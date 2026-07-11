@@ -96,7 +96,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # BIND_IP (default 0.0.0.0 = todo interface) gobierna qué tan
+      # expuestos quedan los puertos que NO son el ingress público.
+      # En el servidor de pruebas .env fija BIND_IP=127.0.0.1: Docker
+      # publica puertos saltándose ufw/firewalld, así que el bind a
+      # loopback es la única barrera real. Solo el api-gateway (8080)
+      # queda deliberadamente fuera de este patrón.
+      - "${BIND_IP:-0.0.0.0}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -154,7 +160,15 @@ services:
     build:
       context: .
       dockerfile: eurekaserver/Dockerfile
-    image: eurekatic/eurekaserver:1.0.0-SNAPSHOT
+    # IMAGE_PREFIX / IMAGE_TAG parametrize every app image so the SAME
+    # compose file serves both flows:
+    #   - dev local (default): eurekatic/<svc>:1.0.0-SNAPSHOT, built by
+    #     `docker compose build` from the local Dockerfiles.
+    #   - test server: IMAGE_PREFIX=ghcr.io/colombia-evaluadora and
+    #     IMAGE_TAG=test-latest in the server's .env, so
+    #     `docker compose pull` fetches what CI published to GHCR
+    #     (the deploy-test.yml workflow) instead of building.
+    image: ${IMAGE_PREFIX:-eurekatic}/eurekaserver:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-eureka
     restart: unless-stopped
     # Cap the cgroup memory so MaxRAMPercentage=75 inside the JVM
@@ -164,7 +178,7 @@ services:
     mem_limit: 384m
     mem_reservation: 256m
     ports:
-      - "${EUREKA_PORT:-8761}:8761"
+      - "${BIND_IP:-0.0.0.0}:${EUREKA_PORT:-8761}:8761"
     environment:
       # Standalone Eureka — does not register with itself.
       EUREKA_CLIENT_REGISTER_WITH_EUREKA: "false"
@@ -213,7 +227,7 @@ services:
     build:
       context: .
       dockerfile: auth-center/Dockerfile
-    image: eurekatic/auth-center:1.0.0-SNAPSHOT
+    image: ${IMAGE_PREFIX:-eurekatic}/auth-center:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-auth-center
     restart: unless-stopped
     mem_limit: 640m
@@ -228,7 +242,7 @@ services:
       eurekaserver:
         condition: service_started
     ports:
-      - "${AUTH_CENTER_PORT:-8081}:8081"
+      - "${BIND_IP:-0.0.0.0}:${AUTH_CENTER_PORT:-8081}:8081"
     environment:
       SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
       DB_USER: ${DB_USER}
@@ -278,7 +292,7 @@ services:
         # sidebar shows only the routes of that single App.
         # Leave unset / set to "" for the un-scoped union.
         VITE_APP_NAME: ${VITE_APP_NAME:-}
-    image: eurekatic/api-gateway:1.0.0-SNAPSHOT
+    image: ${IMAGE_PREFIX:-eurekatic}/api-gateway:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-api-gateway
     restart: unless-stopped
     mem_limit: 512m
@@ -317,7 +331,7 @@ services:
     build:
       context: .
       dockerfile: hello-service/Dockerfile
-    image: eurekatic/hello-service:1.0.0-SNAPSHOT
+    image: ${IMAGE_PREFIX:-eurekatic}/hello-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-hello-service
     restart: unless-stopped
     mem_limit: 256m
@@ -326,7 +340,7 @@ services:
       eurekaserver:
         condition: service_started
     ports:
-      - "${HELLO_SERVICE_PORT:-8082}:8082"
+      - "${BIND_IP:-0.0.0.0}:${HELLO_SERVICE_PORT:-8082}:8082"
     environment:
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       # Observability: push OTLP to Alloy
@@ -345,7 +359,7 @@ services:
     build:
       context: .
       dockerfile: sso-admin/Dockerfile
-    image: eurekatic/sso-admin:1.0.0-SNAPSHOT
+    image: ${IMAGE_PREFIX:-eurekatic}/sso-admin:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-admin
     restart: unless-stopped
     # Bumped to 3g after JVM 25 + Spring Boot 4 + Spring Cloud
@@ -384,7 +398,7 @@ services:
         # refresh tokens, distinct key namespace.
         condition: service_healthy
     ports:
-      - "${SSO_ADMIN_PORT:-8083}:8083"
+      - "${BIND_IP:-0.0.0.0}:${SSO_ADMIN_PORT:-8083}:8083"
     environment:
       # Neon cloud DB. compose composes the JDBC URL inline from
       # DB_URL (host:port) + DB_NAME + DB_SSLMODE + DB_CHANNEL_BINDING
@@ -419,8 +433,12 @@ services:
       # /sso-admin/activateAccount GET endpoint. The gateway's
       # AdminUiGlobalFilter serves the SPA from /admin/** and
       # React Router owns the route + form.
-      SSO_ACTIVATION_URL: "http://localhost:${API_GATEWAY_PORT:-8080}/admin/activate"
-      SSO_RESTORE_URL: "http://localhost:${API_GATEWAY_PORT:-8080}/admin/restore-password"
+      # PUBLIC_BASE_URL is the origin the user's BROWSER reaches the
+      # gateway on. Locally that's localhost:8080; on the test server
+      # set it in .env to the public hostname/IP (these links go out
+      # in emails, so localhost would 404 for anyone off-box).
+      SSO_ACTIVATION_URL: "${PUBLIC_BASE_URL:-http://localhost:8080}/admin/activate"
+      SSO_RESTORE_URL: "${PUBLIC_BASE_URL:-http://localhost:8080}/admin/restore-password"
       # RabbitMQ — sso-admin is the producer for notification-service
       # (Welcome, password reset, role assigned/revoked, deactivation).
       # notification-service consumes from queues bound to the
@@ -461,8 +479,8 @@ services:
     container_name: sso-mailhog
     restart: unless-stopped
     ports:
-      - "${MAILHOG_SMTP_PORT:-1025}:1025"
-      - "${MAILHOG_WEB_PORT:-8025}:8025"
+      - "${BIND_IP:-0.0.0.0}:${MAILHOG_SMTP_PORT:-1025}:1025"
+      - "${BIND_IP:-0.0.0.0}:${MAILHOG_WEB_PORT:-8025}:8025"
 
   # ===========================================================================
   # rabbitmq — message broker for notification-service.
@@ -513,7 +531,7 @@ services:
     build:
       context: .
       dockerfile: notification-service/Dockerfile
-    image: eurekatic/notification-service:1.0.0-SNAPSHOT
+    image: ${IMAGE_PREFIX:-eurekatic}/notification-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-notification-service
     restart: unless-stopped
     mem_limit: 640m
@@ -597,7 +615,7 @@ services:
     build:
       context: .
       dockerfile: query-service/Dockerfile
-    image: eurekatic/query-service:1.0.0-SNAPSHOT
+    image: ${IMAGE_PREFIX:-eurekatic}/query-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-query-service-postgres
     restart: unless-stopped
     mem_limit: 384m
@@ -648,7 +666,7 @@ services:
     build:
       context: .
       dockerfile: query-service/Dockerfile
-    image: eurekatic/query-service:1.0.0-SNAPSHOT
+    image: ${IMAGE_PREFIX:-eurekatic}/query-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-query-service-postgres-analytics
     restart: unless-stopped
     mem_limit: 384m
@@ -700,7 +718,7 @@ services:
     build:
       context: .
       dockerfile: provisioner/Dockerfile
-    image: eurekatic/provisioner:1.0.0-SNAPSHOT
+    image: ${IMAGE_PREFIX:-eurekatic}/provisioner:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-provisioner
     restart: unless-stopped
     mem_limit: 384m
@@ -732,8 +750,11 @@ services:
       # Uses the project name so `-p <other>` overrides it
       # without editing this file.
       DOCKER_NETWORK: ${COMPOSE_PROJECT_NAME:-modernize}_default
-      # Image name the new containers are started from.
-      DOCKER_IMAGE: eurekatic/query-service:1.0.0-SNAPSHOT
+      # Image name the new containers are started from. Follows the
+      # same IMAGE_PREFIX/IMAGE_TAG pair as the compose-managed
+      # query-service instances so provisioner-spawned containers
+      # run the exact image CI published.
+      DOCKER_IMAGE: ${IMAGE_PREFIX:-eurekatic}/query-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
       # Service-name DNS for Eureka. The query-service
       # image uses this exact URL to register its
       # heartbeat.
@@ -859,7 +880,9 @@ services:
     mem_limit: 300m
     mem_reservation: 192m
     ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+      # Grafana corre con auth anónima en rol Admin (dev): en el
+      # servidor SIEMPRE detrás de BIND_IP=127.0.0.1 + túnel SSH.
+      - "${BIND_IP:-0.0.0.0}:${GRAFANA_PORT:-3000}:3000"
     environment:
       # Dev convenience: no login wall, land straight on dashboards.
       # PRODUCTION: remove anonymous auth and set a real admin password.

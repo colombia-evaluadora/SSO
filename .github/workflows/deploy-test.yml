@@ -1,0 +1,205 @@
+# =============================================================================
+# deploy-test.yml — publica imágenes a GHCR y despliega el stack completo
+# al servidor de pruebas (Linode) vía SSH.
+#
+# Flujo:
+#   push a `test` → corre CI (ci.yml) → si CI pasa, este workflow:
+#     1. build-push : construye las 8 imágenes de la app con los
+#                     Dockerfiles del repo y las publica en
+#                     ghcr.io/colombia-evaluadora/sso/<servicio>
+#                     con tags `test-latest` + `test-<sha corto>`.
+#     2. deploy     : rsync de docker-compose.yml + postgres/migrations
+#                     + observability/ al servidor, luego
+#                     `docker compose pull && up -d` por SSH.
+#
+# El gate es `workflow_run` sobre CI (no un push directo) para que
+# nunca se despliegue un commit cuyos tests fallaron. `workflow_dispatch`
+# queda para re-desplegar a mano (usa el HEAD de la rama elegida y NO
+# espera a CI — úsalo consciente de eso).
+#
+# El servidor NO recibe el .env por este workflow: los secretos de la
+# app (Neon, JWT, RabbitMQ…) viven en /opt/sso/.env creado a mano una
+# única vez (ver docs/deploy-test-server.md). Ese .env fija
+# IMAGE_PREFIX=ghcr.io/colombia-evaluadora/sso e IMAGE_TAG=test-latest,
+# que es lo que hace que `compose pull` traiga lo que CI publicó.
+#
+# Rollback: cada deploy también publica `test-<sha>`; en el servidor,
+# editar IMAGE_TAG en /opt/sso/.env a ese tag y `docker compose up -d`.
+#
+# Secretos de repo requeridos (Settings → Secrets → Actions):
+#   TEST_SSH_HOST    — IP o hostname del Linode
+#   TEST_SSH_USER    — usuario de despliegue (miembro del grupo docker)
+#   TEST_SSH_KEY     — clave privada OpenSSH (ed25519) SOLO para deploy
+#   GHCR_PULL_USER   — username de GitHub dueño del PAT de pull
+#   GHCR_PULL_TOKEN  — PAT clásico con scope read:packages (el servidor
+#                      lo usa para `docker login ghcr.io`)
+# =============================================================================
+
+name: Deploy test
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# Un deploy a la vez; el siguiente espera en cola (no se cancela un
+# deploy a medias — dejaría el stack en estado mixto).
+concurrency:
+  group: deploy-test
+  cancel-in-progress: false
+
+env:
+  # Namespace de imágenes en GHCR. El sub-path `sso` evita colisiones
+  # con paquetes de otros repos de la organización.
+  IMAGE_PREFIX: ghcr.io/colombia-evaluadora/sso
+
+jobs:
+  build-push:
+    name: build-push (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    # Solo corre si: (a) CI terminó en verde sobre un PUSH a la rama
+    # test, o (b) se lanzó a mano. workflow_run también dispara para
+    # CI de main y de PRs (incluido el PR test→main del flujo de
+    # promoción) — el par event == 'push' + head_branch == 'test'
+    # filtra todo eso.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'test')
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - eurekaserver
+          - auth-center
+          - api-gateway
+          - hello-service
+          - sso-admin
+          - notification-service
+          - query-service
+          - provisioner
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # En workflow_run, github.sha es el HEAD del default branch —
+          # hay que apuntar explícitamente al commit que CI validó.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.service }}/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:test-latest
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:test-${{ steps.sha.outputs.short }}
+          # Vincula el paquete GHCR al repo (hereda permisos y aparece
+          # en la pestaña Packages del repo).
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha || github.sha }}
+          # Solo el Dockerfile de api-gateway declara este ARG (etapa
+          # node-spa); en el resto es un warning inocuo. Scoping del
+          # sidebar del SPA — mismo valor que .env.example.
+          build-args: |
+            VITE_APP_NAME=${{ vars.VITE_APP_NAME || 'SSO-ADMIN' }}
+          # Caché de capas por servicio en el caché de Actions: la
+          # etapa `dependency:go-offline` / `npm ci` se reutiliza entre
+          # runs y el build Maven baja de ~15 min a ~3-4.
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  deploy:
+    name: deploy to test server
+    runs-on: ubuntu-latest
+    needs: [build-push]
+    environment: test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.TEST_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.TEST_SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Sync compose + configs
+        # El compose monta rutas relativas (./postgres/migrations,
+        # ./observability/**), así que el servidor necesita esos
+        # archivos junto al docker-compose.yml. --delete mantiene
+        # migrations/ y observability/ como espejo del repo; el .env
+        # del servidor NO se toca (vive en /opt/sso y no está en la
+        # lista de origen).
+        env:
+          DEST: ${{ secrets.TEST_SSH_USER }}@${{ secrets.TEST_SSH_HOST }}
+        run: |
+          ssh -i ~/.ssh/deploy_key "$DEST" "mkdir -p /opt/sso/postgres/migrations /opt/sso/observability"
+          rsync -az -e "ssh -i ~/.ssh/deploy_key" docker-compose.yml \
+            "$DEST:/opt/sso/docker-compose.yml"
+          rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" postgres/migrations/ \
+            "$DEST:/opt/sso/postgres/migrations/"
+          rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" observability/ \
+            "$DEST:/opt/sso/observability/"
+
+      - name: Pull & restart stack
+        env:
+          DEST: ${{ secrets.TEST_SSH_USER }}@${{ secrets.TEST_SSH_HOST }}
+          GHCR_PULL_USER: ${{ secrets.GHCR_PULL_USER }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          # Login a GHCR en el servidor en cada deploy (el token va por
+          # stdin, nunca en argv ni en el heredoc). Queda cacheado en
+          # ~/.docker/config.json del usuario de deploy.
+          printf '%s' "$GHCR_PULL_TOKEN" | ssh -i ~/.ssh/deploy_key "$DEST" \
+            "docker login ghcr.io -u '$GHCR_PULL_USER' --password-stdin"
+          ssh -i ~/.ssh/deploy_key "$DEST" bash -s <<'EOF'
+          set -euo pipefail
+          cd /opt/sso
+          # .env del servidor debe existir (creado a mano en el setup
+          # inicial — ver docs/deploy-test-server.md).
+          test -f .env || { echo "FALTA /opt/sso/.env — ver docs/deploy-test-server.md"; exit 1; }
+          docker compose pull --quiet
+          docker compose up -d --remove-orphans
+          # Limpia capas de imágenes viejas para no llenar el disco
+          # del Linode con cada deploy.
+          docker image prune -f
+          EOF
+
+      - name: Smoke check (gateway health)
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.TEST_SSH_USER }}@${{ secrets.TEST_SSH_HOST }}" bash -s <<'EOF'
+          set -euo pipefail
+          # El gateway es el último en levantar (depende de auth-center
+          # healthy); 5 min de margen cubre el arranque frío de las JVMs.
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/actuator/health | grep -q UP; then
+              echo "gateway UP"; exit 0
+            fi
+            sleep 10
+          done
+          echo "gateway no respondió UP en 5 min"
+          cd /opt/sso && docker compose ps || true
+          exit 1
+          EOF
