@@ -22,7 +22,7 @@
 #     (Docker nativo). NO hace falta `TESTCONTAINERS_RYUK_DISABLED=true`
 #     — esa trampa sólo la necesitaba el colima local del dev.
 #   - Si el job toca admin-ui, hace checkout del repo entero y `cd admin-ui`
-#     (no es submódulo, vive dentro de `modernize/`).
+#     (no es submódulo, vive en la raíz del repo).
 #
 # Para activar branch protection, ir a Settings → Branches → Add rule
 # sobre `main` y `test` (script: `scripts/branch-protection.sh`) con
@@ -69,7 +69,6 @@ jobs:
           java-version: '25'
           cache: maven
       - name: Verify (common)
-        working-directory: modernize
         run: mvn -B -ntp -pl common -am verify -DskipITs=false
 
   # ───────── Backend: auth-center (Testcontainers) ─────────
@@ -85,7 +84,6 @@ jobs:
           java-version: '25'
           cache: maven
       - name: Verify (auth-center)
-        working-directory: modernize
         run: mvn -B -ntp -pl auth-center -am verify
 
   # ───────── Backend: sso-admin (Testcontainers) ─────────
@@ -101,7 +99,6 @@ jobs:
           java-version: '25'
           cache: maven
       - name: Verify (sso-admin)
-        working-directory: modernize
         run: mvn -B -ntp -pl sso-admin -am verify
 
   # ───────── Backend: api-gateway (Testcontainers) ─────────
@@ -117,16 +114,14 @@ jobs:
           java-version: '25'
           cache: maven
       - name: Verify (api-gateway)
-        working-directory: modernize
         run: mvn -B -ntp -pl api-gateway -am verify
       - name: Build api-gateway jar (for SPA bake-in smoke)
-        working-directory: modernize
         run: mvn -B -ntp -pl api-gateway -am package -DskipTests
       - name: Upload api-gateway jar
         uses: actions/upload-artifact@v4
         with:
           name: api-gateway-jar
-          path: modernize/api-gateway/target/*.jar
+          path: api-gateway/target/*.jar
           retention-days: 7
 
   # ───────── Frontend: typecheck ─────────
@@ -135,14 +130,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: modernize/admin-ui
+        working-directory: admin-ui
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: modernize/admin-ui/package-lock.json
+          cache-dependency-path: admin-ui/package-lock.json
       - name: Install
         run: npm ci
       - name: Typecheck
@@ -154,14 +149,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: modernize/admin-ui
+        working-directory: admin-ui
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: modernize/admin-ui/package-lock.json
+          cache-dependency-path: admin-ui/package-lock.json
       - name: Install
         run: npm ci
       - name: Vitest (single run, no watch)
@@ -173,14 +168,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: modernize/admin-ui
+        working-directory: admin-ui
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: modernize/admin-ui/package-lock.json
+          cache-dependency-path: admin-ui/package-lock.json
       - name: Install
         run: npm ci
       - name: ESLint
@@ -192,14 +187,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: modernize/admin-ui
+        working-directory: admin-ui
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: modernize/admin-ui/package-lock.json
+          cache-dependency-path: admin-ui/package-lock.json
       - name: Install
         run: npm ci
       - name: Build
@@ -208,5 +203,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: admin-ui-dist
-          path: modernize/admin-ui/dist
+          path: admin-ui/dist
           retention-days: 7
