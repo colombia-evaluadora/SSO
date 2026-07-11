@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Tailwind's preflight resets margins/padding. We add only what's
+   strictly needed beyond it — no global font, no extra reset, no
+   custom utilities. The CSP forbids 'unsafe-inline' style, so we
+   keep everything in static class names that Tailwind generates
+   at build time. */
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}

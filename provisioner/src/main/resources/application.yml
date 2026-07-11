@@ -1,0 +1,56 @@
+server:
+  # Default 9000 — the only callers (sso-admin + the
+  # docker host's external probes) hit this port. Override
+  # via PORT env var.
+  port: ${PORT:9000}
+  shutdown: graceful
+
+spring:
+  application:
+    name: provisioner
+  main:
+    banner-mode: off
+
+docker:
+  image: ${DOCKER_IMAGE:eurekatic/query-service:1.0.0-SNAPSHOT}
+  network: ${DOCKER_NETWORK:sso_postgres_modernize_default}
+  socket-path: ${DOCKER_SOCKET_PATH:/var/run/docker.sock}
+  eureka-url: ${EUREKA_URL:http://eurekaserver:8761/eureka}
+  ready-timeout-seconds: ${READY_TIMEOUT:45}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  otlp:
+    metrics:
+      export:
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 10s
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+    resource-attributes:
+      service.namespace: sso
+      deployment.environment: ${DEPLOY_ENV:dev}
+  tracing:
+    enabled: true
+    sampling:
+      probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
+
+logging:
+  level:
+    root: INFO
+    com.co.eurekatic: INFO

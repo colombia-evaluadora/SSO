@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.co.eurekatic</groupId>
+        <artifactId>sso-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>auth-center</artifactId>
+    <name>auth-center</name>
+    <description>Authentication issuer — login, token issuance, user lookup</description>
+
+    <properties>
+        <start-class>com.co.eurekatic.auth.AuthCenterApplication</start-class>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- Observability: pure-OTLP export via the single Boot 4 starter. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-opentelemetry</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+
+        <!-- Runtime DB driver; test scope replaces with H2 below. -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Backing store for the refresh-token flow (RedisRefreshTokenStore).
+             Spring Boot manages the Lettuce version; we do not pin it here.
+             The interface (RefreshTokenStore) lives in `common` so the
+             controller and JsonLoginFilter can depend on it without pulling
+             Spring Data Redis transitively into the shared module. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
+        <!-- Test scope -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Required by Spring 7's MockMvcWebTestClient.bindToApplicationContext().
+             Even when bound to an in-process MockMvc, the builder still
+             resolves a WebTestClient instance via WebTestClient.bindToServer,
+             which asserts spring-webflux is on the classpath. We need the
+             reactive WebTestClient API to write the integration tests
+             (TestRestTemplate was removed in Spring Boot 4). Test scope only
+             — the runtime app remains a pure servlet stack. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Required so MockMvcWebTestClient can apply the Spring
+             Security filter chain (otherwise the JsonLoginFilter and
+             JwtAuthenticationFilter are bypassed and the test sees
+             404s where the auth surface should be reachable). -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Testcontainers core: we use GenericContainer with the
+             redis:7-alpine image rather than the dedicated
+             org.testcontainers:redis module, because the parent BOM
+             already imports testcontainers-bom and the dedicated
+             module adds nothing we need (we configure the image +
+             port manually anyway). The container is wired into the
+             Spring context via @DynamicPropertySource. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- JUnit 5 integration for Testcontainers: provides the
+             @Testcontainers + @Container annotations that start /
+             stop the Redis container around the test class. The
+             `testcontainers` core artifact above does NOT pull this
+             in transitively. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>${project.artifactId}</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

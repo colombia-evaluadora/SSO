@@ -1,0 +1,69 @@
+name: Feature request
+description: Proponer una nueva capacidad del sistema SSO.
+title: "[feat] "
+labels: ["enhancement", "needs-design"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Antes de abrir una feature
+        - **Discute el diseño primero.** Una feature PR sin alineación
+          suele rechazarse o reescribirse. Abre un hilo en Discussions
+          o un issue tipo `RFC` antes de tocar código.
+        - Si es un cambio chico (typo, doc, ajuste de UX), abre el PR
+          directamente con la etiqueta `good first issue`.
+
+  - type: textarea
+    id: problema
+    attributes:
+      label: Problema / motivación
+      description: Qué hoy no funciona o falta. NO empieces por la solución.
+      placeholder: |
+        Hoy un admin no puede auditar qué usuario ejecutó una acción
+        hace más de 30 días — el log de RabbitMQ se persiste solo en
+        el broker, no en la base.
+    validations:
+      required: true
+
+  - type: textarea
+    id: usuarios
+    attributes:
+      label: Usuarios / casos de uso
+      description: Quién se beneficia y en qué escenario
+    validations:
+      required: true
+
+  - type: textarea
+    id: propuesta
+    attributes:
+      label: Propuesta de solución
+      description: Diseño tentativo — APIs nuevas, modelo de datos, UI,
+                   flujo de despliegue. Incluye alternativas consideradas
+                   y por qué esta gana.
+    validations:
+      required: false
+
+  - type: textarea
+    id: impacto
+    attributes:
+      label: Migración / impacto en despliegues
+      description: "¿Nueva migración? ¿Cambia el wire del SPA? ¿Rompe
+                   compatibilidad?"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: alcance
+    attributes:
+      label: Alcance tentativo
+      options:
+        - label: "Abarca un solo módulo — listo para PR directo"
+          required: false
+        - label: "Abarca varios módulos — necesita RFC primero"
+          required: false
+        - label: "Cambia el esquema de BD — necesita nueva migración Flyway"
+          required: false
+        - label: "Cambia wire types del SPA (necesita rebuild del bundle + release)"
+          required: false

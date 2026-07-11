@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.7</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.co.eurekatic</groupId>
+    <artifactId>sso-parent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>sso-parent</name>
+    <description>Modernized SSO architecture — Spring Boot 4.0 / Java 25 / Spring Cloud 2025.1.x (Oakwood)</description>
+
+    <properties>
+        <java.version>25</java.version>
+        <maven.compiler.source>25</maven.compiler.source>
+        <maven.compiler.target>25</maven.compiler.target>
+        <maven.compiler.release>25</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <!--
+            Spring Cloud 2025.1.x ("Oakwood") is the release train
+            officially mapped to Spring Boot 4.0.x. 4.1.x is not yet
+            in any release train as of 2026-06. We pick the latest
+            2025.1.x patch (2025.1.2) which lines up with
+            spring-cloud-build 5.0.2 / spring-cloud-netflix 5.0.2.
+        -->
+        <spring-cloud.version>2025.1.2</spring-cloud.version>
+
+        <jjwt.version>0.12.7</jjwt.version>
+        <resilience4j.version>2.2.0</resilience4j.version>
+        <postgresql.version>42.7.4</postgresql.version>
+        <testcontainers.version>1.21.4</testcontainers.version>
+        <opentelemetry-instrumentation.version>2.21.0-alpha</opentelemetry-instrumentation.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>${testcontainers.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+        <plugins>
+            <!--
+                Lombok must be on the annotation processor path; the
+                spring-boot-starter-parent does not add it automatically.
+                Declared here at the parent level so every child module
+                gets it without repeating itself.
+
+                Note: the maven-compiler-plugin pin we used under
+                Spring Boot 3.5 (3.13.0) is no longer required under
+                Spring Boot 4.0 / Java 25 — the version inherited
+                from spring-boot-starter-parent is JDK 25-aware, so we
+                let it inherit and only configure annotationProcessorPaths.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <release>${java.version}</release>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <modules>
+        <module>eurekaserver</module>
+        <module>common</module>
+        <module>auth-center</module>
+        <module>api-gateway</module>
+        <module>hello-service</module>
+        <module>sso-admin</module>
+        <module>query-service</module>
+        <module>provisioner</module>
+        <module>notification-service</module>
+    </modules>
+</project>

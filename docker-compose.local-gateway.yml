@@ -1,0 +1,11 @@
+# Override: build api-gateway from a pre-built jar (Dockerfile.local)
+# instead of running the full multi-stage Maven build inside Docker.
+# Host-built jar at api-gateway/target/api-gateway.jar + admin-ui/dist/
+# are baked into the image. Used for fast iteration when the in-container
+# Maven stage OOMs or hits transient dependency:go-offline failures.
+services:
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile.local
+    image: eurekatic/api-gateway:1.0.0-SNAPSHOT-local

@@ -1,0 +1,898 @@
+# =============================================================================
+# docker-compose.yml — full modernized SSO stack.
+#
+# Brings up the following services in dependency order:
+#
+#   postgres       — Postgres 16 with init scripts that create the
+#                    `sso` database and the legacy-compatible
+#                    `users` / `role` / `role_users` tables.
+#   redis          — Redis 7 with persistence disabled. Stores
+#                    refresh-token hashes + per-family SETs.
+#                    Internal-only (no host port mapping). If
+#                    Redis loses state, every active session
+#                    gets a forced re-login once — by design.
+#   eurekaserver   — Netflix Eureka on :8761 for service discovery.
+#   flyway         — one-shot schema migrator against Neon
+#                    (DB_URL/DB_USER/DB_PASSWORD in .env). EXITS
+#                    after applying ./postgres/migrations (V1..V7);
+#                    every Spring service depends_on it as
+#                    `service_completed_successfully`.
+#   auth-center    — login + JWT issuance, talks to Neon over SSL.
+#   api-gateway    — reactive Spring Cloud Gateway, validates JWTs
+#                    and injects X-Authenticated-* headers. Also
+#                    serves the admin-ui SPA at /admin/** (the SPA
+#                    is built by the Dockerfile's `node-spa` stage
+#                    and copied into the fat jar).
+#   hello-service  — reference downstream service, registers with
+#                    Eureka, reachable at /hello-service/** via the
+#                    gateway's dynamic route locator.
+#   notification-service
+#                  — multichannel notification consumer (email/SMS/push).
+#                    Reads JSON envelopes off RabbitMQ, renders
+#                    templates, dispatches to providers with circuit
+#                    breakers, and logs every send to Neon for
+#                    idempotency. Talks to Neon over SSL.
+#   sso-admin      — User/Role/Group CRUD + activation flow (Phase 1
+#                    of the sso-service port). Reachable at
+#                    /sso-admin/** through the gateway. Sends
+#                    activation and restore emails through MailHog.
+#                    For microservice rows with kind=QUERY it
+#                    calls the provisioner sidecar to spin up
+#                    a fresh query-service container.
+#   mailhog        — local SMTP server with a web UI for inspecting
+#                    the emails sso-admin sends. dev only.
+#   provisioner    — Docker sidecar. The ONLY container with
+#                    /var/run/docker.sock mounted. sso-admin
+#                    POSTs to http://provisioner:9000/provision
+#                    when an admin creates a kind=QUERY row; the
+#                    sidecar translates that into a Docker Engine
+#                    API call that starts a new query-service
+#                    container on the compose network. Not
+#                    reachable from the host — internal-only.
+#   query-service-postgres  + query-service-postgres-analytics
+#                  — two instances of the same query-service image
+#                    pointed at the same Neon DB with different
+#                    QUERY_INSTANCE_NAME values (the analytics one
+#                    is a placeholder for a separate backing store
+#                    later). The gateway routes
+#                    /query-service-postgres/** and
+#                    /query-service-postgres-analytics/** to them.
+#
+# Postgres: there is NO local postgres service in this compose. The
+# schema lives in Neon (see .env for DB_URL). Every service that
+# previously depended_on the local `postgres` service now depends_on
+# the `flyway` one-shot migrator instead, so the schema is guaranteed
+# to exist before any app boots.
+#
+# Usage:
+#   cp .env.example .env        # edit secrets (Neon conn string, JWT, etc.)
+#   docker compose build        # build all service images
+#   docker compose up -d        # start the stack
+#   docker compose logs -f api-gateway
+#
+# Health check the stack:
+#   curl -fsS http://localhost:8761/actuator/health
+#   curl -fsS http://localhost:8081/actuator/health
+#   curl -fsS http://localhost:8080/actuator/health
+#
+#   # Get a JWT (admin / password from .env)
+#   TOKEN=$(curl -fsS -X POST http://localhost:8080/login \
+#     -H 'Content-Type: application/json' \
+#     -d '{"username":"admin","password":"ChangeMe-Now-Please-123!"}' | jq -r .token)
+#
+#   # Call hello-service through the gateway with the JWT
+#   curl -fsS http://localhost:8080/hello-service/api/hello \
+#     -H "Authorization: Bearer $TOKEN"
+# =============================================================================
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: sso-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready returns 0 when the cluster is accepting
+      # connections, 3 when starting up, 1 on error.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # ===========================================================================
+  # flyway — one-shot schema migrator. Runs `migrate` against Neon and
+  # EXITS (it is not a long-running service). Every Spring service that
+  # talks to the sso schema depends on this completing successfully, so
+  # the schema is guaranteed present + at the expected version before
+  # any app boots (all of them run ddl-auto=validate).
+  #
+  # Connects to Neon over the public internet with sslmode=require (the
+  # sslmode is part of DB_URL; the Postgres JDBC driver applies it to the
+  # SSL socket before sending the startup packet). Flyway retry policy:
+  # `-connectRetries=60` covers the cold-start window where the container
+  # may reach Neon before Neon's proxy is warm.
+  #
+  # This replaces the old postgres/init/*.sh scripts. Migrations live in
+  # ./postgres/migrations (V1__..V7__) and are the single source of
+  # truth for the schema. To add schema, drop a new V<n>__name.sql file
+  # and re-run `docker compose up flyway`.
+  #
+  # Rollback note: Flyway Community is forward-only (the `undo` command
+  # is a paid Teams feature). "Rolling back" here means writing a new
+  # forward migration (e.g. V8__drop_x.sql), which is the recommended
+  # practice for shared/production schemas anyway.
+  # ===========================================================================
+  flyway:
+    image: flyway/flyway:11-alpine
+    container_name: sso-flyway
+    command: ["-connectRetries=60", "migrate"]
+    environment:
+      FLYWAY_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
+      FLYWAY_USER: ${DB_USER}
+      FLYWAY_PASSWORD: ${DB_PASSWORD}
+      FLYWAY_DEFAULT_SCHEMA: public
+      # Baseline an already-populated schema (e.g. an existing dev volume
+      # created by the old .sh scripts) at version 0 so V1..V7 still run;
+      # every migration is IF-NOT-EXISTS guarded, so re-applying is a
+      # no-op. On a fresh DB this is inert and all migrations run.
+      FLYWAY_BASELINE_ON_MIGRATE: "true"
+      FLYWAY_BASELINE_VERSION: "0"
+    volumes:
+      - ./postgres/migrations:/flyway/sql:ro
+    restart: "no"
+
+  eurekaserver:
+    build:
+      context: .
+      dockerfile: eurekaserver/Dockerfile
+    image: eurekatic/eurekaserver:1.0.0-SNAPSHOT
+    container_name: sso-eureka
+    restart: unless-stopped
+    # Cap the cgroup memory so MaxRAMPercentage=75 inside the JVM
+    # translates to a sane heap (180MB instead of "whatever the
+    # host has"). On a 1.9GiB colima with 5 JVMs this is the
+    # difference between "stack stays up" and "cascade OOM".
+    mem_limit: 384m
+    mem_reservation: 256m
+    ports:
+      - "${EUREKA_PORT:-8761}:8761"
+    environment:
+      # Standalone Eureka — does not register with itself.
+      EUREKA_CLIENT_REGISTER_WITH_EUREKA: "false"
+      EUREKA_CLIENT_FETCH_REGISTRY: "false"
+      # Observability: push OTLP to Alloy
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8761; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # Backing store for the rotating refresh-token flow. Internal-only:
+  # no host port mapping (Redis is reachable solely from auth-center
+  # over the compose network). Persistence is intentionally disabled
+  # (`--save "" --appendonly no`): refresh tokens have a 30-day TTL
+  # set on every key, so if Redis loses state the worst case is
+  # every active session gets a forced re-login once. This is the
+  # correct trade-off for an admin SPA — we never want stale
+  # refresh tokens surviving a Redis crash.
+  redis:
+    image: redis:7-alpine
+    container_name: sso-redis
+    restart: unless-stopped
+    mem_limit: 256m
+    mem_reservation: 128m
+    # Mapped to 127.0.0.1 so the host (and an IDE on the host)
+    # can reach the container without going through the bridge
+    # IP 172.18.0.x. The bind to loopback is deliberate — this
+    # port must NOT be reachable from the LAN. Production
+    # deployments may need to remove or firewall this mapping.
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      # `redis-cli ping` returns "PONG" when the server is ready
+      # to accept commands.
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  auth-center:
+    build:
+      context: .
+      dockerfile: auth-center/Dockerfile
+    image: eurekatic/auth-center:1.0.0-SNAPSHOT
+    container_name: sso-auth-center
+    restart: unless-stopped
+    mem_limit: 640m
+    mem_reservation: 512m
+    depends_on:
+      flyway:
+        # Schema must be migrated before auth-center runs ddl-auto=validate
+        # and DataInitializer seeds the admin user into users/role.
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      eurekaserver:
+        condition: service_started
+    ports:
+      - "${AUTH_CENTER_PORT:-8081}:8081"
+    environment:
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      # Discovery
+      EUREKA_URL: "http://eurekaserver:8761/eureka"
+      # JWT
+      JWT_SECRET: ${JWT_SECRET}
+      # Refresh-token store (Redis)
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # Bootstrap admin. Post-V12 the seed key is the email
+      # (the legacy SSO_ADMIN_USERNAME is no longer
+      # consumed directly; application.yml falls back to it
+      # for backwards compat with old .env files).
+      SSO_BOOTSTRAP_ENABLED: ${SSO_BOOTSTRAP_ENABLED}
+      SSO_ADMIN_EMAIL: ${SSO_ADMIN_EMAIL}
+      SSO_ADMIN_PASSWORD: ${SSO_ADMIN_PASSWORD}
+      SSO_CORS_ALLOWED_ORIGINS: ${SSO_CORS_ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:5173}
+      # Session-cache (effective roles in Redis). Shared secret
+      # must match the value sso-admin is configured with — both
+      # services read SSO_SESSION_USER_ROLES_INVALIDATION_SECRET
+      # and use it as the X-Session-Cache-Secret header value on
+      # the internal POST /internal/cache/user-roles/{email}.
+      # Empty default rejects every request (fail-closed posture
+      # on the controller side; documented in CacheAdminController).
+      SSO_SESSION_USER_ROLES_INVALIDATION_SECRET: ${SSO_SESSION_USER_ROLES_INVALIDATION_SECRET:-}
+      # Observability: push OTLP to Alloy
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8081; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+      args:
+        # Baked into the admin-ui SPA bundle at build time
+        # (api-gateway/Dockerfile stage 1 picks it up as an
+        # ARG + ENV pair). When set, the SPA sends
+        # ?app=<value> on GET /sso-admin/myMenu and the
+        # sidebar shows only the routes of that single App.
+        # Leave unset / set to "" for the un-scoped union.
+        VITE_APP_NAME: ${VITE_APP_NAME:-}
+    image: eurekatic/api-gateway:1.0.0-SNAPSHOT
+    container_name: sso-api-gateway
+    restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 384m
+    depends_on:
+      eurekaserver:
+        condition: service_started
+      auth-center:
+        condition: service_healthy
+    ports:
+      - "${API_GATEWAY_PORT:-8080}:8080"
+    environment:
+      # Must match auth-center's JWT_SECRET exactly — both sign
+      # and verify with the same HMAC key.
+      JWT_SECRET: ${JWT_SECRET}
+      EUREKA_URL: "http://eurekaserver:8761/eureka"
+      # CORS allowlist. The admin-ui SPA is served by THIS gateway
+      # at /admin/**, so http://localhost:8080 is always valid. The
+      # Vite dev server (5173) is included for `npm run dev` against
+      # the dev compose stack. In production replace with the real
+      # public hostname(s).
+      SSO_CORS_ALLOWED_ORIGINS: ${SSO_CORS_ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:5173}
+      # Observability: push OTLP (traces + metrics + logs) to the Alloy
+      # collector over the compose network. When the observability
+      # services are not running these exporters just log a connection
+      # warning and the gateway keeps serving — telemetry is best-effort.
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  hello-service:
+    build:
+      context: .
+      dockerfile: hello-service/Dockerfile
+    image: eurekatic/hello-service:1.0.0-SNAPSHOT
+    container_name: sso-hello-service
+    restart: unless-stopped
+    mem_limit: 256m
+    mem_reservation: 192m
+    depends_on:
+      eurekaserver:
+        condition: service_started
+    ports:
+      - "${HELLO_SERVICE_PORT:-8082}:8082"
+    environment:
+      EUREKA_URL: "http://eurekaserver:8761/eureka"
+      # Observability: push OTLP to Alloy
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+    # No healthcheck on the public port — the gateway's
+    # actuator/health is the canonical signal, and the service
+    # itself doesn't expose /actuator/health to the public.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8082; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  sso-admin:
+    build:
+      context: .
+      dockerfile: sso-admin/Dockerfile
+    image: eurekatic/sso-admin:1.0.0-SNAPSHOT
+    container_name: sso-admin
+    restart: unless-stopped
+    # Bumped to 3g after JVM 25 + Spring Boot 4 + Spring Cloud
+    # 2025.1.x exceeded 1.5g during startup under steady traffic
+    # (Hibernate schema-validate + Eureka lease renewal + first
+    # POST to /microservice/save all converge in the same window).
+    # The earlier 1.5g caused exit 137 OOM kills in a loop.
+    mem_limit: 3g
+    mem_reservation: 2g
+    depends_on:
+      flyway:
+        # Schema (groups/microservice/endpoint/route/app/query/write)
+        # must exist before sso-admin's ddl-auto=validate runs.
+        condition: service_completed_successfully
+      eurekaserver:
+        condition: service_started
+      provisioner:
+        # sso-admin's create(kind=QUERY) blocks until the
+        # provisioner round-trip + Eureka registration
+        # complete, so the sidecar must be UP before the
+        # admin service starts accepting writes — otherwise
+        # the first QUERY row would 503.
+        condition: service_healthy
+      rabbitmq:
+        # sso-admin publishes NotificationMessage envelopes to
+        # the `notifications` topic exchange (Welcome, password
+        # reset, role assigned/revoked, deactivation, etc.).
+        # If the broker is unreachable, those calls fail-fast
+        # with a WARN — they don't block writes — but waiting
+        # until healthy avoids races with notification-service
+        # binding the queues at boot.
+        condition: service_healthy
+      redis:
+        # Backs the app-access cache (SsoAdminAppAccessManager /
+        # AppAccessService) — same instance auth-center uses for
+        # refresh tokens, distinct key namespace.
+        condition: service_healthy
+    ports:
+      - "${SSO_ADMIN_PORT:-8083}:8083"
+    environment:
+      # Neon cloud DB. compose composes the JDBC URL inline from
+      # DB_URL (host:port) + DB_NAME + DB_SSLMODE + DB_CHANNEL_BINDING
+      # and overrides spring.datasource.url via the standard
+      # Spring env var.
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      EUREKA_URL: "http://eurekaserver:8761/eureka"
+      # MUST match auth-center's JWT_SECRET — same key signs and
+      # verifies tokens.
+      JWT_SECRET: ${JWT_SECRET}
+      # Provisioner sidecar — sso-admin POSTs here when an
+      # admin creates a microservice row with kind=QUERY.
+      # The base URL is compose-DNS, NOT localhost, because
+      # sso-admin is itself a container.
+      SSO_PROVISIONER_BASE_URL: "http://provisioner:9000"
+      # SMTP — in dev, point at the mailhog service.
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      SMTP_FROM: ${SMTP_FROM}
+      SSO_EMAIL_COMPANY: ${SSO_EMAIL_COMPANY}
+      SSO_EMAIL_APP_NAME: ${SSO_EMAIL_APP_NAME}
+      SSO_EMAIL_LOGO_URL: ${SSO_EMAIL_LOGO_URL}
+      # Public URLs of the activation/restore links — these are
+      # Public URLs of the activation/restore links — these are
+      # what the user clicks in the email. After the
+      # POST-with-body security fix landed in this branch
+      # (commits 2 + 3 flipped the controllers; the SPA now hosts
+      # the password form), these point at the SPA landing
+      # pages under /admin/** instead of the legacy
+      # /sso-admin/activateAccount GET endpoint. The gateway's
+      # AdminUiGlobalFilter serves the SPA from /admin/** and
+      # React Router owns the route + form.
+      SSO_ACTIVATION_URL: "http://localhost:${API_GATEWAY_PORT:-8080}/admin/activate"
+      SSO_RESTORE_URL: "http://localhost:${API_GATEWAY_PORT:-8080}/admin/restore-password"
+      # RabbitMQ — sso-admin is the producer for notification-service
+      # (Welcome, password reset, role assigned/revoked, deactivation).
+      # notification-service consumes from queues bound to the
+      # `notifications` topic exchange declared by sso-admin at boot.
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASS: ${RABBITMQ_PASS}
+      # Observability: push OTLP to Alloy
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+      # App-access cache (SsoAdminAppAccessManager /
+      # AppAccessService). Same Redis instance + credentials
+      # auth-center already uses for refresh tokens.
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # Session-cache invalidation hop — sso-admin POSTs to
+      # auth-center /internal/cache/user-roles/{email} after every
+      # role / group binding mutation. Base URL is compose-DNS by
+      # default; override for host-mode dev. Shared secret MUST
+      # match the value on auth-center (same env var name feeds
+      # both sides).
+      SSO_AUTH_CENTER_BASE_URL: ${SSO_AUTH_CENTER_BASE_URL:-http://auth-center:8081}
+      SSO_SESSION_USER_ROLES_INVALIDATION_SECRET: ${SSO_SESSION_USER_ROLES_INVALIDATION_SECRET:-}
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8083; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
+
+  mailhog:
+    # Dev-only SMTP catcher. Web UI on http://localhost:8025
+    # shows every email sso-admin sends. Use SMTP_PORT=1025.
+    # In production, remove this service and point SMTP_HOST
+    # at the real mail relay.
+    image: mailhog/mailhog:latest
+    container_name: sso-mailhog
+    restart: unless-stopped
+    ports:
+      - "${MAILHOG_SMTP_PORT:-1025}:1025"
+      - "${MAILHOG_WEB_PORT:-8025}:8025"
+
+  # ===========================================================================
+  # rabbitmq — message broker for notification-service.
+  #
+  # - 3.13.7-management: stable 3.13 line (the spec target).
+  # - hostname is set explicitly so other services can resolve
+  #   it via compose DNS.
+  # - Port 15672 (admin UI) is bound to 127.0.0.1 only; port
+  #   5672 is NOT published to the host at all (per spec —
+  #   internal only).
+  # - Named volume persists the broker's mnesia across
+  #   `docker compose down` (NOT `down -v`).
+  # - Healthcheck: `rabbitmq-diagnostics -q ping` returns 0
+  #   once the broker accepts AMQP connections.
+  # ===========================================================================
+  rabbitmq:
+    image: rabbitmq:3.13.7-management
+    container_name: sso-rabbitmq
+    restart: unless-stopped
+    hostname: rabbitmq
+    mem_limit: 384m
+    mem_reservation: 256m
+    ports:
+      # Admin UI for dev only — loopback bound so it's not
+      # reachable from the LAN. http://localhost:15672 with
+      # guest/guest (override via RABBITMQ_USER / RABBITMQ_PASS).
+      - "127.0.0.1:${RABBITMQ_MGMT_PORT:-15672}:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # ===========================================================================
+  # notification-service — multichannel notification consumer
+  # (email / SMS / push) wired off the rabbitmq broker above.
+  # Reachable only via the gateway's dynamic route locator
+  # (/notification-service/actuator/**). Internal-only — no
+  # host port mapping.
+  # ===========================================================================
+  notification-service:
+    build:
+      context: .
+      dockerfile: notification-service/Dockerfile
+    image: eurekatic/notification-service:1.0.0-SNAPSHOT
+    container_name: sso-notification-service
+    restart: unless-stopped
+    mem_limit: 640m
+    mem_reservation: 512m
+    depends_on:
+      flyway:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      eurekaserver:
+        condition: service_started
+    environment:
+      # Neon cloud DB (same target as auth-center / sso-admin).
+      # The local `postgres` container is used only by the
+      # RabbitMQ healthcheck chain — notification-service
+      # never opens a JDBC connection to it. Using ${DB_URL}
+      # keeps the password consistent with auth-center's.
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
+      DB_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      EUREKA_URL: "http://eurekaserver:8761/eureka"
+      # RabbitMQ
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASS: ${RABBITMQ_PASS}
+      # SMTP — point at mailhog in dev. Real env vars override.
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      # Provider credentials (env-driven). Unset in dev →
+      # providers self-disable with WARN. Set in prod.
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      # Observability: push OTLP to Alloy
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+      VONAGE_API_KEY: ${VONAGE_API_KEY:-}
+      VONAGE_API_SECRET: ${VONAGE_API_SECRET:-}
+      SMTP_GMAIL_USER: ${SMTP_GMAIL_USER:-}
+      SMTP_GMAIL_PASS: ${SMTP_GMAIL_PASS:-}
+      SMTP_BREVO_USER: ${SMTP_BREVO_USER:-}
+      SMTP_BREVO_PASS: ${SMTP_BREVO_PASS:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAILJS_SERVICE_ID: ${EMAILJS_SERVICE_ID:-}
+      EMAILJS_PUBLIC_KEY: ${EMAILJS_PUBLIC_KEY:-}
+      EMAILJS_PRIVATE_KEY: ${EMAILJS_PRIVATE_KEY:-}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8085; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
+
+  # ===========================================================================
+  # query-service — dynamic, per-datasource instances.
+  # ===========================================================================
+  #
+  # Each query-service container is identical (same image)
+  # and is configured purely via env vars. The
+  # InstanceNameResolver env post-processor derives the
+  # Eureka service-id from QUERY_DS_DIALECT, so the gateway's
+  # auto-discovery locator routes
+  # /query-service-<dialect>/** to the right instance.
+  #
+  # To add a new backing datasource the operator just adds
+  # another service block below (or admin-ui triggers a
+  # provisioner that does the equivalent via the Docker /
+  # k8s API). The image itself does not change.
+  #
+  # In dev we ship two instances — one for the application's
+  # primary Postgres (the same one auth-center / sso-admin
+  # already use) and one as a stand-in for an analytics
+  # Postgres on a separate schema. Add an Oracle or SQL
+  # Server instance the same way (set QUERY_DS_DIALECT and
+  # QUERY_DS_URL).
+  # ===========================================================================
+  query-service-postgres:
+    build:
+      context: .
+      dockerfile: query-service/Dockerfile
+    image: eurekatic/query-service:1.0.0-SNAPSHOT
+    container_name: sso-query-service-postgres
+    restart: unless-stopped
+    mem_limit: 384m
+    mem_reservation: 256m
+    depends_on:
+      eurekaserver:
+        condition: service_started
+      sso-admin:
+        # The instance resolves uuids against sso-admin's
+        # /getQuery and /getWrite catalog endpoints on
+        # every request, so it cannot serve traffic until
+        # sso-admin is healthy.
+        condition: service_healthy
+    # No host-side port mapping — the gateway is the
+    # public ingress and it talks to the container over
+    # the compose network via Eureka service-id
+    # resolution.
+    environment:
+      # Per-instance config (instance mode). See
+      # InstanceProps.java. Neon cloud DB, sslmode=require
+      # is encoded in the URL itself.
+      QUERY_DS_DIALECT: postgres
+      QUERY_DS_URL: "jdbc:postgresql://${QUERY_DS_POSTGRES_HOST}:${QUERY_DS_POSTGRES_PORT}/${QUERY_DS_POSTGRES_NAME}?sslmode=${QUERY_DS_POSTGRES_SSLMODE}&channel_binding=${QUERY_DS_POSTGRES_CHANNEL_BINDING}"
+      QUERY_DS_USERNAME: ${QUERY_DS_POSTGRES_USER}
+      QUERY_DS_PASSWORD: ${QUERY_DS_POSTGRES_PASSWORD}
+      QUERY_DS_POOL_SIZE: "10"
+      # Observability: push OTLP to Alloy
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+      # Eureka + JWT (same key auth-center uses)
+      EUREKA_URL: "http://eurekaserver:8761/eureka"
+      JWT_SECRET: ${JWT_SECRET}
+      # Catalog endpoint — sso-admin's controller paths
+      # are NOT prefixed, so the gateway base URL plus
+      # the literal /getQuery path resolves them.
+      QUERY_CATALOG_BASE_URL: "http://sso-api-gateway:8080/sso-admin"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8084; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # Example second instance — a stand-in analytics Postgres
+  # in this stack (the real prod use case is "Oracle",
+  # "SQLServer", "analytics-shard", etc., provisioned by
+  # admin-ui when a new backing store is registered).
+  query-service-postgres-analytics:
+    build:
+      context: .
+      dockerfile: query-service/Dockerfile
+    image: eurekatic/query-service:1.0.0-SNAPSHOT
+    container_name: sso-query-service-postgres-analytics
+    restart: unless-stopped
+    mem_limit: 384m
+    mem_reservation: 256m
+    depends_on:
+      eurekaserver:
+        condition: service_started
+      sso-admin:
+        condition: service_healthy
+    environment:
+      QUERY_DS_DIALECT: postgres
+      QUERY_DS_URL: "jdbc:postgresql://${QUERY_DS_POSTGRES_HOST}:${QUERY_DS_POSTGRES_PORT}/${QUERY_DS_POSTGRES_NAME}?sslmode=${QUERY_DS_POSTGRES_SSLMODE}&channel_binding=${QUERY_DS_POSTGRES_CHANNEL_BINDING}"
+      QUERY_DS_USERNAME: ${QUERY_DS_POSTGRES_USER}
+      QUERY_DS_PASSWORD: ${QUERY_DS_POSTGRES_PASSWORD}
+      QUERY_DS_POOL_SIZE: "10"
+      # Distinct instance name → distinct Eureka service-id
+      # → the gateway routes
+      # /query-service-postgres-analytics/** here.
+      QUERY_INSTANCE_NAME: postgres-analytics
+      EUREKA_URL: "http://eurekaserver:8761/eureka"
+      JWT_SECRET: ${JWT_SECRET}
+      QUERY_CATALOG_BASE_URL: "http://sso-api-gateway:8080/sso-admin"
+      # Observability: push OTLP to Alloy
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8084; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # ===========================================================================
+  # provisioner — Docker sidecar that sso-admin calls to spin up
+  # query-service containers on demand. The ONLY service in the
+  # stack that has /var/run/docker.sock bind-mounted. sso-admin
+  # talks to it over HTTP at http://provisioner:9000/provision
+  # — it never touches the socket itself.
+  # ===========================================================================
+  # The new query-service containers that this service starts
+  # join the compose network by name (DockerSocket sets
+  # HostConfig.NetworkMode = docker.network, default
+  # "sso_postgres_modernize_default"). That way they can
+  # resolve `eurekaserver`, `postgres`, `sso-api-gateway` by
+  # service-name DNS. We deliberately do NOT use
+  # network_mode: host on the provisioner itself — staying on
+  # the compose network is what lets the spawned containers
+  # see the rest of the stack.
+  provisioner:
+    build:
+      context: .
+      dockerfile: provisioner/Dockerfile
+    image: eurekatic/provisioner:1.0.0-SNAPSHOT
+    container_name: sso-provisioner
+    restart: unless-stopped
+    mem_limit: 384m
+    mem_reservation: 256m
+    # PRIVILEGE BOUNDARY: the docker socket is the only path
+    # in the stack that can create containers, so it lives
+    # here and ONLY here. Anyone who can talk to the
+    # provisioner can spawn containers, so its port is
+    # internal (no `ports:` mapping to the host).
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # The provisioner image ships with a non-root `app` user
+    # (uid 1000). On Linux with a standard docker setup the
+    # socket is `root:docker` mode 0660 and you'd add the
+    # `app` user to the docker group with
+    # `group_add: ["docker"]` instead. On colima (and Docker
+    # Desktop) the socket belongs to the host user with mode
+    # 0600, so the simplest correct option is to run this
+    # single container as root and let the rest of the stack
+    # keep its non-root posture. PRODUCTION: replace with
+    # `group_add: ["<docker-group-gid>"]` and keep
+    # `user: "1000:1000"`.
+    user: "0:0"
+    environment:
+      # Network the new containers join — must match the
+      # compose default network (or the operator's custom
+      # network name) so DNS resolution of eurekaserver,
+      # postgres, etc. works inside the new container.
+      # Uses the project name so `-p <other>` overrides it
+      # without editing this file.
+      DOCKER_NETWORK: ${COMPOSE_PROJECT_NAME:-modernize}_default
+      # Image name the new containers are started from.
+      DOCKER_IMAGE: eurekatic/query-service:1.0.0-SNAPSHOT
+      # Service-name DNS for Eureka. The query-service
+      # image uses this exact URL to register its
+      # heartbeat.
+      DOCKER_EUREKA_URL: "http://eurekaserver:8761/eureka"
+      # JWT_SECRET — passed to the new query-service
+      # container as JWT_SECRET env var. Must match the
+      # secret auth-center uses to sign tokens.
+      DOCKER_JWT_SECRET: ${JWT_SECRET}
+      # Observability: push OTLP to Alloy
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+    healthcheck:
+      # The provisioner image installs curl (it talks to
+      # the Docker socket via curl --unix-socket) but not
+      # wget, so the healthcheck uses curl. The
+      # /actuator/health endpoint comes free from the
+      # actuator starter.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/actuator/health | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # ===========================================================================
+  # OBSERVABILITY — the Grafana LGTM stack + Alloy collector.
+  #
+  #   alloy    — single OTLP collector. Every Spring service pushes
+  #              OTLP to alloy:4318; the React SPA pushes Faro RUM to
+  #              alloy:12347. Fans out to Tempo / Mimir / Loki.
+  #   tempo    — traces (OTLP), monolithic + local storage.
+  #   mimir    — metrics (Prometheus-compatible), monolithic + filesystem.
+  #   loki     — logs (native OTLP ingestion), single-binary + filesystem.
+  #   grafana  — dashboards. Datasources auto-provisioned; anonymous
+  #              admin enabled for dev (http://localhost:3000).
+  #
+  # Resource note: this block adds ~2GB of RAM on top of the app
+  # stack. To run the app lean without observability, comment this
+  # block out (the gateway's OTLP exporter will no-op with a warning),
+  # or split these services into a `docker-compose.observability.yml`
+  # overlay later.
+  # ===========================================================================
+  alloy:
+    image: grafana/alloy:latest
+    container_name: sso-alloy
+    restart: unless-stopped
+    mem_limit: 300m
+    mem_reservation: 192m
+    # The Grafana host user (root inside the container, see below) needs
+    # to read the docker socket to enumerate + tail every compose-managed
+    # container. We run alloy as a single process as user root and rely on
+    # the host socket's perms (mode 0600 on colima + Docker Desktop). On
+    # Linux servers where the socket is mode 0660 + `root:docker`, replace
+    # `user: "0:0"` with `group_add: ["<docker-group-gid>"]` and drop the
+    # explicit user.
+    user: "0:0"
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # loki.source.docker enumerates + tails every running container's
+      # stdout/stderr. The provisioner service already binds /var/run/
+      # docker.sock so this compose network is the trust boundary for
+      # "who can spawn containers" — alloy only needs read access to
+      # the socket to LIST and STREAM.
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      # Alloy UI (http://localhost:12345) + Faro receiver for the SPA
+      # (the browser runs on the host, so this one needs a host mapping).
+      - "127.0.0.1:12345:12345"
+      - "127.0.0.1:12347:12347"
+    depends_on:
+      - tempo
+      - mimir
+      - loki
+
+  tempo:
+    # Pinned — Tempo 3.0 removed the ingester/compactor architecture
+    # this config (and its monolithic single-binary deployment) is
+    # written for, replacing it with block-builder/live-store. 2.10.7
+    # is the last 2.x release; bumping to 3.x needs a config rewrite
+    # (see https://grafana.com/docs/tempo/latest/set-up-for-tracing/setup-tempo/migrate-to-3/).
+    image: grafana/tempo:2.10.7
+    container_name: sso-tempo
+    restart: unless-stopped
+    # Bumped from 512m after enabling metrics_generator (spans
+    # processed into RED metrics + service graph; needs the
+    # extra headroom on cold start when the WAL replays).
+    mem_limit: 768m
+    mem_reservation: 384m
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+
+  mimir:
+    image: grafana/mimir:latest
+    container_name: sso-mimir
+    restart: unless-stopped
+    mem_limit: 640m
+    mem_reservation: 384m
+    command: ["-config.file=/etc/mimir/mimir.yaml"]
+    volumes:
+      - ./observability/mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro
+      - mimir-data:/data/mimir
+
+  loki:
+    image: grafana/loki:latest
+    container_name: sso-loki
+    restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 256m
+    command: ["-config.file=/etc/loki/loki-config.yaml"]
+    volumes:
+      - ./observability/loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki-data:/loki
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: sso-grafana
+    restart: unless-stopped
+    mem_limit: 300m
+    mem_reservation: 192m
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      # Dev convenience: no login wall, land straight on dashboards.
+      # PRODUCTION: remove anonymous auth and set a real admin password.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Enable the built-in Explore + trace/log correlation UX.
+      GF_FEATURE_TOGGLES_ENABLE: "traceqlEditor traceToMetrics"
+      GF_PLUGINS_DISABLE_AUTO_UPDATE: "true"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - mimir
+      - loki
+      - tempo
+
+volumes:
+  postgres-data:
+    # Named volume keeps the database across `docker compose down`
+    # but a `docker compose down -v` clears it (handy for dev).
+    name: sso-postgres-data
+  rabbitmq-data:
+    # Persists the broker's mnesia directory (durable queues,
+    # exchanges, persistent messages) across `docker compose down`.
+    # `docker compose down -v` clears it.
+    name: sso-rabbitmq-data
+  tempo-data:
+    name: sso-tempo-data
+  mimir-data:
+    name: sso-mimir-data
+  loki-data:
+    name: sso-loki-data
+  grafana-data:
+    name: sso-grafana-data

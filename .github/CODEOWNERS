@@ -1,0 +1,43 @@
+# CODEOWNERS — cada nueva PR que toque una línea debajo de un patrón
+# se asigna automáticamente para revisión al equipo listado.
+#
+# Formato:  patrón  @usuario-o-equipo
+# El primero que matchea gana; los patrones más específicos van
+# ARRIBA de los más generales.
+#
+# Sustituye los placeholders `djromerom` y `@equipo-<rol>` por tu
+# realidad. Para equipos crea el team en
+# https://github.com/orgs/<tu-org>/teams primero.
+
+# ───────── Defaults ─────────
+# Sin dueño explícito → el maintainer principal del repo.
+*                                       @djromerom
+
+# ───────── Infraestructura crítica ─────────
+# Migraciones de BD y compose cambian el "contrato de despliegue";
+# doble revisión obligatoria.
+/postgres/migrations/                    @djromerom
+/docker-compose.yml                      @djromerom
+/docker-compose.*.yml                    @djromerom
+/.env.example                            @djromerom
+/observability/                          @djromerom
+/provisioner/                            @djromerom
+
+# ───────── Backend por módulo ─────────
+# Cada módulo es dueño de su árbol Java/Maven completo.
+/common/                                 @djromerom
+/auth-center/                            @djromerom
+/sso-admin/                              @djromerom
+/api-gateway/                            @djromerom
+/query-service/                          @djromerom
+/notification-service/                   @djromerom
+
+# ───────── Frontend ─────────
+# admin-ui lo mantiene el equipo del SPA.
+admin-ui/                                @djromerom
+
+# ───────── CI / Docs ─────────
+# Cambios en CI afectan a todo el equipo.
+/.github/workflows/                      @djromerom
+/CONTRIBUTING.md                         @djromerom
+/CLAUDE.md                               @djromerom

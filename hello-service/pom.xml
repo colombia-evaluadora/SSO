@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.co.eurekatic</groupId>
+        <artifactId>sso-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>hello-service</artifactId>
+    <name>hello-service</name>
+    <description>Reference downstream service. Demonstrates how a real business service sits behind the gateway and consumes the X-Authenticated-* headers the gateway injects.</description>
+
+    <properties>
+        <start-class>com.co.eurekatic.hello.HelloServiceApplication</start-class>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Reactive web (Netty). Matches the gateway's stack. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- Observability: pure-OTLP export via the single Boot 4 starter. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-opentelemetry</artifactId>
+        </dependency>
+
+        <!-- Service discovery. Registers with Eureka so the gateway's
+             dynamic route locator auto-creates /hello-service/** → lb://hello-service. -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+
+        <!--
+            The service does NOT validate the JWT itself — it trusts
+            the gateway's X-Authenticated-* headers, which is only
+            safe when the service is reachable only via the gateway
+            and the network path is locked down. The gateway is the
+            trust boundary.
+        -->
+
+        <!-- @WebFluxTest moved out of spring-boot-test-autoconfigure
+             and into its own artifact in Spring Boot 4 (now
+             org.springframework.boot.webflux.test.autoconfigure.WebFluxTest).
+             spring-boot-starter-test (inherited from the parent pom)
+             no longer pulls it in transitively. Test scope only. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-webflux-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>${project.artifactId}</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

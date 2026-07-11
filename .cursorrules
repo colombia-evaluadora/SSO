@@ -1,0 +1,60 @@
+# Cursor rules — modernized-sso reference architecture
+#
+# This file is read by Cursor's AI (Cmd+K, Composer, Agent) to give
+# it context about the project. Keep it focused on the high-leverage
+# facts: stack, layout, conventions, and gotchas. Don't dump the
+# whole README here — link to it.
+
+# ---- Stack ----------------------------------------------------------------
+- Java 21 (LTS). Spring Boot 3.5.3. Spring Cloud 2025.0.0 ("Northfields").
+- Multi-module Maven: eurekaserver, common, auth-center, api-gateway, hello-service, **sso-admin** (Phases 1 + 2 of the legacy `sso-service` port: User/Role/Group + Microservice/Endpoint/Route CRUD).
+- jjwt 0.12.7. Lombok 1.18.x. Postgres 16. JUnit 5 + AssertJ + Mockito.
+- Auth: JWT (HS256) validated at the api-gateway (WebFlux); downstream services trust the X-Authenticated-* headers the gateway injects.
+- **admin-ui** (top-level, NOT a Maven module): Vite 5, React 19, TypeScript 5.6 strict (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`), React Router v7, TanStack Query v5, TailwindCSS v3, Zod. Vitest + @testing-library/react for unit tests, Playwright for E2E. Node 20.
+
+# ---- Module layout --------------------------------------------------------
+- common/        — entities (User, Role), repositories, JwtTokenService, DTOs. Pure library.
+- eurekaserver/  — @EnableEurekaServer, port 8761.
+- auth-center/   — @SpringBootApplication (servlet, Tomcat), port 8081. Login, getToken, getApiToken, getInfoUser, getUsersSSO. JPA-backed.
+- api-gateway/   — @SpringBootApplication (WebFlux, Netty), port 8080. Spring Cloud Gateway. Validates JWT, injects X-Authenticated-{User,Roles,Token-Type} via UserForwardingGlobalFilter.
+- hello-service/ — @SpringBootApplication (WebFlux), port 8082. Reference downstream service. Reachable at /hello-service/** via the dynamic route locator.
+- **sso-admin/** — @SpringBootApplication (servlet, Tomcat), port 8083. User/Role/Group CRUD + account activation + password restore (Phase 1) and Microservice/Endpoint/Route CRUD + bindings (Phase 2). **Re-validates the JWT on every request** via `JwtAuthenticationFilter` (parses the Bearer token, populates SecurityContextHolder with `AuthPrincipal` + `ROLE_<role>` authorities). Reachable at /sso-admin/** via the static gateway route with `StripPrefix=1`. The legacy `sso-service` URL surface is preserved: paths like `/createAccount`, `/role/getRoles`, `/group`, `/microservice/save`, `/endpoint/save`, `/route/save` work as-is once the gateway strips the prefix.
+- **admin-ui/** — Vite + React SPA. Lives at the repo root (sibling to the Maven modules), not inside `api-gateway/`. The api-gateway's Dockerfile has a `node-spa` build stage that produces `dist/` and copies it into `src/main/resources/static/admin/` before `mvn package` — so the SPA ends up inside the gateway's fat jar and is served at `/admin/**` by `AdminUiRouter.kt` (a `RouterFunction<ServerResponse>`). Don't try to build it as a Maven module; the build pipeline is `npm ci && npm run build` inside the Docker stage.
+
+# ---- Conventions ----------------------------------------------------------
+- Base package: com.co.eurekatic.<module>. NEVER move a class to a different module without updating parent + every importer.
+- Lombok @Getter/@Setter with @Setter(AccessLevel.NONE) on the JPA @ManyToMany collection (User.roles). Add roles via user.addRole(role) — never setRoles().
+- Cross-module beans: auth-center and api-gateway both declare @ComponentScan, @EntityScan, @EnableJpaRepositories explicitly because the common module lives outside their base package.
+- WebFlux + JPA: the api-gateway and hello-service exclude DataSourceAutoConfiguration, DataSourceTransactionManagerAutoConfiguration, HibernateJpaAutoConfiguration because common pulls in spring-data-jpa transitively but neither service has a DB.
+- Security: the gateway is the trust boundary for the legacy downstream services (hello-service). **sso-admin is the exception** — it re-validates the JWT and enforces `hasRole("ADMIN")` on every business endpoint because it owns the user/role catalog and is the most security-sensitive downstream. Activation/restore-password links (`/activateAccount`, `/forgotPassword`, `/restorePassword`) are explicitly `permitAll()` so a user clicking the email link can reach them.
+- sso-admin authority prefix: when granting authorities in `JwtAuthenticationFilter`, the code prefixes `ROLE_` so Spring Security's `hasRole("ADMIN")` works. The raw role name in the JWT is `ADMIN` (no prefix).
+
+# ---- Naming ---------------------------------------------------------------
+- Static: PascalCase classes, camelCase methods, UPPER_SNAKE_CASE constants.
+- Endpoints: keep legacy names (e.g. /getToken, /getInfoUser) — the modernization preserves the API surface.
+- Properties: sso.jwt.*, sso.bootstrap.*, eureka.*, spring.*, server.* — never invent new top-level groups without discussion.
+
+# ---- Tests ----------------------------------------------------------------
+- Run from the repo root: mvn -pl <module> test -am  (the -am rebuilds common first).
+- auth-center and JwtTokenServiceTest use H2 in PostgreSQL mode for tests, not Testcontainers. Don't change to Testcontainers without coordination.
+- Spring slice tests: @WebFluxTest for reactive controllers, @DataJpaTest for repos, full @SpringBootTest only when slice tests are insufficient.
+
+# ---- When in doubt --------------------------------------------------------
+- Read README.md — it has the architecture, API surface, env vars, and migration roadmap.
+- Don't introduce a new dependency without checking that the parent BOM already manages it.
+- Don't change the JWT signing algorithm away from HS256 without explicit approval.
+- Don't change the BCrypt cost away from 12 without explicit approval.
+- **sso-admin uses H2 in PostgreSQL compatibility mode + `NON_KEYWORDS=GROUPS`** in the JDBC URL for tests. The `Group` entity is `@Table(name = "groups")` — `GROUPS` is a reserved word in H2 but a normal identifier in Postgres. The test JDBC URL neutralizes it.
+- **sso-admin Freemarker templates** are loaded by Spring Boot's Freemarker auto-configuration from `classpath:/templates/`. Don't define your own `freeMarkerConfiguration` bean — it collides with the autoconfig and the context fails to load (`BeanDefinitionOverrideException`).
+- **Phase 2 entities** (`Microservice`, `Endpoint`, `Route`) keep the legacy `UPPER_CASE` singular table names (`MICROSERVICE`, `ENDPOINT`, `ROUTE`) with `UPPER_SNAKE_CASE` columns. The joining tables (`ENDPOINT_MICROSERVICE`, `ROLE_ENDPOINT`, `ROLE_ROUTE`) follow the same pattern. The owning side of each `@ManyToMany` is on the entity that has `@JoinTable` (Endpoint for both `ENDPOINT_MICROSERVICE` and `ROLE_ENDPOINT`; Route for `ROLE_ROUTE`). Use the entity helper methods (`addMicroservice`/`removeMicroservice`/`addRole`/`removeRole`), never the setter on the back-reference. The `Route.idParent` self-FK is nullable — the service layer normalizes the legacy `"0"` sentinel to `null` on write.
+- **Phase 2 SQL init scripts** run in alphabetical order: `01-create-sso-db.sh` (users / role / role_users), `02-create-sso-admin-tables.sh` (groups / user_group), `03-create-sso-admin-phase2-tables.sh` (Phase 2 — MICROSERVICE / ENDPOINT / ROUTE + their 3 join tables). Future phases (App/Screen/Brick in Phase 3, etc.) will layer as `04-*`, `05-*`, etc. The official `postgres` Docker image only runs these on the **first** startup of a fresh volume; existing containers need a manual `psql` run.
+
+# ---- admin-ui conventions -------------------------------------------------
+- **Access token in memory only**. Never write it to `localStorage`, `sessionStorage`, cookies, or anywhere persistent. The refresh token lives in the `sso_refresh` httpOnly cookie set by `auth-center`. The SPA's `src/api/client.ts` does single-flight `/auth/refresh` on a 401 (see `RefreshLock`).
+- **Login is `skipAuth: true`** in `src/api/endpoints.ts#authApi.login` — a 401 on the login endpoint means "bad credentials", not "session expired". Don't remove the flag or the client will try to refresh and then bounce the user to /login with a confusing error.
+- **CSP**: the meta tag in `admin-ui/index.html` sets `default-src 'self'`, no `'unsafe-inline'`, no `'unsafe-eval'`, `frame-ancestors 'none'`. Don't add inline `<script>` or `<style>` blocks; Vite's build is already compliant. If you need to add a CDN, host the asset locally and update the CSP.
+- **CORS**: api-gateway + auth-center read `SSO_CORS_ALLOWED_ORIGINS` (comma-separated, no trailing slash) and use `setAllowedOrigins(...)` (NOT `setAllowedOriginPatterns`). `setAllowCredentials(true)` is set. The default in dev is `http://localhost:8080,http://localhost:5173`. Production must set a real allowlist; never use `*`.
+- **Type strictness**: `tsconfig.json` has `exactOptionalPropertyTypes` and `noUncheckedIndexedAccess`. When you see `string | undefined` in an `error?:` prop, don't try to "fix" it by switching to `string | null`. The contract is "absent or string". Same for `password?: string` in `UserFormValues` — leave it optional.
+- **Form pattern**: each CRUD page has a `<Domain>ListPage.tsx` + `<Domain>FormDrawer.tsx`. The page owns the list query and the create/update mutations; the drawer owns the form state and Zod validation via `components/forms/Form.tsx`. Zod schemas live in `src/schemas.ts`.
+- **TanStack Query keys**: centralised per-domain in `src/hooks/use*.ts` (e.g. `userKeys.all`, `userKeys.list()`, `userKeys.rolesChecked(userId)`). Mutate then `qc.invalidateQueries({ queryKey: <key> })` — never call `refetch` manually.
+- **Tests**: vitest + @testing-library/react in `src/test/`. Pattern for hook tests: render a `<Probe>` component that reads the hook and re-renders on every state change so the test reads the latest snapshot via data attributes (see `AuthProvider.test.tsx` for the canonical example). The "loading then settled" pattern needs the probe to filter on `auth.status !== "loading"`.

@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.co.eurekatic</groupId>
+        <artifactId>sso-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>sso-admin</artifactId>
+    <name>sso-admin</name>
+    <description>User/Role/Group CRUD, account activation, password restore. Modernized port of the legacy sso-service/ admin surface (Phase 1 of the sso-service migration plan).</description>
+
+    <properties>
+        <start-class>com.co.eurekatic.ssoadmin.SsoAdminApplication</start-class>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Servlet (Tomcat). sso-admin is not reactive — the
+             legacy controllers are blocking and the migration
+             preserves that contract. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!-- Postgres JDBC driver. Tests use H2 in PostgreSQL
+             compatibility mode, but production runs against a real
+             Postgres cluster (docker-compose postgres:16). Without
+             this dependency the app starts in test mode but crashes
+             in production with "Cannot load driver class:
+             org.postgresql.Driver". -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- Observability: pure-OTLP export via the single Boot 4 starter. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-opentelemetry</artifactId>
+        </dependency>
+
+        <!-- Mail + Freemarker for activation and restore-password
+             emails. SMTP creds come from env vars (sso.mail.*) —
+             no hardcoded credentials. In dev, point at MailHog. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-freemarker</artifactId>
+        </dependency>
+
+        <!-- AMQP producer. Publishes notification events to the
+             notifications topic exchange (consumed by
+             notification-service). Connection details come from
+             spring.rabbitmq.* in application.yml; for container
+             runs the docker-compose env block points at the
+             rabbitmq service. We use Spring AMQP's
+             RabbitTemplate + Jackson2JsonMessageConverter
+             (declared in NotificationsConfig). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+
+        <!-- Caches the app-access check (does any of the caller's
+             roles have a role_app binding to this app?) so
+             SsoAdminAppAccessManager doesn't hit Postgres on every
+             single request. Same Redis instance auth-center already
+             uses for refresh tokens (distinct key namespace via the
+             "app-access" cache name — no collision). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-cache</artifactId>
+        </dependency>
+        <!--
+            Spring Boot 4.0 split autoconfigure per-stack. AMQP
+            (RabbitMQ connection factory + RabbitTemplate autoconfig)
+            moved out of spring-boot-autoconfigure into this
+            dedicated jar. Without it, `spring.rabbitmq.*`
+            config is ignored, the CachingConnectionFactory
+            is never created, and `RabbitTemplate` bean
+            registration fails — even though the starter
+            dependency is satisfied. Same split was applied
+            to Flyway, JDBC, and Hibernate (see notif-service
+            and memory note `spring-boot-4-package-moves.md`).
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-amqp</artifactId>
+        </dependency>
+
+        <!-- Spring Security 6 (servlet stack, not reactive). The
+             gateway is the trust boundary, but sso-admin re-validates
+             the JWT on every request via JwtAuthenticationFilter. -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-config</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-resource-server</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-jose</artifactId>
+        </dependency>
+
+        <!-- Service discovery. Registers with Eureka so the gateway's
+             dynamic route locator auto-creates /sso-admin/** → lb://sso-admin. -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+
+        <!-- ===== test scope ===== -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Required by Spring 7's MockMvcWebTestClient.bindToApplicationContext().
+             Even when bound to an in-process MockMvc, the builder still
+             resolves a WebTestClient instance via WebTestClient.bindToServer,
+             which asserts spring-webflux is on the classpath. We need the
+             reactive WebTestClient API to write the integration tests
+             (TestRestTemplate was removed in Spring Boot 4). Test scope only
+             — the runtime app remains a pure servlet stack. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- H2 in PostgreSQL compatibility mode for tests. Tests use
+             NON_KEYWORDS=GROUPS so the @Table(name="groups") entity
+             can be created against H2 (groups is reserved in H2). -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>${project.artifactId}</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -1,0 +1,218 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "uid": "sso-overview",
+  "title": "SSO Stack — Overview",
+  "tags": ["sso", "lgtm", "overview"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "mimir"},
+        "query": "label_values(up{service=~\".+\"}, service)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {"selected": true, "text": ["All"], "value": ["$__all"]}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request Rate (req/s) by Service",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "lastNotNull"]}
+      },
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "targets": [
+        {
+          "expr": "sum by (service) (rate(http_server_requests_milliseconds_count{service=~\"$service\"}[5m]))",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Error Rate % (5xx) by Service",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "lastNotNull"]}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"value": null, "color": "green"},
+              {"value": 1, "color": "yellow"},
+              {"value": 5, "color": "red"}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "(sum by (service) (rate(http_server_requests_milliseconds_count{service=~\"$service\",status=~\"5..\"}[5m])) / sum by (service) (rate(http_server_requests_milliseconds_count{service=~\"$service\"}[5m]))) * 100",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Avg Latency by Service (s)",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "lastNotNull"]}
+      },
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "targets": [
+        {
+          "expr": "sum by (service) (rate(http_server_requests_milliseconds_sum{service=~\"$service\"}[5m])) / sum by (service) (rate(http_server_requests_milliseconds_count{service=~\"$service\"}[5m])) / 1000",
+          "legendFormat": "avg {{service}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "JVM Heap Used by Service",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}
+      },
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "targets": [
+        {
+          "expr": "sum by (service) (jvm_memory_used_bytes{service=~\"$service\",area=\"heap\"})",
+          "legendFormat": "{{service}} heap used",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Service Health (JVM heap activity in last 2m = UP)",
+      "description": "Each Spring service emits `jvm_memory_used_bytes` every 10s via Micrometer. A row is shown UP while that stream is fresh, DOWN when no sample has arrived in the last 2 minutes. We use heap activity instead of `up` directly because Boot 4's actuator `up` gauge only emits on health-probe scrape (every ~30s) and Mimir marks the series stale between probes — `up{service=...}` then returns empty even for healthy services.",
+      "type": "table",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"x": 0, "y": 16, "w": 24, "h": 8},
+      "options": {
+        "showHeader": true,
+        "sortBy": [{"displayName": "service", "desc": false}]
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "Value"}, "properties": [
+            {"id": "mappings", "value": [
+              {"type": "value", "options": {"1": {"text": "UP", "color": "green", "index": 0}}},
+              {"type": "value", "options": {"0": {"text": "DOWN", "color": "red", "index": 1}}}
+            ]},
+            {"id": "custom.displayMode", "value": "color-background-solid"}
+          ]},
+          {"matcher": {"id": "byName", "options": "service"}, "properties": [{"id": "custom.width", "value": 180}]},
+          {"matcher": {"id": "byName", "options": "instance"}, "properties": [{"id": "custom.width", "value": 220}]},
+          {"matcher": {"id": "byName", "options": "job"}, "properties": [{"id": "custom.width", "value": 220}]}
+        ]
+      },
+      "targets": [
+        {
+          "expr": "clamp_max(sum by (service, instance, job) (rate(jvm_memory_used_bytes{service=~\"$service\",area=\"heap\"}[2m])), 1) > 0",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"__name__": true, "Time": true},
+            "renameByName": {
+              "service": "Service",
+              "instance": "Instance",
+              "job": "Job",
+              "Value": "Status"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "JVM Heap Used by Pool & Service",
+      "description": "Per-pool breakdown (Eden, Survivor, Old Gen, CodeCache, ...) of the heap currently in use. Spikes on a single pool are usually GC pressure or a leak — watch the Old Gen line specifically.",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"x": 0, "y": 24, "w": 24, "h": 9},
+      "options": {
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "mean"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "targets": [
+        {
+          "expr": "sum by (service, id) (jvm_memory_used_bytes{service=~\"$service\",area=\"heap\"})",
+          "legendFormat": "{{service}} / {{id}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Log Volume by Service & Level (Loki)",
+      "description": "Log line rate per service, split by log level. A sudden spike in ERROR/WARN on a single service is the canonical signal of something needing attention.",
+      "type": "timeseries",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "gridPos": {"x": 0, "y": 33, "w": 24, "h": 9},
+      "options": {
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "lastNotNull"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "fieldConfig": {"defaults": {"unit": "lines"}, "overrides": []},
+      "targets": [
+        {
+          "expr": "sum by (service_name, severity_text) (count_over_time({service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{service_name}} / {{severity_text}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

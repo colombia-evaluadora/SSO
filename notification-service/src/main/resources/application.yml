@@ -1,0 +1,228 @@
+server:
+  # 8085 avoids collisions with auth-center (8081), hello-service (8082),
+  # sso-admin (8083), query-service (8084), and the gateway (8080).
+  port: ${PORT:8085}
+  shutdown: graceful
+
+spring:
+  application:
+    name: notification-service
+  main:
+    banner-mode: off
+
+  datasource:
+    # The localhost default assumes the operator is running
+    # notification-service on the host with Postgres reachable
+    # via the Docker port mapping (compose forwards
+    # ${POSTGRES_PORT:-5432}:5432 to the host's loopback).
+    # For container runs the compose env block sets
+    # SPRING_DATASOURCE_URL with the fully-built JDBC URL
+    # (composed from DB_URL host:port + DB_NAME + DB_SSLMODE +
+    # DB_CHANNEL_BINDING), so this property is overridden at
+    # runtime. The default below is the host-mode fallback for
+    # `mvn spring-boot:run` outside compose.
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/sso}
+    username: ${DB_USER:sso}
+    password: ${DB_PASSWORD:change-me-in-prod}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      # 5s/3s/5s — same shape as auth-center / sso-admin. Fail
+      # fast on DB unavailability rather than hanging the
+      # listener thread.
+      connection-timeout: 5000
+      validation-timeout: 3000
+      initialization-fail-timeout: 5000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        # Hibernate 7 auto-detects dialect from the JDBC
+        # connection. Setting it explicitly triggers
+        # HHH90000025. Match the convention used by
+        # sso-admin/application.yml.
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: true
+    # Spec mandates Flyway for both notification_log and
+    # provider_config. Default schema is "public", matching
+    # the rest of the stack. We do NOT co-locate Flyway under
+    # postgres/init/* — Flyway runs at app boot, init scripts
+    # run once at cluster init. `public` already has tables
+    # populated by sso-admin / auth-center in this dev cluster,
+    # so baseline-on-migrate=true lets Flyway stamp its
+    # history table and apply only its own migrations.
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: 0
+    # Distinct history table — this service shares the `public`
+    # schema with the rest of the stack, and the top-level
+    # `postgres/migrations` (run by the standalone `flyway`
+    # compose service) ALSO tracks "version 1" in the default
+    # `flyway_schema_history` table. Without this override the
+    # two independent migration sets stomp on each other's
+    # checksum for version 1 every time either one runs.
+    table: flyway_schema_history_notification
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASS:guest}
+    virtual-host: ${RABBITMQ_VHOST:/}
+    listener:
+      simple:
+        acknowledge-mode: auto
+        # Per spec — when retries are exhausted, send to DLQ
+        # instead of re-queueing (would otherwise spin forever).
+        default-requeue-rejected: false
+        # Per-concurrency is overridden on the @RabbitListener
+        # annotations themselves (sms 2-5, email 3-10, push
+        # 5-20). These defaults bound the global listener
+        # container; per-queue values still apply.
+        prefetch: 10
+        retry:
+          enabled: true
+          initial-interval: 2s
+          multiplier: 3
+          max-retries: 4
+          stateless: true
+
+  # Thymeleaf for email templates. Templates live in
+  # classpath:/templates/email/{templateId}.html.
+  thymeleaf:
+    prefix: classpath:/templates/
+    suffix: .html
+    mode: HTML
+    encoding: UTF-8
+    cache: true     # prod default; tests override via @TestPropertySource
+
+  # SMTP defaults — used by the fakes' delegate path and as
+  # the source for SmtpEmailProvider's default JavaMailSender.
+  # In dev, the compose env block points SMTP_HOST at mailhog.
+  mail:
+    host: ${SMTP_HOST:mailhog}
+    port: ${SMTP_PORT:1025}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: ${SMTP_AUTH:false}
+          starttls:
+            enable: ${SMTP_STARTTLS:false}
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka}
+    healthcheck:
+      # Keep disabled. See auth-center / sso-admin for the same
+      # rationale — the JPA / Rabbit warm-up window can
+      # transiently flip the aggregator to DOWN and Eureka
+      # would record that as DOWN, refusing to route.
+      # Heartbeat-only is what we want.
+      enabled: false
+  instance:
+    hostname: ${NOTIFICATION_SERVICE_HOSTNAME:}
+    # MUST be true in Spring Cloud Netflix 5.0.2. See sso-admin's
+    # long comment for the load-balancer DNS-resolution rationale.
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
+
+notif:
+  # A provider whose required env vars are absent must log a
+  # WARN and disable itself, never block startup. Read by
+  # ProviderRegistry.
+  fail-on-missing-credentials: false
+  # Auto-refresh of provider_config from the DB.
+  provider-config:
+    refresh-interval-ms: 30000
+  # Resilience4j circuit breaker defaults. Per-provider
+  # instances are built programmatically at startup from this
+  # block, applied to every provider_key.
+  circuit-breaker:
+    failure-rate-threshold: 50
+    slow-call-rate-threshold: 100
+    slow-call-duration-threshold-ms: 5000
+    wait-duration-in-open-state-ms: 30000
+    permitted-number-of-calls-in-half-open-state: 3
+    sliding-window-type: COUNT_BASED
+    sliding-window-size: 10
+    minimum-number-of-calls: 5
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # First module to expose Prometheus. health,info remain
+        # so we keep compatibility with the existing compose
+        # healthcheck pattern (wget /actuator/health | grep UP).
+        include: health,info,prometheus,providers
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when-authorized
+  # Custom endpoint /actuator/providers — implemented in
+  # ProvidersEndpoint (see Phase 4).
+
+  # ---------------------------------------------------------------------------
+  # Observability — pure OTLP. Metrics, traces and logs are all pushed
+  # to the Grafana Alloy collector. Alloy fans out to Mimir / Tempo / Loki.
+  #
+  # The endpoint defaults to the OTEL_EXPORTER_OTLP_ENDPOINT env var
+  # (set to http://alloy:4318 in docker-compose), falling back to
+  # localhost:4318 for a developer running Alloy on the host.
+  #
+  # Spring Boot 4 naming (per the official 2025-11-18 Spring blog):
+  #   metrics  -> management.otlp.metrics.export.url
+  #   tracing  -> management.opentelemetry.tracing.export.otlp.endpoint
+  #   logs     -> management.opentelemetry.logging.export.otlp.endpoint
+  # The old `management.otlp.tracing.endpoint` /
+  # `management.otlp.logs.export.endpoint` namespaces are silently
+  # ignored in Boot 4 — the app would boot, but no traces or logs
+  # would ever reach Alloy and Tempo/Loki would stay empty.
+  # ---------------------------------------------------------------------------
+  otlp:
+    metrics:
+      export:
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 10s
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+    # Resource attributes attached to every metric/trace/log so Grafana
+    # can group by service. service.name comes from spring.application.name.
+    resource-attributes:
+      service.namespace: sso
+      deployment.environment: ${DEPLOY_ENV:dev}
+  tracing:
+    enabled: true
+    sampling:
+      probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
+
+logging:
+  level:
+    root: INFO
+    com.co.eurekatic: INFO
+    # Resilience4j events at INFO so the operator can see
+    # circuit state transitions in the log without DEBUG-level
+    # noise.
+    io.github.resilience4j: INFO

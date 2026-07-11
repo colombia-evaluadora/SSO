@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Strict CSP. We rely on Tailwind's preflight (loaded as a real
+      stylesheet, not inline) and on Vite-emitted JS bundles (also
+      real script tags, no inline). No 'unsafe-inline' for scripts or
+      styles. frame-ancestors 'none' blocks clickjacking.
+      The connect-src allows the dev proxy target and the production
+      gateway; in dev VITE_API_BASE is /api which is same-origin.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src 'self' http://localhost:5173 http://localhost:8080 ws:; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    />
+    <title>SSO Admin</title>
+  </head>
+  <body class="bg-surface-50 text-surface-900">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

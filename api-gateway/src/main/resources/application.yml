@@ -1,0 +1,331 @@
+server:
+  port: 8080
+  shutdown: graceful
+
+spring:
+  application:
+    name: api-gateway
+  main:
+    banner-mode: off
+    web-application-type: reactive
+
+  cloud:
+    gateway:
+      # Spring Cloud Gateway 5.0.x (Spring Cloud 2025.1.2 / Oakwood)
+      # moved every config knob from `spring.cloud.gateway.*` down
+      # one level to `spring.cloud.gateway.server.webflux.*`. The
+      # `server` node is the multi-protocol router (webflux vs
+      # mvc), and `webflux` is the reactive variant — this app picks
+      # the webflux branch via the new starter
+      # (`spring-cloud-starter-gateway-server-webflux`).
+      server:
+        webflux:
+          # SCG's SimpleUrlHandlerMappingGlobalCorsAutoConfiguration binds
+          # `spring.cloud.gateway.server.webflux.globalcors` onto the
+          # reactive router's URL handler mapping. With no globalcors
+          # config, that binding is an empty map, and the router's CORS
+          # processor then rejects every Origin-bearing request with
+          # 403 "Invalid CORS request" BEFORE our CorsWebFilter (from the
+          # CorsConfigurationSource bean) can approve it. We own CORS via
+          # that bean, so turn the SCG-side handler off explicitly. (The
+          # default would also be `matchIfMissing=true`, so an absent
+          # property keeps the auto-config active — we have to set false
+          # here.)
+          globalcors:
+            add-to-simple-url-handler-mapping: false
+          # Static routes. The dynamic discovery locator (see
+          # DynamicRouteSupportConfig) auto-creates a route per service
+          # registered with Eureka, lowercased service id as the path.
+          # Static routes take precedence when ids collide.
+          routes:
+            # Bare root "/" → 302 redirect to the admin SPA. Without
+            # this, hitting http://localhost:8080/ falls through to
+            # deny-by-default and returns a raw 401 error page. The SPA
+            # is served at /admin/** (AdminUiGlobalFilter); once it
+            # loads, RequireAuth client-side-redirects to the login
+            # form. The `uri` is a required placeholder — RedirectTo
+            # short-circuits the exchange before any forwarding.
+            - id: root-redirect
+              uri: "no://op"
+              predicates:
+                - Path=/
+              filters:
+                - RedirectTo=302, /admin/
+            - id: auth-center
+              uri: lb://auth-center
+              predicates:
+                - Path=/auth/**
+              filters:
+                - StripPrefix=1
+                - AddResponseHeader=X-Source, api-gateway
+            - id: auth-center-info
+              uri: lb://auth-center
+              predicates:
+                # /getUsersSSO discloses usernames + emails + full names
+                # of every active user. Auth gating lives at the
+                # WebFlux SecurityConfig layer (commits 11 + 12):
+                # `.pathMatchers("/getUsersSSO").hasAuthority("ADMIN")`
+                # rejects anonymous callers BEFORE route forwarding
+                # happens. The route entry stays so ADMIN callers can
+                # actually reach auth-center; the security check is
+                # upstream of the route forwarder. Removing the entry
+                # here would 404 legitimate ADMIN traffic, so this
+                # route is auth-gated, NOT route-removed.
+                #
+                # /getToken was removed from this predicate in this
+                # branch (commits 17-19): the controller method is
+                # gone, the SecurityConfig permit-all entries on
+                # both layers are gone. An anonymous /getToken
+                # request hits anyExchange().authenticated() at the
+                # gateway and gets 401 before any forwarding; an
+                # authenticated /getToken has no controller left
+                # and would have been a 404 anyway, so there is
+                # nothing to forward.
+                #
+                # /myApps (added for the post-login app launcher) is
+                # NOT in any permitAll list at either security layer —
+                # it falls through to anyExchange().authenticated(),
+                # same as /api/sso-admin/**. The route entry here only
+                # enables forwarding; it doesn't loosen the gate.
+                - Path=/login,/getApiToken,/getInfoUser,/getUsersSSO,/googleLogin,/myApps
+              filters:
+                - AddResponseHeader=X-Source, api-gateway
+            # /api/** surface for the admin-ui SPA (VITE_API_BASE=/api).
+            # The SPA talks to /api/auth/** (login/logout/refresh) and
+            # /api/sso-admin/** (User/Role/Group/Microservice/Endpoint/Route
+            # CRUD). We strip only the /api prefix here; auth-center's own
+            # /auth/* prefix is preserved so RefreshController
+            # (@RequestMapping("/auth") + @PostMapping("/refresh") etc.)
+            # matches. The login endpoint is the one exception: it lives
+            # directly at /login (not /auth/login) because JsonLoginFilter
+            # is wired to a PathPatternRequestMatcher for "/login", so its
+            # route strips one extra segment.
+            - id: api-auth-login
+              uri: lb://auth-center
+              predicates:
+                - Path=/api/auth/login
+                - Method=POST
+              filters:
+                - StripPrefix=2
+                - AddResponseHeader=X-Source, api-gateway
+            # SPA-facing mirror of the bare /myApps above — same
+            # StripPrefix=2 shape as api-auth-login, since
+            # AuthController's method lives at the bare path, not
+            # under /auth/*.
+            - id: api-auth-myapps
+              uri: lb://auth-center
+              predicates:
+                - Path=/api/auth/myApps
+                - Method=GET
+              filters:
+                - StripPrefix=2
+                - AddResponseHeader=X-Source, api-gateway
+            - id: api-auth-cookie
+              uri: lb://auth-center
+              predicates:
+                - Path=/api/auth/refresh,/api/auth/logout
+              filters:
+                - StripPrefix=1
+                - AddResponseHeader=X-Source, api-gateway
+            - id: api-sso-admin
+              uri: lb://sso-admin
+              predicates:
+                - Path=/api/sso-admin/**
+              filters:
+                # StripPrefix=2 strips both /api AND /sso-admin because
+                # sso-admin's controllers live at /role, /microservice,
+                # /endpoint, /group, /route (no /sso-admin prefix), and
+                # UserController has no prefix at all (/getUsers,
+                # /createAccount, etc.). See the existing /sso-admin/**
+                # route below for the legacy /sso-admin surface.
+                - StripPrefix=2
+                - AddResponseHeader=X-Source, api-gateway
+            # sso-admin preserves the legacy `sso-service` URL surface
+            # so existing clients (and the SPA) don't have to change.
+            #
+            # sso-admin's controllers are mounted under different
+            # prefixes (`@RequestMapping("/role")`, `/microservice`,
+            # `/endpoint`, `/group`, `/route`) and one with NO prefix
+            # (UserController, with `/getUsers`, `/activateAccount`,
+            # `/forgotPassword`, ...). We mirror that here:
+            #
+            #   /sso-admin/role/**         -> sso-admin/role/**
+            #   /sso-admin/microservice/** -> sso-admin/microservice/**
+            #   /sso-admin/endpoint/**     -> sso-admin/endpoint/**
+            #   /sso-admin/group/**        -> sso-admin/group/**
+            #   /sso-admin/route/**        -> sso-admin/route/**
+            #   /sso-admin/**              -> sso-admin/{rest}        (StripPrefix=1, catches UserController)
+            - id: sso-admin-role
+              uri: lb://sso-admin
+              predicates:
+                - Path=/sso-admin/role/**
+              filters:
+                - AddResponseHeader=X-Source, api-gateway
+            - id: sso-admin-microservice
+              uri: lb://sso-admin
+              predicates:
+                - Path=/sso-admin/microservice/**
+              filters:
+                - AddResponseHeader=X-Source, api-gateway
+            - id: sso-admin-endpoint
+              uri: lb://sso-admin
+              predicates:
+                - Path=/sso-admin/endpoint/**
+              filters:
+                - AddResponseHeader=X-Source, api-gateway
+            - id: sso-admin-group
+              uri: lb://sso-admin
+              predicates:
+                - Path=/sso-admin/group/**
+              filters:
+                - AddResponseHeader=X-Source, api-gateway
+            - id: sso-admin-route
+              uri: lb://sso-admin
+              predicates:
+                - Path=/sso-admin/route/**
+              filters:
+                - AddResponseHeader=X-Source, api-gateway
+            - id: sso-admin
+              uri: lb://sso-admin
+              predicates:
+                - Path=/sso-admin/**
+              filters:
+                - StripPrefix=1
+                - AddResponseHeader=X-Source, api-gateway
+            # query-service is dynamic: each backing
+            # datasource has its own container registered
+            # with Eureka under query-service-<dialect> or
+            # query-service-<custom-instance-name>. The
+            # auto-discovery locator (see discovery.locator
+            # below) auto-creates a route per service-id,
+            # lowercased. So:
+            #
+            #   /query-service-postgres/**          ->
+            #       query-service-postgres/{path}
+            #   /query-service-oracle/**            ->
+            #       query-service-oracle/{path}
+            #   /query-service-postgres-analytics/** ->
+            #       query-service-postgres-analytics/{path}
+            #
+            # We add a static legacy alias so existing
+            # callers (which hit /qs/** in the legacy
+            # sso-service URL surface) keep working — it
+            # forwards to the canonical postgres instance.
+            # StripPrefix=1 removes /qs before forwarding.
+            - id: query-service-legacy-alias
+              uri: lb://query-service-postgres
+              predicates:
+                - Path=/qs/**
+              filters:
+                - StripPrefix=1
+                - AddResponseHeader=X-Source, api-gateway
+            - id: api-query-service
+              uri: lb://query-service-postgres
+              predicates:
+                - Path=/api/qs/**
+              filters:
+                - StripPrefix=2
+                - AddResponseHeader=X-Source, api-gateway
+          # 404 for unmatched paths (deny-by-default). The reactive
+          # filter will translate this to a 401 for paths that need auth.
+          default-filters:
+            - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials, RETAIN_UNIQUE
+          discovery:
+            locator:
+              enabled: true
+              lower-case-service-id: true
+              include-expression: "serviceId != 'api-gateway'"
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka}
+    # healthcheck.enabled MUST be false here too: otherwise the
+    # gateway itself can transiently flip to DOWN during its own
+    # warm-up window, and clients (the SPA, scripts) get confusing
+    # gateway-down errors. Lease/heartbeat alone is the source of
+    # truth for "is this instance alive".
+    healthcheck:
+      enabled: false
+    # The default 30s is too slow to recover from a restart. After
+    # a service (e.g. auth-center) comes back UP we want the
+    # gateway's ribbon cache to refresh fast so /login doesn't 503
+    # for a full minute. 5s is plenty for local dev and acceptable
+    # in prod (the registry delta payload is tiny).
+    registry-fetch-interval-seconds: 5
+  instance:
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
+
+sso:
+  jwt:
+    secret: ${JWT_SECRET:change-me-change-me-change-me-change-me-change-me-1234567890}
+    issuer: sso-postgres
+    access-token-ttl-seconds: 3600
+    api-token-ttl-seconds: 86400
+    header-name: Authorization
+    token-prefix: "Bearer "
+  cors:
+    allowed-origins: ${SSO_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:4173,http://localhost:3000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
+  # ---------------------------------------------------------------------------
+  # Observability — pure OTLP. Metrics, traces and logs are all pushed
+  # to the Grafana Alloy collector. Alloy fans out to Mimir / Tempo / Loki.
+  #
+  # The endpoint defaults to the OTEL_EXPORTER_OTLP_ENDPOINT env var
+  # (set to http://alloy:4318 in docker-compose), falling back to
+  # localhost:4318 for a developer running Alloy on the host.
+  #
+  # Spring Boot 4 naming (per the official 2025-11-18 Spring blog):
+  #   metrics  -> management.otlp.metrics.export.url
+  #   tracing  -> management.opentelemetry.tracing.export.otlp.endpoint
+  #   logs     -> management.opentelemetry.logging.export.otlp.endpoint
+  # The old `management.otlp.tracing.endpoint` /
+  # `management.otlp.logs.export.endpoint` namespaces are silently
+  # ignored in Boot 4 — the app would boot, but no traces or logs
+  # would ever reach Alloy and Tempo/Loki would stay empty.
+  # ---------------------------------------------------------------------------
+  otlp:
+    metrics:
+      export:
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 10s
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+    # Resource attributes attached to every metric/trace/log so Grafana
+    # can group by service. service.name comes from spring.application.name.
+    resource-attributes:
+      service.namespace: sso
+      deployment.environment: ${DEPLOY_ENV:dev}
+  tracing:
+    enabled: true
+    sampling:
+      # 100% in dev so every request shows a trace. Lower to e.g. 0.1
+      # in production to cap trace volume.
+      probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
+
+logging:
+  level:
+    root: INFO
+    com.co.eurekatic: INFO
+    org.springframework.cloud.gateway: INFO
+    reactor.netty: INFO

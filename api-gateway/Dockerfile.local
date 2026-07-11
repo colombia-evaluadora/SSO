@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1.7
+#
+# Local-only Dockerfile for api-gateway: composes a previously-built
+# jar (built on the host because Docker's memory cap kills the maven
+# stage on small colima VMs) with a previously-built admin-ui dist
+# (built on the host too, see /tmp/build-gateway.sh).
+#
+# The compose file uses Dockerfile (multi-stage) by default; switch to
+# this one via `docker compose -f docker-compose.yml -f docker-compose.local.yml`
+# only when the in-container builds OOM.
+
+FROM eclipse-temurin:25-jre
+WORKDIR /app
+
+RUN set -ux ; \
+    # uid/gid 1000 are usually already taken (ubuntu in the temurin base).
+    # Pick 10001 instead — guaranteed free, and only consumed by this
+    # image so collisions across the compose stack don't matter.
+    if ! getent group 10001 >/dev/null ; then groupadd --system --gid 10001 app ; fi ; \
+    if ! getent passwd app >/dev/null ; then \
+        existing_gid=$(getent group 10001 | cut -d: -f3) ; \
+        useradd --system --uid 10001 --gid $existing_gid --home /app app ; \
+    fi
+
+COPY api-gateway/target/api-gateway.jar /app/app.jar
+# SPA dist baked into the classpath so AdminUiRouter can serve it
+# from static/admin/. The previous version of this file rebuilt the
+# dist inside Docker (npm run build) but colima's default 4 GiB VM
+# routinely OOM-killed Vite's transformation step; the host has more
+# headroom so we build the SPA on the host and just COPY it in.
+COPY admin-ui/dist/ /app/static/admin/
+
+USER app
+EXPOSE 8080
+
+ENTRYPOINT ["java", \
+    "-XX:+UseContainerSupport", \
+    "-XX:MaxRAMPercentage=70", \
+    "-XX:+ExitOnOutOfMemoryError", \
+    "-Djava.security.egd=file:/dev/./urandom", \
+    "-jar", "/app/app.jar"]

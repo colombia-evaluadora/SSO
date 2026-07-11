@@ -1,0 +1,79 @@
+# Test profile: standalone boot against Testcontainers.
+# Disables Eureka (no service registry in tests) and
+# Thymeleaf caching so email templates reload per test.
+server:
+  port: 0
+
+spring:
+  application:
+    name: notification-service-test
+  main:
+    banner-mode: off
+
+  # The base class overrides these via @DynamicPropertySource;
+  # this block is here only so the bean factory can wire
+  # before the containers start.
+  datasource:
+    url: jdbc:postgresql://localhost:5432/sso
+    username: sso
+    password: change-me-in-prod
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    listener:
+      simple:
+        # Tests rely on retries to assert the "all providers
+        # failed" path; keep retries on but exhaust them
+        # quickly so the DLQ assertion doesn't wait minutes.
+        retry:
+          enabled: true
+          initial-interval: 100ms
+          multiplier: 2
+          max-attempts: 2
+
+  thymeleaf:
+    cache: false
+
+  # Eureka must be disabled in tests — there is no
+  # registry running and the auto-config will retry
+  # indefinitely otherwise.
+eureka:
+  client:
+    enabled: false
+  instance:
+    prefer-ip-address: true
+
+# Test-only: enable FailingFakeProvider so the
+# "all providers fail" scenarios have something to iterate
+# over. The integration test uses @TestPropertySource to
+# flip this per scenario.
+notif:
+  fail-on-missing-credentials: false
+  provider-config:
+    # Refresh-on-demand only — the integration test triggers
+    # refreshes explicitly via /actuator/providers/refresh.
+    refresh-interval-ms: 600000
+  circuit-breaker:
+    failure-rate-threshold: 50
+    slow-call-rate-threshold: 100
+    slow-call-duration-threshold-ms: 5000
+    wait-duration-in-open-state-ms: 30000
+    permitted-number-of-calls-in-half-open-state: 3
+    sliding-window-type: COUNT_BASED
+    sliding-window-size: 5
+    minimum-number-of-calls: 2
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,providers

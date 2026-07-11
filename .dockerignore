@@ -1,0 +1,25 @@
+# Build artifacts — Maven produces these inside each module, but we
+# don't want them baked into the build context (waste of bandwidth).
+**/target/
+# Exception: the locally-built jars are needed for the Dockerfile.local
+# pattern (host maven build + Docker-built SPA). We COPY them
+# explicitly; everything else under target/ stays excluded.
+!api-gateway/target/api-gateway.jar
+!auth-center/target/auth-center.jar
+!sso-admin/target/sso-admin.jar
+!query-service/target/query-service.jar
+!notification-service/target/notification-service.jar
+**/.idea/
+**/*.iml
+**/.vscode/
+**/.DS_Store
+**/.git/
+**/.gitignore
+**/.mvn/
+
+# Docker / compose files themselves.
+**/Dockerfile
+**/docker-compose*.yml
+
+# Don't ship the postgres data dir if someone has run it locally.
+**/postgres-data/

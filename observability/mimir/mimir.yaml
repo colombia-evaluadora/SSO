@@ -1,0 +1,63 @@
+# =====================================================================
+# Grafana Mimir — metrics backend, monolithic single-node mode
+# (-target=all, the grafana/mimir image default) with local filesystem
+# object storage. Single container, no MinIO/S3 needed for dev. For
+# production HA, point common.storage at s3/gcs and scale out the
+# targets.
+#
+# Mimir 3.x is stricter than 2.x about overlapping filesystem paths:
+# every storage subsystem (blocks, tsdb, ruler, compactor) needs its
+# own directory and Mimir rejects any pair where one is a subdir of
+# another. For monolithic single-node that means FOUR sibling dirs
+# under /data. We pre-create them via the named `mimir-data` volume.
+# =====================================================================
+multitenancy_enabled: false
+
+server:
+  http_listen_port: 9009
+  grpc_listen_port: 9095
+  log_level: warn
+
+# Anonymous usage stats off.
+usage_stats:
+  enabled: false
+
+common:
+  storage:
+    backend: filesystem
+    # Must not overlap with blocks_storage.tsdb.dir below — Mimir
+    # refuses to start if the filesystem "bucket" (where compacted
+    # blocks live) nests inside the local TSDB WAL/head directory.
+    filesystem:
+      dir: /data/mimir/blocks
+
+# Ruler storage at a sibling path of the blocks dir. The CLI flag is
+# `-ruler-storage.filesystem.dir` (default "ruler") which in YAML is
+# the `ruler_storage:` block.
+ruler_storage:
+  filesystem:
+    dir: /data/mimir/ruler
+
+# Compactor has its own state directory, also a sibling of blocks.
+compactor:
+  data_dir: /data/mimir/compactor
+
+# Single-node Mimir has 1 ingester; the default replication_factor
+# of 3 makes every write fail with "at least 2 live replicas
+# required". For a dev stack running Mimir as `-target=all` in a
+# single container, force the ingester ring's replication factor
+# to 1 so writes succeed. PRODUCTION: remove this block — production
+# HA needs replication_factor=3 across 3 ingesters.
+ingester:
+  ring:
+    replication_factor: 1
+
+# Generous single-node limits so the dev stack never trips ingestion
+# rate limits when all services + Tempo's metrics_generator push at once.
+limits:
+  ingestion_rate: 100000
+  ingestion_burst_size: 200000
+  # OTLP metrics from Micrometer arrive with resource attributes; keep
+  # them as labels so `service_name` is queryable in Grafana.
+  otel_metric_suffixes_enabled: false
+  max_label_names_per_series: 60

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Local copy of the shared logback config in `common`. The eurekaserver
+  does not depend on `common`, so it cannot inherit the shared config
+  from the classpath. Kept in lockstep with the versions in
+  common/src/main/resources/logback-spring.xml and
+  provisioner/src/main/resources/logback-spring.xml — if you change one,
+  change the other two.
+
+  - The OTEL appender forwards every log event as an OTLP log record to
+    the Grafana Alloy collector. The exporter endpoint is picked up from
+    management.opentelemetry.logging.export.otlp.endpoint (set in
+    application.yml). The OpenTelemetry instance is installed by
+    OpenTelemetryAppenderConfig#afterPropertiesSet, which runs before any
+    application code logs anything.
+
+  - CONSOLE is kept so container `docker compose logs <svc>` still works.
+-->
+<configuration>
+
+  <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+  <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+  <appender name="OTEL" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender"/>
+
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+    <appender-ref ref="OTEL"/>
+  </root>
+
+</configuration>

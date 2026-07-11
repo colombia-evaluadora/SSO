@@ -1,0 +1,194 @@
+// =====================================================================
+// Grafana Alloy — the single OTLP collector for the modernized SSO
+// stack ("máximo Grafana": one agent, one protocol).
+//
+// Every Spring service (api-gateway, auth-center, sso-admin,
+// query-service, provisioner, hello-service) pushes OTLP over the
+// compose network to alloy:4318 (HTTP) / alloy:4317 (gRPC). The React
+// SPA pushes Real-User-Monitoring to the Faro receiver on :12347.
+//
+// Alloy fans everything out to the LGTM backends:
+//   traces  -> Tempo   (otlp gRPC)
+//   metrics -> Mimir   (prometheus remote_write)
+//   logs    -> Loki    (native OTLP ingestion, Loki 3.x)
+// =====================================================================
+
+// ---- OTLP receiver: every Spring service pushes here ---------------
+otelcol.receiver.otlp "default" {
+  grpc { endpoint = "0.0.0.0:4317" }
+  http { endpoint = "0.0.0.0:4318" }
+
+  output {
+    metrics = [otelcol.processor.transform.promote_service.input]
+    logs    = [otelcol.processor.transform.promote_service.input]
+    traces  = [otelcol.processor.transform.promote_service.input]
+  }
+}
+
+// ---- Promote OTel resource attributes to regular attributes ----------
+// Spring Boot 4 + the OTel auto-instrumentation produce HTTP / JDBC
+// metrics whose resource attributes are set at the resource level,
+// but the OTel -> Prometheus exporter does NOT promote every
+// resource attribute to a Prometheus label. Specifically:
+//
+//   - Micrometer's MeterRegistry metrics (jvm_*, logback_*, up) DO
+//     carry `service.name` as a label, so Mimir sees
+//     `service=api-gateway`.
+//   - OTel auto-instrumented metrics (http_server_requests_
+//     milliseconds_*, http_client_requests_milliseconds_*) carry
+//     `service.name` ONLY at the resource level, so the Prometheus
+//     exporter collapses it into the combined `job` label
+//     (`sso/api-gateway`) and never produces a standalone `service`
+//     label.
+//
+// Same gap for `service.namespace`: it never reaches Mimir as a
+// label. To make Grafana / dashboards query `service` uniformly
+// across every metric type, copy the resource attributes onto the
+// metric / log / span attributes here. After this pass the
+// exporter maps `attributes["service"]` -> label `service` and
+// `attributes["service_namespace"]` -> label `service_namespace`
+// for every series, regardless of which emitter produced it.
+//
+// Runs BEFORE the batch processor so the promoted attributes ride
+// the same batch flush as the rest of the payload.
+otelcol.processor.transform "promote_service" {
+  error_mode = "silent"
+
+  metric_statements {
+    context = "datapoint"
+    statements = [
+      `set(attributes["service"], resource.attributes["service.name"])`,
+      `set(attributes["service_namespace"], resource.attributes["service.namespace"])`,
+    ]
+  }
+
+  log_statements {
+    context = "log"
+    statements = [
+      `set(attributes["service"], resource.attributes["service.name"])`,
+      `set(attributes["service_namespace"], resource.attributes["service.namespace"])`,
+    ]
+  }
+
+  trace_statements {
+    context = "span"
+    statements = [
+      `set(attributes["service"], resource.attributes["service.name"])`,
+      `set(attributes["service_namespace"], resource.attributes["service.namespace"])`,
+    ]
+  }
+
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+    logs    = [otelcol.processor.batch.default.input]
+    traces  = [otelcol.processor.batch.default.input]
+  }
+}
+
+// Batching smooths export bursts and cuts backend round-trips.
+otelcol.processor.batch "default" {
+  output {
+    metrics = [otelcol.exporter.prometheus.mimir.input]
+    logs    = [otelcol.exporter.otlphttp.loki.input]
+    traces  = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+// ---- Traces -> Tempo (OTLP gRPC) ----------------------------------
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "tempo:4317"
+    tls { insecure = true }
+  }
+}
+
+// ---- Metrics -> Mimir ---------------------------------------------
+// OTLP metrics are converted to the Prometheus data model and pushed
+// to Mimir's remote_write endpoint. Mimir is Prometheus-compatible,
+// so nothing on the app side knows or cares it isn't Prometheus.
+otelcol.exporter.prometheus "mimir" {
+  forward_to = [prometheus.remote_write.mimir.receiver]
+}
+prometheus.remote_write "mimir" {
+  endpoint {
+    url = "http://mimir:9009/api/v1/push"
+  }
+}
+
+// ---- Logs -> Loki (native OTLP ingestion, Loki 3.x) ---------------
+otelcol.exporter.otlphttp "loki" {
+  client {
+    endpoint = "http://loki:3100/otlp"
+  }
+}
+
+// ---- Faro receiver: RUM from the React SPA ------------------------
+// The browser POSTs page loads, JS errors, Web Vitals and frontend
+// spans here. Logs land in Loki; browser spans join the same Tempo
+// trace graph as the backend spans (end-to-end SPA -> gateway ->
+// service correlation).
+faro.receiver "spa" {
+  server {
+    listen_address       = "0.0.0.0"
+    listen_port          = 12347
+    cors_allowed_origins = ["*"]
+  }
+  output {
+    logs   = [loki.write.faro.receiver]
+    traces = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+loki.write "faro" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+
+// ---- Loki: tail Docker container logs ------------------------------
+// Tails every compose-managed container's stdout/stderr into Loki,
+// prefixed with a `compose_service` and a `container` label so
+// dashboards can filter by service. Requires `/var/run/docker.sock`
+// mounted into the alloy container (see docker-compose.yml).
+//
+// The relabel pass promotes the compose service label
+// (`com.docker.compose.service`) to a top-level Loki stream label so
+// LogQL can group by it, and writes the bare container name (without
+// the leading "/") into `container`. Every other `__meta_docker_*`
+// label is dropped to keep stream cardinality low.
+//
+// Caveat — Linux only. On Docker Desktop for Windows / macOS the
+// host's docker socket is a NAMED PIPE, not a unix socket, and
+// `loki.source.docker` cannot connect. On those hosts the source
+// stays inert (`loki_source_docker_target_entries_total` stays at
+// 0) and the only path into Loki is the OTLP exporters above. On a
+// Linux host (bare metal, colima in Linux VM, k3d, ...) the unix
+// socket is the real one and the source tails every container's
+// stdout live.
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = []
+  forward_to = [loki.relabel.docker.receiver]
+}
+
+loki.relabel "docker" {
+  forward_to = [loki.write.docker.receiver]
+
+  rule {
+    action        = "replace"
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "compose_service"
+  }
+  rule {
+    action        = "replace"
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.write "docker" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+  external_labels = { source = "docker" }
+}

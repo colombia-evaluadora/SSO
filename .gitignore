@@ -1,0 +1,54 @@
+# Build output
+target/
+build/
+out/
+*.jar
+*.war
+*.ear
+*.class
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.project
+.classpath
+.settings/
+.factorypath
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Maven
+.mvn/wrapper/maven-wrapper.jar
+
+# Local env / secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Node / Vite (admin-ui/)
+node_modules/
+dist/
+dist-ssr/
+coverage/
+.vite/
+.cache/
+playwright-report/
+test-results/
+# TypeScript build artifacts (admin-ui)
+*.tsbuildinfo
+*.d.ts
+# Built SPA bundled into the gateway jar at dev time. The real
+# artifact is the admin-ui/dist/ output, NOT what's copied into the
+# gateway's classpath; serving from inside the jar is a debugging
+# fallback only.
+api-gateway/src/main/resources/static/admin/

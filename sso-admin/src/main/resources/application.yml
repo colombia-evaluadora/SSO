@@ -1,0 +1,219 @@
+server:
+  # Default to 8083 so it doesn't collide with the gateway (8080),
+  # auth-center (8081), or hello-service (8082). Override with PORT.
+  port: ${PORT:8083}
+  shutdown: graceful
+
+spring:
+  application:
+    name: sso-admin
+  main:
+    banner-mode: off
+
+  datasource:
+    # The localhost default assumes the operator is running
+    # sso-admin on the host with Postgres reachable via the
+    # Docker port mapping. For container runs the compose
+    # env block sets SPRING_DATASOURCE_URL with the
+    # fully-built JDBC URL, so this property is overridden
+    # at runtime. The default below is the host-mode
+    # fallback for `mvn spring-boot:run` outside compose.
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/sso}
+    username: ${DB_USER:sso}
+    password: ${DB_PASSWORD:change-me-in-prod}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      # Fail fast on DB unavailability. See auth-center
+      # for the rationale — 5s connection acquisition,
+      # 3s liveness probe, 5s startup fail.
+      connection-timeout: 5000
+      validation-timeout: 3000
+      initialization-fail-timeout: 5000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        # hibernate.dialect is auto-detected from the JDBC connection
+        # in Hibernate 7 (the version pulled in by Spring Boot 4). Setting
+        # it explicitly triggers HHH90000025. We keep the rest of the
+        # JDBC properties here unchanged.
+        jdbc:
+          time_zone: UTC
+
+  # SMTP. Dev defaults point at MailHog (started by docker compose).
+  # In production, override the host/port/credentials via env vars.
+  mail:
+    host: ${SMTP_HOST:localhost}
+    port: ${SMTP_PORT:1025}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: ${SMTP_AUTH:false}
+          starttls:
+            enable: ${SMTP_STARTTLS:false}
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+
+  # Freemarker for email templates. Templates live in
+  # src/main/resources/templates/*.ftl and render with the
+  # variables set by EmailService.
+  freemarker:
+    template-loader-path: classpath:/templates/
+    prefer-file-system-access: false
+    default-encoding: UTF-8
+
+  # Backs the "app-access" cache (SsoAdminAppAccessManager /
+  # AppAccessService) — same Redis instance auth-center already
+  # uses for refresh tokens, distinct key namespace (the cache
+  # name "app-access" is Spring's default key prefix, so no
+  # collision with auth-center's own key scheme).
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2s
+
+  # AMQP producer for notification events. sso-admin publishes
+  # to the `notifications` topic exchange; notification-service
+  # consumes per channel. Connection details match the rest of
+  # the stack — the compose env block points RABBITMQ_HOST at
+  # the `rabbitmq` service.
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASS:guest}
+    virtual-host: ${RABBITMQ_VHOST:/}
+    # Publisher confirms + returns — surface unroutable
+    # messages (typo in the routing key, exchange missing) so
+    # the operator notices instead of the message silently
+    # disappearing into the broker.
+    publisher-confirm-type: correlated
+    publisher-returns: true
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka}
+    # IMPORTANT: keep healthcheck DISABLED. When enabled, the Eureka
+    # client polls /actuator/health locally BEFORE each heartbeat and
+    # reports whatever the aggregator says. During the JPA / Tomcat /
+    # FreeMarker warm-up window the aggregator can transiently flip
+    # to DOWN, which Eureka then records as DOWN and refuses to
+    # route to. With this off, Eureka relies solely on the
+    # lease/heartbeat — a successful renew => UP, no renewal => DOWN.
+    healthcheck:
+      enabled: false
+  instance:
+    # See auth-center for rationale.
+    hostname: ${SSO_ADMIN_HOSTNAME:}
+    # prefer-ip-address MUST be true in Spring Cloud Netflix 5.x
+    # (the client bundled with Spring Cloud 2025.1 / Boot 4). The
+    # load balancer in the api-gateway does a Netty DNS lookup of
+    # `hostName` first and only falls back to ipAddr if the lookup
+    # fails; with `prefer-ip-address: false` and `hostName` set to
+    # a non-resolvable name like `sso-admin`, every forwarded
+    # request through `lb://sso-admin` fails with 500
+    # "Failed to resolve 'sso-admin'". Setting this to true makes
+    # the registration carry ipAddr as the URL the load-balancer
+    # reaches, which is what we want for container/local dev.
+    # We also clear `hostname` (no SSO_ADMIN_HOSTNAME env override)
+    # so Spring Cloud Netflix falls back to the resolved IP rather
+    # than a name Netty can't resolve.
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
+
+sso:
+  jwt:
+    # MUST match auth-center's JWT_SECRET exactly — both sign
+    # (auth-center) and verify (sso-admin) with the same HMAC key.
+    secret: ${JWT_SECRET:change-me-change-me-change-me-change-me-change-me-1234567890}
+    issuer: sso-postgres
+    access-token-ttl-seconds: 3600
+    api-token-ttl-seconds: 86400
+    header-name: Authorization
+    token-prefix: "Bearer "
+  # Provisioner sidecar. sso-admin POSTs here when a
+  # microservice row with kind=QUERY is created. The default
+  # points at the compose-DNS name `provisioner:9000`; for
+  # local dev outside compose, override with
+  # SSO_PROVISIONER_BASE_URL=http://localhost:9000.
+  provisioner:
+    base-url: ${SSO_PROVISIONER_BASE_URL:http://provisioner:9000}
+  admin:
+    # The App.name row (seeded by V10) that identifies THIS
+    # console. SsoAdminAppAccessManager requires the caller to
+    # hold ROLE_ADMIN AND have a role bound (role_app) to this
+    # app — see SecurityConfig. Distinct from sso.email.app-name
+    # below, which is just branding text for outgoing emails.
+    app-name: ${SSO_ADMIN_APP_NAME:SSO-ADMIN}
+    # TTL for the app-access cache (AppAccessService). Bindings
+    # rarely change and AppService.bindRole/unbindRole evict the
+    # relevant entry immediately on write, so this TTL is only a
+    # safety net for out-of-band DB edits — doesn't need to be short.
+    app-access-cache-ttl: ${SSO_ADMIN_APP_ACCESS_CACHE_TTL:5m}
+    # TTL for the "roles" cache (RoleLookupService / MyMenuService).
+    # Role count is stable; RoleAdminService evicts on every write.
+    roles-cache-ttl: ${SSO_ADMIN_ROLES_CACHE_TTL:5m}
+    # TTL for the "user-by-email" cache (UserLookupService /
+    # QueryCatalogService). Short (60s) so role/user mutations
+    # in sso-admin reflect quickly in the catalog auth check.
+    user-by-email-cache-ttl: ${SSO_ADMIN_USER_BY_EMAIL_CACHE_TTL:60s}
+  email:
+    # Branding + URLs for activation and restore-password emails.
+    # Override per environment.
+    from: ${SMTP_FROM:no-reply@example.com}
+    company: ${SSO_EMAIL_COMPANY:Example Inc.}
+    app-name: ${SSO_EMAIL_APP_NAME:SSO Modernizado}
+    logo-url: ${SSO_EMAIL_LOGO_URL:https://www.example.com/img/logo.png}
+    activation-url: ${SSO_ACTIVATION_URL:http://localhost:8080/admin/activate}
+    restore-url: ${SSO_RESTORE_URL:http://localhost:8080/admin/restore-password}
+    activation-template: activation-account.html
+    restore-template: restore-password-account.html
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  otlp:
+    metrics:
+      export:
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 10s
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+    resource-attributes:
+      service.namespace: sso
+      deployment.environment: ${DEPLOY_ENV:dev}
+  tracing:
+    enabled: true
+    sampling:
+      probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
+
+logging:
+  level:
+    root: INFO
+    com.co.eurekatic: INFO

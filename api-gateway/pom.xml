@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.co.eurekatic</groupId>
+        <artifactId>sso-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>api-gateway</artifactId>
+    <name>api-gateway</name>
+    <description>Reactive API gateway — JWT validation, request routing, CORS</description>
+
+    <properties>
+        <start-class>com.co.eurekatic.gateway.ApiGatewayApplication</start-class>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Reactive web. Brings in Netty + WebFlux. Do NOT add
+             spring-boot-starter-web to this module — the gateway must
+             use only the reactive stack.
+
+             Spring Cloud Gateway 5.0.x (the Boot 4 line) GA in Nov 2025
+             inside Spring Cloud 2025.1.x (Oakwood). The starter
+             `spring-cloud-starter-gateway` was retired in 2025.1 and
+             replaced by `spring-cloud-starter-gateway-server-webflux`
+             (the "server" suffix + "webflux" qualifier match the
+             servlet/reactive split in 5.0.x). The BOM
+             spring-cloud-dependencies 2025.1.2 pins
+             spring-cloud-gateway.version = 5.0.2 and
+             spring-boot.version = 4.0.7, so we let the BOM resolve
+             the version (no literal <version> tag). -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-gateway-server-webflux</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- Prometheus scrape endpoint. Version resolved by Boot 4 BOM. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!-- Observability: pure-OTLP export of metrics, traces and logs
+             to the Grafana Alloy collector. One starter handles everything.
+
+             The endpoint defaults to ${OTEL_EXPORTER_OTLP_ENDPOINT}
+             (set to http://alloy:4318 in docker-compose). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-opentelemetry</artifactId>
+        </dependency>
+
+        <!-- Reactive Spring Security 6 -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-config</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-resource-server</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-jose</artifactId>
+        </dependency>
+
+        <!-- Service discovery. -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+
+        <!-- Test scope: WebTestClient is brought in by spring-cloud-starter-gateway. -->
+    </dependencies>
+
+    <build>
+        <finalName>${project.artifactId}</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

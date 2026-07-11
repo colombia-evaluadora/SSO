@@ -1,0 +1,68 @@
+server:
+  port: 8761
+  shutdown: graceful
+
+spring:
+  application:
+    name: eureka-server
+  main:
+    banner-mode: off
+
+eureka:
+  client:
+    # The registry must not try to register with itself or pull a peer list.
+    register-with-eureka: false
+    fetch-registry: false
+    healthcheck:
+      enabled: true
+  server:
+    # Make the first start snappier (default is 5 min when no peers sync).
+    wait-time-in-ms-when-sync-empty: 0
+    renewal-percent-threshold: 0.33
+    eviction-interval-timer-in-ms: 1000
+  instance:
+    hostname: localhost
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Lock down to health/info only — never expose
+        # /env, /heapdump, etc.
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  health:
+    eureka:
+      enabled: true
+  otlp:
+    metrics:
+      export:
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 10s
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+    resource-attributes:
+      service.namespace: sso
+      deployment.environment: ${DEPLOY_ENV:dev}
+  tracing:
+    enabled: true
+    sampling:
+      probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
+
+logging:
+  level:
+    root: INFO
+    com.co.eurekatic: INFO
+    com.netflix.eureka: INFO
+    com.netflix.discovery: INFO

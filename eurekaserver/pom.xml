@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.co.eurekatic</groupId>
+        <artifactId>sso-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>eurekaserver</artifactId>
+    <name>eurekaserver</name>
+    <description>Service registry — Spring Cloud Netflix Eureka Server (modernized)</description>
+
+    <properties>
+        <start-class>com.co.eurekatic.eureka.EurekaServerApplication</start-class>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-server</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- Observability: pure-OTLP export via the single Boot 4 starter. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-opentelemetry</artifactId>
+        </dependency>
+        <!--
+            Boot 4's spring-boot-starter-opentelemetry does NOT install a
+            Logback appender out of the box. We add it explicitly so
+            eurekaserver joins the rest of the stack in shipping every log
+            event as an OTLP log record to Alloy / Loki. eurekaserver does
+            not depend on `common` (it has no shared entities), so it keeps
+            its own copy of the appender config — see
+            src/main/java/com/co/eurekatic/eureka/observability/
+            OpenTelemetryAppenderConfig.java. Version is the same one
+            pinned in the parent <properties> block.
+        -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-logback-appender-1.0</artifactId>
+            <version>${opentelemetry-instrumentation.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>${project.artifactId}</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

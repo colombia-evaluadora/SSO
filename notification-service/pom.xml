@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.co.eurekatic</groupId>
+        <artifactId>sso-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>notification-service</artifactId>
+    <name>notification-service</name>
+    <description>
+        Multichannel notification consumer (email / SMS / push) for the
+        modernized SSO. Reads JSON envelopes off RabbitMQ, renders a
+        template, dispatches to the configured provider(s) with circuit
+        breakers, and logs every send to notification_log for idempotency
+        and audit.
+    </description>
+
+    <properties>
+        <start-class>com.co.eurekatic.notificationservice.NotificationServiceApplication</start-class>
+        <!--
+            Flyway 11 split Postgres support out of flyway-core into a
+            dedicated module (flyway-database-postgresql). We pin both
+            to the same version. Spring Boot 4.0.7 BOM ships 11.14.1
+            but we declare it explicitly so the two modules can never
+            drift.
+        -->
+        <flyway.version>11.14.1</flyway.version>
+        <!-- Twilio SDK — 10.9.x is the current line, Java 8+ compatible. -->
+        <twilio.sdk.version>10.9.2</twilio.sdk.version>
+        <!-- Firebase Admin SDK for FCM push. 9.9.0 bundles Messaging. -->
+        <firebase.admin.version>9.9.0</firebase.admin.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!--
+            Web stack — needed for Actuator's web exposure and the
+            custom /actuator/providers endpoint. The service does NOT
+            expose a public HTTP surface to downstream callers —
+            messages arrive over RabbitMQ. We still need starter-web
+            for the actuator endpoints to be reachable.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- AMQP listener side. spring-amqp 4.0.4 from the Spring Cloud BOM. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+
+        <!-- JPA + Flyway for notification_log + provider_config. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+            <version>${flyway.version}</version>
+        </dependency>
+        <!--
+            Flyway 11 split Postgres support into a dedicated module.
+            Without this, migrations against a Postgres datasource fail
+            at startup with "no database type plugin found".
+        -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+            <version>${flyway.version}</version>
+        </dependency>
+        <!--
+            Spring Boot 4.0 split its autoconfigure jars per stack:
+            jdbc, hibernate, flyway, etc. now live in their own
+            `spring-boot-<stack>` artifacts. Without this dependency,
+            `spring.flyway.*` config is silently ignored and the
+            service goes straight from JPA Hibernate validation to
+            "missing table" without ever running migrations.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-flyway</artifactId>
+        </dependency>
+
+        <!-- Postgres driver (runtime only — tests use Testcontainers). -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Bean Validation (jakarta) for @NotNull/@NotBlank on records. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- Thymeleaf for email templates. Spring Boot 4 starter pulls
+             thymeleaf-spring6 (verified on the 4.0.7 BOM). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-thymeleaf</artifactId>
+        </dependency>
+
+        <!--
+            Mail sender for SMTP-backed email providers
+            (smtp-gmail, smtp-brevo). The starter auto-configures a
+            default JavaMailSender from spring.mail.* (used by fakes
+            and as the default in dev).
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
+
+        <!--
+            Scheduling for the @Scheduled 30s provider_config refresh.
+            spring-context ships transitively with every Spring Boot
+            starter; this is a redundant explicit declaration for
+            clarity, NOT required.
+        -->
+
+        <!--
+            Actuator + custom /actuator/providers endpoint.
+            micrometer-registry-prometheus pulls in the
+            /actuator/prometheus scrape endpoint.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <!-- Observability: pure-OTLP export via the single Boot 4 starter. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-opentelemetry</artifactId>
+        </dependency>
+
+        <!-- Service discovery — same starter every other module uses. -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+
+        <!--
+            Resilience4j: programmatic CircuitBreakers per provider.
+            We deliberately do NOT use the spring-boot3 starter
+            (resilience4j-spring-boot3 is the only published variant —
+            no spring-boot4 exists yet) so that this module has no
+            AOP / autoconfig coupling to Spring Boot 4 internal APIs.
+            The CircuitBreaker instances are built at startup from
+            notif.circuit-breaker.* properties, one per provider_key.
+        -->
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-circuitbreaker</artifactId>
+            <version>${resilience4j.version}</version>
+        </dependency>
+
+        <!--
+            Twilio SDK for TwilioSmsProvider (real provider, opt-in
+            via credentials). The bean self-disables with a WARN at
+            startup if TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN are
+            absent; the SDK stays on the classpath so the @Component
+            can compile and the bean shape is testable.
+        -->
+        <dependency>
+            <groupId>com.twilio.sdk</groupId>
+            <artifactId>twilio</artifactId>
+            <version>${twilio.sdk.version}</version>
+        </dependency>
+
+        <!-- Firebase Admin SDK for FcmPushProvider. -->
+        <dependency>
+            <groupId>com.google.firebase</groupId>
+            <artifactId>firebase-admin</artifactId>
+            <version>${firebase.admin.version}</version>
+        </dependency>
+
+        <!-- ============================== test scope ============================== -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--
+            WebTestClient for hitting /actuator/providers in integration
+            tests. starter-webflux is on the test classpath for the
+            same reason sso-admin adds it.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Testcontainers BOM imported at parent — these resolve their
+             versions from there. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>rabbitmq</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>${project.artifactId}</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

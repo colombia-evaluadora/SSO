@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Shared Logback config for every Spring Boot 4 service that depends on
+  `common`. Boot 4's spring-boot-starter-opentelemetry does NOT install a
+  Logback appender out of the box, so this file declares one explicitly.
+
+  - The OTEL appender forwards every log event as an OTLP log record to
+    the Grafana Alloy collector. The exporter endpoint is picked up from
+    management.opentelemetry.logging.export.otlp.endpoint
+    (set per-service in application.yml). The OpenTelemetry instance is
+    installed by OpenTelemetryAppenderConfig#afterPropertiesSet, which
+    runs before any application code logs anything.
+
+  - CONSOLE is kept so container `docker compose logs <svc>` still works
+    and unit tests see their expected log lines.
+
+  - logback-spring.xml (not logback.xml) is the variant Spring Boot loads
+    when present on the classpath — it understands the <springProfile>
+    element and is processed after the Spring context is bootstrapped, so
+    the OTel bean is already wired by the time the first event flows.
+-->
+<configuration>
+
+  <!-- Defaults + CONSOLE appender shipped with Spring Boot. -->
+  <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+  <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+  <!--
+    OpenTelemetry log appender. The class is on the classpath only when
+    a service adds opentelemetry-logback-appender-1.0 to its dependencies
+    (currently all of them via `common`, except eurekaserver). When the
+    class is missing, this file fails to parse, so services that do not
+    include the appender MUST NOT inherit this logback-spring.xml.
+    That's why eurekaserver (which does not depend on `common`) keeps
+    its own local logback-spring.xml.
+  -->
+  <appender name="OTEL" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender"/>
+
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+    <appender-ref ref="OTEL"/>
+  </root>
+
+</configuration>

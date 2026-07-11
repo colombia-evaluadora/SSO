@@ -1,0 +1,131 @@
+server:
+  # Default to 8084 — sso-admin is 8083, gateway 8080,
+  # auth-center 8081, hello-service 8082.
+  port: ${PORT:8084}
+  shutdown: graceful
+
+spring:
+  application:
+    name: query-service
+  main:
+    banner-mode: off
+
+  # Disable Spring Boot's auto-configured single
+  # DataSource / JPA stack. We own the multi-DB pool
+  # creation in DataSourceConfig, keyed off
+  # query.datasources.*. Letting the autoconfig fire
+  # creates a phantom "primary" DataSource with an H2
+  # in-memory default URL (the test classpath has H2),
+  # which then conflicts with our Map<String, DataSource>.
+  #
+  # NOTE — Spring Boot 4 package moves: the autoconfig
+  # classes relocated from `...autoconfigure.jdbc.*` and
+  # `...autoconfigure.orm.jpa.*` (Boot 3) into the
+  # dedicated `spring-boot-jdbc` and `spring-boot-hibernate`
+  # modules. The Boot 3 paths below are NO-OPs in Boot 4 —
+  # autoconfig still runs and tries to wire a phantom
+  # DataSource, which fails with
+  # "Failed to determine a suitable driver class" because
+  # the container has no JDBC URL property binding. The
+  # Boot 4 fully-qualified class names are listed below.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceTransactionManagerAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.JdbcTemplateAutoConfiguration
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka}
+    healthcheck:
+      enabled: false
+  instance:
+    # See auth-center / sso-admin for the full rationale.
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
+
+# Per-dialect JDBC pools. In dev only Postgres is enabled;
+# the Oracle and SQL Server entries are commented out as a
+# template. Set QUERY_CATALOG_BASE_URL to the sso-admin
+# gateway route (or the direct service address in prod).
+#
+# For container runs the compose env block builds
+# QUERY_DS_POSTGRES_URL from QUERY_DS_POSTGRES_HOST /
+# _PORT / _NAME / _SSLMODE / _CHANNEL_BINDING and passes
+# it as QUERY_DS_POSTGRES_URL, so this property is
+# overridden at runtime. The default below is the
+# host-mode fallback for `mvn spring-boot:run` outside
+# compose.
+query:
+  datasources:
+    entries:
+      postgres:
+        enabled: ${QUERY_DS_POSTGRES_ENABLED:true}
+        url: ${QUERY_DS_POSTGRES_URL:jdbc:postgresql://localhost:5432/query}
+        username: ${QUERY_DS_POSTGRES_USER:query}
+        password: ${QUERY_DS_POSTGRES_PASSWORD:change-me}
+        maximum-pool-size: 10
+      # oracle:
+      #   enabled: ${QUERY_DS_ORACLE_ENABLED:false}
+      #   url: ${QUERY_DS_ORACLE_URL:jdbc:oracle:thin:@//oracle-host:1521/ORCLPDB1}
+      #   username: ${QUERY_DS_ORACLE_USER:query}
+      #   password: ${QUERY_DS_ORACLE_PASSWORD:change-me}
+      # sqlserver:
+      #   enabled: ${QUERY_DS_SQLSERVER_ENABLED:false}
+      #   url: ${QUERY_DS_SQLSERVER_URL:jdbc:sqlserver://mssql-host:1433;databaseName=query}
+      #   username: ${QUERY_DS_SQLSERVER_USER:query}
+      #   password: ${QUERY_DS_SQLSERVER_PASSWORD:change-me}
+  catalog:
+    base-url: ${QUERY_CATALOG_BASE_URL:http://localhost:8080/sso-admin}
+    read-timeout: 3s
+    connect-timeout: 2s
+
+sso:
+  jwt:
+    # MUST match auth-center / sso-admin / api-gateway.
+    # Same key signs (auth-center) and verifies
+    # (everywhere else).
+    secret: ${JWT_SECRET:change-me-change-me-change-me-change-me-change-me-1234567890}
+    issuer: sso-postgres
+    header-name: Authorization
+    token-prefix: "Bearer "
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  otlp:
+    metrics:
+      export:
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 10s
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+    resource-attributes:
+      service.namespace: sso
+      deployment.environment: ${DEPLOY_ENV:dev}
+  tracing:
+    enabled: true
+    sampling:
+      probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
+
+logging:
+  level:
+    root: INFO
+    com.co.eurekatic: INFO
