@@ -347,6 +347,15 @@ services:
       start_period: 30s
 
   hello-service:
+    # profiles: pure diagnostic/reference service (nothing else
+    # depends_on it) — gated behind the `diagnostics` profile so it
+    # can be dropped without touching this file per environment.
+    # .env.example sets COMPOSE_PROFILES=diagnostics by default, so
+    # local dev keeps starting it as part of the full stack. The
+    # test server's .env intentionally does NOT set that var, so it
+    # stays off there and saves ~192-256MB of RAM. Still startable
+    # explicitly on either side with `docker compose up -d hello-service`.
+    profiles: ["diagnostics"]
     build:
       context: .
       dockerfile: hello-service/Dockerfile

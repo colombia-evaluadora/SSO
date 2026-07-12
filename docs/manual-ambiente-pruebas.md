@@ -157,6 +157,12 @@ IMAGE_TAG=test-latest
 # Fijo — el provisioner deriva el nombre de red de aquí
 COMPOSE_PROJECT_NAME=sso
 
+# NO copies la línea COMPOSE_PROFILES=diagnostics de .env.example —
+# déjala fuera del .env del servidor. Así hello-service (puro
+# diagnóstico, nada depende de él) no arranca ahí y te ahorras
+# ~192-256MB de RAM. Si un futuro merge de .env.example la vuelve a
+# traer, bórrala de nuevo.
+
 # Todo menos el gateway atado a loopback (Docker se salta ufw)
 BIND_IP=127.0.0.1
 
