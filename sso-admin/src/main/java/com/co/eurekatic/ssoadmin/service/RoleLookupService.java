@@ -5,6 +5,7 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -48,11 +49,15 @@ public class RoleLookupService {
     @Cacheable(value = "roles", key = "'all'")
     @Transactional(readOnly = true)
     public Map<String, Long> nameToId() {
-        return Map.copyOf(roleRepository.findAll().stream()
+        // LinkedHashMap collector (not Map.copyOf, which drops
+        // repository order) — nameToIdFiltered's insertion-order
+        // guarantee only holds if this upstream map is ordered too.
+        return java.util.Collections.unmodifiableMap(roleRepository.findAll().stream()
                 .collect(Collectors.toMap(
                         com.co.eurekatic.common.entity.Role::getName,
                         com.co.eurekatic.common.entity.Role::getId,
-                        (a, b) -> a)));
+                        (a, b) -> a,
+                        LinkedHashMap::new)));
     }
 
     /**
@@ -66,11 +71,15 @@ public class RoleLookupService {
         if (allowedNames == null || allowedNames.isEmpty()) {
             return Map.of();
         }
-        return Map.copyOf(nameToId().entrySet().stream()
+        // LinkedHashMap collector (not Map.copyOf, which drops
+        // insertion order) — the class javadoc above promises
+        // insertion-order output.
+        return java.util.Collections.unmodifiableMap(nameToId().entrySet().stream()
                 .filter(e -> allowedNames.contains(e.getKey()))
                 .collect(Collectors.toMap(
                         Map.Entry::getKey,
                         Map.Entry::getValue,
-                        (a, b) -> a)));
+                        (a, b) -> a,
+                        LinkedHashMap::new)));
     }
 }
