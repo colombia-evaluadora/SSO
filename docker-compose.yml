@@ -271,7 +271,14 @@ services:
       # (the legacy SSO_ADMIN_USERNAME is no longer
       # consumed directly; application.yml falls back to it
       # for backwards compat with old .env files).
-      SSO_BOOTSTRAP_ENABLED: ${SSO_BOOTSTRAP_ENABLED}
+      # :-true default matches application.yml's own
+      # ${SSO_BOOTSTRAP_ENABLED:true} — an ABSENT env var falls back
+      # fine on its own, but compose still injects an EMPTY string
+      # into the container when the host .env doesn't define the
+      # var, and Spring's :true placeholder default does NOT apply
+      # to an empty string (only to a truly missing property),
+      # which crashes DataInitializer's boolean constructor param.
+      SSO_BOOTSTRAP_ENABLED: ${SSO_BOOTSTRAP_ENABLED:-true}
       SSO_ADMIN_EMAIL: ${SSO_ADMIN_EMAIL}
       SSO_ADMIN_PASSWORD: ${SSO_ADMIN_PASSWORD}
       SSO_CORS_ALLOWED_ORIGINS: ${SSO_CORS_ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:5173}
