@@ -3,9 +3,12 @@
 #
 # Brings up the following services in dependency order:
 #
-#   postgres       — Postgres 16 with init scripts that create the
-#                    `sso` database and the legacy-compatible
-#                    `users` / `role` / `role_users` tables.
+#   postgres       — Postgres 16, opt-in local dev fallback (profile
+#                    `local-only` — skipped by a bare `docker compose
+#                    up -d`; start with `docker compose up -d postgres`
+#                    or `--profile local-only up -d`). Every app talks
+#                    to Neon via DB_URL; this container is never a
+#                    dependency of anything in the stack.
 #   redis          — Redis 7 with persistence disabled. Stores
 #                    refresh-token hashes + per-family SETs.
 #                    Internal-only (no host port mapping). If
@@ -88,6 +91,15 @@
 services:
 
   postgres:
+    # profiles: this service only starts when named explicitly
+    # (`docker compose up -d postgres` or `--profile local-only`).
+    # A bare `docker compose up -d` — what both local dev's default
+    # flow and deploy-test.yml's server deploy run — skips it
+    # entirely. Every app in this stack talks to Neon via DB_URL;
+    # this container exists purely as an opt-in local Postgres for
+    # devs who want one, never as a stack dependency (see the note
+    # below).
+    profiles: ["local-only"]
     image: postgres:16-alpine
     container_name: sso-postgres
     restart: unless-stopped
@@ -538,19 +550,22 @@ services:
     mem_reservation: 512m
     depends_on:
       flyway:
+        # Schema must be migrated before ddl-auto=validate runs.
+        # notification-service's actual datasource is ${DB_URL}
+        # (Neon) — the local `postgres` service is opt-in dev-only
+        # (see its own comment block above) and is NOT a dependency
+        # here, unlike an earlier iteration of this file.
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
       rabbitmq:
         condition: service_healthy
       eurekaserver:
         condition: service_started
     environment:
       # Neon cloud DB (same target as auth-center / sso-admin).
-      # The local `postgres` container is used only by the
-      # RabbitMQ healthcheck chain — notification-service
-      # never opens a JDBC connection to it. Using ${DB_URL}
-      # keeps the password consistent with auth-center's.
+      # notification-service never opens a JDBC connection to the
+      # local `postgres` service (that one is opt-in dev-only —
+      # see its own comment block). Using ${DB_URL} keeps the
+      # connection target consistent with auth-center's.
       SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
       DB_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
       DB_USER: ${DB_USER}
