@@ -25,12 +25,18 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.FilterChainProxy;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.EntityExchangeResult;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.test.web.servlet.client.MockMvcWebTestClient;
 import org.springframework.web.context.WebApplicationContext;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.DockerImageName;
 
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -100,7 +106,30 @@ import static org.springframework.security.test.web.servlet.setup.SecurityMockMv
         // bean directly, bypassing the mock).
         "management.health.rabbit.enabled=false"
 })
+@Testcontainers
 class SsoAdminIntegrationTest {
+
+    /**
+     * One Redis container shared across the test class. sso-admin's
+     * RoleLookupService / AppAccessService caches through a real
+     * RedisConnectionFactory bean — without a real Redis here, every
+     * cache-backed call throws and the health aggregate goes DOWN
+     * (503 on /actuator/health). Same pattern as
+     * AuthCenterIntegrationTest.
+     */
+    @Container
+    @SuppressWarnings("resource") // Testcontainers manages lifecycle
+    static final GenericContainer<?> REDIS = new GenericContainer<>(
+            DockerImageName.parse("redis:7-alpine"))
+            .withCommand("redis-server", "--save", "", "--appendonly", "no")
+            .withExposedPorts(6379);
+
+    @DynamicPropertySource
+    static void redisProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.data.redis.host", REDIS::getHost);
+        registry.add("spring.data.redis.port",
+                () -> REDIS.getMappedPort(6379).toString());
+    }
 
     @Autowired WebApplicationContext context;
     @Autowired FilterChainProxy springSecurityFilterChain;
