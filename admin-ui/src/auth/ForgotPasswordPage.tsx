@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { authApi } from "@/api/endpoints";
+import { env } from "@/env";
 
 /**
  * Public "request a password reset" page — the entry point the
@@ -26,7 +27,7 @@ export function ForgotPasswordPage() {
     if (!email) return;
     setSubmitting(true);
     try {
-      await authApi.forgotPassword(email);
+      await authApi.forgotPassword(email, env.VITE_APP_NAME);
     } catch {
       // Deliberately ignored — same generic confirmation either
       // way, so a network blip doesn't leak anything either and

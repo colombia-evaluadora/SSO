@@ -1,8 +1,10 @@
 package com.co.eurekatic.ssoadmin.service;
 
+import com.co.eurekatic.common.entity.App;
 import com.co.eurekatic.common.entity.Role;
 import com.co.eurekatic.common.entity.User;
 import com.co.eurekatic.common.entity.User.UserStatus;
+import com.co.eurekatic.common.repository.AppRepository;
 import com.co.eurekatic.common.repository.RoleRepository;
 import com.co.eurekatic.common.repository.UserRepository;
 import com.co.eurekatic.ssoadmin.client.SessionInvalidationClient;
@@ -83,6 +85,7 @@ public class UserAdminService {
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
+    private final AppRepository appRepository;
     private final PasswordEncoder passwordEncoder;
     private final TokenService tokenService;
     private final EmailService emailService;
@@ -93,6 +96,7 @@ public class UserAdminService {
 
     public UserAdminService(UserRepository userRepository,
                             RoleRepository roleRepository,
+                            AppRepository appRepository,
                             PasswordEncoder passwordEncoder,
                             TokenService tokenService,
                             EmailService emailService,
@@ -102,6 +106,7 @@ public class UserAdminService {
                             CacheManager cacheManager) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
+        this.appRepository = appRepository;
         this.passwordEncoder = passwordEncoder;
         this.tokenService = tokenService;
         this.emailService = emailService;
@@ -362,7 +367,7 @@ public class UserAdminService {
      * doesn't leak which addresses are registered.
      */
     @Transactional
-    public void forgotPassword(String email) {
+    public void forgotPassword(String email, String appName) {
         userRepository.findAll().stream()
                 .filter(u -> email.equals(u.getEmail()))
                 .findFirst()
@@ -373,11 +378,33 @@ public class UserAdminService {
                     Map<String, Object> payload = new LinkedHashMap<>();
                     payload.put("displayName", u.getFullName() == null ? u.getEmail() : u.getFullName());
                     payload.put("email", u.getEmail());
-                    payload.put("resetLink", emailProps.restoreUrl() + "?token=" + token);
+                    payload.put("resetLink", resolveRestoreUrl(token, appName));
                     payload.put("ttlMinutes", 30);
                     events.publish("email", String.valueOf(u.getId()), u.getEmail(),
                             "password-reset", payload, null);
                 });
+    }
+
+    private String resolveRestoreUrl(String token, String appName) {
+        String query = "?token=" + token;
+
+        if (appName != null && !appName.isBlank()) {
+            App app = appRepository.findByName(appName).orElse(null);
+            if (app != null && app.getLaunchUrl() != null && !app.getLaunchUrl().isBlank()) {
+                String launchUrl = app.getLaunchUrl().trim();
+                boolean isAbsolute = launchUrl.startsWith("http://") || launchUrl.startsWith("https://");
+                if (isAbsolute) {
+                    String base = launchUrl.endsWith("/")
+                            ? launchUrl.substring(0, launchUrl.length() - 1)
+                            : launchUrl;
+                    return base + "/restore-password" + query;
+                }
+                log.warn("App '{}' has a non-absolute launchUrl '{}'; falling back to default restoreUrl",
+                        appName, launchUrl);
+            }
+        }
+
+        return emailProps.restoreUrl() + query;
     }
 
     /**

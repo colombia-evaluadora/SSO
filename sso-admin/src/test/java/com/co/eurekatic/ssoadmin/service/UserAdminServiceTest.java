@@ -2,6 +2,7 @@ package com.co.eurekatic.ssoadmin.service;
 
 import com.co.eurekatic.common.entity.Role;
 import com.co.eurekatic.common.entity.User;
+import com.co.eurekatic.common.repository.AppRepository;
 import com.co.eurekatic.common.repository.RoleRepository;
 import com.co.eurekatic.common.repository.UserRepository;
 import com.co.eurekatic.ssoadmin.client.SessionInvalidationClient;
@@ -52,6 +53,7 @@ class UserAdminServiceTest {
 
     @Mock UserRepository userRepository;
     @Mock RoleRepository roleRepository;
+    @Mock AppRepository appRepository;
     @Mock PasswordEncoder passwordEncoder;
     @Mock TokenService tokenService;
     @Mock EmailService emailService;
@@ -83,7 +85,7 @@ class UserAdminServiceTest {
                 "activation-account.html",
                 "restore-password-account.html");
         service = new UserAdminService(userRepository, roleRepository,
-                passwordEncoder, tokenService, emailService,
+                appRepository, passwordEncoder, tokenService, emailService,
                 emailProps, events, sessionInvalidationClient, cacheManager);
     }
 
@@ -294,7 +296,7 @@ class UserAdminServiceTest {
         when(userRepository.findAll()).thenReturn(List.of());
 
         // Should NOT throw — legacy would have failed noisily.
-        service.forgotPassword("nobody@example.com");
+        service.forgotPassword("nobody@example.com", null);
 
         verify(emailService, never()).sendRestorePasswordEmail(any(), anyString());
         verify(tokenService, never()).issueRestoreToken(any());
@@ -308,11 +310,10 @@ class UserAdminServiceTest {
         when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
         when(userRepository.save(u)).thenReturn(u);
 
-        service.forgotPassword("alice@example.com");
+        service.forgotPassword("alice@example.com", null);
 
         // Restore-token must be issued, and the password-reset event
         // is published via NotificationEventPublisher with the token
-        // embedded in the payload's resetLink.
         verify(tokenService, times(1)).issueRestoreToken(u);
         verify(emailService, never()).sendRestorePasswordEmail(any(), anyString());
         @SuppressWarnings("unchecked")
@@ -326,7 +327,115 @@ class UserAdminServiceTest {
                 payload.capture(),
                 any());
         Map<String, Object> p = payload.getValue();
-        assertThat(p.get("resetLink").toString()).contains("rtok");
+        assertThat(p.get("resetLink").toString())
+                .isEqualTo("http://localhost/admin/restore-password?token=rtok");
+    }
+
+    @Test
+    void forgotPasswordUsesAppLaunchUrlWhenAppMatches() {
+        User u = new User();
+        u.setEmail("alice@example.com");
+        com.co.eurekatic.common.entity.App app = new com.co.eurekatic.common.entity.App();
+        app.setName("COLOMBIA-EVALUADORA");
+        app.setLaunchUrl("https://colombia-evaluadora.example.com");
+        when(userRepository.findAll()).thenReturn(List.of(u));
+        when(appRepository.findByName("COLOMBIA-EVALUADORA"))
+                .thenReturn(Optional.of(app));
+        when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
+        when(userRepository.save(u)).thenReturn(u);
+
+        service.forgotPassword("alice@example.com", "COLOMBIA-EVALUADORA");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> payload =
+                ArgumentCaptor.forClass(Map.class);
+        verify(events).publish(
+                eq("email"),
+                anyString(),
+                eq("alice@example.com"),
+                eq("password-reset"),
+                payload.capture(),
+                any());
+        Map<String, Object> p = payload.getValue();
+        // Per-app absolute launchUrl wins — restores to the
+        // app's own URL, not the SSO console's default.
+        assertThat(p.get("resetLink").toString())
+                .isEqualTo("https://colombia-evaluadora.example.com/restore-password?token=rtok");
+    }
+
+    @Test
+    void forgotPasswordTrimsTrailingSlashOnAppLaunchUrl() {
+        User u = new User();
+        u.setEmail("alice@example.com");
+        com.co.eurekatic.common.entity.App app = new com.co.eurekatic.common.entity.App();
+        app.setName("COLOMBIA-EVALUADORA");
+        app.setLaunchUrl("https://colombia-evaluadora.example.com/");
+        when(userRepository.findAll()).thenReturn(List.of(u));
+        when(appRepository.findByName("COLOMBIA-EVALUADORA"))
+                .thenReturn(Optional.of(app));
+        when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
+        when(userRepository.save(u)).thenReturn(u);
+
+        service.forgotPassword("alice@example.com", "COLOMBIA-EVALUADORA");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> payload =
+                ArgumentCaptor.forClass(Map.class);
+        verify(events).publish(eq("email"), anyString(), eq("alice@example.com"),
+                eq("password-reset"), payload.capture(), any());
+        // Trailing slash on the launchUrl must not produce a
+        // double-slash in the composed URL.
+        assertThat(payload.getValue().get("resetLink").toString())
+                .isEqualTo("https://colombia-evaluadora.example.com/restore-password?token=rtok");
+    }
+
+    @Test
+    void forgotPasswordFallsBackWhenAppLaunchUrlIsRelative() {
+        User u = new User();
+        u.setEmail("alice@example.com");
+        com.co.eurekatic.common.entity.App app = new com.co.eurekatic.common.entity.App();
+        app.setName("SSO-ADMIN");
+        app.setLaunchUrl("/admin"); // SSO console uses a relative path
+        when(userRepository.findAll()).thenReturn(List.of(u));
+        when(appRepository.findByName("SSO-ADMIN")).thenReturn(Optional.of(app));
+        when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
+        when(userRepository.save(u)).thenReturn(u);
+
+        service.forgotPassword("alice@example.com", "SSO-ADMIN");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> payload =
+                ArgumentCaptor.forClass(Map.class);
+        verify(events).publish(eq("email"), anyString(), eq("alice@example.com"),
+                eq("password-reset"), payload.capture(), any());
+        // Relative launchUrl is documented as unsupported (the
+        // email needs an absolute URL); the service falls back
+        // to the SSO's env-driven default instead of trying to
+        // resolve the relative path.
+        assertThat(payload.getValue().get("resetLink").toString())
+                .isEqualTo("http://localhost/admin/restore-password?token=rtok");
+    }
+
+    @Test
+    void forgotPasswordFallsBackWhenAppNotFound() {
+        User u = new User();
+        u.setEmail("alice@example.com");
+        when(userRepository.findAll()).thenReturn(List.of(u));
+        when(appRepository.findByName("GHOST-APP")).thenReturn(Optional.empty());
+        when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
+        when(userRepository.save(u)).thenReturn(u);
+
+        service.forgotPassword("alice@example.com", "GHOST-APP");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> payload =
+                ArgumentCaptor.forClass(Map.class);
+        verify(events).publish(eq("email"), anyString(), eq("alice@example.com"),
+                eq("password-reset"), payload.capture(), any());
+        // Unknown app name — no error, the email still goes out
+        // with the default URL.
+        assertThat(payload.getValue().get("resetLink").toString())
+                .isEqualTo("http://localhost/admin/restore-password?token=rtok");
     }
 
     /* ====================== getRolesByEmail ====================== */

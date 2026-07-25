@@ -72,8 +72,10 @@ public class UserController {
      * the email is unknown (no enumeration).
      */
     @GetMapping("/forgotPassword")
-    public ResponseEntity<Void> forgotPassword(@RequestParam String email) {
-        service.forgotPassword(email);
+    public ResponseEntity<Void> forgotPassword(
+            @RequestParam String email,
+            @RequestParam(value = "app", required = false) String app) {
+        service.forgotPassword(email, app);
         return ResponseEntity.ok().build();
     }
 
