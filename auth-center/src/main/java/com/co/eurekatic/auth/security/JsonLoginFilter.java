@@ -15,6 +15,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
+import org.springframework.security.authentication.AccountStatusException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -220,7 +221,16 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         mapper.writeValue(response.getOutputStream(), Map.of(
                 "timestamp", Instant.now().toString(),
                 "status", 401,
-                "error", "authentication_failed",
+                // Código aparte para el estado de la cuenta: el
+                // admin-ui muestra el `message` tal cual, pero un
+                // código distinguible deja la puerta abierta a que
+                // la pantalla de login trate el caso de forma
+                // distinta (ofrecer reenviar la activación, por
+                // ejemplo) sin tener que comparar textos.
+                // Ver AccountStatusChecker.
+                "error", failed instanceof AccountStatusException
+                        ? "account_not_available"
+                        : "authentication_failed",
                 "message", failed.getMessage() == null ? "Credenciales inválidas" : failed.getMessage()
         ));
     }

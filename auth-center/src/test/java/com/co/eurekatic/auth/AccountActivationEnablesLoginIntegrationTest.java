@@ -172,10 +172,11 @@ class AccountActivationEnablesLoginIntegrationTest {
         seedPendingUser();
 
         // The pending user has enabled=false (and null password
-        // — AppUserDetailsService.loadUserByUsername short-
-        // circuits on the isEnabled check before ever hitting
-        // PasswordEncoder.matches). Either way, /login must
-        // return 401, NOT 200.
+        // — AccountStatusChecker runs as preAuthenticationChecks
+        // and rejects before PasswordEncoder.matches is ever
+        // reached). Either way, /login must return 401, NOT 200.
+        // The distinct message for this case is pinned in
+        // AccountStatusMessageIntegrationTest.
         loginExpectingStatus("charlie@example.com", "newpass1", HttpStatus.UNAUTHORIZED);
     }
 

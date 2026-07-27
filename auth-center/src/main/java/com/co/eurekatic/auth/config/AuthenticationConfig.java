@@ -3,6 +3,7 @@ package com.co.eurekatic.auth.config;
 import com.co.eurekatic.common.security.JwtTokenService;
 import com.co.eurekatic.common.security.JwtProperties;
 import com.co.eurekatic.common.security.PasswordEncoderFactory;
+import com.co.eurekatic.auth.security.AccountStatusChecker;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -56,6 +57,11 @@ public class AuthenticationConfig {
         // pero nunca los reescribe, y la migración no avanza nunca.
         // Ver PasswordUpgradeService.
         provider.setUserDetailsPasswordService(userDetailsPasswordService);
+        // Sustituye a DefaultPreAuthenticationChecks para dar el
+        // motivo real cuando la cuenta está inactiva o sin activar,
+        // en vez del "credenciales inválidas" que veía el usuario.
+        // Ver AccountStatusChecker.
+        provider.setPreAuthenticationChecks(new AccountStatusChecker());
         return provider;
     }
 
