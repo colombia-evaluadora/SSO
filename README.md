@@ -250,7 +250,7 @@ activation/restore links do not.
 |---|---|---|---|
 | `POST` | `/sso-admin/createAccount`        | `ADMIN` | Creates a user in `active=true, enabled=false` state, issues an activation token, sends the activation email |
 | `PUT`  | `/sso-admin/updateAccount`        | `ADMIN` | Updates mutable user fields; `null` leaves unchanged; non-null `roleNames` REPLACES the role set |
-| `POST` | `/sso-admin/activateAccount`     | **public** | Activates a user via the email link; body is `{token, password}`; sets `enabled=true` and BCrypts the password. Replaces the legacy GET-with-password-query shape (commits 2 + 5). |
+| `POST` | `/sso-admin/activateAccount`     | **public** | Activates a user via the email link; body is `{token, password}`; sets `enabled=true` and hashes the password with Argon2id. Replaces the legacy GET-with-password-query shape (commits 2 + 5). |
 | `GET`  | `/sso-admin/forgotPassword?email=…` | **public** | Issues a restore token and emails the user. Always 200 (no email enumeration) |
 | `POST` | `/sso-admin/restorePassword`     | **public** | Restores the password via the restore token; body is `{token, password}`. Replaces the legacy GET-with-password-query shape (commits 3 + 6). |
 | `GET`  | `/sso-admin/getUsers`             | `ADMIN` | Lists all users (id, fullName, username, ldap, active, roleNames) |

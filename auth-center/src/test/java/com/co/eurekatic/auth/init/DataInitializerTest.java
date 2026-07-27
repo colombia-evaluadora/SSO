@@ -72,7 +72,7 @@ class DataInitializerTest {
         assertThat(admin.isLdap()).isFalse();
         assertThat(admin.getEmail()).isEqualTo("admin@example.com");
         assertThat(admin.getFullName()).isEqualTo("Default Administrator");
-        // Password is hashed (BCrypt), not the plaintext.
+        // La contraseña se guarda hasheada (Argon2id), no en claro.
         assertThat(admin.getPassword()).isNotEqualTo("InitialP@ssw0rd-9876");
         assertThat(passwordEncoder.matches("InitialP@ssw0rd-9876", admin.getPassword())).isTrue();
 

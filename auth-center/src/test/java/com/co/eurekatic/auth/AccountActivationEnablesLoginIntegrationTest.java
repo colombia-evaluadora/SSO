@@ -185,7 +185,7 @@ class AccountActivationEnablesLoginIntegrationTest {
         User pending = seedPendingUser();
 
         // Simulate the work that UserAdminService.activateAccount
-        // does in sso-admin: BCrypt the typed password, enable
+        // does in sso-admin: hash the typed password, enable
         // the user, clear the activation token. We do it via the
         // repository directly because activateAccount lives in
         // another module — the cross-module integration is
