@@ -273,16 +273,39 @@ class UserAdminServiceTest {
     }
 
     @Test
+    void activateAccountRejectsLongButSimplePassword() {
+        // Longitud suficiente pero sin mayúscula, número ni símbolo.
+        // El @Size del DTO no lo detecta — sólo mide longitud — así
+        // que si la política no corriera en el servicio, esta
+        // contraseña entraría.
+        assertThatThrownBy(() -> service.activateAccount("tok", "solominusculas"))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(tokenService, never()).consumeActivationToken(anyString());
+    }
+
+    @Test
+    void activateAccountErrorNamesEveryUnmetRequirement() {
+        // Un mensaje que sólo nombra el primer fallo obliga a
+        // descubrir la regla a base de reintentos.
+        assertThatThrownBy(() -> service.activateAccount("tok", "abc"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("8 caracteres")
+                .hasMessageContaining("mayúscula")
+                .hasMessageContaining("número")
+                .hasMessageContaining("especial");
+    }
+
+    @Test
     void activateAccountEncodesPasswordAndEnablesUser() {
         User u = new User();
         u.setEmail("alice@example.com");
         u.setActive(false);
         u.setEnabled(false);
         when(tokenService.consumeActivationToken("tok")).thenReturn(u);
-        when(passwordEncoder.encode("newpass1")).thenReturn("$2a$hashed");
+        when(passwordEncoder.encode("Newpass1!")).thenReturn("$2a$hashed");
         when(userRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        service.activateAccount("tok", "newpass1");
+        service.activateAccount("tok", "Newpass1!");
 
         assertThat(u.isEnabled()).isTrue();
         assertThat(u.isActive()).isTrue();

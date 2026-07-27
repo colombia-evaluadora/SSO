@@ -68,16 +68,26 @@ describe("ActivatePage", () => {
     ).toBeInTheDocument();
   });
 
-  it("disables submit until password is ≥6 chars and matches the confirm", async () => {
+  it("disables submit until the password meets the policy and matches the confirm", async () => {
     renderActivate("/admin/activate?token=abc123");
     const user = userEvent.setup();
 
     await user.type(screen.getByLabelText("Contraseña"), "abc");
     await user.type(screen.getByLabelText("Repetir contraseña"), "xyz");
 
-    expect(
-      screen.getByText(/Debe tener al menos 6 caracteres/i),
-    ).toBeInTheDocument();
+    // "abc" incumple longitud, mayúscula, número y símbolo. Los
+    // requisitos se muestran siempre, así que se comprueba el
+    // estado (pendiente) y no la mera presencia.
+    expect(screen.getByTestId("password-rule-length")).toHaveTextContent(
+      /pendiente/i,
+    );
+    expect(screen.getByTestId("password-rule-special")).toHaveTextContent(
+      /pendiente/i,
+    );
+    // La minúscula sí está cumplida — la lista no es todo o nada.
+    expect(screen.getByTestId("password-rule-lowercase")).toHaveTextContent(
+      /cumplido/i,
+    );
     expect(
       screen.getByText(/Las contraseñas no coinciden/i),
     ).toBeInTheDocument();
@@ -97,8 +107,8 @@ describe("ActivatePage", () => {
     renderActivate("/admin/activate?token=abc123");
 
     const user = userEvent.setup();
-    await user.type(screen.getByLabelText("Contraseña"), "newpass1");
-    await user.type(screen.getByLabelText("Repetir contraseña"), "newpass1");
+    await user.type(screen.getByLabelText("Contraseña"), "Newpass1!");
+    await user.type(screen.getByLabelText("Repetir contraseña"), "Newpass1!");
     await user.click(
       screen.getByRole("button", { name: /Activar cuenta/i }),
     );
@@ -116,7 +126,7 @@ describe("ActivatePage", () => {
     // containment so a future re-ordering or extra whitespace
     // in JSON.stringify doesn't break the test.
     expect(init.body).toContain('"token":"abc123"');
-    expect(init.body).toContain('"password":"newpass1"');
+    expect(init.body).toContain('"password":"Newpass1!"');
     // No Authorization header — skipAuth=true on the public
     // activation endpoint (a session-less user is clicking from
     // their email).
@@ -141,8 +151,8 @@ describe("ActivatePage", () => {
     renderActivate("/admin/activate?token=stale");
 
     const user = userEvent.setup();
-    await user.type(screen.getByLabelText("Contraseña"), "newpass1");
-    await user.type(screen.getByLabelText("Repetir contraseña"), "newpass1");
+    await user.type(screen.getByLabelText("Contraseña"), "Newpass1!");
+    await user.type(screen.getByLabelText("Repetir contraseña"), "Newpass1!");
     await user.click(
       screen.getByRole("button", { name: /Activar cuenta/i }),
     );

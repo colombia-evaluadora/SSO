@@ -634,7 +634,7 @@ class SsoAdminIntegrationTest {
         // because the link from the email does not include one.
         String activateBody = mapper.writeValueAsString(Map.of(
                 "token", activationToken,
-                "password", "newpass1"));
+                "password", "Newpass1!"));
         client.post().uri("/activateAccount")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(activateBody)
@@ -646,14 +646,14 @@ class SsoAdminIntegrationTest {
         assertThat(after.isActive()).isTrue();
         // Token column cleared on use — cannot be replayed.
         assertThat(after.getTokenActivation()).isNull();
-        assertThat(passwordEncoder.matches("newpass1", after.getPassword())).isTrue();
+        assertThat(passwordEncoder.matches("Newpass1!", after.getPassword())).isTrue();
     }
 
     @Test
     void activateAccountWithUnknownTokenReturns404() throws Exception {
         String body = mapper.writeValueAsString(Map.of(
                 "token", "does-not-exist",
-                "password", "newpass1"));
+                "password", "Newpass1!"));
         client.post().uri("/activateAccount")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
@@ -663,7 +663,7 @@ class SsoAdminIntegrationTest {
 
     @Test
     void activateAccountRejectsShortPassword() throws Exception {
-        // @Size(min = 6) on the TokenPasswordRequest.password field
+        // @Size(min = 8) on the TokenPasswordRequest.password field
         // turns "123" into a MethodArgumentNotValidException BEFORE
         // the service is reached, so the existing service-level
         // invariant (IllegalArgumentException → 400 INVALID_REQUEST)
@@ -724,7 +724,7 @@ class SsoAdminIntegrationTest {
         // POST + JSON body — same shape as /activateAccount.
         String body = mapper.writeValueAsString(Map.of(
                 "token", restoreToken,
-                "password", "newpass1"));
+                "password", "Newpass1!"));
         client.post().uri("/restorePassword")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
@@ -736,7 +736,7 @@ class SsoAdminIntegrationTest {
         // but it MUST clear the restore token column to enforce
         // single-use semantics.
         assertThat(after.getTokenRestore()).isNull();
-        assertThat(passwordEncoder.matches("newpass1", after.getPassword())).isTrue();
+        assertThat(passwordEncoder.matches("Newpass1!", after.getPassword())).isTrue();
     }
 
     /** Pulls the {@code token=...} query string out of the
@@ -754,7 +754,7 @@ class SsoAdminIntegrationTest {
     void restorePasswordWithUnknownTokenReturns404() throws Exception {
         String body = mapper.writeValueAsString(Map.of(
                 "token", "does-not-exist",
-                "password", "newpass1"));
+                "password", "Newpass1!"));
         client.post().uri("/restorePassword")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)

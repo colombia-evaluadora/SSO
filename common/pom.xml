@@ -39,12 +39,13 @@
             declara la clase pero NO arrastra el proveedor, así que sin esto
             el primer login falla en runtime con NoClassDefFoundError, no al
             compilar. Va en common porque los tres servicios que hashean o
-            verifican contraseñas heredan de aquí. La versión la gestiona el
-            BOM de Spring Boot.
+            verifican contraseñas heredan de aquí. La versión NO la gestiona
+            el BOM de Spring Boot: se fija en las <properties> del padre.
         -->
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
         </dependency>
         <dependency>
             <groupId>org.postgresql</groupId>

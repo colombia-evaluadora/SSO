@@ -62,16 +62,20 @@ describe("RestorePasswordPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("disables submit until password is ≥6 chars and matches the confirm", async () => {
+  it("disables submit until the password meets the policy and matches the confirm", async () => {
     renderRestore("/admin/restore-password?token=tok-restore");
     const user = userEvent.setup();
 
     await user.type(screen.getByLabelText("Nueva contraseña"), "abc");
     await user.type(screen.getByLabelText("Repetir contraseña"), "xyz");
 
-    expect(
-      screen.getByText(/Debe tener al menos 6 caracteres/i),
-    ).toBeInTheDocument();
+    // "abc" incumple longitud, mayúscula, número y símbolo.
+    expect(screen.getByTestId("password-rule-length")).toHaveTextContent(
+      /pendiente/i,
+    );
+    expect(screen.getByTestId("password-rule-digit")).toHaveTextContent(
+      /pendiente/i,
+    );
     expect(
       screen.getByText(/Las contraseñas no coinciden/i),
     ).toBeInTheDocument();
@@ -91,8 +95,8 @@ describe("RestorePasswordPage", () => {
     renderRestore("/admin/restore-password?token=tok-restore");
 
     const user = userEvent.setup();
-    await user.type(screen.getByLabelText("Nueva contraseña"), "newpass1");
-    await user.type(screen.getByLabelText("Repetir contraseña"), "newpass1");
+    await user.type(screen.getByLabelText("Nueva contraseña"), "Newpass1!");
+    await user.type(screen.getByLabelText("Repetir contraseña"), "Newpass1!");
     await user.click(
       screen.getByRole("button", { name: /Restaurar contraseña/i }),
     );
@@ -107,7 +111,7 @@ describe("RestorePasswordPage", () => {
       }),
     );
     expect(init.body).toContain('"token":"tok-restore"');
-    expect(init.body).toContain('"password":"newpass1"');
+    expect(init.body).toContain('"password":"Newpass1!"');
     expect(init.headers).not.toHaveProperty("Authorization");
 
     expect(
@@ -129,8 +133,8 @@ describe("RestorePasswordPage", () => {
     renderRestore("/admin/restore-password?token=tok-stale");
 
     const user = userEvent.setup();
-    await user.type(screen.getByLabelText("Nueva contraseña"), "newpass1");
-    await user.type(screen.getByLabelText("Repetir contraseña"), "newpass1");
+    await user.type(screen.getByLabelText("Nueva contraseña"), "Newpass1!");
+    await user.type(screen.getByLabelText("Repetir contraseña"), "Newpass1!");
     await user.click(
       screen.getByRole("button", { name: /Restaurar contraseña/i }),
     );

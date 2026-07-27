@@ -7,6 +7,7 @@ import com.co.eurekatic.common.entity.User.UserStatus;
 import com.co.eurekatic.common.repository.AppRepository;
 import com.co.eurekatic.common.repository.RoleRepository;
 import com.co.eurekatic.common.repository.UserRepository;
+import com.co.eurekatic.common.security.PasswordPolicy;
 import com.co.eurekatic.ssoadmin.client.SessionInvalidationClient;
 import com.co.eurekatic.ssoadmin.config.EmailProperties;
 import com.co.eurekatic.ssoadmin.dto.CreateAccountRequest;
@@ -322,9 +323,7 @@ public class UserAdminService {
      */
     @Transactional
     public void activateAccount(String token, String password) {
-        if (password == null || password.isBlank() || password.length() < 6) {
-            throw new IllegalArgumentException("La contraseña debe tener al menos 6 caracteres");
-        }
+        PasswordPolicy.validate(password);
         User user = tokenService.consumeActivationToken(token);
         user.setPassword(passwordEncoder.encode(password));
         user.setEnabled(true);
@@ -346,9 +345,7 @@ public class UserAdminService {
      */
     @Transactional
     public void restorePassword(String token, String password) {
-        if (password == null || password.isBlank() || password.length() < 6) {
-            throw new IllegalArgumentException("La contraseña debe tener al menos 6 caracteres");
-        }
+        PasswordPolicy.validate(password);
         User user = tokenService.consumeRestoreToken(token);
         user.setPassword(passwordEncoder.encode(password));
         User saved = userRepository.save(user);
