@@ -73,13 +73,13 @@ public class HttpContainerProvisioner implements ContainerProvisioner {
                     .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {
                         throw new ProvisioningException(
                                 ProvisioningException.Code.CONTAINER_CREATE_FAILED,
-                                "Provisioner refused create for "
+                                "El provisioner rechazó la creación de "
                                         + spec.instanceName() + ": " + res.getStatusText());
                     })
                     .onStatus(HttpStatusCode::is5xxServerError, (req, res) -> {
                         throw new ProvisioningException(
                                 ProvisioningException.Code.CONTAINER_CREATE_FAILED,
-                                "Provisioner 5xx on create for "
+                                "Error 5xx del provisioner al crear "
                                         + spec.instanceName() + ": " + res.getStatusText());
                     })
                     .toBodilessEntity();
@@ -91,7 +91,7 @@ public class HttpContainerProvisioner implements ContainerProvisioner {
                     spec.instanceName(), e.getMessage());
             throw new ProvisioningException(
                     ProvisioningException.Code.SIDECAR_UNREACHABLE,
-                    "Provisioner unreachable: " + e.getMessage(), e);
+                    "No se pudo contactar al provisioner: " + e.getMessage(), e);
         }
     }
 
@@ -111,13 +111,13 @@ public class HttpContainerProvisioner implements ContainerProvisioner {
                         }
                         throw new ProvisioningException(
                                 ProvisioningException.Code.CONTAINER_CREATE_FAILED,
-                                "Provisioner refused delete for "
+                                "El provisioner rechazó el borrado de "
                                         + fullInstanceName + ": " + res.getStatusText());
                     })
                     .onStatus(HttpStatusCode::is5xxServerError, (req, res) -> {
                         throw new ProvisioningException(
                                 ProvisioningException.Code.CONTAINER_CREATE_FAILED,
-                                "Provisioner 5xx on delete for "
+                                "Error 5xx del provisioner al borrar "
                                         + fullInstanceName + ": " + res.getStatusText());
                     })
                     .toBodilessEntity();
@@ -128,7 +128,7 @@ public class HttpContainerProvisioner implements ContainerProvisioner {
                     fullInstanceName, e.getMessage());
             throw new ProvisioningException(
                     ProvisioningException.Code.SIDECAR_UNREACHABLE,
-                    "Provisioner unreachable: " + e.getMessage(), e);
+                    "No se pudo contactar al provisioner: " + e.getMessage(), e);
         }
     }
 
@@ -163,13 +163,13 @@ public class HttpContainerProvisioner implements ContainerProvisioner {
                     .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {
                         throw new ProvisioningException(
                                 ProvisioningException.Code.CONTAINER_CREATE_FAILED,
-                                "Provisioner refused status for "
+                                "El provisioner rechazó la consulta de estado de "
                                         + fullInstanceName + ": " + res.getStatusText());
                     })
                     .onStatus(HttpStatusCode::is5xxServerError, (req, res) -> {
                         throw new ProvisioningException(
                                 ProvisioningException.Code.SIDECAR_UNREACHABLE,
-                                "Provisioner 5xx on status for "
+                                "Error 5xx del provisioner al consultar el estado de "
                                         + fullInstanceName + ": " + res.getStatusText());
                     })
                     .body(ProvisionResponseDto.class);
@@ -193,7 +193,7 @@ public class HttpContainerProvisioner implements ContainerProvisioner {
                     fullInstanceName, e.getMessage());
             throw new ProvisioningException(
                     ProvisioningException.Code.SIDECAR_UNREACHABLE,
-                    "Provisioner unreachable: " + e.getMessage(), e);
+                    "No se pudo contactar al provisioner: " + e.getMessage(), e);
         }
     }
 
@@ -219,13 +219,13 @@ public class HttpContainerProvisioner implements ContainerProvisioner {
                     .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {
                         throw new ProvisioningException(
                                 ProvisioningException.Code.CONTAINER_CREATE_FAILED,
-                                "Provisioner refused logs for "
+                                "El provisioner rechazó los logs de "
                                         + fullInstanceName + ": " + res.getStatusText());
                     })
                     .onStatus(HttpStatusCode::is5xxServerError, (req, res) -> {
                         throw new ProvisioningException(
                                 ProvisioningException.Code.SIDECAR_UNREACHABLE,
-                                "Provisioner 5xx on logs for "
+                                "Error 5xx del provisioner al obtener los logs de "
                                         + fullInstanceName + ": " + res.getStatusText());
                     })
                     .body(String.class);
@@ -237,7 +237,7 @@ public class HttpContainerProvisioner implements ContainerProvisioner {
                     fullInstanceName, e.getMessage());
             throw new ProvisioningException(
                     ProvisioningException.Code.SIDECAR_UNREACHABLE,
-                    "Provisioner unreachable: " + e.getMessage(), e);
+                    "No se pudo contactar al provisioner: " + e.getMessage(), e);
         }
     }
 
@@ -262,13 +262,13 @@ public class HttpContainerProvisioner implements ContainerProvisioner {
                         }
                         throw new ProvisioningException(
                                 ProvisioningException.Code.CONTAINER_CREATE_FAILED,
-                                "Provisioner refused restart for "
+                                "El provisioner rechazó el reinicio de "
                                         + fullInstanceName + ": " + res.getStatusText());
                     })
                     .onStatus(HttpStatusCode::is5xxServerError, (req, res) -> {
                         throw new ProvisioningException(
                                 ProvisioningException.Code.CONTAINER_CREATE_FAILED,
-                                "Provisioner 5xx on restart for "
+                                "Error 5xx del provisioner al reiniciar "
                                         + fullInstanceName + ": " + res.getStatusText());
                     })
                     .toBodilessEntity();
@@ -283,7 +283,7 @@ public class HttpContainerProvisioner implements ContainerProvisioner {
                     fullInstanceName, e.getMessage());
             throw new ProvisioningException(
                     ProvisioningException.Code.SIDECAR_UNREACHABLE,
-                    "Provisioner unreachable: " + e.getMessage(), e);
+                    "No se pudo contactar al provisioner: " + e.getMessage(), e);
         }
     }
 

@@ -7,6 +7,6 @@ package com.co.eurekatic.ssoadmin.exception;
  */
 public class UserDuplicateException extends RuntimeException {
     public UserDuplicateException(String email) {
-        super("User already exists: " + email);
+        super("El usuario ya existe: " + email);
     }
 }

@@ -106,7 +106,7 @@ public class EurekaReadinessProbe {
                 serviceId, discoveryClient.getServices());
         throw new ProvisioningException(
                 ProvisioningException.Code.EUREKA_TIMEOUT,
-                serviceId + " did not register within " + TIMEOUT);
+                serviceId + " no se registró en Eureka dentro de " + TIMEOUT);
     }
 
     @SafeVarargs
@@ -125,7 +125,7 @@ public class EurekaReadinessProbe {
             Thread.currentThread().interrupt();
             throw new ProvisioningException(
                     ProvisioningException.Code.EUREKA_TIMEOUT,
-                    "Readiness probe interrupted");
+                    "La sonda de readiness fue interrumpida");
         }
     }
 }

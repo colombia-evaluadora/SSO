@@ -190,7 +190,7 @@ public class UserAdminService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new NotFoundException("User", userId));
         if (user.getStatus() != UserStatus.PENDING_ACTIVATION) {
-            throw new InvalidUserStateException("Resend activation", user.getStatus(), UserStatus.PENDING_ACTIVATION);
+            throw new InvalidUserStateException("Reenviar la activación", user.getStatus(), UserStatus.PENDING_ACTIVATION);
         }
         tokenService.issueActivationToken(user);
         User saved = userRepository.save(user);
@@ -222,7 +222,7 @@ public class UserAdminService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new NotFoundException("User", userId));
         if (user.getStatus() != UserStatus.ACTIVE) {
-            throw new InvalidUserStateException("Deactivate", user.getStatus(), UserStatus.ACTIVE);
+            throw new InvalidUserStateException("Desactivar el usuario", user.getStatus(), UserStatus.ACTIVE);
         }
         user.setActive(false);
         User saved = userRepository.save(user);
@@ -239,7 +239,7 @@ public class UserAdminService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new NotFoundException("User", userId));
         if (user.getStatus() != UserStatus.INACTIVE) {
-            throw new InvalidUserStateException("Reactivate", user.getStatus(), UserStatus.INACTIVE);
+            throw new InvalidUserStateException("Reactivar el usuario", user.getStatus(), UserStatus.INACTIVE);
         }
         user.setActive(true);
         User saved = userRepository.save(user);
@@ -323,7 +323,7 @@ public class UserAdminService {
     @Transactional
     public void activateAccount(String token, String password) {
         if (password == null || password.isBlank() || password.length() < 6) {
-            throw new IllegalArgumentException("Password must be at least 6 characters");
+            throw new IllegalArgumentException("La contraseña debe tener al menos 6 caracteres");
         }
         User user = tokenService.consumeActivationToken(token);
         user.setPassword(passwordEncoder.encode(password));
@@ -347,7 +347,7 @@ public class UserAdminService {
     @Transactional
     public void restorePassword(String token, String password) {
         if (password == null || password.isBlank() || password.length() < 6) {
-            throw new IllegalArgumentException("Password must be at least 6 characters");
+            throw new IllegalArgumentException("La contraseña debe tener al menos 6 caracteres");
         }
         User user = tokenService.consumeRestoreToken(token);
         user.setPassword(passwordEncoder.encode(password));

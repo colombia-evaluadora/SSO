@@ -62,7 +62,7 @@ public class EndpointService {
     @Transactional
     public EndpointResponse update(EndpointRequest req) {
         if (req.id() == null) {
-            throw new IllegalArgumentException("id is required for update");
+            throw new IllegalArgumentException("El id es obligatorio para actualizar");
         }
         Endpoint e = endpointRepo.findById(req.id())
                 .orElseThrow(() -> new NotFoundException("Endpoint", req.id()));

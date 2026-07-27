@@ -110,7 +110,7 @@ public class MicroserviceService {
         // (REST is the legacy behavior).
         String kind = (req.kind() == null || req.kind().isBlank()) ? "REST" : req.kind();
         if (!"REST".equals(kind) && !"QUERY".equals(kind)) {
-            throw new IllegalArgumentException("kind must be REST or QUERY, got: " + kind);
+            throw new IllegalArgumentException("kind debe ser REST o QUERY, se recibió: " + kind);
         }
 
         // Cross-field validation for QUERY rows. Bean Validation
@@ -186,7 +186,7 @@ public class MicroserviceService {
     @Transactional
     public MicroserviceResponse update(MicroserviceRequest req) {
         if (req.id() == null) {
-            throw new IllegalArgumentException("id is required for update");
+            throw new IllegalArgumentException("El id es obligatorio para actualizar");
         }
         Microservice m = repo.findById(req.id())
                 .orElseThrow(() -> new NotFoundException("Microservice", req.id()));
@@ -274,7 +274,7 @@ public class MicroserviceService {
     private static void requireQueryField(String value, String name) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(
-                    name + " is required when kind=QUERY");
+                    name + " es obligatorio cuando kind=QUERY");
         }
     }
 

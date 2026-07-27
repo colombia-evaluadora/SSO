@@ -11,6 +11,20 @@ import com.co.eurekatic.common.entity.User.UserStatus;
  */
 public class InvalidUserStateException extends RuntimeException {
     public InvalidUserStateException(String action, UserStatus actual, UserStatus required) {
-        super(action + " requires status " + required + ", but user is " + actual);
+        super(action + " requiere que el usuario esté en estado " + label(required)
+                + ", pero está en estado " + label(actual));
+    }
+
+    /**
+     * Etiqueta legible del estado. El nombre del enum viaja en
+     * otros campos del API (contrato), así que aquí sólo se
+     * traduce el texto que ve la persona usuaria.
+     */
+    private static String label(UserStatus status) {
+        return switch (status) {
+            case PENDING_ACTIVATION -> "PENDIENTE DE ACTIVACIÓN";
+            case ACTIVE             -> "ACTIVO";
+            case INACTIVE           -> "INACTIVO";
+        };
     }
 }

@@ -10,6 +10,6 @@ package com.co.eurekatic.ssoadmin.exception;
  */
 public class DuplicateException extends RuntimeException {
     public DuplicateException(String resource, String key) {
-        super(resource + " already exists: " + key);
+        super("Ya existe " + ResourceLabels.of(resource) + ": " + key);
     }
 }

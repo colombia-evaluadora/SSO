@@ -54,7 +54,7 @@ public class JdbcTemplateRegistry {
         NamedParameterJdbcTemplate t = templates.get(key);
         if (t == null) {
             throw new ResponseStatusException(BAD_GATEWAY,
-                    "Dialect '" + key + "' is not configured in this deployment");
+                    "El dialecto '" + key + "' no está configurado en este despliegue");
         }
         return t;
     }

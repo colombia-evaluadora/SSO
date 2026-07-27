@@ -8,6 +8,6 @@ package com.co.eurekatic.ssoadmin.exception;
  */
 public class TokenNotFoundException extends RuntimeException {
     public TokenNotFoundException() {
-        super("Token not found or already used");
+        super("El token no existe o ya fue utilizado");
     }
 }

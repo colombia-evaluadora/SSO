@@ -34,14 +34,14 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleResponseStatus(ResponseStatusException ex) {
         return ResponseEntity.status(ex.getStatusCode()).body(Map.of(
                 "code", ex.getStatusCode().toString(),
-                "message", ex.getReason() == null ? "error" : ex.getReason()));
+                "message", ex.getReason() == null ? "Error en la solicitud" : ex.getReason()));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleIllegal(IllegalArgumentException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
                 "code", "BAD_REQUEST",
-                "message", ex.getMessage() == null ? "Bad request" : ex.getMessage()));
+                "message", ex.getMessage() == null ? "Solicitud inválida" : ex.getMessage()));
     }
 
     /**
@@ -73,6 +73,6 @@ public class GlobalExceptionHandler {
         log.error("Unhandled error", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
                 "code", "INTERNAL_ERROR",
-                "message", "Internal server error"));
+                "message", "Error interno del servidor"));
     }
 }

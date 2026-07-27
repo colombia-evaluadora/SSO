@@ -88,7 +88,7 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
             token.setDetails(authenticationDetailsSource.buildDetails(request));
             return getAuthenticationManager().authenticate(token);
         } catch (IOException e) {
-            throw new BadLoginRequestException("Malformed login body: " + e.getMessage());
+            throw new BadLoginRequestException("Cuerpo de la petición de login mal formado: " + e.getMessage());
         }
     }
 
@@ -132,7 +132,7 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
                     "timestamp", Instant.now().toString(),
                     "status", 503,
                     "error", "store_unavailable",
-                    "message", "Authentication service temporarily unavailable"
+                    "message", "El servicio de autenticación no está disponible temporalmente"
             ));
             return;
         }
@@ -221,7 +221,7 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
                 "timestamp", Instant.now().toString(),
                 "status", 401,
                 "error", "authentication_failed",
-                "message", failed.getMessage() == null ? "Bad credentials" : failed.getMessage()
+                "message", failed.getMessage() == null ? "Credenciales inválidas" : failed.getMessage()
         ));
     }
 

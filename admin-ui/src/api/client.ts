@@ -79,7 +79,7 @@ export class ApiClient {
     const refreshed = await this.refreshLock.acquire();
     if (!refreshed) {
       this.onAuthFailure();
-      throw new ApiError(401, "AUTH_EXPIRED", "Session expired; please log in again");
+      throw new ApiError(401, "AUTH_EXPIRED", "La sesión expiró; inicia sesión de nuevo");
     }
     const retried = await this.fetchOnce(method, path, body, init?.skipAuth, init?.base);
     return this.handleResponse<T>(retried);
