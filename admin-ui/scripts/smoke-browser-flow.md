@@ -116,7 +116,7 @@ Behind the scenes:
    - Image: `eurekatic/query-service:1.0.0-SNAPSHOT`
    - Env: `QUERY_DS_DIALECT`, `QUERY_DS_URL`, `QUERY_DS_USERNAME`,
      `QUERY_DS_PASSWORD`, `QUERY_DS_POOL_SIZE`, `QUERY_INSTANCE_NAME`,
-     `EUREKA_URL`, `JWT_SECRET`, `QUERY_CATALOG_BASE_URL`
+     `EUREKA_URL`, `JWT_PUBLIC_KEY`, `QUERY_CATALOG_BASE_URL`
    - Network: `${COMPOSE_PROJECT_NAME:-modernize}_default`
 4. sso-admin's `EurekaReadinessProbe` waits up to **45 seconds** for the
    new `query-service-myshop-users` instance to register with Eureka.

@@ -42,8 +42,13 @@ class JwtAuthenticationFilterTest {
 
     @BeforeEach
     void setUp() {
+        // JwtTokenService está mockeado, así que estas claves nunca se
+        // parsean: al filtro sólo le importan header-name y token-prefix.
+        // La privada va a null a propósito — es como se configura
+        // sso-admin en producción, que verifica pero no emite.
         props = new JwtProperties(
-                "test-secret-which-is-at-least-32-bytes-long-1234567890",
+                null,
+                "-----BEGIN PUBLIC KEY-----no-se-parsea-----END PUBLIC KEY-----",
                 "sso-postgres",
                 3600L,
                 86400L,

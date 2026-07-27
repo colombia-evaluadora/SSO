@@ -34,6 +34,8 @@ logs/
 .env.local
 *.pem
 *.key
+# Salida de scripts/gen-jwt-keys.sh — el par RSA que firma los JWT.
+secrets/
 
 # Node / Vite (admin-ui/)
 node_modules/

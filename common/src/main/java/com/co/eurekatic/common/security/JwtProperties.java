@@ -8,34 +8,41 @@ import org.springframework.validation.annotation.Validated;
 /**
  * Strongly-typed configuration for the JWT subsystem. Bound from
  * {@code sso.jwt.*} properties by Spring Boot. Used by both the
- * issuer (auth-center) and the validator (api-gateway).
+ * issuer (auth-center) and the validators (api-gateway, sso-admin,
+ * query-service).
  *
- * <p>Defaults are deliberately safe and a 64-character placeholder is
- * supplied so the application starts even without an explicit
- * {@code JWT_SECRET} env var. Production deployments MUST override
- * the secret via environment variable — the default is in the
- * code so dev environments work, not so prod can rely on it.
+ * <p><b>RS256 (asymmetric).</b> The tokens are signed with an RSA
+ * private key and verified with the matching public key. Only
+ * auth-center gets {@link #privateKey()}; every other service is
+ * configured with {@link #publicKey()} alone and is therefore
+ * structurally incapable of minting a token. Under the previous
+ * HS256 setup a single {@code JWT_SECRET} was shared by all five
+ * services, so a read-only verifier that got compromised could
+ * forge an admin token — that is the asymmetry this buys.
  *
- * <p>The secret must be at least 32 bytes (256 bits) — HS256 requires
- * a key that long. The {@code issueAccessToken} call will throw a
- * {@code WeakKeyException} if the configured secret is too short.
+ * <p>Both fields hold a PEM document (the whole thing, including
+ * the {@code -----BEGIN ...-----} armor). {@code privateKey} must
+ * be PKCS#8 ({@code BEGIN PRIVATE KEY}) and {@code publicKey}
+ * X.509/SPKI ({@code BEGIN PUBLIC KEY}) — the formats
+ * {@code scripts/gen-jwt-keys.sh} emits.
+ *
+ * <p>{@code privateKey} is nullable on purpose: a verifier-only
+ * service leaves it unset. Neither key has a placeholder default —
+ * there is no safe stand-in for a signing key, and a service that
+ * boots with a key nobody controls is worse than one that refuses
+ * to boot. {@link JwtTokenService} fails fast with a readable
+ * message when the PEM is missing or malformed.
  */
 @Validated
 @ConfigurationProperties(prefix = "sso.jwt")
 public record JwtProperties(
-        @NotBlank String secret,
+        String privateKey,
+        @NotBlank String publicKey,
         @NotBlank String issuer,
         @Min(60) long accessTokenTtlSeconds,
         @Min(60) long apiTokenTtlSeconds,
         @NotBlank String headerName,
         @NotBlank String tokenPrefix) {
-
-    /**
-     * A 64-character placeholder. NOT FOR PRODUCTION. Override via
-     * {@code JWT_SECRET} env var or {@code sso.jwt.secret} property.
-     */
-    public static final String DEFAULT_SECRET =
-            "change-me-change-me-change-me-change-me-change-me-1234567890";
 
     public static final String DEFAULT_ISSUER = "sso-postgres";
     public static final String DEFAULT_HEADER = "Authorization";
@@ -43,7 +50,7 @@ public record JwtProperties(
 
     /**
      * Compact constructor with sensible defaults so partial configuration
-     * works (e.g. {@code sso.jwt.secret=...} alone).
+     * works (e.g. {@code sso.jwt.public-key=...} alone on a verifier).
      */
     public JwtProperties {
         if (issuer == null || issuer.isBlank()) {
@@ -61,5 +68,10 @@ public record JwtProperties(
         if (tokenPrefix == null || tokenPrefix.isBlank()) {
             tokenPrefix = DEFAULT_PREFIX;
         }
+    }
+
+    /** True when this service is configured to sign, not just verify. */
+    public boolean canIssue() {
+        return privateKey != null && !privateKey.isBlank();
     }
 }

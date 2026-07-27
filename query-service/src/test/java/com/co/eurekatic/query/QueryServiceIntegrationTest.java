@@ -55,7 +55,10 @@ import static org.springframework.security.test.web.servlet.setup.SecurityMockMv
         classes = QueryServiceApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.MOCK
 )
-@TestPropertySource(properties = {
+// El par RSA de test vive en jwt-test-keys.properties: RS256
+// necesita una clave real, no una cadena cualquiera como el
+// secreto HS256 que habia aqui antes.
+@TestPropertySource(locations = "classpath:jwt-test-keys.properties", properties = {
         "spring.autoconfigure.exclude="
                 + "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration,"
                 + "org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration,"
@@ -68,7 +71,6 @@ import static org.springframework.security.test.web.servlet.setup.SecurityMockMv
         "query.datasources.entries.postgres.password=",
         "query.datasources.entries.postgres.maximum-pool-size=4",
         "query.catalog.base-url=http://stubbed.invalid",
-        "sso.jwt.secret=integration-test-secret-which-is-at-least-32-bytes-long-1234567890",
         "eureka.client.enabled=false",
         "spring.cloud.discovery.enabled=false"
 })

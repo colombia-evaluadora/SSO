@@ -50,7 +50,7 @@ auth-center  hello-svc  ...other     eureka
 
 The **api-gateway is the trust boundary**:
 
-1. **auth-center** signs JWTs with HS256 (`sso.jwt.secret`).
+1. **auth-center** signs JWTs with RS256, using the RSA private key in `sso.jwt.private-key`. It is the only service that holds the private half — api-gateway, sso-admin and query-service are configured with `sso.jwt.public-key` alone and can verify but not mint. (Before, all four shared one HS256 `JWT_SECRET`, so any one of them could forge an admin token.)
 2. **api-gateway** validates the JWT on every protected request, populates a reactive `SecurityContext` with an `AuthPrincipal`, and injects `X-Authenticated-User`, `X-Authenticated-Roles`, `X-Authenticated-Token-Type` into the downstream request via a `GlobalFilter`.
 3. **Downstream services** (e.g. `hello-service`) trust the `X-Authenticated-*` headers. They do **NOT** re-validate the JWT. This is safe only when the service is reachable only via the gateway and the network path is locked down.
 
@@ -387,7 +387,8 @@ curl -sI http://localhost:8080/admin/assets/index-XXXXXXXX.js # 200 js
 
 | Var | Default | Where | Purpose |
 |---|---|---|---|
-| `JWT_SECRET` | `change-me-…-1234567890` (dev placeholder) | auth-center, api-gateway, **sso-admin** | HMAC key. **MUST match across all three**. Min 32 bytes; `JwtTokenService` refuses to start with a shorter key. |
+| `JWT_PRIVATE_KEY` | _(sin valor por defecto)_ | **auth-center únicamente** | Clave privada RSA (PEM PKCS#8) con la que se firman los tokens RS256. Genérala con `./scripts/gen-jwt-keys.sh --env`. Ningún otro servicio debe recibirla. |
+| `JWT_PUBLIC_KEY` | _(sin valor por defecto)_ | auth-center, api-gateway, **sso-admin**, query-service, provisioner | Clave pública RSA (PEM X.509) para verificar firmas. Debe ser la pareja de `JWT_PRIVATE_KEY`. Sin valor por defecto a propósito: el servicio no arranca sin ella, en lugar de arrancar con una clave que está en Git. |
 | `DB_URL` | `jdbc:postgresql://localhost:5432/sso` | auth-center, **sso-admin** | JDBC URL |
 | `DB_USER` | `sso` | auth-center, **sso-admin** | DB username |
 | `DB_PASSWORD` | `change-me-in-prod` | auth-center, **sso-admin** | DB password |
@@ -470,12 +471,12 @@ configuration, and how to enable / disable providers via
 
 ## Security notes (for production)
 
-1. **Set a real `JWT_SECRET`** — generate 64+ bytes from a CSPRNG, store in a secret manager. The dev placeholder is in version control.
+1. **Generate a real RSA key pair** — `./scripts/gen-jwt-keys.sh --env`. Put `JWT_PRIVATE_KEY` in a secret manager and give it **only** to auth-center; `JWT_PUBLIC_KEY` can travel with the rest. Rotating the pair invalidates every live access token, so plan it as a forced re-login.
 2. **Set `SSO_BOOTSTRAP_ENABLED=false`** and provision users via a dedicated admin endpoint or migration. The `DataInitializer` logs the username at INFO but never the password.
 3. **Set a real `DB_PASSWORD`** and use a managed Postgres (RDS, Cloud SQL, etc.) with TLS and a least-privilege role.
 4. **Lock down the network path** between api-gateway and downstream services. The `X-Authenticated-*` headers are advisory and can be spoofed by anyone who can reach the downstream directly.
 5. **Refresh the bootstrap password** on first deploy. `DataInitializer` skips seeding if the user already exists, so rotating the password requires either an admin endpoint or a DB migration.
-6. **BCrypt cost** is 12 (`AuthenticationConfig.passwordEncoder`). Adjust up if your hardware can afford it.
+6. **Passwords are Argon2id** (19 MiB, t=2, p=1 — OWASP 2024), built in `common.security.PasswordEncoderFactory` and shared by auth-center, sso-admin and query-service. Legacy BCrypt(12) hashes still verify and are rewritten to Argon2id on each user's next successful login (`PasswordUpgradeService`); migration V19 widened `users.password` and stamped the `{bcrypt}` prefix on the existing rows. Accounts that never log in again keep their BCrypt hash — `SELECT email FROM users WHERE password LIKE '{bcrypt}%'` lists them.
 7. **`GET /getUsersSSO` is ADMIN-only.** Until commits 11+12 on
    `feat/sso-admin-query-catalog` it was permit-all at both the
    api-gateway and auth-center layers, returning every active

@@ -181,8 +181,10 @@ public class SecurityConfig {
 
     /**
      * JWT parser. sso-admin only verifies tokens — auth-center
-     * mints them. The key is the same on both sides
-     * ({@code sso.jwt.secret}).
+     * mints them. Since the RS256 migration that split is
+     * structural, not just conventional: this service is
+     * configured with {@code sso.jwt.public-key} alone, so
+     * {@code JwtTokenService.issueAccessToken} would throw here.
      */
     @Bean
     public JwtTokenService jwtTokenService(JwtProperties props) {
