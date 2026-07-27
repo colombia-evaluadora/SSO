@@ -78,6 +78,13 @@ public class JwtTokenService {
         String body = pem
                 .replaceAll("-----BEGIN [A-Z ]+-----", "")
                 .replaceAll("-----END [A-Z ]+-----", "")
+                // Un PEM que viaja por .env -> docker-compose -> variable de
+                // entorno puede llegar con los saltos como la secuencia
+                // literal \n (barra invertida + n) en vez de como salto real,
+                // segun quien haya interpretado el escape por el camino. El
+                // alfabeto base64 no incluye la barra invertida, asi que
+                // quitarla nunca puede corromper una clave valida.
+                .replace("\\n", "")
                 .replaceAll("\\s", "");
         try {
             return Base64.getDecoder().decode(body);

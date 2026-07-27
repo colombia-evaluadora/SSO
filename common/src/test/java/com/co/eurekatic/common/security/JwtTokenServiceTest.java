@@ -166,6 +166,30 @@ class JwtTokenServiceTest {
     }
 
     @Test
+    void acceptsPemWithLiteralBackslashNInsteadOfRealNewlines() {
+        // Como llega la clave cuando el PEM viaja en una linea por
+        // .env / docker-compose y nadie ha convertido el escape. Se
+        // fija porque el sintoma no apunta al origen: el bean falla
+        // al arrancar con "no es una clave publica RSA" y parece un
+        // problema de la clave, no del transporte.
+        String oneLine = pem("PUBLIC KEY", KEYS.getPublic().getEncoded())
+                .replace("\n", "\\n");
+        assertThat(oneLine).contains("\\n");
+
+        JwtTokenService svc = new JwtTokenService(new JwtProperties(
+                pem("PRIVATE KEY", KEYS.getPrivate().getEncoded()).replace("\n", "\\n"),
+                oneLine,
+                "sso-postgres",
+                3_600L,
+                86_400L,
+                "Authorization",
+                "Bearer "));
+
+        String token = svc.issueAccessToken("alice", Set.of("USER"));
+        assertThat(svc.parse(token).email()).isEqualTo("alice");
+    }
+
+    @Test
     void malformedPublicKeyFailsAtConstruction() {
         // A bad key must break at startup, not on the first request.
         assertThatThrownBy(() -> new JwtTokenService(new JwtProperties(
