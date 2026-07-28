@@ -258,7 +258,7 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
      * el cliente, lo damos aquí y nos saltamos el bundle.
      *
      * <p>Los mensajes que sí generamos nosotros pasan intactos: los de
-     * {@link AccountStatusChecker} ("Tu cuenta fue inactivada…") y los
+     * {@link AccountStatusChecker} ("Tu cuenta fue desactivada…") y los
      * de {@link BadLoginRequestException}.
      */
     private static String messageFor(AuthenticationException failed) {

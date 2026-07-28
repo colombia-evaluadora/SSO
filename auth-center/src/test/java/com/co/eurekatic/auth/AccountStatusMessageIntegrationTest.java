@@ -162,7 +162,7 @@ class AccountStatusMessageIntegrationTest {
         JsonNode json = login("erin@example.com", "s3cret");
 
         assertThat(json.get("message").asText()).isEqualTo(
-                "Tu cuenta fue inactivada. Contacta al administrador.");
+                "Tu cuenta fue desactivada. Contacta al administrador.");
         assertThat(json.get("error").asText()).isEqualTo("account_not_available");
     }
 
@@ -178,7 +178,7 @@ class AccountStatusMessageIntegrationTest {
         JsonNode json = login("erin@example.com", "wrong");
 
         assertThat(json.get("message").asText()).isEqualTo(
-                "Tu cuenta fue inactivada. Contacta al administrador.");
+                "Tu cuenta fue desactivada. Contacta al administrador.");
     }
 
     @Test
@@ -210,7 +210,7 @@ class AccountStatusMessageIntegrationTest {
         // An active account with a wrong password must NOT get the
         // account-status treatment — it stays generic.
         assertThat(json.get("error").asText()).isEqualTo("authentication_failed");
-        assertThat(json.get("message").asText()).doesNotContain("inactivada");
+        assertThat(json.get("message").asText()).doesNotContain("desactivada");
     }
 
     @Test

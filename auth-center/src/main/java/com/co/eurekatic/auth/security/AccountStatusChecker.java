@@ -62,7 +62,7 @@ public class AccountStatusChecker implements UserDetailsChecker {
     private static String disabledReason(UserDetails user) {
         if (user instanceof User u) {
             return switch (u.getStatus()) {
-                case INACTIVE -> "Tu cuenta fue inactivada. Contacta al administrador.";
+                case INACTIVE -> "Tu cuenta fue desactivada. Contacta al administrador.";
                 case PENDING_ACTIVATION -> "Tu cuenta aún no ha sido activada. "
                         + "Revisa el correo de activación que te enviamos.";
                 // Inalcanzable: isEnabled() sólo es false en los dos

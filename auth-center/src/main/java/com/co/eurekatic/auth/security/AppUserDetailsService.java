@@ -38,7 +38,7 @@ public class AppUserDetailsService implements UserDetailsService {
         //
         // Ahora devolvemos la entidad y es AccountStatusChecker
         // (registrado como preAuthenticationChecks) quien rechaza,
-        // con un mensaje que distingue "inactivada" de "sin activar".
+        // con un mensaje que distingue "desactivada" de "sin activar".
         // Sigue ocurriendo ANTES de comprobar la contraseña, así que
         // una cuenta deshabilitada no puede autenticarse aunque la
         // contraseña sea válida.
