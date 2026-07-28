@@ -17,6 +17,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AccountStatusException;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
@@ -231,8 +232,40 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
                 "error", failed instanceof AccountStatusException
                         ? "account_not_available"
                         : "authentication_failed",
-                "message", failed.getMessage() == null ? "Credenciales inválidas" : failed.getMessage()
+                "message", messageFor(failed)
         ));
+    }
+
+    /**
+     * Texto que ve la persona usuaria en el 401.
+     *
+     * <p><b>Por qué no basta con {@code failed.getMessage()}.</b> El
+     * mensaje de {@link BadCredentialsException} no lo escribimos
+     * nosotros: lo resuelve Spring Security contra su bundle
+     * {@code org/springframework/security/messages}, y ahí el único
+     * fichero en castellano es {@code messages_es_ES.properties} —
+     * con código de país. {@code ResourceBundle} resuelve de más
+     * específico a menos ({@code es_ES} → {@code es} → base) y nunca
+     * al revés, así que un locale {@code es} (el que fija
+     * {@code AuthCenterApplication}) o {@code es-CO} (el que manda
+     * el navegador de un usuario colombiano) NO encuentra el
+     * {@code _es_ES} y cae al base en inglés: "Bad credentials".
+     *
+     * <p>Fijar el locale por defecto a {@code es_ES} tampoco lo
+     * resuelve del todo, porque {@code RequestContextHolder} pisa el
+     * locale con el del {@code Accept-Language} de cada petición. Como
+     * este texto es nuestro y no debe depender del idioma que negocie
+     * el cliente, lo damos aquí y nos saltamos el bundle.
+     *
+     * <p>Los mensajes que sí generamos nosotros pasan intactos: los de
+     * {@link AccountStatusChecker} ("Tu cuenta fue inactivada…") y los
+     * de {@link BadLoginRequestException}.
+     */
+    private static String messageFor(AuthenticationException failed) {
+        if (failed instanceof BadCredentialsException) {
+            return "Credenciales inválidas";
+        }
+        return failed.getMessage() == null ? "Credenciales inválidas" : failed.getMessage();
     }
 
     /**

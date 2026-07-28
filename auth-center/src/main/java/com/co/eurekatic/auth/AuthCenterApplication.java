@@ -39,15 +39,24 @@ import java.util.Locale;
 public class AuthCenterApplication {
 
     public static void main(String[] args) {
-        // El cuerpo de error del login lo rellena Spring Security,
-        // no nosotros: AuthenticationException.getMessage() sale de
-        // su bundle org/springframework/security/messages, que se
-        // resuelve con el locale por defecto de la JVM. En el
-        // contenedor eso es 'en', así que un password equivocado
-        // devolvía "Bad credentials" a una pantalla de login en
-        // español. El bundle _es ya viene en spring-security-core;
-        // basta con apuntar el locale antes de arrancar.
-        Locale.setDefault(Locale.of("es"));
+        // Locale por defecto para los mensajes de Spring Security
+        // (bundle org/springframework/security/messages).
+        //
+        // OJO con el código de país: el único fichero en castellano
+        // que trae spring-security-core es messages_es_ES.properties.
+        // ResourceBundle resuelve de más específico a menos
+        // (es_ES -> es -> base) y NUNCA al revés, así que un
+        // Locale.of("es") a secas no encuentra el _es_ES y cae al
+        // base en inglés. Tiene que ser es_ES exacto.
+        //
+        // Esto solo cubre a los clientes que no negocian idioma
+        // (curl, llamadas entre servicios). Para una petición con
+        // Accept-Language, RequestContextFilter pisa este valor con
+        // el locale del request — y un navegador colombiano manda
+        // es-CO, que tampoco resuelve el _es_ES. Por eso el mensaje
+        // de credenciales inválidas NO depende de esto: lo fija
+        // JsonLoginFilter#messageFor directamente.
+        Locale.setDefault(Locale.of("es", "ES"));
         SpringApplication.run(AuthCenterApplication.class, args);
     }
 }
