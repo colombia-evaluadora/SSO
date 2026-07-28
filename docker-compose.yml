@@ -154,7 +154,7 @@ services:
     container_name: sso-flyway
     command: ["-connectRetries=60", "migrate"]
     environment:
-      FLYWAY_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
+      FLYWAY_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}"
       FLYWAY_USER: ${DB_USER}
       FLYWAY_PASSWORD: ${DB_PASSWORD}
       FLYWAY_DEFAULT_SCHEMA: public
@@ -256,7 +256,7 @@ services:
     ports:
       - "${BIND_IP:-0.0.0.0}:${AUTH_CENTER_PORT:-8081}:8081"
     environment:
-      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}"
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       # Discovery
@@ -432,7 +432,7 @@ services:
       # DB_URL (host:port) + DB_NAME + DB_SSLMODE + DB_CHANNEL_BINDING
       # and overrides spring.datasource.url via the standard
       # Spring env var.
-      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}"
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       EUREKA_URL: "http://eurekaserver:8761/eureka"
@@ -582,8 +582,8 @@ services:
       # local `postgres` service (that one is opt-in dev-only —
       # see its own comment block). Using ${DB_URL} keeps the
       # connection target consistent with auth-center's.
-      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
-      DB_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}"
+      DB_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}"
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       EUREKA_URL: "http://eurekaserver:8761/eureka"
