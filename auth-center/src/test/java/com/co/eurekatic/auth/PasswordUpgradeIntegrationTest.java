@@ -2,6 +2,7 @@ package com.co.eurekatic.auth;
 
 import com.co.eurekatic.common.entity.User;
 import com.co.eurekatic.common.repository.UserRepository;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -100,12 +101,20 @@ class PasswordUpgradeIntegrationTest {
      * prefix that V19 stamped onto the existing rows. We hash it
      * here rather than pasting a literal so the fixture can't drift
      * from the cost the delegating encoder is configured to read.
+     *
+     * <p>Each call mints a fresh email: the H2 datasource is shared
+     * across every test method in this class (one Spring context, see
+     * {@link TestPropertySource}), and three of them seed a user with
+     * the same fixture. A fixed email would trip the unique index on
+     * {@code users(email)} on the second and third inserts before
+     * any assertion runs.
      */
     private User seedLegacyBcryptUser() {
+        String email = "dana+" + UUID.randomUUID() + "@example.com";
         String legacyHash = "{bcrypt}" + new BCryptPasswordEncoder(12).encode("s3cret");
 
         User dana = new User();
-        dana.setEmail("dana@example.com");
+        dana.setEmail(email);
         dana.setFullName("Dana Example");
         dana.setPassword(legacyHash);
         dana.setEnabled(true);
@@ -117,11 +126,11 @@ class PasswordUpgradeIntegrationTest {
     @Test
     void legacyBcryptUserCanStillLogIn() {
         bindWebClient();
-        seedLegacyBcryptUser();
+        User dana = seedLegacyBcryptUser();
 
         webTestClient.post().uri("/login")
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"email\":\"dana@example.com\",\"password\":\"s3cret\"}")
+                .bodyValue("{\"email\":\"" + dana.getEmail() + "\",\"password\":\"s3cret\"}")
                 .exchange()
                 .expectStatus().isEqualTo(HttpStatus.OK);
     }
@@ -129,15 +138,15 @@ class PasswordUpgradeIntegrationTest {
     @Test
     void successfulLoginRewritesBcryptHashToArgon2id() {
         bindWebClient();
-        seedLegacyBcryptUser();
+        User dana = seedLegacyBcryptUser();
 
         webTestClient.post().uri("/login")
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"email\":\"dana@example.com\",\"password\":\"s3cret\"}")
+                .bodyValue("{\"email\":\"" + dana.getEmail() + "\",\"password\":\"s3cret\"}")
                 .exchange()
                 .expectStatus().isEqualTo(HttpStatus.OK);
 
-        String stored = userRepository.findByEmail("dana@example.com")
+        String stored = userRepository.findByEmail(dana.getEmail())
                 .orElseThrow()
                 .getPassword();
 
@@ -147,18 +156,19 @@ class PasswordUpgradeIntegrationTest {
     @Test
     void failedLoginLeavesTheLegacyHashUntouched() {
         bindWebClient();
-        String before = seedLegacyBcryptUser().getPassword();
+        User dana = seedLegacyBcryptUser();
+        String before = dana.getPassword();
 
         webTestClient.post().uri("/login")
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue("{\"email\":\"dana@example.com\",\"password\":\"wrong\"}")
+                .bodyValue("{\"email\":\"" + dana.getEmail() + "\",\"password\":\"wrong\"}")
                 .exchange()
                 .expectStatus().isEqualTo(HttpStatus.UNAUTHORIZED);
 
         // The upgrade hook must sit strictly behind a verified
         // password: a wrong guess that rewrote the row would be a
         // way to overwrite a hash without knowing the password.
-        String after = userRepository.findByEmail("dana@example.com")
+        String after = userRepository.findByEmail(dana.getEmail())
                 .orElseThrow()
                 .getPassword();
 
