@@ -77,14 +77,16 @@ import static org.assertj.core.api.Assertions.assertThat;
         classes = AuthCenterApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.MOCK
 )
-@TestPropertySource(properties = {
+// El par RSA de test vive en jwt-test-keys.properties: RS256
+// necesita una clave real, no una cadena cualquiera como el
+// secreto HS256 que habia aqui antes.
+@TestPropertySource(locations = "classpath:jwt-test-keys.properties", properties = {
         "spring.datasource.url=jdbc:h2:mem:auth-center-account-activation-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect",
-        "sso.jwt.secret=integration-test-secret-which-is-at-least-32-bytes-long-1234567890",
         // Same rationale as AuthCenterIntegrationTest — keep the
         // login flow talking to the DB so the activation flip is
         // observable on the second /login call.
@@ -170,10 +172,11 @@ class AccountActivationEnablesLoginIntegrationTest {
         seedPendingUser();
 
         // The pending user has enabled=false (and null password
-        // — AppUserDetailsService.loadUserByUsername short-
-        // circuits on the isEnabled check before ever hitting
-        // PasswordEncoder.matches). Either way, /login must
-        // return 401, NOT 200.
+        // — AccountStatusChecker runs as preAuthenticationChecks
+        // and rejects before PasswordEncoder.matches is ever
+        // reached). Either way, /login must return 401, NOT 200.
+        // The distinct message for this case is pinned in
+        // AccountStatusMessageIntegrationTest.
         loginExpectingStatus("charlie@example.com", "newpass1", HttpStatus.UNAUTHORIZED);
     }
 
@@ -183,7 +186,7 @@ class AccountActivationEnablesLoginIntegrationTest {
         User pending = seedPendingUser();
 
         // Simulate the work that UserAdminService.activateAccount
-        // does in sso-admin: BCrypt the typed password, enable
+        // does in sso-admin: hash the typed password, enable
         // the user, clear the activation token. We do it via the
         // repository directly because activateAccount lives in
         // another module — the cross-module integration is

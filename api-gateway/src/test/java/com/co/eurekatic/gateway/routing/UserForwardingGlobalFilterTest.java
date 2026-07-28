@@ -45,8 +45,12 @@ class UserForwardingGlobalFilterTest {
     void setUp() {
         // Use a real JwtTokenService so we exercise the real
         // claim shape and a real AuthPrincipal.
+        // RS256: se necesita un par RSA de verdad, no una cadena
+        // cualquiera como bastaba con el secreto HMAC.
+        java.security.KeyPair keys = generateKeyPair();
         props = new JwtProperties(
-                "this-is-a-test-secret-that-is-at-least-32-bytes-long-1234",
+                pem("PRIVATE KEY", keys.getPrivate().getEncoded()),
+                pem("PUBLIC KEY", keys.getPublic().getEncoded()),
                 "sso-postgres",
                 3600L,
                 86400L,
@@ -57,6 +61,24 @@ class UserForwardingGlobalFilterTest {
         chain = mock(GatewayFilterChain.class);
         when(chain.filter(org.mockito.ArgumentMatchers.any(ServerWebExchange.class)))
                 .thenReturn(Mono.empty());
+    }
+
+    private static java.security.KeyPair generateKeyPair() {
+        try {
+            java.security.KeyPairGenerator gen =
+                    java.security.KeyPairGenerator.getInstance("RSA");
+            gen.initialize(2048);
+            return gen.generateKeyPair();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Envuelve la clave DER en la armadura PEM que espera JwtTokenService. */
+    private static String pem(String type, byte[] der) {
+        return "-----BEGIN " + type + "-----\n"
+                + java.util.Base64.getMimeEncoder(64, new byte[]{'\n'}).encodeToString(der)
+                + "\n-----END " + type + "-----\n";
     }
 
     @Test

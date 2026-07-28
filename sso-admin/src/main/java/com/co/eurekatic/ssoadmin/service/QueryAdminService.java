@@ -66,7 +66,7 @@ public class QueryAdminService {
     @Transactional
     public QueryResponse update(QueryRequest req) {
         if (req.id() == null) {
-            throw new IllegalArgumentException("id is required for update");
+            throw new IllegalArgumentException("El id es obligatorio para actualizar");
         }
         Query q = queryRepo.findById(req.id())
                 .orElseThrow(() -> new NotFoundException("Query", req.id()));

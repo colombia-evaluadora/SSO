@@ -84,14 +84,16 @@ import static org.springframework.security.test.web.servlet.setup.SecurityMockMv
         classes = SsoAdminApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.MOCK
 )
-@TestPropertySource(properties = {
+// El par RSA de test vive en jwt-test-keys.properties: RS256
+// necesita una clave real, no una cadena cualquiera como el
+// secreto HS256 que habia aqui antes.
+@TestPropertySource(locations = "classpath:jwt-test-keys.properties", properties = {
         "spring.datasource.url=jdbc:h2:mem:sso-admin-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;NON_KEYWORDS=GROUPS;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect",
-        "sso.jwt.secret=integration-test-secret-which-is-at-least-32-bytes-long-1234567890",
         "eureka.client.enabled=false",
         "spring.cloud.discovery.enabled=false",
         "spring.mail.host=localhost",
@@ -632,7 +634,7 @@ class SsoAdminIntegrationTest {
         // because the link from the email does not include one.
         String activateBody = mapper.writeValueAsString(Map.of(
                 "token", activationToken,
-                "password", "newpass1"));
+                "password", "Newpass1!"));
         client.post().uri("/activateAccount")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(activateBody)
@@ -644,14 +646,14 @@ class SsoAdminIntegrationTest {
         assertThat(after.isActive()).isTrue();
         // Token column cleared on use — cannot be replayed.
         assertThat(after.getTokenActivation()).isNull();
-        assertThat(passwordEncoder.matches("newpass1", after.getPassword())).isTrue();
+        assertThat(passwordEncoder.matches("Newpass1!", after.getPassword())).isTrue();
     }
 
     @Test
     void activateAccountWithUnknownTokenReturns404() throws Exception {
         String body = mapper.writeValueAsString(Map.of(
                 "token", "does-not-exist",
-                "password", "newpass1"));
+                "password", "Newpass1!"));
         client.post().uri("/activateAccount")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
@@ -661,7 +663,7 @@ class SsoAdminIntegrationTest {
 
     @Test
     void activateAccountRejectsShortPassword() throws Exception {
-        // @Size(min = 6) on the TokenPasswordRequest.password field
+        // @Size(min = 8) on the TokenPasswordRequest.password field
         // turns "123" into a MethodArgumentNotValidException BEFORE
         // the service is reached, so the existing service-level
         // invariant (IllegalArgumentException → 400 INVALID_REQUEST)
@@ -722,7 +724,7 @@ class SsoAdminIntegrationTest {
         // POST + JSON body — same shape as /activateAccount.
         String body = mapper.writeValueAsString(Map.of(
                 "token", restoreToken,
-                "password", "newpass1"));
+                "password", "Newpass1!"));
         client.post().uri("/restorePassword")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
@@ -734,7 +736,7 @@ class SsoAdminIntegrationTest {
         // but it MUST clear the restore token column to enforce
         // single-use semantics.
         assertThat(after.getTokenRestore()).isNull();
-        assertThat(passwordEncoder.matches("newpass1", after.getPassword())).isTrue();
+        assertThat(passwordEncoder.matches("Newpass1!", after.getPassword())).isTrue();
     }
 
     /** Pulls the {@code token=...} query string out of the
@@ -752,7 +754,7 @@ class SsoAdminIntegrationTest {
     void restorePasswordWithUnknownTokenReturns404() throws Exception {
         String body = mapper.writeValueAsString(Map.of(
                 "token", "does-not-exist",
-                "password", "newpass1"));
+                "password", "Newpass1!"));
         client.post().uri("/restorePassword")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)

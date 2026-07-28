@@ -72,10 +72,17 @@ public class User implements UserDetails {
     private String email;
 
     /**
-     * BCrypt-hashed password. Never store plaintext. Length 68 to fit a
-     * standard 60-char BCrypt hash with breathing room.
+     * Hashed password, never plaintext. Carries the algorithm prefix
+     * that {@code DelegatingPasswordEncoder} uses to route it:
+     * {@code {argon2}...} for anything hashed since the Argon2id
+     * migration, {@code {bcrypt}...} for the older rows (V19 added
+     * the prefix in place; they get rewritten to Argon2id on the
+     * owner's next successful login).
+     *
+     * <p>Length 255: an encoded Argon2id hash is ~95-100 chars, well
+     * past the 68 that sized the old bare BCrypt hash. See V19.
      */
-    @Column(name = "password", length = 68)
+    @Column(name = "password", length = 255)
     private String password;
 
     @Column(name = "enabled", nullable = false)

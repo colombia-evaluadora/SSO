@@ -100,8 +100,9 @@ BIND_IP=127.0.0.1
 PUBLIC_BASE_URL=http://<IP-o-dominio-del-linode>:8080
 SSO_CORS_ALLOWED_ORIGINS=http://<IP-o-dominio-del-linode>:8080
 
-# Y por supuesto: DB_* de Neon reales, JWT_SECRET nuevo (CSPRNG,
-# 32+ bytes), SSO_ADMIN_PASSWORD fuerte, RABBITMQ_USER/PASS no-guest,
+# Y por supuesto: DB_* de Neon reales, un par JWT_PRIVATE_KEY /
+# JWT_PUBLIC_KEY nuevo (./scripts/gen-jwt-keys.sh --env),
+# SSO_ADMIN_PASSWORD fuerte, RABBITMQ_USER/PASS no-guest,
 # SSO_SESSION_USER_ROLES_INVALIDATION_SECRET, REDIS_PASSWORD.
 ```
 
