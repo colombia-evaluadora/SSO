@@ -79,6 +79,10 @@ public final class PasswordEncoderFactory {
         // el fallback. Los hashes BCrypt siguen ruteando por su delegate
         // dedicado.
         enc.setDefaultPasswordEncoderForMatches(argon);
+        // DEBUG
+        System.out.println("PasswordEncoderFactory.create(): delegates.size=" + delegates.size()
+                + " keys=" + delegates.keySet()
+                + " defaultMatchesClass=" + argon.getClass().getName());
         return enc;
     }
 
