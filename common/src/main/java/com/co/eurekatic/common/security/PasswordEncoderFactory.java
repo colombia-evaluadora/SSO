@@ -5,6 +5,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.DelegatingPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -56,14 +57,29 @@ public final class PasswordEncoderFactory {
     }
 
     public static PasswordEncoder create() {
-        Map<String, PasswordEncoder> delegates = Map.of(
-                ARGON2_ID, argon2id(),
-                // Sólo para LEER las filas anteriores a la migración.
-                // Coste 12, el que usaba el encoder anterior — tiene
-                // que coincidir o los hashes viejos no verificarían.
-                BCRYPT_ID, new BCryptPasswordEncoder(12));
+        Argon2PasswordEncoder argon = argon2id();
+        Map<String, PasswordEncoder> delegates = new HashMap<>();
+        delegates.put(ARGON2_ID, argon);
+        // Sólo para LEER las filas anteriores a la migración.
+        // Coste 12, el que usaba el encoder anterior — tiene
+        // que coincidir o los hashes viejos no verificarían.
+        delegates.put(BCRYPT_ID, new BCryptPasswordEncoder(12));
 
-        return new DelegatingPasswordEncoder(ARGON2_ID, delegates);
+        DelegatingPasswordEncoder enc = new DelegatingPasswordEncoder(ARGON2_ID, delegates);
+        // Spring Security 7 cambió `defaultPasswordEncoderForMatches` para que
+        // sea null por defecto: si `extractId` devuelve algo no registrado
+        // (p. ej. un id que no esté en el map), `matches()` cae en
+        // `UnmappedIdPasswordEncoder.matchesNonNull`, que tira
+        // `IllegalArgumentException("Given that there is no default password
+        // encoder configured…")`. Spring Security 6 lo tenía como un
+        // UnmappedIdPasswordEncoder que avisaba con NO_PASSWORD_ENCODER_MAPPED.
+        // Para mantener el comportamiento "si no hay match exacto, intentar
+        // Argon2id antes de tirar" (que es lo que el PasswordUpgradeService
+        // necesita para re-hashear las filas viejas), fijamos Argon2id como
+        // el fallback. Los hashes BCrypt siguen ruteando por su delegate
+        // dedicado.
+        enc.setDefaultPasswordEncoderForMatches(argon);
+        return enc;
     }
 
     /**
