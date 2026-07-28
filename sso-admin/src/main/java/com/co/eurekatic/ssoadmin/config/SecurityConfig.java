@@ -118,7 +118,9 @@ public class SecurityConfig {
                         // Fixed in this branch — all three flows now
                         // sit on equal footing under permitAll().
                         .requestMatchers("/activateAccount", "/restorePassword",
-                                "/forgotPassword").permitAll()
+                                "/forgotPassword",
+                                "/user/activateAccount", "/user/restorePassword",
+                                "/user/forgotPassword").permitAll()
                         // Health probes + Grafana Alloy scrape endpoint. Same trust
                         // boundary argument: the scraper lives on the
                         // internal docker network, not on the LAN.
