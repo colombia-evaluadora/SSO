@@ -28,14 +28,21 @@ public class AppUserDetailsService implements UserDetailsService {
         // UserDetailsService interface mandates that name. We treat
         // it as an email (the unique login identifier since the
         // V12 migration).
-        User u = userRepository.findByEmail(email)
-                .orElseThrow(() -> new UsernameNotFoundException("User not found: " + email));
-        // isEnabled() returns enabled && active. Reject disabled or
-        // not-yet-activated accounts here so they cannot log in even if
-        // they have a valid password.
-        if (!u.isEnabled()) {
-            throw new UsernameNotFoundException("User is disabled: " + email);
-        }
-        return u;
+        // El rechazo de cuentas deshabilitadas ya NO se hace aquí.
+        // Lanzar UsernameNotFoundException para una cuenta inactiva
+        // hacía que DaoAuthenticationProvider la enmascarase como
+        // BadCredentialsException (hideUserNotFoundExceptions=true),
+        // y el usuario veía "credenciales inválidas" cuando su
+        // contraseña era correcta y lo que pasaba era que le habían
+        // desactivado la cuenta.
+        //
+        // Ahora devolvemos la entidad y es AccountStatusChecker
+        // (registrado como preAuthenticationChecks) quien rechaza,
+        // con un mensaje que distingue "inactivada" de "sin activar".
+        // Sigue ocurriendo ANTES de comprobar la contraseña, así que
+        // una cuenta deshabilitada no puede autenticarse aunque la
+        // contraseña sea válida.
+        return userRepository.findByEmail(email)
+                .orElseThrow(() -> new UsernameNotFoundException("No se encontró el usuario: " + email));
     }
 }

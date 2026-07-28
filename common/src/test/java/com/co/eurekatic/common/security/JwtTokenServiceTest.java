@@ -1,12 +1,11 @@
 package com.co.eurekatic.common.security;
 
 import io.jsonwebtoken.JwtException;
-import io.jsonwebtoken.security.Keys;
-import io.jsonwebtoken.security.WeakKeyException;
 import org.junit.jupiter.api.Test;
 
-import javax.crypto.SecretKey;
-import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
@@ -19,20 +18,58 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * <ol>
  *   <li>Round-trip: issue → parse yields the same principal.</li>
  *   <li>Tampered tokens are rejected with {@link JwtException}.</li>
- *   <li>Secrets shorter than 32 bytes throw {@link WeakKeyException}.</li>
+ *   <li>A token signed by a different key pair is rejected.</li>
+ *   <li>A verifier without a private key can parse but not issue —
+ *       the guarantee the RS256 migration exists to provide.</li>
+ *   <li>Malformed PEM fails at construction, not at first use.</li>
  * </ol>
  */
 class JwtTokenServiceTest {
 
-    private static final String GOOD_SECRET =
-            "this-is-a-test-secret-that-is-32-bytes-or-longer-1234567890";
-    private static final JwtProperties DEFAULT_PROPS = new JwtProperties(
-            GOOD_SECRET,
-            "sso-postgres",
-            3_600L,
-            86_400L,
-            "Authorization",
-            "Bearer ");
+    private static final KeyPair KEYS = generateKeyPair();
+    private static final KeyPair OTHER_KEYS = generateKeyPair();
+
+    private static final JwtProperties DEFAULT_PROPS = propsFor(KEYS);
+
+    private static KeyPair generateKeyPair() {
+        try {
+            KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
+            gen.initialize(2048);
+            return gen.generateKeyPair();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Wraps a DER-encoded key in the PEM armor JwtTokenService expects. */
+    private static String pem(String type, byte[] der) {
+        return "-----BEGIN " + type + "-----\n"
+                + Base64.getMimeEncoder(64, new byte[]{'\n'}).encodeToString(der)
+                + "\n-----END " + type + "-----\n";
+    }
+
+    private static JwtProperties propsFor(KeyPair keys) {
+        return new JwtProperties(
+                pem("PRIVATE KEY", keys.getPrivate().getEncoded()),
+                pem("PUBLIC KEY", keys.getPublic().getEncoded()),
+                "sso-postgres",
+                3_600L,
+                86_400L,
+                "Authorization",
+                "Bearer ");
+    }
+
+    /** Same key pair, but public half only — how every non-auth-center service is configured. */
+    private static JwtProperties verifierOnlyProps(KeyPair keys) {
+        return new JwtProperties(
+                null,
+                pem("PUBLIC KEY", keys.getPublic().getEncoded()),
+                "sso-postgres",
+                3_600L,
+                86_400L,
+                "Authorization",
+                "Bearer ");
+    }
 
     @Test
     void roundTripPreservesSubjectRolesAndIssuer() {
@@ -52,6 +89,16 @@ class JwtTokenServiceTest {
     }
 
     @Test
+    void issuedTokenUsesRs256() {
+        JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
+        String token = svc.issueAccessToken("alice", Set.of("USER"));
+
+        String header = new String(Base64.getUrlDecoder().decode(token.split("\\.")[0]));
+
+        assertThat(header).contains("\"alg\":\"RS256\"");
+    }
+
+    @Test
     void apiTokenHasTypApi() {
         JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
         String token = svc.issueApiToken("service-account", Set.of("ADMIN"));
@@ -66,13 +113,10 @@ class JwtTokenServiceTest {
         JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
         String token = svc.issueAccessToken("alice", Set.of("USER"));
 
-        // Tamper the payload (the middle base64url segment), not
-        // the signature. The signature is 32 bytes (HS256) ->
-        // 43 base64url chars, so the last char only encodes the
-        // bottom 2 bits of the last byte. Flipping it produces a
-        // different but base64-valid signature that *occasionally*
-        // the HMAC still rejects; flipping a payload char always
-        // breaks the signature, deterministically.
+        // Tamper the payload (the middle base64url segment), not the
+        // signature: flipping a payload char always invalidates the
+        // signature deterministically, whereas the trailing char of a
+        // signature segment only encodes a couple of bits.
         String[] parts = token.split("\\.");
         assertThat(parts).hasSize(3);
         char mid = parts[1].charAt(parts[1].length() / 2);
@@ -86,20 +130,30 @@ class JwtTokenServiceTest {
     }
 
     @Test
-    void tokenSignedWithDifferentSecretIsRejected() {
-        JwtTokenService signer = new JwtTokenService(DEFAULT_PROPS);
-        JwtTokenService verifier = new JwtTokenService(new JwtProperties(
-                "another-totally-different-secret-that-is-32-bytes-or-longer",
-                "sso-postgres",
-                3_600L,
-                86_400L,
-                "Authorization",
-                "Bearer "));
+    void tokenSignedWithDifferentKeyPairIsRejected() {
+        JwtTokenService signer = new JwtTokenService(propsFor(OTHER_KEYS));
+        JwtTokenService verifier = new JwtTokenService(DEFAULT_PROPS);
 
         String token = signer.issueAccessToken("alice", Set.of("USER"));
 
         assertThatThrownBy(() -> verifier.parse(token))
                 .isInstanceOf(JwtException.class);
+    }
+
+    @Test
+    void verifierWithoutPrivateKeyCanParseButNotIssue() {
+        // This is the whole point of moving off HS256: api-gateway,
+        // sso-admin and query-service hold the public half only, so a
+        // compromise there cannot mint an admin token.
+        JwtTokenService issuer = new JwtTokenService(DEFAULT_PROPS);
+        JwtTokenService verifier = new JwtTokenService(verifierOnlyProps(KEYS));
+
+        String token = issuer.issueAccessToken("alice", Set.of("ADMIN"));
+
+        assertThat(verifier.parse(token).email()).isEqualTo("alice");
+        assertThatThrownBy(() -> verifier.issueAccessToken("mallory", Set.of("ADMIN")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("sólo para verificar");
     }
 
     @Test
@@ -112,33 +166,69 @@ class JwtTokenServiceTest {
     }
 
     @Test
-    void secretShorterThan32BytesIsRejected() {
-        // 16 bytes is the legacy hardcoded secret's length — must fail.
-        // The constructor calls Keys.hmacShaKeyFor(...), which throws
-        // WeakKeyException when the key length is below the HS256
-        // minimum (256 bits / 32 bytes per RFC 7518 §3.2).
+    void acceptsPemWithLiteralBackslashNInsteadOfRealNewlines() {
+        // Como llega la clave cuando el PEM viaja en una linea por
+        // .env / docker-compose y nadie ha convertido el escape. Se
+        // fija porque el sintoma no apunta al origen: el bean falla
+        // al arrancar con "no es una clave publica RSA" y parece un
+        // problema de la clave, no del transporte.
+        String oneLine = pem("PUBLIC KEY", KEYS.getPublic().getEncoded())
+                .replace("\n", "\\n");
+        assertThat(oneLine).contains("\\n");
+
+        JwtTokenService svc = new JwtTokenService(new JwtProperties(
+                pem("PRIVATE KEY", KEYS.getPrivate().getEncoded()).replace("\n", "\\n"),
+                oneLine,
+                "sso-postgres",
+                3_600L,
+                86_400L,
+                "Authorization",
+                "Bearer "));
+
+        String token = svc.issueAccessToken("alice", Set.of("USER"));
+        assertThat(svc.parse(token).email()).isEqualTo("alice");
+    }
+
+    @Test
+    void malformedPublicKeyFailsAtConstruction() {
+        // A bad key must break at startup, not on the first request.
         assertThatThrownBy(() -> new JwtTokenService(new JwtProperties(
-                "short-secret-1234",                  // 16 bytes
+                null,
+                "-----BEGIN PUBLIC KEY-----\nnot-actually-a-key\n-----END PUBLIC KEY-----",
                 "sso-postgres",
                 3_600L,
                 86_400L,
                 "Authorization",
                 "Bearer ")))
-                .isInstanceOf(WeakKeyException.class);
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void missingPublicKeyFailsWithActionableMessage() {
+        assertThatThrownBy(() -> new JwtTokenService(new JwtProperties(
+                null,
+                "  ",
+                "sso-postgres",
+                3_600L,
+                86_400L,
+                "Authorization",
+                "Bearer ")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("gen-jwt-keys.sh");
     }
 
     @Test
     void validateIssuerRejectsForeignIssuer() {
-        // Mint a token with a foreign issuer, then verify the
-        // strict parser rejects it.
-        SecretKey key = Keys.hmacShaKeyFor(GOOD_SECRET.getBytes(StandardCharsets.UTF_8));
+        // Mint a token with a foreign issuer using OUR private key —
+        // a valid signature but the wrong `iss` — and check the strict
+        // parser still rejects it.
         String foreignToken = io.jsonwebtoken.Jwts.builder()
                 .subject("alice")
                 .issuer("evil.example.com")
                 .claim("roles", java.util.List.of("ADMIN"))
                 .issuedAt(new java.util.Date())
                 .expiration(new java.util.Date(System.currentTimeMillis() + 60_000))
-                .signWith(key, io.jsonwebtoken.Jwts.SIG.HS256)
+                .signWith(KEYS.getPrivate(), io.jsonwebtoken.Jwts.SIG.RS256)
                 .compact();
 
         JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);

@@ -55,7 +55,8 @@ class RouteServiceTest {
 
         assertThatThrownBy(() -> service.create(req))
                 .isInstanceOf(DuplicateException.class)
-                .hasMessageContaining("Route");
+                .hasMessageContaining("Ya existe la ruta")
+                .hasMessageContaining("users (/users)");
     }
 
     @Test

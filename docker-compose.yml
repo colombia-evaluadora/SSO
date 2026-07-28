@@ -261,8 +261,12 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       # Discovery
       EUREKA_URL: "http://eurekaserver:8761/eureka"
-      # JWT
-      JWT_SECRET: ${JWT_SECRET}
+      # JWT (RS256). auth-center es el único servicio con la
+      # clave privada: es el único que firma. Los demás sólo
+      # reciben la pública. Genera el par con
+      # scripts/gen-jwt-keys.sh.
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       # Refresh-token store (Redis)
       REDIS_HOST: redis
       REDIS_PORT: "6379"
@@ -324,9 +328,9 @@ services:
     ports:
       - "${API_GATEWAY_PORT:-8080}:8080"
     environment:
-      # Must match auth-center's JWT_SECRET exactly — both sign
-      # and verify with the same HMAC key.
-      JWT_SECRET: ${JWT_SECRET}
+      # Sólo verifica: la pareja pública de la JWT_PRIVATE_KEY
+      # de auth-center. El gateway no puede emitir tokens.
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       # CORS allowlist. The admin-ui SPA is served by THIS gateway
       # at /admin/**, so http://localhost:8080 is always valid. The
@@ -436,9 +440,9 @@ services:
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       EUREKA_URL: "http://eurekaserver:8761/eureka"
-      # MUST match auth-center's JWT_SECRET — same key signs and
-      # verifies tokens.
-      JWT_SECRET: ${JWT_SECRET}
+      # Sólo verifica: la pareja pública de la JWT_PRIVATE_KEY
+      # de auth-center. sso-admin no puede emitir tokens.
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       # Provisioner sidecar — sso-admin POSTs here when an
       # admin creates a microservice row with kind=QUERY.
       # The base URL is compose-DNS, NOT localhost, because
@@ -675,9 +679,9 @@ services:
       QUERY_DS_POOL_SIZE: "10"
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
-      # Eureka + JWT (same key auth-center uses)
+      # Eureka + JWT (sólo la pública: verifica, no emite)
       EUREKA_URL: "http://eurekaserver:8761/eureka"
-      JWT_SECRET: ${JWT_SECRET}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       # Catalog endpoint — sso-admin's controller paths
       # are NOT prefixed, so the gateway base URL plus
       # the literal /getQuery path resolves them.
@@ -718,7 +722,7 @@ services:
       # /query-service-postgres-analytics/** here.
       QUERY_INSTANCE_NAME: postgres-analytics
       EUREKA_URL: "http://eurekaserver:8761/eureka"
-      JWT_SECRET: ${JWT_SECRET}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       QUERY_CATALOG_BASE_URL: "http://sso-api-gateway:8080/sso-admin"
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
@@ -790,10 +794,11 @@ services:
       # image uses this exact URL to register its
       # heartbeat.
       DOCKER_EUREKA_URL: "http://eurekaserver:8761/eureka"
-      # JWT_SECRET — passed to the new query-service
-      # container as JWT_SECRET env var. Must match the
-      # secret auth-center uses to sign tokens.
-      DOCKER_JWT_SECRET: ${JWT_SECRET}
+      # Clave PÚBLICA — se inyecta como JWT_PUBLIC_KEY en el
+      # contenedor de query-service que el provisioner crea.
+      # Con RS256 el provisioner ya no maneja material de
+      # firma: sólo reparte la mitad pública.
+      DOCKER_JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
     healthcheck:

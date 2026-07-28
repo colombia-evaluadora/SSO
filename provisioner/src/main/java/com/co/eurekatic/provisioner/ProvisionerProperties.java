@@ -36,11 +36,14 @@ public class ProvisionerProperties {
      *  rewritten value via env. */
     private String eurekaUrl = "http://eurekaserver:8761/eureka";
 
-    /** JWT_SECRET the new query-service container must use
-     *  to validate Bearer tokens issued by auth-center.
-     *  Defaults to empty — the operator MUST set it (the
-     *  compose service block passes it explicitly). */
-    private String jwtSecret = "";
+    /** Clave PÚBLICA RSA (PEM) que el nuevo contenedor de
+     *  query-service usa para verificar los Bearer token que
+     *  emite auth-center. Con RS256 el provisioner ya no
+     *  reparte material de firma: aunque se comprometa, lo
+     *  único que filtra es una clave pública. Vacía por
+     *  defecto — el operador la pasa explícitamente en el
+     *  bloque de compose (DOCKER_JWT_PUBLIC_KEY). */
+    private String jwtPublicKey = "";
 
     /** Path the provisioner polls to verify the new
      *  container came up. The 30s timeout gives the JVM
@@ -55,8 +58,8 @@ public class ProvisionerProperties {
     public void setSocketPath(String socketPath) { this.socketPath = socketPath; }
     public String getEurekaUrl() { return eurekaUrl; }
     public void setEurekaUrl(String eurekaUrl) { this.eurekaUrl = eurekaUrl; }
-    public String getJwtSecret() { return jwtSecret; }
-    public void setJwtSecret(String jwtSecret) { this.jwtSecret = jwtSecret; }
+    public String getJwtPublicKey() { return jwtPublicKey; }
+    public void setJwtPublicKey(String jwtPublicKey) { this.jwtPublicKey = jwtPublicKey; }
     public int getReadyTimeoutSeconds() { return readyTimeoutSeconds; }
     public void setReadyTimeoutSeconds(int readyTimeoutSeconds) {
         this.readyTimeoutSeconds = readyTimeoutSeconds;

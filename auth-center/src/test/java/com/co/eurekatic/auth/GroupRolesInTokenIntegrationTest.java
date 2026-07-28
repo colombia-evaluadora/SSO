@@ -44,14 +44,16 @@ import static org.assertj.core.api.Assertions.assertThat;
         classes = AuthCenterApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.MOCK
 )
-@TestPropertySource(properties = {
+// El par RSA de test vive en jwt-test-keys.properties: RS256
+// necesita una clave real, no una cadena cualquiera como el
+// secreto HS256 que habia aqui antes.
+@TestPropertySource(locations = "classpath:jwt-test-keys.properties", properties = {
         "spring.datasource.url=jdbc:h2:mem:auth-center-group-roles-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect",
-        "sso.jwt.secret=integration-test-secret-which-is-at-least-32-bytes-long-1234567890",
         // Group-roles-in-token assertion needs the resolver to
         // actually load the user-group-role chain — the cache
         // short-circuits that path.

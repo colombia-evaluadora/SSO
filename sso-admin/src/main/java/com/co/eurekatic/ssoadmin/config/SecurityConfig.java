@@ -11,7 +11,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import com.co.eurekatic.common.security.PasswordEncoderFactory;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
@@ -170,19 +170,23 @@ public class SecurityConfig {
     }
 
     /**
-     * BCrypt with cost 12. Matches the strength used in
-     * auth-center so a user created in either module can
-     * authenticate against either.
+     * Argon2id para los hashes nuevos, con lectura de los BCrypt
+     * heredados. Tiene que ser exactamente el mismo encoder que
+     * usa auth-center: sso-admin ESCRIBE hashes (activación de
+     * cuenta, restablecer contraseña) y auth-center los VERIFICA
+     * en el login. Ver {@link PasswordEncoderFactory}.
      */
     @Bean
     public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder(12);
+        return PasswordEncoderFactory.create();
     }
 
     /**
      * JWT parser. sso-admin only verifies tokens — auth-center
-     * mints them. The key is the same on both sides
-     * ({@code sso.jwt.secret}).
+     * mints them. Since the RS256 migration that split is
+     * structural, not just conventional: this service is
+     * configured with {@code sso.jwt.public-key} alone, so
+     * {@code JwtTokenService.issueAccessToken} would throw here.
      */
     @Bean
     public JwtTokenService jwtTokenService(JwtProperties props) {

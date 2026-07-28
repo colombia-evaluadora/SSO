@@ -40,7 +40,7 @@ public record MicroserviceRequest(
          * {@code MicroserviceService} with a 400.
          */
         @Pattern(regexp = "REST|QUERY",
-                 message = "kind must be REST or QUERY")
+                 message = "kind debe ser REST o QUERY")
         String kind,
 
         @Size(max = 40) String dialect,

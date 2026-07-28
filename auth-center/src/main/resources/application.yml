@@ -98,10 +98,13 @@ eureka:
 
 sso:
   jwt:
-    # Production deployments MUST set JWT_SECRET. The default is a
-    # 64-byte placeholder; JwtTokenService refuses to start with a
-    # secret shorter than 32 bytes.
-    secret: ${JWT_SECRET:change-me-change-me-change-me-change-me-change-me-1234567890}
+    # auth-center es el ÚNICO servicio con la clave privada: es el
+    # único que emite tokens. Los verificadores llevan sólo la
+    # pública. Genera el par con scripts/gen-jwt-keys.sh.
+    # Sin valor por defecto a propósito — arrancar con una clave
+    # de ejemplo es peor que no arrancar.
+    private-key: ${JWT_PRIVATE_KEY}
+    public-key: ${JWT_PUBLIC_KEY}
     issuer: sso-postgres
     access-token-ttl-seconds: 3600
     api-token-ttl-seconds: 86400

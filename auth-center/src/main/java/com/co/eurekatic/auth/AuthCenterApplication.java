@@ -9,6 +9,8 @@ import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
+import java.util.Locale;
+
 /**
  * Entry point for auth-center. The module is a Spring Boot 4.0 application
  * (servlet), registered with Eureka, that issues JWTs for the SSO.
@@ -37,6 +39,15 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 public class AuthCenterApplication {
 
     public static void main(String[] args) {
+        // El cuerpo de error del login lo rellena Spring Security,
+        // no nosotros: AuthenticationException.getMessage() sale de
+        // su bundle org/springframework/security/messages, que se
+        // resuelve con el locale por defecto de la JVM. En el
+        // contenedor eso es 'en', así que un password equivocado
+        // devolvía "Bad credentials" a una pantalla de login en
+        // español. El bundle _es ya viene en spring-security-core;
+        // basta con apuntar el locale antes de arrancar.
+        Locale.setDefault(Locale.of("es"));
         SpringApplication.run(AuthCenterApplication.class, args);
     }
 }

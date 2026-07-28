@@ -10,8 +10,13 @@ import jakarta.validation.constraints.Size;
  * <p>Both endpoints accept the same pair: a single-use token
  * (delivered in the activation or restore-password email) plus
  * the new password. Sharing one DTO keeps the validation rule
- * ({@code @Size(min = 6)} on {@code password}) in lockstep
- * across the two flows and avoids a copy-paste record.
+ * in lockstep across the two flows and avoids a copy-paste record.
+ *
+ * <p>The {@code @Size} here only bounds the payload. The real
+ * complexity rules (upper, lower, digit, symbol) live in
+ * {@code PasswordPolicy} and run in the service, because Bean
+ * Validation would report them one constraint per line and we want
+ * a single message listing everything that is missing.
  *
  * <p><strong>Security:</strong> this DTO exists because the
  * legacy GET-with-query-string shape leaked the password via
@@ -26,5 +31,5 @@ import jakarta.validation.constraints.Size;
  */
 public record TokenPasswordRequest(
         @NotBlank String token,
-        @NotBlank @Size(min = 6, max = 100) String password
+        @NotBlank @Size(min = 8, max = 100) String password
 ) {}

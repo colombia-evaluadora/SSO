@@ -211,7 +211,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       return true;
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "Login failed";
+      const msg = err instanceof ApiError ? err.message : "No se pudo iniciar sesión";
       dispatch({ type: "LOGIN_FAILURE", error: msg });
       return false;
     }

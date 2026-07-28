@@ -26,8 +26,8 @@ public class StubsController {
     public ResponseEntity<Map<String, String>> googleLogin(@RequestBody(required = false) Map<String, Object> body) {
         return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).body(Map.of(
                 "error", "google_login_not_configured",
-                "message", "Google login is not yet implemented in the modernized auth-center. "
-                        + "Use POST /login with email/password instead."
+                "message", "El inicio de sesión con Google todavía no está implementado en el "
+                        + "auth-center modernizado. Usa POST /login con correo y contraseña."
         ));
     }
 }

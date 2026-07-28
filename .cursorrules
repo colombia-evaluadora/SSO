@@ -9,7 +9,7 @@
 - Java 21 (LTS). Spring Boot 3.5.3. Spring Cloud 2025.0.0 ("Northfields").
 - Multi-module Maven: eurekaserver, common, auth-center, api-gateway, hello-service, **sso-admin** (Phases 1 + 2 of the legacy `sso-service` port: User/Role/Group + Microservice/Endpoint/Route CRUD).
 - jjwt 0.12.7. Lombok 1.18.x. Postgres 16. JUnit 5 + AssertJ + Mockito.
-- Auth: JWT (HS256) validated at the api-gateway (WebFlux); downstream services trust the X-Authenticated-* headers the gateway injects.
+- Auth: JWT (RS256) validated at the api-gateway (WebFlux); downstream services trust the X-Authenticated-* headers the gateway injects. auth-center holds the RSA private key and is the only issuer; everyone else gets the public key only.
 - **admin-ui** (top-level, NOT a Maven module): Vite 5, React 19, TypeScript 5.6 strict (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`), React Router v7, TanStack Query v5, TailwindCSS v3, Zod. Vitest + @testing-library/react for unit tests, Playwright for E2E. Node 20.
 
 # ---- Module layout --------------------------------------------------------
@@ -42,8 +42,8 @@
 # ---- When in doubt --------------------------------------------------------
 - Read README.md — it has the architecture, API surface, env vars, and migration roadmap.
 - Don't introduce a new dependency without checking that the parent BOM already manages it.
-- Don't change the JWT signing algorithm away from HS256 without explicit approval.
-- Don't change the BCrypt cost away from 12 without explicit approval.
+- Don't change the JWT signing algorithm away from RS256 without explicit approval. In particular, never give a verifier service the private key "so it can issue too" — the split is the security property.
+- Don't change the Argon2id cost parameters in `common.security.PasswordEncoderFactory` without explicit approval. The BCrypt(12) delegate there exists only to read pre-migration hashes; don't make it the default again.
 - **sso-admin uses H2 in PostgreSQL compatibility mode + `NON_KEYWORDS=GROUPS`** in the JDBC URL for tests. The `Group` entity is `@Table(name = "groups")` — `GROUPS` is a reserved word in H2 but a normal identifier in Postgres. The test JDBC URL neutralizes it.
 - **sso-admin Freemarker templates** are loaded by Spring Boot's Freemarker auto-configuration from `classpath:/templates/`. Don't define your own `freeMarkerConfiguration` bean — it collides with the autoconfig and the context fails to load (`BeanDefinitionOverrideException`).
 - **Phase 2 entities** (`Microservice`, `Endpoint`, `Route`) keep the legacy `UPPER_CASE` singular table names (`MICROSERVICE`, `ENDPOINT`, `ROUTE`) with `UPPER_SNAKE_CASE` columns. The joining tables (`ENDPOINT_MICROSERVICE`, `ROLE_ENDPOINT`, `ROLE_ROUTE`) follow the same pattern. The owning side of each `@ManyToMany` is on the entity that has `@JoinTable` (Endpoint for both `ENDPOINT_MICROSERVICE` and `ROLE_ENDPOINT`; Route for `ROLE_ROUTE`). Use the entity helper methods (`addMicroservice`/`removeMicroservice`/`addRole`/`removeRole`), never the setter on the back-reference. The `Route.idParent` self-FK is nullable — the service layer normalizes the legacy `"0"` sentinel to `null` on write.

@@ -70,7 +70,7 @@ public class GroupAdminService {
     @Transactional
     public GroupResponse update(GroupRequest req) {
         if (req.id() == null) {
-            throw new IllegalArgumentException("id is required for update");
+            throw new IllegalArgumentException("El id es obligatorio para actualizar");
         }
         Group group = groupRepository.findById(req.id())
                 .orElseThrow(() -> new NotFoundException("Group", req.id()));

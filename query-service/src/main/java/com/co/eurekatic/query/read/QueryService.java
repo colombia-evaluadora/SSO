@@ -110,7 +110,7 @@ public class QueryService {
             // no role. Defensive double-check.
             log.warn("Non-public query {} reached /public/service — denying", req.uuid());
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                    "Query is not public");
+                    "La consulta no es pública");
         }
 
         NamedParameterJdbcTemplate jdbc = registry.resolve(def.type());
@@ -180,7 +180,7 @@ public class QueryService {
         String first = trimmed.isEmpty() ? "" : trimmed.split("\\s+", 2)[0].toUpperCase();
         if (!first.equals("SELECT") && !first.equals("WITH")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Query must be a SELECT or WITH; got: " + first);
+                    "La consulta debe ser un SELECT o un WITH; se recibió: " + first);
         }
     }
 
@@ -221,7 +221,7 @@ public class QueryService {
         Object creds = auth.getCredentials();
         if (!(creds instanceof String s) || s.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
-                    "Missing bearer token in security context");
+                    "Falta el token bearer en el contexto de seguridad");
         }
         return s;
     }

@@ -71,7 +71,10 @@ import static org.assertj.core.api.Assertions.assertThat;
         classes = AuthCenterApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.MOCK
 )
-@TestPropertySource(properties = {
+// El par RSA de test vive en jwt-test-keys.properties: RS256
+// necesita una clave real, no una cadena cualquiera como el
+// secreto HS256 que habia aqui antes.
+@TestPropertySource(locations = "classpath:jwt-test-keys.properties", properties = {
         // Replace Postgres with H2 in PostgreSQL compatibility mode
         "spring.datasource.url=jdbc:h2:mem:auth-center-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
@@ -79,8 +82,6 @@ import static org.assertj.core.api.Assertions.assertThat;
         "spring.datasource.password=",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect",
-        // Keep the JWT secret stable and long enough for HS256
-        "sso.jwt.secret=integration-test-secret-which-is-at-least-32-bytes-long-1234567890",
         // Disable the user-roles cache so reseeding the user table
         // between tests doesn't fight a stale Redis entry. The
         // integration test asserts login + JWT shape; the cache

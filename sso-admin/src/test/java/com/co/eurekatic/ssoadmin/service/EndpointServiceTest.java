@@ -67,7 +67,8 @@ class EndpointServiceTest {
 
         assertThatThrownBy(() -> service.create(req))
                 .isInstanceOf(DuplicateException.class)
-                .hasMessageContaining("Endpoint");
+                .hasMessageContaining("Ya existe el endpoint")
+                .hasMessageContaining("GET /x");
     }
 
     @Test

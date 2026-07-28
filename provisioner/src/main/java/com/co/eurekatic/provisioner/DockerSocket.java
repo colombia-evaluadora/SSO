@@ -334,12 +334,13 @@ public class DockerSocket {
         env.add("QUERY_DS_POOL_SIZE=" + req.poolSize());
         env.add("QUERY_INSTANCE_NAME=" + req.instanceName());
         env.add("EUREKA_URL=" + props.getEurekaUrl());
-        // JWT_SECRET must match auth-center's — the
-        // query-service instance validates Bearer tokens
-        // with the same HMAC key. Operator sets it in the
-        // provisioner's compose env block.
-        if (props.getJwtSecret() != null && !props.getJwtSecret().isBlank()) {
-            env.add("JWT_SECRET=" + props.getJwtSecret());
+        // JWT_PUBLIC_KEY must be the pair of auth-center's
+        // private key — the query-service instance only
+        // verifies Bearer tokens, it never mints them, so
+        // the public half is all it needs. Operator sets it
+        // in the provisioner's compose env block.
+        if (props.getJwtPublicKey() != null && !props.getJwtPublicKey().isBlank()) {
+            env.add("JWT_PUBLIC_KEY=" + props.getJwtPublicKey());
         }
         // The catalog endpoint URL the new query-service
         // instance uses to resolve uuid→SQL. Defaults to

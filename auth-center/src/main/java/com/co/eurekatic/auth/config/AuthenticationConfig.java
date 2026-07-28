@@ -2,12 +2,14 @@ package com.co.eurekatic.auth.config;
 
 import com.co.eurekatic.common.security.JwtTokenService;
 import com.co.eurekatic.common.security.JwtProperties;
+import com.co.eurekatic.common.security.PasswordEncoderFactory;
+import com.co.eurekatic.auth.security.AccountStatusChecker;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.security.core.userdetails.UserDetailsPasswordService;
 import org.springframework.security.core.userdetails.UserDetailsService;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 /**
@@ -19,13 +21,15 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 public class AuthenticationConfig {
 
     /**
-     * BCrypt with cost 12. The 2024+ OWASP recommendation is 12 or higher
-     * for interactive authentication. The legacy code used the default
-     * (10) — we bump it for the modernized version.
+     * Argon2id para los hashes nuevos, BCrypt sólo para leer los
+     * anteriores a la migración. Ver {@link PasswordEncoderFactory}
+     * para los parámetros de coste y el porqué del delegante; el
+     * rehash de las filas viejas lo hace
+     * {@code PasswordUpgradeService} tras un login correcto.
      */
     @Bean
     public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder(12);
+        return PasswordEncoderFactory.create();
     }
 
     /**
@@ -44,9 +48,20 @@ public class AuthenticationConfig {
     @Bean
     public DaoAuthenticationProvider daoAuthenticationProvider(
             UserDetailsService userDetailsService,
-            PasswordEncoder passwordEncoder) {
+            PasswordEncoder passwordEncoder,
+            UserDetailsPasswordService userDetailsPasswordService) {
         DaoAuthenticationProvider provider = new DaoAuthenticationProvider(userDetailsService);
         provider.setPasswordEncoder(passwordEncoder);
+        // Habilita el rehash automático BCrypt -> Argon2id. Sin esta
+        // línea el provider verifica los hashes viejos correctamente
+        // pero nunca los reescribe, y la migración no avanza nunca.
+        // Ver PasswordUpgradeService.
+        provider.setUserDetailsPasswordService(userDetailsPasswordService);
+        // Sustituye a DefaultPreAuthenticationChecks para dar el
+        // motivo real cuando la cuenta está inactiva o sin activar,
+        // en vez del "credenciales inválidas" que veía el usuario.
+        // Ver AccountStatusChecker.
+        provider.setPreAuthenticationChecks(new AccountStatusChecker());
         return provider;
     }
 
