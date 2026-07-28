@@ -4,6 +4,7 @@ import com.co.eurekatic.common.entity.User;
 import com.co.eurekatic.common.repository.UserRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -90,6 +91,21 @@ class AccountStatusMessageIntegrationTest {
     ObjectMapper mapper;
 
     private WebTestClient webTestClient;
+
+    /**
+     * Wipes the table between methods: the H2 datasource is shared
+     * across every test method in this class (one Spring context, see
+     * {@link TestPropertySource}), and {@code seedDeactivatedUser}
+     * reuses the same {@code erin@example.com} fixture from two
+     * separate tests. Without the wipe the second insert trips the
+     * unique index on {@code users(email)} with a constraint
+     * violation before the test body ever runs. Same pattern as
+     * {@link PasswordUpgradeIntegrationTest#seedLegacyBcryptUser()}.
+     */
+    @BeforeEach
+    void cleanUsersTable() {
+        userRepository.deleteAll();
+    }
 
     private void bindWebClient() {
         webTestClient = MockMvcWebTestClient.bindToApplicationContext(context)
