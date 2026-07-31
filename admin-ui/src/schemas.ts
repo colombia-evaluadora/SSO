@@ -160,11 +160,17 @@ export const appFormSchema = z.object({
  * shadow whatever the JDBC driver ends up complaining about.
  */
 export const queryFormSchema = z.object({
+  // El UID es automático: el drawer lo genera al abrir en modo
+  // "nuevo" y el backend genera uno si el request llega vacío.
+  // Por eso "" es válido — no es un campo que el admin escriba.
+  // Cuando SÍ viene un valor (fila existente, importación) se
+  // mantiene la regla legacy de formato y longitud.
   uuid: z
     .string()
-    .min(2, "Mínimo 2 caracteres")
     .max(64)
-    .regex(/^[a-zA-Z0-9_-]+$/, "Solo letras, números, _ y -"),
+    .regex(/^[a-zA-Z0-9_-]*$/, "Solo letras, números, _ y -")
+    .refine((v) => v === "" || v.length >= 2, "Mínimo 2 caracteres")
+    .default(""),
   query: z.string().min(1, "Requerido").max(10_000),
   type: z.string().max(64).default(""),
   publicEnd: z.boolean().default(false),

@@ -254,9 +254,13 @@ describe("QueriesAdminPage", () => {
     renderPage();
     await userEvent.click(screen.getByTestId("new-query"));
 
-    // Fill the form. The drawer uses uuid/query/microserviceId.
-    const uuidInput = screen.getByLabelText(/UUID/i);
-    await userEvent.type(uuidInput, "new-q");
+    // El UUID ya viene puesto: es automático y read-only en el
+    // modo "nuevo". Solo se captura para afirmarlo en el body.
+    const uuidInput = screen.getByLabelText(/UUID/i) as HTMLInputElement;
+    expect(uuidInput).toHaveAttribute("readonly");
+    const autoUid = uuidInput.value;
+    expect(autoUid).toMatch(/^[a-zA-Z0-9_-]{2,64}$/);
+
     const sqlArea = screen.getByLabelText(/SQL/i);
     await userEvent.type(sqlArea, "SELECT 1");
 
@@ -275,9 +279,42 @@ describe("QueriesAdminPage", () => {
     const call = findFetchCall(spy, "/sso-admin/query/save");
     expect(call).toBeDefined();
     const body = JSON.parse((call![1] as RequestInit).body as string);
-    expect(body.uuid).toBe("new-q");
+    expect(body.uuid).toBe(autoUid);
     expect(body.query).toBe("SELECT 1");
     expect(body.microserviceId).toBe(7);
+  });
+
+  it("mints a fresh auto-UID each time the new-query drawer opens", async () => {
+    const spy = buildFetchSpy({ queries: [], microservices: [] });
+    vi.stubGlobal("fetch", spy);
+
+    renderPage();
+
+    await userEvent.click(screen.getByTestId("new-query"));
+    const first = (screen.getByLabelText(/UUID/i) as HTMLInputElement).value;
+    await userEvent.click(screen.getByRole("button", { name: /Cancelar/i }));
+
+    await userEvent.click(screen.getByTestId("new-query"));
+    const second = (screen.getByLabelText(/UUID/i) as HTMLInputElement).value;
+
+    // Reusar el UID chocaría contra el unique de la columna UUID
+    // en el segundo create.
+    expect(second).not.toBe(first);
+  });
+
+  it("Regenerar swaps the auto-UID for a new one", async () => {
+    const spy = buildFetchSpy({ queries: [], microservices: [] });
+    vi.stubGlobal("fetch", spy);
+
+    renderPage();
+    await userEvent.click(screen.getByTestId("new-query"));
+
+    const input = screen.getByLabelText(/UUID/i) as HTMLInputElement;
+    const before = input.value;
+    await userEvent.click(screen.getByRole("button", { name: /Regenerar/i }));
+
+    expect(input.value).not.toBe(before);
+    expect(input.value).toMatch(/^[a-zA-Z0-9_-]{2,64}$/);
   });
 
   it("opening the Roles modal lists the role-binding checkboxes from /roles/checked", async () => {

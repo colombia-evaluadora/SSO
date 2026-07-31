@@ -1,10 +1,27 @@
 import { useMemo } from "react";
 import { Drawer } from "@/components/ui/Drawer";
 import { Input } from "@/components/ui/Input";
+import { Button } from "@/components/ui/Button";
 import { Form, zodFieldErrors } from "@/components/forms/Form";
 import { queryFormSchema, type QueryFormValues } from "@/schemas";
 import { useMicroservices } from "@/hooks/useMicroservices";
 import type { QueryAdminResponse } from "@/api/types";
+
+/**
+ * Acuña el UID de un query nuevo. `crypto.randomUUID` existe en
+ * los navegadores objetivo y en jsdom/Node 19+ para los tests; el
+ * fallback cubre el caso de servir el admin-ui por http:// en LAN,
+ * donde el contexto no es seguro y la API no queda expuesta.
+ *
+ * <p>El formato encaja con el regex legacy del catálogo
+ * ({@code [a-zA-Z0-9_-]}) y con VARCHAR(64): un UUID canónico
+ * ocupa 36 caracteres.
+ */
+function newQueryUid(): string {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  return `q-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 interface Props {
   open: boolean;
@@ -41,7 +58,13 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
 
   const initialValues: QueryFormValues = useMemo(
     () => ({
-      uuid: query?.uuid ?? "",
+      // UID automático al crear. `open` entra en las deps a
+      // propósito: este componente NO se desmonta al cerrar el
+      // drawer (Drawer devuelve null, el Form de adentro es el
+      // que se remonta), así que sin esto el segundo "Nuevo
+      // query" reusaría el UID del primero y chocaría contra el
+      // unique de la columna UUID.
+      uuid: query?.uuid ?? (open ? newQueryUid() : ""),
       query: query?.query ?? "",
       type: query?.type ?? "",
       publicEnd: query?.publicEnd ?? false,
@@ -51,7 +74,7 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
       style: query?.style ?? "",
       microserviceId: query?.microserviceId ?? null,
     }),
-    [query],
+    [query, open],
   );
 
   const queryInstances = useMemo(
@@ -84,14 +107,40 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
         {({ values, setField, errors }) => (
           <>
             <div className="grid grid-cols-2 gap-3">
-              <Input
-                label="UUID"
-                required
-                value={values.uuid}
-                onChange={(e) => setField("uuid", e.target.value)}
-                error={errors.uuid}
-                hint="Handle público para el consumidor (letras, números, _ y -)"
-              />
+              {/* UID automático. Al crear se acuña solo y el campo
+                  queda read-only (con "Regenerar" por si el admin
+                  quiere otro); al editar sigue siendo editable
+                  porque hay filas legacy con handles con
+                  significado que a veces se corrigen a mano. */}
+              {query ? (
+                <Input
+                  label="UUID"
+                  value={values.uuid}
+                  onChange={(e) => setField("uuid", e.target.value)}
+                  error={errors.uuid}
+                  hint="Handle público del consumidor — cambiarlo rompe a quien ya lo tenga cableado"
+                />
+              ) : (
+                <div>
+                  <Input
+                    label="UUID"
+                    value={values.uuid}
+                    readOnly
+                    onChange={() => {}}
+                    error={errors.uuid}
+                    hint="Generado automáticamente"
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="mt-1"
+                    onClick={() => setField("uuid", newQueryUid())}
+                  >
+                    Regenerar
+                  </Button>
+                </div>
+              )}
               <Input
                 label="Tipo"
                 value={values.type}

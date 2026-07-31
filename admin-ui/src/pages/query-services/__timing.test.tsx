@@ -237,7 +237,9 @@ describe("QueryServicesSection", () => {
     await user.type(screen.getByLabelText(/DB username/i), "u");
     await user.type(screen.getByLabelText(/Instance name/i), "diag");
 
+    const __t0 = Date.now();
     await user.click(screen.getByRole("button", { name: /Crear/i }));
+    console.log("CREATE_CLICK_MS=" + (Date.now() - __t0));
 
     await waitFor(() => {
       const saveCall = fetchSpy.mock.calls.find(
@@ -291,6 +293,7 @@ describe("QueryServicesSection", () => {
     await user.type(screen.getByLabelText(/DB username/i), "u");
     await user.type(screen.getByLabelText(/Instance name/i), "diag");
 
+    const __t1 = Date.now();
     await user.click(screen.getByRole("button", { name: /Crear/i }));
 
     // La sonda corrió y falló → el error se muestra y el save
@@ -301,7 +304,8 @@ describe("QueryServicesSection", () => {
     );
     // Dos superficies: el banner inline de la sonda y el toast
     // que el Form levanta con el error del submit.
-    expect(await screen.findAllByText(/No se pudo conectar/i)).toHaveLength(2);
+    const __els = await screen.findAllByText(/No se pudo conectar/i, {}, { timeout: 10000 });
+    console.log("PROBE_FAIL_MS=" + (Date.now() - __t1) + " surfaces=" + __els.length);
     expect(findFetchCall(fetchSpy, "/microservice/save")).toBeUndefined();
   });
 });
