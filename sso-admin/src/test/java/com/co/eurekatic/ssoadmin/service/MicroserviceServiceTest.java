@@ -5,6 +5,8 @@ import com.co.eurekatic.common.repository.AppRepository;
 import com.co.eurekatic.common.repository.MicroserviceRepository;
 import com.co.eurekatic.ssoadmin.dto.MicroserviceRequest;
 import com.co.eurekatic.ssoadmin.dto.MicroserviceResponse;
+import com.co.eurekatic.ssoadmin.dto.MicroserviceTestConnectionRequest;
+import com.co.eurekatic.ssoadmin.dto.MicroserviceTestConnectionResponse;
 import com.co.eurekatic.ssoadmin.exception.DuplicateException;
 import com.co.eurekatic.ssoadmin.exception.NotFoundException;
 import com.co.eurekatic.ssoadmin.provisioner.ContainerProvisioner;
@@ -42,7 +44,14 @@ class MicroserviceServiceTest {
     @Mock AppRepository appRepo;
     @Mock ContainerProvisioner provisioner;
     @Mock EurekaReadinessProbe readinessProbe;
+    @Mock JdbcConnectionProbe connectionProbe;
     @InjectMocks MicroserviceService service;
+
+    /** Sonda JDBC en verde — el caso normal para los tests de QUERY. */
+    private void probeSucceeds() {
+        when(connectionProbe.probe(any(MicroserviceTestConnectionRequest.class)))
+                .thenReturn(MicroserviceTestConnectionResponse.success("postgres", 3));
+    }
 
     private static Microservice sample(long id) {
         Microservice m = new Microservice();
@@ -196,6 +205,7 @@ class MicroserviceServiceTest {
     void queryCreateInvokesProvisionerAndWaitsForEureka() {
         when(repo.existsByServiceId("query-oracle-dev")).thenReturn(false);
         when(repo.existsByInstanceName("oracle-dev")).thenReturn(false);
+        probeSucceeds();
         when(repo.save(any(Microservice.class))).thenAnswer(inv -> {
             Microservice m = inv.getArgument(0);
             m.setId(100L);
@@ -217,6 +227,7 @@ class MicroserviceServiceTest {
     @Test
     void queryCreateWithoutInstanceNameDerivesFromDialect() {
         when(repo.existsByServiceId("query-postgres")).thenReturn(false);
+        probeSucceeds();
         when(repo.save(any(Microservice.class))).thenAnswer(inv -> {
             Microservice m = inv.getArgument(0);
             m.setId(101L);
@@ -263,6 +274,29 @@ class MicroserviceServiceTest {
                 .isInstanceOf(DuplicateException.class)
                 .hasMessageContaining("dup");
         verify(provisioner, never()).provision(any());
+    }
+
+    /**
+     * El gate de conexión: si la sonda JDBC falla, {@code create}
+     * aborta antes del {@code save} — ni fila en BD ni contenedor
+     * provisionado. Es el caso que motivó el cambio: antes se
+     * creaba el query-service aunque la conexión no funcionara.
+     */
+    @Test
+    void queryCreateAbortsWhenConnectionProbeFails() {
+        when(repo.existsByServiceId("query-unreachable")).thenReturn(false);
+        when(repo.existsByInstanceName("unreachable")).thenReturn(false);
+        when(connectionProbe.probe(any(MicroserviceTestConnectionRequest.class)))
+                .thenThrow(new IllegalArgumentException(
+                        "No se pudo conectar: connection refused"));
+
+        assertThatThrownBy(() -> service.create(queryRequest("unreachable")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("No se pudo conectar");
+
+        verify(repo, never()).save(any(Microservice.class));
+        verify(provisioner, never()).provision(any());
+        verify(readinessProbe, never()).waitForInstance(anyString());
     }
 
     @Test

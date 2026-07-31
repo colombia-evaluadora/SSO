@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class MicroserviceServiceTestConnectionTest {
 
     private final MicroserviceService service =
-            new MicroserviceService(null, null, null, null);
+            new MicroserviceService(null, null, null, null, new JdbcConnectionProbe());
 
     @Test
     void rejectsJdbcUrlWithoutPrefix() {

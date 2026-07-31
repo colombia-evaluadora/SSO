@@ -94,6 +94,19 @@ export function QueryServiceFormDrawer({
           return zodFieldErrors(result.error);
         }}
         onSubmit={async (values) => {
+          // Gate: la conexión JDBC se prueba SIEMPRE antes de crear
+          // o guardar. Si falla, mutateAsync rechaza (400 del
+          // backend) y el throw corta el submit: el banner de la
+          // sonda ya queda pintado por el estado del mutation y el
+          // Form muestra el toast. Nada se persiste.
+          const probe = await testMutation.mutateAsync({
+            jdbcUrl: values.jdbcUrl,
+            dbUsername: values.dbUsername,
+            dbPassword: values.dbPassword,
+            dialect: values.dialect,
+          });
+          if (!probe.ok) throw new Error(probe.message);
+
           const payload: MicroserviceFormValues = { ...values, kind: "QUERY" as const };
           await onSubmit(microservice ? { id: microservice.id, ...payload } : payload);
         }}
