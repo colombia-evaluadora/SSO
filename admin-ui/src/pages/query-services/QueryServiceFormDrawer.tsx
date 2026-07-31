@@ -3,7 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Drawer } from "@/components/ui/Drawer";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
-import { Form, zodFieldErrors } from "@/components/forms/Form";
+import { Form, SilentFormError, zodFieldErrors } from "@/components/forms/Form";
 import {
   microserviceFormSchema,
   QUERY_DIALECTS,
@@ -95,17 +95,22 @@ export function QueryServiceFormDrawer({
         }}
         onSubmit={async (values) => {
           // Gate: la conexión JDBC se prueba SIEMPRE antes de crear
-          // o guardar. Si falla, mutateAsync rechaza (400 del
-          // backend) y el throw corta el submit: el banner de la
-          // sonda ya queda pintado por el estado del mutation y el
-          // Form muestra el toast. Nada se persiste.
-          const probe = await testMutation.mutateAsync({
-            jdbcUrl: values.jdbcUrl,
-            dbUsername: values.dbUsername,
-            dbPassword: values.dbPassword,
-            dialect: values.dialect,
-          });
-          if (!probe.ok) throw new Error(probe.message);
+          // o guardar. Si falla, el throw corta el submit y nada se
+          // persiste. El error se muestra SOLO en el banner inline
+          // de la sonda — de ahí SilentFormError, que evita que el
+          // Form levante además un toast con el mismo texto.
+          let probe: MicroserviceTestConnectionResponse;
+          try {
+            probe = await testMutation.mutateAsync({
+              jdbcUrl: values.jdbcUrl,
+              dbUsername: values.dbUsername,
+              dbPassword: values.dbPassword,
+              dialect: values.dialect,
+            });
+          } catch (err) {
+            throw new SilentFormError(err);
+          }
+          if (!probe.ok) throw new SilentFormError(new Error(probe.message));
 
           const payload: MicroserviceFormValues = { ...values, kind: "QUERY" as const };
           await onSubmit(microservice ? { id: microservice.id, ...payload } : payload);

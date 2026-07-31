@@ -299,9 +299,10 @@ describe("QueryServicesSection", () => {
     await waitFor(() =>
       expect(findFetchCall(fetchSpy, "/microservice/testConnection")).toBeDefined(),
     );
-    // Dos superficies: el banner inline de la sonda y el toast
-    // que el Form levanta con el error del submit.
-    expect(await screen.findAllByText(/No se pudo conectar/i)).toHaveLength(2);
+    // Una sola superficie: el banner inline de la sonda. El Form
+    // no toasta el fallo del gate (SilentFormError) para no repetir
+    // el mismo texto en dos sitios.
+    expect(await screen.findAllByText(/No se pudo conectar/i)).toHaveLength(1);
     expect(findFetchCall(fetchSpy, "/microservice/save")).toBeUndefined();
   });
 });
