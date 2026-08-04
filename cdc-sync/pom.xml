@@ -33,6 +33,7 @@
 
   <modules>
     <module>cdc-common</module>
+    <module>cdc-generator</module>
     <module>cdc-capture</module>
     <module>cdc-worker</module>
   </modules>

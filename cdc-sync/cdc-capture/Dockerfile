@@ -22,6 +22,11 @@ COPY pom.xml ./
 COPY cdc-common/pom.xml cdc-common/
 COPY cdc-capture/pom.xml cdc-capture/
 COPY cdc-worker/pom.xml cdc-worker/
+# cdc-generator is only consumed at build time by cdc-worker (see
+# cdc-worker/Dockerfile). cdc-capture just needs the pom to exist so
+# the parent reactor can resolve the new <module> entry without
+# "Child module cdc-generator does not exist".
+COPY cdc-generator/pom.xml cdc-generator/
 
 # Warm the local Maven repo with the dependency graph. This layer is
 # invalidated only when one of the pom.xml files above changes — once
