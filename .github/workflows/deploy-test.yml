@@ -4,12 +4,13 @@
 #
 # Flujo:
 #   push a `test` → corre CI (ci.yml) → si CI pasa, este workflow:
-#     1. build-push : construye las 8 imágenes de la app con los
-#                     Dockerfiles del repo y las publica en
+#     1. build-push : construye las 10 imágenes de la app con los
+#                     Dockerfiles del repo (8 en raíz + cdc-capture
+#                     y cdc-worker bajo cdc-sync/) y las publica en
 #                     ghcr.io/colombia-evaluadora/sso/<servicio>
 #                     con tags `test-latest` + `test-<sha corto>`.
 #     2. deploy     : rsync de docker-compose.yml + postgres/migrations
-#                     + observability/ al servidor, luego
+#                     + observability/ + docker/ al servidor, luego
 #                     `docker compose pull && up -d` por SSH.
 #
 # El gate es `workflow_run` sobre CI (no un push directo) para que
@@ -75,15 +76,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service:
-          - eurekaserver
-          - auth-center
-          - api-gateway
-          - hello-service
-          - sso-admin
-          - notification-service
-          - query-service
-          - provisioner
+        include:
+          - service: eurekaserver
+          - service: auth-center
+          - service: api-gateway
+          - service: hello-service
+          - service: sso-admin
+          - service: notification-service
+          - service: query-service
+          - service: provisioner
+          - service: cdc-capture
+            context: cdc-sync
+            dockerfile: cdc-capture/Dockerfile
+            extra-contexts: |
+              repo=.
+          - service: cdc-worker
+            context: cdc-sync
+            dockerfile: cdc-worker/Dockerfile
+            extra-contexts: |
+              repo=.
     steps:
       - uses: actions/checkout@v4
         with:
@@ -106,8 +117,8 @@ jobs:
       - name: Build & push
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: ${{ matrix.service }}/Dockerfile
+          context: ${{ matrix.context || '.' }}
+          file: ${{ matrix.dockerfile || format('{0}/Dockerfile', matrix.service) }}
           push: true
           tags: |
             ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:test-latest
@@ -122,6 +133,12 @@ jobs:
           # sidebar del SPA — mismo valor que .env.example.
           build-args: |
             VITE_APP_NAME=${{ vars.VITE_APP_NAME || 'SSO-ADMIN' }}
+          # Build context adicional para CDC: el `repo` apunta a la
+          # raíz del checkout (necesario para que `COPY --from=repo
+          # postgres/migrations/V22__academic-schema.sql` resuelva).
+          # Vacío para los servicios no-CDC; docker/build-push-action
+          # lo ignora cuando el valor es null.
+          build-contexts: ${{ matrix.extra-contexts }}
           # Caché de capas por servicio en el caché de Actions: la
           # etapa `dependency:go-offline` / `npm ci` se reutiliza entre
           # runs y el build Maven baja de ~15 min a ~3-4.
@@ -147,7 +164,7 @@ jobs:
 
       - name: Sync compose + configs
         # El compose monta rutas relativas (./postgres/migrations,
-        # ./observability/**), así que el servidor necesita esos
+        # ./observability/**, ./docker/**), así que el servidor necesita esos
         # archivos junto al docker-compose.yml. --delete mantiene
         # migrations/ y observability/ como espejo del repo; el .env
         # del servidor NO se toca (vive en /opt/sso y no está en la
@@ -155,13 +172,15 @@ jobs:
         env:
           DEST: ${{ secrets.TEST_SSH_USER }}@${{ secrets.TEST_SSH_HOST }}
         run: |
-          ssh -i ~/.ssh/deploy_key "$DEST" "mkdir -p /opt/sso/postgres/migrations /opt/sso/observability"
+          ssh -i ~/.ssh/deploy_key "$DEST" "mkdir -p /opt/sso/postgres/migrations /opt/sso/observability /opt/sso/docker"
           rsync -az -e "ssh -i ~/.ssh/deploy_key" docker-compose.yml \
             "$DEST:/opt/sso/docker-compose.yml"
           rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" postgres/migrations/ \
             "$DEST:/opt/sso/postgres/migrations/"
           rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" observability/ \
             "$DEST:/opt/sso/observability/"
+          rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" docker/ \
+            "$DEST:/opt/sso/docker/"
 
       - name: Pull & restart stack
         env:
