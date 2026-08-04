@@ -10,10 +10,17 @@ push a `test` ──▶ CI (ci.yml: Maven + admin-ui) ──▶ verde
                                                       │
                  ┌────────────────────────────────────┤
                  ▼                                    ▼
-   build + push de 8 imágenes a          rsync compose/configs + SSH:
+   build + push de 10 imágenes a         rsync compose/configs + SSH:
    ghcr.io/colombia-evaluadora/sso/*     docker compose pull && up -d
    (tags test-latest y test-<sha>)       en /opt/sso del Linode
 ```
+
+Las 10 imágenes son las 8 SSO (auth-center, api-gateway, eurekaserver,
+hello-service, notification-service, provisioner, query-service,
+sso-admin) más cdc-capture y cdc-worker (sub-módulo `cdc-sync/` con
+parent pom propio — Spring Boot 3.3.5 / Java 21, distinto del reactor
+SSO). El job `build-push` detecta cada caso por `context`/`dockerfile`
+en la matriz.
 
 ## 1. Dimensionar el Linode
 
@@ -57,7 +64,7 @@ cat /tmp/deploy_key   # ← copiar al secreto TEST_SSH_KEY y borrar
 rm /tmp/deploy_key /tmp/deploy_key.pub
 
 # Directorio de despliegue
-mkdir -p /opt/sso/postgres/migrations /opt/sso/observability
+mkdir -p /opt/sso/postgres/migrations /opt/sso/observability /opt/sso/docker
 chown -R deploy:deploy /opt/sso
 
 # Firewall — solo SSH y el gateway. OJO: Docker publica puertos
@@ -162,6 +169,16 @@ required (ver encabezado de `ci.yml`; `scripts/branch-protection.sh`).
 - **Rollback**: cada deploy publica también `test-<sha-corto>`. En el
   servidor: editar `IMAGE_TAG=test-<sha>` en `/opt/sso/.env` y
   `docker compose up -d`. Volver a `test-latest` cuando se arregle.
+- **Activar CDC-sync en el servidor**: CDC no viene prendido por
+  default (prod posture). Para encenderlo, editar
+  `/opt/sso/.env` y cambiar `COMPOSE_PROFILES=local-only` por
+  `COMPOSE_PROFILES=local-only,cdc-sync`. Las vars `CDC_*` que ya
+  están en el `.env` (con defaults sensatos — `demopass` como password,
+  `CDC_DEST_ORACLE=false`) se toman en el próximo
+  `docker compose up -d`. El deploy del workflow ya sincroniza
+  `./docker/` al servidor (rabbitmq entrypoint + clickhouse init) y
+  publica las imágenes `cdc-capture` y `cdc-worker` a GHCR, así que
+  basta con flippear el profile + reiniciar el stack.
 - **Ver Grafana / Eureka / MailHog** (loopback-only en el servidor):
 
   ```bash
