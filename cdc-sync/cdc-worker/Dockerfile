@@ -22,6 +22,11 @@ COPY pom.xml ./
 COPY cdc-common/pom.xml cdc-common/
 COPY cdc-capture/pom.xml cdc-capture/
 COPY cdc-worker/pom.xml cdc-worker/
+# cdc-generator is a sibling codegen module — its jar is invoked below
+# to regenerate cdc-common's column-types.json from V22 BEFORE the
+# fat jar is packaged. The pom is copied here so the parent reactor
+# resolves the new module before `dependency:go-offline` runs.
+COPY cdc-generator/pom.xml cdc-generator/
 
 # Warm the local Maven repo with the dependency graph. This layer is
 # invalidated only when one of the pom.xml files above changes — once
@@ -34,6 +39,20 @@ RUN mvn -B -ntp -pl cdc-worker -am dependency:go-offline -q
 # the next step.
 COPY cdc-common/src cdc-common/src
 COPY cdc-worker/src cdc-worker/src
+COPY cdc-generator/src cdc-generator/src
+
+# Regenerate column-types.json from V22 (the idempotent academico
+# schema migration) so cdc-common's classpath resource reflects the
+# current schema. The V22 file comes from the `repo` build context
+# (see docker-compose.yml additional_contexts on this service).
+# Order matters: build the generator jar, fetch V22 into the build
+# stage, run the generator (which overwrites the stale committed
+# JSON), then package the fat jar so it bundles the fresh file.
+RUN mvn -B -ntp -pl cdc-generator -am clean package -DskipTests -q
+COPY --from=repo postgres/migrations/V22__academic-schema.sql /tmp/V22.sql
+RUN java -jar /workspace/cdc-generator/target/app.jar \
+        --source /tmp/V22.sql \
+        --out /workspace/cdc-common/src/main/resources/column-types.json
 
 # Spring Boot's `repackage` goal (default during `package`) renames
 # the empty pre-repackage jar to `*.jar.original` and writes the

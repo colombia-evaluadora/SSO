@@ -3,9 +3,12 @@
 #
 # Brings up the following services in dependency order:
 #
-#   postgres       — Postgres 16 with init scripts that create the
-#                    `sso` database and the legacy-compatible
-#                    `users` / `role` / `role_users` tables.
+#   postgres       — Postgres 16, opt-in local dev fallback (profile
+#                    `local-only` — skipped by a bare `docker compose
+#                    up -d`; start with `docker compose up -d postgres`
+#                    or `--profile local-only up -d`). Every app talks
+#                    to Neon via DB_URL; this container is never a
+#                    dependency of anything in the stack.
 #   redis          — Redis 7 with persistence disabled. Stores
 #                    refresh-token hashes + per-family SETs.
 #                    Internal-only (no host port mapping). If
@@ -88,7 +91,24 @@
 services:
 
   postgres:
-    image: postgres:16-alpine
+    # profiles: this service only starts when named explicitly
+    # (`docker compose up -d postgres` or `--profile local-only`).
+    # A bare `docker compose up -d` — what both local dev's default
+    # flow and deploy-test.yml's server deploy run — skips it
+    # entirely. Every app in this stack talks to Neon via DB_URL;
+    # this container exists purely as an opt-in local Postgres for
+    # devs who want one, never as a stack dependency (see the note
+    # below).
+    profiles: ["local-only"]
+    image: debezium/postgres:16-alpine
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=4
+      - -c
+      - max_wal_senders=4
     container_name: sso-postgres
     restart: unless-stopped
     environment:
@@ -115,22 +135,15 @@ services:
       start_period: 10s
 
   # ===========================================================================
-  # flyway — one-shot schema migrator. Runs `migrate` against Neon and
-  # EXITS (it is not a long-running service). Every Spring service that
-  # talks to the sso schema depends on this completing successfully, so
-  # the schema is guaranteed present + at the expected version before
-  # any app boots (all of them run ddl-auto=validate).
-  #
-  # Connects to Neon over the public internet with sslmode=require (the
-  # sslmode is part of DB_URL; the Postgres JDBC driver applies it to the
-  # SSL socket before sending the startup packet). Flyway retry policy:
-  # `-connectRetries=60` covers the cold-start window where the container
-  # may reach Neon before Neon's proxy is warm.
+  # flyway — one-shot schema migrator against Neon. Every Spring service
+  # depends_on service_completed_successfully, so the schema is guaranteed
+  # present before any app boots. CDC-sync override (FLYWAY_URL pointing
+  # at the local postgres) re-applies V22..V26 to that DB instead.
   #
   # This replaces the old postgres/init/*.sh scripts. Migrations live in
-  # ./postgres/migrations (V1__..V7__) and are the single source of
-  # truth for the schema. To add schema, drop a new V<n>__name.sql file
-  # and re-run `docker compose up flyway`.
+  # ./postgres/migrations (V1..V19 + V22..V26) and are the single source
+  # of truth for the schema. To add schema, drop a new V<n>__name.sql
+  # file and re-run `docker compose up flyway`.
   #
   # Rollback note: Flyway Community is forward-only (the `undo` command
   # is a paid Teams feature). "Rolling back" here means writing a new
@@ -142,9 +155,9 @@ services:
     container_name: sso-flyway
     command: ["-connectRetries=60", "migrate"]
     environment:
-      FLYWAY_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
-      FLYWAY_USER: ${DB_USER}
-      FLYWAY_PASSWORD: ${DB_PASSWORD}
+      FLYWAY_URL: ${FLYWAY_URL:-jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}}
+      FLYWAY_USER: ${FLYWAY_USER:-${DB_USER}}
+      FLYWAY_PASSWORD: ${FLYWAY_PASSWORD:-${DB_PASSWORD}}
       FLYWAY_DEFAULT_SCHEMA: public
       # Baseline an already-populated schema (e.g. an existing dev volume
       # created by the old .sh scripts) at version 0 so V1..V7 still run;
@@ -184,7 +197,7 @@ services:
       EUREKA_CLIENT_REGISTER_WITH_EUREKA: "false"
       EUREKA_CLIENT_FETCH_REGISTRY: "false"
       # Observability: push OTLP to Alloy
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8761; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -244,13 +257,17 @@ services:
     ports:
       - "${BIND_IP:-0.0.0.0}:${AUTH_CENTER_PORT:-8081}:8081"
     environment:
-      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}"
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       # Discovery
       EUREKA_URL: "http://eurekaserver:8761/eureka"
-      # JWT
-      JWT_SECRET: ${JWT_SECRET}
+      # JWT (RS256). auth-center es el único servicio con la
+      # clave privada: es el único que firma. Los demás sólo
+      # reciben la pública. Genera el par con
+      # scripts/gen-jwt-keys.sh.
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       # Refresh-token store (Redis)
       REDIS_HOST: redis
       REDIS_PORT: "6379"
@@ -259,7 +276,14 @@ services:
       # (the legacy SSO_ADMIN_USERNAME is no longer
       # consumed directly; application.yml falls back to it
       # for backwards compat with old .env files).
-      SSO_BOOTSTRAP_ENABLED: ${SSO_BOOTSTRAP_ENABLED}
+      # :-true default matches application.yml's own
+      # ${SSO_BOOTSTRAP_ENABLED:true} — an ABSENT env var falls back
+      # fine on its own, but compose still injects an EMPTY string
+      # into the container when the host .env doesn't define the
+      # var, and Spring's :true placeholder default does NOT apply
+      # to an empty string (only to a truly missing property),
+      # which crashes DataInitializer's boolean constructor param.
+      SSO_BOOTSTRAP_ENABLED: ${SSO_BOOTSTRAP_ENABLED:-true}
       SSO_ADMIN_EMAIL: ${SSO_ADMIN_EMAIL}
       SSO_ADMIN_PASSWORD: ${SSO_ADMIN_PASSWORD}
       SSO_CORS_ALLOWED_ORIGINS: ${SSO_CORS_ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:5173}
@@ -272,7 +296,7 @@ services:
       # on the controller side; documented in CacheAdminController).
       SSO_SESSION_USER_ROLES_INVALIDATION_SECRET: ${SSO_SESSION_USER_ROLES_INVALIDATION_SECRET:-}
       # Observability: push OTLP to Alloy
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8081; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -305,9 +329,9 @@ services:
     ports:
       - "${API_GATEWAY_PORT:-8080}:8080"
     environment:
-      # Must match auth-center's JWT_SECRET exactly — both sign
-      # and verify with the same HMAC key.
-      JWT_SECRET: ${JWT_SECRET}
+      # Sólo verifica: la pareja pública de la JWT_PRIVATE_KEY
+      # de auth-center. El gateway no puede emitir tokens.
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       # CORS allowlist. The admin-ui SPA is served by THIS gateway
       # at /admin/**, so http://localhost:8080 is always valid. The
@@ -319,7 +343,7 @@ services:
       # collector over the compose network. When the observability
       # services are not running these exporters just log a connection
       # warning and the gateway keeps serving — telemetry is best-effort.
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -328,6 +352,15 @@ services:
       start_period: 30s
 
   hello-service:
+    # profiles: pure diagnostic/reference service (nothing else
+    # depends_on it) — gated behind the `diagnostics` profile so it
+    # can be dropped without touching this file per environment.
+    # .env.example sets COMPOSE_PROFILES=diagnostics by default, so
+    # local dev keeps starting it as part of the full stack. The
+    # test server's .env intentionally does NOT set that var, so it
+    # stays off there and saves ~192-256MB of RAM. Still startable
+    # explicitly on either side with `docker compose up -d hello-service`.
+    profiles: ["diagnostics"]
     build:
       context: .
       dockerfile: hello-service/Dockerfile
@@ -344,7 +377,7 @@ services:
     environment:
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       # Observability: push OTLP to Alloy
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
     # No healthcheck on the public port — the gateway's
     # actuator/health is the canonical signal, and the service
     # itself doesn't expose /actuator/health to the public.
@@ -404,13 +437,13 @@ services:
       # DB_URL (host:port) + DB_NAME + DB_SSLMODE + DB_CHANNEL_BINDING
       # and overrides spring.datasource.url via the standard
       # Spring env var.
-      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}"
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       EUREKA_URL: "http://eurekaserver:8761/eureka"
-      # MUST match auth-center's JWT_SECRET — same key signs and
-      # verifies tokens.
-      JWT_SECRET: ${JWT_SECRET}
+      # Sólo verifica: la pareja pública de la JWT_PRIVATE_KEY
+      # de auth-center. sso-admin no puede emitir tokens.
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       # Provisioner sidecar — sso-admin POSTs here when an
       # admin creates a microservice row with kind=QUERY.
       # The base URL is compose-DNS, NOT localhost, because
@@ -448,7 +481,7 @@ services:
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASS: ${RABBITMQ_PASS}
       # Observability: push OTLP to Alloy
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
       # App-access cache (SsoAdminAppAccessManager /
       # AppAccessService). Same Redis instance + credentials
       # auth-center already uses for refresh tokens.
@@ -501,6 +534,12 @@ services:
     container_name: sso-rabbitmq
     restart: unless-stopped
     hostname: rabbitmq
+    # Custom entrypoint: renders the CDC user/password from .env into
+    # definitions.json before the original rabbitmq entrypoint boots.
+    # Bash is invoked explicitly because Windows-mounted script files
+    # lose the executable bit (ACL inheritance produces 0644).
+    entrypoint: ["/bin/bash", "/usr/local/bin/cdc-entrypoint.sh"]
+    command: ["rabbitmq-server"]
     mem_limit: 384m
     mem_reservation: 256m
     ports:
@@ -511,8 +550,28 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
+      # CDC user fed into the definitions.json template by the entrypoint.
+      # Empty values are fatal so a missing config surfaces immediately.
+      CDC_AMQP_USER: ${CDC_AMQP_USER}
+      CDC_AMQP_PASSWORD: ${CDC_AMQP_PASSWORD}
+      # SSO_MQ user fed into the definitions.json template by the
+      # entrypoint. RabbitMQ's `RABBITMQ_DEFAULT_USER`/`_PASS` create
+      # the user ONLY on first boot of a fresh mnesia dir, AND the
+      # `definitions.json` we load on every boot REPLACES the user
+      # list (it's not merged with the default user). Declaring the
+      # SSO_MQ user here in definitions.json keeps the credentials
+      # present across both fresh and replayed boots. Same empty-value
+      # fatal guard as CDC_* above.
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASS: ${RABBITMQ_PASS}
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+      # CDC-sync mounts: entrypoint renders definitions.json from the
+      # template using ${CDC_AMQP_USER}/${CDC_AMQP_PASSWORD}, and
+      # rabbitmq.conf tells the broker to load definitions on boot.
+      - ./docker/rabbitmq/entrypoint.sh:/usr/local/bin/cdc-entrypoint.sh:ro
+      - ./docker/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./docker/rabbitmq/definitions.json.template:/etc/rabbitmq/definitions.json.template:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -538,21 +597,24 @@ services:
     mem_reservation: 512m
     depends_on:
       flyway:
+        # Schema must be migrated before ddl-auto=validate runs.
+        # notification-service's actual datasource is ${DB_URL}
+        # (Neon) — the local `postgres` service is opt-in dev-only
+        # (see its own comment block above) and is NOT a dependency
+        # here, unlike an earlier iteration of this file.
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
       rabbitmq:
         condition: service_healthy
       eurekaserver:
         condition: service_started
     environment:
       # Neon cloud DB (same target as auth-center / sso-admin).
-      # The local `postgres` container is used only by the
-      # RabbitMQ healthcheck chain — notification-service
-      # never opens a JDBC connection to it. Using ${DB_URL}
-      # keeps the password consistent with auth-center's.
-      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
-      DB_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE}&channel_binding=${DB_CHANNEL_BINDING}"
+      # notification-service never opens a JDBC connection to the
+      # local `postgres` service (that one is opt-in dev-only —
+      # see its own comment block). Using ${DB_URL} keeps the
+      # connection target consistent with auth-center's.
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}"
+      DB_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}"
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       EUREKA_URL: "http://eurekaserver:8761/eureka"
@@ -569,7 +631,7 @@ services:
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
       # Observability: push OTLP to Alloy
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
       VONAGE_API_KEY: ${VONAGE_API_KEY:-}
       VONAGE_API_SECRET: ${VONAGE_API_SECRET:-}
       SMTP_GMAIL_USER: ${SMTP_GMAIL_USER:-}
@@ -643,10 +705,10 @@ services:
       QUERY_DS_PASSWORD: ${QUERY_DS_POSTGRES_PASSWORD}
       QUERY_DS_POOL_SIZE: "10"
       # Observability: push OTLP to Alloy
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
-      # Eureka + JWT (same key auth-center uses)
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      # Eureka + JWT (sólo la pública: verifica, no emite)
       EUREKA_URL: "http://eurekaserver:8761/eureka"
-      JWT_SECRET: ${JWT_SECRET}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       # Catalog endpoint — sso-admin's controller paths
       # are NOT prefixed, so the gateway base URL plus
       # the literal /getQuery path resolves them.
@@ -687,10 +749,10 @@ services:
       # /query-service-postgres-analytics/** here.
       QUERY_INSTANCE_NAME: postgres-analytics
       EUREKA_URL: "http://eurekaserver:8761/eureka"
-      JWT_SECRET: ${JWT_SECRET}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       QUERY_CATALOG_BASE_URL: "http://sso-api-gateway:8080/sso-admin"
       # Observability: push OTLP to Alloy
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8084; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -759,12 +821,13 @@ services:
       # image uses this exact URL to register its
       # heartbeat.
       DOCKER_EUREKA_URL: "http://eurekaserver:8761/eureka"
-      # JWT_SECRET — passed to the new query-service
-      # container as JWT_SECRET env var. Must match the
-      # secret auth-center uses to sign tokens.
-      DOCKER_JWT_SECRET: ${JWT_SECRET}
+      # Clave PÚBLICA — se inyecta como JWT_PUBLIC_KEY en el
+      # contenedor de query-service que el provisioner crea.
+      # Con RS256 el provisioner ya no maneja material de
+      # firma: sólo reparte la mitad pública.
+      DOCKER_JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       # Observability: push OTLP to Alloy
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
     healthcheck:
       # The provisioner image installs curl (it talks to
       # the Docker socket via curl --unix-socket) but not
@@ -901,6 +964,161 @@ services:
       - loki
       - tempo
 
+  # ===========================================================================
+  # CDC-SYNC — PostgreSQL → ClickHouse (audit) + Oracle (mirror legacy).
+  # Captures change-data from the local `postgres` container via Debezium,
+  # publishes to the shared `rabbitmq` (cdc user/exchange from
+  # ./docker/rabbitmq/definitions.json), and consumes into ClickHouse
+  # (audit) + Oracle (reverse-sync). Bring up with:
+  #   docker compose --profile local-only --profile cdc-sync up -d
+  # ===========================================================================
+
+  cdc-clickhouse:
+    profiles: ["cdc-sync"]
+    image: clickhouse/clickhouse-server:24.8-alpine
+    container_name: cdc-clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: ${CDC_CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CDC_CLICKHOUSE_PASSWORD:-demopass}
+      CLICKHOUSE_DB: ${CDC_CLICKHOUSE_DB:-auditoria}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: ${CDC_CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT:-1}
+    volumes:
+      - ./docker/clickhouse/clickhouse-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - cdc-clickhouse-data:/var/lib/clickhouse
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${CDC_CLICKHOUSE_HTTP_PORT:-58123}:8123"
+      - "${BIND_IP:-0.0.0.0}:${CDC_CLICKHOUSE_NATIVE_PORT:-59000}:9000"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://127.0.0.1:8123/ping' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  cdc-capture:
+    profiles: ["cdc-sync"]
+    build:
+      context: ./cdc-sync
+      dockerfile: cdc-capture/Dockerfile
+    image: ${IMAGE_PREFIX:-eurekatic}/cdc-capture:${IMAGE_TAG:-1.0.0-SNAPSHOT}
+    container_name: cdc-capture
+    restart: unless-stopped
+    mem_limit: 640m
+    mem_reservation: 384m
+    depends_on:
+      flyway:
+        condition: service_completed_successfully
+      cdc-pg-slot-init:
+        # Replication slot must exist before Debezium starts streaming —
+        # otherwise cdc-capture blocks on its first `START SLOT` and the
+        # consumer group never advances. Slot creation lives in a
+        # separate one-shot service because Flyway OSS wraps every SQL
+        # migration in a transaction and `pg_create_logical_replication_slot`
+        # errors with `cannot create logical replication slot in
+        # transaction that has performed writes` after the CREATE
+        # PUBLICATION in V24 has already committed writes in that txn.
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      CDC_PG_URL: ${CDC_PG_URL:-jdbc:postgresql://postgres:5432/${POSTGRES_DB:-sso}}
+      CDC_PG_USER: ${CDC_PG_USER:-${POSTGRES_USER}}
+      CDC_PG_PASSWORD: ${CDC_PG_PASSWORD:-${POSTGRES_PASSWORD}}
+      # Debezium identifies the source database by name, independent
+      # of the JDBC URL path. Without this override, Debezium errors
+      # with `FATAL: database "academico" does not exist` because
+      # application.yaml defaults dbname to the legacy test setup.
+      # The compose local postgres has DB `${POSTGRES_DB}` (sso_db).
+      CDC_PG_DBNAME: ${CDC_PG_DBNAME:-${POSTGRES_DB:-sso}}
+      CDC_AMQP_HOST: ${CDC_AMQP_HOST:-rabbitmq}
+      CDC_AMQP_PORT: ${CDC_AMQP_PORT:-5672}
+      # No defaults — must match the .env values the broker uses to
+      # render definitions.json; a default would silently mask drift.
+      CDC_AMQP_USER: ${CDC_AMQP_USER}
+      CDC_AMQP_PASSWORD: ${CDC_AMQP_PASSWORD}
+      CDC_OFFSETS_DIR: ${CDC_OFFSETS_DIR:-/var/cdc-capture/offsets}
+    volumes:
+      - cdc-capture-offsets:${CDC_OFFSETS_DIR:-/var/cdc-capture/offsets}
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${CDC_CAPTURE_PORT:-58081}:8081"
+
+  # One-shot init: create the `cdc_slot` logical replication slot after
+  # Flyway has built the publication in V24. Runs as the postgres image
+  # itself (so we get `psql` without adding another base image) in
+  # autocommit mode — each psql command is its own transaction with no
+  # prior writes, so `pg_create_logical_replication_slot` succeeds.
+  # Idempotent: a `WHERE NOT EXISTS` guard makes a re-run a no-op.
+  cdc-pg-slot-init:
+    profiles: ["cdc-sync"]
+    image: debezium/postgres:16-alpine
+    container_name: cdc-pg-slot-init
+    depends_on:
+      flyway:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    command:
+      - sh
+      - -c
+      - |
+        psql -h postgres -U ${POSTGRES_USER} -d ${POSTGRES_DB:-sso} -v ON_ERROR_STOP=1 -c "
+        SELECT pg_create_logical_replication_slot('cdc_slot', 'pgoutput')
+        WHERE NOT EXISTS (
+          SELECT 1 FROM pg_replication_slots WHERE slot_name = 'cdc_slot'
+        );
+        "
+    restart: "no"
+
+  cdc-worker:
+    profiles: ["cdc-sync"]
+    build:
+      context: ./cdc-sync
+      # `repo` exposes the SSO repo root so the Dockerfile can
+      # `COPY --from=repo postgres/migrations/V22__academic-schema.sql`
+      # even though the build context (./cdc-sync) does NOT include
+      # postgres/. additional_contexts paths resolve RELATIVE to the
+      # Compose project directory (where docker-compose.yml lives), so
+      # `repo=.` is the SSO root — `repo=..` would point one level
+      # above and miss postgres/.
+      additional_contexts:
+        - repo=.
+      dockerfile: cdc-worker/Dockerfile
+    image: ${IMAGE_PREFIX:-eurekatic}/cdc-worker:${IMAGE_TAG:-1.0.0-SNAPSHOT}
+    container_name: cdc-worker
+    restart: unless-stopped
+    mem_limit: 768m
+    mem_reservation: 512m
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      cdc-clickhouse:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      CDC_AMQP_HOST: ${CDC_AMQP_HOST:-rabbitmq}
+      CDC_AMQP_PORT: ${CDC_AMQP_PORT:-5672}
+      # No defaults — must match cdc-capture + the broker definitions.json
+      CDC_AMQP_USER: ${CDC_AMQP_USER}
+      CDC_AMQP_PASSWORD: ${CDC_AMQP_PASSWORD}
+      CDC_CLICKHOUSE_URL: ${CDC_CLICKHOUSE_URL:-http://default:demopass@cdc-clickhouse:8123}
+      # Destination toggles: decouple ClickHouse audit from Oracle reverse-sync.
+      CDC_DEST_CLICKHOUSE: ${CDC_DEST_CLICKHOUSE:-true}
+      CDC_DEST_ORACLE: ${CDC_DEST_ORACLE:-true}
+      # Consumer concurrency: scale workers under load.
+      CDC_WORKER_CONCURRENCY_MIN: ${CDC_WORKER_CONCURRENCY_MIN:-1}
+      CDC_WORKER_CONCURRENCY_MAX: ${CDC_WORKER_CONCURRENCY_MAX:-1}
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${CDC_WORKER_PORT:-58082}:8081"
+
 volumes:
   postgres-data:
     # Named volume keeps the database across `docker compose down`
@@ -919,3 +1137,7 @@ volumes:
     name: sso-loki-data
   grafana-data:
     name: sso-grafana-data
+  cdc-clickhouse-data:
+    name: cdc-sync-clickhouse-data
+  cdc-capture-offsets:
+    name: cdc-sync-cdc-capture-offsets
