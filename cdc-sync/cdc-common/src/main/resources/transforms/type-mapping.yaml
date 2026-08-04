@@ -1,0 +1,22 @@
+types:
+  bigint: NUMBER(19,0)
+  bigserial: NUMBER(19,0)
+  numeric: NUMBER
+  numeric(p,s): NUMBER(p,s)
+  integer: NUMBER(10,0)
+  smallint: NUMBER(5,0)
+  varchar: VARCHAR2
+  varchar(n): VARCHAR2(n)
+  text: CLOB
+  bytea: BLOB
+  boolean: CHAR(1)  # 'S'/'N' o 'A'/'I' según columna
+  date: DATE
+  timestamp: TIMESTAMP
+  timestamptz: TIMESTAMP
+  json: CLOB
+  jsonb: CLOB
+
+value_mappings:
+  boolean:
+    true: 'S'
+    false: 'N'
