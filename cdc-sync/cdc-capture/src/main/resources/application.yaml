@@ -1,0 +1,46 @@
+spring:
+  application:
+    name: cdc-capture
+  rabbitmq:
+    host: ${CDC_AMQP_HOST:localhost}
+    port: ${CDC_AMQP_PORT:5672}
+    username: ${CDC_AMQP_USER:cdc}
+    password: ${CDC_AMQP_PASSWORD:demopass}
+  datasource:
+    url: ${CDC_PG_URL:jdbc:postgresql://localhost:55432/academico}
+    username: ${CDC_PG_USER:academico}
+    password: ${CDC_PG_PASSWORD:demopass}
+    driver-class-name: org.postgresql.Driver
+
+cdc:
+  postgres:
+    url: ${CDC_PG_URL:jdbc:postgresql://localhost:55432/academico}
+    user: ${CDC_PG_USER:academico}
+    password: ${CDC_PG_PASSWORD:demopass}
+    # Source database name. Debezium uses this as `database.dbname`
+    # to identify the publication server (independent of the JDBC URL
+    # path). Default `academico` matches the legacy test setup; in
+    # docker compose override via CDC_PG_DBNAME to the actual DB
+    # (e.g. `${POSTGRES_DB}` in docker-compose.yml).
+    dbname: ${CDC_PG_DBNAME:academico}
+    publication: cdc_pub
+    slot: cdc_slot
+  offsets:
+    dir: ${CDC_OFFSETS_DIR:/tmp/cdc-capture/offsets}
+  rabbitmq:
+    exchange: cdc.events
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    root: INFO
+    com.example.cdc: DEBUG
+    io.debezium: WARN

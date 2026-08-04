@@ -1,0 +1,41 @@
+splits:
+  TPAIS:
+    oracle_table: TPAIS
+    codigo_column: CODIGO
+    pk_column: PK_TPAIS
+  ZECTOR:
+    oracle_table: TSECTOR
+    codigo_column: CODIGO
+    pk_column: PK_SECTOR
+  TIPO_DOCUMENTO:
+    oracle_table: TTIPO_DOCUMENTO
+    codigo_column: CODIGO
+    pk_column: PK_TIPO_DOCUMENTO
+  CARACTER:
+    oracle_table: TCARACTER
+    codigo_column: CODIGO
+    pk_column: PK_CARACTER
+  TALENTO:
+    oracle_table: TCAPACIDAD
+    codigo_column: CODIGO
+    pk_column: PK_CAPACIDAD
+  GRUPO_ETNICO:
+    oracle_table: TGRUPO_ETNICO
+    codigo_column: CODIGO
+    pk_column: PK_GRUPO_ETNICO
+  MODELO_PEDAGOGICO:
+    oracle_table: TMODELO_PEDAGOGICO
+    codigo_column: CODIGO
+    pk_column: PK_TMODELO_PEDAGOGICO
+  FORMATO_CALIFICACION:
+    oracle_table: TFORMATO_CALIFICACION
+    codigo_column: CODIGO
+    pk_column: PK_TFORMATO_CALIFICACION
+  MODELO_CALIFICACION:
+    oracle_table: TMODELO_CALIFICACION
+    codigo_column: CODIGO
+    pk_column: PK_TMODELO_CALIFICACION
+  JORNADA:
+    oracle_table: TJORNADA
+    codigo_column: CODIGO
+    pk_column: PK_JORNADA
