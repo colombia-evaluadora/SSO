@@ -348,6 +348,13 @@ public class DockerSocket {
         // via environment if their network topology is
         // different.
         env.add("QUERY_CATALOG_BASE_URL=http://sso-api-gateway:8080/sso-admin");
+        // OTLP endpoint so the spawneado query-service exports
+        // sus trazas / métricas / logs al colector del stack
+        // (Alloy por defecto). Sin esto el application.yml del
+        // query-service cae a http://localhost:4318 — que dentro
+        // del contenedor resuelve al propio contenedor, no al
+        // colector, y los exporters warn con Connection refused.
+        env.add("OTEL_EXPORTER_OTLP_ENDPOINT=" + props.getOtlpEndpoint());
         return env;
     }
 
