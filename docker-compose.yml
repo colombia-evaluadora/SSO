@@ -1082,6 +1082,15 @@ services:
     profiles: ["cdc-sync"]
     build:
       context: ./cdc-sync
+      # `repo` exposes the SSO repo root so the Dockerfile can
+      # `COPY --from=repo postgres/migrations/V22__academic-schema.sql`
+      # even though the build context (./cdc-sync) does NOT include
+      # postgres/. additional_contexts paths resolve RELATIVE to the
+      # Compose project directory (where docker-compose.yml lives), so
+      # `repo=.` is the SSO root — `repo=..` would point one level
+      # above and miss postgres/.
+      additional_contexts:
+        - repo=.
       dockerfile: cdc-worker/Dockerfile
     image: ${IMAGE_PREFIX:-eurekatic}/cdc-worker:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: cdc-worker
