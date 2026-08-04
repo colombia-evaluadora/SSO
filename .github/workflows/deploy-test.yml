@@ -77,24 +77,53 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Todas las entradas comparten las mismas 4 claves
+          # (service/context/dockerfile/extra-contexts). GitHub
+          # Actions descarta silenciosamente las entradas de
+          # matrix.include con claves distintas al resto — esa
+          # inconsistencia era la causa por la que cdc-capture y
+          # cdc-worker nunca se construían. Para los servicios no-CDC
+          # el contexto es la raíz del repo y no hay contextos extra.
           - service: eurekaserver
+            context: '.'
+            dockerfile: eurekaserver/Dockerfile
+            extra-contexts: ''
           - service: auth-center
+            context: '.'
+            dockerfile: auth-center/Dockerfile
+            extra-contexts: ''
           - service: api-gateway
+            context: '.'
+            dockerfile: api-gateway/Dockerfile
+            extra-contexts: ''
           - service: hello-service
+            context: '.'
+            dockerfile: hello-service/Dockerfile
+            extra-contexts: ''
           - service: sso-admin
+            context: '.'
+            dockerfile: sso-admin/Dockerfile
+            extra-contexts: ''
           - service: notification-service
+            context: '.'
+            dockerfile: notification-service/Dockerfile
+            extra-contexts: ''
           - service: query-service
+            context: '.'
+            dockerfile: query-service/Dockerfile
+            extra-contexts: ''
           - service: provisioner
+            context: '.'
+            dockerfile: provisioner/Dockerfile
+            extra-contexts: ''
           - service: cdc-capture
             context: cdc-sync
             dockerfile: cdc-capture/Dockerfile
-            extra-contexts: |
-              repo=.
+            extra-contexts: 'repo=.'
           - service: cdc-worker
             context: cdc-sync
             dockerfile: cdc-worker/Dockerfile
-            extra-contexts: |
-              repo=.
+            extra-contexts: 'repo=.'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -117,8 +146,8 @@ jobs:
       - name: Build & push
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context || '.' }}
-          file: ${{ matrix.dockerfile || format('{0}/Dockerfile', matrix.service) }}
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           push: true
           tags: |
             ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:test-latest
@@ -136,8 +165,8 @@ jobs:
           # Build context adicional para CDC: el `repo` apunta a la
           # raíz del checkout (necesario para que `COPY --from=repo
           # postgres/migrations/V22__academic-schema.sql` resuelva).
-          # Vacío para los servicios no-CDC; docker/build-push-action
-          # lo ignora cuando el valor es null.
+          # Vacío ('') para los servicios no-CDC; docker/build-push-action
+          # lo trata como "sin contextos extra" cuando el string está vacío.
           build-contexts: ${{ matrix.extra-contexts }}
           # Caché de capas por servicio en el caché de Actions: la
           # etapa `dependency:go-offline` / `npm ci` se reutiliza entre
