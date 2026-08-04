@@ -1,0 +1,46 @@
+routes:
+  clientes:
+    oracle_table: CLIENTES
+    oracle_schema: ACADEMICO
+    pk_column: PK_CLIENTE
+    transformers:
+      - ColumnRenamer
+      - TypeMapper
+
+  pedidos:
+    oracle_table: PEDIDOS
+    oracle_schema: ACADEMICO
+    pk_column: PK_PEDIDO
+    transformers:
+      - ColumnRenamer
+      - TypeMapper
+
+  tlista_valor:
+    oracle_table: "AUTO_SPLIT"  # marcador especial: el splitter decide
+    oracle_schema: ACADEMICO
+    pk_column: PK_LISTA_VALOR
+    transformers:
+      - TlistaValorSplitter
+
+  tusuario:
+    oracle_table: "AUTO_DECOMPOSE"  # marcador especial: el decomposer decide
+    oracle_schema: ACADEMICO
+    pk_column: PK_TUSUARIO
+    transformers:
+      - TUsuarioDecomposer
+
+  tmatricula:
+    oracle_table: TMATRICULA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TMATRICULA
+    transformers:
+      - ColumnRenamer
+      - TypeMapper
+      - TMatriculaConsolidator
+
+  tactividad_estudiante:
+    oracle_table: TACTIVIDAD_NOTA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TACTIVIDAD_NOTA
+    transformers:
+      - TActividadFlattener

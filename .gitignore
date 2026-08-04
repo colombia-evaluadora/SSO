@@ -6,6 +6,7 @@ out/
 *.war
 *.ear
 *.class
+**/column-types.json
 
 # IDE
 .idea/
@@ -54,3 +55,8 @@ test-results/
 # gateway's classpath; serving from inside the jar is a debugging
 # fallback only.
 api-gateway/src/main/resources/static/admin/
+
+# Agents
+skills-lock*
+.agents/
+.claude/

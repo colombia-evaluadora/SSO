@@ -1,0 +1,70 @@
+spring:
+  application:
+    name: cdc-worker
+  rabbitmq:
+    host: ${CDC_AMQP_HOST:localhost}
+    port: ${CDC_AMQP_PORT:5672}
+    username: ${CDC_AMQP_USER:cdc}
+    password: ${CDC_AMQP_PASSWORD:demopass}
+    listener:
+      simple:
+        prefetch: 100
+        acknowledge-mode: manual
+        # Number of concurrent consumer threads processing the cdc.worker queue.
+        # Both default to 1 to preserve the historical behavior; bump them on busy
+        # pipelines so a slow destination (e.g. Oracle reverse-sync) doesn't gate
+        # the other. With cdc.destinations.oracle.enabled=false you can crank
+        # this up to drain the backlog without burning retries.
+        concurrency: ${CDC_WORKER_CONCURRENCY_MIN:1}
+        max-concurrency: ${CDC_WORKER_CONCURRENCY_MAX:1}
+        retry:
+          enabled: false  # el retry lo manejamos manualmente en el consumer
+  datasource:
+    url: ${CDC_ORACLE_URL:jdbc:oracle:thin:@localhost:1521/FREEPDB1}
+    username: ${CDC_ORACLE_USER:ACADEMICO}
+    password: ${CDC_ORACLE_PASSWORD:Academico123}
+    driver-class-name: oracle.jdbc.OracleDriver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+
+cdc:
+  rabbitmq:
+    queue: cdc.worker
+    dlq: cdc.worker.dlq
+    exchange: cdc.events
+  oracle:
+    schema-user: ${CDC_ORACLE_USER:ACADEMICO}
+  clickhouse:
+    url: ${CDC_CLICKHOUSE_URL:http://default:demopass@localhost:8123}
+  # Destination toggles. Decouple ClickHouse audit from Oracle reverse-sync so a
+  # failure in one doesn't waste retry budget on the other. Set to false while
+  # debugging a broken Oracle schema to drain the backlog at full speed.
+  destinations:
+    clickhouse:
+      enabled: ${CDC_DEST_CLICKHOUSE:true}
+    oracle:
+      enabled: ${CDC_DEST_ORACLE:true}
+  retry:
+    max-attempts: 5
+    initial-backoff-ms: 1000
+    max-backoff-ms: 60000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info
+  endpoint:
+    health:
+      show-details: always
+  health:
+    rabbit:
+      enabled: true
+    db:
+      enabled: true
+
+logging:
+  level:
+    root: INFO
+    com.example.cdc: DEBUG

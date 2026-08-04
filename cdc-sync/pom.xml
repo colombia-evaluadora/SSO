@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example.cdc</groupId>
+  <artifactId>cdc-sync-parent</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>3.3.5</version>
+    <relativePath/>
+  </parent>
+
+  <properties>
+    <!-- Spring Boot's <java.version> drives BOTH maven.compiler.source
+         AND maven.compiler.target (overriding any explicit setting below).
+         Pinning it to 21 keeps the produced class files at major version
+         65, which Spring Boot 3.3.5's bundled ASM 9.7 can read. The JRE
+         is Java 25 in the Dockerfile and is forward-compatible with
+         Java 21 bytecode, so the application still runs there. Bump
+         this (and the Dockerfile base image) alongside a Spring Boot
+         4.x upgrade. -->
+    <java.version>21</java.version>
+    <maven.compiler.source>21</maven.compiler.source>
+    <maven.compiler.target>21</maven.compiler.target>
+    <debezium.version>3.1.0.Final</debezium.version>
+    <ojdbc.version>23.3.0.23.09</ojdbc.version>
+    <clickhouse.jdbc.version>0.7.2</clickhouse.jdbc.version>
+    <testcontainers.version>1.20.3</testcontainers.version>
+  </properties>
+
+  <modules>
+    <module>cdc-common</module>
+    <module>cdc-generator</module>
+    <module>cdc-capture</module>
+    <module>cdc-worker</module>
+  </modules>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>io.debezium</groupId>
+        <artifactId>debezium-embedded</artifactId>
+        <version>${debezium.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.oracle.database.jdbc</groupId>
+        <artifactId>ojdbc11</artifactId>
+        <version>${ojdbc.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.clickhouse</groupId>
+        <artifactId>clickhouse-jdbc</artifactId>
+        <version>${clickhouse.jdbc.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>testcontainers-bom</artifactId>
+        <version>${testcontainers.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-maven-plugin</artifactId>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+</project>

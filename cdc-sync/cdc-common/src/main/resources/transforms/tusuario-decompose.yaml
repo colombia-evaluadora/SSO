@@ -1,0 +1,46 @@
+decompositions:
+  ESTUDIANTE:
+    oracle_table: TESTUDIANTE
+    pk_column: PK_TESTUDIANTE
+    copy_fields:
+      - PK_TUSUARIO
+      - PRIMER_NOMBRE
+      - SEGUNDO_NOMBRE
+      - PRIMER_APELLIDO
+      - SEGUNDO_APELLIDO
+      - IDENTIFICACION
+      - FK_TLV_TIPO_DOCUMENTO
+      - FECHA_NACIMIENTO
+      - FK_TLV_GENERO
+      - CORREO_ELECTRONICO
+      - TELEFONO
+  FUNCIONARIO:
+    oracle_table: TFUNCIONARIO
+    pk_column: PK_TFUNCIONARIO
+    copy_fields:
+      - PK_TUSUARIO
+      - PRIMER_NOMBRE
+      - SEGUNDO_NOMBRE
+      - PRIMER_APELLIDO
+      - SEGUNDO_APELLIDO
+      - IDENTIFICACION
+      - FK_TLV_TIPO_DOCUMENTO
+      - FECHA_NACIMIENTO
+      - FK_TLV_GENERO
+      - CORREO_ELECTRONICO
+      - TELEFONO
+  PADRE:
+    oracle_table: TPADRE
+    pk_column: PK_TPADRE
+    copy_fields:
+      - PK_TUSUARIO
+      - PRIMER_NOMBRE
+      - SEGUNDO_NOMBRE
+      - PRIMER_APELLIDO
+      - SEGUNDO_APELLIDO
+      - IDENTIFICACION
+      - FK_TLV_TIPO_DOCUMENTO
+      - FECHA_NACIMIENTO
+      - FK_TLV_GENERO
+      - CORREO_ELECTRONICO
+      - TELEFONO

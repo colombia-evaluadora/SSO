@@ -100,7 +100,15 @@ services:
     # devs who want one, never as a stack dependency (see the note
     # below).
     profiles: ["local-only"]
-    image: postgres:16-alpine
+    image: debezium/postgres:16-alpine
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=4
+      - -c
+      - max_wal_senders=4
     container_name: sso-postgres
     restart: unless-stopped
     environment:
@@ -127,22 +135,15 @@ services:
       start_period: 10s
 
   # ===========================================================================
-  # flyway — one-shot schema migrator. Runs `migrate` against Neon and
-  # EXITS (it is not a long-running service). Every Spring service that
-  # talks to the sso schema depends on this completing successfully, so
-  # the schema is guaranteed present + at the expected version before
-  # any app boots (all of them run ddl-auto=validate).
-  #
-  # Connects to Neon over the public internet with sslmode=require (the
-  # sslmode is part of DB_URL; the Postgres JDBC driver applies it to the
-  # SSL socket before sending the startup packet). Flyway retry policy:
-  # `-connectRetries=60` covers the cold-start window where the container
-  # may reach Neon before Neon's proxy is warm.
+  # flyway — one-shot schema migrator against Neon. Every Spring service
+  # depends_on service_completed_successfully, so the schema is guaranteed
+  # present before any app boots. CDC-sync override (FLYWAY_URL pointing
+  # at the local postgres) re-applies V22..V26 to that DB instead.
   #
   # This replaces the old postgres/init/*.sh scripts. Migrations live in
-  # ./postgres/migrations (V1__..V7__) and are the single source of
-  # truth for the schema. To add schema, drop a new V<n>__name.sql file
-  # and re-run `docker compose up flyway`.
+  # ./postgres/migrations (V1..V19 + V22..V26) and are the single source
+  # of truth for the schema. To add schema, drop a new V<n>__name.sql
+  # file and re-run `docker compose up flyway`.
   #
   # Rollback note: Flyway Community is forward-only (the `undo` command
   # is a paid Teams feature). "Rolling back" here means writing a new
@@ -154,9 +155,9 @@ services:
     container_name: sso-flyway
     command: ["-connectRetries=60", "migrate"]
     environment:
-      FLYWAY_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}"
-      FLYWAY_USER: ${DB_USER}
-      FLYWAY_PASSWORD: ${DB_PASSWORD}
+      FLYWAY_URL: ${FLYWAY_URL:-jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}}
+      FLYWAY_USER: ${FLYWAY_USER:-${DB_USER}}
+      FLYWAY_PASSWORD: ${FLYWAY_PASSWORD:-${DB_PASSWORD}}
       FLYWAY_DEFAULT_SCHEMA: public
       # Baseline an already-populated schema (e.g. an existing dev volume
       # created by the old .sh scripts) at version 0 so V1..V7 still run;
@@ -533,6 +534,12 @@ services:
     container_name: sso-rabbitmq
     restart: unless-stopped
     hostname: rabbitmq
+    # Custom entrypoint: renders the CDC user/password from .env into
+    # definitions.json before the original rabbitmq entrypoint boots.
+    # Bash is invoked explicitly because Windows-mounted script files
+    # lose the executable bit (ACL inheritance produces 0644).
+    entrypoint: ["/bin/bash", "/usr/local/bin/cdc-entrypoint.sh"]
+    command: ["rabbitmq-server"]
     mem_limit: 384m
     mem_reservation: 256m
     ports:
@@ -543,8 +550,28 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
+      # CDC user fed into the definitions.json template by the entrypoint.
+      # Empty values are fatal so a missing config surfaces immediately.
+      CDC_AMQP_USER: ${CDC_AMQP_USER}
+      CDC_AMQP_PASSWORD: ${CDC_AMQP_PASSWORD}
+      # SSO_MQ user fed into the definitions.json template by the
+      # entrypoint. RabbitMQ's `RABBITMQ_DEFAULT_USER`/`_PASS` create
+      # the user ONLY on first boot of a fresh mnesia dir, AND the
+      # `definitions.json` we load on every boot REPLACES the user
+      # list (it's not merged with the default user). Declaring the
+      # SSO_MQ user here in definitions.json keeps the credentials
+      # present across both fresh and replayed boots. Same empty-value
+      # fatal guard as CDC_* above.
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASS: ${RABBITMQ_PASS}
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+      # CDC-sync mounts: entrypoint renders definitions.json from the
+      # template using ${CDC_AMQP_USER}/${CDC_AMQP_PASSWORD}, and
+      # rabbitmq.conf tells the broker to load definitions on boot.
+      - ./docker/rabbitmq/entrypoint.sh:/usr/local/bin/cdc-entrypoint.sh:ro
+      - ./docker/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./docker/rabbitmq/definitions.json.template:/etc/rabbitmq/definitions.json.template:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -937,6 +964,161 @@ services:
       - loki
       - tempo
 
+  # ===========================================================================
+  # CDC-SYNC — PostgreSQL → ClickHouse (audit) + Oracle (mirror legacy).
+  # Captures change-data from the local `postgres` container via Debezium,
+  # publishes to the shared `rabbitmq` (cdc user/exchange from
+  # ./docker/rabbitmq/definitions.json), and consumes into ClickHouse
+  # (audit) + Oracle (reverse-sync). Bring up with:
+  #   docker compose --profile local-only --profile cdc-sync up -d
+  # ===========================================================================
+
+  cdc-clickhouse:
+    profiles: ["cdc-sync"]
+    image: clickhouse/clickhouse-server:24.8-alpine
+    container_name: cdc-clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: ${CDC_CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CDC_CLICKHOUSE_PASSWORD:-demopass}
+      CLICKHOUSE_DB: ${CDC_CLICKHOUSE_DB:-auditoria}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: ${CDC_CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT:-1}
+    volumes:
+      - ./docker/clickhouse/clickhouse-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - cdc-clickhouse-data:/var/lib/clickhouse
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${CDC_CLICKHOUSE_HTTP_PORT:-58123}:8123"
+      - "${BIND_IP:-0.0.0.0}:${CDC_CLICKHOUSE_NATIVE_PORT:-59000}:9000"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://127.0.0.1:8123/ping' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  cdc-capture:
+    profiles: ["cdc-sync"]
+    build:
+      context: ./cdc-sync
+      dockerfile: cdc-capture/Dockerfile
+    image: ${IMAGE_PREFIX:-eurekatic}/cdc-capture:${IMAGE_TAG:-1.0.0-SNAPSHOT}
+    container_name: cdc-capture
+    restart: unless-stopped
+    mem_limit: 640m
+    mem_reservation: 384m
+    depends_on:
+      flyway:
+        condition: service_completed_successfully
+      cdc-pg-slot-init:
+        # Replication slot must exist before Debezium starts streaming —
+        # otherwise cdc-capture blocks on its first `START SLOT` and the
+        # consumer group never advances. Slot creation lives in a
+        # separate one-shot service because Flyway OSS wraps every SQL
+        # migration in a transaction and `pg_create_logical_replication_slot`
+        # errors with `cannot create logical replication slot in
+        # transaction that has performed writes` after the CREATE
+        # PUBLICATION in V24 has already committed writes in that txn.
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      CDC_PG_URL: ${CDC_PG_URL:-jdbc:postgresql://postgres:5432/${POSTGRES_DB:-sso}}
+      CDC_PG_USER: ${CDC_PG_USER:-${POSTGRES_USER}}
+      CDC_PG_PASSWORD: ${CDC_PG_PASSWORD:-${POSTGRES_PASSWORD}}
+      # Debezium identifies the source database by name, independent
+      # of the JDBC URL path. Without this override, Debezium errors
+      # with `FATAL: database "academico" does not exist` because
+      # application.yaml defaults dbname to the legacy test setup.
+      # The compose local postgres has DB `${POSTGRES_DB}` (sso_db).
+      CDC_PG_DBNAME: ${CDC_PG_DBNAME:-${POSTGRES_DB:-sso}}
+      CDC_AMQP_HOST: ${CDC_AMQP_HOST:-rabbitmq}
+      CDC_AMQP_PORT: ${CDC_AMQP_PORT:-5672}
+      # No defaults — must match the .env values the broker uses to
+      # render definitions.json; a default would silently mask drift.
+      CDC_AMQP_USER: ${CDC_AMQP_USER}
+      CDC_AMQP_PASSWORD: ${CDC_AMQP_PASSWORD}
+      CDC_OFFSETS_DIR: ${CDC_OFFSETS_DIR:-/var/cdc-capture/offsets}
+    volumes:
+      - cdc-capture-offsets:${CDC_OFFSETS_DIR:-/var/cdc-capture/offsets}
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${CDC_CAPTURE_PORT:-58081}:8081"
+
+  # One-shot init: create the `cdc_slot` logical replication slot after
+  # Flyway has built the publication in V24. Runs as the postgres image
+  # itself (so we get `psql` without adding another base image) in
+  # autocommit mode — each psql command is its own transaction with no
+  # prior writes, so `pg_create_logical_replication_slot` succeeds.
+  # Idempotent: a `WHERE NOT EXISTS` guard makes a re-run a no-op.
+  cdc-pg-slot-init:
+    profiles: ["cdc-sync"]
+    image: debezium/postgres:16-alpine
+    container_name: cdc-pg-slot-init
+    depends_on:
+      flyway:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    command:
+      - sh
+      - -c
+      - |
+        psql -h postgres -U ${POSTGRES_USER} -d ${POSTGRES_DB:-sso} -v ON_ERROR_STOP=1 -c "
+        SELECT pg_create_logical_replication_slot('cdc_slot', 'pgoutput')
+        WHERE NOT EXISTS (
+          SELECT 1 FROM pg_replication_slots WHERE slot_name = 'cdc_slot'
+        );
+        "
+    restart: "no"
+
+  cdc-worker:
+    profiles: ["cdc-sync"]
+    build:
+      context: ./cdc-sync
+      # `repo` exposes the SSO repo root so the Dockerfile can
+      # `COPY --from=repo postgres/migrations/V22__academic-schema.sql`
+      # even though the build context (./cdc-sync) does NOT include
+      # postgres/. additional_contexts paths resolve RELATIVE to the
+      # Compose project directory (where docker-compose.yml lives), so
+      # `repo=.` is the SSO root — `repo=..` would point one level
+      # above and miss postgres/.
+      additional_contexts:
+        - repo=.
+      dockerfile: cdc-worker/Dockerfile
+    image: ${IMAGE_PREFIX:-eurekatic}/cdc-worker:${IMAGE_TAG:-1.0.0-SNAPSHOT}
+    container_name: cdc-worker
+    restart: unless-stopped
+    mem_limit: 768m
+    mem_reservation: 512m
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      cdc-clickhouse:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      CDC_AMQP_HOST: ${CDC_AMQP_HOST:-rabbitmq}
+      CDC_AMQP_PORT: ${CDC_AMQP_PORT:-5672}
+      # No defaults — must match cdc-capture + the broker definitions.json
+      CDC_AMQP_USER: ${CDC_AMQP_USER}
+      CDC_AMQP_PASSWORD: ${CDC_AMQP_PASSWORD}
+      CDC_CLICKHOUSE_URL: ${CDC_CLICKHOUSE_URL:-http://default:demopass@cdc-clickhouse:8123}
+      # Destination toggles: decouple ClickHouse audit from Oracle reverse-sync.
+      CDC_DEST_CLICKHOUSE: ${CDC_DEST_CLICKHOUSE:-true}
+      CDC_DEST_ORACLE: ${CDC_DEST_ORACLE:-true}
+      # Consumer concurrency: scale workers under load.
+      CDC_WORKER_CONCURRENCY_MIN: ${CDC_WORKER_CONCURRENCY_MIN:-1}
+      CDC_WORKER_CONCURRENCY_MAX: ${CDC_WORKER_CONCURRENCY_MAX:-1}
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${CDC_WORKER_PORT:-58082}:8081"
+
 volumes:
   postgres-data:
     # Named volume keeps the database across `docker compose down`
@@ -955,3 +1137,7 @@ volumes:
     name: sso-loki-data
   grafana-data:
     name: sso-grafana-data
+  cdc-clickhouse-data:
+    name: cdc-sync-clickhouse-data
+  cdc-capture-offsets:
+    name: cdc-sync-cdc-capture-offsets

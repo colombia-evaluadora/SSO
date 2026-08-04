@@ -1,0 +1,78 @@
+{
+  "users": [
+    {
+      "name": "${CDC_AMQP_USER}",
+      "password": "${CDC_AMQP_PASSWORD}",
+      "tags": ["management"]
+    },
+    {
+      "name": "${RABBITMQ_USER}",
+      "password": "${RABBITMQ_PASS}",
+      "tags": ["administrator"]
+    }
+  ],
+  "vhosts": [
+    { "name": "/" }
+  ],
+  "permissions": [
+    { "user": "${CDC_AMQP_USER}", "vhost": "/", "configure": ".*", "write": ".*", "read": ".*" },
+    { "user": "${RABBITMQ_USER}", "vhost": "/", "configure": ".*", "write": ".*", "read": ".*" }
+  ],
+  "exchanges": [
+    {
+      "name": "cdc.events",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "cdc.events.dlx",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "cdc.worker",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "cdc.events.dlx",
+        "x-dead-letter-routing-key": "dlq"
+      }
+    },
+    {
+      "name": "cdc.worker.dlq",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    }
+  ],
+  "bindings": [
+    {
+      "source": "cdc.events",
+      "vhost": "/",
+      "destination": "cdc.worker",
+      "destination_type": "queue",
+      "routing_key": "#",
+      "arguments": {}
+    },
+    {
+      "source": "cdc.events.dlx",
+      "vhost": "/",
+      "destination": "cdc.worker.dlq",
+      "destination_type": "queue",
+      "routing_key": "#",
+      "arguments": {}
+    }
+  ]
+}
