@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.example.cdc</groupId>
+    <artifactId>cdc-sync-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+  <artifactId>cdc-generator</artifactId>
+
+  <!--
+    Standalone CLI module that regenerates
+    cdc-common/src/main/resources/column-types.json from the V22
+    idempotent migration. Invoked by the cdc-worker Dockerfile
+    build stage on every rebuild (see cdc-worker/Dockerfile and
+    docker-compose.yml additional_contexts). Pure JDK + Jackson —
+    no Spring context, no Spring Boot plugin, no Fat JAR.
+  -->
+
+  <dependencies>
+    <!-- Jackson for the JSON output. Version inherited from the
+         Spring Boot BOM (spring-boot-dependencies) imported by the
+         parent. -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>app</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <configuration>
+          <!-- Pin the Main-Class so `java -jar target/app.jar` works
+               without the caller passing -cp. The cdc-worker Dockerfile
+               build stage invokes the jar as `java -jar /workspace/...`
+               after V22 has been staged via COPY from the repo context. -->
+          <archive>
+            <manifest>
+              <mainClass>com.example.cdc.generator.ColumnTypesGenerator</mainClass>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+      <plugin>
+        <!-- Fat-jar so the Dockerfile can invoke the generator with a
+             single `java -jar` call (no classpath gymnastics). Keeps
+             the generator self-contained — no Spring Boot plugin, no
+             nested jars to unpack. -->
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <shadedArtifactAttached>false</shadedArtifactAttached>
+              <transformers>
+                <!-- Shade preserves the manifest written by maven-jar-plugin
+                     above (Main-Class). No ManifestResourceTransformer
+                     needed; the original manifest is already correct. -->
+              </transformers>
+              <filters>
+                <filter>
+                  <!-- Shrink the fat jar: drop per-file signatures
+                       (they break under shading) and license files we
+                       don't need to ship. -->
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                    <exclude>module-info.class</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
