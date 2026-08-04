@@ -116,13 +116,18 @@ jobs:
             context: '.'
             dockerfile: provisioner/Dockerfile
             extra-contexts: ''
+          # OJO: a diferencia de docker-compose.yml (donde `dockerfile`
+          # es relativo a `context`), docker/build-push-action pasa
+          # `file` tal cual a `buildx --file`, que lo resuelve desde la
+          # raíz del workspace. Por eso aquí va `cdc-sync/…` y en el
+          # compose va `cdc-capture/Dockerfile` a secas.
           - service: cdc-capture
             context: cdc-sync
-            dockerfile: cdc-capture/Dockerfile
+            dockerfile: cdc-sync/cdc-capture/Dockerfile
             extra-contexts: 'repo=.'
           - service: cdc-worker
             context: cdc-sync
-            dockerfile: cdc-worker/Dockerfile
+            dockerfile: cdc-sync/cdc-worker/Dockerfile
             extra-contexts: 'repo=.'
     steps:
       - uses: actions/checkout@v4
