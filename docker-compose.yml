@@ -153,7 +153,7 @@ services:
   flyway:
     image: flyway/flyway:11-alpine
     container_name: sso-flyway
-    command: ["-connectRetries=60", "migrate"]
+    command: ["-connectRetries=60", "migrate", "-outOfOrder=true"]
     environment:
       FLYWAY_URL: ${FLYWAY_URL:-jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}}
       FLYWAY_USER: ${FLYWAY_USER:-${DB_USER}}
