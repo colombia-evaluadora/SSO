@@ -44,3 +44,285 @@ routes:
     pk_column: PK_TACTIVIDAD_NOTA
     transformers:
       - TActividadFlattener
+
+  # ───────────────────────────────────────────────────────────────────
+  # L4 — Establecimiento (Phase 3 retrocompatibilidad plan).
+  # L4 tables handled by Phase 2 transformers; the route map is now
+  # driven by OracleReverseStage.l4l6Routes. The YAML entries below are
+  # documentation only — runtime dispatch happens before router.route()
+  # — but they keep TableRouter's contract ("explicit entry per table")
+  # honest and prevent the synthetic upper-case default from masking
+  # the Phase 3 wiring.
+  # ───────────────────────────────────────────────────────────────────
+  testablecimiento:
+    oracle_table: TESTABLECIMIENTO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TESTABLECIMIENTO
+    transformers: [ColumnRenamer, TypeMapper, TEstablecimientoFkCycleTransformer]
+  tsede:
+    oracle_table: TSEDE
+    oracle_schema: ACADEMICO
+    pk_column: PK_TSEDE
+    transformers: [ColumnRenamer, TypeMapper, TEstablecimientoFkCycleTransformer]
+  tarchivo:
+    oracle_table: TARCHIVO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TARCHIVO
+    transformers: [ColumnRenamer, TypeMapper, TArchivoBlobDropper]
+  tano_lectivo:
+    oracle_table: TANO_LECTIVO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TANO_LECTIVO
+    transformers: [ColumnRenamer, TypeMapper]
+  tarea_asignatura:
+    oracle_table: TAREA_ASIGNATURA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TAREA_ASIGNATURA
+    transformers: [ColumnRenamer, TypeMapper]
+  tente_establecimiento:
+    oracle_table: TENTE_ESTABLECIMIENTO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TENTE_ESTABLECIMIENTO
+    transformers: [ColumnRenamer, TypeMapper]
+  tsede_convenio:
+    oracle_table: TSEDE_CONVENIO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TSEDE_CONVENIO
+    transformers: [ColumnRenamer, TypeMapper]
+  tsede_nivel:
+    oracle_table: TSEDE_NIVEL
+    oracle_schema: ACADEMICO
+    pk_column: PK_TSEDE_NIVEL
+    transformers: [ColumnRenamer, TypeMapper]
+  trol:
+    oracle_table: TROL
+    oracle_schema: ACADEMICO
+    pk_column: PK_TROL
+    transformers: [ColumnRenamer, TypeMapper]
+  tsede_usuario:
+    oracle_table: TSEDE_USUARIO
+    oracle_schema: ACADEMICO
+    pk_column: "(FK_TSEDE, FK_TROL, FK_TUSUARIO)"
+    transformers: [TSedeUsuarioPkTransformer]
+  tente_usuario:
+    oracle_table: TENTE_USUARIO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TENTE_USUARIO
+    transformers: [ColumnRenamer, TypeMapper]
+  tmenu:
+    oracle_table: TMENU
+    oracle_schema: ACADEMICO
+    pk_column: PK_TMENU
+    transformers: [ColumnRenamer, TypeMapper]
+  trol_menu:
+    oracle_table: TROL_MENU
+    oracle_schema: ACADEMICO
+    pk_column: PK_TROL_MENU
+    transformers: [ColumnRenamer, TypeMapper]
+  tusuario_rol_permiso:
+    oracle_table: TUSUARIO_ROL_PERMISO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TUSUARIO_ROL_PERMISO
+    transformers: [ColumnRenamer, TypeMapper]
+
+  # ───────────────────────────────────────────────────────────────────
+  # L5 — Académico. tperiodo_academico and tcriterio_evaluacion are
+  # handled by TPeriodoAcademicoConfigSplitter (one event → 1-2 Oracle
+  # writes). tgrupo uses TGrupoFkRewriter for catalog FK inversion.
+  # tdescansos is gated by `cdc.tables.tdescansos.enabled=false` until
+  # the legacy schema migration lands.
+  # ───────────────────────────────────────────────────────────────────
+  tperiodo_academico:
+    oracle_table: TPERIODO_ACADEMICO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TPERIODO_ACADEMICO
+    transformers: [TPeriodoAcademicoConfigSplitter]
+  tdescansos:
+    oracle_table: TDESCANSOS
+    oracle_schema: ACADEMICO
+    pk_column: PK_TDESCANSOS
+    transformers: [ColumnRenamer, TypeMapper]
+    skip: true
+  tgrado:
+    oracle_table: TGRADO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TGRADO
+    transformers: [ColumnRenamer, TypeMapper]
+  tgrupo:
+    oracle_table: TGRUPO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TGRUPO
+    transformers: [TGrupoFkRewriter]
+  tenfasis:
+    oracle_table: TENFASIS
+    oracle_schema: ACADEMICO
+    pk_column: PK_TENFASIS
+    transformers: [ColumnRenamer, TypeMapper]
+  tperiodo_academico_config:
+    oracle_table: TPERIODO_ACADEMICO_CONFIG
+    oracle_schema: ACADEMICO
+    pk_column: PK_TPERIODO_ACADEMICO_CONFIG
+    transformers: [ColumnRenamer, TypeMapper]
+  tcriterio_evaluacion:
+    oracle_table: TPERIODO_ACADEMICO_CONFIG
+    oracle_schema: ACADEMICO
+    pk_column: FK_TPERIODO_ACADEMICO
+    transformers: [TPeriodoAcademicoConfigSplitter]
+  tarea:
+    oracle_table: TAREA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TAREA
+    transformers: [ColumnRenamer, TypeMapper]
+  tperiodo_evaluacion:
+    oracle_table: TPERIODO_EVALUACION
+    oracle_schema: ACADEMICO
+    pk_column: PK_TPERIODO_EVALUACION
+    transformers: [ColumnRenamer, TypeMapper]
+  tcriterio_promocion:
+    oracle_table: TCRITERIO_PROMOCION
+    oracle_schema: ACADEMICO
+    pk_column: PK_TCRITERIO_PROMOCION
+    transformers: [ColumnRenamer, TypeMapper]
+  tcriterio_promocion_grado:
+    oracle_table: TCRITERIO_PROMOCION_GRADO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TCRITERIO_PROMOCION_GRADO
+    transformers: [ColumnRenamer, TypeMapper]
+  tcriterio_promocion_asignatura:
+    oracle_table: TCRITERIO_PROMOCION_ASIGNATURA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TCRITERIO_PROMOCION_ASIGNATURA
+    transformers: [ColumnRenamer, TypeMapper]
+  tcriterio_promocion_asignatura_obligatoria:
+    oracle_table: TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
+    transformers: [ColumnRenamer, TypeMapper]
+  tescala_valoracion:
+    oracle_table: TESCALA_VALORACION
+    oracle_schema: ACADEMICO
+    pk_column: PK_TESCALA_VALORACION
+    transformers: [ColumnRenamer, TypeMapper]
+  tnivel_escala:
+    oracle_table: TNIVEL_ESCALA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TNIVEL_ESCALA
+    transformers: [ColumnRenamer, TypeMapper]
+  tcomportamiento:
+    oracle_table: TCOMPORTAMIENTO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TCOMPORTAMIENTO
+    transformers: [ColumnRenamer, TypeMapper]
+  tnucleo_familiar:
+    oracle_table: TNUCLEO_FAMILIAR
+    oracle_schema: ACADEMICO
+    pk_column: PK_TNUCLEO_FAMILIAR
+    transformers: [ColumnRenamer, TypeMapper]
+  tdocente_asignatura:
+    oracle_table: TDOCENTE_ASIGNATURA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TDOCENTE_ASIGNATURA
+    transformers: [ColumnRenamer, TypeMapper]
+  thorario:
+    oracle_table: THORARIO
+    oracle_schema: ACADEMICO
+    pk_column: PK_THORARIO
+    transformers: [ColumnRenamer, TypeMapper]
+  trecurso_compartido:
+    oracle_table: TRECURSO_COMPARTIDO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TRECURSO_COMPARTIDO
+    transformers: [ColumnRenamer, TypeMapper]
+  tperiodo_permiso:
+    oracle_table: TPERIODO_PERMISO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TPERIODO_PERMISO
+    transformers: [ColumnRenamer, TypeMapper]
+  tasignatura:
+    oracle_table: TASIGNATURA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TASIGNATURA
+    transformers: [ColumnRenamer, TypeMapper]
+  tasignatura_plan:
+    oracle_table: TASIGNATURA_PLAN
+    oracle_schema: ACADEMICO
+    pk_column: PK_TASIGNATURA_PLAN
+    transformers: [ColumnRenamer, TypeMapper]
+  tplan:
+    oracle_table: TPLAN
+    oracle_schema: ACADEMICO
+    pk_column: PK_TPLAN
+    transformers: [ColumnRenamer, TypeMapper]
+
+  # ───────────────────────────────────────────────────────────────────
+  # L6 — Matrícula. All five tmatricula-family tables map to a single
+  # TMATRICULA row via TMatriculaConsolidator (snapshot consolidation +
+  # tipo_matricula stamping). treserva_cupo is gated off until its
+  # legacy schema path is fully validated.
+  # ───────────────────────────────────────────────────────────────────
+  treserva_cupo:
+    oracle_table: TRESERVA_CUPO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TRESERVA_CUPO
+    transformers: [ColumnRenamer, TypeMapper]
+    skip: true
+  tinscripcion:
+    oracle_table: TMATRICULA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TMATRICULA
+    transformers: [TMatriculaConsolidator]
+  tprematricula:
+    oracle_table: TMATRICULA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TMATRICULA
+    transformers: [TMatriculaConsolidator]
+  tmatricula:
+    oracle_table: TMATRICULA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TMATRICULA
+    transformers: [TMatriculaConsolidator]
+  tmatricula_socioeconomico:
+    oracle_table: TMATRICULA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TMATRICULA
+    transformers: [TMatriculaConsolidator]
+  tmatricula_promocion:
+    oracle_table: TMATRICULA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TMATRICULA
+    transformers: [TMatriculaConsolidator]
+  ttraslado_estudiante:
+    oracle_table: TTRASLADO_ESTUDIANTE
+    oracle_schema: ACADEMICO
+    pk_column: PK_TTRASLADO_ESTUDIANTE
+    transformers: [ColumnRenamer, TypeMapper]
+  ttraslado_matricula:
+    oracle_table: TTRASLADO_MATRICULA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TTRASLADO_MATRICULA
+    transformers: [ColumnRenamer, TypeMapper]
+  tacta_grado:
+    oracle_table: TACTA_GRADO
+    oracle_schema: ACADEMICO
+    pk_column: PK_TACTA_GRADO
+    transformers: [ColumnRenamer, TypeMapper]
+  tacta_grado_detalle:
+    oracle_table: TACTA_GRADO_DETALLE
+    oracle_schema: ACADEMICO
+    pk_column: PK_TACTA_GRADO_DETALLE
+    transformers: [ColumnRenamer, TypeMapper]
+  tdiploma:
+    oracle_table: TDIPLOMA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TDIPLOMA
+    transformers: [ColumnRenamer, TypeMapper]
+  tdiploma_detalle:
+    oracle_table: TDIPLOMA_DETALLE
+    oracle_schema: ACADEMICO
+    pk_column: PK_TDIPLOMA_DETALLE
+    transformers: [ColumnRenamer, TypeMapper]
+  tsede_convenio_matricula:
+    oracle_table: TSEDE_CONVENIO_MATRICULA
+    oracle_schema: ACADEMICO
+    pk_column: PK_TSEDE_CONVENIO_MATRICULA
+    transformers: [ColumnRenamer, TypeMapper]
