@@ -50,6 +50,46 @@ cdc:
     initial-backoff-ms: 1000
     max-backoff-ms: 60000
 
+  # ──────────────────────────────────────────────────────────────────
+  # Phase 3 retrocompatibilidad knobs.
+  #
+  # `snapshot.hydrate-on-startup` lets ops skip the boot-time PG bulk
+  # read (six queries for tmatricula_socioeconomico / _promocion /
+  # tsede_usuario / tcriterio_evaluacion / tgrupo / tlista_valor) when
+  # the destination is the ClickHouse-only debug profile — those
+  # transformers will then degrade to SnapshotCache.empty() and emit
+  # WARN + skip on the first cache miss, which is the documented
+  # failure mode.
+  #
+  # `pg.snapshot.url` accepts a dedicated read-only connection string;
+  # defaults to the upstream CDC_PG_URL when the env var is unset.
+  #
+  # `s3.*` controls the HttpS3BlobFetcher used by TArchivoBlobDropper
+  # for TARCHIVO BLOBs. `timeout-ms` is the hard exchange timeout;
+  # `max-bytes` is the payload cap (BoundedInputStream aborts the
+  # connection above this — defaults to 100 MiB).
+  #
+  # `tables.*` toggles gate specific tables whose Oracle destination
+  # is not yet on the target schema. They bypass router.route() via
+  # CDC_DEST_ORACLE=false at the worker level today; per-table gating
+  # will land alongside the table-routing.yaml `skip:` entries.
+  # ──────────────────────────────────────────────────────────────────
+  snapshot:
+    hydrate-on-startup: ${CDC_SNAPSHOT_HYDRATE_ON_STARTUP:true}
+  pg:
+    snapshot:
+      url: ${CDC_PG_SNAPSHOT_URL:${CDC_PG_URL}}
+  s3:
+    timeout-ms: ${CDC_S3_TIMEOUT_MS:30000}
+    max-bytes: ${CDC_S3_MAX_BYTES:104857600}
+  tables:
+    tarchivo:
+      enabled: ${CDC_TABLE_TARCHIVO_ENABLED:true}
+    tdescansos:
+      enabled: false
+    treserva_cupo:
+      enabled: false
+
 management:
   endpoints:
     web:
