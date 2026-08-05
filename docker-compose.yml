@@ -301,8 +301,8 @@ services:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8081; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 45s
+      retries: 25
+      start_period: 200s
 
   api-gateway:
     build:
