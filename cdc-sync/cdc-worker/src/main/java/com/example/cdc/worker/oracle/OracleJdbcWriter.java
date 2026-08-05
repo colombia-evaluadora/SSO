@@ -101,4 +101,72 @@ public class OracleJdbcWriter {
         MapSqlParameterSource params = new MapSqlParameterSource(pkColumn, pkValue);
         jdbc.update(sql, params);
     }
+
+    /**
+     * Variant of {@link #merge} that supports streaming BLOBs through Oracle.
+     * <p>
+     * Used by {@code TArchivoBlobDropper} (see spec section 3.6) to persist the
+     * {@code CONTENIDO} column on {@code TARCHIVO}: the value for each column
+     * listed in {@code blobColumns} is passed through {@link MapSqlParameterSource#addValue}
+     * unchanged, which lets Spring bind an {@link java.io.InputStream} via the
+     * JDBC {@code setBinaryStream(...)} path against an Oracle {@code BLOB}
+     * column. All other columns are bound through the regular JDBC type
+     * resolution.
+     * <p>
+     * The MERGE shape mirrors {@link #merge}: an idempotent
+     * {@code WHEN MATCHED THEN UPDATE SET ... WHEN NOT MATCHED THEN INSERT ...}
+     * keyed on {@code pkColumn}, so CDC at-least-once replays do not raise
+     * ORA-00001.
+     *
+     * @param oracleTable target Oracle table (already upper-cased by the caller).
+     * @param pkColumn     primary-key column name (used for the {@code ON} clause).
+     * @param row          full row map including BLOB column values.
+     * @param blobColumns  column names whose values are streamed as BLOBs.
+     */
+    public void mergeWithBlob(String oracleTable, String pkColumn, Map<String, Object> row, List<String> blobColumns) {
+        if (row == null || row.isEmpty()) return;
+
+        List<String> nonBlobCols = row.keySet().stream()
+                .filter(c -> !blobColumns.contains(c))
+                .toList();
+
+        // Short-circuit: only the PK itself was supplied. Use the same idempotent
+        // PK-only no-op MERGE as merge() so CDC replays stay idempotent.
+        if (nonBlobCols.isEmpty()) {
+            insertPkOnly(oracleTable, pkColumn, row.get(pkColumn));
+            return;
+        }
+
+        String setClause = nonBlobCols.stream()
+                .filter(c -> !c.equalsIgnoreCase(pkColumn))
+                .map(c -> "t." + c + " = src." + c)
+                .collect(Collectors.joining(", "));
+
+        String insertCols = String.join(", ", nonBlobCols);
+        String insertVals = nonBlobCols.stream().map(c -> "src." + c).collect(Collectors.joining(", "));
+        String selectCols = nonBlobCols.stream()
+                .map(c -> ":" + c + " AS " + c)
+                .collect(Collectors.joining(", "));
+
+        String sql = "MERGE INTO " + oracleTable + " t USING (SELECT " + selectCols +
+                " FROM DUAL) src ON (t." + pkColumn + " = src." + pkColumn + ")" +
+                " WHEN MATCHED THEN UPDATE SET " + setClause +
+                " WHEN NOT MATCHED THEN INSERT (" + pkColumn + ", " + insertCols + ") VALUES (src." + pkColumn + ", " + insertVals + ")";
+
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        for (Map.Entry<String, Object> e : row.entrySet()) {
+            // InputStream values for blobColumns flow through MapSqlParameterSource
+            // unchanged; Spring's NamedParameterJdbcTemplate binds them via
+            // setBinaryStream() against the target BLOB column.
+            params.addValue(e.getKey(), e.getValue());
+        }
+
+        long start = System.nanoTime();
+        try {
+            jdbc.update(sql, params);
+        } finally {
+            long millis = (System.nanoTime() - start) / 1_000_000;
+            workerMetrics.recordOracleMerge(millis);
+        }
+    }
 }
