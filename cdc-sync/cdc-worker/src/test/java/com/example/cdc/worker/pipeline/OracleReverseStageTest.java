@@ -4,11 +4,16 @@ import com.example.cdc.common.event.CdcEvent;
 import com.example.cdc.common.event.Operation;
 import com.example.cdc.common.routing.TableRouter;
 import com.example.cdc.common.transform.OperationContext;
+import com.example.cdc.common.transform.TEstablecimientoFkCycleTransformer;
+import com.example.cdc.common.transform.TGrupoFkRewriter;
 import com.example.cdc.common.transform.TMatriculaConsolidator;
+import com.example.cdc.common.transform.TPeriodoAcademicoConfigSplitter;
+import com.example.cdc.common.transform.TSedeUsuarioPkTransformer;
 import com.example.cdc.common.transform.TUsuarioDecomposer;
 import com.example.cdc.common.transform.TlistaValorSplitter;
 import com.example.cdc.common.transform.Transformer;
 import com.example.cdc.worker.oracle.OracleJdbcWriter;
+import com.example.cdc.worker.transform.TArchivoBlobDropper;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 
@@ -30,6 +35,9 @@ class OracleReverseStageTest {
         NamedParameterJdbcTemplate jdbc = mock(NamedParameterJdbcTemplate.class);
         TableRouter.RoutingDecision decision = new TableRouter.RoutingDecision(
                 "CLIENTES", "ACADEMICO", "PK_CLIENTE", List.of("DroppingTransformer"));
+        // `clientes` is intentionally NOT in the L4-L6 route map, so the
+        // exercise exercises the legacy transformer-chain short-circuit
+        // (unchanged behaviour from before Phase 3 wiring).
         when(router.route("clientes")).thenReturn(Optional.of(decision));
         OracleReverseStage stage = new OracleReverseStage(
                 router,
@@ -38,6 +46,11 @@ class OracleReverseStageTest {
                 mock(TlistaValorSplitter.class),
                 mock(TUsuarioDecomposer.class),
                 mock(TMatriculaConsolidator.class),
+                mock(TEstablecimientoFkCycleTransformer.class),
+                mock(TSedeUsuarioPkTransformer.class),
+                mock(TPeriodoAcademicoConfigSplitter.class),
+                mock(TGrupoFkRewriter.class),
+                mock(TArchivoBlobDropper.class),
                 List.of(new DroppingTransformer()));
         CdcEvent event = new CdcEvent(
                 Operation.INSERT,
