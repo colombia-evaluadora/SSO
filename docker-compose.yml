@@ -348,8 +348,8 @@ services:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 30s
+      retries: 25
+      start_period: 200s
 
   hello-service:
     # profiles: pure diagnostic/reference service (nothing else
@@ -500,8 +500,8 @@ services:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8083; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 45s
+      retries: 25
+      start_period: 200s
 
   mailhog:
     # Dev-only SMTP catcher. Web UI on http://localhost:8025
@@ -647,8 +647,8 @@ services:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8085; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 45s
+      retries: 25
+      start_period: 200s
 
   # ===========================================================================
   # query-service — dynamic, per-datasource instances.
