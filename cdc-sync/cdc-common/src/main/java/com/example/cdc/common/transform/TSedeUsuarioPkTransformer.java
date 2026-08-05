@@ -5,7 +5,6 @@ import com.example.cdc.common.event.Operation;
 import com.example.cdc.common.snapshot.SnapshotCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -27,8 +26,10 @@ import java.util.Map;
  * <p>For {@code op='d'} events the transformer returns an empty map so the
  * caller (the Oracle reverse stage) can perform the DELETE using the
  * composite PK extracted from the snapshot.
+ *
+ * <p>No {@code @Component} — Phase 3's {@code RetrocompatConfig} instantiates
+ * it with the hydrated cache.
  */
-@Component
 public class TSedeUsuarioPkTransformer {
 
     private static final Logger log = LoggerFactory.getLogger(TSedeUsuarioPkTransformer.class);
