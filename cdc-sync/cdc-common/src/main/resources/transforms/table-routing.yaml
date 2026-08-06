@@ -1,20 +1,4 @@
 routes:
-  clientes:
-    oracle_table: CLIENTES
-    oracle_schema: ACADEMICO
-    pk_column: PK_CLIENTE
-    transformers:
-      - ColumnRenamer
-      - TypeMapper
-
-  pedidos:
-    oracle_table: PEDIDOS
-    oracle_schema: ACADEMICO
-    pk_column: PK_PEDIDO
-    transformers:
-      - ColumnRenamer
-      - TypeMapper
-
   tlista_valor:
     oracle_table: "AUTO_SPLIT"  # marcador especial: el splitter decide
     oracle_schema: ACADEMICO
@@ -147,7 +131,7 @@ routes:
     oracle_table: TGRADO
     oracle_schema: ACADEMICO
     pk_column: PK_TGRADO
-    transformers: [ColumnRenamer, TypeMapper]
+    transformers: [ColumnRenamer, TForeignKeyResolver, TypeMapper]
   tgrupo:
     oracle_table: TGRUPO
     oracle_schema: ACADEMICO
@@ -162,7 +146,7 @@ routes:
     oracle_table: TPERIODO_ACADEMICO_CONFIG
     oracle_schema: ACADEMICO
     pk_column: PK_TPERIODO_ACADEMICO_CONFIG
-    transformers: [ColumnRenamer, TypeMapper]
+    transformers: [ColumnRenamer, TForeignKeyResolver, TypeMapper]      # FK_TLV_FORMATO_BOLETIN/MODO_REDONDEAR/ORDEN_PLANTILLA
   tcriterio_evaluacion:
     oracle_table: TPERIODO_ACADEMICO_CONFIG
     oracle_schema: ACADEMICO
@@ -177,7 +161,7 @@ routes:
     oracle_table: TPERIODO_EVALUACION
     oracle_schema: ACADEMICO
     pk_column: PK_TPERIODO_EVALUACION
-    transformers: [ColumnRenamer, TypeMapper]
+    transformers: [ColumnRenamer, TForeignKeyResolver, TypeMapper]      # FK_TLV_ESTADO
   tcriterio_promocion:
     oracle_table: TCRITERIO_PROMOCION
     oracle_schema: ACADEMICO
@@ -212,12 +196,12 @@ routes:
     oracle_table: TCOMPORTAMIENTO
     oracle_schema: ACADEMICO
     pk_column: PK_TCOMPORTAMIENTO
-    transformers: [ColumnRenamer, TypeMapper]
+    transformers: [ColumnRenamer, TForeignKeyResolver, TypeMapper]      # FK_TLV_TIPO_COMPORTAMIENTO / FK_TLV_TIPO_SANCION
   tnucleo_familiar:
     oracle_table: TNUCLEO_FAMILIAR
     oracle_schema: ACADEMICO
     pk_column: PK_TNUCLEO_FAMILIAR
-    transformers: [ColumnRenamer, TypeMapper]
+    transformers: [ColumnRenamer, TForeignKeyResolver, TypeMapper]      # FK_TLV_PARENTESCO / FK_TLV_TIPO_EMPLEO / FK_TLV_FRECUENCIA_DOMICILIO
   tdocente_asignatura:
     oracle_table: TDOCENTE_ASIGNATURA
     oracle_schema: ACADEMICO
@@ -227,7 +211,7 @@ routes:
     oracle_table: THORARIO
     oracle_schema: ACADEMICO
     pk_column: PK_THORARIO
-    transformers: [ColumnRenamer, TypeMapper]
+    transformers: [ColumnRenamer, TForeignKeyResolver, TypeMapper]      # FK_TLV_DIA_SEMANA
   trecurso_compartido:
     oracle_table: TRECURSO_COMPARTIDO
     oracle_schema: ACADEMICO
@@ -247,7 +231,7 @@ routes:
     oracle_table: TASIGNATURA_PLAN
     oracle_schema: ACADEMICO
     pk_column: PK_TASIGNATURA_PLAN
-    transformers: [ColumnRenamer, TypeMapper]
+    transformers: [ColumnRenamer, TForeignKeyResolver, TypeMapper]      # 6 FK_TLV_* cols (FORMATO_CALIFICACION_ACT/DEF, MODELO_CALIFICACION_DEF, ELEMENTO_CALCULO_DEF, CALCULO_DEFINITIVA, CALCULO_DESCRIPTOR)
   tplan:
     oracle_table: TPLAN
     oracle_schema: ACADEMICO
@@ -295,7 +279,7 @@ routes:
     oracle_table: TTRASLADO_ESTUDIANTE
     oracle_schema: ACADEMICO
     pk_column: PK_TTRASLADO_ESTUDIANTE
-    transformers: [ColumnRenamer, TypeMapper]
+    transformers: [ColumnRenamer, TForeignKeyResolver, TypeMapper]      # FK_TLV_ESTADO_TRASLADO
   ttraslado_matricula:
     oracle_table: TTRASLADO_MATRICULA
     oracle_schema: ACADEMICO
