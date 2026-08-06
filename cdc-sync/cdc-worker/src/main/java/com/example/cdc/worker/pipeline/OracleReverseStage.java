@@ -319,7 +319,16 @@ public class OracleReverseStage {
     }
 
     private String buildInsertSql(String table, Map<String, Object> row) {
-        String cols = String.join(", ", row.keySet());
+        // Oracle normalises unquoted identifiers to UPPER, and the AUTO_SPLIT
+        // pipeline emits PG's lowercase column names verbatim. Pre-existing
+        // bug: bare `categoria` triggers ORA-00904. Uppercase each column
+        // key so the INSERT resolves the right column in Oracle's
+        // upper-case catalog without DDL changes (Oracle is happy to
+        // accept `CATEGORIA = 'x'` even if the table was created
+        // implicitly upper-case).
+        String cols = row.keySet().stream()
+            .map(String::toUpperCase)
+            .collect(Collectors.joining(", "));
         String vals = row.keySet().stream().map(k -> ":" + k).collect(Collectors.joining(", "));
         return String.format("INSERT INTO %s (%s) VALUES (%s)", table, cols, vals);
     }
