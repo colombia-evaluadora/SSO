@@ -1,3 +1,81 @@
+# Phase 2 L4/L5/L6 dispatch tables. Each entry maps a PG source table to the
+# Phase 2 transformer that handles its CDC events. The adapter lambdas for
+# each handler live in `L4L6RouteLoader` (one `Function<CdcEvent,RouteResult>`
+# per `handler` name); this YAML is the developer-facing surface for adding
+# new tables that need a Phase 2 transformer without touching Java code.
+#
+# The legacy `routes:` block below continues to register chains of
+# `Transformer`s for tables routed through the generic `ColumnRenamer +
+# TypeMapper` pipeline. Tables registered here are dispatched via the
+# Phase 2 adapters above; do NOT also add them to `routes:` — that path
+# is reserved for the generic chain.
+l4l6_routes:
+  testablecimiento:
+    handler: TEstablecimientoFkCycleTransformer
+    method: handleEstablecimiento
+    oracle_table: TESTABLECIMIENTO
+    pk_column: PK_TESTABLECIMIENTO
+  tsede:
+    handler: TEstablecimientoFkCycleTransformer
+    method: handleSede
+    oracle_table: TSEDE
+    pk_column: PK_TSEDE
+  tarchivo:
+    handler: TEstablecimientoFkCycleTransformer
+    method: handleArchivo
+    oracle_table: TARCHIVO
+    pk_column: PK_TARCHIVO
+  tsede_usuario:
+    handler: TSedeUsuarioPkTransformer
+    method: apply
+    oracle_table: TSEDE_USUARIO
+    pk_column: "(FK_TSEDE, FK_TROL, FK_TUSUARIO)"
+  tperiodo_academico:
+    handler: TPeriodoAcademicoConfigSplitter
+    method: apply
+    oracle_table: TPERIODO_ACADEMICO
+    pk_column: PK_TPERIODO_ACADEMICO
+  tcriterio_evaluacion:
+    handler: TPeriodoAcademicoConfigSplitter
+    method: apply
+    oracle_table: TPERIODO_ACADEMICO_CONFIG
+    pk_column: FK_TPERIODO_ACADEMICO
+  tgrupo:
+    handler: TGrupoFkRewriter
+    method: apply
+    oracle_table: TGRUPO
+    pk_column: PK_TGRUPO
+  tmatricula:
+    handler: TMatriculaConsolidator
+    method: apply
+    oracle_table: TMATRICULA
+    pk_column: PK_TMATRICULA
+  tinscripcion:
+    handler: TMatriculaConsolidator
+    method: apply
+    oracle_table: TMATRICULA
+    pk_column: PK_TMATRICULA
+  tprematricula:
+    handler: TMatriculaConsolidator
+    method: apply
+    oracle_table: TMATRICULA
+    pk_column: PK_TMATRICULA
+  tmatricula_socioeconomico:
+    handler: TMatriculaConsolidator
+    method: apply
+    oracle_table: TMATRICULA
+    pk_column: PK_TMATRICULA
+  tmatricula_promocion:
+    handler: TMatriculaConsolidator
+    method: apply
+    oracle_table: TMATRICULA
+    pk_column: PK_TMATRICULA
+  tcalendario:
+    handler: TCalendarioReverser
+    method: apply
+    oracle_table: TCALENDARIO
+    pk_column: PK_TCALENDARIO
+
 routes:
   tlista_valor:
     oracle_table: "AUTO_SPLIT"  # marcador especial: el splitter decide

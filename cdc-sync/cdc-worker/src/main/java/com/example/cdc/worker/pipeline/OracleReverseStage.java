@@ -97,7 +97,8 @@ public class OracleReverseStage {
                               TArchivoBlobDropper archivoBlobDropper,
                               TCalendarioReverser calendarioReverser,
                               Environment env,
-                              List<Transformer> transformers) {
+                              List<Transformer> transformers,
+                              Map<String, PhaseRoute> l4l6Routes) {
         this.router = router;
         this.writer = writer;
         this.jdbc = jdbc;
@@ -117,7 +118,10 @@ public class OracleReverseStage {
         for (Transformer t : transformers) {
             this.transformers.put(t.getClass().getSimpleName(), t);
         }
-        this.l4l6Routes = buildL4L6Routes();
+        // L4/L5/L6 dispatch table is loaded from `l4l6_routes:` in
+        // table-routing.yaml by {@link L4L6RouteLoader}; that YAML block is
+        // the single source of truth for which Phase 2 tables get a handler.
+        this.l4l6Routes = l4l6Routes != null ? l4l6Routes : Map.of();
     }
 
     public String execute(CdcEvent event) throws Exception {
@@ -458,127 +462,27 @@ public class OracleReverseStage {
      * pending-FKs queue across the whole worker lifetime (Spring beans are
      * singletons by default).
      */
+    /**
+     * Deprecated: L4/L5/L6 dispatch is now loaded from the
+     * {@code l4l6_routes:} block of {@code transforms/table-routing.yaml}
+     * by {@link L4L6RouteLoader} at bean construction time and injected
+     * into this class's last constructor parameter.
+     *
+     * <p>This method is kept (returning an empty map) for any pre-existing
+     * test or builder that doesn't go through Spring; production wiring
+     * always uses the constructor + YAML loader path.
+     */
+    @Deprecated
     private Map<String, PhaseRoute> buildL4L6Routes() {
-        Map<String, PhaseRoute> map = new HashMap<>();
-
-        // L6 — matricula family. All five source tables land in TMATRICULA
-        // (the consolidator stamps fk_tlv_tipo_matricula='Inscripcion'/
-        // 'Prematricula' for the sub-paths).
-        PhaseRoute matriculaRoute = new PhaseRoute("TMATRICULA", "PK_TMATRICULA",
-                ev -> wrapMatricula(ev));
-        for (String pgTable : List.of("tmatricula", "tinscripcion", "tprematricula",
-                "tmatricula_socioeconomico", "tmatricula_promocion")) {
-            map.put(pgTable, matriculaRoute);
-        }
-
-        // L4 — TESTABLECIMIENTO / TSEDE / TARCHIVO cycle. The
-        // establecimientoCycle transformer is stateful and shared across the
-        // three routes: testablecimiento events register the pending FK,
-        // tsede is a straight merge, and tarchivo events drain the
-        // matching pending FKs and yield DeferredUpdate instances the
-        // executor applies as a follow-up UPDATE on TESTABLECIMIENTO.
-        map.put("testablecimiento", new PhaseRoute("TESTABLECIMIENTO", "PK_TESTABLECIMIENTO",
-                ev -> {
-                    TEstablecimientoFkCycleTransformer.Decision d = establecimientoCycle.apply(ev);
-                    return new RouteResult(
-                            List.of(new Split("TESTABLECIMIENTO", "PK_TESTABLECIMIENTO", d.initialMerge())),
-                            List.of());
-                }));
-        map.put("tsede", new PhaseRoute("TSEDE", "PK_TSEDE",
-                ev -> {
-                    TEstablecimientoFkCycleTransformer.Decision d = establecimientoCycle.apply(ev);
-                    return new RouteResult(
-                            List.of(new Split("TSEDE", "PK_TSEDE", d.initialMerge())),
-                            List.of());
-                }));
-        map.put("tarchivo", new PhaseRoute("TARCHIVO", "PK_TARCHIVO",
-                ev -> {
-                    // Drain the pending FK queue (may produce DeferredUpdate
-                    // rows that the executor turns into UPDATEs against
-                    // TESTABLECIMIENTO once the archivo row is in place).
-                    TEstablecimientoFkCycleTransformer.Decision d = establecimientoCycle.apply(ev);
-                    // Side-effect: BLOB upsert or DELETE via the writer.
-                    // Does not contribute any Splits to the RouteResult —
-                    // the BLOB write is internal to archivoBlobDropper.
-                    archivoBlobDropper.apply(ev);
-                    return new RouteResult(List.of(), d.deferredUpdates());
-                }));
-
-        // L4 — composite-PK converter. Returns the natural triple plus the
-        // FK into TJORNADA, keyed by the surrogate pk_tsede_usuario from PG.
-        map.put("tsede_usuario", new PhaseRoute("TSEDE_USUARIO",
-                "(FK_TSEDE,FK_TROL,FK_TUSUARIO)",
-                ev -> {
-                    Map<String, Object> row = sedeUsuarioPk.apply(ev);
-                    if (row.isEmpty()) return RouteResult.empty();
-                    return new RouteResult(
-                            List.of(new Split("TSEDE_USUARIO",
-                                    "(FK_TSEDE,FK_TROL,FK_TUSUARIO)", row)),
-                            List.of());
-                }));
-
-        // L5 — split inversion: produces one or two Splits depending on
-        // whether the hydrated criterio cache knows about the period.
-        map.put("tperiodo_academico", new PhaseRoute("TPERIODO_ACADEMICO", "PK_TPERIODO_ACADEMICO",
-                ev -> wrapPeriodoSplits(periodoAcademicoSplitter.apply(ev))));
-        map.put("tcriterio_evaluacion", new PhaseRoute("TPERIODO_ACADEMICO_CONFIG", "FK_TPERIODO_ACADEMICO",
-                ev -> wrapPeriodoSplits(periodoAcademicoSplitter.apply(ev))));
-
-        // L5 — catalog FK rewriter. Drops FK_TLV_* (replaced with the
-        // resolved Oracle FK) and the redundant FK_TPLAN.
-        map.put("tgrupo", new PhaseRoute("TGRUPO", "PK_TGRUPO",
-                ev -> {
-                    Map<String, Object> row = grupoFkRewriter.apply(ev);
-                    if (row.isEmpty()) return RouteResult.empty();
-                    return new RouteResult(
-                            List.of(new Split("TGRUPO", "PK_TGRUPO", row)),
-                            List.of());
-                }));
-
-        // L10 — TCALENDARIO consolidates (FK_TANO_LECTIVO, FK_TSEDE)
-        // into FK_TPERIODO_ACADEMICO in the PG forward seed (V22 line 1584).
-        // The reverser splits it back out for the Oracle MERGE/UPDATE.
-        map.put("tcalendario", new PhaseRoute("TCALENDARIO", "PK_TCALENDARIO",
-                ev -> {
-                    OperationContext ctx = new OperationContext(
-                            "tcalendario", "TCALENDARIO", "ACADEMICO",
-                            "PK_TCALENDARIO",
-                            ev.isInsert(), ev.isUpdate(), ev.isDelete());
-                    Optional<Map<String, Object>> rowOpt = calendarioReverser.apply(ev, ctx);
-                    if (rowOpt.isEmpty() || rowOpt.get().isEmpty()) return RouteResult.empty();
-                    return new RouteResult(
-                            List.of(new Split("TCALENDARIO", "PK_TCALENDARIO", rowOpt.get())),
-                            List.of());
-                }));
-
-        return Map.copyOf(map);
+        return Map.of();
     }
 
     /**
-     * Adapter for the consolidator's two-arg apply (the new Phase 2 form
-     * returns a nullable Map; the legacy optional form wraps it).
+     * Old Phase 2 handler adapters (wrapMatricula, wrapPeriodoSplits) used to
+     * live here; they were extracted into {@link L4L6RouteLoader} when the
+     * dispatch table moved to YAML. Each adapter is now resolved by handler
+     * class name from the loader's {@link L4L6RouteLoader.L4L6HandlerRegistry}.
      */
-    private RouteResult wrapMatricula(CdcEvent ev) {
-        Map<String, Object> row = matriculaConsolidator.apply(ev, (CdcEvent.Context) null);
-        if (row == null || row.isEmpty()) return RouteResult.empty();
-        return new RouteResult(
-                List.of(new Split("TMATRICULA", "PK_TMATRICULA", row)),
-                List.of());
-    }
-
-    /**
-     * Adapter for {@link TPeriodoAcademicoConfigSplitter} whose own
-     * {@code Split} record is structurally identical to this class's
-     * {@link Split} but lives in another package; the conversion is
-     * mechanical.
-     */
-    private RouteResult wrapPeriodoSplits(List<TPeriodoAcademicoConfigSplitter.Split> src) {
-        List<Split> splits = new java.util.ArrayList<>(src.size());
-        for (TPeriodoAcademicoConfigSplitter.Split s : src) {
-            splits.add(new Split(s.oracleTable(), s.pkColumn(), s.row()));
-        }
-        return new RouteResult(splits, List.of());
-    }
 
     /**
      * Apply the {@link PhaseRoute} for an L4-L6 table: dispatch DELETE first

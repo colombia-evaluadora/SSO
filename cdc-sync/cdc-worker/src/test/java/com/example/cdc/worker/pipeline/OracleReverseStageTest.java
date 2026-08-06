@@ -60,7 +60,8 @@ class OracleReverseStageTest {
                 mock(TArchivoBlobDropper.class),
                 mock(TCalendarioReverser.class),
                 env,
-                List.of(new DroppingTransformer()));
+                List.of(new DroppingTransformer()),
+                Map.of());
         CdcEvent event = new CdcEvent(
                 Operation.INSERT,
                 null,
