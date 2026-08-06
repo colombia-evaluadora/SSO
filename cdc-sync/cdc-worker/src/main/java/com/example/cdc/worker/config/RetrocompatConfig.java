@@ -5,6 +5,7 @@ import com.example.cdc.common.snapshot.S3BlobFetcher;
 import com.example.cdc.common.snapshot.SnapshotCache;
 import com.example.cdc.common.snapshot.SnapshotHydrator;
 import com.example.cdc.common.transform.TEstablecimientoFkCycleTransformer;
+import com.example.cdc.common.transform.TForeignKeyResolver;
 import com.example.cdc.common.transform.TGrupoFkRewriter;
 import com.example.cdc.common.transform.TMatriculaConsolidator;
 import com.example.cdc.common.transform.TPeriodoAcademicoConfigSplitter;
@@ -14,6 +15,8 @@ import com.example.cdc.worker.transform.TArchivoBlobDropper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.Map;
 
 /**
  * Wires the L4-L6 reverse-sync transformers constructed in Phase 2 of the
@@ -81,8 +84,15 @@ public class RetrocompatConfig {
      * {@link TArchivoBlobDropper}) can be wired against the interface
      * rather than the JDK-HTTP implementation. Lives here, not in
      * {@code cdc-common}, because the worker is the only consumer.
+     *
+     * <p>{@code @Primary} breaks the ambiguity when both the concrete
+     * {@link HttpS3BlobFetcher} bean AND this interface alias qualify
+     * for the same injection point (the concrete bean is also an
+     * {@link S3BlobFetcher} by inheritance, so without {@code @Primary}
+     * Spring reports "found 2 candidates" at startup).
      */
     @Bean
+    @org.springframework.context.annotation.Primary
     public S3BlobFetcher s3BlobFetcher(HttpS3BlobFetcher httpS3BlobFetcher) {
         return httpS3BlobFetcher;
     }
@@ -122,5 +132,32 @@ public class RetrocompatConfig {
                                                  OracleJdbcWriter writer,
                                                  @Value("${cdc.s3.max-bytes:" + DEFAULT_S3_MAX_BYTES + "}") long maxBytes) {
         return new TArchivoBlobDropper(fetcher, writer, maxBytes);
+    }
+
+    /**
+     * Resolves {@code FK_TLV_<X>} codigos → Oracle PKs for every bucket-A
+     * table routed through the generic YAML chain. Wired into
+     * {@code table-routing.yaml} alongside {@code ColumnRenamer +
+     * TypeMapper}; not consulted by Phase 2 transformers, which keep their
+     * existing narrow resolver accessors.
+     *
+     * <p>Overrides are sourced from {@code transforms/fk-resolver.yaml} on
+     * the worker classpath; the file maps the small set of column names
+     * whose suffix rule does not name a real TLISTA_VALOR categoria
+     * (e.g. {@code FK_TLV_FORMATO_CALIFICACION_ACT} →
+     * {@code categoria=FORMATO_CALIFICACION}).
+     */
+    @Bean
+    public TForeignKeyResolver foreignKeyResolver(SnapshotCache cache) throws java.io.IOException {
+        org.yaml.snakeyaml.Yaml yaml = new org.yaml.snakeyaml.Yaml();
+        try (java.io.InputStream in = new org.springframework.core.io.ClassPathResource(
+                "transforms/fk-resolver.yaml").getInputStream()) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> root = yaml.load(in);
+            @SuppressWarnings("unchecked")
+            Map<String, String> overrides =
+                (Map<String, String>) root.getOrDefault("overrides", Map.of());
+            return new TForeignKeyResolver(cache, overrides);
+        }
     }
 }

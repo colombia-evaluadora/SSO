@@ -1,0 +1,16 @@
+# Overrides for TForeignKeyResolver — maps FK_TLV_<X> column names to TLISTA_VALOR
+# categorias when the suffix rule (FK_TLV_<X> → <X>) is wrong.
+#
+# Apply this when the column suffix does NOT match the categoria. The most
+# common case is two related columnas that resolve to the same categoria:
+# TASIGNATURA_PLAN has FK_TLV_FORMATO_CALIFICACION_ACT and FK_TLV_FORMATO_CALIFICACION_DEF
+# both pointing to FORMATO_CALIFICACION. Add a row here whenever the suffix
+# rule would produce a non-existent categoria lookup.
+#
+# `categoria:` here is the literal CATEGORIA value in TLISTA_VALOR (uppercased
+# by Oracle default; the Postgres seed stores it as-is).
+
+overrides:
+  FK_TLV_FORMATO_CALIFICACION_ACT: FORMATO_CALIFICACION
+  FK_TLV_FORMATO_CALIFICACION_DEF: FORMATO_CALIFICACION
+  FK_TLV_FORMATO_BOLETIN: FORMATO_CALIFICACION
