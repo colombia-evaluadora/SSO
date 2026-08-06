@@ -77,9 +77,9 @@ public class SnapshotHydrator {
                         // The full list is small (~10³ rows in production),
                         // so a single roundtrip covers all consumers.
                         while (rs.next()) {
-                            String categoria = rs.getString("categoria");
-                            String codigo = rs.getString("codigo");
-                            long pk = rs.getLong("pk_tlista_valor");
+                            String categoria = rs.getString("CATEGORIA");
+                            String codigo = rs.getString("CODIGO");
+                            long pk = rs.getLong("PK_LISTA_VALOR");
                             if (categoria == null || codigo == null) continue;
                             tlistaValorIndex
                                 .computeIfAbsent(categoria, k -> new HashMap<>())

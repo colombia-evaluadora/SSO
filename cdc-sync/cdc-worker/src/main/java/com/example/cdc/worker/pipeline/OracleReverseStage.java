@@ -288,15 +288,25 @@ public class OracleReverseStage {
 
         if (pkOracle == null) {
             // INSERT (PK la genera IDENTITY)
-            // Filter splitRow + valor down to the columns Oracle cat_eliminadas
-            // tables actually have (PK_MODELO_CALIFICACION, CODIGO, NOMBRE,
-            // CREATED_BY, CREATED_AT, MODIFIED_BY, MODIFIED_AT). The old path
-            // dumped the entire PG tlista_valor row verbatim, which raised
-            // ORA-00904 ("CATEGORIA": invalid identifier) once the catalog
-            // forward-seed ran. writer.buildInsertableRow is the single
-            // source of truth for that projection.
+            //
+            // Two pre-existing bugs are fixed here:
+            //
+            // 1. Column projection — the previous path dumped the entire PG
+            //    tlista_valor row into Oracle's stripped-down cat_eliminadas
+            //    (TMODELO_CALIFICACION has no CATEGORIA / pk_lista_valor /
+            //    accion / active columns), raising ORA-00904. writer
+            //    .buildInsertableRow is now the single source of truth that
+            //    drops PG-only keys and projects PG `valor` onto Oracle
+            //    `CODIGO`.
+            //
+            // 2. Parameter typing — the previous path used a plain
+            //    MapSqlParameterSource with no `getSqlType` override. Debezium
+            //    passes epoch-millis `Long`s for created_at / modified_at and
+            //    Oracle raises ORA-00932 ("incompatible types"). writer.merge()
+            //    uses a typed source + coerceRow; reuse it for the INSERT path
+            //    via a public insertTyped(...) entry point on the writer.
             Map<String, Object> insertRow = writer.buildInsertableRow(oracleTable, splitRow, valor);
-            jdbc.update(buildInsertSql(oracleTable, insertRow), new MapSqlParameterSource(insertRow));
+            writer.insertTyped(oracleTable, pkColumn, insertRow);
         } else {
             splitRow.put(pkColumn, pkOracle);
             writer.merge(oracleTable, pkColumn, splitRow);

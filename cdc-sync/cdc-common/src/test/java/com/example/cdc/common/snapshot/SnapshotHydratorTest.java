@@ -43,8 +43,8 @@ class SnapshotHydratorTest {
     void setUp() {
         StubConnection conn = new StubConnection();
         conn.whenSqlContains("tlista_valor", stubResultSet(
-                row("categoria", "JORNADA", "codigo", "JORNADA_COD", "pk_tlista_valor", 10L),
-                row("categoria", "MODELO_PEDAGOGICO", "codigo", "MODELO_COD", "pk_tlista_valor", 20L)));
+                row("CATEGORIA", "JORNADA", "CODIGO", "JORNADA_COD", "PK_LISTA_VALOR", 10L),
+                row("CATEGORIA", "MODELO_PEDAGOGICO", "CODIGO", "MODELO_COD", "PK_LISTA_VALOR", 20L)));
         conn.whenSqlContains("tmatricula_socioeconomico", stubResultSet(
                 row("pk_tmatricula", 42L, "estrato", 3, "ingresos", 1500)));
         conn.whenSqlContains("tmatricula_promocion", stubResultSet(

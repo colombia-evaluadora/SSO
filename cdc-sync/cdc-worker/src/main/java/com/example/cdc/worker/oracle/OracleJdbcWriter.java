@@ -154,6 +154,50 @@ public class OracleJdbcWriter {
     }
 
     /**
+     * Typed INSERT path used by the AUTO_SPLIT rewrite in
+     * {@link com.example.cdc.worker.pipeline.OracleReverseStage#executeAutoSplit}.
+     * Same machinery as {@link #merge(String, String, Map)} (coerced values +
+     * {@code getSqlType} override that drives Long→Timestamp for
+     * {@code created_at} / {@code modified_at}, etc.) but emits a plain
+     * INSERT instead of a MERGE. The {@code pkColumn} key in {@code row} is
+     * passed through; when present it's a previously-resolved Oracle PK
+     * (used by re-runs), and the SQL uses it as the literal PK value.
+     */
+    public void insertTyped(String oracleTable, String pkColumn, Map<String, Object> row) {
+        if (row == null || row.isEmpty()) return;
+
+        // Coerce epoch-millis Long → Timestamp via the column-type cache.
+        Map<String, Object> coerced = coerceRow(oracleTable, row);
+        List<String> cols = new ArrayList<>(coerced.keySet());
+
+        String vals = cols.stream().map(c -> ":" + c).collect(Collectors.joining(", "));
+
+        String sql = String.format("INSERT INTO %s (%s) VALUES (%s)",
+            oracleTable,
+            cols.stream().map(String::toUpperCase).collect(Collectors.joining(", ")),
+            vals);
+
+        MapSqlParameterSource params = new MapSqlParameterSource() {
+            @Override
+            public int getSqlType(String paramName) {
+                if (paramName == null) return java.sql.Types.NULL;
+                return sqlTypeFor(oracleTable, paramName.toUpperCase());
+            }
+        };
+        for (Map.Entry<String, Object> e : coerced.entrySet()) {
+            params.addValue(e.getKey(), e.getValue());
+        }
+
+        long start = System.nanoTime();
+        try {
+            jdbc.update(sql, params);
+        } finally {
+            long millis = (System.nanoTime() - start) / 1_000_000;
+            workerMetrics.recordOracleMerge(millis);
+        }
+    }
+
+    /**
      * Variant of {@link #merge} that supports streaming BLOBs through Oracle.
      * <p>
      * Used by {@code TArchivoBlobDropper} (see spec section 3.6) to persist the
