@@ -1,10 +1,10 @@
 -- ===========================================================================
--- V28 — Modulo de Sede (TSEDE, esquema academico_test).
+-- V52 — Modulo de Sede (TSEDE, esquema academico_test).
 --
--- Convencion de "package": igual que V27, las funciones se agrupan en un
+-- Convencion de "package": igual que V53, las funciones se agrupan en un
 -- solo archivo de migracion bajo `academico_test` con prefijo comun `fn_sed_`.
 -- El gate de autorizacion reutiliza `fn_es_super_admin(p_pk_usuario)` ya
--- definido en V27.
+-- definido en V50 (utilities).
 --
 -- Alcance de esta primera entrega:
 --   * fn_sed_crear(...)        — crea una nueva TSEDE validando obligatorios,
@@ -14,6 +14,23 @@
 --                                  TSEDE activa. CODIGO/NOMBRE validan
 --                                  unicidad; FK_TESTABLECIMIENTO y
 --                                  CONSECUTIVO son inmutables aqui.
+--   * fn_sed_soft_delete(...)   — baja logica (ACTIVE=FALSE) en cascada:
+--                                  TSEDE → TSEDE_USUARIO → TSEDE_NIVEL.
+--                                  No incluye TPERIODO_ACADEMICO (gestion
+--                                  externa), TINF_* (infra 1-a-1),
+--                                  TSEDE_CONVENIO (CASCADE duro en DDL) ni
+--                                  TARCHIVO/TUSUARIO_ROL_PERMISO.
+--   * fn_sed_contar(...)         — total de TSEDE activas post-filtros
+--                                  (search/zones) para totalCount/pageCount.
+--   * fn_sed_listar(...)         — pagina de TSEDE activas con filtros
+--                                  (search/zones) y orden, replicando el
+--                                  contrato del par fn_est_contar/fn_est_listar.
+--                                  Search = ILIKE sobre NOMBRE y CODIGO
+--                                  (no contra EE/municipio/departamento,
+--                                  los filtros de la UI de sedes son
+--                                  reducidos a proposito).
+--   * fn_sed_buscar_por_pk(...)  — lookup rapido por PK_TSEDE. Solo
+--                                  activas; SETOF (0 o 1 fila).
 --
 -- Reglas de negocio implementadas:
 --   * Obligatorios REALES (se validan explicitos, devuelven 22023 si faltan):
@@ -37,6 +54,16 @@
 --   * FK_TESTABLECIMIENTO: tambien inmutable en update. Mover una sede de
 --     un EE a otro exige soft_delete + crear nueva (las unicidades
 --     U_TSEDE_1 y U_TSEDE_2 estan atadas al EE original).
+-- Integracion pendiente (deuda tecnica documentada, NO implementada en V52):
+--   * fn_sed_soft_delete ya es invocado por fn_est_soft_delete (V53):
+--     cuando se borra un EE por cascade, la baja de cada sede delega
+--     en esta funcion. Eso esta implementado en V53.
+--   * TPERIODO_ACADEMICO: el soft_delete de sede NO lo baja. Cuando el
+--     modulo del companero este listo, se debe invocar su funcion de
+--     borrado aqui (o extender el cascade).
+--   * TINF_INFORMATICA / TINF_INFRAESTRUCTURA / TINF_PERIFIERICOS_MEDIOS:
+--     no se incluyen en el cascade actual. Confirmar con el equipo si
+--     deben seguir la baja de la sede.
 --   * Autorizacion: solo super-admin (TROL.PK_TROL=1). Gate via
 --     fn_es_super_admin. Mensaje generico, sin detalle tecnico.
 --   * Auditoria: CREATED_BY = p_pk_usuario_solicitante::VARCHAR,
@@ -44,7 +71,7 @@
 --                (mismo patron que fn_est_crear).
 --
 -- Idempotencia:
---   * DROP IF EXISTS previo al CREATE OR REPLACE FUNCTION, igual que V27.
+--   * DROP IF EXISTS previo al CREATE OR REPLACE FUNCTION, igual que V53.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -464,3 +491,278 @@ COMMENT ON FUNCTION academico_test.fn_sed_actualizar(
     BIGINT
 )
     IS 'Actualizacion parcial (PATCH) de una TSEDE activa. Solo se modifican las columnas cuyos parametros llegaron con valor (NULL = no cambia). CODIGO/NOMBRE validan unicidad contra otras sedes activas (NOMBRE acotado al mismo EE por U_TSEDE_1). FK_TESTABLECIMIENTO, CONSECUTIVO, CREATED_BY/AT y ACTIVE son inmutables aqui. PATCH vacio no toca MODIFIED_BY/MODIFIED_AT. Requiere rol super-admin.';
+
+
+-- ---------------------------------------------------------------------------
+-- fn_sed_soft_delete
+--   Baja logica en cascada de una TSEDE.
+--   Marca ACTIVE=FALSE (MODIFIED_BY=p_pk_usuario_solicitante, MODIFIED_AT=now)
+--   en:
+--     1. TSEDE identificada por p_pk_sede.
+--     2. Todas las TSEDE_USUARIO con FK_TSEDE = p_pk_sede (usuarios con
+--        permisos sobre esa sede).
+--     3. Todas las TSEDE_NIVEL con FK_TSEDE = p_pk_sede (niveles de
+--        ensenanza asignados a la sede).
+--
+--   Todo corre en una sola transaccion PL/pgSQL: si cualquier UPDATE falla,
+--   la operacion se revierte entera.
+--
+--   Tablas con FK a TSEDE que este cascade NO toca (deuda tecnica):
+--     * TPERIODO_ACADEMICO        — gestionado por otro modulo academico
+--                                    (companero). Cuando se integre el
+--                                    borrado por EE/sede, agregar aqui o
+--                                    invocar la funcion de ese modulo.
+--     * TINF_INFORMATICA /
+--       TINF_INFRAESTRUCTURA /
+--       TINF_PERIFIERICOS_MEDIOS  — datos de infraestructura 1-a-1 con la
+--                                    sede. No incluidos por ahora; revisar
+--                                    con el equipo si deben seguir la baja.
+--     * TSEDE_CONVENIO (ORIGEN/DESTINO) — el DDL define ON DELETE CASCADE
+--                                    (borrado duro), no aplica soft.
+--     * TARCHIVO                  — compartido con TESTABLECIMIENTO; no
+--                                    se elimina al borrar una sede.
+--     * TUSUARIO_ROL_PERMISO      — verificar alcance; no se incluye por
+--                                    ahora para no afectar permisos
+--                                    transversales.
+--
+--   Cuando se integre con el borrado por EE: la opcion recomendada es
+--   que fn_est_soft_delete (V53) delegue aqui en lugar de repetir el
+--   cascade. Eso ya esta implementado en V53: fn_est_soft_delete hace
+--   PERFORM academico_test.fn_sed_soft_delete(p_pk_sede, ...) por cada
+--   sede activa del EE.
+--
+--   Retorna: BIGINT con el PK_TSEDE dado de baja.
+--
+--   Excepciones:
+--     SQLSTATE '42501' — El usuario no es super-admin.
+--     SQLSTATE 'P0002' — No existe la TSEDE con ese PK.
+--     SQLSTATE '22023' — La TSEDE ya estaba inactiva.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_sed_soft_delete(
+    p_pk_sede                 BIGINT,
+    p_pk_usuario_solicitante  BIGINT
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_estado_actual BOOLEAN;
+    v_usuarios     BIGINT := 0;
+    v_niveles      BIGINT := 0;
+BEGIN
+    -- -----------------------------------------------------------------
+    -- 0. Gate de autorizacion.
+    -- -----------------------------------------------------------------
+    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 1. Validaciones previas
+    -- -----------------------------------------------------------------
+    SELECT ACTIVE
+      INTO v_estado_actual
+      FROM academico_test.TSEDE
+     WHERE PK_TSEDE = p_pk_sede;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No existe TSEDE con PK_TSEDE = %', p_pk_sede
+            USING ERRCODE = 'P0002';
+    END IF;
+
+    IF v_estado_actual = FALSE THEN
+        RAISE EXCEPTION 'TSEDE % ya se encuentra inactiva', p_pk_sede
+            USING ERRCODE = '22023',
+                  HINT    = 'Localice la sede mediante una consulta directa sobre TSEDE';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2. Soft delete de la sede.
+    --    MODIFIED_BY/MODIFIED_AT se actualizan para reflejar la baja.
+    -- -----------------------------------------------------------------
+    UPDATE academico_test.TSEDE
+       SET ACTIVE       = FALSE,
+           MODIFIED_BY  = p_pk_usuario_solicitante::VARCHAR,
+           MODIFIED_AT  = CURRENT_TIMESTAMP
+     WHERE PK_TSEDE = p_pk_sede;
+
+    -- -----------------------------------------------------------------
+    -- 3. Soft delete en cascada sobre TSEDE_USUARIO.
+    --    Solo activas para no pisar MODIFIED_AT de permisos inactivos.
+    -- -----------------------------------------------------------------
+    UPDATE academico_test.TSEDE_USUARIO
+       SET ACTIVE       = FALSE,
+           MODIFIED_BY  = p_pk_usuario_solicitante::VARCHAR,
+           MODIFIED_AT  = CURRENT_TIMESTAMP
+     WHERE FK_TSEDE = p_pk_sede
+       AND ACTIVE   = TRUE;
+
+    GET DIAGNOSTICS v_usuarios = ROW_COUNT;
+
+    -- -----------------------------------------------------------------
+    -- 4. Soft delete en cascada sobre TSEDE_NIVEL (niveles de ensenanza
+    --    asignados a esta sede). Misma logica: solo activas.
+    -- -----------------------------------------------------------------
+    UPDATE academico_test.TSEDE_NIVEL
+       SET ACTIVE       = FALSE,
+           MODIFIED_BY  = p_pk_usuario_solicitante::VARCHAR,
+           MODIFIED_AT  = CURRENT_TIMESTAMP
+     WHERE FK_TSEDE = p_pk_sede
+       AND ACTIVE   = TRUE;
+
+    GET DIAGNOSTICS v_niveles = ROW_COUNT;
+
+    -- -----------------------------------------------------------------
+    -- 5. Log de auditoria (RAISE NOTICE; no falla la operacion).
+    -- -----------------------------------------------------------------
+    RAISE NOTICE 'Soft delete TSEDE=% (autor: %): usuarios TSEDE_USUARIO afectados=%, niveles TSEDE_NIVEL afectados=%',
+        p_pk_sede, p_pk_usuario_solicitante, v_usuarios, v_niveles;
+
+    RETURN p_pk_sede;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_sed_soft_delete(BIGINT, BIGINT)
+    IS 'Baja logica en cascada: marca ACTIVE=FALSE en TSEDE, en sus TSEDE_USUARIO y en sus TSEDE_NIVEL. No afecta TPERIODO_ACADEMICO (modulo externo), TINF_*, TSEDE_CONVENIO (CASCADE duro en DDL), TARCHIVO ni TUSUARIO_ROL_PERMISO (ver alcance en cuerpo de la funcion). fn_est_soft_delete (V53) YA delega aqui para la cascade por EE. Solo afecta filas activas. Requiere rol super-admin.';
+
+
+-- ---------------------------------------------------------------------------
+-- fn_sed_contar / fn_sed_listar
+--   Soportan el listado paginado de TSEDE para la UI (misma semantica que
+--   el par fn_est_contar/fn_est_listar: filtros -> totalCount -> sort -> slice).
+--   Division de responsabilidad: fn_sed_contar entrega el total post-filtros
+--   y fn_sed_listar entrega solo la pagina solicitada; el caller (capa Java)
+--   calcula pageCount = max(1, ceil(totalCount / pageSize)) y arma la
+--   respuesta { rows, pageCount, totalCount }. Se separan en dos funciones
+--   para que el conteo (0 filas en la pagina por out-of-range) no impida
+--   reportar totalCount/pageCount correctos.
+--
+--   Filtros (identicos en ambas funciones, ambos arrays vacios/NULL = sin
+--   restriccion; OR dentro del mismo array, AND entre filtros distintos):
+--     p_search — ILIKE parcial case-insensitive sobre TSEDE.NOMBRE y
+--                TSEDE.CODIGO (el "dane" de la sede). NO busca contra
+--                establecimiento/municipio/departamento porque en la UI
+--                de sedes solo se filtra por nombre/dane de la sede.
+--     p_zones  — filtra por TSEDE.FK_TLV_ZONA (BIGINT, PK de TLISTA_VALOR).
+--   Solo se listan sedes activas (ACTIVE=TRUE); los dados de baja no
+--   aparecen en este listado (para eso estara fn_sed_buscar_por_codigo).
+--
+--   Sorting: se resuelve UN solo (campo, desc) por llamada — el array de
+--   TanStack Table ([{id, desc}, ...]) se colapsa en la capa Java antes de
+--   invocar la funcion (vacio => p_sort_campo NULL => orden por defecto).
+--   Campos ordenables: 'name' (NOMBRE), 'dane' (CODIGO), 'zone' (nombre del
+--   valor de lista FK_TLV_ZONA). Un campo desconocido se ignora
+--   silenciosamente (cae al orden por defecto) en vez de fallar, porque
+--   es una funcion de lectura. Se usa CASE estatico (no EXECUTE dinamico)
+--   para evitar SQL dinamico innecesario; NOMBRE + PK_TSEDE se agregan
+--   siempre al final como desempate determinista (asi la paginacion es
+--   estable aunque haya nombres repetidos).
+--
+--   Paginacion: p_page_index es base 0. p_page_size <= 0 cae a 10 (igual
+--   que el mock). p_page_index negativo se ajusta a 0. p_page_size se topa
+--   en 100 como salvaguarda ante consumo excesivo de recursos; una pagina
+--   fuera de rango simplemente retorna 0 filas (LIMIT/OFFSET lo maneja solo).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_sed_contar(
+    p_search  VARCHAR DEFAULT NULL,
+    p_zones   BIGINT[] DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COUNT(*)
+      FROM academico_test.TSEDE s
+ LEFT JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = s.FK_TLV_ZONA
+     WHERE s.ACTIVE = TRUE
+       AND (NULLIF(TRIM(p_search), '') IS NULL
+            OR s.NOMBRE ILIKE '%' || p_search || '%'
+            OR s.CODIGO ILIKE '%' || p_search || '%')
+       AND (p_zones IS NULL OR CARDINALITY(p_zones) = 0
+            OR s.FK_TLV_ZONA = ANY(p_zones));
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_sed_contar(VARCHAR, BIGINT[])
+    IS 'Cuenta TSEDE activas aplicando los mismos filtros que fn_sed_listar (search/zones). Usar junto con fn_sed_listar para armar { rows, pageCount, totalCount } en la capa Java.';
+
+
+CREATE OR REPLACE FUNCTION academico_test.fn_sed_listar(
+    p_search       VARCHAR DEFAULT NULL,
+    p_zones        BIGINT[] DEFAULT NULL,
+    p_sort_campo   VARCHAR DEFAULT NULL,
+    p_sort_desc    BOOLEAN DEFAULT FALSE,
+    p_page_index   INT DEFAULT 0,
+    p_page_size    INT DEFAULT 10
+)
+RETURNS TABLE (
+    pk_sede       BIGINT,
+    codigo        VARCHAR,
+    nombre        VARCHAR,
+    consecutivo   VARCHAR,
+    fk_zona       BIGINT,
+    zona_nombre   VARCHAR,
+    direccion     VARCHAR,
+    telefono      VARCHAR
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_page_size  INT := LEAST(CASE WHEN p_page_size > 0 THEN p_page_size ELSE 10 END, 100);
+    v_page_index INT := GREATEST(COALESCE(p_page_index, 0), 0);
+BEGIN
+    RETURN QUERY
+    SELECT s.PK_TSEDE, s.CODIGO, s.NOMBRE, s.CONSECUTIVO,
+           s.FK_TLV_ZONA, tlv.NOMBRE,
+           s.DIRECCION, s.TELEFONO
+      FROM academico_test.TSEDE s
+ LEFT JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = s.FK_TLV_ZONA
+     WHERE s.ACTIVE = TRUE
+       AND (NULLIF(TRIM(p_search), '') IS NULL
+            OR s.NOMBRE ILIKE '%' || p_search || '%'
+            OR s.CODIGO ILIKE '%' || p_search || '%')
+       AND (p_zones IS NULL OR CARDINALITY(p_zones) = 0
+            OR s.FK_TLV_ZONA = ANY(p_zones))
+     ORDER BY
+        CASE WHEN p_sort_campo = 'name'   AND NOT p_sort_desc THEN s.NOMBRE END ASC,
+        CASE WHEN p_sort_campo = 'name'   AND     p_sort_desc THEN s.NOMBRE END DESC,
+        CASE WHEN p_sort_campo = 'dane'   AND NOT p_sort_desc THEN s.CODIGO END ASC,
+        CASE WHEN p_sort_campo = 'dane'   AND     p_sort_desc THEN s.CODIGO END DESC,
+        CASE WHEN p_sort_campo = 'zone'   AND NOT p_sort_desc THEN tlv.NOMBRE END ASC,
+        CASE WHEN p_sort_campo = 'zone'   AND     p_sort_desc THEN tlv.NOMBRE END DESC,
+        s.NOMBRE ASC,
+        s.PK_TSEDE ASC
+     LIMIT v_page_size
+    OFFSET v_page_index * v_page_size;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_sed_listar(VARCHAR, BIGINT[], VARCHAR, BOOLEAN, INT, INT)
+    IS 'Lista TSEDE activas paginadas. Mismos filtros que fn_sed_contar (solo search/zones — no hay department/municipality/status en la UI de sedes). p_sort_campo/p_sort_desc representan sorting[0] ya resuelto por el caller (array vacio => NULL => orden por defecto NOMBRE/PK). p_page_index base 0; p_page_size se acota a (0,100]. No calcula totalCount/pageCount: usar junto con fn_sed_contar.';
+
+
+-- ---------------------------------------------------------------------------
+-- fn_sed_buscar_por_pk
+--   Busca una TSEDE por PK_TSEDE.
+--   Solo retorna activas (ACTIVE=TRUE). Si el PK no existe o esta inactivo,
+--   el SETOF viene vacio. Misma decision de diseno que fn_est_buscar_por_pk:
+--   por PK el caller distingue 0-fila de "no existe" sin necesidad de
+--   traer inactivos, asi que no se expone p_incluir_inactivos.
+--   Retorna: SETOF TSEDE (0 o 1 fila en la practica).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_sed_buscar_por_pk(
+    p_pk_sede BIGINT
+)
+RETURNS SETOF academico_test.TSEDE
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT *
+    FROM academico_test.TSEDE
+    WHERE PK_TSEDE = p_pk_sede
+      AND ACTIVE = TRUE;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_sed_buscar_por_pk(BIGINT)
+    IS 'Busca TSEDE por PK_TSEDE. Solo registros activos (ACTIVE=TRUE). Retorna SETOF (0 o 1 fila en la practica); si el PK no existe o esta inactivo, el resultado es vacio. Usar para lookup rapido por clave primaria desde la capa Java (detalle, formularios de edicion, etc.).';

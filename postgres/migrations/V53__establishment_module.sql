@@ -1,23 +1,35 @@
 -- ===========================================================================
--- V27 — Modulo de Establecimiento Educativo (academico_test).
+-- V53 — Modulo de Establecimiento Educativo (academico_test).
 --
 -- Convencion de "package": PostgreSQL no tiene PACKAGE como Oracle/PL-SQL,
 -- asi que las funcionalidades se agrupan en un solo archivo de migracion
 -- con funciones del esquema `academico_test` y prefijo comun `fn_est_`.
 -- Patrones reutilizados de V26 (contexto auditor) y de V22 (idempotencia
 -- con DO $$ ... IF NOT EXISTS ... $$).
+-- Dependencias:
+--   * V50 (utilities): consume fn_es_super_admin desde alli.
+--   * V52 (campus):    fn_est_soft_delete delega en fn_sed_soft_delete
+--                       para la cascade de sedes (TSEDE, TSEDE_USUARIO,
+--                       TSEDE_NIVEL) en lugar de repetirla localmente.
 --
 -- Alcance de esta primera entrega:
 --   * fn_est_crear(...)           — crea un TESTABLECIMIENTO validando campos
 --                                    obligatorios y unicidad por NIT/CODIGO.
 --   * fn_est_buscar_por_nit(...)  — consulta un establecimiento por NIT
 --                                    (incluye inactivos para auditoria).
+--   * fn_est_buscar_por_pk(...)   — consulta un establecimiento por PK.
+--                                    Solo activos (no incluye inactivos:
+--                                    por PK el caller sabe distinguir
+--                                    0-fila de "no existe").
 --   * fn_est_actualizar(...)      — actualizacion parcial (PATCH) de un
 --                                    EE activo. NIT y CODIGO son
 --                                    modificables (validando unicidad
 --                                    contra el resto de EE activos).
 --   * fn_est_soft_delete(...)     — baja logica (ACTIVE=FALSE) en cascada:
---                                    TESTABLECIMIENTO → TSEDE → TSEDE_USUARIO.
+--                                    TESTABLECIMIENTO. Para la cascade de
+--                                    sus sedes DELEGA en fn_sed_soft_delete
+--                                    (V52), que se encarga de TSEDE,
+--                                    TSEDE_USUARIO y TSEDE_NIVEL.
 --   * fn_est_contar(...)           — total de EE activos post-filtros (para
 --                                    totalCount/pageCount del listado paginado).
 --   * fn_est_listar(...)           — pagina de EE activos con filtros/orden,
@@ -34,17 +46,20 @@
 --   * CODIGO duplicado (entre activos): RAISE EXCEPTION con SQLSTATE '23505'
 --     — la UNIQUE constraint U_TESTABLECIMIENTO_1 ya cubre todos los CODIGO,
 --     aqui se valida solo entre activos para mantener simetria con NIT.
---   * Soft delete en cascada: TESTABLECIMIENTO.ACTIVE pasa a FALSE, y con
---     el mismo cambio se llevan TSEDE y TSEDE_USUARIO vinculadas (mismo
---     MODIFIED_BY del solicitante, MODIFIED_AT=now).
+--   * Soft delete en cascada: TESTABLECIMIENTO.ACTIVE pasa a FALSE, y
+--     luego, por cada TSEDE activa del EE, se delega en
+--     academico_test.fn_sed_soft_delete (V52) con el mismo MODIFIED_BY
+--     del solicitante y MODIFIED_AT=now. La cascade de TSEDE,
+--     TSEDE_USUARIO y TSEDE_NIVEL vive en V52; aqui NO se replica.
 --   * Autorizacion: TODO usuario que invoque las funciones MUTADORAS de este
 --     modulo (crear/actualizar/soft_delete) debe tener rol de super-admin
 --     (TROL.PK_TROL = 1). Se valida mediante `fn_es_super_admin(p_pk_usuario)`,
---     que retorna TRUE si existe al menos una fila en TSEDE_USUARIO con
---     FK_TROL=1 (y ACTIVE=TRUE) para ese usuario; si no se cumple, SQLSTATE
---     '42501' (insufficient_privilege). Las funciones de solo lectura
---     (fn_est_buscar_por_nit, fn_est_contar, fn_est_listar) NO exigen este
---     gate, igual que el resto de consultas de este modulo.
+--     definida en V50 (utilities), que retorna TRUE si existe al menos una
+--     fila en TSEDE_USUARIO con FK_TROL=1 (y ACTIVE=TRUE) para ese usuario;
+--     si no se cumple, SQLSTATE '42501' (insufficient_privilege). Las
+--     funciones de solo lectura (fn_est_buscar_por_nit, fn_est_contar,
+--     fn_est_listar) NO exigen este gate, igual que el resto de consultas
+--     de este modulo.
 --   * Listado paginado (fn_est_contar/fn_est_listar): solo establecimientos
 --     ACTIVE=TRUE; p_estados/p_departamentos/p_municipios son arrays de
 --     BIGINT (PK reales: TLISTA_VALOR/TDEPARTAMENTO/TMUNICIPIO), no strings;
@@ -62,41 +77,6 @@
 
 SET search_path TO academico_test, public;
 
-
--- ---------------------------------------------------------------------------
--- fn_es_super_admin
---   Verifica si un usuario (PK_TUSUARIO) tiene rol de super-admin.
---   En este modelo, un usuario es super-admin si figura en TSEDE_USUARIO
---   con FK_TROL = 1 (PK_TROL del super-admin) y la vinculacion esta activa.
---   Basta con UNA sola fila (LIMIT 1 / EXISTS) porque al usuario super-admin
---   se le asigna dicho rol en TODAS las sedes; verificar en una sola es
---   suficiente y mas eficiente que recorrer todas.
---
---   Es una funcion helper reusable para TODOS los modulos academicos
---   (establecimiento, sedes, funcionarios, etc.) que requieran autorizacion
---   de super-admin. Marcada STABLE porque solo lee y no modifica estado.
---
---   Retorna: BOOLEAN (TRUE = es super-admin, FALSE = no lo es).
---     * Si p_pk_usuario es NULL: retorna FALSE (no es super-admin).
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_es_super_admin(
-    p_pk_usuario BIGINT
-)
-RETURNS BOOLEAN
-LANGUAGE sql
-STABLE
-AS $$
-    SELECT EXISTS (
-        SELECT 1
-          FROM academico_test.TSEDE_USUARIO
-         WHERE FK_TUSUARIO = p_pk_usuario
-           AND FK_TROL     = 1
-           AND ACTIVE      = TRUE
-    );
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_es_super_admin(BIGINT)
-    IS 'Reusable: retorna TRUE si el usuario (PK_TUSUARIO) tiene rol de super-admin (FK_TROL=1) en al menos una TSEDE_USUARIO activa. Usada como gate de autorizacion en crear/eliminar/actualizar de los modulos academicos.';
 
 -- ---------------------------------------------------------------------------
 -- fn_est_crear
@@ -302,6 +282,33 @@ COMMENT ON FUNCTION academico_test.fn_est_buscar_por_nit(VARCHAR, BOOLEAN)
 
 
 -- ---------------------------------------------------------------------------
+-- fn_est_buscar_por_pk
+--   Busca un TESTABLECIMIENTO por PK_ESTABLECIMIENTO.
+--   Solo retorna activos (ACTIVE=TRUE). Si el PK no existe o esta inactivo,
+--   el SETOF viene vacio (consistente con la semantica de fn_est_buscar_por_nit
+--   por defecto, pero sin exposicion del parametro p_incluir_inactivos: por
+--   PK el caller sabe distinguir 0-fila de "no existe" sin necesidad de
+--   traer inactivos).
+--   Retorna: SETOF TESTABLECIMIENTO (0 o 1 fila en la practica).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_est_buscar_por_pk(
+    p_pk_establecimiento BIGINT
+)
+RETURNS SETOF academico_test.TESTABLECIMIENTO
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT *
+    FROM academico_test.TESTABLECIMIENTO
+    WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento
+      AND ACTIVE = TRUE;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_est_buscar_por_pk(BIGINT)
+    IS 'Busca TESTABLECIMIENTO por PK_ESTABLECIMIENTO. Solo registros activos (ACTIVE=TRUE). Retorna SETOF (0 o 1 fila en la practica); si el PK no existe o esta inactivo, el resultado es vacio. Usar para lookup rapido por clave primaria desde la capa Java (detalle, formularios de edicion, etc.).';
+
+
+-- ---------------------------------------------------------------------------
 -- fn_est_contar / fn_est_listar
 --   Soportan el listado paginado de TESTABLECIMIENTO para la UI (misma
 --   semantica que el mock de front: filtros -> totalCount -> sort -> slice).
@@ -450,21 +457,31 @@ COMMENT ON FUNCTION academico_test.fn_est_listar(VARCHAR, BIGINT[], BIGINT[], BI
 --   Baja logica en cascada de un TESTABLECIMIENTO.
 --   Marca ACTIVE=FALSE (MODIFIED_BY=p_pk_usuario_solicitante, MODIFIED_AT=now) en:
 --     1. TESTABLECIMIENTO identificado por p_pk_establecimiento.
---     2. Todas las TSEDE con FK_TESTABLECIMIENTO = p_pk_establecimiento
---        (ACTIVE pasa a FALSE con mismo MODIFIED_BY/MODIFIED_AT).
---     3. Todas las TSEDE_USUARIO con FK_TSEDE IN (sedes del punto 2)
---        (ACTIVE pasa a FALSE con mismo MODIFIED_BY/MODIFIED_AT).
+--     2. Para cada TSEDE activa del EE, delega en academico_test.fn_sed_soft_delete
+--        (V52), que a su vez marca ACTIVE=FALSE en:
+--          a. TSEDE.
+--          b. TSEDE_USUARIO con FK_TSEDE = esa sede.
+--          c. TSEDE_NIVEL con FK_TSEDE = esa sede.
+--        Aqui NO se replican esos UPDATEs: la cascade de sede vive en V52.
 --
---   Todo corre en una sola transaccion PL/pgSQL: si cualquier UPDATE falla
---   (por ejemplo, FK constraints forzadas), la operacion se revierte entera.
+--   Todo corre en una sola transaccion PL/pgSQL: si fn_sed_soft_delete
+--   falla (por ejemplo, FK constraints forzadas) para cualquiera de las
+--   sedes, la operacion se revierte entera, incluyendo la baja del EE.
+--
+--   NOTA: para que esto funcione, V52 (fn_sed_soft_delete) debe estar
+--   ejecutada antes que V53 (orden lexicografico de Flyway ya lo
+--   garantiza: 52 < 53).
 --
 --   Retorna: BIGINT con el PK_ESTABLECIMIENTO dado de baja.
 --
 --   Excepciones:
 --     SQLSTATE '42501' — El usuario no es super-admin (gate via
---                        fn_es_super_admin).
+--                        fn_es_super_admin, definido en V50).
 --     SQLSTATE 'P0002' — No existe el TESTABLECIMIENTO con ese PK.
 --     SQLSTATE '22023' — El TESTABLECIMIENTO ya estaba inactivo.
+--     SQLSTATE 'P0002'/'22023'/'42501' propagados desde fn_sed_soft_delete
+--                        si una sede no existe, ya estaba inactiva o el
+--                        usuario perdio permisos a mitad del cascade.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_est_soft_delete(
     p_pk_establecimiento      BIGINT,
@@ -476,7 +493,7 @@ AS $$
 DECLARE
     v_estado_actual BOOLEAN;
     v_sedes         BIGINT := 0;
-    v_permisos      BIGINT := 0;
+    v_pk_sede       BIGINT;
 BEGIN
     -- -----------------------------------------------------------------
     -- 0. Gate de autorizacion: solo super-admin (TROL PK=1) puede eliminar.
@@ -516,48 +533,37 @@ BEGIN
      WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
 
     -- -----------------------------------------------------------------
-    -- 3. Soft delete en cascada sobre TSEDE vinculadas.
-    --    Solo se dan de baja las sedes que estuvieran activas para no
-    --    pisar MODIFIED_AT de sedes que ya estaban inactivas.
+    -- 3. Cascade a las sedes del EE.
+    --    Recorremos SOLO las sedes que estuvieran activas al momento del
+    --    borrado, para evitar re-bajar inactivas (que seria no-op y
+    --    ademas pisaria MODIFIED_AT previo). Por cada una, delegamos en
+    --    fn_sed_soft_delete (V52), que se encarga de TSEDE, TSEDE_USUARIO
+    --    y TSEDE_NIVEL. Usamos PERFORM (no SELECT) porque solo nos
+    --    interesa el efecto; el PK devuelto se ignora.
     -- -----------------------------------------------------------------
-    UPDATE academico_test.TSEDE
-       SET ACTIVE       = FALSE,
-           MODIFIED_BY  = p_pk_usuario_solicitante::VARCHAR,
-           MODIFIED_AT  = CURRENT_TIMESTAMP
-     WHERE FK_TESTABLECIMIENTO = p_pk_establecimiento
-       AND ACTIVE = TRUE;
-
-    GET DIAGNOSTICS v_sedes = ROW_COUNT;
-
-    -- -----------------------------------------------------------------
-    -- 4. Soft delete en cascada sobre TSEDE_USUARIO de esas sedes.
-    --    Misma logica: solo activas para no pisar MODIFIED_AT previo.
-    -- -----------------------------------------------------------------
-    UPDATE academico_test.TSEDE_USUARIO
-       SET ACTIVE       = FALSE,
-           MODIFIED_BY  = p_pk_usuario_solicitante::VARCHAR,
-           MODIFIED_AT  = CURRENT_TIMESTAMP
-     WHERE FK_TSEDE IN (
-            SELECT PK_TSEDE
-              FROM academico_test.TSEDE
-             WHERE FK_TESTABLECIMIENTO = p_pk_establecimiento
-       )
-       AND ACTIVE = TRUE;
-
-    GET DIAGNOSTICS v_permisos = ROW_COUNT;
+    FOR v_pk_sede IN
+        SELECT PK_TSEDE
+          FROM academico_test.TSEDE
+         WHERE FK_TESTABLECIMIENTO = p_pk_establecimiento
+           AND ACTIVE = TRUE
+         ORDER BY PK_TSEDE
+    LOOP
+        PERFORM academico_test.fn_sed_soft_delete(v_pk_sede, p_pk_usuario_solicitante);
+        v_sedes := v_sedes + 1;
+    END LOOP;
 
     -- -----------------------------------------------------------------
-    -- 5. Log de auditoria (RAISE NOTICE; no falla la operacion).
+    -- 4. Log de auditoria (RAISE NOTICE; no falla la operacion).
     -- -----------------------------------------------------------------
-    RAISE NOTICE 'Soft delete TESTABLECIMIENTO=% (autor: %): sedes afectadas=%, permisos TSEDE_USUARIO afectados=%',
-        p_pk_establecimiento, p_pk_usuario_solicitante, v_sedes, v_permisos;
+    RAISE NOTICE 'Soft delete TESTABLECIMIENTO=% (autor: %): sedes dadas de baja via V52=%',
+        p_pk_establecimiento, p_pk_usuario_solicitante, v_sedes;
 
     RETURN p_pk_establecimiento;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_est_soft_delete(BIGINT, BIGINT)
-    IS 'Baja logica en cascada: marca ACTIVE=FALSE en TESTABLECIMIENTO, en todas sus TSEDE y en todas las TSEDE_USUARIO de esas sedes. Solo afecta filas actualmente activas (no pisa MODIFIED_AT de inactivos). Requiere p_pk_usuario_solicitante con rol super-admin (validado via fn_es_super_admin). MODIFIED_BY queda como el PK_TUSUARIO del autor. Todo en una sola transaccion. Retorna PK_ESTABLECIMIENTO dado de baja.';
+    IS 'Baja logica en cascada: marca ACTIVE=FALSE en TESTABLECIMIENTO y delega en academico_test.fn_sed_soft_delete (V52) para cada sede activa del EE. fn_sed_soft_delete se encarga a su vez de TSEDE, TSEDE_USUARIO y TSEDE_NIVEL (cuyo detalle vive en V52). Todo en una sola transaccion: si la delegation falla para cualquier sede, todo el borrado se revierte. Requiere p_pk_usuario_solicitante con rol super-admin (validado via fn_es_super_admin, definida en V50). Retorna PK_ESTABLECIMIENTO dado de baja.';
 
 
 -- ---------------------------------------------------------------------------
