@@ -20,7 +20,7 @@ class TPeriodoAcademicoConfigSplitterTest {
     void setUp() {
         cacheWithCriterio = new SnapshotCache(Map.of(), Map.of(), Map.of(),
                 Map.of(100L, Map.of("MINIMA", 3.0, "MAXIMA", 5.0)),
-                Map.of(), Map.of(), Map.of());
+                Map.of(), Map.of(), Map.of(), Map.of());
         cacheEmpty = SnapshotCache.empty();
         tx = new TPeriodoAcademicoConfigSplitter(cacheWithCriterio);
     }

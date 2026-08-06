@@ -24,7 +24,7 @@ class TMatriculaConsolidatorTest {
                 Map.of(101L, Map.of(
                         "justificacion_rendimiento_academico", "Rendimiento sobresaliente",
                         "fk_tgrupo_promovido", 81L)),
-                Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
+                Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
         TMatriculaConsolidator consolidator = new TMatriculaConsolidator(cache);
 
         CdcEvent event = new CdcEvent(
@@ -55,7 +55,7 @@ class TMatriculaConsolidatorTest {
     void consolidatesSocioSnapshotOnMatriculaEvent() {
         SnapshotCache cache = new SnapshotCache(
                 Map.of(42L, Map.of("ESTRATO", 3, "INGRESOS", 1500)),
-                Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of()
+                Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of()
         );
         TMatriculaConsolidator cons = new TMatriculaConsolidator(cache);
         CdcEvent ev = CdcEventFixture.createInsert("tmatricula",
@@ -71,7 +71,7 @@ class TMatriculaConsolidatorTest {
         SnapshotCache cache = new SnapshotCache(
                 Map.of(),
                 Map.of(42L, Map.of("PROMO_ANTICIPADA", "S", "MOTIVO", "X")),
-                Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
+                Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
         TMatriculaConsolidator cons = new TMatriculaConsolidator(cache);
         CdcEvent ev = CdcEventFixture.createInsert("tmatricula",
                 Map.of("pk_tmatricula", 42, "promocion_anticipada", "S"));
@@ -108,7 +108,7 @@ class TMatriculaConsolidatorTest {
         SnapshotCache cache = new SnapshotCache(
                 Map.of(1L, Map.of("ESTRATO", 2)),
                 Map.of(1L, Map.of("PROMO_ANTICIPADA", "S")),
-                Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
+                Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
         TMatriculaConsolidator cons = new TMatriculaConsolidator(cache);
         CdcEvent ev = CdcEventFixture.createInsert("tmatricula",
                 Map.of("pk_tmatricula", 1, "fk_tlv_tipo_matricula", "Matricula", "promocion_anticipada", "S"));
@@ -123,7 +123,7 @@ class TMatriculaConsolidatorTest {
         SnapshotCache cache = new SnapshotCache(
                 Map.of(),
                 Map.of(),
-                Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
+                Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
         TMatriculaConsolidator cons = new TMatriculaConsolidator(cache);
         CdcEvent ev = CdcEventFixture.createDelete("tmatricula",
                 Map.of("pk_tmatricula", 7, "fk_tlv_tipo_matricula", "Matricula"));
@@ -138,7 +138,7 @@ class TMatriculaConsolidatorTest {
         SnapshotCache cache = new SnapshotCache(
                 Map.of(),
                 Map.of(),
-                Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
+                Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
         TMatriculaConsolidator cons = new TMatriculaConsolidator(cache);
         CdcEvent ev = CdcEventFixture.createInsert("tmatricula",
                 Map.of("pk_tmatricula", 11, "fk_tlv_tipo_matricula", "Matricula"));

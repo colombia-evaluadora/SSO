@@ -13,7 +13,10 @@ import java.util.Map;
  * {@code matriculaSocio}, {@code matriculaPromo}, {@code sedeUsuario},
  * {@code criterio}, {@code grupo}, plus the two reverse-lookup maps used to
  * translate {@code fk_tlv_jornada} and {@code fk_tlv_modelo_pedagogico} into
- * the Oracle foreign keys they replaced.
+ * the Oracle foreign keys they replaced. The new {@link #tlistaValorIndex}
+ * holds the full {@code categoria -> codigo -> Oracle PK} index that
+ * {@code TForeignKeyResolver} consults to resolve every other FK_TLV_*
+ * column in V22 (~115 categories, ~10³ entries at boot).
  */
 public record SnapshotCache(
         Map<Long, Map<String, Object>> matriculaSocio,
@@ -22,7 +25,8 @@ public record SnapshotCache(
         Map<Long, Map<String, Object>> criterio,
         Map<Long, Map<String, Object>> grupo,
         Map<String, Long> jornadaReverseMap,
-        Map<String, Long> modeloPedagogicoReverseMap
+        Map<String, Long> modeloPedagogicoReverseMap,
+        Map<String, Map<String, Long>> tlistaValorIndex
 ) {
 
     /**
@@ -37,6 +41,7 @@ public record SnapshotCache(
         grupo = copyOf(grupo);
         jornadaReverseMap = copyOf(jornadaReverseMap);
         modeloPedagogicoReverseMap = copyOf(modeloPedagogicoReverseMap);
+        tlistaValorIndex = copyOfNested(tlistaValorIndex);
     }
 
     /**
@@ -46,6 +51,7 @@ public record SnapshotCache(
      */
     public static SnapshotCache empty() {
         return new SnapshotCache(
+                Map.of(),
                 Map.of(),
                 Map.of(),
                 Map.of(),
@@ -76,5 +82,17 @@ public record SnapshotCache(
             return Collections.emptyMap();
         }
         return Map.copyOf(source);
+    }
+
+    private static Map<String, Map<String, Long>> copyOfNested(Map<String, Map<String, Long>> source) {
+        if (source == null || source.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, Map<String, Long>> out = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, Map<String, Long>> e : source.entrySet()) {
+            Map<String, Long> inner = e.getValue();
+            out.put(e.getKey(), inner == null || inner.isEmpty() ? Map.of() : Map.copyOf(inner));
+        }
+        return Map.copyOf(out);
     }
 }

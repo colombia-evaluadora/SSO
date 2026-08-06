@@ -25,6 +25,7 @@ class TSedeUsuarioPkTransformerTest {
                 Map.of(),
                 Map.of(),
                 Map.of("JORNADA", 50L),
+                Map.of(),
                 Map.of()
         );
         tx = new TSedeUsuarioPkTransformer(cache);
@@ -67,6 +68,7 @@ class TSedeUsuarioPkTransformerTest {
                 Map.of(),
                 Map.of(),
                 Map.of(1L, row),
+                Map.of(),
                 Map.of(),
                 Map.of(),
                 Map.of(),

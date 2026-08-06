@@ -13,7 +13,7 @@ class TGrupoFkRewriterTest {
     @BeforeEach
     void setUp() {
         SnapshotCache cache = new SnapshotCache(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
-            Map.of("JORNADA_A", 50L), Map.of("MODELO_X", 60L));
+            Map.of("JORNADA_A", 50L), Map.of("MODELO_X", 60L), Map.of());
         tx = new TGrupoFkRewriter(cache);
     }
 

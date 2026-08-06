@@ -58,6 +58,7 @@ public class SnapshotHydrator {
         Map<Long, SnapshotCache.SedeUsuarioRow> sedeUsuario = new HashMap<>();
         Map<Long, Map<String, Object>> criterio = new HashMap<>();
         Map<Long, Map<String, Object>> grupo = new HashMap<>();
+        Map<String, Map<String, Long>> tlistaValorIndex = new HashMap<>();
 
         try (Connection conn = pgDataSource.getConnection()) {
             try {
@@ -161,7 +162,8 @@ public class SnapshotHydrator {
             Map.copyOf(criterio),
             Map.copyOf(grupo),
             Map.copyOf(jornadaReverseMap),
-            Map.copyOf(modeloPedagogicoReverseMap));
+            Map.copyOf(modeloPedagogicoReverseMap),
+            Map.copyOf(tlistaValorIndex));
     }
 
     private void runQuery(Connection conn, String sql, SqlConsumer<ResultSet> handler)
