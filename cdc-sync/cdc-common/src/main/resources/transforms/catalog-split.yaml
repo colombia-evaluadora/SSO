@@ -34,7 +34,7 @@ splits:
   MODELO_CALIFICACION:
     oracle_table: TMODELO_CALIFICACION
     codigo_column: CODIGO
-    pk_column: PK_TMODELO_CALIFICACION
+    pk_column: PK_MODELO_CALIFICACION
   JORNADA:
     oracle_table: TJORNADA
     codigo_column: CODIGO
