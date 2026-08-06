@@ -63,13 +63,26 @@ public class SnapshotHydrator {
         try (Connection conn = pgDataSource.getConnection()) {
             try {
                 runQuery(conn,
-                    "SELECT categoria, codigo, pk_tlista_valor FROM tlista_valor "
-                        + "WHERE categoria IN ('JORNADA','MODELO_PEDAGOGICO')",
+                    "SELECT categoria, codigo, pk_tlista_valor FROM tlista_valor",
                     rs -> {
+                        // Single SELECT covers every categoria. We populate:
+                        //   - jornadaReverseMap / modeloPedagogicoReverseMap
+                        //     for the two Phase-2 transformers that read those
+                        //     accessors directly (TGrupoFkRewriter +
+                        //     TSedeUsuarioPkTransformer).
+                        //   - tlistaValorIndex (categoria -> codigo -> Oracle PK)
+                        //     for TForeignKeyResolver, the generic codigo
+                        //     resolver for any FK_TLV_* column in V22.
+                        // The full list is small (~10³ rows in production),
+                        // so a single roundtrip covers all consumers.
                         while (rs.next()) {
                             String categoria = rs.getString("categoria");
                             String codigo = rs.getString("codigo");
-                            Long pk = rs.getLong("pk_tlista_valor");
+                            long pk = rs.getLong("pk_tlista_valor");
+                            if (categoria == null || codigo == null) continue;
+                            tlistaValorIndex
+                                .computeIfAbsent(categoria, k -> new HashMap<>())
+                                .put(codigo, pk);
                             if ("JORNADA".equals(categoria)) {
                                 jornadaReverseMap.put(codigo, pk);
                             } else if ("MODELO_PEDAGOGICO".equals(categoria)) {

@@ -72,6 +72,9 @@ class SnapshotHydratorTest {
         assertThat(cache.grupo()).isNotEmpty();
         assertThat(cache.jornadaReverseMap()).isNotEmpty();
         assertThat(cache.modeloPedagogicoReverseMap()).isNotEmpty();
+        assertThat(cache.tlistaValorIndex())
+            .containsKey("JORNADA")
+            .containsKey("MODELO_PEDAGOGICO");
 
         assertThat(cache.matriculaSocio().get(42L)).containsEntry("estrato", 3);
         assertThat(cache.matriculaPromo().get(7L)).containsEntry("promocion_anticipada", "S");
@@ -88,6 +91,12 @@ class SnapshotHydratorTest {
         // jornadaReverseMap().get("JORNADA_COD") when rewriting fk_tlv_jornada.
         assertThat(cache.jornadaReverseMap()).containsEntry("JORNADA_COD", 10L);
         assertThat(cache.modeloPedagogicoReverseMap()).containsEntry("MODELO_COD", 20L);
+        // The full index re-keys by (categoria, codigo) so a generic resolver
+        // can resolve every FK_TLV_* column on V22.
+        assertThat(cache.tlistaValorIndex().get("JORNADA"))
+            .containsEntry("JORNADA_COD", 10L);
+        assertThat(cache.tlistaValorIndex().get("MODELO_PEDAGOGICO"))
+            .containsEntry("MODELO_COD", 20L);
     }
 
     @Test
@@ -126,11 +135,13 @@ class SnapshotHydratorTest {
         SnapshotCache cache = hydrator.hydrate();
 
         // The failing query's contribution stays empty (tlista_valor drives
-        // both reverse maps), but every other query that successfully ran is
-        // present in the cache. transformers that need reverse maps will log
-        // WARN + skip per spec 7.1 — non-fatal degraded mode.
+        // both reverse maps AND the new tlistaValorIndex), but every other
+        // query that successfully ran is present in the cache. transformers
+        // that need reverse maps will log WARN + skip per spec 7.1 — non-fatal
+        // degraded mode.
         assertThat(cache.jornadaReverseMap()).isEmpty();
         assertThat(cache.modeloPedagogicoReverseMap()).isEmpty();
+        assertThat(cache.tlistaValorIndex()).isEmpty();
         assertThat(cache.matriculaSocio()).isNotEmpty();
         assertThat(cache.matriculaPromo()).isNotEmpty();
         assertThat(cache.sedeUsuario()).isNotEmpty();
