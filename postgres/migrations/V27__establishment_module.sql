@@ -18,6 +18,11 @@
 --                                    contra el resto de EE activos).
 --   * fn_est_soft_delete(...)     — baja logica (ACTIVE=FALSE) en cascada:
 --                                    TESTABLECIMIENTO → TSEDE → TSEDE_USUARIO.
+--   * fn_est_contar(...)           — total de EE activos post-filtros (para
+--                                    totalCount/pageCount del listado paginado).
+--   * fn_est_listar(...)           — pagina de EE activos con filtros/orden,
+--                                    replicando el contrato del mock de front
+--                                    (filtros -> totalCount -> sort -> slice).
 --
 -- Reglas de negocio implementadas:
 --   * Obligatorios NOT NULL del DDL: NOMBRE, FK_TMUNICIPIO,
@@ -32,12 +37,19 @@
 --   * Soft delete en cascada: TESTABLECIMIENTO.ACTIVE pasa a FALSE, y con
 --     el mismo cambio se llevan TSEDE y TSEDE_USUARIO vinculadas (mismo
 --     MODIFIED_BY del solicitante, MODIFIED_AT=now).
---   * Autorizacion: TODO usuario que invoque las funciones de este modulo
---     debe tener rol de super-admin (TROL.PK_TROL = 1). Se valida mediante
---     `fn_es_super_admin(p_pk_usuario)`, que retorna TRUE si existe al
---     menos una fila en TSEDE_USUARIO con FK_TROL=1 (y ACTIVE=TRUE) para
---     ese usuario. Cualquier operacion de EE asume este rol; si no se
---     cumple, SQLSTATE '42501' (insufficient_privilege).
+--   * Autorizacion: TODO usuario que invoque las funciones MUTADORAS de este
+--     modulo (crear/actualizar/soft_delete) debe tener rol de super-admin
+--     (TROL.PK_TROL = 1). Se valida mediante `fn_es_super_admin(p_pk_usuario)`,
+--     que retorna TRUE si existe al menos una fila en TSEDE_USUARIO con
+--     FK_TROL=1 (y ACTIVE=TRUE) para ese usuario; si no se cumple, SQLSTATE
+--     '42501' (insufficient_privilege). Las funciones de solo lectura
+--     (fn_est_buscar_por_nit, fn_est_contar, fn_est_listar) NO exigen este
+--     gate, igual que el resto de consultas de este modulo.
+--   * Listado paginado (fn_est_contar/fn_est_listar): solo establecimientos
+--     ACTIVE=TRUE; p_estados/p_departamentos/p_municipios son arrays de
+--     BIGINT (PK reales: TLISTA_VALOR/TDEPARTAMENTO/TMUNICIPIO), no strings;
+--     p_page_index base 0, p_page_size en (0,100]; sorting resuelto a un
+--     unico (campo, desc) por el caller antes de invocar la funcion.
 --   * Auditoria: CREATED_BY / MODIFIED_BY = p_pk_usuario::VARCHAR (el
 --     PK_TUSUARIO del super-admin que ejecuta la accion). Esta convencion
 --     sigue siendo compatible cuando se migre a sesion ligada al package.
@@ -287,6 +299,150 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_est_buscar_por_nit(VARCHAR, BOOLEAN)
     IS 'Busca TESTABLECIMIENTO por NIT. Por defecto solo activos; con p_incluir_inactivos=TRUE trae tambien los dados de baja.';
+
+
+-- ---------------------------------------------------------------------------
+-- fn_est_contar / fn_est_listar
+--   Soportan el listado paginado de TESTABLECIMIENTO para la UI (misma
+--   semantica que el mock de front: filtros -> totalCount -> sort -> slice).
+--   Division de responsabilidad: fn_est_contar entrega el total post-filtros
+--   y fn_est_listar entrega solo la pagina solicitada; el caller (capa Java)
+--   calcula pageCount = max(1, ceil(totalCount / pageSize)) y arma la
+--   respuesta { rows, pageCount, totalCount }. Se separan en dos funciones
+--   para que el conteo (0 filas en la pagina por out-of-range) no impida
+--   reportar totalCount/pageCount correctos.
+--
+--   Filtros (identicos en ambas funciones, ambos arrays vacios/NULL = sin
+--   restriccion; OR dentro del mismo array, AND entre filtros distintos):
+--     p_search        — ILIKE parcial case-insensitive sobre NOMBRE, CODIGO
+--                        (dane), nombre de departamento y nombre de municipio.
+--     p_departamentos — filtra por TDEPARTAMENTO.PK_DEPARTAMENTO.
+--     p_municipios    — filtra por TMUNICIPIO.PK_TMUNICIPIO.
+--     p_estados       — filtra por TESTABLECIMIENTO.FK_TLV_ESTADO_ESTABLECIMIENTO
+--                        (son BIGINT, PK de TLISTA_VALOR — no strings).
+--   Solo se listan establecimientos activos (ACTIVE=TRUE); los dados de baja
+--   no aparecen en este listado (para eso esta fn_est_buscar_por_nit).
+--
+--   Sorting: se resuelve UN solo (campo, desc) por llamada — el array de
+--   TanStack Table ([{id, desc}, ...]) se colapsa en la capa Java antes de
+--   invocar la funcion (vacio => p_sort_campo NULL => orden por defecto).
+--   Campos ordenables: 'name' (NOMBRE), 'dane' (CODIGO), 'department'
+--   (nombre de departamento), 'municipality' (nombre de municipio),
+--   'status' (nombre del valor de lista). Un campo desconocido se ignora
+--   silenciosamente (cae al orden por defecto) en vez de fallar, porque es
+--   una funcion de lectura. Se usa CASE estatico (no EXECUTE dinamico) para
+--   evitar SQL dinamico innecesario; NOMBRE + PK_ESTABLECIMIENTO se agregan
+--   siempre al final como desempate determinista (asi la paginacion es
+--   estable aunque haya nombres repetidos).
+--
+--   Paginacion: p_page_index es base 0. p_page_size <= 0 cae a 10 (igual
+--   que el mock). p_page_index negativo se ajusta a 0. p_page_size se topa
+--   en 100 como salvaguarda ante consumo excesivo de recursos; una pagina
+--   fuera de rango simplemente retorna 0 filas (LIMIT/OFFSET lo maneja solo).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_est_contar(
+    p_search        VARCHAR DEFAULT NULL,
+    p_departamentos BIGINT[] DEFAULT NULL,
+    p_municipios    BIGINT[] DEFAULT NULL,
+    p_estados       BIGINT[] DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COUNT(*)
+      FROM academico_test.TESTABLECIMIENTO e
+      JOIN academico_test.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
+      JOIN academico_test.TDEPARTAMENTO d ON d.PK_DEPARTAMENTO = m.PK_TDEPARTAMENTO
+ LEFT JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = e.FK_TLV_ESTADO_ESTABLECIMIENTO
+     WHERE e.ACTIVE = TRUE
+       AND (NULLIF(TRIM(p_search), '') IS NULL
+            OR e.NOMBRE ILIKE '%' || p_search || '%'
+            OR e.CODIGO ILIKE '%' || p_search || '%'
+            OR d.NOMBRE ILIKE '%' || p_search || '%'
+            OR m.NOMBRE ILIKE '%' || p_search || '%')
+       AND (p_departamentos IS NULL OR CARDINALITY(p_departamentos) = 0
+            OR d.PK_DEPARTAMENTO = ANY(p_departamentos))
+       AND (p_municipios IS NULL OR CARDINALITY(p_municipios) = 0
+            OR m.PK_TMUNICIPIO = ANY(p_municipios))
+       AND (p_estados IS NULL OR CARDINALITY(p_estados) = 0
+            OR e.FK_TLV_ESTADO_ESTABLECIMIENTO = ANY(p_estados));
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_est_contar(VARCHAR, BIGINT[], BIGINT[], BIGINT[])
+    IS 'Cuenta TESTABLECIMIENTO activos aplicando los mismos filtros que fn_est_listar (search/departamentos/municipios/estados). Usar junto con fn_est_listar para armar { rows, pageCount, totalCount } en la capa Java.';
+
+
+CREATE OR REPLACE FUNCTION academico_test.fn_est_listar(
+    p_search        VARCHAR DEFAULT NULL,
+    p_departamentos BIGINT[] DEFAULT NULL,
+    p_municipios    BIGINT[] DEFAULT NULL,
+    p_estados       BIGINT[] DEFAULT NULL,
+    p_sort_campo    VARCHAR DEFAULT NULL,
+    p_sort_desc     BOOLEAN DEFAULT FALSE,
+    p_page_index    INT DEFAULT 0,
+    p_page_size     INT DEFAULT 10
+)
+RETURNS TABLE (
+    pk_establecimiento  BIGINT,
+    codigo              VARCHAR,
+    nombre              VARCHAR,
+    nit                 VARCHAR,
+    fk_departamento     BIGINT,
+    departamento_nombre VARCHAR,
+    fk_municipio        BIGINT,
+    municipio_nombre    VARCHAR,
+    fk_estado           BIGINT,
+    estado_nombre       VARCHAR
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_page_size  INT := LEAST(CASE WHEN p_page_size > 0 THEN p_page_size ELSE 10 END, 100);
+    v_page_index INT := GREATEST(COALESCE(p_page_index, 0), 0);
+BEGIN
+    RETURN QUERY
+    SELECT e.PK_ESTABLECIMIENTO, e.CODIGO, e.NOMBRE, e.NIT,
+           d.PK_DEPARTAMENTO, d.NOMBRE,
+           m.PK_TMUNICIPIO, m.NOMBRE,
+           e.FK_TLV_ESTADO_ESTABLECIMIENTO, tlv.NOMBRE
+      FROM academico_test.TESTABLECIMIENTO e
+      JOIN academico_test.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
+      JOIN academico_test.TDEPARTAMENTO d ON d.PK_DEPARTAMENTO = m.PK_TDEPARTAMENTO
+ LEFT JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = e.FK_TLV_ESTADO_ESTABLECIMIENTO
+     WHERE e.ACTIVE = TRUE
+       AND (NULLIF(TRIM(p_search), '') IS NULL
+            OR e.NOMBRE ILIKE '%' || p_search || '%'
+            OR e.CODIGO ILIKE '%' || p_search || '%'
+            OR d.NOMBRE ILIKE '%' || p_search || '%'
+            OR m.NOMBRE ILIKE '%' || p_search || '%')
+       AND (p_departamentos IS NULL OR CARDINALITY(p_departamentos) = 0
+            OR d.PK_DEPARTAMENTO = ANY(p_departamentos))
+       AND (p_municipios IS NULL OR CARDINALITY(p_municipios) = 0
+            OR m.PK_TMUNICIPIO = ANY(p_municipios))
+       AND (p_estados IS NULL OR CARDINALITY(p_estados) = 0
+            OR e.FK_TLV_ESTADO_ESTABLECIMIENTO = ANY(p_estados))
+     ORDER BY
+        CASE WHEN p_sort_campo = 'name'         AND NOT p_sort_desc THEN e.NOMBRE   END ASC,
+        CASE WHEN p_sort_campo = 'name'         AND     p_sort_desc THEN e.NOMBRE   END DESC,
+        CASE WHEN p_sort_campo = 'dane'         AND NOT p_sort_desc THEN e.CODIGO   END ASC,
+        CASE WHEN p_sort_campo = 'dane'         AND     p_sort_desc THEN e.CODIGO   END DESC,
+        CASE WHEN p_sort_campo = 'department'   AND NOT p_sort_desc THEN d.NOMBRE   END ASC,
+        CASE WHEN p_sort_campo = 'department'   AND     p_sort_desc THEN d.NOMBRE   END DESC,
+        CASE WHEN p_sort_campo = 'municipality' AND NOT p_sort_desc THEN m.NOMBRE   END ASC,
+        CASE WHEN p_sort_campo = 'municipality' AND     p_sort_desc THEN m.NOMBRE   END DESC,
+        CASE WHEN p_sort_campo = 'status'       AND NOT p_sort_desc THEN tlv.NOMBRE END ASC,
+        CASE WHEN p_sort_campo = 'status'       AND     p_sort_desc THEN tlv.NOMBRE END DESC,
+        e.NOMBRE ASC,
+        e.PK_ESTABLECIMIENTO ASC
+     LIMIT v_page_size
+    OFFSET v_page_index * v_page_size;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_est_listar(VARCHAR, BIGINT[], BIGINT[], BIGINT[], VARCHAR, BOOLEAN, INT, INT)
+    IS 'Lista TESTABLECIMIENTO activos paginados. Mismos filtros que fn_est_contar. p_sort_campo/p_sort_desc representan sorting[0] ya resuelto por el caller (array vacio => NULL => orden por defecto NOMBRE/PK). p_page_index base 0; p_page_size se acota a (0,100]. No calcula totalCount/pageCount: usar junto con fn_est_contar.';
 
 
 -- ---------------------------------------------------------------------------
