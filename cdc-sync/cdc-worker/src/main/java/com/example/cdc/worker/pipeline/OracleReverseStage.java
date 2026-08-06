@@ -288,8 +288,15 @@ public class OracleReverseStage {
 
         if (pkOracle == null) {
             // INSERT (PK la genera IDENTITY)
-            // Necesitamos un INSERT directo, no MERGE
-            jdbc.update(buildInsertSql(oracleTable, splitRow), new MapSqlParameterSource(splitRow));
+            // Filter splitRow + valor down to the columns Oracle cat_eliminadas
+            // tables actually have (PK_MODELO_CALIFICACION, CODIGO, NOMBRE,
+            // CREATED_BY, CREATED_AT, MODIFIED_BY, MODIFIED_AT). The old path
+            // dumped the entire PG tlista_valor row verbatim, which raised
+            // ORA-00904 ("CATEGORIA": invalid identifier) once the catalog
+            // forward-seed ran. writer.buildInsertableRow is the single
+            // source of truth for that projection.
+            Map<String, Object> insertRow = writer.buildInsertableRow(oracleTable, splitRow, valor);
+            jdbc.update(buildInsertSql(oracleTable, insertRow), new MapSqlParameterSource(insertRow));
         } else {
             splitRow.put(pkColumn, pkOracle);
             writer.merge(oracleTable, pkColumn, splitRow);

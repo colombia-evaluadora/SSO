@@ -64,7 +64,7 @@ public class SnapshotHydrator {
         try (Connection conn = pgDataSource.getConnection()) {
             try {
                 runQuery(conn,
-                    "SELECT categoria, codigo, pk_tlista_valor FROM tlista_valor",
+                    "SELECT categoria, valor AS codigo, pk_lista_valor FROM tlista_valor",
                     rs -> {
                         // Single SELECT covers every categoria. We populate:
                         //   - jornadaReverseMap / modeloPedagogicoReverseMap
