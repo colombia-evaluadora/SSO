@@ -20,7 +20,8 @@ class SnapshotCacheTest {
         SnapshotCache cache = new SnapshotCache(
             Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
             jornada, modelo,
-            Map.of("JORNADA", jornada, "MODELO_PEDAGOGICO", modelo));
+            Map.of("JORNADA", jornada, "MODELO_PEDAGOGICO", modelo),
+            Map.of());
         assertThat(cache.tlistaValorIndex())
             .containsEntry("JORNADA", jornada)
             .containsEntry("MODELO_PEDAGOGICO", modelo);

@@ -4,6 +4,7 @@ import com.example.cdc.common.snapshot.HttpS3BlobFetcher;
 import com.example.cdc.common.snapshot.S3BlobFetcher;
 import com.example.cdc.common.snapshot.SnapshotCache;
 import com.example.cdc.common.snapshot.SnapshotHydrator;
+import com.example.cdc.common.transform.TCalendarioReverser;
 import com.example.cdc.common.transform.TEstablecimientoFkCycleTransformer;
 import com.example.cdc.common.transform.TForeignKeyResolver;
 import com.example.cdc.common.transform.TGrupoFkRewriter;
@@ -125,6 +126,11 @@ public class RetrocompatConfig {
     @Bean
     public TGrupoFkRewriter grupoFkRewriter(SnapshotCache cache) {
         return new TGrupoFkRewriter(cache);
+    }
+
+    @Bean
+    public TCalendarioReverser calendarioReverser(SnapshotCache cache) {
+        return new TCalendarioReverser(cache);
     }
 
     @Bean

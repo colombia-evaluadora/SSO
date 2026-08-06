@@ -26,7 +26,8 @@ public record SnapshotCache(
         Map<Long, Map<String, Object>> grupo,
         Map<String, Long> jornadaReverseMap,
         Map<String, Long> modeloPedagogicoReverseMap,
-        Map<String, Map<String, Long>> tlistaValorIndex
+        Map<String, Map<String, Long>> tlistaValorIndex,
+        Map<Long, CalendarioSplit> calendarioSplit
 ) {
 
     /**
@@ -42,6 +43,7 @@ public record SnapshotCache(
         jornadaReverseMap = copyOf(jornadaReverseMap);
         modeloPedagogicoReverseMap = copyOf(modeloPedagogicoReverseMap);
         tlistaValorIndex = copyOfNested(tlistaValorIndex);
+        calendarioSplit = copyOfCalendarioSplit(calendarioSplit);
     }
 
     /**
@@ -51,6 +53,7 @@ public record SnapshotCache(
      */
     public static SnapshotCache empty() {
         return new SnapshotCache(
+                Map.of(),
                 Map.of(),
                 Map.of(),
                 Map.of(),
@@ -77,6 +80,18 @@ public record SnapshotCache(
             Integer orden
     ) {}
 
+    /**
+     * Inverse of the {@code TCALENDARIO} PG consolidation. V22 collapsed the
+     * Oracle native ({@code FK_TANO_LECTIVO, FK_TSEDE}) pair into a single
+     * {@code FK_TPERIODO_ACADEMICO}; the {@code TCalendarioReverser} uses this
+     * snapshot to split back out on writes. Keyed by the {@code PK_TPERIODO_ACADEMICO}
+     * surrogate that the PG row carries.
+     */
+    public record CalendarioSplit(
+            Long fkAnoLectivo,
+            Long fkSede
+    ) {}
+
     private static <K, V> Map<K, V> copyOf(Map<K, V> source) {
         if (source == null || source.isEmpty()) {
             return Collections.emptyMap();
@@ -92,6 +107,15 @@ public record SnapshotCache(
         for (Map.Entry<String, Map<String, Long>> e : source.entrySet()) {
             Map<String, Long> inner = e.getValue();
             out.put(e.getKey(), inner == null || inner.isEmpty() ? Map.of() : Map.copyOf(inner));
+        }
+        return Map.copyOf(out);
+    }
+
+    private static Map<Long, CalendarioSplit> copyOfCalendarioSplit(Map<Long, CalendarioSplit> source) {
+        if (source == null || source.isEmpty()) return Collections.emptyMap();
+        Map<Long, CalendarioSplit> out = new java.util.LinkedHashMap<>();
+        for (Map.Entry<Long, CalendarioSplit> e : source.entrySet()) {
+            out.put(e.getKey(), e.getValue());
         }
         return Map.copyOf(out);
     }

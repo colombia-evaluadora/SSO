@@ -4,6 +4,7 @@ import com.example.cdc.common.event.CdcEvent;
 import com.example.cdc.common.event.Operation;
 import com.example.cdc.common.routing.TableRouter;
 import com.example.cdc.common.transform.OperationContext;
+import com.example.cdc.common.transform.TCalendarioReverser;
 import com.example.cdc.common.transform.TEstablecimientoFkCycleTransformer;
 import com.example.cdc.common.transform.TGrupoFkRewriter;
 import com.example.cdc.common.transform.TMatriculaConsolidator;
@@ -16,6 +17,8 @@ import com.example.cdc.worker.oracle.OracleJdbcWriter;
 import com.example.cdc.worker.transform.TArchivoBlobDropper;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.mock.env.MockEnvironment;
+import org.springframework.core.env.Environment;
 
 import java.util.List;
 import java.util.Map;
@@ -39,6 +42,10 @@ class OracleReverseStageTest {
         // exercise exercises the legacy transformer-chain short-circuit
         // (unchanged behaviour from before Phase 3 wiring).
         when(router.route("clientes")).thenReturn(Optional.of(decision));
+        // MockEnvironment with no cdc.tables.* overrides → every table is
+        // enabled by default (consistent with the new isTableEnabled gate
+        // being a no-op for unset properties).
+        Environment env = new MockEnvironment();
         OracleReverseStage stage = new OracleReverseStage(
                 router,
                 writer,
@@ -51,6 +58,8 @@ class OracleReverseStageTest {
                 mock(TPeriodoAcademicoConfigSplitter.class),
                 mock(TGrupoFkRewriter.class),
                 mock(TArchivoBlobDropper.class),
+                mock(TCalendarioReverser.class),
+                env,
                 List.of(new DroppingTransformer()));
         CdcEvent event = new CdcEvent(
                 Operation.INSERT,

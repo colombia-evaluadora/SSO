@@ -12,6 +12,7 @@ import com.example.cdc.common.transform.TUsuarioDecomposer;
 import com.example.cdc.common.transform.TlistaValorSplitter;
 import com.example.cdc.common.transform.Transformer;
 import com.example.cdc.worker.oracle.OracleJdbcWriter;
+import org.springframework.core.env.Environment;
 import com.example.cdc.worker.transform.TArchivoBlobDropper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,6 +51,18 @@ public class OracleReverseStage {
     private final TPeriodoAcademicoConfigSplitter periodoAcademicoSplitter;
     private final TGrupoFkRewriter grupoFkRewriter;
     private final TArchivoBlobDropper archivoBlobDropper;
+    private final TCalendarioReverser calendarioReverser;
+
+    /**
+     * Spring {@code Environment} used to consult per-table skip flags
+     * ({@code cdc.tables.<source>.enabled}) so that tables whose PG→Oracle
+     * schema divergence is unresolved (e.g. {@code tactividad}, where PG has 36
+     * columns and Oracle has 20) are WARN-skipped without consuming retry
+     * budget on every event. Without this gate, events for a divergent table
+     * ping-pong through five retries and end up in the DLQ, masking the real
+     * flow for tables that DO have a reverse-sync bridge.
+     */
+    private final Environment env;
 
     /**
      * All {@link Transformer} beans injected by Spring, keyed by their simple
@@ -68,8 +81,7 @@ public class OracleReverseStage {
      * apply after the initial writes — see {@link TEstablecimientoFkCycleTransformer}'s
      * TESTABLECIMIENTO / TARCHIVO cycle).
      *
-     * <p>Built once in the constructor; the map is dense and small enough that
-     * {@link java.util.HashMap} vs {@link java.util.Map#of} is irrelevant.
+     * <p>Built once in the constructor.
      */
     private final Map<String, PhaseRoute> l4l6Routes;
 
@@ -83,6 +95,8 @@ public class OracleReverseStage {
                               TPeriodoAcademicoConfigSplitter periodoAcademicoSplitter,
                               TGrupoFkRewriter grupoFkRewriter,
                               TArchivoBlobDropper archivoBlobDropper,
+                              TCalendarioReverser calendarioReverser,
+                              Environment env,
                               List<Transformer> transformers) {
         this.router = router;
         this.writer = writer;
@@ -95,6 +109,8 @@ public class OracleReverseStage {
         this.periodoAcademicoSplitter = periodoAcademicoSplitter;
         this.grupoFkRewriter = grupoFkRewriter;
         this.archivoBlobDropper = archivoBlobDropper;
+        this.calendarioReverser = calendarioReverser;
+        this.env = env;
         // Spring autowires all Transformer beans; key them by simple class name
         // so the routing YAML's string identifiers resolve deterministically.
         this.transformers = new HashMap<>();
@@ -105,6 +121,20 @@ public class OracleReverseStage {
     }
 
     public String execute(CdcEvent event) throws Exception {
+        // Per-table skip gate. Consults cdc.tables.<source>.enabled and
+        // returns early with a WARN log when the operator has explicitly
+        // turned a table off (typically because the PG schema has fields
+        // whose Oracle destinations don't exist yet — see V22 cleanup,
+        // L7+ tables that are out of scope, or per-table debug toggles).
+        // Without this, every event for an off-table would still be
+        // routed through a transformer (or the default chain) and fail at
+        // the Oracle JDBC layer, burning five retries + DLQ budget per event.
+        if (!isTableEnabled(event.tableName())) {
+            log.warn("Tabla '{}' deshabilitada via cdc.tables.{}.enabled=false; saltando Oracle merge/delete",
+                    event.tableName(), event.tableName());
+            return null;
+        }
+
         // Phase 3 dispatch: tables handled by the Phase 2 transformers
         // (L4-L6 retrocompatibilidad) get a dedicated adapter path because
         // those transformers do NOT implement the Transformer interface —
@@ -434,16 +464,12 @@ public class OracleReverseStage {
         // L6 — matricula family. All five source tables land in TMATRICULA
         // (the consolidator stamps fk_tlv_tipo_matricula='Inscripcion'/
         // 'Prematricula' for the sub-paths).
-        map.put("tmatricula", new PhaseRoute("TMATRICULA", "PK_TMATRICULA",
-                ev -> wrapMatricula(ev)));
-        map.put("tinscripcion", new PhaseRoute("TMATRICULA", "PK_TMATRICULA",
-                ev -> wrapMatricula(ev)));
-        map.put("tprematricula", new PhaseRoute("TMATRICULA", "PK_TMATRICULA",
-                ev -> wrapMatricula(ev)));
-        map.put("tmatricula_socioeconomico", new PhaseRoute("TMATRICULA", "PK_TMATRICULA",
-                ev -> wrapMatricula(ev)));
-        map.put("tmatricula_promocion", new PhaseRoute("TMATRICULA", "PK_TMATRICULA",
-                ev -> wrapMatricula(ev)));
+        PhaseRoute matriculaRoute = new PhaseRoute("TMATRICULA", "PK_TMATRICULA",
+                ev -> wrapMatricula(ev));
+        for (String pgTable : List.of("tmatricula", "tinscripcion", "tprematricula",
+                "tmatricula_socioeconomico", "tmatricula_promocion")) {
+            map.put(pgTable, matriculaRoute);
+        }
 
         // L4 — TESTABLECIMIENTO / TSEDE / TARCHIVO cycle. The
         // establecimientoCycle transformer is stateful and shared across the
@@ -506,6 +532,22 @@ public class OracleReverseStage {
                     if (row.isEmpty()) return RouteResult.empty();
                     return new RouteResult(
                             List.of(new Split("TGRUPO", "PK_TGRUPO", row)),
+                            List.of());
+                }));
+
+        // L10 — TCALENDARIO consolidates (FK_TANO_LECTIVO, FK_TSEDE)
+        // into FK_TPERIODO_ACADEMICO in the PG forward seed (V22 line 1584).
+        // The reverser splits it back out for the Oracle MERGE/UPDATE.
+        map.put("tcalendario", new PhaseRoute("TCALENDARIO", "PK_TCALENDARIO",
+                ev -> {
+                    OperationContext ctx = new OperationContext(
+                            "tcalendario", "TCALENDARIO", "ACADEMICO",
+                            "PK_TCALENDARIO",
+                            ev.isInsert(), ev.isUpdate(), ev.isDelete());
+                    Optional<Map<String, Object>> rowOpt = calendarioReverser.apply(ev, ctx);
+                    if (rowOpt.isEmpty() || rowOpt.get().isEmpty()) return RouteResult.empty();
+                    return new RouteResult(
+                            List.of(new Split("TCALENDARIO", "PK_TCALENDARIO", rowOpt.get())),
                             List.of());
                 }));
 
@@ -658,5 +700,25 @@ public class OracleReverseStage {
             String oracleTable,
             String pkColumn,
             Map<String, Object> row) {
+    }
+
+    /**
+     * Reads {@code cdc.tables.<lower-case source table name>.enabled} from
+     * the {@link Environment}. When the flag is absent the table is treated
+     * as enabled (default-on), so existing deploys that pre-date this gate
+     * are unaffected. Recognises both {@code false} (skip) and unset (run).
+     *
+     * <p>The toggle consults the <em>PG source</em> table name (e.g.
+     * {@code tactividad}), not the Oracle destination (e.g.
+     * {@code TACTIVIDAD}), because operators turn tables off at the source
+     * of the event (the data they want to drop from the sync), not at the
+     * destination.
+     */
+    private boolean isTableEnabled(String sourceTable) {
+        if (sourceTable == null || sourceTable.isEmpty()) return true;
+        Boolean enabled = env.getProperty(
+                "cdc.tables." + sourceTable.toLowerCase() + ".enabled",
+                Boolean.class);
+        return enabled == null || enabled;
     }
 }

@@ -19,7 +19,7 @@ class TForeignKeyResolverTest {
 
     private final SnapshotCache cache = new SnapshotCache(
         Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
-        Map.of(), Map.of(), INDEX);
+        Map.of(), Map.of(), INDEX, Map.of());
 
     @Test
     void resolves_fk_tlv_column_via_categoria_suffix() {

@@ -59,6 +59,7 @@ public class SnapshotHydrator {
         Map<Long, Map<String, Object>> criterio = new HashMap<>();
         Map<Long, Map<String, Object>> grupo = new HashMap<>();
         Map<String, Map<String, Long>> tlistaValorIndex = new HashMap<>();
+        Map<Long, SnapshotCache.CalendarioSplit> calendarioSplit = new HashMap<>();
 
         try (Connection conn = pgDataSource.getConnection()) {
             try {
@@ -156,11 +157,28 @@ public class SnapshotHydrator {
                 log.error("snapshot query for tgrupo failed", e);
             }
 
+            try {
+                runQuery(conn,
+                    "SELECT pk_tperiodo_academico, fk_tano_lectivo, fk_tsede FROM tperiodo_academico",
+                    rs -> {
+                        while (rs.next()) {
+                            long pk = rs.getLong("pk_tperiodo_academico");
+                            calendarioSplit.put(pk, new SnapshotCache.CalendarioSplit(
+                                rs.getLong("fk_tano_lectivo"),
+                                rs.getLong("fk_tsede")));
+                        }
+                    });
+            } catch (SQLException e) {
+                log.error("snapshot query for tperiodo_academico failed", e);
+            }
+
             log.info(
                 "Hydrated snapshots: {} socio, {} promo, {} sedeUsuario, {} criterio, "
-                    + "{} grupo",
+                    + "{} grupo, {} tlistaValor, {} calendarioSplit",
                 socio.size(), promo.size(), sedeUsuario.size(),
-                criterio.size(), grupo.size());
+                criterio.size(), grupo.size(),
+                tlistaValorIndex.values().stream().mapToInt(Map::size).sum(),
+                calendarioSplit.size());
         } catch (SQLException e) {
             // Connection-level failure (DataSource unreachable, auth error).
             // Logged once; no point continuing per-query retry because every
@@ -176,7 +194,8 @@ public class SnapshotHydrator {
             Map.copyOf(grupo),
             Map.copyOf(jornadaReverseMap),
             Map.copyOf(modeloPedagogicoReverseMap),
-            Map.copyOf(tlistaValorIndex));
+            Map.copyOf(tlistaValorIndex),
+            Map.copyOf(calendarioSplit));
     }
 
     private void runQuery(Connection conn, String sql, SqlConsumer<ResultSet> handler)
