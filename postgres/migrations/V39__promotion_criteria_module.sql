@@ -22,12 +22,16 @@ CREATE OR REPLACE FUNCTION academico_test.fn_criterio_prom_guardar(
     p_max_asig_promedio      NUMERIC     DEFAULT NULL,
     p_minimo_inasistencias   NUMERIC     DEFAULT NULL,
     p_max_asig_nivelar_prom  NUMERIC     DEFAULT NULL,
+    -- Areas/asignaturas obligatorias (XOR por elemento). NULL = no tocar;
+    -- [] = limpiar; [{asignaturaId?},{areaId?},...] = reescribir el set.
+    p_obligatorias           jsonb       DEFAULT NULL,
     p_pk_usuario_solicitante BIGINT      DEFAULT NULL
 )
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
     v_id BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     d academico_test.TCRITERIO_PROMOCION;
+    it jsonb; v_asig BIGINT; v_area BIGINT;
 BEGIN
     IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
@@ -93,6 +97,46 @@ BEGIN
             MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
          WHERE PK_TCRITERIO_PROMOCION = v_id;
     END IF;
+
+    -- Areas/asignaturas obligatorias (XOR). Reescribe el set del criterio.
+    IF p_obligatorias IS NOT NULL THEN
+        UPDATE academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
+           SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_TCRITERIO_PROMOCION = v_id AND ACTIVE = TRUE;
+
+        FOR it IN SELECT * FROM jsonb_array_elements(p_obligatorias)
+        LOOP
+            v_asig := NULLIF(it->>'asignaturaId','')::BIGINT;
+            v_area := NULLIF(it->>'areaId','')::BIGINT;
+            IF (v_asig IS NULL) = (v_area IS NULL) THEN
+                RAISE EXCEPTION 'Cada obligatoria debe indicar exactamente una asignatura o una area'
+                    USING ERRCODE = '22023';
+            END IF;
+            IF v_asig IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = v_asig AND ACTIVE = TRUE
+            ) THEN
+                RAISE EXCEPTION 'La asignatura % no existe o esta inactiva', v_asig USING ERRCODE = '23503';
+            END IF;
+            IF v_area IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM academico_test.TAREA WHERE PK_TAREA = v_area AND ACTIVE = TRUE
+            ) THEN
+                RAISE EXCEPTION 'El area % no existe o esta inactiva', v_area USING ERRCODE = '23503';
+            END IF;
+            -- Sin duplicados dentro del set.
+            IF EXISTS (
+                SELECT 1 FROM academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
+                 WHERE FK_TCRITERIO_PROMOCION = v_id AND ACTIVE = TRUE
+                   AND FK_TASIGNATURA IS NOT DISTINCT FROM v_asig
+                   AND FK_TAREA IS NOT DISTINCT FROM v_area
+            ) THEN
+                RAISE EXCEPTION 'Obligatoria duplicada (asignatura % / area %)', v_asig, v_area USING ERRCODE = '23505';
+            END IF;
+            INSERT INTO academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
+                (FK_TCRITERIO_PROMOCION, FK_TASIGNATURA, FK_TAREA, CREATED_BY)
+            VALUES (v_id, v_asig, v_area, v_audit);
+        END LOOP;
+    END IF;
+
     RETURN v_id;
 END;
 $$;

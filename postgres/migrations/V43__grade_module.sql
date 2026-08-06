@@ -11,20 +11,20 @@ SET search_path TO academico_test, public;
 CREATE OR REPLACE FUNCTION academico_test.fn_grado_crear(
     p_fk_periodo          BIGINT,
     p_fk_nivel            BIGINT,
-    p_nombre              VARCHAR(130),
-    p_grado               VARCHAR(30),      -- CODIGO
+    p_nombre              VARCHAR(130),     -- al crear = valor del catalogo GRADOS
     p_fk_grado_siguiente  BIGINT DEFAULT NULL,
     p_pk_usuario_solicitante BIGINT DEFAULT NULL
 )
 RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_id BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+DECLARE
+    v_id BIGINT; v_codigo VARCHAR(30);
+    v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
     IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
-    IF p_fk_periodo IS NULL OR p_fk_nivel IS NULL OR NULLIF(TRIM(p_nombre),'') IS NULL
-       OR NULLIF(TRIM(p_grado),'') IS NULL THEN
+    IF p_fk_periodo IS NULL OR p_fk_nivel IS NULL OR NULLIF(TRIM(p_nombre),'') IS NULL THEN
         RAISE EXCEPTION 'Faltan campos obligatorios del grado' USING ERRCODE = '22023';
     END IF;
     IF NOT EXISTS (
@@ -38,6 +38,16 @@ BEGIN
          WHERE PK_NIVEL_ENSENANZA = p_fk_nivel AND ACTIVE = TRUE
     ) THEN
         RAISE EXCEPTION 'El nivel de ensenanza % no existe o esta inactivo', p_fk_nivel USING ERRCODE = '23503';
+    END IF;
+    -- El codigo se DERIVA del catalogo GRADOS: p_nombre es un grado del catalogo
+    -- (nombre o valor, p.ej. "octavo"/"8") y el codigo del TGRADO es su VALOR.
+    SELECT VALOR INTO v_codigo
+      FROM academico_test.TLISTA_VALOR
+     WHERE CATEGORIA = 'GRADOS' AND ACTIVE = TRUE
+       AND (UPPER(TRIM(NOMBRE)) = UPPER(TRIM(p_nombre)) OR TRIM(VALOR) = TRIM(p_nombre))
+     LIMIT 1;
+    IF v_codigo IS NULL THEN
+        RAISE EXCEPTION 'El grado "%" no existe en el catalogo GRADOS', p_nombre USING ERRCODE = '23503';
     END IF;
     IF p_fk_grado_siguiente IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM academico_test.TLISTA_VALOR
@@ -56,14 +66,14 @@ BEGIN
     IF EXISTS (
         SELECT 1 FROM academico_test.TGRADO
          WHERE FK_TPERIODO_ACADEMICO = p_fk_periodo AND ACTIVE = TRUE
-           AND UPPER(TRIM(CODIGO)) = UPPER(TRIM(p_grado))
+           AND UPPER(TRIM(CODIGO)) = UPPER(TRIM(v_codigo))
     ) THEN
-        RAISE EXCEPTION 'Ya existe un grado con el codigo % en este periodo', p_grado USING ERRCODE = '23505';
+        RAISE EXCEPTION 'Ya existe un grado con el codigo % en este periodo', v_codigo USING ERRCODE = '23505';
     END IF;
     INSERT INTO academico_test.TGRADO
         (CODIGO, NOMBRE, FK_TPERIODO_ACADEMICO, FK_TNIVEL_ENSENANZA, FK_TLV_GRADO_SIGUIENTE,
          TIENE_GRADO_SIGUIENTE, CREATED_BY)
-    VALUES (p_grado, p_nombre, p_fk_periodo, p_fk_nivel, p_fk_grado_siguiente,
+    VALUES (v_codigo, p_nombre, p_fk_periodo, p_fk_nivel, p_fk_grado_siguiente,
             CASE WHEN p_fk_grado_siguiente IS NULL THEN 'N' ELSE 'S' END::bool_sn, v_audit)
     RETURNING PK_TGRADO INTO v_id;
     RETURN v_id;
@@ -73,8 +83,7 @@ $$;
 CREATE OR REPLACE FUNCTION academico_test.fn_grado_actualizar(
     p_pk                  BIGINT,
     p_fk_nivel            BIGINT DEFAULT NULL,
-    p_nombre              VARCHAR(130) DEFAULT NULL,
-    p_grado               VARCHAR(30) DEFAULT NULL,
+    p_nombre              VARCHAR(130) DEFAULT NULL,   -- editable libre tras crear
     p_fk_grado_siguiente  BIGINT DEFAULT NULL,
     p_tiene_grado_siguiente BOOLEAN DEFAULT NULL,  -- para poder poner FK en NULL explicito
     p_pk_usuario_solicitante BIGINT DEFAULT NULL
@@ -82,7 +91,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_grado_actualizar(
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
     r academico_test.TGRADO;
-    v_nombre VARCHAR(130); v_codigo VARCHAR(30); v_fk_sig BIGINT;
+    v_nombre VARCHAR(130); v_fk_sig BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
     IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
@@ -94,16 +103,13 @@ BEGIN
     IF p_nombre IS NOT NULL AND NULLIF(TRIM(p_nombre),'') IS NULL THEN
         RAISE EXCEPTION 'El nombre del grado no puede ser vacio' USING ERRCODE = '22023';
     END IF;
-    IF p_grado IS NOT NULL AND NULLIF(TRIM(p_grado),'') IS NULL THEN
-        RAISE EXCEPTION 'El codigo del grado no puede ser vacio' USING ERRCODE = '22023';
-    END IF;
     IF p_fk_nivel IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM academico_test.TNIVEL_ENSENANZA WHERE PK_NIVEL_ENSENANZA = p_fk_nivel AND ACTIVE = TRUE
     ) THEN
         RAISE EXCEPTION 'El nivel de ensenanza % no existe o esta inactivo', p_fk_nivel USING ERRCODE = '23503';
     END IF;
     v_nombre := COALESCE(p_nombre, r.NOMBRE);
-    v_codigo := COALESCE(p_grado, r.CODIGO);
+    -- El codigo NO se cambia en edicion (queda el derivado del catalogo al crear).
     -- Si p_tiene_grado_siguiente = FALSE, se limpia el FK; si TRUE o NULL, se
     -- usa p_fk_grado_siguiente (COALESCE con el actual cuando llega NULL).
     v_fk_sig := CASE WHEN p_tiene_grado_siguiente = FALSE THEN NULL
@@ -122,17 +128,9 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Ya existe un grado con el nombre % en este periodo', v_nombre USING ERRCODE = '23505';
     END IF;
-    IF EXISTS (
-        SELECT 1 FROM academico_test.TGRADO
-         WHERE FK_TPERIODO_ACADEMICO = r.FK_TPERIODO_ACADEMICO AND ACTIVE = TRUE AND PK_TGRADO <> p_pk
-           AND UPPER(TRIM(CODIGO)) = UPPER(TRIM(v_codigo))
-    ) THEN
-        RAISE EXCEPTION 'Ya existe un grado con el codigo % en este periodo', v_codigo USING ERRCODE = '23505';
-    END IF;
     UPDATE academico_test.TGRADO SET
         FK_TNIVEL_ENSENANZA = COALESCE(p_fk_nivel, FK_TNIVEL_ENSENANZA),
         NOMBRE = v_nombre,
-        CODIGO = v_codigo,
         FK_TLV_GRADO_SIGUIENTE = v_fk_sig,
         TIENE_GRADO_SIGUIENTE = CASE WHEN v_fk_sig IS NULL THEN 'N' ELSE 'S' END::bool_sn,
         MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
@@ -182,17 +180,27 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_grado_listar(p_fk_periodo BIGINT)
+CREATE OR REPLACE FUNCTION academico_test.fn_grado_listar(
+    p_fk_periodo BIGINT,
+    p_filtro     TEXT DEFAULT NULL,   -- filtro por nombre (opcional)
+    p_page_index INT  DEFAULT 0,      -- 0-based
+    p_page_size  INT  DEFAULT 10      -- 0/NULL = sin paginar (todo)
+)
 RETURNS TABLE (id BIGINT, nombre VARCHAR, grado VARCHAR, teaching_level_id BIGINT,
-               teaching_level_name VARCHAR, grado_siguiente VARCHAR, tiene_grado_siguiente BOOLEAN)
+               teaching_level_name VARCHAR, grado_siguiente VARCHAR, tiene_grado_siguiente BOOLEAN,
+               total_count BIGINT)
 LANGUAGE sql STABLE AS $$
     SELECT g.PK_TGRADO, g.NOMBRE, g.CODIGO, g.FK_TNIVEL_ENSENANZA, ne.NOMBRE,
-           gs.VALOR, (g.TIENE_GRADO_SIGUIENTE = 'S')
+           gs.VALOR, (g.TIENE_GRADO_SIGUIENTE = 'S'),
+           count(*) OVER()::BIGINT AS total_count
       FROM academico_test.TGRADO g
       JOIN academico_test.TNIVEL_ENSENANZA ne ON ne.PK_NIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
       LEFT JOIN academico_test.TLISTA_VALOR gs ON gs.PK_LISTA_VALOR = g.FK_TLV_GRADO_SIGUIENTE
      WHERE g.FK_TPERIODO_ACADEMICO = p_fk_periodo AND g.ACTIVE = TRUE
-     ORDER BY g.NOMBRE;
+       AND (NULLIF(TRIM(p_filtro),'') IS NULL OR g.NOMBRE ILIKE '%' || p_filtro || '%')
+     ORDER BY g.NOMBRE
+     LIMIT NULLIF(p_page_size, 0)
+    OFFSET COALESCE(p_page_index, 0) * COALESCE(NULLIF(p_page_size, 0), 0);
 $$;
 
 -- ----- GRUPO ---------------------------------------------------------------

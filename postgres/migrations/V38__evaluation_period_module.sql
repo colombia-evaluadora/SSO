@@ -204,3 +204,19 @@ LANGUAGE sql STABLE AS $$
      WHERE pe.FK_TPERIODO_ACADEMICO = p_fk_periodo AND pe.ACTIVE = TRUE
      ORDER BY pe.FECHA_INICIO;
 $$;
+
+-- Un periodo de evaluacion por PK (mismos campos que el listado).
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_detalle(p_pk BIGINT)
+RETURNS TABLE (
+    id BIGINT, codigo VARCHAR, nombre VARCHAR, abreviacion VARCHAR,
+    start_date DATE, end_date DATE, peso NUMERIC, status_id BIGINT, estado VARCHAR,
+    academic_period_id BIGINT
+)
+LANGUAGE sql STABLE AS $$
+    SELECT pe.PK_TPERIODO_EVALUACION, pe.CODIGO, pe.NOMBRE, pe.ABREVIACION,
+           pe.FECHA_INICIO, pe.FECHA_FIN, pe.PORCENTAJE, pe.FK_TLV_ESTADO, est.VALOR,
+           pe.FK_TPERIODO_ACADEMICO
+      FROM academico_test.TPERIODO_EVALUACION pe
+      JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pe.FK_TLV_ESTADO
+     WHERE pe.PK_TPERIODO_EVALUACION = p_pk AND pe.ACTIVE = TRUE;
+$$;

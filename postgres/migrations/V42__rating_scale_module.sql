@@ -20,7 +20,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_escala_guardar_bulk(
 RETURNS INT LANGUAGE plpgsql AS $$
 DECLARE
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-    v_fmt TEXT; v_rango TEXT[]; v_min NUMERIC; v_max NUMERIC;
+    v_fmt TEXT; v_min NUMERIC; v_max NUMERIC;
     v_nivel BIGINT; v_nivel_nom TEXT; v_escala_id BIGINT; v_val_id BIGINT;
     v_tipo_id BIGINT; v_orden INT; v_count INT := 0;
     v_nmin NUMERIC; v_nmax NUMERIC; v_neq NUMERIC;
@@ -32,17 +32,19 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
-    -- Rango del formato de calificacion del periodo (para % ).
+    -- Rango del formato de calificacion del periodo (para % ). El rango base es
+    -- 0-100; solo "DE CERO A CINCO"/"DE CERO A DIEZ" cambian el maximo. El resto
+    -- (DE CERO A CIEN, Caritas, Simbolos, Valoraciones, ...) es 0-100.
     SELECT lv.VALOR INTO v_fmt
       FROM academico_test.TCRITERIO_EVALUACION ce
       JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = ce.FK_TLV_FORMATO_CALIFICACION
      WHERE ce.PK_TCRITERIO_EVALUACION = p_academic_period_id;
-    v_rango := regexp_match(COALESCE(v_fmt,'0 - 100'), '(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)');
-    IF v_rango IS NULL THEN
-        RAISE EXCEPTION 'Formato de calificacion invalido para el periodo %', p_academic_period_id USING ERRCODE = '22023';
-    END IF;
-    v_min := v_rango[1]::NUMERIC; v_max := v_rango[2]::NUMERIC;
-    IF v_max = v_min THEN RAISE EXCEPTION 'El formato no puede tener min = max' USING ERRCODE = '22023'; END IF;
+    v_min := 0;
+    v_max := CASE UPPER(TRIM(COALESCE(v_fmt, '')))
+               WHEN 'DE CERO A CINCO' THEN 5
+               WHEN 'DE CERO A DIEZ'  THEN 10
+               ELSE 100
+             END;
 
     -- Validaciones del lote.
     IF (SELECT count(*) FROM jsonb_array_elements(p_scales))
@@ -133,8 +135,12 @@ RETURNS TABLE (
 )
 LANGUAGE sql STABLE AS $$
     WITH fmt AS (
-        SELECT (regexp_match(lv.VALOR, '(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)'))[1]::numeric AS mn,
-               (regexp_match(lv.VALOR, '(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)'))[2]::numeric AS mx
+        SELECT 0::numeric AS mn,
+               CASE UPPER(TRIM(lv.VALOR))
+                 WHEN 'DE CERO A CINCO' THEN 5
+                 WHEN 'DE CERO A DIEZ'  THEN 10
+                 ELSE 100
+               END::numeric AS mx
           FROM academico_test.TCRITERIO_EVALUACION ce
           JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = ce.FK_TLV_FORMATO_CALIFICACION
          WHERE ce.PK_TCRITERIO_EVALUACION = p_academic_period_id

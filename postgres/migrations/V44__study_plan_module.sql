@@ -22,7 +22,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_plan_agregar(
 )
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
-    v_grado_nom TEXT; v_plan_id BIGINT; v_id BIGINT;
+    v_grado_nom TEXT; v_plan_id BIGINT; v_id BIGINT; v_periodo BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
     IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
@@ -81,6 +81,19 @@ BEGIN
         p_fk_formato_calif, p_fk_criterio_nota, v_audit
     )
     RETURNING PK_TASIGNATURA_PLAN INTO v_id;
+
+    -- Enlaza el renglon del plan con el criterio de evaluacion POR DEFECTO del
+    -- periodo (PK del criterio = PK del periodo). Los overrides personalizados
+    -- de formato/criterio-nota viven en las columnas de TASIGNATURA_PLAN.
+    SELECT FK_TPERIODO_ACADEMICO INTO v_periodo FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_grado;
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TCRITERIO_EVALUACION
+         WHERE PK_TCRITERIO_EVALUACION = v_periodo AND ACTIVE = TRUE
+    ) THEN
+        INSERT INTO academico_test.TCRITERIO_EVALUACION_ASIGNATURA_PLAN
+            (FK_TCRITERIO_EVALUACION, FK_TASIGNATURA_PLAN, FK_TGRADO, POR_DEFECTO, CREATED_BY)
+        VALUES (v_periodo, v_id, NULL, 'S', v_audit);
+    END IF;
     RETURN v_id;
 END;
 $$;
@@ -180,21 +193,35 @@ BEGIN
      WHERE PK_TASIGNATURA_PLAN = p_pk AND ACTIVE = TRUE;
     GET DIAGNOSTICS v_n = ROW_COUNT;
     IF v_n = 0 THEN RAISE EXCEPTION 'No existe un renglon de plan activo con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
+    -- Da de baja el enlace con el criterio de evaluacion.
+    UPDATE academico_test.TCRITERIO_EVALUACION_ASIGNATURA_PLAN
+       SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TASIGNATURA_PLAN = p_pk AND ACTIVE = TRUE;
     RETURN p_pk;
 END;
 $$;
 
+-- Devuelve el valor EFECTIVO de formato/criterio-nota: el override del renglon
+-- del plan si existe, si no lo heredado del criterio de evaluacion enlazado.
 CREATE OR REPLACE FUNCTION academico_test.fn_plan_listar(p_fk_grado BIGINT)
 RETURNS TABLE (codigo BIGINT, asignatura VARCHAR, intensidad_horaria NUMERIC, influencia_area NUMERIC,
                numero_creditos BIGINT, influye_desempeno BOOLEAN, matricula_obligatoria BOOLEAN,
-               aprobacion_obligatoria BOOLEAN, formato_calificacion BIGINT, criterio_nota BIGINT)
+               aprobacion_obligatoria BOOLEAN, formato_calificacion BIGINT, criterio_nota BIGINT,
+               personalizado BOOLEAN)
 LANGUAGE sql STABLE AS $$
     SELECT ap.PK_TASIGNATURA_PLAN, s.NOMBRE, ap.NUMERO_HORA, ap.INFLUENCIA_AREA, ap.NUMERO_CREDITO,
            (ap.INFLUYE_DESEMPLENO_ACADEMICO = 'S'), (ap.MATRICULA_OBLIGATORIA = 'S'),
-           (ap.APROBACION_OBLIGATORIA = 'S'), ap.FK_TLV_FORMATO_CALIFICACION_DEF, ap.FK_TLV_CALCULO_DEFINITIVA
+           (ap.APROBACION_OBLIGATORIA = 'S'),
+           COALESCE(ap.FK_TLV_FORMATO_CALIFICACION_DEF, ce.FK_TLV_FORMATO_CALIFICACION),
+           COALESCE(ap.FK_TLV_CALCULO_DEFINITIVA,      ce.FK_TLV_MODIF_FINAL_PERACA),
+           (ap.FK_TLV_FORMATO_CALIFICACION_DEF IS NOT NULL OR ap.FK_TLV_CALCULO_DEFINITIVA IS NOT NULL)
       FROM academico_test.TASIGNATURA_PLAN ap
-      JOIN academico_test.TPLAN p       ON p.PK_TPLAN = ap.FK_TPLAN
-      JOIN academico_test.TASIGNATURA s ON s.PK_TASIGNATURA = ap.FK_TASIGNATURA
+      JOIN academico_test.TPLAN p        ON p.PK_TPLAN = ap.FK_TPLAN
+      JOIN academico_test.TASIGNATURA s  ON s.PK_TASIGNATURA = ap.FK_TASIGNATURA
+      LEFT JOIN academico_test.TCRITERIO_EVALUACION_ASIGNATURA_PLAN cap
+             ON cap.FK_TASIGNATURA_PLAN = ap.PK_TASIGNATURA_PLAN AND cap.ACTIVE = TRUE
+      LEFT JOIN academico_test.TCRITERIO_EVALUACION ce
+             ON ce.PK_TCRITERIO_EVALUACION = cap.FK_TCRITERIO_EVALUACION AND ce.ACTIVE = TRUE
      WHERE p.FK_TGRADO = p_fk_grado AND ap.ACTIVE = TRUE
      ORDER BY s.NOMBRE;
 $$;

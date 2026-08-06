@@ -111,3 +111,17 @@ LANGUAGE sql STABLE AS $$
      WHERE gr.FK_TGRADO = p_fk_grado AND h.ACTIVE = TRUE
      ORDER BY h.FK_TGRUPO, h.FK_TLV_DIA_SEMANA, h.NUMERO_BLOQUE;
 $$;
+
+-- Asignaturas del plan del grado (para las "fichas" arrastrables del horario).
+-- plan_item_id = PK_TASIGNATURA_PLAN (el subjectId de la grilla). bloques = la
+-- intensidad horaria (cuantos bloques colocar).
+CREATE OR REPLACE FUNCTION academico_test.fn_horario_asignaturas(p_fk_grado BIGINT)
+RETURNS TABLE (plan_item_id BIGINT, nombre VARCHAR, bloques NUMERIC, color VARCHAR)
+LANGUAGE sql STABLE AS $$
+    SELECT ap.PK_TASIGNATURA_PLAN, s.NOMBRE, ap.NUMERO_HORA, s.COLOR
+      FROM academico_test.TASIGNATURA_PLAN ap
+      JOIN academico_test.TPLAN pl       ON pl.PK_TPLAN = ap.FK_TPLAN AND pl.ACTIVE = TRUE
+      JOIN academico_test.TASIGNATURA s  ON s.PK_TASIGNATURA = ap.FK_TASIGNATURA AND s.ACTIVE = TRUE
+     WHERE pl.FK_TGRADO = p_fk_grado AND ap.ACTIVE = TRUE
+     ORDER BY s.NOMBRE;
+$$;

@@ -107,18 +107,33 @@ END;
 $$;
 
 -- Pool asignable: grado x grupo x plan de estudio del periodo.
-CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_pool(p_academic_period_id BIGINT)
+-- p_filtro         = busqueda libre (asignatura, grado, grupo o jornada).
+-- p_solo_sin_docente = TRUE -> solo materias-grupo aun no asignadas a un docente.
+CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_pool(
+    p_academic_period_id BIGINT,
+    p_filtro             TEXT    DEFAULT NULL,
+    p_solo_sin_docente   BOOLEAN DEFAULT FALSE
+)
 RETURNS TABLE (id TEXT, nombre VARCHAR, grado_grupo TEXT, jornada VARCHAR)
 LANGUAGE sql STABLE AS $$
     SELECT gr.PK_TGRUPO || ':' || s.PK_TASIGNATURA, s.NOMBRE,
            g.NOMBRE || ' ' || gr.NOMBRE, jor.VALOR
-      FROM academico_test.TGRUPO gr
-      JOIN academico_test.TGRADO g            ON g.PK_TGRADO = gr.FK_TGRADO
-      JOIN academico_test.TPLAN p             ON p.FK_TGRADO = g.PK_TGRADO AND p.ACTIVE = TRUE
-      JOIN academico_test.TASIGNATURA_PLAN ap ON ap.FK_TPLAN = p.PK_TPLAN AND ap.ACTIVE = TRUE
-      JOIN academico_test.TASIGNATURA s       ON s.PK_TASIGNATURA = ap.FK_TASIGNATURA AND s.ACTIVE = TRUE
+      FROM academico_test.TGRADO g
+      JOIN academico_test.TGRUPO gr            ON gr.FK_TGRADO = g.PK_TGRADO AND gr.ACTIVE = TRUE
+      JOIN academico_test.TPLAN p              ON p.FK_TGRADO = g.PK_TGRADO AND p.ACTIVE = TRUE
+      JOIN academico_test.TASIGNATURA_PLAN ap  ON ap.FK_TPLAN = p.PK_TPLAN AND ap.ACTIVE = TRUE
+      JOIN academico_test.TASIGNATURA s        ON s.PK_TASIGNATURA = ap.FK_TASIGNATURA AND s.ACTIVE = TRUE
       LEFT JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
-     WHERE g.FK_TPERIODO_ACADEMICO = p_academic_period_id AND gr.ACTIVE = TRUE AND g.ACTIVE = TRUE
+     WHERE g.FK_TPERIODO_ACADEMICO = p_academic_period_id AND g.ACTIVE = TRUE
+       AND (NULLIF(TRIM(p_filtro),'') IS NULL
+            OR s.NOMBRE  ILIKE '%' || p_filtro || '%'
+            OR g.NOMBRE  ILIKE '%' || p_filtro || '%'
+            OR gr.NOMBRE ILIKE '%' || p_filtro || '%'
+            OR jor.VALOR ILIKE '%' || p_filtro || '%')
+       AND (NOT p_solo_sin_docente OR NOT EXISTS (
+                SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+                 WHERE da.FK_TGRUPO = gr.PK_TGRUPO AND da.FK_TASIGNATURA = s.PK_TASIGNATURA
+                   AND da.FK_TPERIODO_ACADEMICO = p_academic_period_id AND da.ACTIVE = TRUE))
      ORDER BY g.NOMBRE, gr.NOMBRE, s.NOMBRE;
 $$;
 
@@ -134,4 +149,33 @@ LANGUAGE sql STABLE AS $$
       JOIN academico_test.TUSUARIO u     ON u.PK_TUSUARIO = f.FK_TUSUARIO
      WHERE da.FK_TPERIODO_ACADEMICO = p_academic_period_id
        AND u.IDENTIFICACION = p_document_number AND da.ACTIVE = TRUE;
+$$;
+
+-- Docentes disponibles para asignar en el periodo (funcionarios del
+-- establecimiento del periodo). Filtros: estado (TUSUARIO.ESTADO) y busqueda
+-- libre por documento o nombre.
+CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_docente_listar(
+    p_academic_period_id BIGINT,
+    p_estado             TEXT DEFAULT NULL,   -- valor de TUSUARIO.ESTADO
+    p_filtro             TEXT DEFAULT NULL
+)
+RETURNS TABLE (funcionario_id BIGINT, document_number VARCHAR, nombre_completo TEXT, estado TEXT)
+LANGUAGE sql STABLE AS $$
+    SELECT DISTINCT f.PK_TFUNCIONARIO, u.IDENTIFICACION,
+           TRIM(concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO)),
+           u.ESTADO::text
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TSEDE se        ON se.PK_TSEDE = pa.FK_TSEDE
+      JOIN academico_test.TSEDE s2        ON s2.FK_TESTABLECIMIENTO = se.FK_TESTABLECIMIENTO
+      JOIN academico_test.TSEDE_USUARIO su ON su.FK_TSEDE = s2.PK_TSEDE AND su.ACTIVE = TRUE
+                                          AND su.FK_TROL = 14  -- rol Docente
+      JOIN academico_test.TUSUARIO u      ON u.PK_TUSUARIO = su.FK_TUSUARIO AND u.ACTIVE = TRUE
+      JOIN academico_test.TFUNCIONARIO f  ON f.FK_TUSUARIO = u.PK_TUSUARIO AND f.ACTIVE = TRUE
+     WHERE pa.PK_TPERIODO_ACADEMICO = p_academic_period_id
+       AND (NULLIF(TRIM(p_estado),'') IS NULL OR u.ESTADO::text = p_estado)
+       AND (NULLIF(TRIM(p_filtro),'') IS NULL
+            OR u.IDENTIFICACION ILIKE '%' || p_filtro || '%'
+            OR TRIM(concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO))
+               ILIKE '%' || p_filtro || '%')
+     ORDER BY 3;
 $$;

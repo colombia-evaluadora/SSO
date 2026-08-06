@@ -65,6 +65,13 @@ DECLARE
     v_audit           VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     i                 INT;
     j                 INT;
+    -- Valores por defecto del criterio de evaluacion (catalogo TLISTA_VALOR).
+    c_formato_calif        CONSTANT BIGINT := 5286;
+    c_elemento_def         CONSTANT BIGINT := 494;
+    c_criterio_final       CONSTANT BIGINT := 501;
+    c_criterio_area        CONSTANT BIGINT := 508;
+    c_desempeno_sin_calif  CONSTANT BIGINT := 522;
+    c_modif_final_peraca   CONSTANT BIGINT := 511;
 BEGIN
     -- 0. Autorizacion.
     IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
@@ -160,8 +167,9 @@ BEGIN
     INSERT INTO academico_test.TCRITERIO_EVALUACION (
         PK_TCRITERIO_EVALUACION, FK_TLV_FORMATO_CALIFICACION, FK_TLV_ELEMENTO_DEF,
         FK_TLV_CRITERIO_FINAL, FK_TLV_CRITERIO_AREA, FK_TLV_DESEMPENO_SIN_CALIF,
-        FK_TLV_MODIF_FINAL_PERACA, NUMERO_DECIMALES, PORCENTAJE_INICIAL_CALIF, CREATED_BY
-    ) VALUES (v_id, 5286, 494, 501, 508, 522, 511, 0, 0, v_audit)
+        FK_TLV_MODIF_FINAL_PERACA, CREATED_BY
+    ) VALUES (v_id, c_formato_calif, c_elemento_def, c_criterio_final, c_criterio_area,
+              c_desempeno_sin_calif, c_modif_final_peraca, v_audit)
     ON CONFLICT (PK_TCRITERIO_EVALUACION) DO NOTHING;
 
     -- 9. Descansos anidados (opcional). Validan contra el horario del periodo.
