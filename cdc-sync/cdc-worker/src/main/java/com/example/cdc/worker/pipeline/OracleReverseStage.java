@@ -3,6 +3,7 @@ package com.example.cdc.worker.pipeline;
 import com.example.cdc.common.event.CdcEvent;
 import com.example.cdc.common.routing.TableRouter;
 import com.example.cdc.common.transform.OperationContext;
+import com.example.cdc.common.transform.TCalendarioReverser;
 import com.example.cdc.common.transform.TEstablecimientoFkCycleTransformer;
 import com.example.cdc.common.transform.TGrupoFkRewriter;
 import com.example.cdc.common.transform.TMatriculaConsolidator;
