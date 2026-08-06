@@ -43,7 +43,13 @@ class TForeignKeyResolverTest {
         row.put("fk_tlv_formato_calificacion_act", "NUMERICO");
         Optional<Map<String, Object>> out = r.apply(event(row), ctx());
         assertThat(out).isPresent();
-        assertThat(out.get().get("FK_FORMATO_CALIFICACION_ACT")).isEqualTo(9L);
+        // Override resolves FK_TLV_FORMATO_CALIFICACION_ACT to categoria
+        // FORMATO_CALIFICACION, and the resolver's output column naming is
+        // FK_<categoria>, so the result key is FK_FORMATO_CALIFICACION
+        // (NOT FK_FORMATO_CALIFICACION_ACT — the override discards the
+        // compound-suffix fragment on purpose so the two ACT/DEF columns
+        // collapse onto the same Oracle FK).
+        assertThat(out.get().get("FK_FORMATO_CALIFICACION")).isEqualTo(9L);
         assertThat(out.get()).doesNotContainKey("fk_tlv_formato_calificacion_act");
     }
 
@@ -72,10 +78,19 @@ class TForeignKeyResolverTest {
 
     @Test
     void numeric_codigo_is_stringified_before_lookup() {
-        TForeignKeyResolver r = new TForeignKeyResolver(cache, Map.of());
+        // Index lookup is keyed by TLISTA_VALOR.VALOR (which is a VARCHAR /
+        // codigo string per V22 line 201). When the Debezium payload delivers
+        // the codigo as Long instead, the resolver calls toString() so a
+        // Long(7) finds the "7" entry the same way a String("7") does.
+        Map<String, Map<String, Long>> numericIndex = Map.of(
+            "ESTADO", Map.of("7", 7L));
+        SnapshotCache numericCache = new SnapshotCache(
+            Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
+            Map.of(), Map.of(), numericIndex, Map.of());
+        TForeignKeyResolver r = new TForeignKeyResolver(numericCache, Map.of());
         Map<String, Object> row = new HashMap<>();
         row.put("pk_t", 1);
-        row.put("fk_tlv_estado", 7);  // long, not string
+        row.put("fk_tlv_estado", 7L);  // Long codigo
         Optional<Map<String, Object>> out = r.apply(event(row), ctx());
         assertThat(out).isPresent();
         assertThat(out.get().get("FK_ESTADO")).isEqualTo(7L);
