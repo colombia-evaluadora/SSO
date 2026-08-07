@@ -25,6 +25,20 @@
     <java.version>21</java.version>
     <maven.compiler.source>21</maven.compiler.source>
     <maven.compiler.target>21</maven.compiler.target>
+    <!-- El bytecode se emite como Java 21 (arriba), pero los tests
+         CORREN sobre la JVM de CI, que es Java 25. Mockito instrumenta
+         clases en tiempo de ejecución vía Byte Buddy, y el que trae
+         Boot 3.3.5 sólo llega a Java 23:
+
+           IllegalArgumentException: Java 25 (69) is not supported by
+           the current version of Byte Buddy
+
+         Subirlo a la serie 1.17 (que sí conoce Java 25) arregla la
+         instrumentación sin tocar el target de compilación. La
+         alternativa, -Dnet.bytebuddy.experimental=true, sólo silencia
+         la comprobación y deja a Mockito trabajando sobre un class
+         file format que no soporta oficialmente. -->
+    <byte-buddy.version>1.17.8</byte-buddy.version>
     <debezium.version>3.1.0.Final</debezium.version>
     <ojdbc.version>23.3.0.23.09</ojdbc.version>
     <clickhouse.jdbc.version>0.7.2</clickhouse.jdbc.version>

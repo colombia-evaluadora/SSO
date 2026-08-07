@@ -3,7 +3,7 @@ package com.example.cdc.capture;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.FilterType;
@@ -30,10 +30,14 @@ class AmqpPublisherSpringContextTest {
     static class WiringConfig {
     }
 
-    @MockitoBean
+    // Este módulo sigue en Spring Boot 3.3.5, donde @MockitoBean aún
+    // no existe (llegó en 3.4 / Framework 6.2). @MockBean está
+    // deprecado en el resto del repo (Boot 4), pero aquí es la única
+    // opción hasta que cdc-sync se suba de versión.
+    @MockBean
     RabbitTemplate rabbitTemplate;
 
-    @MockitoBean
+    @MockBean
     CaptureMetrics captureMetrics;
 
     @Autowired
