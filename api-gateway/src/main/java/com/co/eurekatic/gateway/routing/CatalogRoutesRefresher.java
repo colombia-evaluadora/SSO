@@ -9,15 +9,20 @@ import org.springframework.cloud.gateway.event.RefreshRoutesEvent;
 import org.springframework.cloud.gateway.filter.FilterDefinition;
 import org.springframework.cloud.gateway.handler.predicate.PredicateDefinition;
 import org.springframework.cloud.gateway.route.RouteDefinition;
+import org.springframework.cloud.gateway.route.RouteDefinitionWriter;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
 
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -68,14 +73,29 @@ public class CatalogRoutesRefresher {
     /** Header name; mirrors {@code InternalTokenFilter.HEADER} in sso-admin. */
     static final String INTERNAL_TOKEN_HEADER = "X-Internal-Token";
 
+    /**
+     * Rows with this {@code kind} are the ones we own. REST
+     * rows (sso-admin, auth-center) are deliberately skipped —
+     * see {@link #refresh()}.
+     */
+    static final String QUERY_KIND = "QUERY";
+
     private final WebClient client;
     private final ApplicationEventPublisher publisher;
+    private final RouteDefinitionWriter routeWriter;
     private final MeterRegistry meters;
     private final String internalToken;
     private final AtomicInteger lastPublishedCount = new AtomicInteger(0);
+    /**
+     * Ids we wrote on the previous successful poll, so a row
+     * deleted from the catalog gets its route deleted too
+     * instead of lingering until the next gateway restart.
+     */
+    private final Set<String> publishedIds = ConcurrentHashMap.newKeySet();
 
     public CatalogRoutesRefresher(
             ApplicationEventPublisher publisher,
+            RouteDefinitionWriter routeWriter,
             MeterRegistry meters,
             @Value("${gateway.catalog-url:http://sso-admin:8080}") String catalogBaseUrl,
             @Value("${gateway.internal-token:}") String internalToken) {
@@ -96,6 +116,7 @@ public class CatalogRoutesRefresher {
                 .baseUrl(catalogBaseUrl)
                 .build();
         this.publisher = publisher;
+        this.routeWriter = routeWriter;
         this.meters = meters;
         this.internalToken = internalToken;
         log.info("CatalogRoutesRefresher: baseUrl={}", catalogBaseUrl);
@@ -146,21 +167,43 @@ public class CatalogRoutesRefresher {
                         lastPublishedCount.get());
                 return;
             }
-            // Build every RouteDefinition in one batch and
-            // publish a single RefreshRoutesEvent — SCG's
-            // CachingRouteLocator listens for the event and
-            // reloads from all sources (DiscoveryClient +
-            // static yaml + the in-memory RouteDefinitionRepository)
-            // at once. One event = one refresh = cheap.
-            List<RouteDefinition> defs = new ArrayList<>(routes.size());
-            for (GatewayRouteDto r : routes) {
-                defs.add(toRouteDefinition(r));
+            // Build every RouteDefinition in one batch, write
+            // them to the repository, THEN publish a single
+            // RefreshRoutesEvent — SCG's CachingRouteLocator
+            // listens for the event and reloads from all
+            // sources (DiscoveryClient + static yaml + the
+            // in-memory RouteDefinitionRepository) at once.
+            // One event = one refresh = cheap.
+            //
+            // Order matters: the event only re-reads what the
+            // repository already holds, so a save() after the
+            // publish would not take effect until the NEXT
+            // poll. (Before this was fixed the defs list was
+            // built and then dropped on the floor entirely,
+            // so no catalog route ever reached the routing
+            // table and every /api/<prefix>/** request 404'd.)
+            //
+            // See toRouteDefinitions for why REST rows are skipped.
+            List<RouteDefinition> defs = toRouteDefinitions(routes);
+            Set<String> nextIds = new LinkedHashSet<>();
+            for (RouteDefinition def : defs) {
+                routeWriter.save(Mono.just(def)).block();
+                nextIds.add(def.getId());
             }
-            // Mutate the in-memory repository directly. Spring
-            // Cloud Gateway's InMemoryRouteDefinitionRepository
-            // exposes a save(Mono) sink we use via the event
-            // publisher (the event triggers a full reload of
-            // every source, including the YAML static routes).
+            // Drop routes we published on an earlier poll whose
+            // catalog row is gone. delete() errors when the id
+            // is already absent, which is benign here — another
+            // refresh may have removed it — so it's swallowed.
+            for (String stale : publishedIds) {
+                if (!nextIds.contains(stale)) {
+                    routeWriter.delete(Mono.just(stale))
+                            .onErrorResume(e -> Mono.empty())
+                            .block();
+                    log.info("Catalog refresh: removed stale route {}", stale);
+                }
+            }
+            publishedIds.clear();
+            publishedIds.addAll(nextIds);
             publisher.publishEvent(new RefreshRoutesEvent(this));
             lastPublishedCount.set(defs.size());
             log.info("Catalog refresh: published {} catalog routes", defs.size());
@@ -173,6 +216,32 @@ public class CatalogRoutesRefresher {
             meters.counter("gateway.catalog.refresh",
                     Tags.of("outcome", "failure")).increment();
         }
+    }
+
+    /**
+     * Select the catalog rows the gateway owns and map them to
+     * route definitions.
+     *
+     * <p>Only {@code kind=QUERY} rows are ours. The REST rows in
+     * the same feed (sso-admin, auth-center) describe prefixes
+     * that {@code application.yml} already routes with
+     * hand-tuned per-path {@code StripPrefix} values —
+     * {@code /api/auth/refresh} strips 1 segment while
+     * {@code /api/auth/login} strips 2. A generated
+     * {@code Path=/api/auth/**} route would collide with those
+     * and break login/refresh. Dynamic routing exists for
+     * provisioned query instances, which have no YAML
+     * counterpart; the REST surface stays statically owned.
+     */
+    static List<RouteDefinition> toRouteDefinitions(List<GatewayRouteDto> routes) {
+        List<RouteDefinition> defs = new ArrayList<>(routes.size());
+        for (GatewayRouteDto r : routes) {
+            if (!QUERY_KIND.equalsIgnoreCase(r.kind())) {
+                continue;
+            }
+            defs.add(toRouteDefinition(r));
+        }
+        return defs;
     }
 
     /**
