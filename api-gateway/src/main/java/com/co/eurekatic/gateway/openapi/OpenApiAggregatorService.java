@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.net.URI;
 import java.time.Duration;
@@ -85,7 +86,21 @@ public class OpenApiAggregatorService {
      * Returns the cached value if present.
      */
     public Mono<Map<String, Object>> aggregated() {
-        return Mono.fromSupplier(() -> cache.get(MERGED_CACHE_KEY, key -> buildMerged()));
+        return Mono.fromSupplier(() -> cache.get(MERGED_CACHE_KEY, key -> buildMerged()))
+                // buildMerged() is blocking on purpose — it fans out to
+                // every service with WebClient + .block(Duration). Without
+                // this, the supplier runs on whatever non-blocking thread
+                // subscribed (a Netty event loop for HTTP traffic, parallel-N
+                // for the scheduled warmup) and Reactor's blocking guard
+                // throws on the FIRST .block() of every fetch:
+                //   IllegalStateException: block()/blockFirst()/blockLast()
+                //   are blocking, which is not supported in thread parallel-1
+                // Each fetch is individually try/caught and logged as a WARN
+                // "Failed to merge OpenAPI for service=... — skipping", so
+                // the endpoint still answered 200 — with an empty doc. Swagger
+                // UI rendered a page with zero endpoints and no error, which
+                // is why this went unnoticed.
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     /**
@@ -95,8 +110,10 @@ public class OpenApiAggregatorService {
      */
     public Mono<Map<String, Object>> single(String serviceId) {
         return Mono.fromSupplier(() -> cache.get(
-                SINGLE_CACHE_KEY_PREFIX + serviceId,
-                key -> buildSingle(serviceId)));
+                        SINGLE_CACHE_KEY_PREFIX + serviceId,
+                        key -> buildSingle(serviceId)))
+                // Same blocking-on-a-reactive-thread problem as aggregated().
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     /* ====================== builders ====================== */
