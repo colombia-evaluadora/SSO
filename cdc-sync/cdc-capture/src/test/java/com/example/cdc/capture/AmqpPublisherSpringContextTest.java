@@ -3,7 +3,7 @@ package com.example.cdc.capture;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.FilterType;
@@ -30,10 +30,10 @@ class AmqpPublisherSpringContextTest {
     static class WiringConfig {
     }
 
-    @MockBean
+    @MockitoBean
     RabbitTemplate rabbitTemplate;
 
-    @MockBean
+    @MockitoBean
     CaptureMetrics captureMetrics;
 
     @Autowired
