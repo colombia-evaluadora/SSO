@@ -63,16 +63,14 @@ jobs:
   build-push:
     name: build-push (${{ matrix.service }})
     runs-on: ubuntu-latest
-    # Solo corre si: (a) CI terminó en verde sobre un PUSH a la rama
+    # Solo corre si: (a) CI terminó en verde sobre un PUSH a main o
     # test, o (b) se lanzó a mano. workflow_run también dispara para
-    # CI de main y de PRs (incluido el PR test→main del flujo de
-    # promoción) — el par event == 'push' + head_branch == 'test'
-    # filtra todo eso.
+    # CI de PRs (incluido el PR test→main del flujo de promoción) —
+    # el filtro `event == 'push'` los descarta.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'test')
+       github.event.workflow_run.event == 'push')
     strategy:
       fail-fast: false
       matrix:

@@ -96,6 +96,9 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
 
                 // Row-change event: lift the cached context (if any) and attach
                 // it to the envelope so the worker can populate audit_log.
+
+                // Row-change event: lift the cached context (if any) and attach
+                // it to the envelope so the worker can populate audit_log.
                 CdcEvent.Context ctx = (xid != 0L) ? ctxCache.take(xid) : null;
 
                 // Envelope {payload, routing_key, context} — the raw Debezium row change

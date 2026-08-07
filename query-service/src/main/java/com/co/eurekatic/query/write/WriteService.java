@@ -4,9 +4,11 @@ import com.co.eurekatic.common.security.AuthPrincipal;
 import com.co.eurekatic.query.catalog.CatalogClient;
 import com.co.eurekatic.query.catalog.WriteDefinition;
 import com.co.eurekatic.query.config.JdbcTemplateRegistry;
+import com.co.eurekatic.query.exception.PostgresErrorMapper;
 import com.co.eurekatic.query.web.WriteRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -14,6 +16,8 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
+
+import java.sql.SQLException;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -117,7 +121,23 @@ public class WriteService {
         }
 
         MapSqlParameterSource params = new MapSqlParameterSource(req.columns());
-        int rows = jdbc.update(sql, params);
+        int rows;
+        try {
+            rows = jdbc.update(sql, params);
+        } catch (DataAccessException dae) {
+            // V32 — translate SQLState to HTTP status. The
+            // common case here is 23505 (unique_violation)
+            // when a re-INSERT happens; we surface that as
+            // 409 Conflict so the admin-ui can show a
+            // "ya existe" toast.
+            SQLException sqlEx = dae.getMostSpecificCause() instanceof SQLException
+                    ? (SQLException) dae.getMostSpecificCause()
+                    : null;
+            if (sqlEx != null) {
+                throw PostgresErrorMapper.map(sqlEx);
+            }
+            throw dae;
+        }
         log.info("Write uuid={} ({}) affected {} rows", req.uuid(), def.writeType(), rows);
         return rows;
     }

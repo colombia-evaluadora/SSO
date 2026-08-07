@@ -411,6 +411,21 @@ curl -sI http://localhost:8080/admin/assets/index-XXXXXXXX.js # 200 js
 | `SSO_EMAIL_APP_NAME` | `SSO Modernizado` | sso-admin | Application name shown in the email |
 | `SSO_EMAIL_LOGO_URL` | `https://www.example.com/img/logo.png` | sso-admin | Logo URL embedded in the email |
 
+### V27 / V28 / V29 / V30 — catalog-as-REST + procedure execution + caller context
+
+| Variable | Default | Module | Purpose |
+|---|---|---|---|
+| `SSO_INTERNAL_TOKEN` | `change-me-internal-shared-secret-32-bytes-min` | sso-admin | Shared secret gating `/internal/**` (V30 `InternalTokenFilter`). MUST match `GATEWAY_INTERNAL_TOKEN` and `QUERY_CATALOG_INTERNAL_TOKEN`. Empty/placeholder fails closed. |
+| `GATEWAY_INTERNAL_TOKEN` | `change-me-internal-shared-secret-32-bytes-min` | api-gateway | Token the `CatalogRoutesRefresher` sends as `X-Internal-Token` against `/internal/gateway/routes`. |
+| `GATEWAY_CATALOG_REFRESH_MS` | `30000` | api-gateway | Cadence of the dynamic-route poll (V27). |
+| `QUERY_CATALOG_INTERNAL_TOKEN` | (empty) | query-service | Token the path-registry sends as `X-Internal-Token` against `/internal/pathTemplates` (V30). |
+| `QUERY_PATH_REGISTRY_REFRESH_MS` | `60000` | query-service | Cadence of the path-template in-memory registry refresh (V27). |
+| `QUERY_BULKHEAD_MAX_CONCURRENT` | `20` | query-service | V33 — max concurrent JDBC calls per dialect before 503. |
+| `QUERY_BULKHEAD_MAX_QUEUE` | `50` | query-service | V33 — queue depth for bulkhead overflow (wait 200ms before 503). |
+| `QUERY_RATE_LIMIT_RPS` | `100` | query-service | V33 — max RPS per JWT principal before 429. |
+| `QUERY_RATE_LIMIT_WINDOW` | `1s` | query-service | V33 — rate-limit window. |
+| `QUERY_SERVICE_BASE_URL` | `http://query-service:8080` | sso-admin | V33 — sso-admin calls `POST /internal/path-registry/invalidate` here. |
+
 ## Tests
 
 ```bash
@@ -488,10 +503,218 @@ configuration, and how to enable / disable providers via
    pins the contract. Anyone reintroducing `permitAll()` on this
    path should fail CI.
 
+## Queries as REST endpoints (V27 + V28 + V29)
+
+Each catalog row is now addressable as a first-class HTTP
+endpoint:
+
+| Layer | What it owns |
+|---|---|
+| `QUERY.PATH_TEMPLATE` (V27) | URL suffix, e.g. `/establecimiento/{id}` |
+| `MICROSERVICE.REQUEST_URI` (V3, reused) | URL prefix, e.g. `/api/eval-col/**` |
+| `QUERY.EXECUTION_MODE` (V28) | `SELECT` / `PROCEDURE` / `FUNCTION` |
+| JWT `uid` claim (V29) | `:caller_user_id` injected into JDBC params |
+| JWT `roles` claim (V29) | `:caller_roles` (CSV) and `:caller_roles_array` (PG array) injected |
+
+Combined, an admin can publish a catalog row that maps to:
+
+```
+POST /api/eval-col/establecimiento/42?estado=activo
+Authorization: Bearer <jwt, uid=42, roles=[EVALUADOR]>
+{ "filtros": { "regional": "cartagena" } }
+
+→ sso-admin /getQuery?uuid=proc-get-establecimiento
+→ query-service Postgres
+→ CALL get_establecimiento(:caller_user_id, :caller_roles,
+                           :id, :estado)
+→ JSON rows
+```
+
+Two flavors of path-based dispatch:
+
+1. **Hard-coded URL prefixes** in the gateway YAML (static).
+2. **Catalog-driven** via the api-gateway
+   `CatalogRoutesRefresher` polling
+   `sso-admin /internal/gateway/routes` every 30s (default).
+   New microservices become routable without a gateway restart.
+
+Per-query authorization still goes through `role_query`
+(server-side check inside `QueryCatalogService.resolve`).
+The path-registry's call to the catalog is gated by the
+shared `X-Internal-Token` header (V30
+`InternalTokenFilter`); production deployments MUST set
+`SSO_INTERNAL_TOKEN` to a real value or the path-registry
+silently fails to refresh.
+
+## V31 — observability + OUT-parameter support for procedures
+
+### Metrics (Micrometer → OTLP → Mimir)
+
+Every path-template, catalog, and execution event is
+instrumented. The labels are intentionally narrow to keep
+TSDB cardinality bounded:
+
+| Metric | Type | Tags | Meaning |
+|---|---|---|---|
+| `query.path_registry.refresh` | counter | `outcome=success\|failure` | A periodic refresh tick |
+| `query.path_registry.templates_loaded` | counter | (none) | Cumulative count of templates loaded |
+| `query.path_registry.size` | gauge | (none) | Current number of templates in the registry |
+| `query.path_registry.match` | counter | `result=hit\|miss` | Per-request path resolution |
+| `query.catalog.call` | counter | `endpoint=getQuery\|getWrite\|pathTemplates`, `outcome=success\|failure` | Outbound catalog calls |
+| `query.catalog.latency` | timer | same as above | Catalog RTT |
+| `query.execution` | counter | `mode=SELECT\|PROCEDURE\|FUNCTION`, `outcome=success\|failure` | Query executions |
+| `query.execution.latency` | timer | `mode` | JDBC latency split by mode |
+| `gateway.catalog.refresh` | counter | `outcome=success\|failure` | Route-table refresh ticks |
+| `gateway.catalog.routes_published` | counter | (none) | Total routes published |
+
+`/`serviceFit` and the path-dispatch controller return
+the V31 envelope `{rows, outParams}` (when the catalog
+row declares OUT params); the legacy `/query` and
+`/service` keep the bare-list shape for backwards
+compatibility.
+
+### OUT parameters for procedures (CallableStatement)
+
+When a catalog row has `executionMode=PROCEDURE` AND
+`outParamNames` non-empty, `query-service` switches to
+`CallableStatement` and reads each declared
+`:placeholder` as an OUT parameter. The catalog row:
+
+```sql
+CALL get_establecimiento(:caller_user_id, :caller_roles,
+                        :id, :out_status, :out_msg)
+```
+
+with `outParamNames = "out_status,out_msg"` produces:
+
+```json
+{
+  "rows": [ { "id": 42, "nombre": "IE #42" } ],
+  "outParams": { "out_status": "OK", "out_msg": "processed id=42" }
+}
+```
+
+`Types.OTHER` is used for the registration so the
+PostgreSQL driver returns whatever PG type the procedure
+emits (VARCHAR, INTEGER, JSON, …) without the catalog
+author pre-declaring JDBC SQL types. Validation at save
+time (`QueryAdminService.validateOutParams`) checks:
+
+1. `executionMode=PROCEDURE` (no point in OUT params on
+   SELECT/FUNCTION).
+2. Each name starts with `:` (placeholder convention).
+3. Each name appears as a `:name` token in the SQL.
+
+This completes the procedure story: PL/pgSQL
+`INOUT`/`OUT` parameters now flow through the catalog
+the same way `RETURN QUERY` rows have since V28.
+
+## V32 — error mapping + path-registry self-discovery
+
+### PostgreSQL SQLState → HTTP status
+
+| SQLState | Class | HTTP | Typical cause |
+|---|---|---|---|
+| `42501` | `42` | 403 | `RAISE EXCEPTION 'permission_denied: ...'` |
+| `P0001` | `P0` | 400 | PL/pgSQL `RAISE EXCEPTION '<msg>'` |
+| `22000`-`22999` | `22` | 400 | Wrong type, division by zero, etc. |
+| `23000`-`23999` | `23` | 409 | Unique / FK / NOT NULL violations |
+| `08000`-`08999` | `08` | 503 | Connection failure / pool exhausted |
+| `40000`-`40999` | `40` | 503 | Deadlock / serialization (retry-safe) |
+| `42P01` and other 42xxx | `42` | 500 | Operator error (undefined table, syntax) |
+| unknown | — | 500 | Operator alert |
+
+`com.co.eurekatic.query.exception.PostgresErrorMapper` is
+the single point of translation. Both the read path
+(`QueryService.execute`) and the write path
+(`WriteService.execute`) wrap their JDBC calls; a final
+fallback in `GlobalExceptionHandler` catches any
+`SQLException` / `DataAccessException` that bubbles past
+the services (defense in depth).
+
+The mapper also strips `jdbc:postgresql://…` URLs from
+response messages and caps body size at 500 chars so a
+noisy procedure doesn't blow up the response envelope.
+
+### Path-registry self-discovery (`/internal/whoami`)
+
+Before V32 the path-registry fetched every path-template
+query in the catalog and let the AntPathMatcher filter
+at request time. Cheap enough for small catalogs but
+leaky: every query-service instance carries templates
+it will never match.
+
+V32 adds an `/internal/whoami?instanceName=...` endpoint
+on sso-admin (gated by `X-Internal-Token`). At boot and
+on every refresh tick, `QueryPathRegistry` calls it with
+its `query.instance.name` to discover its own
+`microserviceId`, then passes that id to
+`fetchPathTemplates(microserviceId)` so the catalog
+returns only its own templates server-side. An empty
+response from `/whoami` (operator hasn't created the row
+yet) is graceful: the registry stays "global" rather
+than erroring out.
+
+## V33 — resilience: bulkhead + rate limit + invalidation
+
+The query path now has three layers of protection against
+abuse and resource exhaustion. All values are tunable via
+`query.resilience.*` in `application.yml`.
+
+### Bulkhead (per-dialect concurrency cap)
+
+A single slow `SELECT` on a hot dialect shouldn't starve
+the HikariCP pool for every other dialect. The bulkhead
+caps concurrent JDBC calls per dialect (default 20) and
+queues overflow (default 50 deep) with a 200ms wait.
+When the cap + queue are both full, the request returns
+`503 BULKHEAD_FULL` with `Retry-After: 1`. A slow query
+on `postgres` no longer affects `oracle` traffic.
+
+### Rate limiter (per-principal RPS)
+
+A runaway client cannot overwhelm the service. The
+limiter is keyed by the JWT subject (email), so a noisy
+client is throttled independently of quiet ones.
+Default 100 RPS / principal; overflow returns
+`429 RATE_LIMITED` with `Retry-After: 1`. Anonymous
+(`/public/service`) traffic falls back to a single
+shared "anonymous" bucket.
+
+### Path-registry invalidation (sso-admin → query-service)
+
+Before V33 the path-registry refreshed every 60s; a
+catalog mutation could take up to that long to land.
+`PathRegistryNotifier` (sso-admin) now pushes a
+`POST /internal/path-registry/invalidate` to every
+query-service instance right after a successful
+create / update / delete, with the same `X-Internal-Token`
+header. The query-service
+`PathRegistryAdminController` triggers `refresh()`
+synchronously and returns the new registry size. The
+notification is best-effort: a failed call is logged at
+WARN and the next 60s periodic refresh is the safety
+net. The admin-ui save succeeds regardless.
+
+### Metrics (Micrometer → OTLP)
+
+Resilience4j already auto-registers gauges on the
+`MeterRegistry`:
+
+| Metric | Type | Tags | Meaning |
+|---|---|---|---|
+| `query.resilience.bulkhead.available_concurrent` | gauge | `dialect` | Permits available in the bulkhead |
+| `query.resilience.bulkhead.max_concurrent` | gauge | `dialect` | Configured cap |
+| `query.resilience.rate_limit.available` | gauge | `principal`, `kind=ratelimiter` | Permits available in the window |
+
+Plus the standard Resilience4j metrics
+(`resilience4j_bulkhead_*`, `resilience4j_ratelimiter_*`)
+for saturation / failure / wait time. All flow to Mimir
+via the existing OTLP exporter.
+
 ## Migration roadmap (how this maps to the legacy code)
 
 | Step | Status | What it covers |
-|---|---|---|
 | 1 | ✅ | Parent POM + Eureka server |
 | 2 | ✅ | `common` module skeleton (entities, JPA repos) |
 | 3 | ✅ | `common` JWT service (jjwt 0.12.7, unit-tested) |

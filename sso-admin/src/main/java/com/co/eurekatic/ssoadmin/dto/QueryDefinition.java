@@ -1,5 +1,6 @@
 package com.co.eurekatic.ssoadmin.dto;
 
+import com.co.eurekatic.common.entity.ExecutionMode;
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
 
@@ -23,11 +24,19 @@ import com.co.eurekatic.common.entity.Query;
  * backward-compatible with any external consumer that already
  * parses the legacy response.
  *
- * <p>{@code microserviceId} is NEW — it tells the admin-ui which
+ * <p>{@code microserviceId} tells the admin-ui which
  * {@code query-service-<instanceName>} gateway path to use when
  * executing the query. {@code null} means the query is "global"
  * and any instance may serve it (the UI defaults to the legacy
  * canonical {@code query-service} service id in that case).
+ *
+ * <p><b>V27</b> — {@code pathTemplate} surfaces the path suffix
+ * so {@code query-service} can build its in-memory
+ * {@code Map<pathTemplate, uuid>} registry for path-based
+ * dispatch.
+ *
+ * <p><b>V28</b> — {@code executionMode} tells {@code query-service}
+ * whether to run as SELECT / PROCEDURE / FUNCTION.
  */
 public record QueryDefinition(
         Long idQuery,
@@ -39,8 +48,40 @@ public record QueryDefinition(
         String detail,
         String action,
         String style,
-        Long microserviceId
+        Long microserviceId,
+        String pathTemplate,
+        ExecutionMode executionMode,
+        String outParamNames
 ) {
+    /**
+     * V31 — back-compat constructor for callers that pre-date
+     * V27 + V28 + V31 (i.e. the 10-arg shape). The new fields
+     * default to {@code null} / {@code SELECT} so legacy tests
+     * keep compiling without a sweep.
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           Long microserviceId) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             null, ExecutionMode.SELECT, null);
+    }
+
+    /**
+     * V31 — back-compat for callers between V27 and V31
+     * (10 args + pathTemplate, no executionMode / outParamNames).
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           Long microserviceId,
+                           String pathTemplate, ExecutionMode executionMode) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             pathTemplate, executionMode, null);
+    }
+
     public static QueryDefinition fromEntity(Query q) {
         Microservice m = q.getMicroservice();
         return new QueryDefinition(
@@ -53,6 +94,9 @@ public record QueryDefinition(
                 q.getDetail(),
                 q.getAction(),
                 q.getStyle(),
-                m != null ? m.getId() : null);
+                m != null ? m.getId() : null,
+                q.getPathTemplate(),
+                ExecutionMode.fromString(q.getExecutionMode()),
+                q.getOutParamNames());
     }
 }

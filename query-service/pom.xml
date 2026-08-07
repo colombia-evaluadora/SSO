@@ -23,6 +23,8 @@
 
     <properties>
         <start-class>com.co.eurekatic.query.QueryServiceApplication</start-class>
+        <!-- V33 — Resilience4j version is shared via the parent
+             pom (same as notification-service). -->
     </properties>
 
     <dependencies>
@@ -94,6 +96,24 @@
             <groupId>com.microsoft.sqlserver</groupId>
             <artifactId>mssql-jdbc</artifactId>
             <version>12.10.0.jre11</version>
+        </dependency>
+
+        <!-- V33 — Resilience4j: programmatic Bulkhead + RateLimiter.
+             Mirrors notification-service's pattern (no AOP starter
+             — that one is Spring Boot 3 only). Bulkhead caps
+             concurrent JDBC calls per dialect so a single slow
+             query can't starve the pool; RateLimiter caps RPS per
+             principal so a runaway client can't overwhelm the
+             service. Built at startup from query.resilience.* props. -->
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-bulkhead</artifactId>
+            <version>${resilience4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-ratelimiter</artifactId>
+            <version>${resilience4j.version}</version>
         </dependency>
 
         <!-- ===== test scope ===== -->

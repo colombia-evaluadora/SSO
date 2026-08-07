@@ -71,6 +71,25 @@ public class QueryCatalogController {
         return service.listForCaller(currentEmail(), microserviceId);
     }
 
+    /**
+     * V30 — same shape and authorization as {@link #myQueries}
+     * but server-side filtered to {@code path_template IS NOT
+     * NULL}. Consumed by {@code query-service}'s in-memory
+     * {@code QueryPathRegistry} so the registry doesn't pay the
+     * wire cost of fetching rows that don't have a template
+     * (typically the majority of the catalog).
+     *
+     * <p>The per-row authorization check is unchanged: ADMIN
+     * sees everything; everyone else is filtered to queries
+     * they have a role on (or publicEnd=true). A path-template
+     * query that's gated to a specific role won't leak just
+     * because it's routable.
+     */
+    @GetMapping("/myPathTemplates")
+    public List<QueryDefinition> myPathTemplates(@RequestParam(required = false) Long microserviceId) {
+        return service.listPathTemplatesForCaller(currentEmail(), microserviceId);
+    }
+
     private static String currentEmail() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null || !(auth.getPrincipal() instanceof AuthPrincipal principal)) {

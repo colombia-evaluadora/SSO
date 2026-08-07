@@ -25,6 +25,12 @@ import reactor.core.publisher.Mono;
  *       header value is gone since the column was dropped.</li>
  *   <li>{@code X-Authenticated-Roles} — comma-separated role names</li>
  *   <li>{@code X-Authenticated-Token-Type} — {@code access} or {@code api}</li>
+ *   <li>{@code X-Authenticated-User-Id} — the numeric {@code uid} claim
+ *       (V29). Downstream services that need the userId (e.g. for
+ *       auditing or for passing into a stored procedure) read it
+ *       here without a DB lookup. Empty when the token didn't carry
+ *       the claim (legacy tokens); downstream consumers MUST tolerate
+ *       an empty header and treat it as "anonymous-ish".</li>
  * </ul>
  *
  * <p>These headers are advisory only — the downstream service MUST
@@ -38,6 +44,7 @@ import reactor.core.publisher.Mono;
 public class UserForwardingGlobalFilter implements GlobalFilter, Ordered {
 
     static final String HEADER_USER = "X-Authenticated-User";
+    static final String HEADER_USER_ID = "X-Authenticated-User-Id";
     static final String HEADER_ROLES = "X-Authenticated-Roles";
     static final String HEADER_TOKEN_TYPE = "X-Authenticated-Token-Type";
 
@@ -54,15 +61,26 @@ public class UserForwardingGlobalFilter implements GlobalFilter, Ordered {
                 .filter(Authentication::isAuthenticated)
                 .map(Authentication::getPrincipal)
                 .ofType(AuthPrincipal.class)
-                .map(principal -> exchange.getRequest().mutate()
-                        // AuthPrincipal.email() — the JWT sub since V12
-                        // carries the user's email (the legacy username
-                        // column is gone). Header name is unchanged so
-                        // existing downstream parsers keep working.
-                        .header(HEADER_USER, principal.email())
-                        .header(HEADER_ROLES, String.join(",", principal.roles()))
-                        .header(HEADER_TOKEN_TYPE, principal.tokenType())
-                        .build())
+                .map(principal -> {
+                    var mutator = exchange.getRequest().mutate()
+                            // AuthPrincipal.email() — the JWT sub since V12
+                            // carries the user's email (the legacy username
+                            // column is gone). Header name is unchanged so
+                            // existing downstream parsers keep working.
+                            .header(HEADER_USER, principal.email())
+                            .header(HEADER_ROLES, String.join(",", principal.roles()))
+                            .header(HEADER_TOKEN_TYPE, principal.tokenType());
+                    // V29: forward the numeric userId. Empty
+                    // string when the token didn't carry uid
+                    // (legacy). Downstream consumers MUST handle
+                    // empty as "unknown".
+                    if (principal.userId() != null) {
+                        mutator.header(HEADER_USER_ID, principal.userId().toString());
+                    } else {
+                        mutator.header(HEADER_USER_ID, "");
+                    }
+                    return mutator.build();
+                })
                 .defaultIfEmpty(exchange.getRequest());
 
         return requestToForward

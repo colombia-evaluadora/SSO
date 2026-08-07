@@ -2,6 +2,7 @@ package com.co.eurekatic.ssoadmin.config;
 
 import com.co.eurekatic.common.security.JwtProperties;
 import com.co.eurekatic.common.security.JwtTokenService;
+import com.co.eurekatic.ssoadmin.security.InternalTokenFilter;
 import com.co.eurekatic.ssoadmin.service.AppAccessService;
 import com.co.eurekatic.ssoadmin.service.EndpointAccessService;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -126,6 +127,15 @@ public class SecurityConfig {
                         // internal docker network, not on the LAN.
                         .requestMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info").permitAll()
+                        // V27/V30 — internal route-table feed for
+                        // api-gateway's CatalogRoutesRefresher AND
+                        // path-registry token issuance for
+                        // query-service. The InternalTokenFilter
+                        // (registered below) gates these with the
+                        // X-Internal-Token header; SecurityConfig
+                        // just has to permitAll so Spring doesn't
+                        // 401 before the filter runs.
+                        .requestMatchers("/internal/**").permitAll()
                         // Catalog read endpoints — any
                         // authenticated caller; the per-row
                         // role check happens inside the
@@ -137,7 +147,11 @@ public class SecurityConfig {
                         // is also per-row authorized (ADMIN
                         // bypass + publicEnd bypass + role
                         // intersection), same as /getQuery.
-                        .requestMatchers("/getQuery", "/getWrite", "/myQueries", "/myMenu").authenticated()
+                        // V30 — /myPathTemplates is the same shape,
+                        // filtered to queries with a pathTemplate.
+                        // Used by query-service's in-memory registry.
+                        .requestMatchers("/getQuery", "/getWrite", "/myQueries",
+                                "/myPathTemplates", "/myMenu").authenticated()
                         // Everything else requires a role_app binding
                         // to this app AND a matching role_endpoint
                         // binding — see SsoAdminAccessManager. No
@@ -147,6 +161,19 @@ public class SecurityConfig {
                         // of whether it was ever scoped to this app,
                         // and blocked every other role outright.
                         .anyRequest().access(ssoAdminAccessManager))
+                // V30 — gate the /internal/** surface on the
+                // shared-secret header. The InternalTokenFilter
+                // is no longer in the Spring Security chain
+                // (that triggered "Filter class JwtAuthenticationFilter
+                // does not have a registered order" because
+                // addFilterBefore requires a known Spring
+                // Security anchor); instead it's registered as
+                // a global servlet filter with order
+                // HIGHEST_PRECEDENCE in InternalTokenConfig.
+                // The order makes the gate fire BEFORE
+                // UsernamePasswordAuthenticationFilter and the
+                // rest of the security chain — invalid tokens
+                // are rejected before any auth context is built.
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
                 .build();
     }

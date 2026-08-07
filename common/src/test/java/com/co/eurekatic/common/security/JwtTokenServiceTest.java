@@ -240,4 +240,109 @@ class JwtTokenServiceTest {
         assertThatThrownBy(() -> svc.parseAndValidateIssuer(foreignToken))
                 .isInstanceOf(JwtException.class);
     }
+
+    /* ====================== V29 — uid claim round-trip ====================== */
+
+    @Test
+    void roundTripPreservesUidClaim() {
+        JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
+
+        Set<String> roles = new LinkedHashSet<>();
+        roles.add("ADMIN");
+
+        String token = svc.issueAccessToken("alice", 42L, roles);
+        AuthPrincipal principal = svc.parse(token);
+
+        assertThat(principal.email()).isEqualTo("alice");
+        assertThat(principal.userId()).isEqualTo(42L);
+        assertThat(principal.roles()).containsExactly("ADMIN");
+        assertThat(principal.tokenType()).isEqualTo("access");
+    }
+
+    @Test
+    void uidNullAtIssueOmitsClaim() {
+        // Back-compat overload: when userId is null, the claim
+        // should NOT be in the payload. Tokens without uid parse
+        // back to userId=null, which is what the V29 caller
+        // (QueryService) treats as "legacy token".
+        JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
+        String token = svc.issueAccessToken("alice", null, Set.of("USER"));
+
+        AuthPrincipal principal = svc.parse(token);
+        assertThat(principal.userId()).isNull();
+    }
+
+    @Test
+    void tokenWithoutUidClaimParsesToNullUserId() {
+        // Forge a token without the uid claim — what callers from
+        // before V29 would have produced. Must parse cleanly with
+        // userId=null (no NPE).
+        SecretKey key = Keys.hmacShaKeyFor(GOOD_SECRET.getBytes(StandardCharsets.UTF_8));
+        String legacyToken = io.jsonwebtoken.Jwts.builder()
+                .subject("alice")
+                .issuer("sso-postgres")
+                .claim("roles", java.util.List.of("USER"))
+                .claim("typ", "access")
+                .issuedAt(new java.util.Date())
+                .expiration(new java.util.Date(System.currentTimeMillis() + 60_000))
+                .signWith(key, io.jsonwebtoken.Jwts.SIG.HS256)
+                .compact();
+
+        JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
+        AuthPrincipal principal = svc.parse(legacyToken);
+
+        assertThat(principal.email()).isEqualTo("alice");
+        assertThat(principal.userId()).isNull();
+        assertThat(principal.roles()).containsExactly("USER");
+    }
+
+    @Test
+    void uidClaimAsStringIsParsedAsLong() {
+        // Defensive: a non-JJWT producer might emit uid as a JSON
+        // string instead of a number. The parser must coerce it.
+        SecretKey key = Keys.hmacShaKeyFor(GOOD_SECRET.getBytes(StandardCharsets.UTF_8));
+        String oddToken = io.jsonwebtoken.Jwts.builder()
+                .subject("alice")
+                .issuer("sso-postgres")
+                .claim("uid", "99")
+                .claim("roles", java.util.List.of("USER"))
+                .issuedAt(new java.util.Date())
+                .expiration(new java.util.Date(System.currentTimeMillis() + 60_000))
+                .signWith(key, io.jsonwebtoken.Jwts.SIG.HS256)
+                .compact();
+
+        JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
+        assertThat(svc.parse(oddToken).userId()).isEqualTo(99L);
+    }
+
+    @Test
+    void uidClaimWithGarbageValueIsRejected() {
+        SecretKey key = Keys.hmacShaKeyFor(GOOD_SECRET.getBytes(StandardCharsets.UTF_8));
+        String badToken = io.jsonwebtoken.Jwts.builder()
+                .subject("alice")
+                .issuer("sso-postgres")
+                .claim("uid", "not-a-number")
+                .claim("roles", java.util.List.of("USER"))
+                .issuedAt(new java.util.Date())
+                .expiration(new java.util.Date(System.currentTimeMillis() + 60_000))
+                .signWith(key, io.jsonwebtoken.Jwts.SIG.HS256)
+                .compact();
+
+        JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
+        assertThatThrownBy(() -> svc.parse(badToken))
+                .isInstanceOf(JwtException.class)
+                .hasMessageContaining("uid");
+    }
+
+    @Test
+    void backCompatIssueAccessTokenWithoutUidStillWorks() {
+        // The (email, roles) overload is kept for callers that
+        // haven't migrated. Output must be a valid token and
+        // parse to a principal with userId=null.
+        JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
+        String token = svc.issueAccessToken("alice", Set.of("USER"));
+        AuthPrincipal principal = svc.parse(token);
+        assertThat(principal.email()).isEqualTo("alice");
+        assertThat(principal.userId()).isNull();
+    }
 }

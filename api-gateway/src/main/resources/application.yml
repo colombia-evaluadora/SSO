@@ -2,13 +2,28 @@ server:
   port: 8080
   shutdown: graceful
 
+# V30 — config for the CatalogRoutesRefresher that polls
+# sso-admin's /internal/gateway/routes. The shared secret
+# gates the /internal/** surface on sso-admin (see
+# InternalTokenFilter); a missing token causes sso-admin
+# to 401 the poller, which keeps the previous routes
+# active (graceful degradation). Top-level (NOT under
+# spring:) because the names are consumed via @Value
+# (gateway.catalog-url) — not part of Spring Cloud
+# Gateway's schema. Previously this block was placed at
+# top level AND inadvertently caused the cloud.gateway
+# subtree below to be re-indented under it, breaking the
+# discovery locator (this commit fixes that mistake).
+gateway:
+  catalog-url: ${GATEWAY_CATALOG_URL:http://sso-admin:8080}
+  catalog-refresh-ms: ${GATEWAY_CATALOG_REFRESH_MS:30000}
+
 spring:
   application:
     name: api-gateway
   main:
     banner-mode: off
     web-application-type: reactive
-
   cloud:
     gateway:
       # Spring Cloud Gateway 5.0.x (Spring Cloud 2025.1.2 / Oakwood)
@@ -235,29 +250,29 @@ spring:
               enabled: true
               lower-case-service-id: true
               include-expression: "serviceId != 'api-gateway'"
-
+  
 eureka:
-  client:
-    service-url:
-      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka}
-    # healthcheck.enabled MUST be false here too: otherwise the
-    # gateway itself can transiently flip to DOWN during its own
-    # warm-up window, and clients (the SPA, scripts) get confusing
-    # gateway-down errors. Lease/heartbeat alone is the source of
-    # truth for "is this instance alive".
-    healthcheck:
-      enabled: false
-    # The default 30s is too slow to recover from a restart. After
-    # a service (e.g. auth-center) comes back UP we want the
-    # gateway's ribbon cache to refresh fast so /login doesn't 503
-    # for a full minute. 5s is plenty for local dev and acceptable
-    # in prod (the registry delta payload is tiny).
-    registry-fetch-interval-seconds: 5
-  instance:
-    prefer-ip-address: true
-    lease-renewal-interval-in-seconds: 10
-    lease-expiration-duration-in-seconds: 30
-
+    client:
+      service-url:
+        defaultZone: ${EUREKA_URL:http://localhost:8761/eureka}
+      # healthcheck.enabled MUST be false here too: otherwise the
+      # gateway itself can transiently flip to DOWN during its own
+      # warm-up window, and clients (the SPA, scripts) get confusing
+      # gateway-down errors. Lease/heartbeat alone is the source of
+      # truth for "is this instance alive".
+      healthcheck:
+        enabled: false
+      # The default 30s is too slow to recover from a restart. After
+      # a service (e.g. auth-center) comes back UP we want the
+      # gateway's ribbon cache to refresh fast so /login doesn't 503
+      # for a full minute. 5s is plenty for local dev and acceptable
+      # in prod (the registry delta payload is tiny).
+      registry-fetch-interval-seconds: 5
+    instance:
+      prefer-ip-address: true
+      lease-renewal-interval-in-seconds: 10
+      lease-expiration-duration-in-seconds: 30
+  
 sso:
   jwt:
     # Sólo la pública: el gateway verifica firmas, no las emite.
@@ -272,62 +287,62 @@ sso:
     allowed-origins: ${SSO_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:4173,http://localhost:3000}
 
 management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,gateway,prometheus
-  endpoint:
-    health:
-      probes:
-        enabled: true
-      show-details: never
-
-  # ---------------------------------------------------------------------------
-  # Observability — pure OTLP. Metrics, traces and logs are all pushed
-  # to the Grafana Alloy collector. Alloy fans out to Mimir / Tempo / Loki.
-  #
-  # The endpoint defaults to the OTEL_EXPORTER_OTLP_ENDPOINT env var
-  # (set to http://alloy:4318 in docker-compose), falling back to
-  # localhost:4318 for a developer running Alloy on the host.
-  #
-  # Spring Boot 4 naming (per the official 2025-11-18 Spring blog):
-  #   metrics  -> management.otlp.metrics.export.url
-  #   tracing  -> management.opentelemetry.tracing.export.otlp.endpoint
-  #   logs     -> management.opentelemetry.logging.export.otlp.endpoint
-  # The old `management.otlp.tracing.endpoint` /
-  # `management.otlp.logs.export.endpoint` namespaces are silently
-  # ignored in Boot 4 — the app would boot, but no traces or logs
-  # would ever reach Alloy and Tempo/Loki would stay empty.
-  # ---------------------------------------------------------------------------
-  otlp:
-    metrics:
-      export:
-        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
-        step: 10s
-  opentelemetry:
+    endpoints:
+      web:
+        exposure:
+          include: health,info,gateway,prometheus
+    endpoint:
+      health:
+        probes:
+          enabled: true
+        show-details: never
+  
+    # ---------------------------------------------------------------------------
+    # Observability — pure OTLP. Metrics, traces and logs are all pushed
+    # to the Grafana Alloy collector. Alloy fans out to Mimir / Tempo / Loki.
+    #
+    # The endpoint defaults to the OTEL_EXPORTER_OTLP_ENDPOINT env var
+    # (set to http://alloy:4318 in docker-compose), falling back to
+    # localhost:4318 for a developer running Alloy on the host.
+    #
+    # Spring Boot 4 naming (per the official 2025-11-18 Spring blog):
+    #   metrics  -> management.otlp.metrics.export.url
+    #   tracing  -> management.opentelemetry.tracing.export.otlp.endpoint
+    #   logs     -> management.opentelemetry.logging.export.otlp.endpoint
+    # The old `management.otlp.tracing.endpoint` /
+    # `management.otlp.logs.export.endpoint` namespaces are silently
+    # ignored in Boot 4 — the app would boot, but no traces or logs
+    # would ever reach Alloy and Tempo/Loki would stay empty.
+    # ---------------------------------------------------------------------------
+    otlp:
+      metrics:
+        export:
+          url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+          step: 10s
+    opentelemetry:
+      tracing:
+        export:
+          otlp:
+            endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+      logging:
+        export:
+          otlp:
+            endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+      # Resource attributes attached to every metric/trace/log so Grafana
+      # can group by service. service.name comes from spring.application.name.
+      resource-attributes:
+        service.namespace: sso
+        deployment.environment: ${DEPLOY_ENV:dev}
     tracing:
-      export:
-        otlp:
-          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
-    logging:
-      export:
-        otlp:
-          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
-    # Resource attributes attached to every metric/trace/log so Grafana
-    # can group by service. service.name comes from spring.application.name.
-    resource-attributes:
-      service.namespace: sso
-      deployment.environment: ${DEPLOY_ENV:dev}
-  tracing:
-    enabled: true
-    sampling:
-      # 100% in dev so every request shows a trace. Lower to e.g. 0.1
-      # in production to cap trace volume.
-      probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
-
+      enabled: true
+      sampling:
+        # 100% in dev so every request shows a trace. Lower to e.g. 0.1
+        # in production to cap trace volume.
+        probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
+  
 logging:
-  level:
-    root: INFO
-    com.co.eurekatic: INFO
-    org.springframework.cloud.gateway: INFO
-    reactor.netty: INFO
+    level:
+      root: INFO
+      com.co.eurekatic: INFO
+      org.springframework.cloud.gateway: INFO
+      reactor.netty: INFO
