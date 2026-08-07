@@ -29,6 +29,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -177,7 +178,7 @@ class QueryPathDispatcherIntegrationTest {
 
         // WHEN a client POSTs to /establecimiento/42 with a
         // query param + JSON body.
-        Map<String, Object> response = postJson(
+        List<Map<String, Object>> response = postJson(
                 "/establecimiento/42?estado=activo",
                 Map.of("filtros", Map.of("regional", "cartagena")));
 
@@ -215,7 +216,7 @@ class QueryPathDispatcherIntegrationTest {
 
         registry.refresh();
 
-        Map<String, Object> response = postJson(
+        List<Map<String, Object>> response = postJson(
                 "/establecimiento/7", Map.of());
 
         assertThat(response).hasSize(1);
@@ -300,14 +301,16 @@ class QueryPathDispatcherIntegrationTest {
                 .returnResult()
                 .getResponseBody();
         JsonNode node = mapper.readTree(responseBytes == null ? new byte[0] : responseBytes);
-        // The list might come back as a JSON array or as a
-        // single object; normalize to a list.
-        if (node.isArray()) {
-            return mapper.convertValue(node,
-                    mapper.getTypeFactory().constructCollectionType(
-                            java.util.List.class, Map.class));
-        }
-        return List.of(mapper.convertValue(node, Map.class));
+        // V31: the path-dispatch controller always answers with the
+        // envelope {rows, outParams?} — never a bare array (that
+        // shape belongs to the legacy /query endpoint). Unwrap
+        // `rows` so the assertions read naturally. The isArray()
+        // branch stays as a tolerance for the legacy shape in case
+        // a test points at /query instead.
+        JsonNode rows = node.isArray() ? node : node.path("rows");
+        return mapper.convertValue(rows,
+                mapper.getTypeFactory().constructCollectionType(
+                        java.util.List.class, Map.class));
     }
 
     private String tokenFor(String email, String... roles) {

@@ -150,6 +150,20 @@ jobs:
           distribution: temurin
           java-version: '25'
           cache: maven
+      # column-types.json es un recurso GENERADO, no versionado
+      # (.gitignore: **/column-types.json). cdc-worker/Dockerfile lo
+      # regenera desde V22 con cdc-generator antes de empaquetar.
+      # ColumnTypeRegistryTest lo carga del classpath, así que sin
+      # este paso esos tests fallan con "Resource not found on
+      # classpath: column-types.json" — no por una regresión, sino
+      # porque el artefacto sólo existía dentro del build de Docker.
+      # Reproducimos aquí los mismos dos pasos del Dockerfile.
+      - name: Generate column-types.json from V22
+        run: |
+          mvn -B -ntp -f cdc-sync/pom.xml -pl cdc-generator -am package -DskipTests -q
+          java -jar cdc-sync/cdc-generator/target/app.jar \
+            --source postgres/migrations/V22__academic-schema.sql \
+            --out cdc-sync/cdc-common/src/main/resources/column-types.json
       - name: Verify (cdc-sync)
         run: mvn -B -ntp -f cdc-sync/pom.xml verify
 

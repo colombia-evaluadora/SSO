@@ -164,7 +164,7 @@ class CallableStatementOutParamIntegrationTest {
         // populated them via the side-channel table.
         @SuppressWarnings("unchecked")
         Map<String, Object> out = (Map<String, Object>) response.get("outParams");
-        assertThat(out).containsKey("out_status", "out_msg");
+        assertThat(out).containsKeys("out_status", "out_msg");
     }
 
     /* ====================== PROCEDURE without OUT params keeps legacy shape ====================== */
