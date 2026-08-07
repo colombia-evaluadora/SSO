@@ -189,6 +189,14 @@ jobs:
           name: api-gateway-jar
           path: api-gateway/target/*.jar
           retention-days: 7
+        # Same rationale as the admin-ui-build upload:
+        # the build (Verify step above) is what gates a PR.
+        # The upload is a side effect consumed by
+        # deploy-test.yml on push-to-test. A storage-quota
+        # outage in the GitHub org must NOT block the gate.
+        # (PR #10 added the same for admin-ui-build on
+        # 2026-08-07; mirroring here for consistency.)
+        continue-on-error: true
 
   # ───────── Frontend: typecheck ─────────
   admin-ui-typecheck:
