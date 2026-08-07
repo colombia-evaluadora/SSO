@@ -61,14 +61,11 @@ class JwtTokenServiceTest {
     }
 
     private static JwtProperties propsFor(KeyPair keys) {
-        // The constructor signature passes the optional V29
-        // 'secret' as the 8th arg so JwtTokenService's HS256
-        // path has a key to use when its construction runs.
-        // The constructor itself (canonical 8-arg) is what
-        // JwtTokenService consumes; the back-compat 7-arg
-        // overload (added during the main→test merge) lets
-        // the existing 7-arg calls still compile. Both paths
-        // converge on the same instance field set.
+        // RSA-only: no HMAC secret. JwtTokenService falls back
+        // to RS256 when neither secret nor privateKey is set
+        // is impossible, so this returns an RSA-signing setup.
+        // (The back-compat 7-arg overload lets the call compile
+        //  even when JwtProperties has 8 components.)
         return new JwtProperties(
                 pem("PRIVATE KEY", keys.getPrivate().getEncoded()),
                 pem("PUBLIC KEY", keys.getPublic().getEncoded()),
@@ -77,7 +74,7 @@ class JwtTokenServiceTest {
                 86_400L,
                 "Authorization",
                 "Bearer ",
-                GOOD_SECRET);
+                null);
     }
 
     /** Same key pair, but public half only — how every non-auth-center service is configured. */
@@ -90,7 +87,7 @@ class JwtTokenServiceTest {
                 86_400L,
                 "Authorization",
                 "Bearer ",
-                GOOD_SECRET);
+                null);
     }
 
     @Test
@@ -206,7 +203,7 @@ class JwtTokenServiceTest {
                 86_400L,
                 "Authorization",
                 "Bearer ",
-                GOOD_SECRET));
+                null));
 
         String token = svc.issueAccessToken("alice", Set.of("USER"));
         assertThat(svc.parse(token).email()).isEqualTo("alice");
@@ -223,7 +220,7 @@ class JwtTokenServiceTest {
                 86_400L,
                 "Authorization",
                 "Bearer ",
-                GOOD_SECRET)))
+                null)))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -237,7 +234,7 @@ class JwtTokenServiceTest {
                 86_400L,
                 "Authorization",
                 "Bearer ",
-                GOOD_SECRET)))
+                null)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("gen-jwt-keys.sh");
     }
