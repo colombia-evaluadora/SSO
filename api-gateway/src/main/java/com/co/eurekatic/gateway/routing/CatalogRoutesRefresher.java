@@ -46,21 +46,39 @@ import java.util.concurrent.atomic.AtomicInteger;
  * gateway would 404 every request during a sso-admin outage,
  * which is the opposite of what we want for an internal
  * poll-and-update loop.
+ *
+ * <p><b>Authentication</b>: sso-admin's {@code /internal/**}
+ * surface is gated by {@code InternalTokenFilter}, which
+ * requires a constant-time-matched {@code X-Internal-Token}
+ * header. The token is configured via {@code gateway.internal-token}
+ * (env: {@code GATEWAY_INTERNAL_TOKEN}); it MUST match
+ * sso-admin's {@code sso.internal.token} ({@code SSO_INTERNAL_TOKEN}).
+ * When the token is missing/blank the poller skips the
+ * header and sso-admin 401s every poll — visible in the
+ * gateway's startup log as a one-shot WARN so the operator
+ * can tell at a glance that dynamic routing is offline.
+ * Empty-by-default preserves back-compat with deployments
+ * that only rely on the static {@code /api/qs/**} path.
  */
 @Component
 public class CatalogRoutesRefresher {
 
     private static final Logger log = LoggerFactory.getLogger(CatalogRoutesRefresher.class);
 
+    /** Header name; mirrors {@code InternalTokenFilter.HEADER} in sso-admin. */
+    static final String INTERNAL_TOKEN_HEADER = "X-Internal-Token";
+
     private final WebClient client;
     private final ApplicationEventPublisher publisher;
     private final MeterRegistry meters;
+    private final String internalToken;
     private final AtomicInteger lastPublishedCount = new AtomicInteger(0);
 
     public CatalogRoutesRefresher(
             ApplicationEventPublisher publisher,
             MeterRegistry meters,
-            @Value("${gateway.catalog-url:http://sso-admin:8080}") String catalogBaseUrl) {
+            @Value("${gateway.catalog-url:http://sso-admin:8080}") String catalogBaseUrl,
+            @Value("${gateway.internal-token:}") String internalToken) {
         // V27 fix — Spring Boot 4's spring-cloud-starter-gateway-
         // server-webflux does NOT auto-register a WebClient.Builder
         // bean (unlike Boot 3's spring-cloud-starter-gateway which
@@ -79,7 +97,21 @@ public class CatalogRoutesRefresher {
                 .build();
         this.publisher = publisher;
         this.meters = meters;
+        this.internalToken = internalToken;
         log.info("CatalogRoutesRefresher: baseUrl={}", catalogBaseUrl);
+        if (internalToken == null || internalToken.isBlank()) {
+            // One-shot WARN at startup so the operator
+            // notices dynamic routing is offline. The
+            // existing per-poll WARN (in the catch block
+            // below) would also catch it, but a startup
+            // line is easier to grep for in
+            // `docker logs … | grep 'CatalogRoutesRefresher'`.
+            log.warn("CatalogRoutesRefresher: gateway.internal-token is not "
+                    + "configured; sso-admin will 401 every /internal/gateway/routes "
+                    + "poll and dynamic catalog routing will stay empty. "
+                    + "Set GATEWAY_INTERNAL_TOKEN to the same value as "
+                    + "sso-admin's SSO_INTERNAL_TOKEN.");
+        }
     }
 
     /**
@@ -92,8 +124,20 @@ public class CatalogRoutesRefresher {
                initialDelay = 5_000)
     public void refresh() {
         try {
-            List<GatewayRouteDto> routes = client.get()
-                    .uri("/internal/gateway/routes")
+            // Build the request inline so the X-Internal-Token
+            // header is conditional on configuration. Doing it
+            // once at construction time would be cheaper but
+            // would couple the WebClient to a static header
+            // value — if the operator rotates the token at
+            // runtime (via Spring's @RefreshScope), the
+            // WebClient would keep sending the old one. The
+            // header is cheap to recompute per poll.
+            var request = client.get()
+                    .uri("/internal/gateway/routes");
+            if (internalToken != null && !internalToken.isBlank()) {
+                request = request.header(INTERNAL_TOKEN_HEADER, internalToken);
+            }
+            List<GatewayRouteDto> routes = request
                     .retrieve()
                     .bodyToMono(new ParameterizedTypeReference<List<GatewayRouteDto>>() {})
                     .block();

@@ -60,7 +60,7 @@ import static org.springframework.security.test.web.servlet.setup.SecurityMockMv
  *         <li>Query-string parameter binding.</li>
  *         <li>JSON body flattening
  *             ({@code {filtros:{regional:"x"}}} →
- *             {@code filtros_regional="x"}).</li>
+ *             {@code body.filtros.regional="x"}).</li>
  *         <li>V28 execution-mode dispatch: a {@code SELECT}
  *             mode row goes through the JDBC SELECT guard;
  *             a {@code PROCEDURE} mode row bypasses it.</li>
@@ -185,7 +185,7 @@ class QueryPathDispatcherIntegrationTest {
                 Map.of("filtros", Map.of("regional", "cartagena")));
 
         // THEN: the SQL ran with :id=42, :estado=activo, and
-        // the body was flattened to filtros_regional=cartagena
+        // the body was flattened to body.filtros.regional=cartagena
         // (even though our query doesn't use that placeholder,
         // the flatten works).
         assertThat(response).hasSize(1);

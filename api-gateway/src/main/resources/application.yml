@@ -5,18 +5,25 @@ server:
 # V30 — config for the CatalogRoutesRefresher that polls
 # sso-admin's /internal/gateway/routes. The shared secret
 # gates the /internal/** surface on sso-admin (see
-# InternalTokenFilter); a missing token causes sso-admin
-# to 401 the poller, which keeps the previous routes
-# active (graceful degradation). Top-level (NOT under
-# spring:) because the names are consumed via @Value
-# (gateway.catalog-url) — not part of Spring Cloud
-# Gateway's schema. Previously this block was placed at
-# top level AND inadvertently caused the cloud.gateway
-# subtree below to be re-indented under it, breaking the
-# discovery locator (this commit fixes that mistake).
+# sso-admin's InternalTokenFilter); a missing/wrong token
+# causes sso-admin to 401 the poller, which keeps the
+# previous (empty) routes active (graceful degradation
+# but a real outage of dynamic routing). The token MUST
+# match sso-admin's `sso.internal.token` — they read the
+# same env var in the standard compose layout. Top-level
+# (NOT under spring:) because the names are consumed via
+# @Value (gateway.catalog-url) — not part of Spring Cloud
+# Gateway's schema.
 gateway:
   catalog-url: ${GATEWAY_CATALOG_URL:http://sso-admin:8080}
   catalog-refresh-ms: ${GATEWAY_CATALOG_REFRESH_MS:30000}
+  # X-Internal-Token sent on every poll. Leave blank to
+  # keep the legacy behavior (no header → sso-admin 401s →
+  # poller logs WARN at every tick). Empty default for
+  # back-compat with deployments that don't need dynamic
+  # routing (e.g. dev setups that only hit the static
+  # /api/qs/** path).
+  internal-token: ${GATEWAY_INTERNAL_TOKEN:}
 
 spring:
   application:
