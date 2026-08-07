@@ -52,12 +52,12 @@
             Pinned here because common (line 113) and api-gateway (line 100)
             reference it as ${springdoc-openapi.version} — Maven fails
             dependency resolution if the property is missing from the
-            parent POM. v2.8.20 is the last 2.x line that supports
-            Spring Boot 4 (the 3.0.x line is for Spring Boot 4 but
-            issues with spring-cloud-gateway 5.0.2 are still being
-            triaged upstream; keeping 2.8.x until that settles).
+            parent POM. 2.8.6 is the latest 2.x line as of 2025-03;
+            the 3.0.x line is for Spring Boot 4 but has open issues
+            with spring-cloud-gateway 5.0.2 — keeping 2.8.x until
+            that settles.
         -->
-        <springdoc-openapi.version>2.8.20</springdoc-openapi.version>
+        <springdoc-openapi.version>2.8.6</springdoc-openapi.version>
     </properties>
 
     <dependencyManagement>
