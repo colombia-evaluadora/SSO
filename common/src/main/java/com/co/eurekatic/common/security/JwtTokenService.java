@@ -67,6 +67,21 @@ public class JwtTokenService {
         this.rsaPrivateKey = (props.privateKey() != null && !props.privateKey().isBlank())
                 ? readRsaPrivateKey(props.privateKey())
                 : null;
+        // Fail-fast at construction on malformed / missing
+        // publicKey (the test suite asserts this; and a verifier
+        // with a broken key only surfaces the error on first
+        // request, which is a worse operational posture).
+        if (hmacKey == null && rsaPrivateKey == null
+                && (props.publicKey() == null || props.publicKey().isBlank())) {
+            throw new IllegalStateException(
+                "JwtTokenService has neither sso.jwt.secret nor sso.jwt.public-key "
+                    + "configured; cannot verify tokens. Set one in .env.");
+        }
+        if (hmacKey == null && rsaPrivateKey == null) {
+            // Verifier-only: try to parse the public key so a
+            // broken PEM fails at startup, not at first use.
+            readRsaPublicKey(props.publicKey());
+        }
     }
 
     /** The key used to sign new tokens — null iff this service is verifier-only. */
@@ -82,11 +97,7 @@ public class JwtTokenService {
      * {@link #readRsaPrivateKey(String)}.
      */
     private static java.security.PublicKey readRsaPublicKey(String pem) {
-        String body = pem
-                .replace("-----BEGIN PUBLIC KEY-----", "")
-                .replace("-----END PUBLIC KEY-----", "")
-                .replaceAll("\\s+", "");
-        byte[] der = Base64.getDecoder().decode(body);
+        byte[] der = pemBody(pem);
         try {
             java.security.spec.X509EncodedKeySpec spec =
                     new java.security.spec.X509EncodedKeySpec(der);
@@ -102,19 +113,35 @@ public class JwtTokenService {
     }
 
     /**
+     * Strip PEM armor, normalize whitespace (including escaped
+     * newlines from .env / docker one-line PEM values), and return
+     * the base64 body. Shared between private and public key readers
+     * so the same normalization applies to both halves of a keypair.
+     */
+    private static byte[] pemBody(String pem) {
+        String stripped = pem
+                .replace("-----BEGIN PRIVATE KEY-----", "")
+                .replace("-----END PRIVATE KEY-----", "")
+                .replace("-----BEGIN RSA PRIVATE KEY-----", "")
+                .replace("-----END RSA PRIVATE KEY-----", "")
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "");
+        // .env files often carry the PEM as a one-line value with
+        // literal `\n` separators instead of real newlines. The
+        // replaceAll collapses any whitespace run (including the
+        // escaped form) to nothing.
+        String collapsed = stripped.replace("\\n", "").replaceAll("\\s+", "");
+        return Base64.getDecoder().decode(collapsed);
+    }
+
+    /**
      * Parses a PKCS#8 PEM document into an {@link PrivateKey}. The
      * strip-and-decode dance matches what {@code scripts/gen-jwt-keys.sh}
      * emits; we tolerate either PKCS#1 or PKCS#8 with or without the
      * PEM armor.
      */
     private static PrivateKey readRsaPrivateKey(String pem) {
-        String body = pem
-                .replace("-----BEGIN PRIVATE KEY-----", "")
-                .replace("-----END PRIVATE KEY-----", "")
-                .replace("-----BEGIN RSA PRIVATE KEY-----", "")
-                .replace("-----END RSA PRIVATE KEY-----", "")
-                .replaceAll("\\s+", "");
-        byte[] der = Base64.getDecoder().decode(body);
+        byte[] der = pemBody(pem);
         try {
             // PKCS#8 preferred.
             java.security.spec.PKCS8EncodedKeySpec spec =

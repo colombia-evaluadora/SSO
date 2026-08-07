@@ -90,6 +90,24 @@ class JwtTokenServiceTest {
                 null);
     }
 
+    /**
+     * V29 — HMAC props for the legacy-token tests (those forge
+     * an HS256 token without the uid claim and expect the
+     * parser to accept it). Uses the same GOOD_SECRET constant
+     * the test forges with.
+     */
+    private static JwtProperties hmacProps() {
+        return new JwtProperties(
+                null,
+                pem("PUBLIC KEY", KEYS.getPublic().getEncoded()),
+                "sso-postgres",
+                3_600L,
+                86_400L,
+                "Authorization",
+                "Bearer ",
+                GOOD_SECRET);
+    }
+
     @Test
     void roundTripPreservesSubjectRolesAndIssuer() {
         JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
@@ -172,7 +190,7 @@ class JwtTokenServiceTest {
         assertThat(verifier.parse(token).email()).isEqualTo("alice");
         assertThatThrownBy(() -> verifier.issueAccessToken("mallory", Set.of("ADMIN")))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("sólo para verificar");
+                .hasMessageContaining("verifier-only");
     }
 
     @Test
@@ -310,7 +328,7 @@ class JwtTokenServiceTest {
                 .signWith(key, io.jsonwebtoken.Jwts.SIG.HS256)
                 .compact();
 
-        JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
+        JwtTokenService svc = new JwtTokenService(hmacProps());
         AuthPrincipal principal = svc.parse(legacyToken);
 
         assertThat(principal.email()).isEqualTo("alice");
@@ -333,7 +351,7 @@ class JwtTokenServiceTest {
                 .signWith(key, io.jsonwebtoken.Jwts.SIG.HS256)
                 .compact();
 
-        JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
+        JwtTokenService svc = new JwtTokenService(hmacProps());
         assertThat(svc.parse(oddToken).userId()).isEqualTo(99L);
     }
 
@@ -350,7 +368,7 @@ class JwtTokenServiceTest {
                 .signWith(key, io.jsonwebtoken.Jwts.SIG.HS256)
                 .compact();
 
-        JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
+        JwtTokenService svc = new JwtTokenService(hmacProps());
         assertThatThrownBy(() -> svc.parse(badToken))
                 .isInstanceOf(JwtException.class)
                 .hasMessageContaining("uid");
@@ -361,7 +379,7 @@ class JwtTokenServiceTest {
         // The (email, roles) overload is kept for callers that
         // haven't migrated. Output must be a valid token and
         // parse to a principal with userId=null.
-        JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
+        JwtTokenService svc = new JwtTokenService(hmacProps());
         String token = svc.issueAccessToken("alice", Set.of("USER"));
         AuthPrincipal principal = svc.parse(token);
         assertThat(principal.email()).isEqualTo("alice");
