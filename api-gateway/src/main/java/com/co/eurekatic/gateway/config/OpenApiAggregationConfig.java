@@ -6,8 +6,11 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -62,11 +65,28 @@ public class OpenApiAggregationConfig {
      * Translates the YAML config into typed records. The YAML shape is
      * deliberately flat (one map per service with snake-case keys);
      * we keep that surface stable because it's documented for ops.
+     *
+     * <p>Note: the previous version of this method used
+     * {@code @Value("${springdoc.aggregator.services:}")} with a
+     * {@code List<Map<String, Object>>} target type. {@code @Value}
+     * is a {@code String}-oriented binder; it can split comma lists
+     * but cannot decode nested YAML structures, so the application
+     * context failed to start with
+     * "Cannot convert value of type 'java.lang.String' to required
+     * type 'java.util.List' / 'java.util.Map'". Spring Boot's
+     * {@link Binder} is the right tool for complex binding —
+     * it's the same API the {@code @ConfigurationProperties}
+     * machinery uses internally. We bind to
+     * {@code Bindable.listOfMap(String, Object)} which matches the
+     * YAML's {@code List<Map<String,Object>>} shape.
      */
     @Bean
-    public List<ServiceGatewayMapping> serviceGatewayMappings(
-            @Value("${springdoc.aggregator.services:}") List<Map<String, Object>> raw) {
-        if (raw == null || raw.isEmpty()) {
+    public List<ServiceGatewayMapping> serviceGatewayMappings(Environment env) {
+        List<Map<String, Object>> raw = Binder.get(env)
+                .bind("springdoc.aggregator.services",
+                        Bindable.listOfMap(String.class, Object.class))
+                .orElse(Collections.emptyList());
+        if (raw.isEmpty()) {
             return Collections.emptyList();
         }
         return raw.stream()
