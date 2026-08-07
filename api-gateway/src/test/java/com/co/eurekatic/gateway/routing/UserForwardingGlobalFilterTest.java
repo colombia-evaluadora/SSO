@@ -49,7 +49,7 @@ class UserForwardingGlobalFilterTest {
         // RS256: se necesita un par RSA de verdad, no una cadena
         // cualquiera como bastaba con el secreto HMAC.
         java.security.KeyPair keys = generateKeyPair();
-        props = new JwtProperties(
+        props = JwtProperties.rsaOnly(
                 pem("PRIVATE KEY", keys.getPrivate().getEncoded()),
                 pem("PUBLIC KEY", keys.getPublic().getEncoded()),
                 "sso-postgres",

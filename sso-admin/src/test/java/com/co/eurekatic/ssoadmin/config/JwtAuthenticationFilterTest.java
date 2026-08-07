@@ -46,7 +46,7 @@ class JwtAuthenticationFilterTest {
         // parsean: al filtro sólo le importan header-name y token-prefix.
         // La privada va a null a propósito — es como se configura
         // sso-admin en producción, que verifica pero no emite.
-        props = new JwtProperties(
+        props = JwtProperties.rsaOnly(
                 null,
                 "-----BEGIN PUBLIC KEY-----no-se-parsea-----END PUBLIC KEY-----",
                 "sso-postgres",

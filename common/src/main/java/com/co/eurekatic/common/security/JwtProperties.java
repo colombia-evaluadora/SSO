@@ -88,16 +88,23 @@ public record JwtProperties(
     }
 
     /**
-     * Back-compat 7-arg constructor for callers (test branch
-     * tests + older configs) that pre-date the V29 {@code secret}
-     * field. Defaults {@code secret} to null so HMAC stays
-     * disabled and the existing RS256 path is unchanged.
+     * Convenience factory for the pre-V29 7-arg shape (RS256
+     * only, no HMAC secret).
+     *
+     * <p><b>Deliberately a static factory, NOT an overloaded
+     * constructor.</b> Spring Boot's {@code @ConfigurationProperties}
+     * only performs constructor binding when the type has
+     * exactly ONE constructor. A second constructor makes Boot
+     * fall back to setter binding, which then fails with
+     * "No default constructor found" at context startup — the
+     * failure that took down sso-admin and auth-center when
+     * this was an overload.
      */
-    public JwtProperties(String privateKey, String publicKey, String issuer,
-                         long accessTokenTtlSeconds, long apiTokenTtlSeconds,
-                         String headerName, String tokenPrefix) {
-        this(privateKey, publicKey, issuer,
-              accessTokenTtlSeconds, apiTokenTtlSeconds,
-              headerName, tokenPrefix, null);
+    public static JwtProperties rsaOnly(String privateKey, String publicKey, String issuer,
+                                        long accessTokenTtlSeconds, long apiTokenTtlSeconds,
+                                        String headerName, String tokenPrefix) {
+        return new JwtProperties(privateKey, publicKey, issuer,
+                accessTokenTtlSeconds, apiTokenTtlSeconds,
+                headerName, tokenPrefix, null);
     }
 }
