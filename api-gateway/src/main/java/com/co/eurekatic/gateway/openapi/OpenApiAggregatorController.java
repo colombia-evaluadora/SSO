@@ -26,11 +26,14 @@ import java.util.Map;
  * which caches the merged result with a Caffeine TTL
  * ({@code springdoc.cache.ttl}).
  *
- * <p>This controller overrides springdoc's own
- * {@code /v3/api-docs} controller by virtue of
- * {@code springdoc.api-docs.enabled=false} in application.yml —
- * we want our merged doc, not whatever the gateway's own
- * (empty) classpath would produce.
+ * <p>This controller does not collide with springdoc's own
+ * {@code /v3/api-docs} controller because {@code springdoc.api-docs.path}
+ * is parked on a side path in application.yml. It used to rely on
+ * {@code springdoc.api-docs.enabled=false} instead, which was a
+ * mistake: that flag disables springdoc's ENTIRE autoconfiguration,
+ * including the resource handler that serves the Swagger UI bundle,
+ * so the docs page had no assets to load. See the {@code springdoc:}
+ * block in application.yml and {@link SwaggerUiRedirectController}.
  */
 @RestController
 public class OpenApiAggregatorController {

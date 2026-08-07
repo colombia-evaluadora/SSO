@@ -77,10 +77,55 @@ public class InternalGatewayController {
     private static GatewayRoute toRoute(Microservice m) {
         return new GatewayRoute(
                 m.getId(),
-                m.getServiceId(),
+                eurekaServiceId(m),
                 m.getRequestUri(),
                 m.getKind(),
                 stripPrefixFrom(m.getRequestUri()));
+    }
+
+    /**
+     * The id the gateway can actually resolve through Eureka.
+     *
+     * <p>For {@code kind=REST} rows the catalog's
+     * {@code service_id} already IS the Eureka id
+     * ({@code sso-admin}, {@code auth-center}), so it passes
+     * through unchanged.
+     *
+     * <p>For {@code kind=QUERY} rows it does not: the catalog
+     * stores the operator-facing name ({@code eval-col}) while
+     * the provisioner registers the container as
+     * {@code query-service-eval-col} (see
+     * {@code ProvisionerController} and
+     * {@code MicroserviceController#containerName}, which use
+     * the same {@code "query-service-" + instanceName} rule).
+     * Emitting the bare name made the gateway build
+     * {@code lb://eval-col}, which no Eureka instance answers —
+     * every {@code /api/eval-col/**} request 404'd. We apply
+     * the same suffix rule here so the two sides agree.
+     *
+     * <p>Falls back to {@code dialect} when {@code instanceName}
+     * is null (pre-V32 rows were named after their dialect), and
+     * to the raw {@code service_id} when both are missing or the
+     * id already carries the prefix — an operator who typed the
+     * full {@code query-service-foo} into the catalog gets what
+     * they typed, not {@code query-service-query-service-foo}.
+     */
+    static String eurekaServiceId(Microservice m) {
+        if (!"QUERY".equalsIgnoreCase(m.getKind())) {
+            return m.getServiceId();
+        }
+        String suffix = m.getInstanceName() != null && !m.getInstanceName().isBlank()
+                ? m.getInstanceName()
+                : m.getDialect();
+        if (suffix == null || suffix.isBlank()) {
+            return m.getServiceId();
+        }
+        // Idempotent: an operator who typed the full Eureka
+        // name into instance_name / dialect gets it back
+        // unchanged rather than query-service-query-service-foo.
+        return suffix.startsWith("query-service-")
+                ? suffix
+                : "query-service-" + suffix;
     }
 
     /* ====================== path-template registry for query-service ====================== */

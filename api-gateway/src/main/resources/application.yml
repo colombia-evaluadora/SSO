@@ -381,14 +381,38 @@ springdoc:
     path: /api/docs/springdoc/v3/api-docs
   swagger-ui:
     enabled: true
-    path: /api/docs             # /api/docs → redirect to the bundled UI
+    # Left at springdoc's DEFAULT on purpose. Do NOT set this to
+    # /api/docs.
+    #
+    # Measured on the real image: with `path: /api/docs`, springdoc's
+    # SwaggerWelcomeWebFlux takes ownership of GET /api/docs and then
+    # never completes the response — the request hangs until the
+    # client times out. Moving the path off /api/docs makes the hang
+    # disappear immediately (verified: /api/docs went from a hard
+    # timeout to a clean 404 with nothing else changed).
+    #
+    # This is the second, independent cause of the /api/docs outage.
+    # The first was the recursive `forward:` routes (removed above);
+    # deleting those alone was NOT enough, because springdoc's own
+    # controller kept hanging underneath them.
+    #
+    # So /api/docs is served by OUR SwaggerUiRedirectController
+    # instead, which just 302s to the asset bundle below. Keeping
+    # springdoc's UI enabled (at its default path) is still required:
+    # it is what registers the webjars resource handler that actually
+    # serves the Swagger UI bundle.
+    path: /swagger-ui.html
     url: /api/docs/v3/api-docs
     config-url: /api/docs/v3/api-docs/swagger-config
     operations-sorter: alpha
     tags-sorter: alpha
     display-request-duration: true
-  webjars:
-    prefix: /api/docs/webjars
+  # webjars.prefix is deliberately NOT set. It used to say
+  # /api/docs/webjars, but springdoc-webflux does not honor it here:
+  # measured on the real image, /api/docs/webjars/swagger-ui/index.html
+  # 404s while /webjars/swagger-ui/index.html returns 200. The assets
+  # live at the default /webjars/** and GatewaySecurityConfig already
+  # permitAlls that prefix, so the redirect target points there.
   cache:
     ttl: 60s
   aggregator:

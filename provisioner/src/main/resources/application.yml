@@ -21,11 +21,33 @@ spring:
   # That crash put sso-admin into a restart loop because
   # depends_on: provisioner: condition: service_started never
   # resolved, cascading into query-service-postgres as well.
+  #
+  # IMPORTANT — these are Spring Boot 4 class names. Boot 4 split
+  # spring-boot-autoconfigure into per-technology modules and moved
+  # the auto-configuration classes with them:
+  #
+  #   org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+  #     -> org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+  #   org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+  #     -> org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+  #
+  # This list carried the Boot 3 names after the upgrade, and that
+  # failed SILENTLY: Spring skips an exclusion whose class is not on
+  # the classpath, so nothing was excluded, DataSourceAutoConfiguration
+  # ran anyway, and the provisioner crash-looped (28 restarts) with the
+  # exact error the comment above says the exclusion prevents. The
+  # sidecar being down is what made sso-admin's container status/logs
+  # endpoints return SIDECAR_UNREACHABLE.
+  #
+  # If you ever bump Spring Boot again, re-verify these FQCNs against
+  # the jars — a typo here does not fail the build, it fails at boot.
   autoconfigure:
     exclude:
-      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
-      - org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
-      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceTransactionManagerAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceInitializationAutoConfiguration
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+      - org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration
 
 docker:
   image: ${DOCKER_IMAGE:eurekatic/query-service:1.0.0-SNAPSHOT}
