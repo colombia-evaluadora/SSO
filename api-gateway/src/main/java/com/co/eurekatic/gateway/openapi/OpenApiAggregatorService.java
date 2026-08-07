@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.TreeMap;
 
 /**
@@ -84,7 +85,7 @@ public class OpenApiAggregatorService {
      * Returns the cached value if present.
      */
     public Mono<Map<String, Object>> aggregated() {
-        return Mono.fromSupplier(() -> cache.get(MERGED_CACHE_KEY, this::buildMerged));
+        return Mono.fromSupplier(() -> cache.get(MERGED_CACHE_KEY, key -> buildMerged()));
     }
 
     /**
@@ -95,7 +96,7 @@ public class OpenApiAggregatorService {
     public Mono<Map<String, Object>> single(String serviceId) {
         return Mono.fromSupplier(() -> cache.get(
                 SINGLE_CACHE_KEY_PREFIX + serviceId,
-                () -> buildSingle(serviceId)));
+                key -> buildSingle(serviceId)));
     }
 
     /* ====================== builders ====================== */
@@ -281,7 +282,13 @@ public class OpenApiAggregatorService {
     /* ====================== helpers ====================== */
 
     private java.util.Optional<ServiceInstance> pickInstance(String serviceId) {
-        return discovery.getInstances(serviceId).stream().findFirst();
+        // ReactiveDiscoveryClient returns Flux<ServiceInstance>;
+        // .stream() doesn't exist on Flux. blockFirst() pulls the
+        // first emission off the publisher (the registry is
+        // typically a finite Flux with one entry per replica, so
+        // first-iteration is enough for the gateway's
+        // "send-the-doc-to-any-replica" load-balancing intent).
+        return Optional.ofNullable(discovery.getInstances(serviceId).blockFirst());
     }
 
     private static String stripWildcard(String p) {
