@@ -94,23 +94,28 @@
         </dependency>
 
         <!--
-            swagger-models (transitive via springdoc-openapi) is needed
-            here because common defines reusable OpenAPI building blocks
-            consumed by the api-gateway aggregator:
+            swagger-models is needed here because common defines
+            reusable OpenAPI building blocks consumed by the
+            api-gateway aggregator:
               - OpenApiCatalogEntry (DTO returned by sso-admin's
                 /internal/openapi/catalog, consumed by
-                OpenApiAggregatorService to assemble the merged doc for
-                source=catalog services)
-              - OpenApiFactory (static helpers to build OpenAPI beans
-                with the shared bearer-jwt security scheme)
-            Each downstream module pulls springdoc-openapi-starter-*
-            at runtime; this dep keeps the compilation classpath
-            consistent.
+                OpenApiAggregatorService to assemble the merged
+                doc for source=catalog services)
+              - OpenApiFactory (static helpers to build OpenAPI
+                beans with the shared bearer-jwt security scheme)
+            Note: do NOT depend on `org.springdoc:springdoc-openapi`
+            here — that artifact is packaging=pom (a meta-artifact
+            only; no .jar), so Maven fails dependency resolution
+            with "Could not find artifact …:jar:VERSION in central".
+            Each downstream module that needs the runtime pulls
+            springdoc-openapi-starter-webmvc-ui or -webflux-ui
+            (see api-gateway/pom.xml). common is a library and
+            only needs the model classes from swagger-models.
         -->
         <dependency>
-            <groupId>org.springdoc</groupId>
-            <artifactId>springdoc-openapi</artifactId>
-            <version>${springdoc-openapi.version}</version>
+            <groupId>io.swagger.core.v3</groupId>
+            <artifactId>swagger-models</artifactId>
+            <version>2.2.31</version>
         </dependency>
 
         <!-- Test scope: H2 to exercise JPA mappings without a real Postgres -->
