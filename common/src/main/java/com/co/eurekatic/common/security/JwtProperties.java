@@ -36,6 +36,13 @@ import org.springframework.validation.annotation.Validated;
 @Validated
 @ConfigurationProperties(prefix = "sso.jwt")
 public record JwtProperties(
+        // V29 — HS256 fallback for services that prefer
+        // symmetric signing. Nullable; when {@link #privateKey}
+        // is set, the service uses RS256 and this field is
+        // ignored. Most prod deployments use RS256 (test branch
+        // default); main's HMAC path remains valid for dev
+        // environments where a single shared secret is fine.
+        String secret,
         String privateKey,
         @NotBlank String publicKey,
         @NotBlank String issuer,
@@ -72,6 +79,7 @@ public record JwtProperties(
 
     /** True when this service is configured to sign, not just verify. */
     public boolean canIssue() {
-        return privateKey != null && !privateKey.isBlank();
+        return (privateKey != null && !privateKey.isBlank())
+                || (secret != null && !secret.isBlank());
     }
 }
