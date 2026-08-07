@@ -121,7 +121,7 @@ class ResilienceIntegrationTest {
                 "serviceId", "query-service-test",
                 "kind", "QUERY",
                 "instanceName", "test"));
-        when(catalogClient.fetchPathTemplates(anyLong()))
+        when(catalogClient.fetchPathTemplates(any()))
                 .thenReturn(List.of());
     }
 
@@ -246,7 +246,7 @@ class ResilienceIntegrationTest {
         // that the /internal/path-registry/invalidate
         // call triggers the second fetch — proving the
         // endpoint is wired to refresh().
-        when(catalogClient.fetchPathTemplates(anyLong()))
+        when(catalogClient.fetchPathTemplates(any()))
                 .thenReturn(List.of(
                         new QueryDefinition(
                                 1L, "first",
@@ -282,7 +282,7 @@ class ResilienceIntegrationTest {
         // "first" only if the cache is broken. We assert
         // fetchPathTemplates was called at least twice
         // (initial + invalidate).
-        verify(catalogClient, atLeast(2)).fetchPathTemplates(anyLong());
+        verify(catalogClient, atLeast(2)).fetchPathTemplates(any());
         assertThat(node.get("size").asInt()).isEqualTo(1);
     }
 

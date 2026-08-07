@@ -285,7 +285,13 @@ class QueryPathDispatcherIntegrationTest {
         when(catalogClient.fetchPathTemplates(any()))
                 .thenReturn(java.util.List.of());
         registry.refresh();
-        org.mockito.Mockito.verify(catalogClient)
+        // atLeastOnce, not an exact count: QueryPathRegistry.refresh()
+        // is also driven by @Scheduled (refresh-ms=100 in this class),
+        // so the timer adds invocations in the background and an
+        // exact-count verify is flaky by construction. What this test
+        // actually asserts is the ARGUMENT — that an empty whoami
+        // makes the registry fall back to the global (null) scope.
+        org.mockito.Mockito.verify(catalogClient, org.mockito.Mockito.atLeastOnce())
                 .fetchPathTemplates(org.mockito.ArgumentMatchers.isNull());
     }
 
