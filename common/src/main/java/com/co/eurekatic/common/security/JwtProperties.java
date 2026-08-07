@@ -86,4 +86,18 @@ public record JwtProperties(
         return (privateKey != null && !privateKey.isBlank())
                 || (secret != null && !secret.isBlank());
     }
+
+    /**
+     * Back-compat 7-arg constructor for callers (test branch
+     * tests + older configs) that pre-date the V29 {@code secret}
+     * field. Defaults {@code secret} to null so HMAC stays
+     * disabled and the existing RS256 path is unchanged.
+     */
+    public JwtProperties(String privateKey, String publicKey, String issuer,
+                         long accessTokenTtlSeconds, long apiTokenTtlSeconds,
+                         String headerName, String tokenPrefix) {
+        this(privateKey, publicKey, issuer,
+              accessTokenTtlSeconds, apiTokenTtlSeconds,
+              headerName, tokenPrefix, null);
+    }
 }
