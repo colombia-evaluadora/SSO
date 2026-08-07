@@ -68,18 +68,18 @@ public class JwtTokenService {
                 ? readRsaPrivateKey(props.privateKey())
                 : null;
         // Fail-fast at construction on malformed / missing
-        // publicKey (the test suite asserts this; and a verifier
-        // with a broken key only surfaces the error on first
-        // request, which is a worse operational posture).
-        if (hmacKey == null && rsaPrivateKey == null
-                && (props.publicKey() == null || props.publicKey().isBlank())) {
-            throw new IllegalStateException(
-                "JwtTokenService has neither sso.jwt.secret nor sso.jwt.public-key "
-                    + "configured; cannot verify tokens. Set one in .env.");
-        }
+        // publicKey. A verifier with a broken key that only
+        // surfaces the error on the first request is a worse
+        // operational posture than one that refuses to boot.
         if (hmacKey == null && rsaPrivateKey == null) {
-            // Verifier-only: try to parse the public key so a
-            // broken PEM fails at startup, not at first use.
+            if (props.publicKey() == null || props.publicKey().isBlank()) {
+                throw new IllegalStateException(
+                    "sso.jwt.public-key is not configured and neither is "
+                        + "sso.jwt.secret; this service can neither sign nor "
+                        + "verify tokens. Generate a key pair with "
+                        + "scripts/gen-jwt-keys.sh and set sso.jwt.public-key.");
+            }
+            // Parse eagerly so a broken PEM fails at startup.
             readRsaPublicKey(props.publicKey());
         }
     }
@@ -97,8 +97,12 @@ public class JwtTokenService {
      * {@link #readRsaPrivateKey(String)}.
      */
     private static java.security.PublicKey readRsaPublicKey(String pem) {
-        byte[] der = pemBody(pem);
+        // pemBody() must be INSIDE the try: Base64.decode throws
+        // IllegalArgumentException on a malformed body, and callers
+        // (and the test suite) expect the actionable
+        // IllegalStateException instead of a raw decode error.
         try {
+            byte[] der = pemBody(pem);
             java.security.spec.X509EncodedKeySpec spec =
                     new java.security.spec.X509EncodedKeySpec(der);
             return KeyFactory.getInstance("RSA").generatePublic(spec);
