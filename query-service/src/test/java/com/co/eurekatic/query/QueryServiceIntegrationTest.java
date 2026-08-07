@@ -265,7 +265,7 @@ class QueryServiceIntegrationTest {
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody(byte[].class)
-                .value(body -> assertThat(new String(body)).contains("Unknown column"));
+                .value(body -> assertThat(new String(body)).contains("Columna desconocida"));
     }
 
     @Test
@@ -286,7 +286,7 @@ class QueryServiceIntegrationTest {
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody(byte[].class)
-                .value(body -> assertThat(new String(body)).contains("Missing column"));
+                .value(body -> assertThat(new String(body)).contains("Falta la columna"));
     }
 
     /* ====================== helpers ====================== */

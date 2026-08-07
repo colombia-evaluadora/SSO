@@ -78,6 +78,23 @@ public class SecurityConfig {
                         // Security rule. 403 for non-public uuids
                         // is enforced inside the service.
                         .requestMatchers("/public/service").permitAll()
+                        // V33 — service-to-service surface. sso-admin
+                        // calls POST /internal/path-registry/invalidate
+                        // after a catalog mutation, carrying only the
+                        // shared X-Internal-Token header (no JWT — it
+                        // acts on its own behalf, not a user's). With
+                        // anyRequest().authenticated() this returned
+                        // 403 and the invalidation silently never
+                        // worked; the registry only refreshed on its
+                        // 60s tick.
+                        //
+                        // permitAll here does NOT mean unauthenticated:
+                        // the controller verifies X-Internal-Token
+                        // itself (query-service has no equivalent of
+                        // sso-admin's InternalTokenFilter), and the
+                        // endpoint is only reachable from inside the
+                        // docker network.
+                        .requestMatchers("/internal/**").permitAll()
                         // Everything else requires a valid JWT.
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
