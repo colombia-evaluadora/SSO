@@ -43,6 +43,19 @@
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-gateway-server-webflux</artifactId>
         </dependency>
+        <!-- V27 — CatalogRoutesRefresher uses WebClient.Builder
+             to call sso-admin's /internal/gateway/routes.
+             spring-cloud-starter-gateway-server-webflux
+             pulls in spring-webflux (the runtime) but NOT
+             the autoconfigured WebClient.Builder; that's
+             spring-boot-starter-webflux's job. Without this
+             dep the @Component catalogRoutesRefresher fails
+             to wire with "No qualifying bean of type
+             'WebClient.Builder' available". -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
