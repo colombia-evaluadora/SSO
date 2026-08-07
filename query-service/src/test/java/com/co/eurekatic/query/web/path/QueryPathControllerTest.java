@@ -165,12 +165,21 @@ class QueryPathControllerTest {
             // MapSqlParameterSource treats null as a real
             // parameter (useful for procedures that interpret
             // null as "argument not provided").
+            //
+            // We can't use Map.entry(k, v) to express the
+            // expected value: the JDK Map.entry() factory
+            // throws NullPointerException when EITHER the key
+            // or the value is null. Build the expected map
+            // directly with a LinkedHashMap entry and assert
+            // size + key/value pairs separately.
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("optional", null);
 
             Map<String, Object> out = QueryPathController.flattenToPaths(body, "body");
 
-            assertThat(out).containsExactly(Map.entry("body.optional", null));
+            assertThat(out).hasSize(1);
+            assertThat(out).containsKey("body.optional");
+            assertThat(out.get("body.optional")).isNull();
         }
     }
 }
