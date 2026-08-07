@@ -7,7 +7,7 @@
 -- Patrones reutilizados de V26 (contexto auditor) y de V22 (idempotencia
 -- con DO $$ ... IF NOT EXISTS ... $$).
 -- Dependencias:
---   * V50 (utilities): consume fn_es_super_admin desde alli.
+--   * V50 (utilities): consume fn_puede_afectar_establecimiento desde alli.
 --   * V52 (campus):    fn_est_soft_delete delega en fn_sed_soft_delete
 --                       para la cascade de sedes (TSEDE, TSEDE_USUARIO,
 --                       TSEDE_NIVEL) en lugar de repetirla localmente.
@@ -53,7 +53,8 @@
 --     TSEDE_USUARIO y TSEDE_NIVEL vive en V52; aqui NO se replica.
 --   * Autorizacion: TODO usuario que invoque las funciones MUTADORAS de este
 --     modulo (crear/actualizar/soft_delete) debe tener rol de super-admin
---     (TROL.PK_TROL = 1). Se valida mediante `fn_es_super_admin(p_pk_usuario)`,
+--     (TROL.PK_TROL IN 1,2,3). Se valida mediante
+--     `fn_puede_afectar_establecimiento(p_pk_usuario)`,
 --     definida en V50 (utilities), que retorna TRUE si existe al menos una
 --     fila en TSEDE_USUARIO con FK_TROL=1 (y ACTIVE=TRUE) para ese usuario;
 --     si no se cumple, SQLSTATE '42501' (insufficient_privilege). Las
@@ -84,7 +85,7 @@ SET search_path TO academico_test, public;
 --   Retorna: PK_ESTABLECIMIENTO (BIGINT) del registro creado.
 --   Excepciones:
 --     SQLSTATE '42501' — El usuario no es super-admin (gate via
---                        fn_es_super_admin).
+--                        fn_puede_afectar_establecimiento).
 --     SQLSTATE '23505' — NIT ya existe en un TESTABLECIMIENTO activo.
 --     SQLSTATE '22023' — Campo obligatorio nulo/vacio.
 --     SQLSTATE '23503' — Alguna FK no existe (municipio, propiedad juridica,
@@ -95,7 +96,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_est_crear(
     p_nit                     VARCHAR(30),
     p_fk_municipio            BIGINT,
     p_fk_propiedad_juridica   BIGINT,
-    p_codigo                  VARCHAR(30)     DEFAULT NULL,
+    p_codigo                  VARCHAR(30),
     -- Datos de ubicacion (todos opcionales salvo que se indiquen NOT NULL)
     p_localidad               VARCHAR(130)    DEFAULT NULL,
     p_comuna                  VARCHAR(130)    DEFAULT NULL,
@@ -136,9 +137,9 @@ DECLARE
     v_id_creado BIGINT;
 BEGIN
     -- -----------------------------------------------------------------
-    -- 0. Gate de autorizacion: solo super-admin (TROL PK=1) puede crear.
+    -- 0. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
     -- -----------------------------------------------------------------
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
@@ -251,7 +252,7 @@ COMMENT ON FUNCTION academico_test.fn_est_crear(
     BIGINT, BIGINT, BIGINT, BIGINT,
     BYTEA, BIGINT,
     BIGINT
-) IS 'Crea un TESTABLECIMIENTO validando obligatorios (NOMBRE, NIT, CODIGO, FK_TMUNICIPIO, FK_TPROPIEDAD_JURIDICA) y unicidad por NIT/CODIGO activos. Requiere p_pk_usuario_solicitante con rol super-admin (validado via fn_es_super_admin). Retorna PK_ESTABLECIMIENTO. Auditoria: CREATED_BY=p_pk_usuario_solicitante::VARCHAR, CREATED_AT=now. MODIFIED_BY y MODIFIED_AT quedan NULL (se llenan en la primera edicion via fn_est_actualizar).';
+) IS 'Crea un TESTABLECIMIENTO validando obligatorios (NOMBRE, NIT, CODIGO, FK_TMUNICIPIO, FK_TPROPIEDAD_JURIDICA) y unicidad por NIT/CODIGO activos. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento). Retorna PK_ESTABLECIMIENTO. Auditoria: CREATED_BY=p_pk_usuario_solicitante::VARCHAR, CREATED_AT=now. MODIFIED_BY y MODIFIED_AT quedan NULL (se llenan en la primera edicion via fn_est_actualizar).';
 
 
 -- ---------------------------------------------------------------------------
@@ -476,7 +477,7 @@ COMMENT ON FUNCTION academico_test.fn_est_listar(VARCHAR, BIGINT[], BIGINT[], BI
 --
 --   Excepciones:
 --     SQLSTATE '42501' — El usuario no es super-admin (gate via
---                        fn_es_super_admin, definido en V50).
+--                        fn_puede_afectar_establecimiento, definida en V50).
 --     SQLSTATE 'P0002' — No existe el TESTABLECIMIENTO con ese PK.
 --     SQLSTATE '22023' — El TESTABLECIMIENTO ya estaba inactivo.
 --     SQLSTATE 'P0002'/'22023'/'42501' propagados desde fn_sed_soft_delete
@@ -496,9 +497,9 @@ DECLARE
     v_pk_sede       BIGINT;
 BEGIN
     -- -----------------------------------------------------------------
-    -- 0. Gate de autorizacion: solo super-admin (TROL PK=1) puede eliminar.
+    -- 0. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
     -- -----------------------------------------------------------------
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
@@ -563,7 +564,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_est_soft_delete(BIGINT, BIGINT)
-    IS 'Baja logica en cascada: marca ACTIVE=FALSE en TESTABLECIMIENTO y delega en academico_test.fn_sed_soft_delete (V52) para cada sede activa del EE. fn_sed_soft_delete se encarga a su vez de TSEDE, TSEDE_USUARIO y TSEDE_NIVEL (cuyo detalle vive en V52). Todo en una sola transaccion: si la delegation falla para cualquier sede, todo el borrado se revierte. Requiere p_pk_usuario_solicitante con rol super-admin (validado via fn_es_super_admin, definida en V50). Retorna PK_ESTABLECIMIENTO dado de baja.';
+    IS 'Baja logica en cascada: marca ACTIVE=FALSE en TESTABLECIMIENTO y delega en academico_test.fn_sed_soft_delete (V52) para cada sede activa del EE. fn_sed_soft_delete se encarga a su vez de TSEDE, TSEDE_USUARIO y TSEDE_NIVEL (cuyo detalle vive en V52). Todo en una sola transaccion: si la delegation falla para cualquier sede, todo el borrado se revierte. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento, definida en V50). Retorna PK_ESTABLECIMIENTO dado de baja.';
 
 
 -- ---------------------------------------------------------------------------
@@ -655,9 +656,9 @@ DECLARE
     v_estado_actual  BOOLEAN;
 BEGIN
     -- -----------------------------------------------------------------
-    -- 0. Gate de autorizacion: solo super-admin (TROL PK=1) puede editar.
+    -- 0. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
     -- -----------------------------------------------------------------
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
@@ -1037,4 +1038,4 @@ COMMENT ON FUNCTION academico_test.fn_est_actualizar(
     BIGINT, BIGINT, BIGINT, BIGINT,
     BIGINT,
     BIGINT
-) IS 'Actualizacion parcial (estilo PATCH) de TESTABLECIMIENTO. Cada parametro NULL no modifica su columna; cada valor no NULL se aplica. NIT y CODIGO son modificables: si se envian, se validan contra el resto de EE activos (excluyendo el propio PK) y se aplican. Solo opera sobre EE activos. Actualiza MODIFIED_BY/MODIFIED_AT solo si hay cambios. Requiere p_pk_usuario_solicitante con rol super-admin (validado via fn_es_super_admin). Retorna PK_ESTABLECIMIENTO.';
+) IS 'Actualizacion parcial (estilo PATCH) de TESTABLECIMIENTO. Cada parametro NULL no modifica su columna; cada valor no NULL se aplica. NIT y CODIGO son modificables: si se envian, se validan contra el resto de EE activos (excluyendo el propio PK) y se aplican. Solo opera sobre EE activos. Actualiza MODIFIED_BY/MODIFIED_AT solo si hay cambios. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento). Retorna PK_ESTABLECIMIENTO.';

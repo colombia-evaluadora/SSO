@@ -3,7 +3,8 @@
 --
 -- Convencion de "package": igual que V53, las funciones se agrupan en un
 -- solo archivo de migracion bajo `academico_test` con prefijo comun `fn_sed_`.
--- El gate de autorizacion reutiliza `fn_es_super_admin(p_pk_usuario)` ya
+-- El gate de autorizacion del modulo de sede reutiliza
+-- `fn_puede_afectar_sede(p_pk_usuario)` ya
 -- definido en V50 (utilities).
 --
 -- Alcance de esta primera entrega:
@@ -65,7 +66,7 @@
 --     no se incluyen en el cascade actual. Confirmar con el equipo si
 --     deben seguir la baja de la sede.
 --   * Autorizacion: solo super-admin (TROL.PK_TROL=1). Gate via
---     fn_es_super_admin. Mensaje generico, sin detalle tecnico.
+--     fn_puede_afectar_sede. Mensaje generico, sin detalle tecnico.
 --   * Auditoria: CREATED_BY = p_pk_usuario_solicitante::VARCHAR,
 --                MODIFIED_BY = NULL y MODIFIED_AT = NULL en create
 --                (mismo patron que fn_est_crear).
@@ -117,7 +118,7 @@ BEGIN
     -- -----------------------------------------------------------------
     -- 0. Gate de autorizacion.
     -- -----------------------------------------------------------------
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    IF NOT academico_test.fn_puede_afectar_sede(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
@@ -321,9 +322,9 @@ DECLARE
     v_fk_ee        BIGINT;
 BEGIN
     -- -----------------------------------------------------------------
-    -- 0. Gate de autorizacion: solo super-admin (TROL PK=1) puede editar.
+    -- 0. Gate de autorizacion: solo roles con permiso de sede (1-3, 7-8).
     -- -----------------------------------------------------------------
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    IF NOT academico_test.fn_puede_afectar_sede(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
@@ -553,7 +554,7 @@ BEGIN
     -- -----------------------------------------------------------------
     -- 0. Gate de autorizacion.
     -- -----------------------------------------------------------------
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    IF NOT academico_test.fn_puede_afectar_sede(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
