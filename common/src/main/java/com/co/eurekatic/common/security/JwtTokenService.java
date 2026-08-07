@@ -201,8 +201,9 @@ public class JwtTokenService {
                     + "and set one of them in this service's .env / application.yml.");
         }
         return builder
-                .signWith(hmacKey != null ? Jwts.SIG.HS256 : Jwts.SIG.RS256,
-                          signingKey)
+                .signWith(signingKey)   // jjwt 0.12 picks the algorithm
+                                          // from the Key type (HMAC for
+                                          // SecretKey, RSA for RSAPrivateKey)
                 .compact();
     }
 
