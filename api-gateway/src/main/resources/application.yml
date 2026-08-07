@@ -257,6 +257,34 @@ spring:
               filters:
                 - StripPrefix=2
                 - AddResponseHeader=X-Source, api-gateway
+            # ─── OpenAPI / Swagger UI self-routes ───
+            # springdoc-openapi-starter-webflux-ui registers a
+            # RouterFunction bean on the gateway itself, but Spring
+            # Cloud Gateway won't dispatch to it unless there's a
+            # matching route. `forward:` routes the request into the
+            # local DispatcherHandler, which then resolves the
+            # springdoc endpoint. The UI assets (webjars) and the
+            # JSON spec both go through these routes.
+            - id: openapi-ui-self
+              uri: forward:/swagger-ui
+              predicates:
+                - Path=/api/docs,/api/docs/
+            - id: openapi-spec-self
+              uri: forward:/v3/api-docs
+              predicates:
+                - Path=/api/docs/v3/api-docs
+            - id: openapi-webjars-self
+              uri: forward:/webjars/**
+              predicates:
+                - Path=/api/docs/webjars/**
+            - id: swagger-ui-default
+              uri: forward:/swagger-ui
+              predicates:
+                - Path=/swagger-ui,/swagger-ui/
+            - id: swagger-ui-assets
+              uri: forward:/webjars/**
+              predicates:
+                - Path=/webjars/**
           # 404 for unmatched paths (deny-by-default). The reactive
           # filter will translate this to a 401 for paths that need auth.
           default-filters:
