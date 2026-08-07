@@ -271,3 +271,13 @@ jobs:
           name: admin-ui-dist
           path: admin-ui/dist
           retention-days: 7
+        # The build itself is what gates a PR (does the
+        # production bundle compile?). The upload is a
+        # side effect that lets deploy-test.yml pick the
+        # bundle up on push-to-test. A storage-quota
+        # exhaustion in the GitHub org must NOT block
+        # the PR gate — the deploy will simply skip the
+        # artifact and rebuild locally instead.
+        # (Hit on 2026-08-07: "Artifact storage quota has
+        # been hit. Unable to upload any new artifacts.")
+        continue-on-error: true
