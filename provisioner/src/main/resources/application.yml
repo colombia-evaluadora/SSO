@@ -10,6 +10,22 @@ spring:
     name: provisioner
   main:
     banner-mode: off
+  # Exclude JPA/DataSource auto-config: the `common` module
+  # pulls in spring-boot-starter-data-jpa, but the provisioner
+  # is a stateless Docker socket sidecar that does NOT need a
+  # DB. Without this exclusion, Spring Boot tries to autoconfigure
+  # a DataSource on startup, fails (no DB URL in the env), and
+  # the app crashes with
+  # "Failed to configure a DataSource: 'url' attribute is not
+  # specified and no embedded datasource could be configured."
+  # That crash put sso-admin into a restart loop because
+  # depends_on: provisioner: condition: service_started never
+  # resolved, cascading into query-service-postgres as well.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
 
 docker:
   image: ${DOCKER_IMAGE:eurekatic/query-service:1.0.0-SNAPSHOT}

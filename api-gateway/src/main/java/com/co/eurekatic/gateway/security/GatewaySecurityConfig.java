@@ -152,7 +152,14 @@ public class GatewaySecurityConfig {
                         // gateway without a token; the actual API endpoints
                         // listed in the UI still require Bearer (each one is
                         // individually gated by its target service).
-                        .pathMatchers("/api/docs", "/api/docs/**").permitAll()
+                        // /webjars/** covers the static JS/CSS that
+                        // springdoc-openapi serves from the bundled
+                        // webjars-locator (it builds the URL with
+                        // /webjars/swagger-ui/... by default); without
+                        // the permitAll match, the UI loads as 401 and
+                        // the page is blank.
+                        .pathMatchers("/api/docs", "/api/docs/**",
+                                "/webjars/**").permitAll()
                         .anyExchange().authenticated())
                 .addFilterAt(jwtFilter, SecurityWebFiltersOrder.AUTHENTICATION)
                 .build();
