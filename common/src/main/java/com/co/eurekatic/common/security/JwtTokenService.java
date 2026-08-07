@@ -92,6 +92,8 @@ public class JwtTokenService {
                     new java.security.spec.X509EncodedKeySpec(der);
             return KeyFactory.getInstance("RSA").generatePublic(spec);
         } catch (Exception e) {
+            // catches GeneralSecurityException + NoSuchAlgorithm +
+            // InvalidKeySpec + IllegalArgument (bad base64 etc.)
             throw new IllegalStateException(
                     "sso.jwt.public-key is not a parseable RSA public key. "
                             + "Generate one with scripts/gen-jwt-keys.sh. Root cause: "
@@ -118,8 +120,9 @@ public class JwtTokenService {
             java.security.spec.PKCS8EncodedKeySpec spec =
                     new java.security.spec.PKCS8EncodedKeySpec(der);
             return KeyFactory.getInstance("RSA").generatePrivate(spec);
-        } catch (java.security.spec.InvalidKeySpecException ignored) {
-            // Fall back to PKCS#1.
+        } catch (java.security.spec.InvalidKeySpecException
+                 | java.security.NoSuchAlgorithmException ignored) {
+            // Fall back to PKCS#1 (older OpenSSL default).
             java.security.spec.X509EncodedKeySpec x509 =
                     new java.security.spec.X509EncodedKeySpec(der);
             return KeyFactory.getInstance("RSA").generatePrivate(x509);
