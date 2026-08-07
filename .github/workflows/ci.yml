@@ -127,6 +127,32 @@ jobs:
       - name: Verify (query-service)
         run: mvn -B -ntp -pl query-service -am verify
 
+  # ───────── Backend: cdc-sync (reactor independiente) ─────────
+  # cdc-sync NO es un módulo del pom raíz: tiene su propio parent
+  # (cdc-sync-parent) con cdc-common, cdc-generator, cdc-capture y
+  # cdc-worker. Por eso necesita -f en vez de -pl.
+  #
+  # `verify` aquí compila main + test y corre los tests unitarios
+  # (surefire coge *Test.java). Las clases *IT.java —que levantan
+  # Testcontainers— se COMPILAN pero no se ejecutan, porque no hay
+  # plugin failsafe configurado en estos poms. Eso es justo lo que
+  # queremos de una gate de CI: detecta errores de compilación y
+  # regresiones unitarias en segundos, sin arrastrar contenedores
+  # ni la flakiness de un E2E. Si algún día se quiere correr las
+  # ITs, añadir failsafe al pom y un job aparte (nightly), no aquí.
+  maven-cdc:
+    name: maven-cdc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Verify (cdc-sync)
+        run: mvn -B -ntp -f cdc-sync/pom.xml verify
+
   # ───────── Backend: api-gateway (Testcontainers) ─────────
   maven-api-gateway:
     name: maven-api-gateway
