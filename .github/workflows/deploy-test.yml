@@ -18,11 +18,23 @@
 # queda para re-desplegar a mano (usa el HEAD de la rama elegida y NO
 # espera a CI — úsalo consciente de eso).
 #
-# El servidor NO recibe el .env por este workflow: los secretos de la
-# app (Neon, JWT, RabbitMQ…) viven en /opt/sso/.env creado a mano una
-# única vez (ver docs/deploy-test-server.md). Ese .env fija
-# IMAGE_PREFIX=ghcr.io/colombia-evaluadora/sso e IMAGE_TAG=test-latest,
-# que es lo que hace que `compose pull` traiga lo que CI publicó.
+# El .env del servidor se despliega desde el secreto de repo
+# TEST_ENV_FILE (antes se creaba a mano en /opt/sso/.env). Contiene los
+# secretos de la app (Neon, JWT, RabbitMQ, los *_INTERNAL_TOKEN de
+# V30/V33…) y fija IMAGE_PREFIX=ghcr.io/colombia-evaluadora/sso e
+# IMAGE_TAG=test-latest, que es lo que hace que `compose pull` traiga
+# lo que CI publicó.
+#
+# Rotar una credencial = editar el secreto y re-desplegar. Ya no hay
+# que entrar por SSH, y el host deja de tener un fichero de secretos
+# sin trazabilidad.
+#
+# Aviso honesto sobre el modelo de amenaza: los GitHub Secrets están
+# cifrados en reposo y enmascarados en los logs, pero cualquiera con
+# permiso de escritura en el repo puede exfiltrarlos añadiendo un paso
+# al workflow. Esto es un salto claro respecto a un .env suelto en el
+# servidor, no un gestor de secretos: si en algún momento hace falta
+# ese nivel, la vía es SOPS+age, Vault o el secret manager del cloud.
 #
 # Rollback: cada deploy también publica `test-<sha>`; en el servidor,
 # editar IMAGE_TAG en /opt/sso/.env a ese tag y `docker compose up -d`.
@@ -31,6 +43,10 @@
 #   TEST_SSH_HOST    — IP o hostname del Linode
 #   TEST_SSH_USER    — usuario de despliegue (miembro del grupo docker)
 #   TEST_SSH_KEY     — clave privada OpenSSH (ed25519) SOLO para deploy
+#   TEST_ENV_FILE    — contenido COMPLETO de /opt/sso/.env (multilínea).
+#                      Se escribe en el servidor en cada deploy con
+#                      permisos 600. Ver .env.example para el listado
+#                      de variables, incluidas las de V30/V33.
 #   GHCR_PULL_USER   — username de GitHub dueño del PAT de pull
 #   GHCR_PULL_TOKEN  — PAT clásico con scope read:packages (el servidor
 #                      lo usa para `docker login ghcr.io`)
@@ -214,6 +230,40 @@ jobs:
           rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" docker/ \
             "$DEST:/opt/sso/docker/"
 
+      - name: Deploy .env from GitHub secret
+        # El .env ya no se crea "a mano" en el servidor: vive como
+        # secreto de repo (TEST_ENV_FILE) y se escribe aquí en cada
+        # deploy. Con esto, rotar una credencial es editar el secreto
+        # y re-desplegar — no entrar por SSH — y deja de haber un
+        # fichero en el host que nadie sabe qué contiene ni cuándo
+        # cambió.
+        #
+        # Disciplina de manejo, igual que el token de GHCR de abajo:
+        #   - el contenido viaja por STDIN, nunca en argv ni
+        #     interpolado dentro del script (argv es visible en
+        #     `ps` y se filtraría con `set -x`);
+        #   - `umask 077` para que nazca 600, no 644;
+        #   - se escribe a un temporal y se mueve, así un corte a
+        #     mitad no deja un .env truncado capaz de tumbar el stack
+        #     en el `compose up` siguiente;
+        #   - el log sólo reporta el número de líneas, nunca el
+        #     contenido.
+        env:
+          DEST: ${{ secrets.TEST_SSH_USER }}@${{ secrets.TEST_SSH_HOST }}
+          ENV_FILE: ${{ secrets.TEST_ENV_FILE }}
+        run: |
+          if [ -z "${ENV_FILE:-}" ]; then
+            echo "::error::Falta el secreto TEST_ENV_FILE (Settings → Secrets → Actions)."
+            echo "Debe contener el .env completo del servidor, incluidas las"
+            echo "variables de V30/V33 (SSO_INTERNAL_TOKEN, GATEWAY_INTERNAL_TOKEN,"
+            echo "QUERY_CATALOG_INTERNAL_TOKEN, QUERY_SERVICE_BASE_URL, …)."
+            exit 1
+          fi
+          printf '%s' "$ENV_FILE" | ssh -i ~/.ssh/deploy_key "$DEST" \
+            'umask 077 && cat > /opt/sso/.env.new && mv /opt/sso/.env.new /opt/sso/.env'
+          ssh -i ~/.ssh/deploy_key "$DEST" \
+            'echo ".env desplegado: $(grep -c . /opt/sso/.env) líneas no vacías, permisos $(stat -c %a /opt/sso/.env)"'
+
       - name: Pull & restart stack
         env:
           DEST: ${{ secrets.TEST_SSH_USER }}@${{ secrets.TEST_SSH_HOST }}
@@ -228,9 +278,11 @@ jobs:
           ssh -i ~/.ssh/deploy_key "$DEST" bash -s <<'EOF'
           set -euo pipefail
           cd /opt/sso
-          # .env del servidor debe existir (creado a mano en el setup
-          # inicial — ver docs/deploy-test-server.md).
-          test -f .env || { echo "FALTA /opt/sso/.env — ver docs/deploy-test-server.md"; exit 1; }
+          # El .env lo acaba de escribir el paso anterior desde el
+          # secreto TEST_ENV_FILE. Si no está, ese paso falló y no
+          # deberíamos haber llegado aquí — el guard se queda como
+          # red de seguridad.
+          test -f .env || { echo "FALTA /opt/sso/.env — el paso 'Deploy .env' no lo escribió"; exit 1; }
           docker compose pull --quiet
 
           # Si `compose up` falla, casi siempre es porque flyway salió
