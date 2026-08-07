@@ -40,6 +40,11 @@ docker:
   # el query-service spawneado cae al default localhost:4318 de su
   # application.yml y los exporters warn con Connection refused.
   otlp-endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://alloy:4318}
+  # V30 — secreto compartido que se propaga a cada query-service
+  # spawneado como QUERY_CATALOG_INTERNAL_TOKEN. Mismo valor que
+  # SSO_INTERNAL_TOKEN en sso-admin; el .env mantiene los tres
+  # alineados.
+  catalog-internal-token: ${QUERY_CATALOG_INTERNAL_TOKEN:}
   ready-timeout-seconds: ${READY_TIMEOUT:45}
 
 management:

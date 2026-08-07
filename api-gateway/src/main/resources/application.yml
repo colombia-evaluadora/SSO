@@ -257,34 +257,41 @@ spring:
               filters:
                 - StripPrefix=2
                 - AddResponseHeader=X-Source, api-gateway
-            # ─── OpenAPI / Swagger UI self-routes ───
-            # springdoc-openapi-starter-webflux-ui registers a
-            # RouterFunction bean on the gateway itself, but Spring
-            # Cloud Gateway won't dispatch to it unless there's a
-            # matching route. `forward:` routes the request into the
-            # local DispatcherHandler, which then resolves the
-            # springdoc endpoint. The UI assets (webjars) and the
-            # JSON spec both go through these routes.
-            - id: openapi-ui-self
-              uri: forward:/swagger-ui
-              predicates:
-                - Path=/api/docs,/api/docs/
-            - id: openapi-spec-self
-              uri: forward:/v3/api-docs
-              predicates:
-                - Path=/api/docs/v3/api-docs
-            - id: openapi-webjars-self
-              uri: forward:/webjars/**
-              predicates:
-                - Path=/api/docs/webjars/**
-            - id: swagger-ui-default
-              uri: forward:/swagger-ui
-              predicates:
-                - Path=/swagger-ui,/swagger-ui/
-            - id: swagger-ui-assets
-              uri: forward:/webjars/**
-              predicates:
-                - Path=/webjars/**
+            # ─── OpenAPI / Swagger UI: deliberately NO routes ───
+            # There used to be five `forward:` routes here
+            # (openapi-ui-self, openapi-spec-self,
+            # openapi-webjars-self, swagger-ui-default,
+            # swagger-ui-assets). They caused an infinite
+            # recursion that killed the gateway with a
+            # StackOverflowError on every GET /api/docs.
+            #
+            # Why: in Spring Cloud Gateway, `forward:` does NOT
+            # rewrite the request path. ForwardRoutingFilter just
+            # re-dispatches the SAME exchange into the local
+            # DispatcherHandler, path untouched. The dispatcher
+            # runs its handler mappings, RoutePredicateHandlerMapping
+            # is one of them, it matches the very same route again
+            # → forward → dispatch → match → ... until the stack
+            # blows. The blown reactor stack also wedges the Netty
+            # event loop, so unrelated endpoints start hanging too.
+            #
+            # No route is needed in the first place. The handler
+            # mappings that serve the docs both outrank
+            # RoutePredicateHandlerMapping (order 1):
+            #   - RequestMappingHandlerMapping (order 0) serves the
+            #     aggregated spec from OpenApiAggregatorController
+            #     (/api/docs/v3/api-docs and /swagger-config). This
+            #     is why the spec kept working while the UI hung.
+            #   - springdoc's Swagger UI welcome controller (also
+            #     order 0) serves /api/docs, and its webjars
+            #     resource handler serves /api/docs/webjars/**.
+            #     Those beans only exist when springdoc autoconfig
+            #     is ON — see the `springdoc:` block below, which
+            #     previously disabled it wholesale and left nothing
+            #     behind the forward routes to dispatch to.
+            #
+            # Adding a route for a locally-served path here will
+            # reintroduce the recursion. Don't.
           # 404 for unmatched paths (deny-by-default). The reactive
           # filter will translate this to a 401 for paths that need auth.
           default-filters:
@@ -344,8 +351,34 @@ sso:
 # ---------------------------------------------------------------------------
 springdoc:
   api-docs:
-    enabled: false              # our aggregator serves /api/docs/v3/api-docs
-    path: /api/docs/v3/api-docs
+    # MUST stay true. `springdoc.api-docs.enabled=false` is the
+    # master switch for springdoc's ENTIRE autoconfiguration —
+    # not just the /v3/api-docs endpoint. With it false, the
+    # Swagger UI welcome controller and the webjars resource
+    # handler are never registered, so /api/docs and
+    # /api/docs/webjars/** have no local handler at all. That
+    # is what left the `forward:` routes (now removed, see the
+    # routes block above) dispatching into a dead end and
+    # recursing until StackOverflowError.
+    #
+    # We still don't want springdoc's own single-app doc served
+    # at /api/docs/v3/api-docs — that path belongs to
+    # OpenApiAggregatorController's merged doc. So instead of
+    # disabling springdoc, we park its doc on a side path. It
+    # describes only the gateway itself (which has no business
+    # controllers), so it's near-empty and harmless; it just has
+    # to exist somewhere that doesn't collide with the
+    # aggregator's mappings, or Spring fails at startup with an
+    # ambiguous-mapping error.
+    #
+    # Side effect worth knowing: springdoc also derives its own
+    # swagger-config path from this one, so it lands at
+    # /api/docs/springdoc/v3/api-docs/swagger-config and leaves
+    # the aggregator's /api/docs/v3/api-docs/swagger-config
+    # alone. Both are under /api/docs/** which
+    # GatewaySecurityConfig already permitAlls.
+    enabled: true
+    path: /api/docs/springdoc/v3/api-docs
   swagger-ui:
     enabled: true
     path: /api/docs             # /api/docs → redirect to the bundled UI

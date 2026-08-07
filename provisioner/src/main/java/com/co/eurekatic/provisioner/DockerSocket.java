@@ -348,6 +348,15 @@ public class DockerSocket {
         // via environment if their network topology is
         // different.
         env.add("QUERY_CATALOG_BASE_URL=http://sso-api-gateway:8080/sso-admin");
+        // V30 — shared secret the spawned instance needs to call
+        // sso-admin's /internal/pathTemplates. Same guard style as
+        // JWT_PUBLIC_KEY above: only injected when the operator
+        // actually configured it, so an unset value leaves the
+        // container on its own empty default (fail-closed) instead
+        // of injecting the literal string "".
+        if (props.getCatalogInternalToken() != null && !props.getCatalogInternalToken().isBlank()) {
+            env.add("QUERY_CATALOG_INTERNAL_TOKEN=" + props.getCatalogInternalToken());
+        }
         // OTLP endpoint so the spawneado query-service exports
         // sus trazas / métricas / logs al colector del stack
         // (Alloy por defecto). Sin esto el application.yml del

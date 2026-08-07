@@ -339,6 +339,24 @@ services:
       # the dev compose stack. In production replace with the real
       # public hostname(s).
       SSO_CORS_ALLOWED_ORIGINS: ${SSO_CORS_ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:5173}
+      # V30 — shared secret for sso-admin's /internal/** surface.
+      # CatalogRoutesRefresher sends it as X-Internal-Token when
+      # polling /internal/gateway/routes every 30s.
+      #
+      # These MUST be listed here even though they live in .env:
+      # compose reads .env only to interpolate ${VAR} — a variable
+      # that no `environment:` block mentions is NEVER injected into
+      # the container. Omitting them does not fail the build or the
+      # healthcheck; the gateway just falls back to the empty default,
+      # sends no header, sso-admin 401s every poll, and the dynamic
+      # catalog routes silently never load. The symptom shows up far
+      # away as a 404 on catalog-backed paths (/api/eval-col/**) even
+      # with a valid JWT.
+      GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN}
+      # Same secret, second consumer: the OpenAPI aggregator reads it
+      # as springdoc.aggregator.catalog-internal-token to pull
+      # partner/external specs from /internal/openapi/catalog.
+      SSO_INTERNAL_TOKEN: ${SSO_INTERNAL_TOKEN}
       # Observability: push OTLP (traces + metrics + logs) to the Alloy
       # collector over the compose network. When the observability
       # services are not running these exporters just log a connection
@@ -461,6 +479,17 @@ services:
       # The base URL is compose-DNS, NOT localhost, because
       # sso-admin is itself a container.
       SSO_PROVISIONER_BASE_URL: "http://provisioner:9000"
+      # V30 — the producer side of the shared secret. This is the
+      # value InternalTokenFilter compares X-Internal-Token against
+      # for every /internal/** call (api-gateway's route poller,
+      # query-service's path registry). Must be the SAME value the
+      # consumers get; .env keeps all three in sync.
+      #
+      # Without this line the container falls back to the placeholder
+      # default in application.yml, which no consumer can guess, and
+      # the whole /internal/** surface 401s while the stack still
+      # reports healthy.
+      SSO_INTERNAL_TOKEN: ${SSO_INTERNAL_TOKEN}
       # SMTP — in dev, point at the mailhog service.
       SMTP_HOST: mailhog
       SMTP_PORT: "1025"
@@ -725,6 +754,10 @@ services:
       # are NOT prefixed, so the gateway base URL plus
       # the literal /getQuery path resolves them.
       QUERY_CATALOG_BASE_URL: "http://sso-api-gateway:8080/sso-admin"
+      # V30 — shared secret for sso-admin's /internal/pathTemplates.
+      # The path-registry fails closed without it (503) and the
+      # instance can't resolve path-template routes.
+      QUERY_CATALOG_INTERNAL_TOKEN: ${QUERY_CATALOG_INTERNAL_TOKEN}
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8084; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -763,6 +796,8 @@ services:
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       QUERY_CATALOG_BASE_URL: "http://sso-api-gateway:8080/sso-admin"
+      # V30 — see query-service-postgres above.
+      QUERY_CATALOG_INTERNAL_TOKEN: ${QUERY_CATALOG_INTERNAL_TOKEN}
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
     healthcheck:
@@ -838,6 +873,14 @@ services:
       # Con RS256 el provisioner ya no maneja material de
       # firma: sólo reparte la mitad pública.
       DOCKER_JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      # V30 — se propaga tal cual como QUERY_CATALOG_INTERNAL_TOKEN
+      # a cada query-service que el provisioner crea (ver
+      # DockerSocket#buildEnv). Los query-service estáticos lo
+      # reciben desde su propio bloque de compose; los spawneados
+      # SÓLO pueden recibirlo por aquí. Sin esta línea, cada
+      # instancia creada desde admin-ui (p. ej. eval-col) nace sin
+      # el secreto y su path-registry queda fallando cerrado.
+      QUERY_CATALOG_INTERNAL_TOKEN: ${QUERY_CATALOG_INTERNAL_TOKEN}
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
     healthcheck:

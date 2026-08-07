@@ -58,6 +58,21 @@ public class ProvisionerProperties {
      *  el propio contenedor, no el host ni la red compose. */
     private String otlpEndpoint = "http://alloy:4318";
 
+    /** V30 — secreto compartido que el query-service spawneado usa
+     *  para llamar a /internal/pathTemplates en sso-admin (lo envía
+     *  como cabecera X-Internal-Token). Se inyecta al contenedor
+     *  nuevo como {@code QUERY_CATALOG_INTERNAL_TOKEN}.
+     *
+     *  Vacío por defecto, igual que el resto de secretos: el
+     *  operador lo pasa en el bloque de compose del provisioner.
+     *  Sin él, el contenedor spawneado arranca y se registra en
+     *  Eureka igual, pero su path-registry falla cerrado (503) y
+     *  las rutas por plantilla de ese servicio nunca resuelven —
+     *  una degradación silenciosa que sólo se ve en los logs de
+     *  sso-admin como "Rejected GET /internal/... — missing
+     *  X-Internal-Token header". */
+    private String catalogInternalToken = "";
+
     /** Path the provisioner polls to verify the new
      *  container came up. The 30s timeout gives the JVM
      *  + Eureka registration enough room. */
@@ -75,6 +90,8 @@ public class ProvisionerProperties {
     public void setJwtPublicKey(String jwtPublicKey) { this.jwtPublicKey = jwtPublicKey; }
     public String getOtlpEndpoint() { return otlpEndpoint; }
     public void setOtlpEndpoint(String otlpEndpoint) { this.otlpEndpoint = otlpEndpoint; }
+    public String getCatalogInternalToken() { return catalogInternalToken; }
+    public void setCatalogInternalToken(String catalogInternalToken) { this.catalogInternalToken = catalogInternalToken; }
     public int getReadyTimeoutSeconds() { return readyTimeoutSeconds; }
     public void setReadyTimeoutSeconds(int readyTimeoutSeconds) {
         this.readyTimeoutSeconds = readyTimeoutSeconds;
