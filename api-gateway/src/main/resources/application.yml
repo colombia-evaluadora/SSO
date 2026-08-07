@@ -286,6 +286,84 @@ sso:
   cors:
     allowed-origins: ${SSO_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:4173,http://localhost:3000}
 
+# ---------------------------------------------------------------------------
+# OpenAPI / Swagger UI — the gateway aggregates each downstream service's
+# /v3/api-docs into one doc served at /api/docs/v3/api-docs and renders
+# the Swagger UI bundle at /api/docs/swagger-ui.html. The aggregated doc
+# blends two sources (see OpenApiAggregatorService):
+#   - source=springdoc — fetch the service's own /v3/api-docs via Eureka
+#   - source=catalog   — query sso-admin's /internal/openapi/catalog
+#                        (reuses the endpoint table admin-ui already manages)
+# Adding a new internal service = drop a dep on springdoc-openapi and add
+# one entry to springdoc.aggregator.services below. Adding a partner/external
+# service = create the row in sso-admin (no code change here).
+# ---------------------------------------------------------------------------
+springdoc:
+  api-docs:
+    enabled: false              # our aggregator serves /api/docs/v3/api-docs
+    path: /api/docs/v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /api/docs             # /api/docs → redirect to the bundled UI
+    url: /api/docs/v3/api-docs
+    config-url: /api/docs/v3/api-docs/swagger-config
+    operations-sorter: alpha
+    tags-sorter: alpha
+    display-request-duration: true
+  webjars:
+    prefix: /api/docs/webjars
+  cache:
+    ttl: 60s
+  aggregator:
+    catalog-url: http://sso-admin:8080/internal/openapi/catalog
+    catalog-internal-token: ${SSO_INTERNAL_TOKEN:dev-internal-token}
+    services:
+      - service-id: auth-center
+        source: springdoc
+        gateway-paths: ["/auth/**", "/api/auth/**", "/login", "/getApiToken",
+                        "/getInfoUser", "/getUsersSSO", "/googleLogin", "/myApps",
+                        "/internal/cache/**"]
+        tag-prefix: "auth-center"
+        description: "Authentication issuer — login, token issuance, user lookup"
+      - service-id: sso-admin
+        source: springdoc
+        gateway-paths: ["/sso-admin/**", "/api/sso-admin/**",
+                        "/sso-admin/role/**", "/sso-admin/microservice/**",
+                        "/sso-admin/endpoint/**", "/sso-admin/group/**",
+                        "/sso-admin/route/**"]
+        tag-prefix: "sso-admin"
+        description: "Catalog CRUD (User/Role/Group/Microservice/Endpoint/Route) and email-link flows"
+      - service-id: query-service-postgres
+        source: springdoc
+        gateway-paths: ["/qs/**", "/api/qs/**", "/query-service-postgres/**"]
+        tag-prefix: "query-service"
+        description: "Query + write gateway — resolves catalog uuids to SQL and runs them"
+      - service-id: hello-service
+        source: springdoc
+        gateway-paths: ["/hello-service/**", "/api/hello/**"]
+        tag-prefix: "hello-service"
+        description: "Reference reactive downstream (X-Authenticated-* header echo)"
+      - service-id: provisioner
+        source: springdoc
+        gateway-paths: ["/provisioner/**"]
+        tag-prefix: "provisioner"
+        description: "Container lifecycle sidecar (Docker Engine API)"
+      - service-id: notification-service
+        source: springdoc
+        gateway-paths: ["/actuator/providers/**", "/notification-service/actuator/providers/**"]
+        tag-prefix: "notifications"
+        description: "Notification provider roster (actuator)"
+      - service-id: billing-service-external
+        source: catalog
+        gateway-paths: ["/billing/**"]
+        tag-prefix: "external:billing"
+        description: "Servicio externo de facturación (gestionado por partner)"
+      - service-id: erp-service-external
+        source: catalog
+        gateway-paths: ["/erp/**"]
+        tag-prefix: "external:erp"
+        description: "Servicio externo ERP"
+
 management:
     endpoints:
       web:

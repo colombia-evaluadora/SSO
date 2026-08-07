@@ -147,6 +147,12 @@ public class GatewaySecurityConfig {
                         .pathMatchers("/api/auth/refresh", "/api/auth/logout").permitAll()
                         .pathMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info", "/actuator/prometheus").permitAll()
+                        // OpenAPI aggregator — Swagger UI + merged doc + webjars.
+                        // Public because the rendered UI helps devs poke the
+                        // gateway without a token; the actual API endpoints
+                        // listed in the UI still require Bearer (each one is
+                        // individually gated by its target service).
+                        .pathMatchers("/api/docs", "/api/docs/**").permitAll()
                         .anyExchange().authenticated())
                 .addFilterAt(jwtFilter, SecurityWebFiltersOrder.AUTHENTICATION)
                 .build();

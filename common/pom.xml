@@ -93,6 +93,26 @@
             <version>${opentelemetry-instrumentation.version}</version>
         </dependency>
 
+        <!--
+            swagger-models (transitive via springdoc-openapi) is needed
+            here because common defines reusable OpenAPI building blocks
+            consumed by the api-gateway aggregator:
+              - OpenApiCatalogEntry (DTO returned by sso-admin's
+                /internal/openapi/catalog, consumed by
+                OpenApiAggregatorService to assemble the merged doc for
+                source=catalog services)
+              - OpenApiFactory (static helpers to build OpenAPI beans
+                with the shared bearer-jwt security scheme)
+            Each downstream module pulls springdoc-openapi-starter-*
+            at runtime; this dep keeps the compilation classpath
+            consistent.
+        -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi</artifactId>
+            <version>${springdoc-openapi.version}</version>
+        </dependency>
+
         <!-- Test scope: H2 to exercise JPA mappings without a real Postgres -->
         <dependency>
             <groupId>com.h2database</groupId>
