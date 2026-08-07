@@ -61,6 +61,14 @@ class JwtTokenServiceTest {
     }
 
     private static JwtProperties propsFor(KeyPair keys) {
+        // The constructor signature passes the optional V29
+        // 'secret' as the 8th arg so JwtTokenService's HS256
+        // path has a key to use when its construction runs.
+        // The constructor itself (canonical 8-arg) is what
+        // JwtTokenService consumes; the back-compat 7-arg
+        // overload (added during the main→test merge) lets
+        // the existing 7-arg calls still compile. Both paths
+        // converge on the same instance field set.
         return new JwtProperties(
                 pem("PRIVATE KEY", keys.getPrivate().getEncoded()),
                 pem("PUBLIC KEY", keys.getPublic().getEncoded()),
@@ -68,7 +76,8 @@ class JwtTokenServiceTest {
                 3_600L,
                 86_400L,
                 "Authorization",
-                "Bearer ");
+                "Bearer ",
+                GOOD_SECRET);
     }
 
     /** Same key pair, but public half only — how every non-auth-center service is configured. */
@@ -80,7 +89,8 @@ class JwtTokenServiceTest {
                 3_600L,
                 86_400L,
                 "Authorization",
-                "Bearer ");
+                "Bearer ",
+                GOOD_SECRET);
     }
 
     @Test
@@ -195,7 +205,8 @@ class JwtTokenServiceTest {
                 3_600L,
                 86_400L,
                 "Authorization",
-                "Bearer "));
+                "Bearer ",
+                GOOD_SECRET));
 
         String token = svc.issueAccessToken("alice", Set.of("USER"));
         assertThat(svc.parse(token).email()).isEqualTo("alice");
@@ -211,7 +222,8 @@ class JwtTokenServiceTest {
                 3_600L,
                 86_400L,
                 "Authorization",
-                "Bearer ")))
+                "Bearer ",
+                GOOD_SECRET)))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -224,7 +236,8 @@ class JwtTokenServiceTest {
                 3_600L,
                 86_400L,
                 "Authorization",
-                "Bearer ")))
+                "Bearer ",
+                GOOD_SECRET)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("gen-jwt-keys.sh");
     }
