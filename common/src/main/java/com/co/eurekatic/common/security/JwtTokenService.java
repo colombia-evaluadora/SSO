@@ -9,6 +9,7 @@ import io.jsonwebtoken.security.Keys;
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.security.Key;
+import java.security.KeyFactory;
 import java.security.PrivateKey;
 import java.time.Instant;
 import java.util.Base64;
@@ -200,8 +201,8 @@ public class JwtTokenService {
                     + "and set one of them in this service's .env / application.yml.");
         }
         return builder
-                .signWith(signingKey,
-                          hmacKey != null ? Jwts.SIG.HS256 : Jwts.SIG.RS256)
+                .signWith(hmacKey != null ? Jwts.SIG.HS256 : Jwts.SIG.RS256,
+                          signingKey)
                 .compact();
     }
 
