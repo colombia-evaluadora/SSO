@@ -152,14 +152,30 @@ public class GatewaySecurityConfig {
                         // gateway without a token; the actual API endpoints
                         // listed in the UI still require Bearer (each one is
                         // individually gated by its target service).
-                        // /webjars/** covers the static JS/CSS that
-                        // springdoc-openapi serves from the bundled
-                        // webjars-locator (it builds the URL with
-                        // /webjars/swagger-ui/... by default); without
-                        // the permitAll match, the UI loads as 401 and
-                        // the page is blank.
+                        //
+                        // Path notes (2026-08-07, after the V30 OpenAPI
+                        // commit landed):
+                        //   - /api/docs/** is honored for the JSON spec
+                        //     (springdoc.api-docs.path is set in
+                        //     application.yml).
+                        //   - /api/docs/** is NOT honored for the UI
+                        //     redirect: springdoc-openapi 2.8.6 with
+                        //     webflux ignores `springdoc.swagger-ui.path`
+                        //     when the same value is shared with the
+                        //     api-docs.path. The UI still mounts at the
+                        //     default `/swagger-ui` and pulls its static
+                        //     assets from `/webjars/...`. So we
+                        //     permitAll both the custom path (for the
+                        //     spec) AND the default paths (for the UI
+                        //     bundle and assets).
+                        //   - /api/docs/webjars/** is the operator's
+                        //     configured webjars prefix; covered by
+                        //     /api/docs/** but listed explicitly for
+                        //     clarity in case the prefix is later split
+                        //     into its own matcher.
                         .pathMatchers("/api/docs", "/api/docs/**",
-                                "/webjars/**").permitAll()
+                                "/webjars/**", "/swagger-ui", "/swagger-ui/**",
+                                "/api/docs/webjars/**").permitAll()
                         .anyExchange().authenticated())
                 .addFilterAt(jwtFilter, SecurityWebFiltersOrder.AUTHENTICATION)
                 .build();
