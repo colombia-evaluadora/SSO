@@ -15,7 +15,16 @@ server:
 # @Value (gateway.catalog-url) — not part of Spring Cloud
 # Gateway's schema.
 gateway:
-  catalog-url: ${GATEWAY_CATALOG_URL:http://sso-admin:8080}
+  # sso-admin's container port is 8083 (EXPOSE 8083 in its
+  # Dockerfile; the host-side binding is parameterized via
+  # SSO_ADMIN_PORT in docker-compose). The default here
+  # is 8083 (the in-network port), not 8080 — the
+  # 8080 default in older revisions was a typo from when
+  # the gateway was itself the public ingress; with the
+  # current compose the gateway listens on 8080 and
+  # sso-admin on 8083, so the poller would always see
+  # "Connection refused" if it pointed at 8080.
+  catalog-url: ${GATEWAY_CATALOG_URL:http://sso-admin:8083}
   catalog-refresh-ms: ${GATEWAY_CATALOG_REFRESH_MS:30000}
   # X-Internal-Token sent on every poll. Leave blank to
   # keep the legacy behavior (no header → sso-admin 401s →
@@ -322,7 +331,7 @@ springdoc:
   cache:
     ttl: 60s
   aggregator:
-    catalog-url: http://sso-admin:8080/internal/openapi/catalog
+    catalog-url: http://sso-admin:8083/internal/openapi/catalog
     catalog-internal-token: ${SSO_INTERNAL_TOKEN:dev-internal-token}
     services:
       - service-id: auth-center
