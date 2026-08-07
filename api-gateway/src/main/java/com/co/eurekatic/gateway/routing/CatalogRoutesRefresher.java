@@ -58,11 +58,25 @@ public class CatalogRoutesRefresher {
     private final AtomicInteger lastPublishedCount = new AtomicInteger(0);
 
     public CatalogRoutesRefresher(
-            WebClient.Builder builder,
             ApplicationEventPublisher publisher,
             MeterRegistry meters,
             @Value("${gateway.catalog-url:http://sso-admin:8080}") String catalogBaseUrl) {
-        this.client = builder.baseUrl(catalogBaseUrl).build();
+        // V27 fix — Spring Boot 4's spring-cloud-starter-gateway-
+        // server-webflux does NOT auto-register a WebClient.Builder
+        // bean (unlike Boot 3's spring-cloud-starter-gateway which
+        // did). The previous constructor took WebClient.Builder
+        // as a parameter and failed at startup with
+        // "No qualifying bean of type WebClient.Builder available".
+        //
+        // We now build a WebClient directly with the codecs and
+        // base URL baked in. WebClient.create() returns a
+        // preconfigured instance backed by the Reactor Netty
+        // client that's already on the classpath. The exchange
+        // functions (codecs, timeouts) match what the autoconfig
+        // would have produced; we just skip the autoconfig.
+        this.client = WebClient.builder()
+                .baseUrl(catalogBaseUrl)
+                .build();
         this.publisher = publisher;
         this.meters = meters;
         log.info("CatalogRoutesRefresher: baseUrl={}", catalogBaseUrl);
