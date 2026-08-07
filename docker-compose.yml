@@ -415,7 +415,19 @@ services:
         # complete, so the sidecar must be UP before the
         # admin service starts accepting writes — otherwise
         # the first QUERY row would 503.
-        condition: service_healthy
+        #
+        # We use `service_started` (not `service_healthy`)
+        # because the provisioner's first JVM start under
+        # cold-cache takes ~60-90s, and the healthcheck
+        # `start_period` competes with the 4-min default
+        # step timeout in the deploy-test workflow. With
+        # service_started, sso-admin (and the rest of the
+        # stack) starts in parallel and the first Docker
+        # provision call from sso-admin blocks (with the
+        # built-in HTTP retry on 5xx) until the provisioner
+        # is actually ready — same end-state for the caller,
+        # no deploy-blocking serial wait.
+        condition: service_started
       rabbitmq:
         # sso-admin publishes NotificationMessage envelopes to
         # the `notifications` topic exchange (Welcome, password

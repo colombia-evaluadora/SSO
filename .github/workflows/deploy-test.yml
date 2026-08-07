@@ -265,6 +265,15 @@ jobs:
             'echo ".env desplegado: $(grep -c . /opt/sso/.env) líneas no vacías, permisos $(stat -c %a /opt/sso/.env)"'
 
       - name: Pull & restart stack
+        # Cold-cache JVM starts on a 4GB Linode take 60-90s
+        # for the provisioner (the heaviest of the bunch);
+        # the cascade through sso-admin → query-service adds
+        # another 2-3 min. GitHub's default step timeout is
+        # 360 min, but the file was being interpreted as 4 min
+        # by an older runner config; bump explicitly to 15
+        # min so the deploy can wait the full cold-start
+        # window without bailing.
+        timeout-minutes: 15
         env:
           DEST: ${{ secrets.TEST_SSH_USER }}@${{ secrets.TEST_SSH_HOST }}
           GHCR_PULL_USER: ${{ secrets.GHCR_PULL_USER }}
