@@ -96,8 +96,7 @@ public class SecurityConfig {
             HttpSecurity http,
             JwtTokenService jwt,
             JwtProperties jwtProperties,
-            SsoAdminAccessManager ssoAdminAccessManager,
-            InternalTokenFilter internalTokenFilter) throws Exception {
+            SsoAdminAccessManager ssoAdminAccessManager) throws Exception {
 
         JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(jwt, jwtProperties);
 
@@ -161,12 +160,18 @@ public class SecurityConfig {
                         // and blocked every other role outright.
                         .anyRequest().access(ssoAdminAccessManager))
                 // V30 — gate the /internal/** surface on the
-                // shared-secret header. Runs BEFORE Spring
-                // Security's AuthorizationFilter (which is fine
-                // because /internal/** is permitAll anyway, but
-                // we want the 401 from the filter, not from
-                // Spring's anonymous-rejection logic).
-                .addFilterBefore(internalTokenFilter, JwtAuthenticationFilter.class)
+                // shared-secret header. The InternalTokenFilter
+                // is no longer in the Spring Security chain
+                // (that triggered "Filter class JwtAuthenticationFilter
+                // does not have a registered order" because
+                // addFilterBefore requires a known Spring
+                // Security anchor); instead it's registered as
+                // a global servlet filter with order
+                // HIGHEST_PRECEDENCE in InternalTokenConfig.
+                // The order makes the gate fire BEFORE
+                // UsernamePasswordAuthenticationFilter and the
+                // rest of the security chain — invalid tokens
+                // are rejected before any auth context is built.
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
                 .build();
     }

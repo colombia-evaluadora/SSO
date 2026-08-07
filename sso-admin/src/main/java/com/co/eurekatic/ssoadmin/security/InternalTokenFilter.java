@@ -7,12 +7,10 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.security.MessageDigest;
-import java.util.HexFormat;
 
 /**
  * V30 — shared-secret gate for the {@code /internal/**} surface
@@ -38,7 +36,16 @@ import java.util.HexFormat;
  * touched by this filter — they're handled by
  * {@code SecurityConfig}'s {@code permitAll()} matchers.
  */
-@Component
+// V30 — NOT a @Component. Spring Boot would auto-register
+// any @Component Filter as a global servlet filter with
+// order=LOWEST, which conflicts with the Spring Security
+// chain (and "Filter class X does not have a registered
+// order" surfaces when the chain builder can't place the
+// filter). We register the bean explicitly in
+// {@link com.co.eurekatic.ssoadmin.config.InternalTokenConfig}
+// as a {@code FilterRegistrationBean<InternalTokenFilter>}
+// with order=HIGHEST_PRECEDENCE so it runs BEFORE every
+// other filter (including Spring Security's chain).
 public class InternalTokenFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(InternalTokenFilter.class);
