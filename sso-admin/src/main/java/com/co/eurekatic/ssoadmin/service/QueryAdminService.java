@@ -1,5 +1,6 @@
 package com.co.eurekatic.ssoadmin.service;
 
+import com.co.eurekatic.common.entity.ExecutionMode;
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
 import com.co.eurekatic.common.entity.Role;
@@ -10,6 +11,8 @@ import com.co.eurekatic.ssoadmin.dto.QueryRequest;
 import com.co.eurekatic.ssoadmin.dto.QueryResponse;
 import com.co.eurekatic.ssoadmin.exception.DuplicateException;
 import com.co.eurekatic.ssoadmin.exception.NotFoundException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -41,16 +44,21 @@ import java.util.Set;
 @Service
 public class QueryAdminService {
 
+    private static final Logger log = LoggerFactory.getLogger(QueryAdminService.class);
+
     private final QueryRepository queryRepo;
     private final RoleRepository roleRepo;
     private final MicroserviceRepository microserviceRepo;
+    private final PathRegistryNotifier pathRegistryNotifier;
 
     public QueryAdminService(QueryRepository queryRepo,
                              RoleRepository roleRepo,
-                             MicroserviceRepository microserviceRepo) {
+                             MicroserviceRepository microserviceRepo,
+                             PathRegistryNotifier pathRegistryNotifier) {
         this.queryRepo = queryRepo;
         this.roleRepo = roleRepo;
         this.microserviceRepo = microserviceRepo;
+        this.pathRegistryNotifier = pathRegistryNotifier;
     }
 
     @Transactional
@@ -58,9 +66,19 @@ public class QueryAdminService {
         if (queryRepo.existsByUuid(req.uuid())) {
             throw new DuplicateException("Query", req.uuid());
         }
+        validateExecutionModePrefix(req);
+        validatePathTemplate(req, null);
+        validateOutParams(req);
         Query q = new Query();
         copy(req, q);
-        return QueryResponse.fromEntity(queryRepo.save(q));
+        QueryResponse response = QueryResponse.fromEntity(queryRepo.save(q));
+        // V33 — push the change to query-service so the
+        // path-registry picks up the new row before the
+        // next 60s tick. Best-effort (the notifier logs
+        // and swallows failures; the periodic refresh
+        // is the safety net).
+        pathRegistryNotifier.invalidate();
+        return response;
     }
 
     @Transactional
@@ -76,8 +94,14 @@ public class QueryAdminService {
                 throw new DuplicateException("Query", req.uuid());
             }
         });
+        validateExecutionModePrefix(req);
+        validatePathTemplate(req, q.getId());
+        validateOutParams(req);
         copy(req, q);
-        return QueryResponse.fromEntity(queryRepo.save(q));
+        QueryResponse response = QueryResponse.fromEntity(queryRepo.save(q));
+        // V33 — same invalidate-on-write as create().
+        pathRegistryNotifier.invalidate();
+        return response;
     }
 
     @Transactional(readOnly = true)
@@ -99,6 +123,9 @@ public class QueryAdminService {
             throw new NotFoundException("Query", id);
         }
         queryRepo.deleteById(id);
+        // V33 — delete also invalidates so a removed
+        // path-template stops being served immediately.
+        pathRegistryNotifier.invalidate();
     }
 
     /* ====================== bindings: role ====================== */
@@ -161,6 +188,20 @@ public class QueryAdminService {
         q.setDetail(req.detail());
         q.setAction(req.action());
         q.setStyle(req.style());
+        // V28: default SELECT preserves pre-V28 behavior.
+        q.setExecutionMode(req.executionMode() == null
+                ? ExecutionMode.DEFAULT
+                : req.executionMode().name());
+        // V27: nullable. When set, the unique partial index
+        // (microservice_id, path_template) catches concurrent
+        // insert races; the service-layer check below catches
+        // the in-band case for a friendlier 409.
+        q.setPathTemplate(normalizePathTemplate(req.pathTemplate()));
+        // V31: comma-separated :placeholder names that are
+        // OUT params of a PROCEDURE-mode row. Validation lives
+        // in validateOutParams() (must contain a placeholder
+        // that exists in the SQL; only meaningful for PROCEDURE).
+        q.setOutParamNames(normalizeOutParams(req.outParamNames()));
         // Resolve microservice binding. Null clears the
         // association (back to "global" — any instance may
         // serve). A non-null id MUST resolve to a kind=QUERY
@@ -170,6 +211,151 @@ public class QueryAdminService {
         // the request itself is well-formed; the referenced
         // entity is just wrong.
         q.setMicroservice(resolveQueryMicroservice(req.microserviceId()));
+    }
+
+    /**
+     * V31 — normalize the comma-separated OUT param names.
+     * Empty / whitespace becomes {@code null} (legacy
+     * behavior). Each non-empty token must start with
+     * ":" (it has to match a SQL placeholder) and must
+     * appear as a {@code :name} token in the SQL body.
+     * Only meaningful for {@code PROCEDURE} mode — set on
+     * a {@code SELECT} / {@code FUNCTION} row is rejected.
+     */
+    private static String normalizeOutParams(String raw) {
+        if (raw == null) return null;
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty()) return null;
+        // Normalize whitespace: "out_a , out_b" → "out_a,out_b"
+        return java.util.Arrays.stream(trimmed.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    private void validateOutParams(QueryRequest req) {
+        String outParams = req.outParamNames();
+        if (outParams == null || outParams.isBlank()) {
+            return;
+        }
+        ExecutionMode mode = req.executionMode() == null
+                ? ExecutionMode.SELECT : req.executionMode();
+        if (mode != ExecutionMode.PROCEDURE) {
+            throw new IllegalArgumentException(
+                "outParamNames is only valid for executionMode=PROCEDURE; got: " + mode);
+        }
+        // Each name must look like a placeholder and appear in the SQL.
+        String sql = req.query() == null ? "" : req.query();
+        for (String name : outParams.split(",")) {
+            String token = name.trim();
+            if (token.isEmpty()) continue;
+            if (!token.startsWith(":")) {
+                throw new IllegalArgumentException(
+                    "outParamNames entries must start with ':' (placeholder); got: " + token);
+            }
+            // Must appear in the SQL. Tolerate spaces around
+            // the colon (PostgreSQL accepts `: name` too).
+            String needle = ":" + token.substring(1);
+            if (!sql.contains(needle)) {
+                throw new IllegalArgumentException(
+                    "outParamNames entry " + token + " does not appear as a placeholder "
+                    + "in the query SQL");
+            }
+        }
+    }
+
+    /**
+     * V28 — assert the SQL's first keyword matches the declared
+     * execution mode. Saves the admin from a runtime "first
+     * keyword must be SELECT/WITH" 400 the first time the row is
+     * invoked. The check is intentionally lenient on whitespace
+     * and leading {@code --} comments (same strip logic the
+     * query-service guard uses, duplicated here so the failure
+     * message points at the save call).
+     */
+    private void validateExecutionModePrefix(QueryRequest req) {
+        ExecutionMode mode = req.executionMode() == null
+                ? ExecutionMode.SELECT
+                : req.executionMode();
+        String sql = req.query() == null ? "" : req.query().stripLeading();
+        while (sql.startsWith("--")) {
+            int nl = sql.indexOf('\n');
+            if (nl < 0) { sql = ""; break; }
+            sql = sql.substring(nl + 1).stripLeading();
+        }
+        if (sql.isEmpty()) {
+            // Empty SQL — let it through; the catalog will
+            // refuse to run it anyway, and we don't want to
+            // double-reject at save time.
+            return;
+        }
+        String first = sql.split("\\s+", 2)[0].toUpperCase();
+        boolean ok = switch (mode) {
+            case SELECT    -> first.equals("SELECT") || first.equals("WITH");
+            case PROCEDURE -> first.equals("CALL");
+            case FUNCTION  -> first.equals("SELECT"); // functions are called via SELECT
+        };
+        if (!ok) {
+            throw new IllegalArgumentException(
+                "executionMode=" + mode + " requires the query to start with "
+                + switch (mode) {
+                    case SELECT -> "SELECT or WITH";
+                    case PROCEDURE -> "CALL";
+                    case FUNCTION -> "SELECT";
+                }
+                + "; got: " + first);
+        }
+    }
+
+    /**
+     * V27 — normalize and validate the path template. Empty /
+     * whitespace becomes {@code null} (the legacy / non-path
+     * mode). Non-empty must start with "/" and must not contain
+     * "**" (the gateway splits on the prefix, so a "**" inside a
+     * per-query template would never match a real URL).
+     *
+     * <p>{@code excludeId} is the row being updated — we allow
+     * the same row to keep its own pathTemplate without tripping
+     * the unique index. The pre-check here is also friendlier
+     * than the DB's constraint violation.
+     */
+    private void validatePathTemplate(QueryRequest req, Long excludeId) {
+        String tpl = normalizePathTemplate(req.pathTemplate());
+        if (tpl == null) {
+            return;
+        }
+        if (req.microserviceId() == null) {
+            throw new IllegalArgumentException(
+                "pathTemplate requires microserviceId (queries without a "
+                + "backing microservice cannot have a URL-suffix)");
+        }
+        if (tpl.contains("**")) {
+            throw new IllegalArgumentException(
+                "pathTemplate cannot contain '**' — that's the prefix "
+                + "microservice's job (MICROSERVICE.REQUEST_URI). Use a "
+                + "literal path here, e.g. /establecimiento/{id}.");
+        }
+        // Reject if another query in the same microservice already
+        // claims this path. The DB partial unique index catches
+        // the race; this catches the in-band duplicate for a
+        // clearer 409 message.
+        boolean taken = queryRepo.existsByMicroservice_IdAndPathTemplate(
+                req.microserviceId(), tpl);
+        if (taken) {
+            // exempt the row being updated
+            if (excludeId == null
+                    || queryRepo.findById(excludeId)
+                            .map(q -> !tpl.equals(q.getPathTemplate()))
+                            .orElse(true)) {
+                throw new DuplicateException("Query.pathTemplate", tpl);
+            }
+        }
+    }
+
+    private static String normalizePathTemplate(String tpl) {
+        if (tpl == null) return null;
+        String trimmed = tpl.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     /**

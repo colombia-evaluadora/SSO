@@ -2,6 +2,7 @@ package com.co.eurekatic.ssoadmin.config;
 
 import com.co.eurekatic.common.security.JwtProperties;
 import com.co.eurekatic.common.security.JwtTokenService;
+import com.co.eurekatic.ssoadmin.security.InternalTokenFilter;
 import com.co.eurekatic.ssoadmin.service.AppAccessService;
 import com.co.eurekatic.ssoadmin.service.EndpointAccessService;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -95,7 +96,8 @@ public class SecurityConfig {
             HttpSecurity http,
             JwtTokenService jwt,
             JwtProperties jwtProperties,
-            SsoAdminAccessManager ssoAdminAccessManager) throws Exception {
+            SsoAdminAccessManager ssoAdminAccessManager,
+            InternalTokenFilter internalTokenFilter) throws Exception {
 
         JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(jwt, jwtProperties);
 
@@ -124,6 +126,15 @@ public class SecurityConfig {
                         // internal docker network, not on the LAN.
                         .requestMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info").permitAll()
+                        // V27/V30 — internal route-table feed for
+                        // api-gateway's CatalogRoutesRefresher AND
+                        // path-registry token issuance for
+                        // query-service. The InternalTokenFilter
+                        // (registered below) gates these with the
+                        // X-Internal-Token header; SecurityConfig
+                        // just has to permitAll so Spring doesn't
+                        // 401 before the filter runs.
+                        .requestMatchers("/internal/**").permitAll()
                         // Catalog read endpoints — any
                         // authenticated caller; the per-row
                         // role check happens inside the
@@ -135,7 +146,11 @@ public class SecurityConfig {
                         // is also per-row authorized (ADMIN
                         // bypass + publicEnd bypass + role
                         // intersection), same as /getQuery.
-                        .requestMatchers("/getQuery", "/getWrite", "/myQueries", "/myMenu").authenticated()
+                        // V30 — /myPathTemplates is the same shape,
+                        // filtered to queries with a pathTemplate.
+                        // Used by query-service's in-memory registry.
+                        .requestMatchers("/getQuery", "/getWrite", "/myQueries",
+                                "/myPathTemplates", "/myMenu").authenticated()
                         // Everything else requires a role_app binding
                         // to this app AND a matching role_endpoint
                         // binding — see SsoAdminAccessManager. No
@@ -145,6 +160,13 @@ public class SecurityConfig {
                         // of whether it was ever scoped to this app,
                         // and blocked every other role outright.
                         .anyRequest().access(ssoAdminAccessManager))
+                // V30 — gate the /internal/** surface on the
+                // shared-secret header. Runs BEFORE Spring
+                // Security's AuthorizationFilter (which is fine
+                // because /internal/** is permitAll anyway, but
+                // we want the 401 from the filter, not from
+                // Spring's anonymous-rejection logic).
+                .addFilterBefore(internalTokenFilter, JwtAuthenticationFilter.class)
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
                 .build();
     }

@@ -143,6 +143,15 @@ sso:
     api-token-ttl-seconds: 86400
     header-name: Authorization
     token-prefix: "Bearer "
+  # V30 — shared secret gating the /internal/** surface
+  # (InternalTokenFilter). MUST match the consumer tokens:
+  #   api-gateway        → GATEWAY_INTERNAL_TOKEN
+  #   query-service      → QUERY_CATALOG_INTERNAL_TOKEN
+  # Default placeholder fails closed at boot (logged WARN,
+  # all /internal/** calls return 401). Production: secret
+  # manager.
+  internal:
+    token: ${SSO_INTERNAL_TOKEN:change-me-internal-shared-secret-32-bytes-min}
   # Provisioner sidecar. sso-admin POSTs here when a
   # microservice row with kind=QUERY is created. The default
   # points at the compose-DNS name `provisioner:9000`; for

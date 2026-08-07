@@ -1,5 +1,6 @@
 package com.co.eurekatic.ssoadmin.dto;
 
+import com.co.eurekatic.common.entity.ExecutionMode;
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
 
@@ -23,11 +24,19 @@ import com.co.eurekatic.common.entity.Query;
  * backward-compatible with any external consumer that already
  * parses the legacy response.
  *
- * <p>{@code microserviceId} is NEW — it tells the admin-ui which
+ * <p>{@code microserviceId} tells the admin-ui which
  * {@code query-service-<instanceName>} gateway path to use when
  * executing the query. {@code null} means the query is "global"
  * and any instance may serve it (the UI defaults to the legacy
  * canonical {@code query-service} service id in that case).
+ *
+ * <p><b>V27</b> — {@code pathTemplate} surfaces the path suffix
+ * so {@code query-service} can build its in-memory
+ * {@code Map<pathTemplate, uuid>} registry for path-based
+ * dispatch.
+ *
+ * <p><b>V28</b> — {@code executionMode} tells {@code query-service}
+ * whether to run as SELECT / PROCEDURE / FUNCTION.
  */
 public record QueryDefinition(
         Long idQuery,
@@ -39,7 +48,10 @@ public record QueryDefinition(
         String detail,
         String action,
         String style,
-        Long microserviceId
+        Long microserviceId,
+        String pathTemplate,
+        ExecutionMode executionMode,
+        String outParamNames
 ) {
     public static QueryDefinition fromEntity(Query q) {
         Microservice m = q.getMicroservice();
@@ -53,6 +65,9 @@ public record QueryDefinition(
                 q.getDetail(),
                 q.getAction(),
                 q.getStyle(),
-                m != null ? m.getId() : null);
+                m != null ? m.getId() : null,
+                q.getPathTemplate(),
+                ExecutionMode.fromString(q.getExecutionMode()),
+                q.getOutParamNames());
     }
 }

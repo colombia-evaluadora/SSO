@@ -8,6 +8,7 @@ import org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfigur
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceTransactionManagerAutoConfiguration;
 import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Entry point for the reactive api-gateway. Pulls JWT primitives
@@ -45,6 +46,7 @@ import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
 })
 @EnableDiscoveryClient
 @EnableConfigurationProperties(JwtProperties.class)
+@EnableScheduling
 public class ApiGatewayApplication {
 
     public static void main(String[] args) {

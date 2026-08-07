@@ -105,12 +105,24 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         // entity's email field (which UserDetails.getUsername() also
         // returns — both are kept consistent).
         String email = (principal instanceof User u) ? u.getEmail() : authResult.getName();
-        String userId = (principal instanceof User u && u.getId() != null)
-                ? String.valueOf(u.getId())
-                : email;
+        Long uid = (principal instanceof User u && u.getId() != null)
+                ? u.getId()
+                : null;
+        // Refresh-token store still wants a String userId (its
+        // payload is opaque metadata). Convert for that call only —
+        // the JWT below receives the Long form.
+        String userId = uid == null ? email : String.valueOf(uid);
         Set<String> roles = effectiveRoles.forEmail(email);
 
-        String accessToken = jwt.issueAccessToken(email, roles);
+        // V29: include the numeric userId as the uid claim so
+        // downstream services can pass it to procedures without a DB
+        // lookup. Null is tolerated by the token builder (see
+        // JwtTokenService#build) — the claim is omitted entirely
+        // when we don't have it (e.g. an LDAP-bound login where the
+        // User entity wasn't materialised — shouldn't happen here
+        // since AppUserDetailsService returns the entity directly,
+        // but the guard is cheap).
+        String accessToken = jwt.issueAccessToken(email, uid, roles);
 
         // Mint a new refresh token via the store. Each login starts a
         // fresh family so multi-device sessions are independent. If the

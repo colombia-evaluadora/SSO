@@ -1,7 +1,11 @@
 package com.co.eurekatic.query.exception;
 
+import io.github.resilience4j.bulkhead.BulkheadFullException;
+import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MissingServletRequestParameterException;
@@ -9,6 +13,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.sql.SQLException;
 import java.util.Map;
 
 /**
@@ -74,5 +79,78 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
                 "code", "INTERNAL_ERROR",
                 "message", "Internal server error"));
+    }
+
+    /**
+     * V32 — Spring's {@link DataAccessException} wrapper
+     * around JDBC exceptions bubbles up here when a
+     * procedure / statement raises a SQL error that
+     * {@link com.co.eurekatic.query.read.QueryService} or
+     * {@link com.co.eurekatic.query.write.WriteService}
+     * didn't catch (e.g. when a controller calls
+     * {@code jdbcTemplate} directly). Translate to the
+     * same {@link PostgresErrorMapper} mapping the
+     * service path uses, so the wire shape is uniform.
+     */
+    @ExceptionHandler(DataAccessException.class)
+    public ResponseEntity<Map<String, Object>> handleDataAccess(DataAccessException ex) {
+        SQLException sql = ex.getMostSpecificCause() instanceof SQLException
+                ? (SQLException) ex.getMostSpecificCause()
+                : null;
+        ResponseStatusException mapped = sql != null
+                ? PostgresErrorMapper.map(sql)
+                : new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                        "Database error");
+        return ResponseEntity.status(mapped.getStatusCode()).body(Map.of(
+                "code", mapped.getStatusCode().toString(),
+                "message", mapped.getReason() == null ? "Database error" : mapped.getReason()));
+    }
+
+    /**
+     * V32 — same shape for raw {@link SQLException}s that
+     * escape a service method (shouldn't happen anymore
+     * after QueryService wraps them in PostgresErrorMapper,
+     * but the catch-all here keeps the wire uniform if
+     * a future code path forgets to translate).
+     */
+    @ExceptionHandler(SQLException.class)
+    public ResponseEntity<Map<String, Object>> handleSql(SQLException ex) {
+        ResponseStatusException mapped = PostgresErrorMapper.map(ex);
+        return ResponseEntity.status(mapped.getStatusCode()).body(Map.of(
+                "code", mapped.getStatusCode().toString(),
+                "message", mapped.getReason() == null ? "Database error" : mapped.getReason()));
+    }
+
+    /**
+     * V33 — Resilience4j rate limit hit. Return 429 with a
+     * {@code Retry-After} header so the client backs off
+     * for the configured window. The default Resilience4j
+     * timeout is 0 (fail fast) so the client should retry
+     * at most once per {@code query.resilience.rate-limit.window}.
+     */
+    @ExceptionHandler(RequestNotPermitted.class)
+    public ResponseEntity<Map<String, Object>> handleRateLimit(RequestNotPermitted ex) {
+        log.warn("Rate limit exceeded: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, "1")
+                .body(Map.of(
+                        "code", "RATE_LIMITED",
+                        "message", "Rate limit exceeded; retry shortly"));
+    }
+
+    /**
+     * V33 — Resilience4j bulkhead full. Return 503 with a
+     * {@code Retry-After} hint. The bulkhead is per-dialect
+     * so a slow query on one dialect doesn't affect others,
+     * but a hot dialect can still exhaust its own cap.
+     */
+    @ExceptionHandler(BulkheadFullException.class)
+    public ResponseEntity<Map<String, Object>> handleBulkheadFull(BulkheadFullException ex) {
+        log.warn("Bulkhead full: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, "1")
+                .body(Map.of(
+                        "code", "BULKHEAD_FULL",
+                        "message", "Service busy, retry shortly"));
     }
 }

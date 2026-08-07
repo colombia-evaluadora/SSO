@@ -80,8 +80,36 @@ query:
       #   password: ${QUERY_DS_SQLSERVER_PASSWORD:change-me}
   catalog:
     base-url: ${QUERY_CATALOG_BASE_URL:http://localhost:8080/sso-admin}
+    # V30 — shared secret for the /internal/pathTemplates
+    # endpoint on sso-admin. MUST match sso-admin's
+    # sso.internal.token. Empty default fails closed
+    # (path-registry returns 503 until configured); the
+    # WAL log makes the misconfiguration obvious.
+    internal-token: ${QUERY_CATALOG_INTERNAL_TOKEN:}
     read-timeout: 3s
     connect-timeout: 2s
+  # V27/V30 — controls the path-template in-memory registry
+  # refresh cadence. Default 60s; the registry's first
+  # load happens at boot via @Scheduled initialDelay=0 so
+  # the dispatcher is warm before the first request.
+  path-registry:
+    refresh-ms: ${QUERY_PATH_REGISTRY_REFRESH_MS:60000}
+  # V33 — Resilience4j protection for the read path.
+  #   bulkhead caps CONCURRENT JDBC calls per dialect so a
+  #     single slow query can't starve the HikariCP pool.
+  #   rate-limit caps RPS per principal (the JWT subject);
+  #     overflow returns 429 with Retry-After.
+  # The defaults below are conservative for prod. CI / dev
+  # override them via application-test.yml or
+  # @TestPropertySource — see ResilienceIntegrationTest.
+  resilience:
+    bulkhead:
+      max-concurrent: ${QUERY_BULKHEAD_MAX_CONCURRENT:20}
+      max-queue: ${QUERY_BULKHEAD_MAX_QUEUE:50}
+      wait-duration: ${QUERY_BULKHEAD_WAIT_DURATION:200ms}
+    rate-limit:
+      rps: ${QUERY_RATE_LIMIT_RPS:100}
+      window: ${QUERY_RATE_LIMIT_WINDOW:1s}
 
 sso:
   jwt:

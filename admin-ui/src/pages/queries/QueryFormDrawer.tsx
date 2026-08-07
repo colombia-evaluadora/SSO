@@ -14,27 +14,25 @@ interface Props {
 }
 
 /**
- * Form drawer for the Queries Catalog admin CRUD. The two
- * non-trivial controls are:
+ * Form drawer for the Queries Catalog admin CRUD. Notable controls:
  * <ul>
  *   <li>{@code microserviceId} — a {@code <select>} populated
- *       from {@link useMicroservices} filtered to
- *       {@code kind=QUERY}. The {@code queryFormSchema}
- *       accepts {@code null} (treated as "Sin binding —
- *       query global"); the backend's
- *       {@link com.co.eurekatic.ssoadmin.service.QueryAdminService}
- *       rejects any other null/blank state with 422.</li>
- *   <li>{@code query} — a multi-line text input for the raw
- *       SQL. Parameter binding uses {@code :placeholder}
- *       tokens the catalog passes straight through to the
- *       JDBC driver; the form does NOT try to parse or
- *       validate them.</li>
+ *       from {@link useMicroservices} filtered to {@code kind=QUERY}.
+ *       {@code null} = "global" query (canonical
+ *       {@code query-service} serves it).</li>
+ *   <li>{@code executionMode} (V28) — how query-service executes
+ *       the row: SELECT (default), PROCEDURE (CALL schema.proc),
+ *       or FUNCTION (SELECT * FROM schema.func). The backend
+ *       validates the SQL's first keyword matches the mode at
+ *       save time.</li>
+ *   <li>{@code pathTemplate} (V27) — URL suffix that exposes this
+ *       query as a first-class HTTP endpoint. Composed with the
+ *       microservice's {@code REQUEST_URI} prefix at request time.
+ *       Empty = legacy (uuid in body only).</li>
+ *   <li>{@code query} — multi-line text for the raw SQL.
+ *       {@code :placeholder} tokens pass through to JDBC
+ *       {@code MapSqlParameterSource}.</li>
  * </ul>
- *
- * <p>Detail / action / style are surfaced as textareas (json
- * opaque to the catalog endpoint) collapsed under a
- * {@code <details>} toggle so the SQL editor stays uncluttered
- * by metadata most admins never touch.
  */
 export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
   const services = useMicroservices();
@@ -50,6 +48,9 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
       action: query?.action ?? "",
       style: query?.style ?? "",
       microserviceId: query?.microserviceId ?? null,
+      executionMode: query?.executionMode ?? "SELECT",
+      pathTemplate: query?.pathTemplate ?? null,
+      outParamNames: query?.outParamNames ?? null,
     }),
     [query],
   );
@@ -116,7 +117,13 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
                     : "border-slate-300 focus:border-sky-500 focus:ring-sky-500",
                 ].join(" ")}
                 aria-invalid={errors.query ? true : undefined}
-                placeholder="SELECT id, email FROM sso_user WHERE username = :username"
+                placeholder={
+                  values.executionMode === "PROCEDURE"
+                    ? "CALL get_establecimiento(:caller_user_id, :caller_roles, :id, :estado)"
+                    : values.executionMode === "FUNCTION"
+                      ? "SELECT * FROM get_establecimiento(:id)"
+                      : "SELECT id, email FROM sso_user WHERE username = :username"
+                }
               />
               {errors.query ? (
                 <p role="alert" className="mt-1 text-xs text-red-600">
@@ -125,9 +132,73 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
               ) : null}
               <p className="mt-1 text-[11px] text-slate-500">
                 Bindings con <code>:placeholder</code> se resuelven en el
-                query-service vía <code>MapSqlParameterSource</code>.
+                query-service vía <code>MapSqlParameterSource</code>. El
+                catálogo inyecta automáticamente{" "}
+                <code>:caller_user_id</code>, <code>:caller_email</code>,
+                <code>:caller_roles</code> (CSV) y{" "}
+                <code>:caller_roles_array</code> (array PG) desde el JWT.
               </p>
             </label>
+            <div className="h-3" />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label
+                  htmlFor="query-execution-mode"
+                  className="mb-1 block text-sm font-medium text-slate-700"
+                >
+                  Modo de ejecución
+                </label>
+                <select
+                  id="query-execution-mode"
+                  value={values.executionMode}
+                  onChange={(e) =>
+                    setField(
+                      "executionMode",
+                      e.target.value as QueryFormValues["executionMode"],
+                    )
+                  }
+                  className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                >
+                  <option value="SELECT">
+                    SELECT — lectura estándar
+                  </option>
+                  <option value="PROCEDURE">
+                    PROCEDURE — CALL schema.proc(…)
+                  </option>
+                  <option value="FUNCTION">
+                    FUNCTION — SELECT * FROM schema.func(…)
+                  </option>
+                </select>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  El backend valida que el primer keyword del SQL coincida
+                  con el modo al guardar.
+                </p>
+              </div>
+              <Input
+                label="Path template"
+                value={values.pathTemplate ?? ""}
+                onChange={(e) =>
+                  setField(
+                    "pathTemplate",
+                    e.target.value.trim() === "" ? null : e.target.value,
+                  )
+                }
+                error={errors.pathTemplate}
+                hint={`Sufijo de URL DENTRO del microservicio (ej /establecimiento/{id}). Vacío = solo accesible vía POST /<svc>/query (legacy).`}
+              />
+              <Input
+                label="OUT params (solo PROCEDURE)"
+                value={values.outParamNames ?? ""}
+                onChange={(e) =>
+                  setField(
+                    "outParamNames",
+                    e.target.value.trim() === "" ? null : e.target.value,
+                  )
+                }
+                error={errors.outParamNames}
+                hint={`Comma-separated :placeholder names (ej :out_status,:out_message). Solo aplica cuando executionMode=PROCEDURE.`}
+              />
+            </div>
             <div className="h-3" />
             <div>
               <label
@@ -160,6 +231,16 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
               {queryInstances.length === 0 && !services.isLoading ? (
                 <p className="mt-1 text-[11px] text-slate-500">
                   No hay microservicios QUERY aprovisionados aún.
+                </p>
+              ) : null}
+              {values.microserviceId ? (
+                <p className="mt-1 text-[11px] text-slate-500">
+                  URL completa:{" "}
+                  <code className="rounded bg-slate-100 px-1">
+                    /&lt;request_uri&gt;{values.pathTemplate ?? ""}
+                  </code>{" "}
+                  — el prefijo REQUEST_URI lo define el microservicio
+                  seleccionado arriba.
                 </p>
               ) : null}
             </div>

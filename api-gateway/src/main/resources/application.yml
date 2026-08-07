@@ -9,6 +9,16 @@ spring:
     banner-mode: off
     web-application-type: reactive
 
+# V30 — config for the CatalogRoutesRefresher that polls
+# sso-admin's /internal/gateway/routes. The shared secret
+# gates the /internal/** surface on sso-admin (see
+# InternalTokenFilter); a missing token causes sso-admin
+# to 401 the poller, which keeps the previous routes
+# active (graceful degradation).
+gateway:
+  catalog-url: ${GATEWAY_CATALOG_URL:http://sso-admin:8080}
+  catalog-refresh-ms: ${GATEWAY_CATALOG_REFRESH_MS:30000}
+
   cloud:
     gateway:
       # Spring Cloud Gateway 5.0.x (Spring Cloud 2025.1.2 / Oakwood)

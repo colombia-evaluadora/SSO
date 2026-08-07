@@ -3,6 +3,7 @@ package com.co.eurekatic.query;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Query-service entry point.
@@ -41,6 +42,7 @@ import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan(basePackages = "com.co.eurekatic.query.config")
+@EnableScheduling
 public class QueryServiceApplication {
 
     public static void main(String[] args) {

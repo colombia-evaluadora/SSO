@@ -4,6 +4,7 @@ import com.co.eurekatic.common.entity.Microservice;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -37,5 +38,20 @@ public interface MicroserviceRepository extends JpaRepository<Microservice, Long
      * given app — used by the {@code AppService} when
      * listing a single app's services.
      */
-    java.util.List<Microservice> findAllByApp_Id(Long appId);
+    List<Microservice> findAllByApp_Id(Long appId);
+
+    /**
+     * V27 — every microservice that has a non-null
+     * {@code request_uri} (the gateway path prefix). Used
+     * by {@code InternalGatewayController} to publish the
+     * route table to {@code api-gateway}'s
+     * {@code CatalogRoutesRefresher}.
+     *
+     * <p>Spring Data derives the query from the method
+     * name ({@code WHERE request_uri IS NOT NULL}). The
+     * catalog table is small (hundreds of rows tops), so
+     * an in-memory scan is fine; add a derived index on
+     * {@code request_uri} only if this becomes hot.
+     */
+    List<Microservice> findAllByRequestUriIsNotNull();
 }

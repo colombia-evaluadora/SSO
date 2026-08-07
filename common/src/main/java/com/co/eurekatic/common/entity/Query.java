@@ -142,6 +142,51 @@ public class Query {
     private Microservice microservice;
 
     /**
+     * V28 — how the JDBC layer should execute this query.
+     * Default {@code "SELECT"} preserves pre-V28 behavior.
+     * Stored as VARCHAR (not Java enum) so the database
+     * remains the schema of record: an admin can update the
+     * column directly without going through the enum ordinal
+     * trap that bit the legacy code.
+     */
+    @Column(name = "EXECUTION_MODE", length = 20, nullable = false)
+    private String executionMode = "SELECT";
+
+    /**
+     * V27 — path template that exposes this query as an HTTP
+     * endpoint, composed with {@link Microservice#getRequestUri()}.
+     * Example: when the owning microservice has
+     * {@code REQUEST_URI = "/api/eval-col/**"} and this column
+     * holds {@code "/establecimiento/{id}"}, the gateway exposes
+     * the query at {@code POST /api/eval-col/establecimiento/{id}}.
+     *
+     * <p>Nullable: {@code NULL} keeps the legacy
+     * {@code POST /<svc>/query {uuid}} flow as the only way to
+     * invoke. Catalog rows authored before V27 stay exactly
+     * as they were.
+     */
+    @Column(name = "PATH_TEMPLATE", length = 500)
+    private String pathTemplate;
+
+    /**
+     * V31 — comma-separated {@code :placeholder} names that are
+     * OUT params of a PROCEDURE-mode row. When set,
+     * {@code query-service} switches to {@code CallableStatement}
+     * and reads the OUT values into a separate {@code outParams}
+     * map the controller returns alongside the rows.
+     *
+     * <p>Example: a procedure
+     * {@code CALL proc(:in_id, :out_status, :out_message)}
+     * with {@code OUT_PARAM_NAMES = "out_status,out_message"}.
+     *
+     * <p>Nullable and empty both mean "no OUT params" — the
+     * procedure relies on {@code RETURN QUERY} for the result
+     * set, the legacy behaviour.
+     */
+    @Column(name = "OUT_PARAM_NAMES", length = 500)
+    private String outParamNames;
+
+    /**
      * Roles authorized to invoke this query through the catalog
      * endpoint. Owning side of {@code ROLE_QUERY} — call
      * {@link #addRole(Role)} to attach.

@@ -30,9 +30,10 @@ import static org.mockito.Mockito.when;
  * Unit test for {@link UserForwardingGlobalFilter}. Verifies that
  * when a valid {@link AuthPrincipal} is in the reactive security
  * context, the filter propagates {@code X-Authenticated-User},
- * {@code X-Authenticated-Roles}, and {@code X-Authenticated-Token-Type}
- * to the downstream request. When no principal is present, the
- * filter is a no-op (no headers added).
+ * {@code X-Authenticated-Roles}, {@code X-Authenticated-Token-Type},
+ * and (V29) {@code X-Authenticated-User-Id} to the downstream
+ * request. When no principal is present, the filter is a no-op
+ * (no headers added).
  */
 class UserForwardingGlobalFilterTest {
 
@@ -62,7 +63,9 @@ class UserForwardingGlobalFilterTest {
     @Test
     void propagatesUserAndRolesAndTokenTypeToDownstreamRequest() {
         Set<String> roles = new LinkedHashSet<>(List.of("USER", "ADMIN"));
-        AuthPrincipal principal = new AuthPrincipal("alice", roles, "access");
+        // V29: include userId in the principal so the filter
+        // exercises the X-Authenticated-User-Id branch.
+        AuthPrincipal principal = new AuthPrincipal("alice", 42L, roles, "access");
         UsernamePasswordAuthenticationToken auth =
                 new UsernamePasswordAuthenticationToken(principal, "token",
                         List.<GrantedAuthority>of(new SimpleGrantedAuthority("USER"),
@@ -95,6 +98,45 @@ class UserForwardingGlobalFilterTest {
                 .contains("ADMIN");
         assertThat(headers.getFirst(UserForwardingGlobalFilter.HEADER_TOKEN_TYPE))
                 .isEqualTo("access");
+        // V29: numeric userId is forwarded as a header.
+        assertThat(headers.getFirst(UserForwardingGlobalFilter.HEADER_USER_ID))
+                .isEqualTo("42");
+    }
+
+    @Test
+    void legacyTokenWithoutUserIdForwardsEmptyHeader() {
+        // A token without a uid claim (V29 pre-rollout or
+        // explicit null) must still propagate other headers
+        // and forward an empty userId header so downstream
+        // services can detect the legacy state explicitly
+        // rather than via header absence.
+        Set<String> roles = new LinkedHashSet<>(List.of("USER"));
+        AuthPrincipal principal = new AuthPrincipal("alice", null, roles, "access");
+        UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(principal, "token",
+                        List.<GrantedAuthority>of(new SimpleGrantedAuthority("USER")));
+
+        MockServerHttpRequest request = MockServerHttpRequest.get("/some/path").build();
+        ServerWebExchange exchange = MockServerWebExchange.from(request);
+
+        filter.filter(exchange, chain)
+                .contextWrite(ReactiveSecurityContextHolder
+                        .withSecurityContext(Mono.just(
+                                new org.springframework.security.core.context.SecurityContextImpl(auth))))
+                .block();
+
+        ArgumentCaptor<ServerWebExchange> captor =
+                ArgumentCaptor.forClass(ServerWebExchange.class);
+        verify(chain).filter(captor.capture());
+
+        HttpHeaders headers = captor.getValue().getRequest().getHeaders();
+        assertThat(headers.getFirst(UserForwardingGlobalFilter.HEADER_USER))
+                .isEqualTo("alice");
+        // userId is null → header value is the empty string,
+        // NOT absent. Downstream can distinguish "header missing"
+        // from "userId unknown" if it wants to.
+        assertThat(headers.getFirst(UserForwardingGlobalFilter.HEADER_USER_ID))
+                .isEqualTo("");
     }
 
     @Test

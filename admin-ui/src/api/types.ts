@@ -374,6 +374,15 @@ export interface QueryAdminRequest {
   action?: string | null;
   style?: string | null;
   microserviceId?: number | null;
+  /** V27 — path suffix composed with MICROSERVICE.REQUEST_URI to expose
+   *  the query as a first-class HTTP endpoint. Null = legacy (uuid in body). */
+  pathTemplate?: string | null;
+  /** V28 — SELECT (default) | PROCEDURE | FUNCTION. The backend validates
+   *  that the SQL's first keyword matches the mode at save time. */
+  executionMode?: "SELECT" | "PROCEDURE" | "FUNCTION";
+  /** V31 — comma-separated :placeholder names that are OUT params of
+   *  a PROCEDURE-mode row. Null/empty = no OUT params (legacy). */
+  outParamNames?: string | null;
 }
 
 /** Admin CRUD response shape — mirrors {@code QueryResponse}
@@ -394,6 +403,12 @@ export interface QueryAdminResponse {
   createdDate: string | null;
   roleIds: number[];
   microserviceId: number | null;
+  /** V27 */
+  pathTemplate: string | null;
+  /** V28 */
+  executionMode: "SELECT" | "PROCEDURE" | "FUNCTION";
+  /** V31 */
+  outParamNames: string | null;
 }
 
 /** Per-row role binding checkbox list — mirrors
