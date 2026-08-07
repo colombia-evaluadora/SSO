@@ -94,6 +94,18 @@ export function QueriesAdminPage() {
       action: values.action || null,
       style: values.style || null,
       microserviceId: values.microserviceId ?? null,
+      // V27 — URL suffix composed with MICROSERVICE.REQUEST_URI.
+      // V28 — SELECT | PROCEDURE | FUNCTION. Defaults to SELECT
+      // server-side when null, but we send the explicit value so
+      // editing an existing row preserves the chosen mode.
+      // V31 — comma-separated OUT parameter placeholders for
+      // PROCEDURE-mode rows. Null = no OUT params.
+      // All three MUST be forwarded; the backend's
+      // QueryAdminService persists them, but only if they make
+      // it onto the wire — this handler is the chokepoint.
+      executionMode: values.executionMode ?? null,
+      pathTemplate: values.pathTemplate ?? null,
+      outParamNames: values.outParamNames ?? null,
     };
     if (values.id) {
       await updateQ.mutateAsync({ id: values.id, ...body });
