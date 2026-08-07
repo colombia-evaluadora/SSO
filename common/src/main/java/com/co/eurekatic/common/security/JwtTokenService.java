@@ -119,10 +119,18 @@ public class JwtTokenService {
             // PKCS#8 preferred.
             java.security.spec.PKCS8EncodedKeySpec spec =
                     new java.security.spec.PKCS8EncodedKeySpec(der);
-            return KeyFactory.getInstance("RSA").generatePrivate(spec);
-        } catch (java.security.spec.InvalidKeySpecException
-                 | java.security.NoSuchAlgorithmException ignored) {
-            // Fall back to PKCS#1 (older OpenSSL default).
+            try {
+                return KeyFactory.getInstance("RSA").generatePrivate(spec);
+            } catch (java.security.spec.InvalidKeySpecException ignored) {
+                // Fall through to PKCS#1 below.
+            }
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(
+                    "RSA KeyFactory not available on this JVM. Root cause: "
+                            + e.getMessage(), e);
+        }
+        // Fall back to PKCS#1 (older OpenSSL default).
+        try {
             java.security.spec.X509EncodedKeySpec x509 =
                     new java.security.spec.X509EncodedKeySpec(der);
             return KeyFactory.getInstance("RSA").generatePrivate(x509);
