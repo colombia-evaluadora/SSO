@@ -120,17 +120,6 @@ public class QueryPathRegistry {
     }
 
     /**
-     * Register the size gauge once at startup so dashboards
-     * have a continuous view of registry population. The
-     * gauge reads {@code tableRef.get()} lazily on each
-     * scrape — cheap and always current.
-     */
-    @PostConstruct
-    void registerSizeGauge() {
-        metrics.registerRegistrySizeGauge(() -> tableRef.get().size());
-    }
-
-    /**
      * Initial load — fires at startup so the registry is
      * warm before the first request arrives. A failure here
      * logs at WARN; the registry stays empty and the

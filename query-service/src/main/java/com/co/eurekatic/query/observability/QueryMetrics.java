@@ -63,9 +63,21 @@ public class QueryMetrics {
                 .increment();
     }
 
-    /** Current registry size — polled by the gauge. */
+    /**
+     * Current registry size — polled by the gauge on each scrape.
+     *
+     * <p>{@code MeterRegistry.gauge(String, Supplier)} does not
+     * exist; the Supplier-based form goes through
+     * {@link io.micrometer.core.instrument.Gauge#builder(String,
+     * java.util.function.Supplier)}. The registry holds a weak
+     * reference to the supplier, so we keep the caller's lambda
+     * alive by binding it to a bean-scoped field on their side
+     * (QueryPathRegistry holds the AtomicReference it reads).
+     */
     public void registerRegistrySizeGauge(java.util.function.Supplier<Number> supplier) {
-        registry.gauge("query.path_registry.size", supplier);
+        io.micrometer.core.instrument.Gauge
+                .builder("query.path_registry.size", supplier)
+                .register(registry);
     }
 
     /* ====================== catalog client ====================== */

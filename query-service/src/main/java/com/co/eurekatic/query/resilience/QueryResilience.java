@@ -62,6 +62,15 @@ public class QueryResilience {
 
     // Default config values — overridable via application.yml.
     private final int bulkheadMaxConcurrent;
+    /**
+     * INERT with the current semaphore bulkhead — Resilience4j's
+     * {@code BulkheadConfig} has no {@code queueCapacity} (that
+     * knob lives on {@code ThreadPoolBulkheadConfig}). Kept so
+     * the property binds and shows up in the startup log; if we
+     * ever move to a thread-pool bulkhead this is the value to
+     * wire. Overflow behaviour today is governed entirely by
+     * {@link #bulkheadWaitDuration}.
+     */
     private final int bulkheadMaxQueue;
     private final Duration bulkheadWaitDuration;
     private final int rateLimitRps;
@@ -109,10 +118,16 @@ public class QueryResilience {
     }
 
     private Bulkhead buildBulkhead(String dialect) {
+        // NOTE: this is the SEMAPHORE bulkhead (the right choice
+        // for a synchronous MVC controller — no thread handoff).
+        // It has no queue: callers that find no free permit wait
+        // up to maxWaitDuration and then fail fast. `queueCapacity`
+        // belongs to ThreadPoolBulkheadConfig and does not compile
+        // here, so `query.resilience.bulkhead.max-queue` is
+        // currently inert — see the field's javadoc.
         BulkheadConfig config = BulkheadConfig.custom()
                 .maxConcurrentCalls(bulkheadMaxConcurrent)
                 .maxWaitDuration(bulkheadWaitDuration)
-                .queueCapacity(bulkheadMaxQueue)
                 .build();
         Bulkhead bh = BulkheadRegistry.of(config).bulkhead("query-" + dialect, config);
         registerBulkheadMeters(bh, dialect);

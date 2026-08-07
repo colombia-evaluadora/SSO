@@ -354,14 +354,11 @@ public class QueryService {
                 (java.sql.Connection con) -> {
                     try (java.sql.CallableStatement cs = con.prepareCall(sql)) {
                         // Bind IN params (and any INOUT).
-                        params.forEach((name, value) -> {
-                            try {
-                                cs.setObject(name, value);
-                            } catch (java.sql.SQLException e) {
-                                throw new IllegalStateException(
-                                        "Failed to bind param " + name, e);
-                            }
-                        });
+                        // MapSqlParameterSource has no forEach —
+                        // getValues() exposes the backing Map.
+                        for (Map.Entry<String, Object> e : params.getValues().entrySet()) {
+                            cs.setObject(e.getKey(), e.getValue());
+                        }
                         // Register OUT params. The PG driver
                         // accepts Types.OTHER for any type and
                         // returns the value via getObject().
