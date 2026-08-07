@@ -1,8 +1,11 @@
 package com.co.eurekatic.common.security;
 
 import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.security.Keys;
 import org.junit.jupiter.api.Test;
 
+import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.util.Base64;
@@ -28,6 +31,15 @@ class JwtTokenServiceTest {
 
     private static final KeyPair KEYS = generateKeyPair();
     private static final KeyPair OTHER_KEYS = generateKeyPair();
+
+    /**
+     * V29 — used by the legacy-token-without-uid tests to forge
+     * an HS256 token (matching pre-V29 token shape). The
+     * JwtTokenService accepts this token regardless of which
+     * signing mode the local service uses (RSA or HMAC).
+     */
+    private static final String GOOD_SECRET =
+            "this-is-a-test-secret-that-is-32-bytes-or-longer-1234567890";
 
     private static final JwtProperties DEFAULT_PROPS = propsFor(KEYS);
 
