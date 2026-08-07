@@ -403,12 +403,13 @@ export interface QueryAdminResponse {
   createdDate: string | null;
   roleIds: number[];
   microserviceId: number | null;
-  /** V27 */
-  pathTemplate: string | null;
-  /** V28 */
-  executionMode: "SELECT" | "PROCEDURE" | "FUNCTION";
+  /** V27 — optional for back-compat with pre-V27 test fixtures
+   *  that don't set this field. The wire always carries it. */
+  pathTemplate?: string | null;
+  /** V28 — defaults to "SELECT" when omitted (pre-V28 server). */
+  executionMode?: "SELECT" | "PROCEDURE" | "FUNCTION";
   /** V31 */
-  outParamNames: string | null;
+  outParamNames?: string | null;
 }
 
 /** Per-row role binding checkbox list — mirrors

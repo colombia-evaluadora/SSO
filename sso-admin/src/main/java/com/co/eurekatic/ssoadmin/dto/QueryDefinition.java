@@ -53,6 +53,35 @@ public record QueryDefinition(
         ExecutionMode executionMode,
         String outParamNames
 ) {
+    /**
+     * V31 — back-compat constructor for callers that pre-date
+     * V27 + V28 + V31 (i.e. the 10-arg shape). The new fields
+     * default to {@code null} / {@code SELECT} so legacy tests
+     * keep compiling without a sweep.
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           Long microserviceId) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             null, ExecutionMode.SELECT, null);
+    }
+
+    /**
+     * V31 — back-compat for callers between V27 and V31
+     * (10 args + pathTemplate, no executionMode / outParamNames).
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           Long microserviceId,
+                           String pathTemplate, ExecutionMode executionMode) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             pathTemplate, executionMode, null);
+    }
+
     public static QueryDefinition fromEntity(Query q) {
         Microservice m = q.getMicroservice();
         return new QueryDefinition(
