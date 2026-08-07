@@ -24,6 +24,26 @@
     </properties>
 
     <dependencies>
+        <!--
+            common: brings in OpenApiFactory (static helpers
+            for the bearer-jwt security scheme, info, etc.)
+            and transitively swagger-models (compile scope).
+            Needed by ProvisionerOpenApiConfig, which the
+            api-gateway aggregator reads to merge the
+            provisioner's spec into the platform doc.
+
+            Previous commit (47beb91) added the @Configuration
+            class but forgot this dep — the docker build
+            failed on first deploy with
+            "package com.co.eurekatic.common.openapi does not
+            exist". This dependency unblocks the build.
+        -->
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Servlet-only REST surface. No DB, no security
              (the only caller is sso-admin over the internal
              docker network), no Eureka. We add actuator for
