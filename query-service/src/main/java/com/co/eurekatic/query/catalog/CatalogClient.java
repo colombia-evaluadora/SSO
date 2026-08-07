@@ -321,28 +321,4 @@ public class CatalogClient {
                     "sso-admin catalog unavailable", e);
         }
     }
-        try {
-            ResponseEntity<WriteDefinition> resp = client.get()
-                    .uri(uri -> uri.path("/getWrite").queryParam("uuid", uuid).build())
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer)
-                    .retrieve()
-                    .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {
-                        throw new ResponseStatusException(
-                                res.getStatusCode(),
-                                "Catalog refused write: " + res.getStatusText());
-                    })
-                    .onStatus(HttpStatusCode::is5xxServerError, (req, res) -> {
-                        throw new ResponseStatusException(
-                                HttpStatusCode.valueOf(503),
-                                "Catalog server error: " + res.getStatusText());
-                    })
-                    .toEntity(WriteDefinition.class);
-            return resp.getBody();
-        } catch (RestClientException e) {
-            log.warn("Catalog call /getWrite?uuid={} failed: {}", uuid, e.getMessage());
-            throw new ResponseStatusException(
-                    org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-                    "sso-admin catalog unavailable", e);
-        }
-    }
 }
