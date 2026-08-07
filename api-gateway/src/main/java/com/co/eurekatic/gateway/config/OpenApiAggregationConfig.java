@@ -6,11 +6,8 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.boot.context.properties.bind.Bindable;
-import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.env.Environment;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -29,13 +26,30 @@ import java.util.Map;
  *       fetching each downstream service's spec.</li>
  *   <li>{@link #mergedDocCache()} — Caffeine cache so the merged
  *       doc is built at most once per TTL, not on every request.</li>
- *   <li>{@link #serviceGatewayMappings()} — translates the
- *       {@code springdoc.aggregator.services} YAML list into
+ *   <li>{@link #aggregatorProperties()} — typed binding of
+ *       {@code springdoc.aggregator.*} (catalog URL, internal
+ *       token, services list).</li>
+ *   <li>{@link #serviceGatewayMappings(SpringdocAggregatorProperties)}
+ *       — translates the typed services list into
  *       {@link ServiceGatewayMapping} records.</li>
  * </ul>
+ *
+ * <p>Why @ConfigurationProperties instead of @Value for the
+ * services list: the previous version used
+ * {@code @Value("${springdoc.aggregator.services:}")} with a
+ * {@code List<Map<String,Object>>} target type. @Value is a
+ * String-oriented binder; it can split comma lists but cannot
+ * decode nested YAML structures, so the application context
+ * failed to start with "Cannot convert value of type
+ * 'java.lang.String' to required type 'java.util.List' /
+ * 'java.util.Map'". A typed
+ * {@link SpringdocAggregatorProperties} class lets Spring
+ * Boot's Binder do the YAML-to-POJO conversion cleanly. The
+ * operator-facing YAML shape (snake-case keys, "services"
+ * list under springdoc.aggregator) is preserved.
  */
 @Configuration
-@EnableConfigurationProperties
+@EnableConfigurationProperties(SpringdocAggregatorProperties.class)
 public class OpenApiAggregationConfig {
 
     /**
@@ -62,55 +76,59 @@ public class OpenApiAggregationConfig {
     }
 
     /**
-     * Translates the YAML config into typed records. The YAML shape is
-     * deliberately flat (one map per service with snake-case keys);
-     * we keep that surface stable because it's documented for ops.
-     *
-     * <p>Note: the previous version of this method used
-     * {@code @Value("${springdoc.aggregator.services:}")} with a
-     * {@code List<Map<String, Object>>} target type. {@code @Value}
-     * is a {@code String}-oriented binder; it can split comma lists
-     * but cannot decode nested YAML structures, so the application
-     * context failed to start with
-     * "Cannot convert value of type 'java.lang.String' to required
-     * type 'java.util.List' / 'java.util.Map'". Spring Boot's
-     * {@link Binder} is the right tool for complex binding —
-     * it's the same API the {@code @ConfigurationProperties}
-     * machinery uses internally. We bind to
-     * {@code Bindable.listOfMap(String, Object)} which matches the
-     * YAML's {@code List<Map<String,Object>>} shape.
+     * The catalog URL and internal token are also exposed as
+     * separate beans so the aggregator can pick them up via
+     * @Value / @Autowired without coupling to the typed
+     * properties class everywhere. Most callers in the
+     * aggregator constructor still use @Value on the property
+     * paths directly (consistent with the other services'
+     * style).
      */
     @Bean
-    public List<ServiceGatewayMapping> serviceGatewayMappings(Environment env) {
-        List<Map<String, Object>> raw = Binder.get(env)
-                .bind("springdoc.aggregator.services",
-                        Bindable.listOfMap(String.class, Object.class))
-                .orElse(Collections.emptyList());
-        if (raw.isEmpty()) {
+    public SpringdocAggregatorProperties aggregatorProperties() {
+        // Bean is provided here so callers can autowire the
+        // typed class directly if they prefer. The actual
+        // binding happens via @EnableConfigurationProperties
+        // above.
+        return new SpringdocAggregatorProperties();
+    }
+
+    /**
+     * Translates the typed services list into the runtime
+     * records. Each YAML row under {@code springdoc.aggregator.services}
+     * becomes one {@link ServiceGatewayMapping}.
+     */
+    @Bean
+    public List<ServiceGatewayMapping> serviceGatewayMappings(
+            SpringdocAggregatorProperties props) {
+        if (props.getServices() == null || props.getServices().isEmpty()) {
             return Collections.emptyList();
         }
-        return raw.stream()
+        return props.getServices().stream()
                 .map(OpenApiAggregationConfig::toMapping)
                 .toList();
     }
 
-    @SuppressWarnings("unchecked")
-    private static ServiceGatewayMapping toMapping(Map<String, Object> row) {
-        Object sourceObj = row.get("source");
-        Source source = sourceObj == null
+    private static ServiceGatewayMapping toMapping(SpringdocAggregatorProperties.Service row) {
+        Source source = row.getSource() == null || row.getSource().isBlank()
                 ? Source.SPRINGDOC
-                : Source.valueOf(String.valueOf(sourceObj).trim().toUpperCase());
-        List<String> paths = (List<String>) row.getOrDefault("gateway-paths", List.of());
+                : Source.valueOf(row.getSource().trim().toUpperCase());
+        List<String> paths = row.getGatewayPaths() == null
+                ? List.of()
+                : row.getGatewayPaths();
         // For catalog-sourced services the operator specifies a single
         // "/path-prefix/**" that rows from the catalog are joined onto.
         // For springdoc services, the operator specifies every path that
         // the gateway exposes for that service.
+        String tagPrefix = row.getTagPrefix() != null && !row.getTagPrefix().isBlank()
+                ? row.getTagPrefix()
+                : row.getServiceId();
         return new ServiceGatewayMapping(
-                (String) row.get("service-id"),
+                row.getServiceId(),
                 source,
                 paths,
-                (String) row.getOrDefault("tag-prefix", (String) row.get("service-id")),
-                (String) row.getOrDefault("description", ""));
+                tagPrefix,
+                row.getDescription() == null ? "" : row.getDescription());
     }
 
     /**
