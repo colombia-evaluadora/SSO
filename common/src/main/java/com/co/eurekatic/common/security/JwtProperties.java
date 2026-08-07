@@ -36,20 +36,24 @@ import org.springframework.validation.annotation.Validated;
 @Validated
 @ConfigurationProperties(prefix = "sso.jwt")
 public record JwtProperties(
-        // V29 — HS256 fallback for services that prefer
-        // symmetric signing. Nullable; when {@link #privateKey}
-        // is set, the service uses RS256 and this field is
-        // ignored. Most prod deployments use RS256 (test branch
-        // default); main's HMAC path remains valid for dev
-        // environments where a single shared secret is fine.
-        String secret,
         String privateKey,
         @NotBlank String publicKey,
         @NotBlank String issuer,
         @Min(60) long accessTokenTtlSeconds,
         @Min(60) long apiTokenTtlSeconds,
         @NotBlank String headerName,
-        @NotBlank String tokenPrefix) {
+        @NotBlank String tokenPrefix,
+        // V29 — HS256 fallback for services that prefer
+        // symmetric signing. Nullable; when {@link #privateKey}
+        // is set, the service uses RS256 and this field is
+        // ignored. Most prod deployments use RS256 (test branch
+        // default); main's HMAC path remains valid for dev
+        // environments where a single shared secret is fine.
+        //
+        // Declared LAST so existing test constructors that
+        // pass the original 7 args still compile. New callers
+        // can pass an 8th arg for HS256.
+        String secret) {
 
     public static final String DEFAULT_ISSUER = "sso-postgres";
     public static final String DEFAULT_HEADER = "Authorization";
