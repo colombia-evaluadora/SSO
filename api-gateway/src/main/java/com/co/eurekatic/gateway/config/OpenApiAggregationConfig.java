@@ -76,27 +76,12 @@ public class OpenApiAggregationConfig {
     }
 
     /**
-     * The catalog URL and internal token are also exposed as
-     * separate beans so the aggregator can pick them up via
-     * @Value / @Autowired without coupling to the typed
-     * properties class everywhere. Most callers in the
-     * aggregator constructor still use @Value on the property
-     * paths directly (consistent with the other services'
-     * style).
-     */
-    @Bean
-    public SpringdocAggregatorProperties aggregatorProperties() {
-        // Bean is provided here so callers can autowire the
-        // typed class directly if they prefer. The actual
-        // binding happens via @EnableConfigurationProperties
-        // above.
-        return new SpringdocAggregatorProperties();
-    }
-
-    /**
-     * Translates the typed services list into the runtime
-     * records. Each YAML row under {@code springdoc.aggregator.services}
-     * becomes one {@link ServiceGatewayMapping}.
+     * Translates the typed services list (bound by
+     * {@link SpringdocAggregatorProperties} via
+     * {@code @EnableConfigurationProperties} on this class) into
+     * the runtime records. Each YAML row under
+     * {@code springdoc.aggregator.services} becomes one
+     * {@link ServiceGatewayMapping}.
      */
     @Bean
     public List<ServiceGatewayMapping> serviceGatewayMappings(
