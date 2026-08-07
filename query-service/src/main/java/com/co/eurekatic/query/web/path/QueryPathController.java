@@ -43,10 +43,13 @@ import java.util.Map;
  * path variables from the template land in the params map
  * under their template names ({@code :id → params.id});
  * request query parameters ride alongside; the JSON body
- * (if any) is flattened one level so a request like
- * {@code {"filtros":{"regional":"x"}}} becomes
- * {@code filtros_regional=x} (procedures can use
- * {@code :filtros_regional} in the catalog SQL).
+ * (if any) is traversed and each leaf becomes a bind
+ * parameter under a {@code body.}-prefixed dotted path.
+ * A request like {@code {"filtros":{"regional":"x"}}}
+ * becomes {@code body.filtros.regional = "x"} — the
+ * catalog SQL/procedure binds it via
+ * {@code :body.filtros.regional}. See {@link #flattenToPaths}
+ * for the full contract.
  *
  * <p><b>Caller context</b> (V29/V28 — userId, email, roles)
  * is injected by {@link QueryService#execute} directly from
@@ -91,13 +94,13 @@ public class QueryPathController {
 
         Map<String, Object> params = new LinkedHashMap<>();
         // Precedence: path vars → query params → body
-        // (flattened). Same flattening rule as the legacy
-        // service execute(); a procedure author can read
+        // (dotted-path flattened). Same flattening rule as the
+        // legacy service execute(); a procedure author can read
         // any of them under its expected name.
         params.putAll(match.pathVars());
         params.putAll(queryParams);
         if (body != null) {
-            params.putAll(flatten(body, ""));
+            params.putAll(flattenToPaths(body, "body"));
         }
 
         QueryRequest qr = new QueryRequest(
@@ -119,25 +122,57 @@ public class QueryPathController {
     }
 
     /**
-     * Flatten a nested map one level deep. Keys are joined
-     * with {@code _}. Used to translate the JSON body
-     * ({@code {"filtros":{"regional":"x"}}}) into flat
-     * named params ({@code filtros_regional=x}) so JDBC
-     * {@code MapSqlParameterSource} can bind them via
-     * {@code :filtros_regional}. Nested maps deeper than
-     * one level are skipped (their keys are dropped with a
-     * WARN) — the procedure author should keep payloads
-     * shallow.
+     * Traverse a JSON body and register each leaf as a bind
+     * parameter with a dotted path. The {@code body} prefix
+     * is reserved — the catalog SQL/procedure accesses the
+     * flattened params via {@code :body.<path.to.leaf>}.
+     *
+     * <p>Examples:
+     * <ul>
+     *   <li>{@code {"filtros": {"regional": "x"}}} →
+     *       {@code body.filtros.regional = "x"}</li>
+     *   <li>{@code {"page": 1}} → {@code body.page = 1}</li>
+     *   <li>{@code {"tags": ["a","b"]}} →
+     *       {@code body.tags = ["a","b"]} (arrays kept as-is;
+     *       JDBC binds the list to the parameter)</li>
+     * </ul>
+     *
+     * <p>Why dots and not underscores? Two reasons:
+     * <ol>
+     *   <li><b>Property-access reads naturally</b> — the
+     *       SQL mirrors the JSON shape: {@code WHERE
+     *       regional = :body.filtros.regional} reads like
+     *       {@code row.filtros.regional}.</li>
+     *   <li><b>No name collisions</b> — underscore
+     *       flattening ({@code filtros_regional} vs
+     *       {@code filtros_regional_id}) creates ambiguous
+     *       bind names; dotted paths don't collide when
+     *       branches diverge.</li>
+     * </ol>
+     *
+     * <p>Why the {@code body} prefix? Without it, a
+     * top-level field like {@code "id"} would bind as
+     * {@code :id} — clashing with the path variable
+     * extraction above ({@code params.putAll(match.pathVars())}
+     * is the same map). The prefix keeps body-derived
+     * bindings clearly separated from path/query params.
+     * Reserved name: a top-level {@code "body"} field in
+     * the request would bind as {@code body.body.foo} for
+     * any nested {@code foo} — verbose but unambiguous.
+     *
+     * <p>Visibility: package-private for direct unit testing
+     * by {@code QueryPathControllerTest}. Production code
+     * never calls this directly.
      */
-    private static Map<String, Object> flatten(Map<String, Object> body, String prefix) {
+    static Map<String, Object> flattenToPaths(Map<String, Object> body, String prefix) {
         Map<String, Object> out = new LinkedHashMap<>();
         for (var e : body.entrySet()) {
-            String key = prefix.isEmpty() ? e.getKey() : prefix + "_" + e.getKey();
+            String key = prefix + "." + e.getKey();
             Object val = e.getValue();
             if (val instanceof Map<?, ?> nested) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> nestedMap = (Map<String, Object>) nested;
-                out.putAll(flatten(nestedMap, key));
+                out.putAll(flattenToPaths(nestedMap, key));
             } else {
                 out.put(key, val);
             }
