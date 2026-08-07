@@ -11,6 +11,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -150,13 +151,18 @@ class AmqpPublisherContextTest {
         // bootstrap artifacts (SELECT * at engine start) and MUST NOT be published: they
         // would otherwise land in auditoria.audit_log as operacion='r' rows AND trigger
         // MERGEs in Oracle via ColumnRenamer's snapshot branch.
-        handleSingle(Map.of(
-                "op", "r",
-                "before", null,
-                "after", Map.of("pk_tusuario", 1, "nombre", "Alice"),
-                "source", Map.of("schema", "public", "table", "tusuario",
-                        "txId", 0, "lsn", 1, "snapshot", "true")
-        ));
+        // Map.of rechaza valores null con NPE, y Debezium emite
+        // "before": null en las filas de snapshot. Se construye con
+        // HashMap para poder incluir esa clave explícitamente: si se
+        // omitiera, el payload dejaría de parecerse al real.
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("op", "r");
+        payload.put("before", null);
+        payload.put("after", Map.of("pk_tusuario", 1, "nombre", "Alice"));
+        payload.put("source", Map.of("schema", "public", "table", "tusuario",
+                "txId", 0, "lsn", 1, "snapshot", "true"));
+
+        handleSingle(payload);
 
         verify(template, never()).convertAndSend(any(), any(), any(Object.class), any(MessagePostProcessor.class));
         verify(metrics).incrementSnapshotSkipped("tusuario");
