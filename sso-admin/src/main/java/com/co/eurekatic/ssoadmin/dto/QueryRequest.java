@@ -11,6 +11,16 @@ import jakarta.validation.constraints.Size;
  * it is enforced at the DB level and pre-checked in the
  * service layer for a friendlier 409.
  *
+ * <p><b>{@code uuid} es opcional.</b> Si llega null o en blanco,
+ * {@code QueryAdminService} lo genera ({@code UUID.randomUUID()})
+ * en el create y conserva el existente en el update — nunca se
+ * regenera sobre una fila viva, porque es el handle que los
+ * consumidores ya tienen cableado. Se mantiene aceptando un valor
+ * explícito para importaciones y filas legacy con uuid con
+ * significado ({@code "reporte-ventas"}); el admin-ui no envía uno
+ * al crear. El {@code @Size} sigue vigente: la columna es
+ * VARCHAR(64) y un UUID canónico ocupa 36.
+ *
  * <p>{@code detail}, {@code action}, and {@code style} are
  * passed through to the consumer as opaque JSON strings — the
  * admin UI is the only thing that knows their schema. The
@@ -38,7 +48,7 @@ import jakarta.validation.constraints.Size;
  */
 public record QueryRequest(
         Long id,
-        @NotBlank @Size(max = 64)   String uuid,
+        @Size(max = 64)             String uuid,
         @NotBlank                   String query,
         @Size(max = 64)             String type,
         boolean                     publicEnd,

@@ -10,6 +10,8 @@ import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
+import java.util.Locale;
+
 /**
  * Entry point for sso-admin. Servlet (Tomcat) module registered
  * with Eureka, serving the user/role/group admin surface.
@@ -48,6 +50,19 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 public class SsoAdminApplication {
 
     public static void main(String[] args) {
+        // Los mensajes de error que admin-ui pinta al usuario van
+        // en español. Los que no escribimos nosotros — los de Bean
+        // Validation (@NotBlank, @Size…) y los de Spring Security —
+        // se resuelven contra un ResourceBundle usando el locale
+        // por defecto de la JVM, que en el contenedor es 'en'. Sin
+        // esta línea, un formulario inválido devolvía
+        // VALIDATION_FAILED con "must not be blank" en medio de una
+        // UI en español. Hibernate Validator y Spring Security ya
+        // traen sus bundles _es, así que sólo hay que apuntar el
+        // locale. Va antes de SpringApplication.run para que los
+        // bundles ya cacheados durante el arranque no se resuelvan
+        // en inglés.
+        Locale.setDefault(Locale.of("es"));
         SpringApplication.run(SsoAdminApplication.class, args);
     }
 }

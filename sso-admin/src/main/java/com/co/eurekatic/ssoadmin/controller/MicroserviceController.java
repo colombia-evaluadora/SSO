@@ -153,7 +153,7 @@ public class MicroserviceController {
         if (!provisioner.restart(containerName(m))) {
             // Container was already gone — surface as 404 so
             // admin-ui can offer a "recreate" action.
-            throw new NotFoundException("Container for microservice", id);
+            throw new NotFoundException("el contenedor del microservicio", id);
         }
         return ResponseEntity.accepted().build();
     }
@@ -175,8 +175,8 @@ public class MicroserviceController {
             // could retry by changing the URL; 422 makes it
             // clear the row itself is the wrong kind.
             throw new IllegalArgumentException(
-                    "Microservice " + id + " is kind=" + m.getKind()
-                            + "; container ops require kind=QUERY");
+                    "El microservicio " + id + " es kind=" + m.getKind()
+                            + "; las operaciones de contenedor requieren kind=QUERY");
         }
         return m;
     }

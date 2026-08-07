@@ -6,6 +6,7 @@ out/
 *.war
 *.ear
 *.class
+**/column-types.json
 
 # IDE
 .idea/
@@ -34,6 +35,8 @@ logs/
 .env.local
 *.pem
 *.key
+# Salida de scripts/gen-jwt-keys.sh — el par RSA que firma los JWT.
+secrets/
 
 # Node / Vite (admin-ui/)
 node_modules/
@@ -52,3 +55,8 @@ test-results/
 # gateway's classpath; serving from inside the jar is a debugging
 # fallback only.
 api-gateway/src/main/resources/static/admin/
+
+# Agents
+skills-lock*
+.agents/
+.claude/

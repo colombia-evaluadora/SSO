@@ -63,10 +63,21 @@ export const authApi = {
   // resolves 200 even for an unknown email (UserAdminService never
   // discloses which addresses are registered) — the caller can't
   // distinguish "email sent" from "email unknown" by design.
-  forgotPassword: (email: string) =>
-    apiClient.get<void>(`/sso-admin/forgotPassword?email=${encodeURIComponent(email)}`, {
+  //
+  // The optional `app` argument is the App.name the request
+  // originates from. When present, the SSO looks up the App row
+  // and uses its launchUrl to build the restore-password link
+  // in the email — so a user requesting a reset from inside
+  // COLOMBIA-EVALUADORA gets a link that returns them to that
+  // app, not to the SSO console. Pass undefined (or an unknown
+  // name) to fall back to the SSO's env-driven default URL.
+  forgotPassword: (email: string, app?: string) => {
+    const params = new URLSearchParams({ email })
+    if (app) params.set("app", app)
+    return apiClient.get<void>(`/sso-admin/forgotPassword?${params.toString()}`, {
       skipAuth: true,
-    }),
+    })
+  },
   // Apps the caller's roles have role_app access to — powers the
   // post-login launcher (AppLauncherPage). Lives on auth-center,
   // not sso-admin: it's shared, app-agnostic infrastructure, same

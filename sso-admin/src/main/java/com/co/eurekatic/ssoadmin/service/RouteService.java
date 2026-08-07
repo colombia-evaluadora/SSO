@@ -54,7 +54,7 @@ public class RouteService {
     @Transactional
     public RouteResponse update(RouteRequest req) {
         if (req.id() == null) {
-            throw new IllegalArgumentException("id is required for update");
+            throw new IllegalArgumentException("El id es obligatorio para actualizar");
         }
         Route r = routeRepo.findById(req.id())
                 .orElseThrow(() -> new NotFoundException("Route", req.id()));

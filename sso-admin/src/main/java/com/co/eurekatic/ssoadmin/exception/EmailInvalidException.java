@@ -7,6 +7,6 @@ package com.co.eurekatic.ssoadmin.exception;
  */
 public class EmailInvalidException extends RuntimeException {
     public EmailInvalidException(String email) {
-        super("Invalid email address: " + email);
+        super("Correo electrónico inválido: " + email);
     }
 }

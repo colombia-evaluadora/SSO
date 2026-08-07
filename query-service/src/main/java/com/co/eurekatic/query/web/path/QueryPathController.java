@@ -7,6 +7,7 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -75,13 +76,14 @@ public class QueryPathController {
             @RequestParam Map<String, String> queryParams,
             @RequestBody(required = false) Map<String, Object> body) {
 
-        String fullPath = (String) request.getAttribute(
+        String rawPath = (String) request.getAttribute(
                 org.springframework.web.servlet.HandlerMapping.PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE);
-        // Spring sometimes includes a trailing slash or
-        // an empty path for the bare "/" mapping; normalize.
-        if (fullPath == null || fullPath.isEmpty()) {
-            fullPath = "/";
-        }
+        // Spring sometimes includes a trailing slash or an empty
+        // path for the bare "/" mapping; normalize. Assigned once
+        // into a final local because the orElseThrow lambda below
+        // captures it, and a captured local must be effectively
+        // final — reassigning `fullPath` in place would not compile.
+        final String fullPath = (rawPath == null || rawPath.isEmpty()) ? "/" : rawPath;
 
         var match = registry.match(fullPath).orElseThrow(() ->
                 new ResponseStatusException(HttpStatus.NOT_FOUND,

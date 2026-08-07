@@ -5,6 +5,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+import java.util.Locale;
+
 /**
  * Query-service entry point.
  *
@@ -46,6 +48,12 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 public class QueryServiceApplication {
 
     public static void main(String[] args) {
+        // Los mensajes de error viajan al admin-ui y se muestran tal
+        // cual. Los que genera el framework (Bean Validation) salen
+        // del bundle resuelto con el locale por defecto de la JVM,
+        // que en el contenedor es 'en' — se fija a español para que
+        // no se mezclen idiomas dentro de un mismo mensaje.
+        Locale.setDefault(Locale.of("es"));
         SpringApplication.run(QueryServiceApplication.class, args);
     }
 }

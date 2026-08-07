@@ -9,6 +9,10 @@
 !sso-admin/target/sso-admin.jar
 !query-service/target/query-service.jar
 !notification-service/target/notification-service.jar
+# Node dependency dirs — installed inside the image by `npm ci`/`pnpm i`.
+# Shipping them in the build context (a) bloats the context, (b) clashes
+# with the in-image install and corrupts the BuildKit cachemount.
+**/node_modules/
 **/.idea/
 **/*.iml
 **/.vscode/

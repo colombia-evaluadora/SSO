@@ -334,12 +334,13 @@ public class DockerSocket {
         env.add("QUERY_DS_POOL_SIZE=" + req.poolSize());
         env.add("QUERY_INSTANCE_NAME=" + req.instanceName());
         env.add("EUREKA_URL=" + props.getEurekaUrl());
-        // JWT_SECRET must match auth-center's — the
-        // query-service instance validates Bearer tokens
-        // with the same HMAC key. Operator sets it in the
-        // provisioner's compose env block.
-        if (props.getJwtSecret() != null && !props.getJwtSecret().isBlank()) {
-            env.add("JWT_SECRET=" + props.getJwtSecret());
+        // JWT_PUBLIC_KEY must be the pair of auth-center's
+        // private key — the query-service instance only
+        // verifies Bearer tokens, it never mints them, so
+        // the public half is all it needs. Operator sets it
+        // in the provisioner's compose env block.
+        if (props.getJwtPublicKey() != null && !props.getJwtPublicKey().isBlank()) {
+            env.add("JWT_PUBLIC_KEY=" + props.getJwtPublicKey());
         }
         // The catalog endpoint URL the new query-service
         // instance uses to resolve uuid→SQL. Defaults to
@@ -347,6 +348,13 @@ public class DockerSocket {
         // via environment if their network topology is
         // different.
         env.add("QUERY_CATALOG_BASE_URL=http://sso-api-gateway:8080/sso-admin");
+        // OTLP endpoint so the spawneado query-service exports
+        // sus trazas / métricas / logs al colector del stack
+        // (Alloy por defecto). Sin esto el application.yml del
+        // query-service cae a http://localhost:4318 — que dentro
+        // del contenedor resuelve al propio contenedor, no al
+        // colector, y los exporters warn con Connection refused.
+        env.add("OTEL_EXPORTER_OTLP_ENDPOINT=" + props.getOtlpEndpoint());
         return env;
     }
 

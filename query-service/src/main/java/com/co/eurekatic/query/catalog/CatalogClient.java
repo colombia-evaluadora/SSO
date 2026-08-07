@@ -111,12 +111,12 @@ public class CatalogClient {
                     .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {
                         throw new ResponseStatusException(
                                 res.getStatusCode(),
-                                "Catalog refused query: " + res.getStatusText());
+                                "El catálogo rechazó la consulta: " + res.getStatusText());
                     })
                     .onStatus(HttpStatusCode::is5xxServerError, (req, res) -> {
                         throw new ResponseStatusException(
                                 HttpStatusCode.valueOf(503),
-                                "Catalog server error: " + res.getStatusText());
+                                "Error del servidor de catálogo: " + res.getStatusText());
                     })
                     .toEntity(QueryDefinition.class);
             metrics.recordCatalogCall("getQuery",
@@ -129,7 +129,7 @@ public class CatalogClient {
             log.warn("Catalog call /getQuery?uuid={} failed: {}", uuid, e.getMessage());
             throw new ResponseStatusException(
                     org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-                    "sso-admin catalog unavailable", e);
+                    "El catálogo de sso-admin no está disponible", e);
         }
     }
 

@@ -33,6 +33,12 @@ import java.util.Set;
  * 409; the DB-level {@code UQ_QUERY_UUID} constraint is the
  * real source of truth under concurrent inserts.
  *
+ * <p>UID automático: si el request llega sin {@code uuid}, el
+ * create genera uno ({@code UUID.randomUUID()}) y el update
+ * conserva el de la fila. Un uuid explícito se sigue respetando,
+ * así que las importaciones y las filas legacy con handle con
+ * significado no cambian de comportamiento.
+ *
  * <p>Microservice binding: a non-null
  * {@link QueryRequest#microserviceId()} is resolved via
  * {@link MicroserviceRepository#findById} and the lookup MUST
@@ -63,14 +69,15 @@ public class QueryAdminService {
 
     @Transactional
     public QueryResponse create(QueryRequest req) {
-        if (queryRepo.existsByUuid(req.uuid())) {
-            throw new DuplicateException("Query", req.uuid());
+        String uuid = resolveUuidForCreate(req.uuid());
+        if (queryRepo.existsByUuid(uuid)) {
+            throw new DuplicateException("Query", uuid);
         }
         validateExecutionModePrefix(req);
         validatePathTemplate(req, null);
         validateOutParams(req);
         Query q = new Query();
-        copy(req, q);
+        copy(req, q, uuid);
         QueryResponse response = QueryResponse.fromEntity(queryRepo.save(q));
         // V33 — push the change to query-service so the
         // path-registry picks up the new row before the
@@ -84,20 +91,24 @@ public class QueryAdminService {
     @Transactional
     public QueryResponse update(QueryRequest req) {
         if (req.id() == null) {
-            throw new IllegalArgumentException("id is required for update");
+            throw new IllegalArgumentException("El id es obligatorio para actualizar");
         }
         Query q = queryRepo.findById(req.id())
                 .orElseThrow(() -> new NotFoundException("Query", req.id()));
+        // uuid en blanco = "no lo toques". Es el handle público que
+        // los consumidores ya tienen cableado, así que un update sin
+        // uuid conserva el de la fila en vez de generar uno nuevo.
+        String uuid = isBlank(req.uuid()) ? q.getUuid() : req.uuid().trim();
         // Allow same uuid only for the same row.
-        queryRepo.findByUuid(req.uuid()).ifPresent(existing -> {
+        queryRepo.findByUuid(uuid).ifPresent(existing -> {
             if (!existing.getId().equals(q.getId())) {
-                throw new DuplicateException("Query", req.uuid());
+                throw new DuplicateException("Query", uuid);
             }
         });
         validateExecutionModePrefix(req);
         validatePathTemplate(req, q.getId());
         validateOutParams(req);
-        copy(req, q);
+        copy(req, q, uuid);
         QueryResponse response = QueryResponse.fromEntity(queryRepo.save(q));
         // V33 — same invalidate-on-write as create().
         pathRegistryNotifier.invalidate();
@@ -179,8 +190,24 @@ public class QueryAdminService {
 
     /* ====================== helpers ====================== */
 
-    private void copy(QueryRequest req, Query q) {
-        q.setUuid(req.uuid());
+    /**
+     * UID automático: el catálogo genera el handle cuando el
+     * cliente no manda uno. Se sigue aceptando un uuid explícito
+     * (importaciones, filas legacy con uuid con significado); el
+     * admin-ui simplemente no lo envía al crear.
+     */
+    private static String resolveUuidForCreate(String requested) {
+        return isBlank(requested)
+                ? java.util.UUID.randomUUID().toString()
+                : requested.trim();
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
+    }
+
+    private void copy(QueryRequest req, Query q, String uuid) {
+        q.setUuid(uuid);
         q.setQuery(req.query());
         q.setType(req.type());
         q.setPublicEnd(req.publicEnd());

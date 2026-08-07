@@ -135,9 +135,9 @@ eureka:
 
 sso:
   jwt:
-    # MUST match auth-center's JWT_SECRET exactly — both sign
-    # (auth-center) and verify (sso-admin) with the same HMAC key.
-    secret: ${JWT_SECRET:change-me-change-me-change-me-change-me-change-me-1234567890}
+    # Sólo la pública: sso-admin verifica, no emite.
+    # Debe ser la pareja de la JWT_PRIVATE_KEY de auth-center.
+    public-key: ${JWT_PUBLIC_KEY}
     issuer: sso-postgres
     access-token-ttl-seconds: 3600
     api-token-ttl-seconds: 86400

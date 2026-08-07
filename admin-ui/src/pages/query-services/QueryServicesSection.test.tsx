@@ -212,7 +212,15 @@ describe("QueryServicesSection", () => {
   it("creates a QUERY service via the drawer, POSTing kind=QUERY to /microservice/save", async () => {
     fetchSpy.mockResolvedValueOnce(jsonResponse([])); // empty list
     const createdRow = mkMs({ id: 1, serviceId: "diag-svc", instanceName: "diag" });
-    fetchSpy.mockResolvedValue(jsonResponse(createdRow)); // save + any refetch
+    // El submit prueba la conexión antes de guardar, así que hay
+    // que despachar por URL: la sonda en verde y el save después.
+    fetchSpy.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes("/microservice/testConnection")
+          ? jsonResponse({ ok: true, message: "Conexión exitosa", latencyMs: 4, dialect: "postgres" })
+          : jsonResponse(createdRow),
+      ),
+    );
 
     const user = userEvent.setup();
     renderPage();
@@ -249,5 +257,52 @@ describe("QueryServicesSection", () => {
     expect(body.serviceId).toBe("diag-svc");
     expect(body.dialect).toBe("postgres");
     expect(body.instanceName).toBe("diag");
+
+    // La sonda corre ANTES del save, no como botón opcional.
+    const probeCall = findFetchCall(fetchSpy, "/microservice/testConnection");
+    expect(probeCall).toBeDefined();
+  });
+
+  it("does NOT create the query service when the connection probe fails", async () => {
+    fetchSpy.mockResolvedValueOnce(jsonResponse([])); // empty list
+    fetchSpy.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes("/microservice/testConnection")
+          ? jsonResponse(
+              {
+                code: "INVALID_REQUEST",
+                message: "No se pudo conectar: connection refused",
+                timestamp: "",
+              },
+              400,
+            )
+          : jsonResponse(mkMs()),
+      ),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByTestId("new-query-service"));
+    await user.type(screen.getByLabelText(/Service ID/i), "diag-svc");
+    await user.type(screen.getByLabelText(/Request URI/i), "/api/diag/**");
+    await user.selectOptions(screen.getByLabelText(/Dialecto/i), "postgres");
+    await user.type(screen.getByLabelText(/JDBC URL/i), "jdbc:postgresql://x/y");
+    await user.type(screen.getByLabelText(/DB username/i), "u");
+    await user.type(screen.getByLabelText(/Instance name/i), "diag");
+
+    await user.click(screen.getByRole("button", { name: /Crear/i }));
+
+    // La sonda corrió y falló → el error se muestra y el save
+    // nunca sale. Este es el bug que motivó el gate: antes se
+    // creaba el query service aunque la conexión no funcionara.
+    await waitFor(() =>
+      expect(findFetchCall(fetchSpy, "/microservice/testConnection")).toBeDefined(),
+    );
+    // Una sola superficie: el banner inline de la sonda. El Form
+    // no toasta el fallo del gate (SilentFormError) para no repetir
+    // el mismo texto en dos sitios.
+    expect(await screen.findAllByText(/No se pudo conectar/i)).toHaveLength(1);
+    expect(findFetchCall(fetchSpy, "/microservice/save")).toBeUndefined();
   });
 });

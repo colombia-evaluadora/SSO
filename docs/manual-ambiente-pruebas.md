@@ -135,10 +135,14 @@ scp -i /ruta/local/a/deploy_key .env.example deploy@<IP-DEL-LINODE>:/opt/sso/.en
       ejecuta como comando — cada línea imprime un valor):
 
 ```bash
-openssl rand -base64 48   # → para JWT_SECRET
+./scripts/gen-jwt-keys.sh --env   # → imprime JWT_PRIVATE_KEY y JWT_PUBLIC_KEY
 openssl rand -base64 32   # → para SSO_SESSION_USER_ROLES_INVALIDATION_SECRET
 openssl rand -base64 32   # → para REDIS_PASSWORD
 ```
+
+  El par de claves RSA reemplaza al antiguo `JWT_SECRET`: los tokens
+  se firman con RS256, así que ya no vale una cadena aleatoria. El
+  script imprime las dos líneas listas para pegar en el `.env`.
 
   Copia cada resultado a un lugar temporal — son strings literales,
   no comandos.
@@ -157,6 +161,12 @@ IMAGE_TAG=test-latest
 # Fijo — el provisioner deriva el nombre de red de aquí
 COMPOSE_PROJECT_NAME=sso
 
+# NO copies la línea COMPOSE_PROFILES=diagnostics de .env.example —
+# déjala fuera del .env del servidor. Así hello-service (puro
+# diagnóstico, nada depende de él) no arranca ahí y te ahorras
+# ~192-256MB de RAM. Si un futuro merge de .env.example la vuelve a
+# traer, bórrala de nuevo.
+
 # Todo menos el gateway atado a loopback (Docker se salta ufw)
 BIND_IP=127.0.0.1
 
@@ -172,9 +182,11 @@ DB_PASSWORD=...
 DB_SSLMODE=require
 DB_CHANNEL_BINDING=require
 
-# Pegar aquí el valor que imprimió `openssl rand -base64 48` arriba —
-# NO reutilizar el JWT_SECRET de dev
-JWT_SECRET=<pegar-valor-generado>
+# Pegar aquí las dos líneas que imprimió `gen-jwt-keys.sh --env`
+# arriba — NO reutilizar el par de claves de dev. La privada sólo la
+# consume auth-center; la pública la comparten los demás servicios.
+JWT_PRIVATE_KEY=<pegar-valor-generado>
+JWT_PUBLIC_KEY=<pegar-valor-generado>
 
 # Password del admin bootstrap
 SSO_ADMIN_EMAIL=admin@example.com

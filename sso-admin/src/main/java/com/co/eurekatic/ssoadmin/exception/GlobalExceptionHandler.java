@@ -131,7 +131,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleAny(Exception ex) {
         log.error("Unhandled exception in sso-admin", ex);
         return error(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR",
-                "An unexpected error occurred");
+                "Ocurrió un error inesperado");
     }
 
     private static ResponseEntity<Map<String, Object>> error(

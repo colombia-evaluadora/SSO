@@ -16,6 +16,14 @@ docker:
   network: ${DOCKER_NETWORK:sso_postgres_modernize_default}
   socket-path: ${DOCKER_SOCKET_PATH:/var/run/docker.sock}
   eureka-url: ${EUREKA_URL:http://eurekaserver:8761/eureka}
+  # OTLP endpoint propagado a cada contenedor de query-service que
+  # el provisioner spawnea. Misma env var que el resto del stack
+  # compose consume (api-gateway / auth-center / etc.) para que el
+  # observability sea consistente: el operador la sobreescribe en
+  # .env si el colector vive en otra red o host. Sin esta env var
+  # el query-service spawneado cae al default localhost:4318 de su
+  # application.yml y los exporters warn con Connection refused.
+  otlp-endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://alloy:4318}
   ready-timeout-seconds: ${READY_TIMEOUT:45}
 
 management:

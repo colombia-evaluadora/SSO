@@ -78,6 +78,42 @@ describe("ForgotPasswordPage", () => {
     );
   });
 
+  it("appends the app= query param when VITE_APP_NAME is set", async () => {
+    fetchSpy.mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+    vi.stubEnv("VITE_APP_NAME", "COLOMBIA-EVALUADORA");
+    vi.resetModules();
+    const { ForgotPasswordPage: FreshPage } = await import(
+      "@/auth/ForgotPasswordPage"
+    );
+
+    render(
+      <MemoryRouter initialEntries={["/admin/forgot-password"]}>
+        <Routes>
+          <Route path="/admin/forgot-password" element={<FreshPage />} />
+          <Route
+            path="/admin/login"
+            element={<div data-testid="login-landing">login</div>}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Email"), "alice@example.com");
+    await user.click(screen.getByRole("button", { name: /Enviar enlace/i }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    const [url] = fetchSpy.mock.calls[0]!;
+    // The backend looks up the app by name and uses its launchUrl
+    // to build the restore-password link — so a user requesting
+    // a reset from inside COLOMBIA-EVALUADORA comes back to that
+    // app, not to the SSO console.
+    expect(url).toBe(
+      "/api/sso-admin/forgotPassword?email=alice%40example.com&app=COLOMBIA-EVALUADORA",
+    );
+  });
+
   it("shows the same generic confirmation even when the request fails (no email enumeration)", async () => {
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify({ code: "INTERNAL_ERROR", message: "boom", timestamp: "" }), {

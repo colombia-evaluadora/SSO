@@ -51,8 +51,10 @@ import static org.assertj.core.api.Assertions.assertThat;
         classes = ApiGatewayIntegrationTest.TestApp.class,
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT
 )
-@TestPropertySource(properties = {
-        "sso.jwt.secret=gateway-integration-test-secret-32-bytes-or-more-please-thank-you-1234",
+// El par RSA de test vive en jwt-test-keys.properties: RS256
+// necesita una clave real, no una cadena cualquiera como el
+// secreto HS256 que habia aqui antes.
+@TestPropertySource(locations = "classpath:jwt-test-keys.properties", properties = {
         "eureka.client.enabled=false",
         "spring.cloud.discovery.enabled=false"
 })

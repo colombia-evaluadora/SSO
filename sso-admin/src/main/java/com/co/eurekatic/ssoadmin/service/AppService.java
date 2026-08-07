@@ -83,7 +83,7 @@ public class AppService {
     @Transactional
     public AppResponse update(AppRequest req) {
         if (req.id() == null) {
-            throw new IllegalArgumentException("id is required for update");
+            throw new IllegalArgumentException("El id es obligatorio para actualizar");
         }
         App app = appRepo.findById(req.id())
                 .orElseThrow(() -> new NotFoundException("App", req.id()));

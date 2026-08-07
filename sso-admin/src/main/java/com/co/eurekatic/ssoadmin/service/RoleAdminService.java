@@ -57,7 +57,7 @@ public class RoleAdminService {
     @Transactional
     public RoleResponse createRole(RoleRequest req) {
         if (roleRepository.existsByName(req.name())) {
-            throw new IllegalArgumentException("Role already exists: " + req.name());
+            throw new IllegalArgumentException("El rol ya existe: " + req.name());
         }
         Role role = new Role(req.name(), req.description());
         RoleResponse response = RoleResponse.fromEntity(roleRepository.save(role));
@@ -68,7 +68,7 @@ public class RoleAdminService {
     @Transactional
     public RoleResponse updateRole(RoleRequest req) {
         if (req.id() == null) {
-            throw new IllegalArgumentException("id is required for update");
+            throw new IllegalArgumentException("El id es obligatorio para actualizar");
         }
         Role role = roleRepository.findById(req.id())
                 .orElseThrow(() -> new NotFoundException("Role", req.id()));

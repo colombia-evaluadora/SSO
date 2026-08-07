@@ -13,6 +13,19 @@ import { ApiError } from "@/api/client";
  * Submits the parsed (typed) values to {@link onSubmit}. The page
  * is responsible for wiring onSubmit to a TanStack Query mutation.
  */
+/**
+ * Aborta el submit sin levantar toast. Para cuando el propio
+ * formulario ya pinta el error inline (p. ej. el banner de la
+ * sonda JDBC) y repetirlo en un toast sería ruido duplicado.
+ */
+export class SilentFormError extends Error {
+  constructor(cause?: unknown) {
+    super("silent form error");
+    this.name = "SilentFormError";
+    this.cause = cause;
+  }
+}
+
 export interface FormProps<TValues> {
   initialValues: TValues;
   validate?: (values: TValues) => Record<string, string>;
@@ -59,6 +72,7 @@ export function Form<TValues>({
     try {
       await onSubmit(values);
     } catch (err) {
+      if (err instanceof SilentFormError) return;
       const msg =
         err instanceof ApiError
           ? `${err.code}: ${err.message}`

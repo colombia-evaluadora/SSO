@@ -274,16 +274,18 @@ eureka:
       lease-expiration-duration-in-seconds: 30
   
 sso:
-    jwt:
-      secret: ${JWT_SECRET:change-me-change-me-change-me-change-me-change-me-1234567890}
-      issuer: sso-postgres
-      access-token-ttl-seconds: 3600
-      api-token-ttl-seconds: 86400
-      header-name: Authorization
-      token-prefix: "Bearer "
-    cors:
-      allowed-origins: ${SSO_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:4173,http://localhost:3000}
-  
+  jwt:
+    # Sólo la pública: el gateway verifica firmas, no las emite.
+    # Debe ser la pareja de la JWT_PRIVATE_KEY de auth-center.
+    public-key: ${JWT_PUBLIC_KEY}
+    issuer: sso-postgres
+    access-token-ttl-seconds: 3600
+    api-token-ttl-seconds: 86400
+    header-name: Authorization
+    token-prefix: "Bearer "
+  cors:
+    allowed-origins: ${SSO_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:4173,http://localhost:3000}
+
 management:
     endpoints:
       web:

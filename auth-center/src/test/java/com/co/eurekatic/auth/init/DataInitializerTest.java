@@ -25,14 +25,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Postgres instance.
  */
 @SpringBootTest(classes = AuthCenterApplication.class)
-@TestPropertySource(properties = {
+// El par RSA de test vive en jwt-test-keys.properties: RS256
+// necesita una clave real, no una cadena cualquiera como el
+// secreto HS256 que habia aqui antes.
+@TestPropertySource(locations = "classpath:jwt-test-keys.properties", properties = {
         "spring.datasource.url=jdbc:h2:mem:data-initializer-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect",
-        "sso.jwt.secret=integration-test-secret-which-is-at-least-32-bytes-long-1234567890",
         "eureka.client.enabled=false",
         "spring.cloud.discovery.enabled=false",
         // Use a unique admin username per test class so we don't
@@ -70,7 +72,7 @@ class DataInitializerTest {
         assertThat(admin.isLdap()).isFalse();
         assertThat(admin.getEmail()).isEqualTo("admin@example.com");
         assertThat(admin.getFullName()).isEqualTo("Default Administrator");
-        // Password is hashed (BCrypt), not the plaintext.
+        // La contraseña se guarda hasheada (Argon2id), no en claro.
         assertThat(admin.getPassword()).isNotEqualTo("InitialP@ssw0rd-9876");
         assertThat(passwordEncoder.matches("InitialP@ssw0rd-9876", admin.getPassword())).isTrue();
 

@@ -138,7 +138,10 @@ public class GatewaySecurityConfig {
                         // found while testing the token-expiry flow.
                         .pathMatchers("/api/sso-admin/activateAccount",
                                 "/api/sso-admin/restorePassword",
-                                "/api/sso-admin/forgotPassword").permitAll()
+                                "/api/sso-admin/forgotPassword",
+                                "/api/sso-admin/user/activateAccount",
+                                "/api/sso-admin/user/restorePassword",
+                                "/api/sso-admin/user/forgotPassword").permitAll()
                         .pathMatchers("/auth/login").permitAll()
                         .pathMatchers("/api/auth/login").permitAll()
                         .pathMatchers("/api/auth/refresh", "/api/auth/logout").permitAll()

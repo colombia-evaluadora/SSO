@@ -74,9 +74,9 @@ public class AuthController {
     @GetMapping("/getApiToken")
     public ResponseEntity<?> getApiToken(@RequestParam("apiToken") String apiToken) {
         User user = userRepository.findByApiToken(apiToken)
-                .orElseThrow(() -> new AccessDeniedException("Unknown apiToken"));
+                .orElseThrow(() -> new AccessDeniedException("apiToken desconocido"));
         if (!user.isEnabled()) {
-            throw new AccessDeniedException("User is disabled");
+            throw new AccessDeniedException("El usuario está deshabilitado");
         }
         Set<String> roles = effectiveRoles.forEmail(user.getEmail());
         // V29: include the numeric userId in the API token so
@@ -164,7 +164,7 @@ public class AuthController {
      */
     private String principalName(Authentication authentication) {
         if (authentication == null || authentication.getPrincipal() == null) {
-            throw new AccessDeniedException("Missing authentication");
+            throw new AccessDeniedException("Falta la autenticación");
         }
         Object p = authentication.getPrincipal();
         if (p instanceof User u) return u.getEmail();

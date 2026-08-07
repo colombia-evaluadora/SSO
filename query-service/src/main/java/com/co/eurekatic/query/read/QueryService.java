@@ -89,14 +89,21 @@ public class QueryService {
      */
     public QueryResult execute(QueryRequest req, boolean publicOk) {
         long start = System.nanoTime();
-        // Default to SELECT so the FAILURE path records
-        // a meaningful mode even when the catalog row
-        // couldn't be fetched (e.g. 404 before we know the
-        // real mode). Real mode is overwritten below.
-        String mode = "SELECT";
+        // Default to SELECT so the FAILURE path records a
+        // meaningful mode even when the catalog row couldn't be
+        // fetched (e.g. 404 before we know the real mode).
+        // doExecute overwrites it once the row is resolved.
+        //
+        // Single-element array, not a plain local: doExecute
+        // publishes the resolved mode through a Consumer, and a
+        // lambda cannot assign to a captured local (it must be
+        // effectively final). The array reference is final; its
+        // slot is what we mutate. Confined to this thread, so no
+        // synchronisation is needed.
+        final String[] mode = { "SELECT" };
         try {
-            QueryResult result = doExecute(req, publicOk, m -> mode = m);
-            metrics.recordExecution(mode, QueryMetrics.Outcome.SUCCESS,
+            QueryResult result = doExecute(req, publicOk, m -> mode[0] = m);
+            metrics.recordExecution(mode[0], QueryMetrics.Outcome.SUCCESS,
                     System.nanoTime() - start);
             return result;
         } catch (BulkheadFullException bfe) {
@@ -104,14 +111,14 @@ public class QueryService {
             // the bulkhead (concurrent cap + queue full).
             // Surface as 503 with Retry-After so the client
             // backs off instead of retrying immediately.
-            metrics.recordExecution(mode, QueryMetrics.Outcome.FAILURE,
+            metrics.recordExecution(mode[0], QueryMetrics.Outcome.FAILURE,
                     System.nanoTime() - start);
             log.warn("Bulkhead full for query uuid={} (dialect={})", req.uuid(),
                     bfe.getMessage());
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "Service busy, retry shortly");
         } catch (RuntimeException e) {
-            metrics.recordExecution(mode, QueryMetrics.Outcome.FAILURE,
+            metrics.recordExecution(mode[0], QueryMetrics.Outcome.FAILURE,
                     System.nanoTime() - start);
             throw e;
         }
@@ -174,7 +181,7 @@ public class QueryService {
             // no role. Defensive double-check.
             log.warn("Non-public query {} reached /public/service — denying", req.uuid());
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                    "Query is not public");
+                    "La consulta no es pública");
         }
 
         NamedParameterJdbcTemplate jdbc = registry.resolve(def.type());
@@ -354,14 +361,11 @@ public class QueryService {
                 (java.sql.Connection con) -> {
                     try (java.sql.CallableStatement cs = con.prepareCall(sql)) {
                         // Bind IN params (and any INOUT).
-                        params.forEach((name, value) -> {
-                            try {
-                                cs.setObject(name, value);
-                            } catch (java.sql.SQLException e) {
-                                throw new IllegalStateException(
-                                        "Failed to bind param " + name, e);
-                            }
-                        });
+                        // MapSqlParameterSource has no forEach —
+                        // getValues() exposes the backing Map.
+                        for (Map.Entry<String, Object> e : params.getValues().entrySet()) {
+                            cs.setObject(e.getKey(), e.getValue());
+                        }
                         // Register OUT params. The PG driver
                         // accepts Types.OTHER for any type and
                         // returns the value via getObject().
@@ -413,7 +417,7 @@ public class QueryService {
         String first = trimmed.isEmpty() ? "" : trimmed.split("\\s+", 2)[0].toUpperCase();
         if (!first.equals("SELECT") && !first.equals("WITH")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Query must be a SELECT or WITH; got: " + first);
+                    "La consulta debe ser un SELECT o un WITH; se recibió: " + first);
         }
     }
 
@@ -454,7 +458,7 @@ public class QueryService {
         Object creds = auth.getCredentials();
         if (!(creds instanceof String s) || s.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
-                    "Missing bearer token in security context");
+                    "Falta el token bearer en el contexto de seguridad");
         }
         return s;
     }

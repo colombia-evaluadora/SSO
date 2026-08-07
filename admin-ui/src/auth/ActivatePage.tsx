@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { apiClient } from "@/api/client";
+import { PasswordRequirements } from "./PasswordRequirements";
+import { PASSWORD_MIN_LENGTH, isPasswordValid } from "./passwordPolicy";
 
 /**
  * Public account-activation page. The user clicks the link in
@@ -37,16 +39,17 @@ export function ActivatePage() {
     token ? "" : "Falta el token de activación.",
   );
 
-  // Local-only guard before we hit the backend: passwords
-  // must match and be at least 6 chars (matches the @Size on
-  // the backend DTO). We still send the second copy across
-  // the wire — the backend treats the two field-equality as
-  // an out-of-band concern and only validates length, which
-  // is the established pattern for activation flows.
+  // Local-only guard before we hit the backend: the password must
+  // satisfy the complexity policy (mirrored from the backend's
+  // PasswordPolicy — see passwordPolicy.ts) and both copies must
+  // match. The backend re-validates everything; this only exists so
+  // the rules are visible before submitting rather than coming back
+  // as a 400. Field-equality stays a client-side concern, which is
+  // the established pattern for activation flows.
   const mismatch = confirm.length > 0 && password !== confirm;
-  const tooShort = password.length > 0 && password.length < 6;
+  const passwordOk = isPasswordValid(password);
   const canSubmit =
-    token.length > 0 && password.length >= 6 && password === confirm && !submitting;
+    token.length > 0 && passwordOk && password === confirm && !submitting;
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -133,7 +136,7 @@ export function ActivatePage() {
           </div>
         ) : null}
 
-        <label className="mb-3 block text-sm">
+        <label className="mb-2 block text-sm">
           <span className="mb-1 block font-medium text-slate-700">
             Contraseña
           </span>
@@ -141,17 +144,14 @@ export function ActivatePage() {
             type="password"
             autoComplete="new-password"
             required
-            minLength={6}
+            minLength={PASSWORD_MIN_LENGTH}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="w-full rounded border border-slate-300 px-3 py-2 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
           />
-          {tooShort ? (
-            <span className="mt-1 block text-xs text-red-600">
-              Debe tener al menos 6 caracteres.
-            </span>
-          ) : null}
         </label>
+
+        <PasswordRequirements password={password} />
 
         <label className="mb-4 block text-sm">
           <span className="mb-1 block font-medium text-slate-700">
@@ -161,7 +161,7 @@ export function ActivatePage() {
             type="password"
             autoComplete="new-password"
             required
-            minLength={6}
+            minLength={PASSWORD_MIN_LENGTH}
             value={confirm}
             onChange={(e) => setConfirm(e.target.value)}
             className="w-full rounded border border-slate-300 px-3 py-2 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"

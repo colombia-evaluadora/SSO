@@ -174,11 +174,15 @@ export type ExecutionMode = (typeof EXECUTION_MODES)[number];
 
 export const queryFormSchema = z
   .object({
+    // V31 — UUID can be empty (the backend auto-generates one
+    // when the form is submitted with no value). For non-empty
+    // UUIDs the format + length rules apply.
     uuid: z
       .string()
-      .min(2, "Mínimo 2 caracteres")
       .max(64)
-      .regex(/^[a-zA-Z0-9_-]+$/, "Solo letras, números, _ y -"),
+      .regex(/^[a-zA-Z0-9_-]*$/, "Solo letras, números, _ y -")
+      .refine((v) => v === "" || v.length >= 2, "Mínimo 2 caracteres")
+      .default(""),
     query: z.string().min(1, "Requerido").max(10_000),
     type: z.string().max(64).default(""),
     publicEnd: z.boolean().default(false),
@@ -186,9 +190,6 @@ export const queryFormSchema = z
     detail: z.string().max(20_000).default(""),
     action: z.string().max(20_000).default(""),
     style: z.string().max(20_000).default(""),
-    // Empty string from the <select> means "no binding"; coerce
-    // to null so the backend's resolveQueryMicroservice(null)
-    // path runs.
     microserviceId: z
       .union([z.string(), z.number(), z.null()])
       .transform((v) => {
@@ -198,10 +199,7 @@ export const queryFormSchema = z
       })
       .nullable()
       .default(null),
-    // V28 — defaults to SELECT for backwards compat with rows
-    // authored before this field existed.
     executionMode: z.enum(EXECUTION_MODES).default("SELECT"),
-    // V27 — empty string → null → legacy flow (uuid in body).
     pathTemplate: z
       .string()
       .max(500)
@@ -211,8 +209,6 @@ export const queryFormSchema = z
         return t === "" ? null : t;
       })
       .nullable(),
-    // V31 — comma-separated :placeholder names that are OUT
-    // params of a PROCEDURE-mode row. Empty → null.
     outParamNames: z
       .string()
       .max(500)
@@ -246,6 +242,7 @@ export const queryFormSchema = z
       });
     }
   });
+
 
 export type UserFormValues = z.infer<typeof userFormSchema>;
 export type RoleFormValues = z.infer<typeof roleFormSchema>;

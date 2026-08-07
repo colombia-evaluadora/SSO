@@ -46,6 +46,6 @@ public class CatalogAccessDeniedHandler {
         // can't tell them apart.
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
                 "code", "ACCESS_DENIED",
-                "message", "Access denied"));
+                "message", "Acceso denegado"));
     }
 }

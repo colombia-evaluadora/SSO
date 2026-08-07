@@ -8,7 +8,11 @@ import io.jsonwebtoken.security.Keys;
 
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
+import java.security.Key;
+import java.security.KeyFactory;
+import java.security.PrivateKey;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.Date;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -44,11 +48,129 @@ public class JwtTokenService {
     private static final String CLAIM_USER_ID = "uid";
 
     private final JwtProperties props;
-    private final SecretKey key;
+    /**
+     * Mode-aware signing key. {@link #signingKey()} picks the right
+     * one: HMAC ({@link SecretKey}) when {@code secret} is set,
+     * RSA ({@link PrivateKey}) when {@code privateKey} is set.
+     * A verifier-only service has neither and {@link #signingKey()}
+     * throws — which is the right behavior because
+     * {@link #canIssue()} would have returned false anyway.
+     */
+    private final SecretKey hmacKey;
+    private final PrivateKey rsaPrivateKey;
 
     public JwtTokenService(JwtProperties props) {
         this.props = props;
-        this.key = Keys.hmacShaKeyFor(props.secret().getBytes(StandardCharsets.UTF_8));
+        this.hmacKey = (props.secret() != null && !props.secret().isBlank())
+                ? Keys.hmacShaKeyFor(props.secret().getBytes(StandardCharsets.UTF_8))
+                : null;
+        this.rsaPrivateKey = (props.privateKey() != null && !props.privateKey().isBlank())
+                ? readRsaPrivateKey(props.privateKey())
+                : null;
+        // Fail-fast at construction on malformed / missing
+        // publicKey. A verifier with a broken key that only
+        // surfaces the error on the first request is a worse
+        // operational posture than one that refuses to boot.
+        if (hmacKey == null && rsaPrivateKey == null) {
+            if (props.publicKey() == null || props.publicKey().isBlank()) {
+                throw new IllegalStateException(
+                    "sso.jwt.public-key is not configured and neither is "
+                        + "sso.jwt.secret; this service can neither sign nor "
+                        + "verify tokens. Generate a key pair with "
+                        + "scripts/gen-jwt-keys.sh and set sso.jwt.public-key.");
+            }
+            // Parse eagerly so a broken PEM fails at startup.
+            readRsaPublicKey(props.publicKey());
+        }
+    }
+
+    /** The key used to sign new tokens — null iff this service is verifier-only. */
+    private Key signingKey() {
+        if (hmacKey != null) return hmacKey;
+        if (rsaPrivateKey != null) return rsaPrivateKey;
+        return null;
+    }
+
+    /**
+     * Parses an X.509 SubjectPublicKeyInfo PEM document into a
+     * {@link java.security.PublicKey}. Symmetric helper to
+     * {@link #readRsaPrivateKey(String)}.
+     */
+    private static java.security.PublicKey readRsaPublicKey(String pem) {
+        // pemBody() must be INSIDE the try: Base64.decode throws
+        // IllegalArgumentException on a malformed body, and callers
+        // (and the test suite) expect the actionable
+        // IllegalStateException instead of a raw decode error.
+        try {
+            byte[] der = pemBody(pem);
+            java.security.spec.X509EncodedKeySpec spec =
+                    new java.security.spec.X509EncodedKeySpec(der);
+            return KeyFactory.getInstance("RSA").generatePublic(spec);
+        } catch (Exception e) {
+            // catches GeneralSecurityException + NoSuchAlgorithm +
+            // InvalidKeySpec + IllegalArgument (bad base64 etc.)
+            throw new IllegalStateException(
+                    "sso.jwt.public-key is not a parseable RSA public key. "
+                            + "Generate one with scripts/gen-jwt-keys.sh. Root cause: "
+                            + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Strip PEM armor, normalize whitespace (including escaped
+     * newlines from .env / docker one-line PEM values), and return
+     * the base64 body. Shared between private and public key readers
+     * so the same normalization applies to both halves of a keypair.
+     */
+    private static byte[] pemBody(String pem) {
+        String stripped = pem
+                .replace("-----BEGIN PRIVATE KEY-----", "")
+                .replace("-----END PRIVATE KEY-----", "")
+                .replace("-----BEGIN RSA PRIVATE KEY-----", "")
+                .replace("-----END RSA PRIVATE KEY-----", "")
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "");
+        // .env files often carry the PEM as a one-line value with
+        // literal `\n` separators instead of real newlines. The
+        // replaceAll collapses any whitespace run (including the
+        // escaped form) to nothing.
+        String collapsed = stripped.replace("\\n", "").replaceAll("\\s+", "");
+        return Base64.getDecoder().decode(collapsed);
+    }
+
+    /**
+     * Parses a PKCS#8 PEM document into an {@link PrivateKey}. The
+     * strip-and-decode dance matches what {@code scripts/gen-jwt-keys.sh}
+     * emits; we tolerate either PKCS#1 or PKCS#8 with or without the
+     * PEM armor.
+     */
+    private static PrivateKey readRsaPrivateKey(String pem) {
+        byte[] der = pemBody(pem);
+        try {
+            // PKCS#8 preferred.
+            java.security.spec.PKCS8EncodedKeySpec spec =
+                    new java.security.spec.PKCS8EncodedKeySpec(der);
+            try {
+                return KeyFactory.getInstance("RSA").generatePrivate(spec);
+            } catch (java.security.spec.InvalidKeySpecException ignored) {
+                // Fall through to PKCS#1 below.
+            }
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(
+                    "RSA KeyFactory not available on this JVM. Root cause: "
+                            + e.getMessage(), e);
+        }
+        // Fall back to PKCS#1 (older OpenSSL default).
+        try {
+            java.security.spec.X509EncodedKeySpec x509 =
+                    new java.security.spec.X509EncodedKeySpec(der);
+            return KeyFactory.getInstance("RSA").generatePrivate(x509);
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "sso.jwt.private-key is not a parseable RSA private key. "
+                            + "Generate one with scripts/gen-jwt-keys.sh. Root cause: "
+                            + e.getMessage(), e);
+        }
     }
 
     /* ====================== issue ====================== */
@@ -109,8 +231,21 @@ public class JwtTokenService {
             builder.claim(CLAIM_USER_ID, userId);
         }
 
+        Key signingKey = signingKey();
+        if (signingKey == null) {
+            // Verifier-only service — issueAccessToken / issueApiToken
+            // are still on the public API for symmetry, but the
+            // signer refuses. Callers that need to issue tokens
+            // (auth-center) configure sso.jwt.private-key OR sso.jwt.secret.
+            throw new IllegalStateException(
+                "JwtTokenService is verifier-only: no sso.jwt.private-key "
+                    + "or sso.jwt.secret is configured. Run scripts/gen-jwt-keys.sh "
+                    + "and set one of them in this service's .env / application.yml.");
+        }
         return builder
-                .signWith(key, Jwts.SIG.HS256)
+                .signWith(signingKey)   // jjwt 0.12 picks the algorithm
+                                          // from the Key type (HMAC for
+                                          // SecretKey, RSA for RSAPrivateKey)
                 .compact();
     }
 
@@ -145,7 +280,21 @@ public class JwtTokenService {
         if (token == null || token.isBlank()) {
             throw new JwtException("Empty token");
         }
-        var parserBuilder = Jwts.parser().verifyWith(key);
+        // The verifier key matches the mode that was used to
+        // sign. HMAC tokens verify with the same secret; RSA
+        // tokens verify with the configured public key (a
+        // verifier-only service uses publicKey alone — no
+        // signingKey is required for verification).
+        var parserBuilder = Jwts.parser();
+        if (hmacKey != null) {
+            parserBuilder.verifyWith(hmacKey);
+        } else if (props.publicKey() != null && !props.publicKey().isBlank()) {
+            parserBuilder.verifyWith(readRsaPublicKey(props.publicKey()));
+        } else {
+            throw new IllegalStateException(
+                "JwtTokenService has neither sso.jwt.secret nor sso.jwt.public-key "
+                    + "configured; cannot verify tokens. Set one in .env.");
+        }
         if (requireIssuerMatch) {
             parserBuilder.requireIssuer(props.issuer());
         }

@@ -10,6 +10,6 @@ package com.co.eurekatic.ssoadmin.exception;
  */
 public class TokenExpiredException extends RuntimeException {
     public TokenExpiredException() {
-        super("Token has expired");
+        super("El token ha expirado");
     }
 }

@@ -5,6 +5,6 @@ package com.co.eurekatic.ssoadmin.exception;
  */
 public class NotFoundException extends RuntimeException {
     public NotFoundException(String resource, Object id) {
-        super(resource + " not found: " + id);
+        super("No se encontró " + ResourceLabels.of(resource) + ": " + id);
     }
 }

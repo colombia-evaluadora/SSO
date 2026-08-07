@@ -113,10 +113,9 @@ query:
 
 sso:
   jwt:
-    # MUST match auth-center / sso-admin / api-gateway.
-    # Same key signs (auth-center) and verifies
-    # (everywhere else).
-    secret: ${JWT_SECRET:change-me-change-me-change-me-change-me-change-me-1234567890}
+    # Sólo la pública: query-service verifica, no emite.
+    # Debe ser la pareja de la JWT_PRIVATE_KEY de auth-center.
+    public-key: ${JWT_PUBLIC_KEY}
     issuer: sso-postgres
     header-name: Authorization
     token-prefix: "Bearer "

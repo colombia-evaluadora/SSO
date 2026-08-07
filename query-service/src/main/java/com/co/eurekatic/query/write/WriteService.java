@@ -88,13 +88,13 @@ public class WriteService {
         for (String declared : def.columns()) {
             if (!req.columns().containsKey(declared)) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Missing column: " + declared);
+                        "Falta la columna: " + declared);
             }
         }
         for (String submitted : req.columns().keySet()) {
             if (!def.columns().contains(submitted)) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Unknown column: " + submitted);
+                        "Columna desconocida: " + submitted);
             }
         }
 
@@ -117,7 +117,7 @@ public class WriteService {
             sql = buildUpdate(def);
         } else {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Unsupported write type: " + def.writeType());
+                    "Tipo de escritura no soportado: " + def.writeType());
         }
 
         MapSqlParameterSource params = new MapSqlParameterSource(req.columns());
@@ -167,7 +167,7 @@ public class WriteService {
         List<String> keyCols = def.keyColumns();
         if (keyCols == null || keyCols.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "UPDATE requires keyColumns");
+                    "UPDATE requiere keyColumns");
         }
         List<String> updateCols = new ArrayList<>(def.columns());
         updateCols.removeAll(keyCols);
@@ -189,7 +189,7 @@ public class WriteService {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null || !(auth.getPrincipal() instanceof AuthPrincipal)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
-                    "No authenticated principal");
+                    "No hay un principal autenticado");
         }
         return auth;
     }
@@ -198,7 +198,7 @@ public class WriteService {
         Object creds = auth.getCredentials();
         if (!(creds instanceof String s) || s.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
-                    "Missing bearer token in security context");
+                    "Falta el token bearer en el contexto de seguridad");
         }
         return s;
     }
