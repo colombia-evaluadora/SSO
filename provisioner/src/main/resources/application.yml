@@ -67,6 +67,12 @@ docker:
   # SSO_INTERNAL_TOKEN en sso-admin; el .env mantiene los tres
   # alineados.
   catalog-internal-token: ${QUERY_CATALOG_INTERNAL_TOKEN:}
+  # Base URL del catálogo que se inyecta a cada query-service
+  # spawneado. Apunta a sso-admin DIRECTO, no al gateway: el
+  # gateway rechaza /sso-admin/internal/** con 401 porque su
+  # cadena acaba en anyExchange().authenticated() y el
+  # X-Internal-Token no es un JWT. Ver ProvisionerProperties.
+  catalog-base-url: ${PROVISIONER_CATALOG_BASE_URL:http://sso-admin:8083}
   ready-timeout-seconds: ${READY_TIMEOUT:45}
 
 management:
