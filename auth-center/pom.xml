@@ -117,6 +117,27 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <!--
+            springdoc-openapi: publishes THIS service's own /v3/api-docs.
+            api-gateway's OpenApiAggregatorService fetches that path
+            straight from the Eureka instance and merges every service
+            into the one doc rendered at /api/docs.
+
+            The *-api* artifact, not *-ui*: downstream services only need
+            to publish a spec. Swagger UI is rendered once, by the
+            gateway, so the -ui variant would ship the webjars bundle
+            into every image for nothing.
+
+            Without this the service has no /v3/api-docs at all, the
+            aggregator's fetch fails, and the merged doc comes back as a
+            200 with zero endpoints — a docs page that looks fine and
+            shows nothing.
+        -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+            <version>${springdoc-openapi.version}</version>
+        </dependency>
     </dependencies>
 
     <build>

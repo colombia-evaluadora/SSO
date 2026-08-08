@@ -41,16 +41,24 @@ import java.net.URI;
 public class SwaggerUiRedirectController {
 
     /**
-     * Swagger UI reads {@code configUrl} to discover which spec to
-     * load, so the aggregated doc is wired in through the query
-     * parameter rather than baked into the bundle. The target is
-     * {@link OpenApiAggregatorController}'s swagger-config endpoint,
-     * which in turn advertises the merged
-     * {@code /api/docs/v3/api-docs}.
+     * Our own Swagger UI page
+     * ({@code src/main/resources/static/api/docs/ui/index.html}), not
+     * the webjar's.
+     *
+     * <p>Do NOT point this at {@code /webjars/swagger-ui/index.html}.
+     * That file loads the webjar's stock {@code swagger-initializer.js},
+     * whose spec URL is hardcoded to
+     * {@code https://petstore.swagger.io/v2/swagger.json} — it renders
+     * the Petstore demo instead of this platform's API. Appending
+     * {@code ?configUrl=...} does not help: the stock initializer never
+     * reads query parameters. (springdoc normally rewrites that file
+     * through its SwaggerIndexPageTransformer, but this gateway
+     * deliberately bypasses springdoc's UI flow because it hangs.)
+     *
+     * <p>Our page loads the same webjar assets and calls
+     * {@code SwaggerUIBundle} itself against the aggregated spec.
      */
-    private static final URI SWAGGER_UI = URI.create(
-            "/webjars/swagger-ui/index.html"
-                    + "?configUrl=/api/docs/v3/api-docs/swagger-config");
+    private static final URI SWAGGER_UI = URI.create("/api/docs/ui/index.html");
 
     /**
      * Both {@code /api/docs} and {@code /api/docs/} are mapped: the

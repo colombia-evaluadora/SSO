@@ -73,6 +73,17 @@ public class SecurityConfig {
                         // route does its own JWT check anyway.
                         .requestMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info").permitAll()
+                        // OpenAPI spec consumed by api-gateway's
+                        // OpenApiAggregatorService, fetched
+                        // unauthenticated from the Eureka instance
+                        // address. Without permitAll the chain answers
+                        // 403 and this instance drops out of the merged
+                        // doc at /api/docs. Applies to every provisioned
+                        // instance too (query-service-eval-col etc.),
+                        // since they all run this image. Same
+                        // internal-network trust boundary as the actuator
+                        // endpoints above.
+                        .requestMatchers("/v3/api-docs", "/v3/api-docs/**").permitAll()
                         // Public service: per-query authorization
                         // is the publicEnd flag, not a Spring
                         // Security rule. 403 for non-public uuids

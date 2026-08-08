@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<!--
+  Swagger UI bootstrap for the SSO platform.
+
+  Why this file exists instead of the webjar's own index.html:
+  the swagger-ui webjar ships a stock swagger-initializer.js whose
+  spec URL is hardcoded to https://petstore.swagger.io/v2/swagger.json,
+  and it does NOT read the ?configUrl= query parameter. Redirecting to
+  the webjar index therefore renders the Petstore demo, not this
+  platform's API.
+
+  Normally springdoc rewrites that initializer on the fly
+  (SwaggerIndexPageTransformer), but this gateway does not go through
+  springdoc's welcome flow — that path hangs, see
+  SwaggerUiRedirectController — so the raw webjar file is what gets
+  served. This page skips the initializer entirely and calls
+  SwaggerUIBundle itself with the aggregated spec.
+
+  The assets below still come from the webjar (served by springdoc's
+  resource handler at /webjars/**), so upgrading springdoc upgrades
+  the UI with no change here.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SSO Platform API</title>
+    <link rel="stylesheet" href="/webjars/swagger-ui/swagger-ui.css">
+    <link rel="icon" type="image/png" href="/webjars/swagger-ui/favicon-32x32.png" sizes="32x32">
+</head>
+<body>
+<div id="swagger-ui"></div>
+<script src="/webjars/swagger-ui/swagger-ui-bundle.js" crossorigin></script>
+<script src="/webjars/swagger-ui/swagger-ui-standalone-preset.js" crossorigin></script>
+<script>
+    window.onload = function () {
+        window.ui = SwaggerUIBundle({
+            // The aggregated doc built by OpenApiAggregatorService —
+            // every configured service merged into one spec, with the
+            // paths rewritten to their gateway-facing prefixes.
+            url: "/api/docs/v3/api-docs",
+            dom_id: "#swagger-ui",
+            deepLinking: true,
+            presets: [
+                SwaggerUIBundle.presets.apis,
+                SwaggerUIStandalonePreset
+            ],
+            plugins: [
+                SwaggerUIBundle.plugins.DownloadUrl
+            ],
+            layout: "StandaloneLayout",
+            // Mirrors the springdoc.swagger-ui.* settings that used to
+            // be applied through springdoc's own UI wiring.
+            operationsSorter: "alpha",
+            tagsSorter: "alpha",
+            displayRequestDuration: true,
+            // "Try it out" against a protected endpoint needs the
+            // bearer token the user pastes into Authorize; persisting
+            // it keeps the session usable across a page reload.
+            persistAuthorization: true
+        });
+    };
+</script>
+</body>
+</html>
