@@ -8,26 +8,45 @@
 
 ## Problema
 
-Todo endpoint por ruta es hoy un `POST` que lee. `QueryPathController` es un único `@PostMapping("/**")`, y el registro de rutas es un `Map<pathTemplate, uuid>` que sólo apunta a filas de `QUERY`.
+Todo endpoint por ruta es hoy un `POST`. `QueryPathController` es un único `@PostMapping("/**")` y el registro de rutas es un `Map<pathTemplate, uuid>`, sin noción de método.
 
-Eso deja dos cosas fuera:
+Eso impide dos cosas:
 
-**No se puede leer con `GET`.** Una consulta idempotente y sin cuerpo tiene que enviarse como POST, lo que impide cachearla, enlazarla o abrirla en un navegador.
+**Leer con `GET`.** Una consulta idempotente y sin cuerpo tiene que enviarse como POST, así que no se puede cachear, enlazar ni abrir en un navegador.
 
-**No se puede escribir por ruta.** Las escrituras existen (`POST /write` con un uuid en el cuerpo) pero viven fuera del esquema de rutas: no tienen `PATH_TEMPLATE`. Un consumidor que quiera crear o actualizar tiene que conocer un uuid, no una URL.
+**Expresar la intención en la URL.** Crear y actualizar se ven exactamente igual que leer desde fuera: todo es POST a una ruta. El consumidor no puede deducir qué hace un endpoint sin leer el catálogo.
 
 ---
 
-## El límite que este diseño NO cruza
+## El malentendido que este spec corrigió
 
-Conviene dejarlo escrito porque es la restricción que ordena todo lo demás.
+La primera versión de este documento diseñaba un aparato considerable para las escrituras: `PATH_TEMPLATE` en `WRITE_DEFINITION`, las variables de ruta alimentando `keyColumns`, `writeType` derivado del método, y unicidad cruzada entre dos tablas.
 
-Hay dos caminos, separados a propósito:
+**Todo eso sobraba**, y conviene dejar escrito por qué para que nadie lo reintroduzca.
 
-- **Lectura** (`/query` y los endpoints por ruta). Ejecuta el SQL que el autor escribió en el catálogo, pero antes pasa por `rejectIfMutating`: si el SQL modifica algo, se rechaza. SQL libre, sólo lectura.
-- **Escritura** (`POST /write`). **No ejecuta SQL del catálogo.** Construye el `INSERT`/`UPDATE` a partir de una tabla y unas columnas declaradas en `WriteDefinition`. `WriteType` es un enum de dos valores: `INSERT` y `UPDATE`. No hay `DELETE` ni DDL.
+Partía de asumir que una escritura por ruta tendría que ir por `WriteService` (tabla + columnas declaradas), porque el camino de lectura rechaza SQL mutante. Pero el guardia es más estrecho de lo que parece:
 
-La garantía que sale de ahí — **nunca se ejecuta SQL de modificación escrito a mano contra la base** — es la que este diseño mantiene intacta. Por eso `DELETE` queda fuera: soportarlo obligaría a ampliar el camino de escritura o a relajar `rejectIfMutating`, y lo segundo desmonta la garantía entera. `GET`/`POST`/`PUT` encajan con lo que ya existe sin tocarla.
+```java
+if ("SELECT".equals(mode) || "FUNCTION".equals(mode)) {
+    rejectIfMutating(def.query());     // ← sólo en este brazo
+} else if (!"PROCEDURE".equals(mode)) {
+    throw ... "Unknown executionMode"
+}
+
+static void rejectIfMutating(String sql) {
+    String first = ... primer keyword ...
+    if (!first.equals("SELECT") && !first.equals("WITH")) { throw 400; }
+}
+```
+
+Dos consecuencias:
+
+1. **El modo `PROCEDURE` no pasa por el guardia.** Un `CALL paquete.actualizar_x(...)` se ejecuta verbatim, y el procedimiento hace lo que tenga que hacer.
+2. **El guardia sólo mira el primer keyword.** Una función invocada como `SELECT * FROM paquete.func(...)` lo atraviesa sin problema, module lo que module.
+
+O sea que el guardia bloquea únicamente un `UPDATE`/`INSERT`/`DELETE` escrito literalmente a pelo en el campo SQL. **Paquetes, procedimientos y funciones —que es como se consume esta base— ya funcionan hoy.**
+
+Y la propiedad de seguridad resultante es mejor que cualquier alternativa que se barajó: **el DBA decide qué hace cada paquete; el autor del catálogo sólo puede invocarlo.** No hace falta relajar el guardia ni construir un segundo camino de escritura. La superficie de lo que un admin del catálogo puede ejecutar contra la base sigue siendo la que el DBA haya publicado.
 
 ---
 
@@ -35,104 +54,93 @@ La garantía que sale de ahí — **nunca se ejecuta SQL de modificación escrit
 
 | # | Decisión | Alternativas descartadas |
 |---|---|---|
-| 1 | Verbos soportados: `GET`, `POST`, `PUT`. `DELETE` no | Soportar DELETE — requeriría tocar el límite lectura/escritura |
-| 2 | Lo que decide si un `POST` lee o crea es **la fila**, no el verbo | Que POST signifique sólo "crear" (REST estricto) — rompería todos los endpoints POST-que-leen actuales, y sus consumidores no los controlamos |
-| 3 | `writeType` se deriva del método cuando la fila tiene ruta: `POST`→`INSERT`, `PUT`→`UPDATE` | Pedirlo y validar que concuerde — es el patrón que quitamos en la tanda 1: pedir un dato deducible y reñir si no acierta |
-| 4 | Las variables de ruta alimentan `keyColumns`; el cuerpo alimenta `columns` | Que todo venga del cuerpo — dejaría la ruta como decoración y permitiría que cuerpo y URL se contradijeran |
-| 5 | La unicidad de `(microservicio, ruta, método)` se comprueba en sso-admin | Índice único en BD — imposible: la restricción abarca dos tablas |
+| 1 | Verbos soportados: `GET`, `POST`, `PUT`. `DELETE` no | Soportarlo — ver abajo |
+| 2 | Los tres verbos despachan al mismo camino. Lo que la fila hace lo decide su SQL | Enrutar las escrituras por `WriteService` — innecesario: los procedimientos ya pasan |
+| 3 | `rejectIfMutating` no se toca | Relajarlo para POST/PUT — permitiría DML escrito a mano, que hoy es imposible por construcción |
+| 4 | `HTTP_METHOD` entra con default `POST` | Migrar filas — innecesario, el default preserva el comportamiento actual |
+
+**Por qué `DELETE` sigue fuera.** No por un impedimento técnico —un `CALL paquete.borrar_x(...)` funcionaría igual que cualquier otro procedimiento— sino porque es lo que se decidió: mantener el verbo fuera evita que la URL sugiera un borrado directo sobre tablas. Si más adelante hace falta, el trabajo es añadirlo a la lista de verbos válidos y nada más.
 
 ---
 
 ## Diseño
 
-### A. El registro pasa a tener método y tipo de fila
+### A. El registro pasa a tener método
 
-Clave actual: `pathTemplate → uuid`. Nueva: `(método, pathTemplate) → (tipo, uuid)`, donde el tipo es `QUERY` o `WRITE`.
+Clave actual: `pathTemplate → uuid`. Nueva: `(método, pathTemplate) → uuid`.
 
-Eso es lo que hace que la decisión 2 funcione sin ambigüedad en tiempo de petición: `POST /establecimiento/:NOMBRE` apunta a una fila `QUERY` y lee; `POST /establecimiento` apunta a una fila `WRITE` e inserta. Como sólo puede existir una fila por combinación, el dispatcher no tiene nada que adivinar — mira el tipo y despacha.
+Eso permite que `GET /establecimiento/:NOMBRE` y `PUT /establecimiento/:ID` sean filas distintas, y que la misma ruta sirva propósitos distintos según el verbo.
 
-Qué verbo puede apuntar a qué:
-
-| Verbo | Tipo de fila | Efecto | Cuerpo |
-|---|---|---|---|
-| `GET` | `QUERY` | lee | no lleva |
-| `POST` | `QUERY` | lee | opcional |
-| `POST` | `WRITE` (`INSERT`) | crea | obligatorio |
-| `PUT` | `WRITE` (`UPDATE`) | actualiza | obligatorio |
-
-Un `GET` que apunte a una fila `WRITE` se rechaza al guardar, no en tiempo de petición.
+`QueryPathRegistry.match` recibe el verbo además de la ruta. `matchTemplate` no cambia — la gramática y la decodificación son las mismas.
 
 ### B. Esquema
 
-`QUERY` gana `HTTP_METHOD VARCHAR(10) NOT NULL DEFAULT 'POST'`. El default preserva exactamente el comportamiento actual: toda fila existente sigue siendo un POST que lee, sin migración de datos.
+`QUERY` gana:
 
-`WRITE_DEFINITION` gana `PATH_TEMPLATE VARCHAR(500)` y `HTTP_METHOD VARCHAR(10)`, ambos nulables. Nulo = sólo accesible por el `POST /write` legacy, igual que hoy.
-
-El índice único actual de `QUERY` pasa a `(MICROSERVICE_ID, PATH_TEMPLATE, HTTP_METHOD)`, y `WRITE_DEFINITION` gana el suyo equivalente. **Ninguno de los dos impide que una query y una escritura reclamen la misma combinación** — eso lo comprueba `QueryAdminService` / `WriteAdminService` consultando la otra tabla antes de guardar.
-
-Es una garantía más débil que la de hoy: entre la comprobación y el commit hay una ventana en la que dos inserciones concurrentes podrían colar un duplicado cruzado. Se acepta porque el escenario requiere dos admins guardando la misma ruta con el mismo método en el mismo instante, y porque la alternativa —fusionar las dos tablas— es un cambio mucho mayor por un riesgo mucho menor. El síntoma, si ocurriera, sería que una de las dos filas gana el matching de forma no determinista; queda anotado como riesgo conocido.
-
-### C. Cómo se alimenta una escritura por ruta
-
-`WriteService` recibe hoy un mapa `columns` (columna→valor) y, para `UPDATE`, necesita además las `keyColumns`. Con ruta:
-
-- **Las variables de la ruta alimentan las `keyColumns`.**
-- **El cuerpo alimenta las `columns`.**
-
-```
-PUT /establecimiento/:ID     con body { "nombre": "X", "direccion": "Y" }
-
-  keyColumns = id        <- de :PARAM.ID
-  columns    = nombre, direccion   <- del cuerpo
-
-  → UPDATE establecimiento SET nombre = :nombre, direccion = :direccion
-    WHERE id = :id
+```sql
+HTTP_METHOD VARCHAR(10) NOT NULL DEFAULT 'POST'
 ```
 
-Esto da una validación fuerte **al guardar**, no en producción: las variables de la plantilla deben cubrir **exactamente** las `keyColumns` de la fila. Una plantilla `/establecimiento/:ID` sobre una fila cuya key es `(id, anio)` se rechaza con un mensaje que dice qué falta. Sin esa regla, el fallo aparecería en la primera petición real como un `UPDATE` sin `WHERE` completo — o peor, como un `WHERE` que casa más filas de las que debía.
+El default preserva exactamente el comportamiento actual: toda fila existente sigue siendo un POST, sin migrar datos y sin cambios con ruptura.
 
-Para `POST`/`INSERT` no hay `keyColumns`, así que la plantilla no debe declarar variables: `POST /establecimiento` sí, `POST /establecimiento/:ID` no. También se comprueba al guardar.
+El índice único pasa de `(MICROSERVICE_ID, PATH_TEMPLATE)` a `(MICROSERVICE_ID, PATH_TEMPLATE, HTTP_METHOD)`, que es lo que permite tener la misma ruta con dos verbos.
 
-Los nombres de las variables de ruta siguen la gramática de la tanda 1 (`:MAYÚSCULA` ASCII) y se mapean a la columna en minúscula: `:ID` → columna `id`. El mapeo es explícito y no depende de la caja porque los nombres de columna en el catálogo ya se declaran en minúscula.
+Valores admitidos: `GET`, `POST`, `PUT`. Se valida al guardar; la BD lleva un `CHECK` como última línea.
 
-### D. `GET` no lleva cuerpo
+### C. Dispatcher
 
-Un `GET` no puede aportar `:BODY.*`. En vez de dejar que el autor lo descubra con un bind sin valor en la primera petición, se comprueba al guardar: si la fila es `GET` y su SQL menciona `:BODY.`, se rechaza.
+`QueryPathController` pasa de un `@PostMapping("/**")` a tres mappings que delegan en un único método privado con el verbo como parámetro:
 
-Es la misma idea que la derivación de la tanda 1 — mover el error del runtime al momento de guardar, donde hay un humano mirando.
+```java
+@GetMapping("/**")  → dispatch(request, "GET",  queryParams, null)
+@PostMapping("/**") → dispatch(request, "POST", queryParams, body)
+@PutMapping("/**")  → dispatch(request, "PUT",  queryParams, body)
+```
 
-### E. Dispatcher
+`GET` no recibe cuerpo, así que no aporta `:BODY.*`. El resto del flujo es idéntico: se resuelve la fila, se arman los parámetros con sus namespaces y se ejecuta.
 
-`QueryPathController` pasa de un `@PostMapping("/**")` a tres mappings (`GET`, `POST`, `PUT`) que delegan en un único método con el verbo como parámetro. El verbo entra en la consulta al registro; el tipo de fila que devuelve decide si se llama a `QueryService` o a `WriteService`.
+Una ruta registrada a la que se llama con un verbo que no tiene fila responde **405**, no 404: la URL existe, lo que no se admite es el método. Un 404 haría pensar que la ruta está mal escrita.
 
-El `@GetMapping("/**")` no se traga los endpoints de actuator: Spring resuelve primero el handler mapping de actuator, que tiene mayor precedencia que el de controllers. Conviene un test que lo fije, porque es el tipo de cosa que un cambio de versión rompe en silencio.
+`DELETE` no tiene mapping, así que Spring responde 405 por sí solo.
+
+El `@GetMapping("/**")` no se traga los endpoints de actuator: su handler mapping tiene mayor precedencia que el de los controllers. Conviene un test que lo fije, porque es de las cosas que un cambio de versión rompe en silencio.
+
+### D. Validación al guardar
+
+- El método debe ser uno de los tres.
+- Un `GET` cuyo SQL mencione `:BODY.` se rechaza: un GET no lleva cuerpo, así que ese bind nunca tendría valor. Es el mismo criterio que la derivación de la tanda 1 — mover el error al momento de guardar, donde hay un humano mirando, en vez de a la primera petición real.
+- La unicidad `(microservicio, ruta, método)` la sigue garantizando el índice de BD, igual que hoy.
+
+### E. Formulario
+
+Un desplegable con `GET`, `POST`, `PUT`, por defecto `POST`. Junto al campo de plantilla, porque solo tiene sentido cuando hay ruta.
 
 ### F. Gateway
 
-No cambia. Las rutas del catálogo se registran con un predicado `Path`, sin `Method`, así que los tres verbos pasan igual. El PR #14 dejó ese camino funcionando y no hay motivo para tocarlo.
+No cambia. Las rutas del catálogo se registran con un predicado `Path` sin `Method`, así que los tres verbos pasan igual.
 
 ---
 
 ## Pruebas
 
-1. `GET` por ruta devuelve filas y no acepta cuerpo.
-2. `POST` sobre fila `QUERY` sigue leyendo — regresión del comportamiento actual, que es lo que la decisión 2 protege.
-3. `POST` sobre fila `WRITE` inserta y devuelve `rowsAffected`.
-4. `PUT` actualiza usando la variable de ruta como clave.
-5. `DELETE` sobre una ruta registrada responde 405, no 404: la ruta existe, el método no se admite. Un 404 haría pensar que la URL está mal.
-6. Rechazo al guardar: `GET` con SQL que usa `:BODY.`; plantilla cuyas variables no cubren las `keyColumns`; `INSERT` con variables en la plantilla; `GET` apuntando a una fila `WRITE`; ruta+método ya reclamados por la otra tabla.
-7. Actuator sigue respondiendo con el `@GetMapping("/**")` registrado.
+1. `GET` por ruta devuelve filas.
+2. `POST` sobre una fila existente sigue leyendo — regresión de lo que hay hoy en producción.
+3. `PUT` sobre una fila con `CALL paquete.proc(...)` ejecuta el procedimiento.
+4. La misma ruta con dos verbos resuelve a filas distintas.
+5. Verbo sin fila registrada para esa ruta → 405.
+6. `DELETE` → 405.
+7. Rechazo al guardar: método inválido; `GET` con `:BODY.` en el SQL.
+8. Actuator sigue respondiendo con el `@GetMapping("/**")` registrado.
 
 ---
 
 ## Cambios con ruptura
 
-Ninguno. `HTTP_METHOD` entra con default `POST` en `QUERY`, y nulable en `WRITE_DEFINITION`. Todo lo que funciona hoy sigue funcionando igual.
+Ninguno. `HTTP_METHOD` entra con default `POST`.
 
 ---
 
 ## Fuera de alcance
 
-- `DELETE` — ver el límite arriba.
-- `PATCH` — no aporta nada que `PUT` no cubra mientras el camino de escritura sólo sepa hacer INSERT y UPDATE sobre columnas declaradas.
-- Fusionar `QUERY` y `WRITE_DEFINITION` en una sola tabla, que resolvería la unicidad en BD. Es un cambio grande para un riesgo pequeño; queda anotado por si la carrera llegara a doler.
+- `DELETE` y `PATCH` — se pueden añadir después con solo ampliar la lista de verbos válidos, si hace falta.
+- Tocar `rejectIfMutating` o el camino de `WriteService`. Ninguno de los dos hace falta para esto.
