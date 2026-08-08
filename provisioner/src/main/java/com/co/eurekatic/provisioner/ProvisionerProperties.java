@@ -73,6 +73,24 @@ public class ProvisionerProperties {
      *  X-Internal-Token header". */
     private String catalogInternalToken = "";
 
+    /** Base URL que el query-service spawneado usa para resolver
+     *  uuid→SQL y para cargar su path-registry. Se inyecta como
+     *  {@code QUERY_CATALOG_BASE_URL}.
+     *
+     *  Apunta DIRECTAMENTE a sso-admin, no al api-gateway. La
+     *  cadena de seguridad del gateway termina en
+     *  {@code anyExchange().authenticated()}, así que rechaza
+     *  {@code /sso-admin/internal/**} con 401 antes de que llegue
+     *  a sso-admin: el {@code X-Internal-Token} no significa nada
+     *  para el gateway, que espera un JWT. Y no es cuestión de
+     *  añadir ese path al permitAll — el gateway es la superficie
+     *  pública, y el surface /internal debe seguir siendo
+     *  inalcanzable desde fuera de la red de docker.
+     *
+     *  Mismo criterio que {@code gateway.catalog-url}, que ya
+     *  apunta a {@code http://sso-admin:8083}. */
+    private String catalogBaseUrl = "http://sso-admin:8083";
+
     /** Path the provisioner polls to verify the new
      *  container came up. The 30s timeout gives the JVM
      *  + Eureka registration enough room. */
@@ -92,6 +110,8 @@ public class ProvisionerProperties {
     public void setOtlpEndpoint(String otlpEndpoint) { this.otlpEndpoint = otlpEndpoint; }
     public String getCatalogInternalToken() { return catalogInternalToken; }
     public void setCatalogInternalToken(String catalogInternalToken) { this.catalogInternalToken = catalogInternalToken; }
+    public String getCatalogBaseUrl() { return catalogBaseUrl; }
+    public void setCatalogBaseUrl(String catalogBaseUrl) { this.catalogBaseUrl = catalogBaseUrl; }
     public int getReadyTimeoutSeconds() { return readyTimeoutSeconds; }
     public void setReadyTimeoutSeconds(int readyTimeoutSeconds) {
         this.readyTimeoutSeconds = readyTimeoutSeconds;

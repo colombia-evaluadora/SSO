@@ -750,10 +750,21 @@ services:
       # Eureka + JWT (sólo la pública: verifica, no emite)
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
-      # Catalog endpoint — sso-admin's controller paths
-      # are NOT prefixed, so the gateway base URL plus
-      # the literal /getQuery path resolves them.
-      QUERY_CATALOG_BASE_URL: "http://sso-api-gateway:8080/sso-admin"
+      # Catalog endpoint — sso-admin's controller paths are NOT
+      # prefixed, so this base URL plus the literal /getQuery
+      # path resolves them.
+      #
+      # Points at sso-admin DIRECTLY, not the gateway. The
+      # gateway's security chain ends in
+      # anyExchange().authenticated(), so it 401s
+      # /sso-admin/internal/** before the request ever reaches
+      # sso-admin — the X-Internal-Token header is not a JWT.
+      # That left the path-registry empty on every instance and
+      # made all path-template endpoints unresolvable. Widening
+      # the gateway's permitAll to cover /internal/** is NOT the
+      # fix: the gateway is the public surface, and /internal
+      # must stay unreachable from outside the docker network.
+      QUERY_CATALOG_BASE_URL: "http://sso-admin:8083"
       # V30 — shared secret for sso-admin's /internal/pathTemplates.
       # The path-registry fails closed without it (503) and the
       # instance can't resolve path-template routes.
@@ -795,7 +806,9 @@ services:
       QUERY_INSTANCE_NAME: postgres-analytics
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
-      QUERY_CATALOG_BASE_URL: "http://sso-api-gateway:8080/sso-admin"
+      # Direct to sso-admin, not the gateway — see
+      # query-service-postgres above.
+      QUERY_CATALOG_BASE_URL: "http://sso-admin:8083"
       # V30 — see query-service-postgres above.
       QUERY_CATALOG_INTERNAL_TOKEN: ${QUERY_CATALOG_INTERNAL_TOKEN}
       # Observability: push OTLP to Alloy
