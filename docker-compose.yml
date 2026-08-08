@@ -1112,12 +1112,27 @@ services:
   # Captures change-data from the local `postgres` container via Debezium,
   # publishes to the shared `rabbitmq` (cdc user/exchange from
   # ./docker/rabbitmq/definitions.json), and consumes into ClickHouse
-  # (audit) + Oracle (reverse-sync). Bring up with:
-  #   docker compose --profile local-only --profile cdc-sync up -d
   # ===========================================================================
-
+  # ClickHouse — la base de analítica.
+  #
+  # Perfil `analytics`: arranca SÓLO la base. Para ingestarla desde
+  # Postgres hace falta además el perfil `cdc-sync` (capture + worker).
+  # Esto deja tres modos útiles:
+  #
+  #   COMPOSE_PROFILES=local-only,analytics
+  #     → ClickHouse arriba para consultas/diagnóstico manual.
+  #   COMPOSE_PROFILES=local-only,cdc-sync
+  #     → ClickHouse + CDC + worker, ingestión automática.
+  #   COMPOSE_PROFILES=local-only
+  #     → Ni base ni ingestión. Lo más frugal.
+  #
+  # `cdc-capture`, `cdc-pg-slot-init` y `cdc-worker` se mantienen en
+  # `cdc-sync` porque su único trabajo es mover filas a ClickHouse: sin
+  # la base arriba no tienen adónde escribir, y dejar el worker
+  # corriendo "por si acaso" sólo gasta CPU en el servidor de pruebas.
+  # ===========================================================================
   cdc-clickhouse:
-    profiles: ["cdc-sync"]
+    profiles: ["analytics", "cdc-sync"]
     image: clickhouse/clickhouse-server:24.8-alpine
     container_name: cdc-clickhouse
     restart: unless-stopped
