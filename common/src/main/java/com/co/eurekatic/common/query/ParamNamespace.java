@@ -31,6 +31,62 @@ public final class ParamNamespace {
     public static final String CONTEXT = "CONTEXT";
 
     /**
+     * Forma de un nombre de parámetro: ASCII, MAYÚSCULA, empezando
+     * por letra. Es la definición única para todo el sistema — la
+     * usan tanto las variables de ruta ({@link PathTemplateSyntax})
+     * como las claves que llegan en el query string y en el body.
+     *
+     * <p>La restricción no es estilística, es necesaria. El parser
+     * de parámetros de Spring corta un nombre en cuanto encuentra
+     * uno de sus separadores, entre los que está el guion. Una
+     * clave {@code ?page-size=1} produciría {@code :QUERY.PAGE}
+     * seguido de {@code -SIZE} suelto en mitad del SQL: ni error de
+     * parseo ni resultado correcto. Rechazarla al entrar es la
+     * única forma de que ese caso no exista.
+     *
+     * <p>Los acentos y la eñe quedan fuera por la misma razón que
+     * en las rutas: un nombre de parámetro es un identificador que
+     * alguien tiene que poder teclear igual en el SQL, en la URL y
+     * en el formulario. La convención es transliterar —
+     * {@code ANIO}, no {@code AÑO}.
+     */
+    private static final java.util.regex.Pattern VALID_NAME =
+            java.util.regex.Pattern.compile("[A-Z][A-Z0-9_]*");
+
+    /**
+     * ¿Es {@code name} un nombre de parámetro válido? Se expone
+     * para que {@link PathTemplateSyntax} aplique exactamente la
+     * misma regla a las variables de ruta: si las dos definiciones
+     * pudieran divergir, una plantilla válida podría producir un
+     * bind imposible de escribir en el SQL.
+     */
+    public static boolean isValidName(String name) {
+        return name != null && VALID_NAME.matcher(name).matches();
+    }
+
+    /**
+     * Pasa una clave del llamante a su forma canónica y verifica
+     * que sea un nombre de parámetro escribible.
+     *
+     * <p>Se rechaza en vez de transliterar. Convertir {@code AÑO}
+     * a {@code ANIO} por detrás significaría que la clave que el
+     * cliente envía y el bind que el autor escribe en el SQL no se
+     * parecen, y nadie podría deducir uno del otro leyendo el
+     * otro. Mejor un 400 que diga exactamente qué escribir.
+     */
+    private static String normalizeName(String rawKey) {
+        String upper = rawKey.toUpperCase(Locale.ROOT);
+        if (!isValidName(upper)) {
+            throw new IllegalArgumentException(
+                    "La clave '" + rawKey + "' no es un nombre de parámetro "
+                    + "válido: sólo se admiten A-Z, 0-9 y '_', empezando por "
+                    + "letra. Translitera los acentos y la eñe — por ejemplo "
+                    + "'ANIO' en vez de 'AÑO'.");
+        }
+        return upper;
+    }
+
+    /**
      * Copia {@code source} en {@code target} prefijando con el
      * namespace y pasando la clave a MAYÚSCULA.
      *
@@ -51,7 +107,7 @@ public final class ParamNamespace {
         }
         Map<String, String> originalByUpper = new LinkedHashMap<>();
         for (Map.Entry<String, ?> e : source.entrySet()) {
-            String upper = e.getKey().toUpperCase(Locale.ROOT);
+            String upper = normalizeName(e.getKey());
             String previous = originalByUpper.putIfAbsent(upper, e.getKey());
             if (previous != null) {
                 throw new IllegalArgumentException(
@@ -86,7 +142,7 @@ public final class ParamNamespace {
         // (BODY.A.X y BODY.B.X son nombres distintos).
         Map<String, String> originalByUpper = new LinkedHashMap<>();
         for (Map.Entry<String, ?> e : body.entrySet()) {
-            String upper = e.getKey().toUpperCase(Locale.ROOT);
+            String upper = normalizeName(e.getKey());
             String previous = originalByUpper.putIfAbsent(upper, e.getKey());
             if (previous != null) {
                 throw new IllegalArgumentException(

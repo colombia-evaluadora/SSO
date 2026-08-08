@@ -48,9 +48,11 @@ public final class PathTemplateSyntax {
      */
     private static final Pattern VARIABLE = Pattern.compile(":([^/]*)");
 
-    /** Nombre aceptable dentro de una variable. */
-    private static final Pattern VALID_NAME =
-            Pattern.compile("[A-Z][A-Z0-9_]*");
+    // El nombre aceptable dentro de una variable NO se define aquí:
+    // se delega en ParamNamespace.isValidName, que es la misma regla
+    // que se aplica a las claves del query string y del body. Con
+    // dos definiciones, una plantilla podría validarse y generar un
+    // bind que luego el SQL no puede nombrar.
 
     /**
      * Valida una plantilla. Lanza {@link IllegalArgumentException}
@@ -93,16 +95,17 @@ public final class PathTemplateSyntax {
         Matcher m = VARIABLE.matcher(t);
         while (m.find()) {
             String name = m.group(1);
-            if (!VALID_NAME.matcher(name).matches()) {
+            if (!ParamNamespace.isValidName(name)) {
                 String suggestion = name.toUpperCase(Locale.ROOT);
                 throw new IllegalArgumentException(
                         "El nombre de variable ':" + name + "' debe ir en "
                         + "MAYÚSCULA, empezar por letra y usar sólo A-Z, 0-9 "
-                        + "y '_'"
+                        + "y '_'. Translitera acentos y eñe — ':ANIO', no "
+                        + "':AÑO'"
                         // Sólo se sugiere una corrección cuando difiere del
                         // original: decirle al admin "usa ':_FOO'" cuando
                         // acaba de escribir ':_FOO' no ayuda a nadie.
-                        + (VALID_NAME.matcher(suggestion).matches()
+                        + (ParamNamespace.isValidName(suggestion)
                                 ? ": usa ':" + suggestion + "'"
                                 : "."));
             }
