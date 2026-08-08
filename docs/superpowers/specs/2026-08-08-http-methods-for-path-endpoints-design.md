@@ -141,11 +141,11 @@ Una fila `SELECT` o `PROCEDURE` se ejecuta con `jdbc.query(...)` y devuelve fila
 - Un `GET` cuyo SQL mencione `:BODY.` se rechaza: ese bind nunca tendría valor. Mismo criterio que la derivación de la tanda 1 — mover el error al momento de guardar, donde hay un humano mirando, en vez de a la primera petición real.
 - La unicidad `(microservicio, ruta, método)` la sigue garantizando el índice de BD, igual que hoy.
 
-### E. Formulario
+### F. Formulario
 
 Un desplegable con `GET`, `POST`, `PUT`, por defecto `POST`. Junto al campo de plantilla, porque solo tiene sentido cuando hay ruta.
 
-### F. Gateway
+### G. Gateway
 
 No cambia. Las rutas del catálogo se registran con un predicado `Path` sin `Method`, así que los tres verbos pasan igual.
 
@@ -159,8 +159,10 @@ No cambia. Las rutas del catálogo se registran con un predicado `Path` sin `Met
 4. La misma ruta con dos verbos resuelve a filas distintas.
 5. Verbo sin fila registrada para esa ruta → 405.
 6. `DELETE` → 405.
-7. Rechazo al guardar: método inválido; `GET` con `:BODY.` en el SQL.
-8. Actuator sigue respondiendo con el `@GetMapping("/**")` registrado.
+7. `PUT` sobre una fila `UPDATE …` directa ejecuta y devuelve `rowsAffected`.
+8. Una fila `SELECT` **sigue** rechazando SQL mutante — el guardia no se tocó para ellas. Es la prueba de que el permiso nuevo no se derramó sobre lo existente.
+9. Rechazo al guardar: método inválido; `GET` con `:BODY.` en el SQL; fila `DML` atada a `GET`; primer keyword `DELETE`/`DROP`/`ALTER`/`TRUNCATE`.
+10. Actuator sigue respondiendo con el `@GetMapping("/**")` registrado.
 
 ---
 
