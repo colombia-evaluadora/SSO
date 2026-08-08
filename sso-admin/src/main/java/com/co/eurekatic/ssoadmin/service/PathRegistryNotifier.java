@@ -3,10 +3,12 @@ package com.co.eurekatic.ssoadmin.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpHeaders;
+import org.springframework.cloud.client.ServiceInstance;
+import org.springframework.cloud.client.discovery.DiscoveryClient;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -29,26 +31,55 @@ import java.util.Map;
  * This matters because we don't want a flaky
  * query-service to break the admin's create-query flow.
  *
- * <p>The query-service URL is operator-configured via
- * {@code query-service.base-url} (default
- * {@code http://query-service:8080} in compose).
- * Production overrides with the actual service DNS.
+ * <p>Los destinatarios se descubren por Eureka, no se
+ * configuran: cada instancia se registra como
+ * {@code query-service-<instanceName>} y el provisioner puede
+ * crear más en cualquier momento, así que una URL fija en
+ * configuración se quedaría desactualizada por diseño.
  */
 @Component
 public class PathRegistryNotifier {
 
     private static final Logger log = LoggerFactory.getLogger(PathRegistryNotifier.class);
 
+    /**
+     * Prefijo de los service-id que sirven queries. El
+     * provisioner registra cada instancia como
+     * {@code query-service-<instanceName>}, así que este prefijo
+     * las cubre todas.
+     */
+    private static final String QUERY_SERVICE_PREFIX = "query-service";
+
     private final RestClient client;
     private final String internalToken;
-    private final String baseUrl;
+    private final DiscoveryClient discovery;
 
-    public PathRegistryNotifier(
-            @Value("${query-service.base-url:http://query-service:8080}") String baseUrl,
-            @Value("${sso.internal.token:}") String internalToken) {
-        this.baseUrl = baseUrl;
+    public PathRegistryNotifier(DiscoveryClient discovery,
+                                @Value("${sso.internal.token:}") String internalToken) {
+        this.discovery = discovery;
         this.internalToken = internalToken;
-        this.client = RestClient.builder().baseUrl(baseUrl).build();
+        this.client = RestClient.builder().build();
+    }
+
+    /**
+     * Instancias a las que hay que avisar, descubiertas por Eureka.
+     *
+     * <p>Antes esto era una única URL fija
+     * ({@code http://query-service:8080}) y tenía dos problemas a
+     * la vez. Uno, que ese hostname no existe: las instancias se
+     * llaman {@code query-service-postgres},
+     * {@code query-service-eval-col}… así que cada invalidación
+     * moría con "Temporary failure in name resolution" y toda
+     * query guardada tardaba hasta 60s en estar viva. Y dos, que
+     * aunque hubiera resuelto, era una sola URL para un sistema
+     * multi-instancia: las demás nunca se habrían enterado.
+     */
+    private List<ServiceInstance> targets() {
+        return discovery.getServices().stream()
+                .filter(id -> id.toLowerCase(java.util.Locale.ROOT)
+                        .startsWith(QUERY_SERVICE_PREFIX))
+                .flatMap(id -> discovery.getInstances(id).stream())
+                .toList();
     }
 
     /**
@@ -63,30 +94,39 @@ public class PathRegistryNotifier {
             // in sso-admin: empty token means the operator
             // hasn't configured the secret. We log + skip
             // rather than firing requests without auth.
-            log.warn("PathRegistryNotifier: sso.internal.token is empty; "
-                    + "skipping invalidate call to {}. The path-registry "
-                    + "will catch up on the next periodic refresh (60s).",
-                    baseUrl);
+            log.warn("PathRegistryNotifier: sso.internal.token está vacío; "
+                    + "se omite la invalidación. El path-registry se pondrá "
+                    + "al día en el refresco periódico (60s).");
             return;
         }
-        try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> body = client.post()
-                    .uri("/internal/path-registry/invalidate")
-                    .header(HttpHeaders.AUTHORIZATION, "")  // not used
-                    .header("X-Internal-Token", internalToken)
-                    .retrieve()
-                    .onStatus(s -> true, (req, res) -> { /* swallow all */ })
-                    .body(Map.class);
-            log.info("Path-registry invalidated on {} (size={})",
-                    baseUrl, body == null ? "?" : body.get("size"));
-        } catch (Exception e) {
-            // Best-effort. The next periodic refresh
-            // (60s) is the safety net. Logged at WARN,
-            // not ERROR, so the operator's error budget
-            // doesn't burn on a transient outage.
-            log.warn("Path-registry invalidate to {} failed (next periodic "
-                    + "refresh will pick up the change): {}", baseUrl, e.getMessage());
+        List<ServiceInstance> instances = targets();
+        if (instances.isEmpty()) {
+            log.warn("PathRegistryNotifier: Eureka no reporta ninguna instancia "
+                    + "'{}*'. El path-registry se pondrá al día en el refresco "
+                    + "periódico (60s).", QUERY_SERVICE_PREFIX);
+            return;
+        }
+        // Se avisa a TODAS. Fallar en una no debe impedir avisar a
+        // las demás, así que el try va dentro del bucle.
+        for (ServiceInstance instance : instances) {
+            String url = instance.getUri() + "/internal/path-registry/invalidate";
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> body = client.post()
+                        .uri(url)
+                        .header("X-Internal-Token", internalToken)
+                        .retrieve()
+                        .onStatus(s -> true, (req, res) -> { /* swallow all */ })
+                        .body(Map.class);
+                log.info("Path-registry invalidado en {} (size={})",
+                        instance.getServiceId(), body == null ? "?" : body.get("size"));
+            } catch (Exception e) {
+                // Best-effort. El refresco periódico (60s) es la red
+                // de seguridad. WARN y no ERROR: una instancia que
+                // acaba de morir no debería encender alarmas.
+                log.warn("Invalidación fallida en {} ({}), el refresco periódico "
+                        + "lo recogerá: {}", instance.getServiceId(), url, e.getMessage());
+            }
         }
     }
 }
