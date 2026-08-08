@@ -198,6 +198,13 @@ services:
       EUREKA_CLIENT_FETCH_REGISTRY: "false"
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      # Interruptor de telemetria: con el perfil de observabilidad
+      # apagado, Alloy no existe y sin esto los nueve servicios
+      # reintentarian contra un endpoint muerto. Nombres verificados
+      # contra el spring-configuration-metadata.json de los jars.
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8761; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -297,6 +304,13 @@ services:
       SSO_SESSION_USER_ROLES_INVALIDATION_SECRET: ${SSO_SESSION_USER_ROLES_INVALIDATION_SECRET:-}
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      # Interruptor de telemetria: con el perfil de observabilidad
+      # apagado, Alloy no existe y sin esto los nueve servicios
+      # reintentarian contra un endpoint muerto. Nombres verificados
+      # contra el spring-configuration-metadata.json de los jars.
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8081; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -362,6 +376,13 @@ services:
       # services are not running these exporters just log a connection
       # warning and the gateway keeps serving — telemetry is best-effort.
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      # Interruptor de telemetria: con el perfil de observabilidad
+      # apagado, Alloy no existe y sin esto los nueve servicios
+      # reintentarian contra un endpoint muerto. Nombres verificados
+      # contra el spring-configuration-metadata.json de los jars.
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -396,6 +417,13 @@ services:
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      # Interruptor de telemetria: con el perfil de observabilidad
+      # apagado, Alloy no existe y sin esto los nueve servicios
+      # reintentarian contra un endpoint muerto. Nombres verificados
+      # contra el spring-configuration-metadata.json de los jars.
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
     # No healthcheck on the public port — the gateway's
     # actuator/health is the canonical signal, and the service
     # itself doesn't expose /actuator/health to the public.
@@ -523,6 +551,13 @@ services:
       RABBITMQ_PASS: ${RABBITMQ_PASS}
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      # Interruptor de telemetria: con el perfil de observabilidad
+      # apagado, Alloy no existe y sin esto los nueve servicios
+      # reintentarian contra un endpoint muerto. Nombres verificados
+      # contra el spring-configuration-metadata.json de los jars.
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       # App-access cache (SsoAdminAppAccessManager /
       # AppAccessService). Same Redis instance + credentials
       # auth-center already uses for refresh tokens.
@@ -673,6 +708,13 @@ services:
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      # Interruptor de telemetria: con el perfil de observabilidad
+      # apagado, Alloy no existe y sin esto los nueve servicios
+      # reintentarian contra un endpoint muerto. Nombres verificados
+      # contra el spring-configuration-metadata.json de los jars.
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       VONAGE_API_KEY: ${VONAGE_API_KEY:-}
       VONAGE_API_SECRET: ${VONAGE_API_SECRET:-}
       SMTP_GMAIL_USER: ${SMTP_GMAIL_USER:-}
@@ -747,6 +789,13 @@ services:
       QUERY_DS_POOL_SIZE: "10"
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      # Interruptor de telemetria: con el perfil de observabilidad
+      # apagado, Alloy no existe y sin esto los nueve servicios
+      # reintentarian contra un endpoint muerto. Nombres verificados
+      # contra el spring-configuration-metadata.json de los jars.
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       # Eureka + JWT (sólo la pública: verifica, no emite)
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
@@ -813,6 +862,13 @@ services:
       QUERY_CATALOG_INTERNAL_TOKEN: ${QUERY_CATALOG_INTERNAL_TOKEN}
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      # Interruptor de telemetria: con el perfil de observabilidad
+      # apagado, Alloy no existe y sin esto los nueve servicios
+      # reintentarian contra un endpoint muerto. Nombres verificados
+      # contra el spring-configuration-metadata.json de los jars.
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8084; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -896,6 +952,13 @@ services:
       QUERY_CATALOG_INTERNAL_TOKEN: ${QUERY_CATALOG_INTERNAL_TOKEN}
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      # Interruptor de telemetria: con el perfil de observabilidad
+      # apagado, Alloy no existe y sin esto los nueve servicios
+      # reintentarian contra un endpoint muerto. Nombres verificados
+      # contra el spring-configuration-metadata.json de los jars.
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
     healthcheck:
       # The provisioner image installs curl (it talks to
       # the Docker socket via curl --unix-socket) but not
@@ -920,13 +983,21 @@ services:
   #   grafana  — dashboards. Datasources auto-provisioned; anonymous
   #              admin enabled for dev (http://localhost:3000).
   #
-  # Resource note: this block adds ~2GB of RAM on top of the app
-  # stack. To run the app lean without observability, comment this
-  # block out (the gateway's OTLP exporter will no-op with a warning),
-  # or split these services into a `docker-compose.observability.yml`
-  # overlay later.
+  # Estos cinco servicios están detrás del perfil `observability` y
+  # NO arrancan por defecto. Medido el 2026-08-08 en el servidor de
+  # pruebas: 883 MB entre los cinco, con Tempo llevándose 502 — más
+  # que auth-center y api-gateway juntos.
+  #
+  #   COMPOSE_PROFILES=local-only,observability docker compose up -d
+  #
+  # Y al apagarlos hay que poner SSO_TELEMETRY_ENABLED=false. El
+  # comentario anterior aquí afirmaba que el exporter "haría no-op con
+  # un warning" — no es cierto: los nueve servicios reintentan contra
+  # Alloy indefinidamente. Es el mismo bucle que dejó cdc-worker sin
+  # ClickHouse, 99 000 líneas de error en dos minutos.
   # ===========================================================================
   alloy:
+    profiles: ["observability"]
     image: grafana/alloy:latest
     container_name: sso-alloy
     restart: unless-stopped
@@ -964,6 +1035,7 @@ services:
       - loki
 
   tempo:
+    profiles: ["observability"]
     # Pinned — Tempo 3.0 removed the ingester/compactor architecture
     # this config (and its monolithic single-binary deployment) is
     # written for, replacing it with block-builder/live-store. 2.10.7
@@ -983,6 +1055,7 @@ services:
       - tempo-data:/var/tempo
 
   mimir:
+    profiles: ["observability"]
     image: grafana/mimir:latest
     container_name: sso-mimir
     restart: unless-stopped
@@ -994,6 +1067,7 @@ services:
       - mimir-data:/data/mimir
 
   loki:
+    profiles: ["observability"]
     image: grafana/loki:latest
     container_name: sso-loki
     restart: unless-stopped
@@ -1005,6 +1079,7 @@ services:
       - loki-data:/loki
 
   grafana:
+    profiles: ["observability"]
     image: grafana/grafana:latest
     container_name: sso-grafana
     restart: unless-stopped
