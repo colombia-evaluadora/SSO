@@ -148,7 +148,62 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
                   </Button>
                 </div>
               )}
+              {/* El microservicio va aquí, junto al UUID: es lo que
+                  decide qué query-service sirve la fila y qué
+                  prefijo lleva la URL, así que se decide antes de
+                  escribir el SQL, no después. Ocupa el hueco que
+                  dejó el campo "Tipo" al retirarse. */}
+              <div>
+                <label
+                  htmlFor="query-microservice"
+                  className="mb-1 block text-sm font-medium text-slate-700"
+                >
+                  Microservicio (kind=QUERY)
+                </label>
+                <select
+                  id="query-microservice"
+                  value={
+                    values.microserviceId == null
+                      ? ""
+                      : String(values.microserviceId)
+                  }
+                  onChange={(e) =>
+                    setField(
+                      "microserviceId",
+                      e.target.value === "" ? null : Number(e.target.value),
+                    )
+                  }
+                  className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                >
+                  <option value="">Sin binding (global)</option>
+                  {queryInstances.map((m) => (
+                    <option key={m.id} value={String(m.id)}>
+                      #{m.id} · {m.instanceName ?? m.serviceId}
+                      {m.dialect ? ` (${m.dialect})` : ""}
+                    </option>
+                  ))}
+                </select>
+                {queryInstances.length === 0 && !services.isLoading ? (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    No hay microservicios QUERY aprovisionados aún.
+                  </p>
+                ) : null}
+              </div>
             </div>
+            {/* La URL completa se muestra fuera de la rejilla, a lo
+                ancho: es la composición de microservicio + método +
+                plantilla, así que no pertenece a ninguno de los tres
+                campos por separado. */}
+            {values.microserviceId && values.pathTemplate ? (
+              <p className="mt-2 text-[11px] text-slate-500">
+                URL completa:{" "}
+                <code className="rounded bg-slate-100 px-1">
+                  {values.httpMethod} /&lt;request_uri&gt;
+                  {values.pathTemplate}
+                </code>{" "}
+                — el prefijo REQUEST_URI lo define el microservicio.
+              </p>
+            ) : null}
             <div className="h-3" />
             <label className="block text-sm">
               <span className="mb-1 block font-medium text-slate-700">
@@ -261,51 +316,6 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
               derivado del primer keyword del SQL. El dialecto lo hereda del
               microservicio seleccionado.
             </p>
-            <div className="h-3" />
-            <div>
-              <label
-                htmlFor="query-microservice"
-                className="mb-1 block text-sm font-medium text-slate-700"
-              >
-                Microservicio (kind=QUERY)
-              </label>
-              <select
-                id="query-microservice"
-                value={
-                  values.microserviceId == null ? "" : String(values.microserviceId)
-                }
-                onChange={(e) =>
-                  setField(
-                    "microserviceId",
-                    e.target.value === "" ? null : Number(e.target.value),
-                  )
-                }
-                className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-              >
-                <option value="">Sin binding (global)</option>
-                {queryInstances.map((m) => (
-                  <option key={m.id} value={String(m.id)}>
-                    #{m.id} · {m.instanceName ?? m.serviceId}
-                    {m.dialect ? ` (${m.dialect})` : ""}
-                  </option>
-                ))}
-              </select>
-              {queryInstances.length === 0 && !services.isLoading ? (
-                <p className="mt-1 text-[11px] text-slate-500">
-                  No hay microservicios QUERY aprovisionados aún.
-                </p>
-              ) : null}
-              {values.microserviceId ? (
-                <p className="mt-1 text-[11px] text-slate-500">
-                  URL completa:{" "}
-                  <code className="rounded bg-slate-100 px-1">
-                    /&lt;request_uri&gt;{values.pathTemplate ?? ""}
-                  </code>{" "}
-                  — el prefijo REQUEST_URI lo define el microservicio
-                  seleccionado arriba.
-                </p>
-              ) : null}
-            </div>
             <div className="h-3" />
             <div className="flex items-center gap-6">
               <label className="flex items-center gap-2 text-sm text-slate-700">
