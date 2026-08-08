@@ -1,9 +1,9 @@
 package com.co.eurekatic.ssoadmin.service;
 
-import com.co.eurekatic.common.entity.ExecutionMode;
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
 import com.co.eurekatic.common.entity.Role;
+import com.co.eurekatic.common.query.PathTemplateSyntax;
 import com.co.eurekatic.common.repository.MicroserviceRepository;
 import com.co.eurekatic.common.repository.QueryRepository;
 import com.co.eurekatic.common.repository.RoleRepository;
@@ -73,7 +73,6 @@ public class QueryAdminService {
         if (queryRepo.existsByUuid(uuid)) {
             throw new DuplicateException("Query", uuid);
         }
-        validateExecutionModePrefix(req);
         validatePathTemplate(req, null);
         validateOutParams(req);
         Query q = new Query();
@@ -105,7 +104,6 @@ public class QueryAdminService {
                 throw new DuplicateException("Query", uuid);
             }
         });
-        validateExecutionModePrefix(req);
         validatePathTemplate(req, q.getId());
         validateOutParams(req);
         copy(req, q, uuid);
@@ -209,16 +207,22 @@ public class QueryAdminService {
     private void copy(QueryRequest req, Query q, String uuid) {
         q.setUuid(uuid);
         q.setQuery(req.query());
-        q.setType(req.type());
+        // El dialecto lo declara el microservicio dueño, así que el
+        // admin no tiene por qué teclearlo. Antes el formulario lo
+        // pedía como "Tipo" describiéndolo como etiqueta opcional
+        // — y no lo era: TYPE elige el NamedParameterJdbcTemplate y
+        // la clave de bulkhead en query-service. Escribir "CHART"
+        // ahí, como sugería la ayuda, producía un 502 la primera
+        // vez que se invocaba la query.
+        q.setType(resolveDialect(req));
         q.setPublicEnd(req.publicEnd());
         q.setCaptcha(req.captcha());
         q.setDetail(req.detail());
         q.setAction(req.action());
         q.setStyle(req.style());
-        // V28: default SELECT preserves pre-V28 behavior.
-        q.setExecutionMode(req.executionMode() == null
-                ? ExecutionMode.DEFAULT
-                : req.executionMode().name());
+        // Derivado del SQL, no pedido al admin. Ver
+        // deriveExecutionMode para por qué el campo sobraba.
+        q.setExecutionMode(deriveExecutionMode(req.query()));
         // V27: nullable. When set, the unique partial index
         // (microservice_id, path_template) catches concurrent
         // insert races; the service-layer check below catches
@@ -265,11 +269,15 @@ public class QueryAdminService {
         if (outParams == null || outParams.isBlank()) {
             return;
         }
-        ExecutionMode mode = req.executionMode() == null
-                ? ExecutionMode.SELECT : req.executionMode();
-        if (mode != ExecutionMode.PROCEDURE) {
+        // El modo ya no lo declara el request: se deriva del SQL,
+        // así que aquí se pregunta a la misma función que decide.
+        // Preguntar a req.executionMode() dejaría esta validación
+        // mirando un campo que el formulario ya no envía.
+        String mode = deriveExecutionMode(req.query());
+        if (!"PROCEDURE".equals(mode)) {
             throw new IllegalArgumentException(
-                "outParamNames is only valid for executionMode=PROCEDURE; got: " + mode);
+                "outParamNames sólo aplica a procedimientos (SQL que empieza "
+                + "por CALL); este SQL se ejecuta como " + mode + ".");
         }
         // Each name must look like a placeholder and appear in the SQL.
         String sql = req.query() == null ? "" : req.query();
@@ -288,49 +296,6 @@ public class QueryAdminService {
                     "outParamNames entry " + token + " does not appear as a placeholder "
                     + "in the query SQL");
             }
-        }
-    }
-
-    /**
-     * V28 — assert the SQL's first keyword matches the declared
-     * execution mode. Saves the admin from a runtime "first
-     * keyword must be SELECT/WITH" 400 the first time the row is
-     * invoked. The check is intentionally lenient on whitespace
-     * and leading {@code --} comments (same strip logic the
-     * query-service guard uses, duplicated here so the failure
-     * message points at the save call).
-     */
-    private void validateExecutionModePrefix(QueryRequest req) {
-        ExecutionMode mode = req.executionMode() == null
-                ? ExecutionMode.SELECT
-                : req.executionMode();
-        String sql = req.query() == null ? "" : req.query().stripLeading();
-        while (sql.startsWith("--")) {
-            int nl = sql.indexOf('\n');
-            if (nl < 0) { sql = ""; break; }
-            sql = sql.substring(nl + 1).stripLeading();
-        }
-        if (sql.isEmpty()) {
-            // Empty SQL — let it through; the catalog will
-            // refuse to run it anyway, and we don't want to
-            // double-reject at save time.
-            return;
-        }
-        String first = sql.split("\\s+", 2)[0].toUpperCase();
-        boolean ok = switch (mode) {
-            case SELECT    -> first.equals("SELECT") || first.equals("WITH");
-            case PROCEDURE -> first.equals("CALL");
-            case FUNCTION  -> first.equals("SELECT"); // functions are called via SELECT
-        };
-        if (!ok) {
-            throw new IllegalArgumentException(
-                "executionMode=" + mode + " requires the query to start with "
-                + switch (mode) {
-                    case SELECT -> "SELECT or WITH";
-                    case PROCEDURE -> "CALL";
-                    case FUNCTION -> "SELECT";
-                }
-                + "; got: " + first);
         }
     }
 
@@ -356,12 +321,11 @@ public class QueryAdminService {
                 "pathTemplate requires microserviceId (queries without a "
                 + "backing microservice cannot have a URL-suffix)");
         }
-        if (tpl.contains("**")) {
-            throw new IllegalArgumentException(
-                "pathTemplate cannot contain '**' — that's the prefix "
-                + "microservice's job (MICROSERVICE.REQUEST_URI). Use a "
-                + "literal path here, e.g. /establecimiento/{id}.");
-        }
+        // Gramática compartida con query-service (módulo common):
+        // si cada lado tuviera su propia validación, una plantilla
+        // podría guardarse aquí y no casar allí — y ese fallo no
+        // produce error, produce 200 con lista vacía.
+        PathTemplateSyntax.validate(tpl);
         // Reject if another query in the same microservice already
         // claims this path. The DB partial unique index catches
         // the race; this catches the in-band duplicate for a
@@ -377,6 +341,63 @@ public class QueryAdminService {
                 throw new DuplicateException("Query.pathTemplate", tpl);
             }
         }
+    }
+
+    /**
+     * Deduce el modo de ejecución del primer keyword del SQL.
+     *
+     * <p>Antes esto era un campo del formulario y el backend se
+     * limitaba a comprobar que coincidiera con el SQL: se le pedía
+     * al admin un dato que el sistema ya podía leer, y luego se le
+     * reñía si no acertaba.
+     *
+     * <p>FUNCTION desaparece como modo. No aportaba comportamiento:
+     * {@code QueryService} lo trataba con el mismo {@code if} que
+     * SELECT (una función se invoca como {@code SELECT * FROM f()})
+     * y la validación le exigía el mismo primer keyword. Era una
+     * opción más que equivocar, sin efecto alguno.
+     *
+     * <p>Package-private y estático para poder probarlo sin montar
+     * el servicio con todos sus repositorios.
+     */
+    static String deriveExecutionMode(String rawSql) {
+        String sql = rawSql == null ? "" : rawSql.stripLeading();
+        // Misma tolerancia a comentarios iniciales que tenía
+        // validateExecutionModePrefix, al que sustituye.
+        while (sql.startsWith("--")) {
+            int nl = sql.indexOf('\n');
+            if (nl < 0) { sql = ""; break; }
+            sql = sql.substring(nl + 1).stripLeading();
+        }
+        if (sql.isEmpty()) {
+            throw new IllegalArgumentException("El SQL no puede estar vacío.");
+        }
+        String first = sql.split("\\s+", 2)[0].toUpperCase(java.util.Locale.ROOT);
+        if (first.equals("CALL")) {
+            return "PROCEDURE";
+        }
+        if (first.equals("SELECT") || first.equals("WITH")) {
+            return "SELECT";
+        }
+        throw new IllegalArgumentException(
+                "El SQL debe empezar por SELECT, WITH o CALL; empieza por '"
+                + first + "'. Para escribir o borrar datos usa una "
+                + "definición de escritura, no una query.");
+    }
+
+    /**
+     * Dialecto heredado del microservicio dueño. Sin microservicio
+     * se conserva el comportamiento previo: null, que
+     * {@code JdbcTemplateRegistry.resolve} interpreta como
+     * "postgres".
+     */
+    private String resolveDialect(QueryRequest req) {
+        if (req.microserviceId() == null) {
+            return null;
+        }
+        return microserviceRepo.findById(req.microserviceId())
+                .map(Microservice::getDialect)
+                .orElse(null);
     }
 
     private static String normalizePathTemplate(String tpl) {
