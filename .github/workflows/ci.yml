@@ -444,9 +444,28 @@ jobs:
     steps:
       - name: Fallar si algún job requerido falló o fue cancelado
         run: |
-          resultados='${{ join(needs.*.result, " ") }}'
-          echo "Resultados de los jobs: $resultados"
-          for r in $resultados; do
+          # Antes se hacía `join(needs.*.result, " ")` — falla en la
+          # validación previa del workflow porque las comillas DOBLES
+          # son string literals inválidos para el lexer de GitHub
+          # Actions (sólo acepta simples). Resultado: el workflow se
+          # parsea, ningún job se instancia, total_count=0 en la API.
+          #
+          # Aquí se enumera cada job uno a uno. Más largo, pero no
+          # depende de `join` ni de `toJSON`, y cada `needs.X.result`
+          # es una expresión trivial.
+          for r in \
+            '${{ needs.changes.result }}' \
+            '${{ needs.maven-common.result }}' \
+            '${{ needs.maven-auth-center.result }}' \
+            '${{ needs.maven-sso-admin.result }}' \
+            '${{ needs.maven-query-service.result }}' \
+            '${{ needs.maven-file-service.result }}' \
+            '${{ needs.maven-api-gateway.result }}' \
+            '${{ needs.maven-cdc.result }}' \
+            '${{ needs.admin-ui-typecheck.result }}' \
+            '${{ needs.admin-ui-test.result }}' \
+            '${{ needs.admin-ui-lint.result }}' \
+            '${{ needs.admin-ui-build.result }}'; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
               echo "::error::Al menos un job terminó en '$r'."
               exit 1
