@@ -51,7 +51,9 @@ public record QueryDefinition(
         Long microserviceId,
         String pathTemplate,
         ExecutionMode executionMode,
-        String outParamNames
+        String outParamNames,
+        /** V33 — verbo HTTP: GET, POST o PUT. Default POST. */
+        String httpMethod
 ) {
     /**
      * V31 — back-compat constructor for callers that pre-date
@@ -65,7 +67,7 @@ public record QueryDefinition(
                            Long microserviceId) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
-             null, ExecutionMode.SELECT, null);
+             null, ExecutionMode.SELECT, null, null);
     }
 
     /**
@@ -79,7 +81,7 @@ public record QueryDefinition(
                            String pathTemplate, ExecutionMode executionMode) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
-             pathTemplate, executionMode, null);
+             pathTemplate, executionMode, null, null);
     }
 
     public static QueryDefinition fromEntity(Query q) {
@@ -97,6 +99,7 @@ public record QueryDefinition(
                 m != null ? m.getId() : null,
                 q.getPathTemplate(),
                 ExecutionMode.fromString(q.getExecutionMode()),
-                q.getOutParamNames());
+                q.getOutParamNames(),
+                q.getHttpMethod());
     }
 }

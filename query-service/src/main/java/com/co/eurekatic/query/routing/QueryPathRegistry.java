@@ -70,8 +70,16 @@ public class QueryPathRegistry {
      * corresponde. PathPattern hace exactamente eso.
      */
     private static final PathPatternParser PARSER = new PathPatternParser();
-    private final AtomicReference<Map<String, String>> tableRef =
+    private final AtomicReference<Map<RouteKey, String>> tableRef =
             new AtomicReference<>(Map.of());
+
+    /**
+     * V33 — la clave del registro pasa de la plantilla sola a
+     * (verbo, plantilla). Es lo que permite que
+     * {@code GET /est/:ID} y {@code PUT /est/:ID} sean dos filas
+     * distintas sobre la misma ruta.
+     */
+    public record RouteKey(String method, String template) {}
     private final String instanceName;
     /**
      * V32 — resolved at boot via {@code /internal/whoami}.
@@ -159,7 +167,7 @@ public class QueryPathRegistry {
         // restart.
         resolveMyMicroserviceId();
         try {
-            Map<String, String> next = new LinkedHashMap<>();
+            Map<RouteKey, String> next = new LinkedHashMap<>();
             // V30+V32 — call the dedicated internal endpoint
             // /internal/pathTemplates (server-side filtered to
             // rows with a non-null pathTemplate). Auth is the
@@ -171,7 +179,13 @@ public class QueryPathRegistry {
             List<QueryDefinition> templates = catalog.fetchPathTemplates(id);
             for (QueryDefinition q : templates) {
                 if (q.pathTemplate() != null && !q.pathTemplate().isBlank()) {
-                    next.put(q.pathTemplate(), q.uuid());
+                    // Null cae a POST: es el verbo que tenían todas
+                    // las rutas antes de V33, así que una fila que
+                    // venga de un catálogo sin migrar sigue igual.
+                    String method = q.httpMethod() == null || q.httpMethod().isBlank()
+                            ? "POST"
+                            : q.httpMethod().trim().toUpperCase(java.util.Locale.ROOT);
+                    next.put(new RouteKey(method, q.pathTemplate()), q.uuid());
                 }
             }
             tableRef.set(Map.copyOf(next));
@@ -192,18 +206,16 @@ public class QueryPathRegistry {
      * catalog author can rely on declaration order — more
      * specific templates declared first).
      */
-    public Optional<Match> match(String path) {
+    public Optional<Match> match(String method, String path) {
         if (path == null || path.isEmpty()) {
             return Optional.empty();
         }
-        // The gateway forwards with the prefix already
-        // stripped, so the path arrives as
-        // "/<pathTemplate-suffix>" (e.g. "/establecimiento/42").
-        // Strip a trailing slash to keep the matcher happy
-        // with templates that don't have one.
-        Map<String, String> snapshot = tableRef.get();
-        for (Map.Entry<String, String> e : snapshot.entrySet()) {
-            Optional<Map<String, String>> vars = matchTemplate(e.getKey(), path);
+        Map<RouteKey, String> snapshot = tableRef.get();
+        for (Map.Entry<RouteKey, String> e : snapshot.entrySet()) {
+            if (!e.getKey().method().equals(method)) {
+                continue;
+            }
+            Optional<Map<String, String>> vars = matchTemplate(e.getKey().template(), path);
             if (vars.isPresent()) {
                 metrics.recordRegistryMatch(QueryMetrics.Match.HIT);
                 return Optional.of(new Match(e.getValue(), vars.get()));
@@ -211,6 +223,20 @@ public class QueryPathRegistry {
         }
         metrics.recordRegistryMatch(QueryMetrics.Match.MISS);
         return Optional.empty();
+    }
+
+    /**
+     * ¿Existe la ruta con OTRO verbo? Sirve para distinguir un 405
+     * de un 404: la URL existe, lo que no se admite es el método.
+     * Un 404 haría pensar que la ruta está mal escrita.
+     */
+    public boolean pathExistsWithAnotherMethod(String method, String path) {
+        if (path == null || path.isEmpty()) {
+            return false;
+        }
+        return tableRef.get().keySet().stream()
+                .filter(k -> !k.method().equals(method))
+                .anyMatch(k -> matchTemplate(k.template(), path).isPresent());
     }
 
     /**

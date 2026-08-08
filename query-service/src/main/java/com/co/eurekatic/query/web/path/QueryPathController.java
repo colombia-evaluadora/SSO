@@ -6,7 +6,9 @@ import com.co.eurekatic.query.routing.QueryPathRegistry;
 import com.co.eurekatic.query.web.QueryRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -75,11 +77,38 @@ public class QueryPathController {
      * etc. mappings first; this one only fires for paths
      * the legacy controllers don't claim.
      */
+    @GetMapping("/**")
+    public Map<String, Object> dispatchGet(
+            jakarta.servlet.http.HttpServletRequest request,
+            @RequestParam Map<String, String> queryParams) {
+        // Un GET no lleva cuerpo, así que no aporta :BODY.*. Que no
+        // exista el parámetro aquí es deliberado: si alguien manda
+        // un cuerpo en un GET, se ignora en vez de colarse como
+        // binds que la validación al guardar ya prohibió.
+        return dispatch(request, "GET", queryParams, null);
+    }
+
     @PostMapping("/**")
-    public Map<String, Object> dispatch(
+    public Map<String, Object> dispatchPost(
             jakarta.servlet.http.HttpServletRequest request,
             @RequestParam Map<String, String> queryParams,
             @RequestBody(required = false) Map<String, Object> body) {
+        return dispatch(request, "POST", queryParams, body);
+    }
+
+    @PutMapping("/**")
+    public Map<String, Object> dispatchPut(
+            jakarta.servlet.http.HttpServletRequest request,
+            @RequestParam Map<String, String> queryParams,
+            @RequestBody(required = false) Map<String, Object> body) {
+        return dispatch(request, "PUT", queryParams, body);
+    }
+
+    private Map<String, Object> dispatch(
+            jakarta.servlet.http.HttpServletRequest request,
+            String method,
+            Map<String, String> queryParams,
+            Map<String, Object> body) {
 
         String rawPath = (String) request.getAttribute(
                 org.springframework.web.servlet.HandlerMapping.PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE);
@@ -90,9 +119,19 @@ public class QueryPathController {
         // final — reassigning `fullPath` in place would not compile.
         final String fullPath = (rawPath == null || rawPath.isEmpty()) ? "/" : rawPath;
 
-        var match = registry.match(fullPath).orElseThrow(() ->
-                new ResponseStatusException(HttpStatus.NOT_FOUND,
-                        "No query registered for path: " + fullPath));
+        var match = registry.match(method, fullPath).orElseThrow(() -> {
+            // 405 y no 404 cuando la ruta existe con otro verbo: la
+            // URL está bien, lo que no se admite es el método. Un
+            // 404 mandaría a quien depura a revisar la ruta, que es
+            // justo donde no está el problema.
+            if (registry.pathExistsWithAnotherMethod(method, fullPath)) {
+                return new ResponseStatusException(HttpStatus.METHOD_NOT_ALLOWED,
+                        "La ruta " + fullPath + " existe pero no admite "
+                        + method);
+            }
+            return new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "No query registered for path: " + fullPath);
+        });
 
         Map<String, Object> params =
                 buildParams(match.pathVars(), queryParams, body);

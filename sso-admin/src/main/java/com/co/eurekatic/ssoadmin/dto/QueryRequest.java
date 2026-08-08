@@ -59,7 +59,13 @@ public record QueryRequest(
         Long                        microserviceId,
         @Size(max = 500)            String pathTemplate,
         ExecutionMode               executionMode,
-        @Size(max = 500)            String outParamNames
+        @Size(max = 500)            String outParamNames,
+        /**
+         * V33 — verbo HTTP: GET, POST o PUT. Null se trata como
+         * POST, que es el comportamiento anterior a V33, para que
+         * un cliente que no mande el campo siga funcionando igual.
+         */
+        @Size(max = 10)             String httpMethod
 ) {
 
     /** Back-compat constructor for callers that haven't migrated to V27/V28 yet. */
@@ -69,7 +75,7 @@ public record QueryRequest(
                         Long microserviceId) {
         this(id, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId, null,
-             ExecutionMode.SELECT, null);
+             ExecutionMode.SELECT, null, null);
     }
 
     /**
@@ -83,6 +89,21 @@ public record QueryRequest(
                         String pathTemplate, ExecutionMode executionMode) {
         this(id, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
-             pathTemplate, executionMode, null);
+             pathTemplate, executionMode, null, null);
+    }
+
+    /**
+     * V31 back-compat (sin httpMethod). Conserva la forma de
+     * 13 argumentos que los llamantes usaban antes de V33; el
+     * verbo cae a POST, que es lo que hacían todas las rutas.
+     */
+    public QueryRequest(Long id, String uuid, String query, String type,
+                        boolean publicEnd, boolean captcha,
+                        String detail, String action, String style,
+                        Long microserviceId, String pathTemplate,
+                        ExecutionMode executionMode, String outParamNames) {
+        this(id, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             pathTemplate, executionMode, outParamNames, null);
     }
 }

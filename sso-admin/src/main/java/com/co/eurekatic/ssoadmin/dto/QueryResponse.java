@@ -46,7 +46,9 @@ public record QueryResponse(
         Long microserviceId,
         String pathTemplate,
         ExecutionMode executionMode,
-        String outParamNames
+        String outParamNames,
+        /** V33 — verbo HTTP: GET, POST o PUT. Default POST. */
+        String httpMethod
 ) {
     public static QueryResponse fromEntity(Query q) {
         Microservice m = q.getMicroservice();
@@ -67,6 +69,7 @@ public record QueryResponse(
                 m != null ? m.getId() : null,
                 q.getPathTemplate(),
                 ExecutionMode.fromString(q.getExecutionMode()),
-                q.getOutParamNames());
+                q.getOutParamNames(),
+                q.getHttpMethod());
     }
 }
