@@ -23,26 +23,39 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class DottedParamBindingTest {
 
+    /**
+     * Los cuatro namespaces en una sola sentencia. Se comprueba a
+     * través de la sustitución y no de {@code getParameterNames()}
+     * porque ese accessor no es público — y de todas formas ésta
+     * es la comprobación que importa: cada nombre con punto produce
+     * UN placeholder, así que el punto no está partiendo el nombre.
+     */
     @Test
-    void dottedNamesParseAsASingleParameter() {
-        ParsedSql parsed = NamedParameterUtils.parseSqlStatement(
-                "SELECT * FROM t WHERE nombre = :PARAM.NOMBRE");
-
-        assertThat(parsed.getParameterNames()).containsExactly("PARAM.NOMBRE");
-    }
-
-    @Test
-    void allFourNamespacesParseInOneStatement() {
+    void allFourNamespacesParseAsOnePlaceholderEach() {
         ParsedSql parsed = NamedParameterUtils.parseSqlStatement(
                 "SELECT * FROM t "
                 + "WHERE municipio = :PARAM.MUNICIPIO "
                 + "  AND zona = :BODY.FILTROS.ZONA "
                 + "  AND owner = :CONTEXT.USER_ID "
                 + "LIMIT :QUERY.SIZE");
+        MapSqlParameterSource source = new MapSqlParameterSource()
+                .addValue("PARAM.MUNICIPIO", 404)
+                .addValue("BODY.FILTROS.ZONA", 214)
+                .addValue("CONTEXT.USER_ID", 42L)
+                .addValue("QUERY.SIZE", 20);
 
-        assertThat(parsed.getParameterNames()).containsExactly(
-                "PARAM.MUNICIPIO", "BODY.FILTROS.ZONA",
-                "CONTEXT.USER_ID", "QUERY.SIZE");
+        String sql = NamedParameterUtils.substituteNamedParameters(parsed, source);
+        Object[] values = NamedParameterUtils.buildValueArray(parsed, source, null);
+
+        assertThat(sql).isEqualTo(
+                "SELECT * FROM t "
+                + "WHERE municipio = ? "
+                + "  AND zona = ? "
+                + "  AND owner = ? "
+                + "LIMIT ?");
+        // El orden es el de aparición en la SQL: si el punto
+        // partiera un nombre, ni el número ni el orden cuadrarían.
+        assertThat(values).containsExactly(404, 214, 42L, 20);
     }
 
     @Test
