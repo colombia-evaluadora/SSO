@@ -6,6 +6,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.client.discovery.DiscoveryClient;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.client.RestClient;
 
 import java.util.List;
@@ -89,6 +91,35 @@ public class PathRegistryNotifier {
      * (a successful catalog mutation) is not affected.
      */
     public void invalidate() {
+        // Si hay transacción abierta, se espera al commit.
+        //
+        // Los llamantes (create/update/delete) son @Transactional y
+        // llaman aquí antes de que la transacción cierre, así que
+        // avisar en ese momento hace que query-service lea la base
+        // ANTES del commit y recargue el estado viejo: el registro
+        // se quedaba sin la fila recién guardada hasta el refresco
+        // periódico, 60s después.
+        //
+        // Se veía en los logs como una invalidación "exitosa" que
+        // reportaba el tamaño de antes — el peor tipo de fallo,
+        // porque parece que funcionó. Antes de arreglar el
+        // descubrimiento por Eureka esto quedaba tapado: la
+        // notificación no llegaba nunca y el refresco periódico
+        // acababa cubriéndolo.
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            doInvalidate();
+                        }
+                    });
+            return;
+        }
+        doInvalidate();
+    }
+
+    private void doInvalidate() {
         if (internalToken == null || internalToken.isBlank()) {
             // Same fail-closed posture as InternalTokenFilter
             // in sso-admin: empty token means the operator
