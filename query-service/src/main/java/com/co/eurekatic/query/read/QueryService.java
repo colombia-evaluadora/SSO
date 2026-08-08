@@ -1,6 +1,7 @@
 package com.co.eurekatic.query.read;
 
 import com.co.eurekatic.common.security.AuthPrincipal;
+import com.co.eurekatic.common.query.ParamNamespace;
 import com.co.eurekatic.query.catalog.CatalogClient;
 import com.co.eurekatic.query.catalog.QueryDefinition;
 import com.co.eurekatic.query.config.JdbcTemplateRegistry;
@@ -188,33 +189,39 @@ public class QueryService {
 
         MapSqlParameterSource params = new MapSqlParameterSource(req.params());
 
-        // V29 — caller context injection. Pulled from the JWT
-        // (AuthPrincipal.uid), NOT from the request body: the
-        // client can't forge its own userId because the JWT is
-        // HS256-signed with a key only auth-center knows.
+        // Inyección del contexto del llamante, sacada del JWT
+        // verificado (AuthPrincipal) y NO del cuerpo de la
+        // petición: el cliente no puede falsificar su userId
+        // porque la firma la controla auth-center.
         //
-        // The catalog author can write SQL like
-        //   CALL get_x(:caller_user_id, :caller_email)
-        // and the procedure receives the verified identity.
+        // El autor del catálogo escribe SQL como
+        //   CALL get_x(:CONTEXT.USER_ID, :CONTEXT.EMAIL)
+        // y el procedimiento recibe la identidad verificada.
         //
-        // Both params are optional: tokens minted before V29
-        // don't carry the uid claim, and the public endpoint
-        // is unauthenticated (no principal at all). In either
-        // case we DON'T add the named param — the procedure
-        // author is responsible for handling the missing case
-        // (e.g. "IF caller_user_id IS NULL THEN RAISE EXCEPTION
-        // 'unauthenticated'").
+        // El prefijo CONTEXT no es cosmético: es lo que distingue
+        // de un vistazo lo que controla el llamante (PARAM, QUERY,
+        // BODY) de lo que no. Antes estos valores se llamaban
+        // caller_* y vivían en el mismo mapa plano que el resto,
+        // así que leyendo una SQL no había forma de saber cuáles
+        // venían de fuera.
+        //
+        // Siguen siendo opcionales: los tokens anteriores a V29 no
+        // llevan claim uid, y el endpoint público no tiene
+        // principal. En ambos casos NO se añade el parámetro — el
+        // autor del procedimiento decide qué hacer con la ausencia
+        // (p. ej. "IF :CONTEXT.USER_ID IS NULL THEN RAISE
+        // EXCEPTION 'unauthenticated'").
         if (auth != null && auth.getPrincipal() instanceof AuthPrincipal p) {
             if (p.userId() != null) {
-                params.addValue("caller_user_id", p.userId());
+                params.addValue(ParamNamespace.CONTEXT + ".USER_ID", p.userId());
             }
             if (p.email() != null) {
-                params.addValue("caller_email", p.email());
+                params.addValue(ParamNamespace.CONTEXT + ".EMAIL", p.email());
             }
-            // V28 — caller roles injection. Two flavors so the
-            // procedure author can pick the convenient one:
-            //   :caller_roles        → "ADMIN,EVALUADOR"  (PL/pgSQL LIKE-friendly)
-            //   :caller_roles_array  → "{ADMIN,EVALUADOR}" (PostgreSQL text[] for ANY())
+            // Roles en dos formatos para que el autor elija el
+            // que le convenga:
+            //   :CONTEXT.ROLES        → "ADMIN,EVALUADOR"  (LIKE en PL/pgSQL)
+            //   :CONTEXT.ROLES_ARRAY  → "{ADMIN,EVALUADOR}" (text[] para ANY())
             String rolesCsv = p.roles() == null || p.roles().isEmpty()
                     ? ""
                     : String.join(",", p.roles());
@@ -223,30 +230,19 @@ public class QueryService {
                         ? ""
                         : String.join(",", p.roles()))
                     + "}";
-            params.addValue("caller_roles", rolesCsv);
-            params.addValue("caller_roles_array", rolesArray);
+            params.addValue(ParamNamespace.CONTEXT + ".ROLES", rolesCsv);
+            params.addValue(ParamNamespace.CONTEXT + ".ROLES_ARRAY", rolesArray);
         }
 
-        if (req.limit() != null) {
-            params.addValue("limit", req.limit());
-        }
-        if (req.offset() != null) {
-            params.addValue("offset", req.offset());
-        }
-
-        // V28 — LIMIT/OFFSET only on SELECT / FUNCTION.
-        // Stored procedures don't accept LIMIT/OFFSET clauses;
-        // ignoring the request body's pagination is the
-        // documented behavior.
+        // El SQL se ejecuta tal cual está en el catálogo.
+        //
+        // Antes se le concatenaba " LIMIT :limit" por detrás, así
+        // que lo que se ejecutaba no era lo que el autor veía en el
+        // formulario — y sólo en modo SELECT, ignorándose en
+        // silencio para PROCEDURE. La paginación ahora la escribe
+        // el autor con :QUERY.SIZE / :QUERY.OFFSET, lo que además
+        // le da control del dialecto y del orden de las cláusulas.
         String sql = def.query();
-        if ("SELECT".equals(mode) || "FUNCTION".equals(mode)) {
-            if (req.limit() != null) {
-                sql = sql + " LIMIT :limit";
-            }
-            if (req.offset() != null) {
-                sql = sql + " OFFSET :offset";
-            }
-        }
 
         // V33 — wrap the JDBC execution in a per-dialect
         // bulkhead. tryAcquirePermission() returns false

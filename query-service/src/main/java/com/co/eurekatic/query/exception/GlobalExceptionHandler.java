@@ -73,6 +73,24 @@ public class GlobalExceptionHandler {
                 "message", "falta el parámetro requerido '" + ex.getParameterName() + "'"));
     }
 
+    /**
+     * Claves del llamante que no son nombres de parámetro válidos,
+     * o que sólo se diferencian por la caja
+     * ({@code ?estado=a&ESTADO=b}). Las lanza
+     * {@code ParamNamespace}. Es un error de quien llama, no del
+     * servidor: 400, no 500.
+     *
+     * <p>Sin este handler la caza-todo de abajo las convertiría en
+     * 500 y el cliente no vería el mensaje, que es justo el que le
+     * dice qué escribir.
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, Object>> handleIllegalArgument(IllegalArgumentException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
+                "code", "BAD_REQUEST",
+                "message", ex.getMessage()));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleAny(Exception ex) {
         log.error("Unhandled error", ex);

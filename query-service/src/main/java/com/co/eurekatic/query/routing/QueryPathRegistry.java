@@ -1,5 +1,6 @@
 package com.co.eurekatic.query.routing;
 
+import com.co.eurekatic.common.query.PathTemplateSyntax;
 import com.co.eurekatic.query.catalog.CatalogClient;
 import com.co.eurekatic.query.catalog.QueryDefinition;
 import com.co.eurekatic.query.observability.QueryMetrics;
@@ -7,9 +8,11 @@ import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.server.PathContainer;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.util.AntPathMatcher;
+import org.springframework.web.util.pattern.PathPattern;
+import org.springframework.web.util.pattern.PathPatternParser;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,7 +50,26 @@ public class QueryPathRegistry {
 
     private final CatalogClient catalog;
     private final QueryMetrics metrics;
-    private final AntPathMatcher matcher = new AntPathMatcher();
+    /**
+     * PathPatternParser en vez de AntPathMatcher por dos razones.
+     *
+     * <p>La primera es correctitud: {@code matchAndExtract} devuelve
+     * las variables YA DECODIFICADAS. Con AntPathMatcher el valor
+     * llegaba percent-encoded hasta la SQL, así que
+     * {@code /establecimiento/PRUDENCIA%20DAZA} bindeaba el literal
+     * "PRUDENCIA%20DAZA" — y como la consulta usa LIKE, ese '%' hacía
+     * además de comodín. Resultado: 200 con lista vacía, nunca un
+     * error. Cualquier nombre con espacio o acento era inalcanzable.
+     *
+     * <p>La segunda es que es la API que usa el propio Spring MVC;
+     * AntPathMatcher está en retirada para matching de peticiones.
+     *
+     * <p>Se decodifica la VARIABLE EXTRAÍDA, no la ruta completa
+     * antes de casar: decodificar antes permitiría que un %2F dentro
+     * de un valor inyectara segmentos y casara una plantilla que no
+     * corresponde. PathPattern hace exactamente eso.
+     */
+    private static final PathPatternParser PARSER = new PathPatternParser();
     private final AtomicReference<Map<String, String>> tableRef =
             new AtomicReference<>(Map.of());
     private final String instanceName;
@@ -179,20 +201,37 @@ public class QueryPathRegistry {
         // "/<pathTemplate-suffix>" (e.g. "/establecimiento/42").
         // Strip a trailing slash to keep the matcher happy
         // with templates that don't have one.
-        String normalized = path.endsWith("/") && path.length() > 1
-                ? path.substring(0, path.length() - 1)
-                : path;
         Map<String, String> snapshot = tableRef.get();
         for (Map.Entry<String, String> e : snapshot.entrySet()) {
-            if (matcher.match(e.getKey(), normalized)) {
-                Map<String, String> vars = matcher
-                        .extractUriTemplateVariables(e.getKey(), normalized);
+            Optional<Map<String, String>> vars = matchTemplate(e.getKey(), path);
+            if (vars.isPresent()) {
                 metrics.recordRegistryMatch(QueryMetrics.Match.HIT);
-                return Optional.of(new Match(e.getValue(), vars));
+                return Optional.of(new Match(e.getValue(), vars.get()));
             }
         }
         metrics.recordRegistryMatch(QueryMetrics.Match.MISS);
         return Optional.empty();
+    }
+
+    /**
+     * Casa una plantilla {@code :VARIABLE} contra una ruta y
+     * devuelve las variables decodificadas.
+     *
+     * <p>Estático y package-private para poder probar la gramática
+     * y la decodificación sin levantar el contexto de Spring ni
+     * mockear el catálogo.
+     */
+    static Optional<Map<String, String>> matchTemplate(String template, String path) {
+        String normalized = path.endsWith("/") && path.length() > 1
+                ? path.substring(0, path.length() - 1)
+                : path;
+        PathPattern pattern = PARSER.parse(
+                PathTemplateSyntax.toBracePattern(template));
+        PathPattern.PathMatchInfo info =
+                pattern.matchAndExtract(PathContainer.parsePath(normalized));
+        return info == null
+                ? Optional.empty()
+                : Optional.of(info.getUriVariables());
     }
 
     public int size() {
