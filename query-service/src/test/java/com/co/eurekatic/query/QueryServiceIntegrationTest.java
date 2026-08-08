@@ -166,14 +166,21 @@ class QueryServiceIntegrationTest {
 
     @Test
     void postServiceFitWrapsRowsInEnvelope() throws Exception {
+        // La paginación la escribe el autor en el SQL. Antes el
+        // servicio concatenaba " LIMIT :limit" por detrás cuando el
+        // cuerpo traía `limit`, así que lo que se ejecutaba no era
+        // lo que el autor veía — y sólo en modo SELECT. Ahora el
+        // bind es explícito y el llamante lo alimenta como un
+        // parámetro más.
         when(catalogClient.fetchQuery(any(), eq("q2"))).thenReturn(
-                new QueryDefinition(3L, "q2", "SELECT id FROM users ORDER BY id",
+                new QueryDefinition(3L, "q2",
+                        "SELECT id FROM users ORDER BY id LIMIT :size",
                         "postgres", false, false, null, null, null));
 
         client.post().uri("/serviceFit")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenFor("alice", "USER"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("uuid", "q2", "params", Map.of(), "limit", 1))
+                .bodyValue(Map.of("uuid", "q2", "params", Map.of("size", 1)))
                 .exchange()
                 .expectStatus().isOk()
                 .expectBody(byte[].class)

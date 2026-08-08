@@ -3,41 +3,28 @@ package com.co.eurekatic.query.web.path;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Unit tests for {@link QueryPathController#flattenToPaths}.
+ * Cómo se arma el mapa de binds a partir de la petición.
  *
- * <p>The method is package-private precisely so this test can
- * drive it without a Spring context, a database, or a JWT —
- * the body→bind-name translation is pure data, and pinning
- * it here is the cheapest way to catch a regression in the
- * wire contract. The end-to-end dispatch path is exercised
- * separately by {@code QueryPathDispatcherIntegrationTest}.
- *
- * <p>Contract pinned by these tests:
- * <ul>
- *   <li>Top-level scalar fields bind as
- *       {@code body.<field>}.</li>
- *   <li>Nested objects recurse — every leaf becomes a
- *       dotted bind path, no depth limit.</li>
- *   <li>Arrays (and other non-Map values) are kept as-is
- *       and bound as a single parameter.</li>
- *   <li>Empty body returns an empty map (no parameter
- *       pollution from a missing body).</li>
- *   <li>Insertion order is preserved (LinkedHashMap out) —
- *       callers can rely on a deterministic iteration order
- *       when building a WHERE clause by hand.</li>
- * </ul>
+ * <p>Estos casos probaban antes {@code flattenToPaths}, un método
+ * privado del controller. El aplanado vive ahora en
+ * {@code ParamNamespace} (módulo common, con sus propios tests),
+ * así que aquí se ejercita a través de {@code buildParams}, que es
+ * la superficie que el controller usa de verdad: la mezcla de los
+ * tres orígenes que controla el llamante.
  */
 class QueryPathControllerTest {
 
     @Nested
-    class FlattenToPaths {
+    class BodyFlattening {
 
         @Test
         void topLevelScalarFieldsArePrefixedWithBody() {
@@ -46,140 +33,172 @@ class QueryPathControllerTest {
             body.put("size", 20);
             body.put("nombre", "jorge");
 
-            Map<String, Object> out = QueryPathController.flattenToPaths(body, "body");
+            Map<String, Object> out =
+                    QueryPathController.buildParams(Map.of(), Map.of(), body);
 
             assertThat(out).containsOnly(
-                    Map.entry("body.page", 1),
-                    Map.entry("body.size", 20),
-                    Map.entry("body.nombre", "jorge")
-            );
+                    Map.entry("BODY.PAGE", 1),
+                    Map.entry("BODY.SIZE", 20),
+                    Map.entry("BODY.NOMBRE", "jorge"));
         }
 
         @Test
         void nestedObjectsRecurseWithDottedPath() {
-            // The realistic example from the JavaDoc:
-            // {"filtros":{"regional":"x"}} → body.filtros.regional = "x"
-            Map<String, Object> body = Map.of(
-                    "filtros", Map.of("regional", "x")
-            );
+            Map<String, Object> body = Map.of("filtros", Map.of("regional", "x"));
 
-            Map<String, Object> out = QueryPathController.flattenToPaths(body, "body");
+            Map<String, Object> out =
+                    QueryPathController.buildParams(Map.of(), Map.of(), body);
 
-            assertThat(out).containsExactly(Map.entry("body.filtros.regional", "x"));
+            assertThat(out).containsExactly(Map.entry("BODY.FILTROS.REGIONAL", "x"));
         }
 
         @Test
         void arbitrarilyDeepNestingAllFlattened() {
-            // Three levels deep — the regression case for the old
-            // "drop with WARN" behavior, which silently dropped
-            // anything beyond the first level.
             Map<String, Object> body = Map.of(
-                    "filtros", Map.of(
-                            "metadata", Map.of(
-                                    "audit", Map.of("created_by", "sso")
-                            )
-                    )
-            );
+                    "a", Map.of("b", Map.of("c", Map.of("d", "hondo"))));
 
-            Map<String, Object> out = QueryPathController.flattenToPaths(body, "body");
+            Map<String, Object> out =
+                    QueryPathController.buildParams(Map.of(), Map.of(), body);
 
-            assertThat(out).containsExactly(
-                    Map.entry("body.filtros.metadata.audit.created_by", "sso")
-            );
+            assertThat(out).containsExactly(Map.entry("BODY.A.B.C.D", "hondo"));
         }
 
+        /**
+         * Los arrays se bindean enteros. Trocearlos por índice
+         * produciría nombres que nadie puede escribir en una SQL.
+         */
         @Test
         void arrayValuesAreKeptAsIs() {
-            // JDBC binds lists to IN(?) and array-:placeholders via
-            // the Postgres driver's multi-row support; we don't try
-            // to explode the array into individual parameters.
-            Map<String, Object> body = new LinkedHashMap<>();
-            body.put("tags", List.of("a", "b", "c"));
+            Map<String, Object> body = Map.of("tags", List.of("a", "b"));
 
-            Map<String, Object> out = QueryPathController.flattenToPaths(body, "body");
+            Map<String, Object> out =
+                    QueryPathController.buildParams(Map.of(), Map.of(), body);
 
-            assertThat(out).containsExactly(Map.entry("body.tags", List.of("a", "b", "c")));
+            assertThat(out).containsExactly(Map.entry("BODY.TAGS", List.of("a", "b")));
         }
 
         @Test
         void mixedScalarsAndNestedObjects() {
-            Map<String, Object> filtros = new LinkedHashMap<>();
-            filtros.put("regional", "norte");
-            filtros.put("estado", "activo");
-
             Map<String, Object> body = new LinkedHashMap<>();
-            body.put("filtros", filtros);
             body.put("page", 1);
-            body.put("size", 20);
+            body.put("filtros", Map.of("zona", 214));
 
-            Map<String, Object> out = QueryPathController.flattenToPaths(body, "body");
+            Map<String, Object> out =
+                    QueryPathController.buildParams(Map.of(), Map.of(), body);
 
-            assertThat(out).containsExactly(
-                    Map.entry("body.filtros.regional", "norte"),
-                    Map.entry("body.filtros.estado", "activo"),
-                    Map.entry("body.page", 1),
-                    Map.entry("body.size", 20)
-            );
+            assertThat(out)
+                    .containsEntry("BODY.PAGE", 1)
+                    .containsEntry("BODY.FILTROS.ZONA", 214);
         }
 
         @Test
-        void emptyBodyYieldsEmptyMap() {
-            assertThat(QueryPathController.flattenToPaths(Map.of(), "body"))
-                    .isEmpty();
+        void emptyBodyYieldsNoBodyParams() {
+            Map<String, Object> out =
+                    QueryPathController.buildParams(Map.of(), Map.of(), Map.of());
+
+            assertThat(out).isEmpty();
         }
 
         @Test
         void insertionOrderIsPreserved() {
-            // LinkedHashMap in → LinkedHashMap out. This matters
-            // because QueryService iterates the params map to bind
-            // OUT params onto a CallableStatement in declaration
-            // order, and procedure authors expect that order to
-            // match the order they wrote the params in the JSON.
             Map<String, Object> body = new LinkedHashMap<>();
-            body.put("z_first", 1);
-            body.put("a_second", 2);
-            body.put("m_third", 3);
+            body.put("z", 1);
+            body.put("a", 2);
+            body.put("m", 3);
 
-            Map<String, Object> out = QueryPathController.flattenToPaths(body, "body");
+            Map<String, Object> out =
+                    QueryPathController.buildParams(Map.of(), Map.of(), body);
 
-            assertThat(out.keySet())
-                    .containsExactly("body.z_first", "body.a_second", "body.m_third");
+            assertThat(new ArrayList<>(out.keySet()))
+                    .containsExactly("BODY.Z", "BODY.A", "BODY.M");
         }
 
-        @Test
-        void prefixCanBeCustomisedForUnitTesting() {
-            // The prefix parameter is exposed only because the
-            // recursion needs to thread the current path; verifying
-            // with a different prefix ensures tests aren't
-            // accidentally coupled to the public "body" choice.
-            Map<String, Object> body = Map.of("a", "1");
-
-            Map<String, Object> out = QueryPathController.flattenToPaths(body, "req");
-
-            assertThat(out).containsExactly(Map.entry("req.a", "1"));
-        }
-
+        /**
+         * Un null del JSON se conserva como bind: la SQL puede
+         * querer distinguir "no me mandaron nada" de "me mandaron
+         * vacío", y eso lo decide el autor, no el dispatcher.
+         */
         @Test
         void nullValuesArePreservedAsBindParameters() {
-            // A field with an explicit null should still bind —
-            // MapSqlParameterSource treats null as a real
-            // parameter (useful for procedures that interpret
-            // null as "argument not provided").
-            //
-            // We can't use Map.entry(k, v) to express the
-            // expected value: the JDK Map.entry() factory
-            // throws NullPointerException when EITHER the key
-            // or the value is null. Build the expected map
-            // directly with a LinkedHashMap entry and assert
-            // size + key/value pairs separately.
             Map<String, Object> body = new LinkedHashMap<>();
-            body.put("optional", null);
+            body.put("opcional", null);
 
-            Map<String, Object> out = QueryPathController.flattenToPaths(body, "body");
+            Map<String, Object> out =
+                    QueryPathController.buildParams(Map.of(), Map.of(), body);
 
-            assertThat(out).hasSize(1);
-            assertThat(out).containsKey("body.optional");
-            assertThat(out.get("body.optional")).isNull();
+            assertThat(out).containsKey("BODY.OPCIONAL");
+            assertThat(out.get("BODY.OPCIONAL")).isNull();
+        }
+    }
+
+    @Nested
+    class NamespaceIsolation {
+
+        @Test
+        void mergesTheThreeCallerSourcesUnderTheirNamespaces() {
+            Map<String, String> queryParams = new LinkedHashMap<>();
+            queryParams.put("size", "20");
+
+            Map<String, Object> params = QueryPathController.buildParams(
+                    Map.of("MUNICIPIO", "404"),
+                    queryParams,
+                    Map.of("filtros", Map.of("zona", 214)));
+
+            assertThat(params)
+                    .containsEntry("PARAM.MUNICIPIO", "404")
+                    .containsEntry("QUERY.SIZE", "20")
+                    .containsEntry("BODY.FILTROS.ZONA", 214);
+        }
+
+        /**
+         * Antes los query params PISABAN a las variables de ruta
+         * ({@code putAll(pathVars)} y luego
+         * {@code putAll(queryParams)}), así que una ruta declarada
+         * podía secuestrarse desde el query string. Con namespaces
+         * la colisión es imposible por construcción.
+         */
+        @Test
+        void queryParamsCannotOverridePathVariables() {
+            Map<String, Object> params = QueryPathController.buildParams(
+                    Map.of("NOMBRE", "delPath"),
+                    Map.of("NOMBRE", "delQueryString"),
+                    null);
+
+            assertThat(params)
+                    .containsEntry("PARAM.NOMBRE", "delPath")
+                    .containsEntry("QUERY.NOMBRE", "delQueryString");
+        }
+
+        @Test
+        void handlesNullBody() {
+            Map<String, Object> params = QueryPathController.buildParams(
+                    Map.of("ID", "1"), Map.of(), null);
+
+            assertThat(params).containsExactly(Map.entry("PARAM.ID", "1"));
+        }
+
+        @Test
+        void rejectsQueryParamsThatCollideByCase() {
+            Map<String, String> queryParams = new LinkedHashMap<>();
+            queryParams.put("estado", "a");
+            queryParams.put("ESTADO", "b");
+
+            assertThatThrownBy(() ->
+                    QueryPathController.buildParams(Map.of(), queryParams, null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("ESTADO");
+        }
+
+        /**
+         * Un guion rompería el parseo del bind en el SQL
+         * ({@code :QUERY.PAGE} seguido de {@code -SIZE} suelto), así
+         * que se rechaza al entrar en vez de producir SQL corrupto.
+         */
+        @Test
+        void rejectsQueryParamNamesThatCannotBeWrittenInSql() {
+            assertThatThrownBy(() -> QueryPathController.buildParams(
+                    Map.of(), Map.of("page-size", "20"), null))
+                    .isInstanceOf(IllegalArgumentException.class);
         }
     }
 }

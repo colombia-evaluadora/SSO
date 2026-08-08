@@ -42,6 +42,16 @@ public class GlobalExceptionHandler {
                 "message", ex.getReason() == null ? "Error en la solicitud" : ex.getReason()));
     }
 
+    /**
+     * Entrada inválida del llamante. Cubre también las claves que
+     * {@code ParamNamespace} rechaza: nombres que no se pueden
+     * escribir como bind en el SQL ({@code ?page-size=1}) y pares
+     * que sólo se diferencian por la caja
+     * ({@code ?estado=a&ESTADO=b}). Son errores de quien llama, no
+     * del servidor, y el mensaje es justo el que le dice qué
+     * escribir — por eso importa que salgan con 400 y no los trague
+     * la caza-todo de abajo como 500.
+     */
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleIllegal(IllegalArgumentException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(

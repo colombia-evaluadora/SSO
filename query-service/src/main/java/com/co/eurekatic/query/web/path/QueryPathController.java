@@ -1,5 +1,6 @@
 package com.co.eurekatic.query.web.path;
 
+import com.co.eurekatic.common.query.ParamNamespace;
 import com.co.eurekatic.query.read.QueryService;
 import com.co.eurekatic.query.routing.QueryPathRegistry;
 import com.co.eurekatic.query.web.QueryRequest;
@@ -38,23 +39,24 @@ import java.util.Map;
  * no template matches — that path simply doesn't exist in
  * the catalog.
  *
- * <p><b>Query params and body</b> are forwarded exactly
- * the way the legacy {@code /query} controller expects:
- * path variables from the template land in the params map
- * under their template names ({@code :id → params.id});
- * request query parameters ride alongside; the JSON body
- * (if any) is traversed and each leaf becomes a bind
- * parameter under a {@code body.}-prefixed dotted path.
- * A request like {@code {"filtros":{"regional":"x"}}}
- * becomes {@code body.filtros.regional = "x"} — the
- * catalog SQL/procedure binds it via
- * {@code :body.filtros.regional}. See {@link #flattenToPaths}
- * for the full contract.
+ * <p><b>Cada parámetro lleva el prefijo de su origen</b>, de
+ * modo que la SQL dice de dónde sale cada valor y los orígenes
+ * no pueden pisarse entre sí:
+ * <ul>
+ *   <li>{@code :PARAM.X} — variables de la plantilla, así que
+ *       {@code /establecimiento/:NOMBRE} bindea
+ *       {@code :PARAM.NOMBRE}</li>
+ *   <li>{@code :QUERY.X} — query string</li>
+ *   <li>{@code :BODY.X.Y} — cuerpo JSON, aplanado con puntos:
+ *       {@code {"filtros":{"zona":1}}} → {@code :BODY.FILTROS.ZONA}</li>
+ *   <li>{@code :CONTEXT.X} — del JWT verificado</li>
+ * </ul>
+ * Ver {@link com.co.eurekatic.common.query.ParamNamespace}.
  *
- * <p><b>Caller context</b> (V29/V28 — userId, email, roles)
- * is injected by {@link QueryService#execute} directly from
- * the SecurityContextHolder, exactly like the legacy
- * {@code /query} controller. Nothing on the request wire.
+ * <p><b>El contexto del llamante</b> (userId, email, roles) lo
+ * inyecta {@link QueryService#execute} desde el
+ * SecurityContextHolder, no desde la petición: es la única
+ * familia de parámetros que el cliente no puede fabricar.
  */
 @RestController
 public class QueryPathController {
@@ -92,16 +94,8 @@ public class QueryPathController {
                 new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "No query registered for path: " + fullPath));
 
-        Map<String, Object> params = new LinkedHashMap<>();
-        // Precedence: path vars → query params → body
-        // (dotted-path flattened). Same flattening rule as the
-        // legacy service execute(); a procedure author can read
-        // any of them under its expected name.
-        params.putAll(match.pathVars());
-        params.putAll(queryParams);
-        if (body != null) {
-            params.putAll(flattenToPaths(body, "body"));
-        }
+        Map<String, Object> params =
+                buildParams(match.pathVars(), queryParams, body);
 
         QueryRequest qr = new QueryRequest(
                 match.uuid(),
@@ -122,61 +116,38 @@ public class QueryPathController {
     }
 
     /**
-     * Traverse a JSON body and register each leaf as a bind
-     * parameter with a dotted path. The {@code body} prefix
-     * is reserved — the catalog SQL/procedure accesses the
-     * flattened params via {@code :body.<path.to.leaf>}.
+     * Arma el mapa de binds prefijando cada valor con su origen.
      *
-     * <p>Examples:
-     * <ul>
-     *   <li>{@code {"filtros": {"regional": "x"}}} →
-     *       {@code body.filtros.regional = "x"}</li>
-     *   <li>{@code {"page": 1}} → {@code body.page = 1}</li>
-     *   <li>{@code {"tags": ["a","b"]}} →
-     *       {@code body.tags = ["a","b"]} (arrays kept as-is;
-     *       JDBC binds the list to the parameter)</li>
-     * </ul>
+     * <p>Los tres orígenes que controla el llamante viven en
+     * namespaces separados, así que ya no pueden pisarse. Antes un
+     * {@code ?nombre=} machacaba silenciosamente a la variable de
+     * ruta {@code {nombre}} porque ambos escribían la misma clave,
+     * y por tanto una ruta declarada podía secuestrarse desde el
+     * query string.
      *
-     * <p>Why dots and not underscores? Two reasons:
-     * <ol>
-     *   <li><b>Property-access reads naturally</b> — the
-     *       SQL mirrors the JSON shape: {@code WHERE
-     *       regional = :body.filtros.regional} reads like
-     *       {@code row.filtros.regional}.</li>
-     *   <li><b>No name collisions</b> — underscore
-     *       flattening ({@code filtros_regional} vs
-     *       {@code filtros_regional_id}) creates ambiguous
-     *       bind names; dotted paths don't collide when
-     *       branches diverge.</li>
-     * </ol>
+     * <p>{@code CONTEXT.*} lo añade {@code QueryService} desde el
+     * JWT — deliberadamente fuera de aquí, porque nada que llegue
+     * en la petición debe poder inventárselo.
      *
-     * <p>Why the {@code body} prefix? Without it, a
-     * top-level field like {@code "id"} would bind as
-     * {@code :id} — clashing with the path variable
-     * extraction above ({@code params.putAll(match.pathVars())}
-     * is the same map). The prefix keeps body-derived
-     * bindings clearly separated from path/query params.
-     * Reserved name: a top-level {@code "body"} field in
-     * the request would bind as {@code body.body.foo} for
-     * any nested {@code foo} — verbose but unambiguous.
-     *
-     * <p>Visibility: package-private for direct unit testing
-     * by {@code QueryPathControllerTest}. Production code
-     * never calls this directly.
+     * <p>Package-private y estático para poder probar la mezcla sin
+     * montar MockMvc.
      */
-    static Map<String, Object> flattenToPaths(Map<String, Object> body, String prefix) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        for (var e : body.entrySet()) {
-            String key = prefix + "." + e.getKey();
-            Object val = e.getValue();
-            if (val instanceof Map<?, ?> nested) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> nestedMap = (Map<String, Object>) nested;
-                out.putAll(flattenToPaths(nestedMap, key));
-            } else {
-                out.put(key, val);
+    static Map<String, Object> buildParams(Map<String, String> pathVars,
+                                           Map<String, String> queryParams,
+                                           Map<String, Object> body) {
+        Map<String, Object> params = new LinkedHashMap<>();
+        // Las variables de ruta ya vienen validadas en MAYÚSCULA
+        // ASCII desde el catálogo, así que se prefijan sin volver a
+        // normalizar.
+        if (pathVars != null) {
+            for (Map.Entry<String, String> e : pathVars.entrySet()) {
+                params.put(ParamNamespace.PARAM + "." + e.getKey(), e.getValue());
             }
         }
-        return out;
+        ParamNamespace.putAll(params, ParamNamespace.QUERY, queryParams);
+        if (body != null) {
+            params.putAll(ParamNamespace.flatten(body, ParamNamespace.BODY));
+        }
+        return params;
     }
 }

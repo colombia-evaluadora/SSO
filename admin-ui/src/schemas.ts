@@ -169,9 +169,6 @@ export const appFormSchema = z.object({
  * mismatches; deeper SQL linting would just shadow whatever the
  * JDBC driver ends up complaining about.
  */
-export const EXECUTION_MODES = ["SELECT", "PROCEDURE", "FUNCTION"] as const;
-export type ExecutionMode = (typeof EXECUTION_MODES)[number];
-
 export const queryFormSchema = z
   .object({
     // V31 — UUID can be empty (the backend auto-generates one
@@ -184,7 +181,10 @@ export const queryFormSchema = z
       .refine((v) => v === "" || v.length >= 2, "Mínimo 2 caracteres")
       .default(""),
     query: z.string().min(1, "Requerido").max(10_000),
-    type: z.string().max(64).default(""),
+    // `type` (el dialecto) y `executionMode` ya no se piden: el
+    // backend los deriva. El dialecto se hereda del microservicio
+    // dueño, y el modo del primer keyword del SQL. Ver
+    // QueryAdminService.deriveExecutionMode.
     publicEnd: z.boolean().default(false),
     captcha: z.boolean().default(false),
     detail: z.string().max(20_000).default(""),
@@ -199,7 +199,6 @@ export const queryFormSchema = z
       })
       .nullable()
       .default(null),
-    executionMode: z.enum(EXECUTION_MODES).default("SELECT"),
     pathTemplate: z
       .string()
       .max(500)
@@ -227,12 +226,38 @@ export const queryFormSchema = z
         message: "Debe empezar con '/'",
       });
     }
-    if (v.pathTemplate != null && v.pathTemplate.includes("**")) {
+    if (v.pathTemplate != null && /[*?]/.test(v.pathTemplate)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["pathTemplate"],
-        message: "No puede contener '**' — eso es responsabilidad del prefijo del microservicio (REQUEST_URI)",
+        message:
+          "No puede contener comodines ('*' ni '?') — el prefijo con '**' lo aporta el microservicio (REQUEST_URI)",
       });
+    }
+    // La sintaxis {variable} se retiró: ahora es :VARIABLE en
+    // MAYÚSCULA, que es lo que se escribe también en el SQL como
+    // :PARAM.VARIABLE. El backend valida lo mismo (common:
+    // PathTemplateSyntax); esto es sólo para dar el error antes.
+    if (v.pathTemplate != null && /[{}]/.test(v.pathTemplate)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["pathTemplate"],
+        message:
+          "La sintaxis {variable} ya no se admite — usa :VARIABLE en MAYÚSCULA (ej /establecimiento/:NOMBRE)",
+      });
+    }
+    if (v.pathTemplate != null) {
+      for (const m of v.pathTemplate.matchAll(/:([^/]*)/g)) {
+        const name = m[1] ?? "";
+        if (!/^[A-Z][A-Z0-9_]*$/.test(name)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["pathTemplate"],
+            message: `':${name}' debe ir en MAYÚSCULA y usar sólo A-Z, 0-9 y '_'. Translitera acentos y eñe — ':ANIO', no ':AÑO'`,
+          });
+          break;
+        }
+      }
     }
     if (v.pathTemplate != null && v.microserviceId == null) {
       ctx.addIssue({

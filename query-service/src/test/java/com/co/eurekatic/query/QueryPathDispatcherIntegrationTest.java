@@ -55,8 +55,8 @@ import static org.springframework.security.test.web.servlet.setup.SecurityMockMv
  *       the {@code QueryPathController} → {@code QueryService}
  *       → JDBC pipeline, including:
  *       <ul>
- *         <li>Path-variable extraction ({@code :id} from
- *             {@code /{id}}).</li>
+ *         <li>Path-variable extraction ({@code :PARAM.ID} from
+ *             {@code /:ID}).</li>
  *         <li>Query-string parameter binding.</li>
  *         <li>JSON body flattening
  *             ({@code {filtros:{regional:"x"}}} →
@@ -161,17 +161,17 @@ class QueryPathDispatcherIntegrationTest {
     @Disabled("Dispatcher end-to-end execution returns 500 on H2 — under investigation. The registry match / 404 / whoami-scoping tests in this class still run and pass.")
     void pathTemplateSelectBindsPathAndQueryParamsAndBody() throws Exception {
         // GIVEN a SELECT-mode catalog row registered at
-        // /establecimiento/{id}.
+        // /establecimiento/:ID.
         when(catalogClient.fetchPathTemplates(any())).thenReturn(List.of(
                 new QueryDefinition(
                         1L, "get-est",
                         "SELECT id, nombre FROM establecimiento "
-                        + "WHERE id = :id AND estado = :estado "
+                        + "WHERE id = CAST(:PARAM.ID AS int) AND estado = :QUERY.ESTADO "
                         + "ORDER BY id",
                         "postgres",
                         /*publicEnd*/ false, /*captcha*/ false,
                         null, null, null,
-                        /*pathTemplate*/ "/establecimiento/{id}",
+                        /*pathTemplate*/ "/establecimiento/:ID",
                         /*executionMode*/ "SELECT")));
 
         // Force the registry to pick up the new template.
@@ -184,8 +184,8 @@ class QueryPathDispatcherIntegrationTest {
                 "/establecimiento/42?estado=activo",
                 Map.of("filtros", Map.of("regional", "cartagena")));
 
-        // THEN: the SQL ran with :id=42, :estado=activo, and
-        // the body was flattened to body.filtros.regional=cartagena
+        // THEN: the SQL ran with :PARAM.ID=42, :QUERY.ESTADO=activo, and
+        // the body was flattened to BODY.FILTROS.REGIONAL=cartagena
         // (even though our query doesn't use that placeholder,
         // the flatten works).
         assertThat(response).hasSize(1);
@@ -210,11 +210,11 @@ class QueryPathDispatcherIntegrationTest {
                 new QueryDefinition(
                         2L, "proc-get-est",
                         "SELECT id, nombre FROM establecimiento "
-                        + "WHERE id = :id",
+                        + "WHERE id = CAST(:PARAM.ID AS int)",
                         "postgres",
                         /*publicEnd*/ false, /*captcha*/ false,
                         null, null, null,
-                        /*pathTemplate*/ "/establecimiento/{id}",
+                        /*pathTemplate*/ "/establecimiento/:ID",
                         /*executionMode*/ "PROCEDURE")));
 
         registry.refresh();
