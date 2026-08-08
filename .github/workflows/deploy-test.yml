@@ -116,6 +116,7 @@ jobs:
     outputs:
       services: ${{ steps.pick.outputs.services }}
       any:      ${{ steps.pick.outputs.any }}
+      excluded: ${{ steps.pick.outputs.excluded }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -174,6 +175,24 @@ jobs:
             echo "services=[$SERVICIOS]" >> "$GITHUB_OUTPUT"
           fi
 
+          # Lista de TODOS los servicios del `matrix.include`, en el
+          # mismo formato JSON de clave-valor (`[{service: foo}, ...]`)
+          # que espera `strategy.matrix.exclude`. Si el push tocó
+          # `common/` o el pom raíz, `SERVICIOS` ya es TODOS, así que
+          # `excluded` queda `[]` y el `exclude` no quita nada.
+          # Si el push fue quirúrgico, los que faltan en `$SERVICIOS`
+          # van aquí.
+          EXCLUIDOS=""
+          for svc in eurekaserver auth-center api-gateway sso-admin notification-service hello-service file-service provisioner query-service cdc-capture cdc-worker; do
+            if echo ",$SERVICIOS," | grep -qE "(,|\")${svc}(,|\")"; then
+              : # entra en SERVICIOS: no excluir
+            else
+              EXCLUIDOS="${EXCLUIDOS:+$EXCLUIDOS,}{\"service\":\"${svc}\"}"
+            fi
+          done
+          echo "Quedan fuera de la build: [${EXCLUIDOS}]"
+          echo "excluded=[${EXCLUIDOS}]" >> "$GITHUB_OUTPUT"
+
   build-push:
     name: build-push (${{ matrix.service }})
     runs-on: ubuntu-latest
@@ -199,9 +218,11 @@ jobs:
     # aplican se saltan sin arrancar runner, así que no gastan
     # minutos. Ésa es la diferencia con filtrar dentro de los steps,
     # que sí arrancaría los 10 runners para no hacer nada.
-    if: >-
-      needs.changes.outputs.any == 'true'
-      && contains(fromJSON(needs.changes.outputs.services), matrix.service)
+    #
+    # NOTA: `strategy.matrix` debe declararse ANTES del `if:` que
+    # referencia `matrix.*`. Si `if:` aparece antes, el lexer de
+    # Actions no encuentra el contexto `matrix` y falla la validación
+    # previa del workflow — sin error visible, sólo `total_count: 0`.
     strategy:
       fail-fast: false
       matrix:
@@ -262,6 +283,15 @@ jobs:
             context: cdc-sync
             dockerfile: cdc-sync/cdc-worker/Dockerfile
             extra-contexts: 'repo=.'
+        # `exclude` filtra entradas del `include` arriba por claves.
+        # El job `changes` emite `excluded-services` (un array JSON con
+        # los servicios cuyo HEAD~1 vs HEAD no cambió). GitHub Actions
+        # lo lee de `${{ steps.pick.outputs.excluded }}` directamente,
+        # SIN referenciar `matrix.*` en un `if:` — eso es lo que
+        # actionlint rechaza con "context matrix not allowed here".
+        # Si la lista viene vacía, `exclude` filtra 0 entradas y todas
+        # las del `include` siguen construyendo.
+        exclude: ${{ fromJSON(needs.changes.outputs.excluded) }}
     steps:
       - uses: actions/checkout@v4
         with:
