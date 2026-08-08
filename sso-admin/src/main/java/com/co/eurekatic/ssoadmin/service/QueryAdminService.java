@@ -335,15 +335,22 @@ public class QueryAdminService {
         // claims this path. The DB partial unique index catches
         // the race; this catches the in-band duplicate for a
         // clearer 409 message.
-        boolean taken = queryRepo.existsByMicroservice_IdAndPathTemplate(
-                req.microserviceId(), tpl);
+        // V33 — la comprobación incluye el verbo. Sin él,
+        // GET /est/:ID se rechazaba como duplicado de un
+        // PUT /est/:ID existente, aunque el índice de BD sí los
+        // admite. El síntoma era un 409 imposible de entender
+        // desde el formulario.
+        String method = normalizeHttpMethod(req.httpMethod());
+        boolean taken = queryRepo.existsByMicroservice_IdAndPathTemplateAndHttpMethod(
+                req.microserviceId(), tpl, method);
         if (taken) {
             // exempt the row being updated
             if (excludeId == null
                     || queryRepo.findById(excludeId)
-                            .map(q -> !tpl.equals(q.getPathTemplate()))
+                            .map(q -> !(tpl.equals(q.getPathTemplate())
+                                    && method.equals(q.getHttpMethod())))
                             .orElse(true)) {
-                throw new DuplicateException("Query.pathTemplate", tpl);
+                throw new DuplicateException("Query.pathTemplate", method + " " + tpl);
             }
         }
     }

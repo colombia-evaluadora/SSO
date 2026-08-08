@@ -71,6 +71,19 @@ public interface QueryRepository extends JpaRepository<Query, Long> {
     boolean existsByMicroservice_IdAndPathTemplate(Long microserviceId, String pathTemplate);
 
     /**
+     * V33 — la unicidad incluye el verbo, así que
+     * {@code GET /est/:ID} y {@code PUT /est/:ID} pueden convivir.
+     *
+     * <p>Sustituye a la variante sin método en
+     * {@code QueryAdminService.validatePathTemplate}: con la de
+     * arriba, crear la segunda fila de una ruta que ya existía con
+     * otro verbo se rechazaba como duplicado aunque el índice de BD
+     * sí lo permitiera.
+     */
+    boolean existsByMicroservice_IdAndPathTemplateAndHttpMethod(
+            Long microserviceId, String pathTemplate, String httpMethod);
+
+    /**
      * V30 — every query whose {@code path_template} is non-null,
      * optionally filtered by microservice. The query-service
      * path-registry calls this through
