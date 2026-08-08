@@ -213,18 +213,64 @@ public class OpenApiAggregatorService {
             return;
         }
 
-        // Rewrite paths: for each gatewayPath declared, multiply each
-        // service-local path by the gateway prefix. The trailing /** (if
-        // any) is stripped from the gateway prefix when concatenating.
+        // Rewrite the service-local paths onto their gateway-facing
+        // form. A gatewayPaths entry means one of two different things
+        // and they must NOT be treated alike:
+        //
+        //   "/api/auth/**"  — a PREFIX. The gateway strips it and
+        //                     forwards the rest, so every service path
+        //                     appears underneath it.
+        //   "/getApiToken"  — an EXACT path. The gateway forwards it
+        //                     unchanged, so it maps to the identically
+        //                     named path on the service — it is not a
+        //                     prefix for anything.
+        //
+        // This used to cross-product every entry with every service
+        // path, which turned auth-center's 8 endpoints into 72 and
+        // invented routes that do not exist: /getApiToken/auth/logout,
+        // /myApps/getInfoUser, /api/auth/auth/logout. Swagger UI
+        // rendered all of them as if they were real.
         Map<String, Object> docPaths = (Map<String, Object>) doc.getOrDefault("paths", Map.of());
         for (String gatewayPath : mapping.gatewayPaths()) {
-            String prefix = stripWildcard(gatewayPath);
-            for (var entry : docPaths.entrySet()) {
-                String newPath = joinPath(prefix, entry.getKey());
-                // Last writer wins on path collision; tags disambiguate.
-                Map<String, Object> op = new LinkedHashMap<>((Map<String, Object>) entry.getValue());
-                attachTag(op, mapping.tagPrefix(), newPath);
-                paths.put(newPath, op);
+            if (isPrefix(gatewayPath)) {
+                String prefix = stripWildcard(gatewayPath);
+                // A prefix route is one of two shapes and the config
+                // does not say which, because gatewayPaths carries no
+                // StripPrefix value. We infer it:
+                //
+                //   pass-through — the gateway forwards the path
+                //     unchanged, so the downstream's own paths already
+                //     start with the prefix (/auth/** -> /auth/refresh).
+                //     Emit only those, unprefixed-again.
+                //   strip-prefix — the gateway removes the prefix before
+                //     forwarding, so no downstream path starts with it
+                //     (/api/auth/** -> /getApiToken). Emit prefix + path.
+                //
+                // Concatenating unconditionally produced doubled paths
+                // (/auth/auth/refresh) and, worse, glued every unrelated
+                // endpoint onto narrow prefixes
+                // (/internal/cache/getApiToken).
+                boolean passThrough = docPaths.keySet().stream()
+                        .anyMatch(p -> p.startsWith(prefix));
+                for (var entry : docPaths.entrySet()) {
+                    if (passThrough) {
+                        if (entry.getKey().startsWith(prefix)) {
+                            putPath(paths, mapping, entry.getKey(), entry.getValue());
+                        }
+                    } else {
+                        putPath(paths, mapping, joinPath(prefix, entry.getKey()), entry.getValue());
+                    }
+                }
+            } else {
+                // Exact route: only emit it when the service actually
+                // declares that path. Emitting it unconditionally would
+                // document an endpoint the downstream does not serve
+                // (e.g. /login is routed by the gateway but lives on a
+                // controller springdoc does not pick up).
+                Object op = docPaths.get(gatewayPath);
+                if (op != null) {
+                    putPath(paths, mapping, gatewayPath, op);
+                }
             }
         }
 
@@ -306,6 +352,31 @@ public class OpenApiAggregatorService {
         // first-iteration is enough for the gateway's
         // "send-the-doc-to-any-replica" load-balancing intent).
         return Optional.ofNullable(discovery.getInstances(serviceId).blockFirst());
+    }
+
+    /**
+     * True when a {@code gatewayPaths} entry is a prefix pattern
+     * ({@code /api/auth/**}) rather than an exact route
+     * ({@code /getApiToken}). Only prefixes get concatenated with the
+     * downstream's own paths.
+     */
+    private static boolean isPrefix(String p) {
+        return p != null && (p.endsWith("/**") || p.endsWith("/*"));
+    }
+
+    /**
+     * Add one rewritten path to the merged document, tagged with the
+     * owning service. Last writer wins on collision; the tag is what
+     * disambiguates two services exposing the same gateway path.
+     */
+    @SuppressWarnings("unchecked")
+    private static void putPath(Map<String, Object> paths,
+                                ServiceGatewayMapping mapping,
+                                String path,
+                                Object operations) {
+        Map<String, Object> op = new LinkedHashMap<>((Map<String, Object>) operations);
+        attachTag(op, mapping.tagPrefix(), path);
+        paths.put(path, op);
     }
 
     private static String stripWildcard(String p) {
