@@ -139,7 +139,7 @@ jobs:
           fi
           echo "Ficheros cambiados:"; echo "$CAMBIADOS" | sed 's/^/  /'
 
-          TODOS='"eurekaserver","auth-center","api-gateway","sso-admin","query-service","provisioner","notification-service","hello-service","cdc-capture","cdc-worker"'
+          TODOS='"eurekaserver","auth-center","api-gateway","sso-admin","query-service","file-service","provisioner","notification-service","hello-service","cdc-capture","cdc-worker"'
 
           # `common` y el pom raíz son dependencias de 7 de los 8
           # módulos, así que tocarlos obliga a reconstruir todo.
@@ -153,6 +153,7 @@ jobs:
             echo "$CAMBIADOS" | grep -q '^auth-center/'          && add auth-center
             echo "$CAMBIADOS" | grep -q '^sso-admin/'            && add sso-admin
             echo "$CAMBIADOS" | grep -q '^query-service/'        && add query-service
+            echo "$CAMBIADOS" | grep -q '^file-service/'         && add file-service
             echo "$CAMBIADOS" | grep -q '^provisioner/'          && add provisioner
             echo "$CAMBIADOS" | grep -q '^notification-service/' && add notification-service
             echo "$CAMBIADOS" | grep -q '^hello-service/'        && add hello-service
@@ -239,6 +240,10 @@ jobs:
           - service: query-service
             context: '.'
             dockerfile: query-service/Dockerfile
+            extra-contexts: ''
+          - service: file-service
+            context: '.'
+            dockerfile: file-service/Dockerfile
             extra-contexts: ''
           - service: provisioner
             context: '.'

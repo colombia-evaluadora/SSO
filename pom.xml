@@ -140,5 +140,6 @@
         <module>query-service</module>
         <module>provisioner</module>
         <module>notification-service</module>
+        <module>file-service</module>
     </modules>
 </project>

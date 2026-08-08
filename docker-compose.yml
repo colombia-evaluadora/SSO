@@ -1262,6 +1262,117 @@ services:
     ports:
       - "${BIND_IP:-0.0.0.0}:${CDC_WORKER_PORT:-58082}:8081"
 
+  # ===========================================================================
+  # Almacenamiento de objetos (perfil `storage`) — APAGADO POR DEFECTO
+  #
+  # Garage, no MinIO: ~100 MB de RSS frente a ~250. En una caja de 4 GB
+  # que ya iba a swap, esa diferencia cuenta.
+  #
+  # NO sustituye al bucket de producción (coleva-files, 277 GB en AWS).
+  # Es un entorno vacío para desarrollar sin tocar datos reales.
+  #
+  #   COMPOSE_PROFILES=local-only,storage docker compose up -d
+  # ===========================================================================
+  garage:
+    profiles: ["storage"]
+    image: dxflrs/garage:v1.0.1
+    container_name: sso-garage
+    restart: unless-stopped
+    volumes:
+      - ./docker/garage/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    ports:
+      - "${BIND_IP:-127.0.0.1}:${GARAGE_S3_PORT:-3900}:3900"
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  # Arranque en frío de Garage: sin layout asignado acepta conexiones
+  # pero rechaza cada PUT, con un error que no dice eso. El script es
+  # idempotente, así que puede correr en cada `up -d`.
+  garage-init:
+    profiles: ["storage"]
+    # Imagen propia: la oficial es `scratch` y no tiene shell con el que
+    # ejecutar los pasos condicionales del arranque en frío.
+    build:
+      context: ./docker/garage
+      dockerfile: Dockerfile.init
+    image: sso/garage-init:1.0.1
+    container_name: sso-garage-init
+    depends_on:
+      garage:
+        condition: service_healthy
+    # Comparte la pila de red del servidor. No es un atajo: la CLI de
+    # Garage sólo acepta un nodo remoto como `<node_id>@host:puerto`, y
+    # el id no se conoce hasta haber hablado con el nodo — un huevo y
+    # gallina. Dentro de su red, en cambio, vale el `rpc_public_addr`
+    # del toml (127.0.0.1:3901) sin id, que es exactamente lo que hace
+    # el `docker exec garage /garage …` de la documentación.
+    network_mode: "service:garage"
+    environment:
+      GARAGE_BUCKET: "${S3_BUCKET:-eval-col}"
+    volumes:
+      - ./docker/garage/garage.toml:/etc/garage.toml:ro
+      # La CLI se autentica ante el nodo con la clave que éste genera en
+      # su directorio de metadatos al arrancar por primera vez. En sólo
+      # lectura: aquí se lee, quien escribe es el servidor.
+      - garage-meta:/var/lib/garage/meta:ro
+    restart: "no"
+
+  # ===========================================================================
+  # file-service — traduce multipart a JSON para el catálogo.
+  #
+  # Sube cada parte binaria, la registra en TARCHIVO y sustituye el
+  # campo por su id conservando el nombre: `pdf=<binario>` se convierte
+  # en `pdf: 12`, que el procedimiento lee como :BODY.PDF.
+  #
+  # No va como filtro del api-gateway a propósito: eso pondría
+  # credenciales de S3 y subidas de decenas de MB en el camino crítico
+  # de la autenticación.
+  # ===========================================================================
+  file-service:
+    image: ${IMAGE_PREFIX:-eurekatic}/file-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
+    container_name: sso-file-service
+    restart: unless-stopped
+    depends_on:
+      eurekaserver:
+        condition: service_healthy
+    environment:
+      EUREKA_URL: "http://eurekaserver:8761/eureka"
+      FILES_DS_URL: "${FILES_DS_URL:-jdbc:postgresql://sso-postgres:5432/sso_db}"
+      FILES_DS_USERNAME: "${FILES_DS_USERNAME:-neondb_owner}"
+      FILES_DS_PASSWORD: "${FILES_DS_PASSWORD:-}"
+      FILES_SCHEMA: "${FILES_SCHEMA:-academico_test}"
+      # Apunta al gateway, no a query-service directo: así la petición
+      # reenviada pasa por las mismas reglas de autorización que
+      # cualquier otra. Este servicio no es una puerta trasera.
+      FILES_CATALOG_BASE_URL: "http://sso-api-gateway:8080/api"
+      # Vacío = AWS real. Con valor = Garage u otro compatible.
+      S3_ENDPOINT: "${S3_ENDPOINT:-}"
+      S3_BUCKET: "${S3_BUCKET:-eval-col}"
+      S3_ACCESS_KEY: "${S3_ACCESS_KEY:-}"
+      S3_SECRET_KEY: "${S3_SECRET_KEY:-}"
+      S3_PATH_STYLE: "${S3_PATH_STYLE:-true}"
+      S3_PUBLIC_BASE_URL: "${S3_PUBLIC_BASE_URL:-}"
+      # Sin límite, un cliente llena el disco: el servidor está al 85%.
+      FILES_MAX_FILE_SIZE: "${FILES_MAX_FILE_SIZE:-25MB}"
+      FILES_MAX_REQUEST_SIZE: "${FILES_MAX_REQUEST_SIZE:-30MB}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "sh", "-c", "exec 3<>/dev/tcp/localhost/8086; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
 volumes:
   postgres-data:
     # Named volume keeps the database across `docker compose down`
@@ -1282,5 +1393,9 @@ volumes:
     name: sso-grafana-data
   cdc-clickhouse-data:
     name: cdc-sync-clickhouse-data
+  garage-meta:
+    name: sso-garage-meta
+  garage-data:
+    name: sso-garage-data
   cdc-capture-offsets:
     name: cdc-sync-cdc-capture-offsets
