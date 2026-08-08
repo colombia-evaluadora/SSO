@@ -42,6 +42,16 @@ public class GlobalExceptionHandler {
                 "message", ex.getReason() == null ? "Error en la solicitud" : ex.getReason()));
     }
 
+    /**
+     * Entrada inválida del llamante. Cubre también las claves que
+     * {@code ParamNamespace} rechaza: nombres que no se pueden
+     * escribir como bind en el SQL ({@code ?page-size=1}) y pares
+     * que sólo se diferencian por la caja
+     * ({@code ?estado=a&ESTADO=b}). Son errores de quien llama, no
+     * del servidor, y el mensaje es justo el que le dice qué
+     * escribir — por eso importa que salgan con 400 y no los trague
+     * la caza-todo de abajo como 500.
+     */
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleIllegal(IllegalArgumentException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
@@ -71,24 +81,6 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
                 "code", "BAD_REQUEST",
                 "message", "falta el parámetro requerido '" + ex.getParameterName() + "'"));
-    }
-
-    /**
-     * Claves del llamante que no son nombres de parámetro válidos,
-     * o que sólo se diferencian por la caja
-     * ({@code ?estado=a&ESTADO=b}). Las lanza
-     * {@code ParamNamespace}. Es un error de quien llama, no del
-     * servidor: 400, no 500.
-     *
-     * <p>Sin este handler la caza-todo de abajo las convertiría en
-     * 500 y el cliente no vería el mensaje, que es justo el que le
-     * dice qué escribir.
-     */
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<Map<String, Object>> handleIllegalArgument(IllegalArgumentException ex) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
-                "code", "BAD_REQUEST",
-                "message", ex.getMessage()));
     }
 
     @ExceptionHandler(Exception.class)
