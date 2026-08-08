@@ -35,9 +35,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, test]
+    branches: [dev, test, main]
   push:
-    branches: [main, test]
+    branches: [dev, test, main]
 
 # Permisos mínimos: checks:read para comentar / attach; contents:read
 # para checkout. Los workflows no publican nada al registry en esta fase.

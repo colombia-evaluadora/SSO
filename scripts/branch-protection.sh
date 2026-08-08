@@ -112,8 +112,13 @@ apply_protection() {
     }'
 }
 
-apply_protection "main"
+# Las tres ramas del flujo dev → test → main quedan protegidas. Si se
+# puede empujar directo a cualquiera de ellas, el flujo se salta el
+# primer día con prisa — y `dev` es la que más lo necesita, porque es
+# la que despliega.
+apply_protection "dev"
 apply_protection "test"
+apply_protection "main"
 
 echo
-echo "✓ Listo. Próximas PRs contra 'main' o 'test' requieren los checks listados y 1 review."
+echo "✓ Listo. Próximas PRs contra 'dev', 'test' o 'main' requieren los checks listados y 1 review."
