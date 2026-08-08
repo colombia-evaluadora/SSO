@@ -161,6 +161,21 @@ BEGIN
     END IF;
 
     -- -----------------------------------------------------------------
+    -- 2a. Verificar que la FK_TLV_ZONA existe y esta activa en
+    --     TLISTA_VALOR. Asi no se delega al INSERT para que el caller
+    --     reciba el mensaje claro antes de cualquier escritura.
+    -- -----------------------------------------------------------------
+    IF NOT EXISTS (
+        SELECT 1 FROM academico_test.TLISTA_VALOR
+         WHERE PK_LISTA_VALOR = p_fk_lista_valor_zona
+           AND ACTIVE         = TRUE
+    ) THEN
+        RAISE EXCEPTION 'FK_TLV_ZONA (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lista_valor_zona
+            USING ERRCODE = '23503';
+    END IF;
+
+    -- -----------------------------------------------------------------
     -- 3. Validacion de unicidad por CODIGO (solo entre sedes activas).
     -- -----------------------------------------------------------------
     IF EXISTS (
@@ -372,6 +387,24 @@ BEGIN
     END IF;
 
     -- -----------------------------------------------------------------
+    -- 2a. Validacion de existencia y actividad de FK_TLV_ZONA si llega.
+    --     Se hace ANTES del UPDATE para no dejar un cambio parcial si
+    --     la FK no existe: con la verificacion previa, la operacion
+    --     falla de forma atomica sin escribir nada.
+    -- -----------------------------------------------------------------
+    IF p_fk_lista_valor_zona IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lista_valor_zona
+               AND ACTIVE = TRUE
+       )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_ZONA (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lista_valor_zona
+            USING ERRCODE = '23503';
+    END IF;
+
+    -- -----------------------------------------------------------------
     -- 2b. Validacion de unicidad de CODIGO contra otras sedes activas.
     --     Se excluye el propio PK para permitir reenviar el mismo CODIGO
     --     (es un no-op, no debe chocar consigo mismo).
@@ -401,82 +434,68 @@ BEGIN
     END IF;
 
     -- -----------------------------------------------------------------
-    -- 3. UPDATE granular. Cada IF aplica su propio UPDATE independiente
-    --    con MODIFIED_BY/MODIFIED_AT solo si el parametro llego con valor.
-    --    Asi: PATCH vacio no toca auditoria; PATCH parcial solo toca las
-    --    columnas que efectivamente cambiaron.
+    -- 3. UPDATE unico con deteccion granular de cambios.
+    --    Tecnica: se compara cada parametro contra el valor actual usando
+    --    IS DISTINCT FROM (NULL-safe). Si el parametro no llego (NULL)
+    --    o si coincide con el valor actual, no se cuenta como cambio.
+    --    Cualquier cambio efectivo enciende 'chg_*'; el OR de todos los
+    --    flags determina si MODIFIED_BY/MODIFIED_AT se actualizan.
+    --
+    --    Beneficios vs. el patron anterior (un UPDATE por columna):
+    --      * Una sola sentencia UPDATE => un solo registro en WAL, una
+    --        sola entrada en logs de aplicacion, una sola transaccion.
+    --      * MODIFIED_BY/MODIFIED_AT se setean UNA vez (no N veces) y
+    --        SOLO si al menos una columna efectiva cambio.
+    --      * PATCH vacio o PATCH con mismos valores no toca auditoria.
     -- -----------------------------------------------------------------
-    IF p_codigo IS NOT NULL THEN
-        UPDATE academico_test.TSEDE
-           SET CODIGO      = p_codigo,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_TSEDE = p_pk_sede;
-    END IF;
-
-    IF p_nombre IS NOT NULL THEN
-        UPDATE academico_test.TSEDE
-           SET NOMBRE      = p_nombre,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_TSEDE = p_pk_sede;
-    END IF;
-
-    IF p_fk_lista_valor_zona IS NOT NULL THEN
-        UPDATE academico_test.TSEDE
-           SET FK_TLV_ZONA = p_fk_lista_valor_zona,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_TSEDE = p_pk_sede;
-    END IF;
-
-    IF p_localidad IS NOT NULL THEN
-        UPDATE academico_test.TSEDE
-           SET LOCALIDAD   = COALESCE(NULLIF(TRIM(p_localidad), ''), ''),
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_TSEDE = p_pk_sede;
-    END IF;
-
-    IF p_comuna IS NOT NULL THEN
-        UPDATE academico_test.TSEDE
-           SET COMUNA      = COALESCE(NULLIF(TRIM(p_comuna), ''), ''),
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_TSEDE = p_pk_sede;
-    END IF;
-
-    IF p_barrio IS NOT NULL THEN
-        UPDATE academico_test.TSEDE
-           SET BARRIO      = COALESCE(NULLIF(TRIM(p_barrio), ''), ''),
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_TSEDE = p_pk_sede;
-    END IF;
-
-    IF p_direccion IS NOT NULL THEN
-        UPDATE academico_test.TSEDE
-           SET DIRECCION   = COALESCE(NULLIF(TRIM(p_direccion), ''), ''),
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_TSEDE = p_pk_sede;
-    END IF;
-
-    IF p_telefono IS NOT NULL THEN
-        UPDATE academico_test.TSEDE
-           SET TELEFONO    = COALESCE(NULLIF(TRIM(p_telefono), ''), ''),
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_TSEDE = p_pk_sede;
-    END IF;
-
-    IF p_georeferenciacion IS NOT NULL THEN
-        UPDATE academico_test.TSEDE
-           SET GEOREFERENCIACION = p_georeferenciacion,
-               MODIFIED_BY       = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT       = CURRENT_TIMESTAMP
-         WHERE PK_TSEDE = p_pk_sede;
-    END IF;
+    WITH current AS (
+        SELECT CODIGO, NOMBRE, FK_TLV_ZONA, LOCALIDAD, COMUNA, BARRIO,
+               DIRECCION, TELEFONO, GEOREFERENCIACION
+          FROM academico_test.TSEDE
+         WHERE PK_TSEDE = p_pk_sede
+    ),
+    cambios AS (
+        SELECT
+            (p_codigo            IS NOT NULL AND p_codigo            IS DISTINCT FROM current.CODIGO)            AS chg_codigo,
+            (p_nombre            IS NOT NULL AND p_nombre            IS DISTINCT FROM current.NOMBRE)            AS chg_nombre,
+            (p_fk_lista_valor_zona IS NOT NULL AND p_fk_lista_valor_zona IS DISTINCT FROM current.FK_TLV_ZONA)  AS chg_zona,
+            (p_localidad         IS NOT NULL AND p_localidad         IS DISTINCT FROM current.LOCALIDAD)         AS chg_localidad,
+            (p_comuna            IS NOT NULL AND p_comuna            IS DISTINCT FROM current.COMUNA)            AS chg_comuna,
+            (p_barrio            IS NOT NULL AND p_barrio            IS DISTINCT FROM current.BARRIO)            AS chg_barrio,
+            (p_direccion         IS NOT NULL AND p_direccion         IS DISTINCT FROM current.DIRECCION)         AS chg_direccion,
+            (p_telefono          IS NOT NULL AND p_telefono          IS DISTINCT FROM current.TELEFONO)          AS chg_telefono,
+            (p_georeferenciacion IS NOT NULL AND p_georeferenciacion IS DISTINCT FROM current.GEOREFERENCIACION) AS chg_georeferenciacion
+        FROM current
+    )
+    UPDATE academico_test.TSEDE t
+       SET CODIGO             = COALESCE(p_codigo,             t.CODIGO),
+           NOMBRE             = COALESCE(p_nombre,             t.NOMBRE),
+           FK_TLV_ZONA        = COALESCE(p_fk_lista_valor_zona, t.FK_TLV_ZONA),
+           LOCALIDAD          = COALESCE(NULLIF(TRIM(p_localidad), ''),  t.LOCALIDAD),
+           COMUNA             = COALESCE(NULLIF(TRIM(p_comuna),    ''),  t.COMUNA),
+           BARRIO             = COALESCE(NULLIF(TRIM(p_barrio),    ''),  t.BARRIO),
+           DIRECCION          = COALESCE(NULLIF(TRIM(p_direccion), ''),  t.DIRECCION),
+           TELEFONO           = COALESCE(NULLIF(TRIM(p_telefono),  ''),  t.TELEFONO),
+           GEOREFERENCIACION  = COALESCE(p_georeferenciacion,     t.GEOREFERENCIACION),
+           MODIFIED_BY        = CASE
+                                  WHEN (SELECT c.chg_codigo OR c.chg_nombre OR c.chg_zona
+                                             OR c.chg_localidad OR c.chg_comuna OR c.chg_barrio
+                                             OR c.chg_direccion OR c.chg_telefono OR c.chg_georeferenciacion
+                                            FROM cambios c)
+                                  THEN p_pk_usuario_solicitante::VARCHAR
+                                  ELSE t.MODIFIED_BY
+                                END,
+           MODIFIED_AT        = CASE
+                                  WHEN (SELECT c.chg_codigo OR c.chg_nombre OR c.chg_zona
+                                             OR c.chg_localidad OR c.chg_comuna OR c.chg_barrio
+                                             OR c.chg_direccion OR c.chg_telefono OR c.chg_georeferenciacion
+                                            FROM cambios c)
+                                  THEN CURRENT_TIMESTAMP
+                                  ELSE t.MODIFIED_AT
+                                END
+      FROM cambios c
+     WHERE t.PK_TSEDE = p_pk_sede
+       AND t.ACTIVE   = TRUE;
 
     RAISE NOTICE 'TSEDE actualizada: PK=%, autor=%', p_pk_sede, p_pk_usuario_solicitante;
 

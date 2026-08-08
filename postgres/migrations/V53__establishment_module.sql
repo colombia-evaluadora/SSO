@@ -199,6 +199,187 @@ BEGIN
     END IF;
 
     -- -----------------------------------------------------------------
+    -- 2a. Validacion de FKs obligatorias (no se delega al INSERT para
+    --     dar un mensaje claro al caller en vez del SQLSTATE '23503'
+    --     generico del DDL).
+    -- -----------------------------------------------------------------
+    IF NOT EXISTS (
+        SELECT 1 FROM academico_test.TMUNICIPIO
+         WHERE PK_TMUNICIPIO = p_fk_municipio
+    ) THEN
+        RAISE EXCEPTION 'FK_TMUNICIPIO (%) no existe en TMUNICIPIO', p_fk_municipio
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM academico_test.TPROPIEDAD_JURIDICA
+         WHERE PK_TPROPIEDAD_JURIDICA = p_fk_propiedad_juridica
+           AND ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'FK_TPROPIEDAD_JURIDICA (%) no existe o no esta activa en TPROPIEDAD_JURIDICA',
+            p_fk_propiedad_juridica
+            USING ERRCODE = '23503';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2b. Validacion de FKs opcionales contra TLISTA_VALOR.
+    --     Solo se validan las que llegaron con valor (no NULL).
+    --     Se valida existencia + ACTIVE=TRUE para mantener consistencia
+    --     con el resto de las funciones del modulo academico.
+    -- -----------------------------------------------------------------
+    IF p_fk_lista_valor_zona IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lista_valor_zona
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLISTA_VALOR_ZONA (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lista_valor_zona
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF p_fk_lv_calendario IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_calendario
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_CALENDARIO (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_calendario
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF p_fk_lv_idioma IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_idioma
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_IDIOMA (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_idioma
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF p_fk_lv_genero_est IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_genero_est
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_GENERO_EST (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_genero_est
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF p_fk_lv_regimen_catcosto IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_regimen_catcosto
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_REGIMEN_CATCOSTO (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_regimen_catcosto
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF p_fk_lv_rango_tarifa IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_rango_tarifa
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_RANGO_TARIFA (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_rango_tarifa
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF p_fk_lv_asociacion_nacional IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_asociacion_nacional
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_ASOCIACION_NACIONAL (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_asociacion_nacional
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF p_fk_lv_estado_establecimiento IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_estado_establecimiento
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_ESTADO_ESTABLECIMIENTO (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_estado_establecimiento
+            USING ERRCODE = '23503';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2c. Validacion de FK_TDISCAPACIDAD opcional.
+    -- -----------------------------------------------------------------
+    IF p_fk_discapacidad IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TDISCAPACIDAD
+             WHERE PK_TDISCAPACIDAD = p_fk_discapacidad
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TDISCAPACIDAD (%) no existe o no esta activa en TDISCAPACIDAD',
+            p_fk_discapacidad
+            USING ERRCODE = '23503';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2d. Validacion de FK_TFUNCIONARIO_RECTOR / SECRETARIA opcionales.
+    --     Ambos deben ser funcionarios activos.
+    -- -----------------------------------------------------------------
+    IF p_fk_funcionario_rector IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TFUNCIONARIO
+             WHERE PK_TFUNCIONARIO = p_fk_funcionario_rector
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TFUNCIONARIO_RECTOR (%) no existe o no esta activo en TFUNCIONARIO',
+            p_fk_funcionario_rector
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF p_fk_funcionario_secretaria IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TFUNCIONARIO
+             WHERE PK_TFUNCIONARIO = p_fk_funcionario_secretaria
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TFUNCIONARIO_SECRETARIA (%) no existe o no esta activo en TFUNCIONARIO',
+            p_fk_funcionario_secretaria
+            USING ERRCODE = '23503';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2e. Validacion de FK_TARCHIVO opcional.
+    -- -----------------------------------------------------------------
+    IF p_fk_archivo IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TARCHIVO
+             WHERE PK_TARCHIVO = p_fk_archivo
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TARCHIVO (%) no existe en TARCHIVO', p_fk_archivo
+            USING ERRCODE = '23503';
+    END IF;
+
+    -- -----------------------------------------------------------------
     -- 3. INSERT. Las FKs no validadas explicitamente aqui: si alguna no
     --    existe, el INSERT fallara con SQLSTATE '23503' (FK violation)
     --    y ese mensaje sera suficientemente claro para el caller.
@@ -750,270 +931,308 @@ BEGIN
     END IF;
 
     -- -----------------------------------------------------------------
-    -- 3. UPDATE. Cada IF arma el SET dinamicamente solo con las columnas
-    --    cuyos parametros llegaron con valor. Asi:
-    --      (a) si ningun parametro llega, no se ejecuta el UPDATE (no se
-    --          contamina MODIFIED_BY/MODIFIED_AT con PATCHes vacios);
-    --      (b) si llegan algunos, solo esas columnas se modifican
-    --          (PATCH granular real);
-    --      (c) si llega un FK invalido, el UPDATE falla con SQLSTATE 23503
-    --          y el mensaje del DDL es claro para el caller.
+    -- 2d. Validacion de FKs (solo si llegaron con valor no NULL).
+    --     Se hace ANTES del UPDATE para evitar cambios parciales: si
+    --     una FK nueva no existe, la operacion falla sin escribir
+    --     nada y con mensaje claro.
     -- -----------------------------------------------------------------
-    IF p_nit IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET NIT = p_nit,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
+    IF p_fk_municipio IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TMUNICIPIO
+             WHERE PK_TMUNICIPIO = p_fk_municipio
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TMUNICIPIO (%) no existe en TMUNICIPIO', p_fk_municipio
+            USING ERRCODE = '23503';
     END IF;
 
-    IF p_codigo IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET CODIGO = p_codigo,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
+    IF p_fk_propiedad_juridica IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TPROPIEDAD_JURIDICA
+             WHERE PK_TPROPIEDAD_JURIDICA = p_fk_propiedad_juridica
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TPROPIEDAD_JURIDICA (%) no existe o no esta activa en TPROPIEDAD_JURIDICA',
+            p_fk_propiedad_juridica
+            USING ERRCODE = '23503';
     END IF;
 
-    IF p_nombre IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET NOMBRE = p_nombre,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
+    IF p_fk_lista_valor_zona IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lista_valor_zona
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLISTA_VALOR_ZONA (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lista_valor_zona
+            USING ERRCODE = '23503';
     END IF;
 
-    IF p_fk_municipio IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TMUNICIPIO = p_fk_municipio,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
+    IF p_fk_lv_calendario IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_calendario
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_CALENDARIO (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_calendario
+            USING ERRCODE = '23503';
     END IF;
 
-    IF p_fk_lista_valor_zona IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TLISTA_VALOR_ZONA = p_fk_lista_valor_zona,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
+    IF p_fk_lv_idioma IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_idioma
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_IDIOMA (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_idioma
+            USING ERRCODE = '23503';
     END IF;
 
-    IF p_localidad IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET LOCALIDAD = p_localidad,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
+    IF p_fk_lv_genero_est IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_genero_est
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_GENERO_EST (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_genero_est
+            USING ERRCODE = '23503';
     END IF;
 
-    IF p_comuna IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET COMUNA = p_comuna,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
+    IF p_fk_discapacidad IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TDISCAPACIDAD
+             WHERE PK_TDISCAPACIDAD = p_fk_discapacidad
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TDISCAPACIDAD (%) no existe o no esta activa en TDISCAPACIDAD',
+            p_fk_discapacidad
+            USING ERRCODE = '23503';
     END IF;
 
-    IF p_barrio IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET BARRIO = p_barrio,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
+    IF p_fk_funcionario_rector IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TFUNCIONARIO
+             WHERE PK_TFUNCIONARIO = p_fk_funcionario_rector
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TFUNCIONARIO_RECTOR (%) no existe o no esta activo en TFUNCIONARIO',
+            p_fk_funcionario_rector
+            USING ERRCODE = '23503';
     END IF;
 
-    IF p_direccion IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET DIRECCION = p_direccion,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
+    IF p_fk_funcionario_secretaria IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TFUNCIONARIO
+             WHERE PK_TFUNCIONARIO = p_fk_funcionario_secretaria
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TFUNCIONARIO_SECRETARIA (%) no existe o no esta activo en TFUNCIONARIO',
+            p_fk_funcionario_secretaria
+            USING ERRCODE = '23503';
     END IF;
 
-    IF p_correo_electronico IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET CORREO_ELECTRONICO = p_correo_electronico,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
+    IF p_fk_lv_regimen_catcosto IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_regimen_catcosto
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_REGIMEN_CATCOSTO (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_regimen_catcosto
+            USING ERRCODE = '23503';
     END IF;
 
-    IF p_telefono IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET TELEFONO = p_telefono,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
+    IF p_fk_lv_rango_tarifa IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_rango_tarifa
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_RANGO_TARIFA (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_rango_tarifa
+            USING ERRCODE = '23503';
     END IF;
 
-    IF p_fax IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FAX = p_fax,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
+    IF p_fk_lv_asociacion_nacional IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_asociacion_nacional
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_ASOCIACION_NACIONAL (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_asociacion_nacional
+            USING ERRCODE = '23503';
     END IF;
 
-    IF p_idecol IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET IDECOL = p_idecol,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
+    IF p_fk_lv_estado_establecimiento IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_estado_establecimiento
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_ESTADO_ESTABLECIMIENTO (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_estado_establecimiento
+            USING ERRCODE = '23503';
     END IF;
 
-    IF p_pagina_web IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET PAGINA_WEB = p_pagina_web,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
+    IF p_fk_archivo IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TARCHIVO
+             WHERE PK_TARCHIVO = p_fk_archivo
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TARCHIVO (%) no existe en TARCHIVO', p_fk_archivo
+            USING ERRCODE = '23503';
     END IF;
 
-    IF p_fk_propiedad_juridica IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TPROPIEDAD_JURIDICA = p_fk_propiedad_juridica,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_resolucion_aprobacion IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET RESOLUCION_APROBACION = p_resolucion_aprobacion,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_licencia_funcionamiento IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET LICENCIA_FUNCIONAMIENTO = p_licencia_funcionamiento,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_fecha_licencia IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FECHA_LICENCIA = p_fecha_licencia,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_fk_lv_calendario IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TLV_CALENDARIO = p_fk_lv_calendario,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_fk_lv_idioma IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TLV_IDIOMA = p_fk_lv_idioma,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_fk_lv_genero_est IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TLV_GENERO_EST = p_fk_lv_genero_est,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_fk_discapacidad IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TDISCAPACIDAD = p_fk_discapacidad,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_talento IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET TALENTO = p_talento,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_etnias IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET ETNIAS = p_etnias,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_fk_funcionario_rector IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TFUNCIONARIO_RECTOR = p_fk_funcionario_rector,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_fk_funcionario_secretaria IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TFUNCIONARIO_SECRETARIA = p_fk_funcionario_secretaria,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_subsidio IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET SUBSIDIO = p_subsidio,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_fk_lv_regimen_catcosto IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TLV_REGIMEN_CATCOSTO = p_fk_lv_regimen_catcosto,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_fk_lv_rango_tarifa IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TLV_RANGO_TARIFA = p_fk_lv_rango_tarifa,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_fk_lv_asociacion_nacional IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TLV_ASOCIACION_NACIONAL = p_fk_lv_asociacion_nacional,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_fk_lv_estado_establecimiento IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TLV_ESTADO_ESTABLECIMIENTO = p_fk_lv_estado_establecimiento,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
-
-    IF p_fk_archivo IS NOT NULL THEN
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TARCHIVO = p_fk_archivo,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
-    END IF;
+    -- -----------------------------------------------------------------
+    -- 3. UPDATE unico con deteccion granular de cambios.
+    --    Tecnica: se compara cada parametro contra el valor actual usando
+    --    IS DISTINCT FROM (NULL-safe). Si el parametro no llego (NULL)
+    --    o si coincide con el valor actual, no se cuenta como cambio.
+    --    Cualquier cambio efectivo enciende 'chg_*'; el OR de todos los
+    --    flags determina si MODIFIED_BY/MODIFIED_AT se actualizan.
+    --
+    --    Beneficios vs. el patron anterior (un UPDATE por columna):
+    --      * Una sola sentencia UPDATE => un solo registro en WAL, una
+    --        sola entrada en logs de aplicacion, una sola transaccion.
+    --      * MODIFIED_BY/MODIFIED_AT se setean UNA vez (no N veces) y
+    --        SOLO si al menos una columna efectiva cambio.
+    --      * PATCH vacio o PATCH con mismos valores no toca auditoria.
+    -- -----------------------------------------------------------------
+    WITH current_row AS (
+        SELECT CODIGO, NIT, NOMBRE,
+               FK_TMUNICIPIO, FK_TLISTA_VALOR_ZONA,
+               LOCALIDAD, COMUNA, BARRIO, DIRECCION,
+               CORREO_ELECTRONICO, TELEFONO, FAX, IDECOL, PAGINA_WEB,
+               FK_TPROPIEDAD_JURIDICA,
+               RESOLUCION_APROBACION, LICENCIA_FUNCIONAMIENTO, FECHA_LICENCIA,
+               FK_TLV_CALENDARIO, FK_TLV_IDIOMA, FK_TLV_GENERO_EST,
+               FK_TDISCAPACIDAD, TALENTO, ETNIAS,
+               FK_TFUNCIONARIO_RECTOR, FK_TFUNCIONARIO_SECRETARIA, SUBSIDIO,
+               FK_TLV_REGIMEN_CATCOSTO, FK_TLV_RANGO_TARIFA,
+               FK_TLV_ASOCIACION_NACIONAL, FK_TLV_ESTADO_ESTABLECIMIENTO,
+               FK_TARCHIVO
+          FROM academico_test.TESTABLECIMIENTO
+         WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento
+    ),
+    cambios AS (
+        SELECT
+            (p_nit                     IS NOT NULL AND p_nit                     IS DISTINCT FROM current_row.NIT)                       AS chg_nit,
+            (p_codigo                  IS NOT NULL AND p_codigo                  IS DISTINCT FROM current_row.CODIGO)                    AS chg_codigo,
+            (p_nombre                  IS NOT NULL AND p_nombre                  IS DISTINCT FROM current_row.NOMBRE)                    AS chg_nombre,
+            (p_fk_municipio            IS NOT NULL AND p_fk_municipio            IS DISTINCT FROM current_row.FK_TMUNICIPIO)             AS chg_municipio,
+            (p_fk_lista_valor_zona     IS NOT NULL AND p_fk_lista_valor_zona     IS DISTINCT FROM current_row.FK_TLISTA_VALOR_ZONA)      AS chg_zona,
+            (p_localidad               IS NOT NULL AND p_localidad               IS DISTINCT FROM current_row.LOCALIDAD)                 AS chg_localidad,
+            (p_comuna                  IS NOT NULL AND p_comuna                  IS DISTINCT FROM current_row.COMUNA)                    AS chg_comuna,
+            (p_barrio                  IS NOT NULL AND p_barrio                  IS DISTINCT FROM current_row.BARRIO)                    AS chg_barrio,
+            (p_direccion               IS NOT NULL AND p_direccion               IS DISTINCT FROM current_row.DIRECCION)                 AS chg_direccion,
+            (p_correo_electronico      IS NOT NULL AND p_correo_electronico      IS DISTINCT FROM current_row.CORREO_ELECTRONICO)        AS chg_correo,
+            (p_telefono                IS NOT NULL AND p_telefono                IS DISTINCT FROM current_row.TELEFONO)                  AS chg_telefono,
+            (p_fax                     IS NOT NULL AND p_fax                     IS DISTINCT FROM current_row.FAX)                       AS chg_fax,
+            (p_idecol                  IS NOT NULL AND p_idecol                  IS DISTINCT FROM current_row.IDECOL)                    AS chg_idecol,
+            (p_pagina_web              IS NOT NULL AND p_pagina_web              IS DISTINCT FROM current_row.PAGINA_WEB)                AS chg_pagina_web,
+            (p_fk_propiedad_juridica   IS NOT NULL AND p_fk_propiedad_juridica   IS DISTINCT FROM current_row.FK_TPROPIEDAD_JURIDICA)    AS chg_propiedad,
+            (p_resolucion_aprobacion   IS NOT NULL AND p_resolucion_aprobacion   IS DISTINCT FROM current_row.RESOLUCION_APROBACION)     AS chg_resolucion,
+            (p_licencia_funcionamiento IS NOT NULL AND p_licencia_funcionamiento IS DISTINCT FROM current_row.LICENCIA_FUNCIONAMIENTO)   AS chg_licencia,
+            (p_fecha_licencia          IS NOT NULL AND p_fecha_licencia          IS DISTINCT FROM current_row.FECHA_LICENCIA)            AS chg_fecha_licencia,
+            (p_fk_lv_calendario        IS NOT NULL AND p_fk_lv_calendario        IS DISTINCT FROM current_row.FK_TLV_CALENDARIO)         AS chg_calendario,
+            (p_fk_lv_idioma            IS NOT NULL AND p_fk_lv_idioma            IS DISTINCT FROM current_row.FK_TLV_IDIOMA)             AS chg_idioma,
+            (p_fk_lv_genero_est        IS NOT NULL AND p_fk_lv_genero_est        IS DISTINCT FROM current_row.FK_TLV_GENERO_EST)         AS chg_genero_est,
+            (p_fk_discapacidad         IS NOT NULL AND p_fk_discapacidad         IS DISTINCT FROM current_row.FK_TDISCAPACIDAD)          AS chg_discapacidad,
+            (p_talento                 IS NOT NULL AND p_talento                 IS DISTINCT FROM current_row.TALENTO)                   AS chg_talento,
+            (p_etnias                  IS NOT NULL AND p_etnias                  IS DISTINCT FROM current_row.ETNIAS)                    AS chg_etnias,
+            (p_fk_funcionario_rector   IS NOT NULL AND p_fk_funcionario_rector   IS DISTINCT FROM current_row.FK_TFUNCIONARIO_RECTOR)     AS chg_rector,
+            (p_fk_funcionario_secretaria IS NOT NULL AND p_fk_funcionario_secretaria IS DISTINCT FROM current_row.FK_TFUNCIONARIO_SECRETARIA) AS chg_secretaria,
+            (p_subsidio                IS NOT NULL AND p_subsidio                IS DISTINCT FROM current_row.SUBSIDIO)                  AS chg_subsidio,
+            (p_fk_lv_regimen_catcosto  IS NOT NULL AND p_fk_lv_regimen_catcosto  IS DISTINCT FROM current_row.FK_TLV_REGIMEN_CATCOSTO)   AS chg_regimen,
+            (p_fk_lv_rango_tarifa      IS NOT NULL AND p_fk_lv_rango_tarifa      IS DISTINCT FROM current_row.FK_TLV_RANGO_TARIFA)       AS chg_rango,
+            (p_fk_lv_asociacion_nacional IS NOT NULL AND p_fk_lv_asociacion_nacional IS DISTINCT FROM current_row.FK_TLV_ASOCIACION_NACIONAL) AS chg_asociacion,
+            (p_fk_lv_estado_establecimiento IS NOT NULL AND p_fk_lv_estado_establecimiento IS DISTINCT FROM current_row.FK_TLV_ESTADO_ESTABLECIMIENTO) AS chg_estado_est,
+            (p_fk_archivo              IS NOT NULL AND p_fk_archivo              IS DISTINCT FROM current_row.FK_TARCHIVO)               AS chg_archivo
+        FROM current_row
+    )
+    UPDATE academico_test.TESTABLECIMIENTO t
+       SET NIT                            = COALESCE(p_nit,                          t.NIT),
+           CODIGO                         = COALESCE(p_codigo,                       t.CODIGO),
+           NOMBRE                         = COALESCE(p_nombre,                       t.NOMBRE),
+           FK_TMUNICIPIO                  = COALESCE(p_fk_municipio,                 t.FK_TMUNICIPIO),
+           FK_TLISTA_VALOR_ZONA           = COALESCE(p_fk_lista_valor_zona,          t.FK_TLISTA_VALOR_ZONA),
+           LOCALIDAD                      = COALESCE(p_localidad,                    t.LOCALIDAD),
+           COMUNA                         = COALESCE(p_comuna,                       t.COMUNA),
+           BARRIO                         = COALESCE(p_barrio,                       t.BARRIO),
+           DIRECCION                      = COALESCE(p_direccion,                    t.DIRECCION),
+           CORREO_ELECTRONICO             = COALESCE(p_correo_electronico,           t.CORREO_ELECTRONICO),
+           TELEFONO                       = COALESCE(p_telefono,                     t.TELEFONO),
+           FAX                            = COALESCE(p_fax,                          t.FAX),
+           IDECOL                         = COALESCE(p_idecol,                       t.IDECOL),
+           PAGINA_WEB                     = COALESCE(p_pagina_web,                   t.PAGINA_WEB),
+           FK_TPROPIEDAD_JURIDICA         = COALESCE(p_fk_propiedad_juridica,        t.FK_TPROPIEDAD_JURIDICA),
+           RESOLUCION_APROBACION          = COALESCE(p_resolucion_aprobacion,        t.RESOLUCION_APROBACION),
+           LICENCIA_FUNCIONAMIENTO        = COALESCE(p_licencia_funcionamiento,      t.LICENCIA_FUNCIONAMIENTO),
+           FECHA_LICENCIA                 = COALESCE(p_fecha_licencia,               t.FECHA_LICENCIA),
+           FK_TLV_CALENDARIO              = COALESCE(p_fk_lv_calendario,             t.FK_TLV_CALENDARIO),
+           FK_TLV_IDIOMA                  = COALESCE(p_fk_lv_idioma,                 t.FK_TLV_IDIOMA),
+           FK_TLV_GENERO_EST              = COALESCE(p_fk_lv_genero_est,             t.FK_TLV_GENERO_EST),
+           FK_TDISCAPACIDAD               = COALESCE(p_fk_discapacidad,              t.FK_TDISCAPACIDAD),
+           TALENTO                        = COALESCE(p_talento,                      t.TALENTO),
+           ETNIAS                         = COALESCE(p_etnias,                       t.ETNIAS),
+           FK_TFUNCIONARIO_RECTOR         = COALESCE(p_fk_funcionario_rector,        t.FK_TFUNCIONARIO_RECTOR),
+           FK_TFUNCIONARIO_SECRETARIA     = COALESCE(p_fk_funcionario_secretaria,    t.FK_TFUNCIONARIO_SECRETARIA),
+           SUBSIDIO                       = COALESCE(p_subsidio,                     t.SUBSIDIO),
+           FK_TLV_REGIMEN_CATCOSTO        = COALESCE(p_fk_lv_regimen_catcosto,       t.FK_TLV_REGIMEN_CATCOSTO),
+           FK_TLV_RANGO_TARIFA            = COALESCE(p_fk_lv_rango_tarifa,           t.FK_TLV_RANGO_TARIFA),
+           FK_TLV_ASOCIACION_NACIONAL     = COALESCE(p_fk_lv_asociacion_nacional,    t.FK_TLV_ASOCIACION_NACIONAL),
+           FK_TLV_ESTADO_ESTABLECIMIENTO  = COALESCE(p_fk_lv_estado_establecimiento, t.FK_TLV_ESTADO_ESTABLECIMIENTO),
+           FK_TARCHIVO                    = COALESCE(p_fk_archivo,                   t.FK_TARCHIVO),
+           MODIFIED_BY = CASE
+                            WHEN (SELECT c.chg_nit OR c.chg_codigo OR c.chg_nombre OR c.chg_municipio
+                                       OR c.chg_zona OR c.chg_localidad OR c.chg_comuna OR c.chg_barrio
+                                       OR c.chg_direccion OR c.chg_correo OR c.chg_telefono OR c.chg_fax
+                                       OR c.chg_idecol OR c.chg_pagina_web OR c.chg_propiedad
+                                       OR c.chg_resolucion OR c.chg_licencia OR c.chg_fecha_licencia
+                                       OR c.chg_calendario OR c.chg_idioma OR c.chg_genero_est
+                                       OR c.chg_discapacidad OR c.chg_talento OR c.chg_etnias
+                                       OR c.chg_rector OR c.chg_secretaria OR c.chg_subsidio
+                                       OR c.chg_regimen OR c.chg_rango OR c.chg_asociacion
+                                       OR c.chg_estado_est OR c.chg_archivo
+                                  FROM cambios c)
+                            THEN p_pk_usuario_solicitante::VARCHAR
+                            ELSE t.MODIFIED_BY
+                          END,
+           MODIFIED_AT = CASE
+                            WHEN (SELECT c.chg_nit OR c.chg_codigo OR c.chg_nombre OR c.chg_municipio
+                                       OR c.chg_zona OR c.chg_localidad OR c.chg_comuna OR c.chg_barrio
+                                       OR c.chg_direccion OR c.chg_correo OR c.chg_telefono OR c.chg_fax
+                                       OR c.chg_idecol OR c.chg_pagina_web OR c.chg_propiedad
+                                       OR c.chg_resolucion OR c.chg_licencia OR c.chg_fecha_licencia
+                                       OR c.chg_calendario OR c.chg_idioma OR c.chg_genero_est
+                                       OR c.chg_discapacidad OR c.chg_talento OR c.chg_etnias
+                                       OR c.chg_rector OR c.chg_secretaria OR c.chg_subsidio
+                                       OR c.chg_regimen OR c.chg_rango OR c.chg_asociacion
+                                       OR c.chg_estado_est OR c.chg_archivo
+                                  FROM cambios c)
+                            THEN CURRENT_TIMESTAMP
+                            ELSE t.MODIFIED_AT
+                          END
+      FROM cambios c
+     WHERE t.PK_ESTABLECIMIENTO = p_pk_establecimiento
+       AND t.ACTIVE             = TRUE;
 
     -- -----------------------------------------------------------------
     -- 4. Reporte y retorno.
