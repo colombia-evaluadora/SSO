@@ -56,8 +56,26 @@ Y la propiedad de seguridad resultante es mejor que cualquier alternativa que se
 |---|---|---|
 | 1 | Verbos soportados: `GET`, `POST`, `PUT`. `DELETE` no | Soportarlo — ver abajo |
 | 2 | Los tres verbos despachan al mismo camino. Lo que la fila hace lo decide su SQL | Enrutar las escrituras por `WriteService` — innecesario: los procedimientos ya pasan |
-| 3 | `rejectIfMutating` no se toca | Relajarlo para POST/PUT — permitiría DML escrito a mano, que hoy es imposible por construcción |
-| 4 | `HTTP_METHOD` entra con default `POST` | Migrar filas — innecesario, el default preserva el comportamiento actual |
+| 3 | El campo SQL acepta `INSERT`/`UPDATE` directo, en filas atadas a `POST` o `PUT` | Obligar a paquetes o a filas tabla+columnas — decisión del dueño del sistema, tomada el 2026-08-08 |
+| 4 | El permiso se ata al **modo derivado**, no al método | Relajar `rejectIfMutating` para POST/PUT — con default `POST`, dejaría sin guardia a todas las filas existentes de golpe |
+| 5 | `HTTP_METHOD` entra con default `POST` | Migrar filas — innecesario, el default preserva el comportamiento actual |
+
+### Cómo se concede el permiso de escribir sin desproteger lo existente
+
+Relajar `rejectIfMutating` "cuando el método es POST o PUT" parece lo directo, y es una trampa: `HTTP_METHOD` entra con default `POST`, así que **todas las filas que existen hoy pasarían a admitir SQL mutante en el mismo despliegue**. Un cambio de configuración se convertiría en una ampliación silenciosa de privilegios sobre 5 filas que nadie tocó.
+
+En su lugar se extiende la derivación de modo de la tanda 1, que ya lee el primer keyword:
+
+| Primer keyword | Modo derivado | ¿Pasa por `rejectIfMutating`? |
+|---|---|---|
+| `SELECT` / `WITH` | `SELECT` | sí — igual que hoy |
+| `CALL` | `PROCEDURE` | no — igual que hoy |
+| `INSERT` / `UPDATE` | `DML` (nuevo) | no, y **exige** método `POST` o `PUT` |
+| cualquier otro | — | rechazado al guardar |
+
+Con esto, una fila `SELECT` sigue tan protegida como hoy y el permiso alcanza únicamente a las filas donde el autor escribió DML deliberadamente. `rejectIfMutating` no se relaja: sigue aplicándose íntegro en su brazo.
+
+El último renglón mantiene el DDL fuera del sistema. `DELETE`, `DROP`, `ALTER`, `TRUNCATE` y `GRANT` se rechazan al guardar, que es la misma línea que ya traza `WriteService` (su enum sólo admite `INSERT` y `UPDATE`, nunca DDL).
 
 **Por qué `DELETE` sigue fuera.** No por un impedimento técnico —un `CALL paquete.borrar_x(...)` funcionaría igual que cualquier otro procedimiento— sino porque es lo que se decidió: mantener el verbo fuera evita que la URL sugiera un borrado directo sobre tablas. Si más adelante hace falta, el trabajo es añadirlo a la lista de verbos válidos y nada más.
 
@@ -105,10 +123,22 @@ Una ruta registrada a la que se llama con un verbo que no tiene fila responde **
 
 El `@GetMapping("/**")` no se traga los endpoints de actuator: su handler mapping tiene mayor precedencia que el de los controllers. Conviene un test que lo fije, porque es de las cosas que un cambio de versión rompe en silencio.
 
-### D. Validación al guardar
+### D. Ejecución de una fila `DML`
 
-- El método debe ser uno de los tres.
-- Un `GET` cuyo SQL mencione `:BODY.` se rechaza: un GET no lleva cuerpo, así que ese bind nunca tendría valor. Es el mismo criterio que la derivación de la tanda 1 — mover el error al momento de guardar, donde hay un humano mirando, en vez de a la primera petición real.
+Una fila `SELECT` o `PROCEDURE` se ejecuta con `jdbc.query(...)` y devuelve filas. Una fila `DML` no devuelve filas: se ejecuta con `jdbc.update(...)` y la respuesta es
+
+```json
+{ "rowsAffected": 1 }
+```
+
+`INSERT … RETURNING` queda fuera de alcance: `update()` ejecuta la sentencia pero descarta las filas devueltas. Detectar `RETURNING` a base de buscar la palabra en el texto sería una heurística que falla en cuanto aparezca dentro de un literal de cadena, y prefiero una regla predecible a una que acierta el 95% de las veces. Quien necesite recuperar la fila insertada tiene dos caminos que ya funcionan: una función del paquete invocada con `SELECT`, o un procedimiento con OUT params.
+
+### E. Validación al guardar
+
+- El método debe ser `GET`, `POST` o `PUT`.
+- El primer keyword del SQL debe ser `SELECT`, `WITH`, `CALL`, `INSERT` o `UPDATE`. Cualquier otro —`DELETE`, `DROP`, `ALTER`, `TRUNCATE`, `GRANT`…— se rechaza con un mensaje que dice qué se admite.
+- Una fila `DML` atada a `GET` se rechaza: un GET no debe modificar nada, y además no lleva cuerpo del que sacar los valores.
+- Un `GET` cuyo SQL mencione `:BODY.` se rechaza: ese bind nunca tendría valor. Mismo criterio que la derivación de la tanda 1 — mover el error al momento de guardar, donde hay un humano mirando, en vez de a la primera petición real.
 - La unicidad `(microservicio, ruta, método)` la sigue garantizando el índice de BD, igual que hoy.
 
 ### E. Formulario
