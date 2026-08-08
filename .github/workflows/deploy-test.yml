@@ -90,9 +90,93 @@ env:
   IMAGE_PREFIX: ghcr.io/colombia-evaluadora/sso
 
 jobs:
+  # ───────── Qué imágenes hay que reconstruir ─────────
+  #
+  # Antes se construían y subían las 10 SIEMPRE. Ése era el motivo real
+  # de que un cambio en un formulario reiniciara el gateway: si las 10
+  # imágenes se republican, compose ve que las 10 cambiaron y recrea
+  # los 10 contenedores.
+  #
+  # No hace falta pasarle una lista de servicios a compose. Basta con
+  # no republicar lo que no cambió: `docker compose up -d` sólo recrea
+  # contenedores cuya imagen o configuración cambió, así que el
+  # comportamiento correcto sale solo.
+  #
+  # El diff se calcula contra HEAD~1 porque este workflow corre sobre
+  # un push ya integrado: en `dev`, HEAD~1 es la punta anterior de la
+  # rama, que es exactamente el punto de comparación que queremos.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'dev')
+    outputs:
+      services: ${{ steps.pick.outputs.services }}
+      any:      ${{ steps.pick.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 2
+      - id: pick
+        run: |
+          set -euo pipefail
+
+          # workflow_dispatch = redespliegue manual: se reconstruye todo
+          # a propósito, porque quien lo lanza no está reaccionando a un
+          # diff concreto.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            CAMBIADOS="TODO"
+          elif ! git rev-parse HEAD~1 >/dev/null 2>&1; then
+            # Primer commit del historial disponible: sin base de
+            # comparación, se reconstruye todo en vez de adivinar.
+            CAMBIADOS="TODO"
+          else
+            CAMBIADOS="$(git diff --name-only HEAD~1 HEAD)"
+          fi
+          echo "Ficheros cambiados:"; echo "$CAMBIADOS" | sed 's/^/  /'
+
+          TODOS='"eurekaserver","auth-center","api-gateway","sso-admin","query-service","provisioner","notification-service","hello-service","cdc-capture","cdc-worker"'
+
+          # `common` y el pom raíz son dependencias de 7 de los 8
+          # módulos, así que tocarlos obliga a reconstruir todo.
+          if [ "$CAMBIADOS" = "TODO" ] \
+             || echo "$CAMBIADOS" | grep -qE '^(common/|pom\.xml|\.github/workflows/deploy-test\.yml)'; then
+            SERVICIOS="$TODOS"
+          else
+            S=""
+            add() { case ",$S," in *,\"$1\",*) ;; *) S="${S:+$S,}\"$1\"";; esac; }
+            echo "$CAMBIADOS" | grep -q '^eurekaserver/'         && add eurekaserver
+            echo "$CAMBIADOS" | grep -q '^auth-center/'          && add auth-center
+            echo "$CAMBIADOS" | grep -q '^sso-admin/'            && add sso-admin
+            echo "$CAMBIADOS" | grep -q '^query-service/'        && add query-service
+            echo "$CAMBIADOS" | grep -q '^provisioner/'          && add provisioner
+            echo "$CAMBIADOS" | grep -q '^notification-service/' && add notification-service
+            echo "$CAMBIADOS" | grep -q '^hello-service/'        && add hello-service
+            # api-gateway compila el SPA dentro de su Dockerfile, así
+            # que un cambio en admin-ui también le obliga a reconstruir.
+            echo "$CAMBIADOS" | grep -qE '^(api-gateway/|admin-ui/)' && add api-gateway
+            echo "$CAMBIADOS" | grep -q '^cdc-sync/'             && { add cdc-capture; add cdc-worker; }
+            SERVICIOS="$S"
+          fi
+
+          if [ -z "$SERVICIOS" ]; then
+            echo "Ninguna imagen que reconstruir (cambios de compose, migraciones o docs)."
+            echo "any=false" >> "$GITHUB_OUTPUT"
+            echo 'services=[]' >> "$GITHUB_OUTPUT"
+          else
+            echo "Se reconstruyen: $SERVICIOS"
+            echo "any=true" >> "$GITHUB_OUTPUT"
+            echo "services=[$SERVICIOS]" >> "$GITHUB_OUTPUT"
+          fi
+
   build-push:
     name: build-push (${{ matrix.service }})
     runs-on: ubuntu-latest
+    needs: [changes]
     # Solo corre si: (a) CI terminó en verde sobre un PUSH a main o
     # test, o (b) se lanzó a mano. workflow_run también dispara para
     # CI de PRs (incluido el PR test→main del flujo de promoción) —
@@ -109,11 +193,14 @@ jobs:
     # entorno. `test` y `main` son marcas de promoción: pasan por CI
     # pero no despliegan. Cuando existan sus entornos, cada una
     # engancha el suyo sin tocar esta condición.
+    #
+    # El `contains` se evalúa POR ENTRADA de la matriz: las que no
+    # aplican se saltan sin arrancar runner, así que no gastan
+    # minutos. Ésa es la diferencia con filtrar dentro de los steps,
+    # que sí arrancaría los 10 runners para no hacer nada.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'dev')
+      needs.changes.outputs.any == 'true'
+      && contains(fromJSON(needs.changes.outputs.services), matrix.service)
     strategy:
       fail-fast: false
       matrix:
@@ -223,7 +310,20 @@ jobs:
   deploy:
     name: deploy to test server
     runs-on: ubuntu-latest
-    needs: [build-push]
+    needs: [changes, build-push]
+    # `always()` es imprescindible: cuando no cambia ninguna imagen
+    # —un cambio en docker-compose.yml, en una migración o en el
+    # .env— TODAS las entradas de build-push se saltan, y sin esto
+    # el deploy se saltaría en cascada. Pero esos cambios sí hay que
+    # desplegarlos: la migración no se aplica sola.
+    #
+    # Se exige que ninguna construcción haya fallado; saltada es un
+    # resultado válido.
+    if: >-
+      always()
+      && needs.changes.result == 'success'
+      && needs.build-push.result != 'failure'
+      && needs.build-push.result != 'cancelled'
     environment: test
     steps:
       - uses: actions/checkout@v4

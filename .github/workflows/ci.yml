@@ -57,8 +57,70 @@ env:
   LC_ALL: C.UTF-8
 
 jobs:
+  # ───────── Qué cambió realmente ─────────
+  #
+  # Sin esto, tocar una línea de admin-ui compilaba los 8 módulos Java.
+  # Con ~39 ejecuciones en un solo día eso fueron ~900 minutos: casi
+  # media cuota mensual del plan Free.
+  #
+  # Los filtros NO son "una carpeta, un job". Respetan el grafo de
+  # dependencias real del repo, y hay dos aristas que un filtro
+  # ingenuo rompe:
+  #
+  #   · 7 de los 8 módulos dependen de `common` (todos menos
+  #     eurekaserver), así que tocarlo obliga a recompilarlos.
+  #   · api-gateway compila el SPA DENTRO de su Dockerfile (etapa
+  #     node-spa), así que un cambio en admin-ui también le afecta.
+  #     Parece independiente y no lo es.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      common:        ${{ steps.filter.outputs.common }}
+      auth-center:   ${{ steps.filter.outputs.auth-center }}
+      sso-admin:     ${{ steps.filter.outputs.sso-admin }}
+      query-service: ${{ steps.filter.outputs.query-service }}
+      api-gateway:   ${{ steps.filter.outputs.api-gateway }}
+      cdc:           ${{ steps.filter.outputs.cdc }}
+      admin-ui:      ${{ steps.filter.outputs.admin-ui }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            # `common` actúa de disparador global: si cambia él, el pom
+            # raíz o el propio workflow, se recompila todo.
+            common: &global
+              - 'common/**'
+              - 'pom.xml'
+              - '.github/workflows/ci.yml'
+            auth-center:
+              - *global
+              - 'auth-center/**'
+            sso-admin:
+              - *global
+              - 'sso-admin/**'
+            query-service:
+              - *global
+              - 'query-service/**'
+            # admin-ui entra aquí porque el Dockerfile del gateway lo
+            # compila dentro.
+            api-gateway:
+              - *global
+              - 'api-gateway/**'
+              - 'admin-ui/**'
+            cdc:
+              - *global
+              - 'cdc-sync/**'
+            admin-ui:
+              - 'admin-ui/**'
+              - '.github/workflows/ci.yml'
+
   # ───────── Backend: common (compilación + unit tests) ─────────
   maven-common:
+    if: needs.changes.outputs.common == 'true'
+    needs: [changes]
     name: maven-common
     runs-on: ubuntu-latest
     steps:
@@ -75,7 +137,15 @@ jobs:
   maven-auth-center:
     name: maven-auth-center
     runs-on: ubuntu-latest
-    needs: [maven-common]
+    # `needs` e `if` van juntos a propósito. Si maven-common se SALTA
+    # (porque common no cambió), GitHub saltaría en cascada todo lo
+    # que dependa de él. Por eso se comprueba `!= failure` y no
+    # `== success`: saltado es un resultado válido, fallido no.
+    needs: [changes, maven-common]
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.auth-center == 'true'
+      && needs.maven-common.result != 'failure'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -90,7 +160,11 @@ jobs:
   maven-sso-admin:
     name: maven-sso-admin
     runs-on: ubuntu-latest
-    needs: [maven-common]
+    needs: [changes, maven-common]
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.sso-admin == 'true'
+      && needs.maven-common.result != 'failure'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -116,7 +190,11 @@ jobs:
   maven-query-service:
     name: maven-query-service
     runs-on: ubuntu-latest
-    needs: [maven-common]
+    needs: [changes, maven-common]
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.query-service == 'true'
+      && needs.maven-common.result != 'failure'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -143,6 +221,8 @@ jobs:
   maven-cdc:
     name: maven-cdc
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.cdc == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -171,7 +251,13 @@ jobs:
   maven-api-gateway:
     name: maven-api-gateway
     runs-on: ubuntu-latest
-    needs: [maven-common, maven-auth-center, maven-sso-admin]
+    needs: [changes, maven-common, maven-auth-center, maven-sso-admin]
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.api-gateway == 'true'
+      && needs.maven-common.result != 'failure'
+      && needs.maven-auth-center.result != 'failure'
+      && needs.maven-sso-admin.result != 'failure'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -202,6 +288,8 @@ jobs:
   admin-ui-typecheck:
     name: admin-ui-typecheck
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.admin-ui == 'true'
     defaults:
       run:
         working-directory: admin-ui
@@ -221,6 +309,8 @@ jobs:
   admin-ui-test:
     name: admin-ui-test
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.admin-ui == 'true'
     defaults:
       run:
         working-directory: admin-ui
@@ -240,6 +330,8 @@ jobs:
   admin-ui-lint:
     name: admin-ui-lint
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.admin-ui == 'true'
     defaults:
       run:
         working-directory: admin-ui
@@ -259,6 +351,8 @@ jobs:
   admin-ui-build:
     name: admin-ui-build
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.admin-ui == 'true'
     defaults:
       run:
         working-directory: admin-ui
@@ -289,3 +383,46 @@ jobs:
         # (Hit on 2026-08-07: "Artifact storage quota has
         # been hit. Unable to upload any new artifacts.")
         continue-on-error: true
+
+  # ───────── Puerta única ─────────
+  #
+  # Con jobs condicionales, los que no aplican salen como `skipped`.
+  # Un required check que se salta NO se marca como cumplido y
+  # bloquearía el merge para siempre. Este job agrega el resultado de
+  # todos y es el único que conviene marcar como requerido.
+  #
+  # `always()` es imprescindible: sin él, este job también se saltaría
+  # en cascada cuando se salten sus dependencias, que es justo el caso
+  # normal.
+  #
+  # Nota: hoy la protección de ramas no está disponible en el plan Free
+  # para repos privados, así que no hay required checks que configurar.
+  # Queda listo para cuando lo esté.
+  ci-ok:
+    name: ci-ok
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - changes
+      - maven-common
+      - maven-auth-center
+      - maven-sso-admin
+      - maven-query-service
+      - maven-api-gateway
+      - maven-cdc
+      - admin-ui-typecheck
+      - admin-ui-test
+      - admin-ui-lint
+      - admin-ui-build
+    steps:
+      - name: Fallar si algún job requerido falló o fue cancelado
+        run: |
+          resultados='${{ join(needs.*.result, " ") }}'
+          echo "Resultados de los jobs: $resultados"
+          for r in $resultados; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "::error::Al menos un job terminó en '$r'."
+              exit 1
+            fi
+          done
+          echo "Todos los jobs aplicables pasaron (los saltados no aplicaban)."
