@@ -2,8 +2,22 @@
 # deploy-test.yml — publica imágenes a GHCR y despliega el stack completo
 # al servidor de pruebas (Linode) vía SSH.
 #
-# Flujo:
-#   push a `test` → corre CI (ci.yml) → si CI pasa, este workflow:
+# Flujo de ramas:
+#
+#   feature/CU-xxxx → dev → test → main
+#                      │
+#                      └── único entorno desplegado (este workflow)
+#
+#   `dev`  integración: las ramas de tarea entran aquí por PR y es lo
+#          que corre en el Linode.
+#   `test` marca de promoción: "esto pasó QA". Pasa por CI, no despliega.
+#   `main` releases, con tag por versión. Pasa por CI, no despliega.
+#
+#   Cuando test o main tengan su propio entorno, cada uno engancha su
+#   workflow; la condición de abajo no cambia.
+#
+# Flujo del despliegue:
+#   push a `dev` → corre CI (ci.yml) → si CI pasa, este workflow:
 #     1. build-push : construye las 10 imágenes de la app con los
 #                     Dockerfiles del repo (8 en raíz + cdc-capture
 #                     y cdc-worker bajo cdc-sync/) y las publica en
@@ -83,10 +97,23 @@ jobs:
     # test, o (b) se lanzó a mano. workflow_run también dispara para
     # CI de PRs (incluido el PR test→main del flujo de promoción) —
     # el filtro `event == 'push'` los descarta.
+    # Sólo `dev` despliega.
+    #
+    # Antes esta condición no miraba la rama: bastaba con que CI
+    # pasara tras un push, viniera de donde viniera. Como CI corría en
+    # main y en test, las dos desplegaban al MISMO servidor y ganaba
+    # la que terminara última — con dos promociones seguidas, el
+    # servidor podía acabar sirviendo la que no era.
+    #
+    # Con el flujo dev → test → main, `dev` es la única rama con
+    # entorno. `test` y `main` son marcas de promoción: pasan por CI
+    # pero no despliegan. Cuando existan sus entornos, cada una
+    # engancha el suyo sin tocar esta condición.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push')
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'dev')
     strategy:
       fail-fast: false
       matrix:
