@@ -159,7 +159,19 @@ public class QueryService {
         if ("SELECT".equals(mode) || "FUNCTION".equals(mode)) {
             // SELECT and FUNCTION share the same prefix
             // (FUNCTION is called as "SELECT * FROM func()").
+            //
+            // V33: este brazo NO se tocó. Conceder DML directo se
+            // hizo añadiendo un modo nuevo, no relajando el guardia
+            // aquí — si se hubiera relajado "cuando el método es
+            // POST", cada fila existente habría perdido la
+            // protección de golpe, porque HTTP_METHOD entra con
+            // default POST.
             rejectIfMutating(def.query());
+        } else if ("DML".equals(mode)) {
+            // V33 — INSERT/UPDATE escrito directamente. El catálogo
+            // ya validó al guardar que la fila esté atada a POST o
+            // PUT y que el primer keyword no sea DELETE ni DDL.
+            log.debug("uuid={} ejecuta DML directo", req.uuid());
         } else if (!"PROCEDURE".equals(mode)) {
             // Unknown mode — fail closed.
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -280,6 +292,25 @@ public class QueryService {
                     log.debug("uuid={} returned {} rows + {} OUT params (mode={})",
                             req.uuid(), rows.size(), outValues.size(), mode);
                     return QueryResult.withOutParams(rows, outValues);
+                }
+
+                // V33 — una fila DML no devuelve filas: se ejecuta
+                // con update() y la respuesta es rowsAffected.
+                //
+                // INSERT ... RETURNING queda fuera de alcance a
+                // propósito: update() ejecuta la sentencia pero
+                // descarta las filas. Detectar RETURNING buscando la
+                // palabra en el texto sería una heurística que falla
+                // en cuanto aparezca dentro de un literal, y prefiero
+                // una regla predecible a una que acierta casi
+                // siempre. Quien necesite la fila insertada tiene dos
+                // caminos que ya funcionan: una función invocada con
+                // SELECT, o un procedimiento con OUT params.
+                if ("DML".equals(mode)) {
+                    int affected = jdbc.update(sql, params);
+                    log.debug("uuid={} afectó {} filas (mode=DML)", req.uuid(), affected);
+                    return QueryResult.rowsOnly(List.of(
+                            Map.of("rowsAffected", affected)));
                 }
 
                 // SELECT / FUNCTION / PROCEDURE-without-OUT path.

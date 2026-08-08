@@ -169,6 +169,23 @@ public class Query {
     private String pathTemplate;
 
     /**
+     * V33 — verbo HTTP que expone esta fila cuando tiene
+     * {@code pathTemplate}: {@code GET}, {@code POST} o {@code PUT}.
+     *
+     * <p>El default {@code POST} es lo que hace que V33 no rompa
+     * nada: antes toda ruta era un POST, así que cada fila
+     * existente conserva su comportamiento sin migrar datos.
+     *
+     * <p>{@code DELETE} no se admite a propósito. No hay
+     * impedimento técnico — un {@code CALL paquete.borrar(...)}
+     * funcionaría igual que cualquier otro procedimiento — pero
+     * mantener el verbo fuera evita que una URL sugiera un borrado
+     * directo sobre tablas.
+     */
+    @Column(name = "HTTP_METHOD", length = 10, nullable = false)
+    private String httpMethod = "POST";
+
+    /**
      * V31 — comma-separated {@code :placeholder} names that are
      * OUT params of a PROCEDURE-mode row. When set,
      * {@code query-service} switches to {@code CallableStatement}

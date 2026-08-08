@@ -199,6 +199,9 @@ export const queryFormSchema = z
       })
       .nullable()
       .default(null),
+    // V33 — verbo HTTP. DELETE no está en la lista a propósito;
+    // para borrar se publica un procedimiento y se llama con CALL.
+    httpMethod: z.enum(["GET", "POST", "PUT"]).default("POST"),
     pathTemplate: z
       .string()
       .max(500)
@@ -258,6 +261,25 @@ export const queryFormSchema = z
           break;
         }
       }
+    }
+    // Un GET no lleva cuerpo, así que :BODY.* nunca tendría valor.
+    // El backend valida lo mismo; esto da el error antes.
+    if (v.httpMethod === "GET" && /:BODY\./i.test(v.query ?? "")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["query"],
+        message:
+          "Un GET no lleva cuerpo: usa :PARAM.* o :QUERY.* en vez de :BODY.*",
+      });
+    }
+    // Un GET no debe modificar nada — es la mitad del contrato que
+    // permite cachearlo y reintentarlo.
+    if (v.httpMethod === "GET" && /^\s*(insert|update)\b/i.test(v.query ?? "")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["query"],
+        message: "Un GET no puede ejecutar INSERT ni UPDATE. Usa POST o PUT.",
+      });
     }
     if (v.pathTemplate != null && v.microserviceId == null) {
       ctx.addIssue({

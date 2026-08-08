@@ -70,6 +70,8 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
       action: query?.action ?? "",
       style: query?.style ?? "",
       microserviceId: query?.microserviceId ?? null,
+
+      httpMethod: query?.httpMethod ?? "POST",
       pathTemplate: query?.pathTemplate ?? null,
       outParamNames: query?.outParamNames ?? null,
     }),
@@ -191,6 +193,34 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
             </label>
             <div className="h-3" />
             <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label
+                  htmlFor="query-http-method"
+                  className="mb-1 block text-sm font-medium text-slate-700"
+                >
+                  Método HTTP
+                </label>
+                <select
+                  id="query-http-method"
+                  value={values.httpMethod}
+                  onChange={(e) =>
+                    setField(
+                      "httpMethod",
+                      e.target.value as QueryFormValues["httpMethod"],
+                    )
+                  }
+                  className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                >
+                  <option value="GET">GET — leer, sin cuerpo</option>
+                  <option value="POST">POST — leer o crear</option>
+                  <option value="PUT">PUT — actualizar</option>
+                </select>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Solo aplica cuando hay path template. DELETE no se admite:
+                  para borrar, publica un procedimiento y llámalo con{" "}
+                  <code>CALL</code>.
+                </p>
+              </div>
               <Input
                 label="Path template"
                 value={values.pathTemplate ?? ""}

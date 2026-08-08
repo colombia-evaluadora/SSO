@@ -76,6 +76,22 @@ class QueryPathRegistryMatchTest {
                 "/establecimiento/:NOMBRE", "/otra/cosa")).isEmpty();
     }
 
+    /**
+     * V33 — la clave del registro es (verbo, plantilla), así que la
+     * misma ruta puede servir propósitos distintos según el método.
+     * {@code matchTemplate} no sabe de verbos: el filtrado por
+     * método ocurre en {@code match}, y aquí sólo se fija que la
+     * gramática siga siendo la misma para todos.
+     */
+    @Test
+    void routeKeyDistinguishesMethodsOnTheSameTemplate() {
+        var get = new QueryPathRegistry.RouteKey("GET", "/est/:ID");
+        var put = new QueryPathRegistry.RouteKey("PUT", "/est/:ID");
+
+        assertThat(get).isNotEqualTo(put);
+        assertThat(get).isEqualTo(new QueryPathRegistry.RouteKey("GET", "/est/:ID"));
+    }
+
     @Test
     void toleratesTrailingSlash() {
         var match = QueryPathRegistry.matchTemplate(

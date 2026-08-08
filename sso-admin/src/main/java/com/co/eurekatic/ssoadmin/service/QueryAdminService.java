@@ -73,6 +73,8 @@ public class QueryAdminService {
         if (queryRepo.existsByUuid(uuid)) {
             throw new DuplicateException("Query", uuid);
         }
+        validateMethodAgainstSql(req);
+
         validatePathTemplate(req, null);
         validateOutParams(req);
         Query q = new Query();
@@ -104,6 +106,8 @@ public class QueryAdminService {
                 throw new DuplicateException("Query", uuid);
             }
         });
+        validateMethodAgainstSql(req);
+
         validatePathTemplate(req, q.getId());
         validateOutParams(req);
         copy(req, q, uuid);
@@ -223,6 +227,7 @@ public class QueryAdminService {
         // Derivado del SQL, no pedido al admin. Ver
         // deriveExecutionMode para por qué el campo sobraba.
         q.setExecutionMode(deriveExecutionMode(req.query()));
+        q.setHttpMethod(normalizeHttpMethod(req.httpMethod()));
         // V27: nullable. When set, the unique partial index
         // (microservice_id, path_template) catches concurrent
         // insert races; the service-layer check below catches
@@ -379,10 +384,73 @@ public class QueryAdminService {
         if (first.equals("SELECT") || first.equals("WITH")) {
             return "SELECT";
         }
+        // DML directo. Deliberadamente NO se concede relajando
+        // rejectIfMutating "cuando el método es POST o PUT": como
+        // HTTP_METHOD entra con default POST, eso habría dejado sin
+        // guardia a todas las filas que ya existen, en el mismo
+        // despliegue y sin que nadie las tocara. Atarlo al modo hace
+        // que el permiso alcance sólo a las filas donde el autor
+        // escribió DML a propósito; una fila SELECT sigue pasando
+        // por el guardia igual que siempre.
+        if (first.equals("INSERT") || first.equals("UPDATE")) {
+            return "DML";
+        }
+        // DELETE y el DDL quedan fuera. Es la misma línea que ya
+        // traza WriteService, cuyo enum sólo admite INSERT y UPDATE.
         throw new IllegalArgumentException(
-                "El SQL debe empezar por SELECT, WITH o CALL; empieza por '"
-                + first + "'. Para escribir o borrar datos usa una "
-                + "definición de escritura, no una query.");
+                "El SQL debe empezar por SELECT, WITH, CALL, INSERT o UPDATE; "
+                + "empieza por '" + first + "'. Para borrar o alterar "
+                + "estructura, publica un procedimiento y llámalo con CALL.");
+    }
+
+    /** Verbos admitidos. DELETE queda fuera a propósito — ver la entidad Query. */
+    private static final Set<String> HTTP_METHODS = Set.of("GET", "POST", "PUT");
+
+    /**
+     * Normaliza y valida el verbo. Null o vacío cae a {@code POST},
+     * que es lo que hacían todas las rutas antes de V33, para que un
+     * cliente que no mande el campo no cambie de comportamiento.
+     */
+    static String normalizeHttpMethod(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "POST";
+        }
+        String m = raw.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!HTTP_METHODS.contains(m)) {
+            throw new IllegalArgumentException(
+                    "Método HTTP no admitido: '" + raw + "'. Usa GET, POST o PUT. "
+                    + "DELETE no se admite; para borrar, publica un "
+                    + "procedimiento y llámalo con CALL.");
+        }
+        return m;
+    }
+
+    /**
+     * Comprobaciones que cruzan el verbo con el SQL. Se hacen al
+     * guardar y no en tiempo de petición: aquí hay un humano
+     * mirando el formulario, allí sólo un 500 en un log.
+     */
+    private void validateMethodAgainstSql(QueryRequest req) {
+        String method = normalizeHttpMethod(req.httpMethod());
+        String mode = deriveExecutionMode(req.query());
+        String sql = req.query() == null ? "" : req.query();
+
+        // Un GET no lleva cuerpo, así que :BODY.* nunca tendría
+        // valor. Mejor decirlo ahora que dejar un bind sin resolver
+        // esperando a la primera llamada real.
+        if ("GET".equals(method) && sql.toUpperCase(java.util.Locale.ROOT).contains(":BODY.")) {
+            throw new IllegalArgumentException(
+                    "Un GET no lleva cuerpo, así que no puede usar :BODY.*. "
+                    + "Pasa esos valores por la ruta (:PARAM.*) o por el "
+                    + "query string (:QUERY.*).");
+        }
+        // Un GET no debe modificar nada. Es la mitad del contrato
+        // que hace que un GET se pueda cachear y reintentar.
+        if ("GET".equals(method) && "DML".equals(mode)) {
+            throw new IllegalArgumentException(
+                    "Un GET no puede ejecutar INSERT ni UPDATE. Ata esta "
+                    + "consulta a POST o PUT.");
+        }
     }
 
     /**

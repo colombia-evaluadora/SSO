@@ -101,6 +101,8 @@ export function QueriesAdminPage() {
       // backend los deriva del microservicio dueño y del primer
       // keyword del SQL. Mandarlos desde aquí sólo permitiría que
       // contradijeran al SQL.
+      httpMethod: values.httpMethod,
+
       pathTemplate: values.pathTemplate ?? null,
       outParamNames: values.outParamNames ?? null,
     };

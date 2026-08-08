@@ -20,11 +20,19 @@ package com.co.eurekatic.common.entity;
  *       (PL/pgSQL) to return rows; the JDBC layer still calls
  *       {@code JdbcTemplate.query()} but the SELECT-only guard
  *       is bypassed.</li>
- *   <li>{@link #FUNCTION} — a {@code SELECT * FROM
- *       schema.func(...)} statement. Treated as a SELECT for
- *       JDBC purposes (the result is a ResultSet), but
- *       catalogued separately so the admin form can render the
- *       right hint.</li>
+ *   <li>{@link #FUNCTION} — histórico. Se ejecutaba y validaba
+ *       exactamente igual que {@link #SELECT}, así que V32
+ *       convirtió las filas existentes y el formulario dejó de
+ *       ofrecerlo. Se conserva en el enum para que un valor
+ *       antiguo en la columna no deje de parsear.</li>
+ *   <li>{@link #DML} — V33. Un {@code INSERT} o {@code UPDATE}
+ *       escrito directamente. No pasa por {@code rejectIfMutating}
+ *       y se ejecuta con {@code JdbcTemplate.update()}, así que
+ *       devuelve {@code rowsAffected} en vez de filas. Sólo puede
+ *       existir en filas atadas a {@code POST} o {@code PUT}: el
+ *       permiso va atado al modo, no al verbo, para que conceder
+ *       DML no desproteja a las filas {@code SELECT} que ya
+ *       existen.</li>
  * </ul>
  *
  * <p>The string form is what travels in JSON and in the DB; the
@@ -35,7 +43,8 @@ package com.co.eurekatic.common.entity;
 public enum ExecutionMode {
     SELECT,
     PROCEDURE,
-    FUNCTION;
+    FUNCTION,
+    DML;
 
     public static final String DEFAULT = "SELECT";
 

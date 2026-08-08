@@ -45,7 +45,11 @@ public record QueryDefinition(
         @JsonProperty("style") String style,
         @JsonProperty("pathTemplate") String pathTemplate,
         @JsonProperty("executionMode") String executionMode,
-        @JsonProperty("outParamNames") String outParamNames
+        @JsonProperty("outParamNames") String outParamNames,
+
+        /** V33 — verbo HTTP de la fila: GET, POST o PUT. Null = POST. */
+
+        @JsonProperty("httpMethod") String httpMethod
 ) {
     /**
      * Back-compat constructor for callers that pre-date V27/V28
@@ -58,7 +62,7 @@ public record QueryDefinition(
                            String type, boolean publicEnd, boolean captcha,
                            String detail, String action, String style) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
-             detail, action, style, null, "SELECT", null);
+             detail, action, style, null, "SELECT", null, "POST");
     }
 
     /**
@@ -70,6 +74,20 @@ public record QueryDefinition(
                            String detail, String action, String style,
                            String pathTemplate, String executionMode) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
-             detail, action, style, pathTemplate, executionMode, null);
+             detail, action, style, pathTemplate, executionMode, null, "POST");
+    }
+
+    /**
+     * V31 back-compat (sin httpMethod). El verbo cae a POST,
+     * que es lo que hacian todas las rutas antes de V33.
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           String pathTemplate, String executionMode,
+                           String outParamNames) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, pathTemplate, executionMode,
+             outParamNames, "POST");
     }
 }
