@@ -8,6 +8,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -81,6 +82,39 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
                 "code", "BAD_REQUEST",
                 "message", "falta el parámetro requerido '" + ex.getParameterName() + "'"));
+    }
+
+    /**
+     * V33 — verbo no soportado en una ruta que sí existe.
+     *
+     * <p>El dispatcher declara GET, POST y PUT. Un DELETE hace que
+     * Spring lance {@code HttpRequestMethodNotSupportedException}
+     * antes de llegar al controller, así que el 405 que emite el
+     * propio dispatcher para "ruta registrada con otro verbo" no
+     * cubre este caso — sin este handler, la caza-todo de abajo lo
+     * convertía en un 500 que sugería un fallo del servidor cuando
+     * el problema era la petición.
+     *
+     * <p>Se devuelve {@code Allow}, que es lo que la especificación
+     * de HTTP exige en un 405 y lo que permite a un cliente
+     * descubrir qué puede usar.
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<Map<String, Object>> handleMethodNotSupported(
+            HttpRequestMethodNotSupportedException ex) {
+        String allowed = ex.getSupportedHttpMethods() == null
+                ? "GET, POST, PUT"
+                : ex.getSupportedHttpMethods().stream()
+                        .map(Object::toString)
+                        .collect(java.util.stream.Collectors.joining(", "));
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+                .header("Allow", allowed)
+                .body(Map.of(
+                        "code", "METHOD_NOT_ALLOWED",
+                        "message", "El método " + ex.getMethod()
+                                + " no se admite. Disponibles: " + allowed
+                                + ". Para borrar, publica un procedimiento y "
+                                + "llámalo con CALL."));
     }
 
     @ExceptionHandler(Exception.class)
