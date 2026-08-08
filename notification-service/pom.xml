@@ -225,6 +225,17 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <!--
+            springdoc-openapi: publishes this service's /v3/api-docs so
+            api-gateway's OpenApiAggregatorService can merge it into the
+            doc at /api/docs. See auth-center/pom.xml for the full
+            rationale. *-api*, not *-ui*: the gateway owns Swagger UI.
+        -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+            <version>${springdoc-openapi.version}</version>
+        </dependency>
     </dependencies>
 
     <build>

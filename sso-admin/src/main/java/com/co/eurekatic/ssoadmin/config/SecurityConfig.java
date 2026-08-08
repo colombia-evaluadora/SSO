@@ -127,6 +127,16 @@ public class SecurityConfig {
                         // internal docker network, not on the LAN.
                         .requestMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info").permitAll()
+                        // OpenAPI spec consumed by api-gateway's
+                        // OpenApiAggregatorService, which fetches it
+                        // unauthenticated from the Eureka instance
+                        // address. Without permitAll the chain answers
+                        // 403 and sso-admin drops out of the merged doc
+                        // at /api/docs. Same internal-network trust
+                        // boundary as the actuator endpoints above; the
+                        // gateway's /sso-admin/** route still requires
+                        // authentication from outside.
+                        .requestMatchers("/v3/api-docs", "/v3/api-docs/**").permitAll()
                         // V27/V30 — internal route-table feed for
                         // api-gateway's CatalogRoutesRefresher AND
                         // path-registry token issuance for
