@@ -64,14 +64,12 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
       // unique de la columna UUID.
       uuid: query?.uuid ?? (open ? newQueryUid() : ""),
       query: query?.query ?? "",
-      type: query?.type ?? "",
       publicEnd: query?.publicEnd ?? false,
       captcha: query?.captcha ?? false,
       detail: query?.detail ?? "",
       action: query?.action ?? "",
       style: query?.style ?? "",
       microserviceId: query?.microserviceId ?? null,
-      executionMode: query?.executionMode ?? "SELECT",
       pathTemplate: query?.pathTemplate ?? null,
       outParamNames: query?.outParamNames ?? null,
     }),
@@ -105,7 +103,13 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
         onCancel={onClose}
         submitLabel={query ? "Guardar cambios" : "Crear"}
       >
-        {({ values, setField, errors }) => (
+        {({ values, setField, errors }) => {
+          // Misma regla que QueryAdminService.deriveExecutionMode:
+          // el modo sale del primer keyword del SQL. Se recalcula
+          // aquí sólo para decidir qué mostrar; la fuente de verdad
+          // es el backend.
+          const isProcedure = /^\s*call\b/i.test(values.query ?? "");
+          return (
           <>
             <div className="grid grid-cols-2 gap-3">
               {/* UID automático. Al crear se acuña solo y el campo
@@ -142,13 +146,6 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
                   </Button>
                 </div>
               )}
-              <Input
-                label="Tipo"
-                value={values.type}
-                onChange={(e) => setField("type", e.target.value)}
-                error={errors.type}
-                hint="Etiqueta opcional (QUERY, CHART, …)"
-              />
             </div>
             <div className="h-3" />
             <label className="block text-sm">
@@ -167,11 +164,7 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
                 ].join(" ")}
                 aria-invalid={errors.query ? true : undefined}
                 placeholder={
-                  values.executionMode === "PROCEDURE"
-                    ? "CALL get_establecimiento(:caller_user_id, :caller_roles, :id, :estado)"
-                    : values.executionMode === "FUNCTION"
-                      ? "SELECT * FROM get_establecimiento(:id)"
-                      : "SELECT id, email FROM sso_user WHERE username = :username"
+                  "SELECT id, nombre FROM establecimiento\nWHERE nombre LIKE :PARAM.NOMBRE\n  AND owner = :CONTEXT.USER_ID\nLIMIT :QUERY.SIZE"
                 }
               />
               {errors.query ? (
@@ -180,49 +173,24 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
                 </p>
               ) : null}
               <p className="mt-1 text-[11px] text-slate-500">
-                Bindings con <code>:placeholder</code> se resuelven en el
-                query-service vía <code>MapSqlParameterSource</code>. El
-                catálogo inyecta automáticamente{" "}
-                <code>:caller_user_id</code>, <code>:caller_email</code>,
-                <code>:caller_roles</code> (CSV) y{" "}
-                <code>:caller_roles_array</code> (array PG) desde el JWT.
+                Cada parámetro lleva el prefijo de su origen:{" "}
+                <code>:PARAM.X</code> (variables de la ruta),{" "}
+                <code>:QUERY.X</code> (query string),{" "}
+                <code>:BODY.X.Y</code> (cuerpo JSON) y{" "}
+                <code>:CONTEXT.USER_ID</code>, <code>:CONTEXT.EMAIL</code>,{" "}
+                <code>:CONTEXT.ROLES</code> (CSV),{" "}
+                <code>:CONTEXT.ROLES_ARRAY</code> (array PG) — estos últimos
+                salen del JWT y el cliente no puede fabricarlos.
+              </p>
+              <p className="mt-1 text-[11px] text-slate-500">
+                La paginación la escribes tú:{" "}
+                <code>LIMIT :QUERY.SIZE OFFSET :QUERY.OFFSET</code>. El SQL
+                se ejecuta tal cual lo ves — ya no se le añade nada por
+                detrás.
               </p>
             </label>
             <div className="h-3" />
             <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label
-                  htmlFor="query-execution-mode"
-                  className="mb-1 block text-sm font-medium text-slate-700"
-                >
-                  Modo de ejecución
-                </label>
-                <select
-                  id="query-execution-mode"
-                  value={values.executionMode}
-                  onChange={(e) =>
-                    setField(
-                      "executionMode",
-                      e.target.value as QueryFormValues["executionMode"],
-                    )
-                  }
-                  className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-                >
-                  <option value="SELECT">
-                    SELECT — lectura estándar
-                  </option>
-                  <option value="PROCEDURE">
-                    PROCEDURE — CALL schema.proc(…)
-                  </option>
-                  <option value="FUNCTION">
-                    FUNCTION — SELECT * FROM schema.func(…)
-                  </option>
-                </select>
-                <p className="mt-1 text-[11px] text-slate-500">
-                  El backend valida que el primer keyword del SQL coincida
-                  con el modo al guardar.
-                </p>
-              </div>
               <Input
                 label="Path template"
                 value={values.pathTemplate ?? ""}
@@ -233,21 +201,36 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
                   )
                 }
                 error={errors.pathTemplate}
-                hint={`Sufijo de URL DENTRO del microservicio (ej /establecimiento/{id}). Vacío = solo accesible vía POST /<svc>/query (legacy).`}
+                hint="Sufijo de URL DENTRO del microservicio, con variables :MAYÚSCULA (ej /establecimiento/:NOMBRE), que se bindean como :PARAM.NOMBRE. Vacío = solo accesible vía POST /<svc>/query (legacy)."
               />
-              <Input
-                label="OUT params (solo PROCEDURE)"
-                value={values.outParamNames ?? ""}
-                onChange={(e) =>
-                  setField(
-                    "outParamNames",
-                    e.target.value.trim() === "" ? null : e.target.value,
-                  )
-                }
-                error={errors.outParamNames}
-                hint={`Comma-separated :placeholder names (ej :out_status,:out_message). Solo aplica cuando executionMode=PROCEDURE.`}
-              />
+              {isProcedure ? (
+                <Input
+                  label="OUT params"
+                  value={values.outParamNames ?? ""}
+                  onChange={(e) =>
+                    setField(
+                      "outParamNames",
+                      e.target.value.trim() === "" ? null : e.target.value,
+                    )
+                  }
+                  error={errors.outParamNames}
+                  hint="Nombres :placeholder separados por comas (ej :out_status,:out_message)."
+                />
+              ) : null}
             </div>
+            <div className="h-2" />
+            {/*
+              Modo y dialecto ya no se piden: el backend los deriva del
+              SQL y del microservicio dueño. Se muestran igualmente para
+              que siga siendo visible qué se va a guardar, pero sin que
+              se puedan contradecir con el SQL.
+            */}
+            <p className="text-[11px] text-slate-500">
+              Modo de ejecución:{" "}
+              <strong>{isProcedure ? "PROCEDURE" : "SELECT"}</strong> —
+              derivado del primer keyword del SQL. El dialecto lo hereda del
+              microservicio seleccionado.
+            </p>
             <div className="h-3" />
             <div>
               <label
@@ -356,7 +339,8 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
               (mismo patrón que Endpoints).
             </p>
           </>
-        )}
+          );
+        }}
       </Form>
     </Drawer>
   );

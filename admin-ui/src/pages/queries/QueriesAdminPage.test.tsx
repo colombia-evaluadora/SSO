@@ -295,7 +295,7 @@ describe("QueriesAdminPage", () => {
    * the wire shape so a future refactor can't reintroduce the
    * silence.
    */
-  it("submitting the new-query drawer forwards executionMode, pathTemplate, and outParamNames", async () => {
+  it("submitting the new-query drawer forwards pathTemplate and outParamNames, and no longer sends the derived fields", async () => {
     const pg = mkMs({ id: 7, instanceName: "pg-prod" });
     const spy = buildFetchSpy({ queries: [], microservices: [pg] });
     vi.stubGlobal("fetch", spy);
@@ -303,33 +303,26 @@ describe("QueriesAdminPage", () => {
     renderPage();
     await userEvent.click(screen.getByTestId("new-query"));
 
-    // SQL with a PROCEDURE so the mode validator accepts the
-    // OUT-param placeholder we provide.
+    // Un CALL, que es lo que hace que el backend derive
+    // PROCEDURE y que el campo de OUT params aparezca.
     const sqlArea = screen.getByLabelText(/SQL/i);
     await userEvent.type(
       sqlArea,
-      "CALL get_establecimiento(:id, :out_status, :out_message)",
+      "CALL get_establecimiento(:PARAM.ID, :out_status, :out_message)",
     );
 
     await screen.findByRole("option", { name: /pg-prod/i });
     await userEvent.selectOptions(screen.getByLabelText(/Microservicio/i), "7");
 
-    // V28 — execution mode dropdown
-    await userEvent.selectOptions(
-      screen.getByLabelText(/Modo de ejecución/i),
-      "PROCEDURE",
-    );
-
-    // V27 — path template. User-event interprets `{id}` as a
-    // keyboard shortcut (the curly-brace syntax is reserved for
-    // actions like `{enter}` / `{tab}`), so we set the value via
-    // fireEvent.change instead — the right tool for "set the
-    // value of this input" rather than "simulate a user typing".
+    // La plantilla se fija con fireEvent.change y no con
+    // userEvent.type porque éste interpreta las llaves como
+    // atajos de teclado ({enter}, {tab}…). La sintaxis nueva no
+    // lleva llaves, pero seguimos usando change: la intención es
+    // "pon este valor", no "simula tecleo".
     const pathInput = screen.getByLabelText(/Path template/i) as HTMLInputElement;
-    fireEvent.change(pathInput, { target: { value: "/establecimiento/{id}" } });
+    fireEvent.change(pathInput, { target: { value: "/establecimiento/:ID" } });
 
-    // V31 — OUT params
-    const outInput = screen.getByLabelText(/OUT params/i);
+    const outInput = await screen.findByLabelText(/OUT params/i);
     await userEvent.type(outInput, ":out_status,:out_message");
 
     await userEvent.click(screen.getByRole("button", { name: /Crear/i }));
@@ -341,10 +334,12 @@ describe("QueriesAdminPage", () => {
       (findFetchCall(spy, "/sso-admin/query/save")![1] as RequestInit).body as string,
     );
 
-    // The three fields the previous bug was dropping:
-    expect(body.executionMode).toBe("PROCEDURE");
-    expect(body.pathTemplate).toBe("/establecimiento/{id}");
+    expect(body.pathTemplate).toBe("/establecimiento/:ID");
     expect(body.outParamNames).toBe(":out_status,:out_message");
+    // Derivados en el backend: mandarlos desde el formulario sólo
+    // permitiría que contradijeran al SQL.
+    expect(body).not.toHaveProperty("executionMode");
+    expect(body).not.toHaveProperty("type");
   });
 
   /**
@@ -356,15 +351,15 @@ describe("QueriesAdminPage", () => {
    * separately catches the case where someone refactors the
    * branches apart and only fixes one.
    */
-  it("editing an existing query forwards the V27/V28/V31 fields on PUT", async () => {
+  it("editing an existing query forwards pathTemplate and outParamNames on PUT", async () => {
     const pg = mkMs({ id: 7, instanceName: "pg-prod" });
     const q = mkQuery({
       id: 42,
       uuid: "q-exec",
-      query: "CALL get_establecimiento(:id, :out_status, :out_message)",
+      query: "CALL get_establecimiento(:PARAM.ID, :out_status, :out_message)",
       microserviceId: 7,
       executionMode: "PROCEDURE",
-      pathTemplate: "/establecimiento/{id}",
+      pathTemplate: "/establecimiento/:ID",
       outParamNames: ":out_status,:out_message",
     });
     const spy = buildFetchSpy({ queries: [q], microservices: [pg] });
@@ -379,7 +374,7 @@ describe("QueriesAdminPage", () => {
     // {placeholder} shortcut that user-event.type consumes.
     const pathInput = screen.getByLabelText(/Path template/i) as HTMLInputElement;
     fireEvent.change(pathInput, {
-      target: { value: "/establecimiento/{id}/detalle" },
+      target: { value: "/establecimiento/:ID/detalle" },
     });
 
     await userEvent.click(screen.getByRole("button", { name: /Guardar cambios/i }));
@@ -390,9 +385,10 @@ describe("QueriesAdminPage", () => {
     const body = JSON.parse(
       (findFetchCall(spy, "/sso-admin/query/update")![1] as RequestInit).body as string,
     );
-    expect(body.executionMode).toBe("PROCEDURE");
-    expect(body.pathTemplate).toBe("/establecimiento/{id}/detalle");
+    expect(body.pathTemplate).toBe("/establecimiento/:ID/detalle");
     expect(body.outParamNames).toBe(":out_status,:out_message");
+    expect(body).not.toHaveProperty("executionMode");
+    expect(body).not.toHaveProperty("type");
   });
 
   it("mints a fresh auto-UID each time the new-query drawer opens", async () => {
