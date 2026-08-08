@@ -157,7 +157,20 @@ Obligatorias, porque cubren huecos reales:
 
 ## Fuera de alcance
 
-- **Métodos HTTP (GET/POST/PUT/DELETE)** — tanda 2. Requiere que la clave del registro pase de `path` a `(método, path)`, cambiar el índice único a `(microservice_id, path_template, http_method)`, decidir qué ocurre con los parámetros de body en GET, y sobre todo resolver una cuestión de seguridad: hoy los endpoints por ruta van al camino de **lectura**, que rechaza SQL mutante (`rejectIfMutating`). El camino de **escritura** (`POST /write`) no ejecuta SQL del catálogo — genera `INSERT`/`UPDATE` a partir de una tabla y columnas declaradas, y `DELETE`/DDL están prohibidos por diseño. Un `DELETE /x/:ID` hoy no podría borrar nada. Abrir esa puerta es una decisión aparte.
+- **Métodos HTTP** — tanda 2. Requiere que la clave del registro pase de `path` a `(método, path)` y el índice único a `(microservice_id, path_template, http_method)`.
+
+  **Decidido el 2026-08-07, pendiente de diseñar en detalle:**
+
+  | Verbo | Puede apuntar a | Efecto |
+  |---|---|---|
+  | `GET` | fila con SQL | lee, sin cuerpo |
+  | `POST` | fila con SQL **o** fila de escritura | lee o inserta |
+  | `PUT` | fila de escritura | actualiza |
+  | `DELETE` | — | **no se soporta** |
+
+  Lo que decide si un `POST` lee o crea **no es el verbo, es la fila**: una fila con SQL lee, una con tabla+columnas escribe. Como sólo puede haber una fila por `(método, ruta)`, no hay ambigüedad que resolver en tiempo de petición.
+
+  **Por qué DELETE queda fuera.** Los endpoints por ruta van hoy al camino de **lectura**, que rechaza SQL mutante (`rejectIfMutating`). El camino de **escritura** (`POST /write`) no ejecuta SQL del catálogo: genera `INSERT`/`UPDATE` a partir de una tabla y columnas declaradas, y `DELETE`/DDL están prohibidos por diseño. Un `DELETE /x/:ID` no podría borrar nada sin una de dos cosas: ampliar el camino de escritura para que sepa borrar, o relajar `rejectIfMutating` — y lo segundo desmontaría la garantía de que nunca se ejecuta SQL de modificación escrito a mano contra la base. Al dejar DELETE fuera, esa garantía se mantiene intacta y GET/POST/PUT encajan con lo que ya existe.
 - Cambiar la semántica de `LIKE` o añadir búsqueda insensible a mayúsculas por defecto — queda en manos de cada autor (decisión 2).
 
 ---
