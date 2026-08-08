@@ -1,6 +1,7 @@
 package com.co.eurekatic.common.query;
 
 import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -25,9 +26,27 @@ public final class PathTemplateSyntax {
 
     private PathTemplateSyntax() {}
 
-    /** Una variable candidata: dos puntos + identificador. */
-    private static final Pattern VARIABLE =
-            Pattern.compile(":([A-Za-z_][A-Za-z0-9_]*)");
+    /**
+     * Un candidato a variable: {@code ':'} y TODO lo que le siga
+     * hasta el final del segmento.
+     *
+     * <p>Deliberadamente permisivo. Un patrón estrecho como
+     * {@code [A-Za-z_][A-Za-z0-9_]*} parece más correcto y es una
+     * trampa: se corta en el primer carácter no ASCII, de modo que
+     * {@code :AÑO} se detecta como la variable {@code A}, pasa la
+     * validación, y luego {@code toBracePattern} produce
+     * {@code {A}ÑO} — un patrón que sólo casa con rutas acabadas en
+     * "ÑO". En un catálogo en español ({@code :AÑO}, {@code :CÓDIGO},
+     * {@code :TAMAÑO}) eso no es un caso exótico. Y el síntoma es
+     * justo el que esta clase existe para evitar: 200 con lista
+     * vacía, nunca un error.
+     *
+     * <p>Capturando el segmento entero, cualquier cosa que no sea
+     * un nombre válido falla ruidosamente en {@link #validate}, y
+     * "lo que validate acepta es exactamente lo que toBracePattern
+     * traduce bien" pasa a ser estructural en vez de casual.
+     */
+    private static final Pattern VARIABLE = Pattern.compile(":([^/]*)");
 
     /** Nombre aceptable dentro de una variable. */
     private static final Pattern VALID_NAME =
@@ -38,6 +57,9 @@ public final class PathTemplateSyntax {
      * con un mensaje que explica QUÉ hay que escribir, no sólo qué
      * está mal — el consumidor es un admin en un formulario, no un
      * programador leyendo un stacktrace.
+     *
+     * <p>Asume que el llamante ya normalizó la cadena; sso-admin lo
+     * hace en normalizePathTemplate antes de validar y de guardar.
      */
     public static void validate(String template) {
         if (template == null || template.isBlank()) {
@@ -49,11 +71,17 @@ public final class PathTemplateSyntax {
             throw new IllegalArgumentException(
                     "La plantilla debe empezar por '/': " + t);
         }
-        if (t.contains("**")) {
+        // Se rechaza cualquier comodín, no sólo '**'. Un '*' casa un
+        // segmento entero y un '?' un carácter en PathPattern, así que
+        // /reporte/* daría una ruta comodín donde el admin creía
+        // escribir una literal — una cuestión de superficie de
+        // autorización, no sólo de matching.
+        if (t.indexOf('*') >= 0 || t.indexOf('?') >= 0) {
             throw new IllegalArgumentException(
-                    "La plantilla no puede contener '**' — ese prefijo lo "
-                    + "aporta el microservicio (MICROSERVICE.REQUEST_URI). "
-                    + "Usa una ruta literal, ej /establecimiento/:NOMBRE");
+                    "La plantilla no puede contener comodines ('*' ni '?'). "
+                    + "El prefijo con '**' lo aporta el microservicio "
+                    + "(MICROSERVICE.REQUEST_URI). Usa una ruta literal, "
+                    + "ej /establecimiento/:NOMBRE");
         }
         if (t.indexOf('{') >= 0 || t.indexOf('}') >= 0) {
             throw new IllegalArgumentException(
@@ -66,10 +94,17 @@ public final class PathTemplateSyntax {
         while (m.find()) {
             String name = m.group(1);
             if (!VALID_NAME.matcher(name).matches()) {
+                String suggestion = name.toUpperCase(Locale.ROOT);
                 throw new IllegalArgumentException(
                         "El nombre de variable ':" + name + "' debe ir en "
-                        + "MAYÚSCULA y empezar por letra: usa ':"
-                        + name.toUpperCase() + "'");
+                        + "MAYÚSCULA, empezar por letra y usar sólo A-Z, 0-9 "
+                        + "y '_'"
+                        // Sólo se sugiere una corrección cuando difiere del
+                        // original: decirle al admin "usa ':_FOO'" cuando
+                        // acaba de escribir ':_FOO' no ayuda a nadie.
+                        + (VALID_NAME.matcher(suggestion).matches()
+                                ? ": usa ':" + suggestion + "'"
+                                : "."));
             }
             if (!seen.add(name)) {
                 throw new IllegalArgumentException(
