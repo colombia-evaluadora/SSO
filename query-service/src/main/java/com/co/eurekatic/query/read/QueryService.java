@@ -337,8 +337,24 @@ public class QueryService {
                                         return QueryResult.rowsOnly(out);
                                     }
                                 }
-                                return QueryResult.rowsOnly(List.of(
-                                        Map.of("rowsAffected", ps.getUpdateCount())));
+                                // getUpdateCount() devuelve -1 cuando no hay
+                                // contador que dar, que es justo el caso de
+                                // un CALL en Postgres: un procedimiento no
+                                // reporta filas afectadas. Comprobado contra
+                                // la base real — execute() da hasResultSet
+                                // =false y updateCount=-1.
+                                //
+                                // Devolver "rowsAffected: -1" sería un número
+                                // sin significado para una llamada que fue
+                                // bien, así que en ese caso la respuesta es
+                                // un envelope vacío: ni filas ni contador,
+                                // que es literalmente lo que ocurrió. El
+                                // contador solo se emite cuando existe (DML).
+                                int affected = ps.getUpdateCount();
+                                return affected < 0
+                                        ? QueryResult.rowsOnly(List.of())
+                                        : QueryResult.rowsOnly(List.of(
+                                                Map.of("rowsAffected", affected)));
                             });
                     log.debug("uuid={} ejecutado (mode={})", req.uuid(), mode);
                     return result;
