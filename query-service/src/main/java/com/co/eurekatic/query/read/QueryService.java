@@ -283,34 +283,81 @@ public class QueryService {
                     log.debug("uuid={} using CallableStatement (outParams={})",
                             req.uuid(), def.outParamNames());
                     List<String> outNames = parseOutNames(def.outParamNames());
-                    Map<String, Object> outValues = executeCallable(jdbc, sql, params, outNames);
-                    // For procedures that ALSO return rows via RETURN QUERY,
-                    // we still capture the result set. The driver returns
-                    // it after the call completes.
-                    List<Map<String, Object>> rows = jdbc.query(sql, params,
-                            QueryService::mapRow);
-                    log.debug("uuid={} returned {} rows + {} OUT params (mode={})",
-                            req.uuid(), rows.size(), outValues.size(), mode);
-                    return QueryResult.withOutParams(rows, outValues);
+                    // UNA sola ejecución. Antes se llamaba a
+                    // executeCallable y después a jdbc.query() con el
+                    // MISMO sql, así que el procedimiento corría dos
+                    // veces: sus efectos secundarios (auditoría,
+                    // contadores, cualquier escritura) se aplicaban
+                    // por duplicado. El comentario decía que el
+                    // driver "devuelve el result set después de la
+                    // llamada", que es cierto — pero se leía
+                    // reejecutando en vez de leyéndolo del
+                    // CallableStatement que ya lo tenía.
+                    QueryResult result = executeCallable(jdbc, sql, params, outNames);
+                    log.debug("uuid={} devolvió {} filas + {} OUT params (mode={})",
+                            req.uuid(), result.rows().size(),
+                            result.outParams() == null ? 0 : result.outParams().size(), mode);
+                    return result;
                 }
 
-                // V33 — una fila DML no devuelve filas: se ejecuta
-                // con update() y la respuesta es rowsAffected.
+                // PROCEDURE (sin OUT params) y DML comparten camino:
+                // se deja que JDBC diga si hubo result set en vez de
+                // suponerlo.
                 //
-                // INSERT ... RETURNING queda fuera de alcance a
-                // propósito: update() ejecuta la sentencia pero
-                // descarta las filas. Detectar RETURNING buscando la
-                // palabra en el texto sería una heurística que falla
-                // en cuanto aparezca dentro de un literal, y prefiero
-                // una regla predecible a una que acierta casi
-                // siempre. Quien necesite la fila insertada tiene dos
-                // caminos que ya funcionan: una función invocada con
-                // SELECT, o un procedimiento con OUT params.
-                if ("DML".equals(mode)) {
-                    int affected = jdbc.update(sql, params);
-                    log.debug("uuid={} afectó {} filas (mode=DML)", req.uuid(), affected);
-                    return QueryResult.rowsOnly(List.of(
-                            Map.of("rowsAffected", affected)));
+                // Suponerlo costó caro. Un CALL a un procedimiento
+                // que no devuelve nada iba por query(), y el driver
+                // de Postgres lanzaba "La consulta no retornó ningún
+                // resultado" DESPUÉS de ejecutar y commitear: el
+                // cliente recibía un 500 por una escritura que sí se
+                // había aplicado. Un reintento la aplicaba dos veces.
+                //
+                // ps.execute() devuelve true si hay filas y false si
+                // hay un contador de actualización, que es
+                // exactamente la pregunta que hay que hacer. Así
+                // salen bien los cuatro casos sin heurísticas:
+                //   CALL sin retorno        -> rowsAffected
+                //   CALL con INOUT          -> filas
+                //   INSERT/UPDATE           -> rowsAffected
+                //   INSERT ... RETURNING    -> filas
+                //
+                // Ese último era una limitación declarada en V33 y
+                // desaparece sola: no hace falta buscar la palabra
+                // RETURNING en el texto, que era la heurística que
+                // se había descartado por frágil.
+                if ("DML".equals(mode) || "PROCEDURE".equals(mode)) {
+                    QueryResult result = jdbc.execute(sql, params,
+                            (java.sql.PreparedStatement ps) -> {
+                                if (ps.execute()) {
+                                    try (java.sql.ResultSet rs = ps.getResultSet()) {
+                                        List<Map<String, Object>> out = new java.util.ArrayList<>();
+                                        int i = 0;
+                                        while (rs.next()) {
+                                            out.add(mapRow(rs, i++));
+                                        }
+                                        return QueryResult.rowsOnly(out);
+                                    }
+                                }
+                                // getUpdateCount() devuelve -1 cuando no hay
+                                // contador que dar, que es justo el caso de
+                                // un CALL en Postgres: un procedimiento no
+                                // reporta filas afectadas. Comprobado contra
+                                // la base real — execute() da hasResultSet
+                                // =false y updateCount=-1.
+                                //
+                                // Devolver "rowsAffected: -1" sería un número
+                                // sin significado para una llamada que fue
+                                // bien, así que en ese caso la respuesta es
+                                // un envelope vacío: ni filas ni contador,
+                                // que es literalmente lo que ocurrió. El
+                                // contador solo se emite cuando existe (DML).
+                                int affected = ps.getUpdateCount();
+                                return affected < 0
+                                        ? QueryResult.rowsOnly(List.of())
+                                        : QueryResult.rowsOnly(List.of(
+                                                Map.of("rowsAffected", affected)));
+                            });
+                    log.debug("uuid={} ejecutado (mode={})", req.uuid(), mode);
+                    return result;
                 }
 
                 // SELECT / FUNCTION / PROCEDURE-without-OUT path.
@@ -380,10 +427,10 @@ public class QueryService {
      * CallableStatement.getObject(name, Class<T>) which is
      * out of scope for v1.
      */
-    private Map<String, Object> executeCallable(NamedParameterJdbcTemplate jdbc,
-                                                 String sql,
-                                                 MapSqlParameterSource params,
-                                                 List<String> outNames) {
+    private QueryResult executeCallable(NamedParameterJdbcTemplate jdbc,
+                                        String sql,
+                                        MapSqlParameterSource params,
+                                        List<String> outNames) {
         return jdbc.getJdbcTemplate().execute(
                 (java.sql.Connection con) -> {
                     try (java.sql.CallableStatement cs = con.prepareCall(sql)) {
@@ -400,13 +447,27 @@ public class QueryService {
                             cs.registerOutParameter(outName,
                                     java.sql.Types.OTHER);
                         }
-                        cs.execute();
-                        // Read OUT values.
+                        // execute() dice si hay result set. Se lee del
+                        // MISMO statement en vez de reejecutar el SQL,
+                        // que es lo que hacía que el procedimiento
+                        // corriera dos veces.
+                        List<Map<String, Object>> rows = new java.util.ArrayList<>();
+                        if (cs.execute()) {
+                            try (java.sql.ResultSet rs = cs.getResultSet()) {
+                                int i = 0;
+                                while (rs.next()) {
+                                    rows.add(mapRow(rs, i++));
+                                }
+                            }
+                        }
+                        // Los OUT se leen después de agotar el result
+                        // set: el driver de Postgres no los tiene
+                        // disponibles hasta que la llamada termina.
                         Map<String, Object> out = new LinkedHashMap<>();
                         for (String outName : outNames) {
                             out.put(outName, cs.getObject(outName));
                         }
-                        return out;
+                        return QueryResult.withOutParams(rows, out);
                     }
                 });
     }
