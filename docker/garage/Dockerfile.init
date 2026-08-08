@@ -1,0 +1,17 @@
+# =============================================================================
+# Imagen del inicializador de Garage.
+#
+# La imagen oficial (dxflrs/garage) es `scratch`: sólo lleva el binario, sin
+# /bin/sh. Eso basta para el servidor, pero no para el arranque en frío, que
+# necesita varios pasos condicionales (¿hay layout?, ¿existe el bucket?,
+# ¿existe la clave?) y por tanto un shell.
+#
+# La CLI de Garage es el mismo binario que el servidor, así que se copia
+# sobre una alpine y el script se ejecuta tal cual.
+# =============================================================================
+FROM dxflrs/garage:v1.0.1 AS garage
+
+FROM alpine:3.20
+COPY --from=garage /garage /usr/local/bin/garage
+COPY garage-init.sh /init/garage-init.sh
+ENTRYPOINT ["/bin/sh", "/init/garage-init.sh"]

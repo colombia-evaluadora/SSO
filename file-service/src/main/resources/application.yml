@@ -1,0 +1,80 @@
+server:
+  port: ${PORT:8086}
+  shutdown: graceful
+
+spring:
+  application:
+    name: file-service
+  main:
+    banner-mode: off
+
+  # ---------------------------------------------------------------------------
+  # Límites de subida. SIN ESTO, UN CLIENTE PUEDE LLENAR EL DISCO.
+  #
+  # El repo no tenía ningún límite configurado en ningún módulo, y el
+  # servidor de pruebas está al 85% con 12 GB libres. Spring, por
+  # defecto, no limita el tamaño de un multipart.
+  #
+  # `file-size-threshold` en 0 hace que todo vaya a disco temporal en
+  # vez de a memoria: con menos de 1 GB disponible, tres subidas
+  # simultáneas en heap devolverían la caja al swap.
+  # ---------------------------------------------------------------------------
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: ${FILES_MAX_FILE_SIZE:25MB}
+      max-request-size: ${FILES_MAX_REQUEST_SIZE:30MB}
+      file-size-threshold: 0
+
+  datasource:
+    url: ${FILES_DS_URL}
+    username: ${FILES_DS_USERNAME}
+    password: ${FILES_DS_PASSWORD}
+    hikari:
+      maximum-pool-size: ${FILES_DS_POOL_SIZE:5}
+
+files:
+  # Esquema donde vive TARCHIVO.
+  schema: ${FILES_SCHEMA:academico_test}
+
+  # A dónde se reenvía el JSON ya transformado. Apunta al gateway para
+  # que la petición pase por las mismas reglas de autorización que
+  # cualquier otra: este servicio no es una puerta trasera al catálogo.
+  catalog-base-url: ${FILES_CATALOG_BASE_URL:http://sso-api-gateway:8080/api}
+
+  s3:
+    # Vacío = AWS real. Con valor = almacén compatible (Garage en dev).
+    endpoint: ${S3_ENDPOINT:}
+    region: ${S3_REGION:us-east-1}
+    bucket: ${S3_BUCKET:eval-col}
+    access-key: ${S3_ACCESS_KEY:}
+    secret-key: ${S3_SECRET_KEY:}
+    # Obligatorio contra un endpoint local: no hay DNS por bucket, así
+    # que el SDK debe pedir /bucket/objeto. Contra AWS se pone en false.
+    path-style: ${S3_PATH_STYLE:true}
+    # Prefijo con el que se compone la urls3 que se guarda en TARCHIVO.
+    public-base-url: ${S3_PUBLIC_BASE_URL:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://eurekaserver:8761/eureka}
+  instance:
+    prefer-ip-address: true
+
+logging:
+  level:
+    com.co.eurekatic.files: INFO
+    # El SDK de AWS es muy verboso en DEBUG y filtra cabeceras firmadas.
+    software.amazon.awssdk: WARN
