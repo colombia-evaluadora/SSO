@@ -510,25 +510,54 @@ endpoint:
 
 | Layer | What it owns |
 |---|---|
-| `QUERY.PATH_TEMPLATE` (V27) | URL suffix, e.g. `/establecimiento/{id}` |
+| `QUERY.PATH_TEMPLATE` (V27, V32) | URL suffix with `:UPPERCASE` variables, e.g. `/establecimiento/:NOMBRE` |
 | `MICROSERVICE.REQUEST_URI` (V3, reused) | URL prefix, e.g. `/api/eval-col/**` |
-| `QUERY.EXECUTION_MODE` (V28) | `SELECT` / `PROCEDURE` / `FUNCTION` |
-| JWT `uid` claim (V29) | `:caller_user_id` injected into JDBC params |
-| JWT `roles` claim (V29) | `:caller_roles` (CSV) and `:caller_roles_array` (PG array) injected |
+| `QUERY.EXECUTION_MODE` (V28, V32) | Derived from the SQL's first keyword — not an admin-editable field |
+| `QUERY.TYPE` (V32) | DB dialect, inherited from the owning microservice |
+| JWT claims (V29, V32) | `:CONTEXT.USER_ID`, `:CONTEXT.EMAIL`, `:CONTEXT.ROLES`, `:CONTEXT.ROLES_ARRAY` |
+
+**Every parameter carries the prefix of its origin (V32).** Reading a
+statement tells you which values the caller controls and which the
+system injects — and the four namespaces cannot collide with each
+other, so a query param can no longer silently override a path
+variable.
+
+| Prefix | Origin | Controlled by |
+|---|---|---|
+| `:PARAM.*` | path variables | the caller |
+| `:QUERY.*` | query string | the caller |
+| `:BODY.*` | JSON body, dot-flattened | the caller |
+| `:CONTEXT.*` | verified JWT | the system |
+
+Names must be ASCII uppercase (`[A-Z][A-Z0-9_]*`) in every origin.
+That is not stylistic: Spring's parameter parser terminates a bind
+name at a hyphen, so a key like `?page-size=1` would yield
+`:QUERY.PAGE` followed by a stray `-SIZE` in the middle of the SQL.
+Transliterate — `ANIO`, not `AÑO`.
 
 Combined, an admin can publish a catalog row that maps to:
 
 ```
-POST /api/eval-col/establecimiento/42?estado=activo
+POST /api/eval-col/municipio/404/establecimientos?SIZE=20&OFFSET=0
 Authorization: Bearer <jwt, uid=42, roles=[EVALUADOR]>
-{ "filtros": { "regional": "cartagena" } }
+{ "filtros": { "zona": 214 } }
 
-→ sso-admin /getQuery?uuid=proc-get-establecimiento
-→ query-service Postgres
-→ CALL get_establecimiento(:caller_user_id, :caller_roles,
-                           :id, :estado)
+PATH_TEMPLATE = /municipio/:MUNICIPIO/establecimientos
+
+SELECT pk_establecimiento, nombre
+FROM   testablecimiento
+WHERE  fk_tmunicipio          = CAST(:PARAM.MUNICIPIO AS bigint)
+  AND  fk_tlista_valor_zona   = CAST(:BODY.FILTROS.ZONA AS bigint)
+  AND  fk_tfuncionario_rector = :CONTEXT.USER_ID
+LIMIT  :QUERY.SIZE OFFSET :QUERY.OFFSET
+
 → JSON rows
 ```
+
+The SQL runs exactly as written. Before V32 the service appended
+` LIMIT :limit` behind the author's back — so what executed was not
+what the form showed, and only in SELECT mode. Pagination is now
+the author's to write.
 
 Two flavors of path-based dispatch:
 
