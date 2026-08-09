@@ -1,5 +1,7 @@
 package com.co.eurekatic.files;
 
+import com.co.eurekatic.common.security.JwtProperties;
+import com.co.eurekatic.common.security.JwtTokenService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -67,13 +69,19 @@ public class DownloadController {
 
     private final ArchivoRepository archivos;
     private final AlmacenObjetos almacen;
+    private final JwtTokenService jwt;
+    private final JwtProperties jwtProps;
     private final String tokenCompartido;
 
     public DownloadController(ArchivoRepository archivos,
                               AlmacenObjetos almacen,
+                              JwtTokenService jwt,
+                              JwtProperties jwtProps,
                               @Value("${files.internal-token:}") String tokenCompartido) {
         this.archivos = archivos;
         this.almacen = almacen;
+        this.jwt = jwt;
+        this.jwtProps = jwtProps;
         this.tokenCompartido = tokenCompartido == null ? "" : tokenCompartido;
     }
 
@@ -86,10 +94,12 @@ public class DownloadController {
     @GetMapping("/files/download/{archivoId}")
     public ResponseEntity<StreamingResponseBody> descargar(
             @RequestHeader(value = INTERNAL_HEADER, required = false) String token,
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String autorizacion,
             @PathVariable("archivoId") long archivoId) {
 
-        if (!verificaToken(token)) {
-            log.warn("descarga id={} rechazada: token interno ausente o inválido", archivoId);
+        String quien = identificaLlamante(autorizacion, token);
+        if (quien == null) {
+            log.warn("descarga id={} rechazada: ni JWT válido ni token interno", archivoId);
             return ResponseEntity.status(401).build();
         }
 
@@ -181,7 +191,48 @@ public class DownloadController {
         // que ponerlo a mano (hacerlo es un error: es un header
         // hop-by-hop que el contenedor gestiona él mismo).
 
+        log.info("descarga id={} ({} bytes) para {}", archivoId, tamano, quien);
         return ResponseEntity.ok().headers(headers).body(cuerpo);
+    }
+
+    /**
+     * Identifica a quien pide el archivo, por cualquiera de las dos
+     * vías legítimas. Devuelve una etiqueta para el log, o
+     * {@code null} si no se pudo autenticar por ninguna.
+     *
+     * <p>Son dos porque hay dos clases de llamante, y ninguna puede
+     * usar el mecanismo de la otra:
+     *
+     * <ul>
+     *   <li><b>Un usuario</b> (el admin-ui pidiendo la firma de un
+     *       funcionario) llega con su JWT. Se verifica la FIRMA, no
+     *       la mera presencia de la cabecera.</li>
+     *   <li><b>El catálogo</b>, cuando arma un enlace en una respuesta,
+     *       actúa por su cuenta y no tiene JWT de usuario ninguno que
+     *       presentar. Para eso está el secreto compartido.</li>
+     * </ul>
+     *
+     * <p>Se prueba primero el JWT porque es el caso normal; el token
+     * interno es la excepción.
+     */
+    private String identificaLlamante(String autorizacion, String tokenInterno) {
+        String prefijo = jwtProps.tokenPrefix();
+        if (autorizacion != null && autorizacion.startsWith(prefijo)) {
+            String bruto = autorizacion.substring(prefijo.length()).trim();
+            if (!bruto.isEmpty()) {
+                try {
+                    return "usuario:" + jwt.parse(bruto).email();
+                } catch (io.jsonwebtoken.JwtException e) {
+                    // Token presente pero inválido (caducado, firma que
+                    // no cuadra). No se cae al token interno: quien
+                    // manda un JWT roto quería entrar como usuario, y
+                    // devolver 401 dice exactamente eso.
+                    log.debug("JWT rechazado: {}", e.getMessage());
+                    return null;
+                }
+            }
+        }
+        return verificaTokenInterno(tokenInterno) ? "catálogo" : null;
     }
 
     /**
@@ -189,7 +240,7 @@ public class DownloadController {
      * Devuelve false si la variable está vacía: un despliegue sin
      * token configurado debe fallar cerrado, no abierto.
      */
-    private boolean verificaToken(String recibido) {
+    private boolean verificaTokenInterno(String recibido) {
         if (tokenCompartido.isEmpty() || recibido == null) {
             return false;
         }

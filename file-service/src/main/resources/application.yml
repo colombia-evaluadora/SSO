@@ -43,13 +43,32 @@ files:
   catalog-base-url: ${FILES_CATALOG_BASE_URL:http://sso-api-gateway:8080/api}
 
   # Secreto compartido con el catálogo PL/pgSQL. Quien lo presente en
-  # X-Internal-Token puede pedir GET /api/files/download/{id} aunque
-  # la request no lleve cookie de sesión. Vacío = esa puerta está
-  # cerrada y la única forma de descargar es con sesión SSO válida.
+  # X-Internal-Token puede pedir GET /api/files/download/{id} sin
+  # llevar JWT — el catálogo actúa por su cuenta, no en nombre de un
+  # usuario. Vacío = esa puerta está cerrada y la única forma de
+  # descargar es con un JWT válido.
   # No confundir con SSO_INTERNAL_TOKEN / GATEWAY_INTERNAL_TOKEN:
   # son tres secretos independientes (mismo valor por simplicidad
   # operativa, pero rotarlos debe hacerse de forma sincronizada).
   internal-token: ${FILES_INTERNAL_TOKEN:}
+
+sso:
+  jwt:
+    # Sólo la pública: file-service verifica, no emite. Debe ser la
+    # pareja de la JWT_PRIVATE_KEY de auth-center.
+    #
+    # Hasta ahora este servicio no validaba nada: confiaba en que el
+    # gateway hubiera autenticado antes de reenviar (ver
+    # ReenvioController, que se limita a propagar el Authorization).
+    # DownloadController sí verifica la firma, porque es el único
+    # endpoint que devuelve BYTES de un archivo: si algún día alguien
+    # alcanza este servicio sin pasar por el gateway, la diferencia
+    # entre confiar en la cabecera y comprobar la firma es la
+    # diferencia entre entregar el archivo a cualquiera y no hacerlo.
+    public-key: ${JWT_PUBLIC_KEY}
+    issuer: sso-postgres
+    header-name: Authorization
+    token-prefix: "Bearer "
 
   s3:
     # Vacío = AWS real. Con valor = almacén compatible (Garage en dev).

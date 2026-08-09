@@ -1393,6 +1393,10 @@ services:
       # llegue con cookie de sesión válida, lo cual es seguro pero
       # bloquea el caso "el catálogo arma un enlace temporal".
       FILES_INTERNAL_TOKEN: "${FILES_INTERNAL_TOKEN:-}"
+      # Clave PÚBLICA del par RS256. file-service verifica firmas en
+      # GET /files/download/{id}; no emite tokens, así que no recibe
+      # (ni debe recibir) la privada.
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"

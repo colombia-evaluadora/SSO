@@ -1,9 +1,22 @@
 package com.co.eurekatic.files;
 
+import com.co.eurekatic.common.security.AuthPrincipal;
+import com.co.eurekatic.common.security.JwtProperties;
+import com.co.eurekatic.common.security.JwtTokenService;
+import io.jsonwebtoken.JwtException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 
+import java.util.Optional;
+import java.util.Set;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 /**
  * Fija el contrato de {@link DownloadController#extraerClave}.
@@ -94,6 +107,98 @@ class DownloadControllerTest {
                 .isEqualTo(MediaType.APPLICATION_OCTET_STREAM);
         assertThat(DownloadController.mediaTypeDe(null, "sin-extension"))
                 .isEqualTo(MediaType.APPLICATION_OCTET_STREAM);
+    }
+
+    // ---------- Autenticación: las dos puertas legítimas ----------
+    //
+    // El endpoint devuelve BYTES de un archivo, así que quién puede
+    // llamarlo importa más que en el resto del servicio. Hay dos
+    // llamantes con necesidades distintas: un usuario (trae JWT) y el
+    // catálogo (no tiene JWT de usuario que presentar, trae el secreto
+    // compartido). Estos tests fijan que ambas funcionan y que nada más
+    // pasa.
+
+    private static final String TOKEN_INTERNO = "secreto-compartido-de-prueba";
+
+    /** Controller con repositorio vacío: basta para ver si autentica. */
+    private static DownloadController controller(JwtTokenService jwt,
+                                                 ArchivoRepository repo) {
+        var props = new JwtProperties(null, "irrelevante-en-tests",
+                "sso-postgres", 3600, 86400, "Authorization", "Bearer ", null);
+        return new DownloadController(repo, mock(AlmacenObjetos.class),
+                jwt, props, TOKEN_INTERNO);
+    }
+
+    @Test
+    void unUsuarioConJwtValidoPasaLaAutenticacion() {
+        var jwt = mock(JwtTokenService.class);
+        var repo = mock(ArchivoRepository.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("ana@example.com", 7L, Set.of("USER"), "access"));
+        when(repo.buscarActivo(anyLong())).thenReturn(Optional.empty());
+
+        var respuesta = controller(jwt, repo)
+                .descargar(null, "Bearer jwt-bueno", 1L);
+
+        // 404 y no 401: pasó la autenticación y falló al buscar la fila,
+        // que es justo lo que queremos demostrar aquí.
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
+        verify(repo).buscarActivo(1L);
+    }
+
+    @Test
+    void elCatalogoPasaConElTokenInterno() {
+        var jwt = mock(JwtTokenService.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.buscarActivo(anyLong())).thenReturn(Optional.empty());
+
+        var respuesta = controller(jwt, repo).descargar(TOKEN_INTERNO, null, 1L);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
+        // Sin cabecera Authorization no se toca el verificador de JWT.
+        verifyNoInteractions(jwt);
+    }
+
+    @Test
+    void sinCredencialesDeNingunTipoEs401() {
+        var repo = mock(ArchivoRepository.class);
+
+        var respuesta = controller(mock(JwtTokenService.class), repo)
+                .descargar(null, null, 1L);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(401);
+        // No debe ni mirar la base de datos si no está autenticado.
+        verifyNoInteractions(repo);
+    }
+
+    @Test
+    void unTokenInternoEquivocadoEs401() {
+        var repo = mock(ArchivoRepository.class);
+
+        var respuesta = controller(mock(JwtTokenService.class), repo)
+                .descargar("no-es-el-secreto", null, 1L);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(401);
+        verifyNoInteractions(repo);
+    }
+
+    /**
+     * Un JWT roto NO cae de vuelta al token interno. Quien manda un
+     * Bearer quería entrar como usuario; si su token no vale, la
+     * respuesta correcta es 401 — no colarlo por la puerta del
+     * catálogo porque casualmente supiera el otro secreto.
+     */
+    @Test
+    void unJwtInvalidoEs401AunqueVengaConElTokenInterno() {
+        var jwt = mock(JwtTokenService.class);
+        var repo = mock(ArchivoRepository.class);
+        when(jwt.parse(anyString())).thenThrow(new JwtException("caducado"));
+
+        var respuesta = controller(jwt, repo)
+                .descargar(TOKEN_INTERNO, "Bearer jwt-caducado", 1L);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(401);
+        verifyNoInteractions(repo);
     }
 
     @Test
