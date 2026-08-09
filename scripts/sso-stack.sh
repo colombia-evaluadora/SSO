@@ -204,43 +204,60 @@ fi
 if [ "${1:-}" = "up" ] && [ -n "$FILTER_OUT" ]; then
   # Servicios que matchean los perfiles que se acaban de apagar.
   # Parseamos docker-compose.yml: nombres de servicio son líneas
-  # que empiezan con 2 espacios + letra + `:` y fin de línea
-  # (no `<<<:`, no tienen hijos en esa línea). Capturamos qué
-  # profiles tiene cada uno con un parser simplificado.
+  # que empiezan con 2 espacios + letra + `:` y fin de línea.
+  # Capturamos qué profiles tiene cada uno.
   HUErfanos=""
 
   PROFILES_BY_SERVICE="$(awk '
-    function flush() { if (svc != "") printf "%s %s\n", svc, prof; svc=""; prof="" }
-    # Cabecera de servicio: dos espacios, nombre sin caracteres raros, ":"
-    /^  [a-zA-Z0-9_.-]+:$/ { flush(); svc=$1; sub(/:$/,"",svc); next }
-    # En cualquier otra línea, vaciamos svc si no estamos dentro
-    # de la cabecera del servicio (top-level `name:`, `services:`).
-    /^[^ ]/ || /^ [^ ]/ { flush(); next }
-    # Línea con profiles: [...]
-    /[[:space:]]+profiles:[[:space:]]*\[/ {
-      line=$0
-      sub(/.*profiles:[[:space:]]*\[/, "", line)
-      sub(/\].*/, "", line)
-      prof=line
+    # Cabecera de servicio: dos espacios, nombre, ":" y fin de línea.
+    # Si veníamos acumulando profiles de otro servicio, los volcamos.
+    /^  [a-zA-Z0-9_.-]+:$/ {
+      if (svc != "" && svc != "services") printf "%s %s\n", svc, prof
+      svc=$1; sub(/:$/,"",svc); prof=""; next
+    }
+    # Top-level (services:, name:, etc.) → olvidamos el svc pendiente
+    # y volcamos si había algo.
+    /^[^ ]/ || /^ [^ ]/ {
+      if (svc != "" && svc != "services") printf "%s %s\n", svc, prof
+      svc=""; prof=""; next
+    }
+    # profiles: [a, b] — capturar todo lo que está dentro del corchete
+    # en una sola pasada (no asumimos que cierre en la misma línea).
+    /profiles:[[:space:]]*\[/ {
+      s = $0
+      while (match(s, /\[[^\]]*\]/)) {
+        arr = substr(s, RSTART+1, RLENGTH-2)
+        gsub(/[ \t]+/, "", arr)
+        if (prof == "") prof = arr; else prof = prof "," arr
+        s = substr(s, RSTART+RLENGTH)
+      }
       next
     }
-    END { flush() }
+    END { if (svc != "" && svc != "services") printf "%s %s\n", svc, prof }
   ' docker-compose.yml)"
 
-  # Validación básica: si el parser no detectó nada, no bajamos nada.
-  [ -z "$PROFILES_BY_SERVICE" ] && PROFILES_BY_SERVICE="__none__:__none__"
+  # Validación: parser sano. Si la salida está vacía o no tiene
+  # comas, no bajamos nada (defensivo).
+  if [ -z "$PROFILES_BY_SERVICE" ]; then
+    echo ">> Aviso: parser no extrajo profiles de docker-compose.yml; saltando bajada de huérfanos."
+    PROFILES_BY_SERVICE=""
+  fi
 
   for f in $FILTER_OUT; do
     matches="$(printf '%s\n' "$PROFILES_BY_SERVICE" | awk -v p="$f" '{
-      n=split($0, parts, " ");
+      # Limpiamos comillas y separamos por comas/espacios.
+      gsub(/"/, "", $0)
+      n = split($0, parts, /[, ]+/)
       for (i=2; i<=n; i++) {
-        gsub(/[",]/, "", parts[i])
-        if (parts[i] == p) { print $1; break }
+        if (parts[i] == p) { print $1; next }
       }
     }')"
     for m in $matches; do
-      # ¿Está corriendo?
-      if docker ps --format '{{.Names}}' | grep -qx "${COMPOSE_PROJECT_NAME:-sso}-${m}"; then
+      # El nombre del contenedor puede llevar el prefijo del proyecto
+      # (`sso-…`) o no, dependiendo de si `docker-compose.yml` define
+      # `container_name:` o no. Probamos los dos.
+      PROJECT_PREFIX="${COMPOSE_PROJECT_NAME:-sso}"
+      if docker ps --format '{{.Names}}' | grep -qxE "^(${PROJECT_PREFIX}-)?${m}\$"; then
         HUErfanos="${HUErfanos} ${m}"
       fi
     done
