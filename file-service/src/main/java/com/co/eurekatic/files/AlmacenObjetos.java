@@ -103,6 +103,16 @@ public class AlmacenObjetos {
                 ? urlPublicaBase.replaceAll("/+$", "")
                 : endpoint;
         if (hostParaFirma != null && !hostParaFirma.isBlank()) {
+            // Si el publicBase trae /<bucket> al final (caso Garage:
+            // http://host:3900/eval-col), hay que quitárselo porque
+            // el presigner ya prepende /<bucket>/<key>. Sin esto, la
+            // URL queda /eval-col/eval-col/<key> y Garage responde 404.
+            URI pub = URI.create(hostParaFirma);
+            String path = pub.getPath();
+            if (path != null && !path.isBlank() && path.equals("/" + bucket)) {
+                hostParaFirma = new URI(pub.getScheme(), null, pub.getHost(),
+                        pub.getPort(), null, null, null).toString();
+            }
             presignerBuilder = presignerBuilder.endpointOverride(URI.create(hostParaFirma));
         }
         this.presigner = presignerBuilder.build();
