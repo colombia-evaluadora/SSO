@@ -69,6 +69,15 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>s3</artifactId>
             <version>${aws-sdk.version}</version>
+            <!--
+                El presigner (S3Presigner) viene incluido en este
+                artifact, no es una dependencia separada — sirve
+                para armar URLs prefirmadas (GET con expiración) sin
+                hacer una llamada al bucket. Lo necesita
+                GET /files/sign/{archivoId} para entregar al front
+                URLs de descarga válidas 15 min, sin requerir que el
+                bucket sea público.
+            -->
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

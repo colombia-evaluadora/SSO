@@ -10,7 +10,12 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
+
+import java.time.Duration;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -36,6 +41,7 @@ public class AlmacenObjetos {
     private static final Logger log = LoggerFactory.getLogger(AlmacenObjetos.class);
 
     private final S3Client s3;
+    private final S3Presigner presigner;
     private final String bucket;
     private final String urlPublicaBase;
 
@@ -69,6 +75,22 @@ public class AlmacenObjetos {
             log.info("AlmacenObjetos: AWS S3 bucket={} region={}", bucket, region);
         }
         this.s3 = builder.build();
+
+        // Mismas credenciales y endpoint que el cliente principal; el
+        // presigner NO hace la llamada HTTP — sólo arma la URL firmada
+        // con la firma SigV4 y los headers correctos para que el
+        // navegador haga el GET directo al bucket.
+        var presignerBuilder = S3Presigner.builder()
+                .region(Region.of(region))
+                .credentialsProvider(StaticCredentialsProvider.create(
+                        AwsBasicCredentials.create(accessKey, secretKey)))
+                .serviceConfiguration(S3Configuration.builder()
+                        .pathStyleAccessEnabled(pathStyle)
+                        .build());
+        if (endpoint != null && !endpoint.isBlank()) {
+            presignerBuilder = presignerBuilder.endpointOverride(URI.create(endpoint));
+        }
+        this.presigner = presignerBuilder.build();
     }
 
     /**
@@ -96,6 +118,38 @@ public class AlmacenObjetos {
                 ? "s3://" + bucket + "/" + clave
                 : urlPublicaBase.replaceAll("/+$", "") + "/" + clave;
         log.debug("subido {} ({} bytes) -> {}", clave, tamano, url);
+        return url;
+    }
+
+    /**
+     * Genera una URL prefirmada (GET con expiración) para que un
+     * navegador descargue el objeto sin pasar por este servicio.
+     *
+     * <p>La expiración es {@code expiracion} y se aplica aunque el
+     * llamante pase null (default 15 min). Pasamos
+     * {@code responseContentDisposition} opcional para sugerir nombre
+     * de descarga en el cliente sin tener que cambiar la fila en
+     * TARCHIVO.
+     */
+    public java.net.URL firmar(String clave, Duration expiracion,
+                               String responseContentDisposition) {
+        Duration exp = expiracion == null ? Duration.ofMinutes(15) : expiracion;
+        var getObject = GetObjectRequest.builder()
+                .bucket(bucket)
+                .key(clave)
+                .applyMutation(b -> {
+                    if (responseContentDisposition != null
+                            && !responseContentDisposition.isBlank()) {
+                        b.responseContentDisposition(responseContentDisposition);
+                    }
+                })
+                .build();
+        GetObjectPresignRequest req = GetObjectPresignRequest.builder()
+                .signatureDuration(exp)
+                .getObjectRequest(getObject)
+                .build();
+        java.net.URL url = presigner.presignGetObject(req).url();
+        log.debug("firmada {} ({} seg) -> {}", clave, exp.toSeconds(), url);
         return url;
     }
 }
