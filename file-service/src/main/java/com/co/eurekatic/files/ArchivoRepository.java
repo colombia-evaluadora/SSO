@@ -109,21 +109,37 @@ public class ArchivoRepository {
      */
     public java.util.Optional<Archivo> buscarActivo(long pkTarchivo) {
         var filas = jdbc.query("""
-                SELECT pk_tarchivo, nombre, peso, urls3, mimetype
+                SELECT pk_tarchivo, nombre, peso, urls3
                   FROM %s.tarchivo
                  WHERE pk_tarchivo = :pk AND active = true
                 """.formatted(schema),
                 new MapSqlParameterSource().addValue("pk", pkTarchivo),
-                (rs, n) -> new Archivo(
-                        rs.getLong("pk_tarchivo"),
-                        rs.getString("nombre"),
-                        rs.getLong("peso"),
-                        rs.getString("urls3"),
-                        rs.getString("mimetype")));
+                (rs, n) -> {
+                    // peso es nullable en el esquema: getLong() devuelve
+                    // 0 para NULL, que es indistinguible de un archivo
+                    // vacío. Sólo importa para decidir si podemos poner
+                    // Content-Length, así que lo normalizamos aquí.
+                    long peso = rs.getLong("peso");
+                    return new Archivo(
+                            rs.getLong("pk_tarchivo"),
+                            rs.getString("nombre"),
+                            rs.wasNull() ? -1 : peso,
+                            rs.getString("urls3"));
+                });
         return filas.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(filas.get(0));
     }
 
-    /** Proyección de las columnas que {@link DownloadController} necesita. */
+    /**
+     * Proyección de las columnas que {@link DownloadController}
+     * necesita.
+     *
+     * <p>No hay {@code mimetype}: TARCHIVO nunca lo guardó. El
+     * content-type de la descarga se deriva de la extensión de la
+     * clave S3 (ver {@code DownloadController#mediaTypeDe}).
+     *
+     * <p>{@code peso} vale -1 cuando la columna es NULL — pasa en
+     * filas antiguas.
+     */
     public record Archivo(long pkTarchivo, String nombre, long peso,
-                          String urls3, String mimetype) {}
+                          String urls3) {}
 }

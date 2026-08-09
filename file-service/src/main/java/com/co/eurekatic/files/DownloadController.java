@@ -141,7 +141,11 @@ public class DownloadController {
         };
 
         HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(mediaTypeDe(archivo.mimetype(), clave));
+        // TARCHIVO no guarda mimetype, así que el content-type sale
+        // de la extensión de la clave. Se pasa null como primer
+        // argumento para dejar explícito que no es que lo hayamos
+        // olvidado: no existe esa columna.
+        headers.setContentType(mediaTypeDe(null, clave));
         // attachment vs inline: si el cliente es un <img> en el front,
         // inline; si es un "Descargar" explícito, attachment. El
         // catálogo puede pasar ?disposition=attachment vía query si
@@ -150,16 +154,22 @@ public class DownloadController {
         headers.set(HttpHeaders.CONTENT_DISPOSITION,
                 "inline; filename=\"" + nombreSeguro(archivo.nombre()) + "\"");
 
-        Long tamano = archivo.peso();
-        if (tamano != null && tamano > 0) {
-            headers.setContentLength(tamano);
-        } else {
-            // Si la fila no tiene peso (caso de cargas previas a este
-            // campo), caemos al header de S3 — pero el cliente de
-            // Garage puede no devolverlo siempre. Content-Length es
-            // opcional en HTTP/1.1; los browsers saben chunkear.
-            headers.set(HttpHeaders.TRANSFER_ENCODING, "chunked");
+        // El tamaño lo manda S3, no la fila. TARCHIVO.peso se escribió
+        // al subir y puede haber quedado desincronizado (o NULL en
+        // filas antiguas); anunciar un Content-Length que no coincide
+        // con los bytes que se van a escribir deja al navegador
+        // esperando datos que no llegan, o truncando la descarga.
+        // El GetObjectResponse trae el valor real del objeto.
+        Long tamano = objeto.response().contentLength();
+        if (tamano == null || tamano <= 0) {
+            tamano = archivo.peso() > 0 ? archivo.peso() : null;
         }
+        if (tamano != null) {
+            headers.setContentLength(tamano);
+        }
+        // Sin Content-Length, Tomcat usa chunked por su cuenta; no hay
+        // que ponerlo a mano (hacerlo es un error: es un header
+        // hop-by-hop que el contenedor gestiona él mismo).
 
         return ResponseEntity.ok().headers(headers).body(cuerpo);
     }
