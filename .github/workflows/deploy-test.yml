@@ -159,7 +159,16 @@ jobs:
     outputs:
       services: ${{ steps.pick.outputs.services }}
       any:      ${{ steps.pick.outputs.any }}
-      excluded: ${{ steps.pick.outputs.excluded }}
+      # La matriz COMPLETA de build-push, ya filtrada: un array JSON
+      # con un objeto por servicio a reconstruir. Sustituye al antiguo
+      # `excluded` — ver el comentario de `strategy` en build-push.
+      matrix:   ${{ steps.pick.outputs.matrix }}
+      # Separado de `any` a propósito: hay cambios que no reconstruyen
+      # ninguna imagen pero SÍ hay que desplegar (una migración nueva,
+      # un ajuste del compose, del .env). Con un solo flag, esos
+      # cambios se quedaban sin desplegar aunque el propio workflow
+      # documentaba lo contrario.
+      deploy:   ${{ steps.pick.outputs.deploy }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -213,14 +222,20 @@ jobs:
           set -euo pipefail
 
           # Guard contra SHA duplicado: si ya desplegamos este commit,
-          # no hacemos nada.
+          # no hacemos nada. Es el ÚNICO caso en que no se despliega.
           if [ "${SKIP:-false}" = "true" ]; then
             echo "Saltado: SHA ya desplegado."
-            echo "any=false" >> "$GITHUB_OUTPUT"
+            echo "any=false"   >> "$GITHUB_OUTPUT"
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
             echo 'services=[]' >> "$GITHUB_OUTPUT"
-            echo 'excluded=[]' >> "$GITHUB_OUTPUT"
+            echo 'matrix=[]'   >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          # A partir de aquí SIEMPRE se despliega, se reconstruya alguna
+          # imagen o no: una migración o un cambio de compose no genera
+          # imágenes pero sí tiene que llegar al servidor.
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
 
           # workflow_dispatch = redespliegue manual: se reconstruye todo
           # a propósito, porque quien lo lanza no está reaccionando a un
@@ -271,23 +286,46 @@ jobs:
             echo "services=[$SERVICIOS]" >> "$GITHUB_OUTPUT"
           fi
 
-          # Lista de TODOS los servicios del `matrix.include`, en el
-          # mismo formato JSON de clave-valor (`[{service: foo}, ...]`)
-          # que espera `strategy.matrix.exclude`. Si el push tocó
-          # `common/` o el pom raíz, `SERVICIOS` ya es TODOS, así que
-          # `excluded` queda `[]` y el `exclude` no quita nada.
-          # Si el push fue quirúrgico, los que faltan en `$SERVICIOS`
-          # van aquí.
-          EXCLUIDOS=""
+          # ─── La matriz de build-push, ya filtrada ───
+          #
+          # Antes esto emitía la lista COMPLEMENTARIA (`excluded`) para
+          # dársela a `strategy.matrix.exclude`. Nunca funcionó, y no se
+          # notó porque el único camino que la ejercitaba —el deploy
+          # automático— llevaba roto desde el 08-08: TODOS los deploys
+          # que salieron bien fueron manuales, y en un `workflow_dispatch`
+          # se reconstruye todo, así que `excluded` siempre iba vacía.
+          # La primera vez que un deploy automático volvió a correr, la
+          # exclusión parcial dejó la matriz en CERO entradas: ningún
+          # build-push, y el run en rojo.
+          #
+          # El motivo está documentado por GitHub: `include` se procesa
+          # DESPUÉS de `exclude` — hasta el punto de que la forma
+          # soportada de usarlos juntos es meter con `include` algo que
+          # `exclude` había quitado. Aquí la matriz sale ENTERA de
+          # `include`, así que intentar recortarla con `exclude` es
+          # pedirle al mecanismo justo lo contrario de lo que hace.
+          #
+          # Se emite la matriz directamente y `exclude` desaparece. Cada
+          # objeto lleva las cuatro claves que build-push necesita; las
+          # rutas son las mismas de antes (ojo: para los CDC el
+          # `dockerfile` es relativo a la raíz del workspace, no al
+          # `context` — es como lo resuelve buildx).
+          matriz_de() {
+            case "$1" in
+              cdc-capture) echo '{"service":"cdc-capture","context":"cdc-sync","dockerfile":"cdc-sync/cdc-capture/Dockerfile","extra-contexts":"repo=."}' ;;
+              cdc-worker)  echo '{"service":"cdc-worker","context":"cdc-sync","dockerfile":"cdc-sync/cdc-worker/Dockerfile","extra-contexts":"repo=."}' ;;
+              *)           echo "{\"service\":\"$1\",\"context\":\".\",\"dockerfile\":\"$1/Dockerfile\",\"extra-contexts\":\"\"}" ;;
+            esac
+          }
+
+          MATRIZ=""
           for svc in eurekaserver auth-center api-gateway sso-admin notification-service hello-service file-service provisioner query-service cdc-capture cdc-worker; do
             if echo ",$SERVICIOS," | grep -qE "(,|\")${svc}(,|\")"; then
-              : # entra en SERVICIOS: no excluir
-            else
-              EXCLUIDOS="${EXCLUIDOS:+$EXCLUIDOS,}{\"service\":\"${svc}\"}"
+              MATRIZ="${MATRIZ:+$MATRIZ,}$(matriz_de "$svc")"
             fi
           done
-          echo "Quedan fuera de la build: [${EXCLUIDOS}]"
-          echo "excluded=[${EXCLUIDOS}]" >> "$GITHUB_OUTPUT"
+          echo "Entradas de la matriz: $(echo "[${MATRIZ}]" | grep -o '"service"' | wc -l)"
+          echo "matrix=[${MATRIZ}]" >> "$GITHUB_OUTPUT"
 
   build-push:
     name: build-push (${{ matrix.service }})
@@ -304,84 +342,33 @@ jobs:
     # arriba). Cuando test/main tengan su entorno, cada workflow
     # añade su propio gate — no se vuelve a meter aquí.
     #
-    # El `contains` se evalúa POR ENTRADA de la matriz: las que no
-    # aplican se saltan sin arrancar runner, así que no gastan
-    # minutos. Ésa es la diferencia con filtrar dentro de los steps,
-    # que sí arrancaría los 10 runners para no hacer nada.
-    #
-    # NOTA: `strategy.matrix` debe declararse ANTES del `if:` que
-    # referencia `matrix.*`. Si `if:` aparece antes, el lexer de
-    # Actions no encuentra el contexto `matrix` y falla la validación
-    # previa del workflow — sin error visible, sólo `total_count: 0`.
+    # No se construye nada si el guard de SHA dijo que este commit ya
+    # salió, o si el diff no tocó ningún servicio (una migración
+    # suelta, por ejemplo). Sin este `if`, una matriz vacía hace
+    # fallar el job — y con él, el run entero.
+    if: needs.changes.outputs.any == 'true'
     strategy:
       fail-fast: false
+      # La matriz llega YA FILTRADA desde el job `changes`: un objeto
+      # por servicio a reconstruir, con las cuatro claves que los
+      # steps de abajo usan.
+      #
+      # Antes se declaraban aquí los 11 servicios con `include` y se
+      # recortaban con `exclude: ${{ fromJSON(...excluded) }}`. Eso no
+      # funciona: GitHub procesa `include` DESPUÉS de `exclude`, así
+      # que una matriz que sale entera de `include` no se puede
+      # recortar por esa vía. El fallo estuvo latente meses porque el
+      # único camino que lo ejercitaba —el deploy automático— llevaba
+      # roto desde el 08-08, y en los deploys manuales se reconstruye
+      # todo, así que `excluded` siempre iba vacía y nunca recortaba
+      # nada. Al volver a funcionar el disparo automático, la primera
+      # exclusión parcial dejó la matriz en cero entradas.
+      #
+      # Construir la matriz en el job anterior también quita de en
+      # medio la trampa del `if:` que referenciaba `matrix.*` (ver la
+      # nota histórica en el job `changes`): aquí ya no hay ninguno.
       matrix:
-        include:
-          # Todas las entradas comparten las mismas 4 claves
-          # (service/context/dockerfile/extra-contexts). GitHub
-          # Actions descarta silenciosamente las entradas de
-          # matrix.include con claves distintas al resto — esa
-          # inconsistencia era la causa por la que cdc-capture y
-          # cdc-worker nunca se construían. Para los servicios no-CDC
-          # el contexto es la raíz del repo y no hay contextos extra.
-          - service: eurekaserver
-            context: '.'
-            dockerfile: eurekaserver/Dockerfile
-            extra-contexts: ''
-          - service: auth-center
-            context: '.'
-            dockerfile: auth-center/Dockerfile
-            extra-contexts: ''
-          - service: api-gateway
-            context: '.'
-            dockerfile: api-gateway/Dockerfile
-            extra-contexts: ''
-          - service: hello-service
-            context: '.'
-            dockerfile: hello-service/Dockerfile
-            extra-contexts: ''
-          - service: sso-admin
-            context: '.'
-            dockerfile: sso-admin/Dockerfile
-            extra-contexts: ''
-          - service: notification-service
-            context: '.'
-            dockerfile: notification-service/Dockerfile
-            extra-contexts: ''
-          - service: query-service
-            context: '.'
-            dockerfile: query-service/Dockerfile
-            extra-contexts: ''
-          - service: file-service
-            context: '.'
-            dockerfile: file-service/Dockerfile
-            extra-contexts: ''
-          - service: provisioner
-            context: '.'
-            dockerfile: provisioner/Dockerfile
-            extra-contexts: ''
-          # OJO: a diferencia de docker-compose.yml (donde `dockerfile`
-          # es relativo a `context`), docker/build-push-action pasa
-          # `file` tal cual a `buildx --file`, que lo resuelve desde la
-          # raíz del workspace. Por eso aquí va `cdc-sync/…` y en el
-          # compose va `cdc-capture/Dockerfile` a secas.
-          - service: cdc-capture
-            context: cdc-sync
-            dockerfile: cdc-sync/cdc-capture/Dockerfile
-            extra-contexts: 'repo=.'
-          - service: cdc-worker
-            context: cdc-sync
-            dockerfile: cdc-sync/cdc-worker/Dockerfile
-            extra-contexts: 'repo=.'
-        # `exclude` filtra entradas del `include` arriba por claves.
-        # El job `changes` emite `excluded-services` (un array JSON con
-        # los servicios cuyo HEAD~1 vs HEAD no cambió). GitHub Actions
-        # lo lee de `${{ steps.pick.outputs.excluded }}` directamente,
-        # SIN referenciar `matrix.*` en un `if:` — eso es lo que
-        # actionlint rechaza con "context matrix not allowed here".
-        # Si la lista viene vacía, `exclude` filtra 0 entradas y todas
-        # las del `include` siguen construyendo.
-        exclude: ${{ fromJSON(needs.changes.outputs.excluded) }}
+        include: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -443,15 +430,20 @@ jobs:
     # desplegarlos: la migración no se aplica sola.
     #
     # Se exige que ninguna construcción haya fallado; saltada es un
-    # resultado válido. Y no se despliega si el guard de SHA
-    # detectó que este commit ya salió en el último run
-    # (`needs.changes.outputs.any == 'false'`).
+    # resultado válido.
+    #
+    # El gate es `deploy`, no `any`. Eran el mismo flag y ahí estaba
+    # la contradicción con el párrafo de arriba: `any` significa "hay
+    # imágenes que reconstruir", así que exigirlo saltaba justo los
+    # despliegues que el comentario decía querer — migración suelta,
+    # cambio de compose, rotación del .env. `deploy` sólo es false
+    # cuando el guard de SHA detecta que este commit ya salió.
     if: >-
       always()
       && needs.changes.result == 'success'
       && needs.build-push.result != 'failure'
       && needs.build-push.result != 'cancelled'
-      && needs.changes.outputs.any == 'true'
+      && needs.changes.outputs.deploy == 'true'
     environment: test
     steps:
       - uses: actions/checkout@v4
