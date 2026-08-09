@@ -145,6 +145,28 @@ public class GatewaySecurityConfig {
                         .pathMatchers("/auth/login").permitAll()
                         .pathMatchers("/api/auth/login").permitAll()
                         .pathMatchers("/api/auth/refresh", "/api/auth/logout").permitAll()
+                        // /api/files/download/** NO lleva permitAll, a
+                        // propósito. Hubo un intento de ponérselo para
+                        // que un <img src="/api/files/download/123">
+                        // funcionara, partiendo de que el navegador
+                        // mandaría "la cookie de sesión". No existe tal
+                        // cosa: la única cookie que emite el SSO es
+                        // sso_refresh (HttpOnly, SameSite=Strict), que
+                        // sirve para renovar en /auth/refresh y no para
+                        // autenticar peticiones. La autenticación es
+                        // Bearer, y un <img> no puede poner cabeceras.
+                        //
+                        // Así que un <img src> jamás va a autenticarse
+                        // contra este gateway, con permitAll o sin él;
+                        // lo único que aportaba era exponer el endpoint.
+                        // El front descarga el binario con fetch()
+                        // llevando el Authorization, y lo pinta desde
+                        // un blob URL. file-service verifica la firma
+                        // del JWT por su cuenta (ver DownloadController),
+                        // así que hay comprobación en los dos sitios.
+                        //
+                        // Cae en anyExchange().authenticated(), como
+                        // /api/files/** (la subida) y todo lo demás.
                         .pathMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info", "/actuator/prometheus").permitAll()
                         // OpenAPI aggregator — Swagger UI + merged doc + webjars.

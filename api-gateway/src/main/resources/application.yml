@@ -257,6 +257,28 @@ spring:
               filters:
                 - StripPrefix=2
                 - AddResponseHeader=X-Source, api-gateway
+            # ─── Subidas: un solo POST multipart ───
+            #
+            #   POST /api/files/eval-col/establecimiento   (multipart)
+            #     └─ file-service sube cada binario, lo registra en
+            #        TARCHIVO y sustituye el campo por su id
+            #     └─ POST /api/eval-col/establecimiento    (JSON)
+            #
+            # StripPrefix=1 quita /api y deja /files/..., que es donde
+            # escucha el controlador. El segundo salto vuelve a entrar
+            # por este gateway, así que la autorización del endpoint de
+            # catálogo se aplica igual que si el cliente lo hubiera
+            # llamado directamente: aquí sólo hace falta un JWT válido
+            # (anyExchange().authenticated()), y quien decide si ese
+            # usuario puede crear un establecimiento sigue siendo la
+            # regla del propio endpoint.
+            - id: api-file-service
+              uri: lb://file-service
+              predicates:
+                - Path=/api/files/**
+              filters:
+                - StripPrefix=1
+                - AddResponseHeader=X-Source, api-gateway
             # ─── OpenAPI / Swagger UI: deliberately NO routes ───
             # There used to be five `forward:` routes here
             # (openapi-ui-self, openapi-spec-self,
