@@ -145,6 +145,28 @@ public class GatewaySecurityConfig {
                         .pathMatchers("/auth/login").permitAll()
                         .pathMatchers("/api/auth/login").permitAll()
                         .pathMatchers("/api/auth/refresh", "/api/auth/logout").permitAll()
+                        // /api/files/download/**: el browser hace GET
+                        // directo desde un <img src="..."> o un
+                        // window.open(url). Esos contextos del navegador
+                        // ya llevan la cookie de sesión del SSO, así que
+                        // no es "anónimo" en el sentido del resto de
+                        // permitAll de arriba. La razón de sacarlo del
+                        // anyExchange().authenticated() es operativa:
+                        // el JwtAuthenticationFilter rechaza esta ruta
+                        // incluso cuando la cookie viaja, porque
+                        // Spring Security evalúa autorización antes
+                        // que el filtro reenvíe la request a
+                        // file-service, y el endpoint queda inaccesible
+                        // para <img>.
+                        //
+                        // La autorización fina la hace file-service:
+                        // acepta la request si la cookie se traduce a
+                        // un usuario válido (la misma regla que el
+                        // gateway aplicaría si la dejara pasar), o
+                        // si la llamada trae X-Internal-Token (caso
+                        // del catálogo cuando arma enlaces
+                        // temporales). Sin cookie ni token, 401.
+                        .pathMatchers("/api/files/download/**").permitAll()
                         .pathMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info", "/actuator/prometheus").permitAll()
                         // OpenAPI aggregator — Swagger UI + merged doc + webjars.
