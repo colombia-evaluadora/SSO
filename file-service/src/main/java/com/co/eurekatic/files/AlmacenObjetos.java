@@ -7,6 +7,8 @@ import org.springframework.stereotype.Component;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.core.checksums.RequestChecksumCalculation;
+import software.amazon.awssdk.core.checksums.ResponseChecksumValidation;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -67,6 +69,24 @@ public class AlmacenObjetos {
                 .region(Region.of(region))
                 .credentialsProvider(StaticCredentialsProvider.create(
                         AwsBasicCredentials.create(accessKey, secretKey)))
+                // A partir de la 2.30 el SDK calcula checksums flexibles
+                // por defecto (WHEN_SUPPORTED): manda el cuerpo en
+                // chunks con trailer y pone
+                // x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER.
+                // Garage 1.0.1 no entiende ese modo y responde
+                // "Invalid content sha256 hash: Invalid character 'S'
+                // at position 0" — un mensaje que no menciona ni
+                // checksums ni streaming, así que cuesta llegar a la
+                // causa desde el síntoma.
+                //
+                // WHEN_REQUIRED vuelve al comportamiento clásico
+                // (cuerpo entero, sha256 real) y sigue calculando
+                // checksum donde el protocolo lo exige. Contra AWS el
+                // efecto es nulo salvo perder una comprobación extra
+                // de integridad que aquí no compensa: es la diferencia
+                // entre subir y no subir.
+                .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
+                .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
                 .serviceConfiguration(S3Configuration.builder()
                         .pathStyleAccessEnabled(pathStyle)
                         .build());
