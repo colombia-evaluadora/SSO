@@ -42,6 +42,15 @@ files:
   # cualquier otra: este servicio no es una puerta trasera al catálogo.
   catalog-base-url: ${FILES_CATALOG_BASE_URL:http://sso-api-gateway:8080/api}
 
+  # Secreto compartido con el catálogo PL/pgSQL. Quien lo presente en
+  # X-Internal-Token puede pedir GET /api/files/download/{id} aunque
+  # la request no lleve cookie de sesión. Vacío = esa puerta está
+  # cerrada y la única forma de descargar es con sesión SSO válida.
+  # No confundir con SSO_INTERNAL_TOKEN / GATEWAY_INTERNAL_TOKEN:
+  # son tres secretos independientes (mismo valor por simplicidad
+  # operativa, pero rotarlos debe hacerse de forma sincronizada).
+  internal-token: ${FILES_INTERNAL_TOKEN:}
+
   s3:
     # Vacío = AWS real. Con valor = almacén compatible (Garage en dev).
     endpoint: ${S3_ENDPOINT:}

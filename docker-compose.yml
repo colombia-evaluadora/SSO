@@ -1376,6 +1376,14 @@ services:
       # Sin límite, un cliente llena el disco: el servidor está al 85%.
       FILES_MAX_FILE_SIZE: "${FILES_MAX_FILE_SIZE:-25MB}"
       FILES_MAX_REQUEST_SIZE: "${FILES_MAX_REQUEST_SIZE:-30MB}"
+      # Secreto compartido para que el catálogo PL/pgSQL pueda pedir
+      # binarios a través del gateway sin tener que llevar cookie
+      # de sesión. La verificación vive en
+      # DownloadController#verificaToken (comparación en tiempo
+      # constante). Vacío = el endpoint rechaza TODO lo que no
+      # llegue con cookie de sesión válida, lo cual es seguro pero
+      # bloquea el caso "el catálogo arma un enlace temporal".
+      FILES_INTERNAL_TOKEN: "${FILES_INTERNAL_TOKEN:-}"
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
