@@ -178,6 +178,91 @@ if [ -n "$FILTER_OUT" ]; then
   fi
 fi
 
+# ─── Bajar contenedores huérfanos cuando un perfil se apaga ───────────────────
+#
+# `docker compose up -d` sólo recrea/levanta servicios del grafo activo
+# — los que estaban bajo un perfil que se acaba de quitar (p. ej.
+# `cdc-sync` cuando CDC_SYNC_ENABLED=false) ya no salen en el grafo,
+# pero sus contenedores siguen corriendo. Si no los paramos, el flag
+# "no apagó" nada en la práctica: el operador sigue viendo CDC UP y
+# la memoria no se libera.
+#
+# Solución: si vamos a hacer `up` (no `down`, no `ps`, no `logs`) y
+# hay al menos un perfil en `FILTER_OUT`, preguntamos al grafo cuáles
+# servicios están bajo ese perfil — con el override de perfiles
+# resuelto por la flag — y bajamos selectivamente los que están
+# corriendo. Sólo `up` lo dispara: cualquier otro subcomando pasa
+# intacto.
+#
+# OJO: usamos `docker compose config --services` después de aplicar
+# el mismo filtro de COMPOSE_PROFILES, así sabemos qué servicios
+# caen DENTRO del grafo activo. Para saber cuáles sacar, en cambio,
+# vemos qué servicios tenían `cdc-sync` u `observability` en su
+# perfil ORIGINAL — para eso parseamos docker-compose.yml directamente
+# con un grep (no nos hace falta `yq`; la regex es estable).
+
+if [ "${1:-}" = "up" ] && [ -n "$FILTER_OUT" ]; then
+  # Servicios que matchean los perfiles que se acaban de apagar.
+  # Parseamos docker-compose.yml: nombres de servicio son líneas
+  # que empiezan con 2 espacios + letra + `:` y fin de línea
+  # (no `<<<:`, no tienen hijos en esa línea). Capturamos qué
+  # profiles tiene cada uno con un parser simplificado.
+  HUErfanos=""
+
+  PROFILES_BY_SERVICE="$(awk '
+    function flush() { if (svc != "") printf "%s %s\n", svc, prof; svc=""; prof="" }
+    # Cabecera de servicio: dos espacios, nombre sin caracteres raros, ":"
+    /^  [a-zA-Z0-9_.-]+:$/ { flush(); svc=$1; sub(/:$/,"",svc); next }
+    # En cualquier otra línea, vaciamos svc si no estamos dentro
+    # de la cabecera del servicio (top-level `name:`, `services:`).
+    /^[^ ]/ || /^ [^ ]/ { flush(); next }
+    # Línea con profiles: [...]
+    /[[:space:]]+profiles:[[:space:]]*\[/ {
+      line=$0
+      sub(/.*profiles:[[:space:]]*\[/, "", line)
+      sub(/\].*/, "", line)
+      prof=line
+      next
+    }
+    END { flush() }
+  ' docker-compose.yml)"
+
+  # Validación básica: si el parser no detectó nada, no bajamos nada.
+  [ -z "$PROFILES_BY_SERVICE" ] && PROFILES_BY_SERVICE="__none__:__none__"
+
+  for f in $FILTER_OUT; do
+    matches="$(printf '%s\n' "$PROFILES_BY_SERVICE" | awk -v p="$f" '{
+      n=split($0, parts, " ");
+      for (i=2; i<=n; i++) {
+        gsub(/[",]/, "", parts[i])
+        if (parts[i] == p) { print $1; break }
+      }
+    }')"
+    for m in $matches; do
+      # ¿Está corriendo?
+      if docker ps --format '{{.Names}}' | grep -qx "${COMPOSE_PROJECT_NAME:-sso}-${m}"; then
+        HUErfanos="${HUErfanos} ${m}"
+      fi
+    done
+  done
+
+  # Quita duplicados y espacios extra.
+  HUErfanos="$(echo "$HUErfanos" | tr ' ' '\n' | sort -u | sed '/^$/d' | tr '\n' ' ' | sed 's/ $//')"
+
+  if [ -n "$HUErfanos" ]; then
+    echo ">> Bajando contenedores huérfanos (perfiles apagados:${FILTER_OUT#,}):"
+    for s in $HUErfanos; do
+      echo "     - $s"
+    done
+    # `docker compose stop` + `rm` es seguro: stop manda SIGTERM,
+    # espera 10s, pasa a SIGKILL. rm quita el contenedor pero deja
+    # los volúmenes y la imagen (eso es lo que queremos — los datos
+    # de ClickHouse se conservan por si el operador reactiva CDC).
+    docker compose "${COMPOSE_FILES[@]}" stop $HUErfanos 2>&1 || true
+    docker compose "${COMPOSE_FILES[@]}" rm -f $HUErfanos 2>&1 || true
+  fi
+fi
+
 # ─── Despachar el sub-comando ─────────────────────────────────────────────────
 #
 # `exec docker compose` para que las señales (Ctrl-C, SIGTERM del
