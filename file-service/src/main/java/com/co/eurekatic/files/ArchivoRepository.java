@@ -98,6 +98,38 @@ public class ArchivoRepository {
     }
 
     /**
+     * Marca las filas como activas: la operación de negocio completa
+     * terminó bien y el archivo ya "existe" de cara al resto del
+     * sistema.
+     *
+     * <p>Quien llama a esto es {@code ReenvioController}, después de
+     * que el catálogo devuelva 2xx. Es el único punto del flujo que
+     * conoce las dos mitades: que los bytes están en S3 y que la
+     * operación de negocio que los referencia tuvo éxito.
+     *
+     * <p>El diseño original dejaba esta activación al procedimiento
+     * PL/pgSQL del catálogo. No funcionaba: las queries del catálogo
+     * son INSERT/UPDATE sobre sus propias tablas y ninguna tocaba
+     * TARCHIVO, así que toda fila subida se quedaba en
+     * {@code active = false} — y por tanto indescargable, con un 404
+     * que parecía "el archivo no existe" cuando los bytes estaban
+     * perfectamente en el bucket. Además obligaba a recordar esta
+     * regla en cada query nueva que aceptara un fichero, y olvidarla
+     * fallaba en silencio.
+     */
+    public void activar(java.util.List<Long> pks) {
+        if (pks == null || pks.isEmpty()) {
+            return;
+        }
+        jdbc.update("""
+                UPDATE %s.tarchivo
+                   SET active = true, modified_at = CURRENT_TIMESTAMP
+                 WHERE pk_tarchivo IN (:pks)
+                """.formatted(schema),
+                new MapSqlParameterSource().addValue("pks", pks));
+    }
+
+    /**
      * Busca la fila activa por id. Devuelve null si no existe o si la
      * fila está marcada inactiva (= reserva que nunca se cerró).
      *

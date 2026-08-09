@@ -40,7 +40,7 @@ class TransformadorMultipartTest {
                 Map.of("nombre", "Juan Pérez"),
                 Map.of("pdf",  List.of(fichero("pdf", "informe.pdf", "A")),
                        "foto", List.of(fichero("foto", "cara.png", "B"))),
-                "admin@example.com");
+                "admin@example.com").cuerpo();
 
         assertThat(cuerpo).containsEntry("nombre", "Juan Pérez");
         assertThat(cuerpo.get("pdf")).isInstanceOf(Long.class);
@@ -61,7 +61,7 @@ class TransformadorMultipartTest {
                         fichero("anexos", "a.pdf", "1"),
                         fichero("anexos", "b.pdf", "2"),
                         fichero("anexos", "c.pdf", "3"))),
-                "admin@example.com");
+                "admin@example.com").cuerpo();
 
         assertThat(cuerpo.get("anexos")).isEqualTo(List.of(1L, 2L, 3L));
     }
@@ -97,10 +97,13 @@ class TransformadorMultipartTest {
         var almacen = mock(AlmacenObjetos.class);
         var repo = mock(ArchivoRepository.class);
 
-        Map<String, Object> cuerpo = new TransformadorMultipart(almacen, repo)
+        var resultado = new TransformadorMultipart(almacen, repo)
                 .transformar(Map.of("nombre", "Ana", "nit", "123"), Map.of(), "u");
 
-        assertThat(cuerpo).containsEntry("nombre", "Ana").containsEntry("nit", "123");
+        assertThat(resultado.cuerpo())
+                .containsEntry("nombre", "Ana").containsEntry("nit", "123");
+        // Sin ficheros no hay nada que activar después.
+        assertThat(resultado.archivoIds()).isEmpty();
         verify(repo, never()).reservar(anyString(), anyLong(), anyString());
     }
 
@@ -141,5 +144,33 @@ class TransformadorMultipartTest {
         orden.verify(almacen).subir(anyString(), any(), anyLong(), any());
         orden.verify(repo).registrarUrl(7L, "s3://b/7/a.pdf");
         verify(repo, times(0)).descartar(anyLong());
+    }
+
+    /**
+     * El transformador NO activa las filas: las deja reservadas y
+     * devuelve sus ids. Quien las activa es ReenvioController, cuando
+     * el catálogo confirma con 2xx — es el único punto que sabe que la
+     * operación completa terminó bien.
+     *
+     * <p>Sin este contrato las filas se quedaban en
+     * {@code active = false} para siempre y el archivo subido era
+     * indescargable: 404 "no existe" con los bytes intactos en el
+     * bucket.
+     */
+    @Test
+    void devuelveLosIdsReservadosSinActivarlos() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar(anyString(), anyLong(), anyString())).thenReturn(11L, 12L);
+        when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/k");
+
+        var resultado = new TransformadorMultipart(almacen, repo).transformar(
+                Map.of(),
+                Map.of("uno", List.of(fichero("uno", "a.pdf", "A")),
+                       "dos", List.of(fichero("dos", "b.pdf", "B"))),
+                "u");
+
+        assertThat(resultado.archivoIds()).containsExactly(11L, 12L);
+        verify(repo, never()).activar(any());
     }
 }

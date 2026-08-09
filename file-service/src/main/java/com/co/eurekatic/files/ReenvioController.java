@@ -45,12 +45,15 @@ public class ReenvioController {
     private static final Logger log = LoggerFactory.getLogger(ReenvioController.class);
 
     private final TransformadorMultipart transformador;
+    private final ArchivoRepository archivos;
     private final RestClient http;
     private final String catalogoBaseUrl;
 
     public ReenvioController(TransformadorMultipart transformador,
+                             ArchivoRepository archivos,
                              @Value("${files.catalog-base-url}") String catalogoBaseUrl) {
         this.transformador = transformador;
+        this.archivos = archivos;
         this.catalogoBaseUrl = catalogoBaseUrl.replaceAll("/+$", "");
         this.http = RestClient.builder().build();
     }
@@ -83,7 +86,7 @@ public class ReenvioController {
         peticion.getMultiFileMap().forEach((campo, partes) ->
                 ficheros.put(campo, new ArrayList<>(partes)));
 
-        Map<String, Object> cuerpo =
+        var resultado =
                 transformador.transformar(campos, ficheros, usuarioDe(autorizacion));
 
         log.info("{} {} — {} campo(s), {} con fichero", metodo, destino,
@@ -100,11 +103,31 @@ public class ReenvioController {
                 .uri(destino)
                 .header(HttpHeaders.AUTHORIZATION, autorizacion)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(cuerpo);
+                .body(resultado.cuerpo());
 
-        return solicitud.retrieve()
+        ResponseEntity<String> respuesta = solicitud.retrieve()
                 .onStatus(estado -> true, (req, res) -> { /* se propaga tal cual */ })
                 .toEntity(String.class);
+
+        // Sólo ahora se sabe que la operación completa salió bien: los
+        // bytes están en S3 Y el catálogo aceptó la fila que los
+        // referencia. Hasta este punto las filas de TARCHIVO están en
+        // active = false, así que un fallo del catálogo las deja
+        // visibles para la limpieza en vez de dejar objetos huérfanos
+        // que nadie referencia.
+        //
+        // Si el catálogo falla NO se descartan las filas: los bytes ya
+        // están subidos y borrar la fila los volvería inalcanzables.
+        // Quedan inactivas, que es justo el estado que la limpieza
+        // periódica busca.
+        if (respuesta.getStatusCode().is2xxSuccessful()) {
+            archivos.activar(resultado.archivoIds());
+        } else if (!resultado.archivoIds().isEmpty()) {
+            log.warn("el catálogo respondió {} — {} fila(s) quedan inactivas: {}",
+                    respuesta.getStatusCode().value(),
+                    resultado.archivoIds().size(), resultado.archivoIds());
+        }
+        return respuesta;
     }
 
     /**
