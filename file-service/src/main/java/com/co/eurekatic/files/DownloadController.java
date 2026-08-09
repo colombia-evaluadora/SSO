@@ -181,17 +181,27 @@ public class DownloadController {
     /**
      * Extrae la clave S3 de una URL registrada en {@code TARCHIVO.URLS3}.
      *
-     * <p>Acepta dos formas:
+     * <p>Acepta tres formas:
      * <ul>
      *   <li>{@code s3://bucket/key/sub/path} — lo que genera el
      *       AlmacenObjetos cuando no hay publicBase;</li>
      *   <li>{@code http(s)://host/bucket/key/sub/path} — lo que se
-     *       genera cuando sí hay publicBase.</li>
+     *       genera cuando sí hay publicBase;</li>
+     *   <li>{@code key/sub/path} — clave cruda, SIN esquema. Es la
+     *       forma en la que están escritas la mayoría de las filas
+     *       históricas de TARCHIVO (p.ej.
+     *       {@code ACADEMICO_VALLEDUPAR/120001003751/actividad/463900.pdf}),
+     *       y hay que devolverla tal cual. Pasarla por el mismo
+     *       "quítale el primer segmento" que las URLs le arrancaría
+     *       el {@code ACADEMICO_VALLEDUPAR} y pediría a S3 una clave
+     *       que no existe — 404 en vez del archivo, sin ninguna
+     *       pista en el log de por qué.</li>
      * </ul>
      *
-     * <p>Devuelve {@code null} si la URL no encaja en ninguno de los
-     * dos formatos — preferimos un 502 explícito a propagar una
-     * clave vacía que S3 rechazaría con un 400 confuso.
+     * <p>Devuelve {@code null} sólo si la entrada está vacía o si es
+     * una URL de la que no se puede extraer clave — preferimos un
+     * 502 explícito a propagar una clave vacía que S3 rechazaría con
+     * un 400 confuso.
      */
     static String extraerClave(String urls3) {
         if (urls3 == null || urls3.isBlank()) {
@@ -202,6 +212,13 @@ public class DownloadController {
             String resto = urls3.substring("s3://".length());
             int slash = resto.indexOf('/');
             return slash < 0 ? null : resto.substring(slash + 1);
+        }
+        // Sin esquema http(s) = ya es la clave. El check es sobre el
+        // prefijo y no sobre "¿parsea como URI?" a propósito: una
+        // clave cruda TAMBIÉN parsea como URI relativa, así que
+        // preguntarle a URI no distingue los dos casos.
+        if (!urls3.startsWith("http://") && !urls3.startsWith("https://")) {
+            return urls3;
         }
         try {
             URI uri = URI.create(urls3);
