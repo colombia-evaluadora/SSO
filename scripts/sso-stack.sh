@@ -70,7 +70,7 @@ read_env_flag() {
   # Override en línea gana sobre .env
   local val="${!key:-}"
   if [ -z "$val" ]; then
-    val="$(grep -E "^${key}=" .env 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+    val="$(grep -E "^${key}=" .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r' || true)"
   fi
   if [ -z "$val" ]; then
     echo "$default"
@@ -124,7 +124,7 @@ DEFAULT_PROFILES="local-only,cdc-sync"
 if [ -n "${COMPOSE_PROFILES:-}" ]; then
   PROFILES_RAW="$COMPOSE_PROFILES"
 elif grep -qE "^COMPOSE_PROFILES=" .env 2>/dev/null; then
-  PROFILES_RAW="$(grep -E "^COMPOSE_PROFILES=" .env | tail -n1 | cut -d= -f2-)"
+  PROFILES_RAW="$(grep -E "^COMPOSE_PROFILES=" .env | tail -n1 | cut -d= -f2- | tr -d '\r')"
 else
   PROFILES_RAW="$DEFAULT_PROFILES"
 fi
