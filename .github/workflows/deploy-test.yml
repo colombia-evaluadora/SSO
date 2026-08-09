@@ -452,6 +452,12 @@ jobs:
           ssh -i ~/.ssh/deploy_key "$DEST" "mkdir -p /opt/sso/postgres/migrations /opt/sso/observability /opt/sso/docker /opt/sso/scripts"
           rsync -az -e "ssh -i ~/.ssh/deploy_key" docker-compose.yml \
             "$DEST:/opt/sso/docker-compose.yml"
+          # docker-compose.cdc-off.yml lo aplica el wrapper
+          # ./scripts/sso-stack.sh cuando CDC_SYNC_ENABLED=false. Sin
+          # este fichero en el server, el deploy con el flag apagado
+          # cae con "no such file or directory" en `docker compose -f`.
+          rsync -az -e "ssh -i ~/.ssh/deploy_key" docker-compose.cdc-off.yml \
+            "$DEST:/opt/sso/docker-compose.cdc-off.yml"
           rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" postgres/migrations/ \
             "$DEST:/opt/sso/postgres/migrations/"
           rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" observability/ \
