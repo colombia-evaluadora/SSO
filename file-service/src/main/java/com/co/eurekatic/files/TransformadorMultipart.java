@@ -50,14 +50,25 @@ public class TransformadorMultipart {
     }
 
     /**
+     * Resultado de la transformación: el cuerpo a reenviar y los ids
+     * de las filas reservadas en esta petición.
+     *
+     * <p>Los ids salen a la superficie porque las filas quedan en
+     * {@code active = false} hasta que el catálogo confirma la
+     * operación, y quien ve esa confirmación es
+     * {@code ReenvioController} — ver {@code ArchivoRepository#activar}.
+     */
+    public record Resultado(Map<String, Object> cuerpo, List<Long> archivoIds) {}
+
+    /**
      * @param campos  partes de texto del multipart, tal cual llegaron
      * @param ficheros partes binarias, agrupadas por nombre de campo
      * @param usuario  identidad verificada del llamante, para auditoría
-     * @return el cuerpo JSON a reenviar
+     * @return el cuerpo JSON a reenviar y los ids reservados
      */
-    public Map<String, Object> transformar(Map<String, String> campos,
-                                           Map<String, List<MultipartFile>> ficheros,
-                                           String usuario) {
+    public Resultado transformar(Map<String, String> campos,
+                                 Map<String, List<MultipartFile>> ficheros,
+                                 String usuario) {
         Map<String, Object> cuerpo = new LinkedHashMap<>(campos);
         // Ids ya reservados, para poder deshacerlos si algo falla a
         // media transformación.
@@ -83,7 +94,7 @@ public class TransformadorMultipart {
                 // sugería al repetir el mismo nombre de campo.
                 cuerpo.put(campo, ids.size() == 1 ? ids.get(0) : ids);
             }
-            return cuerpo;
+            return new Resultado(cuerpo, List.copyOf(reservados));
 
         } catch (RuntimeException | IOException e) {
             // Deshacer lo reservado en esta petición. Sin esto, un
@@ -114,9 +125,11 @@ public class TransformadorMultipart {
 
         try (InputStream in = parte.getInputStream()) {
             String url = almacen.subir(clave, in, peso, parte.getContentType());
-            // 3. Cerrar la fila. Sigue inactiva: la activa el
-            //    procedimiento del catálogo cuando la operación de
-            //    negocio completa termina bien.
+            // 3. Cerrar la fila con su URL. Sigue inactiva: la activa
+            //    ReenvioController cuando el catálogo responde 2xx,
+            //    que es el momento en que la operación de negocio
+            //    completa se sabe terminada. Ver
+            //    ArchivoRepository#activar.
             archivos.registrarUrl(pk, url);
         }
         log.debug("campo con fichero '{}' -> pk_tarchivo={}", nombre, pk);

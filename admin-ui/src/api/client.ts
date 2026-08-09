@@ -62,6 +62,53 @@ export class ApiClient {
   }
 
   /**
+   * GET de un binario (imagen, PDF…). Devuelve un Blob en vez de
+   * JSON, con el mismo Bearer y el mismo reintento tras refrescar
+   * que el resto de llamadas.
+   *
+   * Existe porque un `<img src="/api/files/download/12">` NO se
+   * puede autenticar: la autenticación del SSO es por cabecera
+   * `Authorization`, y un `<img>` no puede ponerla. La única cookie
+   * que emite el SSO es `sso_refresh` (HttpOnly, SameSite=Strict),
+   * que sirve para renovar el token en `/auth/refresh`, no para
+   * autorizar peticiones. Así que el binario se descarga con fetch
+   * y se pinta desde un object URL — ver {@link useArchivoUrl}.
+   */
+  async getBlob(path: string, init?: { base?: string | null }): Promise<Blob> {
+    const resp = await this.fetchOnce("GET", path, undefined, false, init?.base);
+    if (resp.status !== 401) {
+      return this.handleBlobResponse(resp);
+    }
+    const refreshed = await this.refreshLock.acquire();
+    if (!refreshed) {
+      this.onAuthFailure();
+      throw new ApiError(401, "AUTH_EXPIRED", "La sesión expiró; inicia sesión de nuevo");
+    }
+    const retried = await this.fetchOnce("GET", path, undefined, false, init?.base);
+    return this.handleBlobResponse(retried);
+  }
+
+  private async handleBlobResponse(resp: Response): Promise<Blob> {
+    if (resp.ok) {
+      return resp.blob();
+    }
+    // El cuerpo de error SÍ es JSON aunque el éxito sea binario.
+    // Se lee como texto y se intenta parsear: leerlo como blob y
+    // luego querer el mensaje obliga a un FileReader para nada.
+    let payload: ErrorResponse | null = null;
+    try {
+      payload = JSON.parse(await resp.text()) as ErrorResponse;
+    } catch {
+      // ignore: el error no era JSON
+    }
+    throw new ApiError(
+      resp.status,
+      payload?.code ?? "HTTP_ERROR",
+      payload?.message ?? `${resp.status} ${resp.statusText}`,
+    );
+  }
+
+  /**
    * Internal: a single request, with one transparent 401 -> refresh
    * -> retry attempt. After that, the error bubbles up.
    */

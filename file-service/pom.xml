@@ -32,6 +32,25 @@
             <groupId>com.co.eurekatic</groupId>
             <artifactId>common</artifactId>
             <version>${project.version}</version>
+            <!--
+                common arrastra spring-boot-starter-data-jpa para que los
+                servicios con entidades (auth-center, sso-admin,
+                notification-service) hereden los repos. file-service no
+                tiene entidades: toca UNA tabla (TARCHIVO) con NamedParameter
+                JdbcTemplate, y dejar que arranque Hibernate contra Neon
+                reventaba el startup con "Unable to determine Dialect
+                without JDBC metadata" + "SCRAM-based authentication, but
+                no password was provided" (la password SÍ estaba, pero la
+                pedía Hibernate, no JdbcTemplate). Excluimos el starter
+                aquí y dejamos que common aporte el resto (swagger-models,
+                jjwt, OpenApiFactory, etc.).
+            -->
+            <exclusions>
+                <exclusion>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-data-jpa</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -69,6 +88,12 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>s3</artifactId>
             <version>${aws-sdk.version}</version>
+            <!--
+                La descarga se hace streameando desde el api-gateway
+                (ver DownloadController), no entregando URLs prefirmadas
+                al navegador. Por eso no necesitamos S3Presigner: el
+                cliente S3 regular basta para GetObject y PutObject.
+            -->
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

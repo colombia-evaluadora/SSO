@@ -52,7 +52,12 @@ export function Table<T>({
     );
   }
   return (
-    <div className="overflow-hidden rounded border border-slate-200 bg-white">
+    // overflow-x-auto: la tabla manda en columnas largas (URLs,
+    // rutas S3, nombres de archivo). El border-radius del wrapper
+    // recorta el contenido en el eje Y y deja un track de scroll
+    // en X cuando la suma de anchos supera al contenedor — antes se
+    // cortaba con overflow-hidden y la última columna desaparecía.
+    <div className="overflow-x-auto rounded border border-slate-200 bg-white">
       <table className="w-full text-sm">
         <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
           <tr>

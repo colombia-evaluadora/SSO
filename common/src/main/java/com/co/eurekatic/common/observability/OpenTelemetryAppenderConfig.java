@@ -2,8 +2,12 @@ package com.co.eurekatic.common.observability;
 
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
 
 /**
@@ -27,19 +31,41 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass(OpenTelemetryAppender.class)
+// Matcheamos `management.tracing.export.enabled` (que el compose
+// deriva de SSO_TELEMETRY_ENABLED) en vez de inventar un nombre
+// propio, así un solo flag gobierna toda la cadena de telemetría.
+// El `matchIfMissing = true` preserva el comportamiento histórico
+// de servicios que no setean el flag — antes de V35, el bean
+// OpenTelemetry siempre existía (auto-creado por Spring Boot).
+@ConditionalOnProperty(name = "management.tracing.export.enabled", havingValue = "true", matchIfMissing = true)
 public class OpenTelemetryAppenderConfig implements InitializingBean {
 
-    private final OpenTelemetry openTelemetry;
+    private static final Logger log = LoggerFactory.getLogger(OpenTelemetryAppenderConfig.class);
 
-    public OpenTelemetryAppenderConfig(OpenTelemetry openTelemetry) {
+    private final ObjectProvider<OpenTelemetry> openTelemetry;
+
+    public OpenTelemetryAppenderConfig(ObjectProvider<OpenTelemetry> openTelemetry) {
         this.openTelemetry = openTelemetry;
     }
 
     @Override
     public void afterPropertiesSet() {
+        // El bean OpenTelemetry sólo existe si el servicio incluye
+        // el starter OTel Y un exporter está habilitado. Con
+        // ObjectProvider evitamos que la ausencia del bean bloquee
+        // el startup (lo que pasaba antes del V35): si no hay, el
+        // appender simplemente no se registra y los logs salen por
+        // CONSOLE. Es el mismo comportamiento que un servicio que
+        // nunca tuvo observabilidad.
+        OpenTelemetry ot = openTelemetry.getIfAvailable();
+        if (ot == null) {
+            log.warn("OpenTelemetry bean no disponible; el appender OTEL "
+                    + "queda sin instalar y los logs salen sólo por CONSOLE.");
+            return;
+        }
         // Idempotent at runtime per JVM (the static install is a
         // single-slot assignment), but Spring's lifecycle guarantees
         // this fires exactly once per application context.
-        OpenTelemetryAppender.install(openTelemetry);
+        OpenTelemetryAppender.install(ot);
     }
 }
