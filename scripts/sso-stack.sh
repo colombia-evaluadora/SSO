@@ -5,27 +5,25 @@
 # Por qué existe: Docker Compose NO interpola variables dentro del campo
 # `profiles:` de un servicio. Eso significa que flags tipo
 # `CDC_SYNC_ENABLED=false` o `SSO_TELEMETRY_ENABLED=false` no pueden,
-# por sí solos, esconder servicios del grafo. La forma soportada es:
+# por sí solos, esconder servicios del grafo. La forma soportada es
+# filtrar perfiles de la lista `COMPOSE_PROFILES` antes de exportarla
+# al environment del comando compose: si un servicio sólo tiene
+# `profiles: ["cdc-sync"]`, quitar `cdc-sync` del environment hace
+# que el servicio quede fuera del grafo.
 #
-#   · un override que reasigne el `profiles:` del servicio a uno que
-#     nadie active (en este repo, `disabled` — docker-compose.cdc-off.yml).
-#   · filtrar perfiles de la lista `COMPOSE_PROFILES` antes de
-#     exportarla al environment del comando compose.
-#
-# Este wrapper lee `.env`, aplica los overrides necesarios y exporta
-# `COMPOSE_PROFILES` ya filtrada, así el operador sólo tiene que
-# decidir en `.env` qué encender y qué apagar. Cubre dos flags:
+# Este wrapper lee `.env`, filtra `COMPOSE_PROFILES` en consecuencia y
+# se la pasa a compose. Cubre dos flags:
 #
 #   CDC_SYNC_ENABLED=true|false
-#     false → añade docker-compose.cdc-off.yml al comando compose.
-#             Apaga ClickHouse, cdc-capture, cdc-pg-slot-init y
-#             cdc-worker en una sola línea.
+#     false → quita `cdc-sync` del COMPOSE_PROFILES. Apaga ClickHouse,
+#             cdc-capture, cdc-pg-slot-init y cdc-worker en una
+#             sola línea.
 #
 #   SSO_TELEMETRY_ENABLED=true|false
-#     false → quita `observability` del COMPOSE_PROFILES que se le pasa
-#             a compose. Apaga Alloy/Tempo/Mimir/Loki/Grafana en una
-#             sola línea (los cinco contenedores que gastan ~883 MB sin
-#             recibir nada si los exporters ya están apagados).
+#     false → quita `observability` del COMPOSE_PROFILES. Apaga
+#             Alloy/Tempo/Mimir/Loki/Grafana en una sola línea (los
+#             cinco contenedores que gastan ~883 MB sin recibir nada
+#             si los exporters ya están apagados).
 #             Los exporters OTLP de los nueve servicios Spring también
 #             leen este flag directamente desde su `environment:`.
 #
@@ -97,15 +95,13 @@ SSO_TELEMETRY_ENABLED_VAL="$(read_env_flag SSO_TELEMETRY_ENABLED true)"
 # ─── Componer la lista de archivos -f ─────────────────────────────────────────
 #
 # El base SIEMPRE va primero; los overrides van después y machacan
-# campos del anterior (gana el último). `docker-compose.cdc-off.yml`
-# sólo entra si CDC_SYNC_ENABLED dice apagado.
+# campos del anterior (gana el último). El override `cdc-off.yml`
+# ya no se concatena por aquí — el apagado de CDC se hace filtrando
+# `cdc-sync` de COMPOSE_PROFILES más abajo, que es la vía robusta
+# (el override mezclaba listas de perfiles en vez de reemplazarlas,
+# dejando los CDC seleccionables bajo ambos perfiles).
 
 COMPOSE_FILES=(-f docker-compose.yml)
-
-if ! is_truthy "$CDC_SYNC_ENABLED_VAL"; then
-  COMPOSE_FILES+=(-f docker-compose.cdc-off.yml)
-  echo ">> CDC_SYNC_ENABLED=${CDC_SYNC_ENABLED_VAL} → aplicando docker-compose.cdc-off.yml"
-fi
 
 # ─── Filtrar COMPOSE_PROFILES si telemetría está apagada ──────────────────────
 #
@@ -133,18 +129,41 @@ else
   PROFILES_RAW="$DEFAULT_PROFILES"
 fi
 
+# ─── Filtrar COMPOSE_PROFILES según los flags ────────────────────────────────
+#
+# Algunos flags se materializan quitando el perfil del CDC de la lista
+# activa; otros (telemetría) lo mismo con `observability`. La lógica
+# general: si `.env` lo dice apagado, ese perfil no se queda.
+#
+# Razón del enfoque: originalmente usábamos un override (-f
+# docker-compose.cdc-off.yml) que movía los servicios CDC a un perfil
+# `disabled`. Pero Docker Compose V2 mezcla listas de override (no
+# las reemplaza atómicamente), y la config efectiva quedaba con
+# `profiles: ["cdc-sync", "disabled"]` — ambos perfiles a la vez, así
+# que los CDC seguían siendo seleccionables. Filtrar el `-f` extra es
+# más simple, más robusto y consistente con cómo apagamos
+# `observability`.
+
+FILTER_OUT=""
 if ! is_truthy "$SSO_TELEMETRY_ENABLED_VAL"; then
-  # Filtro: conservamos todos los perfiles de la lista salvo
-  # `observability`. `,` se usa como separador; el IFS de read nos
-  # ayuda a tokenizar limpiamente sin tirar de awk/sed.
+  FILTER_OUT="${FILTER_OUT} observability"
+fi
+if ! is_truthy "$CDC_SYNC_ENABLED_VAL"; then
+  FILTER_OUT="${FILTER_OUT} cdc-sync"
+fi
+
+if [ -n "$FILTER_OUT" ]; then
   FILTERED=""
   IFS=',' read -ra PARTS <<< "$PROFILES_RAW"
   for p in "${PARTS[@]}"; do
     p="$(echo "$p" | xargs)"  # trim espacios
     [ -z "$p" ] && continue
-    if [ "$p" = "observability" ]; then
-      continue
-    fi
+    # Espacio-delimitado en FILTER_OUT: ¿está $p en la lista a quitar?
+    skip=0
+    for f in $FILTER_OUT; do
+      if [ "$p" = "$f" ]; then skip=1; break; fi
+    done
+    [ "$skip" = "1" ] && continue
     if [ -z "$FILTERED" ]; then
       FILTERED="$p"
     else
@@ -152,7 +171,7 @@ if ! is_truthy "$SSO_TELEMETRY_ENABLED_VAL"; then
     fi
   done
   if [ "$FILTERED" != "$PROFILES_RAW" ]; then
-    echo ">> SSO_TELEMETRY_ENABLED=${SSO_TELEMETRY_ENABLED_VAL} → quitando 'observability' de COMPOSE_PROFILES"
+    echo ">> Filtro COMPOSE_PROFILES (apagado: ${FILTER_OUT# })"
     echo "   antes:  COMPOSE_PROFILES=${PROFILES_RAW}"
     echo "   ahora:  COMPOSE_PROFILES=${FILTERED}"
     export COMPOSE_PROFILES="$FILTERED"
