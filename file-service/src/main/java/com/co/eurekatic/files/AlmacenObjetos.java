@@ -57,6 +57,15 @@ public class AlmacenObjetos {
         this.bucket = bucket;
         this.urlPublicaBase = urlPublicaBase;
 
+        // Para SUBIR, el cliente habla contra el endpoint interno de
+        // Docker (rapido, sin proxy). Para FIRMAR, en cambio, el
+        // navegador va a hacer el GET directo al bucket: si firmamos
+        // contra el endpoint interno, la URL queda con host=garage y
+        // el browser no puede resolverla. Por eso el presigner usa
+        // la URL pública (la misma que el front va a llamar).
+        //
+        // Si `urlPublicaBase` no está seteada, caemos al endpoint
+        // interno o a AWS según `endpoint`.
         var builder = S3Client.builder()
                 .region(Region.of(region))
                 .credentialsProvider(StaticCredentialsProvider.create(
@@ -76,10 +85,13 @@ public class AlmacenObjetos {
         }
         this.s3 = builder.build();
 
-        // Mismas credenciales y endpoint que el cliente principal; el
-        // presigner NO hace la llamada HTTP — sólo arma la URL firmada
-        // con la firma SigV4 y los headers correctos para que el
-        // navegador haga el GET directo al bucket.
+        // Mismas credenciales que el cliente principal; el presigner
+        // NO hace la llamada HTTP — sólo arma la URL firmada con
+        // SigV4 y los headers correctos para que el navegador haga
+        // el GET directo al bucket. El host de la firma tiene que
+        // coincidir con el host desde el que el browser descarga,
+        // si no Garage responde 400 AuthorizationHeaderMalformed
+        // ("the V4 signature does not match the region of the bucket").
         var presignerBuilder = S3Presigner.builder()
                 .region(Region.of(region))
                 .credentialsProvider(StaticCredentialsProvider.create(
@@ -87,8 +99,11 @@ public class AlmacenObjetos {
                 .serviceConfiguration(S3Configuration.builder()
                         .pathStyleAccessEnabled(pathStyle)
                         .build());
-        if (endpoint != null && !endpoint.isBlank()) {
-            presignerBuilder = presignerBuilder.endpointOverride(URI.create(endpoint));
+        String hostParaFirma = (urlPublicaBase != null && !urlPublicaBase.isBlank())
+                ? urlPublicaBase.replaceAll("/+$", "")
+                : endpoint;
+        if (hostParaFirma != null && !hostParaFirma.isBlank()) {
+            presignerBuilder = presignerBuilder.endpointOverride(URI.create(hostParaFirma));
         }
         this.presigner = presignerBuilder.build();
     }
