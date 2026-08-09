@@ -382,7 +382,7 @@ jobs:
         env:
           DEST: ${{ secrets.TEST_SSH_USER }}@${{ secrets.TEST_SSH_HOST }}
         run: |
-          ssh -i ~/.ssh/deploy_key "$DEST" "mkdir -p /opt/sso/postgres/migrations /opt/sso/observability /opt/sso/docker"
+          ssh -i ~/.ssh/deploy_key "$DEST" "mkdir -p /opt/sso/postgres/migrations /opt/sso/observability /opt/sso/docker /opt/sso/scripts"
           rsync -az -e "ssh -i ~/.ssh/deploy_key" docker-compose.yml \
             "$DEST:/opt/sso/docker-compose.yml"
           rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" postgres/migrations/ \
@@ -391,6 +391,11 @@ jobs:
             "$DEST:/opt/sso/observability/"
           rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" docker/ \
             "$DEST:/opt/sso/docker/"
+          # El wrapper ./scripts/sso-stack.sh lo invoca el paso "Pull &
+          # restart stack" para que CDC_SYNC_ENABLED / SSO_TELEMETRY_ENABLED
+          # se honren en el deploy. Sin él el deploy cae con exit 127.
+          rsync -az -e "ssh -i ~/.ssh/deploy_key" scripts/ \
+            "$DEST:/opt/sso/scripts/"
 
       - name: Deploy .env from GitHub secret
         # El .env ya no se crea "a mano" en el servidor: vive como
