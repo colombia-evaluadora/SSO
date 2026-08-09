@@ -96,4 +96,34 @@ public class ArchivoRepository {
             // Silencio deliberado: ver javadoc.
         }
     }
+
+    /**
+     * Busca la fila activa por id. Devuelve null si no existe o si la
+     * fila está marcada inactiva (= reserva que nunca se cerró).
+     *
+     * <p>Descargar bytes de una fila inactiva es un agujero de auditoría:
+     * una reserva huérfana podría tener un {@code urls3} apuntando a
+     * cualquier cosa si alguien manipuló la BD. Sólo las filas cerradas
+     * por el procedimiento del catálogo ({@code active = true}) son
+     * archivos "reales" desde el punto de vista del negocio.
+     */
+    public java.util.Optional<Archivo> buscarActivo(long pkTarchivo) {
+        var filas = jdbc.query("""
+                SELECT pk_tarchivo, nombre, peso, urls3, mimetype
+                  FROM %s.tarchivo
+                 WHERE pk_tarchivo = :pk AND active = true
+                """.formatted(schema),
+                new MapSqlParameterSource().addValue("pk", pkTarchivo),
+                (rs, n) -> new Archivo(
+                        rs.getLong("pk_tarchivo"),
+                        rs.getString("nombre"),
+                        rs.getLong("peso"),
+                        rs.getString("urls3"),
+                        rs.getString("mimetype")));
+        return filas.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(filas.get(0));
+    }
+
+    /** Proyección de las columnas que {@link DownloadController} necesita. */
+    public record Archivo(long pkTarchivo, String nombre, long peso,
+                          String urls3, String mimetype) {}
 }

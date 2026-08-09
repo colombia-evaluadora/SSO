@@ -134,8 +134,26 @@ jobs:
     # sola al mergear, y `test`/`main` no desplegarán porque CI ya
     # no corre en push sobre esas ramas (sólo en PR con destino
     # ahí) — cuando tengan su entorno, cada workflow mete el suyo.
+    #
+    # La condición cubre TRES triggers, no dos:
+    #   1. `workflow_dispatch`   — redespliegue manual.
+    #   2. `workflow_run`        — disparado por CI (push o PR).
+    #      Sólo si CI terminó en success Y el evento que disparó CI
+    #      fue un push (no un pull_request).
+    #   3. `push` directo        — un push al branch donde vive este
+    #      workflow (main) sin pasar por CI. La rama default es `main`
+    #      y CI NO corre en push sobre main (sólo en PR con destino
+    #      ahí); por eso un merge directo a main — vía PR desde la UI
+    #      con la opción "merge commit" + un push posterior, o un
+    #      `git push origin main` manual desde local — genera un run
+    #      con `event_name: push` y sin `workflow_run.*`. Sin la rama
+    #      `event_name == 'push'`, ese run se saltaría entero y
+    #      dejaría `main` con código nuevo que nunca llegó al server.
+    #      El guard de SHA duplicado de abajo evita que CI+el push
+    #      directo al merge deployen dos veces el mismo commit.
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push')
     outputs:
@@ -148,13 +166,21 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 2
       - name: Check SHA not yet deployed
-        if: github.event_name == 'workflow_run'
+        # Para `workflow_dispatch` no aplica: el usuario ya sabe que
+        # está re-desplegando, y saltarse el guard permite precisamente
+        # forzar un redeploy del HEAD actual aunque CI ya lo hubiera
+        # sacado. Para `push` y `workflow_run` sí: si el último
+        # deploy-test exitoso ya usó este SHA, no tiene sentido
+        # construir y empujar lo mismo otra vez.
+        if: github.event_name != 'workflow_dispatch'
         id: sha-check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          SHA="${{ github.event.workflow_run.head_sha }}"
+          # workflow_run trae el SHA del commit que CI validó; en push
+          # directo github.sha ES ese commit (no hay workflow_run).
+          SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
           # Pillar el último run de deploy-test que NO fuera skipped
           # (workflow_dispatch también se lista, y los viejos
           # `cancelled` por la cancelación mutua). Filtrar por

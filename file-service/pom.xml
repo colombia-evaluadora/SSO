@@ -89,13 +89,10 @@
             <artifactId>s3</artifactId>
             <version>${aws-sdk.version}</version>
             <!--
-                El presigner (S3Presigner) viene incluido en este
-                artifact, no es una dependencia separada — sirve
-                para armar URLs prefirmadas (GET con expiración) sin
-                hacer una llamada al bucket. Lo necesita
-                GET /files/sign/{archivoId} para entregar al front
-                URLs de descarga válidas 15 min, sin requerir que el
-                bucket sea público.
+                La descarga se hace streameando desde el api-gateway
+                (ver DownloadController), no entregando URLs prefirmadas
+                al navegador. Por eso no necesitamos S3Presigner: el
+                cliente S3 regular basta para GetObject y PutObject.
             -->
         </dependency>
         <dependency>
