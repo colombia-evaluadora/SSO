@@ -461,8 +461,16 @@ jobs:
           # El wrapper ./scripts/sso-stack.sh lo invoca el paso "Pull &
           # restart stack" para que CDC_SYNC_ENABLED / SSO_TELEMETRY_ENABLED
           # se honren en el deploy. Sin él el deploy cae con exit 127.
-          rsync -az -e "ssh -i ~/.ssh/deploy_key" scripts/ \
+          # `--chmod=u+rwx,go+rx` fuerza 755 en el server: por defecto
+          # rsync conserva los permisos del repo (644), y sin el bit
+          # +x el deploy cae con exit 126 ("permission denied").
+          rsync -az --chmod=u+rwx,go+rx -e "ssh -i ~/.ssh/deploy_key" scripts/ \
             "$DEST:/opt/sso/scripts/"
+          # Defensa adicional: si el rsync quedó con umask raro, re-fija
+          # el bit de ejecución del wrapper antes de invocarlo. Si ya
+          # está bien, no hace daño.
+          ssh -i ~/.ssh/deploy_key "$DEST" \
+            "chmod 755 /opt/sso/scripts/sso-stack.sh 2>/dev/null || true"
 
       - name: Deploy .env from GitHub secret
         # El .env ya no se crea "a mano" en el servidor: vive como
