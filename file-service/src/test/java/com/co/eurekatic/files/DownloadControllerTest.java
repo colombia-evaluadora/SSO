@@ -25,13 +25,35 @@ class DownloadControllerTest {
                 .isEqualTo("a/b/c.jpg");
     }
 
+    /**
+     * Path-style: el bucket es el primer segmento del path, así que
+     * hay que quitarlo. Es la forma que produce Garage.
+     */
     @Test
-    void extraeLaClaveDeUnaUrlHttpQuitandoElBucket() {
-        assertThat(DownloadController.extraerClave(
-                "https://coleva-files.s3.amazonaws.com/sistema/ACADEMICO_TEST/foto.jpg"))
-                .isEqualTo("ACADEMICO_TEST/foto.jpg");
+    void enPathStyleSeQuitaElBucketDelPath() {
         assertThat(DownloadController.extraerClave(
                 "http://172.233.184.248:3900/eval-col/sistema/firma.png"))
+                .isEqualTo("sistema/firma.png");
+        // s3.amazonaws.com a secas (sin bucket delante) también es
+        // path-style.
+        assertThat(DownloadController.extraerClave(
+                "https://s3.amazonaws.com/coleva-files/sistema/foto.jpg"))
+                .isEqualTo("sistema/foto.jpg");
+    }
+
+    /**
+     * Virtual-hosted: el bucket va en el HOST, así que el path entero
+     * ya es la clave. Es la forma en la que están escritas las filas
+     * históricas de TARCHIVO, y tratarlas como path-style les
+     * arrancaría el {@code sistema/} inicial — 404 silencioso.
+     */
+    @Test
+    void enVirtualHostedElPathEnteroEsLaClave() {
+        assertThat(DownloadController.extraerClave(
+                "https://coleva-files.s3.amazonaws.com/sistema/ACADEMICO_TEST/foto.jpg"))
+                .isEqualTo("sistema/ACADEMICO_TEST/foto.jpg");
+        assertThat(DownloadController.extraerClave(
+                "https://coleva-files.s3.us-east-1.amazonaws.com/sistema/firma.png"))
                 .isEqualTo("sistema/firma.png");
     }
 

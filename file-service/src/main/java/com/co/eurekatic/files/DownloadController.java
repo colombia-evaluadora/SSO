@@ -223,18 +223,53 @@ public class DownloadController {
         try {
             URI uri = URI.create(urls3);
             String path = uri.getPath();
-            if (path == null || path.isBlank()) {
+            if (path == null || path.isBlank() || path.equals("/")) {
                 return null;
             }
-            // /bucket/key/sub -> quitamos el primer segmento (bucket).
-            int idx = path.indexOf('/', 1);
-            if (idx < 0 || idx == path.length() - 1) {
+            String sinBarra = path.substring(1);
+            // Aquí hay que distinguir los dos estilos de URL de S3,
+            // porque en uno el bucket va en el path y en el otro no:
+            //
+            //   path-style     http://host:3900/eval-col/a/b.jpg
+            //                  → el bucket ES el primer segmento
+            //   virtual-hosted https://coleva-files.s3.amazonaws.com/a/b.jpg
+            //                  → el bucket va en el HOST; el path
+            //                    entero es ya la clave
+            //
+            // Confundirlos corrompe la clave en silencio: aplicar la
+            // regla de path-style a una URL virtual-hosted le arranca
+            // el primer segmento real de la clave (en las filas
+            // históricas, el "sistema/" inicial) y S3 responde 404.
+            if (esVirtualHosted(uri.getHost())) {
+                return sinBarra;
+            }
+            int idx = sinBarra.indexOf('/');
+            if (idx < 0 || idx == sinBarra.length() - 1) {
                 return null;
             }
-            return path.substring(idx + 1);
+            return sinBarra.substring(idx + 1);
         } catch (IllegalArgumentException e) {
             return null;
         }
+    }
+
+    /**
+     * ¿El host lleva el bucket delante, al estilo
+     * {@code <bucket>.s3.amazonaws.com} / {@code <bucket>.s3.<region>.amazonaws.com}?
+     *
+     * <p>Se mira el host y no una lista de buckets conocidos a
+     * propósito: este servicio no sabe qué buckets existieron
+     * históricamente, y las filas de TARCHIVO son de hace años.
+     */
+    private static boolean esVirtualHosted(String host) {
+        if (host == null) {
+            return false;
+        }
+        String h = host.toLowerCase();
+        // "s3.amazonaws.com" a secas es path-style (el bucket viene
+        // en el path); sólo es virtual-hosted si hay algo DELANTE.
+        return (h.contains(".s3.") || h.contains(".s3-"))
+                && h.endsWith("amazonaws.com");
     }
 
     /**
