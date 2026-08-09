@@ -1,5 +1,5 @@
 # =============================================================================
-# ci.yml — PR + push a main o test: matriz por módulo + admin-ui.
+# ci.yml — gate de integración sobre `dev`: matriz por módulo + admin-ui.
 #
 # Estructura de la matriz:
 #   - common                       → mvn verify (compilación + unit tests)
@@ -11,8 +11,12 @@
 #                                  → typecheck / vitest / eslint / vite build
 #
 # Dispara en:
-#   - PR contra main o test
-#   - push directo a main o test (concurrency cancela runs obsoletos)
+#   - PR contra dev
+#   - push directo a dev (concurrency cancela runs obsoletos)
+#
+# CI NO corre en `test` ni en `main` — esas ramas reciben merges ya
+# verificados en `dev`, así que re-verificarlas duplica minutos sin
+# añadir señal. Ver el comentario del bloque `on:` para más detalle.
 #
 # Notas:
 #   - JDK 25 / Temurin (el repo está sobre Spring Boot 4 + JDK 25).
@@ -25,7 +29,7 @@
 #     (no es submódulo, vive en la raíz del repo).
 #
 # Para activar branch protection, ir a Settings → Branches → Add rule
-# sobre `main` y `test` (script: `scripts/branch-protection.sh`) con
+# sobre `dev` (script: `scripts/branch-protection.sh`) con
 # required checks: `maven-common`, `maven-auth-center`,
 # `maven-sso-admin`, `maven-api-gateway`, `admin-ui-typecheck`,
 # `admin-ui-test`, `admin-ui-lint`, `admin-ui-build`.
@@ -33,11 +37,28 @@
 
 name: CI
 
+# CI corre SOLO en `dev`. Razones:
+#   · `dev` es la rama de integración donde aterrizan las PRs de
+#     feature/*. Aquí tiene sentido verificar cada cambio.
+#   · `test` y `main` son promociones que vienen de merges ya
+#     verificados en `dev` (mismo SHA, mismo contenido del squash).
+#     Re-correr CI en cada promoción duplica minutos sin añadir
+#     señal: si `dev` estaba en verde, `test` y `main` también lo
+#     estarán.
+#   · El plan Free del repo (cuando era privado) quemaba ~900 min/día
+#     por este mismo error de diseño. Ahora es público y los minutos
+#     son gratis, pero el motivo de fondo (no re-verificar lo ya
+#     verificado) sigue aplicando.
+#
+# Si en algún momento quieres un gate extra en `main` (release),
+# añade un workflow específico con `on: push: branches: [main]` y
+# required checks más estrictos. No metas `main` aquí: este es el
+# gate de integración.
 on:
   pull_request:
-    branches: [dev, test, main]
+    branches: [dev]
   push:
-    branches: [dev, test, main]
+    branches: [dev]
 
 # Permisos mínimos: checks:read para comentar / attach; contents:read
 # para checkout. Los workflows no publican nada al registry en esta fase.
@@ -80,6 +101,7 @@ jobs:
       auth-center:   ${{ steps.filter.outputs.auth-center }}
       sso-admin:     ${{ steps.filter.outputs.sso-admin }}
       query-service: ${{ steps.filter.outputs.query-service }}
+      file-service:  ${{ steps.filter.outputs.file-service }}
       api-gateway:   ${{ steps.filter.outputs.api-gateway }}
       cdc:           ${{ steps.filter.outputs.cdc }}
       admin-ui:      ${{ steps.filter.outputs.admin-ui }}
@@ -104,6 +126,9 @@ jobs:
             query-service:
               - *global
               - 'query-service/**'
+            file-service:
+              - *global
+              - 'file-service/**'
             # admin-ui entra aquí porque el Dockerfile del gateway lo
             # compila dentro.
             api-gateway:
@@ -204,6 +229,28 @@ jobs:
           cache: maven
       - name: Verify (query-service)
         run: mvn -B -ntp -pl query-service -am verify
+
+  # ───────── Backend: file-service ─────────
+  # Entra en CI desde el primer commit, en vez de repetir el agujero
+  # de query-service: su primera compilación no puede ser el
+  # build-push del deploy.
+  maven-file-service:
+    name: maven-file-service
+    runs-on: ubuntu-latest
+    needs: [changes, maven-common]
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.file-service == 'true'
+      && needs.maven-common.result != 'failure'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Verify (file-service)
+        run: mvn -B -ntp -pl file-service -am verify
 
   # ───────── Backend: cdc-sync (reactor independiente) ─────────
   # cdc-sync NO es un módulo del pom raíz: tiene su propio parent
@@ -408,6 +455,7 @@ jobs:
       - maven-auth-center
       - maven-sso-admin
       - maven-query-service
+      - maven-file-service
       - maven-api-gateway
       - maven-cdc
       - admin-ui-typecheck
@@ -417,9 +465,28 @@ jobs:
     steps:
       - name: Fallar si algún job requerido falló o fue cancelado
         run: |
-          resultados='${{ join(needs.*.result, " ") }}'
-          echo "Resultados de los jobs: $resultados"
-          for r in $resultados; do
+          # Antes se hacía `join(needs.*.result, " ")` — falla en la
+          # validación previa del workflow porque las comillas DOBLES
+          # son string literals inválidos para el lexer de GitHub
+          # Actions (sólo acepta simples). Resultado: el workflow se
+          # parsea, ningún job se instancia, total_count=0 en la API.
+          #
+          # Aquí se enumera cada job uno a uno. Más largo, pero no
+          # depende de `join` ni de `toJSON`, y cada `needs.X.result`
+          # es una expresión trivial.
+          for r in \
+            '${{ needs.changes.result }}' \
+            '${{ needs.maven-common.result }}' \
+            '${{ needs.maven-auth-center.result }}' \
+            '${{ needs.maven-sso-admin.result }}' \
+            '${{ needs.maven-query-service.result }}' \
+            '${{ needs.maven-file-service.result }}' \
+            '${{ needs.maven-api-gateway.result }}' \
+            '${{ needs.maven-cdc.result }}' \
+            '${{ needs.admin-ui-typecheck.result }}' \
+            '${{ needs.admin-ui-test.result }}' \
+            '${{ needs.admin-ui-lint.result }}' \
+            '${{ needs.admin-ui-build.result }}'; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
               echo "::error::Al menos un job terminó en '$r'."
               exit 1
