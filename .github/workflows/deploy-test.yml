@@ -18,19 +18,33 @@
 #
 # Flujo del despliegue:
 #   push a `dev` → corre CI (ci.yml) → si CI pasa, este workflow:
-#     1. build-push : construye las 10 imágenes de la app con los
-#                     Dockerfiles del repo (8 en raíz + cdc-capture
-#                     y cdc-worker bajo cdc-sync/) y las publica en
-#                     ghcr.io/colombia-evaluadora/sso/<servicio>
+#     1. changes    : mira el diff HEAD~1..HEAD para decidir qué
+#                     imágenes hay que reconstruir (no siempre son
+#                     las 10); consulta el último run exitoso de
+#                     deploy-test y se sale si el SHA ya salió
+#                     (evita deploys duplicados por push consecutivos
+#                     a dev).
+#     2. build-push : reconstruye sólo las imágenes afectadas y las
+#                     publica en ghcr.io/colombia-evaluadora/sso/<servicio>
 #                     con tags `test-latest` + `test-<sha corto>`.
-#     2. deploy     : rsync de docker-compose.yml + postgres/migrations
-#                     + observability/ + docker/ al servidor, luego
-#                     `docker compose pull && up -d` por SSH.
+#     3. deploy     : rsync de docker-compose.yml + postgres/migrations
+#                     + observability/ + docker/ + scripts/ al servidor,
+#                     escribe /opt/sso/.env desde el secreto TEST_ENV_FILE,
+#                     y luego `docker compose pull && up -d` por SSH.
 #
 # El gate es `workflow_run` sobre CI (no un push directo) para que
 # nunca se despliegue un commit cuyos tests fallaron. `workflow_dispatch`
 # queda para re-desplegar a mano (usa el HEAD de la rama elegida y NO
 # espera a CI — úsalo consciente de eso).
+#
+# NOTA sobre la rama: la condición NO filtra por `head_branch == 'dev'`
+# porque `github.event.workflow_run.head_branch` siempre apunta a la
+# rama donde está deploy-test.yml (main), no a la del push que disparó
+# CI. El filtro se sustituye por la observación práctica: CI sólo
+# corre en push para `dev` (el push a `test`/`main` va por PR → CI de
+# PR → workflow_run con `event == 'pull_request'`, descartado por la
+# condición `event == 'push'`). Cuando `test` y `main` tengan entorno,
+# cada workflow añade su propio filtro SIN volver a este.
 #
 # El .env del servidor se despliega desde el secreto de repo
 # TEST_ENV_FILE (antes se creaba a mano en /opt/sso/.env). Contiene los
@@ -108,11 +122,22 @@ jobs:
   changes:
     name: changes
     runs-on: ubuntu-latest
+    # Antes filtrábamos por `head_branch == 'dev'`, pero esa condición
+    # es un escollo: `github.event.workflow_run.head_branch` apunta a
+    # la rama donde vive deploy-test.yml (main), no a la rama del push
+    # que disparó CI. El filtro nunca hacía match y el deploy
+    # nunca se auto-disparaba (sólo lanzaba con workflow_dispatch).
+    #
+    # Solución: lanzar en cualquier push cuyo CI verduzco, sin mirar
+    # la rama, y añadir un guard contra SHA duplicado más abajo
+    # (paso `Check SHA not yet deployed`). Así `dev` se despliega
+    # sola al mergear, y `test`/`main` no desplegarán porque CI ya
+    # no corre en push sobre esas ramas (sólo en PR con destino
+    # ahí) — cuando tengan su entorno, cada workflow mete el suyo.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'dev')
+       github.event.workflow_run.event == 'push')
     outputs:
       services: ${{ steps.pick.outputs.services }}
       any:      ${{ steps.pick.outputs.any }}
@@ -122,9 +147,54 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 2
-      - id: pick
+      - name: Check SHA not yet deployed
+        if: github.event_name == 'workflow_run'
+        id: sha-check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          # Pillar el último run de deploy-test que NO fuera skipped
+          # (workflow_dispatch también se lista, y los viejos
+          # `cancelled` por la cancelación mutua). Filtrar por
+          # conclusion = success y event = push a dev — pero como
+          # el campo `head_branch` ya no es fiable, simplemente
+          # miramos el último run con éxito de la rama por nombre
+          # de workflow.
+          LAST=$(gh run list \
+            --workflow "deploy-test.yml" \
+            --status success \
+            --limit 1 \
+            --json headSha,databaseId,displayTitle \
+            --jq '.[0] // empty')
+          if [ -n "$LAST" ]; then
+            LAST_SHA=$(echo "$LAST" | jq -r '.headSha')
+            echo "Último deploy-test exitoso: $LAST_SHA (run $(echo "$LAST" | jq -r '.databaseId'))"
+            if [ "$LAST_SHA" = "$SHA" ]; then
+              echo "::notice::SHA $SHA ya desplegado por el último run exitoso. Saltando."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            echo "No hay deploys previos exitosos — se procede."
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+      - id: pick
+        env:
+          SKIP: ${{ steps.sha-check.outputs.skip }}
+        run: |
+          set -euo pipefail
+
+          # Guard contra SHA duplicado: si ya desplegamos este commit,
+          # no hacemos nada.
+          if [ "${SKIP:-false}" = "true" ]; then
+            echo "Saltado: SHA ya desplegado."
+            echo "any=false" >> "$GITHUB_OUTPUT"
+            echo 'services=[]' >> "$GITHUB_OUTPUT"
+            echo 'excluded=[]' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           # workflow_dispatch = redespliegue manual: se reconstruye todo
           # a propósito, porque quien lo lanza no está reaccionando a un
@@ -197,22 +267,16 @@ jobs:
     name: build-push (${{ matrix.service }})
     runs-on: ubuntu-latest
     needs: [changes]
-    # Solo corre si: (a) CI terminó en verde sobre un PUSH a main o
-    # test, o (b) se lanzó a mano. workflow_run también dispara para
-    # CI de PRs (incluido el PR test→main del flujo de promoción) —
-    # el filtro `event == 'push'` los descarta.
-    # Sólo `dev` despliega.
+    # Solo corre si: (a) CI terminó en verde sobre un push, o
+    # (b) se lanzó a mano. workflow_run también dispara para CI de
+    # PRs (incluido el PR test→main del flujo de promoción) — el
+    # filtro `event == 'push'` los descarta.
     #
-    # Antes esta condición no miraba la rama: bastaba con que CI
-    # pasara tras un push, viniera de donde viniera. Como CI corría en
-    # main y en test, las dos desplegaban al MISMO servidor y ganaba
-    # la que terminara última — con dos promociones seguidas, el
-    # servidor podía acabar sirviendo la que no era.
-    #
-    # Con el flujo dev → test → main, `dev` es la única rama con
-    # entorno. `test` y `main` son marcas de promoción: pasan por CI
-    # pero no despliegan. Cuando existan sus entornos, cada una
-    # engancha el suyo sin tocar esta condición.
+    # No filtramos por rama: CI sólo corre en push sobre `dev` (los
+    # push a `test`/`main` van por PR → CI de PR → workflow_run con
+    # `event == 'pull_request'`, descartado por la condición de
+    # arriba). Cuando test/main tengan su entorno, cada workflow
+    # añade su propio gate — no se vuelve a meter aquí.
     #
     # El `contains` se evalúa POR ENTRADA de la matriz: las que no
     # aplican se saltan sin arrancar runner, así que no gastan
@@ -353,12 +417,15 @@ jobs:
     # desplegarlos: la migración no se aplica sola.
     #
     # Se exige que ninguna construcción haya fallado; saltada es un
-    # resultado válido.
+    # resultado válido. Y no se despliega si el guard de SHA
+    # detectó que este commit ya salió en el último run
+    # (`needs.changes.outputs.any == 'false'`).
     if: >-
       always()
       && needs.changes.result == 'success'
       && needs.build-push.result != 'failure'
       && needs.build-push.result != 'cancelled'
+      && needs.changes.outputs.any == 'true'
     environment: test
     steps:
       - uses: actions/checkout@v4
