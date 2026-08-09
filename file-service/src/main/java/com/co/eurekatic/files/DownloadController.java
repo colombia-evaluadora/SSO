@@ -120,8 +120,18 @@ public class DownloadController {
                     archivoId, clave);
             return ResponseEntity.notFound().build();
         } catch (S3Exception e) {
-            log.error("descarga id={}: S3 respondió {} (clave={})",
-                    archivoId, e.statusCode(), clave);
+            // El mensaje del bucket va en el log a propósito: un 400
+            // de S3 casi nunca es "la clave está mal", es un problema
+            // de configuración (región equivocada en la firma,
+            // path-style desactivado contra un endpoint local,
+            // credenciales de otro bucket). Sin el texto del error
+            // hay que ir a los logs del propio S3 para enterarse, y
+            // contra AWS eso no es una opción.
+            log.error("descarga id={}: S3 respondió {} (clave={}): {}",
+                    archivoId, e.statusCode(), clave,
+                    e.awsErrorDetails() == null
+                            ? e.getMessage()
+                            : e.awsErrorDetails().errorMessage());
             return ResponseEntity.status(502).build();
         }
 

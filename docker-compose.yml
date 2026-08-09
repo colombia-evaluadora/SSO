@@ -1368,6 +1368,15 @@ services:
       FILES_CATALOG_BASE_URL: "http://sso-api-gateway:8080/api"
       # Vacío = AWS real. Con valor = Garage u otro compatible.
       S3_ENDPOINT: "${S3_ENDPOINT:-}"
+      # La región entra en la FIRMA SigV4, no es decorativa: Garage
+      # se llama a sí mismo "garage" y rechaza con 400 "Authorization
+      # header malformed, unexpected scope: .../us-east-1/..." una
+      # petición firmada para otra región. Sin esta línea el
+      # application.yml caía a su default us-east-1 y toda descarga
+      # contra Garage moría en 400 — la subida no, porque la hacía
+      # el mismo cliente contra el mismo endpoint... con el mismo
+      # error latente en cuanto el bucket exigiera región correcta.
+      S3_REGION: "${S3_REGION:-us-east-1}"
       S3_BUCKET: "${S3_BUCKET:-eval-col}"
       S3_ACCESS_KEY: "${S3_ACCESS_KEY:-}"
       S3_SECRET_KEY: "${S3_SECRET_KEY:-}"
