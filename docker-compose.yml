@@ -1403,7 +1403,18 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
     mem_limit: 512m
     healthcheck:
-      test: ["CMD", "sh", "-c", "exec 3<>/dev/tcp/localhost/8086; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      # `bash`, no `sh`: /dev/tcp NO es un fichero, es una función del
+      # propio bash. El `sh` de la imagen es dash y no la implementa,
+      # así que el healthcheck fallaba SIEMPRE con "cannot create
+      # /dev/tcp/localhost/8086: Directory nonexistent" y el
+      # contenedor vivía marcado unhealthy pese a responder UP.
+      # Era el único de los nueve servicios que usaba sh.
+      #
+      # Importa más de lo que parece: hoy nadie hace
+      # `depends_on: file-service: condition: service_healthy`, pero
+      # el día que alguien lo añada se quedaría esperando para
+      # siempre a un servicio que está perfectamente vivo.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8086; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 15s
       timeout: 5s
       retries: 10
