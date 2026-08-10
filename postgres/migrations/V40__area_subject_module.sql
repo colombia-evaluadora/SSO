@@ -8,23 +8,55 @@
 
 SET search_path TO academico_test, public;
 
+-- ---------------------------------------------------------------------------
+-- Helpers de alcance por rol reutilizables (usados por V40-V46). Se apoyan en
+-- los helpers definidos en V37 (fn_periodo_usuario_puede_gestionar / _escribir).
+--   fn_periodo_establecimiento(periodo) -> establecimiento dueño del periodo.
+--   fn_periodo_gate_escritura(usuario, establecimiento) -> gate grueso (algun
+--     rol de gestion) + fino (el establecimiento debe estar en su alcance).
+--     Si el establecimiento llega NULL (entidad inexistente) solo aplica el
+--     grueso y deja que cada funcion lance su propio error de existencia.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_establecimiento(p_fk_periodo BIGINT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT s.FK_TESTABLECIMIENTO
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_gate_escritura(
+    p_pk_usuario BIGINT, p_fk_establecimiento BIGINT
+)
+RETURNS VOID LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario) THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+    IF p_fk_establecimiento IS NOT NULL
+       AND NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario, p_fk_establecimiento) THEN
+        RAISE EXCEPTION 'El usuario no puede gestionar datos academicos de este establecimiento'
+            USING ERRCODE = '42501';
+    END IF;
+END;
+$$;
+
 -- ----- AREA (TAREA) --------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_area_crear(BIGINT, BIGINT, VARCHAR, VARCHAR, VARCHAR, NUMERIC, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_area_crear(
     p_fk_periodo          BIGINT,
     p_fk_area_asignatura  BIGINT,
     p_nombre_interno      VARCHAR(130),
-    p_abreviacion         VARCHAR(30),
-    p_codigo              VARCHAR(30) DEFAULT NULL,
+    p_abreviacion         VARCHAR(30),   -- va a CODIGO (el front lo manda como "abreviacion")
     p_orden_reportes      NUMERIC     DEFAULT 0,
     p_pk_usuario_solicitante BIGINT   DEFAULT NULL
 )
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE v_id BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_fk_periodo));
     IF p_fk_periodo IS NULL OR p_fk_area_asignatura IS NULL
        OR NULLIF(TRIM(p_nombre_interno),'') IS NULL OR NULLIF(TRIM(p_abreviacion),'') IS NULL THEN
         RAISE EXCEPTION 'Faltan campos obligatorios del area' USING ERRCODE = '22023';
@@ -46,14 +78,14 @@ BEGIN
     IF EXISTS (
         SELECT 1 FROM academico_test.TAREA a
          WHERE a.FK_TPERIODO_ACADEMICO = p_fk_periodo AND a.ACTIVE = TRUE
-           AND UPPER(TRIM(a.CODIGO)) = UPPER(TRIM(COALESCE(p_codigo, p_abreviacion)))
+           AND UPPER(TRIM(a.CODIGO)) = UPPER(TRIM(p_abreviacion))
     ) THEN
         RAISE EXCEPTION 'Ya existe un area con el codigo % en este periodo academico',
-            COALESCE(p_codigo, p_abreviacion) USING ERRCODE = '23505';
+            p_abreviacion USING ERRCODE = '23505';
     END IF;
     INSERT INTO academico_test.TAREA
         (CODIGO, NOMBRE, FK_TPERIODO_ACADEMICO, FK_TAREA_ASIGNATURA, ORDEN_REPORTE, CREATED_BY)
-    VALUES (COALESCE(p_codigo, p_abreviacion), p_nombre_interno, p_fk_periodo,
+    VALUES (p_abreviacion, p_nombre_interno, p_fk_periodo,
             p_fk_area_asignatura, COALESCE(p_orden_reportes, 0), v_audit)
     RETURNING PK_TAREA INTO v_id;
     RETURN v_id;
@@ -74,10 +106,9 @@ DECLARE
     v_nombre VARCHAR(130); v_abrev VARCHAR(30);
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TAREA a WHERE a.PK_TAREA = p_pk));
     SELECT * INTO r FROM academico_test.TAREA WHERE PK_TAREA = p_pk AND ACTIVE = TRUE;
     IF NOT FOUND THEN RAISE EXCEPTION 'No existe un area activa con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
     IF p_nombre_interno IS NOT NULL AND NULLIF(TRIM(p_nombre_interno),'') IS NULL THEN
@@ -125,10 +156,9 @@ CREATE OR REPLACE FUNCTION academico_test.fn_area_soft_delete(p_pk BIGINT, p_pk_
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TAREA a WHERE a.PK_TAREA = p_pk));
     -- No se puede eliminar un area con asignaturas activas.
     IF EXISTS (
         SELECT 1 FROM academico_test.TASIGNATURA WHERE FK_TAREA = p_pk AND ACTIVE = TRUE
@@ -143,9 +173,12 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS academico_test.fn_area_listar(BIGINT, TEXT, INT, INT);
+DROP FUNCTION IF EXISTS academico_test.fn_area_listar(BIGINT, TEXT, INT, INT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_area_listar(
     p_fk_periodo BIGINT, p_nombre_interno TEXT DEFAULT NULL,
-    p_page_index INT DEFAULT 0, p_page_size INT DEFAULT 10
+    p_page_index INT DEFAULT 0, p_page_size INT DEFAULT 10,
+    p_pk_usuario BIGINT DEFAULT NULL   -- alcance (global / establecimiento)
 )
 RETURNS TABLE (id BIGINT, codigo VARCHAR, nombre_interno VARCHAR,
                area_general_id BIGINT, orden_reportes NUMERIC, total_count BIGINT)
@@ -154,6 +187,7 @@ LANGUAGE sql STABLE AS $$
            count(*) OVER()::BIGINT
       FROM academico_test.TAREA a
      WHERE a.FK_TPERIODO_ACADEMICO = p_fk_periodo AND a.ACTIVE = TRUE
+       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_fk_periodo)
        AND (NULLIF(TRIM(p_nombre_interno),'') IS NULL OR a.NOMBRE ILIKE '%' || p_nombre_interno || '%')
      ORDER BY a.ORDEN_REPORTE, a.NOMBRE
      LIMIT NULLIF(p_page_size, 0)
@@ -176,10 +210,7 @@ DECLARE
     -- Especialidad "Otro" para enfasis creados al vuelo.
     c_especialidad_otro CONSTANT BIGINT := 7;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, p_fk_establecimiento);
     SELECT PK_TENFASIS INTO v_id FROM academico_test.TENFASIS
      WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento AND ACTIVE = TRUE
        AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(p_nombre));
@@ -192,13 +223,68 @@ BEGIN
 END;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- fn_enfasis_desde_seleccion — resuelve el "id" elegido en el combo combinado
+-- especialidad+enfasis (fn_especialidad_enfasis_listar) a un PK_TENFASIS del
+-- establecimiento. Reglas:
+--   * NULL -> NULL (sin especialidad).
+--   * Si el id ya es un ENFASIS activo del establecimiento -> se usa tal cual.
+--   * Si es una ESPECIALIDAD global activa -> se crea (o reusa) un enfasis del
+--     establecimiento con NOMBRE y FK_TESPECIALIDAD de esa especialidad y un
+--     CODIGO incremental (00000, 00001, ...) por establecimiento. Reusa el ya
+--     creado (misma especialidad + nombre) si se vuelve a elegir. Devuelve su PK.
+--   * Si no es ni una ni otra -> 22023.
+-- Nota: el id de enfasis del establecimiento tiene prioridad ante colision
+-- numerica con una especialidad global (el front distingue por 'origen'; si en
+-- el futuro se quiere 100% inequivoco, pasar el origen como parametro).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_enfasis_desde_seleccion(
+    p_fk_establecimiento BIGINT, p_id BIGINT, p_audit VARCHAR
+)
+RETURNS BIGINT LANGUAGE plpgsql AS $$
+DECLARE v_enf BIGINT; v_nombre VARCHAR(130); v_next INT;
+BEGIN
+    IF p_id IS NULL THEN RETURN NULL; END IF;
+    -- 1) ¿Ya es un enfasis del establecimiento?
+    SELECT PK_TENFASIS INTO v_enf FROM academico_test.TENFASIS
+     WHERE PK_TENFASIS = p_id AND ACTIVE = TRUE AND FK_TESTABLECIMIENTO = p_fk_establecimiento;
+    IF v_enf IS NOT NULL THEN RETURN v_enf; END IF;
+    -- 2) ¿Es una especialidad global activa? -> resolver-o-crear enfasis con su nombre.
+    SELECT NOMBRE INTO v_nombre FROM academico_test.TESPECIALIDAD
+     WHERE PK_ESPECIALIDAD = p_id AND ACTIVE = TRUE;
+    IF v_nombre IS NULL THEN
+        RAISE EXCEPTION 'La especialidad/enfasis % no existe, esta inactiva o pertenece a otro establecimiento', p_id
+            USING ERRCODE = '22023';
+    END IF;
+    -- Serializar la creacion por establecimiento (codigo incremental sin choques).
+    PERFORM pg_advisory_xact_lock(hashtext('tenfasis:' || p_fk_establecimiento::text));
+    -- Reusar el enfasis ya creado para esta especialidad en el establecimiento
+    -- (misma especialidad + mismo nombre): si vuelve a elegirse, no se crea otro.
+    SELECT PK_TENFASIS INTO v_enf FROM academico_test.TENFASIS
+     WHERE FK_TESPECIALIDAD = p_id AND FK_TESTABLECIMIENTO = p_fk_establecimiento AND ACTIVE = TRUE
+       AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(v_nombre))
+     LIMIT 1;
+    IF v_enf IS NOT NULL THEN RETURN v_enf; END IF;
+    -- Crear: FK_TESPECIALIDAD = la especialidad elegida; NOMBRE = el de la
+    -- especialidad; CODIGO incremental (00000, 00001, ...) por establecimiento,
+    -- calculado entre los codigos puramente numericos existentes.
+    SELECT COALESCE(MAX(CODIGO::int), -1) + 1 INTO v_next
+      FROM academico_test.TENFASIS
+     WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento AND CODIGO ~ '^[0-9]+$';
+    INSERT INTO academico_test.TENFASIS (CODIGO, NOMBRE, FK_TESPECIALIDAD, FK_TESTABLECIMIENTO, CREATED_BY)
+    VALUES (lpad(v_next::text, 5, '0'), v_nombre, p_id, p_fk_establecimiento, p_audit)
+    RETURNING PK_TENFASIS INTO v_enf;
+    RETURN v_enf;
+END;
+$$;
+
 -- ----- ASIGNATURA (TASIGNATURA) — "abreviacion" del front = CODIGO ----------
 CREATE OR REPLACE FUNCTION academico_test.fn_subject_crear(
     p_fk_area             BIGINT,
     p_fk_area_asignatura  BIGINT,
     p_nombre_interno      VARCHAR(130),
     p_abreviacion         VARCHAR(30),               -- va a CODIGO
-    p_fk_enfasis          BIGINT      DEFAULT NULL,
+    p_fk_enfasis          BIGINT      DEFAULT 2,
     p_color               VARCHAR(10) DEFAULT NULL,
     p_orden_reportes      NUMERIC     DEFAULT 0,
     p_pk_usuario_solicitante BIGINT   DEFAULT NULL
@@ -206,10 +292,9 @@ CREATE OR REPLACE FUNCTION academico_test.fn_subject_crear(
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE v_id BIGINT; v_est BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TAREA a WHERE a.PK_TAREA = p_fk_area));
     IF p_fk_area IS NULL OR NULLIF(TRIM(p_nombre_interno),'') IS NULL
        OR NULLIF(TRIM(p_abreviacion),'') IS NULL THEN
         RAISE EXCEPTION 'Faltan campos obligatorios de la asignatura' USING ERRCODE = '22023';
@@ -232,15 +317,10 @@ BEGIN
     IF p_color IS NOT NULL AND p_color !~ '^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$' THEN
         RAISE EXCEPTION 'El color (%) debe ser un HEX valido, p.ej. #FFAA00', p_color USING ERRCODE = '22023';
     END IF;
-    -- Especialidad (opcional): existe, activa y del mismo establecimiento.
-    IF p_fk_enfasis IS NOT NULL THEN
-        PERFORM 1 FROM academico_test.TENFASIS
-         WHERE PK_TENFASIS = p_fk_enfasis AND ACTIVE = TRUE AND FK_TESTABLECIMIENTO = v_est;
-        IF NOT FOUND THEN
-            RAISE EXCEPTION 'La especialidad % no existe, esta inactiva o pertenece a otro establecimiento', p_fk_enfasis
-                USING ERRCODE = '22023';
-        END IF;
-    END IF;
+    -- Especialidad/enfasis (opcional): resolver la seleccion del combo. Si es una
+    -- especialidad global, se crea (o reusa) un enfasis del establecimiento con su
+    -- info; si ya es un enfasis, se usa tal cual. Deja p_fk_enfasis = PK_TENFASIS.
+    p_fk_enfasis := academico_test.fn_enfasis_desde_seleccion(v_est, p_fk_enfasis, v_audit);
     IF EXISTS (
         SELECT 1 FROM academico_test.TASIGNATURA s
          WHERE s.FK_TAREA = p_fk_area AND s.ACTIVE = TRUE
@@ -282,10 +362,10 @@ DECLARE
     v_nombre VARCHAR(130); v_codigo VARCHAR(30); v_enfasis BIGINT; v_est BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TASIGNATURA s JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
+         WHERE s.PK_TASIGNATURA = p_pk));
     SELECT * INTO r FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_pk AND ACTIVE = TRUE;
     IF NOT FOUND THEN RAISE EXCEPTION 'No existe una asignatura activa con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
     IF p_nombre_interno IS NOT NULL AND NULLIF(TRIM(p_nombre_interno),'') IS NULL THEN
@@ -305,20 +385,18 @@ BEGIN
     END IF;
     v_nombre  := COALESCE(p_nombre_interno, r.NOMBRE);
     v_codigo  := COALESCE(p_abreviacion, r.CODIGO);
-    v_enfasis := COALESCE(p_fk_enfasis, r.FK_TENFASIS);
-    -- Especialidad (si viene o ya existe): valida contra el establecimiento del area.
+    -- Especialidad/enfasis (si viene): resolver la seleccion del combo contra el
+    -- establecimiento del area. Especialidad global -> crea/reusa enfasis; enfasis
+    -- -> tal cual. Si no viene, conserva el actual.
     IF p_fk_enfasis IS NOT NULL THEN
         SELECT s.FK_TESTABLECIMIENTO INTO v_est
           FROM academico_test.TAREA a
           JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = a.FK_TPERIODO_ACADEMICO
           JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
          WHERE a.PK_TAREA = r.FK_TAREA;
-        PERFORM 1 FROM academico_test.TENFASIS
-         WHERE PK_TENFASIS = p_fk_enfasis AND ACTIVE = TRUE AND FK_TESTABLECIMIENTO = v_est;
-        IF NOT FOUND THEN
-            RAISE EXCEPTION 'La especialidad % no existe, esta inactiva o pertenece a otro establecimiento', p_fk_enfasis
-                USING ERRCODE = '22023';
-        END IF;
+        v_enfasis := academico_test.fn_enfasis_desde_seleccion(v_est, p_fk_enfasis, v_audit);
+    ELSE
+        v_enfasis := r.FK_TENFASIS;
     END IF;
     IF EXISTS (
         SELECT 1 FROM academico_test.TASIGNATURA s
@@ -353,10 +431,10 @@ CREATE OR REPLACE FUNCTION academico_test.fn_subject_soft_delete(p_pk BIGINT, p_
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TASIGNATURA s JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
+         WHERE s.PK_TASIGNATURA = p_pk));
     -- Bloqueo por dependencias (solo filas activas).
     IF EXISTS (
         SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
@@ -421,9 +499,10 @@ $$;
 -- p_asignaturas jsonb = set COMPLETO de asignaturas del area, en el shape del
 -- front: [{nombreInterno, abreviacion, asignaturaGeneral, especialidad?, color?,
 -- ordenReportes?}]. Semantica de REEMPLAZO: da de baja las que ya no estan
--- (por nombre) y hace upsert por nombre de las presentes. `asignaturaGeneral` y
--- `especialidad` llegan como NOMBRE y se resuelven a id (la especialidad se
--- resuelve-o-crea como enfasis del establecimiento).
+-- (por nombre) y hace upsert por nombre de las presentes. `asignaturaGeneral`
+-- llega como ID (fk_area_asignatura). `especialidad` llega como NOMBRE: si es una
+-- especialidad global se resuelve-o-crea como enfasis (FK_TESPECIALIDAD real +
+-- codigo incremental); si es un nombre nuevo, se crea enfasis con especialidad "Otro".
 CREATE OR REPLACE FUNCTION academico_test.fn_subject_guardar_bulk(
     p_fk_area             BIGINT,
     p_asignaturas         jsonb,
@@ -434,10 +513,10 @@ DECLARE
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_est BIGINT; v_count INT := 0; it jsonb;
     v_id BIGINT; v_nombre VARCHAR(130); v_codigo VARCHAR(30);
-    v_aa BIGINT; v_enf BIGINT; v_color VARCHAR(10); v_orden NUMERIC;
-    v_aa_name TEXT; v_enf_name TEXT;
+    v_aa BIGINT; v_enf BIGINT; v_esp BIGINT; v_color VARCHAR(10); v_orden NUMERIC;
+    v_enf_name TEXT;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
@@ -449,6 +528,11 @@ BEGIN
      WHERE a.PK_TAREA = p_fk_area AND a.ACTIVE = TRUE;
     IF v_est IS NULL THEN
         RAISE EXCEPTION 'El area % no existe o esta inactiva', p_fk_area USING ERRCODE = '23503';
+    END IF;
+    -- Gate fino: el establecimiento del area debe estar en el alcance del usuario.
+    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_est) THEN
+        RAISE EXCEPTION 'El usuario no puede gestionar datos academicos de este establecimiento'
+            USING ERRCODE = '42501';
     END IF;
 
     -- Reemplazo: baja logica de las asignaturas del area que NO vienen en el set.
@@ -467,7 +551,6 @@ BEGIN
         v_codigo   := it->>'abreviacion';
         v_color    := NULLIF(it->>'color','');
         v_orden    := COALESCE(NULLIF(it->>'ordenReportes','')::NUMERIC, 0);
-        v_aa_name  := NULLIF(TRIM(it->>'asignaturaGeneral'),'');
         v_enf_name := NULLIF(TRIM(it->>'especialidad'),'');
 
         IF NULLIF(TRIM(v_nombre),'') IS NULL OR NULLIF(TRIM(v_codigo),'') IS NULL THEN
@@ -476,19 +559,28 @@ BEGIN
         IF v_color IS NOT NULL AND v_color !~ '^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$' THEN
             RAISE EXCEPTION 'El color (%) debe ser un HEX valido, p.ej. #FFAA00', v_color USING ERRCODE = '22023';
         END IF;
-        -- Asignatura general (nombre -> id de TAREA_ASIGNATURA).
-        v_aa := NULL;
-        IF v_aa_name IS NOT NULL THEN
-            SELECT PK_TAREA_ASIGNATURA INTO v_aa FROM academico_test.TAREA_ASIGNATURA
-             WHERE ACTIVE = TRUE AND UPPER(TRIM(NOMBRE)) = UPPER(v_aa_name) LIMIT 1;
-            IF v_aa IS NULL THEN
-                RAISE EXCEPTION 'La asignatura general "%" no existe', v_aa_name USING ERRCODE = '23503';
-            END IF;
+        -- Area general: el front manda el id (fk_area_asignatura), no el nombre.
+        v_aa := NULLIF(TRIM(it->>'asignaturaGeneral'),'')::bigint;
+        IF v_aa IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TAREA_ASIGNATURA
+             WHERE PK_TAREA_ASIGNATURA = v_aa AND ACTIVE = TRUE
+        ) THEN
+            RAISE EXCEPTION 'La asignatura general % no existe o esta inactiva', v_aa USING ERRCODE = '23503';
         END IF;
-        -- Especialidad (nombre -> enfasis del establecimiento, resolver-o-crear).
+        -- Especialidad: si el nombre corresponde a una ESPECIALIDAD global del
+        -- catalogo, se resuelve preservandola (crea/reusa enfasis con su
+        -- FK_TESPECIALIDAD y codigo incremental, via fn_enfasis_desde_seleccion).
+        -- Si es un nombre nuevo (no del catalogo global), cae al resolver por
+        -- nombre (enfasis con especialidad "Otro").
         v_enf := NULL;
         IF v_enf_name IS NOT NULL THEN
-            v_enf := academico_test.fn_enfasis_resolver(v_est, v_enf_name, NULL, p_pk_usuario_solicitante);
+            SELECT PK_ESPECIALIDAD INTO v_esp FROM academico_test.TESPECIALIDAD
+             WHERE ACTIVE = TRUE AND UPPER(TRIM(NOMBRE)) = UPPER(v_enf_name) LIMIT 1;
+            IF v_esp IS NOT NULL THEN
+                v_enf := academico_test.fn_enfasis_desde_seleccion(v_est, v_esp, v_audit);
+            ELSE
+                v_enf := academico_test.fn_enfasis_resolver(v_est, v_enf_name, NULL, p_pk_usuario_solicitante);
+            END IF;
         END IF;
 
         -- Match por nombre dentro del area (upsert).
@@ -536,10 +628,8 @@ RETURNS TABLE (id BIGINT, eliminado BOOLEAN, error_code TEXT, error_mensaje TEXT
 LANGUAGE plpgsql AS $$
 DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- Gate grueso; el fino por establecimiento lo aplica fn_area_soft_delete.
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, NULL);
     IF p_ids IS NULL THEN RETURN; END IF;
     FOREACH v_id IN ARRAY p_ids LOOP
         BEGIN
