@@ -6,6 +6,7 @@ import com.co.eurekatic.common.entity.Query;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -48,7 +49,14 @@ public record QueryResponse(
         ExecutionMode executionMode,
         String outParamNames,
         /** V33 — verbo HTTP: GET, POST o PUT. Default POST. */
-        String httpMethod
+        String httpMethod,
+        /**
+         * V49 — author-declared JDBC/PG type per caller-controlled
+         * placeholder. Shape: {@code {"PARAM.NOMBRE":"TEXT", ...}}.
+         * Empty map means the row is legacy or has no caller-controlled
+         * placeholders.
+         */
+        Map<String, String> paramTypes
 ) {
     public static QueryResponse fromEntity(Query q) {
         Microservice m = q.getMicroservice();
@@ -70,6 +78,7 @@ public record QueryResponse(
                 q.getPathTemplate(),
                 ExecutionMode.fromString(q.getExecutionMode()),
                 q.getOutParamNames(),
-                q.getHttpMethod());
+                q.getHttpMethod(),
+                q.getParamTypes());
     }
 }

@@ -385,6 +385,10 @@ export interface QueryAdminRequest {
   /** V31 — comma-separated :placeholder names that are OUT params of
    *  a PROCEDURE-mode row. Null/empty = no OUT params (legacy). */
   outParamNames?: string | null;
+  /** V49 — author-declared JDBC/PG type per caller-controlled
+   *  placeholder. Strict at write time: every :PARAM.* / :BODY.*
+   *  in `query` must appear as a key. */
+  paramTypes?: Record<string, string> | null;
 }
 
 /** Admin CRUD response shape — mirrors {@code QueryResponse}
@@ -414,6 +418,8 @@ export interface QueryAdminResponse {
   executionMode?: "SELECT" | "PROCEDURE" | "FUNCTION";
   /** V31 */
   outParamNames?: string | null;
+  /** V49 */
+  paramTypes?: Record<string, string> | null;
 }
 
 /** Per-row role binding checkbox list — mirrors
