@@ -77,8 +77,8 @@ UPDATE role
 --    works regardless of Flyway's session.
 INSERT INTO role (name, description)
 SELECT DISTINCT
-       'CEVAL-' || t.nombre,
-       COALESCE(NULLIF(t.codigo, ''), 'CEVAL-' || t.nombre)
+       'CEVAL-' || t.codigo,
+       COALESCE(NULLIF(t.nombre, ''), 'CEVAL-' || t.codigo)
   FROM academico_test.trol t
  WHERE NOT EXISTS (
        SELECT 1
