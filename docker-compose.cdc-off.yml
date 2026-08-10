@@ -1,0 +1,42 @@
+# =============================================================================
+# docker-compose.cdc-off.yml — override que apaga TODA la pipeline CDC.
+#
+# Cubre las cuatro piezas que hoy viven bajo los perfiles `cdc-sync`
+# y `analytics`:
+#
+#   cdc-clickhouse      → ClickHouse, la base de analítica.
+#   cdc-capture         → captura cambios de Postgres en un slot lógico.
+#   cdc-pg-slot-init    → crea el slot y la publication la primera vez.
+#   cdc-worker          → mueve los eventos a ClickHouse/Oracle.
+#
+# Por qué un override y no una variable de entorno:
+# Docker Compose no interpola variables dentro del campo `profiles:`
+# — es un valor literal que se evalúa al parsear. La forma soportada
+# de condicionar la existencia de un servicio es un archivo override
+# que sobrescribe sus `profiles` con uno que el operador no va a
+# pasar. Aquí usamos un perfil `disabled` que nadie activa, así que
+# cuando se aplica el override los servicios CDC simplemente dejan
+# de existir en el grafo resuelto.
+#
+# Uso:
+#
+#   # Apagado (sin CDC, sin ClickHouse, sin reverse-sync a Oracle):
+#   docker compose -f docker-compose.yml -f docker-compose.cdc-off.yml up -d
+#
+#   # Encendido (estado actual):
+#   COMPOSE_PROFILES=local-only,cdc-sync docker compose up -d
+#
+# El `.env` también acepta `CDC_SYNC_ENABLED=true|false` para los
+# orquestadores que prefieran flag en vez de -f extra. Ver el
+# wrapper `scripts/sso-stack.sh`.
+# =============================================================================
+
+services:
+  cdc-clickhouse:
+    profiles: ["disabled"]
+  cdc-capture:
+    profiles: ["disabled"]
+  cdc-pg-slot-init:
+    profiles: ["disabled"]
+  cdc-worker:
+    profiles: ["disabled"]

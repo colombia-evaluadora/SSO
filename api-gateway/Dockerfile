@@ -42,6 +42,7 @@ COPY eurekaserver/pom.xml eurekaserver/
 COPY common/pom.xml common/
 COPY auth-center/pom.xml auth-center/
 COPY api-gateway/pom.xml api-gateway/
+COPY file-service/pom.xml file-service/
 COPY hello-service/pom.xml hello-service/
 COPY sso-admin/pom.xml sso-admin/
 COPY query-service/pom.xml query-service/

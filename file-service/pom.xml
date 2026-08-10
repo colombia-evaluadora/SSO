@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/0/POM4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/0/POM4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.co.eurekatic</groupId>
+        <artifactId>sso-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+    <artifactId>file-service</artifactId>
+    <name>file-service</name>
+    <description>
+        Traduce peticiones multipart en peticiones JSON: sube cada
+        parte binaria a S3, la registra en TARCHIVO y sustituye el
+        campo por el id resultante, CONSERVANDO el nombre del campo.
+        Un multipart con `pdf=&lt;binario&gt;` se convierte en un JSON
+        con `pdf: 12`, que el procedimiento del catálogo lee como
+        :BODY.PDF.
+
+        Deliberadamente no sabe nada de negocio: no conoce
+        funcionarios ni establecimientos. Su única regla es "sube y
+        sustituye", así que una operación nueva no le añade código.
+        Dónde va cada id lo decide el PL/pgSQL del catálogo.
+    </description>
+    <properties>
+        <start-class>com.co.eurekatic.files.FileServiceApplication</start-class>
+        <aws-sdk.version>2.31.7</aws-sdk.version>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common</artifactId>
+            <version>${project.version}</version>
+            <!--
+                common arrastra spring-boot-starter-data-jpa para que los
+                servicios con entidades (auth-center, sso-admin,
+                notification-service) hereden los repos. file-service no
+                tiene entidades: toca UNA tabla (TARCHIVO) con NamedParameter
+                JdbcTemplate, y dejar que arranque Hibernate contra Neon
+                reventaba el startup con "Unable to determine Dialect
+                without JDBC metadata" + "SCRAM-based authentication, but
+                no password was provided" (la password SÍ estaba, pero la
+                pedía Hibernate, no JdbcTemplate). Excluimos el starter
+                aquí y dejamos que common aporte el resto (swagger-models,
+                jjwt, OpenApiFactory, etc.).
+            -->
+            <exclusions>
+                <exclusion>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-data-jpa</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!--
+            JDBC sin JPA: este servicio toca UNA tabla (TARCHIVO) con
+            sentencias que escribe él mismo. Traer Hibernate para eso
+            arrastraría el autoconfig de datasource/JPA que ya dejó al
+            provisioner en crash-loop cuando lo heredó sin quererlo.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+        <!--
+            SDK v2 de AWS. Sirve igual para Garage en local y para S3
+            en producción: la diferencia son endpoint y credenciales,
+            más el path-style que Garage necesita y AWS no.
+        -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>${aws-sdk.version}</version>
+            <!--
+                La descarga se hace streameando desde el api-gateway
+                (ver DownloadController), no entregando URLs prefirmadas
+                al navegador. Por eso no necesitamos S3Presigner: el
+                cliente S3 regular basta para GetObject y PutObject.
+            -->
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <build>
+        <finalName>${project.artifactId}</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -282,6 +282,113 @@ describe("QueriesAdminPage", () => {
     expect(body.uuid).toBe(autoUid);
     expect(body.query).toBe("SELECT 1");
     expect(body.microserviceId).toBe(7);
+  });
+
+  /**
+   * Regression: the drawer's V27/V28/V31 fields (executionMode,
+   * pathTemplate, outParamNames) MUST end up on the wire. The
+   * form, schema, types, and backend service all carry them —
+   * but the parent page's handleSubmit was building the body
+   * field-by-field and quietly dropping these three. Result:
+   * the user filled them in, hit save, the toast said success,
+   * and on reload the fields were empty again. This test pins
+   * the wire shape so a future refactor can't reintroduce the
+   * silence.
+   */
+  it("submitting the new-query drawer forwards pathTemplate and outParamNames, and no longer sends the derived fields", async () => {
+    const pg = mkMs({ id: 7, instanceName: "pg-prod" });
+    const spy = buildFetchSpy({ queries: [], microservices: [pg] });
+    vi.stubGlobal("fetch", spy);
+
+    renderPage();
+    await userEvent.click(screen.getByTestId("new-query"));
+
+    // Un CALL, que es lo que hace que el backend derive
+    // PROCEDURE y que el campo de OUT params aparezca.
+    const sqlArea = screen.getByLabelText(/SQL/i);
+    await userEvent.type(
+      sqlArea,
+      "CALL get_establecimiento(:PARAM.ID, :out_status, :out_message)",
+    );
+
+    await screen.findByRole("option", { name: /pg-prod/i });
+    await userEvent.selectOptions(screen.getByLabelText(/Microservicio/i), "7");
+
+    // La plantilla se fija con fireEvent.change y no con
+    // userEvent.type porque éste interpreta las llaves como
+    // atajos de teclado ({enter}, {tab}…). La sintaxis nueva no
+    // lleva llaves, pero seguimos usando change: la intención es
+    // "pon este valor", no "simula tecleo".
+    const pathInput = screen.getByLabelText(/Path template/i) as HTMLInputElement;
+    fireEvent.change(pathInput, { target: { value: "/establecimiento/:ID" } });
+
+    const outInput = await screen.findByLabelText(/OUT params/i);
+    await userEvent.type(outInput, ":out_status,:out_message");
+
+    await userEvent.click(screen.getByRole("button", { name: /Crear/i }));
+
+    await waitFor(() =>
+      expect(findFetchCall(spy, "/sso-admin/query/save")).toBeDefined(),
+    );
+    const body = JSON.parse(
+      (findFetchCall(spy, "/sso-admin/query/save")![1] as RequestInit).body as string,
+    );
+
+    expect(body.pathTemplate).toBe("/establecimiento/:ID");
+    expect(body.outParamNames).toBe(":out_status,:out_message");
+    // Derivados en el backend: mandarlos desde el formulario sólo
+    // permitiría que contradijeran al SQL.
+    expect(body).not.toHaveProperty("executionMode");
+    expect(body).not.toHaveProperty("type");
+  });
+
+  /**
+   * Companion regression: editing an existing row preserves
+   * the wire shape. The bug was symmetric on update — the
+   * same handleSubmit is used for both create and update, so
+   * the existing test ("submitting the new-query drawer …")
+   * arguably covers both. But pinning the update path
+   * separately catches the case where someone refactors the
+   * branches apart and only fixes one.
+   */
+  it("editing an existing query forwards pathTemplate and outParamNames on PUT", async () => {
+    const pg = mkMs({ id: 7, instanceName: "pg-prod" });
+    const q = mkQuery({
+      id: 42,
+      uuid: "q-exec",
+      query: "CALL get_establecimiento(:PARAM.ID, :out_status, :out_message)",
+      microserviceId: 7,
+      executionMode: "PROCEDURE",
+      pathTemplate: "/establecimiento/:ID",
+      outParamNames: ":out_status,:out_message",
+    });
+    const spy = buildFetchSpy({ queries: [q], microservices: [pg] });
+    vi.stubGlobal("fetch", spy);
+
+    renderPage();
+    await userEvent.click(await screen.findByTestId("edit-42"));
+
+    // The drawer pre-fills the existing values; change the path
+    // template to make sure the new value is what lands on the
+    // wire (not a stale initial). fireEvent.change avoids the
+    // {placeholder} shortcut that user-event.type consumes.
+    const pathInput = screen.getByLabelText(/Path template/i) as HTMLInputElement;
+    fireEvent.change(pathInput, {
+      target: { value: "/establecimiento/:ID/detalle" },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /Guardar cambios/i }));
+
+    await waitFor(() =>
+      expect(findFetchCall(spy, "/sso-admin/query/update")).toBeDefined(),
+    );
+    const body = JSON.parse(
+      (findFetchCall(spy, "/sso-admin/query/update")![1] as RequestInit).body as string,
+    );
+    expect(body.pathTemplate).toBe("/establecimiento/:ID/detalle");
+    expect(body.outParamNames).toBe(":out_status,:out_message");
+    expect(body).not.toHaveProperty("executionMode");
+    expect(body).not.toHaveProperty("type");
   });
 
   it("mints a fresh auto-UID each time the new-query drawer opens", async () => {

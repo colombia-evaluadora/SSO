@@ -114,6 +114,31 @@ public class QueryCatalogService {
                 .toList();
     }
 
+    /**
+     * V30 — same authorization model as {@link #listForCaller} but
+     * restricted to queries with a non-null {@code path_template}.
+     * Used by {@code query-service}'s in-memory
+     * {@code QueryPathRegistry} to build its path → uuid map
+     * without paying the wire cost of the catalog rows that have
+     * no template (typically the majority).
+     *
+     * <p>The microserviceId filter is what makes this a real
+     * win: a per-instance registry call pulls only the rows
+     * for that instance's templates, which is a small number
+     * even when the global catalog is huge.
+     */
+    @Transactional(readOnly = true)
+    public List<QueryDefinition> listPathTemplatesForCaller(String email, Long microserviceId) {
+        boolean isAdmin = hasAdminRole(email);
+        List<Query> rows = (microserviceId == null)
+                ? queryRepo.findAllByPathTemplateIsNotNull()
+                : queryRepo.findAllByMicroservice_IdAndPathTemplateIsNotNull(microserviceId);
+        return rows.stream()
+                .filter(q -> isAdmin || q.isPublicEnd() || userHasAccessTo(q, email))
+                .map(QueryDefinition::fromEntity)
+                .toList();
+    }
+
     /* ====================== internals ====================== */
 
     /**

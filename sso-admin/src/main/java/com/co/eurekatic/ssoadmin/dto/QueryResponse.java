@@ -1,10 +1,12 @@
 package com.co.eurekatic.ssoadmin.dto;
 
+import com.co.eurekatic.common.entity.ExecutionMode;
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -21,9 +23,14 @@ import java.util.stream.Collectors;
  * <p>{@code microserviceId} identifies the {@code query-service-<instance>}
  * that owns this query. Surfaced for the admin CRUD form so
  * operators can re-bind a query to a different instance without
- * writing SQL. The admin form does not yet expose this field
- * directly (server-managed for MVP) but the DTO carries it so
- * a follow-up form change is a small edit.
+ * writing SQL.
+ *
+ * <p><b>V27</b> — {@code pathTemplate} is the URL suffix this
+ * query exposes within the microservice's prefix. Nullable for
+ * legacy queries that only respond to the uuid-in-body flow.
+ *
+ * <p><b>V28</b> — {@code executionMode} tells {@code query-service}
+ * how to run the SQL.
  */
 public record QueryResponse(
         Long id,
@@ -37,7 +44,19 @@ public record QueryResponse(
         String style,
         LocalDateTime createdDate,
         Set<Long> roleIds,
-        Long microserviceId
+        Long microserviceId,
+        String pathTemplate,
+        ExecutionMode executionMode,
+        String outParamNames,
+        /** V33 — verbo HTTP: GET, POST o PUT. Default POST. */
+        String httpMethod,
+        /**
+         * V49 — author-declared JDBC/PG type per caller-controlled
+         * placeholder. Shape: {@code {"PARAM.NOMBRE":"TEXT", ...}}.
+         * Empty map means the row is legacy or has no caller-controlled
+         * placeholders.
+         */
+        Map<String, String> paramTypes
 ) {
     public static QueryResponse fromEntity(Query q) {
         Microservice m = q.getMicroservice();
@@ -55,6 +74,11 @@ public record QueryResponse(
                 q.getRoles().stream()
                         .map(com.co.eurekatic.common.entity.Role::getId)
                         .collect(Collectors.toCollection(LinkedHashSet::new)),
-                m != null ? m.getId() : null);
+                m != null ? m.getId() : null,
+                q.getPathTemplate(),
+                ExecutionMode.fromString(q.getExecutionMode()),
+                q.getOutParamNames(),
+                q.getHttpMethod(),
+                q.getParamTypes());
     }
 }

@@ -374,6 +374,21 @@ export interface QueryAdminRequest {
   action?: string | null;
   style?: string | null;
   microserviceId?: number | null;
+  /** V27 — path suffix composed with MICROSERVICE.REQUEST_URI to expose
+   *  the query as a first-class HTTP endpoint. Null = legacy (uuid in body). */
+  pathTemplate?: string | null;
+
+  httpMethod?: "GET" | "POST" | "PUT" | null;
+  /** V28 — SELECT (default) | PROCEDURE | FUNCTION. The backend validates
+   *  that the SQL's first keyword matches the mode at save time. */
+  executionMode?: "SELECT" | "PROCEDURE" | "FUNCTION";
+  /** V31 — comma-separated :placeholder names that are OUT params of
+   *  a PROCEDURE-mode row. Null/empty = no OUT params (legacy). */
+  outParamNames?: string | null;
+  /** V49 — author-declared JDBC/PG type per caller-controlled
+   *  placeholder. Strict at write time: every :PARAM.* / :BODY.*
+   *  in `query` must appear as a key. */
+  paramTypes?: Record<string, string> | null;
 }
 
 /** Admin CRUD response shape — mirrors {@code QueryResponse}
@@ -394,6 +409,17 @@ export interface QueryAdminResponse {
   createdDate: string | null;
   roleIds: number[];
   microserviceId: number | null;
+  /** V27 — optional for back-compat with pre-V27 test fixtures
+   *  that don't set this field. The wire always carries it. */
+  pathTemplate?: string | null;
+  /** V33 — verbo HTTP que expone esta fila. Null = POST. */
+  httpMethod?: "GET" | "POST" | "PUT" | null;
+  /** V28 — defaults to "SELECT" when omitted (pre-V28 server). */
+  executionMode?: "SELECT" | "PROCEDURE" | "FUNCTION";
+  /** V31 */
+  outParamNames?: string | null;
+  /** V49 */
+  paramTypes?: Record<string, string> | null;
 }
 
 /** Per-row role binding checkbox list — mirrors

@@ -1,7 +1,11 @@
 package com.co.eurekatic.ssoadmin.dto;
 
+import com.co.eurekatic.common.entity.ExecutionMode;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Request body for {@code POST /query/save} and
@@ -34,6 +38,16 @@ import jakarta.validation.constraints.Size;
  * When non-null the service layer enforces that the referenced
  * row is {@code kind=QUERY} — binding a {@code REST} row is
  * rejected with 422 because no container runs there.
+ *
+ * <p><b>V27</b> — {@code pathTemplate} exposes the query at
+ * {@code MICROSERVICE.REQUEST_URI + pathTemplate}. Validated
+ * by {@code QueryAdminService} (must start with "/" and be
+ * unique within the microservice).
+ *
+ * <p><b>V28</b> — {@code executionMode} tells {@code query-service}
+ * whether to run the row as a SELECT, a {@code CALL schema.proc()},
+ * or a {@code SELECT * FROM schema.func()}. Defaults to SELECT so
+ * pre-V28 callers keep working.
  */
 public record QueryRequest(
         Long id,
@@ -45,5 +59,95 @@ public record QueryRequest(
         String                      detail,
         String                      action,
         String                      style,
-        Long                        microserviceId
-) {}
+        Long                        microserviceId,
+        @Size(max = 500)            String pathTemplate,
+        ExecutionMode               executionMode,
+        @Size(max = 500)            String outParamNames,
+        /**
+         * V33 — verbo HTTP: GET, POST o PUT. Null se trata como
+         * POST, que es el comportamiento anterior a V33, para que
+         * un cliente que no mande el campo siga funcionando igual.
+         */
+        @Size(max = 10)             String httpMethod,
+        /**
+         * V49 — author-declared JDBC/PG type per caller-controlled
+         * placeholder. Shape: {@code {"PARAM.NOMBRE":"TEXT", "BODY.IDS":"BIGINT[]", ...}}.
+         * Strict at write time: every {@code :PARAM.*} / {@code :BODY.*}
+         * in the SQL must appear as a key. {@code :CONTEXT.*} and
+         * {@code :QUERY.{SIZE,OFFSET}} are system-bound and need no entry.
+         *
+         * <p>Nullable for back-compat: callers that don't send the
+         * field default to an empty map, which {@code QueryAdminService}
+         * then treats as "no types declared" — the strict check
+         * fires and rejects the save if any placeholder is present.
+         */
+        Map<String, String>         paramTypes
+) {
+
+    /** Back-compat constructor for callers that haven't migrated to V27/V28 yet. */
+    public QueryRequest(Long id, String uuid, String query, String type,
+                        boolean publicEnd, boolean captcha,
+                        String detail, String action, String style,
+                        Long microserviceId) {
+        this(id, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId, null,
+             ExecutionMode.SELECT, null, null, null);
+    }
+
+    /**
+     * V27+V28 back-compat (no outParamNames). Preserves the
+     * 11-arg shape callers used before V31.
+     */
+    public QueryRequest(Long id, String uuid, String query, String type,
+                        boolean publicEnd, boolean captcha,
+                        String detail, String action, String style,
+                        Long microserviceId,
+                        String pathTemplate, ExecutionMode executionMode) {
+        this(id, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             pathTemplate, executionMode, null, null, null);
+    }
+
+    /**
+     * V31 back-compat (sin httpMethod). Conserva la forma de
+     * 13 argumentos que los llamantes usaban antes de V33; el
+     * verbo cae a POST, que es lo que hacían todas las rutas.
+     */
+    public QueryRequest(Long id, String uuid, String query, String type,
+                        boolean publicEnd, boolean captcha,
+                        String detail, String action, String style,
+                        Long microserviceId, String pathTemplate,
+                        ExecutionMode executionMode, String outParamNames) {
+        this(id, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             pathTemplate, executionMode, outParamNames, null, null);
+    }
+
+    /**
+     * V33 back-compat (sin paramTypes). Conserva la forma de
+     * 14 argumentos que los llamantes usaban antes de V49; el
+     * mapa de tipos cae a vacío, que {@code QueryAdminService}
+     * interpreta como "sin tipos declarados" y rechaza si el SQL
+     * tiene placeholders caller-controlled.
+     */
+    public QueryRequest(Long id, String uuid, String query, String type,
+                        boolean publicEnd, boolean captcha,
+                        String detail, String action, String style,
+                        Long microserviceId, String pathTemplate,
+                        ExecutionMode executionMode, String outParamNames,
+                        String httpMethod) {
+        this(id, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             pathTemplate, executionMode, outParamNames, httpMethod,
+             null);
+    }
+
+    /**
+     * Constructor canónico. Acepta {@code paramTypes} null y lo
+     * convierte en mapa vacío — la validación estricta vive en
+     * {@code QueryAdminService.validateParamTypes}, no aquí.
+     */
+    public QueryRequest {
+        paramTypes = paramTypes == null ? new LinkedHashMap<>() : paramTypes;
+    }
+}

@@ -83,6 +83,33 @@
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
         </dependency>
 
+        <!--
+            springdoc-openapi reactive: serves /swagger-ui.html and the
+            /v3/api-docs controller. The aggregator in this module
+            (com.co.eurekatic.gateway.openapi.OpenApiAggregatorService)
+            builds a custom JSON for /api/docs/v3/api-docs and bypasses
+            springdoc's own controller (springdoc.api-docs.enabled=false
+            in application.yml); we still need the starter so the
+            Swagger UI webjars land on the classpath and the
+            swagger-ui.html redirect is wired by springdoc's
+            WebFluxRouterFunction.
+        -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webflux-ui</artifactId>
+            <version>${springdoc-openapi.version}</version>
+        </dependency>
+        <!--
+            Caffeine cache for the merged OpenAPI doc — re-fetching
+            every downstream /v3/api-docs on each request would
+            hammer Eureka + every service. springdoc.cache.ttl
+            controls the expiry.
+        -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
         <!-- Test scope: WebTestClient is brought in by spring-cloud-starter-gateway. -->
     </dependencies>
 

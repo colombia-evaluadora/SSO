@@ -18,8 +18,13 @@ import lombok.Setter;
 
 import java.time.LocalDateTime;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * Query — a parameterized SQL definition indexed by {@code uuid},
@@ -140,6 +145,83 @@ public class Query {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "MICROSERVICE_ID")
     private Microservice microservice;
+
+    /**
+     * V28 — how the JDBC layer should execute this query.
+     * Default {@code "SELECT"} preserves pre-V28 behavior.
+     * Stored as VARCHAR (not Java enum) so the database
+     * remains the schema of record: an admin can update the
+     * column directly without going through the enum ordinal
+     * trap that bit the legacy code.
+     */
+    @Column(name = "EXECUTION_MODE", length = 20, nullable = false)
+    private String executionMode = "SELECT";
+
+    /**
+     * V27 — path template that exposes this query as an HTTP
+     * endpoint, composed with {@link Microservice#getRequestUri()}.
+     * Example: when the owning microservice has
+     * {@code REQUEST_URI = "/api/eval-col/**"} and this column
+     * holds {@code "/establecimiento/{id}"}, the gateway exposes
+     * the query at {@code POST /api/eval-col/establecimiento/{id}}.
+     *
+     * <p>Nullable: {@code NULL} keeps the legacy
+     * {@code POST /<svc>/query {uuid}} flow as the only way to
+     * invoke. Catalog rows authored before V27 stay exactly
+     * as they were.
+     */
+    @Column(name = "PATH_TEMPLATE", length = 500)
+    private String pathTemplate;
+
+    /**
+     * V33 — verbo HTTP que expone esta fila cuando tiene
+     * {@code pathTemplate}: {@code GET}, {@code POST} o {@code PUT}.
+     *
+     * <p>El default {@code POST} es lo que hace que V33 no rompa
+     * nada: antes toda ruta era un POST, así que cada fila
+     * existente conserva su comportamiento sin migrar datos.
+     *
+     * <p>{@code DELETE} no se admite a propósito. No hay
+     * impedimento técnico — un {@code CALL paquete.borrar(...)}
+     * funcionaría igual que cualquier otro procedimiento — pero
+     * mantener el verbo fuera evita que una URL sugiera un borrado
+     * directo sobre tablas.
+     */
+    @Column(name = "HTTP_METHOD", length = 10, nullable = false)
+    private String httpMethod = "POST";
+
+    /**
+     * V31 — comma-separated {@code :placeholder} names that are
+     * OUT params of a PROCEDURE-mode row. When set,
+     * {@code query-service} switches to {@code CallableStatement}
+     * and reads the OUT values into a separate {@code outParams}
+     * map the controller returns alongside the rows.
+     *
+     * <p>Example: a procedure
+     * {@code CALL proc(:in_id, :out_status, :out_message)}
+     * with {@code OUT_PARAM_NAMES = "out_status,out_message"}.
+     *
+     * <p>Nullable and empty both mean "no OUT params" — the
+     * procedure relies on {@code RETURN QUERY} for the result
+     * set, the legacy behaviour.
+     */
+    @Column(name = "OUT_PARAM_NAMES", length = 500)
+    private String outParamNames;
+
+    /**
+     * Author-declared JDBC/PG type per caller-controlled placeholder.
+     * Shape: {@code {"PARAM.NOMBRE":"TEXT", "BODY.IDS":"BIGINT[]", ...}}.
+     * Strict at write time: every {@code :PARAM.*} / {@code :BODY.*}
+     * in the SQL must appear as a key. {@code :CONTEXT.*} and
+     * {@code :QUERY.{SIZE,OFFSET}} are system-bound and need no entry.
+     *
+     * <p>Marshalled to JSONB by Hibernate 7 ({@link SqlTypes#JSON}).
+     * {@link LinkedHashMap} preserves insertion order so the API
+     * responses stay deterministic when the UI diffs by key.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "PARAM_TYPES", nullable = false, columnDefinition = "jsonb")
+    private Map<String, String> paramTypes = new LinkedHashMap<>();
 
     /**
      * Roles authorized to invoke this query through the catalog

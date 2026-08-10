@@ -343,11 +343,23 @@ public class DockerSocket {
             env.add("JWT_PUBLIC_KEY=" + props.getJwtPublicKey());
         }
         // The catalog endpoint URL the new query-service
-        // instance uses to resolve uuid→SQL. Defaults to
-        // the gateway address, but operators can override
-        // via environment if their network topology is
-        // different.
-        env.add("QUERY_CATALOG_BASE_URL=http://sso-api-gateway:8080/sso-admin");
+        // instance uses to resolve uuid→SQL and to load its
+        // path-registry. Points straight at sso-admin; see
+        // ProvisionerProperties#catalogBaseUrl for why routing
+        // it through the gateway 401s. Operators can override
+        // it via PROVISIONER_CATALOG_BASE_URL / docker.catalog-base-url
+        // when their network topology differs — which is what
+        // the previous hardcoded literal only claimed to allow.
+        env.add("QUERY_CATALOG_BASE_URL=" + props.getCatalogBaseUrl());
+        // V30 — shared secret the spawned instance needs to call
+        // sso-admin's /internal/pathTemplates. Same guard style as
+        // JWT_PUBLIC_KEY above: only injected when the operator
+        // actually configured it, so an unset value leaves the
+        // container on its own empty default (fail-closed) instead
+        // of injecting the literal string "".
+        if (props.getCatalogInternalToken() != null && !props.getCatalogInternalToken().isBlank()) {
+            env.add("QUERY_CATALOG_INTERNAL_TOKEN=" + props.getCatalogInternalToken());
+        }
         // OTLP endpoint so the spawneado query-service exports
         // sus trazas / métricas / logs al colector del stack
         // (Alloy por defecto). Sin esto el application.yml del

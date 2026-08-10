@@ -145,8 +145,59 @@ public class GatewaySecurityConfig {
                         .pathMatchers("/auth/login").permitAll()
                         .pathMatchers("/api/auth/login").permitAll()
                         .pathMatchers("/api/auth/refresh", "/api/auth/logout").permitAll()
+                        // /api/files/download/** NO lleva permitAll, a
+                        // propósito. Hubo un intento de ponérselo para
+                        // que un <img src="/api/files/download/123">
+                        // funcionara, partiendo de que el navegador
+                        // mandaría "la cookie de sesión". No existe tal
+                        // cosa: la única cookie que emite el SSO es
+                        // sso_refresh (HttpOnly, SameSite=Strict), que
+                        // sirve para renovar en /auth/refresh y no para
+                        // autenticar peticiones. La autenticación es
+                        // Bearer, y un <img> no puede poner cabeceras.
+                        //
+                        // Así que un <img src> jamás va a autenticarse
+                        // contra este gateway, con permitAll o sin él;
+                        // lo único que aportaba era exponer el endpoint.
+                        // El front descarga el binario con fetch()
+                        // llevando el Authorization, y lo pinta desde
+                        // un blob URL. file-service verifica la firma
+                        // del JWT por su cuenta (ver DownloadController),
+                        // así que hay comprobación en los dos sitios.
+                        //
+                        // Cae en anyExchange().authenticated(), como
+                        // /api/files/** (la subida) y todo lo demás.
                         .pathMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info", "/actuator/prometheus").permitAll()
+                        // OpenAPI aggregator — Swagger UI + merged doc + webjars.
+                        // Public because the rendered UI helps devs poke the
+                        // gateway without a token; the actual API endpoints
+                        // listed in the UI still require Bearer (each one is
+                        // individually gated by its target service).
+                        //
+                        // Path notes (2026-08-07, after the V30 OpenAPI
+                        // commit landed):
+                        //   - /api/docs/** is honored for the JSON spec
+                        //     (springdoc.api-docs.path is set in
+                        //     application.yml).
+                        //   - /api/docs/** is NOT honored for the UI
+                        //     redirect: springdoc-openapi 2.8.6 with
+                        //     webflux ignores `springdoc.swagger-ui.path`
+                        //     when the same value is shared with the
+                        //     api-docs.path. The UI still mounts at the
+                        //     default `/swagger-ui` and pulls its static
+                        //     assets from `/webjars/...`. So we
+                        //     permitAll both the custom path (for the
+                        //     spec) AND the default paths (for the UI
+                        //     bundle and assets).
+                        //   - /api/docs/webjars/** is the operator's
+                        //     configured webjars prefix; covered by
+                        //     /api/docs/** but listed explicitly for
+                        //     clarity in case the prefix is later split
+                        //     into its own matcher.
+                        .pathMatchers("/api/docs", "/api/docs/**",
+                                "/webjars/**", "/swagger-ui", "/swagger-ui/**",
+                                "/api/docs/webjars/**").permitAll()
                         .anyExchange().authenticated())
                 .addFilterAt(jwtFilter, SecurityWebFiltersOrder.AUTHENTICATION)
                 .build();

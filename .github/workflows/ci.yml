@@ -1,5 +1,5 @@
 # =============================================================================
-# ci.yml — PR + push a main o test: matriz por módulo + admin-ui.
+# ci.yml — gate de integración sobre `dev`: matriz por módulo + admin-ui.
 #
 # Estructura de la matriz:
 #   - common                       → mvn verify (compilación + unit tests)
@@ -11,8 +11,12 @@
 #                                  → typecheck / vitest / eslint / vite build
 #
 # Dispara en:
-#   - PR contra main o test
-#   - push directo a main o test (concurrency cancela runs obsoletos)
+#   - PR contra dev
+#   - push directo a dev (concurrency cancela runs obsoletos)
+#
+# CI NO corre en `test` ni en `main` — esas ramas reciben merges ya
+# verificados en `dev`, así que re-verificarlas duplica minutos sin
+# añadir señal. Ver el comentario del bloque `on:` para más detalle.
 #
 # Notas:
 #   - JDK 25 / Temurin (el repo está sobre Spring Boot 4 + JDK 25).
@@ -25,7 +29,7 @@
 #     (no es submódulo, vive en la raíz del repo).
 #
 # Para activar branch protection, ir a Settings → Branches → Add rule
-# sobre `main` y `test` (script: `scripts/branch-protection.sh`) con
+# sobre `dev` (script: `scripts/branch-protection.sh`) con
 # required checks: `maven-common`, `maven-auth-center`,
 # `maven-sso-admin`, `maven-api-gateway`, `admin-ui-typecheck`,
 # `admin-ui-test`, `admin-ui-lint`, `admin-ui-build`.
@@ -33,11 +37,28 @@
 
 name: CI
 
+# CI corre SOLO en `dev`. Razones:
+#   · `dev` es la rama de integración donde aterrizan las PRs de
+#     feature/*. Aquí tiene sentido verificar cada cambio.
+#   · `test` y `main` son promociones que vienen de merges ya
+#     verificados en `dev` (mismo SHA, mismo contenido del squash).
+#     Re-correr CI en cada promoción duplica minutos sin añadir
+#     señal: si `dev` estaba en verde, `test` y `main` también lo
+#     estarán.
+#   · El plan Free del repo (cuando era privado) quemaba ~900 min/día
+#     por este mismo error de diseño. Ahora es público y los minutos
+#     son gratis, pero el motivo de fondo (no re-verificar lo ya
+#     verificado) sigue aplicando.
+#
+# Si en algún momento quieres un gate extra en `main` (release),
+# añade un workflow específico con `on: push: branches: [main]` y
+# required checks más estrictos. No metas `main` aquí: este es el
+# gate de integración.
 on:
   pull_request:
-    branches: [main, test]
+    branches: [dev]
   push:
-    branches: [main, test]
+    branches: [dev]
 
 # Permisos mínimos: checks:read para comentar / attach; contents:read
 # para checkout. Los workflows no publican nada al registry en esta fase.
@@ -57,8 +78,74 @@ env:
   LC_ALL: C.UTF-8
 
 jobs:
+  # ───────── Qué cambió realmente ─────────
+  #
+  # Sin esto, tocar una línea de admin-ui compilaba los 8 módulos Java.
+  # Con ~39 ejecuciones en un solo día eso fueron ~900 minutos: casi
+  # media cuota mensual del plan Free.
+  #
+  # Los filtros NO son "una carpeta, un job". Respetan el grafo de
+  # dependencias real del repo, y hay dos aristas que un filtro
+  # ingenuo rompe:
+  #
+  #   · 7 de los 8 módulos dependen de `common` (todos menos
+  #     eurekaserver), así que tocarlo obliga a recompilarlos.
+  #   · api-gateway compila el SPA DENTRO de su Dockerfile (etapa
+  #     node-spa), así que un cambio en admin-ui también le afecta.
+  #     Parece independiente y no lo es.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      common:        ${{ steps.filter.outputs.common }}
+      auth-center:   ${{ steps.filter.outputs.auth-center }}
+      sso-admin:     ${{ steps.filter.outputs.sso-admin }}
+      query-service: ${{ steps.filter.outputs.query-service }}
+      file-service:  ${{ steps.filter.outputs.file-service }}
+      api-gateway:   ${{ steps.filter.outputs.api-gateway }}
+      cdc:           ${{ steps.filter.outputs.cdc }}
+      admin-ui:      ${{ steps.filter.outputs.admin-ui }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            # `common` actúa de disparador global: si cambia él, el pom
+            # raíz o el propio workflow, se recompila todo.
+            common: &global
+              - 'common/**'
+              - 'pom.xml'
+              - '.github/workflows/ci.yml'
+            auth-center:
+              - *global
+              - 'auth-center/**'
+            sso-admin:
+              - *global
+              - 'sso-admin/**'
+            query-service:
+              - *global
+              - 'query-service/**'
+            file-service:
+              - *global
+              - 'file-service/**'
+            # admin-ui entra aquí porque el Dockerfile del gateway lo
+            # compila dentro.
+            api-gateway:
+              - *global
+              - 'api-gateway/**'
+              - 'admin-ui/**'
+            cdc:
+              - *global
+              - 'cdc-sync/**'
+            admin-ui:
+              - 'admin-ui/**'
+              - '.github/workflows/ci.yml'
+
   # ───────── Backend: common (compilación + unit tests) ─────────
   maven-common:
+    if: needs.changes.outputs.common == 'true'
+    needs: [changes]
     name: maven-common
     runs-on: ubuntu-latest
     steps:
@@ -75,7 +162,15 @@ jobs:
   maven-auth-center:
     name: maven-auth-center
     runs-on: ubuntu-latest
-    needs: [maven-common]
+    # `needs` e `if` van juntos a propósito. Si maven-common se SALTA
+    # (porque common no cambió), GitHub saltaría en cascada todo lo
+    # que dependa de él. Por eso se comprueba `!= failure` y no
+    # `== success`: saltado es un resultado válido, fallido no.
+    needs: [changes, maven-common]
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.auth-center == 'true'
+      && needs.maven-common.result != 'failure'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -90,7 +185,11 @@ jobs:
   maven-sso-admin:
     name: maven-sso-admin
     runs-on: ubuntu-latest
-    needs: [maven-common]
+    needs: [changes, maven-common]
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.sso-admin == 'true'
+      && needs.maven-common.result != 'failure'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -101,11 +200,111 @@ jobs:
       - name: Verify (sso-admin)
         run: mvn -B -ntp -pl sso-admin -am verify
 
+  # ───────── Backend: query-service ─────────
+  # Añadido tras un incidente: query-service NO estaba en CI, así
+  # que su primera compilación ocurría en el paso build-push del
+  # workflow de deploy. Seis errores de compilación (métodos
+  # duplicados, imports ausentes, firmas de Micrometer/Resilience4j
+  # equivocadas, captura de local en lambda) llegaron a `test` con
+  # CI en verde y sólo reventaron al construir la imagen — cuatro
+  # ciclos de deploy quemados para descubrirlos de uno en uno.
+  #
+  # Los módulos que siguen sin cubrir (eurekaserver, hello-service,
+  # notification-service, provisioner, cdc-capture, cdc-worker)
+  # tienen el mismo agujero; merecen el mismo tratamiento.
+  maven-query-service:
+    name: maven-query-service
+    runs-on: ubuntu-latest
+    needs: [changes, maven-common]
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.query-service == 'true'
+      && needs.maven-common.result != 'failure'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Verify (query-service)
+        run: mvn -B -ntp -pl query-service -am verify
+
+  # ───────── Backend: file-service ─────────
+  # Entra en CI desde el primer commit, en vez de repetir el agujero
+  # de query-service: su primera compilación no puede ser el
+  # build-push del deploy.
+  maven-file-service:
+    name: maven-file-service
+    runs-on: ubuntu-latest
+    needs: [changes, maven-common]
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.file-service == 'true'
+      && needs.maven-common.result != 'failure'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Verify (file-service)
+        run: mvn -B -ntp -pl file-service -am verify
+
+  # ───────── Backend: cdc-sync (reactor independiente) ─────────
+  # cdc-sync NO es un módulo del pom raíz: tiene su propio parent
+  # (cdc-sync-parent) con cdc-common, cdc-generator, cdc-capture y
+  # cdc-worker. Por eso necesita -f en vez de -pl.
+  #
+  # `verify` aquí compila main + test y corre los tests unitarios
+  # (surefire coge *Test.java). Las clases *IT.java —que levantan
+  # Testcontainers— se COMPILAN pero no se ejecutan, porque no hay
+  # plugin failsafe configurado en estos poms. Eso es justo lo que
+  # queremos de una gate de CI: detecta errores de compilación y
+  # regresiones unitarias en segundos, sin arrastrar contenedores
+  # ni la flakiness de un E2E. Si algún día se quiere correr las
+  # ITs, añadir failsafe al pom y un job aparte (nightly), no aquí.
+  maven-cdc:
+    name: maven-cdc
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.cdc == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      # column-types.json es un recurso GENERADO, no versionado
+      # (.gitignore: **/column-types.json). cdc-worker/Dockerfile lo
+      # regenera desde V22 con cdc-generator antes de empaquetar.
+      # ColumnTypeRegistryTest lo carga del classpath, así que sin
+      # este paso esos tests fallan con "Resource not found on
+      # classpath: column-types.json" — no por una regresión, sino
+      # porque el artefacto sólo existía dentro del build de Docker.
+      # Reproducimos aquí los mismos dos pasos del Dockerfile.
+      - name: Generate column-types.json from V22
+        run: |
+          mvn -B -ntp -f cdc-sync/pom.xml -pl cdc-generator -am package -DskipTests -q
+          java -jar cdc-sync/cdc-generator/target/app.jar \
+            --source postgres/migrations/V22__academic-schema.sql \
+            --out cdc-sync/cdc-common/src/main/resources/column-types.json
+      - name: Verify (cdc-sync)
+        run: mvn -B -ntp -f cdc-sync/pom.xml verify
+
   # ───────── Backend: api-gateway (Testcontainers) ─────────
   maven-api-gateway:
     name: maven-api-gateway
     runs-on: ubuntu-latest
-    needs: [maven-common, maven-auth-center, maven-sso-admin]
+    needs: [changes, maven-common, maven-auth-center, maven-sso-admin]
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.api-gateway == 'true'
+      && needs.maven-common.result != 'failure'
+      && needs.maven-auth-center.result != 'failure'
+      && needs.maven-sso-admin.result != 'failure'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -123,11 +322,21 @@ jobs:
           name: api-gateway-jar
           path: api-gateway/target/*.jar
           retention-days: 7
+        # Same rationale as the admin-ui-build upload:
+        # the build (Verify step above) is what gates a PR.
+        # The upload is a side effect consumed by
+        # deploy-test.yml on push-to-test. A storage-quota
+        # outage in the GitHub org must NOT block the gate.
+        # (PR #10 added the same for admin-ui-build on
+        # 2026-08-07; mirroring here for consistency.)
+        continue-on-error: true
 
   # ───────── Frontend: typecheck ─────────
   admin-ui-typecheck:
     name: admin-ui-typecheck
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.admin-ui == 'true'
     defaults:
       run:
         working-directory: admin-ui
@@ -147,6 +356,8 @@ jobs:
   admin-ui-test:
     name: admin-ui-test
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.admin-ui == 'true'
     defaults:
       run:
         working-directory: admin-ui
@@ -166,6 +377,8 @@ jobs:
   admin-ui-lint:
     name: admin-ui-lint
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.admin-ui == 'true'
     defaults:
       run:
         working-directory: admin-ui
@@ -185,6 +398,8 @@ jobs:
   admin-ui-build:
     name: admin-ui-build
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.admin-ui == 'true'
     defaults:
       run:
         working-directory: admin-ui
@@ -205,3 +420,76 @@ jobs:
           name: admin-ui-dist
           path: admin-ui/dist
           retention-days: 7
+        # The build itself is what gates a PR (does the
+        # production bundle compile?). The upload is a
+        # side effect that lets deploy-test.yml pick the
+        # bundle up on push-to-test. A storage-quota
+        # exhaustion in the GitHub org must NOT block
+        # the PR gate — the deploy will simply skip the
+        # artifact and rebuild locally instead.
+        # (Hit on 2026-08-07: "Artifact storage quota has
+        # been hit. Unable to upload any new artifacts.")
+        continue-on-error: true
+
+  # ───────── Puerta única ─────────
+  #
+  # Con jobs condicionales, los que no aplican salen como `skipped`.
+  # Un required check que se salta NO se marca como cumplido y
+  # bloquearía el merge para siempre. Este job agrega el resultado de
+  # todos y es el único que conviene marcar como requerido.
+  #
+  # `always()` es imprescindible: sin él, este job también se saltaría
+  # en cascada cuando se salten sus dependencias, que es justo el caso
+  # normal.
+  #
+  # Nota: hoy la protección de ramas no está disponible en el plan Free
+  # para repos privados, así que no hay required checks que configurar.
+  # Queda listo para cuando lo esté.
+  ci-ok:
+    name: ci-ok
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - changes
+      - maven-common
+      - maven-auth-center
+      - maven-sso-admin
+      - maven-query-service
+      - maven-file-service
+      - maven-api-gateway
+      - maven-cdc
+      - admin-ui-typecheck
+      - admin-ui-test
+      - admin-ui-lint
+      - admin-ui-build
+    steps:
+      - name: Fallar si algún job requerido falló o fue cancelado
+        run: |
+          # Antes se hacía `join(needs.*.result, " ")` — falla en la
+          # validación previa del workflow porque las comillas DOBLES
+          # son string literals inválidos para el lexer de GitHub
+          # Actions (sólo acepta simples). Resultado: el workflow se
+          # parsea, ningún job se instancia, total_count=0 en la API.
+          #
+          # Aquí se enumera cada job uno a uno. Más largo, pero no
+          # depende de `join` ni de `toJSON`, y cada `needs.X.result`
+          # es una expresión trivial.
+          for r in \
+            '${{ needs.changes.result }}' \
+            '${{ needs.maven-common.result }}' \
+            '${{ needs.maven-auth-center.result }}' \
+            '${{ needs.maven-sso-admin.result }}' \
+            '${{ needs.maven-query-service.result }}' \
+            '${{ needs.maven-file-service.result }}' \
+            '${{ needs.maven-api-gateway.result }}' \
+            '${{ needs.maven-cdc.result }}' \
+            '${{ needs.admin-ui-typecheck.result }}' \
+            '${{ needs.admin-ui-test.result }}' \
+            '${{ needs.admin-ui-lint.result }}' \
+            '${{ needs.admin-ui-build.result }}'; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "::error::Al menos un job terminó en '$r'."
+              exit 1
+            fi
+          done
+          echo "Todos los jobs aplicables pasaron (los saltados no aplicaban)."

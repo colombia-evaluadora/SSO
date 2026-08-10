@@ -6,42 +6,69 @@ reviewer lo apruebe sin rehacer trabajo.
 
 ---
 
-## 1. Modelo de ramas — **GitHub Flow + integration buffer**
+## 1. Modelo de ramas — **tres ramas, una dirección**
 
-Dos ramas de vida larga: **`main`** (releases limpios) y **`test`**
-(buffer de integración / staging donde se acumulan PRs de varios devs
-y se valida el cross-PR antes de promover). Todo lo demás son feature
-branches de vida corta.
+Tres ramas de vida larga. Un cambio siempre viaja en la misma
+dirección y **nunca al revés**:
 
 ```
-main    ●─────●─────●────●─────●  (releases; nunca roto)
-              ↑           ↑
-test    ●───●───●──●───●──●──┤  (staging; integración cross-PR)
-              ↑     ↑
-feat/a   │●───●──→●┘   │       (PR #4: chore/dev → test)
-feat/b   │●───●──●────→●┘      (PR #5: feat/foo → test)
-
-Flujo:
-  1. Dev abre PR de feat/a hacia test (no hacia main).
-  2. Review + CI verde en PR → merge a test (squash).
-  3. Cuando test es estable y se quiere liberar → promoción a main
-     vía PR `--head test --base main` (ver §3.5).
-  4. Tag SemVer en main al promover (§5).
+feature/CU-xxxx  --squash-->  dev  --merge-->  test  --merge+tag-->  main
+                               │
+                               └── único entorno desplegado (Linode)
 ```
+
+| Rama | Qué contiene | Cómo se lee |
+|---|---|---|
+| **`dev`** | Todo el trabajo, **un commit por tarea** | historial completo |
+| **`test`** | Lo que pasó QA | `git log --first-parent test` = una línea por promoción |
+| **`main`** | Releases, con tag SemVer | `git log --first-parent main` = una línea por release |
+
+**El método de merge de cada paso no es un detalle, es lo que hace
+que el modelo funcione:**
+
+| Paso | Método | Por qué |
+|---|---|---|
+| `feature/CU-xxxx` → `dev` | **squash** | Un commit por tarea. Los WIP y los "fix typo" no ensucian el historial |
+| `dev` → `test` | **merge commit** | Agrupa la promoción sin destruir los commits que la componen |
+| `test` → `main` | **merge commit + tag** | El release lo marca el tag, no un commit aplastado |
+
+### Por qué NO se hace squash entre `dev`, `test` y `main`
+
+Es tentador —dejaría un `main` con historial corto— y rompe el modelo.
+
+Un squash de `dev → test` crea en `test` un commit **que no existe en
+`dev`**. Las dos ramas quedan divergidas para siempre, y en la
+siguiente promoción el PR vuelve a mostrar los commits ya promovidos,
+porque para git nunca llegaron. Cuando un cambio nuevo toque líneas
+que un cambio ya promovido tocó, aparece un conflicto **con contenido
+que ya está aplicado**. Cada promoción arrastra más ruido que la
+anterior.
+
+Además se pierde `git bisect`: si en `test` una promoción entera es un
+solo commit, no hay forma de localizar cuál de los veinte cambios
+rompió algo.
+
+Con merge commits se consigue lo mismo que se buscaba —un historial
+legible por bloques— sin pagar ninguna de las dos cosas: **agrupar es
+una forma de leer, no de destruir.** Ver `--first-parent` en la tabla
+de arriba.
 
 **Reglas por rama:**
 
-| | `main` | `test` |
-|---|---|---|
-| Branch protection | estricta | estricta |
-| Required approvals | 1 | 1 |
-| Status checks | full matrix | full matrix |
-| Force-push | bloqueado | bloqueado |
-| Deletion | bloqueado | bloqueado |
-| Linear history (squash) | sí | sí |
-| Conversation resolve | requerido | requerido |
-| Origen de PRs | `test` (promoción) | `feat/*`, `fix/*`, `refactor/*`, `chore/*` |
-| Deploy target | release env (cuando se taguea) | staging env (auto en cada merge) |
+| | `dev` | `test` | `main` |
+|---|---|---|---|
+| Branch protection | estricta | estricta | estricta |
+| Required approvals | 1 | 1 | 1 |
+| Status checks | full matrix | full matrix | full matrix |
+| Force-push | bloqueado | bloqueado | bloqueado |
+| Deletion | bloqueado | bloqueado | bloqueado |
+| Conversation resolve | requerido | requerido | requerido |
+| Origen de PRs | `feature/*`, `fix/*`, `refactor/*`, `chore/*` | `dev` (promoción) | `test` (release) |
+| Método de merge | squash | merge commit | merge commit + tag |
+| Deploy | **sí** — servidor de pruebas | no | no |
+
+`test` y `main` no despliegan hoy porque sólo hay un entorno. Cuando
+tengan el suyo, cada una engancha su workflow sin tocar el resto.
 
 **Hotfix:** si `main` está roto y la fix es urgente y NO puede esperar
 a que pase por `test`, abrí la rama `fix/<slug>` desde el SHA de main,
@@ -97,7 +124,8 @@ sí. Mensajes flojos → PR rebotada.
 
 ### 3.1 Antes de abrir
 
-- [ ] `git fetch origin && git rebase origin/main` sobre tu rama.
+- [ ] `git fetch origin && git rebase origin/dev` sobre tu rama.
+      La base de una feature es **`dev`**, no `main` (§1).
 - [ ] `mvn -B clean verify` por cada módulo afectado corre localmente.
 - [ ] `npm run typecheck && npm test -- --run && npm run build`
       corre localmente si tocaste admin-ui.
@@ -117,26 +145,67 @@ rompe el flujo principal de login/CRUD, explica cómo revertir.
 
 ### 3.3 Reglas de merge
 
-Configuradas como branch protection sobre `main`:
+Configuradas como branch protection sobre `dev`, `test` y `main`
+(`scripts/branch-protection.sh`):
 
 - 1 aprobación de un CODEOWNER del archivo tocado.
 - Todos los checks verdes (`maven-common`, `maven-auth-center`,
   `maven-sso-admin`, `maven-api-gateway`, `admin-ui-*`).
-- Rama actualizada con `origin/main` antes de mergear.
-- Linear history habilitado → **squash merge** por defecto.
+- Rama actualizada con la base antes de mergear.
+
+**El método depende del paso** (§1): squash para entrar a `dev`,
+merge commit para promover a `test` y a `main`. GitHub no permite
+fijarlo por rama, así que es una convención — pero es la que sostiene
+el modelo, no una preferencia estética.
+
+```bash
+gh pr merge <n> --squash --delete-branch   # feature → dev
+gh pr merge <n> --merge                    # dev → test, test → main
+```
 
 ### 3.4 Borra ramas viejas
 
 Una vez mergeada, `gh pr merge --delete-branch` se encarga. No
 dejes ramas zombies en el remote.
 
-### 3.5 Promover `test` → `main` (release procedural)
+**Y no sigas commiteando a una rama cuyo PR ya se mergeó.** El commit
+se queda ahí, sin PR, sin llegar a ninguna parte, y nadie vuelve a
+mirar esa rama. Pasó tres veces el 2026-08-08 y sólo se detectó por
+casualidad; uno de esos commits estaba desplegado en el servidor y no
+existía en `main`.
+
+Antes de dar una rama por terminada:
+
+```bash
+git log origin/main..<rama>   # si devuelve algo, hay trabajo que no llegó
+```
+
+### 3.5 Promover `dev` → `test` (pasar a QA)
+
+Cuando lo que hay en `dev` se considera listo para que QA lo mire:
+
+```bash
+gh pr create --base test --head dev \
+  --title "promote: dev → test" \
+  --body "Resumen de lo que entra y qué probar."
+gh pr merge <n> --merge      # merge commit, NO squash (ver §1)
+```
+
+El PR listará todos los commits desde la última promoción. Eso es lo
+correcto: es exactamente el lote que QA va a validar. El merge commit
+los agrupa en una sola línea de `--first-parent`.
+
+Recordá que **`dev` es lo que está desplegado**, así que esta
+promoción no cambia lo que corre en el servidor — sólo marca qué se
+está validando.
+
+### 3.6 Promover `test` → `main` (release procedural)
 
 Esta subsección es **para quien coordina la liberación**, no para cada
 PR. La promoción es optativa: si no hay release a la vista, no se hace.
 
 1. **Verificación previa.** Asegurate de que `test` está verde en CI y
-   de que el entorno de staging (si existe) pasó el smoke suite.
+   de que QA dio el visto bueno sobre lo desplegado.
 2. **Sincronización local.**
 
    ```bash

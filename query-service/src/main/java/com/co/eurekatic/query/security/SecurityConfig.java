@@ -73,11 +73,39 @@ public class SecurityConfig {
                         // route does its own JWT check anyway.
                         .requestMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info").permitAll()
+                        // OpenAPI spec consumed by api-gateway's
+                        // OpenApiAggregatorService, fetched
+                        // unauthenticated from the Eureka instance
+                        // address. Without permitAll the chain answers
+                        // 403 and this instance drops out of the merged
+                        // doc at /api/docs. Applies to every provisioned
+                        // instance too (query-service-eval-col etc.),
+                        // since they all run this image. Same
+                        // internal-network trust boundary as the actuator
+                        // endpoints above.
+                        .requestMatchers("/v3/api-docs", "/v3/api-docs/**").permitAll()
                         // Public service: per-query authorization
                         // is the publicEnd flag, not a Spring
                         // Security rule. 403 for non-public uuids
                         // is enforced inside the service.
                         .requestMatchers("/public/service").permitAll()
+                        // V33 — service-to-service surface. sso-admin
+                        // calls POST /internal/path-registry/invalidate
+                        // after a catalog mutation, carrying only the
+                        // shared X-Internal-Token header (no JWT — it
+                        // acts on its own behalf, not a user's). With
+                        // anyRequest().authenticated() this returned
+                        // 403 and the invalidation silently never
+                        // worked; the registry only refreshed on its
+                        // 60s tick.
+                        //
+                        // permitAll here does NOT mean unauthenticated:
+                        // the controller verifies X-Internal-Token
+                        // itself (query-service has no equivalent of
+                        // sso-admin's InternalTokenFilter), and the
+                        // endpoint is only reachable from inside the
+                        // docker network.
+                        .requestMatchers("/internal/**").permitAll()
                         // Everything else requires a valid JWT.
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)

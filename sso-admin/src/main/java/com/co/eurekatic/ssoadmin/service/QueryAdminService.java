@@ -3,6 +3,10 @@ package com.co.eurekatic.ssoadmin.service;
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
 import com.co.eurekatic.common.entity.Role;
+import com.co.eurekatic.common.query.ParamNamespace;
+import com.co.eurekatic.common.query.ParamTypes;
+import com.co.eurekatic.common.query.PathTemplateSyntax;
+import com.co.eurekatic.common.query.PlaceholderScanner;
 import com.co.eurekatic.common.repository.MicroserviceRepository;
 import com.co.eurekatic.common.repository.QueryRepository;
 import com.co.eurekatic.common.repository.RoleRepository;
@@ -10,12 +14,18 @@ import com.co.eurekatic.ssoadmin.dto.QueryRequest;
 import com.co.eurekatic.ssoadmin.dto.QueryResponse;
 import com.co.eurekatic.ssoadmin.exception.DuplicateException;
 import com.co.eurekatic.ssoadmin.exception.NotFoundException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 /**
  * Query CRUD plus role bindings. Mirrors the shape of
@@ -47,16 +57,21 @@ import java.util.Set;
 @Service
 public class QueryAdminService {
 
+    private static final Logger log = LoggerFactory.getLogger(QueryAdminService.class);
+
     private final QueryRepository queryRepo;
     private final RoleRepository roleRepo;
     private final MicroserviceRepository microserviceRepo;
+    private final PathRegistryNotifier pathRegistryNotifier;
 
     public QueryAdminService(QueryRepository queryRepo,
                              RoleRepository roleRepo,
-                             MicroserviceRepository microserviceRepo) {
+                             MicroserviceRepository microserviceRepo,
+                             PathRegistryNotifier pathRegistryNotifier) {
         this.queryRepo = queryRepo;
         this.roleRepo = roleRepo;
         this.microserviceRepo = microserviceRepo;
+        this.pathRegistryNotifier = pathRegistryNotifier;
     }
 
     @Transactional
@@ -65,9 +80,21 @@ public class QueryAdminService {
         if (queryRepo.existsByUuid(uuid)) {
             throw new DuplicateException("Query", uuid);
         }
+        validateMethodAgainstSql(req);
+
+        validatePathTemplate(req, null);
+        validateOutParams(req);
+        validateParamTypes(req);
         Query q = new Query();
         copy(req, q, uuid);
-        return QueryResponse.fromEntity(queryRepo.save(q));
+        QueryResponse response = QueryResponse.fromEntity(queryRepo.save(q));
+        // V33 — push the change to query-service so the
+        // path-registry picks up the new row before the
+        // next 60s tick. Best-effort (the notifier logs
+        // and swallows failures; the periodic refresh
+        // is the safety net).
+        pathRegistryNotifier.invalidate();
+        return response;
     }
 
     @Transactional
@@ -87,8 +114,16 @@ public class QueryAdminService {
                 throw new DuplicateException("Query", uuid);
             }
         });
+        validateMethodAgainstSql(req);
+
+        validatePathTemplate(req, q.getId());
+        validateOutParams(req);
+        validateParamTypes(req);
         copy(req, q, uuid);
-        return QueryResponse.fromEntity(queryRepo.save(q));
+        QueryResponse response = QueryResponse.fromEntity(queryRepo.save(q));
+        // V33 — same invalidate-on-write as create().
+        pathRegistryNotifier.invalidate();
+        return response;
     }
 
     @Transactional(readOnly = true)
@@ -110,6 +145,9 @@ public class QueryAdminService {
             throw new NotFoundException("Query", id);
         }
         queryRepo.deleteById(id);
+        // V33 — delete also invalidates so a removed
+        // path-template stops being served immediately.
+        pathRegistryNotifier.invalidate();
     }
 
     /* ====================== bindings: role ====================== */
@@ -182,12 +220,38 @@ public class QueryAdminService {
     private void copy(QueryRequest req, Query q, String uuid) {
         q.setUuid(uuid);
         q.setQuery(req.query());
-        q.setType(req.type());
+        // El dialecto lo declara el microservicio dueño, así que el
+        // admin no tiene por qué teclearlo. Antes el formulario lo
+        // pedía como "Tipo" describiéndolo como etiqueta opcional
+        // — y no lo era: TYPE elige el NamedParameterJdbcTemplate y
+        // la clave de bulkhead en query-service. Escribir "CHART"
+        // ahí, como sugería la ayuda, producía un 502 la primera
+        // vez que se invocaba la query.
+        q.setType(resolveDialect(req));
         q.setPublicEnd(req.publicEnd());
         q.setCaptcha(req.captcha());
         q.setDetail(req.detail());
         q.setAction(req.action());
         q.setStyle(req.style());
+        // Derivado del SQL, no pedido al admin. Ver
+        // deriveExecutionMode para por qué el campo sobraba.
+        q.setExecutionMode(deriveExecutionMode(req.query()));
+        q.setHttpMethod(normalizeHttpMethod(req.httpMethod()));
+        // V27: nullable. When set, the unique partial index
+        // (microservice_id, path_template) catches concurrent
+        // insert races; the service-layer check below catches
+        // the in-band case for a friendlier 409.
+        q.setPathTemplate(normalizePathTemplate(req.pathTemplate()));
+        // V31: comma-separated :placeholder names that are
+        // OUT params of a PROCEDURE-mode row. Validation lives
+        // in validateOutParams() (must contain a placeholder
+        // that exists in the SQL; only meaningful for PROCEDURE).
+        q.setOutParamNames(normalizeOutParams(req.outParamNames()));
+        // V49: author-declared JDBC/PG type per caller-controlled
+        // placeholder. Strict validation lives in validateParamTypes(),
+        // called from create()/update() before copy(). LinkedHashMap
+        // to preserve insertion order for deterministic API responses.
+        q.setParamTypes(new LinkedHashMap<>(req.paramTypes()));
         // Resolve microservice binding. Null clears the
         // association (back to "global" — any instance may
         // serve). A non-null id MUST resolve to a kind=QUERY
@@ -197,6 +261,301 @@ public class QueryAdminService {
         // the request itself is well-formed; the referenced
         // entity is just wrong.
         q.setMicroservice(resolveQueryMicroservice(req.microserviceId()));
+    }
+
+    /**
+     * V31 — normalize the comma-separated OUT param names.
+     * Empty / whitespace becomes {@code null} (legacy
+     * behavior). Each non-empty token must start with
+     * ":" (it has to match a SQL placeholder) and must
+     * appear as a {@code :name} token in the SQL body.
+     * Only meaningful for {@code PROCEDURE} mode — set on
+     * a {@code SELECT} / {@code FUNCTION} row is rejected.
+     */
+    private static String normalizeOutParams(String raw) {
+        if (raw == null) return null;
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty()) return null;
+        // Normalize whitespace: "out_a , out_b" → "out_a,out_b"
+        return java.util.Arrays.stream(trimmed.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    private void validateOutParams(QueryRequest req) {
+        String outParams = req.outParamNames();
+        if (outParams == null || outParams.isBlank()) {
+            return;
+        }
+        // El modo ya no lo declara el request: se deriva del SQL,
+        // así que aquí se pregunta a la misma función que decide.
+        // Preguntar a req.executionMode() dejaría esta validación
+        // mirando un campo que el formulario ya no envía.
+        String mode = deriveExecutionMode(req.query());
+        if (!"PROCEDURE".equals(mode)) {
+            throw new IllegalArgumentException(
+                "outParamNames sólo aplica a procedimientos (SQL que empieza "
+                + "por CALL); este SQL se ejecuta como " + mode + ".");
+        }
+        // Each name must look like a placeholder and appear in the SQL.
+        String sql = req.query() == null ? "" : req.query();
+        for (String name : outParams.split(",")) {
+            String token = name.trim();
+            if (token.isEmpty()) continue;
+            if (!token.startsWith(":")) {
+                throw new IllegalArgumentException(
+                    "outParamNames entries must start with ':' (placeholder); got: " + token);
+            }
+            // Must appear in the SQL. Tolerate spaces around
+            // the colon (PostgreSQL accepts `: name` too).
+            String needle = ":" + token.substring(1);
+            if (!sql.contains(needle)) {
+                throw new IllegalArgumentException(
+                    "outParamNames entry " + token + " does not appear as a placeholder "
+                    + "in the query SQL");
+            }
+        }
+    }
+
+    /**
+     * V49 — strict validation of {@code paramTypes} at write time.
+     *
+     * <p>Two checks, en este orden:
+     *
+     * <ol>
+     *   <li><b>Shape</b>: cada clave debe ser un placeholder válido
+     *       ({@link ParamTypes#isValidKey}) y cada valor un tipo del
+     *       set curado ({@link ParamTypes#CURATED}). Una entrada mal
+     *       formada se rechaza con 400 mencionando el set permitido.</li>
+     *   <li><b>Cobertura</b>: todo placeholder {@code :PARAM.*} o
+     *       {@code :BODY.*} presente en el SQL debe tener una entrada
+     *       en {@code paramTypes}. {@code :CONTEXT.*} y
+     *       {@code :QUERY.{SIZE,OFFSET}} son del sistema y no
+     *       requieren entrada.</li>
+     * </ol>
+     *
+     * <p>El mensaje de error nombra los placeholders sin tipo en
+     * orden alfabético ({@link TreeSet}) para que el autor pueda
+     * copiarlos a la UI sin reordenar.
+     */
+    private void validateParamTypes(QueryRequest req) {
+        Map<String, String> declared = req.paramTypes() == null
+                ? Map.of() : req.paramTypes();
+
+        // (1) shape: key válida, value en set curado
+        for (Map.Entry<String, String> e : declared.entrySet()) {
+            if (!ParamTypes.isValidKey(e.getKey())) {
+                throw new IllegalArgumentException(
+                    "PARAM_TYPES key inválida: '" + e.getKey()
+                    + "'. Cada segmento debe coincidir con [A-Z][A-Z0-9_]* "
+                    + "(namespace incluido). Ejemplos válidos: "
+                    + "'PARAM.NOMBRE', 'BODY.USER.EMAIL'.");
+            }
+            if (!ParamTypes.CURATED.contains(e.getValue())) {
+                throw new IllegalArgumentException(
+                    "PARAM_TYPES['" + e.getKey() + "']='" + e.getValue()
+                    + "' no es un tipo soportado. Permitidos: "
+                    + ParamTypes.CURATED);
+            }
+        }
+
+        // (2) cobertura: todo :PARAM.* / :BODY.* del SQL debe estar declarado
+        Set<String> inSql = PlaceholderScanner.scan(req.query());
+        Set<String> required = inSql.stream()
+                .filter(p -> {
+                    String ns = p.split("\\.", 2)[0];
+                    return ParamNamespace.PARAM.equals(ns)
+                            || ParamNamespace.BODY.equals(ns);
+                })
+                .collect(Collectors.toCollection(TreeSet::new));
+
+        Set<String> missing = new TreeSet<>(required);
+        missing.removeAll(declared.keySet());
+        if (!missing.isEmpty()) {
+            throw new IllegalArgumentException(
+                "PARAM_TYPES incompleto. Placeholders del SQL sin tipo "
+                + "declarado: " + missing
+                + ". Asigna un tipo a cada uno antes de guardar "
+                + "(o usa 'TEXT' si no tienes preferencia).");
+        }
+    }
+
+    /**
+     * V27 — normalize and validate the path template. Empty /
+     * whitespace becomes {@code null} (the legacy / non-path
+     * mode). Non-empty must start with "/" and must not contain
+     * "**" (the gateway splits on the prefix, so a "**" inside a
+     * per-query template would never match a real URL).
+     *
+     * <p>{@code excludeId} is the row being updated — we allow
+     * the same row to keep its own pathTemplate without tripping
+     * the unique index. The pre-check here is also friendlier
+     * than the DB's constraint violation.
+     */
+    private void validatePathTemplate(QueryRequest req, Long excludeId) {
+        String tpl = normalizePathTemplate(req.pathTemplate());
+        if (tpl == null) {
+            return;
+        }
+        if (req.microserviceId() == null) {
+            throw new IllegalArgumentException(
+                "pathTemplate requires microserviceId (queries without a "
+                + "backing microservice cannot have a URL-suffix)");
+        }
+        // Gramática compartida con query-service (módulo common):
+        // si cada lado tuviera su propia validación, una plantilla
+        // podría guardarse aquí y no casar allí — y ese fallo no
+        // produce error, produce 200 con lista vacía.
+        PathTemplateSyntax.validate(tpl);
+        // Reject if another query in the same microservice already
+        // claims this path. The DB partial unique index catches
+        // the race; this catches the in-band duplicate for a
+        // clearer 409 message.
+        // V33 — la comprobación incluye el verbo. Sin él,
+        // GET /est/:ID se rechazaba como duplicado de un
+        // PUT /est/:ID existente, aunque el índice de BD sí los
+        // admite. El síntoma era un 409 imposible de entender
+        // desde el formulario.
+        String method = normalizeHttpMethod(req.httpMethod());
+        boolean taken = queryRepo.existsByMicroservice_IdAndPathTemplateAndHttpMethod(
+                req.microserviceId(), tpl, method);
+        if (taken) {
+            // exempt the row being updated
+            if (excludeId == null
+                    || queryRepo.findById(excludeId)
+                            .map(q -> !(tpl.equals(q.getPathTemplate())
+                                    && method.equals(q.getHttpMethod())))
+                            .orElse(true)) {
+                throw new DuplicateException("Query.pathTemplate", method + " " + tpl);
+            }
+        }
+    }
+
+    /**
+     * Deduce el modo de ejecución del primer keyword del SQL.
+     *
+     * <p>Antes esto era un campo del formulario y el backend se
+     * limitaba a comprobar que coincidiera con el SQL: se le pedía
+     * al admin un dato que el sistema ya podía leer, y luego se le
+     * reñía si no acertaba.
+     *
+     * <p>FUNCTION desaparece como modo. No aportaba comportamiento:
+     * {@code QueryService} lo trataba con el mismo {@code if} que
+     * SELECT (una función se invoca como {@code SELECT * FROM f()})
+     * y la validación le exigía el mismo primer keyword. Era una
+     * opción más que equivocar, sin efecto alguno.
+     *
+     * <p>Package-private y estático para poder probarlo sin montar
+     * el servicio con todos sus repositorios.
+     */
+    static String deriveExecutionMode(String rawSql) {
+        String sql = rawSql == null ? "" : rawSql.stripLeading();
+        // Misma tolerancia a comentarios iniciales que tenía
+        // validateExecutionModePrefix, al que sustituye.
+        while (sql.startsWith("--")) {
+            int nl = sql.indexOf('\n');
+            if (nl < 0) { sql = ""; break; }
+            sql = sql.substring(nl + 1).stripLeading();
+        }
+        if (sql.isEmpty()) {
+            throw new IllegalArgumentException("El SQL no puede estar vacío.");
+        }
+        String first = sql.split("\\s+", 2)[0].toUpperCase(java.util.Locale.ROOT);
+        if (first.equals("CALL")) {
+            return "PROCEDURE";
+        }
+        if (first.equals("SELECT") || first.equals("WITH")) {
+            return "SELECT";
+        }
+        // DML directo. Deliberadamente NO se concede relajando
+        // rejectIfMutating "cuando el método es POST o PUT": como
+        // HTTP_METHOD entra con default POST, eso habría dejado sin
+        // guardia a todas las filas que ya existen, en el mismo
+        // despliegue y sin que nadie las tocara. Atarlo al modo hace
+        // que el permiso alcance sólo a las filas donde el autor
+        // escribió DML a propósito; una fila SELECT sigue pasando
+        // por el guardia igual que siempre.
+        if (first.equals("INSERT") || first.equals("UPDATE")) {
+            return "DML";
+        }
+        // DELETE y el DDL quedan fuera. Es la misma línea que ya
+        // traza WriteService, cuyo enum sólo admite INSERT y UPDATE.
+        throw new IllegalArgumentException(
+                "El SQL debe empezar por SELECT, WITH, CALL, INSERT o UPDATE; "
+                + "empieza por '" + first + "'. Para borrar o alterar "
+                + "estructura, publica un procedimiento y llámalo con CALL.");
+    }
+
+    /** Verbos admitidos. DELETE queda fuera a propósito — ver la entidad Query. */
+    private static final Set<String> HTTP_METHODS = Set.of("GET", "POST", "PUT");
+
+    /**
+     * Normaliza y valida el verbo. Null o vacío cae a {@code POST},
+     * que es lo que hacían todas las rutas antes de V33, para que un
+     * cliente que no mande el campo no cambie de comportamiento.
+     */
+    static String normalizeHttpMethod(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "POST";
+        }
+        String m = raw.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!HTTP_METHODS.contains(m)) {
+            throw new IllegalArgumentException(
+                    "Método HTTP no admitido: '" + raw + "'. Usa GET, POST o PUT. "
+                    + "DELETE no se admite; para borrar, publica un "
+                    + "procedimiento y llámalo con CALL.");
+        }
+        return m;
+    }
+
+    /**
+     * Comprobaciones que cruzan el verbo con el SQL. Se hacen al
+     * guardar y no en tiempo de petición: aquí hay un humano
+     * mirando el formulario, allí sólo un 500 en un log.
+     */
+    private void validateMethodAgainstSql(QueryRequest req) {
+        String method = normalizeHttpMethod(req.httpMethod());
+        String mode = deriveExecutionMode(req.query());
+        String sql = req.query() == null ? "" : req.query();
+
+        // Un GET no lleva cuerpo, así que :BODY.* nunca tendría
+        // valor. Mejor decirlo ahora que dejar un bind sin resolver
+        // esperando a la primera llamada real.
+        if ("GET".equals(method) && sql.toUpperCase(java.util.Locale.ROOT).contains(":BODY.")) {
+            throw new IllegalArgumentException(
+                    "Un GET no lleva cuerpo, así que no puede usar :BODY.*. "
+                    + "Pasa esos valores por la ruta (:PARAM.*) o por el "
+                    + "query string (:QUERY.*).");
+        }
+        // Un GET no debe modificar nada. Es la mitad del contrato
+        // que hace que un GET se pueda cachear y reintentar.
+        if ("GET".equals(method) && "DML".equals(mode)) {
+            throw new IllegalArgumentException(
+                    "Un GET no puede ejecutar INSERT ni UPDATE. Ata esta "
+                    + "consulta a POST o PUT.");
+        }
+    }
+
+    /**
+     * Dialecto heredado del microservicio dueño. Sin microservicio
+     * se conserva el comportamiento previo: null, que
+     * {@code JdbcTemplateRegistry.resolve} interpreta como
+     * "postgres".
+     */
+    private String resolveDialect(QueryRequest req) {
+        if (req.microserviceId() == null) {
+            return null;
+        }
+        return microserviceRepo.findById(req.microserviceId())
+                .map(Microservice::getDialect)
+                .orElse(null);
+    }
+
+    private static String normalizePathTemplate(String tpl) {
+        if (tpl == null) return null;
+        String trimmed = tpl.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     /**

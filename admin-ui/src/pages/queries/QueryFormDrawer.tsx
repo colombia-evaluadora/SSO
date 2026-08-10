@@ -6,6 +6,8 @@ import { Form, zodFieldErrors } from "@/components/forms/Form";
 import { queryFormSchema, type QueryFormValues } from "@/schemas";
 import { useMicroservices } from "@/hooks/useMicroservices";
 import type { QueryAdminResponse } from "@/api/types";
+import { useParamTypes } from "@/api/useParamTypes";
+import { scanPlaceholders, getImplicitSystemType } from "@/lib/placeholderScanner";
 
 /**
  * Acuña el UID de un query nuevo. `crypto.randomUUID` existe en
@@ -31,27 +33,25 @@ interface Props {
 }
 
 /**
- * Form drawer for the Queries Catalog admin CRUD. The two
- * non-trivial controls are:
+ * Form drawer for the Queries Catalog admin CRUD. Notable controls:
  * <ul>
  *   <li>{@code microserviceId} — a {@code <select>} populated
- *       from {@link useMicroservices} filtered to
- *       {@code kind=QUERY}. The {@code queryFormSchema}
- *       accepts {@code null} (treated as "Sin binding —
- *       query global"); the backend's
- *       {@link com.co.eurekatic.ssoadmin.service.QueryAdminService}
- *       rejects any other null/blank state with 422.</li>
- *   <li>{@code query} — a multi-line text input for the raw
- *       SQL. Parameter binding uses {@code :placeholder}
- *       tokens the catalog passes straight through to the
- *       JDBC driver; the form does NOT try to parse or
- *       validate them.</li>
+ *       from {@link useMicroservices} filtered to {@code kind=QUERY}.
+ *       {@code null} = "global" query (canonical
+ *       {@code query-service} serves it).</li>
+ *   <li>{@code executionMode} (V28) — how query-service executes
+ *       the row: SELECT (default), PROCEDURE (CALL schema.proc),
+ *       or FUNCTION (SELECT * FROM schema.func). The backend
+ *       validates the SQL's first keyword matches the mode at
+ *       save time.</li>
+ *   <li>{@code pathTemplate} (V27) — URL suffix that exposes this
+ *       query as a first-class HTTP endpoint. Composed with the
+ *       microservice's {@code REQUEST_URI} prefix at request time.
+ *       Empty = legacy (uuid in body only).</li>
+ *   <li>{@code query} — multi-line text for the raw SQL.
+ *       {@code :placeholder} tokens pass through to JDBC
+ *       {@code MapSqlParameterSource}.</li>
  * </ul>
- *
- * <p>Detail / action / style are surfaced as textareas (json
- * opaque to the catalog endpoint) collapsed under a
- * {@code <details>} toggle so the SQL editor stays uncluttered
- * by metadata most admins never touch.
  */
 export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
   const services = useMicroservices();
@@ -66,13 +66,17 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
       // unique de la columna UUID.
       uuid: query?.uuid ?? (open ? newQueryUid() : ""),
       query: query?.query ?? "",
-      type: query?.type ?? "",
       publicEnd: query?.publicEnd ?? false,
       captcha: query?.captcha ?? false,
       detail: query?.detail ?? "",
       action: query?.action ?? "",
       style: query?.style ?? "",
       microserviceId: query?.microserviceId ?? null,
+
+      httpMethod: query?.httpMethod ?? "POST",
+      pathTemplate: query?.pathTemplate ?? null,
+      outParamNames: query?.outParamNames ?? null,
+      paramTypes: (query?.paramTypes ?? {}) as Record<string, string>,
     }),
     [query, open],
   );
@@ -104,7 +108,20 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
         onCancel={onClose}
         submitLabel={query ? "Guardar cambios" : "Crear"}
       >
-        {({ values, setField, errors }) => (
+        {({ values, setField, errors }) => {
+          // Misma regla que QueryAdminService.deriveExecutionMode:
+          // el modo sale del primer keyword del SQL. Se recalcula
+          // aquí sólo para decidir qué mostrar; la fuente de verdad
+          // es el backend.
+          const isProcedure = /^\s*call\b/i.test(values.query ?? "");
+          // V49 — tipos por placeholder. La detección corre en
+          // cliente cada vez que el SQL cambia; los tipos asignados
+          // viven en values.paramTypes y se preservan entre iteraciones
+          // aunque un placeholder desaparezca temporalmente del SQL.
+          const placeholders = scanPlaceholders(values.query ?? "");
+          const detected = placeholders;
+          const paramTypes = (values.paramTypes ?? {}) as Record<string, string>;
+          return (
           <>
             <div className="grid grid-cols-2 gap-3">
               {/* UID automático. Al crear se acuña solo y el campo
@@ -141,14 +158,62 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
                   </Button>
                 </div>
               )}
-              <Input
-                label="Tipo"
-                value={values.type}
-                onChange={(e) => setField("type", e.target.value)}
-                error={errors.type}
-                hint="Etiqueta opcional (QUERY, CHART, …)"
-              />
+              {/* El microservicio va aquí, junto al UUID: es lo que
+                  decide qué query-service sirve la fila y qué
+                  prefijo lleva la URL, así que se decide antes de
+                  escribir el SQL, no después. Ocupa el hueco que
+                  dejó el campo "Tipo" al retirarse. */}
+              <div>
+                <label
+                  htmlFor="query-microservice"
+                  className="mb-1 block text-sm font-medium text-slate-700"
+                >
+                  Microservicio (kind=QUERY)
+                </label>
+                <select
+                  id="query-microservice"
+                  value={
+                    values.microserviceId == null
+                      ? ""
+                      : String(values.microserviceId)
+                  }
+                  onChange={(e) =>
+                    setField(
+                      "microserviceId",
+                      e.target.value === "" ? null : Number(e.target.value),
+                    )
+                  }
+                  className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                >
+                  <option value="">Sin binding (global)</option>
+                  {queryInstances.map((m) => (
+                    <option key={m.id} value={String(m.id)}>
+                      #{m.id} · {m.instanceName ?? m.serviceId}
+                      {m.dialect ? ` (${m.dialect})` : ""}
+                    </option>
+                  ))}
+                </select>
+                {queryInstances.length === 0 && !services.isLoading ? (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    No hay microservicios QUERY aprovisionados aún.
+                  </p>
+                ) : null}
+              </div>
             </div>
+            {/* La URL completa se muestra fuera de la rejilla, a lo
+                ancho: es la composición de microservicio + método +
+                plantilla, así que no pertenece a ninguno de los tres
+                campos por separado. */}
+            {values.microserviceId && values.pathTemplate ? (
+              <p className="mt-2 text-[11px] text-slate-500">
+                URL completa:{" "}
+                <code className="rounded bg-slate-100 px-1">
+                  {values.httpMethod} /&lt;request_uri&gt;
+                  {values.pathTemplate}
+                </code>{" "}
+                — el prefijo REQUEST_URI lo define el microservicio.
+              </p>
+            ) : null}
             <div className="h-3" />
             <label className="block text-sm">
               <span className="mb-1 block font-medium text-slate-700">
@@ -165,7 +230,9 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
                     : "border-slate-300 focus:border-sky-500 focus:ring-sky-500",
                 ].join(" ")}
                 aria-invalid={errors.query ? true : undefined}
-                placeholder="SELECT id, email FROM sso_user WHERE username = :username"
+                placeholder={
+                  "SELECT id, nombre FROM establecimiento\nWHERE nombre LIKE :PARAM.NOMBRE\n  AND owner = :CONTEXT.USER_ID\nLIMIT :QUERY.SIZE"
+                }
               />
               {errors.query ? (
                 <p role="alert" className="mt-1 text-xs text-red-600">
@@ -173,45 +240,98 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
                 </p>
               ) : null}
               <p className="mt-1 text-[11px] text-slate-500">
-                Bindings con <code>:placeholder</code> se resuelven en el
-                query-service vía <code>MapSqlParameterSource</code>.
+                Cada parámetro lleva el prefijo de su origen:{" "}
+                <code>:PARAM.X</code> (variables de la ruta),{" "}
+                <code>:QUERY.X</code> (query string),{" "}
+                <code>:BODY.X.Y</code> (cuerpo JSON) y{" "}
+                <code>:CONTEXT.USER_ID</code>, <code>:CONTEXT.EMAIL</code>,{" "}
+                <code>:CONTEXT.ROLES</code> (CSV),{" "}
+                <code>:CONTEXT.ROLES_ARRAY</code> (array PG) — estos últimos
+                salen del JWT y el cliente no puede fabricarlos.
+              </p>
+              <p className="mt-1 text-[11px] text-slate-500">
+                La paginación la escribes tú:{" "}
+                <code>LIMIT :QUERY.SIZE OFFSET :QUERY.OFFSET</code>. El SQL
+                se ejecuta tal cual lo ves — ya no se le añade nada por
+                detrás.
               </p>
             </label>
             <div className="h-3" />
-            <div>
-              <label
-                htmlFor="query-microservice"
-                className="mb-1 block text-sm font-medium text-slate-700"
-              >
-                Microservicio (kind=QUERY)
-              </label>
-              <select
-                id="query-microservice"
-                value={
-                  values.microserviceId == null ? "" : String(values.microserviceId)
-                }
+            <ParamTypesSection
+              detected={detected}
+              value={paramTypes}
+              onChange={(next) => setField("paramTypes", next)}
+            />
+            <div className="h-3" />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label
+                  htmlFor="query-http-method"
+                  className="mb-1 block text-sm font-medium text-slate-700"
+                >
+                  Método HTTP
+                </label>
+                <select
+                  id="query-http-method"
+                  value={values.httpMethod}
+                  onChange={(e) =>
+                    setField(
+                      "httpMethod",
+                      e.target.value as QueryFormValues["httpMethod"],
+                    )
+                  }
+                  className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                >
+                  <option value="GET">GET — leer, sin cuerpo</option>
+                  <option value="POST">POST — leer o crear</option>
+                  <option value="PUT">PUT — actualizar</option>
+                </select>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Solo aplica cuando hay path template. DELETE no se admite:
+                  para borrar, publica un procedimiento y llámalo con{" "}
+                  <code>CALL</code>.
+                </p>
+              </div>
+              <Input
+                label="Path template"
+                value={values.pathTemplate ?? ""}
                 onChange={(e) =>
                   setField(
-                    "microserviceId",
-                    e.target.value === "" ? null : Number(e.target.value),
+                    "pathTemplate",
+                    e.target.value.trim() === "" ? null : e.target.value,
                   )
                 }
-                className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-              >
-                <option value="">Sin binding (global)</option>
-                {queryInstances.map((m) => (
-                  <option key={m.id} value={String(m.id)}>
-                    #{m.id} · {m.instanceName ?? m.serviceId}
-                    {m.dialect ? ` (${m.dialect})` : ""}
-                  </option>
-                ))}
-              </select>
-              {queryInstances.length === 0 && !services.isLoading ? (
-                <p className="mt-1 text-[11px] text-slate-500">
-                  No hay microservicios QUERY aprovisionados aún.
-                </p>
+                error={errors.pathTemplate}
+                hint="Sufijo de URL DENTRO del microservicio, con variables :MAYÚSCULA (ej /establecimiento/:NOMBRE), que se bindean como :PARAM.NOMBRE. Vacío = solo accesible vía POST /<svc>/query (legacy)."
+              />
+              {isProcedure ? (
+                <Input
+                  label="OUT params"
+                  value={values.outParamNames ?? ""}
+                  onChange={(e) =>
+                    setField(
+                      "outParamNames",
+                      e.target.value.trim() === "" ? null : e.target.value,
+                    )
+                  }
+                  error={errors.outParamNames}
+                  hint="Nombres :placeholder separados por comas (ej :out_status,:out_message)."
+                />
               ) : null}
             </div>
+            <div className="h-2" />
+            {/*
+              Modo y dialecto ya no se piden: el backend los deriva del
+              SQL y del microservicio dueño. Se muestran igualmente para
+              que siga siendo visible qué se va a guardar, pero sin que
+              se puedan contradecir con el SQL.
+            */}
+            <p className="text-[11px] text-slate-500">
+              Modo de ejecución:{" "}
+              <strong>{isProcedure ? "PROCEDURE" : "SELECT"}</strong> —
+              derivado del primer keyword del SQL. El dialecto lo hereda del
+              microservicio seleccionado.
+            </p>
             <div className="h-3" />
             <div className="flex items-center gap-6">
               <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -275,8 +395,245 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
               (mismo patrón que Endpoints).
             </p>
           </>
-        )}
+          );
+        }}
       </Form>
     </Drawer>
+  );
+}
+
+/**
+ * V49 — Sección "Tipos de parámetros" del formulario.
+ *
+ * <p>Auto-detecta los placeholders del SQL, los muestra como filas
+ * con un dropdown por fila, y deja al autor asignar el tipo PG/JDBC
+ * a cada uno. El backend rechaza el guardado si alguna :PARAM.* /
+ * :BODY.* del SQL no tiene entrada — aquí damos feedback inmediato
+ * con un contador que se pone rojo cuando falta alguno.
+ *
+ * <p>Las filas que ya tenían un tipo (de un edit anterior) se
+ * restauran automáticamente cuando reaparecen en el SQL. El autor
+ * puede añadir tipos manualmente para placeholders que aún no ha
+ * escrito (útil para preparar el SQL).
+ */
+function ParamTypesSection({
+  detected,
+  value,
+  onChange,
+}: {
+  detected: string[];
+  value: Record<string, string>;
+  onChange: (next: Record<string, string>) => void;
+}) {
+  const { data, isLoading, error } = useParamTypes();
+  const curated = data?.curated ?? [];
+
+  // Cuenta cuántos de los placeholders detectados están tipados.
+  // El backend exige tipo explícito sólo en :PARAM.* / :BODY.* —
+  // :CONTEXT.* y :QUERY.{SIZE,OFFSET} los bindea el sistema y no
+  // cuentan como "faltantes" para el badge, aunque los seguimos
+  // mostrando en la tabla para que el autor los vea.
+  const REQUIRED_NS = new Set(["PARAM", "BODY"]);
+  const required = detected.filter((p) => REQUIRED_NS.has(p.split(".")[0] ?? ""));
+  const typed = required.filter((p) => value[p]).length;
+  const missing = required.length - typed;
+
+  function setType(placeholder: string, type: string) {
+    const next = { ...value };
+    if (type === "" || type === undefined) {
+      delete next[placeholder];
+    } else {
+      next[placeholder] = type;
+    }
+    onChange(next);
+  }
+
+  function addManual() {
+    // Pide una key (default = placeholder vacío). El autor la puede
+    // editar para reservar el tipo antes de escribir el placeholder
+    // en el SQL.
+    const key = window.prompt(
+      "Nombre del placeholder (MAYÚSCULAS, ej PARAM.NOMBRE):",
+    );
+    if (!key) return;
+    if (!/^[A-Z][A-Z0-9_]*(\.[A-Z][A-Z0-9_]*)*$/.test(key)) {
+      window.alert("Formato inválido. Cada segmento debe ser MAYÚSCULAS y usar A-Z, 0-9, _.");
+      return;
+    }
+    if (value[key]) {
+      window.alert("Ese placeholder ya tiene tipo asignado.");
+      return;
+    }
+    const defaultType = curated[0] ?? "TEXT";
+    onChange({ ...value, [key]: defaultType });
+  }
+
+  function removeManual(placeholder: string) {
+    const next = { ...value };
+    delete next[placeholder];
+    onChange(next);
+  }
+
+  if (isLoading) {
+    return (
+      <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+        Cargando tipos disponibles…
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700">
+        No se pudieron cargar los tipos disponibles ({String(error)}).
+      </div>
+    );
+  }
+
+  const manualKeys = Object.keys(value).filter((k) => !detected.includes(k));
+
+  return (
+    <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+      <div className="mb-2 flex items-center justify-between">
+        <div>
+          <div className="text-sm font-medium text-slate-700">
+            Tipos de parámetros
+          </div>
+          <div className="text-[11px] text-slate-500">
+            Auto-detectados del SQL. Asigna un tipo a cada :PARAM.* / :BODY.*.
+            :CONTEXT.* y :QUERY.{'{'}SIZE,OFFSET{'}'} los bindea el sistema.
+          </div>
+        </div>
+        <div
+          className={
+            "rounded px-2 py-0.5 text-[11px] font-medium " +
+            (detected.length === 0
+              ? "bg-slate-100 text-slate-600"
+              : missing === 0
+                ? "bg-emerald-100 text-emerald-800"
+                : "bg-rose-100 text-rose-800")
+          }
+        >
+          {detected.length === 0
+            ? "Sin placeholders"
+            : missing === 0
+              ? `Detectados ${detected.length} — tipados ${typed} — ✓`
+              : `Detectados ${detected.length} — tipados ${typed} — faltantes ${missing}`}
+        </div>
+      </div>
+
+      {detected.length > 0 && (
+        <div className="overflow-hidden rounded border border-slate-200 bg-white">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-100 text-[11px] uppercase text-slate-500">
+              <tr>
+                <th className="px-2 py-1 text-left">Placeholder</th>
+                <th className="px-2 py-1 text-left">Tipo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {detected.map((p) => {
+                const systemType = getImplicitSystemType(p);
+                if (systemType) {
+                  // El sistema lo bindea — selector deshabilitado que
+                  // muestra el tipo real. El autor no tiene que (ni
+                  // puede) cambiarlo: incluirlo en paramTypes
+                  // sería rechazado por la validación del backend.
+                  return (
+                    <tr key={p} className="border-t border-slate-100">
+                      <td className="px-2 py-1 font-mono">:{p}</td>
+                      <td className="px-2 py-1">
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={systemType}
+                            disabled
+                            aria-readonly="true"
+                            className="flex-1 cursor-not-allowed rounded border border-slate-200 bg-slate-100 px-2 py-1 text-xs text-slate-500"
+                          >
+                            <option value={systemType}>{systemType}</option>
+                          </select>
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">
+                            sistema
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                }
+                return (
+                  <tr key={p} className="border-t border-slate-100">
+                    <td className="px-2 py-1 font-mono">:{p}</td>
+                    <td className="px-2 py-1">
+                      <select
+                        value={value[p] ?? ""}
+                        onChange={(e) => setType(p, e.target.value)}
+                        className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                      >
+                        <option value="">— sin tipo —</option>
+                        {curated.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {manualKeys.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-[11px] font-medium text-slate-500">
+            Tipos manuales (placeholder aún no escrito)
+          </div>
+          <div className="overflow-hidden rounded border border-slate-200 bg-white">
+            <table className="w-full text-xs">
+              <tbody>
+                {manualKeys.map((k) => (
+                  <tr key={k} className="border-t border-slate-100 first:border-t-0">
+                    <td className="px-2 py-1 font-mono">:{k}</td>
+                    <td className="px-2 py-1">
+                      <select
+                        value={value[k] ?? ""}
+                        onChange={(e) => setType(k, e.target.value)}
+                        className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                      >
+                        <option value="">— sin tipo —</option>
+                        {curated.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-2 py-1 text-right">
+                      <button
+                        type="button"
+                        onClick={() => removeManual(k)}
+                        className="text-rose-600 hover:underline"
+                        title="Quitar tipo manual"
+                      >
+                        ×
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={addManual}
+        className="mt-2 text-[11px] text-sky-700 hover:underline"
+      >
+        + Agregar tipo manualmente
+      </button>
+    </div>
   );
 }

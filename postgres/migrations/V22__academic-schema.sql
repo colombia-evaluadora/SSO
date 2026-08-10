@@ -63,6 +63,41 @@ CREATE SCHEMA IF NOT EXISTS academico_test;
 SET search_path TO academico_test, public;
 
 -- ---------------------------------------------------------------------------
+--  Reconciliacion de esquemas preexistentes.
+--
+--  Todos los CREATE TABLE de abajo son IF NOT EXISTS, asi que en una BD
+--  donde academico_test ya fue creado FUERA de Flyway (el servidor de
+--  test tiene 147 tablas cargadas con ~16M filas de datos importados)
+--  el CREATE es un no-op y la columna ACTIVE nunca aparece. Los indices
+--  parciales `WHERE ACTIVE = true` que siguen a cada tabla fallan
+--  entonces con 42703 "column active does not exist" y tumban la
+--  migracion completa.
+--
+--  Este bloque agrega ACTIVE a lo que ya existe ANTES de que se cree el
+--  primer indice. En una BD limpia el loop no encuentra tablas y no
+--  hace nada — cada CREATE TABLE ya trae su ACTIVE. En PostgreSQL 11+
+--  un ADD COLUMN con DEFAULT no reescribe la tabla (default rapido en
+--  el catalogo), asi que esto es barato incluso sobre tactividad_nota
+--  (3.6M filas).
+-- ---------------------------------------------------------------------------
+DO $reconcile$
+DECLARE
+    t record;
+BEGIN
+    FOR t IN
+        SELECT tablename
+          FROM pg_tables
+         WHERE schemaname = 'academico_test'
+    LOOP
+        EXECUTE format(
+            'ALTER TABLE academico_test.%I '
+            'ADD COLUMN IF NOT EXISTS ACTIVE BOOLEAN DEFAULT TRUE NOT NULL',
+            t.tablename);
+    END LOOP;
+END
+$reconcile$;
+
+-- ---------------------------------------------------------------------------
 --  Domain types: sustituyen CHECK constraints de dos valores en columnas
 --  muy repetidas. Permiten que information_schema.domains reporte el dominio
 --  semantico (bool_sn, estado_ai, ...) y que PostgREST/OpenAPI lo exponga

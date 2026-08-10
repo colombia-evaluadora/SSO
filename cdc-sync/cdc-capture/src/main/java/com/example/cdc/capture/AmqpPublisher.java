@@ -83,6 +83,20 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
                     continue;
                 }
 
+                // Debezium snapshot row (op="r", emitted during the initial SELECT *
+                // bootstrap or after a force-snapshot reset). These are NOT business
+                // changes — drop them at the producer so they never reach the worker,
+                // never get written to auditoria.audit_log, and never trigger the
+                // ColumnRenamer snapshot branch in Oracle.
+                if ("r".equals(op)) {
+                    captureMetrics.incrementSnapshotSkipped(table);
+                    log.debug("Skipping snapshot row table={} lsn={}", table, lsn);
+                    continue;
+                }
+
+                // Row-change event: lift the cached context (if any) and attach
+                // it to the envelope so the worker can populate audit_log.
+
                 // Row-change event: lift the cached context (if any) and attach
                 // it to the envelope so the worker can populate audit_log.
                 CdcEvent.Context ctx = (xid != 0L) ? ctxCache.take(xid) : null;

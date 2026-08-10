@@ -65,6 +65,22 @@
             <artifactId>spring-boot-webflux-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!--
+            springdoc-openapi: publishes this service's /v3/api-docs so
+            api-gateway's OpenApiAggregatorService can merge it into the
+            doc at /api/docs. See auth-center/pom.xml for the full
+            rationale.
+
+            webflux, not webmvc: this is the one downstream that is
+            purely reactive (spring-boot-starter-webflux with no
+            spring-boot-starter-web). The webmvc variant would not
+            register its endpoint here.
+        -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webflux-api</artifactId>
+            <version>${springdoc-openapi.version}</version>
+        </dependency>
     </dependencies>
 
     <build>

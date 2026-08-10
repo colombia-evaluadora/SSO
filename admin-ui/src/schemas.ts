@@ -139,58 +139,211 @@ export const appFormSchema = z.object({
 });
 
 /**
- * Schema for the Queries Catalog admin form. The two
- * cross-field checks worth noting:
+ * Schema for the Queries Catalog admin form. Cross-field checks:
  * <ul>
- *   <li>{@code type} is optional, but admins sometimes paste
- *       a "SELECT" / "CHART" label here — keep it short and
- *       free-form; the backend will echo whatever is sent
- *       back to the consumer.</li>
- *   <li>{@code microserviceId} is null by default (query
- *       stays "global", canonical {@code query-service}
- *       serves it). Setting it requires picking a row out of
- *       the QUERY microservice dropdown the page renders;
- *       the schema accepts any positive integer, the form
- *       coerces empty string to {@code null}.</li>
+ *   <li>{@code type} is optional (legacy "QUERY" / "CHART" label).</li>
+ *   <li>{@code microserviceId} null = "global" query. Setting it
+ *       requires picking a row out of the QUERY microservice
+ *       dropdown the page renders; empty string coerces to null.</li>
+ *   <li>{@code executionMode} (V28) — controls how query-service
+ *       executes the row. {@code SELECT} (default) is the legacy
+ *       read; {@code PROCEDURE} runs a {@code CALL schema.proc(...)};
+ *       {@code FUNCTION} runs {@code SELECT * FROM schema.func(...)}.
+ *       The backend validates that the SQL's first keyword matches
+ *       the mode at save time.</li>
+ *   <li>{@code pathTemplate} (V27) — URL suffix that exposes this
+ *       query as a first-class HTTP endpoint. Composed with the
+ *       microservice's {@code REQUEST_URI} prefix. Must start with
+ *       "/" and be unique within the microservice. Empty / null
+ *       keeps the row reachable only via the legacy uuid flow.</li>
  * </ul>
  *
- * <p>{@code query} (the SQL itself) is NOT validated for
- * syntax — Bean Validation 400 from the backend covers
- * malformed payloads, and trying to lint SQL here would just
- * shadow whatever the JDBC driver ends up complaining about.
+ * <p>{@code pathTemplate} cross-checks: non-empty REQUIRES a
+ * {@code microserviceId} (queries without a backing instance have
+ * no URL prefix to compose with). Validation lives in
+ * {@code .superRefine} because Zod can't express this in the
+ * per-field rules.
+ *
+ * <p>{@code query} (the SQL itself) is NOT validated for syntax —
+ * the backend's mode-prefix check at save time catches the obvious
+ * mismatches; deeper SQL linting would just shadow whatever the
+ * JDBC driver ends up complaining about.
  */
-export const queryFormSchema = z.object({
-  // El UID es automático: el drawer lo genera al abrir en modo
-  // "nuevo" y el backend genera uno si el request llega vacío.
-  // Por eso "" es válido — no es un campo que el admin escriba.
-  // Cuando SÍ viene un valor (fila existente, importación) se
-  // mantiene la regla legacy de formato y longitud.
-  uuid: z
-    .string()
-    .max(64)
-    .regex(/^[a-zA-Z0-9_-]*$/, "Solo letras, números, _ y -")
-    .refine((v) => v === "" || v.length >= 2, "Mínimo 2 caracteres")
-    .default(""),
-  query: z.string().min(1, "Requerido").max(10_000),
-  type: z.string().max(64).default(""),
-  publicEnd: z.boolean().default(false),
-  captcha: z.boolean().default(false),
-  detail: z.string().max(20_000).default(""),
-  action: z.string().max(20_000).default(""),
-  style: z.string().max(20_000).default(""),
-  // Empty string from the <select> means "no binding"; coerce
-  // to null so the backend's resolveQueryMicroservice(null)
-  // path runs.
-  microserviceId: z
-    .union([z.string(), z.number(), z.null()])
-    .transform((v) => {
-      if (v === "" || v == null) return null;
-      const n = typeof v === "string" ? Number(v) : v;
-      return Number.isFinite(n) && n > 0 ? n : null;
-    })
-    .nullable()
-    .default(null),
-});
+
+/**
+ * V49 — Set curado de tipos PG/JDBC que el autor puede asignar a cada
+ * placeholder. Espejo del `ParamTypes.CURATED` de Java (ver spec
+ * 2026-08-10); el backend es la fuente única — el frontend lo pide
+ * vía `useParamTypes()` al renderizar el dropdown.
+ */
+const CURATED_PG_TYPES = [
+  "TEXT",
+  "VARCHAR",
+  "BIGINT",
+  "INTEGER",
+  "SMALLINT",
+  "NUMERIC",
+  "BOOLEAN",
+  "DATE",
+  "TIMESTAMP",
+  "TIMESTAMPTZ",
+  "UUID",
+  "JSONB",
+  "JSON",
+  "TEXT[]",
+  "BIGINT[]",
+  "INTEGER[]",
+  "NUMERIC[]",
+  "BOOLEAN[]",
+] as const;
+
+export const queryFormSchema = z
+  .object({
+    // V31 — UUID can be empty (the backend auto-generates one
+    // when the form is submitted with no value). For non-empty
+    // UUIDs the format + length rules apply.
+    uuid: z
+      .string()
+      .max(64)
+      .regex(/^[a-zA-Z0-9_-]*$/, "Solo letras, números, _ y -")
+      .refine((v) => v === "" || v.length >= 2, "Mínimo 2 caracteres")
+      .default(""),
+    query: z.string().min(1, "Requerido").max(10_000),
+    // `type` (el dialecto) y `executionMode` ya no se piden: el
+    // backend los deriva. El dialecto se hereda del microservicio
+    // dueño, y el modo del primer keyword del SQL. Ver
+    // QueryAdminService.deriveExecutionMode.
+    publicEnd: z.boolean().default(false),
+    captcha: z.boolean().default(false),
+    detail: z.string().max(20_000).default(""),
+    action: z.string().max(20_000).default(""),
+    style: z.string().max(20_000).default(""),
+    microserviceId: z
+      .union([z.string(), z.number(), z.null()])
+      .transform((v) => {
+        if (v === "" || v == null) return null;
+        const n = typeof v === "string" ? Number(v) : v;
+        return Number.isFinite(n) && n > 0 ? n : null;
+      })
+      .nullable()
+      .default(null),
+    // V33 — verbo HTTP. DELETE no está en la lista a propósito;
+    // para borrar se publica un procedimiento y se llama con CALL.
+    httpMethod: z.enum(["GET", "POST", "PUT"]).default("POST"),
+    pathTemplate: z
+      .string()
+      .max(500)
+      .default("")
+      .transform((v) => {
+        const t = v.trim();
+        return t === "" ? null : t;
+      })
+      .nullable(),
+    outParamNames: z
+      .string()
+      .max(500)
+      .default("")
+      .transform((v) => {
+        const t = v.trim();
+        return t === "" ? null : t;
+      })
+      .nullable(),
+    // V49 — author-declared JDBC/PG type per caller-controlled
+    // placeholder. El backend valida en el guardado (QueryAdminService
+    // .validateParamTypes) que toda :PARAM.* / :BODY.* del SQL tenga
+    // entrada; aquí validamos el shape y dejamos la cobertura para el
+    // servidor.
+    //
+    // Usamos `z.string().refine(...)` en vez de `z.enum([...])` para
+    // que el tipo inferido sea `Record<string, string>` (no el literal
+    // union del enum) y encaje con `Record<string, string>` en el resto
+    // del código (defaultValues, tipos en types.ts).
+    paramTypes: z
+      .record(
+        z
+          .string()
+          .regex(
+            /^[A-Z][A-Z0-9_]*(\.[A-Z][A-Z0-9_]*)*$/,
+            "Cada segmento debe ser MAYÚSCULA y usar A-Z, 0-9, _",
+          ),
+        z
+          .string()
+          .refine(
+            (v) => (CURATED_PG_TYPES as readonly string[]).includes(v),
+            `Tipo no soportado. Permitidos: ${CURATED_PG_TYPES.join(", ")}`,
+          ),
+      )
+      .default({}),
+  })
+  .superRefine((v, ctx) => {
+    if (v.pathTemplate != null && !v.pathTemplate.startsWith("/")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["pathTemplate"],
+        message: "Debe empezar con '/'",
+      });
+    }
+    if (v.pathTemplate != null && /[*?]/.test(v.pathTemplate)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["pathTemplate"],
+        message:
+          "No puede contener comodines ('*' ni '?') — el prefijo con '**' lo aporta el microservicio (REQUEST_URI)",
+      });
+    }
+    // La sintaxis {variable} se retiró: ahora es :VARIABLE en
+    // MAYÚSCULA, que es lo que se escribe también en el SQL como
+    // :PARAM.VARIABLE. El backend valida lo mismo (common:
+    // PathTemplateSyntax); esto es sólo para dar el error antes.
+    if (v.pathTemplate != null && /[{}]/.test(v.pathTemplate)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["pathTemplate"],
+        message:
+          "La sintaxis {variable} ya no se admite — usa :VARIABLE en MAYÚSCULA (ej /establecimiento/:NOMBRE)",
+      });
+    }
+    if (v.pathTemplate != null) {
+      for (const m of v.pathTemplate.matchAll(/:([^/]*)/g)) {
+        const name = m[1] ?? "";
+        if (!/^[A-Z][A-Z0-9_]*$/.test(name)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["pathTemplate"],
+            message: `':${name}' debe ir en MAYÚSCULA y usar sólo A-Z, 0-9 y '_'. Translitera acentos y eñe — ':ANIO', no ':AÑO'`,
+          });
+          break;
+        }
+      }
+    }
+    // Un GET no lleva cuerpo, así que :BODY.* nunca tendría valor.
+    // El backend valida lo mismo; esto da el error antes.
+    if (v.httpMethod === "GET" && /:BODY\./i.test(v.query ?? "")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["query"],
+        message:
+          "Un GET no lleva cuerpo: usa :PARAM.* o :QUERY.* en vez de :BODY.*",
+      });
+    }
+    // Un GET no debe modificar nada — es la mitad del contrato que
+    // permite cachearlo y reintentarlo.
+    if (v.httpMethod === "GET" && /^\s*(insert|update)\b/i.test(v.query ?? "")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["query"],
+        message: "Un GET no puede ejecutar INSERT ni UPDATE. Usa POST o PUT.",
+      });
+    }
+    if (v.pathTemplate != null && v.microserviceId == null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["pathTemplate"],
+        message: "pathTemplate requiere un microservicio (kind=QUERY) seleccionado",
+      });
+    }
+  });
+
 
 export type UserFormValues = z.infer<typeof userFormSchema>;
 export type RoleFormValues = z.infer<typeof roleFormSchema>;
