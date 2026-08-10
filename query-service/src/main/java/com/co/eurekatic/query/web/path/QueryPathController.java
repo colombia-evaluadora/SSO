@@ -7,6 +7,7 @@ import com.co.eurekatic.query.web.QueryRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -102,6 +103,21 @@ public class QueryPathController {
             @RequestParam Map<String, String> queryParams,
             @RequestBody(required = false) Map<String, Object> body) {
         return dispatch(request, "PUT", queryParams, body);
+    }
+
+    /**
+     * V50 — PATCH method. Idempotent semantics with partial body
+     * (RFC 5789). Like PUT, it carries a body and matches the
+     * same validation rules — PATCH on a DML row is allowed.
+     * Registered after PUT so Spring's handler mapping resolves
+     * the more specific path templates first.
+     */
+    @PatchMapping("/**")
+    public Map<String, Object> dispatchPatch(
+            jakarta.servlet.http.HttpServletRequest request,
+            @RequestParam Map<String, String> queryParams,
+            @RequestBody(required = false) Map<String, Object> body) {
+        return dispatch(request, "PATCH", queryParams, body);
     }
 
     private Map<String, Object> dispatch(

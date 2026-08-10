@@ -61,7 +61,8 @@ public final class ParamBinder {
             "BIGINT[]",   "int8",
             "INTEGER[]",  "int4",
             "NUMERIC[]",  "numeric",
-            "BOOLEAN[]",  "bool"
+            "BOOLEAN[]",  "bool",
+            "TIME[]",     "time"
     );
 
     /** Tipo Java del elemento para cada alias de array — para construir el {@code Object[]} tipado. */
@@ -70,7 +71,8 @@ public final class ParamBinder {
             "BIGINT[]",   Long.class,
             "INTEGER[]",  Integer.class,
             "NUMERIC[]",  BigDecimal.class,
-            "BOOLEAN[]",  Boolean.class
+            "BOOLEAN[]",  Boolean.class,
+            "TIME[]",     java.sql.Time.class
     );
 
     public static MapSqlParameterSource build(Map<String, Object> values,
@@ -141,10 +143,15 @@ public final class ParamBinder {
      *       nativo).</li>
      *   <li>{@code DATE}: {@link java.sql.Date} desde String ISO
      *       {@code yyyy-MM-dd}.</li>
+     *   <li>{@code TIME}: {@link java.sql.Time} desde String
+     *       {@code HH:mm:ss[.fffffffff]}.</li>
      *   <li>{@code TIMESTAMP}: {@link Timestamp} desde String
      *       {@code yyyy-MM-dd HH:mm:ss[.fffffffff]}.</li>
      *   <li>{@code TIMESTAMPTZ}: se pasa como String; el driver PG
      *       parsea con zona horaria del parámetro de sesión.</li>
+     *   <li>{@code CHAR(1)}: {@code String} de longitud 1. Útil para
+     *       flags de un solo carácter ({@code 'S'/'N'}, {@code 'A'/'I'})
+     *       muy comunes en este codebase (ver V22 academic schema).</li>
      * </ul>
      */
     private static Object coerceScalar(Object val, String declaredType) {
@@ -217,6 +224,27 @@ public final class ParamBinder {
             case "DATE":
                 if (val instanceof java.sql.Date d) return d;
                 return java.sql.Date.valueOf(val.toString().trim());
+
+            case "TIME":
+                if (val instanceof java.sql.Time t) return t;
+                // java.sql.Time.valueOf exige HH:mm:ss (con fracciones
+                // opcionales). Si el front manda "10:30" lo extendemos
+                // a "10:30:00" para que no rebote por algo que PG
+                // aceptaría tranquilamente.
+                String ts = val.toString().trim();
+                if (ts.matches("\\d{1,2}:\\d{2}")) {
+                    ts = ts + ":00";
+                }
+                return java.sql.Time.valueOf(ts);
+
+            case "CHAR(1)":
+                String cs = val.toString();
+                if (cs.length() > 1) {
+                    throw new IllegalArgumentException(
+                            "CHAR(1) admite un solo carácter; llegó '"
+                            + cs + "' (longitud=" + cs.length() + ")");
+                }
+                return cs;
 
             case "TIMESTAMP":
                 if (val instanceof Timestamp t) return t;
