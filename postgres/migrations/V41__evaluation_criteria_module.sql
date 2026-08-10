@@ -11,10 +11,15 @@ SET search_path TO academico_test, public;
 -- fn_escala_propagar — cuando se elige una escala de valoracion como la del
 -- criterio del periodo, esa escala se vuelve la maestra: sus valoraciones se
 -- copian a TODAS las demas escalas del periodo (via TNIVEL_ESCALA), reemplazando
--- por completo las que cada una tuviera. Se hace DELETE de las bandas de cada
--- escala destino (hard delete: evita chocar con los UNIQUE de
--- TESCALA_VALORACION al reinsertar) y se insertan copias frescas (nuevas
--- TVALORACION por-banda) del maestro.
+-- por completo las que cada una tuviera. El motor de endpoints del SSO NO
+-- permite DELETE, asi que las bandas de cada escala destino se dan de baja
+-- logica (ACTIVE=FALSE) — igual sus TVALORACION — en vez de borrarse. Como los
+-- UNIQUE de TESCALA_VALORACION cuentan filas inactivas, al reinsertar las copias
+-- frescas del maestro el ORDEN continua desde el MAX historico del destino
+-- (nunca se reinicia), evitando chocar con U_TESCALA_VALORACION_2
+-- (FK_TESCALA, FK_TVL_TIPO_VALORACION, ORDEN). Cada copia crea una TVALORACION
+-- nueva, por lo que U_TESCALA_VALORACION_1 (FK_TESCALA, FK_TVALORACION) tampoco
+-- colisiona (el par escala-valoracion es siempre nuevo).
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_escala_propagar(
     p_pk_periodo BIGINT, p_fk_escala_source BIGINT, p_audit VARCHAR
@@ -37,7 +42,8 @@ BEGIN
            AND ne.FK_TESCALA <> p_fk_escala_source
     LOOP
         -- No pisar una escala cuyas bandas ya esten en uso por criterios de
-        -- unidad (el DELETE violaria la FK y ademas destruiria datos calificados).
+        -- unidad: darlas de baja dejaria el descriptor apuntando a una banda
+        -- inactiva (perderia consistencia con datos ya calificados).
         IF EXISTS (
             SELECT 1 FROM academico_test.TNIVEL_CRITERIO_UNIDAD ncu
               JOIN academico_test.TESCALA_VALORACION ev2
@@ -46,13 +52,22 @@ BEGIN
         ) THEN
             CONTINUE;
         END IF;
-        -- Borrar las TVALORACION de las bandas del destino: cascada-borra sus
-        -- TESCALA_VALORACION y no deja valoraciones huerfanas.
-        DELETE FROM academico_test.TVALORACION
+        -- Baja logica de las bandas activas del destino y de sus valoraciones
+        -- (sin DELETE). Primero las TVALORACION referenciadas por las bandas
+        -- vigentes, luego las bandas mismas.
+        UPDATE academico_test.TVALORACION
+           SET ACTIVE = FALSE, MODIFIED_BY = p_audit, MODIFIED_AT = CURRENT_TIMESTAMP
          WHERE PK_TVALORACION IN (
-             SELECT FK_TVALORACION FROM academico_test.TESCALA_VALORACION WHERE FK_TESCALA = v_target
+             SELECT FK_TVALORACION FROM academico_test.TESCALA_VALORACION
+              WHERE FK_TESCALA = v_target AND ACTIVE = TRUE
          );
-        v_orden := 0;
+        UPDATE academico_test.TESCALA_VALORACION
+           SET ACTIVE = FALSE, MODIFIED_BY = p_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_TESCALA = v_target AND ACTIVE = TRUE;
+        -- ORDEN maximo historico del destino (incluye inactivas) para no reusar
+        -- valores y chocar con U_TESCALA_VALORACION_2.
+        SELECT COALESCE(MAX(ORDEN), 0) INTO v_orden
+          FROM academico_test.TESCALA_VALORACION WHERE FK_TESCALA = v_target;
         FOR sb IN
             SELECT ev.FK_TVL_TIPO_VALORACION AS tipo, ev.LIMITE_INFERIOR AS li,
                    ev.LIMITE_SUPERIOR AS ls, ev.LIMITE_PROMEDIO AS lp,

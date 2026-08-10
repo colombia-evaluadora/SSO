@@ -144,16 +144,20 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_area_listar(
-    p_fk_periodo BIGINT, p_nombre_interno TEXT DEFAULT NULL
+    p_fk_periodo BIGINT, p_nombre_interno TEXT DEFAULT NULL,
+    p_page_index INT DEFAULT 0, p_page_size INT DEFAULT 10
 )
 RETURNS TABLE (id BIGINT, codigo VARCHAR, nombre_interno VARCHAR,
-               area_general_id BIGINT, orden_reportes NUMERIC)
+               area_general_id BIGINT, orden_reportes NUMERIC, total_count BIGINT)
 LANGUAGE sql STABLE AS $$
-    SELECT a.PK_TAREA, a.CODIGO, a.NOMBRE, a.FK_TAREA_ASIGNATURA, a.ORDEN_REPORTE
+    SELECT a.PK_TAREA, a.CODIGO, a.NOMBRE, a.FK_TAREA_ASIGNATURA, a.ORDEN_REPORTE,
+           count(*) OVER()::BIGINT
       FROM academico_test.TAREA a
      WHERE a.FK_TPERIODO_ACADEMICO = p_fk_periodo AND a.ACTIVE = TRUE
-       AND (p_nombre_interno IS NULL OR a.NOMBRE ILIKE '%' || p_nombre_interno || '%')
-     ORDER BY a.ORDEN_REPORTE, a.NOMBRE;
+       AND (NULLIF(TRIM(p_nombre_interno),'') IS NULL OR a.NOMBRE ILIKE '%' || p_nombre_interno || '%')
+     ORDER BY a.ORDEN_REPORTE, a.NOMBRE
+     LIMIT NULLIF(p_page_size, 0)
+    OFFSET COALESCE(p_page_index, 0) * COALESCE(NULLIF(p_page_size, 0), 0);
 $$;
 
 -- ----- ENFASIS (TENFASIS) — resolver-o-crear por nombre en establecimiento --
@@ -413,9 +417,13 @@ LANGUAGE sql STABLE AS $$
      ORDER BY 4, 2;
 $$;
 
--- ----- ASIGNATURAS EN LOTE (crear/actualizar varias a la vez) ---------------
--- p_asignaturas jsonb: [{id?, nombreInterno, abreviacion, areaAsignaturaId?,
--- enfasisId?, color?, ordenReportes?}]. Con id -> actualiza; sin id -> crea.
+-- ----- ASIGNATURAS EN LOTE (set completo del area) --------------------------
+-- p_asignaturas jsonb = set COMPLETO de asignaturas del area, en el shape del
+-- front: [{nombreInterno, abreviacion, asignaturaGeneral, especialidad?, color?,
+-- ordenReportes?}]. Semantica de REEMPLAZO: da de baja las que ya no estan
+-- (por nombre) y hace upsert por nombre de las presentes. `asignaturaGeneral` y
+-- `especialidad` llegan como NOMBRE y se resuelven a id (la especialidad se
+-- resuelve-o-crea como enfasis del establecimiento).
 CREATE OR REPLACE FUNCTION academico_test.fn_subject_guardar_bulk(
     p_fk_area             BIGINT,
     p_asignaturas         jsonb,
@@ -426,7 +434,8 @@ DECLARE
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_est BIGINT; v_count INT := 0; it jsonb;
     v_id BIGINT; v_nombre VARCHAR(130); v_codigo VARCHAR(30);
-    v_aa BIGINT; v_enf BIGINT; v_color VARCHAR(10); v_orden NUMERIC; v_n INT;
+    v_aa BIGINT; v_enf BIGINT; v_color VARCHAR(10); v_orden NUMERIC;
+    v_aa_name TEXT; v_enf_name TEXT;
 BEGIN
     IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
@@ -442,15 +451,24 @@ BEGIN
         RAISE EXCEPTION 'El area % no existe o esta inactiva', p_fk_area USING ERRCODE = '23503';
     END IF;
 
+    -- Reemplazo: baja logica de las asignaturas del area que NO vienen en el set.
+    UPDATE academico_test.TASIGNATURA
+       SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TAREA = p_fk_area AND ACTIVE = TRUE
+       AND UPPER(TRIM(NOMBRE)) NOT IN (
+           SELECT UPPER(TRIM(e->>'nombreInterno'))
+             FROM jsonb_array_elements(COALESCE(p_asignaturas, '[]'::jsonb)) e
+            WHERE NULLIF(TRIM(e->>'nombreInterno'),'') IS NOT NULL
+       );
+
     FOR it IN SELECT * FROM jsonb_array_elements(COALESCE(p_asignaturas, '[]'::jsonb))
     LOOP
-        v_id     := NULLIF(it->>'id','')::BIGINT;
-        v_nombre := it->>'nombreInterno';
-        v_codigo := it->>'abreviacion';
-        v_aa     := NULLIF(it->>'areaAsignaturaId','')::BIGINT;
-        v_enf    := NULLIF(it->>'enfasisId','')::BIGINT;
-        v_color  := NULLIF(it->>'color','');
-        v_orden  := COALESCE(NULLIF(it->>'ordenReportes','')::NUMERIC, 0);
+        v_nombre   := it->>'nombreInterno';
+        v_codigo   := it->>'abreviacion';
+        v_color    := NULLIF(it->>'color','');
+        v_orden    := COALESCE(NULLIF(it->>'ordenReportes','')::NUMERIC, 0);
+        v_aa_name  := NULLIF(TRIM(it->>'asignaturaGeneral'),'');
+        v_enf_name := NULLIF(TRIM(it->>'especialidad'),'');
 
         IF NULLIF(TRIM(v_nombre),'') IS NULL OR NULLIF(TRIM(v_codigo),'') IS NULL THEN
             RAISE EXCEPTION 'Faltan campos obligatorios de la asignatura' USING ERRCODE = '22023';
@@ -458,27 +476,26 @@ BEGIN
         IF v_color IS NOT NULL AND v_color !~ '^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$' THEN
             RAISE EXCEPTION 'El color (%) debe ser un HEX valido, p.ej. #FFAA00', v_color USING ERRCODE = '22023';
         END IF;
-        IF v_aa IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM academico_test.TAREA_ASIGNATURA WHERE PK_TAREA_ASIGNATURA = v_aa AND ACTIVE = TRUE
-        ) THEN
-            RAISE EXCEPTION 'La asignatura general % no existe o esta inactiva', v_aa USING ERRCODE = '23503';
+        -- Asignatura general (nombre -> id de TAREA_ASIGNATURA).
+        v_aa := NULL;
+        IF v_aa_name IS NOT NULL THEN
+            SELECT PK_TAREA_ASIGNATURA INTO v_aa FROM academico_test.TAREA_ASIGNATURA
+             WHERE ACTIVE = TRUE AND UPPER(TRIM(NOMBRE)) = UPPER(v_aa_name) LIMIT 1;
+            IF v_aa IS NULL THEN
+                RAISE EXCEPTION 'La asignatura general "%" no existe', v_aa_name USING ERRCODE = '23503';
+            END IF;
         END IF;
-        IF v_enf IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM academico_test.TENFASIS
-             WHERE PK_TENFASIS = v_enf AND ACTIVE = TRUE AND FK_TESTABLECIMIENTO = v_est
-        ) THEN
-            RAISE EXCEPTION 'La especialidad % no existe, esta inactiva o pertenece a otro establecimiento', v_enf
-                USING ERRCODE = '22023';
+        -- Especialidad (nombre -> enfasis del establecimiento, resolver-o-crear).
+        v_enf := NULL;
+        IF v_enf_name IS NOT NULL THEN
+            v_enf := academico_test.fn_enfasis_resolver(v_est, v_enf_name, NULL, p_pk_usuario_solicitante);
         END IF;
-        -- Unicidad por area (nombre y codigo), excluyendo la propia fila en update.
-        IF EXISTS (
-            SELECT 1 FROM academico_test.TASIGNATURA s
-             WHERE s.FK_TAREA = p_fk_area AND s.ACTIVE = TRUE
-               AND s.PK_TASIGNATURA <> COALESCE(v_id, -1)
-               AND UPPER(TRIM(s.NOMBRE)) = UPPER(TRIM(v_nombre))
-        ) THEN
-            RAISE EXCEPTION 'Ya existe una asignatura con el nombre % en esta area', v_nombre USING ERRCODE = '23505';
-        END IF;
+
+        -- Match por nombre dentro del area (upsert).
+        SELECT PK_TASIGNATURA INTO v_id FROM academico_test.TASIGNATURA
+         WHERE FK_TAREA = p_fk_area AND ACTIVE = TRUE
+           AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(v_nombre)) LIMIT 1;
+        -- Codigo unico en el area (excluyendo la fila que se va a actualizar).
         IF EXISTS (
             SELECT 1 FROM academico_test.TASIGNATURA s
              WHERE s.FK_TAREA = p_fk_area AND s.ACTIVE = TRUE
@@ -494,20 +511,47 @@ BEGIN
             VALUES (v_codigo, v_nombre, p_fk_area, v_aa, v_enf, v_color, v_orden, v_audit);
         ELSE
             UPDATE academico_test.TASIGNATURA SET
-                CODIGO = v_codigo, NOMBRE = v_nombre,
-                FK_TAREA_ASIGNATURA = COALESCE(v_aa, FK_TAREA_ASIGNATURA),
-                FK_TENFASIS = COALESCE(v_enf, FK_TENFASIS),
-                COLOR = COALESCE(v_color, COLOR),
-                ORDEN_REPORTE = COALESCE(v_orden, ORDEN_REPORTE),
+                CODIGO = v_codigo,
+                FK_TAREA_ASIGNATURA = v_aa,
+                FK_TENFASIS = v_enf,
+                COLOR = v_color,
+                ORDEN_REPORTE = v_orden,
                 MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-             WHERE PK_TASIGNATURA = v_id AND FK_TAREA = p_fk_area AND ACTIVE = TRUE;
-            GET DIAGNOSTICS v_n = ROW_COUNT;
-            IF v_n = 0 THEN
-                RAISE EXCEPTION 'No existe una asignatura activa con PK % en esta area', v_id USING ERRCODE = 'P0002';
-            END IF;
+             WHERE PK_TASIGNATURA = v_id;
         END IF;
         v_count := v_count + 1;
     END LOOP;
     RETURN v_count;
+END;
+$$;
+
+-- Borrado multiple de areas: intenta cada id; salta las bloqueadas.
+-- Devuelve una fila por id: eliminado=TRUE, o FALSE con error_code (SQLSTATE)
+-- y error_mensaje. Cada id en su subtransaccion; un fallo no revierte al resto.
+DROP FUNCTION IF EXISTS academico_test.fn_area_bulk_delete(BIGINT[], BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_area_bulk_delete(
+    p_ids BIGINT[], p_pk_usuario_solicitante BIGINT
+)
+RETURNS TABLE (id BIGINT, eliminado BOOLEAN, error_code TEXT, error_mensaje TEXT)
+LANGUAGE plpgsql AS $$
+DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
+BEGIN
+    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+    IF p_ids IS NULL THEN RETURN; END IF;
+    FOREACH v_id IN ARRAY p_ids LOOP
+        BEGIN
+            PERFORM academico_test.fn_area_soft_delete(v_id, p_pk_usuario_solicitante);
+            id := v_id; eliminado := TRUE; error_code := NULL; error_mensaje := NULL;
+            RETURN NEXT;
+        EXCEPTION WHEN OTHERS THEN
+            GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
+            id := v_id; eliminado := FALSE; error_code := v_state; error_mensaje := v_msg;
+            RETURN NEXT;
+        END;
+    END LOOP;
+    RETURN;
 END;
 $$;

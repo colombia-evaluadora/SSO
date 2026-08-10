@@ -35,6 +35,86 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
+-- Alcance de lectura del PERIODO ACADEMICO.
+--   Globales (ven todo):  1 Super Admin, 2 Director (Ente Territorial),
+--                         3 Jefe de Sistema (Ente Territorial).
+--   Por establecimiento:  7 Rector, 8 Jefe de Sistema (Establecimiento),
+--                         9 Auxiliar administrativo.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_usuario_global(p_pk_usuario BIGINT)
+RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM academico_test.TSEDE_USUARIO
+         WHERE FK_TUSUARIO = p_pk_usuario AND ACTIVE = TRUE AND FK_TROL IN (1, 2, 3)
+    );
+$$;
+
+-- Establecimientos que el usuario puede ver (por sus roles de establecimiento).
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_usuario_establecimientos(p_pk_usuario BIGINT)
+RETURNS TABLE (establecimiento_id BIGINT) LANGUAGE sql STABLE AS $$
+    SELECT DISTINCT s.FK_TESTABLECIMIENTO
+      FROM academico_test.TSEDE_USUARIO su
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+     WHERE su.FK_TUSUARIO = p_pk_usuario AND su.ACTIVE = TRUE
+       AND su.FK_TROL IN (7, 8, 9);
+$$;
+
+-- Sedes que el usuario puede ver por roles con alcance SEDE (no todo el
+-- establecimiento). Rol 11 = Coordinador: SOLO su(s) sede(s), solo lectura.
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_usuario_sedes(p_pk_usuario BIGINT)
+RETURNS TABLE (sede_id BIGINT) LANGUAGE sql STABLE AS $$
+    SELECT DISTINCT su.FK_TSEDE
+      FROM academico_test.TSEDE_USUARIO su
+     WHERE su.FK_TUSUARIO = p_pk_usuario AND su.ACTIVE = TRUE
+       AND su.FK_TROL IN (11);
+$$;
+
+-- TRUE si el usuario puede ver el periodo: global (1/2/3), o el establecimiento
+-- de su sede (7/8/9), o —alcance SEDE— la sede exacta del periodo (11).
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_usuario_puede_ver(
+    p_pk_usuario BIGINT, p_fk_periodo BIGINT
+)
+RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+    SELECT academico_test.fn_periodo_usuario_global(p_pk_usuario)
+        OR EXISTS (
+            SELECT 1
+              FROM academico_test.TPERIODO_ACADEMICO pa
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+             WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo
+               AND ( s.FK_TESTABLECIMIENTO IN (
+                         SELECT establecimiento_id
+                           FROM academico_test.fn_periodo_usuario_establecimientos(p_pk_usuario))
+                     OR pa.FK_TSEDE IN (
+                         SELECT sede_id
+                           FROM academico_test.fn_periodo_usuario_sedes(p_pk_usuario)) )
+        );
+$$;
+
+-- ESCRITURA: los mismos roles (1,2,3 globales; 7,8,9 por establecimiento).
+-- Gate grueso: ¿tiene algun rol de gestion?
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario BIGINT)
+RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM academico_test.TSEDE_USUARIO
+         WHERE FK_TUSUARIO = p_pk_usuario AND ACTIVE = TRUE
+           AND FK_TROL IN (1, 2, 3, 7, 8, 9)
+    );
+$$;
+
+-- Gate fino: ¿puede escribir sobre este establecimiento? Global si; los de
+-- establecimiento solo si es el suyo.
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_usuario_puede_escribir(
+    p_pk_usuario BIGINT, p_fk_establecimiento BIGINT
+)
+RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+    SELECT academico_test.fn_periodo_usuario_global(p_pk_usuario)
+        OR p_fk_establecimiento IN (
+            SELECT establecimiento_id
+              FROM academico_test.fn_periodo_usuario_establecimientos(p_pk_usuario)
+        );
+$$;
+
+-- ---------------------------------------------------------------------------
 -- fn_periodo_crear
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_crear(
@@ -73,8 +153,8 @@ DECLARE
     c_desempeno_sin_calif  CONSTANT BIGINT := 522;
     c_modif_final_peraca   CONSTANT BIGINT := 511;
 BEGIN
-    -- 0. Autorizacion.
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    -- 0. Autorizacion (gate grueso: algun rol de gestion).
+    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
@@ -106,6 +186,11 @@ BEGIN
       FROM academico_test.TSEDE WHERE PK_TSEDE = p_fk_sede AND ACTIVE = TRUE;
     IF v_establecimiento IS NULL THEN
         RAISE EXCEPTION 'La sede % no existe o esta inactiva', p_fk_sede USING ERRCODE = '23503';
+    END IF;
+    -- 3a. Autorizacion (gate fino: el establecimiento debe estar en su alcance).
+    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_establecimiento) THEN
+        RAISE EXCEPTION 'El usuario no puede gestionar periodos de este establecimiento'
+            USING ERRCODE = '42501';
     END IF;
 
     -- 3b. Periodo anterior (opcional): debe existir, estar activo y pertenecer al
@@ -239,7 +324,7 @@ DECLARE
     v_ano_id          BIGINT;
     v_audit           VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
@@ -251,6 +336,13 @@ BEGIN
     IF r.ACTIVE = FALSE THEN
         RAISE EXCEPTION 'El periodo academico % esta inactivo; no se puede actualizar', p_pk_periodo
             USING ERRCODE = '22023';
+    END IF;
+    -- Autorizacion fina: el establecimiento del periodo debe estar en su alcance.
+    IF NOT academico_test.fn_periodo_usuario_puede_escribir(
+             p_pk_usuario_solicitante,
+             (SELECT FK_TESTABLECIMIENTO FROM academico_test.TSEDE WHERE PK_TSEDE = r.FK_TSEDE)) THEN
+        RAISE EXCEPTION 'El usuario no puede gestionar periodos de este establecimiento'
+            USING ERRCODE = '42501';
     END IF;
 
     -- Valores efectivos (COALESCE param o actual).
@@ -380,7 +472,7 @@ DECLARE
     v_activo BOOLEAN;
     v_audit  VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
@@ -391,6 +483,15 @@ BEGIN
     END IF;
     IF v_activo = FALSE THEN
         RAISE EXCEPTION 'El periodo academico % ya esta inactivo', p_pk_periodo USING ERRCODE = '22023';
+    END IF;
+    -- Autorizacion fina: el establecimiento del periodo debe estar en su alcance.
+    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, (
+             SELECT s.FK_TESTABLECIMIENTO
+               FROM academico_test.TPERIODO_ACADEMICO pa
+               JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+              WHERE pa.PK_TPERIODO_ACADEMICO = p_pk_periodo)) THEN
+        RAISE EXCEPTION 'El usuario no puede gestionar periodos de este establecimiento'
+            USING ERRCODE = '42501';
     END IF;
 
     IF EXISTS (
@@ -454,6 +555,20 @@ BEGIN
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TCRITERIO_EVALUACION = p_pk_periodo AND ACTIVE = TRUE;
 
+    -- Cascade: criterios de promocion del periodo (default POR_DEFECTO='S' y
+    -- cualquier override que quede ligado al periodo) y sus obligatorias. Son
+    -- propiedad del periodo, se dan de baja con el (igual que el criterio de
+    -- evaluacion). Los overrides por grado ya bajaron via fn_grado_soft_delete.
+    UPDATE academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
+       SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE ACTIVE = TRUE AND FK_TCRITERIO_PROMOCION IN (
+         SELECT PK_TCRITERIO_PROMOCION FROM academico_test.TCRITERIO_PROMOCION
+          WHERE FK_TPERIODO_ACADEMICO = p_pk_periodo AND ACTIVE = TRUE
+     );
+    UPDATE academico_test.TCRITERIO_PROMOCION
+       SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TPERIODO_ACADEMICO = p_pk_periodo AND ACTIVE = TRUE;
+
     UPDATE academico_test.TDESCANSOS
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE FK_TPERIODO_ACADEMICO = p_pk_periodo AND ACTIVE = TRUE;
@@ -466,31 +581,37 @@ $$;
 -- fn_periodo_listar — lista con filtros opcionales (NULL = ignora). Sin gate
 -- (lectura). Devuelve nombres resueltos (sede, año, estado).
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_listar(BIGINT, TEXT, TEXT, BIGINT, DATE, DATE, BIGINT, INT, INT);
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_listar(
     p_fk_sede      BIGINT   DEFAULT NULL,
     p_nombre_sede  TEXT     DEFAULT NULL,
     p_ano          TEXT     DEFAULT NULL,
     p_fk_estado    BIGINT   DEFAULT NULL,
     p_fecha_desde  DATE     DEFAULT NULL,
-    p_fecha_hasta  DATE     DEFAULT NULL
+    p_fecha_hasta  DATE     DEFAULT NULL,
+    p_pk_usuario   BIGINT   DEFAULT NULL,   -- alcance (global / establecimiento)
+    p_page_index   INT      DEFAULT 0,
+    p_page_size    INT      DEFAULT 10
 )
 RETURNS TABLE (
     id BIGINT, sede_id BIGINT, sede_name VARCHAR, school_year_id BIGINT,
-    school_year_name VARCHAR, status_id BIGINT, status VARCHAR,
+    school_year_name VARCHAR, status_id BIGINT, status VARCHAR, status_name VARCHAR,
     start_date DATE, end_date DATE, enrollment_deadline DATE, name VARCHAR,
-    jornada_id BIGINT, reserva bool_sn, default_blocks_count BIGINT,
-    schedule_start_time TIME, schedule_end_time TIME
+    jornada_id BIGINT, jornada VARCHAR, jornada_name VARCHAR,
+    reserva bool_sn, default_blocks_count BIGINT,
+    schedule_start_time TIME, schedule_end_time TIME, total_count BIGINT
 )
 LANGUAGE sql STABLE AS $$
     SELECT pa.PK_TPERIODO_ACADEMICO, pa.FK_TSEDE, s.NOMBRE, pa.FK_TANO_LECTIVO,
-           al.NOMBRE, pa.FK_TLV_ESTADO, est.VALOR,
+           al.NOMBRE, pa.FK_TLV_ESTADO, est.VALOR, est.NOMBRE,
            pa.FECHA_INICIO, pa.FECHA_FIN, pa.FECHA_LIMITE_MATRICULA, pa.NOMBRE,
-           pa.FK_TLV_JORNADA, pa.RESERVA, pa.BLOQUES_POR_DEFECTO,
-           pa.HORA_INICIO, pa.HORA_FIN
+           pa.FK_TLV_JORNADA, jor.VALOR, jor.NOMBRE, pa.RESERVA, pa.BLOQUES_POR_DEFECTO,
+           pa.HORA_INICIO, pa.HORA_FIN, count(*) OVER()::BIGINT
       FROM academico_test.TPERIODO_ACADEMICO pa
       JOIN academico_test.TSEDE s          ON s.PK_TSEDE = pa.FK_TSEDE
       JOIN academico_test.TANO_LECTIVO al  ON al.PK_ANO_LECTIVO = pa.FK_TANO_LECTIVO
       JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pa.FK_TLV_ESTADO
+      JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = pa.FK_TLV_JORNADA
      WHERE pa.ACTIVE = TRUE
        AND (p_fk_sede     IS NULL OR pa.FK_TSEDE = p_fk_sede)
        AND (p_nombre_sede IS NULL OR s.NOMBRE ILIKE '%' || p_nombre_sede || '%')
@@ -498,31 +619,59 @@ LANGUAGE sql STABLE AS $$
        AND (p_fk_estado   IS NULL OR pa.FK_TLV_ESTADO = p_fk_estado)
        AND (p_fecha_desde IS NULL OR pa.FECHA_INICIO >= p_fecha_desde)
        AND (p_fecha_hasta IS NULL OR pa.FECHA_INICIO <= p_fecha_hasta)
-     ORDER BY pa.FECHA_INICIO DESC;
+       -- Alcance por rol: global (1/2/3) ve todo; establecimiento (7/8/9) el
+       -- suyo; SEDE (11 coordinador) solo la sede exacta del periodo.
+       AND (academico_test.fn_periodo_usuario_global(p_pk_usuario)
+            OR s.FK_TESTABLECIMIENTO IN (
+                SELECT establecimiento_id
+                  FROM academico_test.fn_periodo_usuario_establecimientos(p_pk_usuario))
+            OR pa.FK_TSEDE IN (
+                SELECT sede_id FROM academico_test.fn_periodo_usuario_sedes(p_pk_usuario)))
+     ORDER BY pa.FECHA_INICIO DESC
+     LIMIT NULLIF(p_page_size, 0)
+    OFFSET COALESCE(p_page_index, 0) * COALESCE(NULLIF(p_page_size, 0), 0);
 $$;
 
 -- ---------------------------------------------------------------------------
 -- fn_periodo_detalle — un periodo por PK (mismos campos que el listado).
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_periodo_detalle(p_pk_periodo BIGINT)
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_detalle(BIGINT, BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_detalle(
+    p_pk_periodo BIGINT, p_pk_usuario BIGINT DEFAULT NULL
+)
 RETURNS TABLE (
     id BIGINT, sede_id BIGINT, sede_name VARCHAR, school_year_id BIGINT,
-    school_year_name VARCHAR, status_id BIGINT, status VARCHAR,
+    school_year_name VARCHAR, status_id BIGINT, status VARCHAR, status_name VARCHAR,
     start_date DATE, end_date DATE, enrollment_deadline DATE, name VARCHAR,
-    jornada_id BIGINT, reserva bool_sn, default_blocks_count BIGINT,
-    schedule_start_time TIME, schedule_end_time TIME
+    jornada_id BIGINT, jornada VARCHAR, jornada_name VARCHAR,
+    reserva bool_sn, default_blocks_count BIGINT,
+    schedule_start_time TIME, schedule_end_time TIME, descansos jsonb
 )
 LANGUAGE sql STABLE AS $$
     SELECT pa.PK_TPERIODO_ACADEMICO, pa.FK_TSEDE, s.NOMBRE, pa.FK_TANO_LECTIVO,
-           al.NOMBRE, pa.FK_TLV_ESTADO, est.VALOR,
+           al.NOMBRE, pa.FK_TLV_ESTADO, est.VALOR, est.NOMBRE,
            pa.FECHA_INICIO, pa.FECHA_FIN, pa.FECHA_LIMITE_MATRICULA, pa.NOMBRE,
-           pa.FK_TLV_JORNADA, pa.RESERVA, pa.BLOQUES_POR_DEFECTO,
-           pa.HORA_INICIO, pa.HORA_FIN
+           pa.FK_TLV_JORNADA, jor.VALOR, jor.NOMBRE, pa.RESERVA, pa.BLOQUES_POR_DEFECTO,
+           pa.HORA_INICIO, pa.HORA_FIN,
+           -- Descansos activos del periodo como [{startTime, endTime}] en HH:MI,
+           -- ordenados por hora de inicio. '[]' si no hay.
+           COALESCE((
+               SELECT jsonb_agg(
+                          jsonb_build_object(
+                              'startTime', to_char(d.HORA_INICIO, 'HH24:MI'),
+                              'endTime',   to_char(d.HORA_FIN,    'HH24:MI'))
+                          ORDER BY d.HORA_INICIO)
+                 FROM academico_test.TDESCANSOS d
+                WHERE d.FK_TPERIODO_ACADEMICO = pa.PK_TPERIODO_ACADEMICO
+                  AND d.ACTIVE = TRUE
+           ), '[]'::jsonb)
       FROM academico_test.TPERIODO_ACADEMICO pa
       JOIN academico_test.TSEDE s          ON s.PK_TSEDE = pa.FK_TSEDE
       JOIN academico_test.TANO_LECTIVO al  ON al.PK_ANO_LECTIVO = pa.FK_TANO_LECTIVO
       JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pa.FK_TLV_ESTADO
-     WHERE pa.PK_TPERIODO_ACADEMICO = p_pk_periodo AND pa.ACTIVE = TRUE;
+      JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = pa.FK_TLV_JORNADA
+     WHERE pa.PK_TPERIODO_ACADEMICO = p_pk_periodo AND pa.ACTIVE = TRUE
+       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_pk_periodo);
 $$;
 
 -- ---------------------------------------------------------------------------
@@ -540,7 +689,7 @@ DECLARE
     v_pi TIME; v_pf TIME; v_id BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
@@ -549,6 +698,14 @@ BEGIN
       FROM academico_test.TPERIODO_ACADEMICO WHERE PK_TPERIODO_ACADEMICO = p_fk_periodo;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'No existe el periodo academico %', p_fk_periodo USING ERRCODE = 'P0002';
+    END IF;
+    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, (
+             SELECT s.FK_TESTABLECIMIENTO
+               FROM academico_test.TPERIODO_ACADEMICO pa
+               JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+              WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo)) THEN
+        RAISE EXCEPTION 'El usuario no puede gestionar periodos de este establecimiento'
+            USING ERRCODE = '42501';
     END IF;
     IF p_hora_fin < p_hora_inicio THEN
         RAISE EXCEPTION 'La hora fin del descanso no puede ser anterior a la inicio' USING ERRCODE = '22023';
@@ -582,8 +739,18 @@ RETURNS BIGINT
 LANGUAGE plpgsql AS $$
 DECLARE v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR; v_n INT;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+    -- Alcance fino: el establecimiento del periodo del descanso debe estar en su alcance.
+    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, (
+             SELECT s.FK_TESTABLECIMIENTO
+               FROM academico_test.TDESCANSOS d
+               JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = d.FK_TPERIODO_ACADEMICO
+               JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+              WHERE d.PK_TDESCANSOS = p_pk_descanso)) THEN
+        RAISE EXCEPTION 'El usuario no puede gestionar periodos de este establecimiento'
             USING ERRCODE = '42501';
     END IF;
     UPDATE academico_test.TDESCANSOS
@@ -594,5 +761,38 @@ BEGIN
         RAISE EXCEPTION 'No existe un descanso activo con PK %', p_pk_descanso USING ERRCODE = 'P0002';
     END IF;
     RETURN p_pk_descanso;
+END;
+$$;
+
+-- Borrado multiple: intenta cada id; salta los bloqueados (dependencias/no existe).
+-- Devuelve una fila por cada id recibido: eliminado=TRUE si el soft delete
+-- corrio, o FALSE con error_code (SQLSTATE) y error_mensaje del motivo. Cada
+-- id corre en su propia subtransaccion (BEGIN...EXCEPTION), asi que un fallo
+-- no revierte a los que si se pudieron eliminar.
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_bulk_delete(BIGINT[], BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_bulk_delete(
+    p_ids BIGINT[], p_pk_usuario_solicitante BIGINT
+)
+RETURNS TABLE (id BIGINT, eliminado BOOLEAN, error_code TEXT, error_mensaje TEXT)
+LANGUAGE plpgsql AS $$
+DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
+BEGIN
+    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+    IF p_ids IS NULL THEN RETURN; END IF;
+    FOREACH v_id IN ARRAY p_ids LOOP
+        BEGIN
+            PERFORM academico_test.fn_periodo_soft_delete(v_id, p_pk_usuario_solicitante);
+            id := v_id; eliminado := TRUE; error_code := NULL; error_mensaje := NULL;
+            RETURN NEXT;
+        EXCEPTION WHEN OTHERS THEN
+            GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
+            id := v_id; eliminado := FALSE; error_code := v_state; error_mensaje := v_msg;
+            RETURN NEXT;
+        END;
+    END LOOP;
+    RETURN;
 END;
 $$;

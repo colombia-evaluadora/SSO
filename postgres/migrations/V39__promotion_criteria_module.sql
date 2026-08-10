@@ -244,3 +244,11 @@ LANGUAGE sql STABLE AS $$
       FROM academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
      WHERE FK_TCRITERIO_PROMOCION = p_fk_criterio AND ACTIVE = TRUE;
 $$;
+
+-- Catalogo de nodos curriculares (dominio nodo_curricular: 'AS'/'AR').
+-- key = valor que se guarda; label = texto para el select.
+CREATE OR REPLACE FUNCTION academico_test.fn_nodo_curricular_listar()
+RETURNS TABLE (key TEXT, label TEXT)
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT * FROM (VALUES ('AS', 'Asignatura'), ('AR', 'Area')) AS t(key, label);
+$$;

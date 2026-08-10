@@ -128,10 +128,14 @@ END;
 $$;
 
 -- Lista: convierte el % de vuelta al formato del periodo.
-CREATE OR REPLACE FUNCTION academico_test.fn_escala_listar(p_academic_period_id BIGINT)
+CREATE OR REPLACE FUNCTION academico_test.fn_escala_listar(
+    p_academic_period_id BIGINT, p_filtro TEXT DEFAULT NULL,
+    p_page_index INT DEFAULT 0, p_page_size INT DEFAULT 10
+)
 RETURNS TABLE (
     id BIGINT, nombre VARCHAR, abreviacion VARCHAR, tipo VARCHAR, iconografia VARCHAR,
-    teaching_level_id BIGINT, nota_minima NUMERIC, nota_maxima NUMERIC, nota_equivalente NUMERIC
+    teaching_level_id BIGINT, nota_minima NUMERIC, nota_maxima NUMERIC, nota_equivalente NUMERIC,
+    total_count BIGINT
 )
 LANGUAGE sql STABLE AS $$
     WITH fmt AS (
@@ -149,12 +153,49 @@ LANGUAGE sql STABLE AS $$
            ne.FK_TNIVEL_ENSENANZA,
            round(ev.LIMITE_INFERIOR / 100 * (fmt.mx - fmt.mn) + fmt.mn, 2),
            round(ev.LIMITE_SUPERIOR / 100 * (fmt.mx - fmt.mn) + fmt.mn, 2),
-           round(ev.LIMITE_PROMEDIO / 100 * (fmt.mx - fmt.mn) + fmt.mn, 2)
+           round(ev.LIMITE_PROMEDIO / 100 * (fmt.mx - fmt.mn) + fmt.mn, 2),
+           count(*) OVER()::BIGINT
       FROM academico_test.TESCALA_VALORACION ev
       JOIN academico_test.TVALORACION v    ON v.PK_TVALORACION = ev.FK_TVALORACION
       JOIN academico_test.TLISTA_VALOR tv  ON tv.PK_LISTA_VALOR = ev.FK_TVL_TIPO_VALORACION
       JOIN academico_test.TNIVEL_ESCALA ne ON ne.FK_TESCALA = ev.FK_TESCALA
       CROSS JOIN fmt
      WHERE ne.FK_PERIODO_ACADEMICO = p_academic_period_id AND ev.ACTIVE = TRUE
-     ORDER BY ne.FK_TNIVEL_ENSENANZA, ev.ORDEN;
+       AND (NULLIF(TRIM(p_filtro),'') IS NULL
+            OR v.NOMBRE ILIKE '%' || p_filtro || '%'
+            OR v.CODIGO ILIKE '%' || p_filtro || '%')
+     ORDER BY ne.FK_TNIVEL_ENSENANZA, ev.ORDEN
+     LIMIT NULLIF(p_page_size, 0)
+    OFFSET COALESCE(p_page_index, 0) * COALESCE(NULLIF(p_page_size, 0), 0);
+$$;
+
+-- Borrado multiple de bandas de valoracion.
+-- Devuelve una fila por id: eliminado=TRUE, o FALSE con error_code (SQLSTATE)
+-- y error_mensaje. Cada id en su subtransaccion; un fallo no revierte al resto.
+DROP FUNCTION IF EXISTS academico_test.fn_escala_bulk_delete(BIGINT[], BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_escala_bulk_delete(
+    p_ids BIGINT[], p_pk_usuario_solicitante BIGINT
+)
+RETURNS TABLE (id BIGINT, eliminado BOOLEAN, error_code TEXT, error_mensaje TEXT)
+LANGUAGE plpgsql AS $$
+DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
+BEGIN
+    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+    IF p_ids IS NULL THEN RETURN; END IF;
+    FOREACH v_id IN ARRAY p_ids LOOP
+        BEGIN
+            PERFORM academico_test.fn_escala_eliminar(v_id, p_pk_usuario_solicitante);
+            id := v_id; eliminado := TRUE; error_code := NULL; error_mensaje := NULL;
+            RETURN NEXT;
+        EXCEPTION WHEN OTHERS THEN
+            GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
+            id := v_id; eliminado := FALSE; error_code := v_state; error_mensaje := v_msg;
+            RETURN NEXT;
+        END;
+    END LOOP;
+    RETURN;
+END;
 $$;
