@@ -22,8 +22,8 @@
 --
 -- Four steps, all idempotent so re-applying this migration is a no-op:
 --
---   1. Widen role.name so a CEVAL- prefix (5 chars) + a 130-char TROL.NOMBRE
---      fit. TROL.NOMBRE is VARCHAR(130); we use VARCHAR(140) so two prefixes
+--   1. Widen role.name so a CEVAL- prefix (5 chars) + a 50-char TROL.CODIGO
+--      fit. TROL.NOMBRE is VARCHAR(130) — we use VARCHAR(140) so two prefixes
 --      would still leave headroom and a future SSOMFA- or CEVAL2- prefix
 --      doesn't force another widening migration. UNIQUE on name is preserved.
 --
@@ -38,11 +38,14 @@
 --      the path). This migration only namespaces rows that already exist.
 --
 --   3. Import every distinct role from academico_test.TROL with the CEVAL-
---      prefix. TROL.NOMBRE is the role name there; CODIGO is the short code
---      the evaluadora UI uses. We store the code in `description` so the
---      legacy identifier survives the rename (and the admin UI can show it
---      without re-querying academico_test). `WHERE NOT EXISTS` makes the
---      insert idempotent in environments that re-run migrations.
+--      prefix. TROL.CODIGO is the snake_case identifier the evaluadora UI
+--      uses (SUPER_ADMINISTRADOR, JEFE_SISTEMA_ENTE_TERRITORIAL, ...) and is
+--      what becomes the role's `name` — the namespace contract is that
+--      CEVAL-* names = TROL codigos. TROL.NOMBRE is the full human-readable
+--      label ("Súper Administrador") and lives in `description` so the
+--      admin UI can display it without re-querying academico_test.
+--      `WHERE NOT EXISTS` against the same codigo-derived name makes the
+--      insert idempotent on re-runs.
 --
 --   4. Re-bind role_app strictly by prefix:
 --        - delete any binding whose prefix doesn't match the app's namespace
@@ -57,7 +60,9 @@
 -- academico_test schema state other than TROL existing (it does — V22).
 -- =============================================================================
 
--- 1. Widen role.name to fit "CEVAL-" + TROL.NOMBRE(VARCHAR 130) with margin.
+-- 1. Widen role.name to fit "CEVAL-" + TROL.CODIGO(VARCHAR 50) with margin.
+--    (TROL.NOMBRE was the wrong column in the original docblock — that
+--    label doesn't go in `name`, CODIGO does.)
 ALTER TABLE role ALTER COLUMN name TYPE VARCHAR(140);
 
 -- 2. Prefix existing roles with SSO- (skip already-prefixed rows so the
@@ -75,6 +80,12 @@ UPDATE role
 --    the same convention here: schema-qualified table, lowercase columns.
 --    Schema-qualify rather than setting search_path so this migration
 --    works regardless of Flyway's session.
+--
+--    codigo -> role.name (with the CEVAL- prefix): this IS the role
+--              identifier the eval UI keys off; TROL.CODIGO is unique.
+--    nombre -> role.description: full human-readable label, used by the
+--              admin UI for display; falls back to codigo if the label
+--              somehow ends up empty.
 INSERT INTO role (name, description)
 SELECT DISTINCT
        'CEVAL-' || t.codigo,
@@ -83,7 +94,7 @@ SELECT DISTINCT
  WHERE NOT EXISTS (
        SELECT 1
          FROM role r
-        WHERE r.name = 'CEVAL-' || t.nombre
+        WHERE r.name = 'CEVAL-' || t.codigo
        );
 
 -- 4. Re-wire role_app strictly by prefix.
