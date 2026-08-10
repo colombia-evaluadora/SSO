@@ -3,7 +3,10 @@ package com.co.eurekatic.ssoadmin.service;
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
 import com.co.eurekatic.common.entity.Role;
+import com.co.eurekatic.common.query.ParamNamespace;
+import com.co.eurekatic.common.query.ParamTypes;
 import com.co.eurekatic.common.query.PathTemplateSyntax;
+import com.co.eurekatic.common.query.PlaceholderScanner;
 import com.co.eurekatic.common.repository.MicroserviceRepository;
 import com.co.eurekatic.common.repository.QueryRepository;
 import com.co.eurekatic.common.repository.RoleRepository;
@@ -16,9 +19,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 /**
  * Query CRUD plus role bindings. Mirrors the shape of
@@ -77,6 +84,7 @@ public class QueryAdminService {
 
         validatePathTemplate(req, null);
         validateOutParams(req);
+        validateParamTypes(req);
         Query q = new Query();
         copy(req, q, uuid);
         QueryResponse response = QueryResponse.fromEntity(queryRepo.save(q));
@@ -110,6 +118,7 @@ public class QueryAdminService {
 
         validatePathTemplate(req, q.getId());
         validateOutParams(req);
+        validateParamTypes(req);
         copy(req, q, uuid);
         QueryResponse response = QueryResponse.fromEntity(queryRepo.save(q));
         // V33 — same invalidate-on-write as create().
@@ -238,6 +247,11 @@ public class QueryAdminService {
         // in validateOutParams() (must contain a placeholder
         // that exists in the SQL; only meaningful for PROCEDURE).
         q.setOutParamNames(normalizeOutParams(req.outParamNames()));
+        // V49: author-declared JDBC/PG type per caller-controlled
+        // placeholder. Strict validation lives in validateParamTypes(),
+        // called from create()/update() before copy(). LinkedHashMap
+        // to preserve insertion order for deterministic API responses.
+        q.setParamTypes(new LinkedHashMap<>(req.paramTypes()));
         // Resolve microservice binding. Null clears the
         // association (back to "global" — any instance may
         // serve). A non-null id MUST resolve to a kind=QUERY
@@ -301,6 +315,69 @@ public class QueryAdminService {
                     "outParamNames entry " + token + " does not appear as a placeholder "
                     + "in the query SQL");
             }
+        }
+    }
+
+    /**
+     * V49 — strict validation of {@code paramTypes} at write time.
+     *
+     * <p>Two checks, en este orden:
+     *
+     * <ol>
+     *   <li><b>Shape</b>: cada clave debe ser un placeholder válido
+     *       ({@link ParamTypes#isValidKey}) y cada valor un tipo del
+     *       set curado ({@link ParamTypes#CURATED}). Una entrada mal
+     *       formada se rechaza con 400 mencionando el set permitido.</li>
+     *   <li><b>Cobertura</b>: todo placeholder {@code :PARAM.*} o
+     *       {@code :BODY.*} presente en el SQL debe tener una entrada
+     *       en {@code paramTypes}. {@code :CONTEXT.*} y
+     *       {@code :QUERY.{SIZE,OFFSET}} son del sistema y no
+     *       requieren entrada.</li>
+     * </ol>
+     *
+     * <p>El mensaje de error nombra los placeholders sin tipo en
+     * orden alfabético ({@link TreeSet}) para que el autor pueda
+     * copiarlos a la UI sin reordenar.
+     */
+    private void validateParamTypes(QueryRequest req) {
+        Map<String, String> declared = req.paramTypes() == null
+                ? Map.of() : req.paramTypes();
+
+        // (1) shape: key válida, value en set curado
+        for (Map.Entry<String, String> e : declared.entrySet()) {
+            if (!ParamTypes.isValidKey(e.getKey())) {
+                throw new IllegalArgumentException(
+                    "PARAM_TYPES key inválida: '" + e.getKey()
+                    + "'. Cada segmento debe coincidir con [A-Z][A-Z0-9_]* "
+                    + "(namespace incluido). Ejemplos válidos: "
+                    + "'PARAM.NOMBRE', 'BODY.USER.EMAIL'.");
+            }
+            if (!ParamTypes.CURATED.contains(e.getValue())) {
+                throw new IllegalArgumentException(
+                    "PARAM_TYPES['" + e.getKey() + "']='" + e.getValue()
+                    + "' no es un tipo soportado. Permitidos: "
+                    + ParamTypes.CURATED);
+            }
+        }
+
+        // (2) cobertura: todo :PARAM.* / :BODY.* del SQL debe estar declarado
+        Set<String> inSql = PlaceholderScanner.scan(req.query());
+        Set<String> required = inSql.stream()
+                .filter(p -> {
+                    String ns = p.split("\\.", 2)[0];
+                    return ParamNamespace.PARAM.equals(ns)
+                            || ParamNamespace.BODY.equals(ns);
+                })
+                .collect(Collectors.toCollection(TreeSet::new));
+
+        Set<String> missing = new TreeSet<>(required);
+        missing.removeAll(declared.keySet());
+        if (!missing.isEmpty()) {
+            throw new IllegalArgumentException(
+                "PARAM_TYPES incompleto. Placeholders del SQL sin tipo "
+                + "declarado: " + missing
+                + ". Asigna un tipo a cada uno antes de guardar "
+                + "(o usa 'TEXT' si no tienes preferencia).");
         }
     }
 

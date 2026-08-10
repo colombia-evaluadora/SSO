@@ -6,6 +6,7 @@ import { Modal } from "@/components/ui/Modal";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { Table, type Column } from "@/components/ui/Table";
 import { useToast } from "@/components/ui/Toast";
+import { scanPlaceholders } from "@/lib/placeholderScanner";
 import {
   useAdminQueries,
   useBindQueryRole,
@@ -56,6 +57,26 @@ import type { QueryFormValues } from "@/schemas";
  *       surface.</li>
  * </ul>
  */
+/**
+ * V49 — Filtra el mapa {@code paramTypes} para quedarse sólo con
+ * los placeholders que efectivamente aparecen en el SQL final. El
+ * autor puede tener tipos "manuales" para placeholders que aún no
+ * ha escrito — preservarlos en el state local durante la edición
+ * es útil, pero no se envían al backend porque el servidor los
+ * rechazaría (no aparecen en el SQL).
+ */
+function filterParamTypesToSql(
+  paramTypes: Record<string, string>,
+  sql: string,
+): Record<string, string> {
+  const present = new Set(scanPlaceholders(sql));
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(paramTypes)) {
+    if (present.has(k)) out[k] = v;
+  }
+  return out;
+}
+
 export function QueriesAdminPage() {
   const queries = useAdminQueries();
   const services = useMicroservices();
@@ -105,6 +126,12 @@ export function QueriesAdminPage() {
 
       pathTemplate: values.pathTemplate ?? null,
       outParamNames: values.outParamNames ?? null,
+      // V49 — author-declared JDBC/PG type per caller-controlled
+      // placeholder. El backend rechaza el guardado si alguna
+      // :PARAM.* / :BODY.* del SQL no tiene entrada; mandamos el
+      // mapa tal cual, con el filtrado de "sólo placeholders que
+      // existen en el SQL" aplicado al armar el body.
+      paramTypes: filterParamTypesToSql(values.paramTypes ?? {}, values.query ?? ""),
     };
     if (values.id) {
       await updateQ.mutateAsync({ id: values.id, ...body });

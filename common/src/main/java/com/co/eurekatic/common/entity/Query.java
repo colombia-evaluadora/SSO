@@ -18,8 +18,13 @@ import lombok.Setter;
 
 import java.time.LocalDateTime;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * Query — a parameterized SQL definition indexed by {@code uuid},
@@ -202,6 +207,21 @@ public class Query {
      */
     @Column(name = "OUT_PARAM_NAMES", length = 500)
     private String outParamNames;
+
+    /**
+     * Author-declared JDBC/PG type per caller-controlled placeholder.
+     * Shape: {@code {"PARAM.NOMBRE":"TEXT", "BODY.IDS":"BIGINT[]", ...}}.
+     * Strict at write time: every {@code :PARAM.*} / {@code :BODY.*}
+     * in the SQL must appear as a key. {@code :CONTEXT.*} and
+     * {@code :QUERY.{SIZE,OFFSET}} are system-bound and need no entry.
+     *
+     * <p>Marshalled to JSONB by Hibernate 7 ({@link SqlTypes#JSON}).
+     * {@link LinkedHashMap} preserves insertion order so the API
+     * responses stay deterministic when the UI diffs by key.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "PARAM_TYPES", nullable = false, columnDefinition = "jsonb")
+    private Map<String, String> paramTypes = new LinkedHashMap<>();
 
     /**
      * Roles authorized to invoke this query through the catalog

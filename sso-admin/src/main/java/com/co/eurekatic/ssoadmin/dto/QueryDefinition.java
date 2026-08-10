@@ -4,6 +4,9 @@ import com.co.eurekatic.common.entity.ExecutionMode;
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
  * Read-side response shape for {@code GET /getQuery?uuid=...}
  * and {@code GET /myQueries}. Consumed by both
@@ -53,7 +56,14 @@ public record QueryDefinition(
         ExecutionMode executionMode,
         String outParamNames,
         /** V33 — verbo HTTP: GET, POST o PUT. Default POST. */
-        String httpMethod
+        String httpMethod,
+        /**
+         * V49 — author-declared JDBC/PG type per caller-controlled
+         * placeholder. Wire format: {@code {"PARAM.NOMBRE":"TEXT", ...}}.
+         * Empty map when the row has no caller-controlled placeholders or
+         * when the row is legacy (pre-V49 server doesn't carry it).
+         */
+        Map<String, String> paramTypes
 ) {
     /**
      * V31 — back-compat constructor for callers that pre-date
@@ -67,7 +77,7 @@ public record QueryDefinition(
                            Long microserviceId) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
-             null, ExecutionMode.SELECT, null, null);
+             null, ExecutionMode.SELECT, null, null, new LinkedHashMap<>());
     }
 
     /**
@@ -81,7 +91,24 @@ public record QueryDefinition(
                            String pathTemplate, ExecutionMode executionMode) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
-             pathTemplate, executionMode, null, null);
+             pathTemplate, executionMode, null, null, new LinkedHashMap<>());
+    }
+
+    /**
+     * V33 back-compat (no V49 paramTypes). Conserva la forma de 14
+     * argumentos; el mapa cae a vacío para que el lado consumidor
+     * (query-service) caiga en su rama "legacy" — Spring auto-derive.
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           Long microserviceId,
+                           String pathTemplate, ExecutionMode executionMode,
+                           String outParamNames, String httpMethod) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             pathTemplate, executionMode, outParamNames, httpMethod,
+             new LinkedHashMap<>());
     }
 
     public static QueryDefinition fromEntity(Query q) {
@@ -100,6 +127,7 @@ public record QueryDefinition(
                 q.getPathTemplate(),
                 ExecutionMode.fromString(q.getExecutionMode()),
                 q.getOutParamNames(),
-                q.getHttpMethod());
+                q.getHttpMethod(),
+                q.getParamTypes());
     }
 }

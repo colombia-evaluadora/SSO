@@ -169,6 +169,34 @@ export const appFormSchema = z.object({
  * mismatches; deeper SQL linting would just shadow whatever the
  * JDBC driver ends up complaining about.
  */
+
+/**
+ * V49 — Set curado de tipos PG/JDBC que el autor puede asignar a cada
+ * placeholder. Espejo del `ParamTypes.CURATED` de Java (ver spec
+ * 2026-08-10); el backend es la fuente única — el frontend lo pide
+ * vía `useParamTypes()` al renderizar el dropdown.
+ */
+const CURATED_PG_TYPES = [
+  "TEXT",
+  "VARCHAR",
+  "BIGINT",
+  "INTEGER",
+  "SMALLINT",
+  "NUMERIC",
+  "BOOLEAN",
+  "DATE",
+  "TIMESTAMP",
+  "TIMESTAMPTZ",
+  "UUID",
+  "JSONB",
+  "JSON",
+  "TEXT[]",
+  "BIGINT[]",
+  "INTEGER[]",
+  "NUMERIC[]",
+  "BOOLEAN[]",
+] as const;
+
 export const queryFormSchema = z
   .object({
     // V31 — UUID can be empty (the backend auto-generates one
@@ -220,6 +248,32 @@ export const queryFormSchema = z
         return t === "" ? null : t;
       })
       .nullable(),
+    // V49 — author-declared JDBC/PG type per caller-controlled
+    // placeholder. El backend valida en el guardado (QueryAdminService
+    // .validateParamTypes) que toda :PARAM.* / :BODY.* del SQL tenga
+    // entrada; aquí validamos el shape y dejamos la cobertura para el
+    // servidor.
+    //
+    // Usamos `z.string().refine(...)` en vez de `z.enum([...])` para
+    // que el tipo inferido sea `Record<string, string>` (no el literal
+    // union del enum) y encaje con `Record<string, string>` en el resto
+    // del código (defaultValues, tipos en types.ts).
+    paramTypes: z
+      .record(
+        z
+          .string()
+          .regex(
+            /^[A-Z][A-Z0-9_]*(\.[A-Z][A-Z0-9_]*)*$/,
+            "Cada segmento debe ser MAYÚSCULA y usar A-Z, 0-9, _",
+          ),
+        z
+          .string()
+          .refine(
+            (v) => (CURATED_PG_TYPES as readonly string[]).includes(v),
+            `Tipo no soportado. Permitidos: ${CURATED_PG_TYPES.join(", ")}`,
+          ),
+      )
+      .default({}),
   })
   .superRefine((v, ctx) => {
     if (v.pathTemplate != null && !v.pathTemplate.startsWith("/")) {

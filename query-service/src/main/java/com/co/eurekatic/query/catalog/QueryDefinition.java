@@ -3,6 +3,8 @@ package com.co.eurekatic.query.catalog;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.Map;
+
 /**
  * Wire format of the {@code /getQuery} response. Mirrors
  * the legacy {@code sso-service} response shape (uppercase
@@ -31,6 +33,11 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * CallableStatement and reads the OUT values into a
  * separate {@code outParams} map the controller returns
  * alongside the rows.
+ *
+ * <p><b>V49</b> — {@code paramTypes} carries the author-declared
+ * JDBC/PG type per caller-controlled placeholder. Empty/null means
+ * "legacy row" — QueryService falls back to Spring's auto-derivation.
+ * See {@code com.co.eurekatic.common.query.ParamBinder}.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record QueryDefinition(
@@ -49,7 +56,14 @@ public record QueryDefinition(
 
         /** V33 — verbo HTTP de la fila: GET, POST o PUT. Null = POST. */
 
-        @JsonProperty("httpMethod") String httpMethod
+        @JsonProperty("httpMethod") String httpMethod,
+
+        /**
+         * V49 — {@code {"PARAM.NOMBRE":"TEXT", "BODY.IDS":"BIGINT[]", ...}}.
+         * Nullable for back-compat with pre-V49 servers; treated as
+         * empty map by {@code ParamBinder} (legacy auto-derive path).
+         */
+        @JsonProperty("paramTypes") Map<String, String> paramTypes
 ) {
     /**
      * Back-compat constructor for callers that pre-date V27/V28
@@ -62,7 +76,7 @@ public record QueryDefinition(
                            String type, boolean publicEnd, boolean captcha,
                            String detail, String action, String style) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
-             detail, action, style, null, "SELECT", null, "POST");
+             detail, action, style, null, "SELECT", null, "POST", null);
     }
 
     /**
@@ -74,7 +88,7 @@ public record QueryDefinition(
                            String detail, String action, String style,
                            String pathTemplate, String executionMode) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
-             detail, action, style, pathTemplate, executionMode, null, "POST");
+             detail, action, style, pathTemplate, executionMode, null, "POST", null);
     }
 
     /**
@@ -88,6 +102,23 @@ public record QueryDefinition(
                            String outParamNames) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, pathTemplate, executionMode,
-             outParamNames, "POST");
+             outParamNames, "POST", null);
+    }
+
+    /**
+     * V33 back-compat (sin paramTypes). Conserva la forma de 13
+     * argumentos que los llamantes usaban antes de V49; el mapa de
+     * tipos cae a {@code null}, que {@code ParamBinder} trata como
+     * "sin tipos declarados" — el bind vuelve al comportamiento
+     * anterior (Spring auto-derive del valor).
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           String pathTemplate, String executionMode,
+                           String outParamNames, String httpMethod) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, pathTemplate, executionMode,
+             outParamNames, httpMethod, null);
     }
 }
