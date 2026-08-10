@@ -116,19 +116,22 @@ CREATE OR REPLACE FUNCTION academico_test.fn_est_crear(
     p_fk_lv_idioma            BIGINT          DEFAULT NULL,
     p_fk_lv_genero_est        BIGINT          DEFAULT NULL,
     p_fk_discapacidad         BIGINT          DEFAULT NULL,
-    p_talento                 bool_sn         DEFAULT NULL,
-    p_etnias                  bool_sn         DEFAULT NULL,
+    p_talento                 academico_test.bool_sn         DEFAULT NULL,
+    p_etnias                  academico_test.bool_sn         DEFAULT NULL,
     p_fk_funcionario_rector   BIGINT          DEFAULT NULL,
     p_fk_funcionario_secretaria BIGINT        DEFAULT NULL,
-    p_subsidio                bool_sn         DEFAULT NULL,
+    p_subsidio                academico_test.bool_sn         DEFAULT NULL,
     p_fk_lv_regimen_catcosto  BIGINT          DEFAULT NULL,
     p_fk_lv_rango_tarifa      BIGINT          DEFAULT NULL,
     p_fk_lv_asociacion_nacional BIGINT        DEFAULT NULL,
     p_fk_lv_estado_establecimiento BIGINT     DEFAULT NULL,
     p_logo                    BYTEA           DEFAULT NULL,
     p_fk_archivo              BIGINT          DEFAULT NULL,
-    -- Auditoria / autorizacion: PK_TUSUARIO del super-admin que crea
-    p_pk_usuario_solicitante  BIGINT
+    -- Auditoria / autorizacion: PK_TUSUARIO del super-admin que crea.
+    -- DEFAULT NULL para cumplir la regla 42P13: tras un parametro con
+    -- default, todos los siguientes deben tener default. La validacion
+    -- de presencia y >0 se hace al inicio del cuerpo.
+    p_pk_usuario_solicitante  BIGINT          DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -137,7 +140,15 @@ DECLARE
     v_id_creado BIGINT;
 BEGIN
     -- -----------------------------------------------------------------
-    -- 0. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
+    -- 0. Validacion del solicitante (DEFAULT NULL por 42P13; cuerpo verifica).
+    -- -----------------------------------------------------------------
+    IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
+        RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 1. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
     -- -----------------------------------------------------------------
     IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
@@ -213,7 +224,7 @@ BEGIN
 
     IF NOT EXISTS (
         SELECT 1 FROM academico_test.TPROPIEDAD_JURIDICA
-         WHERE PK_TPROPIEDAD_JURIDICA = p_fk_propiedad_juridica
+         WHERE PK_PROPIEDAD_JURIDICA = p_fk_propiedad_juridica
            AND ACTIVE = TRUE
     ) THEN
         RAISE EXCEPTION 'FK_TPROPIEDAD_JURIDICA (%) no existe o no esta activa en TPROPIEDAD_JURIDICA',
@@ -329,7 +340,7 @@ BEGIN
     IF p_fk_discapacidad IS NOT NULL
        AND NOT EXISTS (
             SELECT 1 FROM academico_test.TDISCAPACIDAD
-             WHERE PK_TDISCAPACIDAD = p_fk_discapacidad
+             WHERE PK_DISCAPACIDAD = p_fk_discapacidad
                AND ACTIVE = TRUE
           )
     THEN
@@ -428,8 +439,8 @@ COMMENT ON FUNCTION academico_test.fn_est_crear(
     BIGINT,
     VARCHAR, VARCHAR, DATE,
     BIGINT, BIGINT, BIGINT, BIGINT,
-    bool_sn, bool_sn,
-    BIGINT, BIGINT, bool_sn,
+    academico_test.bool_sn, academico_test.bool_sn,
+    BIGINT, BIGINT, academico_test.bool_sn,
     BIGINT, BIGINT, BIGINT, BIGINT,
     BYTEA, BIGINT,
     BIGINT
@@ -789,7 +800,6 @@ COMMENT ON FUNCTION academico_test.fn_est_soft_delete(BIGINT, BIGINT)
 --     SQLSTATE '23503' — Alguna FK nueva no existe.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_est_actualizar(
-    p_pk_establecimiento      BIGINT,
     -- Identificadores modificables (nullable: NULL = no cambia).
     -- Si se envian, se validan contra el resto de EE activos para evitar
     -- colision; pueden reutilizar valores de EE inactivos.
@@ -817,18 +827,23 @@ CREATE OR REPLACE FUNCTION academico_test.fn_est_actualizar(
     p_fk_lv_idioma            BIGINT          DEFAULT NULL,
     p_fk_lv_genero_est        BIGINT          DEFAULT NULL,
     p_fk_discapacidad         BIGINT          DEFAULT NULL,
-    p_talento                 bool_sn         DEFAULT NULL,
-    p_etnias                  bool_sn         DEFAULT NULL,
+    p_talento                 academico_test.bool_sn         DEFAULT NULL,
+    p_etnias                  academico_test.bool_sn         DEFAULT NULL,
     p_fk_funcionario_rector   BIGINT          DEFAULT NULL,
     p_fk_funcionario_secretaria BIGINT        DEFAULT NULL,
-    p_subsidio                bool_sn         DEFAULT NULL,
+    p_subsidio                academico_test.bool_sn         DEFAULT NULL,
     p_fk_lv_regimen_catcosto  BIGINT          DEFAULT NULL,
     p_fk_lv_rango_tarifa      BIGINT          DEFAULT NULL,
     p_fk_lv_asociacion_nacional BIGINT        DEFAULT NULL,
     p_fk_lv_estado_establecimiento BIGINT     DEFAULT NULL,
     p_fk_archivo              BIGINT          DEFAULT NULL,
-    -- Auditoria / autorizacion: PK_TUSUARIO del super-admin que actualiza
-    p_pk_usuario_solicitante  BIGINT
+    -- PK del EE a actualizar. DEFAULT NULL por regla 42P13 (todos los
+    -- params tras uno con default deben tener default); la presencia
+    -- se valida al inicio del cuerpo.
+    p_pk_establecimiento      BIGINT          DEFAULT NULL,
+    -- Auditoria / autorizacion: PK_TUSUARIO del super-admin que actualiza.
+    -- DEFAULT NULL por la misma regla; presencia validada al inicio.
+    p_pk_usuario_solicitante  BIGINT          DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -837,7 +852,19 @@ DECLARE
     v_estado_actual  BOOLEAN;
 BEGIN
     -- -----------------------------------------------------------------
-    -- 0. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
+    -- 0. Validacion de parametros clave (DEFAULT NULL por 42P13).
+    -- -----------------------------------------------------------------
+    IF p_pk_establecimiento IS NULL OR p_pk_establecimiento <= 0 THEN
+        RAISE EXCEPTION 'p_pk_establecimiento es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+    IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
+        RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 1. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
     -- -----------------------------------------------------------------
     IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
@@ -949,7 +976,7 @@ BEGIN
     IF p_fk_propiedad_juridica IS NOT NULL
        AND NOT EXISTS (
             SELECT 1 FROM academico_test.TPROPIEDAD_JURIDICA
-             WHERE PK_TPROPIEDAD_JURIDICA = p_fk_propiedad_juridica
+             WHERE PK_PROPIEDAD_JURIDICA = p_fk_propiedad_juridica
                AND ACTIVE = TRUE
           )
     THEN
@@ -1009,7 +1036,7 @@ BEGIN
     IF p_fk_discapacidad IS NOT NULL
        AND NOT EXISTS (
             SELECT 1 FROM academico_test.TDISCAPACIDAD
-             WHERE PK_TDISCAPACIDAD = p_fk_discapacidad
+             WHERE PK_DISCAPACIDAD = p_fk_discapacidad
                AND ACTIVE = TRUE
           )
     THEN
@@ -1244,7 +1271,6 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_est_actualizar(
-    BIGINT,
     VARCHAR, VARCHAR,
     VARCHAR, BIGINT, BIGINT,
     VARCHAR, VARCHAR, VARCHAR, VARCHAR,
@@ -1252,9 +1278,10 @@ COMMENT ON FUNCTION academico_test.fn_est_actualizar(
     BIGINT,
     VARCHAR, VARCHAR, DATE,
     BIGINT, BIGINT, BIGINT, BIGINT,
-    bool_sn, bool_sn,
-    BIGINT, BIGINT, bool_sn,
+    academico_test.bool_sn, academico_test.bool_sn,
+    BIGINT, BIGINT, academico_test.bool_sn,
     BIGINT, BIGINT, BIGINT, BIGINT,
+    BIGINT,
     BIGINT,
     BIGINT
 ) IS 'Actualizacion parcial (estilo PATCH) de TESTABLECIMIENTO. Cada parametro NULL no modifica su columna; cada valor no NULL se aplica. NIT y CODIGO son modificables: si se envian, se validan contra el resto de EE activos (excluyendo el propio PK) y se aplican. Solo opera sobre EE activos. Actualiza MODIFIED_BY/MODIFIED_AT solo si hay cambios. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento). Retorna PK_ESTABLECIMIENTO.';
