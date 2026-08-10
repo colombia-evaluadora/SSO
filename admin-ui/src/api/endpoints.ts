@@ -431,3 +431,16 @@ export const writesApi = {
   unbindRole: (id: number, roleId: number) =>
     apiClient.delete<void>(`/sso-admin/write/${id}/role/${roleId}`),
 };
+
+/**
+ * Binarios (TARCHIVO). El id que devuelve el catálogo en una
+ * columna tipo {@code archivo_id} se descarga por aquí.
+ *
+ * Devuelve un Blob, no una URL: el endpoint exige el Bearer, así que
+ * no se puede meter en un {@code <img src>} — ver {@code getBlob} en
+ * el cliente y el hook {@code useArchivoUrl}.
+ */
+export const filesApi = {
+  descargar: (archivoId: number) =>
+    apiClient.getBlob(`/files/download/${archivoId}`),
+};

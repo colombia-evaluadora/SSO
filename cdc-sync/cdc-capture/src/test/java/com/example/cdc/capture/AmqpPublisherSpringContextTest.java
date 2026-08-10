@@ -30,6 +30,10 @@ class AmqpPublisherSpringContextTest {
     static class WiringConfig {
     }
 
+    // Este módulo sigue en Spring Boot 3.3.5, donde @MockitoBean aún
+    // no existe (llegó en 3.4 / Framework 6.2). @MockBean está
+    // deprecado en el resto del repo (Boot 4), pero aquí es la única
+    // opción hasta que cdc-sync se suba de versión.
     @MockBean
     RabbitTemplate rabbitTemplate;
 

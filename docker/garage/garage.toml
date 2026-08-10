@@ -1,0 +1,40 @@
+# =============================================================================
+# Garage — almacén compatible con S3 para desarrollo local.
+#
+# Se eligió frente a MinIO por consumo: ~100 MB de RSS frente a ~250. En una
+# caja de 4 GB que ya iba a swap, esa diferencia cuenta.
+#
+# La API S3 es compatible, así que el mismo SDK y el mismo código sirven para
+# Garage en local y para AWS en producción: sólo cambian endpoint y
+# credenciales. Ver file-service/src/main/resources/application.yml.
+#
+# NO es un sustituto del bucket de producción (coleva-files, 277 GB). Es un
+# entorno vacío para desarrollar sin tocar datos reales.
+# =============================================================================
+
+replication_factor = 1          # nodo único: sin réplicas
+consistency_mode   = "consistent"
+
+metadata_dir = "/var/lib/garage/meta"
+data_dir     = "/var/lib/garage/data"
+db_engine    = "sqlite"
+
+# Secreto de RPC entre nodos. Con un solo nodo no protege nada real, pero
+# Garage no arranca sin él. En un despliegue multi-nodo esto DEBE venir de
+# un gestor de secretos, no del repo.
+rpc_bind_addr   = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret      = "0000000000000000000000000000000000000000000000000000000000000001"
+
+[s3_api]
+s3_region   = "garage"
+api_bind_addr = "[::]:3900"
+# Path-style obligatorio: con un endpoint local no hay DNS por bucket, así
+# que el SDK debe pedir /bucket/objeto y no bucket.host/objeto. Es la
+# diferencia de configuración más común entre S3 local y AWS.
+root_domain = ".s3.garage.localhost"
+
+[admin]
+api_bind_addr = "[::]:3903"
+admin_token   = "garage-admin-token-dev"
+metrics_token = "garage-metrics-token-dev"

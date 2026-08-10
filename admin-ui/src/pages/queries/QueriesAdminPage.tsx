@@ -87,13 +87,24 @@ export function QueriesAdminPage() {
     const body = {
       uuid: values.uuid,
       query: values.query,
-      type: values.type || null,
       publicEnd: values.publicEnd,
       captcha: values.captcha,
       detail: values.detail || null,
       action: values.action || null,
       style: values.style || null,
       microserviceId: values.microserviceId ?? null,
+      // V27 — sufijo de URL que se compone con MICROSERVICE.REQUEST_URI.
+      // V31 — placeholders OUT separados por comas, sólo para filas
+      // que ejecutan un CALL. Null = sin OUT params.
+      //
+      // `type` (dialecto) y `executionMode` ya NO se envían: el
+      // backend los deriva del microservicio dueño y del primer
+      // keyword del SQL. Mandarlos desde aquí sólo permitiría que
+      // contradijeran al SQL.
+      httpMethod: values.httpMethod,
+
+      pathTemplate: values.pathTemplate ?? null,
+      outParamNames: values.outParamNames ?? null,
     };
     if (values.id) {
       await updateQ.mutateAsync({ id: values.id, ...body });

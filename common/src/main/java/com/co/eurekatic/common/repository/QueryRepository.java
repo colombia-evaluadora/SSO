@@ -59,4 +59,51 @@ public interface QueryRepository extends JpaRepository<Query, Long> {
     @EntityGraph(attributePaths = "roles")
     @QueryHints(@jakarta.persistence.QueryHint(name = HINT_FETCH_SIZE, value = "100"))
     List<Query> findAllByMicroservice_IdOrderByIdAsc(Long microserviceId);
+
+    /**
+     * V27 — checks whether the (microserviceId, pathTemplate)
+     * pair is already claimed by some query. Used by
+     * {@code QueryAdminService.validatePathTemplate} for an
+     * in-band 409; the DB partial unique index
+     * {@code uq_query_microservice_path} is the source of
+     * truth under concurrent inserts.
+     */
+    boolean existsByMicroservice_IdAndPathTemplate(Long microserviceId, String pathTemplate);
+
+    /**
+     * V33 — la unicidad incluye el verbo, así que
+     * {@code GET /est/:ID} y {@code PUT /est/:ID} pueden convivir.
+     *
+     * <p>Sustituye a la variante sin método en
+     * {@code QueryAdminService.validatePathTemplate}: con la de
+     * arriba, crear la segunda fila de una ruta que ya existía con
+     * otro verbo se rechazaba como duplicado aunque el índice de BD
+     * sí lo permitiera.
+     */
+    boolean existsByMicroservice_IdAndPathTemplateAndHttpMethod(
+            Long microserviceId, String pathTemplate, String httpMethod);
+
+    /**
+     * V30 — every query whose {@code path_template} is non-null,
+     * optionally filtered by microservice. The query-service
+     * path-registry calls this through
+     * {@code /internal/myPathTemplates} to build its in-memory
+     * path → uuid map without fetching rows that don't have a
+     * template (the {@code myQueries} endpoint returns ALL
+     * queries, which is wasteful when most have no template).
+     *
+     * <p>Filtering on the DB side keeps the wire small even when
+     * the catalog grows to thousands of rows. The
+     * {@code idx_query_microservice} index covers the WHERE
+     * clause (the partial unique index {@code uq_query_microservice_path}
+     * doesn't help here because the catalog doesn't enforce
+     * that every query has a template).
+     */
+    @EntityGraph(attributePaths = "roles")
+    @QueryHints(@jakarta.persistence.QueryHint(name = HINT_FETCH_SIZE, value = "100"))
+    java.util.List<Query> findAllByPathTemplateIsNotNull();
+
+    @EntityGraph(attributePaths = "roles")
+    @QueryHints(@jakarta.persistence.QueryHint(name = HINT_FETCH_SIZE, value = "100"))
+    java.util.List<Query> findAllByMicroservice_IdAndPathTemplateIsNotNull(Long microserviceId);
 }

@@ -4,32 +4,93 @@
     "tlista_valor": {
       "schema": "academico_test",
       "columns": {
-        "pk_lista_valor": { "pg_type": "BIGINT",      "slot": "pk_t" },
-        "categoria":       { "pg_type": "VARCHAR(30)",  "slot": "codigo" },
-        "nombre":          { "pg_type": "VARCHAR(120)", "slot": "nombre" },
-        "valor":           { "pg_type": "VARCHAR(130)", "slot": "valor" },
-        "created_at":      { "pg_type": "TIMESTAMP",    "slot": "fecha_ts" },
-        "modified_at":     { "pg_type": "TIMESTAMP",    "slot": "fecha_ts" },
-        "accion":          { "pg_type": "VARCHAR(150)", "slot": "texto" }
+        "pk_lista_valor": {
+          "pg_type": "BIGINT",
+          "slot": "pk_t"
+        },
+        "categoria": {
+          "pg_type": "VARCHAR(30)",
+          "slot": "codigo"
+        },
+        "nombre": {
+          "pg_type": "VARCHAR(120)",
+          "slot": "nombre"
+        },
+        "valor": {
+          "pg_type": "VARCHAR(130)",
+          "slot": "valor"
+        },
+        "created_at": {
+          "pg_type": "TIMESTAMP",
+          "slot": "fecha_ts"
+        },
+        "modified_at": {
+          "pg_type": "TIMESTAMP",
+          "slot": "fecha_ts"
+        },
+        "accion": {
+          "pg_type": "VARCHAR(150)",
+          "slot": "texto"
+        }
       }
     },
     "tusuario": {
       "schema": "academico_test",
       "columns": {
-        "pk_tusuario":          { "pg_type": "BIGINT",      "slot": "pk_t" },
-        "fk_tmunicipio":        { "pg_type": "BIGINT",      "slot": "padre_id_json" },
-        "fk_testablecimiento":  { "pg_type": "BIGINT",      "slot": "padre_id_json" },
-        "fk_tetnia":            { "pg_type": "BIGINT",      "slot": "padre_id_json" },
-        "fk_tdiscapacidad":     { "pg_type": "BIGINT",      "slot": "padre_id_json" },
-        "saldo":                { "pg_type": "NUMERIC(12,2)", "slot": "decimal" },
-        "estado":               { "pg_type": "VARCHAR(1)",  "slot": "booleano_sn" }
+        "pk_tusuario": {
+          "pg_type": "BIGINT",
+          "slot": "pk_t"
+        },
+        "fk_tmunicipio": {
+          "pg_type": "BIGINT",
+          "slot": "padre_id_json"
+        },
+        "fk_testablecimiento": {
+          "pg_type": "BIGINT",
+          "slot": "padre_id_json"
+        },
+        "fk_tetnia": {
+          "pg_type": "BIGINT",
+          "slot": "padre_id_json"
+        },
+        "fk_tdiscapacidad": {
+          "pg_type": "BIGINT",
+          "slot": "padre_id_json"
+        },
+        "saldo": {
+          "pg_type": "NUMERIC(12,2)",
+          "slot": "decimal"
+        },
+        "estado": {
+          "pg_type": "VARCHAR(1)",
+          "slot": "booleano_sn"
+        }
       }
     },
     "tactividad": {
       "schema": "academico_test",
       "columns": {
-        "pk_actividad": { "pg_type": "BIGINT",     "slot": "pk_t" },
-        "nombre":        { "pg_type": "VARCHAR(80)", "slot": "nombre" }
+        "pk_actividad": {
+          "pg_type": "BIGINT",
+          "slot": "pk_t"
+        },
+        "nombre": {
+          "pg_type": "VARCHAR(80)",
+          "slot": "nombre"
+        }
+      }
+    },
+    "tsesion": {
+      "schema": "academico_test",
+      "columns": {
+        "pk_tsesion": {
+          "pg_type": "BIGINT",
+          "slot": "pk_t"
+        },
+        "fecha_ingreso": {
+          "pg_type": "DATE",
+          "slot": "fecha"
+        }
       }
     }
   }

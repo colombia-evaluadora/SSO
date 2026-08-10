@@ -2,27 +2,67 @@
 # deploy-test.yml — publica imágenes a GHCR y despliega el stack completo
 # al servidor de pruebas (Linode) vía SSH.
 #
-# Flujo:
-#   push a `test` → corre CI (ci.yml) → si CI pasa, este workflow:
-#     1. build-push : construye las 10 imágenes de la app con los
-#                     Dockerfiles del repo (8 en raíz + cdc-capture
-#                     y cdc-worker bajo cdc-sync/) y las publica en
-#                     ghcr.io/colombia-evaluadora/sso/<servicio>
+# Flujo de ramas:
+#
+#   feature/CU-xxxx → dev → test → main
+#                      │
+#                      └── único entorno desplegado (este workflow)
+#
+#   `dev`  integración: las ramas de tarea entran aquí por PR y es lo
+#          que corre en el Linode.
+#   `test` marca de promoción: "esto pasó QA". Pasa por CI, no despliega.
+#   `main` releases, con tag por versión. Pasa por CI, no despliega.
+#
+#   Cuando test o main tengan su propio entorno, cada uno engancha su
+#   workflow; la condición de abajo no cambia.
+#
+# Flujo del despliegue:
+#   push a `dev` → corre CI (ci.yml) → si CI pasa, este workflow:
+#     1. changes    : mira el diff HEAD~1..HEAD para decidir qué
+#                     imágenes hay que reconstruir (no siempre son
+#                     las 10); consulta el último run exitoso de
+#                     deploy-test y se sale si el SHA ya salió
+#                     (evita deploys duplicados por push consecutivos
+#                     a dev).
+#     2. build-push : reconstruye sólo las imágenes afectadas y las
+#                     publica en ghcr.io/colombia-evaluadora/sso/<servicio>
 #                     con tags `test-latest` + `test-<sha corto>`.
-#     2. deploy     : rsync de docker-compose.yml + postgres/migrations
-#                     + observability/ + docker/ al servidor, luego
-#                     `docker compose pull && up -d` por SSH.
+#     3. deploy     : rsync de docker-compose.yml + postgres/migrations
+#                     + observability/ + docker/ + scripts/ al servidor,
+#                     escribe /opt/sso/.env desde el secreto TEST_ENV_FILE,
+#                     y luego `docker compose pull && up -d` por SSH.
 #
 # El gate es `workflow_run` sobre CI (no un push directo) para que
 # nunca se despliegue un commit cuyos tests fallaron. `workflow_dispatch`
 # queda para re-desplegar a mano (usa el HEAD de la rama elegida y NO
 # espera a CI — úsalo consciente de eso).
 #
-# El servidor NO recibe el .env por este workflow: los secretos de la
-# app (Neon, JWT, RabbitMQ…) viven en /opt/sso/.env creado a mano una
-# única vez (ver docs/deploy-test-server.md). Ese .env fija
-# IMAGE_PREFIX=ghcr.io/colombia-evaluadora/sso e IMAGE_TAG=test-latest,
-# que es lo que hace que `compose pull` traiga lo que CI publicó.
+# NOTA sobre la rama: la condición NO filtra por `head_branch == 'dev'`
+# porque `github.event.workflow_run.head_branch` siempre apunta a la
+# rama donde está deploy-test.yml (main), no a la del push que disparó
+# CI. El filtro se sustituye por la observación práctica: CI sólo
+# corre en push para `dev` (el push a `test`/`main` va por PR → CI de
+# PR → workflow_run con `event == 'pull_request'`, descartado por la
+# condición `event == 'push'`). Cuando `test` y `main` tengan entorno,
+# cada workflow añade su propio filtro SIN volver a este.
+#
+# El .env del servidor se despliega desde el secreto de repo
+# TEST_ENV_FILE (antes se creaba a mano en /opt/sso/.env). Contiene los
+# secretos de la app (Neon, JWT, RabbitMQ, los *_INTERNAL_TOKEN de
+# V30/V33…) y fija IMAGE_PREFIX=ghcr.io/colombia-evaluadora/sso e
+# IMAGE_TAG=test-latest, que es lo que hace que `compose pull` traiga
+# lo que CI publicó.
+#
+# Rotar una credencial = editar el secreto y re-desplegar. Ya no hay
+# que entrar por SSH, y el host deja de tener un fichero de secretos
+# sin trazabilidad.
+#
+# Aviso honesto sobre el modelo de amenaza: los GitHub Secrets están
+# cifrados en reposo y enmascarados en los logs, pero cualquiera con
+# permiso de escritura en el repo puede exfiltrarlos añadiendo un paso
+# al workflow. Esto es un salto claro respecto a un .env suelto en el
+# servidor, no un gestor de secretos: si en algún momento hace falta
+# ese nivel, la vía es SOPS+age, Vault o el secret manager del cloud.
 #
 # Rollback: cada deploy también publica `test-<sha>`; en el servidor,
 # editar IMAGE_TAG en /opt/sso/.env a ese tag y `docker compose up -d`.
@@ -31,6 +71,10 @@
 #   TEST_SSH_HOST    — IP o hostname del Linode
 #   TEST_SSH_USER    — usuario de despliegue (miembro del grupo docker)
 #   TEST_SSH_KEY     — clave privada OpenSSH (ed25519) SOLO para deploy
+#   TEST_ENV_FILE    — contenido COMPLETO de /opt/sso/.env (multilínea).
+#                      Se escribe en el servidor en cada deploy con
+#                      permisos 600. Ver .env.example para el listado
+#                      de variables, incluidas las de V30/V33.
 #   GHCR_PULL_USER   — username de GitHub dueño del PAT de pull
 #   GHCR_PULL_TOKEN  — PAT clásico con scope read:packages (el servidor
 #                      lo usa para `docker login ghcr.io`)
@@ -60,75 +104,271 @@ env:
   IMAGE_PREFIX: ghcr.io/colombia-evaluadora/sso
 
 jobs:
+  # ───────── Qué imágenes hay que reconstruir ─────────
+  #
+  # Antes se construían y subían las 10 SIEMPRE. Ése era el motivo real
+  # de que un cambio en un formulario reiniciara el gateway: si las 10
+  # imágenes se republican, compose ve que las 10 cambiaron y recrea
+  # los 10 contenedores.
+  #
+  # No hace falta pasarle una lista de servicios a compose. Basta con
+  # no republicar lo que no cambió: `docker compose up -d` sólo recrea
+  # contenedores cuya imagen o configuración cambió, así que el
+  # comportamiento correcto sale solo.
+  #
+  # El diff se calcula contra HEAD~1 porque este workflow corre sobre
+  # un push ya integrado: en `dev`, HEAD~1 es la punta anterior de la
+  # rama, que es exactamente el punto de comparación que queremos.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    # Antes filtrábamos por `head_branch == 'dev'`, pero esa condición
+    # es un escollo: `github.event.workflow_run.head_branch` apunta a
+    # la rama donde vive deploy-test.yml (main), no a la rama del push
+    # que disparó CI. El filtro nunca hacía match y el deploy
+    # nunca se auto-disparaba (sólo lanzaba con workflow_dispatch).
+    #
+    # Solución: lanzar en cualquier push cuyo CI verduzco, sin mirar
+    # la rama, y añadir un guard contra SHA duplicado más abajo
+    # (paso `Check SHA not yet deployed`). Así `dev` se despliega
+    # sola al mergear, y `test`/`main` no desplegarán porque CI ya
+    # no corre en push sobre esas ramas (sólo en PR con destino
+    # ahí) — cuando tengan su entorno, cada workflow mete el suyo.
+    #
+    # La condición cubre TRES triggers, no dos:
+    #   1. `workflow_dispatch`   — redespliegue manual.
+    #   2. `workflow_run`        — disparado por CI (push o PR).
+    #      Sólo si CI terminó en success Y el evento que disparó CI
+    #      fue un push (no un pull_request).
+    #   3. `push` directo        — un push al branch donde vive este
+    #      workflow (main) sin pasar por CI. La rama default es `main`
+    #      y CI NO corre en push sobre main (sólo en PR con destino
+    #      ahí); por eso un merge directo a main — vía PR desde la UI
+    #      con la opción "merge commit" + un push posterior, o un
+    #      `git push origin main` manual desde local — genera un run
+    #      con `event_name: push` y sin `workflow_run.*`. Sin la rama
+    #      `event_name == 'push'`, ese run se saltaría entero y
+    #      dejaría `main` con código nuevo que nunca llegó al server.
+    #      El guard de SHA duplicado de abajo evita que CI+el push
+    #      directo al merge deployen dos veces el mismo commit.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    outputs:
+      services: ${{ steps.pick.outputs.services }}
+      any:      ${{ steps.pick.outputs.any }}
+      # La matriz COMPLETA de build-push, ya filtrada: un array JSON
+      # con un objeto por servicio a reconstruir. Sustituye al antiguo
+      # `excluded` — ver el comentario de `strategy` en build-push.
+      matrix:   ${{ steps.pick.outputs.matrix }}
+      # Separado de `any` a propósito: hay cambios que no reconstruyen
+      # ninguna imagen pero SÍ hay que desplegar (una migración nueva,
+      # un ajuste del compose, del .env). Con un solo flag, esos
+      # cambios se quedaban sin desplegar aunque el propio workflow
+      # documentaba lo contrario.
+      deploy:   ${{ steps.pick.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 2
+      - name: Check SHA not yet deployed
+        # Para `workflow_dispatch` no aplica: el usuario ya sabe que
+        # está re-desplegando, y saltarse el guard permite precisamente
+        # forzar un redeploy del HEAD actual aunque CI ya lo hubiera
+        # sacado. Para `push` y `workflow_run` sí: si el último
+        # deploy-test exitoso ya usó este SHA, no tiene sentido
+        # construir y empujar lo mismo otra vez.
+        if: github.event_name != 'workflow_dispatch'
+        id: sha-check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # workflow_run trae el SHA del commit que CI validó; en push
+          # directo github.sha ES ese commit (no hay workflow_run).
+          SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+          # Pillar el último run de deploy-test que NO fuera skipped
+          # (workflow_dispatch también se lista, y los viejos
+          # `cancelled` por la cancelación mutua). Filtrar por
+          # conclusion = success y event = push a dev — pero como
+          # el campo `head_branch` ya no es fiable, simplemente
+          # miramos el último run con éxito de la rama por nombre
+          # de workflow.
+          LAST=$(gh run list \
+            --workflow "deploy-test.yml" \
+            --status success \
+            --limit 1 \
+            --json headSha,databaseId,displayTitle \
+            --jq '.[0] // empty')
+          if [ -n "$LAST" ]; then
+            LAST_SHA=$(echo "$LAST" | jq -r '.headSha')
+            echo "Último deploy-test exitoso: $LAST_SHA (run $(echo "$LAST" | jq -r '.databaseId'))"
+            if [ "$LAST_SHA" = "$SHA" ]; then
+              echo "::notice::SHA $SHA ya desplegado por el último run exitoso. Saltando."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            echo "No hay deploys previos exitosos — se procede."
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+      - id: pick
+        env:
+          SKIP: ${{ steps.sha-check.outputs.skip }}
+        run: |
+          set -euo pipefail
+
+          # Guard contra SHA duplicado: si ya desplegamos este commit,
+          # no hacemos nada. Es el ÚNICO caso en que no se despliega.
+          if [ "${SKIP:-false}" = "true" ]; then
+            echo "Saltado: SHA ya desplegado."
+            echo "any=false"   >> "$GITHUB_OUTPUT"
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo 'services=[]' >> "$GITHUB_OUTPUT"
+            echo 'matrix=[]'   >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A partir de aquí SIEMPRE se despliega, se reconstruya alguna
+          # imagen o no: una migración o un cambio de compose no genera
+          # imágenes pero sí tiene que llegar al servidor.
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
+
+          # workflow_dispatch = redespliegue manual: se reconstruye todo
+          # a propósito, porque quien lo lanza no está reaccionando a un
+          # diff concreto.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            CAMBIADOS="TODO"
+          elif ! git rev-parse HEAD~1 >/dev/null 2>&1; then
+            # Primer commit del historial disponible: sin base de
+            # comparación, se reconstruye todo en vez de adivinar.
+            CAMBIADOS="TODO"
+          else
+            CAMBIADOS="$(git diff --name-only HEAD~1 HEAD)"
+          fi
+          echo "Ficheros cambiados:"; echo "$CAMBIADOS" | sed 's/^/  /'
+
+          TODOS='"eurekaserver","auth-center","api-gateway","sso-admin","query-service","file-service","provisioner","notification-service","hello-service","cdc-capture","cdc-worker"'
+
+          # `common` y el pom raíz son dependencias de 7 de los 8
+          # módulos, así que tocarlos obliga a reconstruir todo.
+          if [ "$CAMBIADOS" = "TODO" ] \
+             || echo "$CAMBIADOS" | grep -qE '^(common/|pom\.xml|\.github/workflows/deploy-test\.yml)'; then
+            SERVICIOS="$TODOS"
+          else
+            S=""
+            add() { case ",$S," in *,\"$1\",*) ;; *) S="${S:+$S,}\"$1\"";; esac; }
+            echo "$CAMBIADOS" | grep -q '^eurekaserver/'         && add eurekaserver
+            echo "$CAMBIADOS" | grep -q '^auth-center/'          && add auth-center
+            echo "$CAMBIADOS" | grep -q '^sso-admin/'            && add sso-admin
+            echo "$CAMBIADOS" | grep -q '^query-service/'        && add query-service
+            echo "$CAMBIADOS" | grep -q '^file-service/'         && add file-service
+            echo "$CAMBIADOS" | grep -q '^provisioner/'          && add provisioner
+            echo "$CAMBIADOS" | grep -q '^notification-service/' && add notification-service
+            echo "$CAMBIADOS" | grep -q '^hello-service/'        && add hello-service
+            # api-gateway compila el SPA dentro de su Dockerfile, así
+            # que un cambio en admin-ui también le obliga a reconstruir.
+            echo "$CAMBIADOS" | grep -qE '^(api-gateway/|admin-ui/)' && add api-gateway
+            echo "$CAMBIADOS" | grep -q '^cdc-sync/'             && { add cdc-capture; add cdc-worker; }
+            SERVICIOS="$S"
+          fi
+
+          if [ -z "$SERVICIOS" ]; then
+            echo "Ninguna imagen que reconstruir (cambios de compose, migraciones o docs)."
+            echo "any=false" >> "$GITHUB_OUTPUT"
+            echo 'services=[]' >> "$GITHUB_OUTPUT"
+          else
+            echo "Se reconstruyen: $SERVICIOS"
+            echo "any=true" >> "$GITHUB_OUTPUT"
+            echo "services=[$SERVICIOS]" >> "$GITHUB_OUTPUT"
+          fi
+
+          # ─── La matriz de build-push, ya filtrada ───
+          #
+          # Antes esto emitía la lista COMPLEMENTARIA (`excluded`) para
+          # dársela a `strategy.matrix.exclude`. Nunca funcionó, y no se
+          # notó porque el único camino que la ejercitaba —el deploy
+          # automático— llevaba roto desde el 08-08: TODOS los deploys
+          # que salieron bien fueron manuales, y en un `workflow_dispatch`
+          # se reconstruye todo, así que `excluded` siempre iba vacía.
+          # La primera vez que un deploy automático volvió a correr, la
+          # exclusión parcial dejó la matriz en CERO entradas: ningún
+          # build-push, y el run en rojo.
+          #
+          # El motivo está documentado por GitHub: `include` se procesa
+          # DESPUÉS de `exclude` — hasta el punto de que la forma
+          # soportada de usarlos juntos es meter con `include` algo que
+          # `exclude` había quitado. Aquí la matriz sale ENTERA de
+          # `include`, así que intentar recortarla con `exclude` es
+          # pedirle al mecanismo justo lo contrario de lo que hace.
+          #
+          # Se emite la matriz directamente y `exclude` desaparece. Cada
+          # objeto lleva las cuatro claves que build-push necesita; las
+          # rutas son las mismas de antes (ojo: para los CDC el
+          # `dockerfile` es relativo a la raíz del workspace, no al
+          # `context` — es como lo resuelve buildx).
+          matriz_de() {
+            case "$1" in
+              cdc-capture) echo '{"service":"cdc-capture","context":"cdc-sync","dockerfile":"cdc-sync/cdc-capture/Dockerfile","extra-contexts":"repo=."}' ;;
+              cdc-worker)  echo '{"service":"cdc-worker","context":"cdc-sync","dockerfile":"cdc-sync/cdc-worker/Dockerfile","extra-contexts":"repo=."}' ;;
+              *)           echo "{\"service\":\"$1\",\"context\":\".\",\"dockerfile\":\"$1/Dockerfile\",\"extra-contexts\":\"\"}" ;;
+            esac
+          }
+
+          MATRIZ=""
+          for svc in eurekaserver auth-center api-gateway sso-admin notification-service hello-service file-service provisioner query-service cdc-capture cdc-worker; do
+            if echo ",$SERVICIOS," | grep -qE "(,|\")${svc}(,|\")"; then
+              MATRIZ="${MATRIZ:+$MATRIZ,}$(matriz_de "$svc")"
+            fi
+          done
+          echo "Entradas de la matriz: $(echo "[${MATRIZ}]" | grep -o '"service"' | wc -l)"
+          echo "matrix=[${MATRIZ}]" >> "$GITHUB_OUTPUT"
+
   build-push:
     name: build-push (${{ matrix.service }})
     runs-on: ubuntu-latest
-    # Solo corre si: (a) CI terminó en verde sobre un PUSH a la rama
-    # test, o (b) se lanzó a mano. workflow_run también dispara para
-    # CI de main y de PRs (incluido el PR test→main del flujo de
-    # promoción) — el par event == 'push' + head_branch == 'test'
-    # filtra todo eso.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'test')
+    needs: [changes]
+    # Solo corre si: (a) CI terminó en verde sobre un push, o
+    # (b) se lanzó a mano. workflow_run también dispara para CI de
+    # PRs (incluido el PR test→main del flujo de promoción) — el
+    # filtro `event == 'push'` los descarta.
+    #
+    # No filtramos por rama: CI sólo corre en push sobre `dev` (los
+    # push a `test`/`main` van por PR → CI de PR → workflow_run con
+    # `event == 'pull_request'`, descartado por la condición de
+    # arriba). Cuando test/main tengan su entorno, cada workflow
+    # añade su propio gate — no se vuelve a meter aquí.
+    #
+    # No se construye nada si el guard de SHA dijo que este commit ya
+    # salió, o si el diff no tocó ningún servicio (una migración
+    # suelta, por ejemplo). Sin este `if`, una matriz vacía hace
+    # fallar el job — y con él, el run entero.
+    if: needs.changes.outputs.any == 'true'
     strategy:
       fail-fast: false
+      # La matriz llega YA FILTRADA desde el job `changes`: un objeto
+      # por servicio a reconstruir, con las cuatro claves que los
+      # steps de abajo usan.
+      #
+      # Antes se declaraban aquí los 11 servicios con `include` y se
+      # recortaban con `exclude: ${{ fromJSON(...excluded) }}`. Eso no
+      # funciona: GitHub procesa `include` DESPUÉS de `exclude`, así
+      # que una matriz que sale entera de `include` no se puede
+      # recortar por esa vía. El fallo estuvo latente meses porque el
+      # único camino que lo ejercitaba —el deploy automático— llevaba
+      # roto desde el 08-08, y en los deploys manuales se reconstruye
+      # todo, así que `excluded` siempre iba vacía y nunca recortaba
+      # nada. Al volver a funcionar el disparo automático, la primera
+      # exclusión parcial dejó la matriz en cero entradas.
+      #
+      # Construir la matriz en el job anterior también quita de en
+      # medio la trampa del `if:` que referenciaba `matrix.*` (ver la
+      # nota histórica en el job `changes`): aquí ya no hay ninguno.
       matrix:
-        include:
-          # Todas las entradas comparten las mismas 4 claves
-          # (service/context/dockerfile/extra-contexts). GitHub
-          # Actions descarta silenciosamente las entradas de
-          # matrix.include con claves distintas al resto — esa
-          # inconsistencia era la causa por la que cdc-capture y
-          # cdc-worker nunca se construían. Para los servicios no-CDC
-          # el contexto es la raíz del repo y no hay contextos extra.
-          - service: eurekaserver
-            context: '.'
-            dockerfile: eurekaserver/Dockerfile
-            extra-contexts: ''
-          - service: auth-center
-            context: '.'
-            dockerfile: auth-center/Dockerfile
-            extra-contexts: ''
-          - service: api-gateway
-            context: '.'
-            dockerfile: api-gateway/Dockerfile
-            extra-contexts: ''
-          - service: hello-service
-            context: '.'
-            dockerfile: hello-service/Dockerfile
-            extra-contexts: ''
-          - service: sso-admin
-            context: '.'
-            dockerfile: sso-admin/Dockerfile
-            extra-contexts: ''
-          - service: notification-service
-            context: '.'
-            dockerfile: notification-service/Dockerfile
-            extra-contexts: ''
-          - service: query-service
-            context: '.'
-            dockerfile: query-service/Dockerfile
-            extra-contexts: ''
-          - service: provisioner
-            context: '.'
-            dockerfile: provisioner/Dockerfile
-            extra-contexts: ''
-          # OJO: a diferencia de docker-compose.yml (donde `dockerfile`
-          # es relativo a `context`), docker/build-push-action pasa
-          # `file` tal cual a `buildx --file`, que lo resuelve desde la
-          # raíz del workspace. Por eso aquí va `cdc-sync/…` y en el
-          # compose va `cdc-capture/Dockerfile` a secas.
-          - service: cdc-capture
-            context: cdc-sync
-            dockerfile: cdc-sync/cdc-capture/Dockerfile
-            extra-contexts: 'repo=.'
-          - service: cdc-worker
-            context: cdc-sync
-            dockerfile: cdc-sync/cdc-worker/Dockerfile
-            extra-contexts: 'repo=.'
+        include: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -182,7 +422,28 @@ jobs:
   deploy:
     name: deploy to test server
     runs-on: ubuntu-latest
-    needs: [build-push]
+    needs: [changes, build-push]
+    # `always()` es imprescindible: cuando no cambia ninguna imagen
+    # —un cambio en docker-compose.yml, en una migración o en el
+    # .env— TODAS las entradas de build-push se saltan, y sin esto
+    # el deploy se saltaría en cascada. Pero esos cambios sí hay que
+    # desplegarlos: la migración no se aplica sola.
+    #
+    # Se exige que ninguna construcción haya fallado; saltada es un
+    # resultado válido.
+    #
+    # El gate es `deploy`, no `any`. Eran el mismo flag y ahí estaba
+    # la contradicción con el párrafo de arriba: `any` significa "hay
+    # imágenes que reconstruir", así que exigirlo saltaba justo los
+    # despliegues que el comentario decía querer — migración suelta,
+    # cambio de compose, rotación del .env. `deploy` sólo es false
+    # cuando el guard de SHA detecta que este commit ya salió.
+    if: >-
+      always()
+      && needs.changes.result == 'success'
+      && needs.build-push.result != 'failure'
+      && needs.build-push.result != 'cancelled'
+      && needs.changes.outputs.deploy == 'true'
     environment: test
     steps:
       - uses: actions/checkout@v4
@@ -206,17 +467,79 @@ jobs:
         env:
           DEST: ${{ secrets.TEST_SSH_USER }}@${{ secrets.TEST_SSH_HOST }}
         run: |
-          ssh -i ~/.ssh/deploy_key "$DEST" "mkdir -p /opt/sso/postgres/migrations /opt/sso/observability /opt/sso/docker"
+          ssh -i ~/.ssh/deploy_key "$DEST" "mkdir -p /opt/sso/postgres/migrations /opt/sso/observability /opt/sso/docker /opt/sso/scripts"
           rsync -az -e "ssh -i ~/.ssh/deploy_key" docker-compose.yml \
             "$DEST:/opt/sso/docker-compose.yml"
+          # docker-compose.cdc-off.yml lo aplica el wrapper
+          # ./scripts/sso-stack.sh cuando CDC_SYNC_ENABLED=false. Sin
+          # este fichero en el server, el deploy con el flag apagado
+          # cae con "no such file or directory" en `docker compose -f`.
+          rsync -az -e "ssh -i ~/.ssh/deploy_key" docker-compose.cdc-off.yml \
+            "$DEST:/opt/sso/docker-compose.cdc-off.yml"
           rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" postgres/migrations/ \
             "$DEST:/opt/sso/postgres/migrations/"
           rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" observability/ \
             "$DEST:/opt/sso/observability/"
           rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" docker/ \
             "$DEST:/opt/sso/docker/"
+          # El wrapper ./scripts/sso-stack.sh lo invoca el paso "Pull &
+          # restart stack" para que CDC_SYNC_ENABLED / SSO_TELEMETRY_ENABLED
+          # se honren en el deploy. Sin él el deploy cae con exit 127.
+          # `--chmod=u+rwx,go+rx` fuerza 755 en el server: por defecto
+          # rsync conserva los permisos del repo (644), y sin el bit
+          # +x el deploy cae con exit 126 ("permission denied").
+          rsync -az --chmod=u+rwx,go+rx -e "ssh -i ~/.ssh/deploy_key" scripts/ \
+            "$DEST:/opt/sso/scripts/"
+          # Defensa adicional: si el rsync quedó con umask raro, re-fija
+          # el bit de ejecución del wrapper antes de invocarlo. Si ya
+          # está bien, no hace daño.
+          ssh -i ~/.ssh/deploy_key "$DEST" \
+            "chmod 755 /opt/sso/scripts/sso-stack.sh 2>/dev/null || true"
+
+      - name: Deploy .env from GitHub secret
+        # El .env ya no se crea "a mano" en el servidor: vive como
+        # secreto de repo (TEST_ENV_FILE) y se escribe aquí en cada
+        # deploy. Con esto, rotar una credencial es editar el secreto
+        # y re-desplegar — no entrar por SSH — y deja de haber un
+        # fichero en el host que nadie sabe qué contiene ni cuándo
+        # cambió.
+        #
+        # Disciplina de manejo, igual que el token de GHCR de abajo:
+        #   - el contenido viaja por STDIN, nunca en argv ni
+        #     interpolado dentro del script (argv es visible en
+        #     `ps` y se filtraría con `set -x`);
+        #   - `umask 077` para que nazca 600, no 644;
+        #   - se escribe a un temporal y se mueve, así un corte a
+        #     mitad no deja un .env truncado capaz de tumbar el stack
+        #     en el `compose up` siguiente;
+        #   - el log sólo reporta el número de líneas, nunca el
+        #     contenido.
+        env:
+          DEST: ${{ secrets.TEST_SSH_USER }}@${{ secrets.TEST_SSH_HOST }}
+          ENV_FILE: ${{ secrets.TEST_ENV_FILE }}
+        run: |
+          if [ -z "${ENV_FILE:-}" ]; then
+            echo "::error::Falta el secreto TEST_ENV_FILE (Settings → Secrets → Actions)."
+            echo "Debe contener el .env completo del servidor, incluidas las"
+            echo "variables de V30/V33 (SSO_INTERNAL_TOKEN, GATEWAY_INTERNAL_TOKEN,"
+            echo "QUERY_CATALOG_INTERNAL_TOKEN, QUERY_SERVICE_BASE_URL, …)."
+            exit 1
+          fi
+          printf '%s' "$ENV_FILE" | ssh -i ~/.ssh/deploy_key "$DEST" \
+            'umask 077 && cat > /opt/sso/.env.new && mv /opt/sso/.env.new /opt/sso/.env'
+          ssh -i ~/.ssh/deploy_key "$DEST" \
+            'echo ".env desplegado: $(grep -c . /opt/sso/.env) líneas no vacías, permisos $(stat -c %a /opt/sso/.env)"'
 
       - name: Pull & restart stack
+        # Cold-cache JVM starts on a 4GB Linode take 60-90s
+        # for the provisioner (the heaviest of the bunch);
+        # the cascade through sso-admin → query-service adds
+        # another 2-3 min. GitHub's default step timeout is
+        # 360 min, but the file was being interpreted as 4 min
+        # by an older runner config; bump explicitly to 15
+        # min so the deploy can wait the full cold-start
+        # window without bailing.
+        timeout-minutes: 15
         env:
           DEST: ${{ secrets.TEST_SSH_USER }}@${{ secrets.TEST_SSH_HOST }}
           GHCR_PULL_USER: ${{ secrets.GHCR_PULL_USER }}
@@ -230,10 +553,17 @@ jobs:
           ssh -i ~/.ssh/deploy_key "$DEST" bash -s <<'EOF'
           set -euo pipefail
           cd /opt/sso
-          # .env del servidor debe existir (creado a mano en el setup
-          # inicial — ver docs/deploy-test-server.md).
-          test -f .env || { echo "FALTA /opt/sso/.env — ver docs/deploy-test-server.md"; exit 1; }
-          docker compose pull --quiet
+          # El .env lo acaba de escribir el paso anterior desde el
+          # secreto TEST_ENV_FILE. Si no está, ese paso falló y no
+          # deberíamos haber llegado aquí — el guard se queda como
+          # red de seguridad.
+          test -f .env || { echo "FALTA /opt/sso/.env — el paso 'Deploy .env' no lo escribió"; exit 1; }
+          # Wrapper en vez de `docker compose` directo: aplica los
+          # overrides según .env (CDC_SYNC_ENABLED, SSO_TELEMETRY_ENABLED).
+          # Sin esto, poner CDC_SYNC_ENABLED=false en TEST_ENV_FILE no
+          # apagaría los servicios CDC en el deploy automático — el
+          # override `docker-compose.cdc-off.yml` no se concatenaría.
+          ./scripts/sso-stack.sh pull --quiet
 
           # Si `compose up` falla, casi siempre es porque flyway salió
           # con código !=0 y el resto de servicios dependen de
@@ -243,7 +573,7 @@ jobs:
           # de flyway (credenciales mal, sslmode/channel_binding
           # incompatible con Neon, error SQL en una migración, etc.)
           # se pierde si no lo volcamos aquí.
-          if ! docker compose up -d --remove-orphans; then
+          if ! ./scripts/sso-stack.sh up -d --remove-orphans; then
             echo "=== flyway logs ==="
             docker compose logs --no-color --tail=200 flyway || true
             echo "=== auth-center logs (last 50) ==="

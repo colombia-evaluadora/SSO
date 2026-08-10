@@ -25,4 +25,18 @@ public class CaptureMetrics {
                 .register(registry))
                 .increment();
     }
+
+    /**
+     * Counts Debezium snapshot rows (op="r") that AmqpPublisher filtered out before
+     * publishing. Visible as {@code cdc.events.snapshot_skipped{tabla=...}} so an
+     * operator can tell how many bootstrap rows would have leaked into
+     * auditoria.audit_log / Oracle MERGEs had the guard not been in place.
+     */
+    public void incrementSnapshotSkipped(String tabla) {
+        String key = "snapshot:" + tabla;
+        counters.computeIfAbsent(key, k -> Counter.builder("cdc.events.snapshot_skipped")
+                .tag("tabla", tabla)
+                .register(registry))
+                .increment();
+    }
 }

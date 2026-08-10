@@ -154,7 +154,11 @@ public class RefreshController {
         }
 
         Set<String> roles = effectiveRoles.forEmail(user.getEmail());
-        String accessToken = jwt.issueAccessToken(user.getEmail(), roles);
+        // V29: forward the numeric userId so the rotated access
+        // token carries the uid claim just like the original. Same
+        // lookup that already populated `user` is reused — no extra
+        // DB hit.
+        String accessToken = jwt.issueAccessToken(user.getEmail(), user.getId(), roles);
 
         response.addHeader(HttpHeaders.SET_COOKIE,
                 JsonLoginFilter.buildRefreshCookie(next.rawToken(), next.ttlSeconds(), request));

@@ -2,13 +2,44 @@ server:
   port: 8080
   shutdown: graceful
 
+# V30 — config for the CatalogRoutesRefresher that polls
+# sso-admin's /internal/gateway/routes. The shared secret
+# gates the /internal/** surface on sso-admin (see
+# sso-admin's InternalTokenFilter); a missing/wrong token
+# causes sso-admin to 401 the poller, which keeps the
+# previous (empty) routes active (graceful degradation
+# but a real outage of dynamic routing). The token MUST
+# match sso-admin's `sso.internal.token` — they read the
+# same env var in the standard compose layout. Top-level
+# (NOT under spring:) because the names are consumed via
+# @Value (gateway.catalog-url) — not part of Spring Cloud
+# Gateway's schema.
+gateway:
+  # sso-admin's container port is 8083 (EXPOSE 8083 in its
+  # Dockerfile; the host-side binding is parameterized via
+  # SSO_ADMIN_PORT in docker-compose). The default here
+  # is 8083 (the in-network port), not 8080 — the
+  # 8080 default in older revisions was a typo from when
+  # the gateway was itself the public ingress; with the
+  # current compose the gateway listens on 8080 and
+  # sso-admin on 8083, so the poller would always see
+  # "Connection refused" if it pointed at 8080.
+  catalog-url: ${GATEWAY_CATALOG_URL:http://sso-admin:8083}
+  catalog-refresh-ms: ${GATEWAY_CATALOG_REFRESH_MS:30000}
+  # X-Internal-Token sent on every poll. Leave blank to
+  # keep the legacy behavior (no header → sso-admin 401s →
+  # poller logs WARN at every tick). Empty default for
+  # back-compat with deployments that don't need dynamic
+  # routing (e.g. dev setups that only hit the static
+  # /api/qs/** path).
+  internal-token: ${GATEWAY_INTERNAL_TOKEN:}
+
 spring:
   application:
     name: api-gateway
   main:
     banner-mode: off
     web-application-type: reactive
-
   cloud:
     gateway:
       # Spring Cloud Gateway 5.0.x (Spring Cloud 2025.1.2 / Oakwood)
@@ -226,6 +257,63 @@ spring:
               filters:
                 - StripPrefix=2
                 - AddResponseHeader=X-Source, api-gateway
+            # ─── Subidas: un solo POST multipart ───
+            #
+            #   POST /api/files/eval-col/establecimiento   (multipart)
+            #     └─ file-service sube cada binario, lo registra en
+            #        TARCHIVO y sustituye el campo por su id
+            #     └─ POST /api/eval-col/establecimiento    (JSON)
+            #
+            # StripPrefix=1 quita /api y deja /files/..., que es donde
+            # escucha el controlador. El segundo salto vuelve a entrar
+            # por este gateway, así que la autorización del endpoint de
+            # catálogo se aplica igual que si el cliente lo hubiera
+            # llamado directamente: aquí sólo hace falta un JWT válido
+            # (anyExchange().authenticated()), y quien decide si ese
+            # usuario puede crear un establecimiento sigue siendo la
+            # regla del propio endpoint.
+            - id: api-file-service
+              uri: lb://file-service
+              predicates:
+                - Path=/api/files/**
+              filters:
+                - StripPrefix=1
+                - AddResponseHeader=X-Source, api-gateway
+            # ─── OpenAPI / Swagger UI: deliberately NO routes ───
+            # There used to be five `forward:` routes here
+            # (openapi-ui-self, openapi-spec-self,
+            # openapi-webjars-self, swagger-ui-default,
+            # swagger-ui-assets). They caused an infinite
+            # recursion that killed the gateway with a
+            # StackOverflowError on every GET /api/docs.
+            #
+            # Why: in Spring Cloud Gateway, `forward:` does NOT
+            # rewrite the request path. ForwardRoutingFilter just
+            # re-dispatches the SAME exchange into the local
+            # DispatcherHandler, path untouched. The dispatcher
+            # runs its handler mappings, RoutePredicateHandlerMapping
+            # is one of them, it matches the very same route again
+            # → forward → dispatch → match → ... until the stack
+            # blows. The blown reactor stack also wedges the Netty
+            # event loop, so unrelated endpoints start hanging too.
+            #
+            # No route is needed in the first place. The handler
+            # mappings that serve the docs both outrank
+            # RoutePredicateHandlerMapping (order 1):
+            #   - RequestMappingHandlerMapping (order 0) serves the
+            #     aggregated spec from OpenApiAggregatorController
+            #     (/api/docs/v3/api-docs and /swagger-config). This
+            #     is why the spec kept working while the UI hung.
+            #   - springdoc's Swagger UI welcome controller (also
+            #     order 0) serves /api/docs, and its webjars
+            #     resource handler serves /api/docs/webjars/**.
+            #     Those beans only exist when springdoc autoconfig
+            #     is ON — see the `springdoc:` block below, which
+            #     previously disabled it wholesale and left nothing
+            #     behind the forward routes to dispatch to.
+            #
+            # Adding a route for a locally-served path here will
+            # reintroduce the recursion. Don't.
           # 404 for unmatched paths (deny-by-default). The reactive
           # filter will translate this to a 401 for paths that need auth.
           default-filters:
@@ -235,29 +323,29 @@ spring:
               enabled: true
               lower-case-service-id: true
               include-expression: "serviceId != 'api-gateway'"
-
+  
 eureka:
-  client:
-    service-url:
-      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka}
-    # healthcheck.enabled MUST be false here too: otherwise the
-    # gateway itself can transiently flip to DOWN during its own
-    # warm-up window, and clients (the SPA, scripts) get confusing
-    # gateway-down errors. Lease/heartbeat alone is the source of
-    # truth for "is this instance alive".
-    healthcheck:
-      enabled: false
-    # The default 30s is too slow to recover from a restart. After
-    # a service (e.g. auth-center) comes back UP we want the
-    # gateway's ribbon cache to refresh fast so /login doesn't 503
-    # for a full minute. 5s is plenty for local dev and acceptable
-    # in prod (the registry delta payload is tiny).
-    registry-fetch-interval-seconds: 5
-  instance:
-    prefer-ip-address: true
-    lease-renewal-interval-in-seconds: 10
-    lease-expiration-duration-in-seconds: 30
-
+    client:
+      service-url:
+        defaultZone: ${EUREKA_URL:http://localhost:8761/eureka}
+      # healthcheck.enabled MUST be false here too: otherwise the
+      # gateway itself can transiently flip to DOWN during its own
+      # warm-up window, and clients (the SPA, scripts) get confusing
+      # gateway-down errors. Lease/heartbeat alone is the source of
+      # truth for "is this instance alive".
+      healthcheck:
+        enabled: false
+      # The default 30s is too slow to recover from a restart. After
+      # a service (e.g. auth-center) comes back UP we want the
+      # gateway's ribbon cache to refresh fast so /login doesn't 503
+      # for a full minute. 5s is plenty for local dev and acceptable
+      # in prod (the registry delta payload is tiny).
+      registry-fetch-interval-seconds: 5
+    instance:
+      prefer-ip-address: true
+      lease-renewal-interval-in-seconds: 10
+      lease-expiration-duration-in-seconds: 30
+  
 sso:
   jwt:
     # Sólo la pública: el gateway verifica firmas, no las emite.
@@ -271,63 +359,191 @@ sso:
   cors:
     allowed-origins: ${SSO_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:4173,http://localhost:3000}
 
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,gateway,prometheus
-  endpoint:
-    health:
-      probes:
-        enabled: true
-      show-details: never
-
-  # ---------------------------------------------------------------------------
-  # Observability — pure OTLP. Metrics, traces and logs are all pushed
-  # to the Grafana Alloy collector. Alloy fans out to Mimir / Tempo / Loki.
-  #
-  # The endpoint defaults to the OTEL_EXPORTER_OTLP_ENDPOINT env var
-  # (set to http://alloy:4318 in docker-compose), falling back to
-  # localhost:4318 for a developer running Alloy on the host.
-  #
-  # Spring Boot 4 naming (per the official 2025-11-18 Spring blog):
-  #   metrics  -> management.otlp.metrics.export.url
-  #   tracing  -> management.opentelemetry.tracing.export.otlp.endpoint
-  #   logs     -> management.opentelemetry.logging.export.otlp.endpoint
-  # The old `management.otlp.tracing.endpoint` /
-  # `management.otlp.logs.export.endpoint` namespaces are silently
-  # ignored in Boot 4 — the app would boot, but no traces or logs
-  # would ever reach Alloy and Tempo/Loki would stay empty.
-  # ---------------------------------------------------------------------------
-  otlp:
-    metrics:
-      export:
-        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
-        step: 10s
-  opentelemetry:
-    tracing:
-      export:
-        otlp:
-          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
-    logging:
-      export:
-        otlp:
-          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
-    # Resource attributes attached to every metric/trace/log so Grafana
-    # can group by service. service.name comes from spring.application.name.
-    resource-attributes:
-      service.namespace: sso
-      deployment.environment: ${DEPLOY_ENV:dev}
-  tracing:
+# ---------------------------------------------------------------------------
+# OpenAPI / Swagger UI — the gateway aggregates each downstream service's
+# /v3/api-docs into one doc served at /api/docs/v3/api-docs and renders
+# the Swagger UI bundle at /api/docs/swagger-ui.html. The aggregated doc
+# blends two sources (see OpenApiAggregatorService):
+#   - source=springdoc — fetch the service's own /v3/api-docs via Eureka
+#   - source=catalog   — query sso-admin's /internal/openapi/catalog
+#                        (reuses the endpoint table admin-ui already manages)
+# Adding a new internal service = drop a dep on springdoc-openapi and add
+# one entry to springdoc.aggregator.services below. Adding a partner/external
+# service = create the row in sso-admin (no code change here).
+# ---------------------------------------------------------------------------
+springdoc:
+  api-docs:
+    # MUST stay true. `springdoc.api-docs.enabled=false` is the
+    # master switch for springdoc's ENTIRE autoconfiguration —
+    # not just the /v3/api-docs endpoint. With it false, the
+    # Swagger UI welcome controller and the webjars resource
+    # handler are never registered, so /api/docs and
+    # /api/docs/webjars/** have no local handler at all. That
+    # is what left the `forward:` routes (now removed, see the
+    # routes block above) dispatching into a dead end and
+    # recursing until StackOverflowError.
+    #
+    # We still don't want springdoc's own single-app doc served
+    # at /api/docs/v3/api-docs — that path belongs to
+    # OpenApiAggregatorController's merged doc. So instead of
+    # disabling springdoc, we park its doc on a side path. It
+    # describes only the gateway itself (which has no business
+    # controllers), so it's near-empty and harmless; it just has
+    # to exist somewhere that doesn't collide with the
+    # aggregator's mappings, or Spring fails at startup with an
+    # ambiguous-mapping error.
+    #
+    # Side effect worth knowing: springdoc also derives its own
+    # swagger-config path from this one, so it lands at
+    # /api/docs/springdoc/v3/api-docs/swagger-config and leaves
+    # the aggregator's /api/docs/v3/api-docs/swagger-config
+    # alone. Both are under /api/docs/** which
+    # GatewaySecurityConfig already permitAlls.
     enabled: true
-    sampling:
-      # 100% in dev so every request shows a trace. Lower to e.g. 0.1
-      # in production to cap trace volume.
-      probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
+    path: /api/docs/springdoc/v3/api-docs
+  swagger-ui:
+    enabled: true
+    # Left at springdoc's DEFAULT on purpose. Do NOT set this to
+    # /api/docs.
+    #
+    # Measured on the real image: with `path: /api/docs`, springdoc's
+    # SwaggerWelcomeWebFlux takes ownership of GET /api/docs and then
+    # never completes the response — the request hangs until the
+    # client times out. Moving the path off /api/docs makes the hang
+    # disappear immediately (verified: /api/docs went from a hard
+    # timeout to a clean 404 with nothing else changed).
+    #
+    # This is the second, independent cause of the /api/docs outage.
+    # The first was the recursive `forward:` routes (removed above);
+    # deleting those alone was NOT enough, because springdoc's own
+    # controller kept hanging underneath them.
+    #
+    # So /api/docs is served by OUR SwaggerUiRedirectController
+    # instead, which just 302s to the asset bundle below. Keeping
+    # springdoc's UI enabled (at its default path) is still required:
+    # it is what registers the webjars resource handler that actually
+    # serves the Swagger UI bundle.
+    path: /swagger-ui.html
+    url: /api/docs/v3/api-docs
+    config-url: /api/docs/v3/api-docs/swagger-config
+    operations-sorter: alpha
+    tags-sorter: alpha
+    display-request-duration: true
+  # webjars.prefix is deliberately NOT set. It used to say
+  # /api/docs/webjars, but springdoc-webflux does not honor it here:
+  # measured on the real image, /api/docs/webjars/swagger-ui/index.html
+  # 404s while /webjars/swagger-ui/index.html returns 200. The assets
+  # live at the default /webjars/** and GatewaySecurityConfig already
+  # permitAlls that prefix, so the redirect target points there.
+  cache:
+    ttl: 60s
+  aggregator:
+    catalog-url: http://sso-admin:8083/internal/openapi/catalog
+    catalog-internal-token: ${SSO_INTERNAL_TOKEN:dev-internal-token}
+    services:
+      - service-id: auth-center
+        source: springdoc
+        gateway-paths: ["/auth/**", "/api/auth/**", "/login", "/getApiToken",
+                        "/getInfoUser", "/getUsersSSO", "/googleLogin", "/myApps",
+                        "/internal/cache/**"]
+        tag-prefix: "auth-center"
+        description: "Authentication issuer — login, token issuance, user lookup"
+      - service-id: sso-admin
+        source: springdoc
+        gateway-paths: ["/sso-admin/**", "/api/sso-admin/**",
+                        "/sso-admin/role/**", "/sso-admin/microservice/**",
+                        "/sso-admin/endpoint/**", "/sso-admin/group/**",
+                        "/sso-admin/route/**"]
+        tag-prefix: "sso-admin"
+        description: "Catalog CRUD (User/Role/Group/Microservice/Endpoint/Route) and email-link flows"
+      - service-id: query-service-postgres
+        source: springdoc
+        gateway-paths: ["/qs/**", "/api/qs/**", "/query-service-postgres/**"]
+        tag-prefix: "query-service"
+        description: "Query + write gateway — resolves catalog uuids to SQL and runs them"
+      - service-id: hello-service
+        source: springdoc
+        gateway-paths: ["/hello-service/**", "/api/hello/**"]
+        tag-prefix: "hello-service"
+        description: "Reference reactive downstream (X-Authenticated-* header echo)"
+      - service-id: provisioner
+        source: springdoc
+        gateway-paths: ["/provisioner/**"]
+        tag-prefix: "provisioner"
+        description: "Container lifecycle sidecar (Docker Engine API)"
+      - service-id: notification-service
+        source: springdoc
+        gateway-paths: ["/actuator/providers/**", "/notification-service/actuator/providers/**"]
+        tag-prefix: "notifications"
+        description: "Notification provider roster (actuator)"
+      - service-id: billing-service-external
+        source: catalog
+        gateway-paths: ["/billing/**"]
+        tag-prefix: "external:billing"
+        description: "Servicio externo de facturación (gestionado por partner)"
+      - service-id: erp-service-external
+        source: catalog
+        gateway-paths: ["/erp/**"]
+        tag-prefix: "external:erp"
+        description: "Servicio externo ERP"
 
+management:
+    endpoints:
+      web:
+        exposure:
+          include: health,info,gateway,prometheus
+    endpoint:
+      health:
+        probes:
+          enabled: true
+        show-details: never
+  
+    # ---------------------------------------------------------------------------
+    # Observability — pure OTLP. Metrics, traces and logs are all pushed
+    # to the Grafana Alloy collector. Alloy fans out to Mimir / Tempo / Loki.
+    #
+    # The endpoint defaults to the OTEL_EXPORTER_OTLP_ENDPOINT env var
+    # (set to http://alloy:4318 in docker-compose), falling back to
+    # localhost:4318 for a developer running Alloy on the host.
+    #
+    # Spring Boot 4 naming (per the official 2025-11-18 Spring blog):
+    #   metrics  -> management.otlp.metrics.export.url
+    #   tracing  -> management.opentelemetry.tracing.export.otlp.endpoint
+    #   logs     -> management.opentelemetry.logging.export.otlp.endpoint
+    # The old `management.otlp.tracing.endpoint` /
+    # `management.otlp.logs.export.endpoint` namespaces are silently
+    # ignored in Boot 4 — the app would boot, but no traces or logs
+    # would ever reach Alloy and Tempo/Loki would stay empty.
+    # ---------------------------------------------------------------------------
+    otlp:
+      metrics:
+        export:
+          url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+          step: 10s
+    opentelemetry:
+      tracing:
+        export:
+          otlp:
+            endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+      logging:
+        export:
+          otlp:
+            endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+      # Resource attributes attached to every metric/trace/log so Grafana
+      # can group by service. service.name comes from spring.application.name.
+      resource-attributes:
+        service.namespace: sso
+        deployment.environment: ${DEPLOY_ENV:dev}
+    tracing:
+      enabled: true
+      sampling:
+        # 100% in dev so every request shows a trace. Lower to e.g. 0.1
+        # in production to cap trace volume.
+        probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
+  
 logging:
-  level:
-    root: INFO
-    com.co.eurekatic: INFO
-    org.springframework.cloud.gateway: INFO
-    reactor.netty: INFO
+    level:
+      root: INFO
+      com.co.eurekatic: INFO
+      org.springframework.cloud.gateway: INFO
+      reactor.netty: INFO

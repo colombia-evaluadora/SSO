@@ -23,6 +23,8 @@
 
     <properties>
         <start-class>com.co.eurekatic.query.QueryServiceApplication</start-class>
+        <!-- V33 — Resilience4j version is shared via the parent
+             pom (same as notification-service). -->
     </properties>
 
     <dependencies>
@@ -96,6 +98,24 @@
             <version>12.10.0.jre11</version>
         </dependency>
 
+        <!-- V33 — Resilience4j: programmatic Bulkhead + RateLimiter.
+             Mirrors notification-service's pattern (no AOP starter
+             — that one is Spring Boot 3 only). Bulkhead caps
+             concurrent JDBC calls per dialect so a single slow
+             query can't starve the pool; RateLimiter caps RPS per
+             principal so a runaway client can't overwhelm the
+             service. Built at startup from query.resilience.* props. -->
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-bulkhead</artifactId>
+            <version>${resilience4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-ratelimiter</artifactId>
+            <version>${resilience4j.version}</version>
+        </dependency>
+
         <!-- ===== test scope ===== -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -118,6 +138,21 @@
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
             <scope>test</scope>
+        </dependency>
+        <!--
+            springdoc-openapi: publishes this service's /v3/api-docs so
+            api-gateway's OpenApiAggregatorService can merge it into the
+            doc at /api/docs. See auth-center/pom.xml for the full
+            rationale. *-api*, not *-ui*: the gateway owns Swagger UI.
+
+            Note this image is also what the provisioner spawns for every
+            dynamic instance (query-service-eval-col etc.), so those get
+            their spec published too, for free.
+        -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+            <version>${springdoc-openapi.version}</version>
         </dependency>
     </dependencies>
 

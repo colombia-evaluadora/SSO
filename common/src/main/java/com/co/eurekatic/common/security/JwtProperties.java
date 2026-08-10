@@ -42,7 +42,18 @@ public record JwtProperties(
         @Min(60) long accessTokenTtlSeconds,
         @Min(60) long apiTokenTtlSeconds,
         @NotBlank String headerName,
-        @NotBlank String tokenPrefix) {
+        @NotBlank String tokenPrefix,
+        // V29 — HS256 fallback for services that prefer
+        // symmetric signing. Nullable; when {@link #privateKey}
+        // is set, the service uses RS256 and this field is
+        // ignored. Most prod deployments use RS256 (test branch
+        // default); main's HMAC path remains valid for dev
+        // environments where a single shared secret is fine.
+        //
+        // Declared LAST so existing test constructors that
+        // pass the original 7 args still compile. New callers
+        // can pass an 8th arg for HS256.
+        String secret) {
 
     public static final String DEFAULT_ISSUER = "sso-postgres";
     public static final String DEFAULT_HEADER = "Authorization";
@@ -72,6 +83,28 @@ public record JwtProperties(
 
     /** True when this service is configured to sign, not just verify. */
     public boolean canIssue() {
-        return privateKey != null && !privateKey.isBlank();
+        return (privateKey != null && !privateKey.isBlank())
+                || (secret != null && !secret.isBlank());
+    }
+
+    /**
+     * Convenience factory for the pre-V29 7-arg shape (RS256
+     * only, no HMAC secret).
+     *
+     * <p><b>Deliberately a static factory, NOT an overloaded
+     * constructor.</b> Spring Boot's {@code @ConfigurationProperties}
+     * only performs constructor binding when the type has
+     * exactly ONE constructor. A second constructor makes Boot
+     * fall back to setter binding, which then fails with
+     * "No default constructor found" at context startup — the
+     * failure that took down sso-admin and auth-center when
+     * this was an overload.
+     */
+    public static JwtProperties rsaOnly(String privateKey, String publicKey, String issuer,
+                                        long accessTokenTtlSeconds, long apiTokenTtlSeconds,
+                                        String headerName, String tokenPrefix) {
+        return new JwtProperties(privateKey, publicKey, issuer,
+                accessTokenTtlSeconds, apiTokenTtlSeconds,
+                headerName, tokenPrefix, null);
     }
 }

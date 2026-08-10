@@ -24,6 +24,26 @@
     </properties>
 
     <dependencies>
+        <!--
+            common: brings in OpenApiFactory (static helpers
+            for the bearer-jwt security scheme, info, etc.)
+            and transitively swagger-models (compile scope).
+            Needed by ProvisionerOpenApiConfig, which the
+            api-gateway aggregator reads to merge the
+            provisioner's spec into the platform doc.
+
+            Previous commit (47beb91) added the @Configuration
+            class but forgot this dep — the docker build
+            failed on first deploy with
+            "package com.co.eurekatic.common.openapi does not
+            exist". This dependency unblocks the build.
+        -->
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Servlet-only REST surface. No DB, no security
              (the only caller is sso-admin over the internal
              docker network), no Eureka. We add actuator for
@@ -62,6 +82,17 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
+        </dependency>
+        <!--
+            springdoc-openapi: publishes this service's /v3/api-docs so
+            api-gateway's OpenApiAggregatorService can merge it into the
+            doc at /api/docs. See auth-center/pom.xml for the full
+            rationale. *-api*, not *-ui*: the gateway owns Swagger UI.
+        -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+            <version>${springdoc-openapi.version}</version>
         </dependency>
     </dependencies>
 

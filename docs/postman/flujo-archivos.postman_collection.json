@@ -1,0 +1,458 @@
+{
+  "info": {
+    "_postman_id": "8f3c1e40-6b2a-4d7e-9c11-5a2f7d0b4e91",
+    "name": "SSO — flujo de archivos (file-service + query-service)",
+    "description": "Recorre el ciclo completo de binarios del SSO, de punta a punta.\n\n**El flujo real**\n\n1. `POST /api/files/eval-col/funcionario/crear` (multipart) — file-service sube el binario a S3, lo registra en TARCHIVO, sustituye el campo por su id y reenvía el JSON al catálogo, que crea el funcionario.\n2. `GET /api/eval-col/funcionario/{id}/archivo-firmado` — query-service devuelve la fila con la ruta de descarga.\n3. `GET /api/files/download/{archivoId}` — file-service streamea los bytes a través del gateway.\n\nEl prefijo `/files` del paso 1 es lo único que distingue la subida: el gateway enruta por path, y `/api/eval-col/**` ya es de query-service. file-service se quita ese prefijo y reenvía al path real, así que la operación vuelve a entrar por el gateway y pasa la misma autorización.\n\n**Antes de empezar**\n\n- Elige el entorno `SSO — test` e introduce `password`. Es lo único que hace falta.\n- El paso 1 necesita que **selecciones un fichero** a mano: Postman no permite incrustar binarios en una colección. Ve a *Body → form-data → firma* y elige cualquier imagen.\n\n**El login es automático.** Un script de colección pide el token antes de cada petición y lo reutiliza mientras siga vivo, así que cualquier petición funciona suelta, sin ejecutar nada antes y sin copiar tokens a mano. Cuando caduca (1 h), se renueva solo. La petición *Login* de la carpeta 1 se queda para probar el login en sí y ver la respuesta.\n\nLa carpeta *Rechazos esperados* comprueba que lo que debe fallar, falla. Un 200 ahí es un problema de seguridad, no un éxito.\n\n**Limpieza**: la última petición borra lo creado. Si paras a medias, quedan una fila en `tfuncionario`, otra en `tarchivo` y un objeto en el bucket.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Login automático. Se ejecuta antes de CADA petición de la",
+          "// colección, así que cualquiera funciona suelta, sin tener que",
+          "// acordarse de lanzar el login primero.",
+          "//",
+          "// Sólo pide token si hace falta: si el que hay sigue vivo, no",
+          "// se hace nada. Sin esta comprobación se metería una llamada",
+          "// extra de login delante de cada petición, lo que ensucia los",
+          "// tiempos y castiga a auth-center sin motivo.",
+          "",
+          "const rutaLogin = '/api/auth/login';",
+          "",
+          "// La propia petición de login no debe autenticarse a sí misma.",
+          "if (pm.request.url.getPath().endsWith(rutaLogin)) { return; }",
+          "",
+          "// Las pruebas de rechazo NO se excluyen de aquí, aunque a",
+          "// primera vista lo parezca. No usan {{token}}: llevan su",
+          "// credencial mala escrita en la propia petición (ninguna, un",
+          "// JWT roto, el token interno), así que refrescar la variable no",
+          "// las afecta. La única que sí lo usa es «Archivo inexistente»,",
+          "// que necesita un token BUENO para pasar el gateway y llegar al",
+          "// 404 de file-service — excluirla la rompería con un 401.",
+          "",
+          "function caducado(jwt) {",
+          "    try {",
+          "        const carga = JSON.parse(atob(jwt.split('.')[1]));",
+          "        // 30 s de margen: un token que expira dentro de dos",
+          "        // segundos llega muerto si la petición tarda.",
+          "        return !carga.exp || (carga.exp - 30) * 1000 < Date.now();",
+          "    } catch (e) {",
+          "        return true; // ilegible = inservible",
+          "    }",
+          "}",
+          "",
+          "const actual = pm.collectionVariables.get('token');",
+          "if (actual && !caducado(actual)) { return; }",
+          "",
+          "const clave = pm.environment.get('password');",
+          "if (!clave) {",
+          "    throw new Error('Falta `password` en el entorno «SSO — test». ' +",
+          "        'Ábrelo, rellénalo y vuelve a lanzar.');",
+          "}",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + rutaLogin,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: {",
+          "        mode: 'raw',",
+          "        raw: JSON.stringify({",
+          "            email: pm.environment.get('email'),",
+          "            password: clave",
+          "        })",
+          "    }",
+          "}, (err, res) => {",
+          "    if (err) { throw new Error('No se pudo contactar con el gateway: ' + err); }",
+          "    if (res.code !== 200) {",
+          "        throw new Error('Login rechazado (' + res.code + '). ' +",
+          "            'Revisa `email` y `password` del entorno.');",
+          "    }",
+          "    pm.collectionVariables.set('token', res.json().token);",
+          "    console.log('token renovado automáticamente');",
+          "});"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "0 — Salud",
+      "item": [
+        {
+          "name": "Gateway arriba",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('status UP', () => {",
+                  "    pm.expect(pm.response.json().status).to.eql('UP');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["actuator", "health"]
+            },
+            "description": "Comprobación previa. Si esto falla, no sigas: el resto dará errores que parecen de la aplicación y son de red o de un contenedor caído."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1 — Login",
+      "item": [
+        {
+          "name": "Login (guarda el token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "",
+                  "const token = pm.response.json().token;",
+                  "pm.test('devuelve un token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+                  "",
+                  "// Variable de COLECCIÓN, no de entorno: el token es efímero",
+                  "// (1 h) y no tiene por qué ensuciar el entorno guardado.",
+                  "pm.collectionVariables.set('token', token);",
+                  "",
+                  "// El login también deja una cookie sso_refresh (HttpOnly,",
+                  "// SameSite=Strict). Sirve para renovar en /auth/refresh, NO",
+                  "// para autenticar peticiones: la autenticación es Bearer.",
+                  "// Por eso un <img src=\"/api/files/download/12\"> no funciona",
+                  "// y el front tiene que descargar con fetch.",
+                  "pm.test('deja la cookie de refresco', () => {",
+                  "    const c = pm.response.headers.get('Set-Cookie') || '';",
+                  "    pm.expect(c).to.include('sso_refresh');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "**No hace falta ejecutarla**: el script de colección ya obtiene el token solo antes de cada petición.\n\nSe queda por dos motivos: probar el login en sí (que devuelve token y cookie), y poder forzar uno nuevo cuando quieras."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2 — Flujo completo",
+      "item": [
+        {
+          "name": "POST subir archivo + crear funcionario (multipart)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "",
+                  "const filas = pm.response.json().rows;",
+                  "pm.test('devuelve el id del funcionario', () => {",
+                  "    pm.expect(filas).to.be.an('array').with.lengthOf(1);",
+                  "    pm.expect(filas[0].id).to.be.a('number');",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set('funcionarioId', filas[0].id);",
+                  "console.log('funcionario creado:', filas[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "municipio", "value": "1", "type": "text" },
+                { "key": "telefonos", "value": "3001234567", "type": "text" },
+                {
+                  "key": "firma",
+                  "type": "file",
+                  "src": [],
+                  "description": "ELIGE UN FICHERO AQUÍ. Postman no permite incrustar binarios en la colección, así que hay que seleccionarlo a mano. Vale cualquier imagen pequeña."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/files/eval-col/funcionario/crear",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "files", "eval-col", "funcionario", "crear"]
+            },
+            "description": "Una sola petición hace todo:\n\n- file-service sube el binario a S3 y reserva la fila en TARCHIVO **antes** de subir (si algo falla, queda basura visible y borrable, no un objeto huérfano invisible en el bucket).\n- Sustituye el campo `firma` por el id resultante, conservando el nombre: el catálogo lo lee como `:BODY.FIRMA`.\n- Reenvía el JSON a `/api/eval-col/funcionario/crear` con **tu mismo JWT**, así que la autorización se aplica igual que si lo hubieras llamado directo.\n- Cuando el catálogo responde 2xx, file-service marca la fila como activa. Hasta ese momento el archivo no es descargable.\n\nNo pongas `Content-Type` a mano: Postman genera el `boundary` del multipart."
+          },
+          "response": []
+        },
+        {
+          "name": "GET funcionario por id (query-service)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "",
+                  "const f = pm.response.json().rows[0];",
+                  "pm.test('trae el archivo asociado', () => {",
+                  "    pm.expect(f.archivo_id).to.be.a('number');",
+                  "});",
+                  "",
+                  "pm.test('la ruta de descarga apunta al gateway, no al bucket', () => {",
+                  "    pm.expect(f.archivo_firmado_url).to.match(/^\\/api\\/files\\/download\\/\\d+$/);",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set('archivoId', f.archivo_id);",
+                  "pm.collectionVariables.set('rutaDescarga', f.archivo_firmado_url);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/funcionario/{{funcionarioId}}/archivo-firmado",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "funcionario", "{{funcionarioId}}", "archivo-firmado"]
+            },
+            "description": "Query del catálogo (`eval-col-funcionario-archivo-firmado-001`).\n\nDevuelve dos URLs distintas y conviene no confundirlas:\n\n- `archivo_url` — la ruta cruda del objeto en el bucket. Sirve para operar y auditar; **no** es consumible desde un cliente.\n- `archivo_firmado_url` — `/api/files/download/{id}`, la que sí funciona. El nombre lleva \"firmado\" de cuando esto devolvía URLs prefirmadas contra S3; ya no hay ninguna firma en juego."
+          },
+          "response": []
+        },
+        {
+          "name": "GET listado de funcionarios",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "",
+                  "const filas = pm.response.json().rows;",
+                  "const mia = filas.find(r => r.id === pm.collectionVariables.get('funcionarioId'));",
+                  "",
+                  "pm.test('el funcionario recién creado aparece', () => {",
+                  "    pm.expect(mia, 'no está en el listado').to.not.be.undefined;",
+                  "});",
+                  "",
+                  "pm.test('trae la ruta de descarga (V37)', () => {",
+                  "    pm.expect(mia.archivo_descarga_url).to.match(/^\\/api\\/files\\/download\\/\\d+$/);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/funcionario",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "funcionario"]
+            },
+            "description": "Listado (`eval-col-funcionario-listar-001`).\n\n`archivo_descarga_url` la añadió V37: antes esta query sólo devolvía `archivo_url` (la ruta del bucket), que ningún cliente puede abrir. La query por id ya se había corregido en V36 y ésta se quedó fuera.\n\nOjo con las filas antiguas: muchas tienen un `urls3` que apunta a AWS (`coleva-files.s3.amazonaws.com`) y esos objetos no existen en el Garage de pruebas. Descargarlas da 404 — es correcto, no hay bytes en este entorno."
+          },
+          "response": []
+        },
+        {
+          "name": "GET descargar el binario",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('llega contenido', () => {",
+                  "    pm.expect(pm.response.responseSize).to.be.above(0);",
+                  "});",
+                  "",
+                  "pm.test('Content-Disposition inline con el nombre original', () => {",
+                  "    const cd = pm.response.headers.get('Content-Disposition') || '';",
+                  "    pm.expect(cd).to.include('inline');",
+                  "    pm.expect(cd).to.include('filename=');",
+                  "});",
+                  "",
+                  "pm.test('Content-Length coincide con los bytes recibidos', () => {",
+                  "    const cl = pm.response.headers.get('Content-Length');",
+                  "    if (cl) pm.expect(Number(cl)).to.eql(pm.response.responseSize);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}{{rutaDescarga}}",
+              "host": ["{{baseUrl}}{{rutaDescarga}}"]
+            },
+            "description": "Usa la ruta que devolvió el catálogo, no una construida a mano — así se prueba la cadena entera.\n\nfile-service saca la clave S3 del `urls3` de la fila y streamea los bytes. No carga el fichero en memoria: con tres subidas simultáneas de 50 MB eso serían 150 MB de heap en una caja que ya iba justa.\n\nEl `Content-Length` sale del objeto en S3, no de `TARCHIVO.peso`: esa columna se escribe al subir y puede quedar desincronizada, y anunciar un tamaño que no cuadra con los bytes deja al navegador esperando o truncando.\n\n**Para verlo**: pestaña *Body → Preview* si es una imagen, o *Save Response → Save to a file*."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3 — Rechazos esperados",
+      "description": "Aquí un 200 es un fallo de seguridad. Todas deben dar 401 o 404.",
+      "item": [
+        {
+          "name": "Sin credenciales → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 (lo rechaza el gateway)', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{rutaDescarga}}",
+              "host": ["{{baseUrl}}{{rutaDescarga}}"]
+            },
+            "description": "El gateway corta antes de que la petición salga hacia file-service."
+          },
+          "response": []
+        },
+        {
+          "name": "JWT inválido → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer basura.basura.basura" }],
+            "url": {
+              "raw": "{{baseUrl}}{{rutaDescarga}}",
+              "host": ["{{baseUrl}}{{rutaDescarga}}"]
+            },
+            "description": "file-service verifica la **firma** del token (RS256, sólo con la clave pública), no que exista la cabecera."
+          },
+          "response": []
+        },
+        {
+          "name": "Token interno por el gateway → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-Internal-Token", "value": "{{internalToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}{{rutaDescarga}}",
+              "host": ["{{baseUrl}}{{rutaDescarga}}"]
+            },
+            "description": "Reparto deliberado: el gateway atiende **usuarios** (JWT). El token compartido sirve para llamadas **servicio a servicio**, que van directas a `file-service:8086` por la red interna de Docker y no pasan por aquí.\n\nSi dejas `internalToken` vacío en el entorno, esta petición da 401 igual — que es lo que se está comprobando."
+          },
+          "response": []
+        },
+        {
+          "name": "Archivo inexistente → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/files/download/99999999",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "files", "download", "99999999"]
+            },
+            "description": "404, no 500. También da 404 una fila que exista pero esté inactiva: mientras el catálogo no confirme la operación, el archivo no se entrega."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4 — Limpieza",
+      "item": [
+        {
+          "name": "Cómo borrar lo creado",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["actuator", "health"]
+            },
+            "description": "No hay endpoint de borrado en el catálogo, así que la limpieza es manual. Con los ids que dejó la ejecución (mira las variables `funcionarioId` y `archivoId` de la colección), por SSH al servidor:\n\n```sh\ndocker exec sso-postgres psql -U neondb_owner -d sso_db \\\n  -c \"DELETE FROM academico_test.tfuncionario WHERE pk_tfuncionario = <funcionarioId>;\" \\\n  -c \"DELETE FROM academico_test.tarchivo    WHERE pk_tarchivo    = <archivoId>;\"\n```\n\nY el objeto del bucket (la clave lleva el id delante):\n\n```sh\ndocker run --rm --network sso_default \\\n  -e AWS_ACCESS_KEY_ID=... -e AWS_SECRET_ACCESS_KEY=... -e AWS_DEFAULT_REGION=garage \\\n  amazon/aws-cli --endpoint-url http://garage:3900 \\\n  s3 rm s3://eval-col/<archivoId>/<nombre>\n```\n\nBorrar sólo la fila y dejar el objeto es lo peor de las dos opciones: quedan bytes que nadie referencia y que sólo aparecen comparando el bucket entero contra la tabla."
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "token", "value": "", "type": "string" },
+    { "key": "funcionarioId", "value": "", "type": "string" },
+    { "key": "archivoId", "value": "", "type": "string" },
+    { "key": "rutaDescarga", "value": "", "type": "string" }
+  ]
+}

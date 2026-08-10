@@ -10,6 +10,44 @@ spring:
     name: provisioner
   main:
     banner-mode: off
+  # Exclude JPA/DataSource auto-config: the `common` module
+  # pulls in spring-boot-starter-data-jpa, but the provisioner
+  # is a stateless Docker socket sidecar that does NOT need a
+  # DB. Without this exclusion, Spring Boot tries to autoconfigure
+  # a DataSource on startup, fails (no DB URL in the env), and
+  # the app crashes with
+  # "Failed to configure a DataSource: 'url' attribute is not
+  # specified and no embedded datasource could be configured."
+  # That crash put sso-admin into a restart loop because
+  # depends_on: provisioner: condition: service_started never
+  # resolved, cascading into query-service-postgres as well.
+  #
+  # IMPORTANT — these are Spring Boot 4 class names. Boot 4 split
+  # spring-boot-autoconfigure into per-technology modules and moved
+  # the auto-configuration classes with them:
+  #
+  #   org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+  #     -> org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+  #   org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+  #     -> org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+  #
+  # This list carried the Boot 3 names after the upgrade, and that
+  # failed SILENTLY: Spring skips an exclusion whose class is not on
+  # the classpath, so nothing was excluded, DataSourceAutoConfiguration
+  # ran anyway, and the provisioner crash-looped (28 restarts) with the
+  # exact error the comment above says the exclusion prevents. The
+  # sidecar being down is what made sso-admin's container status/logs
+  # endpoints return SIDECAR_UNREACHABLE.
+  #
+  # If you ever bump Spring Boot again, re-verify these FQCNs against
+  # the jars — a typo here does not fail the build, it fails at boot.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceTransactionManagerAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceInitializationAutoConfiguration
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+      - org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration
 
 docker:
   image: ${DOCKER_IMAGE:eurekatic/query-service:1.0.0-SNAPSHOT}
@@ -24,6 +62,17 @@ docker:
   # el query-service spawneado cae al default localhost:4318 de su
   # application.yml y los exporters warn con Connection refused.
   otlp-endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://alloy:4318}
+  # V30 — secreto compartido que se propaga a cada query-service
+  # spawneado como QUERY_CATALOG_INTERNAL_TOKEN. Mismo valor que
+  # SSO_INTERNAL_TOKEN en sso-admin; el .env mantiene los tres
+  # alineados.
+  catalog-internal-token: ${QUERY_CATALOG_INTERNAL_TOKEN:}
+  # Base URL del catálogo que se inyecta a cada query-service
+  # spawneado. Apunta a sso-admin DIRECTO, no al gateway: el
+  # gateway rechaza /sso-admin/internal/** con 401 porque su
+  # cadena acaba en anyExchange().authenticated() y el
+  # X-Internal-Token no es un JWT. Ver ProvisionerProperties.
+  catalog-base-url: ${PROVISIONER_CATALOG_BASE_URL:http://sso-admin:8083}
   ready-timeout-seconds: ${READY_TIMEOUT:45}
 
 management:

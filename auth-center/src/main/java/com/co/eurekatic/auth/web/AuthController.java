@@ -79,8 +79,11 @@ public class AuthController {
             throw new AccessDeniedException("El usuario está deshabilitado");
         }
         Set<String> roles = effectiveRoles.forEmail(user.getEmail());
+        // V29: include the numeric userId in the API token so
+        // service-to-service callers get the same caller-context
+        // affordance as user-bearer tokens.
         return ResponseEntity.ok(new com.co.eurekatic.common.dto.AuthDtos.TokenResponse(
-                jwt.issueApiToken(user.getEmail(), roles),
+                jwt.issueApiToken(user.getEmail(), user.getId(), roles),
                 user.getApiToken(),
                 86_400L));
     }
