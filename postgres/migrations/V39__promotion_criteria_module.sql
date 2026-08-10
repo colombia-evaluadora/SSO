@@ -33,12 +33,21 @@ DECLARE
     d academico_test.TCRITERIO_PROMOCION;
     it jsonb; v_asig BIGINT; v_area BIGINT;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    -- Alcance por rol (como V37): gate grueso + gate fino por establecimiento.
+    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
     IF p_fk_periodo IS NULL THEN
         RAISE EXCEPTION 'El periodo academico es obligatorio' USING ERRCODE = '22023';
+    END IF;
+    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, (
+             SELECT s.FK_TESTABLECIMIENTO
+               FROM academico_test.TPERIODO_ACADEMICO pa
+               JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+              WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo)) THEN
+        RAISE EXCEPTION 'El usuario no puede gestionar criterios de promocion de este establecimiento'
+            USING ERRCODE = '42501';
     END IF;
     -- Ningun valor numerico puede ser negativo.
     IF p_cantidad_nivelar < 0 OR p_desempenho_min_general < 0 OR p_desempenho_minimo < 0
@@ -173,7 +182,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_criterio_prom_asig_agregar(
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE v_id BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
@@ -187,6 +196,19 @@ BEGIN
          WHERE PK_TCRITERIO_PROMOCION = p_fk_criterio AND ACTIVE = TRUE
     ) THEN
         RAISE EXCEPTION 'El criterio de promocion % no existe o esta inactivo', p_fk_criterio USING ERRCODE = '23503';
+    END IF;
+    -- Gate fino: establecimiento del criterio (via periodo, o via grado->periodo).
+    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, (
+             SELECT s.FK_TESTABLECIMIENTO
+               FROM academico_test.TCRITERIO_PROMOCION cp
+               JOIN academico_test.TPERIODO_ACADEMICO pa
+                 ON pa.PK_TPERIODO_ACADEMICO = COALESCE(cp.FK_TPERIODO_ACADEMICO,
+                      (SELECT gr.FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO gr
+                        WHERE gr.PK_TGRADO = cp.FK_TGRADO))
+               JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+              WHERE cp.PK_TCRITERIO_PROMOCION = p_fk_criterio)) THEN
+        RAISE EXCEPTION 'El usuario no puede gestionar criterios de promocion de este establecimiento'
+            USING ERRCODE = '42501';
     END IF;
     -- La asignatura o el area (segun corresponda) debe existir y estar activa.
     IF p_fk_asignatura IS NOT NULL AND NOT EXISTS (
@@ -221,10 +243,23 @@ CREATE OR REPLACE FUNCTION academico_test.fn_criterio_prom_asig_eliminar(
     p_pk BIGINT, p_pk_usuario_solicitante BIGINT
 )
 RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR; v_est BIGINT;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
+    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+    -- Gate fino: establecimiento del criterio dueño de la obligatoria.
+    SELECT s.FK_TESTABLECIMIENTO INTO v_est
+      FROM academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA o
+      JOIN academico_test.TCRITERIO_PROMOCION cp ON cp.PK_TCRITERIO_PROMOCION = o.FK_TCRITERIO_PROMOCION
+      JOIN academico_test.TPERIODO_ACADEMICO pa
+        ON pa.PK_TPERIODO_ACADEMICO = COALESCE(cp.FK_TPERIODO_ACADEMICO,
+             (SELECT gr.FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO gr WHERE gr.PK_TGRADO = cp.FK_TGRADO))
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE o.PK_TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA = p_pk;
+    IF v_est IS NOT NULL AND NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_est) THEN
+        RAISE EXCEPTION 'El usuario no puede gestionar criterios de promocion de este establecimiento'
             USING ERRCODE = '42501';
     END IF;
     UPDATE academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA

@@ -1,6 +1,6 @@
 -- ===========================================================================
--- V42 — Modulo de Escalas de Valoracion (academico_test). Convencion de
--- funciones (ver V37). Una "escala" del front es una banda de valoracion que
+-- V42 — Modulo de Escalas de Valoracion (academico_test). 
+-- Una "escala" del front es una banda de valoracion que
 -- se reparte en TESCALA (contenedor por nivel+periodo via TNIVEL_ESCALA),
 -- TVALORACION (valoracion: nombre, codigo=abreviacion, tipo, icono) y
 -- TESCALA_VALORACION (banda: rango en %). Alta en lote (niveles x valoraciones).
@@ -27,10 +27,8 @@ DECLARE
     v_niveles BIGINT[];
     scale jsonb;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_academic_period_id));
 
     -- Rango del formato de calificacion del periodo (para % ). El rango base es
     -- 0-100; solo "DE CERO A CINCO"/"DE CERO A DIEZ" cambian el maximo. El resto
@@ -115,10 +113,11 @@ CREATE OR REPLACE FUNCTION academico_test.fn_escala_eliminar(p_pk BIGINT, p_pk_u
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(ne.FK_PERIODO_ACADEMICO)
+          FROM academico_test.TESCALA_VALORACION ev
+          JOIN academico_test.TNIVEL_ESCALA ne ON ne.FK_TESCALA = ev.FK_TESCALA AND ne.ACTIVE = TRUE
+         WHERE ev.PK_TESCALA_VALORACION = p_pk));
     UPDATE academico_test.TESCALA_VALORACION SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TESCALA_VALORACION = p_pk AND ACTIVE = TRUE;
     GET DIAGNOSTICS v_n = ROW_COUNT;
@@ -127,13 +126,69 @@ BEGIN
 END;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- fn_escala_nivel_soft_delete — baja logica de la escala COMPLETA de un nivel
+-- en un periodo: su vinculo TNIVEL_ESCALA, el contenedor TESCALA, todas sus
+-- bandas TESCALA_VALORACION y las TVALORACION de esas bandas. fn_escala_eliminar
+-- solo baja UNA banda; sin esta funcion el bloqueo del periodo por TNIVEL_ESCALA
+-- activa (V37) no se podia limpiar. Bloquea si alguna banda esta en uso por
+-- criterios de unidad (TNIVEL_CRITERIO_UNIDAD), para no dejar descriptores
+-- calificados apuntando a bandas inactivas.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_escala_nivel_soft_delete(
+    p_academic_period_id BIGINT, p_teaching_level_id BIGINT, p_pk_usuario_solicitante BIGINT
+)
+RETURNS BIGINT LANGUAGE plpgsql AS $$
+DECLARE v_escala BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+BEGIN
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_academic_period_id));
+    SELECT ne.FK_TESCALA INTO v_escala FROM academico_test.TNIVEL_ESCALA ne
+     WHERE ne.FK_PERIODO_ACADEMICO = p_academic_period_id
+       AND ne.FK_TNIVEL_ENSENANZA = p_teaching_level_id AND ne.ACTIVE = TRUE;
+    IF v_escala IS NULL THEN
+        RAISE EXCEPTION 'No existe una escala activa para el periodo % y nivel %', p_academic_period_id, p_teaching_level_id
+            USING ERRCODE = 'P0002';
+    END IF;
+    -- Bloqueo: bandas en uso por criterios de unidad.
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TNIVEL_CRITERIO_UNIDAD ncu
+          JOIN academico_test.TESCALA_VALORACION ev ON ev.PK_TESCALA_VALORACION = ncu.FK_TESCALA_VALORACION
+         WHERE ev.FK_TESCALA = v_escala AND ncu.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No se puede eliminar la escala del nivel %: hay bandas en uso por criterios de unidad', p_teaching_level_id
+            USING ERRCODE = '23503';
+    END IF;
+    -- Valoraciones de las bandas.
+    UPDATE academico_test.TVALORACION SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TVALORACION IN (
+         SELECT FK_TVALORACION FROM academico_test.TESCALA_VALORACION
+          WHERE FK_TESCALA = v_escala AND ACTIVE = TRUE
+     );
+    -- Bandas.
+    UPDATE academico_test.TESCALA_VALORACION SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TESCALA = v_escala AND ACTIVE = TRUE;
+    -- Vinculo nivel-escala-periodo.
+    UPDATE academico_test.TNIVEL_ESCALA SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TESCALA = v_escala AND FK_PERIODO_ACADEMICO = p_academic_period_id
+       AND FK_TNIVEL_ENSENANZA = p_teaching_level_id AND ACTIVE = TRUE;
+    -- Contenedor TESCALA.
+    UPDATE academico_test.TESCALA SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TESCALA = v_escala AND ACTIVE = TRUE;
+    RETURN v_escala;
+END;
+$$;
+
 -- Lista: convierte el % de vuelta al formato del periodo.
+DROP FUNCTION IF EXISTS academico_test.fn_escala_listar(BIGINT, TEXT, INT, INT);
+DROP FUNCTION IF EXISTS academico_test.fn_escala_listar(BIGINT, TEXT, INT, INT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_escala_listar(
     p_academic_period_id BIGINT, p_filtro TEXT DEFAULT NULL,
-    p_page_index INT DEFAULT 0, p_page_size INT DEFAULT 10
+    p_page_index INT DEFAULT 0, p_page_size INT DEFAULT 10,
+    p_pk_usuario BIGINT DEFAULT NULL   -- alcance (global / establecimiento)
 )
 RETURNS TABLE (
-    id BIGINT, nombre VARCHAR, abreviacion VARCHAR, tipo VARCHAR, iconografia VARCHAR,
+    id BIGINT, nombre VARCHAR, abreviacion VARCHAR, tipo VARCHAR, tipo_name VARCHAR, iconografia VARCHAR,
     teaching_level_id BIGINT, nota_minima NUMERIC, nota_maxima NUMERIC, nota_equivalente NUMERIC,
     total_count BIGINT
 )
@@ -149,7 +204,7 @@ LANGUAGE sql STABLE AS $$
           JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = ce.FK_TLV_FORMATO_CALIFICACION
          WHERE ce.PK_TCRITERIO_EVALUACION = p_academic_period_id
     )
-    SELECT ev.PK_TESCALA_VALORACION, v.NOMBRE, v.CODIGO, tv.VALOR, v.GRAFICA_CARITAS,
+    SELECT ev.PK_TESCALA_VALORACION, v.NOMBRE, v.CODIGO, tv.VALOR, tv.NOMBRE, v.GRAFICA_CARITAS,
            ne.FK_TNIVEL_ENSENANZA,
            round(ev.LIMITE_INFERIOR / 100 * (fmt.mx - fmt.mn) + fmt.mn, 2),
            round(ev.LIMITE_SUPERIOR / 100 * (fmt.mx - fmt.mn) + fmt.mn, 2),
@@ -161,6 +216,7 @@ LANGUAGE sql STABLE AS $$
       JOIN academico_test.TNIVEL_ESCALA ne ON ne.FK_TESCALA = ev.FK_TESCALA
       CROSS JOIN fmt
      WHERE ne.FK_PERIODO_ACADEMICO = p_academic_period_id AND ev.ACTIVE = TRUE
+       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_academic_period_id)
        AND (NULLIF(TRIM(p_filtro),'') IS NULL
             OR v.NOMBRE ILIKE '%' || p_filtro || '%'
             OR v.CODIGO ILIKE '%' || p_filtro || '%')
@@ -180,10 +236,8 @@ RETURNS TABLE (id BIGINT, eliminado BOOLEAN, error_code TEXT, error_mensaje TEXT
 LANGUAGE plpgsql AS $$
 DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- Gate grueso; el fino por establecimiento lo aplica fn_escala_eliminar.
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, NULL);
     IF p_ids IS NULL THEN RETURN; END IF;
     FOREACH v_id IN ARRAY p_ids LOOP
         BEGIN

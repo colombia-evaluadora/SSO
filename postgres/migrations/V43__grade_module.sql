@@ -20,10 +20,8 @@ DECLARE
     v_id BIGINT; v_codigo VARCHAR(30);
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_fk_periodo));
     IF p_fk_periodo IS NULL OR p_fk_nivel IS NULL OR NULLIF(TRIM(p_nombre),'') IS NULL THEN
         RAISE EXCEPTION 'Faltan campos obligatorios del grado' USING ERRCODE = '22023';
     END IF;
@@ -94,10 +92,9 @@ DECLARE
     v_nombre VARCHAR(130); v_fk_sig BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_pk));
     SELECT * INTO r FROM academico_test.TGRADO WHERE PK_TGRADO = p_pk AND ACTIVE = TRUE;
     IF NOT FOUND THEN RAISE EXCEPTION 'No existe un grado activo con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
     IF p_nombre IS NOT NULL AND NULLIF(TRIM(p_nombre),'') IS NULL THEN
@@ -143,10 +140,9 @@ CREATE OR REPLACE FUNCTION academico_test.fn_grado_soft_delete(p_pk BIGINT, p_pk
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_pk));
     -- Bloqueo por dependencias (solo filas activas), de lo mas especifico a lo general.
     IF EXISTS (
         SELECT 1 FROM academico_test.TMATRICULA m
@@ -172,6 +168,16 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'No se puede eliminar el grado %: existen grupos activos', p_pk USING ERRCODE = '23503';
     END IF;
+    -- Cascade: el criterio de promocion override del grado (POR_DEFECTO='N') y sus
+    -- obligatorias son propiedad del grado, se dan de baja con el.
+    UPDATE academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
+       SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE ACTIVE = TRUE AND FK_TCRITERIO_PROMOCION IN (
+         SELECT PK_TCRITERIO_PROMOCION FROM academico_test.TCRITERIO_PROMOCION
+          WHERE FK_TGRADO = p_pk AND ACTIVE = TRUE
+     );
+    UPDATE academico_test.TCRITERIO_PROMOCION SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TGRADO = p_pk AND ACTIVE = TRUE;
     UPDATE academico_test.TGRADO SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TGRADO = p_pk AND ACTIVE = TRUE;
     GET DIAGNOSTICS v_n = ROW_COUNT;
@@ -180,23 +186,27 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS academico_test.fn_grado_listar(BIGINT, TEXT, INT, INT);
+DROP FUNCTION IF EXISTS academico_test.fn_grado_listar(BIGINT, TEXT, INT, INT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_grado_listar(
     p_fk_periodo BIGINT,
     p_filtro     TEXT DEFAULT NULL,   -- filtro por nombre (opcional)
     p_page_index INT  DEFAULT 0,      -- 0-based
-    p_page_size  INT  DEFAULT 10      -- 0/NULL = sin paginar (todo)
+    p_page_size  INT  DEFAULT 10,     -- 0/NULL = sin paginar (todo)
+    p_pk_usuario BIGINT DEFAULT NULL  -- alcance (global / establecimiento)
 )
 RETURNS TABLE (id BIGINT, nombre VARCHAR, grado VARCHAR, teaching_level_id BIGINT,
-               teaching_level_name VARCHAR, grado_siguiente VARCHAR, tiene_grado_siguiente BOOLEAN,
-               total_count BIGINT)
+               teaching_level_name VARCHAR, grado_siguiente VARCHAR, grado_siguiente_name VARCHAR,
+               tiene_grado_siguiente BOOLEAN, total_count BIGINT)
 LANGUAGE sql STABLE AS $$
     SELECT g.PK_TGRADO, g.NOMBRE, g.CODIGO, g.FK_TNIVEL_ENSENANZA, ne.NOMBRE,
-           gs.VALOR, (g.TIENE_GRADO_SIGUIENTE = 'S'),
+           gs.VALOR, gs.NOMBRE, (g.TIENE_GRADO_SIGUIENTE = 'S'),
            count(*) OVER()::BIGINT AS total_count
       FROM academico_test.TGRADO g
       JOIN academico_test.TNIVEL_ENSENANZA ne ON ne.PK_NIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
       LEFT JOIN academico_test.TLISTA_VALOR gs ON gs.PK_LISTA_VALOR = g.FK_TLV_GRADO_SIGUIENTE
      WHERE g.FK_TPERIODO_ACADEMICO = p_fk_periodo AND g.ACTIVE = TRUE
+       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_fk_periodo)
        AND (NULLIF(TRIM(p_filtro),'') IS NULL OR g.NOMBRE ILIKE '%' || p_filtro || '%')
      ORDER BY g.NOMBRE
      LIMIT NULLIF(p_page_size, 0)
@@ -215,10 +225,9 @@ CREATE OR REPLACE FUNCTION academico_test.fn_grupo_crear(
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE v_id BIGINT; v_jornada BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado));
     IF p_fk_grado IS NULL OR NULLIF(TRIM(p_nombre),'') IS NULL OR p_fk_modelo_pedagogico IS NULL
        OR p_capacidad IS NULL THEN
         RAISE EXCEPTION 'Faltan campos obligatorios del grupo' USING ERRCODE = '22023';
@@ -267,10 +276,10 @@ DECLARE
     r academico_test.TGRUPO; v_nombre VARCHAR(130);
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TGRUPO gr JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+         WHERE gr.PK_TGRUPO = p_pk));
     SELECT * INTO r FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_pk AND ACTIVE = TRUE;
     IF NOT FOUND THEN RAISE EXCEPTION 'No existe un grupo activo con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
     IF p_nombre IS NOT NULL AND NULLIF(TRIM(p_nombre),'') IS NULL THEN
@@ -307,10 +316,10 @@ CREATE OR REPLACE FUNCTION academico_test.fn_grupo_soft_delete(p_pk BIGINT, p_pk
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TGRUPO gr JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+         WHERE gr.PK_TGRUPO = p_pk));
     -- Bloqueo por dependencias (solo filas activas).
     IF EXISTS (
         SELECT 1 FROM academico_test.TMATRICULA m WHERE m.FK_TGRUPO = p_pk AND m.ACTIVE = TRUE
@@ -335,14 +344,15 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS academico_test.fn_grupo_listar(BIGINT, TEXT, INT, INT);
 CREATE OR REPLACE FUNCTION academico_test.fn_grupo_listar(
     p_fk_grado BIGINT, p_filtro TEXT DEFAULT NULL,
     p_page_index INT DEFAULT 0, p_page_size INT DEFAULT 10
 )
-RETURNS TABLE (id BIGINT, codigo VARCHAR, jornada VARCHAR, director_id BIGINT,
-               metodologia VARCHAR, cupo NUMERIC, total_count BIGINT)
+RETURNS TABLE (id BIGINT, codigo VARCHAR, jornada VARCHAR, jornada_name VARCHAR, director_id BIGINT,
+               metodologia VARCHAR, metodologia_name VARCHAR, cupo NUMERIC, total_count BIGINT)
 LANGUAGE sql STABLE AS $$
-    SELECT gr.PK_TGRUPO, gr.NOMBRE, jor.VALOR, gr.FK_TFUNCIONARIO, met.VALOR, gr.CAPACIDAD,
+    SELECT gr.PK_TGRUPO, gr.NOMBRE, jor.VALOR, jor.NOMBRE, gr.FK_TFUNCIONARIO, met.VALOR, met.NOMBRE, gr.CAPACIDAD,
            count(*) OVER()::BIGINT
       FROM academico_test.TGRUPO gr
       JOIN academico_test.TLISTA_VALOR jor      ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
@@ -375,10 +385,8 @@ RETURNS TABLE (id BIGINT, eliminado BOOLEAN, error_code TEXT, error_mensaje TEXT
 LANGUAGE plpgsql AS $$
 DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- Gate grueso; el fino por establecimiento lo aplica fn_grado_soft_delete.
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, NULL);
     IF p_ids IS NULL THEN RETURN; END IF;
     FOREACH v_id IN ARRAY p_ids LOOP
         BEGIN

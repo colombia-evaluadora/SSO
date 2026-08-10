@@ -21,10 +21,9 @@ DECLARE
     v_bloque INT; v_grupo BIGINT; v_asig BIGINT; v_dia BIGINT; v_planitem BIGINT;
     entry jsonb;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado));
 
     SELECT pa.BLOQUES_POR_DEFECTO INTO v_max_bloques
       FROM academico_test.TGRADO g JOIN academico_test.TPERIODO_ACADEMICO pa
@@ -96,12 +95,13 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS academico_test.fn_horario_listar(BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_horario_listar(p_fk_grado BIGINT)
 RETURNS TABLE (id BIGINT, grupo_id BIGINT, plan_item_id BIGINT, asignatura_id BIGINT,
-               dia_id BIGINT, dia VARCHAR, bloque NUMERIC)
+               dia_id BIGINT, dia VARCHAR, dia_name VARCHAR, bloque NUMERIC)
 LANGUAGE sql STABLE AS $$
     SELECT h.PK_THORARIO, h.FK_TGRUPO, ap.PK_TASIGNATURA_PLAN, h.FK_TASIGNATURA,
-           h.FK_TLV_DIA_SEMANA, dia.VALOR, h.NUMERO_BLOQUE
+           h.FK_TLV_DIA_SEMANA, dia.VALOR, dia.NOMBRE, h.NUMERO_BLOQUE
       FROM academico_test.THORARIO h
       JOIN academico_test.TGRUPO gr ON gr.PK_TGRUPO = h.FK_TGRUPO AND gr.ACTIVE = TRUE
       LEFT JOIN academico_test.TLISTA_VALOR dia ON dia.PK_LISTA_VALOR = h.FK_TLV_DIA_SEMANA

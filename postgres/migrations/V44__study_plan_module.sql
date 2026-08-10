@@ -25,10 +25,9 @@ DECLARE
     v_grado_nom TEXT; v_plan_id BIGINT; v_id BIGINT; v_periodo BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado));
     IF p_fk_grado IS NULL OR p_fk_asignatura IS NULL THEN
         RAISE EXCEPTION 'Grado y asignatura son obligatorios' USING ERRCODE = '22023';
     END IF;
@@ -114,10 +113,12 @@ CREATE OR REPLACE FUNCTION academico_test.fn_plan_actualizar(
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TASIGNATURA_PLAN ap
+          JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
+          JOIN academico_test.TGRADO g ON g.PK_TGRADO = pl.FK_TGRADO
+         WHERE ap.PK_TASIGNATURA_PLAN = p_pk));
     -- Validaciones numericas (solo si vienen).
     IF p_numero_hora IS NOT NULL AND p_numero_hora <= 0 THEN
         RAISE EXCEPTION 'La intensidad horaria debe ser mayor a 0' USING ERRCODE = '22023';
@@ -171,10 +172,12 @@ CREATE OR REPLACE FUNCTION academico_test.fn_plan_eliminar(p_pk BIGINT, p_pk_usu
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TASIGNATURA_PLAN ap
+          JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
+          JOIN academico_test.TGRADO g ON g.PK_TGRADO = pl.FK_TGRADO
+         WHERE ap.PK_TASIGNATURA_PLAN = p_pk));
     -- Bloqueo: la asignatura del renglon tiene asignaciones docente activas en
     -- algun grupo del grado del plan.
     IF EXISTS (
@@ -198,6 +201,56 @@ BEGIN
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE FK_TASIGNATURA_PLAN = p_pk AND ACTIVE = TRUE;
     RETURN p_pk;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- fn_plan_soft_delete — baja logica del plan COMPLETO de un grado: el header
+-- TPLAN + todos sus renglones TASIGNATURA_PLAN + sus enlaces al criterio de
+-- evaluacion (TCRITERIO_EVALUACION_ASIGNATURA_PLAN). fn_plan_eliminar solo baja
+-- un renglon y NO toca el header, por lo que el bloqueo del periodo por TPLAN
+-- activo (V37) no se podia limpiar sin esta funcion. Bloquea si algun renglon
+-- activo tiene asignaciones docente activas en grupos del grado (mismo criterio
+-- que fn_plan_eliminar, generalizado al plan entero).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_plan_soft_delete(p_fk_grado BIGINT, p_pk_usuario_solicitante BIGINT)
+RETURNS BIGINT LANGUAGE plpgsql AS $$
+DECLARE v_pk_plan BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+BEGIN
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado));
+    SELECT PK_TPLAN INTO v_pk_plan FROM academico_test.TPLAN
+     WHERE FK_TGRADO = p_fk_grado AND ACTIVE = TRUE;
+    IF v_pk_plan IS NULL THEN
+        RAISE EXCEPTION 'No existe un plan de estudio activo para el grado %', p_fk_grado USING ERRCODE = 'P0002';
+    END IF;
+    -- Bloqueo: algun renglon del plan tiene asignaciones docente activas.
+    IF EXISTS (
+        SELECT 1
+          FROM academico_test.TASIGNATURA_PLAN ap
+          JOIN academico_test.TGRUPO g ON g.FK_TGRADO = p_fk_grado AND g.ACTIVE = TRUE
+          JOIN academico_test.TDOCENTE_ASIGNATURA da ON da.FK_TGRUPO = g.PK_TGRUPO
+               AND da.FK_TASIGNATURA = ap.FK_TASIGNATURA AND da.ACTIVE = TRUE
+         WHERE ap.FK_TPLAN = v_pk_plan AND ap.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No se puede eliminar el plan del grado %: hay asignaturas con asignaciones academicas (docentes) activas', p_fk_grado
+            USING ERRCODE = '23503';
+    END IF;
+    -- Enlaces al criterio de evaluacion de los renglones del plan.
+    UPDATE academico_test.TCRITERIO_EVALUACION_ASIGNATURA_PLAN
+       SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE ACTIVE = TRUE AND FK_TASIGNATURA_PLAN IN (
+         SELECT PK_TASIGNATURA_PLAN FROM academico_test.TASIGNATURA_PLAN
+          WHERE FK_TPLAN = v_pk_plan AND ACTIVE = TRUE
+     );
+    -- Renglones del plan.
+    UPDATE academico_test.TASIGNATURA_PLAN SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TPLAN = v_pk_plan AND ACTIVE = TRUE;
+    -- Header del plan.
+    UPDATE academico_test.TPLAN SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TPLAN = v_pk_plan AND ACTIVE = TRUE;
+    RETURN v_pk_plan;
 END;
 $$;
 
