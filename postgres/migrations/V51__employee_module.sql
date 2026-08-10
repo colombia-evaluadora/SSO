@@ -1644,3 +1644,429 @@ COMMENT ON FUNCTION academico_test.fn_fun_actualizar(
     JSONB
 )
     IS 'PATCH integral del funcionario: TUSUARIO + TFUNCIONARIO + lista de permisos TSEDE_USUARIO, en una sola transaccion. Parametros NULL no modifican su columna. Validaciones: gate (fn_puede_afectar_usuarios), existencia y actividad del TFUNCIONARIO, obligatorios no vacios, dominio estado_ai (''A''/''I''), dominio estado_activo_inactivo (''ACTIVO''/''INACTIVO''), FKs contra TLISTA_VALOR/TMUNICIPIO/TARCHIVO/TDENOMINACION activos, unicidad de CUENTA y (FK_TLV_TIPO_DOCUMENTO, IDENTIFICACION) excluyendo el propio PK. PATCH con CTE + IS DISTINCT FROM en ambas tablas: una sola sentencia UPDATE por tabla; MODIFIED_BY/MODIFIED_AT se setean UNA sola vez y SOLO si hubo cambios efectivos. Sincronizacion de p_lista_permisos (JSONB array): UPDATE si elemento trae id existente activo, INSERT si no trae id; soft delete de TSEDE_USUARIO activos del funcionario que NO aparecen en la lista, SOLO si su FK_TROL es < 8 (proteccion de roles de rango alto). Si p_lista_permisos es NULL, no se sincroniza nada. Si p_lista_permisos es array vacio, se borran todos los permisos del funcionario respetando la proteccion FK_TROL < 8. Cualquier fallo hace ROLLBACK de todo. Requiere p_pk_usuario_solicitante con permiso de usuarios via fn_puede_afectar_usuarios (V50). Retorna PK_TFUNCIONARIO.';
+
+
+-- ===========================================================================
+--  Listado paginado de funcionarios (a nivel usuario) para grillas del front.
+--  Misma firma "aplanada" que fn_sed_listar / fn_est_listar:
+--    * search        : busqueda libre parcial (ILIKE) sobre nombre completo
+--                      del funcionario + numero de documento + nombre de las
+--                      sedes ligadas a algun TSEDE_USUARIO del funcionario +
+--                      nombre de los roles ligados a algun TSEDE_USUARIO del
+--                      funcionario.
+--    * roles         : filtro exacto OR sobre FK_TROL de TSEDE_USUARIO activos
+--                      del funcionario.
+--    * workSchedules : filtro exacto OR sobre FK_TLV_JORNADA de TSEDE_USUARIO
+--                      activos del funcionario.
+--    * statuses      : array de 'ACTIVE' | 'SUSPENDED' mapeado a TUSUARIO.ESTADO
+--                      (''A''/''I''). ''SUSPENDED'' => ''I'', ''ACTIVE'' => ''A''.
+--                      (Al no existir columna ESTADO en TFUNCIONARIO, el
+--                      estado del funcionario se modela con el del TUSUARIO
+--                      asociado.)
+--    * campusId      : PK_TSEDE; si llega, el funcionario debe tener al menos
+--                      un TSEDE_USUARIO activo en esa sede (con cualquier rol
+--                      y jornada).
+--    * sorting[0]    : se aplana a p_sort_campo/p_sort_desc:
+--                        ''name''       => PRIMER_NOMBRE/SEGUNDO_NOMBRE
+--                                       || '' '' || PRIMER_APELLIDO/SEGUNDO_APELLIDO
+--                        ''document''   => IDENTIFICACION
+--                        ''status''     => TUSUARIO.ESTADO
+--                      Default: PRIMER_NOMBRE ASC, PK_TFUNCIONARIO ASC.
+--    * pageIndex     : 0-based; negativo => 0.
+--    * pageSize      : positivo; <=0 => 10; cap a 100.
+--
+--  Nota importante: TFUNCIONARIO no tiene columna ESTADO ni jornada propia.
+--  El campo "jornada" del aplanado se resuelve eligiendo el TSEDE_USUARIO
+--  activo del funcionario con PREDETERMINADO=1 si existe, si no el de menor
+--  ORDEN. Es arbitrario para una grilla pero estable para la misma entrada.
+-- ===========================================================================
+
+
+-- ---------------------------------------------------------------------------
+-- fn_usu_empleados_contar
+--   Cuenta funcionarios activos que cumplen los mismos filtros que
+--   fn_usu_empleados_listar. Usar junto con ese para armar
+--   { rows, pageCount, totalCount } en la capa Java.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_usu_empleados_contar(
+    p_search        VARCHAR    DEFAULT NULL,
+    p_roles         BIGINT[]   DEFAULT NULL,
+    p_work_schedules BIGINT[]  DEFAULT NULL,
+    p_statuses      VARCHAR[]  DEFAULT NULL,
+    p_campus_id     BIGINT     DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COUNT(DISTINCT f.PK_TFUNCIONARIO)
+      FROM academico_test.TFUNCIONARIO f
+      JOIN academico_test.TUSUARIO      u ON u.PK_TUSUARIO = f.FK_TUSUARIO
+      JOIN academico_test.TSEDE_USUARIO su
+            ON su.FK_TUSUARIO = u.PK_TUSUARIO
+           AND su.ACTIVE      = TRUE
+     WHERE f.ACTIVE = TRUE
+       AND (NULLIF(TRIM(p_search), '') IS NULL
+            OR u.PRIMER_NOMBRE || ' ' || COALESCE(u.SEGUNDO_NOMBRE,'') ILIKE '%' || p_search || '%'
+            OR u.PRIMER_APELLIDO || ' ' || COALESCE(u.SEGUNDO_APELLIDO,'') ILIKE '%' || p_search || '%'
+            OR (u.PRIMER_NOMBRE || ' ' || COALESCE(u.PRIMER_APELLIDO,'')) ILIKE '%' || p_search || '%'
+            OR u.IDENTIFICACION ILIKE '%' || p_search || '%'
+            OR EXISTS (
+                SELECT 1 FROM academico_test.TSEDE_USUARIO su2
+                  JOIN academico_test.TSEDE  s ON s.PK_TSEDE = su2.FK_TSEDE
+                  JOIN academico_test.TROL   r ON r.PK_TROL  = su2.FK_TROL
+                 WHERE su2.FK_TUSUARIO = u.PK_TUSUARIO
+                   AND su2.ACTIVE      = TRUE
+                   AND (s.NOMBRE ILIKE '%' || p_search || '%'
+                        OR r.NOMBRE ILIKE '%' || p_search || '%')
+              )
+       )
+       AND (p_statuses IS NULL OR CARDINALITY(p_statuses) = 0
+            OR u.ESTADO = ANY(
+                SELECT CASE
+                         WHEN x = 'ACTIVE'    THEN 'A'
+                         WHEN x = 'SUSPENDED' THEN 'I'
+                       END
+                  FROM unnest(p_statuses) AS x
+                 WHERE x IN ('ACTIVE','SUSPENDED')
+            ))
+       AND (p_campus_id IS NULL OR EXISTS (
+            SELECT 1 FROM academico_test.TSEDE_USUARIO su3
+             WHERE su3.FK_TUSUARIO = u.PK_TUSUARIO
+               AND su3.ACTIVE      = TRUE
+               AND su3.FK_TSEDE    = p_campus_id
+       ))
+       AND (p_roles IS NULL OR CARDINALITY(p_roles) = 0 OR EXISTS (
+            SELECT 1 FROM academico_test.TSEDE_USUARIO su4
+             WHERE su4.FK_TUSUARIO = u.PK_TUSUARIO
+               AND su4.ACTIVE      = TRUE
+               AND su4.FK_TROL     = ANY(p_roles)
+       ))
+       AND (p_work_schedules IS NULL OR CARDINALITY(p_work_schedules) = 0 OR EXISTS (
+            SELECT 1 FROM academico_test.TSEDE_USUARIO su5
+             WHERE su5.FK_TUSUARIO    = u.PK_TUSUARIO
+               AND su5.ACTIVE         = TRUE
+               AND su5.FK_TLV_JORNADA = ANY(p_work_schedules)
+       ));
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_usu_empleados_contar(
+    VARCHAR, BIGINT[], BIGINT[], VARCHAR[], BIGINT
+)
+    IS 'Cuenta funcionarios activos aplicando los mismos filtros que fn_usu_empleados_listar (search, roles, work_schedules, statuses, campus_id). search: ILIKE parcial sobre nombre del funcionario (compuesto por nombres+apellidos) y numero de documento, tambien sobre nombres de sede y rol ligados a sus TSEDE_USUARIO activos. statuses: array de ''ACTIVE''/''SUSPENDED'' mapeado a TUSUARIO.ESTADO (''A''/''I''). Los filtros sobre TSEDE_USUARIO (roles, work_schedules, campus_id) se aplican como EXISTS sobre los registros activos del funcionario. Usar junto con fn_usu_empleados_listar para armar { rows, pageCount, totalCount } en la capa Java.';
+
+
+-- ---------------------------------------------------------------------------
+-- fn_usu_empleados_listar
+--   Devuelve la pagina de funcionarios segun los filtros. Cada fila trae:
+--     * pk_empleado                 PK_TFUNCIONARIO
+--     * numero_documento            TUSUARIO.IDENTIFICACION
+--     * primer_nombre, segundo_nombre, primer_apellido, segundo_apellido
+--     * nombre_completo             concatenacion para mostrar
+--     * fk_estado (estado_ai)       TUSUARIO.ESTADO (''A''/''I'')
+--     * estado_label                mapeo ''A''=>''ACTIVE'',''I''=>''SUSPENDED''
+--     * jornada_id, jornada_nombre  jornada del TSEDE_USUARIO activo del
+--                                   funcionario elegido segun la regla:
+--                                   PREDETERMINADO=1 si existe, si no ORDEN
+--                                   minimo. Si no hay permiso, NULL.
+--     * roles                       JSONB array {id, nombre}
+--     * sedes                       JSONB array {id, nombre}
+--     * estados_permisos            JSONB array (cada elemento es
+--                                   ''ACTIVO''/''INACTIVO'').
+--   Estos 3 arrays se agregan a partir de los TSEDE_USUARIO activos del
+--   funcionario (siempre despues de aplicar los EXISTS de los filtros),
+--   con unicas por combinacion.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_usu_empleados_listar(
+    p_search         VARCHAR    DEFAULT NULL,
+    p_roles          BIGINT[]   DEFAULT NULL,
+    p_work_schedules BIGINT[]   DEFAULT NULL,
+    p_statuses       VARCHAR[]  DEFAULT NULL,
+    p_campus_id      BIGINT     DEFAULT NULL,
+    p_sort_campo     VARCHAR    DEFAULT NULL,
+    p_sort_desc      BOOLEAN    DEFAULT FALSE,
+    p_page_index     INT        DEFAULT 0,
+    p_page_size      INT        DEFAULT 10
+)
+RETURNS TABLE (
+    pk_empleado        BIGINT,
+    numero_documento   VARCHAR,
+    primer_nombre      VARCHAR,
+    segundo_nombre     VARCHAR,
+    primer_apellido    VARCHAR,
+    segundo_apellido   VARCHAR,
+    nombre_completo    VARCHAR,
+    fk_estado          VARCHAR,
+    estado_label       VARCHAR,
+    jornada_id         BIGINT,
+    jornada_nombre     VARCHAR,
+    roles              JSONB,
+    sedes              JSONB,
+    estados_permisos   JSONB
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_page_size  INT := LEAST(CASE WHEN p_page_size > 0 THEN p_page_size ELSE 10 END, 100);
+    v_page_index INT := GREATEST(COALESCE(p_page_index, 0), 0);
+BEGIN
+    RETURN QUERY
+    WITH base AS (
+        -- Funcionarios activos cuyo TUSUARIO matchea search/estado y que
+        -- tienen al menos un TSEDE_USUARIO activo que matchea los EXISTS
+        -- con roles/workSchedules/campusId.
+        SELECT DISTINCT f.PK_TFUNCIONARIO, u.PK_TUSUARIO, u.IDENTIFICACION,
+               u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE,
+               u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO,
+               u.ESTADO
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TUSUARIO      u ON u.PK_TUSUARIO = f.FK_TUSUARIO
+          JOIN academico_test.TSEDE_USUARIO su
+                ON su.FK_TUSUARIO = u.PK_TUSUARIO
+               AND su.ACTIVE      = TRUE
+         WHERE f.ACTIVE = TRUE
+           AND (NULLIF(TRIM(p_search), '') IS NULL
+                OR u.PRIMER_NOMBRE  || ' ' || COALESCE(u.SEGUNDO_NOMBRE,'')  ILIKE '%' || p_search || '%'
+                OR u.PRIMER_APELLIDO || ' ' || COALESCE(u.SEGUNDO_APELLIDO,'') ILIKE '%' || p_search || '%'
+                OR (u.PRIMER_NOMBRE || ' ' || COALESCE(u.PRIMER_APELLIDO,'')) ILIKE '%' || p_search || '%'
+                OR u.IDENTIFICACION ILIKE '%' || p_search || '%'
+                OR EXISTS (
+                    SELECT 1 FROM academico_test.TSEDE_USUARIO su2
+                      JOIN academico_test.TSEDE  s ON s.PK_TSEDE = su2.FK_TSEDE
+                      JOIN academico_test.TROL   r ON r.PK_TROL  = su2.FK_TROL
+                     WHERE su2.FK_TUSUARIO = u.PK_TUSUARIO
+                       AND su2.ACTIVE      = TRUE
+                       AND (s.NOMBRE ILIKE '%' || p_search || '%'
+                            OR r.NOMBRE ILIKE '%' || p_search || '%')
+                  )
+           )
+           AND (p_statuses IS NULL OR CARDINALITY(p_statuses) = 0
+                OR u.ESTADO = ANY(
+                    SELECT CASE
+                             WHEN x = 'ACTIVE'    THEN 'A'
+                             WHEN x = 'SUSPENDED' THEN 'I'
+                           END
+                      FROM unnest(p_statuses) AS x
+                     WHERE x IN ('ACTIVE','SUSPENDED')
+                ))
+           AND (p_campus_id IS NULL OR EXISTS (
+                SELECT 1 FROM academico_test.TSEDE_USUARIO su3
+                 WHERE su3.FK_TUSUARIO = u.PK_TUSUARIO
+                   AND su3.ACTIVE      = TRUE
+                   AND su3.FK_TSEDE    = p_campus_id
+           ))
+           AND (p_roles IS NULL OR CARDINALITY(p_roles) = 0 OR EXISTS (
+                SELECT 1 FROM academico_test.TSEDE_USUARIO su4
+                 WHERE su4.FK_TUSUARIO = u.PK_TUSUARIO
+                   AND su4.ACTIVE      = TRUE
+                   AND su4.FK_TROL     = ANY(p_roles)
+           ))
+           AND (p_work_schedules IS NULL OR CARDINALITY(p_work_schedules) = 0 OR EXISTS (
+                SELECT 1 FROM academico_test.TSEDE_USUARIO su5
+                 WHERE su5.FK_TUSUARIO    = u.PK_TUSUARIO
+                   AND su5.ACTIVE         = TRUE
+                   AND su5.FK_TLV_JORNADA = ANY(p_work_schedules)
+           ))
+    ),
+    -- Agregados: roles, sedes, estados_permisos a partir de TODOS los
+    -- TSEDE_USUARIO activos del funcionario (sin filtros EXISTS, o sea,
+    -- el agregado refleja la realidad completa del funcionario aunque
+    -- venga filtrado por una sola sede/rol).
+    agregados AS (
+        SELECT su.FK_TUSUARIO AS pk_usuario,
+               -- roles: lista unica {id, nombre}
+               COALESCE(
+                   (SELECT jsonb_agg(DISTINCT jsonb_build_object('id', r.PK_TROL, 'nombre', r.NOMBRE) ORDER BY jsonb_build_object('id', r.PK_TROL, 'nombre', r.NOMBRE))
+                      FROM academico_test.TSEDE_USUARIO su_r
+                      JOIN academico_test.TROL          r    ON r.PK_TROL = su_r.FK_TROL
+                     WHERE su_r.FK_TUSUARIO = su.FK_TUSUARIO
+                       AND su_r.ACTIVE      = TRUE),
+                   '[]'::jsonb
+               )                              AS roles_agg,
+               COALESCE(
+                   (SELECT jsonb_agg(DISTINCT jsonb_build_object('id', s.PK_TSEDE, 'nombre', s.NOMBRE) ORDER BY jsonb_build_object('id', s.PK_TSEDE, 'nombre', s.NOMBRE))
+                      FROM academico_test.TSEDE_USUARIO su_s
+                      JOIN academico_test.TSEDE         s    ON s.PK_TSEDE = su_s.FK_TSEDE
+                     WHERE su_s.FK_TUSUARIO = su.FK_TUSUARIO
+                       AND su_s.ACTIVE      = TRUE),
+                   '[]'::jsonb
+               )                              AS sedes_agg,
+               COALESCE(
+                   (SELECT jsonb_agg(DISTINCT su_e.TLV_ESTADO ORDER BY su_e.TLV_ESTADO)
+                      FROM academico_test.TSEDE_USUARIO su_e
+                     WHERE su_e.FK_TUSUARIO = su.FK_TUSUARIO
+                       AND su_e.ACTIVE      = TRUE),
+                   '[]'::jsonb
+               )                              AS estados_agg
+          FROM academico_test.TSEDE_USUARIO su
+         WHERE su.ACTIVE = TRUE
+         GROUP BY su.FK_TUSUARIO
+    ),
+    jornada_pick AS (
+        -- Una sola fila por usuario con el TSEDE_USUARIO activo que define
+        -- la jornada a mostrar en la grilla: PREDETERMINADO=1 si existe,
+        -- si no el de menor ORDEN.
+        SELECT DISTINCT ON (su.FK_TUSUARIO)
+               su.FK_TUSUARIO   AS pk_usuario,
+               su.FK_TLV_JORNADA AS jornada_id,
+               tlv.NOMBRE        AS jornada_nombre
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = su.FK_TLV_JORNADA
+         WHERE su.ACTIVE = TRUE
+         ORDER BY su.FK_TUSUARIO,
+                  su.PREDETERMINADO DESC,
+                  su.ORDEN         ASC,
+                  su.PK_TSEDE_USUARIO ASC
+    )
+    SELECT b.PK_TFUNCIONARIO,
+           b.IDENTIFICACION,
+           b.PRIMER_NOMBRE,
+           b.SEGUNDO_NOMBRE,
+           b.PRIMER_APELLIDO,
+           b.SEGUNDO_APELLIDO,
+           TRIM(COALESCE(b.PRIMER_NOMBRE,'') || ' ' || COALESCE(b.SEGUNDO_NOMBRE,'')
+                || ' ' || COALESCE(b.PRIMER_APELLIDO,'') || ' ' || COALESCE(b.SEGUNDO_APELLIDO,'')) AS nombre_completo,
+           b.ESTADO::VARCHAR AS fk_estado,
+           CASE b.ESTADO
+                WHEN 'A' THEN 'ACTIVE'
+                WHEN 'I' THEN 'SUSPENDED'
+                ELSE NULL
+           END                AS estado_label,
+           jp.jornada_id,
+           jp.jornada_nombre,
+           a.roles_agg,
+           a.sedes_agg,
+           a.estados_agg
+      FROM base     b
+      LEFT JOIN agregados   a ON a.pk_usuario = b.PK_TUSUARIO
+      LEFT JOIN jornada_pick jp ON jp.pk_usuario = b.PK_TUSUARIO
+     ORDER BY
+        CASE WHEN p_sort_campo = 'name'      AND NOT p_sort_desc
+             THEN TRIM(COALESCE(b.PRIMER_NOMBRE,'') || ' ' || COALESCE(b.SEGUNDO_NOMBRE,'')
+                       || ' ' || COALESCE(b.PRIMER_APELLIDO,'') || ' ' || COALESCE(b.SEGUNDO_APELLIDO,''))
+        END ASC,
+        CASE WHEN p_sort_campo = 'name'      AND     p_sort_desc
+             THEN TRIM(COALESCE(b.PRIMER_NOMBRE,'') || ' ' || COALESCE(b.SEGUNDO_NOMBRE,'')
+                       || ' ' || COALESCE(b.PRIMER_APELLIDO,'') || ' ' || COALESCE(b.SEGUNDO_APELLIDO,''))
+        END DESC,
+        CASE WHEN p_sort_campo = 'document'  AND NOT p_sort_desc THEN b.IDENTIFICACION END ASC,
+        CASE WHEN p_sort_campo = 'document'  AND     p_sort_desc THEN b.IDENTIFICACION END DESC,
+        CASE WHEN p_sort_campo = 'status'    AND NOT p_sort_desc THEN b.ESTADO END ASC,
+        CASE WHEN p_sort_campo = 'status'    AND     p_sort_desc THEN b.ESTADO END DESC,
+        b.PRIMER_NOMBRE  ASC,
+        b.PRIMER_APELLIDO ASC,
+        b.PK_TFUNCIONARIO ASC
+     LIMIT v_page_size
+    OFFSET v_page_index * v_page_size;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_usu_empleados_listar(
+    VARCHAR, BIGINT[], BIGINT[], VARCHAR[], BIGINT,
+    VARCHAR, BOOLEAN, INT, INT
+)
+    IS 'Lista funcionarios activos paginados segun los mismos filtros que fn_usu_empleados_contar (search, roles, work_schedules, statuses, campus_id). El row devuelto es la version aplanada del empleado: id, documento, nombres, apellidos, nombre completo, estado (''A''/''I'') y label (''ACTIVE''/''SUSPENDED''), jornada (la del TSEDE_USUARIO activo con PREDETERMINADO=1 si existe, si no la de menor ORDEN, NULL si no hay permisos), roles/sedes/estados_permisos agregados como JSONB array de objetos {id, nombre} o ''ACTIVO''/''INACTIVO'' segun corresponda. p_sort_campo/p_sort_desc representan sorting[0] ya resuelto (''name'' => nombre completo, ''document'' => IDENTIFICACION, ''status'' => ESTADO). p_page_index base 0; p_page_size se acota a (0,100]. No calcula totalCount/pageCount: usar junto con fn_usu_empleados_contar.';
+
+
+-- ===========================================================================
+--  Soft delete parcial de un funcionario: inactivar TODOS sus TSEDE_USUARIO
+--  ligados a una sede especifica, reutilizando fn_sede_usuario_soft_delete
+--  por cada PK.
+--
+--  Decisiones:
+--    * No desactiva al TFUNCIONARIO ni al TUSUARIO: solo los permisos del
+--      funcionario en la sede indicada. Si se quiere desactivar el
+--      funcionario entero (de todas las sedes), eso es otro modulo.
+--    * Gate: una sola llamada a fn_puede_afectar_usuarios al inicio (FAIL
+--      FAST antes de tocar nada). Las llamadas internas a
+--      fn_sede_usuario_soft_delete revalidan el gate por cada permiso, lo
+--      cual es redundante pero coherente con el principio de "usar la
+--      funcion que ya existe" y barato (gate STABLE, EXISTS).
+--    * Si el funcionario no existe o ya esta inactivo: error P0002.
+--    * Si no hay permisos activos del funcionario en esa sede: idempotente,
+--      retorna 0 (no es error).
+--    * Si algun fn_sede_usuario_soft_delete interno falla: ROLLBACK
+--      automatico (no se usa bloque EXCEPTION aqui para preservar el
+--      codigo de error original y abortar la operacion).
+--    * Retorna la cantidad de permisos (TSEDE_USUARIO) desactivados.
+-- ===========================================================================
+
+
+-- ---------------------------------------------------------------------------
+-- fn_fun_soft_delete
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_fun_soft_delete(
+    p_pk_funcionario        BIGINT,
+    p_pk_sede               BIGINT,
+    p_pk_usuario_solicitante BIGINT
+)
+RETURNS INT
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+DECLARE
+    v_pk_usuario    BIGINT;
+    v_desactivados  INT := 0;
+    v_perm          RECORD;
+BEGIN
+    -- ---------------------------------------------------------------------
+    -- 0. Gate de autorizacion (FAIL FAST).
+    -- ---------------------------------------------------------------------
+    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    -- ---------------------------------------------------------------------
+    -- 1. Validacion del funcionario: debe existir y estar activo.
+    -- ---------------------------------------------------------------------
+    SELECT f.FK_TUSUARIO
+      INTO v_pk_usuario
+      FROM academico_test.TFUNCIONARIO f
+     WHERE f.PK_TFUNCIONARIO = p_pk_funcionario
+       AND f.ACTIVE           = TRUE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'no existe TFUNCIONARIO activo con PK %', p_pk_funcionario
+            USING ERRCODE = 'P0002';
+    END IF;
+
+    -- ---------------------------------------------------------------------
+    -- 2. Buscar todos los TSEDE_USUARIO activos del funcionario en la sede.
+    --    Si no hay, idempotente: retornamos 0.
+    -- ---------------------------------------------------------------------
+    FOR v_perm IN
+        SELECT su.PK_TSEDE_USUARIO
+          FROM academico_test.TSEDE_USUARIO su
+         WHERE su.FK_TUSUARIO = v_pk_usuario
+           AND su.FK_TSEDE    = p_pk_sede
+           AND su.ACTIVE      = TRUE
+    LOOP
+        -- ---------------------------------------------------------------
+        -- 3. Reutilizar el soft delete ya implementado.
+        --    fn_sede_usuario_soft_delete:
+        --      * revalida el gate (barato, STABLE + EXISTS).
+        --      * valida existencia (no fallara, lo acabamos de leer).
+        --      * idempotente si ya esta inactivo.
+        --      * setea ACTIVE=FALSE + auditoria.
+        --      * retorna el PK (lo descartamos con PERFORM).
+        -- ---------------------------------------------------------------
+        PERFORM academico_test.fn_sede_usuario_soft_delete(
+            v_perm.PK_TSEDE_USUARIO,
+            p_pk_usuario_solicitante
+        );
+        v_desactivados := v_desactivados + 1;
+    END LOOP;
+
+    -- ---------------------------------------------------------------------
+    -- 4. Resultado.
+    -- ---------------------------------------------------------------------
+    RETURN v_desactivados;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_fun_soft_delete(
+    BIGINT, BIGINT, BIGINT
+)
+    IS 'Soft delete parcial de un funcionario: inactiva TODOS los TSEDE_USUARIO del funcionario que esten en la sede indicada (p_pk_sede), reutilizando fn_sede_usuario_soft_delete por cada PK. NO desactiva TFUNCIONARIO ni TUSUARIO: solo los permisos en esa sede especifica. Validaciones: gate (fn_puede_afectar_usuarios, FAIL FAST) y existencia/actividad del TFUNCIONARIO (P0002 si no). Si el funcionario no tiene permisos activos en la sede, retorna 0 (idempotente). Las llamadas internas a fn_sede_usuario_soft_delete revalidan el gate por cada permiso y registran auditoria (MODIFIED_BY/MODIFIED_AT). Si alguna llamada interna falla, ROLLBACK automatico (no se atrapan excepciones). Retorna la cantidad de TSEDE_USUARIO desactivados.';
