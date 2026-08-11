@@ -97,7 +97,12 @@ CREATE OR REPLACE FUNCTION academico_test.fn_usu_crear(
     p_contrasena_hasheada      VARCHAR,
     p_fk_tlv_tipo_documento    BIGINT,
     p_identificacion           VARCHAR,
-    p_primer_nombre            VARCHAR,
+    -- DEFAULT NULL por regla 42P13 de PostgreSQL (p_segundo_nombre es el
+    -- primer parametro con DEFAULT, asi que todos los anteriores deben
+    -- tener DEFAULT tambien). Sigue siendo obligatorio a nivel de
+    -- negocio: la validacion de presencia se hace en el bloque
+    -- "1. Validaciones de obligatoriedad" del cuerpo.
+    p_primer_nombre            VARCHAR     DEFAULT NULL,
     p_segundo_nombre           VARCHAR     DEFAULT NULL,
     -- DEFAULT NULL por regla 42P13 de PostgreSQL (tras p_segundo_nombre con
     -- DEFAULT, todos los parametros siguientes deben tener DEFAULT). Sigue
@@ -308,7 +313,12 @@ CREATE OR REPLACE FUNCTION academico_test.fn_fun_crear(
     p_contrasena_hasheada          VARCHAR,
     p_fk_tlv_tipo_documento        BIGINT,
     p_identificacion               VARCHAR,
-    p_primer_nombre                VARCHAR,
+    -- DEFAULT NULL por regla 42P13 de PostgreSQL (p_segundo_nombre es el
+    -- primer parametro con DEFAULT, asi que todos los anteriores deben
+    -- tener DEFAULT tambien). Sigue siendo obligatorio a nivel de
+    -- negocio: la validacion de presencia la hace fn_usu_crear, que
+    -- orquesta esta funcion con argumentos nombrados.
+    p_primer_nombre                VARCHAR     DEFAULT NULL,
     p_segundo_nombre               VARCHAR     DEFAULT NULL,
     -- DEFAULT NULL por regla 42P13 de PostgreSQL (tras p_segundo_nombre con
     -- DEFAULT, todos los parametros siguientes deben tener DEFAULT). Sigue
@@ -540,8 +550,13 @@ CREATE OR REPLACE FUNCTION academico_test.fn_sede_usuario_crear(
     p_fk_sede                 BIGINT,
     p_fk_rol                  BIGINT,
     p_fk_usuario              BIGINT,
-    p_orden                   NUMERIC(4),
-    p_fk_tlv_jornada          BIGINT,
+    -- DEFAULT NULL por regla 42P13 de PostgreSQL (p_tlv_estado es el primer
+    -- parametro con DEFAULT, asi que p_orden y p_fk_tlv_jornada tambien
+    -- deben tener DEFAULT). Siguen siendo obligatorios a nivel de negocio:
+    -- la validacion de presencia se hace en el bloque
+    -- "1. Validaciones de obligatoriedad" del cuerpo (NOT NULL en DDL).
+    p_orden                   NUMERIC(4)  DEFAULT NULL,
+    p_fk_tlv_jornada          BIGINT      DEFAULT NULL,
     p_tlv_estado              VARCHAR(12) DEFAULT 'ACTIVO',
     p_predeterminado          NUMERIC(6)  DEFAULT 0
 )
