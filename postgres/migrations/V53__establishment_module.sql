@@ -129,7 +129,6 @@ CREATE OR REPLACE FUNCTION academico_test.fn_est_crear(
     p_fk_lv_rango_tarifa      BIGINT          DEFAULT NULL,
     p_fk_lv_asociacion_nacional BIGINT        DEFAULT NULL,
     p_fk_lv_estado_establecimiento BIGINT     DEFAULT NULL,
-    p_logo                    BYTEA           DEFAULT NULL,
     p_fk_archivo              BIGINT          DEFAULT NULL
 )
 RETURNS BIGINT
@@ -404,7 +403,7 @@ BEGIN
         FK_TFUNCIONARIO_RECTOR, FK_TFUNCIONARIO_SECRETARIA, SUBSIDIO,
         FK_TLV_REGIMEN_CATCOSTO, FK_TLV_RANGO_TARIFA,
         FK_TLV_ASOCIACION_NACIONAL, FK_TLV_ESTADO_ESTABLECIMIENTO,
-        LOGO, FK_TARCHIVO,
+        FK_TARCHIVO,
         CREATED_BY, CREATED_AT, MODIFIED_BY, MODIFIED_AT, ACTIVE
     ) VALUES (
         p_codigo, p_nombre, p_nit,
@@ -418,7 +417,7 @@ BEGIN
         p_FK_TFUNCIONARIO_RECTOR, p_FK_TFUNCIONARIO_SECRETARIA, p_subsidio,
         p_fk_lv_regimen_catcosto, p_fk_lv_rango_tarifa,
         p_fk_lv_asociacion_nacional, p_fk_lv_estado_establecimiento,
-        p_logo, p_fk_archivo,
+        p_fk_archivo,
         p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP,
         NULL, NULL,
         TRUE
@@ -440,8 +439,8 @@ COMMENT ON FUNCTION academico_test.fn_est_crear(
     academico_test.bool_sn, academico_test.bool_sn,
     BIGINT, BIGINT, academico_test.bool_sn,
     BIGINT, BIGINT, BIGINT, BIGINT,
-    BYTEA, BIGINT
-) IS 'Crea un TESTABLECIMIENTO validando obligatorios (NOMBRE, NIT, CODIGO, FK_TMUNICIPIO, FK_TPROPIEDAD_JURIDICA) y unicidad por NIT/CODIGO activos. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento). p_pk_usuario_solicitante va al inicio sin DEFAULT (obligatorio, mismo patron que V52). Retorna PK_ESTABLECIMIENTO. Auditoria: CREATED_BY=p_pk_usuario_solicitante::VARCHAR, CREATED_AT=now. MODIFIED_BY y MODIFIED_AT quedan NULL (se llenan en la primera edicion via fn_est_actualizar).';
+    BIGINT
+) IS 'Crea un TESTABLECIMIENTO validando obligatorios (NOMBRE, NIT, CODIGO, FK_TMUNICIPIO, FK_TPROPIEDAD_JURIDICA) y unicidad por NIT/CODIGO activos. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento). p_pk_usuario_solicitante va al inicio sin DEFAULT (obligatorio, mismo patron que V52). Retorna PK_ESTABLECIMIENTO. La columna LOGO del DDL NO se escribe desde esta funcion (no hay modulo de archivos todavia); se pobla posteriormente via UPDATE directo. Auditoria: CREATED_BY=p_pk_usuario_solicitante::VARCHAR, CREATED_AT=now. MODIFIED_BY y MODIFIED_AT quedan NULL (se llenan en la primera edicion via fn_est_actualizar).';
 
 
 -- ---------------------------------------------------------------------------
