@@ -175,16 +175,23 @@ export const appFormSchema = z.object({
  * placeholder. Espejo del `ParamTypes.CURATED` de Java (ver spec
  * 2026-08-10); el backend es la fuente única — el frontend lo pide
  * vía `useParamTypes()` al renderizar el dropdown.
+ *
+ * V50 — extiende el set con `CHAR(1)`, `TIME` y `TIME[]`. Este
+ * `as const` se usa para validación local (en `paramTypes`) pero
+ * el dropdown se llena con la respuesta de `useParamTypes` — la
+ * fuente de verdad en runtime es el backend.
  */
 const CURATED_PG_TYPES = [
   "TEXT",
   "VARCHAR",
+  "CHAR(1)",
   "BIGINT",
   "INTEGER",
   "SMALLINT",
   "NUMERIC",
   "BOOLEAN",
   "DATE",
+  "TIME",
   "TIMESTAMP",
   "TIMESTAMPTZ",
   "UUID",
@@ -195,6 +202,7 @@ const CURATED_PG_TYPES = [
   "INTEGER[]",
   "NUMERIC[]",
   "BOOLEAN[]",
+  "TIME[]",
 ] as const;
 
 export const queryFormSchema = z
@@ -229,7 +237,8 @@ export const queryFormSchema = z
       .default(null),
     // V33 — verbo HTTP. DELETE no está en la lista a propósito;
     // para borrar se publica un procedimiento y se llama con CALL.
-    httpMethod: z.enum(["GET", "POST", "PUT"]).default("POST"),
+    // V50 — PATCH se suma a GET/POST/PUT (RFC 5789, partial body).
+    httpMethod: z.enum(["GET", "POST", "PUT", "PATCH"]).default("POST"),
     pathTemplate: z
       .string()
       .max(500)
@@ -327,12 +336,13 @@ export const queryFormSchema = z
       });
     }
     // Un GET no debe modificar nada — es la mitad del contrato que
-    // permite cachearlo y reintentarlo.
+    // permite cachearlo y reintentarlo. PATCH sí admite DML (es la
+    // esencia del partial update), así que sólo bloqueamos GET.
     if (v.httpMethod === "GET" && /^\s*(insert|update)\b/i.test(v.query ?? "")) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["query"],
-        message: "Un GET no puede ejecutar INSERT ni UPDATE. Usa POST o PUT.",
+        message: "Un GET no puede ejecutar INSERT ni UPDATE. Usa POST, PUT o PATCH.",
       });
     }
     if (v.pathTemplate != null && v.microserviceId == null) {

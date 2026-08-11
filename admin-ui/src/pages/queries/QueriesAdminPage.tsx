@@ -161,8 +161,33 @@ export function QueriesAdminPage() {
     {
       key: "uuid",
       header: "UUID",
+      // El path-template (V27) + verbo HTTP (V33) es lo que se
+      // registra en el query-service. Mostrarlo al lado del uuid
+      // ahorra un click al admin: con un vistazo ve qué URL expone
+      // cada fila, sin abrir el drawer. Si la fila no tiene
+      // path-template (legacy, sólo invocable por uuid en el body)
+      // la línea secundaria se omite — no rellenamos con "—" para
+      // no sugerir que ese endpoint existe.
       render: (q) => (
-        <span className="font-mono text-xs text-slate-900">{q.uuid}</span>
+        <div className="flex flex-col gap-0.5">
+          <span
+            className="font-mono text-xs text-slate-900"
+            data-testid={`query-uuid-${q.id}`}
+          >
+            {q.uuid}
+          </span>
+          {q.pathTemplate ? (
+            <span
+              className="font-mono text-[10px] text-slate-500"
+              data-testid={`query-path-template-${q.id}`}
+            >
+              <span className="font-semibold text-emerald-700">
+                {q.httpMethod ?? "POST"}
+              </span>
+              {q.pathTemplate}
+            </span>
+          ) : null}
+        </div>
       ),
     },
     {

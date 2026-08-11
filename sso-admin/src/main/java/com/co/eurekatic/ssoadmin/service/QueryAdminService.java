@@ -488,7 +488,7 @@ public class QueryAdminService {
     }
 
     /** Verbos admitidos. DELETE queda fuera a propósito — ver la entidad Query. */
-    private static final Set<String> HTTP_METHODS = Set.of("GET", "POST", "PUT");
+    private static final Set<String> HTTP_METHODS = Set.of("GET", "POST", "PUT", "PATCH");
 
     /**
      * Normaliza y valida el verbo. Null o vacío cae a {@code POST},
@@ -502,7 +502,7 @@ public class QueryAdminService {
         String m = raw.trim().toUpperCase(java.util.Locale.ROOT);
         if (!HTTP_METHODS.contains(m)) {
             throw new IllegalArgumentException(
-                    "Método HTTP no admitido: '" + raw + "'. Usa GET, POST o PUT. "
+                    "Método HTTP no admitido: '" + raw + "'. Usa GET, POST, PUT o PATCH. "
                     + "DELETE no se admite; para borrar, publica un "
                     + "procedimiento y llámalo con CALL.");
         }
@@ -530,10 +530,11 @@ public class QueryAdminService {
         }
         // Un GET no debe modificar nada. Es la mitad del contrato
         // que hace que un GET se pueda cachear y reintentar.
+        // PATCH sí admite DML (es la esencia del partial update).
         if ("GET".equals(method) && "DML".equals(mode)) {
             throw new IllegalArgumentException(
                     "Un GET no puede ejecutar INSERT ni UPDATE. Ata esta "
-                    + "consulta a POST o PUT.");
+                    + "consulta a POST, PUT o PATCH.");
         }
     }
 

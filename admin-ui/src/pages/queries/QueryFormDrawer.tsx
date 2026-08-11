@@ -285,6 +285,7 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
                   <option value="GET">GET — leer, sin cuerpo</option>
                   <option value="POST">POST — leer o crear</option>
                   <option value="PUT">PUT — actualizar</option>
+                  <option value="PATCH">PATCH — actualizar parcial (RFC 5789)</option>
                 </select>
                 <p className="mt-1 text-[11px] text-slate-500">
                   Solo aplica cuando hay path template. DELETE no se admite:

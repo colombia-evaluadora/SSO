@@ -24,19 +24,19 @@ public final class ParamTypes {
     /** Set curado que se ofrece en el dropdown de la UI. */
     public static final Set<String> CURATED = Set.of(
             // Escalares
-            "TEXT", "VARCHAR",
+            "TEXT", "VARCHAR", "CHAR(1)",
             "BIGINT", "INTEGER", "SMALLINT",
             "NUMERIC",
             "BOOLEAN",
-            "DATE", "TIMESTAMP", "TIMESTAMPTZ",
+            "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ",
             "UUID", "JSONB", "JSON",
             // Arrays
-            "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]"
+            "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]"
     );
 
     /** Tipos array — para que {@code ParamBinder} sepa envolver en {@link java.sql.Array}. */
     public static final Set<String> ARRAY_TYPES = Set.of(
-            "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]"
+            "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]"
     );
 
     /**
@@ -49,12 +49,14 @@ public final class ParamTypes {
     public static final Map<String, Integer> JDBC_TYPES = Map.ofEntries(
             Map.entry("TEXT", Types.VARCHAR),
             Map.entry("VARCHAR", Types.VARCHAR),
+            Map.entry("CHAR(1)", Types.CHAR),
             Map.entry("BIGINT", Types.BIGINT),
             Map.entry("INTEGER", Types.INTEGER),
             Map.entry("SMALLINT", Types.SMALLINT),
             Map.entry("NUMERIC", Types.NUMERIC),
             Map.entry("BOOLEAN", Types.BOOLEAN),
             Map.entry("DATE", Types.DATE),
+            Map.entry("TIME", Types.TIME),
             Map.entry("TIMESTAMP", Types.TIMESTAMP),
             Map.entry("TIMESTAMPTZ", Types.TIMESTAMP_WITH_TIMEZONE),
             Map.entry("UUID", Types.OTHER),
@@ -64,7 +66,8 @@ public final class ParamTypes {
             Map.entry("BIGINT[]", Types.ARRAY),
             Map.entry("INTEGER[]", Types.ARRAY),
             Map.entry("NUMERIC[]", Types.ARRAY),
-            Map.entry("BOOLEAN[]", Types.ARRAY)
+            Map.entry("BOOLEAN[]", Types.ARRAY),
+            Map.entry("TIME[]", Types.ARRAY)
     );
 
     /**

@@ -378,7 +378,7 @@ export interface QueryAdminRequest {
    *  the query as a first-class HTTP endpoint. Null = legacy (uuid in body). */
   pathTemplate?: string | null;
 
-  httpMethod?: "GET" | "POST" | "PUT" | null;
+  httpMethod?: "GET" | "POST" | "PUT" | "PATCH" | null;
   /** V28 — SELECT (default) | PROCEDURE | FUNCTION. The backend validates
    *  that the SQL's first keyword matches the mode at save time. */
   executionMode?: "SELECT" | "PROCEDURE" | "FUNCTION";
@@ -412,8 +412,8 @@ export interface QueryAdminResponse {
   /** V27 — optional for back-compat with pre-V27 test fixtures
    *  that don't set this field. The wire always carries it. */
   pathTemplate?: string | null;
-  /** V33 — verbo HTTP que expone esta fila. Null = POST. */
-  httpMethod?: "GET" | "POST" | "PUT" | null;
+  /** V33 — verbo HTTP que expone esta fila. Null = POST. V50 añade PATCH. */
+  httpMethod?: "GET" | "POST" | "PUT" | "PATCH" | null;
   /** V28 — defaults to "SELECT" when omitted (pre-V28 server). */
   executionMode?: "SELECT" | "PROCEDURE" | "FUNCTION";
   /** V31 */
