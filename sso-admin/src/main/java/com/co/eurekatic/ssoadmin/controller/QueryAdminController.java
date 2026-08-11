@@ -1,5 +1,7 @@
 package com.co.eurekatic.ssoadmin.controller;
 
+import com.co.eurekatic.common.query.ParamTypes;
+import com.co.eurekatic.ssoadmin.dto.ParamTypesResponse;
 import com.co.eurekatic.ssoadmin.dto.QueryRequest;
 import com.co.eurekatic.ssoadmin.dto.QueryResponse;
 import com.co.eurekatic.ssoadmin.exception.NotFoundException;
@@ -95,5 +97,20 @@ public class QueryAdminController {
                 .filter(q -> q.uuid().equals(uuid))
                 .findFirst()
                 .orElseThrow(() -> new NotFoundException("Query", uuid));
+    }
+
+    /* ====================== V49 — curated PG/JDBC type set for the UI ====================== */
+
+    /**
+     * Devuelve el set curado de tipos que el autor puede asignar a cada
+     * placeholder. La UI lo cachea agresivamente (el set cambia rara vez).
+     * Devolver un orden estable para que el dropdown sea determinista —
+     * el orden del {@code Set} no lo es, así que aquí ordenamos por nombre.
+     */
+    @GetMapping("/param-types")
+    public ParamTypesResponse getParamTypes() {
+        return new ParamTypesResponse(
+                ParamTypes.CURATED.stream().sorted().toList(),
+                ParamTypes.JDBC_TYPES);
     }
 }

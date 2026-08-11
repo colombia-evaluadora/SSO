@@ -206,6 +206,57 @@ describe("QueriesAdminPage", () => {
     expect(screen.getByTestId("bind-roles-1")).toBeInTheDocument();
   });
 
+  it("renders path-template next to uuid when the query has one", async () => {
+    // Filas con path-template exponen la URL completa del query-service
+    // debajo del uuid. Sin path-template (legacy uuid-in-body) la
+    // línea secundaria se omite para no sugerir un endpoint que no
+    // existe.
+    const exposed = mkQuery({
+      id: 1,
+      uuid: "reporte-ventas",
+      pathTemplate: "/reporte/ventas",
+      httpMethod: "GET",
+    });
+    const legacy = mkQuery({ id: 2, uuid: "legacy-uuid-only" });
+    const spy = buildFetchSpy({
+      queries: [exposed, legacy],
+      microservices: [],
+    });
+    vi.stubGlobal("fetch", spy);
+
+    renderPage();
+    expect(await screen.findByTestId("query-uuid-1")).toHaveTextContent(
+      "reporte-ventas",
+    );
+    const pathEl = await screen.findByTestId("query-path-template-1");
+    expect(pathEl).toHaveTextContent("GET");
+    expect(pathEl).toHaveTextContent("/reporte/ventas");
+
+    // Legacy row: no path-template child. The testid is absent.
+    expect(
+      screen.queryByTestId("query-path-template-2"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("defaults the httpMethod to POST when it is null in the response", async () => {
+    // null httpMethod is the legacy wire shape (pre-V33). The cell
+    // must still render — POST is the historical default — so the
+    // URL the admin sees matches what the dispatcher actually does.
+    const q = mkQuery({
+      id: 1,
+      uuid: "by-uuid-legacy",
+      pathTemplate: "/legacy/path",
+      httpMethod: null,
+    });
+    const spy = buildFetchSpy({ queries: [q], microservices: [] });
+    vi.stubGlobal("fetch", spy);
+
+    renderPage();
+    const pathEl = await screen.findByTestId("query-path-template-1");
+    expect(pathEl).toHaveTextContent("POST");
+    expect(pathEl).toHaveTextContent("/legacy/path");
+  });
+
   it("resolves the microservice column via /getMicroservices and falls back to #<id>", async () => {
     const pg = mkMs({ id: 7, instanceName: "pg-prod", dialect: "postgres" });
     const q = mkQuery({ id: 1, uuid: "q-bound", microserviceId: 7 });

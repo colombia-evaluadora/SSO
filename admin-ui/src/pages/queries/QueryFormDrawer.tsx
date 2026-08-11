@@ -6,6 +6,8 @@ import { Form, zodFieldErrors } from "@/components/forms/Form";
 import { queryFormSchema, type QueryFormValues } from "@/schemas";
 import { useMicroservices } from "@/hooks/useMicroservices";
 import type { QueryAdminResponse } from "@/api/types";
+import { useParamTypes } from "@/api/useParamTypes";
+import { scanPlaceholders, getImplicitSystemType } from "@/lib/placeholderScanner";
 
 /**
  * Acuña el UID de un query nuevo. `crypto.randomUUID` existe en
@@ -74,6 +76,7 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
       httpMethod: query?.httpMethod ?? "POST",
       pathTemplate: query?.pathTemplate ?? null,
       outParamNames: query?.outParamNames ?? null,
+      paramTypes: (query?.paramTypes ?? {}) as Record<string, string>,
     }),
     [query, open],
   );
@@ -111,6 +114,13 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
           // aquí sólo para decidir qué mostrar; la fuente de verdad
           // es el backend.
           const isProcedure = /^\s*call\b/i.test(values.query ?? "");
+          // V49 — tipos por placeholder. La detección corre en
+          // cliente cada vez que el SQL cambia; los tipos asignados
+          // viven en values.paramTypes y se preservan entre iteraciones
+          // aunque un placeholder desaparezca temporalmente del SQL.
+          const placeholders = scanPlaceholders(values.query ?? "");
+          const detected = placeholders;
+          const paramTypes = (values.paramTypes ?? {}) as Record<string, string>;
           return (
           <>
             <div className="grid grid-cols-2 gap-3">
@@ -247,6 +257,12 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
               </p>
             </label>
             <div className="h-3" />
+            <ParamTypesSection
+              detected={detected}
+              value={paramTypes}
+              onChange={(next) => setField("paramTypes", next)}
+            />
+            <div className="h-3" />
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label
@@ -269,6 +285,7 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
                   <option value="GET">GET — leer, sin cuerpo</option>
                   <option value="POST">POST — leer o crear</option>
                   <option value="PUT">PUT — actualizar</option>
+                  <option value="PATCH">PATCH — actualizar parcial (RFC 5789)</option>
                 </select>
                 <p className="mt-1 text-[11px] text-slate-500">
                   Solo aplica cuando hay path template. DELETE no se admite:
@@ -383,5 +400,241 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
         }}
       </Form>
     </Drawer>
+  );
+}
+
+/**
+ * V49 — Sección "Tipos de parámetros" del formulario.
+ *
+ * <p>Auto-detecta los placeholders del SQL, los muestra como filas
+ * con un dropdown por fila, y deja al autor asignar el tipo PG/JDBC
+ * a cada uno. El backend rechaza el guardado si alguna :PARAM.* /
+ * :BODY.* del SQL no tiene entrada — aquí damos feedback inmediato
+ * con un contador que se pone rojo cuando falta alguno.
+ *
+ * <p>Las filas que ya tenían un tipo (de un edit anterior) se
+ * restauran automáticamente cuando reaparecen en el SQL. El autor
+ * puede añadir tipos manualmente para placeholders que aún no ha
+ * escrito (útil para preparar el SQL).
+ */
+function ParamTypesSection({
+  detected,
+  value,
+  onChange,
+}: {
+  detected: string[];
+  value: Record<string, string>;
+  onChange: (next: Record<string, string>) => void;
+}) {
+  const { data, isLoading, error } = useParamTypes();
+  const curated = data?.curated ?? [];
+
+  // Cuenta cuántos de los placeholders detectados están tipados.
+  // El backend exige tipo explícito sólo en :PARAM.* / :BODY.* —
+  // :CONTEXT.* y :QUERY.{SIZE,OFFSET} los bindea el sistema y no
+  // cuentan como "faltantes" para el badge, aunque los seguimos
+  // mostrando en la tabla para que el autor los vea.
+  const REQUIRED_NS = new Set(["PARAM", "BODY"]);
+  const required = detected.filter((p) => REQUIRED_NS.has(p.split(".")[0] ?? ""));
+  const typed = required.filter((p) => value[p]).length;
+  const missing = required.length - typed;
+
+  function setType(placeholder: string, type: string) {
+    const next = { ...value };
+    if (type === "" || type === undefined) {
+      delete next[placeholder];
+    } else {
+      next[placeholder] = type;
+    }
+    onChange(next);
+  }
+
+  function addManual() {
+    // Pide una key (default = placeholder vacío). El autor la puede
+    // editar para reservar el tipo antes de escribir el placeholder
+    // en el SQL.
+    const key = window.prompt(
+      "Nombre del placeholder (MAYÚSCULAS, ej PARAM.NOMBRE):",
+    );
+    if (!key) return;
+    if (!/^[A-Z][A-Z0-9_]*(\.[A-Z][A-Z0-9_]*)*$/.test(key)) {
+      window.alert("Formato inválido. Cada segmento debe ser MAYÚSCULAS y usar A-Z, 0-9, _.");
+      return;
+    }
+    if (value[key]) {
+      window.alert("Ese placeholder ya tiene tipo asignado.");
+      return;
+    }
+    const defaultType = curated[0] ?? "TEXT";
+    onChange({ ...value, [key]: defaultType });
+  }
+
+  function removeManual(placeholder: string) {
+    const next = { ...value };
+    delete next[placeholder];
+    onChange(next);
+  }
+
+  if (isLoading) {
+    return (
+      <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+        Cargando tipos disponibles…
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700">
+        No se pudieron cargar los tipos disponibles ({String(error)}).
+      </div>
+    );
+  }
+
+  const manualKeys = Object.keys(value).filter((k) => !detected.includes(k));
+
+  return (
+    <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+      <div className="mb-2 flex items-center justify-between">
+        <div>
+          <div className="text-sm font-medium text-slate-700">
+            Tipos de parámetros
+          </div>
+          <div className="text-[11px] text-slate-500">
+            Auto-detectados del SQL. Asigna un tipo a cada :PARAM.* / :BODY.*.
+            :CONTEXT.* y :QUERY.{'{'}SIZE,OFFSET{'}'} los bindea el sistema.
+          </div>
+        </div>
+        <div
+          className={
+            "rounded px-2 py-0.5 text-[11px] font-medium " +
+            (detected.length === 0
+              ? "bg-slate-100 text-slate-600"
+              : missing === 0
+                ? "bg-emerald-100 text-emerald-800"
+                : "bg-rose-100 text-rose-800")
+          }
+        >
+          {detected.length === 0
+            ? "Sin placeholders"
+            : missing === 0
+              ? `Detectados ${detected.length} — tipados ${typed} — ✓`
+              : `Detectados ${detected.length} — tipados ${typed} — faltantes ${missing}`}
+        </div>
+      </div>
+
+      {detected.length > 0 && (
+        <div className="overflow-hidden rounded border border-slate-200 bg-white">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-100 text-[11px] uppercase text-slate-500">
+              <tr>
+                <th className="px-2 py-1 text-left">Placeholder</th>
+                <th className="px-2 py-1 text-left">Tipo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {detected.map((p) => {
+                const systemType = getImplicitSystemType(p);
+                if (systemType) {
+                  // El sistema lo bindea — selector deshabilitado que
+                  // muestra el tipo real. El autor no tiene que (ni
+                  // puede) cambiarlo: incluirlo en paramTypes
+                  // sería rechazado por la validación del backend.
+                  return (
+                    <tr key={p} className="border-t border-slate-100">
+                      <td className="px-2 py-1 font-mono">:{p}</td>
+                      <td className="px-2 py-1">
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={systemType}
+                            disabled
+                            aria-readonly="true"
+                            className="flex-1 cursor-not-allowed rounded border border-slate-200 bg-slate-100 px-2 py-1 text-xs text-slate-500"
+                          >
+                            <option value={systemType}>{systemType}</option>
+                          </select>
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">
+                            sistema
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                }
+                return (
+                  <tr key={p} className="border-t border-slate-100">
+                    <td className="px-2 py-1 font-mono">:{p}</td>
+                    <td className="px-2 py-1">
+                      <select
+                        value={value[p] ?? ""}
+                        onChange={(e) => setType(p, e.target.value)}
+                        className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                      >
+                        <option value="">— sin tipo —</option>
+                        {curated.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {manualKeys.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-[11px] font-medium text-slate-500">
+            Tipos manuales (placeholder aún no escrito)
+          </div>
+          <div className="overflow-hidden rounded border border-slate-200 bg-white">
+            <table className="w-full text-xs">
+              <tbody>
+                {manualKeys.map((k) => (
+                  <tr key={k} className="border-t border-slate-100 first:border-t-0">
+                    <td className="px-2 py-1 font-mono">:{k}</td>
+                    <td className="px-2 py-1">
+                      <select
+                        value={value[k] ?? ""}
+                        onChange={(e) => setType(k, e.target.value)}
+                        className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                      >
+                        <option value="">— sin tipo —</option>
+                        {curated.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-2 py-1 text-right">
+                      <button
+                        type="button"
+                        onClick={() => removeManual(k)}
+                        className="text-rose-600 hover:underline"
+                        title="Quitar tipo manual"
+                      >
+                        ×
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={addManual}
+        className="mt-2 text-[11px] text-sky-700 hover:underline"
+      >
+        + Agregar tipo manualmente
+      </button>
+    </div>
   );
 }
