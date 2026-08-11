@@ -2,6 +2,10 @@ package com.co.eurekatic.auth.web;
 
 import com.co.eurekatic.auth.security.CachedUserSummaryService;
 import com.co.eurekatic.auth.security.EffectiveRolesResolver;
+import com.co.eurekatic.auth.service.FuncionarioRegistrationService;
+import com.co.eurekatic.auth.web.dto.RegisterFuncionarioRequest;
+import com.co.eurekatic.auth.web.dto.RegisterResponse;
+import com.co.eurekatic.auth.web.dto.RegisterUsuarioRequest;
 import com.co.eurekatic.common.dto.AuthDtos.AppSummary;
 import com.co.eurekatic.common.dto.AuthDtos.UserSummary;
 import com.co.eurekatic.common.entity.Role;
@@ -11,11 +15,15 @@ import com.co.eurekatic.common.repository.RoleRepository;
 import com.co.eurekatic.common.repository.UserRepository;
 import com.co.eurekatic.common.security.AuthPrincipal;
 import com.co.eurekatic.common.security.JwtTokenService;
+import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -28,7 +36,7 @@ import java.util.stream.Collectors;
 /**
  * REST endpoints exposed by auth-center. POST /login is NOT in this
  * controller — it's handled by {@link JsonLoginFilter} which sets
- * the response body directly. Everything here is a GET.
+ * the response body directly. This controller exposes the remaining GET and POST endpoints.
  */
 @RestController
 @RequestMapping
@@ -40,17 +48,20 @@ public class AuthController {
     private final JwtTokenService jwt;
     private final EffectiveRolesResolver effectiveRoles;
     private final CachedUserSummaryService cachedUserSummary;
+    private final FuncionarioRegistrationService funcionarioRegistrationService;
 
     public AuthController(UserRepository userRepository, RoleRepository roleRepository,
                            AppRepository appRepository, JwtTokenService jwt,
                            EffectiveRolesResolver effectiveRoles,
-                           CachedUserSummaryService cachedUserSummary) {
+                           CachedUserSummaryService cachedUserSummary,
+                           FuncionarioRegistrationService funcionarioRegistrationService) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.appRepository = appRepository;
         this.jwt = jwt;
         this.effectiveRoles = effectiveRoles;
         this.cachedUserSummary = cachedUserSummary;
+        this.funcionarioRegistrationService = funcionarioRegistrationService;
     }
 
     /**
@@ -152,6 +163,22 @@ public class AuthController {
                 .map(this::toSummary)
                 .collect(Collectors.toList());
         return ResponseEntity.ok(out);
+    }
+
+    @PostMapping("/register/usuario")
+    public ResponseEntity<RegisterResponse> registerUsuario(
+            @Valid @RequestBody RegisterUsuarioRequest req,
+            Authentication auth) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(funcionarioRegistrationService.registerUsuario(req, auth));
+    }
+
+    @PostMapping("/register/funcionario")
+    public ResponseEntity<RegisterResponse> registerFuncionario(
+            @Valid @RequestBody RegisterFuncionarioRequest req,
+            Authentication auth) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(funcionarioRegistrationService.registerFuncionario(req, auth));
     }
 
     /* ====================== helpers ====================== */
