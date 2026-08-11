@@ -106,7 +106,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_sed_crear(
     -- Campo realmente opcional (DDL lo define nullable)
     p_georeferenciacion       VARCHAR(400)    DEFAULT NULL,
     -- Auditoria / autorizacion: PK_TUSUARIO del super-admin que crea
-    p_pk_usuario_solicitante  BIGINT
+    p_pk_usuario_solicitante  BIGINT          DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -116,7 +116,15 @@ DECLARE
     v_consecutivo   VARCHAR(2);
 BEGIN
     -- -----------------------------------------------------------------
-    -- 0. Gate de autorizacion.
+    -- 0a. Validacion del solicitante (DEFAULT NULL por 42P13; cuerpo verifica).
+    -- -----------------------------------------------------------------
+    IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
+        RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 0b. Gate de autorizacion.
     -- -----------------------------------------------------------------
     IF NOT academico_test.fn_puede_afectar_sede(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
@@ -327,7 +335,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_sed_actualizar(
     p_telefono                VARCHAR(60)     DEFAULT NULL,
     p_georeferenciacion       VARCHAR(400)    DEFAULT NULL,
     -- Auditoria / autorizacion: PK_TUSUARIO del super-admin que actualiza
-    p_pk_usuario_solicitante  BIGINT
+    p_pk_usuario_solicitante  BIGINT          DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -337,7 +345,15 @@ DECLARE
     v_fk_ee        BIGINT;
 BEGIN
     -- -----------------------------------------------------------------
-    -- 0. Gate de autorizacion: solo roles con permiso de sede (1-3, 7-8).
+    -- 0a. Validacion del solicitante (DEFAULT NULL por 42P13; cuerpo verifica).
+    -- -----------------------------------------------------------------
+    IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
+        RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 0b. Gate de autorizacion: solo roles con permiso de sede (1-3, 7-8).
     -- -----------------------------------------------------------------
     IF NOT academico_test.fn_puede_afectar_sede(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
