@@ -6,9 +6,11 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.sql.SQLException;
 import java.time.Instant;
@@ -34,7 +36,17 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<Map<String, Object>> handleAccessDenied(AccessDeniedException ex) {
-        return error(HttpStatus.FORBIDDEN, "FORBIDDEN", ex.getMessage(), null);
+        throw ex;
+    }
+
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<Map<String, Object>> handleAuthentication(AuthenticationException ex) {
+        throw ex;
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleNoResource(NoResourceFoundException ex) {
+        throw ex;
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
