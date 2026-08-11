@@ -1,16 +1,17 @@
 -- ===========================================================================
 -- V46 — Modulo de Asignaciones Academicas (TDOCENTE_ASIGNATURA).
 -- Una asignacion = (grupo, docente, asignatura, periodo).
--- El docente se identifica por numero de documento (TUSUARIO.IDENTIFICACION ->
--- TFUNCIONARIO). Guardar = reescribe el set del docente en el periodo. El id
--- de cada "subject" es el par "grupoId:asignaturaId".
+-- El docente se identifica por su id (PK_TFUNCIONARIO). Guardar = reescribe el
+-- set del docente en el periodo. El id de cada "subject" es el par
+-- "grupoId:asignaturaId".
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
 
+DROP FUNCTION IF EXISTS academico_test.fn_asignacion_guardar(BIGINT, VARCHAR, TEXT[], BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_guardar(
     p_academic_period_id BIGINT,
-    p_document_number    VARCHAR(30),
+    p_fk_funcionario     BIGINT,           -- id del docente (PK_TFUNCIONARIO)
     p_subject_ids        TEXT[],           -- ["grupoId:asignaturaId", ...]
     p_pk_usuario_solicitante BIGINT
 )
@@ -19,10 +20,8 @@ DECLARE
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_func BIGINT; v_count INT := 0; v_pair TEXT; v_grupo BIGINT; v_asig BIGINT;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_academic_period_id));
 
     IF NOT EXISTS (
         SELECT 1 FROM academico_test.TPERIODO_ACADEMICO
@@ -33,11 +32,9 @@ BEGIN
 
     SELECT f.PK_TFUNCIONARIO INTO v_func
       FROM academico_test.TFUNCIONARIO f
-      JOIN academico_test.TUSUARIO u ON u.PK_TUSUARIO = f.FK_TUSUARIO
-     WHERE u.IDENTIFICACION = p_document_number AND f.ACTIVE = TRUE
-     ORDER BY f.PK_TFUNCIONARIO LIMIT 1;
+     WHERE f.PK_TFUNCIONARIO = p_fk_funcionario AND f.ACTIVE = TRUE;
     IF v_func IS NULL THEN
-        RAISE EXCEPTION 'No existe un funcionario con documento %', p_document_number USING ERRCODE = '23503';
+        RAISE EXCEPTION 'No existe un funcionario con id %', p_fk_funcionario USING ERRCODE = '23503';
     END IF;
 
     PERFORM pg_advisory_xact_lock(hashtext('docasig:' || p_academic_period_id::text || ':' || v_func::text));
@@ -109,15 +106,18 @@ $$;
 -- Pool asignable: grado x grupo x plan de estudio del periodo.
 -- p_filtro         = busqueda libre (asignatura, grado, grupo o jornada).
 -- p_solo_sin_docente = TRUE -> solo materias-grupo aun no asignadas a un docente.
+DROP FUNCTION IF EXISTS academico_test.fn_asignacion_pool(BIGINT, TEXT, BOOLEAN);
+DROP FUNCTION IF EXISTS academico_test.fn_asignacion_pool(BIGINT, TEXT, BOOLEAN, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_pool(
     p_academic_period_id BIGINT,
     p_filtro             TEXT    DEFAULT NULL,
-    p_solo_sin_docente   BOOLEAN DEFAULT FALSE
+    p_solo_sin_docente   BOOLEAN DEFAULT FALSE,
+    p_pk_usuario         BIGINT  DEFAULT NULL   -- alcance (global / establecimiento)
 )
-RETURNS TABLE (id TEXT, nombre VARCHAR, grado_grupo TEXT, jornada VARCHAR)
+RETURNS TABLE (id TEXT, nombre VARCHAR, grado_grupo TEXT, jornada VARCHAR, jornada_name VARCHAR)
 LANGUAGE sql STABLE AS $$
     SELECT gr.PK_TGRUPO || ':' || s.PK_TASIGNATURA, s.NOMBRE,
-           g.NOMBRE || ' ' || gr.NOMBRE, jor.VALOR
+           g.NOMBRE || ' ' || gr.NOMBRE, jor.VALOR, jor.NOMBRE
       FROM academico_test.TGRADO g
       JOIN academico_test.TGRUPO gr            ON gr.FK_TGRADO = g.PK_TGRADO AND gr.ACTIVE = TRUE
       JOIN academico_test.TPLAN p              ON p.FK_TGRADO = g.PK_TGRADO AND p.ACTIVE = TRUE
@@ -125,6 +125,7 @@ LANGUAGE sql STABLE AS $$
       JOIN academico_test.TASIGNATURA s        ON s.PK_TASIGNATURA = ap.FK_TASIGNATURA AND s.ACTIVE = TRUE
       LEFT JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
      WHERE g.FK_TPERIODO_ACADEMICO = p_academic_period_id AND g.ACTIVE = TRUE
+       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_academic_period_id)
        AND (NULLIF(TRIM(p_filtro),'') IS NULL
             OR s.NOMBRE  ILIKE '%' || p_filtro || '%'
             OR g.NOMBRE  ILIKE '%' || p_filtro || '%'
@@ -138,26 +139,28 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- Asignaciones vigentes de un docente (por documento) en el periodo.
+DROP FUNCTION IF EXISTS academico_test.fn_asignacion_docente(BIGINT, VARCHAR);
 CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_docente(
-    p_academic_period_id BIGINT, p_document_number VARCHAR(30)
+    p_academic_period_id BIGINT, p_fk_funcionario BIGINT
 )
 RETURNS TABLE (assignment_id TEXT)
 LANGUAGE sql STABLE AS $$
     SELECT da.FK_TGRUPO || ':' || da.FK_TASIGNATURA
       FROM academico_test.TDOCENTE_ASIGNATURA da
-      JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = da.FK_TFUNCIONARIO
-      JOIN academico_test.TUSUARIO u     ON u.PK_TUSUARIO = f.FK_TUSUARIO
      WHERE da.FK_TPERIODO_ACADEMICO = p_academic_period_id
-       AND u.IDENTIFICACION = p_document_number AND da.ACTIVE = TRUE;
+       AND da.FK_TFUNCIONARIO = p_fk_funcionario AND da.ACTIVE = TRUE;
 $$;
 
 -- Docentes disponibles para asignar en el periodo (funcionarios del
 -- establecimiento del periodo). Filtros: estado (TUSUARIO.ESTADO) y busqueda
 -- libre por documento o nombre.
+DROP FUNCTION IF EXISTS academico_test.fn_asignacion_docente_listar(BIGINT, TEXT, TEXT);
+DROP FUNCTION IF EXISTS academico_test.fn_asignacion_docente_listar(BIGINT, TEXT, TEXT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_docente_listar(
     p_academic_period_id BIGINT,
     p_estado             TEXT DEFAULT NULL,   -- valor de TUSUARIO.ESTADO
-    p_filtro             TEXT DEFAULT NULL
+    p_filtro             TEXT DEFAULT NULL,
+    p_pk_usuario         BIGINT DEFAULT NULL  -- alcance (global / establecimiento)
 )
 RETURNS TABLE (funcionario_id BIGINT, document_number VARCHAR, nombre_completo TEXT, estado TEXT)
 LANGUAGE sql STABLE AS $$
@@ -165,13 +168,12 @@ LANGUAGE sql STABLE AS $$
            TRIM(concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO)),
            u.ESTADO::text
       FROM academico_test.TPERIODO_ACADEMICO pa
-      JOIN academico_test.TSEDE se        ON se.PK_TSEDE = pa.FK_TSEDE
-      JOIN academico_test.TSEDE s2        ON s2.FK_TESTABLECIMIENTO = se.FK_TESTABLECIMIENTO
-      JOIN academico_test.TSEDE_USUARIO su ON su.FK_TSEDE = s2.PK_TSEDE AND su.ACTIVE = TRUE
+      JOIN academico_test.TSEDE_USUARIO su ON su.FK_TSEDE = pa.FK_TSEDE AND su.ACTIVE = TRUE
                                           AND su.FK_TROL = 14  -- rol Docente
       JOIN academico_test.TUSUARIO u      ON u.PK_TUSUARIO = su.FK_TUSUARIO AND u.ACTIVE = TRUE
       JOIN academico_test.TFUNCIONARIO f  ON f.FK_TUSUARIO = u.PK_TUSUARIO AND f.ACTIVE = TRUE
      WHERE pa.PK_TPERIODO_ACADEMICO = p_academic_period_id
+       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_academic_period_id)
        AND (NULLIF(TRIM(p_estado),'') IS NULL OR u.ESTADO::text = p_estado)
        AND (NULLIF(TRIM(p_filtro),'') IS NULL
             OR u.IDENTIFICACION ILIKE '%' || p_filtro || '%'

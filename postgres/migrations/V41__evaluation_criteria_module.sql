@@ -126,10 +126,10 @@ DECLARE
     v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_escala_actual BIGINT;
 BEGIN
-    IF NOT academico_test.fn_es_super_admin(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- Alcance por rol (como V37): grueso + fino (el criterio comparte PK con el
+    -- periodo, asi que el establecimiento sale de p_pk_periodo).
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_pk_periodo));
     -- FK_TESCALA solo cambia si p_set_grading_scale = TRUE (permite ponerla o
     -- limpiarla explicitamente); en FALSE no se toca. El resto es COALESCE.
     -- Si se va a asignar una escala no nula, debe existir y estar activa.
