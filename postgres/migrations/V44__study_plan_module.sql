@@ -74,8 +74,8 @@ BEGIN
         FK_TLV_FORMATO_CALIFICACION_DEF, FK_TLV_CALCULO_DEFINITIVA, CREATED_BY
     ) VALUES (
         v_plan_id, p_fk_asignatura, p_numero_hora, p_influencia_area, p_numero_credito,
-        CASE WHEN p_influye_desempeno THEN 'S' ELSE 'N' END::bool_sn,
-        CASE WHEN p_matricula_obligatoria THEN 'S' ELSE 'N' END::bool_sn,
+        CASE WHEN p_influye_desempeno THEN 'S' ELSE 'N' END::academico_test.bool_sn,
+        CASE WHEN p_matricula_obligatoria THEN 'S' ELSE 'N' END::academico_test.bool_sn,
         CASE WHEN p_aprobacion_obligatoria THEN 'S' ELSE 'N' END,
         p_fk_formato_calif, p_fk_criterio_nota, v_audit
     )
@@ -153,9 +153,9 @@ BEGIN
         INFLUENCIA_AREA = COALESCE(p_influencia_area, INFLUENCIA_AREA),
         NUMERO_CREDITO = COALESCE(p_numero_credito, NUMERO_CREDITO),
         INFLUYE_DESEMPLENO_ACADEMICO = CASE WHEN p_influye_desempeno IS NULL THEN INFLUYE_DESEMPLENO_ACADEMICO
-                                            WHEN p_influye_desempeno THEN 'S' ELSE 'N' END::bool_sn,
+                                            WHEN p_influye_desempeno THEN 'S' ELSE 'N' END::academico_test.bool_sn,
         MATRICULA_OBLIGATORIA = CASE WHEN p_matricula_obligatoria IS NULL THEN MATRICULA_OBLIGATORIA
-                                     WHEN p_matricula_obligatoria THEN 'S' ELSE 'N' END::bool_sn,
+                                     WHEN p_matricula_obligatoria THEN 'S' ELSE 'N' END::academico_test.bool_sn,
         APROBACION_OBLIGATORIA = CASE WHEN p_aprobacion_obligatoria IS NULL THEN APROBACION_OBLIGATORIA
                                       WHEN p_aprobacion_obligatoria THEN 'S' ELSE 'N' END,
         FK_TLV_FORMATO_CALIFICACION_DEF = p_fk_formato_calif,
@@ -256,9 +256,11 @@ $$;
 
 -- Devuelve el valor EFECTIVO de formato/criterio-nota: el override del renglon
 -- del plan si existe, si no lo heredado del criterio de evaluacion enlazado.
+DROP FUNCTION IF EXISTS academico_test.fn_plan_listar(BIGINT, TEXT, INT, INT);
 CREATE OR REPLACE FUNCTION academico_test.fn_plan_listar(
     p_fk_grado BIGINT, p_filtro TEXT DEFAULT NULL,
-    p_page_index INT DEFAULT 0, p_page_size INT DEFAULT 10
+    p_page_index INT DEFAULT 0, p_page_size INT DEFAULT 10,
+    p_pk_usuario_solicitante BIGINT DEFAULT NULL
 )
 RETURNS TABLE (codigo BIGINT, asignatura VARCHAR, intensidad_horaria NUMERIC, influencia_area NUMERIC,
                numero_creditos BIGINT, influye_desempeno BOOLEAN, matricula_obligatoria BOOLEAN,
@@ -284,4 +286,57 @@ LANGUAGE sql STABLE AS $$
      ORDER BY s.NOMBRE
      LIMIT NULLIF(p_page_size, 0)
     OFFSET COALESCE(p_page_index, 0) * COALESCE(NULLIF(p_page_size, 0), 0);
+$$;
+
+-- Detalle de un renglon del plan (para el formulario de edicion). Incluye el
+-- id de la asignatura (para preseleccionar) y el valor EFECTIVO de
+-- formato/criterio-nota (override del renglon o, si no hay, heredado del criterio).
+DROP FUNCTION IF EXISTS academico_test.fn_plan_obtener(BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_plan_obtener(
+    p_pk BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
+RETURNS TABLE (codigo BIGINT, asignatura_id BIGINT, asignatura VARCHAR,
+               intensidad_horaria NUMERIC, influencia_area NUMERIC, numero_creditos BIGINT,
+               influye_desempeno BOOLEAN, matricula_obligatoria BOOLEAN, aprobacion_obligatoria BOOLEAN,
+               formato_calificacion BIGINT, criterio_nota BIGINT, personalizado BOOLEAN, grado_id BIGINT)
+LANGUAGE sql STABLE AS $$
+    SELECT ap.PK_TASIGNATURA_PLAN, ap.FK_TASIGNATURA, s.NOMBRE,
+           ap.NUMERO_HORA, ap.INFLUENCIA_AREA, ap.NUMERO_CREDITO,
+           (ap.INFLUYE_DESEMPLENO_ACADEMICO = 'S'), (ap.MATRICULA_OBLIGATORIA = 'S'),
+           (ap.APROBACION_OBLIGATORIA = 'S'),
+           COALESCE(ap.FK_TLV_FORMATO_CALIFICACION_DEF, ce.FK_TLV_FORMATO_CALIFICACION),
+           COALESCE(ap.FK_TLV_CALCULO_DEFINITIVA,      ce.FK_TLV_MODIF_FINAL_PERACA),
+           (ap.FK_TLV_FORMATO_CALIFICACION_DEF IS NOT NULL OR ap.FK_TLV_CALCULO_DEFINITIVA IS NOT NULL),
+           p.FK_TGRADO
+      FROM academico_test.TASIGNATURA_PLAN ap
+      JOIN academico_test.TPLAN p        ON p.PK_TPLAN = ap.FK_TPLAN
+      JOIN academico_test.TASIGNATURA s  ON s.PK_TASIGNATURA = ap.FK_TASIGNATURA
+      LEFT JOIN academico_test.TCRITERIO_EVALUACION_ASIGNATURA_PLAN cap
+             ON cap.FK_TASIGNATURA_PLAN = ap.PK_TASIGNATURA_PLAN AND cap.ACTIVE = TRUE
+      LEFT JOIN academico_test.TCRITERIO_EVALUACION ce
+             ON ce.PK_TCRITERIO_EVALUACION = cap.FK_TCRITERIO_EVALUACION AND ce.ACTIVE = TRUE
+     WHERE ap.PK_TASIGNATURA_PLAN = p_pk AND ap.ACTIVE = TRUE;
+$$;
+
+-- Asignaturas del periodo del grado que todavia NO estan en su plan de estudio
+-- (para el selector de "agregar asignatura al plan"). Evita ofrecer duplicados,
+-- que ademas fn_plan_agregar rechaza.
+DROP FUNCTION IF EXISTS academico_test.fn_plan_asignaturas_disponibles_listar(BIGINT, TEXT);
+CREATE OR REPLACE FUNCTION academico_test.fn_plan_asignaturas_disponibles_listar(
+    p_fk_grado BIGINT, p_filtro TEXT DEFAULT NULL,
+    p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
+RETURNS TABLE (id BIGINT, nombre VARCHAR, area_id BIGINT, area_nombre VARCHAR)
+LANGUAGE sql STABLE AS $$
+    SELECT s.PK_TASIGNATURA, s.NOMBRE, a.PK_TAREA, a.NOMBRE
+      FROM academico_test.TGRADO g
+      JOIN academico_test.TAREA a       ON a.FK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO AND a.ACTIVE = TRUE
+      JOIN academico_test.TASIGNATURA s ON s.FK_TAREA = a.PK_TAREA AND s.ACTIVE = TRUE
+     WHERE g.PK_TGRADO = p_fk_grado
+       AND (NULLIF(TRIM(p_filtro),'') IS NULL OR s.NOMBRE ILIKE '%' || p_filtro || '%')
+       AND NOT EXISTS (
+             SELECT 1 FROM academico_test.TASIGNATURA_PLAN ap
+               JOIN academico_test.TPLAN p ON p.PK_TPLAN = ap.FK_TPLAN
+              WHERE p.FK_TGRADO = p_fk_grado AND ap.FK_TASIGNATURA = s.PK_TASIGNATURA AND ap.ACTIVE = TRUE)
+     ORDER BY a.NOMBRE, s.NOMBRE;
 $$;

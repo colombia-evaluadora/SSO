@@ -96,19 +96,29 @@ END;
 $$;
 
 DROP FUNCTION IF EXISTS academico_test.fn_horario_listar(BIGINT);
-CREATE OR REPLACE FUNCTION academico_test.fn_horario_listar(p_fk_grado BIGINT)
-RETURNS TABLE (id BIGINT, grupo_id BIGINT, plan_item_id BIGINT, asignatura_id BIGINT,
+DROP FUNCTION IF EXISTS academico_test.fn_horario_listar(BIGINT, BIGINT, BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_horario_listar(
+    p_fk_grado BIGINT,
+    p_fk_grupo BIGINT DEFAULT NULL,   -- filtro opcional por grupo
+    p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
+RETURNS TABLE (id BIGINT, grado_id BIGINT, grado VARCHAR, grupo_id BIGINT, grupo VARCHAR,
+               plan_item_id BIGINT, asignatura_id BIGINT, asignatura VARCHAR,
                dia_id BIGINT, dia VARCHAR, dia_name VARCHAR, bloque NUMERIC)
 LANGUAGE sql STABLE AS $$
-    SELECT h.PK_THORARIO, h.FK_TGRUPO, ap.PK_TASIGNATURA_PLAN, h.FK_TASIGNATURA,
+    SELECT h.PK_THORARIO, g.PK_TGRADO, g.NOMBRE, h.FK_TGRUPO, gr.NOMBRE,
+           ap.PK_TASIGNATURA_PLAN, h.FK_TASIGNATURA, s.NOMBRE,
            h.FK_TLV_DIA_SEMANA, dia.VALOR, dia.NOMBRE, h.NUMERO_BLOQUE
       FROM academico_test.THORARIO h
       JOIN academico_test.TGRUPO gr ON gr.PK_TGRUPO = h.FK_TGRUPO AND gr.ACTIVE = TRUE
+      JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+      LEFT JOIN academico_test.TASIGNATURA s ON s.PK_TASIGNATURA = h.FK_TASIGNATURA
       LEFT JOIN academico_test.TLISTA_VALOR dia ON dia.PK_LISTA_VALOR = h.FK_TLV_DIA_SEMANA
       LEFT JOIN academico_test.TPLAN pl ON pl.FK_TGRADO = gr.FK_TGRADO AND pl.ACTIVE = TRUE
       LEFT JOIN academico_test.TASIGNATURA_PLAN ap ON ap.FK_TPLAN = pl.PK_TPLAN
            AND ap.FK_TASIGNATURA = h.FK_TASIGNATURA AND ap.ACTIVE = TRUE
      WHERE gr.FK_TGRADO = p_fk_grado AND h.ACTIVE = TRUE
+       AND (p_fk_grupo IS NULL OR h.FK_TGRUPO = p_fk_grupo)
      ORDER BY h.FK_TGRUPO, h.FK_TLV_DIA_SEMANA, h.NUMERO_BLOQUE;
 $$;
 

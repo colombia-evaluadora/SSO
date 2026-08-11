@@ -458,7 +458,10 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_subject_listar(p_fk_area BIGINT)
+DROP FUNCTION IF EXISTS academico_test.fn_subject_listar(BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_subject_listar(
+    p_fk_area BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
 RETURNS TABLE (id BIGINT, abreviacion VARCHAR, nombre_interno VARCHAR,
                asignatura_general_id BIGINT, enfasis_id BIGINT, color VARCHAR, orden_reportes NUMERIC)
 LANGUAGE sql STABLE AS $$
@@ -471,7 +474,10 @@ $$;
 
 -- ----- CATALOGOS PARA SELECTS ----------------------------------------------
 -- Areas/asignaturas generales (TAREA_ASIGNATURA) para el select de "area general".
-CREATE OR REPLACE FUNCTION academico_test.fn_area_asignatura_listar()
+DROP FUNCTION IF EXISTS academico_test.fn_area_asignatura_listar();
+CREATE OR REPLACE FUNCTION academico_test.fn_area_asignatura_listar(
+    p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
 RETURNS TABLE (id BIGINT, nombre VARCHAR, especialidad_id BIGINT)
 LANGUAGE sql STABLE AS $$
     SELECT PK_TAREA_ASIGNATURA, NOMBRE, FK_TESPECIALIDAD
@@ -480,9 +486,38 @@ LANGUAGE sql STABLE AS $$
      ORDER BY NOMBRE;
 $$;
 
+-- Areas de un periodo con sus asignaturas anidadas, para el selector de
+-- asignaturas/areas obligatorias del criterio de promocion (V39). Una fila por
+-- area; `asignaturas` es un arreglo jsonb (vacio si el area no tiene ninguna).
+-- Limpieza del nombre previo (version plana) por si ya se aplico en test.
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_asignaturas_listar(BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_areas_asignaturas_listar(BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_areas_asignaturas_listar(
+    p_fk_periodo BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
+RETURNS TABLE (area_id BIGINT, area_nombre VARCHAR, asignaturas JSONB)
+LANGUAGE sql STABLE AS $$
+    SELECT a.PK_TAREA, a.NOMBRE,
+           COALESCE(
+               (SELECT jsonb_agg(
+                          jsonb_build_object('id', s.PK_TASIGNATURA,
+                                             'abreviacion', s.CODIGO,
+                                             'nombreInterno', s.NOMBRE)
+                          ORDER BY s.ORDEN_REPORTE, s.NOMBRE)
+                  FROM academico_test.TASIGNATURA s
+                 WHERE s.FK_TAREA = a.PK_TAREA AND s.ACTIVE = TRUE),
+               '[]'::jsonb)
+      FROM academico_test.TAREA a
+     WHERE a.FK_TPERIODO_ACADEMICO = p_fk_periodo AND a.ACTIVE = TRUE
+     ORDER BY a.ORDEN_REPORTE, a.NOMBRE;
+$$;
+
 -- Especialidades (catalogo global) + enfasis del establecimiento, en una sola
 -- lista con un campo 'origen' para distinguirlos.
-CREATE OR REPLACE FUNCTION academico_test.fn_especialidad_enfasis_listar(p_fk_establecimiento BIGINT)
+DROP FUNCTION IF EXISTS academico_test.fn_especialidad_enfasis_listar(BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_especialidad_enfasis_listar(
+    p_fk_establecimiento BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
 RETURNS TABLE (id BIGINT, nombre VARCHAR, codigo VARCHAR, origen TEXT)
 LANGUAGE sql STABLE AS $$
     SELECT e.PK_ESPECIALIDAD, e.NOMBRE, e.CODIGO, 'ESPECIALIDAD'
