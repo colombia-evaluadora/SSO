@@ -35,17 +35,17 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<Map<String, Object>> handleAccessDenied(AccessDeniedException ex) {
+    public ResponseEntity<Map<String, Object>> handleAccessDenied(AccessDeniedException ex) throws AccessDeniedException {
         throw ex;
     }
 
     @ExceptionHandler(AuthenticationException.class)
-    public ResponseEntity<Map<String, Object>> handleAuthentication(AuthenticationException ex) {
+    public ResponseEntity<Map<String, Object>> handleAuthentication(AuthenticationException ex) throws AuthenticationException {
         throw ex;
     }
 
     @ExceptionHandler(NoResourceFoundException.class)
-    public ResponseEntity<Map<String, Object>> handleNoResource(NoResourceFoundException ex) {
+    public ResponseEntity<Map<String, Object>> handleNoResource(NoResourceFoundException ex) throws NoResourceFoundException {
         throw ex;
     }
 
