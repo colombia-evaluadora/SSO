@@ -92,6 +92,10 @@ SET search_path TO academico_test, public;
 --                        funcionario rector/secretaria, archivo, etc.).
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_est_crear(
+    -- Auditoria / autorizacion: PK_TUSUARIO del super-admin que crea.
+    -- Siempre el primer parametro (mismo patron que V52): evita el 42P13
+    -- "args con default deben ir al final" y estandariza el orden.
+    p_pk_usuario_solicitante  BIGINT,
     p_nombre                  VARCHAR(130),
     p_nit                     VARCHAR(30),
     p_fk_municipio            BIGINT,
@@ -118,20 +122,15 @@ CREATE OR REPLACE FUNCTION academico_test.fn_est_crear(
     p_fk_discapacidad         BIGINT          DEFAULT NULL,
     p_talento                 academico_test.bool_sn         DEFAULT NULL,
     p_etnias                  academico_test.bool_sn         DEFAULT NULL,
-    p_fk_funcionario_rector   BIGINT          DEFAULT NULL,
-    p_fk_funcionario_secretaria BIGINT        DEFAULT NULL,
+    p_FK_TFUNCIONARIO_RECTOR   BIGINT          DEFAULT NULL,
+    p_FK_TFUNCIONARIO_SECRETARIA BIGINT        DEFAULT NULL,
     p_subsidio                academico_test.bool_sn         DEFAULT NULL,
     p_fk_lv_regimen_catcosto  BIGINT          DEFAULT NULL,
     p_fk_lv_rango_tarifa      BIGINT          DEFAULT NULL,
     p_fk_lv_asociacion_nacional BIGINT        DEFAULT NULL,
     p_fk_lv_estado_establecimiento BIGINT     DEFAULT NULL,
     p_logo                    BYTEA           DEFAULT NULL,
-    p_fk_archivo              BIGINT          DEFAULT NULL,
-    -- Auditoria / autorizacion: PK_TUSUARIO del super-admin que crea.
-    -- DEFAULT NULL para cumplir la regla 42P13: tras un parametro con
-    -- default, todos los siguientes deben tener default. La validacion
-    -- de presencia y >0 se hace al inicio del cuerpo.
-    p_pk_usuario_solicitante  BIGINT          DEFAULT NULL
+    p_fk_archivo              BIGINT          DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -140,16 +139,14 @@ DECLARE
     v_id_creado BIGINT;
 BEGIN
     -- -----------------------------------------------------------------
-    -- 0. Validacion del solicitante (DEFAULT NULL por 42P13; cuerpo verifica).
+    -- 0. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
+    --    p_pk_usuario_solicitante es obligatorio por firma (sin DEFAULT).
     -- -----------------------------------------------------------------
     IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
         RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
             USING ERRCODE = '22023';
     END IF;
 
-    -- -----------------------------------------------------------------
-    -- 1. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
-    -- -----------------------------------------------------------------
     IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
@@ -353,27 +350,27 @@ BEGIN
     -- 2d. Validacion de FK_TFUNCIONARIO_RECTOR / SECRETARIA opcionales.
     --     Ambos deben ser funcionarios activos.
     -- -----------------------------------------------------------------
-    IF p_fk_funcionario_rector IS NOT NULL
+    IF p_FK_TFUNCIONARIO_RECTOR IS NOT NULL
        AND NOT EXISTS (
             SELECT 1 FROM academico_test.TFUNCIONARIO
-             WHERE PK_TFUNCIONARIO = p_fk_funcionario_rector
+             WHERE PK_TFUNCIONARIO = p_FK_TFUNCIONARIO_RECTOR
                AND ACTIVE = TRUE
           )
     THEN
         RAISE EXCEPTION 'FK_TFUNCIONARIO_RECTOR (%) no existe o no esta activo en TFUNCIONARIO',
-            p_fk_funcionario_rector
+            p_FK_TFUNCIONARIO_RECTOR
             USING ERRCODE = '23503';
     END IF;
 
-    IF p_fk_funcionario_secretaria IS NOT NULL
+    IF p_FK_TFUNCIONARIO_SECRETARIA IS NOT NULL
        AND NOT EXISTS (
             SELECT 1 FROM academico_test.TFUNCIONARIO
-             WHERE PK_TFUNCIONARIO = p_fk_funcionario_secretaria
+             WHERE PK_TFUNCIONARIO = p_FK_TFUNCIONARIO_SECRETARIA
                AND ACTIVE = TRUE
           )
     THEN
         RAISE EXCEPTION 'FK_TFUNCIONARIO_SECRETARIA (%) no existe o no esta activo en TFUNCIONARIO',
-            p_fk_funcionario_secretaria
+            p_FK_TFUNCIONARIO_SECRETARIA
             USING ERRCODE = '23503';
     END IF;
 
@@ -418,7 +415,7 @@ BEGIN
         p_fk_propiedad_juridica,
         p_fk_lv_calendario, p_fk_lv_idioma, p_fk_lv_genero_est, p_fk_discapacidad,
         p_talento, p_etnias,
-        p_fk_funcionario_rector, p_fk_funcionario_secretaria, p_subsidio,
+        p_FK_TFUNCIONARIO_RECTOR, p_FK_TFUNCIONARIO_SECRETARIA, p_subsidio,
         p_fk_lv_regimen_catcosto, p_fk_lv_rango_tarifa,
         p_fk_lv_asociacion_nacional, p_fk_lv_estado_establecimiento,
         p_logo, p_fk_archivo,
@@ -433,6 +430,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_est_crear(
+    BIGINT,
     VARCHAR, VARCHAR, BIGINT, BIGINT,
     VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR,
     VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR,
@@ -442,9 +440,8 @@ COMMENT ON FUNCTION academico_test.fn_est_crear(
     academico_test.bool_sn, academico_test.bool_sn,
     BIGINT, BIGINT, academico_test.bool_sn,
     BIGINT, BIGINT, BIGINT, BIGINT,
-    BYTEA, BIGINT,
-    BIGINT
-) IS 'Crea un TESTABLECIMIENTO validando obligatorios (NOMBRE, NIT, CODIGO, FK_TMUNICIPIO, FK_TPROPIEDAD_JURIDICA) y unicidad por NIT/CODIGO activos. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento). Retorna PK_ESTABLECIMIENTO. Auditoria: CREATED_BY=p_pk_usuario_solicitante::VARCHAR, CREATED_AT=now. MODIFIED_BY y MODIFIED_AT quedan NULL (se llenan en la primera edicion via fn_est_actualizar).';
+    BYTEA, BIGINT
+) IS 'Crea un TESTABLECIMIENTO validando obligatorios (NOMBRE, NIT, CODIGO, FK_TMUNICIPIO, FK_TPROPIEDAD_JURIDICA) y unicidad por NIT/CODIGO activos. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento). p_pk_usuario_solicitante va al inicio sin DEFAULT (obligatorio, mismo patron que V52). Retorna PK_ESTABLECIMIENTO. Auditoria: CREATED_BY=p_pk_usuario_solicitante::VARCHAR, CREATED_AT=now. MODIFIED_BY y MODIFIED_AT quedan NULL (se llenan en la primera edicion via fn_est_actualizar).';
 
 
 -- ---------------------------------------------------------------------------
@@ -541,20 +538,66 @@ COMMENT ON FUNCTION academico_test.fn_est_buscar_por_pk(BIGINT)
 --   fuera de rango simplemente retorna 0 filas (LIMIT/OFFSET lo maneja solo).
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_est_contar(
+    p_pk_usuario_solicitante  BIGINT,
     p_search        VARCHAR DEFAULT NULL,
     p_departamentos BIGINT[] DEFAULT NULL,
     p_municipios    BIGINT[] DEFAULT NULL,
     p_estados       BIGINT[] DEFAULT NULL
 )
 RETURNS BIGINT
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $$
+DECLARE
+    v_total BIGINT;
+BEGIN
+    -- Gate de autorizacion: super-admin ve todo; cualquier otro solo
+    -- cuenta EE de los que es rector (FK_TFUNCIONARIO_RECTOR -> TFUNCIONARIO
+    -- activo cuyo FK_TUSUARIO = p_pk_usuario_solicitante).
+    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
+             WHERE e.ACTIVE     = TRUE
+               AND f.ACTIVE     = TRUE
+               AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+        ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
+
+        SELECT COUNT(*)
+          INTO v_total
+          FROM academico_test.TESTABLECIMIENTO e
+          JOIN academico_test.TMUNICIPIO    m ON m.PK_TMUNICIPIO    = e.FK_TMUNICIPIO
+          JOIN academico_test.TDEPARTAMENTO d ON d.PK_DEPARTAMENTO  = m.FK_TDEPARTAMENTO
+          JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO  = e.FK_TFUNCIONARIO_RECTOR
+     LEFT JOIN academico_test.TLISTA_VALOR  tlv ON tlv.PK_LISTA_VALOR = e.FK_TLV_ESTADO_ESTABLECIMIENTO
+         WHERE e.ACTIVE       = TRUE
+           AND f.ACTIVE       = TRUE
+           AND f.FK_TUSUARIO  = p_pk_usuario_solicitante
+           AND (NULLIF(TRIM(p_search), '') IS NULL
+                OR e.NOMBRE ILIKE '%' || p_search || '%'
+                OR e.CODIGO ILIKE '%' || p_search || '%'
+                OR d.NOMBRE ILIKE '%' || p_search || '%'
+                OR m.NOMBRE ILIKE '%' || p_search || '%')
+           AND (p_departamentos IS NULL OR CARDINALITY(p_departamentos) = 0
+                OR d.PK_DEPARTAMENTO = ANY(p_departamentos))
+           AND (p_municipios IS NULL OR CARDINALITY(p_municipios) = 0
+                OR m.PK_TMUNICIPIO = ANY(p_municipios))
+           AND (p_estados IS NULL OR CARDINALITY(p_estados) = 0
+                OR e.FK_TLV_ESTADO_ESTABLECIMIENTO = ANY(p_estados));
+        RETURN v_total;
+    END IF;
+
+    -- Camino super-admin: misma query que antes, sin filtro por rector.
     SELECT COUNT(*)
+      INTO v_total
       FROM academico_test.TESTABLECIMIENTO e
-      JOIN academico_test.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
-      JOIN academico_test.TDEPARTAMENTO d ON d.PK_DEPARTAMENTO = m.PK_TDEPARTAMENTO
- LEFT JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = e.FK_TLV_ESTADO_ESTABLECIMIENTO
+      JOIN academico_test.TMUNICIPIO    m ON m.PK_TMUNICIPIO    = e.FK_TMUNICIPIO
+      JOIN academico_test.TDEPARTAMENTO d ON d.PK_DEPARTAMENTO  = m.FK_TDEPARTAMENTO
+ LEFT JOIN academico_test.TLISTA_VALOR  tlv ON tlv.PK_LISTA_VALOR = e.FK_TLV_ESTADO_ESTABLECIMIENTO
      WHERE e.ACTIVE = TRUE
        AND (NULLIF(TRIM(p_search), '') IS NULL
             OR e.NOMBRE ILIKE '%' || p_search || '%'
@@ -567,13 +610,16 @@ AS $$
             OR m.PK_TMUNICIPIO = ANY(p_municipios))
        AND (p_estados IS NULL OR CARDINALITY(p_estados) = 0
             OR e.FK_TLV_ESTADO_ESTABLECIMIENTO = ANY(p_estados));
+    RETURN v_total;
+END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_est_contar(VARCHAR, BIGINT[], BIGINT[], BIGINT[])
-    IS 'Cuenta TESTABLECIMIENTO activos aplicando los mismos filtros que fn_est_listar (search/departamentos/municipios/estados). Usar junto con fn_est_listar para armar { rows, pageCount, totalCount } en la capa Java.';
+COMMENT ON FUNCTION academico_test.fn_est_contar(BIGINT, VARCHAR, BIGINT[], BIGINT[], BIGINT[])
+    IS 'Cuenta TESTABLECIMIENTO activos aplicando los mismos filtros que fn_est_listar (search/departamentos/municipios/estados). Gate de autorizacion: si el usuario pasa fn_puede_afectar_establecimiento cuenta todos los EE activos; en caso contrario solo cuenta los EE cuyo FK_TFUNCIONARIO_RECTOR apunte a un TFUNCIONARIO activo con FK_TUSUARIO = p_pk_usuario_solicitante. Si no es super-admin y no es rector de ningun EE activo => 42501. Usar junto con fn_est_listar para armar { rows, pageCount, totalCount } en la capa Java. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52).';
 
 
 CREATE OR REPLACE FUNCTION academico_test.fn_est_listar(
+    p_pk_usuario_solicitante  BIGINT,
     p_search        VARCHAR DEFAULT NULL,
     p_departamentos BIGINT[] DEFAULT NULL,
     p_municipios    BIGINT[] DEFAULT NULL,
@@ -602,16 +648,75 @@ DECLARE
     v_page_size  INT := LEAST(CASE WHEN p_page_size > 0 THEN p_page_size ELSE 10 END, 100);
     v_page_index INT := GREATEST(COALESCE(p_page_index, 0), 0);
 BEGIN
+    -- Gate de autorizacion: super-admin ve todo; cualquier otro solo
+    -- ve EE de los que es rector (FK_TFUNCIONARIO_RECTOR -> TFUNCIONARIO
+    -- activo cuyo FK_TUSUARIO = p_pk_usuario_solicitante).
+    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
+        RETURN QUERY
+        SELECT e.PK_ESTABLECIMIENTO, e.CODIGO, e.NOMBRE, e.NIT,
+               d.PK_DEPARTAMENTO, d.NOMBRE,
+               m.PK_TMUNICIPIO, m.NOMBRE,
+               e.FK_TLV_ESTADO_ESTABLECIMIENTO, tlv.NOMBRE
+          FROM academico_test.TESTABLECIMIENTO e
+          JOIN academico_test.TMUNICIPIO    m ON m.PK_TMUNICIPIO    = e.FK_TMUNICIPIO
+          JOIN academico_test.TDEPARTAMENTO d ON d.PK_DEPARTAMENTO  = m.FK_TDEPARTAMENTO
+     LEFT JOIN academico_test.TLISTA_VALOR  tlv ON tlv.PK_LISTA_VALOR = e.FK_TLV_ESTADO_ESTABLECIMIENTO
+         WHERE e.ACTIVE = TRUE
+           AND (NULLIF(TRIM(p_search), '') IS NULL
+                OR e.NOMBRE ILIKE '%' || p_search || '%'
+                OR e.CODIGO ILIKE '%' || p_search || '%'
+                OR d.NOMBRE ILIKE '%' || p_search || '%'
+                OR m.NOMBRE ILIKE '%' || p_search || '%')
+           AND (p_departamentos IS NULL OR CARDINALITY(p_departamentos) = 0
+                OR d.PK_DEPARTAMENTO = ANY(p_departamentos))
+           AND (p_municipios IS NULL OR CARDINALITY(p_municipios) = 0
+                OR m.PK_TMUNICIPIO = ANY(p_municipios))
+           AND (p_estados IS NULL OR CARDINALITY(p_estados) = 0
+                OR e.FK_TLV_ESTADO_ESTABLECIMIENTO = ANY(p_estados))
+         ORDER BY
+            CASE WHEN p_sort_campo = 'name'         AND NOT p_sort_desc THEN e.NOMBRE   END ASC,
+            CASE WHEN p_sort_campo = 'name'         AND     p_sort_desc THEN e.NOMBRE   END DESC,
+            CASE WHEN p_sort_campo = 'dane'         AND NOT p_sort_desc THEN e.CODIGO   END ASC,
+            CASE WHEN p_sort_campo = 'dane'         AND     p_sort_desc THEN e.CODIGO   END DESC,
+            CASE WHEN p_sort_campo = 'department'   AND NOT p_sort_desc THEN d.NOMBRE   END ASC,
+            CASE WHEN p_sort_campo = 'department'   AND     p_sort_desc THEN d.NOMBRE   END DESC,
+            CASE WHEN p_sort_campo = 'municipality' AND NOT p_sort_desc THEN m.NOMBRE   END ASC,
+            CASE WHEN p_sort_campo = 'municipality' AND     p_sort_desc THEN m.NOMBRE   END DESC,
+            CASE WHEN p_sort_campo = 'status'       AND NOT p_sort_desc THEN tlv.NOMBRE END ASC,
+            CASE WHEN p_sort_campo = 'status'       AND     p_sort_desc THEN tlv.NOMBRE END DESC,
+            e.NOMBRE ASC,
+            e.PK_ESTABLECIMIENTO ASC
+         LIMIT v_page_size
+        OFFSET v_page_index * v_page_size;
+        RETURN;
+    END IF;
+
+    -- Camino no-super-admin: filtrar por rector.
+    IF NOT EXISTS (
+        SELECT 1
+          FROM academico_test.TESTABLECIMIENTO e
+          JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
+         WHERE e.ACTIVE      = TRUE
+           AND f.ACTIVE      = TRUE
+           AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+    ) THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
     RETURN QUERY
     SELECT e.PK_ESTABLECIMIENTO, e.CODIGO, e.NOMBRE, e.NIT,
            d.PK_DEPARTAMENTO, d.NOMBRE,
            m.PK_TMUNICIPIO, m.NOMBRE,
            e.FK_TLV_ESTADO_ESTABLECIMIENTO, tlv.NOMBRE
       FROM academico_test.TESTABLECIMIENTO e
-      JOIN academico_test.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
-      JOIN academico_test.TDEPARTAMENTO d ON d.PK_DEPARTAMENTO = m.PK_TDEPARTAMENTO
- LEFT JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = e.FK_TLV_ESTADO_ESTABLECIMIENTO
-     WHERE e.ACTIVE = TRUE
+      JOIN academico_test.TMUNICIPIO    m ON m.PK_TMUNICIPIO    = e.FK_TMUNICIPIO
+      JOIN academico_test.TDEPARTAMENTO d ON d.PK_DEPARTAMENTO  = m.FK_TDEPARTAMENTO
+      JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO  = e.FK_TFUNCIONARIO_RECTOR
+ LEFT JOIN academico_test.TLISTA_VALOR  tlv ON tlv.PK_LISTA_VALOR = e.FK_TLV_ESTADO_ESTABLECIMIENTO
+     WHERE e.ACTIVE       = TRUE
+       AND f.ACTIVE       = TRUE
+       AND f.FK_TUSUARIO  = p_pk_usuario_solicitante
        AND (NULLIF(TRIM(p_search), '') IS NULL
             OR e.NOMBRE ILIKE '%' || p_search || '%'
             OR e.CODIGO ILIKE '%' || p_search || '%'
@@ -641,8 +746,129 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_est_listar(VARCHAR, BIGINT[], BIGINT[], BIGINT[], VARCHAR, BOOLEAN, INT, INT)
-    IS 'Lista TESTABLECIMIENTO activos paginados. Mismos filtros que fn_est_contar. p_sort_campo/p_sort_desc representan sorting[0] ya resuelto por el caller (array vacio => NULL => orden por defecto NOMBRE/PK). p_page_index base 0; p_page_size se acota a (0,100]. No calcula totalCount/pageCount: usar junto con fn_est_contar.';
+COMMENT ON FUNCTION academico_test.fn_est_listar(BIGINT, VARCHAR, BIGINT[], BIGINT[], BIGINT[], VARCHAR, BOOLEAN, INT, INT)
+    IS 'Lista TESTABLECIMIENTO activos paginados. Mismos filtros que fn_est_contar. Gate de autorizacion: si el usuario pasa fn_puede_afectar_establecimiento ve todos los EE activos; en caso contrario solo ve los EE cuyo FK_TFUNCIONARIO_RECTOR apunte a un TFUNCIONARIO activo con FK_TUSUARIO = p_pk_usuario_solicitante. Si no es super-admin y no es rector de ningun EE activo => 42501. p_sort_campo/p_sort_desc representan sorting[0] ya resuelto por el caller (array vacio => NULL => orden por defecto NOMBRE/PK). p_page_index base 0; p_page_size se acota a (0,100]. No calcula totalCount/pageCount: usar junto con fn_est_contar. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52).';
+
+
+-- ---------------------------------------------------------------------------
+-- fn_est_listar_paginado
+--   Wrapper de conveniencia que combina fn_est_listar + fn_est_contar en
+--   una sola llamada, devolviendo en un unico record la pagina de filas
+--   mas la metadata de paginacion.
+--
+--   Por que existe:
+--     La capa Java hacia 2 round-trips (uno para las filas, otro para el
+--     total) y luego combinaba los resultados a mano. Con esta funcion
+--     una sola llamada entrega { rows, totalCount, pageCount, pageIndex,
+--     pageSize } listo para serializar a { rows, totalCount, pageCount }
+--     en el response del endpoint.
+--
+--   Como esta implementado:
+--     - DELega en fn_est_contar para obtener v_total (BIGINT). Esto
+--       re-ejecuta la logica de gate y filtros de contar.
+--     - Captura el SETOF de fn_est_listar con un FOR ... IN SELECT LOOP
+--       (no necesita TYPE adicional porque fn_est_listar devuelve TABLE,
+--       que es anonimo pero consultable como si fuera una vista).
+--       Cada fila se agrega a un JSONB via jsonb_build_object y se
+--       acumula con el operador || sobre un array JSONB.
+--     - Calcula v_page_count = CEIL(v_total / v_page_size). Page count
+--       = 0 si total = 0 (asi el cliente sabe "sin datos").
+--
+--   NO modifica la logica de gate ni filtros: ambas sub-funciones son
+--   la fuente de verdad. Si cambian los criterios de busqueda, los
+--   ordenes o el gate, solo se tocan fn_est_listar y fn_est_contar.
+--
+--   Retorna: UN SOLO record con la forma:
+--       ( rows JSONB, total_count BIGINT, page_count BIGINT,
+--         page_index INT, page_size INT )
+--     donde rows es un JSON array de objetos con las mismas 10 columnas
+--     que fn_est_listar: pk_establecimiento, codigo, nombre, nit,
+--     fk_departamento, departamento_nombre, fk_municipio, municipio_nombre,
+--     fk_estado, estado_nombre.
+--
+--   Excepciones:
+--     SQLSTATE '42501' — Propagado desde fn_est_listar/fn_est_contar si
+--                        el usuario no es super-admin ni rector de EE.
+--     Cualquier otra excepcion 23503/22023/P0002 propagada.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_est_listar_paginado(
+    p_pk_usuario_solicitante  BIGINT,
+    p_search                  VARCHAR   DEFAULT NULL,
+    p_departamentos           BIGINT[]  DEFAULT NULL,
+    p_municipios              BIGINT[]  DEFAULT NULL,
+    p_estados                 BIGINT[]  DEFAULT NULL,
+    p_sort_campo              VARCHAR   DEFAULT NULL,
+    p_sort_desc               BOOLEAN   DEFAULT FALSE,
+    p_page_index              INT       DEFAULT 0,
+    p_page_size               INT       DEFAULT 10
+)
+RETURNS TABLE (
+    rows         JSONB,
+    total_count  BIGINT,
+    page_count   BIGINT,
+    page_index   INT,
+    page_size    INT
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_rows_json   JSONB   := '[]'::JSONB;
+    v_total       BIGINT;
+    v_page_size   INT     := LEAST(CASE WHEN p_page_size > 0 THEN p_page_size ELSE 10 END, 100);
+    v_page_index  INT     := GREATEST(COALESCE(p_page_index, 0), 0);
+    v_page_count  BIGINT;
+    v_one_row     JSONB;
+BEGIN
+    -- 1) Total de filas que cumplen los filtros (con gate aplicado).
+    --    fn_est_contar ya aplica el gate de autorizacion (super-admin OR
+    --    rector de >=1 EE activo). Si no cumple, lanza 42501.
+    v_total := academico_test.fn_est_contar(
+        p_pk_usuario_solicitante,
+        p_search,
+        p_departamentos,
+        p_municipios,
+        p_estados
+    );
+
+    -- 2) Calculo de page_count (0 si no hay resultados).
+    v_page_count := CASE WHEN v_total = 0 THEN 0 ELSE CEIL(v_total::NUMERIC / v_page_size)::BIGINT END;
+
+    -- 3) Captura de la pagina via FOR ... IN SELECT ... LOOP sobre
+    --    fn_est_listar. fn_est_listar aplica los mismos filtros + gate y
+    --    ya respeta p_page_index/p_page_size.
+    FOR
+        v_one_row IN
+        SELECT to_jsonb(t)
+          FROM academico_test.fn_est_listar(
+              p_pk_usuario_solicitante,
+              p_search,
+              p_departamentos,
+              p_municipios,
+              p_estados,
+              p_sort_campo,
+              p_sort_desc,
+              p_page_index,
+              p_page_size
+          ) AS t(
+              pk_establecimiento, codigo, nombre, nit,
+              fk_departamento, departamento_nombre,
+              fk_municipio, municipio_nombre,
+              fk_estado, estado_nombre
+          )
+    LOOP
+        v_rows_json := v_rows_json || jsonb_build_array(v_one_row);
+    END LOOP;
+
+    -- 4) Resultado final en un solo record.
+    RETURN QUERY
+    SELECT v_rows_json, v_total, v_page_count, v_page_index, v_page_size;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_est_listar_paginado(
+    BIGINT, VARCHAR, BIGINT[], BIGINT[], BIGINT[], VARCHAR, BOOLEAN, INT, INT
+) IS 'Wrapper de paginacion: combina fn_est_listar + fn_est_contar en una sola llamada. Devuelve un unico record con la forma (rows JSONB, total_count BIGINT, page_count BIGINT, page_index INT, page_size INT). rows es un JSON array con las 10 columnas que retorna fn_est_listar (pk_establecimiento, codigo, nombre, nit, fk_departamento, departamento_nombre, fk_municipio, municipio_nombre, fk_estado, estado_nombre). El gate de autorizacion y los filtros se delegan tal cual a fn_est_listar/fn_est_contar (fuente unica de verdad). v_page_size se acota a (0,100] (mismo cap que fn_est_listar). Si v_total=0 => page_count=0 y rows=[]. Pensada para que la capa Java haga un solo SELECT * FROM academico_test.fn_est_listar_paginado(...) y arme { rows, totalCount, pageCount } directamente. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52).';
 
 
 -- ---------------------------------------------------------------------------
@@ -677,8 +903,8 @@ COMMENT ON FUNCTION academico_test.fn_est_listar(VARCHAR, BIGINT[], BIGINT[], BI
 --                        usuario perdio permisos a mitad del cascade.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_est_soft_delete(
-    p_pk_establecimiento      BIGINT,
-    p_pk_usuario_solicitante  BIGINT
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_establecimiento      BIGINT
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -756,7 +982,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_est_soft_delete(BIGINT, BIGINT)
-    IS 'Baja logica en cascada: marca ACTIVE=FALSE en TESTABLECIMIENTO y delega en academico_test.fn_sed_soft_delete (V52) para cada sede activa del EE. fn_sed_soft_delete se encarga a su vez de TSEDE, TSEDE_USUARIO y TSEDE_NIVEL (cuyo detalle vive en V52). Todo en una sola transaccion: si la delegation falla para cualquier sede, todo el borrado se revierte. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento, definida en V50). Retorna PK_ESTABLECIMIENTO dado de baja.';
+    IS 'Baja logica en cascada: marca ACTIVE=FALSE en TESTABLECIMIENTO y delega en academico_test.fn_sed_soft_delete (V52) para cada sede activa del EE. fn_sed_soft_delete se encarga a su vez de TSEDE, TSEDE_USUARIO y TSEDE_NIVEL (cuyo detalle vive en V52). Todo en una sola transaccion: si la delegation falla para cualquier sede, todo el borrado se revierte. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento, definida en V50). p_pk_usuario_solicitante va primero en la firma (obligatorio, mismo patron que V52). Retorna PK_ESTABLECIMIENTO dado de baja.';
 
 
 -- ---------------------------------------------------------------------------
@@ -800,6 +1026,12 @@ COMMENT ON FUNCTION academico_test.fn_est_soft_delete(BIGINT, BIGINT)
 --     SQLSTATE '23503' — Alguna FK nueva no existe.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_est_actualizar(
+    -- Auditoria / autorizacion: PK_TUSUARIO del usuario que actualiza.
+    -- Siempre el primer parametro (mismo patron que V52): evita el 42P13
+    -- "args con default deben ir al final" y estandariza el orden.
+    p_pk_usuario_solicitante  BIGINT,
+    -- PK del EE a actualizar. Obligatorio.
+    p_pk_establecimiento      BIGINT,
     -- Identificadores modificables (nullable: NULL = no cambia).
     -- Si se envian, se validan contra el resto de EE activos para evitar
     -- colision; pueden reutilizar valores de EE inactivos.
@@ -829,46 +1061,65 @@ CREATE OR REPLACE FUNCTION academico_test.fn_est_actualizar(
     p_fk_discapacidad         BIGINT          DEFAULT NULL,
     p_talento                 academico_test.bool_sn         DEFAULT NULL,
     p_etnias                  academico_test.bool_sn         DEFAULT NULL,
-    p_fk_funcionario_rector   BIGINT          DEFAULT NULL,
-    p_fk_funcionario_secretaria BIGINT        DEFAULT NULL,
+    p_FK_TFUNCIONARIO_RECTOR   BIGINT          DEFAULT NULL,
+    p_FK_TFUNCIONARIO_SECRETARIA BIGINT        DEFAULT NULL,
     p_subsidio                academico_test.bool_sn         DEFAULT NULL,
     p_fk_lv_regimen_catcosto  BIGINT          DEFAULT NULL,
     p_fk_lv_rango_tarifa      BIGINT          DEFAULT NULL,
     p_fk_lv_asociacion_nacional BIGINT        DEFAULT NULL,
     p_fk_lv_estado_establecimiento BIGINT     DEFAULT NULL,
-    p_fk_archivo              BIGINT          DEFAULT NULL,
-    -- PK del EE a actualizar. DEFAULT NULL por regla 42P13 (todos los
-    -- params tras uno con default deben tener default); la presencia
-    -- se valida al inicio del cuerpo.
-    p_pk_establecimiento      BIGINT          DEFAULT NULL,
-    -- Auditoria / autorizacion: PK_TUSUARIO del super-admin que actualiza.
-    -- DEFAULT NULL por la misma regla; presencia validada al inicio.
-    p_pk_usuario_solicitante  BIGINT          DEFAULT NULL
+    p_fk_archivo              BIGINT          DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
     v_estado_actual  BOOLEAN;
+    v_fk_rector     BIGINT;
+    v_es_rector     BOOLEAN := FALSE;
 BEGIN
     -- -----------------------------------------------------------------
-    -- 0. Validacion de parametros clave (DEFAULT NULL por 42P13).
+    -- 0. Validacion de parametros clave (obligatorios por firma).
     -- -----------------------------------------------------------------
-    IF p_pk_establecimiento IS NULL OR p_pk_establecimiento <= 0 THEN
-        RAISE EXCEPTION 'p_pk_establecimiento es obligatorio y debe ser > 0'
-            USING ERRCODE = '22023';
-    END IF;
     IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
         RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
             USING ERRCODE = '22023';
     END IF;
+    IF p_pk_establecimiento IS NULL OR p_pk_establecimiento <= 0 THEN
+        RAISE EXCEPTION 'p_pk_establecimiento es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
 
     -- -----------------------------------------------------------------
-    -- 1. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
+    -- 1. Gate de autorizacion compuesto:
+    --    (a) super-admin (rol 1-3) => puede modificar cualquier EE, o
+    --    (b) el usuario es el rector activo del EE que se quiere modificar
+    --        (TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR -> TFUNCIONARIO activo
+    --         cuyo FK_TUSUARIO coincide con p_pk_usuario_solicitante).
+    --    Cualquier otro caso => 42501.
     -- -----------------------------------------------------------------
     IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
+        -- No es super-admin: probamos si es rector del EE objetivo.
+        SELECT e.FK_TFUNCIONARIO_RECTOR
+          INTO v_fk_rector
+          FROM academico_test.TESTABLECIMIENTO e
+         WHERE e.PK_ESTABLECIMIENTO = p_pk_establecimiento
+           AND e.ACTIVE             = TRUE;
+
+        IF v_fk_rector IS NOT NULL THEN
+            SELECT EXISTS (
+                SELECT 1
+                  FROM academico_test.TFUNCIONARIO f
+                 WHERE f.PK_TFUNCIONARIO = v_fk_rector
+                   AND f.FK_TUSUARIO     = p_pk_usuario_solicitante
+                   AND f.ACTIVE          = TRUE
+            ) INTO v_es_rector;
+        END IF;
+
+        IF NOT v_es_rector THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
     END IF;
 
     -- -----------------------------------------------------------------
@@ -1045,27 +1296,27 @@ BEGIN
             USING ERRCODE = '23503';
     END IF;
 
-    IF p_fk_funcionario_rector IS NOT NULL
+    IF p_FK_TFUNCIONARIO_RECTOR IS NOT NULL
        AND NOT EXISTS (
             SELECT 1 FROM academico_test.TFUNCIONARIO
-             WHERE PK_TFUNCIONARIO = p_fk_funcionario_rector
+             WHERE PK_TFUNCIONARIO = p_FK_TFUNCIONARIO_RECTOR
                AND ACTIVE = TRUE
           )
     THEN
         RAISE EXCEPTION 'FK_TFUNCIONARIO_RECTOR (%) no existe o no esta activo en TFUNCIONARIO',
-            p_fk_funcionario_rector
+            p_FK_TFUNCIONARIO_RECTOR
             USING ERRCODE = '23503';
     END IF;
 
-    IF p_fk_funcionario_secretaria IS NOT NULL
+    IF p_FK_TFUNCIONARIO_SECRETARIA IS NOT NULL
        AND NOT EXISTS (
             SELECT 1 FROM academico_test.TFUNCIONARIO
-             WHERE PK_TFUNCIONARIO = p_fk_funcionario_secretaria
+             WHERE PK_TFUNCIONARIO = p_FK_TFUNCIONARIO_SECRETARIA
                AND ACTIVE = TRUE
           )
     THEN
         RAISE EXCEPTION 'FK_TFUNCIONARIO_SECRETARIA (%) no existe o no esta activo en TFUNCIONARIO',
-            p_fk_funcionario_secretaria
+            p_FK_TFUNCIONARIO_SECRETARIA
             USING ERRCODE = '23503';
     END IF;
 
@@ -1184,8 +1435,8 @@ BEGIN
             (p_fk_discapacidad         IS NOT NULL AND p_fk_discapacidad         IS DISTINCT FROM current_row.FK_TDISCAPACIDAD)          AS chg_discapacidad,
             (p_talento                 IS NOT NULL AND p_talento                 IS DISTINCT FROM current_row.TALENTO)                   AS chg_talento,
             (p_etnias                  IS NOT NULL AND p_etnias                  IS DISTINCT FROM current_row.ETNIAS)                    AS chg_etnias,
-            (p_fk_funcionario_rector   IS NOT NULL AND p_fk_funcionario_rector   IS DISTINCT FROM current_row.FK_TFUNCIONARIO_RECTOR)     AS chg_rector,
-            (p_fk_funcionario_secretaria IS NOT NULL AND p_fk_funcionario_secretaria IS DISTINCT FROM current_row.FK_TFUNCIONARIO_SECRETARIA) AS chg_secretaria,
+            (p_FK_TFUNCIONARIO_RECTOR   IS NOT NULL AND p_FK_TFUNCIONARIO_RECTOR   IS DISTINCT FROM current_row.FK_TFUNCIONARIO_RECTOR)     AS chg_rector,
+            (p_FK_TFUNCIONARIO_SECRETARIA IS NOT NULL AND p_FK_TFUNCIONARIO_SECRETARIA IS DISTINCT FROM current_row.FK_TFUNCIONARIO_SECRETARIA) AS chg_secretaria,
             (p_subsidio                IS NOT NULL AND p_subsidio                IS DISTINCT FROM current_row.SUBSIDIO)                  AS chg_subsidio,
             (p_fk_lv_regimen_catcosto  IS NOT NULL AND p_fk_lv_regimen_catcosto  IS DISTINCT FROM current_row.FK_TLV_REGIMEN_CATCOSTO)   AS chg_regimen,
             (p_fk_lv_rango_tarifa      IS NOT NULL AND p_fk_lv_rango_tarifa      IS DISTINCT FROM current_row.FK_TLV_RANGO_TARIFA)       AS chg_rango,
@@ -1219,8 +1470,8 @@ BEGIN
            FK_TDISCAPACIDAD               = COALESCE(p_fk_discapacidad,              t.FK_TDISCAPACIDAD),
            TALENTO                        = COALESCE(p_talento,                      t.TALENTO),
            ETNIAS                         = COALESCE(p_etnias,                       t.ETNIAS),
-           FK_TFUNCIONARIO_RECTOR         = COALESCE(p_fk_funcionario_rector,        t.FK_TFUNCIONARIO_RECTOR),
-           FK_TFUNCIONARIO_SECRETARIA     = COALESCE(p_fk_funcionario_secretaria,    t.FK_TFUNCIONARIO_SECRETARIA),
+           FK_TFUNCIONARIO_RECTOR         = COALESCE(p_FK_TFUNCIONARIO_RECTOR,        t.FK_TFUNCIONARIO_RECTOR),
+           FK_TFUNCIONARIO_SECRETARIA     = COALESCE(p_FK_TFUNCIONARIO_SECRETARIA,    t.FK_TFUNCIONARIO_SECRETARIA),
            SUBSIDIO                       = COALESCE(p_subsidio,                     t.SUBSIDIO),
            FK_TLV_REGIMEN_CATCOSTO        = COALESCE(p_fk_lv_regimen_catcosto,       t.FK_TLV_REGIMEN_CATCOSTO),
            FK_TLV_RANGO_TARIFA            = COALESCE(p_fk_lv_rango_tarifa,           t.FK_TLV_RANGO_TARIFA),
@@ -1271,6 +1522,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_est_actualizar(
+    BIGINT, BIGINT,
     VARCHAR, VARCHAR,
     VARCHAR, BIGINT, BIGINT,
     VARCHAR, VARCHAR, VARCHAR, VARCHAR,
@@ -1282,6 +1534,5 @@ COMMENT ON FUNCTION academico_test.fn_est_actualizar(
     BIGINT, BIGINT, academico_test.bool_sn,
     BIGINT, BIGINT, BIGINT, BIGINT,
     BIGINT,
-    BIGINT,
     BIGINT
-) IS 'Actualizacion parcial (estilo PATCH) de TESTABLECIMIENTO. Cada parametro NULL no modifica su columna; cada valor no NULL se aplica. NIT y CODIGO son modificables: si se envian, se validan contra el resto de EE activos (excluyendo el propio PK) y se aplican. Solo opera sobre EE activos. Actualiza MODIFIED_BY/MODIFIED_AT solo si hay cambios. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento). Retorna PK_ESTABLECIMIENTO.';
+) IS 'Actualizacion parcial (estilo PATCH) de TESTABLECIMIENTO. Cada parametro NULL no modifica su columna; cada valor no NULL se aplica. NIT y CODIGO son modificables: si se envian, se validan contra el resto de EE activos (excluyendo el propio PK) y se aplican. Solo opera sobre EE activos. Actualiza MODIFIED_BY/MODIFIED_AT solo si hay cambios. Gate de autorizacion compuesto: (a) el usuario pasa fn_puede_afectar_establecimiento (roles 1-3) => puede modificar cualquier EE activo; (b) en caso contrario, se valida que el FK_TFUNCIONARIO_RECTOR del EE apunte a un TFUNCIONARIO activo cuyo FK_TUSUARIO coincida con p_pk_usuario_solicitante. Cualquier otro caso => 42501. p_pk_usuario_solicitante y p_pk_establecimiento van al inicio sin DEFAULT (obligatorios, mismo patron que V52). Retorna PK_ESTABLECIMIENTO.';
