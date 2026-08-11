@@ -573,14 +573,43 @@ jobs:
           # de flyway (credenciales mal, sslmode/channel_binding
           # incompatible con Neon, error SQL en una migración, etc.)
           # se pierde si no lo volcamos aquí.
-          if ! ./scripts/sso-stack.sh up -d --remove-orphans; then
-            echo "=== flyway logs ==="
+          #
+          # Antes de claudicar: muchos fallos son por checksum mismatch
+          # (cambios locales en migraciones ya aplicadas en commits
+          # anteriores — típicos cuando un fix de una migración V<n>
+          # previa reescribe el archivo y el servidor todavía conserva
+          # el checksum antiguo en flyway_schema_history). Un
+          # `flyway repair` actualiza los checksums sin tocar datos y,
+          # combinado con un nuevo `compose up`, suele bastar para
+          # recuperar el deploy sin tener que entrar por SSH a mano.
+          up_stack() { ./scripts/sso-stack.sh up -d --remove-orphans; }
+          if ! up_stack; then
+            echo "=== primer compose up falló ==="
+            echo "=== flyway logs (last 200) ==="
             docker compose logs --no-color --tail=200 flyway || true
-            echo "=== auth-center logs (last 50) ==="
-            docker compose logs --no-color --tail=50 auth-center || true
-            echo "=== compose ps ==="
-            docker compose ps || true
-            exit 1
+            echo "=== intentando flyway repair ==="
+            if docker compose run --rm flyway repair; then
+              echo "=== flyway repair OK; reintentando compose up ==="
+              if up_stack; then
+                echo "=== compose up exitoso tras repair ==="
+              else
+                echo "=== compose up SIGUE fallando tras repair ==="
+                echo "=== flyway logs (last 200) ==="
+                docker compose logs --no-color --tail=200 flyway || true
+                echo "=== auth-center logs (last 50) ==="
+                docker compose logs --no-color --tail=50 auth-center || true
+                echo "=== compose ps ==="
+                docker compose ps || true
+                exit 1
+              fi
+            else
+              echo "=== flyway repair también falló (no es un checksum mismatch) ==="
+              echo "=== auth-center logs (last 50) ==="
+              docker compose logs --no-color --tail=50 auth-center || true
+              echo "=== compose ps ==="
+              docker compose ps || true
+              exit 1
+            fi
           fi
 
           # Limpia capas de imágenes viejas para no llenar el disco

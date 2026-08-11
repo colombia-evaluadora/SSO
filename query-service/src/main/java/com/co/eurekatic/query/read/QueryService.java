@@ -1,7 +1,9 @@
 package com.co.eurekatic.query.read;
 
 import com.co.eurekatic.common.security.AuthPrincipal;
+import com.co.eurekatic.common.query.ParamBinder;
 import com.co.eurekatic.common.query.ParamNamespace;
+import com.co.eurekatic.common.query.ParamTypes;
 import com.co.eurekatic.query.catalog.CatalogClient;
 import com.co.eurekatic.query.catalog.QueryDefinition;
 import com.co.eurekatic.query.config.JdbcTemplateRegistry;
@@ -199,52 +201,20 @@ public class QueryService {
 
         NamedParameterJdbcTemplate jdbc = registry.resolve(def.type());
 
-        MapSqlParameterSource params = new MapSqlParameterSource(req.params());
+        // V49 — bind con tipos. Construimos el mapa final (parámetros
+        // del llamante + valores CONTEXT del JWT) y se lo pasamos a
+        // ParamBinder, que aplica sqlType explícito cuando
+        // def.paramTypes() lo declara y deja el resto al auto-derive
+        // de Spring. Una fila legacy sin paramTypes cae aquí y se
+        // comporta como antes del cambio.
+        Map<String, Object> allParams = new LinkedHashMap<>(
+                req.params() == null ? Map.of() : req.params());
+        injectContextParams(allParams, auth);
 
-        // Inyección del contexto del llamante, sacada del JWT
-        // verificado (AuthPrincipal) y NO del cuerpo de la
-        // petición: el cliente no puede falsificar su userId
-        // porque la firma la controla auth-center.
-        //
-        // El autor del catálogo escribe SQL como
-        //   CALL get_x(:CONTEXT.USER_ID, :CONTEXT.EMAIL)
-        // y el procedimiento recibe la identidad verificada.
-        //
-        // El prefijo CONTEXT no es cosmético: es lo que distingue
-        // de un vistazo lo que controla el llamante (PARAM, QUERY,
-        // BODY) de lo que no. Antes estos valores se llamaban
-        // caller_* y vivían en el mismo mapa plano que el resto,
-        // así que leyendo una SQL no había forma de saber cuáles
-        // venían de fuera.
-        //
-        // Siguen siendo opcionales: los tokens anteriores a V29 no
-        // llevan claim uid, y el endpoint público no tiene
-        // principal. En ambos casos NO se añade el parámetro — el
-        // autor del procedimiento decide qué hacer con la ausencia
-        // (p. ej. "IF :CONTEXT.USER_ID IS NULL THEN RAISE
-        // EXCEPTION 'unauthenticated'").
-        if (auth != null && auth.getPrincipal() instanceof AuthPrincipal p) {
-            if (p.userId() != null) {
-                params.addValue(ParamNamespace.CONTEXT + ".USER_ID", p.userId());
-            }
-            if (p.email() != null) {
-                params.addValue(ParamNamespace.CONTEXT + ".EMAIL", p.email());
-            }
-            // Roles en dos formatos para que el autor elija el
-            // que le convenga:
-            //   :CONTEXT.ROLES        → "ADMIN,EVALUADOR"  (LIKE en PL/pgSQL)
-            //   :CONTEXT.ROLES_ARRAY  → "{ADMIN,EVALUADOR}" (text[] para ANY())
-            String rolesCsv = p.roles() == null || p.roles().isEmpty()
-                    ? ""
-                    : String.join(",", p.roles());
-            String rolesArray = "{"
-                    + (p.roles() == null || p.roles().isEmpty()
-                        ? ""
-                        : String.join(",", p.roles()))
-                    + "}";
-            params.addValue(ParamNamespace.CONTEXT + ".ROLES", rolesCsv);
-            params.addValue(ParamNamespace.CONTEXT + ".ROLES_ARRAY", rolesArray);
-        }
+        // bind con tipos. def.paramTypes() puede ser null en filas
+        // legacy — ParamBinder lo trata como mapa vacío y devuelve
+        // comportamiento idéntico al anterior a V49.
+        MapSqlParameterSource params = ParamBinder.build(allParams, def.paramTypes());
 
         // El SQL se ejecuta tal cual está en el catálogo.
         //
@@ -293,7 +263,7 @@ public class QueryService {
                     // llamada", que es cierto — pero se leía
                     // reejecutando en vez de leyéndolo del
                     // CallableStatement que ya lo tenía.
-                    QueryResult result = executeCallable(jdbc, sql, params, outNames);
+                    QueryResult result = executeCallable(jdbc, sql, params, outNames, def.paramTypes());
                     log.debug("uuid={} devolvió {} filas + {} OUT params (mode={})",
                             req.uuid(), result.rows().size(),
                             result.outParams() == null ? 0 : result.outParams().size(), mode);
@@ -430,7 +400,15 @@ public class QueryService {
     private QueryResult executeCallable(NamedParameterJdbcTemplate jdbc,
                                         String sql,
                                         MapSqlParameterSource params,
-                                        List<String> outNames) {
+                                        List<String> outNames,
+                                        Map<String, String> paramTypes) {
+        // V49 — Aplicamos el sqlType declarado por el autor también
+        // en el bind manual del CallableStatement. Si no hay tipo
+        // declarado (entrada no en paramTypes o paramTypes vacío),
+        // caemos al setObject(key, value) sin tipo — comportamiento
+        // idéntico al anterior a V49.
+        Map<String, Integer> sqlTypes = resolveCallableTypes(params, paramTypes);
+
         return jdbc.getJdbcTemplate().execute(
                 (java.sql.Connection con) -> {
                     try (java.sql.CallableStatement cs = con.prepareCall(sql)) {
@@ -438,7 +416,18 @@ public class QueryService {
                         // MapSqlParameterSource has no forEach —
                         // getValues() exposes the backing Map.
                         for (Map.Entry<String, Object> e : params.getValues().entrySet()) {
-                            cs.setObject(e.getKey(), e.getValue());
+                            Integer sqlType = sqlTypes.get(e.getKey());
+                            if (sqlType != null && sqlType.intValue() != java.sql.Types.ARRAY) {
+                                // Para tipos array usamos el setObject
+                                // sin tipo: ParamBinder ya envolvió el
+                                // valor en un AbstractSqlTypeValue que
+                                // sabe hacer createArrayOf contra la
+                                // Connection activa cuando se bindea
+                                // por la vía jdbc.update.
+                                cs.setObject(e.getKey(), e.getValue(), sqlType);
+                            } else {
+                                cs.setObject(e.getKey(), e.getValue());
+                            }
                         }
                         // Register OUT params. The PG driver
                         // accepts Types.OTHER for any type and
@@ -482,6 +471,86 @@ public class QueryService {
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * V49 — Construye el mapa nombre → sqlType para los IN/INOUT
+     * del CallableStatement. Sólo las entradas que tienen tipo
+     * declarado en {@code paramTypes} aparecen; las demás devuelven
+     * null en la búsqueda y caen al setObject(key, value) sin tipo.
+     *
+     * <p>Los arrays se excluyen aquí — ParamBinder ya envolvió el
+     * valor en un {@code AbstractSqlTypeValue} que necesita la
+     * Connection activa, no un sqlType explícito. En el bind
+     * manual del CallableStatement los dejamos sin tipo y dejamos
+     * que el driver haga su mejor inferencia.
+     */
+    private static Map<String, Integer> resolveCallableTypes(
+            MapSqlParameterSource params, Map<String, String> paramTypes) {
+        Map<String, Integer> out = new java.util.HashMap<>();
+        if (paramTypes == null || paramTypes.isEmpty()) return out;
+        for (Map.Entry<String, Object> e : params.getValues().entrySet()) {
+            String declared = paramTypes.get(e.getKey());
+            if (declared == null) continue;
+            Integer jdbcType = ParamTypes.JDBC_TYPES.get(declared);
+            if (jdbcType == null) continue;
+            if (ParamTypes.ARRAY_TYPES.contains(declared)) continue; // ver javadoc
+            out.put(e.getKey(), jdbcType);
+        }
+        return out;
+    }
+
+    /**
+     * V49 (movido desde el cuerpo de doExecute) — inyecta los valores
+     * CONTEXT derivados del JWT verificado en el mapa de parámetros.
+     *
+     * <p>Estos valores NO son caller-controlled: el cliente no puede
+     * meter un {@code :CONTEXT.USER_ID} en su body para suplantar
+     * identidad, porque la firma la controla auth-center y el
+     * SecurityContextHolder se rellena desde el JWT parseado, no
+     * desde la petición.
+     *
+     * <p>El prefijo {@code CONTEXT.} no es cosmético — es lo que
+     * distingue de un vistazo lo que controla el llamante
+     * ({@code PARAM.*}, {@code QUERY.*}, {@code BODY.*}) de lo que
+     * no. Ver spec 2026-08-10.
+     *
+     * <p>Siguen siendo opcionales: los tokens anteriores a V29 no
+     * llevan claim uid, y el endpoint público no tiene principal.
+     * En ambos casos NO se añade el parámetro — el autor del
+     * procedimiento decide qué hacer con la ausencia (p. ej.
+     * "IF :CONTEXT.USER_ID IS NULL THEN RAISE EXCEPTION
+     * 'unauthenticated'").
+     *
+     * <p>Estos bindings no se pasan por {@link ParamBinder} con sqlType:
+     * su comportamiento actual (Spring auto-derive) es correcto y no
+     * entran en la validación estricta de la metadata. Si en el
+     * futuro hace falta tiparlos, {@code ParamBinder} los respeta
+     * igual que cualquier otra key.
+     */
+    private static void injectContextParams(Map<String, Object> target,
+                                            Authentication auth) {
+        if (auth == null || !(auth.getPrincipal() instanceof AuthPrincipal p)) {
+            return;
+        }
+        if (p.userId() != null) {
+            target.put(ParamNamespace.CONTEXT + ".USER_ID", p.userId());
+        }
+        if (p.email() != null) {
+            target.put(ParamNamespace.CONTEXT + ".EMAIL", p.email());
+        }
+        // Roles en dos formatos para que el autor elija el
+        // que le convenga:
+        //   :CONTEXT.ROLES        → "ADMIN,EVALUADOR"  (LIKE en PL/pgSQL)
+        //   :CONTEXT.ROLES_ARRAY  → "{ADMIN,EVALUADOR}" (text[] para ANY())
+        String rolesCsv = p.roles() == null || p.roles().isEmpty()
+                ? "" : String.join(",", p.roles());
+        String rolesArray = "{"
+                + (p.roles() == null || p.roles().isEmpty()
+                    ? "" : String.join(",", p.roles()))
+                + "}";
+        target.put(ParamNamespace.CONTEXT + ".ROLES", rolesCsv);
+        target.put(ParamNamespace.CONTEXT + ".ROLES_ARRAY", rolesArray);
     }
 
     /**
