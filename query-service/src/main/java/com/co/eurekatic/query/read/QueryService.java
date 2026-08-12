@@ -4,6 +4,7 @@ import com.co.eurekatic.common.security.AuthPrincipal;
 import com.co.eurekatic.common.query.ParamBinder;
 import com.co.eurekatic.common.query.ParamNamespace;
 import com.co.eurekatic.common.query.ParamTypes;
+import com.co.eurekatic.common.query.SqlRewriter;
 import com.co.eurekatic.query.catalog.CatalogClient;
 import com.co.eurekatic.query.catalog.QueryDefinition;
 import com.co.eurekatic.query.config.JdbcTemplateRegistry;
@@ -211,9 +212,70 @@ public class QueryService {
                 req.params() == null ? Map.of() : req.params());
         injectContextParams(allParams, auth);
 
+        // V49 (defence in depth) — si un placeholder caller-controlled
+        // (':PARAM.*' / ':BODY.*') llega al bind sin tipo declarado,
+        // ParamBinder cae al auto-derive de Spring, que bindea un String
+        // como VARCHAR. Eso rompe cualquier firma de función/SELECT que
+        // espere otro tipo — el síntoma exacto es
+        // "function xxx(character varying, bigint) does not exist",
+        // que es lo que el operador veía en producción porque las
+        // filas heredadas pre-V49 quedaron con paramTypes='{}' y la
+        // validación strict de sso-admin sólo dispara al guardar.
+        //
+        // En lugar de ejecutar y devolver un 500 con PG críptico,
+        // rechazamos en runtime con un 400 que nombra los placeholders
+        // sin tipo y le dice al autor qué hacer. Mismo set curado que
+        // la validación al guardar; si la fila ya está bien guardada,
+        // esta lista viene vacía y el bind sigue como siempre.
+        if (def.paramTypes() != null) {
+            List<String> untypedCallerParams = allParams.keySet().stream()
+                    .filter(k -> {
+                        int dot = k.indexOf('.');
+                        if (dot <= 0) return false;
+                        String ns = k.substring(0, dot);
+                        return ParamNamespace.PARAM.equals(ns)
+                                || ParamNamespace.BODY.equals(ns);
+                    })
+                    .filter(k -> !def.paramTypes().containsKey(k))
+                    .sorted()
+                    .toList();
+            if (!untypedCallerParams.isEmpty()) {
+                log.warn("uuid={} tiene placeholders caller-controlled sin tipo declarado: {} "
+                        + "(paramTypes={}). El autor debe editar la fila en el catálogo.",
+                        req.uuid(), untypedCallerParams, def.paramTypes());
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "El query " + req.uuid() + " tiene placeholders sin tipo declarado: "
+                        + untypedCallerParams
+                        + ". Edita la fila en el catálogo y asigna un tipo a cada uno "
+                        + "(en 'Tipos de parámetros', parte inferior del formulario).");
+            }
+        }
+
         // bind con tipos. def.paramTypes() puede ser null en filas
         // legacy — ParamBinder lo trata como mapa vacío y devuelve
         // comportamiento idéntico al anterior a V49.
+        //
+        // V49-bis: el SQL se reescribe ANTES del bind para insertar
+        // `cast(:PH as TIPO)` por cada placeholder tipado. Eso elimina
+        // la dependencia del tipo JDBC — ParamBinder pasa texto puro
+        // y PG aplica el cast en su contexto (donde search_path sí
+        // resuelve academico_test.* para los DOMAIN types).
+        //
+        // V49 diagnostics — imprimo lo que ParamBinder va a ver.
+        // Si el bug del bind sigue siendo "todo se pasa como
+        // string" en runtime, este log muestra exactamente qué
+        // mapa llegó desde el catálogo. La pista es si
+        // def.paramTypes() viene vacío cuando la fila sí lo
+        // tiene persistido — eso aísla si el bug está aguas
+        // arriba (Jackson, JSONB) o aguas abajo (binder).
+        log.info("V49-bind uuid={} paramTypes={} allParamsKeys={}",
+                req.uuid(), def.paramTypes(), allParams.keySet());
+        String originalSql = def.query();
+        String rewrittenSql = SqlRewriter.rewrite(originalSql, def.paramTypes());
+        if (!originalSql.equals(rewrittenSql)) {
+            log.debug("V49-rewrite uuid={} rewrittenSql={}",
+                    req.uuid(), rewrittenSql);
+        }
         MapSqlParameterSource params = ParamBinder.build(allParams, def.paramTypes());
 
         // El SQL se ejecuta tal cual está en el catálogo.
@@ -224,7 +286,7 @@ public class QueryService {
         // silencio para PROCEDURE. La paginación ahora la escribe
         // el autor con :QUERY.SIZE / :QUERY.OFFSET, lo que además
         // le da control del dialecto y del orden de las cláusulas.
-        String sql = def.query();
+        String sql = rewrittenSql;
 
         // V33 — wrap the JDBC execution in a per-dialect
         // bulkhead. tryAcquirePermission() returns false

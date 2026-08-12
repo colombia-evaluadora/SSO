@@ -36,10 +36,15 @@ class QueryPathControllerTest {
             Map<String, Object> out =
                     QueryPathController.buildParams(Map.of(), Map.of(), body);
 
+            // V49-bis: BODY.* (escalares aplanados) Y BODY_RAW.* (mismos
+            // top-level sin aplanar, disponibles para cast as jsonb).
             assertThat(out).containsOnly(
                     Map.entry("BODY.PAGE", 1),
                     Map.entry("BODY.SIZE", 20),
-                    Map.entry("BODY.NOMBRE", "jorge"));
+                    Map.entry("BODY.NOMBRE", "jorge"),
+                    Map.entry("BODY_RAW.PAGE", 1),
+                    Map.entry("BODY_RAW.SIZE", 20),
+                    Map.entry("BODY_RAW.NOMBRE", "jorge"));
         }
 
         @Test
@@ -49,7 +54,11 @@ class QueryPathControllerTest {
             Map<String, Object> out =
                     QueryPathController.buildParams(Map.of(), Map.of(), body);
 
-            assertThat(out).containsExactly(Map.entry("BODY.FILTROS.REGIONAL", "x"));
+            // BODY.FILTROS.REGIONAL — el escalar aplanado.
+            // BODY_RAW.FILTROS — el sub-objeto completo sin aplanar.
+            assertThat(out).containsExactlyInAnyOrderEntriesOf(Map.of(
+                    "BODY.FILTROS.REGIONAL", "x",
+                    "BODY_RAW.FILTROS", Map.of("regional", "x")));
         }
 
         @Test
@@ -60,7 +69,10 @@ class QueryPathControllerTest {
             Map<String, Object> out =
                     QueryPathController.buildParams(Map.of(), Map.of(), body);
 
-            assertThat(out).containsExactly(Map.entry("BODY.A.B.C.D", "hondo"));
+            // El escalar aplanado + el sub-objeto top-level completo.
+            assertThat(out).containsExactlyInAnyOrderEntriesOf(Map.of(
+                    "BODY.A.B.C.D", "hondo",
+                    "BODY_RAW.A", Map.of("b", Map.of("c", Map.of("d", "hondo")))));
         }
 
         /**
@@ -74,7 +86,10 @@ class QueryPathControllerTest {
             Map<String, Object> out =
                     QueryPathController.buildParams(Map.of(), Map.of(), body);
 
-            assertThat(out).containsExactly(Map.entry("BODY.TAGS", List.of("a", "b")));
+            // BODY.TAGS (aplanado) + BODY_RAW.TAGS (sin aplanar, mismo valor).
+            assertThat(out).containsExactlyInAnyOrderEntriesOf(Map.of(
+                    "BODY.TAGS", List.of("a", "b"),
+                    "BODY_RAW.TAGS", List.of("a", "b")));
         }
 
         @Test
@@ -88,7 +103,9 @@ class QueryPathControllerTest {
 
             assertThat(out)
                     .containsEntry("BODY.PAGE", 1)
-                    .containsEntry("BODY.FILTROS.ZONA", 214);
+                    .containsEntry("BODY.FILTROS.ZONA", 214)
+                    .containsEntry("BODY_RAW.PAGE", 1)
+                    .containsEntry("BODY_RAW.FILTROS", Map.of("zona", 214));
         }
 
         @Test
@@ -101,6 +118,8 @@ class QueryPathControllerTest {
 
         @Test
         void insertionOrderIsPreserved() {
+            // BODY.* se inserta primero (orden de inserción del body),
+            // seguido de BODY_RAW.* en el mismo orden.
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("z", 1);
             body.put("a", 2);
@@ -110,7 +129,9 @@ class QueryPathControllerTest {
                     QueryPathController.buildParams(Map.of(), Map.of(), body);
 
             assertThat(new ArrayList<>(out.keySet()))
-                    .containsExactly("BODY.Z", "BODY.A", "BODY.M");
+                    .containsExactly(
+                            "BODY.Z", "BODY.A", "BODY.M",
+                            "BODY_RAW.Z", "BODY_RAW.A", "BODY_RAW.M");
         }
 
         /**
