@@ -25,8 +25,16 @@ public final class ParamNamespace {
     public static final String PARAM = "PARAM";
     /** Query string. Lo controla el llamante. */
     public static final String QUERY = "QUERY";
-    /** Cuerpo JSON. Lo controla el llamante. */
+    /** Cuerpo JSON aplanado con puntos. Lo controla el llamante. */
     public static final String BODY = "BODY";
+    /**
+     * V49-bis — Cuerpo JSON sin aplanar: cada clave top-level del body se
+     * expone con su valor completo (un sub-objeto Map o un array) bajo
+     * {@code BODY_RAW.NOMBRE}. Pensado para pasar sub-árboles completos
+     * como {@code JSONB} al SQL via {@code cast(:BODY_RAW.X as jsonb)},
+     * donde el aplanamiento con puntos no aplica.
+     */
+    public static final String BODY_RAW = "BODY_RAW";
     /** Derivado del JWT verificado. NO lo controla el llamante. */
     public static final String CONTEXT = "CONTEXT";
 
@@ -160,6 +168,39 @@ public final class ParamNamespace {
             } else {
                 out.put(key, val);
             }
+        }
+    }
+
+    /**
+     * V49-bis — version sin aplanar de {@link #flatten} para sub-objetos completos.
+     * Cada clave top-level del body se expone con su valor completo (Map, List o
+     * escalar) bajo {@code BODY_RAW.NOMBRE}, en MAYÚSCULA, sin recursión.
+     *
+     * <p>El autor del catálogo lo usa cuando quiere pasar un sub-árbol completo
+     * como {@code JSONB} via {@code cast(:BODY_RAW.X as jsonb)}, donde el
+     * aplanamiento con puntos pierde el shape del objeto.
+     *
+     * <p>Detección de colisión por mayúsculas: idéntica a {@link #putAll} y a
+     * {@code flattenInto} — la normalización a MAYÚSCULAS puede hacer que dos
+     * claves distintas sólo se diferencien por caja y terminen en la misma
+     * key. Igual que en los otros métodos, se rechaza en vez de elegir en
+     * silencio.
+     */
+    public static void putRaw(Map<String, Object> target,
+                              Map<String, ?> source) {
+        if (source == null || source.isEmpty()) return;
+        Map<String, String> originalByUpper = new LinkedHashMap<>();
+        for (Map.Entry<String, ?> e : source.entrySet()) {
+            String upper = normalizeName(e.getKey());
+            String previous = originalByUpper.putIfAbsent(upper, e.getKey());
+            if (previous != null) {
+                throw new IllegalArgumentException(
+                        "Las claves '" + previous + "' y '" + e.getKey()
+                        + "' del cuerpo sólo se diferencian por mayúsculas y "
+                        + "ambas resolverían a :" + BODY_RAW + "." + upper
+                        + ". Envía sólo una.");
+            }
+            target.put(BODY_RAW + "." + upper, e.getValue());
         }
     }
 }

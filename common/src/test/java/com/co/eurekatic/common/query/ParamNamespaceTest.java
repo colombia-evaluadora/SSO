@@ -146,6 +146,93 @@ class ParamNamespaceTest {
         assertThat(ParamNamespace.PARAM).isEqualTo("PARAM");
         assertThat(ParamNamespace.QUERY).isEqualTo("QUERY");
         assertThat(ParamNamespace.BODY).isEqualTo("BODY");
+        assertThat(ParamNamespace.BODY_RAW).isEqualTo("BODY_RAW");
         assertThat(ParamNamespace.CONTEXT).isEqualTo("CONTEXT");
+    }
+
+    /* ====================== V49-bis — BODY_RAW namespace ====================== */
+
+    @Test
+    void putRawExposesTopLevelMapIntact() {
+        // Body: {filtro: {zona: 1, nivel: 'A'}}
+        Map<String, Object> filtro = new LinkedHashMap<>();
+        filtro.put("zona", 1);
+        filtro.put("nivel", "A");
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("filtro", filtro);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        ParamNamespace.putRaw(out, body);
+
+        // El valor completo del sub-objeto, sin aplanar.
+        assertThat(out).containsEntry("BODY_RAW.FILTRO", filtro);
+    }
+
+    @Test
+    void putRawUppercasesTopLevelKeys() {
+        Map<String, Object> filtro = Map.of("zona", 1);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("filtro", filtro);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        ParamNamespace.putRaw(out, body);
+
+        assertThat(out).containsKey("BODY_RAW.FILTRO");
+        assertThat(out.get("BODY_RAW.FILTRO")).isSameAs(filtro);
+    }
+
+    @Test
+    void putRawKeepsArraysIntactAsValues() {
+        // Body: {tags: ['a','b','c']}
+        Map<String, Object> body = Map.of("tags", java.util.List.of("a", "b", "c"));
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        ParamNamespace.putRaw(out, body);
+
+        assertThat(out).containsEntry("BODY_RAW.TAGS", java.util.List.of("a", "b", "c"));
+    }
+
+    @Test
+    void putRawRejectsKeysThatCollideByCase() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("filtro", Map.of("a", 1));
+        body.put("FILTRO", Map.of("b", 2));
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        assertThatThrownBy(() -> ParamNamespace.putRaw(out, body))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("FILTRO");
+    }
+
+    @Test
+    void putRawToleratesNullAndEmptySource() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        ParamNamespace.putRaw(out, null);
+        ParamNamespace.putRaw(out, Map.of());
+        assertThat(out).isEmpty();
+    }
+
+    @Test
+    void putRawAndFlattenCoexistOnSameBody() {
+        // El body produce entradas tanto en BODY.* (escalares aplanados) como
+        // en BODY_RAW.* (sub-objetos completos). No se pisan porque los
+        // namespaces son disjuntos.
+        Map<String, Object> filtro = new LinkedHashMap<>();
+        filtro.put("zona", 1);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("zona", 214);         // escalar top-level
+        body.put("filtro", filtro);    // sub-objeto
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        ParamNamespace.putAll(out, ParamNamespace.QUERY, null);
+        // Llamamos ambos — debe funcionar sin colisión.
+        out.putAll(ParamNamespace.flatten(body, ParamNamespace.BODY));
+        ParamNamespace.putRaw(out, body);
+
+        assertThat(out).containsEntry("BODY.ZONA", 214);
+        assertThat(out).containsEntry("BODY_RAW.FILTRO", filtro);
     }
 }
