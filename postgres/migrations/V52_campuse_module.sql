@@ -1088,27 +1088,134 @@ COMMENT ON FUNCTION academico_test.fn_sed_listar(BIGINT, VARCHAR, BIGINT[], VARC
 -- ---------------------------------------------------------------------------
 -- fn_sed_buscar_por_pk
 --   Busca una TSEDE por PK_TSEDE.
---   Solo retorna activas (ACTIVE=TRUE). Si el PK no existe o esta inactivo,
---   el SETOF viene vacio. Misma decision de diseno que fn_est_buscar_por_pk:
---   por PK el caller distingue 0-fila de "no existe" sin necesidad de
---   traer inactivos, asi que no se expone p_incluir_inactivos.
+--   Solo retorna registros activos (ACTIVE=TRUE). Si el PK no existe o
+--   esta inactiva (borrado logico), el SETOF viene vacio: mismo contrato
+--   que antes, sin p_incluir_inactivos, porque el caller distingue 0-fila
+--   de "no existe" sin necesidad de traer inactivas.
 --   Retorna: SETOF TSEDE (0 o 1 fila en la practica).
+--
+--   Gate de autorizacion (mismo patron que fn_sed_listar):
+--     (a) super-admin (fn_puede_afectar_establecimiento, roles 1-3): ve
+--         cualquier sede activa.
+--     (b) rector del EE padre de la sede: TFUNCIONARIO.ACTIVE=TRUE con
+--         FK_TFUNCIONARIO_RECTOR = s.FK_TESTABLECIMIENTO->FK_TFUNCIONARIO_RECTOR
+--         y FK_TUSUARIO = p_pk_usuario_solicitante.
+--     (c) secretaria del EE padre de la sede: TFUNCIONARIO.ACTIVE=TRUE con
+--         FK_TFUNCIONARIO_SECRETARIA = s.FK_TESTABLECIMIENTO->FK_TFUNCIONARIO_SECRETARIA
+--         y FK_TUSUARIO = p_pk_usuario_solicitante.
+--     (d) jefe de sistema (rol 8) con vinculacion activa (TSEDE_USUARIO.ACTIVE=TRUE,
+--         FK_TROL=8) en cualquier sede del mismo EE padre.
+--     Cualquier otro caso => 42501. Igual que en establecimientos, el gate
+--     se valida contra el EE concreto de la sede objetivo, no contra el
+--     universo completo.
+--
+--   Excepciones:
+--     SQLSTATE '22023' — p_pk_usuario_solicitante <= 0.
+--     SQLSTATE 'P0002' — No existe TSEDE con ese PK.
+--     SQLSTATE '42501' — Existe, esta activa, pero el usuario no pasa
+--                        el gate (no es super-admin ni rector/secretaria/
+--                        jefe del EE padre).
+--     SETOF vacio    — Existe pero esta inactiva (no se distingue de
+--                       "no existe"; por convencion del modulo las
+--                       inactivas son "borrado logico").
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_sed_buscar_por_pk(
-    p_pk_sede BIGINT
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_sede                 BIGINT
 )
 RETURNS SETOF academico_test.TSEDE
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $$
+DECLARE
+    v_active    BOOLEAN;
+    v_fk_ee     BIGINT;
+BEGIN
+    -- 0. Validacion de parametro obligatorio.
+    IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
+        RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+    IF p_pk_sede IS NULL OR p_pk_sede <= 0 THEN
+        RAISE EXCEPTION 'p_pk_sede es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- 1. Lectura de la sede objetivo (activa o no) para decidir gate / error.
+    SELECT s.ACTIVE, s.FK_TESTABLECIMIENTO
+      INTO v_active, v_fk_ee
+      FROM academico_test.TSEDE s
+     WHERE s.PK_TSEDE = p_pk_sede;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No existe TSEDE con PK_TSEDE = %', p_pk_sede
+            USING ERRCODE = 'P0002';
+    END IF;
+
+    -- 2. Inactivas => SETOF vacio, sin error (consistente con la
+    --    semantica de "borrado logico" del modulo).
+    IF v_active = FALSE THEN
+        RETURN;
+    END IF;
+
+    -- 3. Gate de autorizacion. Mismo patron que fn_sed_listar:
+    --    (a) super-admin => ok;
+    --    (b) rector del EE padre => ok;
+    --    (c) secretaria del EE padre => ok;
+    --    (d) jefe de sistema (rol 8) en sede del EE padre => ok;
+    --    (e) cualquier otro => 42501.
+    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_ee
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_ee
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s
+            ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.FK_TESTABLECIMIENTO = v_fk_ee
+           AND s.ACTIVE              = TRUE
+           AND su.ACTIVE             = TRUE
+           AND su.FK_TROL            = 8
+           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    -- 4. Retorno de la fila completa (todos los campos del DDL).
+    RETURN QUERY
     SELECT *
-    FROM academico_test.TSEDE
-    WHERE PK_TSEDE = p_pk_sede
-      AND ACTIVE = TRUE;
+      FROM academico_test.TSEDE
+     WHERE PK_TSEDE = p_pk_sede
+       AND ACTIVE = TRUE;
+END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_sed_buscar_por_pk(BIGINT)
-    IS 'Busca TSEDE por PK_TSEDE. Solo registros activos (ACTIVE=TRUE). Retorna SETOF (0 o 1 fila en la practica); si el PK no existe o esta inactivo, el resultado es vacio. Usar para lookup rapido por clave primaria desde la capa Java (detalle, formularios de edicion, etc.).';
+COMMENT ON FUNCTION academico_test.fn_sed_buscar_por_pk(BIGINT, BIGINT)
+    IS 'Busca TSEDE por PK_TSEDE con gate de autorizacion (mismo patron que fn_sed_listar). Solo registros activos: si el PK no existe => P0002; si existe pero esta inactiva (borrado logico) => SETOF vacio. Gate contra el EE padre de la sede (v_fk_ee leido en el primer SELECT): super-admin (fn_puede_afectar_establecimiento, roles 1-3) ve cualquier sede activa; cualquier otro solo si (b) rector activo del EE padre, (c) secretaria activa del EE padre, o (d) jefe de sistema (rol 8 en TSEDE_USUARIO activa) en cualquier sede del EE padre; en otro caso => 42501. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52/V53). Pensada para carga completa de detalle desde la UI: el SELECT expone todos los campos del DDL (incluye datos sensibles no presentes en el listado paginado), por eso el gate es obligatorio.';
 
 
 -- ---------------------------------------------------------------------------

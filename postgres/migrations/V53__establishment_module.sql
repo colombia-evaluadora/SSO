@@ -473,28 +473,104 @@ COMMENT ON FUNCTION academico_test.fn_est_buscar_por_nit(VARCHAR, BOOLEAN)
 -- ---------------------------------------------------------------------------
 -- fn_est_buscar_por_pk
 --   Busca un TESTABLECIMIENTO por PK_ESTABLECIMIENTO.
---   Solo retorna activos (ACTIVE=TRUE). Si el PK no existe o esta inactivo,
---   el SETOF viene vacio (consistente con la semantica de fn_est_buscar_por_nit
---   por defecto, pero sin exposicion del parametro p_incluir_inactivos: por
---   PK el caller sabe distinguir 0-fila de "no existe" sin necesidad de
---   traer inactivos).
+--   Solo retorna registros activos (ACTIVE=TRUE). Si el PK no existe o
+--   esta inactivo (borrado logico), el SETOF viene vacio: mismo contrato
+--   que antes, sin p_incluir_inactivos, porque el caller distingue 0-fila
+--   de "no existe" sin necesidad de traer inactivos.
 --   Retorna: SETOF TESTABLECIMIENTO (0 o 1 fila en la practica).
+--
+--   Gate de autorizacion (mismo patron que fn_est_listar):
+--     (a) super-admin (fn_puede_afectar_establecimiento, roles 1-3): ve
+--         cualquier EE activo.
+--     (b) rector del EE objetivo: TFUNCIONARIO.ACTIVE=TRUE con
+--         FK_TFUNCIONARIO_RECTOR = e.FK_TFUNCIONARIO_RECTOR y
+--         FK_TUSUARIO = p_pk_usuario_solicitante.
+--     Cualquier otro caso => 42501. La unica diferencia con el listado
+--     es que el gate se valida contra el EE concreto que se esta pidiendo
+--     (no contra el universo completo): un rector solo puede pedir
+--     "su" EE, no uno ajeno.
+--
+--   Excepciones:
+--     SQLSTATE '22023' — p_pk_usuario_solicitante <= 0.
+--     SQLSTATE 'P0002' — No existe TESTABLECIMIENTO con ese PK.
+--     SQLSTATE '42501' — Existe, esta activo, pero el usuario no pasa
+--                        el gate (no es super-admin ni rector del EE).
+--     SETOF vacio    — Existe pero esta inactivo (no se distingue de
+--                       "no existe"; por convencion del modulo los
+--                       inactivos son "borrados logicos").
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_est_buscar_por_pk(
-    p_pk_establecimiento BIGINT
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_establecimiento      BIGINT
 )
 RETURNS SETOF academico_test.TESTABLECIMIENTO
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $$
+DECLARE
+    v_active  BOOLEAN;
+BEGIN
+    -- 0. Validacion de parametro obligatorio.
+    IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
+        RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+    IF p_pk_establecimiento IS NULL OR p_pk_establecimiento <= 0 THEN
+        RAISE EXCEPTION 'p_pk_establecimiento es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- 1. Lectura del EE objetivo (activo o no) para decidir gate / error.
+    SELECT e.ACTIVE
+      INTO v_active
+      FROM academico_test.TESTABLECIMIENTO e
+     WHERE e.PK_ESTABLECIMIENTO = p_pk_establecimiento;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No existe TESTABLECIMIENTO con PK_ESTABLECIMIENTO = %', p_pk_establecimiento
+            USING ERRCODE = 'P0002';
+    END IF;
+
+    -- 2. Inactivos => SETOF vacio, sin error (consistente con la
+    --    semantica de "borrado logico" del modulo).
+    IF v_active = FALSE THEN
+        RETURN;
+    END IF;
+
+    -- 3. Gate de autorizacion. Mismo patron que fn_est_listar:
+    --    (a) super-admin => ok;
+    --    (b) rector del EE objetivo => ok;
+    --    (c) cualquier otro => 42501.
+    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+         WHERE f.PK_TFUNCIONARIO = (
+                   SELECT e2.FK_TFUNCIONARIO_RECTOR
+                     FROM academico_test.TESTABLECIMIENTO e2
+                    WHERE e2.PK_ESTABLECIMIENTO = p_pk_establecimiento
+               )
+           AND f.ACTIVE          = TRUE
+           AND f.FK_TUSUARIO     = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    -- 4. Retorno de la fila completa (todos los campos del DDL).
+    RETURN QUERY
     SELECT *
-    FROM academico_test.TESTABLECIMIENTO
-    WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento
-      AND ACTIVE = TRUE;
+      FROM academico_test.TESTABLECIMIENTO
+     WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento
+       AND ACTIVE = TRUE;
+END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_est_buscar_por_pk(BIGINT)
-    IS 'Busca TESTABLECIMIENTO por PK_ESTABLECIMIENTO. Solo registros activos (ACTIVE=TRUE). Retorna SETOF (0 o 1 fila en la practica); si el PK no existe o esta inactivo, el resultado es vacio. Usar para lookup rapido por clave primaria desde la capa Java (detalle, formularios de edicion, etc.).';
+COMMENT ON FUNCTION academico_test.fn_est_buscar_por_pk(BIGINT, BIGINT)
+    IS 'Busca TESTABLECIMIENTO por PK_ESTABLECIMIENTO con gate de autorizacion (mismo patron que fn_est_listar). Solo registros activos: si el PK no existe => P0002; si existe pero esta inactivo (borrado logico) => SETOF vacio. Gate: super-admin (fn_puede_afectar_establecimiento, roles 1-3) ve cualquier EE activo; cualquier otro solo si es rector activo del EE objetivo (TFUNCIONARIO.ACTIVE=TRUE con FK_TFUNCIONARIO_RECTOR = e.FK_TFUNCIONARIO_RECTOR y FK_TUSUARIO = p_pk_usuario_solicitante); en otro caso => 42501. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52/V53). Pensada para carga completa de detalle desde la UI: el SELECT expone todos los campos del DDL (incluye datos sensibles no presentes en el listado paginado), por eso el gate es obligatorio.';
 
 
 -- ---------------------------------------------------------------------------
@@ -1029,17 +1105,19 @@ CREATE OR REPLACE FUNCTION academico_test.fn_est_actualizar(
     -- Siempre el primer parametro (mismo patron que V52): evita el 42P13
     -- "args con default deben ir al final" y estandariza el orden.
     p_pk_usuario_solicitante  BIGINT,
-    -- PK del EE a actualizar. Obligatorio.
+    -- PK del EE a actualizar. Obligatorio. Se coloca inmediatamente
+    -- despues de p_pk_usuario_solicitante (mismo patron que V52) y el
+    -- resto de parametros mantiene el orden de fn_est_crear, con todos
+    -- los campos en DEFAULT NULL (NULL = no cambia; si se envian, se
+    -- validan contra el resto de EE activos para evitar colision y
+    -- pueden reutilizar valores de EE inactivos).
     p_pk_establecimiento      BIGINT,
-    -- Identificadores modificables (nullable: NULL = no cambia).
-    -- Si se envian, se validan contra el resto de EE activos para evitar
-    -- colision; pueden reutilizar valores de EE inactivos.
+    p_nombre                  VARCHAR(130)    DEFAULT NULL,
     p_nit                     VARCHAR(30)     DEFAULT NULL,
+    p_fk_municipio            BIGINT          DEFAULT NULL,
+    p_fk_propiedad_juridica   BIGINT          DEFAULT NULL,
     p_codigo                  VARCHAR(30)     DEFAULT NULL,
     -- Datos de ubicacion (nullable: NULL = no cambia)
-    p_nombre                  VARCHAR(130)    DEFAULT NULL,
-    p_fk_municipio            BIGINT          DEFAULT NULL,
-    p_fk_lista_valor_zona     BIGINT          DEFAULT NULL,
     p_localidad               VARCHAR(130)    DEFAULT NULL,
     p_comuna                  VARCHAR(130)    DEFAULT NULL,
     p_barrio                  VARCHAR(130)    DEFAULT NULL,
@@ -1049,8 +1127,8 @@ CREATE OR REPLACE FUNCTION academico_test.fn_est_actualizar(
     p_fax                     VARCHAR(130)    DEFAULT NULL,
     p_idecol                  VARCHAR(7)      DEFAULT NULL,
     p_pagina_web              VARCHAR(130)    DEFAULT NULL,
+    p_fk_lista_valor_zona     BIGINT          DEFAULT NULL,
     -- Datos administrativos / licencias
-    p_fk_propiedad_juridica   BIGINT          DEFAULT NULL,
     p_resolucion_aprobacion   VARCHAR(130)    DEFAULT NULL,
     p_licencia_funcionamiento VARCHAR(130)    DEFAULT NULL,
     p_fecha_licencia          DATE            DEFAULT NULL,
