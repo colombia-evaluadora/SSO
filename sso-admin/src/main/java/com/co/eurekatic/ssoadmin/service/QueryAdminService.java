@@ -360,13 +360,14 @@ public class QueryAdminService {
             }
         }
 
-        // (2) cobertura: todo :PARAM.* / :BODY.* del SQL debe estar declarado
+        // (2) cobertura: todo :PARAM.* / :BODY.* / :BODY_RAW.* del SQL debe estar declarado
         Set<String> inSql = PlaceholderScanner.scan(req.query());
         Set<String> required = inSql.stream()
                 .filter(p -> {
                     String ns = p.split("\\.", 2)[0];
                     return ParamNamespace.PARAM.equals(ns)
-                            || ParamNamespace.BODY.equals(ns);
+                            || ParamNamespace.BODY.equals(ns)
+                            || ParamNamespace.BODY_RAW.equals(ns);
                 })
                 .collect(Collectors.toCollection(TreeSet::new));
 
