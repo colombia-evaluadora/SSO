@@ -800,6 +800,111 @@ BEGIN
 END;
 $$;
 
+
+-- ---------------------------------------------------------------------------
+-- fn_sed_soft_delete_bulk
+--   Variante bulk de fn_sed_soft_delete: en lugar de un solo PK_TSEDE
+--   recibe un BIGINT[] de PKs y les aplica soft delete a todos en una
+--   sola transaccion PL/pgSQL.
+--
+--   Semantica: ATOMICO TODO-O-NADA. Si CUALQUIER PK del array falla
+--   (no existe / ya estaba inactiva / el usuario no pasa el gate para
+--   el EE concreto de esa sede) la operacion se revierte entera via
+--   RAISE EXCEPTION; ningun PK queda parcialmente procesado.
+--   Esta decision mantiene el mismo contrato transaccional que
+--   fn_sed_soft_delete y que fn_est_soft_delete (que delega en este).
+--   Si el caller necesita tolerancia a fallos por fila, debe llamar al
+--   single N veces y manejar las excepciones por su cuenta.
+--
+--   Por cada PK del array se delega en fn_sed_soft_delete(p_pk_usuario_
+--   solicitante, p_pk_sede), que es la fuente de verdad de la cascade
+--   (TSEDE + TSEDE_USUARIO + TSEDE_NIVEL). Asi, cualquier cambio futuro
+--   en la cascade del single se refleja automaticamente aqui.
+--
+--   Validaciones previas (antes de tocar nada):
+--     * p_pk_usuario_solicitante > 0 (22023).
+--     * p_pks no nulo, no vacio (22023).
+--     * Sin duplicados (22023 con HINT) — si llegan duplicados, la
+--       delegation fallaria con 'ya inactiva' en la segunda pasada y
+--       oscureceria el error real; lo detectamos arriba para mensaje
+--       claro.
+--     * Todos los PKs > 0 (22023).
+--
+--   Retorna: BIGINT con el conteo de sedes efectivamente dadas de baja
+--   (= cardinalidad del array, en el caso exitoso).
+--
+--   Excepciones:
+--     SQLSTATE '22023' — Parametros de entrada invalidos (solicitante
+--                        <= 0, p_pks nulo/vacio/con duplicados/con
+--                        elementos <= 0).
+--     SQLSTATE 'P0002' — Alguna sede del array no existe (propagado del
+--                        single).
+--     SQLSTATE '22023' — Alguna sede del array ya estaba inactiva (pro-
+--                        pagado del single).
+--     SQLSTATE '42501' — El usuario no satisface el gate compuesto para
+--                        el EE concreto de alguna de las sedes (propa-
+--                        gado del single).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_sed_soft_delete_bulk(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pks                     BIGINT[]
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_pk        BIGINT;
+    v_procesados BIGINT := 0;
+BEGIN
+    -- -----------------------------------------------------------------
+    -- 0. Validacion de parametros de entrada.
+    -- -----------------------------------------------------------------
+    IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
+        RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+
+    IF p_pks IS NULL OR CARDINALITY(p_pks) = 0 THEN
+        RAISE EXCEPTION 'p_pks es obligatorio y debe contener al menos un PK_TSEDE'
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- Duplicados: si el caller envia el mismo PK dos veces, el primer
+    -- PERFORM lo da de baja y el segundo cae con 'ya inactiva' (22023
+    -- propagado), oscureciendo el problema real. Lo detectamos arriba.
+    IF (SELECT COUNT(*) FROM (SELECT unnest(p_pks)) AS x) <> CARDINALITY(p_pks) THEN
+        RAISE EXCEPTION 'p_pks contiene PKs duplicados'
+            USING ERRCODE = '22023',
+                  HINT    = 'Elimine duplicados antes de invocar la funcion';
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM unnest(p_pks) AS pk WHERE pk IS NULL OR pk <= 0) THEN
+        RAISE EXCEPTION 'p_pks contiene elementos nulos o <= 0'
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 1. Bulk soft delete delegando en el single.
+    --    Cualquier excepcion (P0002, 22023, 42501) aborta la transaccion
+    --    y deshace TODAS las bajas ya aplicadas.
+    -- -----------------------------------------------------------------
+    FOREACH v_pk IN ARRAY p_pks
+    LOOP
+        PERFORM academico_test.fn_sed_soft_delete(p_pk_usuario_solicitante, v_pk);
+        v_procesados := v_procesados + 1;
+    END LOOP;
+
+    RAISE NOTICE 'Soft delete bulk TSEDE: autor=%, pks=% (procesados=%)',
+        p_pk_usuario_solicitante, p_pks, v_procesados;
+
+    RETURN v_procesados;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_sed_soft_delete_bulk(BIGINT, BIGINT[])
+    IS 'Variante bulk de fn_sed_soft_delete. Recibe un BIGINT[] de PK_TSEDE y aplica soft delete (con cascade a TSEDE_USUARIO y TSEDE_NIVEL via el single) en una sola transaccion. Semantica ATOMICA: si cualquier PK falla (no existe / ya inactiva / el usuario no pasa el gate para el EE concreto de esa sede), la operacion se revierte entera via RAISE EXCEPTION; ningun PK queda parcialmente procesado. Validaciones previas (22023): p_pk_usuario_solicitante > 0, p_pks no nulo ni vacio, sin duplicados, todos los elementos > 0. Retorna el conteo de sedes efectivamente dadas de baja (= cardinalidad de p_pks en caso exitoso). p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que el resto de funciones del esquema).';
+$$;
+
 COMMENT ON FUNCTION academico_test.fn_sed_soft_delete(BIGINT, BIGINT)
     IS 'Baja logica en cascada: marca ACTIVE=FALSE en TSEDE, en sus TSEDE_USUARIO y en sus TSEDE_NIVEL. No afecta TPERIODO_ACADEMICO (modulo externo), TINF_*, TSEDE_CONVENIO (CASCADE duro en DDL), TARCHIVO ni TUSUARIO_ROL_PERMISO (ver alcance en cuerpo de la funcion). fn_est_soft_delete (V53) YA delega aqui para la cascade por EE. Solo afecta filas activas. Gate de autorizacion COMPUESTO contra el EE de la sede (mismo patron que fn_sed_crear / fn_sed_actualizar): (a) super-admin via fn_puede_afectar_establecimiento; (b) rector del EE (TFUNCIONARIO activo con FK_TUSUARIO = p_pk_usuario_solicitante y FK_TFUNCIONARIO_RECTOR del EE); (c) secretaria del EE (FK_TFUNCIONARIO_SECRETARIA); (d) jefe de sistema (rol 8 en TSEDE_USUARIO activa) con vinculacion en cualquier sede del EE. Cualquier otro caso => 42501. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52 y V53).';
 
@@ -1331,3 +1436,33 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_sed_listar_paginado(
     BIGINT, VARCHAR, BIGINT[], VARCHAR, BOOLEAN, INT, INT
 ) IS 'Wrapper de paginacion: combina fn_sed_listar + fn_sed_contar en una sola llamada. Devuelve un unico record con la forma (rows JSONB, total_count BIGINT, page_count BIGINT, page_index INT, page_size INT). rows es un JSON array con las 8 columnas que retorna fn_sed_listar (pk_sede, codigo, nombre, consecutivo, fk_zona, zona_nombre, direccion, telefono). El gate de autorizacion y los filtros se delegan tal cual a fn_sed_listar/fn_sed_contar (fuente unica de verdad). v_page_size se acota a (0,100] (mismo cap que fn_sed_listar). Si v_total=0 => page_count=0 y rows=[]. Pensada para que la capa Java haga un solo SELECT * FROM academico_test.fn_sed_listar_paginado(...) y arme { rows, totalCount, pageCount } directamente. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52/V53).';
+
+
+-- ---------------------------------------------------------------------------
+-- fn_sed_por_establecimiento
+--   Catalogo de sedes (id + nombre) de un EE concreto, para selects del
+--   front (p.ej. al vincular un funcionario a una sede del EE elegido).
+--   Retorna: SETOF (pk_sede BIGINT, nombre VARCHAR) -- 0..N filas.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_sed_por_establecimiento(
+    p_pk_usuario_solicitante  BIGINT,
+    p_fk_establecimiento      BIGINT
+)
+RETURNS TABLE (
+    pk_sede  BIGINT,
+    nombre   VARCHAR
+)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT s.PK_TSEDE,
+           s.NOMBRE
+      FROM academico_test.TSEDE s
+     WHERE s.FK_TESTABLECIMIENTO = p_fk_establecimiento
+       AND s.ACTIVE = TRUE
+     ORDER BY s.NOMBRE ASC,
+              s.PK_TSEDE ASC;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_sed_por_establecimiento(BIGINT, BIGINT)
+    IS 'Lista las TSEDE activas de un TESTABLECIMIENTO para selects del front. Retorna (pk_sede BIGINT, nombre VARCHAR). Solo ACTIVE=TRUE; orden estable por NOMBRE ASC, PK_TSEDE ASC. Sin gate de autorizacion (catalogo de lookup); p_pk_usuario_solicitante se conserva al inicio de la firma por simetria con el resto de funciones del esquema.';

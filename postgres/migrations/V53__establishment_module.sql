@@ -1061,6 +1061,127 @@ COMMENT ON FUNCTION academico_test.fn_est_soft_delete(BIGINT, BIGINT)
 
 
 -- ---------------------------------------------------------------------------
+-- fn_est_soft_delete_bulk
+--   Variante bulk de fn_est_soft_delete: en lugar de un solo PK_ESTABLE-
+--   CIMIENTO recibe un BIGINT[] de PKs y les aplica soft delete (con
+--   cascade a sus sedes via fn_sed_soft_delete) a todos en una sola
+--   transaccion PL/pgSQL.
+--
+--   Semantica: ATOMICO TODO-O-NADA. Si CUALQUIER PK del array falla
+--   (no existe / ya estaba inactivo / el usuario no pasa el gate de
+--   super-admin) la operacion se revierte entera via RAISE EXCEPTION;
+--   ningun EE queda parcialmente procesado. Esta decision mantiene el
+--   mismo contrato transaccional que fn_est_soft_delete / fn_sed_soft_
+--   delete. Si el caller necesita tolerancia a fallos por fila, debe
+--   llamar al single N veces y manejar las excepciones por su cuenta.
+--
+--   Por cada PK del array se valida el gate de super-admin (via
+--   fn_puede_afectar_establecimiento) y luego se delega en
+--   fn_est_soft_delete(p_pk_usuario_solicitante, p_pk_establecimiento),
+--   que es la fuente de verdad de la cascade EE -> sedes -> usuarios
+--   de sede / niveles. Asi, cualquier cambio futuro en la cascade del
+--   single se refleja automaticamente aqui.
+--
+--   Validaciones previas (antes de tocar nada):
+--     * p_pk_usuario_solicitante > 0 (22023).
+--     * p_pks no nulo, no vacio (22023).
+--     * Sin duplicados (22023 con HINT) — si llegan duplicados, la
+--       delegation fallaria con 'ya inactivo' en la segunda pasada y
+--       oscureceria el error real; lo detectamos arriba para mensaje
+--       claro.
+--     * Todos los PKs > 0 (22023).
+--     * Gate de super-admin para el solicitante (42501). Se valida UNA
+--       sola vez al inicio (no por cada EE): si no pasa, se aborta sin
+--       tocar nada. Es consistente con que fn_est_soft_delete aplica el
+--       mismo gate, y evita gastar trabajo en un caller que claramente
+--       no tiene permiso.
+--
+--   Retorna: BIGINT con el conteo de EE efectivamente dados de baja
+--   (= cardinalidad del array, en el caso exitoso).
+--
+--   Excepciones:
+--     SQLSTATE '22023' — Parametros de entrada invalidos (solicitante
+--                        <= 0, p_pks nulo/vacio/con duplicados/con
+--                        elementos <= 0).
+--     SQLSTATE '42501' — El usuario no es super-admin.
+--     SQLSTATE 'P0002' — Alguna EE del array no existe (propagado del
+--                        single).
+--     SQLSTATE '22023' — Alguna EE del array ya estaba inactiva (propa-
+--                        gado del single).
+--     SQLSTATE 'P0002'/'22023'/'42501' propagados desde fn_sed_soft_delete
+--                        si una sede de la cascade falla.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_est_soft_delete_bulk(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pks                     BIGINT[]
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_pk         BIGINT;
+    v_procesados BIGINT := 0;
+BEGIN
+    -- -----------------------------------------------------------------
+    -- 0. Validacion de parametros de entrada.
+    -- -----------------------------------------------------------------
+    IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
+        RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+
+    IF p_pks IS NULL OR CARDINALITY(p_pks) = 0 THEN
+        RAISE EXCEPTION 'p_pks es obligatorio y debe contener al menos un PK_ESTABLECIMIENTO'
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- Duplicados: si el caller envia el mismo PK dos veces, el primer
+    -- PERFORM lo da de baja y el segundo cae con 'ya inactivo' (22023
+    -- propagado), oscureciendo el problema real. Lo detectamos arriba.
+    IF (SELECT COUNT(*) FROM (SELECT unnest(p_pks)) AS x) <> CARDINALITY(p_pks) THEN
+        RAISE EXCEPTION 'p_pks contiene PKs duplicados'
+            USING ERRCODE = '22023',
+                  HINT    = 'Elimine duplicados antes de invocar la funcion';
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM unnest(p_pks) AS pk WHERE pk IS NULL OR pk <= 0) THEN
+        RAISE EXCEPTION 'p_pks contiene elementos nulos o <= 0'
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 1. Gate de super-admin (mismo patron que fn_est_soft_delete).
+    --    Se valida UNA sola vez al inicio: si no pasa, no tocamos nada.
+    -- -----------------------------------------------------------------
+    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2. Bulk soft delete delegando en el single.
+    --    Cualquier excepcion (P0002, 22023, 42501 desde la cascade de
+    --    sedes) aborta la transaccion y deshace TODAS las bajas ya
+    --    aplicadas.
+    -- -----------------------------------------------------------------
+    FOREACH v_pk IN ARRAY p_pks
+    LOOP
+        PERFORM academico_test.fn_est_soft_delete(p_pk_usuario_solicitante, v_pk);
+        v_procesados := v_procesados + 1;
+    END LOOP;
+
+    RAISE NOTICE 'Soft delete bulk TESTABLECIMIENTO: autor=%, pks=% (procesados=%)',
+        p_pk_usuario_solicitante, p_pks, v_procesados;
+
+    RETURN v_procesados;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_est_soft_delete_bulk(BIGINT, BIGINT[])
+    IS 'Variante bulk de fn_est_soft_delete. Recibe un BIGINT[] de PK_ESTABLECIMIENTO y aplica soft delete (con cascade a sedes -> usuarios de sede / niveles via fn_sed_soft_delete) en una sola transaccion. Semantica ATOMICA: si cualquier PK falla (no existe / ya inactivo / el usuario no pasa el gate de super-admin), la operacion se revierte entera via RAISE EXCEPTION; ningun EE queda parcialmente procesado. Validaciones previas (22023): p_pk_usuario_solicitante > 0, p_pks no nulo ni vacio, sin duplicados, todos los elementos > 0. Gate de super-admin validado una sola vez al inicio (42501). Retorna el conteo de EE efectivamente dados de baja (= cardinalidad de p_pks en caso exitoso). p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que el resto de funciones del esquema).';
+
+
+-- ---------------------------------------------------------------------------
 -- fn_est_actualizar
 --   Actualizacion parcial (estilo PATCH) de un TESTABLECIMIENTO activo.
 --   SEMANTICA: cada parametro que llegue como NULL NO modifica la columna.
