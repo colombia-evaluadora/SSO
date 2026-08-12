@@ -85,11 +85,15 @@ class QueryDerivationTest {
         assertThat(QueryAdminService.normalizeHttpMethod("get")).isEqualTo("GET");
         assertThat(QueryAdminService.normalizeHttpMethod(" Put ")).isEqualTo("PUT");
 
+        // V50 — PATCH (RFC 5789) se suma al allowlist. Difiere de
+        // POST/PUT en la semántica del cuerpo (partial update), pero
+        // el sistema lo trata igual: lleva body, admite DML.
+        assertThat(QueryAdminService.normalizeHttpMethod("PATCH")).isEqualTo("PATCH");
+        assertThat(QueryAdminService.normalizeHttpMethod("patch")).isEqualTo("PATCH");
+
         assertThatThrownBy(() -> QueryAdminService.normalizeHttpMethod("DELETE"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("CALL");
-        assertThatThrownBy(() -> QueryAdminService.normalizeHttpMethod("PATCH"))
-                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

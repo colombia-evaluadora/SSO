@@ -169,6 +169,42 @@ export const appFormSchema = z.object({
  * mismatches; deeper SQL linting would just shadow whatever the
  * JDBC driver ends up complaining about.
  */
+
+/**
+ * V49 — Set curado de tipos PG/JDBC que el autor puede asignar a cada
+ * placeholder. Espejo del `ParamTypes.CURATED` de Java (ver spec
+ * 2026-08-10); el backend es la fuente única — el frontend lo pide
+ * vía `useParamTypes()` al renderizar el dropdown.
+ *
+ * V50 — extiende el set con `CHAR(1)`, `TIME` y `TIME[]`. Este
+ * `as const` se usa para validación local (en `paramTypes`) pero
+ * el dropdown se llena con la respuesta de `useParamTypes` — la
+ * fuente de verdad en runtime es el backend.
+ */
+const CURATED_PG_TYPES = [
+  "TEXT",
+  "VARCHAR",
+  "CHAR(1)",
+  "BIGINT",
+  "INTEGER",
+  "SMALLINT",
+  "NUMERIC",
+  "BOOLEAN",
+  "DATE",
+  "TIME",
+  "TIMESTAMP",
+  "TIMESTAMPTZ",
+  "UUID",
+  "JSONB",
+  "JSON",
+  "TEXT[]",
+  "BIGINT[]",
+  "INTEGER[]",
+  "NUMERIC[]",
+  "BOOLEAN[]",
+  "TIME[]",
+] as const;
+
 export const queryFormSchema = z
   .object({
     // V31 — UUID can be empty (the backend auto-generates one
@@ -201,7 +237,8 @@ export const queryFormSchema = z
       .default(null),
     // V33 — verbo HTTP. DELETE no está en la lista a propósito;
     // para borrar se publica un procedimiento y se llama con CALL.
-    httpMethod: z.enum(["GET", "POST", "PUT"]).default("POST"),
+    // V50 — PATCH se suma a GET/POST/PUT (RFC 5789, partial body).
+    httpMethod: z.enum(["GET", "POST", "PUT", "PATCH"]).default("POST"),
     pathTemplate: z
       .string()
       .max(500)
@@ -220,6 +257,32 @@ export const queryFormSchema = z
         return t === "" ? null : t;
       })
       .nullable(),
+    // V49 — author-declared JDBC/PG type per caller-controlled
+    // placeholder. El backend valida en el guardado (QueryAdminService
+    // .validateParamTypes) que toda :PARAM.* / :BODY.* del SQL tenga
+    // entrada; aquí validamos el shape y dejamos la cobertura para el
+    // servidor.
+    //
+    // Usamos `z.string().refine(...)` en vez de `z.enum([...])` para
+    // que el tipo inferido sea `Record<string, string>` (no el literal
+    // union del enum) y encaje con `Record<string, string>` en el resto
+    // del código (defaultValues, tipos en types.ts).
+    paramTypes: z
+      .record(
+        z
+          .string()
+          .regex(
+            /^[A-Z][A-Z0-9_]*(\.[A-Z][A-Z0-9_]*)*$/,
+            "Cada segmento debe ser MAYÚSCULA y usar A-Z, 0-9, _",
+          ),
+        z
+          .string()
+          .refine(
+            (v) => (CURATED_PG_TYPES as readonly string[]).includes(v),
+            `Tipo no soportado. Permitidos: ${CURATED_PG_TYPES.join(", ")}`,
+          ),
+      )
+      .default({}),
   })
   .superRefine((v, ctx) => {
     if (v.pathTemplate != null && !v.pathTemplate.startsWith("/")) {
@@ -273,12 +336,13 @@ export const queryFormSchema = z
       });
     }
     // Un GET no debe modificar nada — es la mitad del contrato que
-    // permite cachearlo y reintentarlo.
+    // permite cachearlo y reintentarlo. PATCH sí admite DML (es la
+    // esencia del partial update), así que sólo bloqueamos GET.
     if (v.httpMethod === "GET" && /^\s*(insert|update)\b/i.test(v.query ?? "")) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["query"],
-        message: "Un GET no puede ejecutar INSERT ni UPDATE. Usa POST o PUT.",
+        message: "Un GET no puede ejecutar INSERT ni UPDATE. Usa POST, PUT o PATCH.",
       });
     }
     if (v.pathTemplate != null && v.microserviceId == null) {
