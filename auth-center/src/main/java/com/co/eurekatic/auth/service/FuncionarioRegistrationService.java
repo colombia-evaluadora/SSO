@@ -10,6 +10,7 @@ import com.co.eurekatic.common.entity.User;
 import com.co.eurekatic.common.repository.UserRepository;
 import com.co.eurekatic.common.security.AuthPrincipal;
 import com.co.eurekatic.common.security.PasswordPolicy;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -28,13 +29,16 @@ public class FuncionarioRegistrationService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final AcademicoJdbcRepository academicoJdbc;
+    private final JdbcTemplate jdbc;
 
     public FuncionarioRegistrationService(UserRepository userRepository,
                                           PasswordEncoder passwordEncoder,
-                                          AcademicoJdbcRepository academicoJdbc) {
+                                          AcademicoJdbcRepository academicoJdbc,
+                                          JdbcTemplate jdbc) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.academicoJdbc = academicoJdbc;
+        this.jdbc = jdbc;
     }
 
     @Transactional
@@ -65,7 +69,11 @@ public class FuncionarioRegistrationService {
         User saved = userRepository.save(newUser(u, hashed));
 
         long pkFuncionario = academicoJdbc.callFunCrear(callerId, req, hashed);
-        return new RegisterResponse(saved.getId(), null, pkFuncionario, saved.getEmail());
+        // fn_fun_crear solo retorna PK_TFUNCIONARIO. Resolvemos PK_TUSUARIO
+        // por el bridge public.users.id_user -> academico_test.tusuario (V48).
+        Long pkTusuario = jdbc.queryForObject(
+            "SELECT public.fn_get_academico_usuario_id(?)", Long.class, saved.getId());
+        return new RegisterResponse(saved.getId(), pkTusuario, pkFuncionario, saved.getEmail());
     }
 
     private User newUser(RegisterUsuarioRequest req, String hashedPwd) {
