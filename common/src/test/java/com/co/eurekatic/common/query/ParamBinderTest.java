@@ -217,6 +217,18 @@ class ParamBinderTest {
     }
 
     @Test
+    void listOfIsoTimeStringsBecomesTimeArrayLiteral() {
+        // JSON no tiene un literal nativo de hora — Jackson SIEMPRE entrega
+        // String para cada elemento (p.ej. "10:00:00"), nunca java.sql.Time.
+        // Antes de este fix, validateAgainstDeclared exigía instanceof Time
+        // en cada elemento y rechazaba cualquier body JSON válido para TIME[].
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.DESCANSO_INICIO", List.of("10:00:00")),
+                Map.of("BODY.DESCANSO_INICIO", "TIME[]"));
+        assertThat(src.getValue("BODY.DESCANSO_INICIO")).isEqualTo("{\"10:00:00\"}");
+    }
+
+    @Test
     void bodyRawMapBecomesJsonLiteral() {
         Map<String, Object> filtro = new LinkedHashMap<>();
         filtro.put("zona", 1);

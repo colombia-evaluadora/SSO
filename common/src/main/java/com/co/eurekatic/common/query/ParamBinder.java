@@ -398,6 +398,16 @@ public final class ParamBinder {
         // Aceptamos cualquier número entero en un BIGINT[].
         if (expected == Long.class) return isIntegerFamily(v);
         if (expected == BigDecimal.class) return isDecimalFamily(v);
+        // TIME[] (y temporales en general): JSON no tiene un
+        // literal nativo para hora/fecha — Jackson SIEMPRE
+        // entrega String para un elemento de array como
+        // "10:00:00", nunca java.sql.Time (eso sólo existe si
+        // el caller lo construye a mano en Java). Exigir
+        // instanceof Time aquí rechazaría cualquier body JSON
+        // válido; igual que la rama escalar de TEMPORAL_TYPES
+        // más abajo, aceptamos String y dejamos que el cast de
+        // PG valide el formato real.
+        if (expected == Time.class) return v instanceof String;
         return false;
     }
 
