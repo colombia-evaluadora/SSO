@@ -39,6 +39,28 @@ public final class ParamTypes {
             "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]"
     );
 
+    /** Tipos numéricos enteros — usados por la guardia runtime para
+     *  validar el tipo Java del valor antes de bindear. */
+    public static final Set<String> INTEGER_TYPES = Set.of(
+            "BIGINT", "INTEGER", "SMALLINT"
+    );
+
+    /** Tipos numéricos con decimales. */
+    public static final Set<String> DECIMAL_TYPES = Set.of(
+            "NUMERIC"
+    );
+
+    /** Tipos textuales — para validación laxa (cualquier String pasa). */
+    public static final Set<String> STRING_TYPES = Set.of(
+            "TEXT", "VARCHAR", "CHAR(1)"
+    );
+
+    /** Tipos temporales — Jackson entrega String ISO-8601 o
+     *  {@code java.time.*}; PG aplica el cast. */
+    public static final Set<String> TEMPORAL_TYPES = Set.of(
+            "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ"
+    );
+
     /**
      * V49-bis — DOMAIN types del schema {@code academico_test} (definidos en
      * {@code postgres/migrations/V22__academic-schema.sql}). Son los tipos que el

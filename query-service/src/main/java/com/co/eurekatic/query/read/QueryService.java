@@ -276,7 +276,17 @@ public class QueryService {
             log.debug("V49-rewrite uuid={} rewrittenSql={}",
                     req.uuid(), rewrittenSql);
         }
-        MapSqlParameterSource params = ParamBinder.build(allParams, def.paramTypes());
+        // V60 — bind con validación de tipos. Atrapa los casos
+        // donde el cliente envía un String/Boolean donde el
+        // catálogo declara BIGINT, o un array mixto en un
+        // BIGINT[] — antes caían al cast PG con SQLSTATE 22P02
+        // y un mensaje críptico. Ahora el binder rechaza con
+        // 400 nombrando el placeholder y el tipo esperado.
+        // El Illega aquí como respuesta llamada cuando el
+        // bind actual se GeneralExceptionHandler lo mapea a 400
+        // con el envelope estándar.
+        MapSqlParameterSource params = ParamBinder.buildStrict(
+                allParams, def.paramTypes(), java.util.Map.of());
 
         // El SQL se ejecuta tal cual está en el catálogo.
         //
