@@ -1722,15 +1722,16 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_est_actualizar(
     BIGINT, BIGINT,
     VARCHAR, VARCHAR,
-    VARCHAR, BIGINT, BIGINT,
+    BIGINT, BIGINT,
+    VARCHAR,
     VARCHAR, VARCHAR, VARCHAR, VARCHAR,
     VARCHAR, VARCHAR, VARCHAR, VARCHAR,
+    VARCHAR,
     BIGINT,
     VARCHAR, VARCHAR, DATE,
     BIGINT, BIGINT, BIGINT, BIGINT,
     academico_test.bool_sn, academico_test.bool_sn,
     BIGINT, BIGINT, academico_test.bool_sn,
     BIGINT, BIGINT, BIGINT, BIGINT,
-    BIGINT,
     BIGINT
 ) IS 'Actualizacion parcial (estilo PATCH) de TESTABLECIMIENTO. Cada parametro NULL no modifica su columna; cada valor no NULL se aplica. NIT y CODIGO son modificables: si se envian, se validan contra el resto de EE activos (excluyendo el propio PK) y se aplican. Solo opera sobre EE activos. Actualiza MODIFIED_BY/MODIFIED_AT solo si hay cambios. Gate de autorizacion compuesto: (a) el usuario pasa fn_puede_afectar_establecimiento (roles 1-3) => puede modificar cualquier EE activo; (b) en caso contrario, se valida que el FK_TFUNCIONARIO_RECTOR del EE apunte a un TFUNCIONARIO activo cuyo FK_TUSUARIO coincida con p_pk_usuario_solicitante. Cualquier otro caso => 42501. p_pk_usuario_solicitante y p_pk_establecimiento van al inicio sin DEFAULT (obligatorios, mismo patron que V52). Retorna PK_ESTABLECIMIENTO.';
