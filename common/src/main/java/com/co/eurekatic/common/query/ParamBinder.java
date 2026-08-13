@@ -3,6 +3,7 @@ package com.co.eurekatic.common.query;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
@@ -40,6 +41,16 @@ import java.util.Map;
  * no insertó ningún cast y el bind queda como texto puro — la guardia
  * runtime del {@code QueryService} ya rechazó el caso antes de llegar aquí.
  *
+ * <p><b>V60 (validación temprana)</b>: cuando se llama al overload
+ * {@link #buildStrict(Map, Map, java.util.List)}, cada (key, valor, tipo)
+ * se valida antes de bindear. La intención es cortar los
+ * {@code cast(:k as TIPO)} de PG que devolverían un críptico
+ * {@code SQLSTATE 22P02} cuando el cliente manda, p.ej., un String
+ * donde el catálogo declara BIGINT — Jackson entregó un String
+ * cuando lo que se necesitaba era un Long. La validación nombra
+ * la key y el tipo esperado, así el operador ve el error sin
+ * tener que mirar el log de PG.
+ *
  * <p><b>Legacy / backward-compat</b>: el camino
  * {@code QueryService.executeCallable} (CallableStatement con OUT params)
  * sigue usando {@code cs.setObject(k, v, sqlType)} con el map
@@ -52,7 +63,29 @@ public final class ParamBinder {
 
     public static MapSqlParameterSource build(Map<String, Object> values,
                                               Map<String, String> paramTypes) {
-        Map<String, String> types = paramTypes == null ? Map.of() : paramTypes;
+        return buildStrict(values, paramTypes,
+                java.util.Map.of() /* no extra declared types */);
+    }
+
+    /**
+     * Variante estricta: además de serializar, valida que el
+     * tipo Java del valor coincida con el declarado para cada
+     * placeholder. Si hay mismatch, lanza
+     * {@link IllegalArgumentException} con un mensaje que
+     * nombra la key, el placeholder del SQL (si se conoce), y
+     * el tipo observado vs el esperado.
+     *
+     * @param extraDeclared map adicional de {key → tipo} que se
+     *                      suma a {@code paramTypes} para
+     *                      validación. Útil cuando el caller
+     *                      ya computó tipos por su cuenta (p.ej.
+     *                      desde un JsonNode tree).
+     */
+    public static MapSqlParameterSource buildStrict(
+            Map<String, Object> values,
+            Map<String, String> paramTypes,
+            Map<String, String> extraDeclared) {
+        Map<String, String> types = mergeTypes(paramTypes, extraDeclared);
         MapSqlParameterSource src = new MapSqlParameterSource();
         if (values == null) return src;
 
@@ -60,6 +93,16 @@ public final class ParamBinder {
             String key = e.getKey();
             Object val = e.getValue();
             String declaredType = types.get(key);
+            if (declaredType == null) {
+                // V60-bis — el cliente puede haber escrito la
+                // key en cualquier caja. Buscamos la
+                // representación canónica (MAYÚSCULAS +
+                // namespace prefix) contra el catálogo.
+                String canonical = canonicalLookupKey(key);
+                if (canonical != null) {
+                    declaredType = types.get(canonical);
+                }
+            }
 
             if (val == null) {
                 // null: no se bindea. PG interpreta el placeholder como NULL
@@ -67,6 +110,13 @@ public final class ParamBinder {
                 // Saltarse el addValue evita que JDBC mande setObject(k, null)
                 // con tipo desconocido.
                 continue;
+            }
+
+            if (declaredType != null) {
+                String problem = validateAgainstDeclared(key, val, declaredType);
+                if (problem != null) {
+                    throw new IllegalArgumentException(problem);
+                }
             }
 
             String serialized;
@@ -85,8 +135,270 @@ public final class ParamBinder {
                         + ex.getMessage());
             }
             src.addValue(key, serialized);
+            // V60-bis — publicamos también varias variantes
+            // canonicales para que un SQL con placeholder
+            // UPPERCASA O minúsculas, con namespace O sin él,
+            // encuentre el valor aunque el cliente haya
+            // enviado la key en una caja arbitraria.
+            //
+            // Tres aliases:
+            //  - upper: mayúsculas (sin namespace) — para
+            //    SQL legacy con :id en mayúsculas.
+            //  - canonical: namespace-prefixado en MAYÚSCULAS
+            //    (BODY.X para body-scope) — para SQL con
+            //    placeholder moderno :BODY.X.
+            //  - lower: minúsculas (sin namespace) — para
+            //    SQL legacy con :id en minúsculas.
+            //
+            // Spring NamedParameterUtils es case-sensitive
+            // sobre los placeholders del SQL, así que con
+            // tres aliases el bind funciona en cualquier
+            // combinación de cajas y namespaces.
+            String upper = key.toUpperCase(java.util.Locale.ROOT);
+            String lower = key.toLowerCase(java.util.Locale.ROOT);
+            String canonical = canonicalLookupKey(key);
+            if (canonical != null && !canonical.equals(key)) {
+                src.addValue(canonical, serialized);
+            }
+            if (!upper.equals(key) && !upper.equals(canonical)) {
+                src.addValue(upper, serialized);
+            }
+            if (!lower.equals(key) && !lower.equals(canonical) && !lower.equals(upper)) {
+                src.addValue(lower, serialized);
+            }
         }
         return src;
+    }
+
+    /**
+     * Genera las variantes canónicas de {@code key} contra las
+     * que un catálogo puede haber declarado el tipo. Devuelve
+     * la primera que NO esté vacía — el binder usa esa para
+     * el lookup en {@code paramTypes}.
+     *
+     * <p>Por ejemplo, para la key {@code "size"} del
+     * cliente: prueba {@code "size"} (literal), {@code "SIZE"}
+     * (upper), {@code "QUERY.SIZE"} (con prefijo derivado
+     * del namespace QUERY si la key viene suelta) — la
+     * primera que el catálogo tenga declarada gana.
+     */
+    public static String canonicalLookupKey(String key) {
+        if (key == null || key.isEmpty()) return null;
+        // La forma canónica Body-namespace-prefixed es la
+        // que casi siempre declara el catálogo. Si el
+        // cliente ya escribió el prefijo, canonicalKeyFor
+        // no lo duplica.
+        for (String ns : new String[]{
+                ParamNamespace.BODY, ParamNamespace.BODY_RAW,
+                ParamNamespace.QUERY, ParamNamespace.PARAM,
+                ParamNamespace.CONTEXT}) {
+            String canonical = ParamNamespace.canonicalKeyFor(key, ns);
+            if (canonical != null && !canonical.equals(key)) {
+                return canonical;
+            }
+        }
+        return null;
+    }
+
+    private static Map<String, String> mergeTypes(Map<String, String> base,
+                                                   Map<String, String> extra) {
+        if (base == null && extra == null) return Map.of();
+        if (base == null) return extra;
+        if (extra == null) return base;
+        java.util.LinkedHashMap<String, String> merged = new java.util.LinkedHashMap<>(base);
+        merged.putAll(extra);
+        return merged;
+    }
+
+    /**
+     * Comprueba que el tipo Java del valor sea compatible con
+     * el declarado en {@code paramTypes}. Devuelve
+     * {@code null} si está bien, o un mensaje listo para el
+     * 400 del llamante.
+     *
+     * <p>La regla es deliberadamente laxa: aceptamos cualquier
+     * número donde se declaró un número (Integer, Long,
+     * BigInteger, BigDecimal, etc.) y rechazamos mezclas
+     * absurdas (String para BIGINT, Boolean para TIMESTAMP).
+     * La coerción fina la hace PG vía el cast insertado por
+     * {@code SqlRewriter} — la guardia sólo corta los casos
+     * donde PG daría un mensaje críptico que no ayuda al
+     * operador.
+     */
+    static String validateAgainstDeclared(String key, Object val, String declared) {
+        if (val == null || declared == null) return null;
+        String up = declared.trim().toUpperCase(Locale.ROOT);
+
+        // Arrays
+        if (ParamTypes.ARRAY_TYPES.contains(up)) {
+            if (!(val instanceof List<?>) && !val.getClass().isArray()) {
+                return "El parámetro '" + key + "' se declaró como " + up
+                        + " (array) pero el cliente envió "
+                        + val.getClass().getSimpleName()
+                        + ". Verifica que el JSON tenga un [...] y no un escalar.";
+            }
+            if (val instanceof List<?> list) {
+                int wrong = -1;
+                Class<?> elementExpected = arrayElementType(up);
+                if (elementExpected != null) {
+                    for (int i = 0; i < list.size(); i++) {
+                        Object el = list.get(i);
+                        if (el == null) continue;
+                        if (!isCompatibleWith(el, elementExpected)) {
+                            wrong = i;
+                            break;
+                        }
+                    }
+                }
+                if (wrong >= 0) {
+                    Object el = list.get(wrong);
+                    return "El array '" + key + "' se declaró como " + up
+                            + " pero el elemento [" + wrong + "] es "
+                            + (el == null ? "null" : el.getClass().getSimpleName())
+                            + " (esperado " + elementExpected.getSimpleName()
+                            + "). Mezclar tipos en el array produce errores crípticos de PG; "
+                            + "el cliente debe enviar todos los elementos del mismo tipo.";
+                }
+            }
+            return null;
+        }
+
+        // JSONB / JSON — sólo aceptamos Map o String (un
+        // JSON literal que ya viene como String del cliente es
+        // legal; no lo rechazamos).
+        if ("JSONB".equals(up) || "JSON".equals(up)) {
+            if (val instanceof Map || val instanceof String) return null;
+            return "El parámetro '" + key + "' se declaró como " + up
+                    + " pero el cliente envió "
+                    + val.getClass().getSimpleName()
+                    + ". Para JSONB/JSONB usa BODY_RAW.X con un sub-objeto completo.";
+        }
+
+        // Booleano
+        if ("BOOLEAN".equals(up)) {
+            if (!(val instanceof Boolean)) {
+                return "El parámetro '" + key + "' se declaró como BOOLEAN pero el cliente envió "
+                        + val.getClass().getSimpleName()
+                        + ". Verifica que el JSON use true/false y no 0/1 o \"S\"/\"N\".";
+            }
+            return null;
+        }
+
+        // Numéricos enteros
+        if (ParamTypes.INTEGER_TYPES.contains(up)) {
+            if (isIntegerFamily(val)) return null;
+            if (val instanceof String s) {
+                try {
+                    Long.parseLong(s);
+                    return null;
+                } catch (NumberFormatException ignored) {
+                    // cae al mensaje de abajo
+                }
+            }
+            return "El parámetro '" + key + "' se declaró como " + up
+                    + " (entero) pero el cliente envió "
+                    + val.getClass().getSimpleName()
+                    + ". Verifica que el campo lleve un número sin decimales.";
+        }
+
+        // Numéricos con decimales
+        if (ParamTypes.DECIMAL_TYPES.contains(up)) {
+            if (isDecimalFamily(val)) return null;
+            if (val instanceof String s) {
+                try {
+                    new BigDecimal(s);
+                    return null;
+                } catch (NumberFormatException ignored) {
+                    // cae al mensaje
+                }
+            }
+            return "El parámetro '" + key + "' se declaró como " + up
+                    + " (numérico con decimales) pero el cliente envió "
+                    + val.getClass().getSimpleName()
+                    + ". Verifica que el campo lleve un número (entero o decimal).";
+        }
+
+        // Texto y CHAR(1) — aceptamos cualquier cosa; PG hará
+        // el chequeo fino (truncamiento, codificación).
+        if (ParamTypes.STRING_TYPES.contains(up)) {
+            return null;
+        }
+
+        // UUID — sólo aceptamos String (un UUID textual) o java.util.UUID.
+        if ("UUID".equals(up)) {
+            if (val instanceof String || val instanceof java.util.UUID) return null;
+            return "El parámetro '" + key + "' se declaró como UUID pero el cliente envió "
+                    + val.getClass().getSimpleName()
+                    + ". UUID debe ir como cadena con formato estándar.";
+        }
+
+        // DATE / TIME / TIMESTAMP / TIMESTAMPTZ — aceptamos
+        // String (formato ISO-8601) o los java.sql.* / java.time.*
+        // que Jackson entregue por reflexión. Para esta v60 no
+        // distinguimos java.time.Instant de java.util.Date — PG
+        // recibe texto y aplica el cast.
+        if (ParamTypes.TEMPORAL_TYPES.contains(up)) {
+            if (val instanceof String
+                    || val instanceof java.sql.Date
+                    || val instanceof Time
+                    || val instanceof Timestamp
+                    || val instanceof java.time.temporal.Temporal) {
+                return null;
+            }
+            return "El parámetro '" + key + "' se declaró como " + up
+                    + " pero el cliente envió "
+                    + val.getClass().getSimpleName()
+                    + ". Usa una cadena ISO-8601 o un tipo fecha/hora.";
+        }
+
+        // DOMAIN types — el binder serializa a texto; PG
+        // valida el CHECK constraint. La guardia aquí no
+        // puede añadir información útil, así que dejamos
+        // pasar.
+        if (ParamTypes.DOMAIN_TYPES.contains(up)) {
+            return null;
+        }
+
+        // Tipo desconocido declarado — defensivo, no rompe.
+        return null;
+    }
+
+    /** Inferencia del tipo Java esperado del elemento del array. */
+    private static Class<?> arrayElementType(String up) {
+        return switch (up) {
+            case "BIGINT[]", "INTEGER[]" -> Long.class;
+            case "NUMERIC[]" -> BigDecimal.class;
+            case "BOOLEAN[]" -> Boolean.class;
+            case "TIME[]" -> java.sql.Time.class;
+            case "TEXT[]" -> String.class;
+            default -> null;
+        };
+    }
+
+    private static boolean isIntegerFamily(Object v) {
+        return v instanceof Integer || v instanceof Long
+                || v instanceof Short || v instanceof Byte
+                || v instanceof BigInteger;
+    }
+
+    private static boolean isDecimalFamily(Object v) {
+        return isIntegerFamily(v) /* INTEGER cabe en DECIMAL */
+                || v instanceof Float || v instanceof Double
+                || v instanceof BigDecimal;
+    }
+
+    /**
+     * ¿El valor {@code v} es asignable / parseable al tipo
+     * esperado? Conservador: si el valor es null ya lo
+     * filtramos; si no, miramos la jerarquía directa.
+     */
+    private static boolean isCompatibleWith(Object v, Class<?> expected) {
+        if (v == null) return true;
+        if (expected.isInstance(v)) return true;
+        // Aceptamos cualquier número entero en un BIGINT[].
+        if (expected == Long.class) return isIntegerFamily(v);
+        if (expected == BigDecimal.class) return isDecimalFamily(v);
+        return false;
     }
 
     /**

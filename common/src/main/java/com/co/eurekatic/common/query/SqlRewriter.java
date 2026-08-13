@@ -85,10 +85,19 @@ public final class SqlRewriter {
         int cursor = 0;
         int n = sql.length();
 
-        // Regex de placeholder — case-sensitive sobre el SQL original.
-        // Captura el placeholder completo (incluyendo ':') para reemplazo.
+        // Regex de placeholder — case-insensitive sobre el SQL original
+        // (V60). La convención es escribir los nombres en MAYÚSCULAS
+        // (tanto en el SQL como en el catálogo), pero un autor que
+        // escribe ":param.id" en lugar de ":PARAM.ID" no debería
+        // hacer que el rewriter falle en silencio: el cast PG
+        // quedaría sin insertar y el bind terminaría con un
+        // "function xxx(character varying, bigint) does not
+        // exist" críptico. La key con la que se busca en
+        // {@code paramTypes} siempre va en MAYÚSCULAS (es lo que el
+        // resto del codebase guarda y emite).
         java.util.regex.Pattern placeholder = java.util.regex.Pattern.compile(
-                ":(PARAM|BODY|BODY_RAW|QUERY|CONTEXT)(\\.[A-Za-z][A-Za-z0-9_]*)+");
+                ":(PARAM|BODY|BODY_RAW|QUERY|CONTEXT)(\\.[A-Za-z][A-Za-z0-9_]*)+",
+                java.util.regex.Pattern.CASE_INSENSITIVE);
 
         java.util.regex.Matcher m = placeholder.matcher(sql);
         // Estado del lexer — se mantiene entre matches para no desincronizarse

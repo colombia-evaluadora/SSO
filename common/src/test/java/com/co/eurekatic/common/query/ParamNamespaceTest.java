@@ -235,4 +235,121 @@ class ParamNamespaceTest {
         assertThat(out).containsEntry("BODY.ZONA", 214);
         assertThat(out).containsEntry("BODY_RAW.FILTRO", filtro);
     }
+
+    /**
+     * V60-bis — case-insensitive: indexa el body por su
+     * key canónica (MAYÚSCULAS + namespace prefix) sin
+     * mutar la key original del cliente. El caller recibe
+     * el map canónico para lookup en {@code paramTypes} o
+     * en {@code SqlRewriter}, mientras conserva el body
+     * original (sin mutación) para el bind JDBC.
+     */
+    @Test
+    void indexCanonicalBodyUppercasesPlainKeys() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("fecha", "2024-01-01");
+        body.put("ID", 42);
+        body.put("Estado", "ACTIVO");
+
+        Map<String, Object> canonical = ParamNamespace.indexCanonicalBody(body, ParamNamespace.BODY);
+
+        assertThat(canonical).containsEntry("BODY.FECHA", "2024-01-01");
+        assertThat(canonical).containsEntry("BODY.ID", 42);
+        assertThat(canonical).containsEntry("BODY.ESTADO", "ACTIVO");
+    }
+
+    @Test
+    void indexCanonicalBodyFlattensNestedObjects() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        Map<String, Object> filtros = new LinkedHashMap<>();
+        filtros.put("zona", 1);
+        filtros.put("regional", "BOG");
+        body.put("filtros", filtros);
+
+        Map<String, Object> canonical = ParamNamespace.indexCanonicalBody(body, ParamNamespace.BODY);
+
+        assertThat(canonical).containsEntry("BODY.FILTROS.ZONA", 1);
+        assertThat(canonical).containsEntry("BODY.FILTROS.REGIONAL", "BOG");
+    }
+
+    @Test
+    void indexCanonicalBodyKeepsArraysAsOneValue() {
+        java.util.List<Object> tags = java.util.List.of("a", "b");
+        Map<String, Object> body = Map.of("tags", tags);
+
+        Map<String, Object> canonical = ParamNamespace.indexCanonicalBody(body, ParamNamespace.BODY);
+
+        assertThat(canonical).containsEntry("BODY.TAGS", tags);
+    }
+
+    @Test
+    void indexCanonicalBodyRejectsCaseOnlyCollisions() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("estado", "a");
+        body.put("ESTADO", "b");
+
+        assertThatThrownBy(() -> ParamNamespace.indexCanonicalBody(body, ParamNamespace.BODY))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("ESTADO");
+    }
+
+    @Test
+    void indexCanonicalBodyPreservesProvidedNamespacePrefix() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("body.fecha", "2024-01-01");
+        body.put("BODY.id", 42);
+
+        Map<String, Object> canonical = ParamNamespace.indexCanonicalBody(body, ParamNamespace.BODY);
+
+        assertThat(canonical).containsEntry("BODY.FECHA", "2024-01-01");
+        assertThat(canonical).containsEntry("BODY.ID", 42);
+        assertThat(canonical).doesNotContainKey("BODY.BODY.FECHA");
+    }
+
+    @Test
+    void indexCanonicalBodyToleratesNullAndEmpty() {
+        assertThat(ParamNamespace.indexCanonicalBody(null, ParamNamespace.BODY)).isEmpty();
+        assertThat(ParamNamespace.indexCanonicalBody(Map.of(), ParamNamespace.BODY)).isEmpty();
+    }
+
+    @Test
+    void indexCanonicalBodyRejectsInvalidNameCharacters() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("page-size", 20);
+
+        assertThatThrownBy(() -> ParamNamespace.indexCanonicalBody(body, ParamNamespace.BODY))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("page-size");
+    }
+
+    /**
+     * El helper {@code canonicalKeyFor} produce la
+     * representación canónica de cualquier key suelta
+     * sin necesidad de un mapa de entrada. Lo consume
+     * {@code ParamBinder} para hacer lookups
+     * case-insensitive contra {@code paramTypes}.
+     */
+    @Test
+    void canonicalKeyForPlainKeyAddsPrefix() {
+        assertThat(ParamNamespace.canonicalKeyFor("fecha", ParamNamespace.BODY))
+                .isEqualTo("BODY.FECHA");
+    }
+
+    @Test
+    void canonicalKeyForAlreadyPrefixedKeyDoesNotDuplicatePrefix() {
+        // El cliente envió "BODY.fecha" — no se duplica.
+        assertThat(ParamNamespace.canonicalKeyFor("BODY.fecha", ParamNamespace.BODY))
+                .isEqualTo("BODY.FECHA");
+        assertThat(ParamNamespace.canonicalKeyFor("body.fecha", ParamNamespace.BODY))
+                .isEqualTo("BODY.FECHA");
+    }
+
+    @Test
+    void canonicalKeyForOtherNamespacePrefixedKeyPrepends() {
+        // "QUERY.size" no está en el namespace BODY — el
+        // canonical NO prepende, sólo uppercasar por
+        // segmento.
+        assertThat(ParamNamespace.canonicalKeyFor("QUERY.size", ParamNamespace.BODY))
+                .isEqualTo("QUERY.SIZE");
+    }
 }

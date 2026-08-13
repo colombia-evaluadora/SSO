@@ -35,6 +35,23 @@ spring:
       - org.springframework.boot.jdbc.autoconfigure.JdbcTemplateAutoConfiguration
       - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
 
+  # V60 — preservación del diagnóstico al fallar el parseo del
+  # cuerpo. Sin esto Jackson 3 (transitivo de Boot 4) REDACTA
+  # el fragmento responsable en el log: el operador sólo ve
+  # el byte offset y un mensaje como "byte offset: #201", sin
+  # saber si fue una coma faltante, una cadena sin cerrar o un
+  # array como raíz. Activarlo imprime el snippet alrededor
+  # del offset, acotado a ~80 caracteres por Jackson.
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
+      fail-on-null-for-primitives: true
+      wrap-exceptions: true
+    parser:
+      include-source-in-location: true
+      max-string-length: 1048576
+      max-number-length: 1000
+
 eureka:
   client:
     service-url:

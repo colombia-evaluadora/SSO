@@ -21,24 +21,6 @@ public final class ParamTypes {
 
     private ParamTypes() {}
 
-    /** Set curado que se ofrece en el dropdown de la UI. */
-    public static final Set<String> CURATED = Set.of(
-            // Escalares
-            "TEXT", "VARCHAR", "CHAR(1)",
-            "BIGINT", "INTEGER", "SMALLINT",
-            "NUMERIC",
-            "BOOLEAN",
-            "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ",
-            "UUID", "JSONB", "JSON",
-            // Arrays
-            "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]"
-    );
-
-    /** Tipos array — para que {@code ParamBinder} sepa envolver en {@link java.sql.Array}. */
-    public static final Set<String> ARRAY_TYPES = Set.of(
-            "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]"
-    );
-
     /**
      * V49-bis — DOMAIN types del schema {@code academico_test} (definidos en
      * {@code postgres/migrations/V22__academic-schema.sql}). Son los tipos que el
@@ -54,6 +36,60 @@ public final class ParamTypes {
             "NODO_CURRICULAR",
             "TITULACION_GRADO"
     );
+
+    /** Tipos array — para que {@code ParamBinder} sepa envolver en {@link java.sql.Array}. */
+    public static final Set<String> ARRAY_TYPES = Set.of(
+            "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]"
+    );
+
+    /** Tipos numéricos enteros — usados por la guardia runtime para
+     *  validar el tipo Java del valor antes de bindear. */
+    public static final Set<String> INTEGER_TYPES = Set.of(
+            "BIGINT", "INTEGER", "SMALLINT"
+    );
+
+    /** Tipos numéricos con decimales. */
+    public static final Set<String> DECIMAL_TYPES = Set.of(
+            "NUMERIC"
+    );
+
+    /** Tipos textuales — para validación laxa (cualquier String pasa). */
+    public static final Set<String> STRING_TYPES = Set.of(
+            "TEXT", "VARCHAR", "CHAR(1)"
+    );
+
+    /** Tipos temporales — Jackson entrega String ISO-8601 o
+     *  {@code java.time.*}; PG aplica el cast. */
+    public static final Set<String> TEMPORAL_TYPES = Set.of(
+            "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ"
+    );
+
+    /**
+     * Set curado que se ofrece en el dropdown de la UI y que
+     * el sso-admin acepta al validar un {@code paramTypes}.
+     * Combina escalares built-in, arrays built-in y los
+     * DOMAIN types del schema {@code academico_test} — un
+     * único set compartido por la UI y el binder.
+     *
+     * <p>Cada vez que se añade un tipo nuevo al catálogo
+     * (escalares, arrays o DOMAIN), basta con actualizar
+     * los sets arriba — el set curado se reconstruye al
+     * cargar la clase, sin necesidad de tocar este método.
+     */
+    public static final Set<String> CURATED;
+    static {
+        java.util.LinkedHashSet<String> curated = new java.util.LinkedHashSet<>();
+        curated.addAll(Set.of(
+                "TEXT", "VARCHAR", "CHAR(1)",
+                "BIGINT", "INTEGER", "SMALLINT",
+                "NUMERIC",
+                "BOOLEAN",
+                "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ",
+                "UUID", "JSONB", "JSON",
+                "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]"));
+        curated.addAll(DOMAIN_TYPES);
+        CURATED = java.util.Collections.unmodifiableSet(curated);
+    }
 
     /**
      * V49-bis — mapeo del nombre del set curado al nombre PG-cast (lo que va

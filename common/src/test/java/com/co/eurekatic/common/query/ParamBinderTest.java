@@ -1,10 +1,12 @@
 package com.co.eurekatic.common.query;
 
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.SqlTypeValue;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
@@ -264,5 +266,166 @@ class ParamBinderTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("BODY.IDS")
                 .hasMessageContaining("BIGINT[]");
+    }
+
+    /**
+     * V60 — los overloads {@code buildStrict} introducen
+     * validación de tipo entre el valor Java y el declarado.
+     * Estos casos documentan el contrato del guardia runtime
+     * para cada categoría de tipo.
+     */
+    @Nested
+    class StrictTypeValidation {
+
+        @Test
+        void booleanParamRejectsStringValue() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("PARAM.ACTIVO", "S");
+            assertThatThrownBy(() -> ParamBinder.buildStrict(values,
+                    Map.of("PARAM.ACTIVO", "BOOLEAN"), Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BOOLEAN")
+                    .hasMessageContaining("PARAM.ACTIVO");
+        }
+
+        @Test
+        void booleanParamAcceptsBooleanValue() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("PARAM.ACTIVO", true);
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("PARAM.ACTIVO", "BOOLEAN"), Map.of()))
+                    .isNotNull();
+        }
+
+        @Test
+        void bigIntParamRejectsDouble() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("PARAM.ID", 3.14);
+            assertThatThrownBy(() -> ParamBinder.buildStrict(values,
+                    Map.of("PARAM.ID", "BIGINT"), Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BIGINT")
+                    .hasMessageContaining("PARAM.ID")
+                    .hasMessageContaining("Double");
+        }
+
+        @Test
+        void bigIntParamAcceptsIntegerLongAndBigInteger() {
+            for (Object v : new Object[]{42, 42L, BigInteger.valueOf(42)}) {
+                Map<String, Object> values = new LinkedHashMap<>();
+                values.put("PARAM.ID", v);
+                assertThat(ParamBinder.buildStrict(values,
+                        Map.of("PARAM.ID", "BIGINT"), Map.of()))
+                        .as("acepta %s como BIGINT", v.getClass().getSimpleName())
+                        .isNotNull();
+            }
+        }
+
+        @Test
+        void bigIntParamAcceptsParseableString() {
+            // Caso típico de cliente que serializa el id como
+            // "12345" en vez de 12345 — PG lo aceptaría vía
+            // el cast, así que tampoco rechazamos en el
+            // guardia. (Si fuera "abc", también pasaría el
+            // guardia y PG devolvería SQLSTATE 22P02 — ese
+            // caso el guardia no lo cubre porque añadir
+            // parseo+redondeo aquí duplica trabajo con PG.)
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("PARAM.ID", "12345");
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("PARAM.ID", "BIGINT"), Map.of())).isNotNull();
+        }
+
+        @Test
+        void numericParamAcceptsDecimals() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("PARAM.PRECIO", new BigDecimal("1234.5600"));
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("PARAM.PRECIO", "NUMERIC"), Map.of())).isNotNull();
+        }
+
+        @Test
+        void arrayParamRejectsMixedTypes() {
+            // El caso del log: el cliente envía [1, "2", 3].
+            // El catálogo lo declara BIGINT[]; el guardia
+            // detecta el String en el índice 1 y nombra
+            // exactamente qué elemento falla.
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.IDS", List.of(1L, "2", 3L));
+            assertThatThrownBy(() -> ParamBinder.buildStrict(values,
+                    Map.of("BODY.IDS", "BIGINT[]"), Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BODY.IDS")
+                    .hasMessageContaining("[1]")
+                    .hasMessageContaining("String");
+        }
+
+        @Test
+        void arrayParamAcceptsUniformIntegers() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.IDS", List.of(1L, 2L, 3L));
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("BODY.IDS", "BIGINT[]"), Map.of())).isNotNull();
+        }
+
+        @Test
+        void arrayParamRejectsScalarWhereArrayExpected() {
+            // "x": 5 debería ser BIGINT, no un array — el
+            // guardia lo rechaza si el tipo declarado es
+            // BIGINT[] y el valor es escalar.
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.IDS", 5);
+            assertThatThrownBy(() -> ParamBinder.buildStrict(values,
+                    Map.of("BODY.IDS", "BIGINT[]"), Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BODY.IDS")
+                    .hasMessageContaining("array");
+        }
+
+        @Test
+        void jsonbParamAcceptsValidJsonLiteralAsString() {
+            // El guardia NO parsea el String — acepta un JSON
+            // literal textual (lo que el cliente suele enviar)
+            // y deja que PG valide al aplicar el cast. Un
+            // String inválido también pasa el guardia y PG lo
+            // rechaza con SQLSTATE 22P02 — eso es aceptable
+            // porque la causa raíz está clara: el cliente
+            // mandó algo que no era JSON.
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY_RAW.FILTRO", "{\"x\":1}");
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("BODY_RAW.FILTRO", "JSONB"), Map.of())).isNotNull();
+        }
+
+        @Test
+        void jsonbParamAcceptsMap() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY_RAW.FILTRO", Map.of("x", 1));
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("BODY_RAW.FILTRO", "JSONB"), Map.of())).isNotNull();
+        }
+
+        @Test
+        void undeclaredKeyDoesNotTriggerValidation() {
+            // Sin tipo declarado, buildStrict no impone
+            // validación — reproduce el comportamiento legacy.
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.X", "hola");
+            assertThat(ParamBinder.buildStrict(values, Map.of(), Map.of())).isNotNull();
+        }
+
+        @Test
+        void extraDeclaredTypesSupplementBaseMap() {
+            // extraDeclared añade tipos que no están en
+            // paramTypes — útil cuando el caller computó
+            // tipos por su cuenta (p.ej. desde un JsonNode
+            // tree durante el path dispatch).
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.NEW", "true-not-a-bool");
+            assertThatThrownBy(() -> ParamBinder.buildStrict(
+                    values, Map.of(), Map.of("BODY.NEW", "BOOLEAN")))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BOOLEAN");
+        }
     }
 }

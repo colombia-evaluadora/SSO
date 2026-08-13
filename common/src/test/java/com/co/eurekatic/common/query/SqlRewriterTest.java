@@ -183,6 +183,45 @@ class SqlRewriterTest {
                 .isEqualTo("SELECT cast(:PARAM.ID as bigint)");
     }
 
+    /**
+     * V60 — caso complementario: el SQL tiene el placeholder
+     * en minúsculas (autor lo escribió así) y paramTypes
+     * viene en MAYÚSCULAS por convención. El rewriter debe
+     * matchear el placeholder en el SQL (regex
+     * case-sensitive) y luego buscar la key en MAYÚSCULAS
+     * contra el map.
+     *
+     * <p>Importante: si esto falla, el binder pasa el valor
+     * bajo la key {@code ":param.id"} en minúsculas pero
+     * NamedParameterUtils de Spring hace matching
+     * case-insensitive en {@code parseSqlStatement}, así que
+     * el bind aún funciona — sólo se pierde el cast, y el
+     * resultado es un cast PG que devuelve críptico
+     * {@code function xxx(character varying, bigint) does
+     * not exist}.
+     */
+    @Test
+    void lowercasePlaceholderInSqlMatchesUppercaseInParamTypes() {
+        Map<String, String> types = Map.of("PARAM.ID", "BIGINT");
+        String sql = "SELECT * FROM fn(:param.id)";
+        assertThat(SqlRewriter.rewrite(sql, types))
+                .isEqualTo("SELECT * FROM fn(cast(:param.id as bigint))");
+    }
+
+    /**
+     * Capitalización mixta (p. ej. {@code :Param.Id} en el
+     * SQL, {@code PARAM.ID} en paramTypes). El regex
+     * case-sensitive del placeholder lo captura, la key se
+     * canonicaliza a MAYÚSCULAS para el lookup.
+     */
+    @Test
+    void mixedCasePlaceholderInSqlMatchesUppercaseInParamTypes() {
+        Map<String, String> types = Map.of("PARAM.ID", "BIGINT");
+        String sql = "SELECT * FROM fn(:Param.Id)";
+        assertThat(SqlRewriter.rewrite(sql, types))
+                .isEqualTo("SELECT * FROM fn(cast(:Param.Id as bigint))");
+    }
+
     @Test
     void placeholdersToRewriteReturnsDeclaredOnes() {
         Map<String, String> types = Map.of(
