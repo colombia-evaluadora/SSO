@@ -128,13 +128,18 @@ class GlobalExceptionHandlerIntegrationTest {
                 .as("stream-level error gets MALFORMED category")
                 .isEqualTo("MALFORMED");
         // Byte offset es diagnóstico útil para el cliente.
-        // Aceptamos tanto el offset explícito como su ausencia
-        // si el cause chain de Jackson no lo expuso: el contrato
-        // es "incluirlo cuando esté disponible", no obligatorio.
-        if (node.has("byteOffset")) {
-            assertThat(node.has("line")).isTrue();
-            assertThat(node.has("column")).isTrue();
-        }
+        // V60 lo expone cuando INCLUDE_SOURCE_IN_LOCATION está
+        // activo en producción (JacksonConfig.includeSourceOnParseError).
+        // En el contexto del test lo verificamos directamente:
+        assertThat(node.has("byteOffset"))
+                .as("byte offset is included for client-side forensics")
+                .isTrue();
+        assertThat(node.has("line")).isTrue();
+        assertThat(node.has("column")).isTrue();
+        assertThat(node.get("line").asLong()).isEqualTo(1L);
+        // El '}' suelto está después de `"params":` — column 23
+        // es la posición del carácter problemático.
+        assertThat(node.get("column").asLong()).isGreaterThanOrEqualTo(15L);
         assertThat(node.get("message").asText()).contains("JSON");
     }
 
