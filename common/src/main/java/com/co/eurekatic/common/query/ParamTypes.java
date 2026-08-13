@@ -37,9 +37,19 @@ public final class ParamTypes {
             "TITULACION_GRADO"
     );
 
-    /** Tipos array — para que {@code ParamBinder} sepa envolver en {@link java.sql.Array}. */
+    /**
+     * Tipos array — para que {@code ParamBinder} sepa envolver en {@link java.sql.Array}.
+     *
+     * <p>V61 — se suman {@code DATE[]}, {@code TIMESTAMP[]} y
+     * {@code TIMESTAMPTZ[]}. Antes sólo {@code TIME[]} tenía
+     * contraparte array entre los tipos temporales — un autor
+     * que quisiera {@code WHERE fecha = ANY(:BODY.FECHAS)} no
+     * tenía forma de declarar el tipo y caía al auto-derive de
+     * Spring (rompe con listas, ver spec 2026-08-10).
+     */
     public static final Set<String> ARRAY_TYPES = Set.of(
-            "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]"
+            "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]",
+            "DATE[]", "TIMESTAMP[]", "TIMESTAMPTZ[]"
     );
 
     /** Tipos numéricos enteros — usados por la guardia runtime para
@@ -86,7 +96,8 @@ public final class ParamTypes {
                 "BOOLEAN",
                 "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ",
                 "UUID", "JSONB", "JSON",
-                "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]"));
+                "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]",
+                "DATE[]", "TIMESTAMP[]", "TIMESTAMPTZ[]"));
         curated.addAll(DOMAIN_TYPES);
         CURATED = java.util.Collections.unmodifiableSet(curated);
     }
@@ -124,6 +135,9 @@ public final class ParamTypes {
             Map.entry("NUMERIC[]", "numeric[]"),
             Map.entry("BOOLEAN[]", "bool[]"),
             Map.entry("TIME[]", "time[]"),
+            Map.entry("DATE[]", "date[]"),
+            Map.entry("TIMESTAMP[]", "timestamp[]"),
+            Map.entry("TIMESTAMPTZ[]", "timestamptz[]"),
             // DOMAIN types — schema-qualified
             Map.entry("BOOL_SN",                "academico_test.bool_sn"),
             Map.entry("ESTADO_AI",              "academico_test.estado_ai"),
@@ -167,7 +181,10 @@ public final class ParamTypes {
             Map.entry("INTEGER[]", Types.ARRAY),
             Map.entry("NUMERIC[]", Types.ARRAY),
             Map.entry("BOOLEAN[]", Types.ARRAY),
-            Map.entry("TIME[]", Types.ARRAY)
+            Map.entry("TIME[]", Types.ARRAY),
+            Map.entry("DATE[]", Types.ARRAY),
+            Map.entry("TIMESTAMP[]", Types.ARRAY),
+            Map.entry("TIMESTAMPTZ[]", Types.ARRAY)
     );
 
     /**

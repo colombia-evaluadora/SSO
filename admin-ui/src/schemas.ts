@@ -176,10 +176,21 @@ export const appFormSchema = z.object({
  * 2026-08-10); el backend es la fuente única — el frontend lo pide
  * vía `useParamTypes()` al renderizar el dropdown.
  *
- * V50 — extiende el set con `CHAR(1)`, `TIME` y `TIME[]`. Este
- * `as const` se usa para validación local (en `paramTypes`) pero
- * el dropdown se llena con la respuesta de `useParamTypes` — la
- * fuente de verdad en runtime es el backend.
+ * V50 — extiende el set con `CHAR(1)`, `TIME` y `TIME[]`.
+ *
+ * V61 — sincroniza dos gaps encontrados al comparar contra
+ * `ParamTypes.CURATED` (backend, fuente de verdad):
+ *   1. Faltaban los DOMAIN types de `academico_test` (BOOL_SN,
+ *      ESTADO_AI, ...) — el dropdown ya los ofrecía (viene de
+ *      `useParamTypes()`, backend), pero elegir uno hacía fallar
+ *      esta validación local con "Tipo no soportado" antes de
+ *      llegar al submit.
+ *   2. Faltaban `DATE[]`, `TIMESTAMP[]`, `TIMESTAMPTZ[]` — sólo
+ *      `TIME[]` tenía contraparte array entre los temporales.
+ *
+ * Este `as const` se usa para validación local (en `paramTypes`)
+ * pero el dropdown se llena con la respuesta de `useParamTypes` —
+ * la fuente de verdad en runtime es el backend.
  */
 const CURATED_PG_TYPES = [
   "TEXT",
@@ -203,6 +214,16 @@ const CURATED_PG_TYPES = [
   "NUMERIC[]",
   "BOOLEAN[]",
   "TIME[]",
+  "DATE[]",
+  "TIMESTAMP[]",
+  "TIMESTAMPTZ[]",
+  // academico_test DOMAIN types
+  "BOOL_SN",
+  "ESTADO_AI",
+  "ESTADO_AC",
+  "ESTADO_ACTIVO_INACTIVO",
+  "NODO_CURRICULAR",
+  "TITULACION_GRADO",
 ] as const;
 
 export const queryFormSchema = z

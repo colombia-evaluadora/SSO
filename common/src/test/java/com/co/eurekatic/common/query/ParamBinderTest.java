@@ -229,6 +229,32 @@ class ParamBinderTest {
     }
 
     @Test
+    void listOfIsoDateStringsBecomesDateArrayLiteral() {
+        // Mismo motivo que TIME[]: JSON no tiene literal nativo de fecha,
+        // Jackson entrega String para cada elemento.
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.FERIADOS", List.of("2026-01-01", "2026-12-25")),
+                Map.of("BODY.FERIADOS", "DATE[]"));
+        assertThat(src.getValue("BODY.FERIADOS")).isEqualTo("{\"2026-01-01\",\"2026-12-25\"}");
+    }
+
+    @Test
+    void listOfIsoTimestampStringsBecomesTimestampArrayLiteral() {
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.CORTES", List.of("2026-08-12 14:30:00")),
+                Map.of("BODY.CORTES", "TIMESTAMP[]"));
+        assertThat(src.getValue("BODY.CORTES")).isEqualTo("{\"2026-08-12 14:30:00\"}");
+    }
+
+    @Test
+    void listOfIsoTimestampTzStringsBecomesTimestampTzArrayLiteral() {
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.CORTES", List.of("2026-08-12T14:30:00-05:00")),
+                Map.of("BODY.CORTES", "TIMESTAMPTZ[]"));
+        assertThat(src.getValue("BODY.CORTES")).isEqualTo("{\"2026-08-12T14:30:00-05:00\"}");
+    }
+
+    @Test
     void bodyRawMapBecomesJsonLiteral() {
         Map<String, Object> filtro = new LinkedHashMap<>();
         filtro.put("zona", 1);

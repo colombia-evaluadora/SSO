@@ -370,6 +370,11 @@ public final class ParamBinder {
             case "NUMERIC[]" -> BigDecimal.class;
             case "BOOLEAN[]" -> Boolean.class;
             case "TIME[]" -> java.sql.Time.class;
+            // V61 — mismo tratamiento que TIME[]: JSON no tiene
+            // literal nativo de fecha/hora, así que el elemento
+            // "esperado" real es siempre String (ver isCompatibleWith).
+            case "DATE[]" -> java.sql.Date.class;
+            case "TIMESTAMP[]", "TIMESTAMPTZ[]" -> Timestamp.class;
             case "TEXT[]" -> String.class;
             default -> null;
         };
@@ -398,16 +403,21 @@ public final class ParamBinder {
         // Aceptamos cualquier número entero en un BIGINT[].
         if (expected == Long.class) return isIntegerFamily(v);
         if (expected == BigDecimal.class) return isDecimalFamily(v);
-        // TIME[] (y temporales en general): JSON no tiene un
-        // literal nativo para hora/fecha — Jackson SIEMPRE
-        // entrega String para un elemento de array como
-        // "10:00:00", nunca java.sql.Time (eso sólo existe si
-        // el caller lo construye a mano en Java). Exigir
-        // instanceof Time aquí rechazaría cualquier body JSON
+        // TIME[] / DATE[] / TIMESTAMP[] / TIMESTAMPTZ[] (y
+        // temporales en general): JSON no tiene un literal
+        // nativo para fecha/hora — Jackson SIEMPRE entrega
+        // String para un elemento de array como "10:00:00" o
+        // "2026-08-12", nunca java.sql.Time/Date/Timestamp (eso
+        // sólo existe si el caller lo construye a mano en Java).
+        // Exigir instanceof aquí rechazaría cualquier body JSON
         // válido; igual que la rama escalar de TEMPORAL_TYPES
         // más abajo, aceptamos String y dejamos que el cast de
         // PG valide el formato real.
-        if (expected == Time.class) return v instanceof String;
+        if (expected == Time.class
+                || expected == java.sql.Date.class
+                || expected == Timestamp.class) {
+            return v instanceof String;
+        }
         return false;
     }
 
