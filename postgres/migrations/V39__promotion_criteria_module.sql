@@ -210,6 +210,7 @@ LANGUAGE sql STABLE AS $$
                '[]'::jsonb)
       FROM academico_test.TCRITERIO_PROMOCION cp
      WHERE cp.ACTIVE = TRUE
+       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario_solicitante, cp.FK_TPERIODO_ACADEMICO)
        AND ( (p_fk_grado IS NOT NULL AND cp.FK_TGRADO = p_fk_grado)
           OR (p_fk_grado IS NULL AND cp.FK_TPERIODO_ACADEMICO = p_fk_periodo AND cp.FK_TGRADO IS NULL) );
 $$;

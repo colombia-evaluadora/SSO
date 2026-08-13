@@ -175,23 +175,43 @@ $$;
 
 DROP FUNCTION IF EXISTS academico_test.fn_area_listar(BIGINT, TEXT, INT, INT);
 DROP FUNCTION IF EXISTS academico_test.fn_area_listar(BIGINT, TEXT, INT, INT, BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_area_listar(BIGINT, TEXT, INT, INT, BIGINT, TEXT, TEXT);
 CREATE OR REPLACE FUNCTION academico_test.fn_area_listar(
     p_fk_periodo BIGINT, p_nombre_interno TEXT DEFAULT NULL,
     p_page_index INT DEFAULT 0, p_page_size INT DEFAULT 10,
-    p_pk_usuario BIGINT DEFAULT NULL   -- alcance (global / establecimiento)
+    p_pk_usuario BIGINT DEFAULT NULL,  -- alcance (global / establecimiento)
+    -- Orden: id de columna del front + direccion ('asc'/'desc'), igual que fn_periodo_listar (V37).
+    p_sort_by TEXT DEFAULT NULL,
+    p_sort_dir TEXT DEFAULT NULL
 )
 RETURNS TABLE (id BIGINT, codigo VARCHAR, nombre_interno VARCHAR,
                area_general_id BIGINT, orden_reportes NUMERIC, total_count BIGINT)
-LANGUAGE sql STABLE AS $$
-    SELECT a.PK_TAREA, a.CODIGO, a.NOMBRE, a.FK_TAREA_ASIGNATURA, a.ORDEN_REPORTE,
-           count(*) OVER()::BIGINT
-      FROM academico_test.TAREA a
-     WHERE a.FK_TPERIODO_ACADEMICO = p_fk_periodo AND a.ACTIVE = TRUE
-       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_fk_periodo)
-       AND (NULLIF(TRIM(p_nombre_interno),'') IS NULL OR a.NOMBRE ILIKE '%' || p_nombre_interno || '%')
-     ORDER BY a.ORDEN_REPORTE, a.NOMBRE
-     LIMIT NULLIF(p_page_size, 0)
-    OFFSET COALESCE(p_page_index, 0) * COALESCE(NULLIF(p_page_size, 0), 0);
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_col TEXT;
+    v_dir TEXT;
+BEGIN
+    v_col := CASE lower(coalesce(p_sort_by, ''))
+        WHEN 'codigo'        THEN 'a.CODIGO'
+        WHEN 'nombreinterno' THEN 'a.NOMBRE'
+        WHEN 'ordenreportes' THEN 'a.ORDEN_REPORTE'
+        ELSE 'a.ORDEN_REPORTE'
+    END;
+    v_dir := CASE WHEN lower(coalesce(p_sort_dir, '')) = 'desc' THEN 'DESC' ELSE 'ASC' END;
+
+    RETURN QUERY EXECUTE format($q$
+        SELECT a.PK_TAREA, a.CODIGO, a.NOMBRE, a.FK_TAREA_ASIGNATURA, a.ORDEN_REPORTE,
+               count(*) OVER()::BIGINT
+          FROM academico_test.TAREA a
+         WHERE a.FK_TPERIODO_ACADEMICO = $1 AND a.ACTIVE = TRUE
+           AND academico_test.fn_periodo_usuario_puede_ver($5, $1)
+           AND ($2 IS NULL OR a.NOMBRE ILIKE '%%' || $2 || '%%')
+         ORDER BY %s %s, a.NOMBRE, a.PK_TAREA
+         LIMIT NULLIF($4, 0)
+        OFFSET COALESCE($3, 0) * COALESCE(NULLIF($4, 0), 0)
+    $q$, v_col, v_dir)
+    USING p_fk_periodo, NULLIF(TRIM(p_nombre_interno),''), p_page_index, p_page_size, p_pk_usuario;
+END;
 $$;
 
 -- ----- ENFASIS (TENFASIS) — resolver-o-crear por nombre en establecimiento --
@@ -226,28 +246,45 @@ $$;
 -- ---------------------------------------------------------------------------
 -- fn_enfasis_desde_seleccion — resuelve el "id" elegido en el combo combinado
 -- especialidad+enfasis (fn_especialidad_enfasis_listar) a un PK_TENFASIS del
--- establecimiento. Reglas:
---   * NULL -> NULL (sin especialidad).
+-- establecimiento dueño del periodo. La resolucion del establecimiento se hace
+-- internamente (periodo -> sede -> establecimiento) para que los callers no
+-- tengan que duplicar el JOIN. Reglas:
+--   * p_id NULL -> NULL (sin especialidad).
 --   * Si el id ya es un ENFASIS activo del establecimiento -> se usa tal cual.
 --   * Si es una ESPECIALIDAD global activa -> se crea (o reusa) un enfasis del
 --     establecimiento con NOMBRE y FK_TESPECIALIDAD de esa especialidad y un
 --     CODIGO incremental (00000, 00001, ...) por establecimiento. Reusa el ya
 --     creado (misma especialidad + nombre) si se vuelve a elegir. Devuelve su PK.
+--   * Si el periodo no existe o esta inactivo -> P0002.
 --   * Si no es ni una ni otra -> 22023.
 -- Nota: el id de enfasis del establecimiento tiene prioridad ante colision
 -- numerica con una especialidad global (el front distingue por 'origen'; si en
 -- el futuro se quiere 100% inequivoco, pasar el origen como parametro).
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_enfasis_desde_seleccion(BIGINT, BIGINT, VARCHAR);
 CREATE OR REPLACE FUNCTION academico_test.fn_enfasis_desde_seleccion(
-    p_fk_establecimiento BIGINT, p_id BIGINT, p_audit VARCHAR
+    p_fk_periodo BIGINT, p_id BIGINT, p_audit VARCHAR
 )
 RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_enf BIGINT; v_nombre VARCHAR(130); v_next INT;
+DECLARE
+    v_est    BIGINT;          -- establecimiento del periodo (periodo -> sede -> establecimiento)
+    v_enf    BIGINT;
+    v_nombre VARCHAR(130);
+    v_next   INT;
 BEGIN
     IF p_id IS NULL THEN RETURN NULL; END IF;
+    -- Resolver establecimiento a partir del periodo (periodo -> sede -> establecimiento).
+    SELECT s.FK_TESTABLECIMIENTO INTO v_est
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo AND pa.ACTIVE = TRUE;
+    IF v_est IS NULL THEN
+        RAISE EXCEPTION 'El periodo academico % no existe o esta inactivo', p_fk_periodo
+            USING ERRCODE = 'P0002';
+    END IF;
     -- 1) ¿Ya es un enfasis del establecimiento?
     SELECT PK_TENFASIS INTO v_enf FROM academico_test.TENFASIS
-     WHERE PK_TENFASIS = p_id AND ACTIVE = TRUE AND FK_TESTABLECIMIENTO = p_fk_establecimiento;
+     WHERE PK_TENFASIS = p_id AND ACTIVE = TRUE AND FK_TESTABLECIMIENTO = v_est;
     IF v_enf IS NOT NULL THEN RETURN v_enf; END IF;
     -- 2) ¿Es una especialidad global activa? -> resolver-o-crear enfasis con su nombre.
     SELECT NOMBRE INTO v_nombre FROM academico_test.TESPECIALIDAD
@@ -257,11 +294,11 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
     -- Serializar la creacion por establecimiento (codigo incremental sin choques).
-    PERFORM pg_advisory_xact_lock(hashtext('tenfasis:' || p_fk_establecimiento::text));
+    PERFORM pg_advisory_xact_lock(hashtext('tenfasis:' || v_est::text));
     -- Reusar el enfasis ya creado para esta especialidad en el establecimiento
     -- (misma especialidad + mismo nombre): si vuelve a elegirse, no se crea otro.
     SELECT PK_TENFASIS INTO v_enf FROM academico_test.TENFASIS
-     WHERE FK_TESPECIALIDAD = p_id AND FK_TESTABLECIMIENTO = p_fk_establecimiento AND ACTIVE = TRUE
+     WHERE FK_TESPECIALIDAD = p_id AND FK_TESTABLECIMIENTO = v_est AND ACTIVE = TRUE
        AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(v_nombre))
      LIMIT 1;
     IF v_enf IS NOT NULL THEN RETURN v_enf; END IF;
@@ -270,11 +307,107 @@ BEGIN
     -- calculado entre los codigos puramente numericos existentes.
     SELECT COALESCE(MAX(CODIGO::int), -1) + 1 INTO v_next
       FROM academico_test.TENFASIS
-     WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento AND CODIGO ~ '^[0-9]+$';
+     WHERE FK_TESTABLECIMIENTO = v_est AND CODIGO ~ '^[0-9]+$';
     INSERT INTO academico_test.TENFASIS (CODIGO, NOMBRE, FK_TESPECIALIDAD, FK_TESTABLECIMIENTO, CREATED_BY)
-    VALUES (lpad(v_next::text, 5, '0'), v_nombre, p_id, p_fk_establecimiento, p_audit)
+    VALUES (lpad(v_next::text, 5, '0'), v_nombre, p_id, v_est, p_audit)
     RETURNING PK_TENFASIS INTO v_enf;
     RETURN v_enf;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- fn_enfasis_actualizar — edita NOMBRE/CODIGO/FK_TESPECIALIDAD de un enfasis
+-- del establecimiento. No permite mover el enfasis a otro establecimiento (no
+-- se recibe FK_TESTABLECIMIENTO como parametro editable).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_enfasis_actualizar(
+    p_pk                     BIGINT,
+    p_nombre                 VARCHAR(130) DEFAULT NULL,
+    p_codigo                 VARCHAR(30)  DEFAULT NULL,
+    p_fk_especialidad        BIGINT       DEFAULT NULL,
+    p_pk_usuario_solicitante BIGINT       DEFAULT NULL
+)
+RETURNS BIGINT LANGUAGE plpgsql AS $$
+DECLARE
+    r academico_test.TENFASIS;
+    v_nombre VARCHAR(130); v_codigo VARCHAR(30);
+    v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+BEGIN
+    SELECT * INTO r FROM academico_test.TENFASIS WHERE PK_TENFASIS = p_pk AND ACTIVE = TRUE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No existe un enfasis activo con PK %', p_pk USING ERRCODE = 'P0002';
+    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, r.FK_TESTABLECIMIENTO);
+    IF p_nombre IS NOT NULL AND NULLIF(TRIM(p_nombre),'') IS NULL THEN
+        RAISE EXCEPTION 'El nombre del enfasis no puede ser vacio' USING ERRCODE = '22023';
+    END IF;
+    IF p_codigo IS NOT NULL AND NULLIF(TRIM(p_codigo),'') IS NULL THEN
+        RAISE EXCEPTION 'El codigo del enfasis no puede ser vacio' USING ERRCODE = '22023';
+    END IF;
+    IF p_fk_especialidad IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM academico_test.TESPECIALIDAD WHERE PK_ESPECIALIDAD = p_fk_especialidad AND ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'La especialidad % no existe o esta inactiva', p_fk_especialidad USING ERRCODE = '23503';
+    END IF;
+    v_nombre := COALESCE(p_nombre, r.NOMBRE);
+    v_codigo := COALESCE(p_codigo, r.CODIGO);
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TENFASIS
+         WHERE FK_TESTABLECIMIENTO = r.FK_TESTABLECIMIENTO AND ACTIVE = TRUE AND PK_TENFASIS <> p_pk
+           AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(v_nombre))
+    ) THEN
+        RAISE EXCEPTION 'Ya existe un enfasis con el nombre % en este establecimiento', v_nombre
+            USING ERRCODE = '23505';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TENFASIS
+         WHERE FK_TESTABLECIMIENTO = r.FK_TESTABLECIMIENTO AND ACTIVE = TRUE AND PK_TENFASIS <> p_pk
+           AND UPPER(TRIM(CODIGO)) = UPPER(TRIM(v_codigo))
+    ) THEN
+        RAISE EXCEPTION 'Ya existe un enfasis con el codigo % en este establecimiento', v_codigo
+            USING ERRCODE = '23505';
+    END IF;
+    UPDATE academico_test.TENFASIS SET
+        NOMBRE = v_nombre,
+        CODIGO = v_codigo,
+        FK_TESPECIALIDAD = COALESCE(p_fk_especialidad, FK_TESPECIALIDAD),
+        MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TENFASIS = p_pk;
+    RETURN p_pk;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- fn_enfasis_soft_delete — baja logica. Bloquea si hay asignaturas activas
+-- usando el enfasis (evita dejar TASIGNATURA.FK_TENFASIS apuntando a un enfasis
+-- inactivo).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_enfasis_soft_delete(
+    p_pk BIGINT, p_pk_usuario_solicitante BIGINT
+)
+RETURNS BIGINT LANGUAGE plpgsql AS $$
+DECLARE
+    v_est BIGINT; v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+BEGIN
+    SELECT FK_TESTABLECIMIENTO INTO v_est FROM academico_test.TENFASIS
+     WHERE PK_TENFASIS = p_pk AND ACTIVE = TRUE;
+    IF v_est IS NULL THEN
+        RAISE EXCEPTION 'No existe un enfasis activo con PK %', p_pk USING ERRCODE = 'P0002';
+    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_est);
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TASIGNATURA s WHERE s.FK_TENFASIS = p_pk AND s.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No se puede eliminar el enfasis %: existen asignaturas asociadas', p_pk
+            USING ERRCODE = '23503';
+    END IF;
+    UPDATE academico_test.TENFASIS SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TENFASIS = p_pk AND ACTIVE = TRUE;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n = 0 THEN
+        RAISE EXCEPTION 'No existe un enfasis activo con PK %', p_pk USING ERRCODE = 'P0002';
+    END IF;
+    RETURN p_pk;
 END;
 $$;
 
@@ -290,7 +423,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_subject_crear(
     p_pk_usuario_solicitante BIGINT   DEFAULT NULL
 )
 RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_id BIGINT; v_est BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+DECLARE v_id BIGINT; v_est BIGINT; v_periodo BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
     PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
         SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
@@ -299,8 +432,8 @@ BEGIN
        OR NULLIF(TRIM(p_abreviacion),'') IS NULL THEN
         RAISE EXCEPTION 'Faltan campos obligatorios de la asignatura' USING ERRCODE = '22023';
     END IF;
-    -- Establecimiento del area (via periodo -> sede). Valida que el area exista.
-    SELECT s.FK_TESTABLECIMIENTO INTO v_est
+    -- Periodo y establecimiento del area (via periodo -> sede). Valida que el area exista.
+    SELECT a.FK_TPERIODO_ACADEMICO, s.FK_TESTABLECIMIENTO INTO v_periodo, v_est
       FROM academico_test.TAREA a
       JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = a.FK_TPERIODO_ACADEMICO
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
@@ -320,7 +453,7 @@ BEGIN
     -- Especialidad/enfasis (opcional): resolver la seleccion del combo. Si es una
     -- especialidad global, se crea (o reusa) un enfasis del establecimiento con su
     -- info; si ya es un enfasis, se usa tal cual. Deja p_fk_enfasis = PK_TENFASIS.
-    p_fk_enfasis := academico_test.fn_enfasis_desde_seleccion(v_est, p_fk_enfasis, v_audit);
+    p_fk_enfasis := academico_test.fn_enfasis_desde_seleccion(v_periodo, p_fk_enfasis, v_audit);
     IF EXISTS (
         SELECT 1 FROM academico_test.TASIGNATURA s
          WHERE s.FK_TAREA = p_fk_area AND s.ACTIVE = TRUE
@@ -359,7 +492,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_subject_actualizar(
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
     r academico_test.TASIGNATURA;
-    v_nombre VARCHAR(130); v_codigo VARCHAR(30); v_enfasis BIGINT; v_est BIGINT;
+    v_nombre VARCHAR(130); v_codigo VARCHAR(30); v_enfasis BIGINT; v_est BIGINT; v_periodo BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
     PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
@@ -389,12 +522,12 @@ BEGIN
     -- establecimiento del area. Especialidad global -> crea/reusa enfasis; enfasis
     -- -> tal cual. Si no viene, conserva el actual.
     IF p_fk_enfasis IS NOT NULL THEN
-        SELECT s.FK_TESTABLECIMIENTO INTO v_est
+        SELECT a.FK_TPERIODO_ACADEMICO, s.FK_TESTABLECIMIENTO INTO v_periodo, v_est
           FROM academico_test.TAREA a
           JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = a.FK_TPERIODO_ACADEMICO
           JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
          WHERE a.PK_TAREA = r.FK_TAREA;
-        v_enfasis := academico_test.fn_enfasis_desde_seleccion(v_est, p_fk_enfasis, v_audit);
+        v_enfasis := academico_test.fn_enfasis_desde_seleccion(v_periodo, p_fk_enfasis, v_audit);
     ELSE
         v_enfasis := r.FK_TENFASIS;
     END IF;
@@ -450,6 +583,14 @@ BEGIN
         RAISE EXCEPTION 'No se puede eliminar la asignatura %: existen horarios asociados', p_pk
             USING ERRCODE = '23503';
     END IF;
+    -- Procesos academicos activos: ya hay calificaciones registradas para la asignatura.
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TASIGNATURA_NOTA an
+         WHERE an.FK_TASIGNATURA = p_pk AND an.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No se puede eliminar la asignatura %: existen calificaciones registradas', p_pk
+            USING ERRCODE = '23503';
+    END IF;
     UPDATE academico_test.TASIGNATURA SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TASIGNATURA = p_pk AND ACTIVE = TRUE;
     GET DIAGNOSTICS v_n = ROW_COUNT;
@@ -470,6 +611,59 @@ LANGUAGE sql STABLE AS $$
       FROM academico_test.TASIGNATURA s
      WHERE s.FK_TAREA = p_fk_area AND s.ACTIVE = TRUE
      ORDER BY s.ORDEN_REPORTE;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- fn_subject_periodo_listar — todas las asignaturas de un periodo academico
+-- (join TASIGNATURA -> TAREA), en formato plano paginado y con sorting, igual
+-- al patron de fn_periodo_listar (V37): whitelist de columnas + EXECUTE format.
+-- A diferencia de fn_subject_listar (una sola area) y de
+-- fn_periodo_areas_asignaturas_listar (anidado en JSON, sin filtro/paginado).
+-- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_subject_periodo_listar(BIGINT, TEXT, INT, INT, BIGINT, TEXT, TEXT);
+CREATE OR REPLACE FUNCTION academico_test.fn_subject_periodo_listar(
+    p_fk_periodo BIGINT,
+    p_filtro     TEXT DEFAULT NULL,
+    p_page_index INT  DEFAULT 0,
+    p_page_size  INT  DEFAULT 10,
+    p_pk_usuario BIGINT DEFAULT NULL,  -- alcance (global / establecimiento)
+    -- Orden: id de columna del front + direccion ('asc'/'desc'), igual que fn_periodo_listar (V37).
+    p_sort_by    TEXT DEFAULT NULL,
+    p_sort_dir   TEXT DEFAULT NULL
+)
+RETURNS TABLE (id BIGINT, codigo VARCHAR, nombre_interno VARCHAR,
+               area_id BIGINT, area_nombre VARCHAR,
+               asignatura_general_id BIGINT, enfasis_id BIGINT, color VARCHAR,
+               orden_reportes NUMERIC, total_count BIGINT)
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_col TEXT;
+    v_dir TEXT;
+BEGIN
+    v_col := CASE lower(coalesce(p_sort_by, ''))
+        WHEN 'codigo'        THEN 's.CODIGO'
+        WHEN 'nombreinterno' THEN 's.NOMBRE'
+        WHEN 'areanombre'    THEN 'a.NOMBRE'
+        WHEN 'ordenreportes' THEN 's.ORDEN_REPORTE'
+        ELSE 'a.NOMBRE'
+    END;
+    v_dir := CASE WHEN lower(coalesce(p_sort_dir, '')) = 'desc' THEN 'DESC' ELSE 'ASC' END;
+
+    RETURN QUERY EXECUTE format($q$
+        SELECT s.PK_TASIGNATURA, s.CODIGO, s.NOMBRE, a.PK_TAREA, a.NOMBRE,
+               s.FK_TAREA_ASIGNATURA, s.FK_TENFASIS, s.COLOR, s.ORDEN_REPORTE,
+               count(*) OVER()::BIGINT
+          FROM academico_test.TASIGNATURA s
+          JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA AND a.ACTIVE = TRUE
+         WHERE a.FK_TPERIODO_ACADEMICO = $1 AND s.ACTIVE = TRUE
+           AND academico_test.fn_periodo_usuario_puede_ver($5, $1)
+           AND ($2 IS NULL OR s.NOMBRE ILIKE '%%' || $2 || '%%' OR s.CODIGO ILIKE '%%' || $2 || '%%')
+         ORDER BY %s %s, s.NOMBRE, s.PK_TASIGNATURA
+         LIMIT NULLIF($4, 0)
+        OFFSET COALESCE($3, 0) * COALESCE(NULLIF($4, 0), 0)
+    $q$, v_col, v_dir)
+    USING p_fk_periodo, NULLIF(TRIM(p_filtro),''), p_page_index, p_page_size, p_pk_usuario;
+END;
 $$;
 
 -- ----- CATALOGOS PARA SELECTS ----------------------------------------------
@@ -546,7 +740,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_subject_guardar_bulk(
 RETURNS INT LANGUAGE plpgsql AS $$
 DECLARE
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-    v_est BIGINT; v_count INT := 0; it jsonb;
+    v_est BIGINT; v_periodo BIGINT; v_count INT := 0; it jsonb;
     v_id BIGINT; v_nombre VARCHAR(130); v_codigo VARCHAR(30);
     v_aa BIGINT; v_enf BIGINT; v_esp BIGINT; v_color VARCHAR(10); v_orden NUMERIC;
     v_enf_name TEXT;
@@ -555,8 +749,8 @@ BEGIN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
-    -- Establecimiento del area (valida que el area exista/activa).
-    SELECT s.FK_TESTABLECIMIENTO INTO v_est
+    -- Periodo y establecimiento del area (valida que el area exista/activa).
+    SELECT a.FK_TPERIODO_ACADEMICO, s.FK_TESTABLECIMIENTO INTO v_periodo, v_est
       FROM academico_test.TAREA a
       JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = a.FK_TPERIODO_ACADEMICO
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
@@ -612,7 +806,7 @@ BEGIN
             SELECT PK_ESPECIALIDAD INTO v_esp FROM academico_test.TESPECIALIDAD
              WHERE ACTIVE = TRUE AND UPPER(TRIM(NOMBRE)) = UPPER(v_enf_name) LIMIT 1;
             IF v_esp IS NOT NULL THEN
-                v_enf := academico_test.fn_enfasis_desde_seleccion(v_est, v_esp, v_audit);
+                v_enf := academico_test.fn_enfasis_desde_seleccion(v_periodo, v_esp, v_audit);
             ELSE
                 v_enf := academico_test.fn_enfasis_resolver(v_est, v_enf_name, NULL, p_pk_usuario_solicitante);
             END IF;

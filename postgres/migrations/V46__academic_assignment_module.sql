@@ -141,14 +141,16 @@ $$;
 -- Asignaciones vigentes de un docente (por documento) en el periodo.
 DROP FUNCTION IF EXISTS academico_test.fn_asignacion_docente(BIGINT, VARCHAR);
 CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_docente(
-    p_academic_period_id BIGINT, p_fk_funcionario BIGINT
+    p_academic_period_id BIGINT, p_fk_funcionario BIGINT,
+    p_pk_usuario BIGINT DEFAULT NULL  -- alcance (global / establecimiento)
 )
 RETURNS TABLE (assignment_id TEXT)
 LANGUAGE sql STABLE AS $$
     SELECT da.FK_TGRUPO || ':' || da.FK_TASIGNATURA
       FROM academico_test.TDOCENTE_ASIGNATURA da
      WHERE da.FK_TPERIODO_ACADEMICO = p_academic_period_id
-       AND da.FK_TFUNCIONARIO = p_fk_funcionario AND da.ACTIVE = TRUE;
+       AND da.FK_TFUNCIONARIO = p_fk_funcionario AND da.ACTIVE = TRUE
+       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_academic_period_id);
 $$;
 
 -- Docentes disponibles para asignar en el periodo (funcionarios del
