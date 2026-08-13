@@ -135,22 +135,36 @@ public final class ParamBinder {
                         + ex.getMessage());
             }
             src.addValue(key, serialized);
-            // V60-bis — publicamos también la forma canónica
-            // para que un SQL con placeholder UPPERCASA
-            // (p. ej. :BODY.ID) encuentre el valor aunque el
-            // cliente haya enviado la key en minúsculas
-            // (p. ej. {"id": 1}). Spring NamedParameterUtils
-            // es case-sensitive sobre los placeholders del
-            // SQL, así que tener una sola key nunca alcanza
-            // para SQL con naming mixto. Si la canónica ya
-            // coincide con la key original, putIfAbsent
-            // ignora; si es igual al key, no escribimos
-            // doble.
-            if (declaredType != null) {
-                String canonical = canonicalLookupKey(key);
-                if (canonical != null && !canonical.equals(key)) {
-                    src.addValue(canonical, serialized);
-                }
+            // V60-bis — publicamos también varias variantes
+            // canonicales para que un SQL con placeholder
+            // UPPERCASA O minúsculas, con namespace O sin él,
+            // encuentre el valor aunque el cliente haya
+            // enviado la key en una caja arbitraria.
+            //
+            // Tres aliases:
+            //  - upper: mayúsculas (sin namespace) — para
+            //    SQL legacy con :id en mayúsculas.
+            //  - canonical: namespace-prefixado en MAYÚSCULAS
+            //    (BODY.X para body-scope) — para SQL con
+            //    placeholder moderno :BODY.X.
+            //  - lower: minúsculas (sin namespace) — para
+            //    SQL legacy con :id en minúsculas.
+            //
+            // Spring NamedParameterUtils es case-sensitive
+            // sobre los placeholders del SQL, así que con
+            // tres aliases el bind funciona en cualquier
+            // combinación de cajas y namespaces.
+            String upper = key.toUpperCase(java.util.Locale.ROOT);
+            String lower = key.toLowerCase(java.util.Locale.ROOT);
+            String canonical = canonicalLookupKey(key);
+            if (canonical != null && !canonical.equals(key)) {
+                src.addValue(canonical, serialized);
+            }
+            if (!upper.equals(key) && !upper.equals(canonical)) {
+                src.addValue(upper, serialized);
+            }
+            if (!lower.equals(key) && !lower.equals(canonical) && !lower.equals(upper)) {
+                src.addValue(lower, serialized);
             }
         }
         return src;
