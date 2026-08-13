@@ -111,6 +111,7 @@ public class QueryAdminController {
     public ParamTypesResponse getParamTypes() {
         return new ParamTypesResponse(
                 ParamTypes.CURATED.stream().sorted().toList(),
-                ParamTypes.JDBC_TYPES);
+                ParamTypes.JDBC_TYPES,
+                ParamTypes.PG_CAST_NAME);
     }
 }

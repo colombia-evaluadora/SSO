@@ -15,8 +15,9 @@ import java.util.regex.Pattern;
  * {@code admin-ui/src/lib/placeholderScanner.ts}; cualquier cambio
  * aquí debe ir acompañado de un cambio allá.
  *
- * <p>Reconoce los cuatro namespaces: {@link ParamNamespace#PARAM},
- * {@link ParamNamespace#BODY}, {@link ParamNamespace#QUERY},
+ * <p>Reconoce los cinco namespaces: {@link ParamNamespace#PARAM},
+ * {@link ParamNamespace#BODY}, {@link ParamNamespace#BODY_RAW}
+ * (V49-bis, sin aplanar), {@link ParamNamespace#QUERY},
  * {@link ParamNamespace#CONTEXT}. El segmento después del namespace
  * puede tener puntos (cuerpo JSON anidado: {@code :BODY.USER.EMAIL}).
  *
@@ -29,7 +30,7 @@ public final class PlaceholderScanner {
     private PlaceholderScanner() {}
 
     private static final Pattern P = Pattern.compile(
-            ":(PARAM|BODY|QUERY|CONTEXT)(\\.[A-Z][A-Z0-9_]*)+");
+            ":(PARAM|BODY|BODY_RAW|QUERY|CONTEXT)(\\.[A-Z][A-Z0-9_]*)+");
 
     /**
      * Devuelve los placeholders únicos en orden de aparición, sin el

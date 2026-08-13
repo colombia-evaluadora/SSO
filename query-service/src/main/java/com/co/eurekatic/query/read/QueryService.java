@@ -4,6 +4,7 @@ import com.co.eurekatic.common.security.AuthPrincipal;
 import com.co.eurekatic.common.query.ParamBinder;
 import com.co.eurekatic.common.query.ParamNamespace;
 import com.co.eurekatic.common.query.ParamTypes;
+import com.co.eurekatic.common.query.SqlRewriter;
 import com.co.eurekatic.query.catalog.CatalogClient;
 import com.co.eurekatic.query.catalog.QueryDefinition;
 import com.co.eurekatic.query.config.JdbcTemplateRegistry;
@@ -12,6 +13,7 @@ import com.co.eurekatic.query.observability.QueryMetrics;
 import com.co.eurekatic.query.resilience.QueryResilience;
 import com.co.eurekatic.query.web.QueryRequest;
 import io.github.resilience4j.bulkhead.BulkheadFullException;
+import org.postgresql.util.PGobject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -64,13 +66,16 @@ public class QueryService {
     private final JdbcTemplateRegistry registry;
     private final QueryMetrics metrics;
     private final QueryResilience resilience;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     public QueryService(CatalogClient catalog, JdbcTemplateRegistry registry,
-                         QueryMetrics metrics, QueryResilience resilience) {
+                         QueryMetrics metrics, QueryResilience resilience,
+                         com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
         this.catalog = catalog;
         this.registry = registry;
         this.metrics = metrics;
         this.resilience = resilience;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -207,14 +212,102 @@ public class QueryService {
         // def.paramTypes() lo declara y deja el resto al auto-derive
         // de Spring. Una fila legacy sin paramTypes cae aquí y se
         // comporta como antes del cambio.
+        //
+        // V60-bis — case-insensitive lookups: el cliente puede
+        // mandar las keys del body en cualquier caja. NO las
+        // mutamos aquí — Spring JDBC bindea
+        // case-sensitively contra los placeholders del SQL,
+        // así que cambiar la key rompería SQL legacy escrito
+        // con placeholders lowercase. En su lugar,
+        // {@code ParamBinder.buildStrict} hace lookup
+        // case-insensitive y namespace-aware contra
+        // paramTypes para encontrar el tipo declarado.
         Map<String, Object> allParams = new LinkedHashMap<>(
                 req.params() == null ? Map.of() : req.params());
         injectContextParams(allParams, auth);
 
+        // V49 (defence in depth) — si un placeholder caller-controlled
+        // (':PARAM.*' / ':BODY.*') llega al bind sin tipo declarado,
+        // ParamBinder cae al auto-derive de Spring, que bindea un String
+        // como VARCHAR. Eso rompe cualquier firma de función/SELECT que
+        // espere otro tipo — el síntoma exacto es
+        // "function xxx(character varying, bigint) does not exist",
+        // que es lo que el operador veía en producción porque las
+        // filas heredadas pre-V49 quedaron con paramTypes='{}' y la
+        // validación strict de sso-admin sólo dispara al guardar.
+        //
+        // En lugar de ejecutar y devolver un 500 con PG críptico,
+        // rechazamos en runtime con un 400 que nombra los placeholders
+        // sin tipo y le dice al autor qué hacer. Mismo set curado que
+        // la validación al guardar; si la fila ya está bien guardada,
+        // esta lista viene vacía y el bind sigue como siempre.
+        if (def.paramTypes() != null) {
+            List<String> untypedCallerParams = allParams.keySet().stream()
+                    .filter(k -> {
+                        int dot = k.indexOf('.');
+                        if (dot <= 0) return false;
+                        String ns = k.substring(0, dot);
+                        return ParamNamespace.PARAM.equals(ns.toUpperCase(java.util.Locale.ROOT))
+                                || ParamNamespace.BODY.equals(ns.toUpperCase(java.util.Locale.ROOT));
+                    })
+                    // V60-bis — case-insensitive: el cliente
+                    // puede mandar la key en cualquier caja.
+                    // Buscamos primero literal y luego
+                    // canonical (MAYÚSCULAS + namespace
+                    // prefix).
+                    .filter(k -> !def.paramTypes().containsKey(k)
+                            && !def.paramTypes().containsKey(
+                                    com.co.eurekatic.common.query.ParamBinder.canonicalLookupKey(k)))
+                    .sorted()
+                    .toList();
+            if (!untypedCallerParams.isEmpty()) {
+                log.warn("uuid={} tiene placeholders caller-controlled sin tipo declarado: {} "
+                        + "(paramTypes={}). El autor debe editar la fila en el catálogo.",
+                        req.uuid(), untypedCallerParams, def.paramTypes());
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "El query " + req.uuid() + " tiene placeholders sin tipo declarado: "
+                        + untypedCallerParams
+                        + ". Edita la fila en el catálogo y asigna un tipo a cada uno "
+                        + "(en 'Tipos de parámetros', parte inferior del formulario).");
+            }
+        }
+
         // bind con tipos. def.paramTypes() puede ser null en filas
         // legacy — ParamBinder lo trata como mapa vacío y devuelve
         // comportamiento idéntico al anterior a V49.
-        MapSqlParameterSource params = ParamBinder.build(allParams, def.paramTypes());
+        //
+        // V49-bis: el SQL se reescribe ANTES del bind para insertar
+        // `cast(:PH as TIPO)` por cada placeholder tipado. Eso elimina
+        // la dependencia del tipo JDBC — ParamBinder pasa texto puro
+        // y PG aplica el cast en su contexto (donde search_path sí
+        // resuelve academico_test.* para los DOMAIN types).
+        //
+        // V49 diagnostics — imprimo lo que ParamBinder va a ver.
+        // Si el bug del bind sigue siendo "todo se pasa como
+        // string" en runtime, este log muestra exactamente qué
+        // mapa llegó desde el catálogo. La pista es si
+        // def.paramTypes() viene vacío cuando la fila sí lo
+        // tiene persistido — eso aísla si el bug está aguas
+        // arriba (Jackson, JSONB) o aguas abajo (binder).
+        log.info("V49-bind uuid={} paramTypes={} allParamsKeys={}",
+                req.uuid(), def.paramTypes(), allParams.keySet());
+        String originalSql = def.query();
+        String rewrittenSql = SqlRewriter.rewrite(originalSql, def.paramTypes());
+        if (!originalSql.equals(rewrittenSql)) {
+            log.debug("V49-rewrite uuid={} rewrittenSql={}",
+                    req.uuid(), rewrittenSql);
+        }
+        // V60 — bind con validación de tipos. Atrapa los casos
+        // donde el cliente envía un String/Boolean donde el
+        // catálogo declara BIGINT, o un array mixto en un
+        // BIGINT[] — antes caían al cast PG con SQLSTATE 22P02
+        // y un mensaje críptico. Ahora el binder rechaza con
+        // 400 nombrando el placeholder y el tipo esperado.
+        // El Illega aquí como respuesta llamada cuando el
+        // bind actual se GeneralExceptionHandler lo mapea a 400
+        // con el envelope estándar.
+        MapSqlParameterSource params = ParamBinder.buildStrict(
+                allParams, def.paramTypes(), java.util.Map.of());
 
         // El SQL se ejecuta tal cual está en el catálogo.
         //
@@ -224,7 +317,7 @@ public class QueryService {
         // silencio para PROCEDURE. La paginación ahora la escribe
         // el autor con :QUERY.SIZE / :QUERY.OFFSET, lo que además
         // le da control del dialecto y del orden de las cláusulas.
-        String sql = def.query();
+        String sql = rewrittenSql;
 
         // V33 — wrap the JDBC execution in a per-dialect
         // bulkhead. tryAcquirePermission() returns false
@@ -302,7 +395,7 @@ public class QueryService {
                                         List<Map<String, Object>> out = new java.util.ArrayList<>();
                                         int i = 0;
                                         while (rs.next()) {
-                                            out.add(mapRow(rs, i++));
+                                            out.add(mapRow(rs, i++, objectMapper));
                                         }
                                         return QueryResult.rowsOnly(out);
                                     }
@@ -332,7 +425,7 @@ public class QueryService {
 
                 // SELECT / FUNCTION / PROCEDURE-without-OUT path.
                 List<Map<String, Object>> rows = jdbc.query(sql, params,
-                        QueryService::mapRow);
+                        (rs, rn) -> mapRow(rs, rn, objectMapper));
 
                 log.debug("uuid={} returned {} rows (mode={})", req.uuid(), rows.size(), mode);
                 // Metrics are recorded by the wrapping execute()
@@ -368,15 +461,118 @@ public class QueryService {
      * the ResultSetMetaData — the legacy UI depends on it
      * for tabular rendering.
      */
-    private static Map<String, Object> mapRow(java.sql.ResultSet rs, int rn)
+    private static Map<String, Object> mapRow(java.sql.ResultSet rs, int rn,
+                                              com.fasterxml.jackson.databind.ObjectMapper objectMapper)
             throws java.sql.SQLException {
         java.sql.ResultSetMetaData md = rs.getMetaData();
         int cols = md.getColumnCount();
         Map<String, Object> row = new LinkedHashMap<>(cols);
         for (int i = 1; i <= cols; i++) {
-            row.put(md.getColumnLabel(i), rs.getObject(i));
+            row.put(md.getColumnLabel(i), normalizeColumnValue(rs.getObject(i), objectMapper));
         }
         return row;
+    }
+
+    /**
+     * Converts a raw {@code ResultSet.getObject(i)} value into
+     * something Jackson can serialize as the JSON shape callers
+     * actually expect. Without this, two PostgreSQL JDBC types
+     * leak the driver's internals into the response:
+     *
+     * <ul>
+     *   <li>{@link java.sql.Array} (any native array column, e.g.
+     *       {@code int8[]}) — Jackson has no built-in serializer
+     *       for it, so it fell back to reflecting over the
+     *       driver's {@code PgArray} bean properties, dumping the
+     *       whole JDBC {@code Connection} (URL, backend PID, the
+     *       full keyword list, …) into the response body. We
+     *       extract the actual element array via
+     *       {@link java.sql.Array#getArray()} and return it as a
+     *       {@link List} — a plain JSON array, exactly what a
+     *       column typed {@code int8[]} should produce.</li>
+     *   <li>{@link PGobject} ({@code json}/{@code jsonb} columns,
+     *       and any other PG type the driver doesn't map to a
+     *       plain Java type, e.g. {@code uuid} or a DOMAIN type)
+     *       — Jackson serialized the wrapper itself
+     *       ({@code {"type":"jsonb","value":"<the json as a
+     *       string>"}}), double-encoding the JSON instead of
+     *       nesting it. For {@code json}/{@code jsonb} we parse
+     *       the raw text into plain JDK types ({@link Map},
+     *       {@link List}, {@code String}, {@code Number},
+     *       {@code Boolean}) so it serializes as nested JSON.
+     *
+     *       <p>We deliberately deserialize to plain JDK
+     *       collections instead of a Jackson-specific tree type
+     *       ({@code JsonNode}) or a "write this verbatim" wrapper
+     *       ({@code RawValue}): Spring Boot 4 ships {@code
+     *       com.fasterxml.jackson.databind} (Jackson 2, what this
+     *       service's own code and the {@code ObjectMapper} bean
+     *       we're holding here are built against) ALONGSIDE
+     *       Jackson 3's {@code tools.jackson.databind} — which is
+     *       what the HTTP response converter that actually writes
+     *       the wire bytes uses by default. A Jackson-2
+     *       {@code JsonNode}/{@code RawValue} instance is a
+     *       foreign type to that Jackson-3 writer, which doesn't
+     *       recognize it and falls back to reflecting over its
+     *       bean-style getters ({@code isObject()}, {@code
+     *       getNodeType()}, …) instead of its content — same
+     *       failure mode as the original bug, just one level
+     *       removed. {@code Map}/{@code List}/{@code String}/
+     *       {@code Number}/{@code Boolean} are core JDK types
+     *       every JSON library — either Jackson generation, or
+     *       whatever replaces them — serializes correctly without
+     *       needing to recognize anything Jackson-specific. Any
+     *       other PGobject-backed type falls back to its plain
+     *       text value.</li>
+     * </ul>
+     *
+     * <p>Every other value (String, Long, Boolean, java.sql.Date,
+     * …) already has a working Jackson serializer and passes
+     * through unchanged.
+     */
+    static Object normalizeColumnValue(Object value,
+                                       com.fasterxml.jackson.databind.ObjectMapper objectMapper)
+            throws java.sql.SQLException {
+        if (value instanceof java.sql.Array array) {
+            try {
+                Object javaArray = array.getArray();
+                int len = java.lang.reflect.Array.getLength(javaArray);
+                List<Object> out = new java.util.ArrayList<>(len);
+                for (int i = 0; i < len; i++) {
+                    out.add(java.lang.reflect.Array.get(javaArray, i));
+                }
+                return out;
+            } finally {
+                // Releases the driver-side resources backing the
+                // array now that we've copied its elements out —
+                // JDBC best practice, not required for correctness
+                // here since the ResultSet itself is closed right
+                // after, but cheap and avoids relying on that.
+                array.free();
+            }
+        }
+        if (value instanceof PGobject pg) {
+            String raw = pg.getValue();
+            if (raw == null) return null;
+            String type = pg.getType();
+            if ("json".equals(type) || "jsonb".equals(type)) {
+                try {
+                    return objectMapper.readValue(raw, Object.class);
+                } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                    // Postgres already validated this as JSON when
+                    // it went into the column, so this shouldn't
+                    // happen — but a single malformed row isn't a
+                    // reason to 500 the whole query. Fall back to
+                    // the plain text; the client still gets the
+                    // data, just not parsed.
+                    log.warn("Column declared {} but its value didn't parse as JSON "
+                            + "({}); returning it as plain text.", type, e.getMessage());
+                    return raw;
+                }
+            }
+            return raw;
+        }
+        return value;
     }
 
     /**
@@ -445,7 +641,7 @@ public class QueryService {
                             try (java.sql.ResultSet rs = cs.getResultSet()) {
                                 int i = 0;
                                 while (rs.next()) {
-                                    rows.add(mapRow(rs, i++));
+                                    rows.add(mapRow(rs, i++, objectMapper));
                                 }
                             }
                         }

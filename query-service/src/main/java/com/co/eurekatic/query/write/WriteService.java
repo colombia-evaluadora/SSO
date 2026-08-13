@@ -85,16 +85,25 @@ public class WriteService {
         //    request map) so an attacker can't smuggle in
         //    extra keys that happen to be ignored by the
         //    INSERT.
-        for (String declared : def.columns()) {
-            if (!req.columns().containsKey(declared)) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Falta la columna: " + declared);
-            }
-        }
+        //
+        //    V60-bis — case-insensitive: el catálogo puede
+        //    declarar la columna en MAYÚSCULAS y el cliente
+        //    mandarla en minúsculas (o viceversa). Miramos
+        //    ambas representaciones antes de rechazar.
+        java.util.Set<String> declaredLower = new java.util.HashSet<>();
+        for (String c : def.columns()) declaredLower.add(c.toLowerCase(java.util.Locale.ROOT));
         for (String submitted : req.columns().keySet()) {
-            if (!def.columns().contains(submitted)) {
+            if (!declaredLower.contains(submitted.toLowerCase(java.util.Locale.ROOT))) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Columna desconocida: " + submitted);
+            }
+        }
+        for (String declared : def.columns()) {
+            boolean present = req.columns().keySet().stream()
+                    .anyMatch(k -> k.equalsIgnoreCase(declared));
+            if (!present) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Falta la columna: " + declared);
             }
         }
 
@@ -120,7 +129,23 @@ public class WriteService {
                     "Tipo de escritura no soportado: " + def.writeType());
         }
 
-        MapSqlParameterSource params = new MapSqlParameterSource(req.columns());
+        // V60-bis — case-insensitive: el cliente puede
+        // mandar las columnas en MAYÚSCULAS O minúsculas.
+        // El SQL se construye usando los nombres del
+        // catálogo (que el autor suele escribir en MAYÚSCULAS
+        // por convención), así que para que Spring JDBC
+        // matchee el placeholder publicamos DOS copias de
+        // cada valor: la key original del cliente Y la
+        // canónica MAYÚSCULAS.
+        java.util.Map<String, Object> normalizedColumns =
+                new java.util.LinkedHashMap<>(req.columns());
+        for (java.util.Map.Entry<String, Object> e : req.columns().entrySet()) {
+            String upper = e.getKey().toUpperCase(java.util.Locale.ROOT);
+            if (!upper.equals(e.getKey())) {
+                normalizedColumns.putIfAbsent(upper, e.getValue());
+            }
+        }
+        MapSqlParameterSource params = new MapSqlParameterSource(normalizedColumns);
         int rows;
         try {
             rows = jdbc.update(sql, params);

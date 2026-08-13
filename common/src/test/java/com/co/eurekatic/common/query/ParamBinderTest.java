@@ -1,196 +1,496 @@
 package com.co.eurekatic.common.query;
 
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.SqlTypeValue;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
-import java.time.LocalTime;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.springframework.jdbc.core.SqlTypeValue;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Unit tests for {@link ParamBinder}. The four legacy scalar types
- * (TEXT, BIGINT, BOOLEAN, DATE) are exercised by the existing
- * integration suite; the tests here focus on the V50 additions and
- * the strict-failure path that the integration tests don't reach.
+ * V49-bis — tests del binder que serializa cada valor a String para que
+ * PG aplique el cast en SQL (via {@link SqlRewriter}). El binder ya NO
+ * usa {@code addValue(k, v, sqlType)} en el camino normal — eso era la
+ * causa del bug del operador (driver JDBC no conocía los DOMAIN types).
  *
- * <p>The "array" path delegates to a Spring {@code SqlTypeValue}
- * that calls {@code createArrayOf} on the connection — that branch
- * is exercised by the {@code TimeArrayIntegration} tests in the
- * query-service module. We assert the scalar coercion here because
- * it's deterministic and doesn't need a live connection.
+ * <p>Casos cubiertos:
+ * <ul>
+ *   <li>Escalares: String, Long, Integer, BigDecimal, Boolean, Date, Time,
+ *       Timestamp, UUID → serialización a String.</li>
+ *   <li>Arrays: List de escalares → texto PG-array con quoting correcto.</li>
+ *   <li>DOMAIN types (BOOL_SN, etc.) → serialización a String; el cast
+ *       corre en SQL (insertado por SqlRewriter).</li>
+ *   <li>BODY_RAW con Map → JSON literal que se castea via jsonb en SQL.</li>
+ *   <li>null → no se bindea la key.</li>
+ *   <li>Tipo declarado pero desconocido → defensivo, no crashea.</li>
+ * </ul>
  */
 class ParamBinderTest {
 
     @Test
-    void time_scalar_parsesHhMmSsFromString() {
+    void stringValueIsBoundAsString() {
         MapSqlParameterSource src = ParamBinder.build(
-                Map.of("PARAM.HORA", "14:30:00"),
-                Map.of("PARAM.HORA", "TIME"));
-
-        assertThat(src.getValue("PARAM.HORA")).isInstanceOf(Time.class);
-        assertThat(src.getSqlType("PARAM.HORA")).isEqualTo(Types.TIME);
-        assertThat((Time) src.getValue("PARAM.HORA"))
-                .isEqualTo(Time.valueOf(LocalTime.of(14, 30, 0)));
+                Map.of("PARAM.NOMBRE", "alice"),
+                Map.of("PARAM.NOMBRE", "TEXT"));
+        assertThat(src.getValue("PARAM.NOMBRE")).isEqualTo("alice");
+        // Spring's addValue sin sqlType pone TYPE_UNKNOWN — el cast corre en SQL.
+        assertThat(src.getSqlType("PARAM.NOMBRE")).isEqualTo(SqlTypeValue.TYPE_UNKNOWN);
     }
 
     @Test
-    void time_scalar_acceptsNativeTimeWithoutCoercion() {
-        Time in = Time.valueOf(LocalTime.of(9, 0, 0));
+    void longValueIsBoundAsTextRepresentation() {
+        // El cast a bigint corre en SQL (insertado por SqlRewriter).
         MapSqlParameterSource src = ParamBinder.build(
-                Map.of("PARAM.HORA", in),
+                Map.of("PARAM.ID", 1432L),
+                Map.of("PARAM.ID", "BIGINT"));
+        assertThat(src.getValue("PARAM.ID")).isEqualTo("1432");
+    }
+
+    @Test
+    void integerValueIsBoundAsTextRepresentation() {
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("PARAM.ID", 42),
+                Map.of("PARAM.ID", "INTEGER"));
+        assertThat(src.getValue("PARAM.ID")).isEqualTo("42");
+    }
+
+    @Test
+    void bigDecimalValueIsBoundAsPlainString() {
+        // toPlainString — sin notación científica, PG parsea numeric correctamente.
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("PARAM.PRECIO", new BigDecimal("1234.5600")),
+                Map.of("PARAM.PRECIO", "NUMERIC"));
+        assertThat(src.getValue("PARAM.PRECIO")).isEqualTo("1234.5600");
+    }
+
+    @Test
+    void booleanValueIsBoundAsTrueFalseString() {
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("PARAM.ACTIVO", true),
+                Map.of("PARAM.ACTIVO", "BOOLEAN"));
+        assertThat(src.getValue("PARAM.ACTIVO")).isEqualTo("true");
+    }
+
+    @Test
+    void sqlDateIsBoundAsIsoString() {
+        java.sql.Date d = java.sql.Date.valueOf("2026-08-12");
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("PARAM.FECHA", d),
+                Map.of("PARAM.FECHA", "DATE"));
+        assertThat(src.getValue("PARAM.FECHA")).isEqualTo("2026-08-12");
+    }
+
+    @Test
+    void sqlTimeIsBoundAsIsoString() {
+        Time t = Time.valueOf("14:30:00");
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("PARAM.HORA", t),
                 Map.of("PARAM.HORA", "TIME"));
-
-        assertThat(src.getValue("PARAM.HORA")).isSameAs(in);
-        assertThat(src.getSqlType("PARAM.HORA")).isEqualTo(Types.TIME);
+        assertThat(src.getValue("PARAM.HORA")).isEqualTo("14:30:00");
     }
 
     @Test
-    void time_scalar_rejectsNonTimeString() {
-        assertThatThrownBy(() -> ParamBinder.build(
-                Map.of("PARAM.HORA", "not-a-time"),
-                Map.of("PARAM.HORA", "TIME")))
-                .isInstanceOf(IllegalArgumentException.class)
-                // NumberFormatException extends IAE; ParamBinder catches
-                // it and rewraps with the placeholder name.
-                .hasMessageContaining("PARAM.HORA");
+    void sqlTimestampIsBoundAsIsoString() {
+        Timestamp ts = Timestamp.valueOf("2026-08-12 14:30:00.123");
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("PARAM.TS", ts),
+                Map.of("PARAM.TS", "TIMESTAMP"));
+        assertThat(src.getValue("PARAM.TS")).isEqualTo("2026-08-12 14:30:00.123");
     }
 
     @Test
-    void char1_acceptsSingleCharacterString() {
+    void uuidValueIsBoundAsString() {
+        java.util.UUID u = java.util.UUID.fromString("550e8400-e29b-41d4-a716-446655440000");
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("PARAM.ID", u),
+                Map.of("PARAM.ID", "UUID"));
+        assertThat(src.getValue("PARAM.ID")).isEqualTo("550e8400-e29b-41d4-a716-446655440000");
+    }
+
+    @Test
+    void domainTypeIsBoundAsString() {
+        // BOOL_SN acepta sólo 'S'/'N'. Pasamos 'S' como String — el cast
+        // academico_test.bool_sn validará contra el CHECK constraint.
         MapSqlParameterSource src = ParamBinder.build(
                 Map.of("PARAM.ESTADO", "S"),
-                Map.of("PARAM.ESTADO", "CHAR(1)"));
-
+                Map.of("PARAM.ESTADO", "BOOL_SN"));
         assertThat(src.getValue("PARAM.ESTADO")).isEqualTo("S");
-        assertThat(src.getSqlType("PARAM.ESTADO")).isEqualTo(Types.CHAR);
     }
 
     @Test
-    void char1_acceptsEmptyString() {
-        // Empty string is a valid CHAR(1) value (PG keeps the column
-        // to its declared width and pads with spaces; the empty
-        // literal is the caller's choice. Don't second-guess here.)
-        MapSqlParameterSource src = ParamBinder.build(
-                Map.of("PARAM.ESTADO", ""),
-                Map.of("PARAM.ESTADO", "CHAR(1)"));
-
-        assertThat(src.getValue("PARAM.ESTADO")).isEqualTo("");
-        assertThat(src.getSqlType("PARAM.ESTADO")).isEqualTo(Types.CHAR);
-    }
-
-    @Test
-    void char1_rejectsStringLongerThanOne() {
-        assertThatThrownBy(() -> ParamBinder.build(
-                Map.of("PARAM.ESTADO", "SI"),
-                Map.of("PARAM.ESTADO", "CHAR(1)")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("CHAR(1)")
-                .hasMessageContaining("SI");
-    }
-
-    @Test
-    void char1_rejectsNumericValueLongerThanOne() {
-        // 12 → "12" → length 2 → reject.
-        assertThatThrownBy(() -> ParamBinder.build(
-                Map.of("PARAM.ESTADO", 12),
-                Map.of("PARAM.ESTADO", "CHAR(1)")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("CHAR(1)");
-    }
-
-    @Test
-    void char1_acceptsSingleDigitNumber() {
-        // 1 → "1" → length 1 → ok.
-        MapSqlParameterSource src = ParamBinder.build(
-                Map.of("PARAM.ESTADO", 1),
-                Map.of("PARAM.ESTADO", "CHAR(1)"));
-
-        assertThat(src.getValue("PARAM.ESTADO")).isEqualTo("1");
-        assertThat(src.getSqlType("PARAM.ESTADO")).isEqualTo(Types.CHAR);
-    }
-
-    @Test
-    void undeclaredKey_fallsBackToSpringAutoDerive() {
-        // No entry in paramTypes → no sqlType, no coercion. This is the
-        // legacy path used by queries predating V49.
+    void undeclaredKeyIsBoundAsStringifiedValue() {
+        // Sin tipo declarado — SqlRewriter no insertó cast. El binder
+        // serializa a texto. La guardia runtime del QueryService ya
+        // rechazó este caso, pero si llegamos aquí, no crasheamos.
         MapSqlParameterSource src = ParamBinder.build(
                 Map.of("BODY.X", "hello"),
                 Map.of());
-
         assertThat(src.getValue("BODY.X")).isEqualTo("hello");
-        // Spring's default sqlType for an unannotated value is
-        // SqlTypeValue.TYPE_UNKNOWN (Integer.MIN_VALUE), not the JDBC
-        // Types.NULL constant — the driver's metadata lookup at execute
-        // time is what does the actual falling-back.
-        assertThat(src.getSqlType("BODY.X")).isEqualTo(SqlTypeValue.TYPE_UNKNOWN);
     }
 
     @Test
-    void unknownDeclaredType_fallsBackToAutoDeriveDefensively() {
-        // The validation in sso-admin already rejects unknown types, but
-        // we don't want ParamBinder to crash on a hostile DB row.
+    void unknownDeclaredTypeIsBoundAsStringifiedValueDefensively() {
         Map<String, String> types = new LinkedHashMap<>();
         types.put("PARAM.X", "OUT-OF-BAND-TYPE");
 
         MapSqlParameterSource src = ParamBinder.build(
                 Map.of("PARAM.X", "hello"),
                 types);
-
         assertThat(src.getValue("PARAM.X")).isEqualTo("hello");
-        assertThat(src.getSqlType("PARAM.X")).isEqualTo(SqlTypeValue.TYPE_UNKNOWN);
     }
 
     @Test
-    void nullValue_carriesNoCoercion() {
-        // null in, null out — Spring keeps the key with the declared
-        // sqlType so PG can still pick the right parameter type at
-        // execution time. We don't second-guess.
-        // Map.of rejects null values, so use a plain HashMap for the
-        // null entry.
+    void nullValueIsNotBound() {
+        // null in, null out: no se añade la key al MapSqlParameterSource.
+        // El placeholder en el SQL no se bindea — depende del autor usar
+        // coalesce(:var, default) en el SQL si quiere default.
         Map<String, Object> values = new HashMap<>();
         values.put("PARAM.HORA", null);
 
         MapSqlParameterSource src = ParamBinder.build(
                 values,
                 Map.of("PARAM.HORA", "TIME"));
-
-        assertThat(src.getValue("PARAM.HORA")).isNull();
-        assertThat(src.getSqlType("PARAM.HORA")).isEqualTo(Types.TIME);
+        assertThat(src.hasValue("PARAM.HORA")).isFalse();
     }
 
     @Test
-    void timestamp_returnsTimestampForStringInput() {
-        // Sanity check the change did not break the parallel TIMESTAMP
-        // case. The V50 patch only widened the switch; we want to know
-        // immediately if it accidentally reordered existing cases.
+    void emptyListBecomesEmptyPgArray() {
         MapSqlParameterSource src = ParamBinder.build(
-                Map.of("PARAM.TS", "2026-01-15 10:30:00"),
-                Map.of("PARAM.TS", "TIMESTAMP"));
-
-        assertThat(src.getValue("PARAM.TS")).isInstanceOf(Timestamp.class);
-        assertThat(src.getSqlType("PARAM.TS")).isEqualTo(Types.TIMESTAMP);
+                Map.of("BODY.IDS", List.of()),
+                Map.of("BODY.IDS", "BIGINT[]"));
+        assertThat(src.getValue("BODY.IDS")).isEqualTo("{}");
     }
 
     @Test
-    void time_array_passesArrayTypeForDriverToCreate() {
-        // We can't easily exercise createArrayOf without a connection, but
-        // we can assert that the value is wrapped in a SqlTypeValue and
-        // that the declared sqlType is Types.ARRAY. The actual array
-        // creation is verified by TimeArrayIntegrationTest.
+    void listOfLongsBecomesInt8ArrayLiteral() {
         MapSqlParameterSource src = ParamBinder.build(
-                Map.of("BODY.HORAS", List.of("10:00:00", "11:00:00")),
-                Map.of("BODY.HORAS", "TIME[]"));
+                Map.of("BODY.IDS", List.of(1L, 2L, 3L)),
+                Map.of("BODY.IDS", "BIGINT[]"));
+        assertThat(src.getValue("BODY.IDS")).isEqualTo("{1,2,3}");
+    }
 
-        assertThat(src.getValue("BODY.HORAS")).isNotNull();
-        assertThat(src.getSqlType("BODY.HORAS")).isEqualTo(Types.ARRAY);
+    @Test
+    void listOfStringsIsQuotedWithEscaping() {
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.NAMES", List.of("alice", "bob's", "carol")),
+                Map.of("BODY.NAMES", "TEXT[]"));
+        // PG array syntax: dentro de "..." sólo se escapan " y \.
+        // Las comillas simples van literales (no necesitan escape).
+        assertThat(src.getValue("BODY.NAMES")).isEqualTo("{\"alice\",\"bob's\",\"carol\"}");
+    }
+
+    @Test
+    void listOfStringsEscapesDoubleQuotesAndBackslash() {
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.NAMES", List.of("a\"b", "c\\d")),
+                Map.of("BODY.NAMES", "TEXT[]"));
+        assertThat(src.getValue("BODY.NAMES")).isEqualTo("{\"a\\\"b\",\"c\\\\d\"}");
+    }
+
+    @Test
+    void listOfBooleansBecomesBoolArrayLiteral() {
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.FLAGS", List.of(true, false, true)),
+                Map.of("BODY.FLAGS", "BOOLEAN[]"));
+        assertThat(src.getValue("BODY.FLAGS")).isEqualTo("{true,false,true}");
+    }
+
+    @Test
+    void listWithNullElementsRendersAsNull() {
+        Map<String, Object> values = new HashMap<>();
+        values.put("BODY.IDS", java.util.Arrays.asList(1L, null, 3L));
+        MapSqlParameterSource src = ParamBinder.build(
+                values,
+                Map.of("BODY.IDS", "BIGINT[]"));
+        assertThat(src.getValue("BODY.IDS")).isEqualTo("{1,NULL,3}");
+    }
+
+    @Test
+    void listOfIsoTimeStringsBecomesTimeArrayLiteral() {
+        // JSON no tiene un literal nativo de hora — Jackson SIEMPRE entrega
+        // String para cada elemento (p.ej. "10:00:00"), nunca java.sql.Time.
+        // Antes de este fix, validateAgainstDeclared exigía instanceof Time
+        // en cada elemento y rechazaba cualquier body JSON válido para TIME[].
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.DESCANSO_INICIO", List.of("10:00:00")),
+                Map.of("BODY.DESCANSO_INICIO", "TIME[]"));
+        assertThat(src.getValue("BODY.DESCANSO_INICIO")).isEqualTo("{\"10:00:00\"}");
+    }
+
+    @Test
+    void listOfIsoDateStringsBecomesDateArrayLiteral() {
+        // Mismo motivo que TIME[]: JSON no tiene literal nativo de fecha,
+        // Jackson entrega String para cada elemento.
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.FERIADOS", List.of("2026-01-01", "2026-12-25")),
+                Map.of("BODY.FERIADOS", "DATE[]"));
+        assertThat(src.getValue("BODY.FERIADOS")).isEqualTo("{\"2026-01-01\",\"2026-12-25\"}");
+    }
+
+    @Test
+    void listOfIsoTimestampStringsBecomesTimestampArrayLiteral() {
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.CORTES", List.of("2026-08-12 14:30:00")),
+                Map.of("BODY.CORTES", "TIMESTAMP[]"));
+        assertThat(src.getValue("BODY.CORTES")).isEqualTo("{\"2026-08-12 14:30:00\"}");
+    }
+
+    @Test
+    void listOfIsoTimestampTzStringsBecomesTimestampTzArrayLiteral() {
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.CORTES", List.of("2026-08-12T14:30:00-05:00")),
+                Map.of("BODY.CORTES", "TIMESTAMPTZ[]"));
+        assertThat(src.getValue("BODY.CORTES")).isEqualTo("{\"2026-08-12T14:30:00-05:00\"}");
+    }
+
+    @Test
+    void listOfMapsBecomesJsonbArrayLiteral() {
+        Map<String, Object> obj1 = new LinkedHashMap<>();
+        obj1.put("k", "v");
+        Map<String, Object> obj2 = new LinkedHashMap<>();
+        obj2.put("n", 1);
+
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.FILTROS", List.of(obj1, obj2)),
+                Map.of("BODY.FILTROS", "JSONB[]"));
+        // Cada Map se serializa a JSON y ESE texto se quota como
+        // elemento string del array — las comillas internas del JSON
+        // se escapan igual que en cualquier otro elemento String.
+        assertThat(src.getValue("BODY.FILTROS"))
+                .isEqualTo("{\"{\\\"k\\\":\\\"v\\\"}\",\"{\\\"n\\\":1}\"}");
+    }
+
+    @Test
+    void listOfPreSerializedJsonStringsBecomesJsonbArrayLiteral() {
+        // El cliente ya mandó el JSON como texto — es tan válido como
+        // el sub-objeto; el cast a jsonb[] en PG acepta ambos.
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.FILTROS", List.of("{\"k\":\"v\"}")),
+                Map.of("BODY.FILTROS", "JSONB[]"));
+        assertThat(src.getValue("BODY.FILTROS")).isEqualTo("{\"{\\\"k\\\":\\\"v\\\"}\"}");
+    }
+
+    @Test
+    void bodyRawMapBecomesJsonLiteral() {
+        Map<String, Object> filtro = new LinkedHashMap<>();
+        filtro.put("zona", 1);
+        filtro.put("activo", true);
+
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY_RAW.FILTRO", filtro),
+                Map.of("BODY_RAW.FILTRO", "JSONB"));
+        // El cast academico_test.jsonb (o jsonb built-in) acepta el JSON literal.
+        assertThat(src.getValue("BODY_RAW.FILTRO"))
+                .isEqualTo("{\"zona\":1,\"activo\":true}");
+    }
+
+    @Test
+    void bodyRawMapWithNestedStructures() {
+        Map<String, Object> filtro = new LinkedHashMap<>();
+        filtro.put("rango", List.of(1, 2, 3));
+        Map<String, Object> inner = new LinkedHashMap<>();
+        inner.put("k", "v");
+        filtro.put("meta", inner);
+
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY_RAW.FILTRO", filtro),
+                Map.of("BODY_RAW.FILTRO", "JSONB"));
+        assertThat(src.getValue("BODY_RAW.FILTRO"))
+                .isEqualTo("{\"rango\":[1,2,3],\"meta\":{\"k\":\"v\"}}");
+    }
+
+    @Test
+    void bodyRawMapWithSpecialCharsEscapesCorrectly() {
+        Map<String, Object> filtro = new LinkedHashMap<>();
+        filtro.put("msg", "hello \"world\"\nnext line");
+
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY_RAW.FILTRO", filtro),
+                Map.of("BODY_RAW.FILTRO", "JSONB"));
+        assertThat(src.getValue("BODY_RAW.FILTRO"))
+                .isEqualTo("{\"msg\":\"hello \\\"world\\\"\\nnext line\"}");
+    }
+
+    @Test
+    void arrayRejectsNonListNonArrayValueWithClearMessage() {
+        Map<String, Object> values = new HashMap<>();
+        values.put("BODY.IDS", "not-a-list");
+        assertThatThrownBy(() ->
+                ParamBinder.build(values, Map.of("BODY.IDS", "BIGINT[]")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("BODY.IDS")
+                .hasMessageContaining("BIGINT[]");
+    }
+
+    /**
+     * V60 — los overloads {@code buildStrict} introducen
+     * validación de tipo entre el valor Java y el declarado.
+     * Estos casos documentan el contrato del guardia runtime
+     * para cada categoría de tipo.
+     */
+    @Nested
+    class StrictTypeValidation {
+
+        @Test
+        void booleanParamRejectsStringValue() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("PARAM.ACTIVO", "S");
+            assertThatThrownBy(() -> ParamBinder.buildStrict(values,
+                    Map.of("PARAM.ACTIVO", "BOOLEAN"), Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BOOLEAN")
+                    .hasMessageContaining("PARAM.ACTIVO");
+        }
+
+        @Test
+        void booleanParamAcceptsBooleanValue() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("PARAM.ACTIVO", true);
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("PARAM.ACTIVO", "BOOLEAN"), Map.of()))
+                    .isNotNull();
+        }
+
+        @Test
+        void bigIntParamRejectsDouble() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("PARAM.ID", 3.14);
+            assertThatThrownBy(() -> ParamBinder.buildStrict(values,
+                    Map.of("PARAM.ID", "BIGINT"), Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BIGINT")
+                    .hasMessageContaining("PARAM.ID")
+                    .hasMessageContaining("Double");
+        }
+
+        @Test
+        void bigIntParamAcceptsIntegerLongAndBigInteger() {
+            for (Object v : new Object[]{42, 42L, BigInteger.valueOf(42)}) {
+                Map<String, Object> values = new LinkedHashMap<>();
+                values.put("PARAM.ID", v);
+                assertThat(ParamBinder.buildStrict(values,
+                        Map.of("PARAM.ID", "BIGINT"), Map.of()))
+                        .as("acepta %s como BIGINT", v.getClass().getSimpleName())
+                        .isNotNull();
+            }
+        }
+
+        @Test
+        void bigIntParamAcceptsParseableString() {
+            // Caso típico de cliente que serializa el id como
+            // "12345" en vez de 12345 — PG lo aceptaría vía
+            // el cast, así que tampoco rechazamos en el
+            // guardia. (Si fuera "abc", también pasaría el
+            // guardia y PG devolvería SQLSTATE 22P02 — ese
+            // caso el guardia no lo cubre porque añadir
+            // parseo+redondeo aquí duplica trabajo con PG.)
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("PARAM.ID", "12345");
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("PARAM.ID", "BIGINT"), Map.of())).isNotNull();
+        }
+
+        @Test
+        void numericParamAcceptsDecimals() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("PARAM.PRECIO", new BigDecimal("1234.5600"));
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("PARAM.PRECIO", "NUMERIC"), Map.of())).isNotNull();
+        }
+
+        @Test
+        void arrayParamRejectsMixedTypes() {
+            // El caso del log: el cliente envía [1, "2", 3].
+            // El catálogo lo declara BIGINT[]; el guardia
+            // detecta el String en el índice 1 y nombra
+            // exactamente qué elemento falla.
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.IDS", List.of(1L, "2", 3L));
+            assertThatThrownBy(() -> ParamBinder.buildStrict(values,
+                    Map.of("BODY.IDS", "BIGINT[]"), Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BODY.IDS")
+                    .hasMessageContaining("[1]")
+                    .hasMessageContaining("String");
+        }
+
+        @Test
+        void arrayParamAcceptsUniformIntegers() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.IDS", List.of(1L, 2L, 3L));
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("BODY.IDS", "BIGINT[]"), Map.of())).isNotNull();
+        }
+
+        @Test
+        void arrayParamRejectsScalarWhereArrayExpected() {
+            // "x": 5 debería ser BIGINT, no un array — el
+            // guardia lo rechaza si el tipo declarado es
+            // BIGINT[] y el valor es escalar.
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.IDS", 5);
+            assertThatThrownBy(() -> ParamBinder.buildStrict(values,
+                    Map.of("BODY.IDS", "BIGINT[]"), Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BODY.IDS")
+                    .hasMessageContaining("array");
+        }
+
+        @Test
+        void jsonbParamAcceptsValidJsonLiteralAsString() {
+            // El guardia NO parsea el String — acepta un JSON
+            // literal textual (lo que el cliente suele enviar)
+            // y deja que PG valide al aplicar el cast. Un
+            // String inválido también pasa el guardia y PG lo
+            // rechaza con SQLSTATE 22P02 — eso es aceptable
+            // porque la causa raíz está clara: el cliente
+            // mandó algo que no era JSON.
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY_RAW.FILTRO", "{\"x\":1}");
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("BODY_RAW.FILTRO", "JSONB"), Map.of())).isNotNull();
+        }
+
+        @Test
+        void jsonbParamAcceptsMap() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY_RAW.FILTRO", Map.of("x", 1));
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("BODY_RAW.FILTRO", "JSONB"), Map.of())).isNotNull();
+        }
+
+        @Test
+        void undeclaredKeyDoesNotTriggerValidation() {
+            // Sin tipo declarado, buildStrict no impone
+            // validación — reproduce el comportamiento legacy.
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.X", "hola");
+            assertThat(ParamBinder.buildStrict(values, Map.of(), Map.of())).isNotNull();
+        }
+
+        @Test
+        void extraDeclaredTypesSupplementBaseMap() {
+            // extraDeclared añade tipos que no están en
+            // paramTypes — útil cuando el caller computó
+            // tipos por su cuenta (p.ej. desde un JsonNode
+            // tree durante el path dispatch).
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.NEW", "true-not-a-bool");
+            assertThatThrownBy(() -> ParamBinder.buildStrict(
+                    values, Map.of(), Map.of("BODY.NEW", "BOOLEAN")))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BOOLEAN");
+        }
     }
 }

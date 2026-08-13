@@ -52,6 +52,9 @@ import java.util.Map;
  *   <li>{@code :QUERY.X} — query string</li>
  *   <li>{@code :BODY.X.Y} — cuerpo JSON, aplanado con puntos:
  *       {@code {"filtros":{"zona":1}}} → {@code :BODY.FILTROS.ZONA}</li>
+ *   <li>{@code :BODY_RAW.X} — cuerpo JSON sin aplanar (V49-bis):
+ *       cada top-level del body se expone como sub-objeto completo
+ *       para que el autor lo pase como JSONB via cast.</li>
  *   <li>{@code :CONTEXT.X} — del JWT verificado</li>
  * </ul>
  * Ver {@link com.co.eurekatic.common.query.ParamNamespace}.
@@ -201,7 +204,11 @@ public class QueryPathController {
         }
         ParamNamespace.putAll(params, ParamNamespace.QUERY, queryParams);
         if (body != null) {
+            // Aplanado: BODY.X.Y para acceder a sub-campos escalares.
             params.putAll(ParamNamespace.flatten(body, ParamNamespace.BODY));
+            // V49-bis — sin aplanar: BODY_RAW.X para sub-objetos completos
+            // que el autor quiere pasar como JSONB via cast(:BODY_RAW.X as jsonb).
+            ParamNamespace.putRaw(params, body);
         }
         return params;
     }

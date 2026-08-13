@@ -12,10 +12,17 @@ import java.util.Map;
  * the runtime uses, useful if a future UI wants to show the JDBC type
  * alongside the friendly name. Today only {@code curated} is consumed.
  *
+ * <p>V49-bis — {@code pgCastName} exposes the SQL cast target per type.
+ * Para tipos built-in es el nombre PG ({@code integer}, {@code jsonb}, etc.);
+ * para los DOMAIN types del schema {@code academico_test} viene con
+ * schema-qualified name ({@code academico_test.bool_sn}). La UI lo usa
+ * si quiere mostrar al autor qué cast se va a generar.
+ *
  * <p>The set changes rarely, so the UI caches it aggressively
  * ({@code staleTime: Infinity}) and refreshes on deploy.
  */
 public record ParamTypesResponse(
         List<String> curated,
-        Map<String, Integer> jdbcTypes
+        Map<String, Integer> jdbcTypes,
+        Map<String, String> pgCastName
 ) { }

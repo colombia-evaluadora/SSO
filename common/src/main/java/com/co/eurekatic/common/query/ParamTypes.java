@@ -21,22 +21,138 @@ public final class ParamTypes {
 
     private ParamTypes() {}
 
-    /** Set curado que se ofrece en el dropdown de la UI. */
-    public static final Set<String> CURATED = Set.of(
-            // Escalares
-            "TEXT", "VARCHAR", "CHAR(1)",
-            "BIGINT", "INTEGER", "SMALLINT",
-            "NUMERIC",
-            "BOOLEAN",
-            "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ",
-            "UUID", "JSONB", "JSON",
-            // Arrays
-            "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]"
+    /**
+     * V49-bis — DOMAIN types del schema {@code academico_test} (definidos en
+     * {@code postgres/migrations/V22__academic-schema.sql}). Son los tipos que el
+     * autor del catálogo puede asignar a un placeholder cuando la columna destino
+     * es un dominio PG con CHECK constraint. El binder genera
+     * {@code cast(:PLACEHOLDER as academico_test.DOMAIN)} en el SQL.
+     */
+    public static final Set<String> DOMAIN_TYPES = Set.of(
+            "BOOL_SN",
+            "ESTADO_AI",
+            "ESTADO_AC",
+            "ESTADO_ACTIVO_INACTIVO",
+            "NODO_CURRICULAR",
+            "TITULACION_GRADO"
     );
 
-    /** Tipos array — para que {@code ParamBinder} sepa envolver en {@link java.sql.Array}. */
+    /**
+     * Tipos array — para que {@code ParamBinder} sepa envolver en {@link java.sql.Array}.
+     *
+     * <p>V61 — se suman {@code DATE[]}, {@code TIMESTAMP[]} y
+     * {@code TIMESTAMPTZ[]}. Antes sólo {@code TIME[]} tenía
+     * contraparte array entre los tipos temporales — un autor
+     * que quisiera {@code WHERE fecha = ANY(:BODY.FECHAS)} no
+     * tenía forma de declarar el tipo y caía al auto-derive de
+     * Spring (rompe con listas, ver spec 2026-08-10).
+     *
+     * <p>V61-bis — se suma {@code JSONB[]}: lista de objetos JSON
+     * (p. ej. {@code [{"k":"v"},{"k":"w"}]}). A diferencia de
+     * {@code JSONB} escalar (que sólo se usa vía {@code BODY_RAW.X}),
+     * el elemento de un {@code JSONB[]} puede venir como sub-objeto
+     * (Map) o como literal ya serializado (String) — ver
+     * {@code ParamBinder.toPgArray}.
+     */
     public static final Set<String> ARRAY_TYPES = Set.of(
-            "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]"
+            "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]",
+            "DATE[]", "TIMESTAMP[]", "TIMESTAMPTZ[]", "JSONB[]"
+    );
+
+    /** Tipos numéricos enteros — usados por la guardia runtime para
+     *  validar el tipo Java del valor antes de bindear. */
+    public static final Set<String> INTEGER_TYPES = Set.of(
+            "BIGINT", "INTEGER", "SMALLINT"
+    );
+
+    /** Tipos numéricos con decimales. */
+    public static final Set<String> DECIMAL_TYPES = Set.of(
+            "NUMERIC"
+    );
+
+    /** Tipos textuales — para validación laxa (cualquier String pasa). */
+    public static final Set<String> STRING_TYPES = Set.of(
+            "TEXT", "VARCHAR", "CHAR(1)"
+    );
+
+    /** Tipos temporales — Jackson entrega String ISO-8601 o
+     *  {@code java.time.*}; PG aplica el cast. */
+    public static final Set<String> TEMPORAL_TYPES = Set.of(
+            "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ"
+    );
+
+    /**
+     * Set curado que se ofrece en el dropdown de la UI y que
+     * el sso-admin acepta al validar un {@code paramTypes}.
+     * Combina escalares built-in, arrays built-in y los
+     * DOMAIN types del schema {@code academico_test} — un
+     * único set compartido por la UI y el binder.
+     *
+     * <p>Cada vez que se añade un tipo nuevo al catálogo
+     * (escalares, arrays o DOMAIN), basta con actualizar
+     * los sets arriba — el set curado se reconstruye al
+     * cargar la clase, sin necesidad de tocar este método.
+     */
+    public static final Set<String> CURATED;
+    static {
+        java.util.LinkedHashSet<String> curated = new java.util.LinkedHashSet<>();
+        curated.addAll(Set.of(
+                "TEXT", "VARCHAR", "CHAR(1)",
+                "BIGINT", "INTEGER", "SMALLINT",
+                "NUMERIC",
+                "BOOLEAN",
+                "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ",
+                "UUID", "JSONB", "JSON",
+                "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]",
+                "DATE[]", "TIMESTAMP[]", "TIMESTAMPTZ[]", "JSONB[]"));
+        curated.addAll(DOMAIN_TYPES);
+        CURATED = java.util.Collections.unmodifiableSet(curated);
+    }
+
+    /**
+     * V49-bis — mapeo del nombre del set curado al nombre PG-cast (lo que va
+     * dentro de {@code cast(:var as X)}). Los tipos built-in van sin schema prefix;
+     * los DOMAIN types del academico van con {@code academico_test.} porque el
+     * {@code search_path} por defecto no incluye ese schema.
+     *
+     * <p>Esto lo consume {@link SqlRewriter} para construir el SQL con casts.
+     * El binder llama al rewriter con {@code def.paramTypes()} y este map.
+     */
+    public static final Map<String, String> PG_CAST_NAME = Map.ofEntries(
+            // Escalares built-in
+            Map.entry("TEXT", "text"),
+            Map.entry("VARCHAR", "varchar"),
+            Map.entry("CHAR(1)", "char"),
+            Map.entry("BIGINT", "bigint"),
+            Map.entry("INTEGER", "integer"),
+            Map.entry("SMALLINT", "smallint"),
+            Map.entry("NUMERIC", "numeric"),
+            Map.entry("BOOLEAN", "boolean"),
+            Map.entry("DATE", "date"),
+            Map.entry("TIME", "time"),
+            Map.entry("TIMESTAMP", "timestamp"),
+            Map.entry("TIMESTAMPTZ", "timestamptz"),
+            Map.entry("UUID", "uuid"),
+            Map.entry("JSONB", "jsonb"),
+            Map.entry("JSON", "json"),
+            // Arrays built-in
+            Map.entry("TEXT[]", "text[]"),
+            Map.entry("BIGINT[]", "int8[]"),
+            Map.entry("INTEGER[]", "int4[]"),
+            Map.entry("NUMERIC[]", "numeric[]"),
+            Map.entry("BOOLEAN[]", "bool[]"),
+            Map.entry("TIME[]", "time[]"),
+            Map.entry("DATE[]", "date[]"),
+            Map.entry("TIMESTAMP[]", "timestamp[]"),
+            Map.entry("TIMESTAMPTZ[]", "timestamptz[]"),
+            Map.entry("JSONB[]", "jsonb[]"),
+            // DOMAIN types — schema-qualified
+            Map.entry("BOOL_SN",                "academico_test.bool_sn"),
+            Map.entry("ESTADO_AI",              "academico_test.estado_ai"),
+            Map.entry("ESTADO_AC",              "academico_test.estado_ac"),
+            Map.entry("ESTADO_ACTIVO_INACTIVO", "academico_test.estado_activo_inactivo"),
+            Map.entry("NODO_CURRICULAR",        "academico_test.nodo_curricular"),
+            Map.entry("TITULACION_GRADO",       "academico_test.titulacion_grado")
     );
 
     /**
@@ -44,7 +160,13 @@ public final class ParamTypes {
      * a la constante {@link Types} que espera {@code PreparedStatement.setObject(key, value, sqlType)}.
      * Para arrays y tipos que el driver PG maneja como string ({@code JSONB}, {@code JSON},
      * {@code UUID}) usamos {@link Types#OTHER} o {@link Types#ARRAY} según corresponda —
-     * el wrapping concreto lo hace {@link ParamBinder}.
+     * el wrapping concreto lo hace {@link ParamBinder} (callable path).
+     *
+     * <p>V49-bis: este map ya NO lo usa el camino normal de {@link ParamBinder} — el
+     * cast se hace en SQL via {@link SqlRewriter}. Se conserva para
+     * {@code QueryService.executeCallable} (CallableStatement requiere sqlType
+     * explícito para OUT params) y como documentación de la correspondencia
+     * nombre-PG → {@link Types}.
      */
     public static final Map<String, Integer> JDBC_TYPES = Map.ofEntries(
             Map.entry("TEXT", Types.VARCHAR),
@@ -67,7 +189,11 @@ public final class ParamTypes {
             Map.entry("INTEGER[]", Types.ARRAY),
             Map.entry("NUMERIC[]", Types.ARRAY),
             Map.entry("BOOLEAN[]", Types.ARRAY),
-            Map.entry("TIME[]", Types.ARRAY)
+            Map.entry("TIME[]", Types.ARRAY),
+            Map.entry("DATE[]", Types.ARRAY),
+            Map.entry("TIMESTAMP[]", Types.ARRAY),
+            Map.entry("TIMESTAMPTZ[]", Types.ARRAY),
+            Map.entry("JSONB[]", Types.ARRAY)
     );
 
     /**

@@ -13,6 +13,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.TestPropertySource;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 /**
  * Integration test for {@link DataInitializer}. Verifies the seeder
@@ -108,6 +109,7 @@ class DataInitializerTest {
                 userRepository,
                 roleRepository,
                 passwordEncoder,
+                mock(AdminAcademicIdentityBootstrap.class),
                 /* enabled */ false,
                 "InitialP@ssw0rd-9876",
                 "admin@example.com"
@@ -125,6 +127,7 @@ class DataInitializerTest {
                 userRepository,
                 roleRepository,
                 passwordEncoder,
+                mock(AdminAcademicIdentityBootstrap.class),
                 /* enabled */ true,
                 /* adminPassword */ "",
                 "admin@example.com"
@@ -139,6 +142,7 @@ class DataInitializerTest {
                 userRepository,
                 roleRepository,
                 passwordEncoder,
+                mock(AdminAcademicIdentityBootstrap.class),
                 /* enabled */ true,
                 /* adminPassword */ "CHANGE_ME",
                 "admin@example.com"
@@ -152,6 +156,7 @@ class DataInitializerTest {
                 userRepository,
                 roleRepository,
                 passwordEncoder,
+                mock(AdminAcademicIdentityBootstrap.class),
                 /* enabled */ true,
                 "InitialP@ssw0rd-9876",
                 "admin@example.com"

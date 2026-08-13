@@ -340,38 +340,74 @@ public class QueryAdminService {
      * copiarlos a la UI sin reordenar.
      */
     private void validateParamTypes(QueryRequest req) {
-        Map<String, String> declared = req.paramTypes() == null
+        Map<String, String> raw = req.paramTypes() == null
                 ? Map.of() : req.paramTypes();
+        if (raw.isEmpty()) {
+            // Aún sin tipos declarados, validamos la cobertura
+            // (el SQL podría tener placeholders sin soportar
+            // — debe ser 0 o todos declarados).
+            validateCoverage(req.query(), Map.of());
+            return;
+        }
 
-        // (1) shape: key válida, value en set curado
-        for (Map.Entry<String, String> e : declared.entrySet()) {
-            if (!ParamTypes.isValidKey(e.getKey())) {
+        // V60-bis — canonicalizamos keys a MAYÚSCULAS para
+        // tolerar clientes (admins) que las escriban en
+        // cualquier caja — la cobertura y el lookup en
+        // query-service son case-insensitive desde V60-bis.
+        Map<String, String> declared = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, String> e : raw.entrySet()) {
+            String upperKey = e.getKey().toUpperCase(java.util.Locale.ROOT);
+            if (!ParamTypes.isValidKey(upperKey)) {
                 throw new IllegalArgumentException(
                     "PARAM_TYPES key inválida: '" + e.getKey()
-                    + "'. Cada segmento debe coincidir con [A-Z][A-Z0-9_]* "
-                    + "(namespace incluido). Ejemplos válidos: "
-                    + "'PARAM.NOMBRE', 'BODY.USER.EMAIL'.");
+                    + "' (canonical='" + upperKey + "'). Cada segmento debe "
+                    + "coincidir con [A-Z][A-Z0-9_]* (namespace incluido). "
+                    + "Ejemplos válidos: 'PARAM.NOMBRE', 'BODY.USER.EMAIL'.");
             }
             if (!ParamTypes.CURATED.contains(e.getValue())) {
                 throw new IllegalArgumentException(
-                    "PARAM_TYPES['" + e.getKey() + "']='" + e.getValue()
+                    "PARAM_TYPES['" + upperKey + "']='" + e.getValue()
                     + "' no es un tipo soportado. Permitidos: "
                     + ParamTypes.CURATED);
             }
+            // Detectar colisiones case-only entre keys
+            // (ej. "body.id" y "BODY.ID" envían a la misma
+            // key canónica).
+            String prev = declared.putIfAbsent(upperKey, e.getValue());
+            if (prev != null) {
+                throw new IllegalArgumentException(
+                    "PARAM_TYPES tiene las dos claves '" + e.getKey()
+                    + "' y '" + prev + "' que difieren sólo por mayúsculas. "
+                    + "Envía sólo una (la forma canónica es '" + upperKey + "').");
+            }
         }
 
-        // (2) cobertura: todo :PARAM.* / :BODY.* del SQL debe estar declarado
-        Set<String> inSql = PlaceholderScanner.scan(req.query());
+        validateCoverage(req.query(), declared);
+    }
+
+    private void validateCoverage(String sql, Map<String, String> declared) {
+        Set<String> inSql = sql == null ? Set.of() : PlaceholderScanner.scan(sql);
         Set<String> required = inSql.stream()
                 .filter(p -> {
                     String ns = p.split("\\.", 2)[0];
                     return ParamNamespace.PARAM.equals(ns)
-                            || ParamNamespace.BODY.equals(ns);
+                            || ParamNamespace.BODY.equals(ns)
+                            || ParamNamespace.BODY_RAW.equals(ns);
                 })
                 .collect(Collectors.toCollection(TreeSet::new));
 
-        Set<String> missing = new TreeSet<>(required);
-        missing.removeAll(declared.keySet());
+        // La cobertura es case-insensitive — los placeholders
+        // del SQL pueden estar en cualquier caja (el rewriter
+        // los uppercase-es para el lookup) y las keys de
+        // paramTypes están canonicalizadas.
+        Set<String> declaredUpper = declared.keySet().stream()
+                .map(s -> s.toUpperCase(java.util.Locale.ROOT))
+                .collect(Collectors.toCollection(TreeSet::new));
+        Set<String> requiredUpper = required.stream()
+                .map(s -> s.toUpperCase(java.util.Locale.ROOT))
+                .collect(Collectors.toCollection(TreeSet::new));
+        Set<String> missing = new TreeSet<>(requiredUpper);
+        missing.removeAll(declaredUpper);
         if (!missing.isEmpty()) {
             throw new IllegalArgumentException(
                 "PARAM_TYPES incompleto. Placeholders del SQL sin tipo "

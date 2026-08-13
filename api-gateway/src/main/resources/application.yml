@@ -158,6 +158,18 @@ spring:
               filters:
                 - StripPrefix=1
                 - AddResponseHeader=X-Source, api-gateway
+            # Auth-center register endpoints (V45+). StripPrefix=2 strips
+            # both /api AND /auth because auth-center's AuthController
+            # exposes them at /register/usuario and /register/funcionario
+            # (under @RequestMapping, no /auth prefix). Same path shape
+            # as api-auth-myapps.
+            - id: api-auth-register
+              uri: lb://auth-center
+              predicates:
+                - Path=/api/auth/register/**
+              filters:
+                - StripPrefix=2
+                - AddResponseHeader=X-Source, api-gateway
             - id: api-sso-admin
               uri: lb://sso-admin
               predicates:
@@ -445,6 +457,7 @@ springdoc:
         source: springdoc
         gateway-paths: ["/auth/**", "/api/auth/**", "/login", "/getApiToken",
                         "/getInfoUser", "/getUsersSSO", "/googleLogin", "/myApps",
+                        "/register/**", "/register/usuario", "/register/funcionario",
                         "/internal/cache/**"]
         tag-prefix: "auth-center"
         description: "Authentication issuer — login, token issuance, user lookup"
