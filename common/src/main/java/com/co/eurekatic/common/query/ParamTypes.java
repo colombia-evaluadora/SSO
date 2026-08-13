@@ -21,17 +21,20 @@ public final class ParamTypes {
 
     private ParamTypes() {}
 
-    /** Set curado que se ofrece en el dropdown de la UI. */
-    public static final Set<String> CURATED = Set.of(
-            // Escalares
-            "TEXT", "VARCHAR", "CHAR(1)",
-            "BIGINT", "INTEGER", "SMALLINT",
-            "NUMERIC",
-            "BOOLEAN",
-            "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ",
-            "UUID", "JSONB", "JSON",
-            // Arrays
-            "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]"
+    /**
+     * V49-bis — DOMAIN types del schema {@code academico_test} (definidos en
+     * {@code postgres/migrations/V22__academic-schema.sql}). Son los tipos que el
+     * autor del catálogo puede asignar a un placeholder cuando la columna destino
+     * es un dominio PG con CHECK constraint. El binder genera
+     * {@code cast(:PLACEHOLDER as academico_test.DOMAIN)} en el SQL.
+     */
+    public static final Set<String> DOMAIN_TYPES = Set.of(
+            "BOOL_SN",
+            "ESTADO_AI",
+            "ESTADO_AC",
+            "ESTADO_ACTIVO_INACTIVO",
+            "NODO_CURRICULAR",
+            "TITULACION_GRADO"
     );
 
     /** Tipos array — para que {@code ParamBinder} sepa envolver en {@link java.sql.Array}. */
@@ -62,20 +65,31 @@ public final class ParamTypes {
     );
 
     /**
-     * V49-bis — DOMAIN types del schema {@code academico_test} (definidos en
-     * {@code postgres/migrations/V22__academic-schema.sql}). Son los tipos que el
-     * autor del catálogo puede asignar a un placeholder cuando la columna destino
-     * es un dominio PG con CHECK constraint. El binder genera
-     * {@code cast(:PLACEHOLDER as academico_test.DOMAIN)} en el SQL.
+     * Set curado que se ofrece en el dropdown de la UI y que
+     * el sso-admin acepta al validar un {@code paramTypes}.
+     * Combina escalares built-in, arrays built-in y los
+     * DOMAIN types del schema {@code academico_test} — un
+     * único set compartido por la UI y el binder.
+     *
+     * <p>Cada vez que se añade un tipo nuevo al catálogo
+     * (escalares, arrays o DOMAIN), basta con actualizar
+     * los sets arriba — el set curado se reconstruye al
+     * cargar la clase, sin necesidad de tocar este método.
      */
-    public static final Set<String> DOMAIN_TYPES = Set.of(
-            "BOOL_SN",
-            "ESTADO_AI",
-            "ESTADO_AC",
-            "ESTADO_ACTIVO_INACTIVO",
-            "NODO_CURRICULAR",
-            "TITULACION_GRADO"
-    );
+    public static final Set<String> CURATED;
+    static {
+        java.util.LinkedHashSet<String> curated = new java.util.LinkedHashSet<>();
+        curated.addAll(Set.of(
+                "TEXT", "VARCHAR", "CHAR(1)",
+                "BIGINT", "INTEGER", "SMALLINT",
+                "NUMERIC",
+                "BOOLEAN",
+                "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ",
+                "UUID", "JSONB", "JSON",
+                "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]"));
+        curated.addAll(DOMAIN_TYPES);
+        CURATED = java.util.Collections.unmodifiableSet(curated);
+    }
 
     /**
      * V49-bis — mapeo del nombre del set curado al nombre PG-cast (lo que va

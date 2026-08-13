@@ -28,7 +28,10 @@ class ParamTypesTest {
 
     @Test
     void curatedContainsAllScalarAndArrayTypes() {
-        // Includes the V50 additions: TIME, TIME[], CHAR(1).
+        // V60-bis — incluye DOMAIN types del schema
+        // academico_test además de los escalares y arrays
+        // built-in. El conjunto curado es ahora la unión
+        // explícita de los tres grupos.
         assertThat(ParamTypes.CURATED).containsExactlyInAnyOrder(
                 "TEXT", "VARCHAR", "CHAR(1)",
                 "BIGINT", "INTEGER", "SMALLINT",
@@ -36,7 +39,13 @@ class ParamTypesTest {
                 "BOOLEAN",
                 "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ",
                 "UUID", "JSONB", "JSON",
-                "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]");
+                "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]",
+                // academico_test DOMAIN types — la UI los
+                // expone en un sub-grupo y el binder los
+                // serializa a texto + cast SQL.
+                "BOOL_SN", "ESTADO_AI", "ESTADO_AC",
+                "ESTADO_ACTIVO_INACTIVO", "NODO_CURRICULAR",
+                "TITULACION_GRADO");
     }
 
     @Test
@@ -56,10 +65,15 @@ class ParamTypesTest {
 
     @Test
     void everyCuratedTypeHasAJdbcMapping() {
-        // If a type is in CURATED but missing from JDBC_TYPES, ParamBinder
-        // falls back to Spring auto-derive with no coercion — silently
-        // breaking the "stated type wins" guarantee. Catch it at test time.
+        // Si un tipo está en CURATED pero falta en JDBC_TYPES,
+        // ParamBinder cae al auto-derive de Spring sin
+        // coerción explícita — rompiendo el contrato "el tipo
+        // declarado gana". DOMAIN types del academico son
+        // la excepción: NO tienen mapeo JDBC_TYPES porque el
+        // binder los serializa a texto y deja que PG haga
+        // el cast con el CHECK constraint del dominio.
         for (String type : ParamTypes.CURATED) {
+            if (ParamTypes.DOMAIN_TYPES.contains(type)) continue;
             assertThat(ParamTypes.JDBC_TYPES)
                     .as("CURATED entry %s must have a JDBC_TYPES mapping", type)
                     .containsKey(type);
