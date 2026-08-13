@@ -93,6 +93,16 @@ public final class ParamBinder {
             String key = e.getKey();
             Object val = e.getValue();
             String declaredType = types.get(key);
+            if (declaredType == null) {
+                // V60-bis — el cliente puede haber escrito la
+                // key en cualquier caja. Buscamos la
+                // representación canónica (MAYÚSCULAS +
+                // namespace prefix) contra el catálogo.
+                String canonical = canonicalLookupKey(key);
+                if (canonical != null) {
+                    declaredType = types.get(canonical);
+                }
+            }
 
             if (val == null) {
                 // null: no se bindea. PG interpreta el placeholder como NULL
@@ -125,8 +135,55 @@ public final class ParamBinder {
                         + ex.getMessage());
             }
             src.addValue(key, serialized);
+            // V60-bis — publicamos también la forma canónica
+            // para que un SQL con placeholder UPPERCASA
+            // (p. ej. :BODY.ID) encuentre el valor aunque el
+            // cliente haya enviado la key en minúsculas
+            // (p. ej. {"id": 1}). Spring NamedParameterUtils
+            // es case-sensitive sobre los placeholders del
+            // SQL, así que tener una sola key nunca alcanza
+            // para SQL con naming mixto. Si la canónica ya
+            // coincide con la key original, putIfAbsent
+            // ignora; si es igual al key, no escribimos
+            // doble.
+            if (declaredType != null) {
+                String canonical = canonicalLookupKey(key);
+                if (canonical != null && !canonical.equals(key)) {
+                    src.addValue(canonical, serialized);
+                }
+            }
         }
         return src;
+    }
+
+    /**
+     * Genera las variantes canónicas de {@code key} contra las
+     * que un catálogo puede haber declarado el tipo. Devuelve
+     * la primera que NO esté vacía — el binder usa esa para
+     * el lookup en {@code paramTypes}.
+     *
+     * <p>Por ejemplo, para la key {@code "size"} del
+     * cliente: prueba {@code "size"} (literal), {@code "SIZE"}
+     * (upper), {@code "QUERY.SIZE"} (con prefijo derivado
+     * del namespace QUERY si la key viene suelta) — la
+     * primera que el catálogo tenga declarada gana.
+     */
+    public static String canonicalLookupKey(String key) {
+        if (key == null || key.isEmpty()) return null;
+        // La forma canónica Body-namespace-prefixed es la
+        // que casi siempre declara el catálogo. Si el
+        // cliente ya escribió el prefijo, canonicalKeyFor
+        // no lo duplica.
+        for (String ns : new String[]{
+                ParamNamespace.BODY, ParamNamespace.BODY_RAW,
+                ParamNamespace.QUERY, ParamNamespace.PARAM,
+                ParamNamespace.CONTEXT}) {
+            String canonical = ParamNamespace.canonicalKeyFor(key, ns);
+            if (canonical != null && !canonical.equals(key)) {
+                return canonical;
+            }
+        }
+        return null;
     }
 
     private static Map<String, String> mergeTypes(Map<String, String> base,

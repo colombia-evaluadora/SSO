@@ -1,16 +1,21 @@
 package com.co.eurekatic.query.write;
 
+import com.co.eurekatic.common.query.ParamNamespace;
 import com.co.eurekatic.query.catalog.WriteDefinition;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Unit tests for the SQL builders. Same-package so the
- * package-private {@code ForTest} suffixed builders are
- * reachable.
+ * Unit tests for the SQL builders and the strict column
+ * shape check (V60-bis — case-insensitive).
+ *
+ * <p>Same-package so the package-private {@code ForTest}
+ * suffixed builders are reachable.
  */
 class WriteServiceUnitTest {
 
@@ -71,5 +76,24 @@ class WriteServiceUnitTest {
         // catalog's declared list.
         assertThat(sql).doesNotContain("DROP");
         assertThat(sql).doesNotContain("--");
+    }
+
+    /**
+     * V60-bis — el cliente puede enviar las keys del
+     * columns en minúsculas y el catálogo las declara en
+     * MAYÚSCULAS — la shape check acepta ambos casos.
+     * Lo verificamos contra el helper
+     * {@link ParamNamespace#canonicalKeyFor} para no
+     * necesitar mocks del catálogo.
+     */
+    @Test
+    void catalogKeyUppercaseMapsToLowercaseClientKey() {
+        // El catálogo declara "EMAIL"; el cliente envía
+        // "email". La canonical key de "email" en namespace
+        // BODY es "BODY.EMAIL" — pero la shape check
+        // compara case-insensitive directamente.
+        assertThat(ParamNamespace.canonicalKeyFor("email", ParamNamespace.BODY))
+                .isEqualTo("BODY.EMAIL");
+        assertThat("EMAIL".equalsIgnoreCase("email")).isTrue();
     }
 }

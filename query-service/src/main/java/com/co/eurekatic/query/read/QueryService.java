@@ -208,6 +208,16 @@ public class QueryService {
         // def.paramTypes() lo declara y deja el resto al auto-derive
         // de Spring. Una fila legacy sin paramTypes cae aquí y se
         // comporta como antes del cambio.
+        //
+        // V60-bis — case-insensitive lookups: el cliente puede
+        // mandar las keys del body en cualquier caja. NO las
+        // mutamos aquí — Spring JDBC bindea
+        // case-sensitively contra los placeholders del SQL,
+        // así que cambiar la key rompería SQL legacy escrito
+        // con placeholders lowercase. En su lugar,
+        // {@code ParamBinder.buildStrict} hace lookup
+        // case-insensitive y namespace-aware contra
+        // paramTypes para encontrar el tipo declarado.
         Map<String, Object> allParams = new LinkedHashMap<>(
                 req.params() == null ? Map.of() : req.params());
         injectContextParams(allParams, auth);
@@ -233,10 +243,17 @@ public class QueryService {
                         int dot = k.indexOf('.');
                         if (dot <= 0) return false;
                         String ns = k.substring(0, dot);
-                        return ParamNamespace.PARAM.equals(ns)
-                                || ParamNamespace.BODY.equals(ns);
+                        return ParamNamespace.PARAM.equals(ns.toUpperCase(java.util.Locale.ROOT))
+                                || ParamNamespace.BODY.equals(ns.toUpperCase(java.util.Locale.ROOT));
                     })
-                    .filter(k -> !def.paramTypes().containsKey(k))
+                    // V60-bis — case-insensitive: el cliente
+                    // puede mandar la key en cualquier caja.
+                    // Buscamos primero literal y luego
+                    // canonical (MAYÚSCULAS + namespace
+                    // prefix).
+                    .filter(k -> !def.paramTypes().containsKey(k)
+                            && !def.paramTypes().containsKey(
+                                    com.co.eurekatic.common.query.ParamBinder.canonicalLookupKey(k)))
                     .sorted()
                     .toList();
             if (!untypedCallerParams.isEmpty()) {
