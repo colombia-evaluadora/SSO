@@ -42,6 +42,8 @@ class ParamTypesTest {
                 "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]",
                 // V61 — arrays temporales que faltaban junto a TIME[].
                 "DATE[]", "TIMESTAMP[]", "TIMESTAMPTZ[]",
+                // V61-bis — lista de objetos JSON.
+                "JSONB[]",
                 // academico_test DOMAIN types — la UI los
                 // expone en un sub-grupo y el binder los
                 // serializa a texto + cast SQL.
@@ -54,7 +56,7 @@ class ParamTypesTest {
     void arrayTypesContainOnlyArrayEntries() {
         assertThat(ParamTypes.ARRAY_TYPES).containsExactlyInAnyOrder(
                 "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]",
-                "DATE[]", "TIMESTAMP[]", "TIMESTAMPTZ[]");
+                "DATE[]", "TIMESTAMP[]", "TIMESTAMPTZ[]", "JSONB[]");
 
         // Each ARRAY_TYPES entry must be present in CURATED — otherwise
         // ParamBinder reaches ARRAY_TYPES.contains() true but the

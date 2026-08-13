@@ -46,10 +46,17 @@ public final class ParamTypes {
      * que quisiera {@code WHERE fecha = ANY(:BODY.FECHAS)} no
      * tenía forma de declarar el tipo y caía al auto-derive de
      * Spring (rompe con listas, ver spec 2026-08-10).
+     *
+     * <p>V61-bis — se suma {@code JSONB[]}: lista de objetos JSON
+     * (p. ej. {@code [{"k":"v"},{"k":"w"}]}). A diferencia de
+     * {@code JSONB} escalar (que sólo se usa vía {@code BODY_RAW.X}),
+     * el elemento de un {@code JSONB[]} puede venir como sub-objeto
+     * (Map) o como literal ya serializado (String) — ver
+     * {@code ParamBinder.toPgArray}.
      */
     public static final Set<String> ARRAY_TYPES = Set.of(
             "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]",
-            "DATE[]", "TIMESTAMP[]", "TIMESTAMPTZ[]"
+            "DATE[]", "TIMESTAMP[]", "TIMESTAMPTZ[]", "JSONB[]"
     );
 
     /** Tipos numéricos enteros — usados por la guardia runtime para
@@ -97,7 +104,7 @@ public final class ParamTypes {
                 "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ",
                 "UUID", "JSONB", "JSON",
                 "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]",
-                "DATE[]", "TIMESTAMP[]", "TIMESTAMPTZ[]"));
+                "DATE[]", "TIMESTAMP[]", "TIMESTAMPTZ[]", "JSONB[]"));
         curated.addAll(DOMAIN_TYPES);
         CURATED = java.util.Collections.unmodifiableSet(curated);
     }
@@ -138,6 +145,7 @@ public final class ParamTypes {
             Map.entry("DATE[]", "date[]"),
             Map.entry("TIMESTAMP[]", "timestamp[]"),
             Map.entry("TIMESTAMPTZ[]", "timestamptz[]"),
+            Map.entry("JSONB[]", "jsonb[]"),
             // DOMAIN types — schema-qualified
             Map.entry("BOOL_SN",                "academico_test.bool_sn"),
             Map.entry("ESTADO_AI",              "academico_test.estado_ai"),
@@ -184,7 +192,8 @@ public final class ParamTypes {
             Map.entry("TIME[]", Types.ARRAY),
             Map.entry("DATE[]", Types.ARRAY),
             Map.entry("TIMESTAMP[]", Types.ARRAY),
-            Map.entry("TIMESTAMPTZ[]", Types.ARRAY)
+            Map.entry("TIMESTAMPTZ[]", Types.ARRAY),
+            Map.entry("JSONB[]", Types.ARRAY)
     );
 
     /**

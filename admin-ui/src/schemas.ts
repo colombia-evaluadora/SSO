@@ -187,6 +187,7 @@ export const appFormSchema = z.object({
  *      llegar al submit.
  *   2. Faltaban `DATE[]`, `TIMESTAMP[]`, `TIMESTAMPTZ[]` — sólo
  *      `TIME[]` tenía contraparte array entre los temporales.
+ *   3. Falta `JSONB[]` — lista de objetos JSON.
  *
  * Este `as const` se usa para validación local (en `paramTypes`)
  * pero el dropdown se llena con la respuesta de `useParamTypes` —
@@ -217,6 +218,7 @@ const CURATED_PG_TYPES = [
   "DATE[]",
   "TIMESTAMP[]",
   "TIMESTAMPTZ[]",
+  "JSONB[]",
   // academico_test DOMAIN types
   "BOOL_SN",
   "ESTADO_AI",

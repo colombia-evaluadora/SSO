@@ -255,6 +255,33 @@ class ParamBinderTest {
     }
 
     @Test
+    void listOfMapsBecomesJsonbArrayLiteral() {
+        Map<String, Object> obj1 = new LinkedHashMap<>();
+        obj1.put("k", "v");
+        Map<String, Object> obj2 = new LinkedHashMap<>();
+        obj2.put("n", 1);
+
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.FILTROS", List.of(obj1, obj2)),
+                Map.of("BODY.FILTROS", "JSONB[]"));
+        // Cada Map se serializa a JSON y ESE texto se quota como
+        // elemento string del array — las comillas internas del JSON
+        // se escapan igual que en cualquier otro elemento String.
+        assertThat(src.getValue("BODY.FILTROS"))
+                .isEqualTo("{\"{\\\"k\\\":\\\"v\\\"}\",\"{\\\"n\\\":1}\"}");
+    }
+
+    @Test
+    void listOfPreSerializedJsonStringsBecomesJsonbArrayLiteral() {
+        // El cliente ya mandó el JSON como texto — es tan válido como
+        // el sub-objeto; el cast a jsonb[] en PG acepta ambos.
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.FILTROS", List.of("{\"k\":\"v\"}")),
+                Map.of("BODY.FILTROS", "JSONB[]"));
+        assertThat(src.getValue("BODY.FILTROS")).isEqualTo("{\"{\\\"k\\\":\\\"v\\\"}\"}");
+    }
+
+    @Test
     void bodyRawMapBecomesJsonLiteral() {
         Map<String, Object> filtro = new LinkedHashMap<>();
         filtro.put("zona", 1);
