@@ -370,7 +370,17 @@ public final class ParamBinder {
             case "NUMERIC[]" -> BigDecimal.class;
             case "BOOLEAN[]" -> Boolean.class;
             case "TIME[]" -> java.sql.Time.class;
+            // V61 — mismo tratamiento que TIME[]: JSON no tiene
+            // literal nativo de fecha/hora, así que el elemento
+            // "esperado" real es siempre String (ver isCompatibleWith).
+            case "DATE[]" -> java.sql.Date.class;
+            case "TIMESTAMP[]", "TIMESTAMPTZ[]" -> Timestamp.class;
             case "TEXT[]" -> String.class;
+            // V61-bis — el elemento de JSONB[] es un sub-objeto
+            // (Map, lo que Jackson entrega para un {...} anidado)
+            // o, si el cliente ya lo mandó serializado, un String
+            // con el literal JSON (ver isCompatibleWith).
+            case "JSONB[]" -> Map.class;
             default -> null;
         };
     }
@@ -398,6 +408,28 @@ public final class ParamBinder {
         // Aceptamos cualquier número entero en un BIGINT[].
         if (expected == Long.class) return isIntegerFamily(v);
         if (expected == BigDecimal.class) return isDecimalFamily(v);
+        // TIME[] / DATE[] / TIMESTAMP[] / TIMESTAMPTZ[] (y
+        // temporales en general): JSON no tiene un literal
+        // nativo para fecha/hora — Jackson SIEMPRE entrega
+        // String para un elemento de array como "10:00:00" o
+        // "2026-08-12", nunca java.sql.Time/Date/Timestamp (eso
+        // sólo existe si el caller lo construye a mano en Java).
+        // Exigir instanceof aquí rechazaría cualquier body JSON
+        // válido; igual que la rama escalar de TEMPORAL_TYPES
+        // más abajo, aceptamos String y dejamos que el cast de
+        // PG valide el formato real.
+        if (expected == Time.class
+                || expected == java.sql.Date.class
+                || expected == Timestamp.class) {
+            return v instanceof String;
+        }
+        // JSONB[]: el elemento "Map" ya lo cubre expected.isInstance(v)
+        // arriba (Map es una interfaz — isInstance funciona igual).
+        // Lo único que falta es aceptar String: un cliente que ya
+        // serializó el objeto a texto ({@code "{\"k\":\"v\"}"}) es
+        // tan válido como el sub-objeto — el cast a jsonb[] en PG
+        // acepta ambos.
+        if (expected == Map.class) return v instanceof String;
         return false;
     }
 
@@ -463,21 +495,42 @@ public final class ParamBinder {
             if (elem == null) {
                 sb.append("NULL");
             } else if (elem instanceof String s) {
-                sb.append('"');
-                for (int i = 0; i < s.length(); i++) {
-                    char c = s.charAt(i);
-                    if (c == '"' || c == '\\') sb.append('\\');
-                    sb.append(c);
-                }
-                sb.append('"');
+                appendQuotedPgArrayElement(sb, s);
             } else if (elem instanceof Boolean b) {
                 sb.append(b ? "true" : "false");
+            } else if (elem instanceof Map<?, ?> m) {
+                // JSONB[]: el elemento es un sub-objeto — se serializa a
+                // texto JSON y ESE texto se quota como cualquier String,
+                // igual que el resto de elementos del array. El cast
+                // `as jsonb[]` en SQL valida que cada elemento sea JSON
+                // bien formado.
+                appendQuotedPgArrayElement(sb, toJsonLiteral(m));
             } else {
                 sb.append(stringify(elem));
             }
         }
         sb.append('}');
         return sb.toString();
+    }
+
+    /**
+     * Quota {@code raw} como elemento string de un literal PG-array
+     * ({@code "..."}), escapando comilla doble y backslash — las dos
+     * reglas del formato de array de PostgreSQL. Se usa tanto para
+     * elementos {@code String} planos como para el texto JSON que
+     * produce {@link #toJsonLiteral} en un {@code JSONB[]}: en ambos
+     * casos el contenido es "un string" desde el punto de vista del
+     * parser de arrays de PG, sin importar que ese string a su vez
+     * contenga JSON con sus propias comillas.
+     */
+    private static void appendQuotedPgArrayElement(StringBuilder sb, String raw) {
+        sb.append('"');
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '"' || c == '\\') sb.append('\\');
+            sb.append(c);
+        }
+        sb.append('"');
     }
 
     /**
