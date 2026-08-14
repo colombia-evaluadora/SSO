@@ -217,6 +217,71 @@ class ParamBinderTest {
     }
 
     @Test
+    void listOfIsoTimeStringsBecomesTimeArrayLiteral() {
+        // JSON no tiene un literal nativo de hora — Jackson SIEMPRE entrega
+        // String para cada elemento (p.ej. "10:00:00"), nunca java.sql.Time.
+        // Antes de este fix, validateAgainstDeclared exigía instanceof Time
+        // en cada elemento y rechazaba cualquier body JSON válido para TIME[].
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.DESCANSO_INICIO", List.of("10:00:00")),
+                Map.of("BODY.DESCANSO_INICIO", "TIME[]"));
+        assertThat(src.getValue("BODY.DESCANSO_INICIO")).isEqualTo("{\"10:00:00\"}");
+    }
+
+    @Test
+    void listOfIsoDateStringsBecomesDateArrayLiteral() {
+        // Mismo motivo que TIME[]: JSON no tiene literal nativo de fecha,
+        // Jackson entrega String para cada elemento.
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.FERIADOS", List.of("2026-01-01", "2026-12-25")),
+                Map.of("BODY.FERIADOS", "DATE[]"));
+        assertThat(src.getValue("BODY.FERIADOS")).isEqualTo("{\"2026-01-01\",\"2026-12-25\"}");
+    }
+
+    @Test
+    void listOfIsoTimestampStringsBecomesTimestampArrayLiteral() {
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.CORTES", List.of("2026-08-12 14:30:00")),
+                Map.of("BODY.CORTES", "TIMESTAMP[]"));
+        assertThat(src.getValue("BODY.CORTES")).isEqualTo("{\"2026-08-12 14:30:00\"}");
+    }
+
+    @Test
+    void listOfIsoTimestampTzStringsBecomesTimestampTzArrayLiteral() {
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.CORTES", List.of("2026-08-12T14:30:00-05:00")),
+                Map.of("BODY.CORTES", "TIMESTAMPTZ[]"));
+        assertThat(src.getValue("BODY.CORTES")).isEqualTo("{\"2026-08-12T14:30:00-05:00\"}");
+    }
+
+    @Test
+    void listOfMapsBecomesJsonbArrayLiteral() {
+        Map<String, Object> obj1 = new LinkedHashMap<>();
+        obj1.put("k", "v");
+        Map<String, Object> obj2 = new LinkedHashMap<>();
+        obj2.put("n", 1);
+
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.FILTROS", List.of(obj1, obj2)),
+                Map.of("BODY.FILTROS", "JSONB[]"));
+        // Cada Map se serializa a JSON y ESE texto se quota como
+        // elemento string del array — las comillas internas del JSON
+        // se escapan igual que en cualquier otro elemento String.
+        assertThat(src.getValue("BODY.FILTROS"))
+                .isEqualTo("{\"{\\\"k\\\":\\\"v\\\"}\",\"{\\\"n\\\":1}\"}");
+    }
+
+    @Test
+    void listOfPreSerializedJsonStringsBecomesJsonbArrayLiteral() {
+        // El cliente ya mandó el JSON como texto — es tan válido como
+        // el sub-objeto; el cast a jsonb[] en PG acepta ambos.
+        MapSqlParameterSource src = ParamBinder.build(
+                Map.of("BODY.FILTROS", List.of("{\"k\":\"v\"}")),
+                Map.of("BODY.FILTROS", "JSONB[]"));
+        assertThat(src.getValue("BODY.FILTROS")).isEqualTo("{\"{\\\"k\\\":\\\"v\\\"}\"}");
+    }
+
+    @Test
     void bodyRawMapBecomesJsonLiteral() {
         Map<String, Object> filtro = new LinkedHashMap<>();
         filtro.put("zona", 1);
@@ -295,6 +360,48 @@ class ParamBinderTest {
             assertThat(ParamBinder.buildStrict(values,
                     Map.of("PARAM.ACTIVO", "BOOLEAN"), Map.of()))
                     .isNotNull();
+        }
+
+        /**
+         * V61 — un {@code QUERY.X} declarado BOOLEAN llega siempre
+         * como String: {@code QueryPathController} arma los valores
+         * de querystring con
+         * {@code @RequestParam Map<String, String>}, así que un
+         * Boolean real nunca es posible ahí. Antes de este cambio
+         * NINGÚN {@code QUERY.*: BOOLEAN} del catálogo era
+         * alcanzable — no era un límite del harness de pruebas, era
+         * cualquier cliente HTTP real (caso detectado en
+         * {@code QUERY.SOLO_SIN_DOCENTE} de
+         * {@code GET /asignaciones/pool}).
+         */
+        @Test
+        void booleanParamAcceptsTrueFalseString() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("QUERY.SOLO_SIN_DOCENTE", "true");
+            MapSqlParameterSource src = ParamBinder.buildStrict(values,
+                    Map.of("QUERY.SOLO_SIN_DOCENTE", "BOOLEAN"), Map.of());
+            assertThat(src.getValue("QUERY.SOLO_SIN_DOCENTE")).isEqualTo("true");
+        }
+
+        @Test
+        void booleanParamAcceptsTrueFalseStringCaseInsensitive() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("QUERY.SOLO_SIN_DOCENTE", "False");
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("QUERY.SOLO_SIN_DOCENTE", "BOOLEAN"), Map.of()))
+                    .isNotNull();
+        }
+
+        /** "S"/"N"/"0"/"1" siguen sin ser aceptados — la única
+         *  concesión es al literal true/false, no a cualquier String. */
+        @Test
+        void booleanParamStillRejectsNonTrueFalseStrings() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("QUERY.SOLO_SIN_DOCENTE", "1");
+            assertThatThrownBy(() -> ParamBinder.buildStrict(values,
+                    Map.of("QUERY.SOLO_SIN_DOCENTE", "BOOLEAN"), Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BOOLEAN");
         }
 
         @Test
