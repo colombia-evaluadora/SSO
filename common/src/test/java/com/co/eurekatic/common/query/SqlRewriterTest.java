@@ -35,6 +35,28 @@ class SqlRewriterTest {
                 .isEqualTo("SELECT * FROM fn(cast(:PARAM.ID as bigint))");
     }
 
+    /**
+     * V62 — el sufijo de obligatoriedad ('!', ver
+     * {@link ParamTypes#parseDeclaration}) es una instrucción para
+     * {@code ParamBinder}, no un tipo PG real. El cast insertado debe
+     * usar siempre el tipo base, sin el sufijo.
+     */
+    @Test
+    void requiredSuffixIsStrippedBeforeCast() {
+        Map<String, String> types = Map.of("PARAM.ID", "BIGINT!");
+        String sql = "SELECT * FROM fn(:PARAM.ID)";
+        assertThat(SqlRewriter.rewrite(sql, types))
+                .isEqualTo("SELECT * FROM fn(cast(:PARAM.ID as bigint))");
+    }
+
+    @Test
+    void requiredSuffixIsStrippedOnArrayTypes() {
+        Map<String, String> types = Map.of("BODY.IDS", "BIGINT[]!");
+        String sql = "SELECT * FROM fn(:BODY.IDS)";
+        assertThat(SqlRewriter.rewrite(sql, types))
+                .isEqualTo("SELECT * FROM fn(cast(:BODY.IDS as int8[]))");
+    }
+
     @Test
     void rewritesMultiplePlaceholdersInSameSql() {
         Map<String, String> types = Map.of(

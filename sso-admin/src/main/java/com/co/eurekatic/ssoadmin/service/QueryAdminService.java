@@ -364,11 +364,19 @@ public class QueryAdminService {
                     + "coincidir con [A-Z][A-Z0-9_]* (namespace incluido). "
                     + "Ejemplos válidos: 'PARAM.NOMBRE', 'BODY.USER.EMAIL'.");
             }
-            if (!ParamTypes.CURATED.contains(e.getValue())) {
+            // V62 — el valor puede traer el sufijo de obligatoriedad
+            // ('!', ver ParamTypes#parseDeclaration); el set curado
+            // sólo conoce el tipo base, así que se valida sin el
+            // sufijo. El sufijo en sí no se restringe más — cualquier
+            // tipo del set curado puede marcarse obligatorio.
+            String baseType = ParamTypes.parseDeclaration(e.getValue()).baseType();
+            if (!ParamTypes.CURATED.contains(baseType)) {
                 throw new IllegalArgumentException(
                     "PARAM_TYPES['" + upperKey + "']='" + e.getValue()
                     + "' no es un tipo soportado. Permitidos: "
-                    + ParamTypes.CURATED);
+                    + ParamTypes.CURATED
+                    + " (opcionalmente con sufijo '!' para marcarlo obligatorio, "
+                    + "p. ej. 'BIGINT!').");
             }
             // Detectar colisiones case-only entre keys
             // (ej. "body.id" y "BODY.ID" envían a la misma

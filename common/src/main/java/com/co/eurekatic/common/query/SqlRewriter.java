@@ -59,6 +59,11 @@ public final class SqlRewriter {
      * <p>Si {@code paramTypes} es null o vacío, devuelve el SQL sin tocar
      * (legacy behavior).
      *
+     * <p>V62 — un valor de {@code paramTypes} puede traer el sufijo de
+     * obligatoriedad ({@code "BIGINT!"}, ver {@link ParamTypes#parseDeclaration}).
+     * El cast insertado usa siempre el tipo base — el sufijo es una
+     * instrucción para {@code ParamBinder}, no un tipo PG real.
+     *
      * @param sql        el SQL del catálogo, tal cual lo carga
      *                   {@code QueryDefinition.query()}.
      * @param paramTypes mapa {@code placeholder → tipo} del catálogo. Keys en
@@ -138,7 +143,10 @@ public final class SqlRewriter {
                 }
             }
             if (declaredType != null) {
-                String pgCastName = ParamTypes.PG_CAST_NAME.get(declaredType);
+                // V62 — el tipo puede traer el sufijo de obligatoriedad
+                // ("BIGINT!"); el cast en SQL sólo conoce el tipo base.
+                String baseType = ParamTypes.parseDeclaration(declaredType).baseType();
+                String pgCastName = ParamTypes.PG_CAST_NAME.get(baseType);
                 if (pgCastName != null) {
                     out.append("cast(").append(ph).append(" as ").append(pgCastName).append(")");
                 } else {

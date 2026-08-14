@@ -20,9 +20,16 @@ import java.util.Map;
  *
  * <p>The set changes rarely, so the UI caches it aggressively
  * ({@code staleTime: Infinity}) and refreshes on deploy.
+ *
+ * <p>V62 — {@code requiredSuffix} is the literal ({@code "!"}) the UI
+ * appends to a base type from {@code curated} to mark a parameter as
+ * obligatorio (see {@link com.co.eurekatic.common.query.ParamTypes#parseDeclaration}).
+ * Exposed instead of hardcoded on the frontend so both sides read the
+ * convention from the same source.
  */
 public record ParamTypesResponse(
         List<String> curated,
         Map<String, Integer> jdbcTypes,
-        Map<String, String> pgCastName
+        Map<String, String> pgCastName,
+        String requiredSuffix
 ) { }

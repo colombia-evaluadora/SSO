@@ -25,6 +25,31 @@ function newQueryUid(): string {
   return `q-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * V62 — separa el tipo base del sufijo de obligatoriedad
+ * ({@code "BIGINT!"} → {@code {base: "BIGINT", required: true}}).
+ * Espejo en TS de {@code ParamTypes.parseDeclaration} en el backend
+ * — sin sufijo, el parámetro es nullable por defecto (null explícito
+ * u omitir el campo bindean NULL de SQL en vez de tumbar la
+ * petición; ver spec 2026-08-13/14).
+ */
+function splitDeclaration(
+  raw: string | undefined,
+  suffix: string,
+): { base: string; required: boolean } {
+  if (!raw) return { base: "", required: false };
+  if (suffix && raw.endsWith(suffix)) {
+    return { base: raw.slice(0, -suffix.length), required: true };
+  }
+  return { base: raw, required: false };
+}
+
+/** Inverso de {@link splitDeclaration}: recompone el string que se
+ *  guarda en {@code paramTypes}. */
+function composeDeclaration(base: string, required: boolean, suffix: string): string {
+  return required ? `${base}${suffix}` : base;
+}
+
 interface Props {
   open: boolean;
   query: QueryAdminResponse | null;
@@ -428,6 +453,7 @@ function ParamTypesSection({
 }) {
   const { data, isLoading, error } = useParamTypes();
   const curated = data?.curated ?? [];
+  const requiredSuffix = data?.requiredSuffix ?? "!";
 
   // Cuenta cuántos de los placeholders detectados están tipados.
   // El backend exige tipo explícito sólo en :PARAM.* / :BODY.* —
@@ -444,9 +470,24 @@ function ParamTypesSection({
     if (type === "" || type === undefined) {
       delete next[placeholder];
     } else {
-      next[placeholder] = type;
+      // V62 — el dropdown sólo elige el tipo base; se preserva el
+      // sufijo de obligatoriedad que ya tuviera la fila.
+      const { required: wasRequired } = splitDeclaration(next[placeholder], requiredSuffix);
+      next[placeholder] = composeDeclaration(type, wasRequired, requiredSuffix);
     }
     onChange(next);
+  }
+
+  /**
+   * V62 — checkbox "obligatorio" por fila. Sin tipo asignado
+   * todavía no hay nada que marcar como obligatorio — el checkbox
+   * de esas filas viene deshabilitado (ver render).
+   */
+  function setRequired(placeholder: string, isRequired: boolean) {
+    const current = value[placeholder];
+    if (!current) return;
+    const { base } = splitDeclaration(current, requiredSuffix);
+    onChange({ ...value, [placeholder]: composeDeclaration(base, isRequired, requiredSuffix) });
   }
 
   function addManual() {
@@ -502,6 +543,8 @@ function ParamTypesSection({
           <div className="text-[11px] text-slate-500">
             Auto-detectados del SQL. Asigna un tipo a cada :PARAM.* / :BODY.*.
             :CONTEXT.* y :QUERY.{'{'}SIZE,OFFSET{'}'} los bindea el sistema.
+            Por defecto un parámetro acepta null (u omitirse) sin error — marca
+            "Obligatorio" sólo en los que la función SIEMPRE necesita.
           </div>
         </div>
         <div
@@ -529,6 +572,9 @@ function ParamTypesSection({
               <tr>
                 <th className="px-2 py-1 text-left">Placeholder</th>
                 <th className="px-2 py-1 text-left">Tipo</th>
+                <th className="px-2 py-1 text-center" title="Si no se marca, el parámetro acepta null / omitirse sin error">
+                  Obligatorio
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -557,15 +603,17 @@ function ParamTypesSection({
                           </span>
                         </div>
                       </td>
+                      <td className="px-2 py-1 text-center text-slate-300">—</td>
                     </tr>
                   );
                 }
+                const { base, required: isRequired } = splitDeclaration(value[p], requiredSuffix);
                 return (
                   <tr key={p} className="border-t border-slate-100">
                     <td className="px-2 py-1 font-mono">:{p}</td>
                     <td className="px-2 py-1">
                       <select
-                        value={value[p] ?? ""}
+                        value={base}
                         onChange={(e) => setType(p, e.target.value)}
                         className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
                       >
@@ -576,6 +624,21 @@ function ParamTypesSection({
                           </option>
                         ))}
                       </select>
+                    </td>
+                    <td className="px-2 py-1 text-center">
+                      <input
+                        type="checkbox"
+                        checked={isRequired}
+                        disabled={!base}
+                        onChange={(e) => setRequired(p, e.target.checked)}
+                        aria-label={`${p} es obligatorio`}
+                        title={
+                          base
+                            ? "Sin marcar: acepta null u omitirse (bindea NULL). Marcado: null/omitido responde 400."
+                            : "Asigna un tipo primero"
+                        }
+                        className="h-3.5 w-3.5 cursor-pointer accent-sky-600 disabled:cursor-not-allowed"
+                      />
                     </td>
                   </tr>
                 );
@@ -593,35 +656,53 @@ function ParamTypesSection({
           <div className="overflow-hidden rounded border border-slate-200 bg-white">
             <table className="w-full text-xs">
               <tbody>
-                {manualKeys.map((k) => (
-                  <tr key={k} className="border-t border-slate-100 first:border-t-0">
-                    <td className="px-2 py-1 font-mono">:{k}</td>
-                    <td className="px-2 py-1">
-                      <select
-                        value={value[k] ?? ""}
-                        onChange={(e) => setType(k, e.target.value)}
-                        className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-                      >
-                        <option value="">— sin tipo —</option>
-                        {curated.map((t) => (
-                          <option key={t} value={t}>
-                            {t}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="px-2 py-1 text-right">
-                      <button
-                        type="button"
-                        onClick={() => removeManual(k)}
-                        className="text-rose-600 hover:underline"
-                        title="Quitar tipo manual"
-                      >
-                        ×
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {manualKeys.map((k) => {
+                  const { base, required: isRequired } = splitDeclaration(value[k], requiredSuffix);
+                  return (
+                    <tr key={k} className="border-t border-slate-100 first:border-t-0">
+                      <td className="px-2 py-1 font-mono">:{k}</td>
+                      <td className="px-2 py-1">
+                        <select
+                          value={base}
+                          onChange={(e) => setType(k, e.target.value)}
+                          className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                        >
+                          <option value="">— sin tipo —</option>
+                          {curated.map((t) => (
+                            <option key={t} value={t}>
+                              {t}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-2 py-1 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isRequired}
+                          disabled={!base}
+                          onChange={(e) => setRequired(k, e.target.checked)}
+                          aria-label={`${k} es obligatorio`}
+                          title={
+                            base
+                              ? "Sin marcar: acepta null u omitirse (bindea NULL). Marcado: null/omitido responde 400."
+                              : "Asigna un tipo primero"
+                          }
+                          className="h-3.5 w-3.5 cursor-pointer accent-sky-600 disabled:cursor-not-allowed"
+                        />
+                      </td>
+                      <td className="px-2 py-1 text-right">
+                        <button
+                          type="button"
+                          onClick={() => removeManual(k)}
+                          className="text-rose-600 hover:underline"
+                          title="Quitar tipo manual"
+                        >
+                          ×
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
