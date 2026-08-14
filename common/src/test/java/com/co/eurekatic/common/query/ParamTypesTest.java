@@ -107,4 +107,59 @@ class ParamTypesTest {
                     .contains(key);
         }
     }
+
+    /** No curated type name may end in '!' — that suffix is the V62
+     *  nullability marker, and it must never collide with a real type
+     *  name or {@link ParamTypes#parseDeclaration} would silently
+     *  mis-parse it. */
+    @Test
+    void noCuratedTypeEndsInExclamationMark() {
+        for (String type : ParamTypes.CURATED) {
+            assertThat(type).as("CURATED type %s", type)
+                    .doesNotEndWith(ParamTypes.REQUIRED_SUFFIX);
+        }
+    }
+
+    @Test
+    void parseDeclaration_bareTypeIsNullableByDefault() {
+        var decl = ParamTypes.parseDeclaration("BIGINT");
+        assertThat(decl.baseType()).isEqualTo("BIGINT");
+        assertThat(decl.nullable()).isTrue();
+    }
+
+    @Test
+    void parseDeclaration_exclamationSuffixMeansRequired() {
+        var decl = ParamTypes.parseDeclaration("BIGINT!");
+        assertThat(decl.baseType()).isEqualTo("BIGINT");
+        assertThat(decl.nullable()).isFalse();
+    }
+
+    @Test
+    void parseDeclaration_suffixWorksOnArrayTypes() {
+        var decl = ParamTypes.parseDeclaration("BIGINT[]!");
+        assertThat(decl.baseType()).isEqualTo("BIGINT[]");
+        assertThat(decl.nullable()).isFalse();
+        assertThat(ParamTypes.ARRAY_TYPES).contains(decl.baseType());
+    }
+
+    @Test
+    void parseDeclaration_suffixWorksOnDomainTypes() {
+        var decl = ParamTypes.parseDeclaration("BOOL_SN!");
+        assertThat(decl.baseType()).isEqualTo("BOOL_SN");
+        assertThat(decl.nullable()).isFalse();
+    }
+
+    @Test
+    void parseDeclaration_nullRawIsTreatedAsNullableUndeclared() {
+        var decl = ParamTypes.parseDeclaration(null);
+        assertThat(decl.baseType()).isNull();
+        assertThat(decl.nullable()).isTrue();
+    }
+
+    @Test
+    void parseDeclaration_trimsWhitespaceAroundSuffix() {
+        var decl = ParamTypes.parseDeclaration("  BIGINT!  ");
+        assertThat(decl.baseType()).isEqualTo("BIGINT");
+        assertThat(decl.nullable()).isFalse();
+    }
 }

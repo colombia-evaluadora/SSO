@@ -5,6 +5,16 @@ import { apiClient } from "./client";
 export interface ParamTypesResponse {
   curated: string[];
   jdbcTypes: Record<string, number>;
+  /**
+   * V62 — literal ({@code "!"}) que, agregado al final de un tipo de
+   * {@code curated}, marca el parámetro como obligatorio (ver
+   * {@code ParamTypes.parseDeclaration} en el backend). Sin el
+   * sufijo, todo parámetro es nullable por defecto: null explícito
+   * u omitir el campo bindean {@code NULL} de SQL en vez de tumbar
+   * la petición con un 500. Se expone en vez de hardcodearlo acá
+   * para que ambos lados lean la misma convención.
+   */
+  requiredSuffix: string;
 }
 
 /**

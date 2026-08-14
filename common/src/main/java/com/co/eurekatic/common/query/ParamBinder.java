@@ -56,6 +56,19 @@ import java.util.Map;
  * sigue usando {@code cs.setObject(k, v, sqlType)} con el map
  * {@link ParamTypes#JDBC_TYPES} — CallableStatement requiere sqlType
  * explícito para OUT, y no entra al SqlRewriter.
+ *
+ * <p><b>V62 (nulabilidad)</b>: por defecto, todo parámetro declarado
+ * acepta {@code null} — enviarlo explícito o simplemente omitir el
+ * campo bindea {@code NULL} de SQL. Antes de V62 ambos casos dejaban
+ * el placeholder sin valor en el {@link MapSqlParameterSource}, y
+ * como el SQL sí lo referenciaba (el {@code cast(:x as TIPO)} que
+ * inserta {@link SqlRewriter}), Spring reventaba con una excepción
+ * que no es {@link java.sql.SQLException} — de ahí el 500 opaco sin
+ * log que documenta la spec 2026-08-13. Un autor del catálogo marca
+ * un parámetro como <b>obligatorio</b> añadiendo {@code '!'} al tipo
+ * ({@code "BIGINT!"}, ver {@link ParamTypes#parseDeclaration}); ahí
+ * {@code null} u omitir el campo responde {@code 400} nombrando el
+ * parámetro en vez de bindear NULL o reventar.
  */
 public final class ParamBinder {
 
@@ -87,28 +100,40 @@ public final class ParamBinder {
             Map<String, String> extraDeclared) {
         Map<String, String> types = mergeTypes(paramTypes, extraDeclared);
         MapSqlParameterSource src = new MapSqlParameterSource();
-        if (values == null) return src;
+        Map<String, Object> safeValues = values == null ? Map.of() : values;
 
-        for (Map.Entry<String, Object> e : values.entrySet()) {
+        for (Map.Entry<String, Object> e : safeValues.entrySet()) {
             String key = e.getKey();
             Object val = e.getValue();
-            String declaredType = types.get(key);
-            if (declaredType == null) {
+            String declaredTypeRaw = types.get(key);
+            if (declaredTypeRaw == null) {
                 // V60-bis — el cliente puede haber escrito la
                 // key en cualquier caja. Buscamos la
                 // representación canónica (MAYÚSCULAS +
                 // namespace prefix) contra el catálogo.
                 String canonical = canonicalLookupKey(key);
                 if (canonical != null) {
-                    declaredType = types.get(canonical);
+                    declaredTypeRaw = types.get(canonical);
                 }
             }
+            ParamTypes.Declaration decl = ParamTypes.parseDeclaration(declaredTypeRaw);
+            String declaredType = decl.baseType();
 
             if (val == null) {
-                // null: no se bindea. PG interpreta el placeholder como NULL
-                // sólo si el cast lo permite; si no, hay que usar COALESCE en SQL.
-                // Saltarse el addValue evita que JDBC mande setObject(k, null)
-                // con tipo desconocido.
+                requireNullableOr400(key, declaredTypeRaw, decl);
+                // V62 — antes esto simplemente saltaba el
+                // addValue: el placeholder quedaba SIN valor en
+                // el MapSqlParameterSource, y como el SQL sí lo
+                // referencia (vía el cast que insertó
+                // SqlRewriter), Spring reventaba con
+                // "no value supplied for the SQL parameter" —
+                // una excepción que no es SQLException, así que
+                // GlobalExceptionHandler.handleDataAccess la
+                // devolvía como 500 opaco sin loguear nada (ver
+                // spec 2026-08-13). Bindear NULL explícito deja
+                // que PG resuelva {@code cast(NULL as TIPO)},
+                // válido para cualquier tipo.
+                bindWithAliases(src, key, null);
                 continue;
             }
 
@@ -134,40 +159,90 @@ public final class ParamBinder {
                         + "' al tipo declarado " + declaredType + ": "
                         + ex.getMessage());
             }
-            src.addValue(key, serialized);
-            // V60-bis — publicamos también varias variantes
-            // canonicales para que un SQL con placeholder
-            // UPPERCASA O minúsculas, con namespace O sin él,
-            // encuentre el valor aunque el cliente haya
-            // enviado la key en una caja arbitraria.
-            //
-            // Tres aliases:
-            //  - upper: mayúsculas (sin namespace) — para
-            //    SQL legacy con :id en mayúsculas.
-            //  - canonical: namespace-prefixado en MAYÚSCULAS
-            //    (BODY.X para body-scope) — para SQL con
-            //    placeholder moderno :BODY.X.
-            //  - lower: minúsculas (sin namespace) — para
-            //    SQL legacy con :id en minúsculas.
-            //
-            // Spring NamedParameterUtils es case-sensitive
-            // sobre los placeholders del SQL, así que con
-            // tres aliases el bind funciona en cualquier
-            // combinación de cajas y namespaces.
-            String upper = key.toUpperCase(java.util.Locale.ROOT);
-            String lower = key.toLowerCase(java.util.Locale.ROOT);
-            String canonical = canonicalLookupKey(key);
-            if (canonical != null && !canonical.equals(key)) {
-                src.addValue(canonical, serialized);
-            }
-            if (!upper.equals(key) && !upper.equals(canonical)) {
-                src.addValue(upper, serialized);
-            }
-            if (!lower.equals(key) && !lower.equals(canonical) && !lower.equals(upper)) {
-                src.addValue(lower, serialized);
-            }
+            bindWithAliases(src, key, serialized);
         }
+
+        // V62 — parámetros DECLARADOS que el cliente ni siquiera
+        // mandó (la key no aparece en absoluto en `values`, ni
+        // como null explícito). Antes del fix de arriba esto ya
+        // era el mismo 500 opaco — sólo que el bucle de arriba ni
+        // llegaba a verlo, porque no hay entrada en `values` que
+        // recorrer. Un campo omitido y uno enviado en null son la
+        // misma "ausencia de valor" desde el punto de vista de
+        // SQL, así que se tratan igual: obligatorio → 400 nombrando
+        // el parámetro; opcional (default) → bind NULL.
+        for (Map.Entry<String, String> te : types.entrySet()) {
+            String declaredKey = te.getKey();
+            if (isPresent(safeValues, declaredKey)) continue; // ya procesado arriba
+            ParamTypes.Declaration decl = ParamTypes.parseDeclaration(te.getValue());
+            requireNullableOr400(declaredKey, te.getValue(), decl);
+            bindWithAliases(src, declaredKey, null);
+        }
+
         return src;
+    }
+
+    /** Lanza 400 si {@code decl} es obligatorio; no hace nada si es nullable. */
+    private static void requireNullableOr400(String key, String declaredTypeRaw,
+                                              ParamTypes.Declaration decl) {
+        if (declaredTypeRaw != null && !decl.nullable()) {
+            throw new IllegalArgumentException(
+                    "El parámetro '" + key + "' es obligatorio (tipo " + decl.baseType()
+                    + ") y no puede omitirse ni enviarse como null.");
+        }
+    }
+
+    /**
+     * ¿Existe alguna entrada en {@code values} que el bucle principal
+     * de {@link #buildStrict} habría emparejado con {@code declaredKey}?
+     * Espejo inverso de la búsqueda hacia adelante (key del cliente →
+     * {@link #canonicalLookupKey} → key declarada) que ya hace ese
+     * bucle — necesario para distinguir "declarado pero nunca
+     * enviado" de "ya se procesó arriba" en el segundo paso.
+     */
+    private static boolean isPresent(Map<String, Object> values, String declaredKey) {
+        if (values.containsKey(declaredKey)) return true;
+        for (String rawKey : values.keySet()) {
+            if (rawKey.equalsIgnoreCase(declaredKey)) return true;
+            String canonical = canonicalLookupKey(rawKey);
+            if (declaredKey.equals(canonical)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Bindea {@code serializedOrNull} bajo {@code key} y sus variantes
+     * canónicas — el mismo esquema de tres alias que V60-bis introdujo
+     * (mayúscula, minúscula, forma canónica con namespace), ahora
+     * compartido entre el camino "valor real" y el camino "NULL"
+     * (V62) para no duplicar la lógica de aliasing.
+     *
+     * <p>Tres aliases, igual que antes:
+     * <ul>
+     *   <li>canonical: namespace-prefixado en MAYÚSCULAS ({@code BODY.X})
+     *       — para SQL con placeholder moderno {@code :BODY.X}.</li>
+     *   <li>upper: mayúsculas — para SQL legacy con {@code :id} en mayúsculas.</li>
+     *   <li>lower: minúsculas — para SQL legacy con {@code :id} en minúsculas.</li>
+     * </ul>
+     * Spring {@code NamedParameterUtils} es case-sensitive sobre los
+     * placeholders del SQL, así que con los tres aliases el bind
+     * funciona en cualquier combinación de cajas y namespaces.
+     */
+    private static void bindWithAliases(MapSqlParameterSource src, String key,
+                                        String serializedOrNull) {
+        src.addValue(key, serializedOrNull);
+        String upper = key.toUpperCase(java.util.Locale.ROOT);
+        String lower = key.toLowerCase(java.util.Locale.ROOT);
+        String canonical = canonicalLookupKey(key);
+        if (canonical != null && !canonical.equals(key)) {
+            src.addValue(canonical, serializedOrNull);
+        }
+        if (!upper.equals(key) && !upper.equals(canonical)) {
+            src.addValue(upper, serializedOrNull);
+        }
+        if (!lower.equals(key) && !lower.equals(canonical) && !lower.equals(upper)) {
+            src.addValue(lower, serializedOrNull);
+        }
     }
 
     /**

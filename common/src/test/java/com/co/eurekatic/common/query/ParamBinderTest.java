@@ -32,7 +32,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *   <li>DOMAIN types (BOOL_SN, etc.) → serialización a String; el cast
  *       corre en SQL (insertado por SqlRewriter).</li>
  *   <li>BODY_RAW con Map → JSON literal que se castea via jsonb en SQL.</li>
- *   <li>null → no se bindea la key.</li>
+ *   <li>null (o campo omitido) → bindea NULL de SQL si el tipo es
+ *       nullable (default); 400 si el tipo lleva el sufijo '!'
+ *       (obligatorio) — ver {@link NullabilityTests}.</li>
  *   <li>Tipo declarado pero desconocido → defensivo, no crashea.</li>
  * </ul>
  */
@@ -151,17 +153,21 @@ class ParamBinderTest {
     }
 
     @Test
-    void nullValueIsNotBound() {
-        // null in, null out: no se añade la key al MapSqlParameterSource.
-        // El placeholder en el SQL no se bindea — depende del autor usar
-        // coalesce(:var, default) en el SQL si quiere default.
+    void nullValueBindsSqlNull() {
+        // V62 — null in, NULL bindeado (no se salta el addValue). Antes
+        // esto dejaba el placeholder sin valor y, como el SQL sí lo
+        // referencia vía el cast que inserta SqlRewriter, Spring
+        // reventaba con un 500 opaco antes de llegar a Postgres. Un
+        // tipo sin sufijo '!' es nullable por defecto, así que null
+        // bindea limpio: cast(NULL as time) es válido en PG.
         Map<String, Object> values = new HashMap<>();
         values.put("PARAM.HORA", null);
 
         MapSqlParameterSource src = ParamBinder.build(
                 values,
                 Map.of("PARAM.HORA", "TIME"));
-        assertThat(src.hasValue("PARAM.HORA")).isFalse();
+        assertThat(src.hasValue("PARAM.HORA")).isTrue();
+        assertThat(src.getValue("PARAM.HORA")).isNull();
     }
 
     @Test
@@ -533,6 +539,109 @@ class ParamBinderTest {
                     values, Map.of(), Map.of("BODY.NEW", "BOOLEAN")))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("BOOLEAN");
+        }
+    }
+
+    /**
+     * V62 — el sufijo {@code '!'} en el tipo declarado ({@code "BIGINT!"})
+     * marca un parámetro como obligatorio. Sin sufijo, todo parámetro es
+     * nullable por defecto: null explícito u omitir el campo bindean
+     * {@code NULL} de SQL en vez de dejar el placeholder sin valor (la
+     * causa real del 500 opaco sin log que documentó la spec 2026-08-13
+     * — Spring revienta al preparar el statement porque el SQL SÍ
+     * referencia el placeholder vía el cast que inserta SqlRewriter,
+     * pero {@code MapSqlParameterSource} nunca tuvo esa key).
+     */
+    @Nested
+    class NullabilityTests {
+
+        @Test
+        void nullableByDefault_explicitNullBindsSqlNull() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.APODO", null);
+            MapSqlParameterSource src = ParamBinder.buildStrict(values,
+                    Map.of("BODY.APODO", "VARCHAR"), Map.of());
+            assertThat(src.hasValue("BODY.APODO")).isTrue();
+            assertThat(src.getValue("BODY.APODO")).isNull();
+        }
+
+        /**
+         * El caso que antes era invisible: la key ni siquiera está en
+         * {@code values} (el cliente omitió el campo del body por
+         * completo) — no sólo "vino null". Debe bindear igual que si
+         * hubiera llegado null explícito.
+         */
+        @Test
+        void nullableByDefault_omittedFieldBindsSqlNull() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.OTRO", "presente");
+            // BODY.APODO está declarado pero nunca aparece en `values`.
+            MapSqlParameterSource src = ParamBinder.buildStrict(values,
+                    Map.of("BODY.APODO", "VARCHAR", "BODY.OTRO", "VARCHAR"), Map.of());
+            assertThat(src.hasValue("BODY.APODO")).isTrue();
+            assertThat(src.getValue("BODY.APODO")).isNull();
+            assertThat(src.getValue("BODY.OTRO")).isEqualTo("presente");
+        }
+
+        @Test
+        void required_explicitNullThrows400Style() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.FK_GRADO", null);
+            assertThatThrownBy(() -> ParamBinder.buildStrict(values,
+                    Map.of("BODY.FK_GRADO", "BIGINT!"), Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BODY.FK_GRADO")
+                    .hasMessageContaining("obligatorio");
+        }
+
+        @Test
+        void required_omittedFieldThrows() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.OTRO", "presente");
+            assertThatThrownBy(() -> ParamBinder.buildStrict(values,
+                    Map.of("BODY.FK_GRADO", "BIGINT!", "BODY.OTRO", "VARCHAR"), Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BODY.FK_GRADO");
+        }
+
+        @Test
+        void required_realValuePassesNormally() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.FK_GRADO", 1750L);
+            MapSqlParameterSource src = ParamBinder.buildStrict(values,
+                    Map.of("BODY.FK_GRADO", "BIGINT!"), Map.of());
+            assertThat(src.getValue("BODY.FK_GRADO")).isEqualTo("1750");
+        }
+
+        /** El sufijo '!' en un array no rompe la validación/serialización
+         *  normal de arrays — sólo añade la exigencia de no-null. */
+        @Test
+        void requiredArray_realValueStillSerializesAsPgArray() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.IDS", List.of(1L, 2L));
+            MapSqlParameterSource src = ParamBinder.buildStrict(values,
+                    Map.of("BODY.IDS", "BIGINT[]!"), Map.of());
+            assertThat(src.getValue("BODY.IDS")).isEqualTo("{1,2}");
+        }
+
+        @Test
+        void requiredArray_omittedThrows() {
+            assertThatThrownBy(() -> ParamBinder.buildStrict(Map.of(),
+                    Map.of("BODY.IDS", "BIGINT[]!"), Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BODY.IDS");
+        }
+
+        /** Un tipo sin declarar en absoluto (legacy, `paramTypes` no
+         *  incluye la key) nunca fue "obligatorio" — sigue comportándose
+         *  como antes: null se bindea sin exigir nada. */
+        @Test
+        void undeclaredKey_nullStillBindsWithoutRequiring() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY.LEGACY", null);
+            MapSqlParameterSource src = ParamBinder.buildStrict(values, Map.of(), Map.of());
+            assertThat(src.hasValue("BODY.LEGACY")).isTrue();
+            assertThat(src.getValue("BODY.LEGACY")).isNull();
         }
     }
 }

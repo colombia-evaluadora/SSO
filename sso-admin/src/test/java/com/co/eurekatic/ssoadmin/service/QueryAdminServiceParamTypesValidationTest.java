@@ -163,6 +163,43 @@ class QueryAdminServiceParamTypesValidationTest {
                 .hasMessageContaining("VARCHAR-99");
     }
 
+    /**
+     * V62 — el sufijo '!' marca el parámetro como obligatorio
+     * (ver {@link ParamTypes#parseDeclaration}); el tipo base
+     * ("BIGINT") sigue teniendo que estar en {@link ParamTypes#CURATED}.
+     */
+    @Test
+    void requiredSuffixOnAValidTypeIsAccepted() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-required", "SELECT cast(:BODY.FK_GRADO as bigint)",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.FK_GRADO", "BIGINT!"));
+        assertThatCode(() -> invokeValidation(req));
+    }
+
+    @Test
+    void requiredSuffixOnAnArrayTypeIsAccepted() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-required-arr", "SELECT cast(:BODY.IDS as int8[])",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.IDS", "BIGINT[]!"));
+        assertThatCode(() -> invokeValidation(req));
+    }
+
+    @Test
+    void requiredSuffixDoesNotRescueAnInvalidBaseType() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-required-bad", "SELECT :BODY.X",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.X", "VARCHAR-99!"));
+        assertThatThrownBy(() -> invokeValidation(req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("VARCHAR-99!");
+    }
+
     @Test
     void invalidParamKeyShapeIsRejected() {
         QueryRequest req = new QueryRequest(

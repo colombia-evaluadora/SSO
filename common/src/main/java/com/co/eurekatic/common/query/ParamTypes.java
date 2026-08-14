@@ -212,4 +212,54 @@ public final class ParamTypes {
         }
         return true;
     }
+
+    /**
+     * V62 — sufijo que marca un parámetro como obligatorio
+     * ({@code "BIGINT!"}). Constante única para que
+     * {@link #parseDeclaration}, la validación de {@code sso-admin}
+     * al guardar y la respuesta de {@code GET /query/param-types}
+     * (que se lo expone al admin-ui) lean el mismo literal.
+     */
+    public static final String REQUIRED_SUFFIX = "!";
+
+    /**
+     * V62 — el tipo declarado más el sufijo opcional de
+     * obligatoriedad ({@code baseType} sin el {@code '!'}, más
+     * {@code nullable}).
+     */
+    public record Declaration(String baseType, boolean nullable) {}
+
+    /**
+     * Parsea el sufijo de nulabilidad de un tipo declarado en el
+     * catálogo. Por defecto, TODO parámetro es <b>nullable</b> — un
+     * cliente que manda {@code null} explícito, o que directamente
+     * omite el campo, bindea {@code NULL} de SQL en vez de reventar
+     * (antes de V62 ambos casos dejaban el placeholder sin valor y
+     * Spring fallaba con un {@code 500} opaco antes de llegar
+     * siquiera a Postgres — ver {@code ParamBinder.buildStrict}).
+     *
+     * <p>Un autor del catálogo marca un parámetro como
+     * <b>obligatorio</b> añadiendo {@code '!'} al final del tipo:
+     * {@code "BIGINT!"}, {@code "VARCHAR!"}, {@code "BIGINT[]!"}.
+     * Enviarlo como {@code null} u omitirlo entonces responde
+     * {@code 400} nombrando el parámetro, en vez del 500 opaco de
+     * antes o un {@code NULL} silencioso que la función PL/pgSQL
+     * tendría que validar por su cuenta.
+     *
+     * <p>Ningún tipo del set {@link #CURATED} termina en {@code '!'},
+     * así que el sufijo nunca colisiona con un nombre de tipo real.
+     *
+     * @param raw el valor tal cual está en {@code paramTypes} (p.ej.
+     *            {@code "BIGINT!"}); puede ser {@code null}.
+     */
+    public static Declaration parseDeclaration(String raw) {
+        if (raw == null) return new Declaration(null, true);
+        String trimmed = raw.trim();
+        if (trimmed.endsWith(REQUIRED_SUFFIX)) {
+            return new Declaration(
+                    trimmed.substring(0, trimmed.length() - REQUIRED_SUFFIX.length()),
+                    false);
+        }
+        return new Declaration(trimmed, true);
+    }
 }
