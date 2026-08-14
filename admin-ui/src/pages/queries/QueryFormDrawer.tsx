@@ -456,11 +456,17 @@ function ParamTypesSection({
   const requiredSuffix = data?.requiredSuffix ?? "!";
 
   // Cuenta cuántos de los placeholders detectados están tipados.
-  // El backend exige tipo explícito sólo en :PARAM.* / :BODY.* —
-  // :CONTEXT.* y :QUERY.{SIZE,OFFSET} los bindea el sistema y no
-  // cuentan como "faltantes" para el badge, aunque los seguimos
-  // mostrando en la tabla para que el autor los vea.
-  const REQUIRED_NS = new Set(["PARAM", "BODY"]);
+  // El backend exige tipo explícito en :PARAM.* / :BODY.* / :BODY_RAW.*
+  // (QueryAdminService.validateCoverage incluye los tres en el set
+  // `required`) — :CONTEXT.* y :QUERY.{SIZE,OFFSET} los bindea el
+  // sistema y no cuentan como "faltantes" para el badge, aunque los
+  // seguimos mostrando en la tabla para que el autor los vea.
+  //
+  // V62-bis — BODY_RAW faltaba acá (mismo olvido que en el regex de
+  // placeholderScanner.ts): el badge nunca marcaba un :BODY_RAW.X
+  // sin tipar como "faltante", así que el formulario parecía OK
+  // hasta que el guardado rebotaba con 400 "PARAM_TYPES incompleto".
+  const REQUIRED_NS = new Set(["PARAM", "BODY", "BODY_RAW"]);
   const required = detected.filter((p) => REQUIRED_NS.has(p.split(".")[0] ?? ""));
   const typed = required.filter((p) => value[p]).length;
   const missing = required.length - typed;
