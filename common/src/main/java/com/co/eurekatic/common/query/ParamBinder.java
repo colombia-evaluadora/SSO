@@ -275,13 +275,36 @@ public final class ParamBinder {
         }
 
         // Booleano
+        //
+        // V61 — además de un Boolean real, aceptamos el String
+        // literal "true"/"false" (cualquier caja). No es sólo
+        // laxitud: un :QUERY.X declarado BOOLEAN es
+        // estructuralmente imposible de satisfacer con un
+        // Boolean real, porque QueryPathController arma los
+        // valores de QUERY con
+        // {@code @RequestParam Map<String, String>} — un query
+        // string HTTP no tiene forma de transportar un tipo
+        // JSON, sólo texto. Antes de este cambio TODO
+        // {@code QUERY.*: BOOLEAN} del catálogo era inalcanzable
+        // para cualquier cliente real, no sólo para el harness
+        // de pruebas (caso detectado en
+        // {@code QUERY.SOLO_SIN_DOCENTE} de
+        // {@code fn_asignacion_pool}). El valor sigue viajando
+        // como texto — {@code stringify} ya devuelve el String
+        // tal cual — así que el {@code cast(:x as boolean)} que
+        // inserta {@code SqlRewriter} termina de validarlo en
+        // PG. Seguimos rechazando "0"/"1"/"S"/"N": la regla
+        // explícita sigue siendo sólo true/false, como dice el
+        // mensaje de error.
         if ("BOOLEAN".equals(up)) {
-            if (!(val instanceof Boolean)) {
-                return "El parámetro '" + key + "' se declaró como BOOLEAN pero el cliente envió "
-                        + val.getClass().getSimpleName()
-                        + ". Verifica que el JSON use true/false y no 0/1 o \"S\"/\"N\".";
+            if (val instanceof Boolean) return null;
+            if (val instanceof String s
+                    && ("true".equalsIgnoreCase(s) || "false".equalsIgnoreCase(s))) {
+                return null;
             }
-            return null;
+            return "El parámetro '" + key + "' se declaró como BOOLEAN pero el cliente envió "
+                    + val.getClass().getSimpleName()
+                    + ". Verifica que el JSON use true/false y no 0/1 o \"S\"/\"N\".";
         }
 
         // Numéricos enteros

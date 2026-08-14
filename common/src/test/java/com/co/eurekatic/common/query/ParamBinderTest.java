@@ -362,6 +362,48 @@ class ParamBinderTest {
                     .isNotNull();
         }
 
+        /**
+         * V61 — un {@code QUERY.X} declarado BOOLEAN llega siempre
+         * como String: {@code QueryPathController} arma los valores
+         * de querystring con
+         * {@code @RequestParam Map<String, String>}, así que un
+         * Boolean real nunca es posible ahí. Antes de este cambio
+         * NINGÚN {@code QUERY.*: BOOLEAN} del catálogo era
+         * alcanzable — no era un límite del harness de pruebas, era
+         * cualquier cliente HTTP real (caso detectado en
+         * {@code QUERY.SOLO_SIN_DOCENTE} de
+         * {@code GET /asignaciones/pool}).
+         */
+        @Test
+        void booleanParamAcceptsTrueFalseString() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("QUERY.SOLO_SIN_DOCENTE", "true");
+            MapSqlParameterSource src = ParamBinder.buildStrict(values,
+                    Map.of("QUERY.SOLO_SIN_DOCENTE", "BOOLEAN"), Map.of());
+            assertThat(src.getValue("QUERY.SOLO_SIN_DOCENTE")).isEqualTo("true");
+        }
+
+        @Test
+        void booleanParamAcceptsTrueFalseStringCaseInsensitive() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("QUERY.SOLO_SIN_DOCENTE", "False");
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("QUERY.SOLO_SIN_DOCENTE", "BOOLEAN"), Map.of()))
+                    .isNotNull();
+        }
+
+        /** "S"/"N"/"0"/"1" siguen sin ser aceptados — la única
+         *  concesión es al literal true/false, no a cualquier String. */
+        @Test
+        void booleanParamStillRejectsNonTrueFalseStrings() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("QUERY.SOLO_SIN_DOCENTE", "1");
+            assertThatThrownBy(() -> ParamBinder.buildStrict(values,
+                    Map.of("QUERY.SOLO_SIN_DOCENTE", "BOOLEAN"), Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("BOOLEAN");
+        }
+
         @Test
         void bigIntParamRejectsDouble() {
             Map<String, Object> values = new LinkedHashMap<>();
