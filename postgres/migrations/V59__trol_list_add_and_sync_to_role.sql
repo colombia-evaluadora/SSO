@@ -121,7 +121,8 @@
 --      MenuDto sin transformaciones adicionales en el catalogo QUERY.
 --
 --   7. fn_upsert_menu(...) -> TABLE(pk_tmenu, pk_padre, nombre, path,
---                                   icono, orden, visible, plan_id, status)
+--                                   icono, orden, visible, plan_id,
+--                                   type, status)
 --      Reemplaza y absorbe a fn_create_parent_menu_with_submenus (V59
 --      original). Tres modos segun que parametros opcionales lleguen:
 --        MODO EDITAR    (p_pk_tmenu_editar IS NOT NULL)
@@ -167,7 +168,12 @@
 --      procedimiento y llamalo con CALL/PUT"; el resto del sistema sigue
 --      el patron PUT .../eliminar, nunca un verbo DELETE literal). Soft-
 --      delete en cascada: el menu, sus hijos directos, y las filas de
---      trol_menu de todos ellos.
+--      trol_menu de todos ellos. Si el pk no existe o no esta activo
+--      (TMENU ausente / soft-deleted), RAISE EXCEPTION con ERRCODE='P0002'
+--      (no_data_found -> 404) — NO devuelve 200 OK con was_deleted=FALSE,
+--      que era el bug del 2026-08-14 (la primera version silenciaba el
+--      caso "id inexistente" detras de un status 200, en contra del
+--      contrato y de la coleccion Postman).
 --
 --  10. fn_list_plans_from_value(p_user_pk) -> TABLE(id, name, valor, activo)
 --      GET /plans. Planes activos de tlista_valor CATEGORIA='PLAN'.
@@ -626,8 +632,11 @@ BEGIN
             WHERE pk_trol = p_pk_trol AND active = TRUE
        )
     THEN
+        -- roleId de la URL de PUT /roles/{roleId}/menus -- documentado como
+        -- "404 { status: 'error' } si el rol no existe". ERRCODE='P0002'
+        -- (no_data_found), el unico que PostgresErrorMapper traduce a 404.
         RAISE EXCEPTION 'fn_associate_menus_to_rol: TROL pk=% no existe o no esta activo', p_pk_trol
-            USING ERRCODE = '22023';
+            USING ERRCODE = 'P0002';
     END IF;
 
     -- El array puede venir vacio SOLO en modo full_replace (equivale a
@@ -851,6 +860,7 @@ RETURNS TABLE (
     orden    NUMERIC,
     visible  BOOLEAN,
     plan_id  BIGINT,
+    type     VARCHAR,
     status   VARCHAR
 )
 LANGUAGE plpgsql
@@ -863,6 +873,7 @@ DECLARE
     v_visible_ch CHAR(1);
     v_existente  BIGINT;
     v_orden_calc NUMERIC;
+    v_type       VARCHAR;
 
     -- Iteradores per-submenu (modo RAIZ + batch).
     v_sub_nombre     VARCHAR;
@@ -910,8 +921,13 @@ BEGIN
             SELECT 1 FROM academico_test.tmenu m
              WHERE m.pk_tmenu = p_pk_tmenu_editar AND m.active = TRUE
         ) THEN
+            -- El :ID de la URL de PATCH /menus/{id} no existe -- 404, no 400.
+            -- roles-permisos.postman_collection.json lo documenta como
+            -- "404 si el menu no existe". ERRCODE='P0002' (no_data_found) es
+            -- el unico SQLSTATE de este archivo que PostgresErrorMapper
+            -- traduce a 404 (ver nota del header sobre codigos de error).
             RAISE EXCEPTION 'fn_upsert_menu: TMENU pk=% no existe o no esta activo', p_pk_tmenu_editar
-                USING ERRCODE = '22023';
+                USING ERRCODE = 'P0002';
         END IF;
 
         IF p_nombre IS NULL OR LENGTH(TRIM(p_nombre)) = 0 THEN
@@ -971,8 +987,9 @@ BEGIN
                modified_at = CURRENT_TIMESTAMP
          WHERE m.pk_tmenu = p_pk_tmenu_editar
         RETURNING m.pk_tmenu, m.fk_tmenu, m.nombre, m.url, m.icono, m.orden,
-                  (m.visible = 'S'), m.fk_tplan
-          INTO pk_tmenu, pk_padre, nombre, path, icono, orden, visible, plan_id;
+                  (m.visible = 'S'), m.fk_tplan,
+                  (CASE WHEN m.fk_tmenu IS NULL THEN 'GROUP' ELSE 'ITEM' END)::VARCHAR
+          INTO pk_tmenu, pk_padre, nombre, path, icono, orden, visible, plan_id, type;
 
         status := 'updated';
         RETURN NEXT;
@@ -1027,8 +1044,9 @@ BEGIN
         RETURNING academico_test.tmenu.pk_tmenu, academico_test.tmenu.fk_tmenu,
                   academico_test.tmenu.nombre, academico_test.tmenu.url,
                   academico_test.tmenu.icono, academico_test.tmenu.orden,
-                  (academico_test.tmenu.visible = 'S'), academico_test.tmenu.fk_tplan
-          INTO pk_tmenu, pk_padre, nombre, path, icono, orden, visible, plan_id;
+                  (academico_test.tmenu.visible = 'S'), academico_test.tmenu.fk_tplan,
+                  (CASE WHEN academico_test.tmenu.fk_tmenu IS NULL THEN 'GROUP' ELSE 'ITEM' END)::VARCHAR
+          INTO pk_tmenu, pk_padre, nombre, path, icono, orden, visible, plan_id, type;
 
         status := 'created';
         RETURN NEXT;
@@ -1080,6 +1098,7 @@ BEGIN
     orden    := v_orden_calc;
     visible  := (v_visible_ch = 'S');
     plan_id  := p_plan_id;
+    type     := 'GROUP'; -- padre: fk_tmenu=NULL por definicion
     status   := 'created';
     RETURN NEXT;
 
@@ -1106,6 +1125,7 @@ BEGIN
             orden    := NULL;
             visible  := NULL;
             plan_id  := NULL;
+            type     := NULL;
             status   := NULL;
 
             IF v_sub_nombre IS NULL OR LENGTH(TRIM(v_sub_nombre)) = 0 THEN
@@ -1174,8 +1194,9 @@ BEGIN
             )
             RETURNING academico_test.tmenu.pk_tmenu, academico_test.tmenu.nombre,
                       academico_test.tmenu.url, academico_test.tmenu.orden,
-                      (academico_test.tmenu.visible = 'S'), academico_test.tmenu.fk_tplan
-              INTO pk_tmenu, nombre, path, orden, visible, plan_id;
+                      (academico_test.tmenu.visible = 'S'), academico_test.tmenu.fk_tplan,
+                      (CASE WHEN academico_test.tmenu.fk_tmenu IS NULL THEN 'GROUP' ELSE 'ITEM' END)::VARCHAR
+              INTO pk_tmenu, nombre, path, orden, visible, plan_id, type;
 
             status := 'submenu_inserted';
             RETURN NEXT;
@@ -1233,8 +1254,11 @@ BEGIN
     IF (SELECT COUNT(*) FROM academico_test.tmenu m
          WHERE m.pk_tmenu = ANY(v_ids) AND m.active = TRUE) <> array_length(v_ids, 1)
     THEN
+        -- roles-permisos.postman_collection.json: "404 si alguno de los ids
+        -- no existe". Distinto del chequeo de arriba (hermanos mixtos, que
+        -- SI es 22023/400 -- es una regla de negocio, no un recurso ausente).
         RAISE EXCEPTION 'fn_reorder_menus: alguno de los ids no existe o no esta activo'
-            USING ERRCODE = '22023';
+            USING ERRCODE = 'P0002';
     END IF;
 
     RETURN QUERY
@@ -1253,7 +1277,11 @@ $$;
 -- 10) fn_delete_menu
 --     Pensada para PUT /menus/{id}/eliminar (el catalogo QUERY no admite
 --     HTTP_METHOD=DELETE). Soft-delete en cascada: el menu, sus hijos
---     directos, y las filas de trol_menu de todos ellos.
+--     directos, y las filas de trol_menu de todos ellos. Si el pk no existe
+--     o no esta activo, RAISE EXCEPTION con ERRCODE='P0002' (no_data_found
+--     -> 404) — consistente con fn_upsert_menu (MODO EDITAR) y
+--     fn_associate_menus_to_rol. Antes del fix 2026-08-14 silenciaba el
+--     caso "id inexistente" detras de un 200 OK con was_deleted=FALSE.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_delete_menu(
     p_user_pk  BIGINT,
@@ -1275,6 +1303,18 @@ BEGIN
     IF p_pk_tmenu IS NULL THEN
         RAISE EXCEPTION 'fn_delete_menu: p_pk_tmenu es obligatorio'
             USING ERRCODE = '22023';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM academico_test.tmenu m
+         WHERE m.pk_tmenu = p_pk_tmenu AND m.active = TRUE
+    ) THEN
+        -- 404 (no_data_found). P0002 es el unico SQLSTATE que
+        -- PostgresErrorMapper traduce a 404 en esta rama (ver nota del
+        -- header); mismo tratamiento que fn_upsert_menu (MODO EDITAR) y
+        -- fn_associate_menus_to_rol.
+        RAISE EXCEPTION 'fn_delete_menu: TMENU pk=% no existe o no esta activo', p_pk_tmenu
+            USING ERRCODE = 'P0002';
     END IF;
 
     -- 1. Desactivar las asignaciones (trol_menu) del menu y de sus hijos.
@@ -1687,13 +1727,13 @@ COMMENT ON FUNCTION academico_test.fn_list_available_menus(BIGINT) IS
     'GET /menus -> MenuDto[]. Arbol completo de tmenu (sin filtro por rol), visible como BOOLEAN, type derivado (GROUP/ITEM de fk_tmenu IS NULL), plan_id de tmenu.fk_tplan. Shape listo para MenuDto. REQUIERE p_user_pk (fn_assert_superadmin).';
 
 COMMENT ON FUNCTION academico_test.fn_upsert_menu(BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, NUMERIC, BIGINT, BIGINT, BIGINT, JSONB) IS
-    'Reemplaza a fn_create_parent_menu_with_submenus. Tres modos: EDITAR (p_pk_tmenu_editar IS NOT NULL -> PATCH /menus/{id}, UPDATE de una fila; p_id_padre actua como reparent — NULL mueve a raiz, un pk valido mueve bajo ese padre, rechazado si crea 3 niveles o auto-referencia); HIJO BAJO PADRE EXISTENTE (p_pk_tmenu_editar NULL + p_id_padre IS NOT NULL -> POST /menus con idParent, INSERT de un submenu); RAIZ (ambos NULL, default -> POST /menus con idParent=null, INSERT de un menu raiz, +/- batch de p_submenus JSONB para el flujo historico "Crear nuevo menu principal"). p_plan_id (o "plan_id" por submenu) se valida contra tlista_valor CATEGORIA=''PLAN'' y se persiste en tmenu.fk_tplan. Duplicado de codigo -> ERRCODE=''23505'' (409); referencias invalidas (padre/plan/menu inexistente, auto-referencia, 3er nivel) -> ERRCODE=''22023'' (400). REQUIERE p_user_pk (fn_assert_superadmin).';
+    'Reemplaza a fn_create_parent_menu_with_submenus. Tres modos: EDITAR (p_pk_tmenu_editar IS NOT NULL -> PATCH /menus/{id}, UPDATE de una fila; p_id_padre actua como reparent — NULL mueve a raiz, un pk valido mueve bajo ese padre, rechazado si crea 3 niveles o auto-referencia); HIJO BAJO PADRE EXISTENTE (p_pk_tmenu_editar NULL + p_id_padre IS NOT NULL -> POST /menus con idParent, INSERT de un submenu); RAIZ (ambos NULL, default -> POST /menus con idParent=null, INSERT de un menu raiz, +/- batch de p_submenus JSONB para el flujo historico "Crear nuevo menu principal"). p_plan_id (o "plan_id" por submenu) se valida contra tlista_valor CATEGORIA=''PLAN'' y se persiste en tmenu.fk_tplan. Devuelve SIEMPRE la columna TYPE (''GROUP'' si fk_tmenu IS NULL, ''ITEM'' si no) — el contrato MenuDto.type es obligatorio, y el SELECT de los tres modos + el bucle de submenus lo calculan explicitamente (antes del fix 2026-08-14 solo lo retornaba fn_list_available_menus). Duplicado de codigo -> ERRCODE=''23505'' (409); referencias invalidas (padre/plan/menu inexistente, auto-referencia, 3er nivel) -> ERRCODE=''22023'' (400); menu a editar ausente/inactivo -> ERRCODE=''P0002'' (404). REQUIERE p_user_pk (fn_assert_superadmin).';
+
+COMMENT ON FUNCTION academico_test.fn_delete_menu(BIGINT, BIGINT) IS
+    'Pensada para PUT /menus/{id}/eliminar (el catalogo QUERY no admite HTTP_METHOD=DELETE). Soft-delete en cascada: el menu, sus hijos directos, y las filas de trol_menu de todos ellos. Si el pk no existe o no esta activo, RAISE EXCEPTION con ERRCODE=''P0002'' (no_data_found -> 404) — NO devuelve 200 OK con was_deleted=FALSE (bug del 2026-08-14). REQUIERE p_user_pk (fn_assert_superadmin).';
 
 COMMENT ON FUNCTION academico_test.fn_reorder_menus(BIGINT, JSONB) IS
     'PUT /menus/order. p_items=[{"id":..,"menuOrder":..}] (mismas claves del front). Bulk UPDATE atomico de tmenu.orden; valida que todos los ids sean hermanos (mismo fk_tmenu) y existan/esten activos antes de aplicar. REQUIERE p_user_pk (fn_assert_superadmin).';
-
-COMMENT ON FUNCTION academico_test.fn_delete_menu(BIGINT, BIGINT) IS
-    'Pensada para PUT /menus/{id}/eliminar (el catalogo QUERY no admite HTTP_METHOD=DELETE). Soft-delete en cascada: el menu, sus hijos directos, y las filas de trol_menu de todos ellos. REQUIERE p_user_pk (fn_assert_superadmin).';
 
 COMMENT ON FUNCTION academico_test.fn_list_plans_from_value(BIGINT) IS
     'GET /plans -> PlanDto[]. Planes activos de tlista_valor CATEGORIA=''PLAN''. REQUIERE p_user_pk (fn_assert_superadmin).';
