@@ -125,8 +125,14 @@
 --      Reemplaza y absorbe a fn_create_parent_menu_with_submenus (V59
 --      original). Tres modos segun que parametros opcionales lleguen:
 --        MODO EDITAR    (p_pk_tmenu_editar IS NOT NULL)
---          -> PATCH /menus/{id}: UPDATE de esa unica fila. No toca orden
---          ni jerarquia. RAISE (400, no hay 404 real) si no existe/activo.
+--          -> PATCH /menus/{id}: UPDATE de esa unica fila. No toca orden.
+--          p_id_padre SI se aplica aqui (no como selector de modo, sino
+--          como "nuevo padre deseado" — reparent): NULL mueve el menu a
+--          raiz, un pk valido lo mueve bajo ese padre. Rechaza (22023) si
+--          el padre no existe/no esta activo/no es raiz, si el padre es
+--          el mismo menu, o si el menu editado YA tiene submenus propios
+--          (solo 2 niveles de jerarquia — V22). RAISE (400, no hay 404
+--          real) si el menu a editar no existe/activo.
 --        MODO HIJO      (p_pk_tmenu_editar NULL, p_id_padre IS NOT NULL)
 --          -> POST /menus con idParent set: INSERT de UN submenu bajo un
 --          padre EXISTENTE (valida que el padre exista, este activo y sea
@@ -925,6 +931,34 @@ BEGIN
                 USING ERRCODE = '23505';
         END IF;
 
+        -- Reparent (opcional): SaveMenuRequest.idParent siempre viaja en el
+        -- body de PATCH /menus/{id}, incluso sin cambiar de padre — asi que
+        -- p_id_padre se usa aqui como "nuevo padre deseado" (NULL = mover a
+        -- raiz), no como selector de modo (ese rol ya lo cumplio
+        -- p_pk_tmenu_editar mas arriba). Tres validaciones antes de aplicar:
+        IF p_id_padre IS NOT NULL THEN
+            IF p_id_padre = p_pk_tmenu_editar THEN
+                RAISE EXCEPTION 'fn_upsert_menu: un menu no puede ser su propio padre'
+                    USING ERRCODE = '22023';
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM academico_test.tmenu m
+                 WHERE m.pk_tmenu = p_id_padre AND m.active = TRUE AND m.fk_tmenu IS NULL
+            ) THEN
+                RAISE EXCEPTION 'fn_upsert_menu: el padre pk=% no existe, no esta activo o no es un menu raiz', p_id_padre
+                    USING ERRCODE = '22023';
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM academico_test.tmenu m
+                 WHERE m.fk_tmenu = p_pk_tmenu_editar AND m.active = TRUE
+            ) THEN
+                -- Solo 2 niveles de jerarquia (V22): un menu que YA tiene
+                -- hijos no puede convertirse el mismo en hijo de otro.
+                RAISE EXCEPTION 'fn_upsert_menu: pk=% tiene submenus propios, no puede convertirse en submenu', p_pk_tmenu_editar
+                    USING ERRCODE = '22023';
+            END IF;
+        END IF;
+
         UPDATE academico_test.tmenu m
            SET nombre      = v_nombre,
                codigo      = v_codigo,
@@ -932,6 +966,7 @@ BEGIN
                icono       = p_icono,
                visible     = v_visible_ch,
                fk_tplan    = p_plan_id,
+               fk_tmenu    = p_id_padre,
                modified_by = TRIM(p_created_by),
                modified_at = CURRENT_TIMESTAMP
          WHERE m.pk_tmenu = p_pk_tmenu_editar
@@ -1652,7 +1687,7 @@ COMMENT ON FUNCTION academico_test.fn_list_available_menus(BIGINT) IS
     'GET /menus -> MenuDto[]. Arbol completo de tmenu (sin filtro por rol), visible como BOOLEAN, type derivado (GROUP/ITEM de fk_tmenu IS NULL), plan_id de tmenu.fk_tplan. Shape listo para MenuDto. REQUIERE p_user_pk (fn_assert_superadmin).';
 
 COMMENT ON FUNCTION academico_test.fn_upsert_menu(BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, NUMERIC, BIGINT, BIGINT, BIGINT, JSONB) IS
-    'Reemplaza a fn_create_parent_menu_with_submenus. Tres modos: EDITAR (p_pk_tmenu_editar IS NOT NULL -> PATCH /menus/{id}, UPDATE de una fila); HIJO BAJO PADRE EXISTENTE (p_id_padre IS NOT NULL -> POST /menus con idParent, INSERT de un submenu); RAIZ (default -> POST /menus con idParent=null, INSERT de un menu raiz, +/- batch de p_submenus JSONB para el flujo historico "Crear nuevo menu principal"). p_plan_id (o "plan_id" por submenu) se valida contra tlista_valor CATEGORIA=''PLAN'' y se persiste en tmenu.fk_tplan. Duplicado de codigo -> ERRCODE=''23505'' (409). REQUIERE p_user_pk (fn_assert_superadmin).';
+    'Reemplaza a fn_create_parent_menu_with_submenus. Tres modos: EDITAR (p_pk_tmenu_editar IS NOT NULL -> PATCH /menus/{id}, UPDATE de una fila; p_id_padre actua como reparent — NULL mueve a raiz, un pk valido mueve bajo ese padre, rechazado si crea 3 niveles o auto-referencia); HIJO BAJO PADRE EXISTENTE (p_pk_tmenu_editar NULL + p_id_padre IS NOT NULL -> POST /menus con idParent, INSERT de un submenu); RAIZ (ambos NULL, default -> POST /menus con idParent=null, INSERT de un menu raiz, +/- batch de p_submenus JSONB para el flujo historico "Crear nuevo menu principal"). p_plan_id (o "plan_id" por submenu) se valida contra tlista_valor CATEGORIA=''PLAN'' y se persiste en tmenu.fk_tplan. Duplicado de codigo -> ERRCODE=''23505'' (409); referencias invalidas (padre/plan/menu inexistente, auto-referencia, 3er nivel) -> ERRCODE=''22023'' (400). REQUIERE p_user_pk (fn_assert_superadmin).';
 
 COMMENT ON FUNCTION academico_test.fn_reorder_menus(BIGINT, JSONB) IS
     'PUT /menus/order. p_items=[{"id":..,"menuOrder":..}] (mismas claves del front). Bulk UPDATE atomico de tmenu.orden; valida que todos los ids sean hermanos (mismo fk_tmenu) y existan/esten activos antes de aplicar. REQUIERE p_user_pk (fn_assert_superadmin).';
