@@ -36,6 +36,18 @@ import java.util.Map;
  * valor es un {@code Map}, se serializa como JSON literal
  * ({@code {"k":"v"}}). El cast {@code as jsonb} lo acepta.
  *
+ * <p><b>Arrays JSON nativos en un JSONB escalar (V63)</b>: cuando el tipo
+ * declarado es {@code JSONB}/{@code JSON} (no {@code JSONB[]}) y el valor
+ * es un {@code List} — el caso de un parámetro {@code jsonb} de PL/pgSQL
+ * que internamente contiene un array de registros, como
+ * {@code fn_escala_guardar_bulk(p_scales jsonb, ...)} — se serializa como
+ * literal JSON array ({@code [{"k":"v"},{"k":"w"}]}). Antes de V63 el
+ * cliente tenía que pre-serializar el array a mano como {@code String}
+ * ({@code "SCALES": "[{...}]"}); ahora un array nativo
+ * ({@code "SCALES": [{...}]}) también funciona — más ergonómico y lo que
+ * cualquier cliente REST esperaría de un campo JSON. Ver
+ * {@link #toJsonArrayLiteral}.
+ *
  * <p><b>Sin tipo declarado</b>: si la key no aparece en {@code paramTypes},
  * el valor se pasa como {@code String.valueOf(val)}. El {@code SqlRewriter}
  * no insertó ningún cast y el bind queda como texto puro — la guardia
@@ -148,7 +160,19 @@ public final class ParamBinder {
             try {
                 if (declaredType != null && ParamTypes.ARRAY_TYPES.contains(declaredType)) {
                     serialized = toPgArray(val);
+                } else if (isScalarJsonType(declaredType) && val instanceof List<?> listVal) {
+                    // V63 — array nativo para un JSONB/JSON escalar (no
+                    // JSONB[]): el cliente ya no necesita pre-serializar
+                    // el array a String a mano.
+                    serialized = toJsonArrayLiteral(listVal);
+                } else if (isScalarJsonType(declaredType) && val instanceof Map<?, ?> mapVal) {
+                    serialized = toJsonLiteral(mapVal);
                 } else if (key.startsWith(ParamNamespace.BODY_RAW + ".") && val instanceof Map) {
+                    // Fallback para BODY_RAW.X con Map SIN tipo declarado
+                    // (declaredType == null) — el guard runtime de
+                    // QueryService ya exige tipo para todo BODY_RAW.* en
+                    // producción, pero este método también lo llaman
+                    // callers que no pasan por esa guardia.
                     serialized = toJsonLiteral((Map<?, ?>) val);
                 } else {
                     serialized = stringify(val);
@@ -275,6 +299,16 @@ public final class ParamBinder {
         return null;
     }
 
+    /**
+     * ¿{@code declaredType} es JSONB/JSON escalar (no {@code JSONB[]},
+     * que va por {@link ParamTypes#ARRAY_TYPES}/{@link #toPgArray})?
+     * {@code declaredType} ya viene sin el sufijo de nulabilidad — es
+     * el tipo base que devuelve {@link ParamTypes#parseDeclaration}.
+     */
+    private static boolean isScalarJsonType(String declaredType) {
+        return "JSONB".equals(declaredType) || "JSON".equals(declaredType);
+    }
+
     private static Map<String, String> mergeTypes(Map<String, String> base,
                                                    Map<String, String> extra) {
         if (base == null && extra == null) return Map.of();
@@ -338,15 +372,20 @@ public final class ParamBinder {
             return null;
         }
 
-        // JSONB / JSON — sólo aceptamos Map o String (un
-        // JSON literal que ya viene como String del cliente es
-        // legal; no lo rechazamos).
+        // JSONB / JSON — aceptamos Map (objeto), List (array) o
+        // String (un JSON ya serializado por el cliente, objeto o
+        // array). V63: antes un List se rechazaba acá y obligaba
+        // al cliente a pre-serializar el array a mano
+        // ({@code "SCALES": "[{...}]"}) — ahora el binder serializa
+        // el array nativo correctamente (ver toJsonArrayLiteral),
+        // así que un array real ({@code "SCALES": [{...}]}) es tan
+        // válido como el objeto o el String pre-serializado.
         if ("JSONB".equals(up) || "JSON".equals(up)) {
-            if (val instanceof Map || val instanceof String) return null;
+            if (val instanceof Map || val instanceof List || val instanceof String) return null;
             return "El parámetro '" + key + "' se declaró como " + up
                     + " pero el cliente envió "
                     + val.getClass().getSimpleName()
-                    + ". Para JSONB/JSONB usa BODY_RAW.X con un sub-objeto completo.";
+                    + ". Usa un objeto {...}, un array [...], o un string ya serializado.";
         }
 
         // Booleano
@@ -639,7 +678,6 @@ public final class ParamBinder {
      * ligero. Si los valores son heterogéneos, los strings se quotan y los
      * números/booleanos se serializan con su forma JSON.
      */
-    @SuppressWarnings("unchecked")
     static String toJsonLiteral(Map<?, ?> map) {
         if (map == null) return null;
         StringBuilder sb = new StringBuilder("{");
@@ -648,34 +686,72 @@ public final class ParamBinder {
             if (!first) sb.append(',');
             first = false;
             sb.append('"').append(escapeJson(e.getKey().toString())).append('"').append(':');
-            Object v = e.getValue();
-            if (v == null) {
-                sb.append("null");
-            } else if (v instanceof Map<?, ?> nested) {
-                sb.append(toJsonLiteral(nested));
-            } else if (v instanceof List<?> list) {
-                sb.append('[');
-                boolean firstArr = true;
-                for (Object item : list) {
-                    if (!firstArr) sb.append(',');
-                    firstArr = false;
-                    if (item == null) sb.append("null");
-                    else if (item instanceof String s) sb.append('"').append(escapeJson(s)).append('"');
-                    else if (item instanceof Number || item instanceof Boolean) sb.append(stringify(item));
-                    else if (item instanceof Map<?, ?> m) sb.append(toJsonLiteral(m));
-                    else sb.append('"').append(escapeJson(stringify(item))).append('"');
-                }
-                sb.append(']');
-            } else if (v instanceof String s) {
-                sb.append('"').append(escapeJson(s)).append('"');
-            } else if (v instanceof Number || v instanceof Boolean) {
-                sb.append(stringify(v));
-            } else {
-                sb.append('"').append(escapeJson(stringify(v))).append('"');
-            }
+            appendJsonValue(sb, e.getValue());
         }
         sb.append('}');
         return sb.toString();
+    }
+
+    /**
+     * V63 — serializa un {@code List<?>} (lo que produce Jackson desde un
+     * JSON array) como literal JSON array: {@code [elem1,elem2,...]}. Es
+     * el contrapunto de {@link #toJsonLiteral} para cuando el valor de un
+     * {@code BODY_RAW.X} declarado {@code JSONB}/{@code JSON} es
+     * directamente un array, no un objeto — el caso de
+     * {@code fn_escala_guardar_bulk}, {@code fn_subject_guardar_bulk},
+     * etc., cuyo parámetro {@code jsonb} escalar contiene un array de
+     * registros ({@code [{"...":"..."},{"...":"..."}]}), no un objeto.
+     *
+     * <p>Antes de V63 el cliente tenía que pre-serializar el array a
+     * mano como {@code String} ({@code "SCALES": "[{...}]"}) porque
+     * {@link #validateAgainstDeclared} rechazaba un {@code List} crudo
+     * para JSONB escalar, y aun sorteando esa validación la
+     * serialización caía al fallback de {@link #stringify} —
+     * {@code List.toString()} de Java, que no es JSON válido. Ahora se
+     * acepta el array nativo (más ergonómico y lo que cualquier
+     * cliente REST esperaría) y se serializa acá correctamente; la
+     * forma pre-serializada como {@code String} se sigue aceptando
+     * también, sin cambios.
+     */
+    static String toJsonArrayLiteral(List<?> list) {
+        if (list == null) return null;
+        StringBuilder sb = new StringBuilder("[");
+        boolean first = true;
+        for (Object item : list) {
+            if (!first) sb.append(',');
+            first = false;
+            appendJsonValue(sb, item);
+        }
+        sb.append(']');
+        return sb.toString();
+    }
+
+    /**
+     * Serializa un valor JSON cualquiera (lo que puede salir de un
+     * árbol Jackson: {@code null}, {@code Map}, {@code List}, String,
+     * Number, Boolean, o cualquier otro tipo como fallback a texto
+     * quotado) y lo apendiza a {@code sb}. Punto único de dispatch
+     * compartido por {@link #toJsonLiteral} (valores de un objeto) y
+     * {@link #toJsonArrayLiteral} (elementos de un array) — antes esta
+     * lógica vivía duplicada e inline dentro de {@code toJsonLiteral},
+     * y la rama de List anidada dentro de un Map no manejaba una lista
+     * DENTRO de otra lista (caía al fallback de texto quotado); al
+     * unificar en un método recursivo, ese caso también queda cubierto.
+     */
+    private static void appendJsonValue(StringBuilder sb, Object v) {
+        if (v == null) {
+            sb.append("null");
+        } else if (v instanceof Map<?, ?> nested) {
+            sb.append(toJsonLiteral(nested));
+        } else if (v instanceof List<?> nested) {
+            sb.append(toJsonArrayLiteral(nested));
+        } else if (v instanceof String s) {
+            sb.append('"').append(escapeJson(s)).append('"');
+        } else if (v instanceof Number || v instanceof Boolean) {
+            sb.append(stringify(v));
+        } else {
+            sb.append('"').append(escapeJson(stringify(v))).append('"');
+        }
     }
 
     private static String escapeJson(String s) {
