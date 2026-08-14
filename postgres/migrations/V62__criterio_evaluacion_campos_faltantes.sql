@@ -277,14 +277,16 @@ LANGUAGE sql STABLE AS $$
         ce.FK_TLV_MODO_REDONDEAR,
         modo_redondear.NOMBRE,
 
-        ce.PORCENTAJE_INICIAL_CALIF,
+        round(ce.PORCENTAJE_INICIAL_CALIF / 100
+              * (CASE UPPER(TRIM(COALESCE(formato.NOMBRE, ''))) WHEN 'DE CERO A CINCO' THEN 5 WHEN 'DE CERO A DIEZ' THEN 10 ELSE 100 END), 2),
 
         ce.NUMERO_DECIMALES,
 
         ce.FK_TLV_MODIF_FINAL_PERACA,
         modif_final.NOMBRE,
 
-        ce.PORCENTAJE_MAXIMO_RECUPERACION
+        round(ce.PORCENTAJE_MAXIMO_RECUPERACION / 100
+              * (CASE UPPER(TRIM(COALESCE(formato.NOMBRE, ''))) WHEN 'DE CERO A CINCO' THEN 5 WHEN 'DE CERO A DIEZ' THEN 10 ELSE 100 END), 2)
 
     FROM academico_test.TCRITERIO_EVALUACION ce
 
@@ -324,7 +326,7 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_criterio_eval_obtener(BIGINT, BIGINT) IS
-    'V62: rounding_mode ahora lee FK_TLV_MODO_REDONDEAR (antes leia NUMERO_DECIMALES por error) y gana su propio rounding_mode_name, igual que el resto de lookups. subject_grade_criteria ahora lee la columna dedicada FK_TLV_CRITERIO_ASIGNATURA (antes leia FK_TLV_MODIF_FINAL_PERACA por error). initial_grade sigue leyendo PORCENTAJE_INICIAL_CALIF sin cambios (confirmado con datos reales: 0,1,10,20,30,40 -- exactamente "nota inicial", el nombre siempre fue correcto). decimal_places y final_grade_editable son nuevos, exponen NUMERO_DECIMALES y FK_TLV_MODIF_FINAL_PERACA bajo su nombre real para no perder esa capacidad. max_recovery_grade es nuevo, lee la columna nueva PORCENTAJE_MAXIMO_RECUPERACION.';
+    'V62: rounding_mode ahora lee FK_TLV_MODO_REDONDEAR (antes leia NUMERO_DECIMALES por error) y gana su propio rounding_mode_name, igual que el resto de lookups. subject_grade_criteria ahora lee la columna dedicada FK_TLV_CRITERIO_ASIGNATURA (antes leia FK_TLV_MODIF_FINAL_PERACA por error). initial_grade y max_recovery_grade ahora convierten PORCENTAJE_INICIAL_CALIF/PORCENTAJE_MAXIMO_RECUPERACION de vuelta al rango real del formato de calificacion (V22: "Porcentaje inicial del rango de calificaciones" -- la columna SIEMPRE fue un %, nunca el valor crudo; V41 jamas convirtio, bug heredado corregido aqui). Regla identica a V42 (fn_escala_guardar_bulk/fn_escala_listar: "las notas se guardan en % contra el formato del periodo"), pero comparando contra TLISTA_VALOR.NOMBRE en vez de VALOR -- V42 compara contra VALOR ("CINCO"/"DIEZ"/"CIEN", confirmado con datos reales), que nunca calza con los literales "DE CERO A CINCO"/"DE CERO A DIEZ" de su propio CASE, asi que su rango cae siempre al ELSE (100); no se replica ese bug aca. decimal_places y final_grade_editable son nuevos, exponen NUMERO_DECIMALES y FK_TLV_MODIF_FINAL_PERACA bajo su nombre real para no perder esa capacidad.';
 
 -- ---------------------------------------------------------------------------
 -- 5. fn_criterio_eval_actualizar — misma correccion en el UPDATE; tres
@@ -381,11 +383,35 @@ RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
     v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_escala_actual BIGINT;
+    v_fmt_nombre TEXT; v_max NUMERIC;
 BEGIN
     -- Alcance por rol (como V37): grueso + fino (el criterio comparte PK con el
     -- periodo, asi que el establecimiento sale de p_pk_periodo).
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_pk_periodo));
+    -- Rango real del formato de calificacion VIGENTE TRAS este UPDATE (el
+    -- nuevo si se manda p_grading_format, si no el que ya tenia el
+    -- periodo) -- para convertir p_initial_grade / p_max_recovery_grade a
+    -- porcentaje antes de guardar (V22: PORCENTAJE_INICIAL_CALIF es
+    -- "Porcentaje inicial del rango de calificaciones", nunca el valor
+    -- crudo; V42: "las notas se guardan en % (0-100) contra el formato
+    -- del periodo; la lectura convierte de vuelta"). Compara contra
+    -- TLISTA_VALOR.NOMBRE, NO contra VALOR: V42 (fn_escala_guardar_bulk)
+    -- compara contra VALOR, pero esa columna guarda "CINCO"/"DIEZ"/"CIEN"
+    -- (confirmado con datos reales), nunca "DE CERO A CINCO"/"DE CERO A
+    -- DIEZ" -- su CASE nunca matchea y cae siempre al ELSE (100). NOMBRE
+    -- si contiene el texto completo; no se replica ese bug aca.
+    SELECT lv.NOMBRE INTO v_fmt_nombre
+      FROM academico_test.TLISTA_VALOR lv
+     WHERE lv.PK_LISTA_VALOR = COALESCE(p_grading_format, (
+         SELECT FK_TLV_FORMATO_CALIFICACION FROM academico_test.TCRITERIO_EVALUACION
+          WHERE PK_TCRITERIO_EVALUACION = p_pk_periodo AND ACTIVE = TRUE
+     ));
+    v_max := CASE UPPER(TRIM(COALESCE(v_fmt_nombre, '')))
+                WHEN 'DE CERO A CINCO' THEN 5
+                WHEN 'DE CERO A DIEZ'  THEN 10
+                ELSE 100
+              END;
     -- FK_TESCALA solo cambia si p_set_grading_scale = TRUE (permite ponerla o
     -- limpiarla explicitamente); en FALSE no se toca. El resto es COALESCE.
     -- Si se va a asignar una escala no nula, debe existir y estar activa.
@@ -417,10 +443,10 @@ BEGIN
         FK_TLV_CRITERIO_AREA        = COALESCE(p_area_grade_criteria, FK_TLV_CRITERIO_AREA),
         FK_TLV_DESEMPENO_SIN_CALIF  = COALESCE(p_student_wo_grades, FK_TLV_DESEMPENO_SIN_CALIF),
         FK_TLV_MODO_REDONDEAR       = COALESCE(p_rounding_mode::BIGINT, FK_TLV_MODO_REDONDEAR),
-        PORCENTAJE_INICIAL_CALIF    = COALESCE(p_initial_grade, PORCENTAJE_INICIAL_CALIF),
+        PORCENTAJE_INICIAL_CALIF    = COALESCE(p_initial_grade / v_max * 100, PORCENTAJE_INICIAL_CALIF),
         NUMERO_DECIMALES            = COALESCE(p_decimal_places, NUMERO_DECIMALES),
         FK_TLV_MODIF_FINAL_PERACA   = COALESCE(p_final_grade_editable, FK_TLV_MODIF_FINAL_PERACA),
-        PORCENTAJE_MAXIMO_RECUPERACION = COALESCE(p_max_recovery_grade, PORCENTAJE_MAXIMO_RECUPERACION),
+        PORCENTAJE_MAXIMO_RECUPERACION = COALESCE(p_max_recovery_grade / v_max * 100, PORCENTAJE_MAXIMO_RECUPERACION),
         MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TCRITERIO_EVALUACION = p_pk_periodo AND ACTIVE = TRUE;
     GET DIAGNOSTICS v_n = ROW_COUNT;
@@ -444,4 +470,4 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_criterio_eval_actualizar(
     BIGINT, BIGINT, BIGINT, BOOLEAN, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, BIGINT, NUMERIC, BIGINT, NUMERIC
 ) IS
-    'V62: corrige el wiring de p_rounding_mode (antes escribia NUMERO_DECIMALES; ahora FK_TLV_MODO_REDONDEAR, columna trasladada desde TPERIODO_ACADEMICO_CONFIG) y de p_subject_grade_criteria (antes escribia FK_TLV_MODIF_FINAL_PERACA; ahora la columna dedicada FK_TLV_CRITERIO_ASIGNATURA). p_initial_grade sigue escribiendo PORCENTAJE_INICIAL_CALIF sin cambio de columna (confirmado: es efectivamente la nota inicial). p_decimal_places y p_final_grade_editable son nuevos, exponen NUMERO_DECIMALES y FK_TLV_MODIF_FINAL_PERACA. p_max_recovery_grade es nuevo, escribe la columna nueva PORCENTAJE_MAXIMO_RECUPERACION -- todos al final de la firma para no romper la llamada posicional del catalogo (fila 51).';
+    'V62: corrige el wiring de p_rounding_mode (antes escribia NUMERO_DECIMALES; ahora FK_TLV_MODO_REDONDEAR, columna trasladada desde TPERIODO_ACADEMICO_CONFIG) y de p_subject_grade_criteria (antes escribia FK_TLV_MODIF_FINAL_PERACA; ahora la columna dedicada FK_TLV_CRITERIO_ASIGNATURA). p_initial_grade y p_max_recovery_grade ahora se convierten a porcentaje (v_max = 5/10/100 segun el formato de calificacion vigente tras el UPDATE) antes de guardarse en PORCENTAJE_INICIAL_CALIF/PORCENTAJE_MAXIMO_RECUPERACION, en vez de escribir el valor crudo (bug heredado de V41, que jamas convirtio pese a que V22 documenta la columna como "Porcentaje inicial del rango de calificaciones"; ver comentario en el cuerpo de la funcion para el detalle del bug analogo en V42 que se evito no replicar). p_decimal_places y p_final_grade_editable son nuevos, exponen NUMERO_DECIMALES y FK_TLV_MODIF_FINAL_PERACA -- todos al final de la firma para no romper la llamada posicional del catalogo (fila 51).';
