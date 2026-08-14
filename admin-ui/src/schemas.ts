@@ -228,6 +228,17 @@ const CURATED_PG_TYPES = [
   "TITULACION_GRADO",
 ] as const;
 
+/**
+ * V62 — espejo del sufijo de obligatoriedad que expone
+ * {@code GET /query/param-types} (campo {@code requiredSuffix}).
+ * Hardcodeado acá también porque esta validación corre ANTES del
+ * submit, sin acceso al hook de React Query — mismo trade-off que
+ * ya tenía {@code CURATED_PG_TYPES} (comentario arriba): la fuente
+ * de verdad en runtime es el backend, esto es sólo para no dejar
+ * pasar un typo evidente antes de llegar ahí.
+ */
+const REQUIRED_SUFFIX = "!";
+
 export const queryFormSchema = z
   .object({
     // V31 — UUID can be empty (the backend auto-generates one
@@ -301,8 +312,17 @@ export const queryFormSchema = z
         z
           .string()
           .refine(
-            (v) => (CURATED_PG_TYPES as readonly string[]).includes(v),
-            `Tipo no soportado. Permitidos: ${CURATED_PG_TYPES.join(", ")}`,
+            (v) => {
+              // V62 — el valor puede traer el sufijo de obligatoriedad
+              // ("BIGINT!"); se valida el tipo base, igual que el
+              // backend (ParamTypes.parseDeclaration).
+              const base = v.endsWith(REQUIRED_SUFFIX)
+                ? v.slice(0, -REQUIRED_SUFFIX.length)
+                : v;
+              return (CURATED_PG_TYPES as readonly string[]).includes(base);
+            },
+            `Tipo no soportado. Permitidos: ${CURATED_PG_TYPES.join(", ")} `
+              + `(opcionalmente con sufijo '${REQUIRED_SUFFIX}' para marcarlo obligatorio).`,
           ),
       )
       .default({}),

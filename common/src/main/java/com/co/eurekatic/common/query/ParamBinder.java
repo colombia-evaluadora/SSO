@@ -36,6 +36,18 @@ import java.util.Map;
  * valor es un {@code Map}, se serializa como JSON literal
  * ({@code {"k":"v"}}). El cast {@code as jsonb} lo acepta.
  *
+ * <p><b>Arrays JSON nativos en un JSONB escalar (V63)</b>: cuando el tipo
+ * declarado es {@code JSONB}/{@code JSON} (no {@code JSONB[]}) y el valor
+ * es un {@code List} — el caso de un parámetro {@code jsonb} de PL/pgSQL
+ * que internamente contiene un array de registros, como
+ * {@code fn_escala_guardar_bulk(p_scales jsonb, ...)} — se serializa como
+ * literal JSON array ({@code [{"k":"v"},{"k":"w"}]}). Antes de V63 el
+ * cliente tenía que pre-serializar el array a mano como {@code String}
+ * ({@code "SCALES": "[{...}]"}); ahora un array nativo
+ * ({@code "SCALES": [{...}]}) también funciona — más ergonómico y lo que
+ * cualquier cliente REST esperaría de un campo JSON. Ver
+ * {@link #toJsonArrayLiteral}.
+ *
  * <p><b>Sin tipo declarado</b>: si la key no aparece en {@code paramTypes},
  * el valor se pasa como {@code String.valueOf(val)}. El {@code SqlRewriter}
  * no insertó ningún cast y el bind queda como texto puro — la guardia
@@ -56,6 +68,19 @@ import java.util.Map;
  * sigue usando {@code cs.setObject(k, v, sqlType)} con el map
  * {@link ParamTypes#JDBC_TYPES} — CallableStatement requiere sqlType
  * explícito para OUT, y no entra al SqlRewriter.
+ *
+ * <p><b>V62 (nulabilidad)</b>: por defecto, todo parámetro declarado
+ * acepta {@code null} — enviarlo explícito o simplemente omitir el
+ * campo bindea {@code NULL} de SQL. Antes de V62 ambos casos dejaban
+ * el placeholder sin valor en el {@link MapSqlParameterSource}, y
+ * como el SQL sí lo referenciaba (el {@code cast(:x as TIPO)} que
+ * inserta {@link SqlRewriter}), Spring reventaba con una excepción
+ * que no es {@link java.sql.SQLException} — de ahí el 500 opaco sin
+ * log que documenta la spec 2026-08-13. Un autor del catálogo marca
+ * un parámetro como <b>obligatorio</b> añadiendo {@code '!'} al tipo
+ * ({@code "BIGINT!"}, ver {@link ParamTypes#parseDeclaration}); ahí
+ * {@code null} u omitir el campo responde {@code 400} nombrando el
+ * parámetro en vez de bindear NULL o reventar.
  */
 public final class ParamBinder {
 
@@ -87,28 +112,40 @@ public final class ParamBinder {
             Map<String, String> extraDeclared) {
         Map<String, String> types = mergeTypes(paramTypes, extraDeclared);
         MapSqlParameterSource src = new MapSqlParameterSource();
-        if (values == null) return src;
+        Map<String, Object> safeValues = values == null ? Map.of() : values;
 
-        for (Map.Entry<String, Object> e : values.entrySet()) {
+        for (Map.Entry<String, Object> e : safeValues.entrySet()) {
             String key = e.getKey();
             Object val = e.getValue();
-            String declaredType = types.get(key);
-            if (declaredType == null) {
+            String declaredTypeRaw = types.get(key);
+            if (declaredTypeRaw == null) {
                 // V60-bis — el cliente puede haber escrito la
                 // key en cualquier caja. Buscamos la
                 // representación canónica (MAYÚSCULAS +
                 // namespace prefix) contra el catálogo.
                 String canonical = canonicalLookupKey(key);
                 if (canonical != null) {
-                    declaredType = types.get(canonical);
+                    declaredTypeRaw = types.get(canonical);
                 }
             }
+            ParamTypes.Declaration decl = ParamTypes.parseDeclaration(declaredTypeRaw);
+            String declaredType = decl.baseType();
 
             if (val == null) {
-                // null: no se bindea. PG interpreta el placeholder como NULL
-                // sólo si el cast lo permite; si no, hay que usar COALESCE en SQL.
-                // Saltarse el addValue evita que JDBC mande setObject(k, null)
-                // con tipo desconocido.
+                requireNullableOr400(key, declaredTypeRaw, decl);
+                // V62 — antes esto simplemente saltaba el
+                // addValue: el placeholder quedaba SIN valor en
+                // el MapSqlParameterSource, y como el SQL sí lo
+                // referencia (vía el cast que insertó
+                // SqlRewriter), Spring reventaba con
+                // "no value supplied for the SQL parameter" —
+                // una excepción que no es SQLException, así que
+                // GlobalExceptionHandler.handleDataAccess la
+                // devolvía como 500 opaco sin loguear nada (ver
+                // spec 2026-08-13). Bindear NULL explícito deja
+                // que PG resuelva {@code cast(NULL as TIPO)},
+                // válido para cualquier tipo.
+                bindWithAliases(src, key, null);
                 continue;
             }
 
@@ -123,7 +160,19 @@ public final class ParamBinder {
             try {
                 if (declaredType != null && ParamTypes.ARRAY_TYPES.contains(declaredType)) {
                     serialized = toPgArray(val);
+                } else if (isScalarJsonType(declaredType) && val instanceof List<?> listVal) {
+                    // V63 — array nativo para un JSONB/JSON escalar (no
+                    // JSONB[]): el cliente ya no necesita pre-serializar
+                    // el array a String a mano.
+                    serialized = toJsonArrayLiteral(listVal);
+                } else if (isScalarJsonType(declaredType) && val instanceof Map<?, ?> mapVal) {
+                    serialized = toJsonLiteral(mapVal);
                 } else if (key.startsWith(ParamNamespace.BODY_RAW + ".") && val instanceof Map) {
+                    // Fallback para BODY_RAW.X con Map SIN tipo declarado
+                    // (declaredType == null) — el guard runtime de
+                    // QueryService ya exige tipo para todo BODY_RAW.* en
+                    // producción, pero este método también lo llaman
+                    // callers que no pasan por esa guardia.
                     serialized = toJsonLiteral((Map<?, ?>) val);
                 } else {
                     serialized = stringify(val);
@@ -134,40 +183,90 @@ public final class ParamBinder {
                         + "' al tipo declarado " + declaredType + ": "
                         + ex.getMessage());
             }
-            src.addValue(key, serialized);
-            // V60-bis — publicamos también varias variantes
-            // canonicales para que un SQL con placeholder
-            // UPPERCASA O minúsculas, con namespace O sin él,
-            // encuentre el valor aunque el cliente haya
-            // enviado la key en una caja arbitraria.
-            //
-            // Tres aliases:
-            //  - upper: mayúsculas (sin namespace) — para
-            //    SQL legacy con :id en mayúsculas.
-            //  - canonical: namespace-prefixado en MAYÚSCULAS
-            //    (BODY.X para body-scope) — para SQL con
-            //    placeholder moderno :BODY.X.
-            //  - lower: minúsculas (sin namespace) — para
-            //    SQL legacy con :id en minúsculas.
-            //
-            // Spring NamedParameterUtils es case-sensitive
-            // sobre los placeholders del SQL, así que con
-            // tres aliases el bind funciona en cualquier
-            // combinación de cajas y namespaces.
-            String upper = key.toUpperCase(java.util.Locale.ROOT);
-            String lower = key.toLowerCase(java.util.Locale.ROOT);
-            String canonical = canonicalLookupKey(key);
-            if (canonical != null && !canonical.equals(key)) {
-                src.addValue(canonical, serialized);
-            }
-            if (!upper.equals(key) && !upper.equals(canonical)) {
-                src.addValue(upper, serialized);
-            }
-            if (!lower.equals(key) && !lower.equals(canonical) && !lower.equals(upper)) {
-                src.addValue(lower, serialized);
-            }
+            bindWithAliases(src, key, serialized);
         }
+
+        // V62 — parámetros DECLARADOS que el cliente ni siquiera
+        // mandó (la key no aparece en absoluto en `values`, ni
+        // como null explícito). Antes del fix de arriba esto ya
+        // era el mismo 500 opaco — sólo que el bucle de arriba ni
+        // llegaba a verlo, porque no hay entrada en `values` que
+        // recorrer. Un campo omitido y uno enviado en null son la
+        // misma "ausencia de valor" desde el punto de vista de
+        // SQL, así que se tratan igual: obligatorio → 400 nombrando
+        // el parámetro; opcional (default) → bind NULL.
+        for (Map.Entry<String, String> te : types.entrySet()) {
+            String declaredKey = te.getKey();
+            if (isPresent(safeValues, declaredKey)) continue; // ya procesado arriba
+            ParamTypes.Declaration decl = ParamTypes.parseDeclaration(te.getValue());
+            requireNullableOr400(declaredKey, te.getValue(), decl);
+            bindWithAliases(src, declaredKey, null);
+        }
+
         return src;
+    }
+
+    /** Lanza 400 si {@code decl} es obligatorio; no hace nada si es nullable. */
+    private static void requireNullableOr400(String key, String declaredTypeRaw,
+                                              ParamTypes.Declaration decl) {
+        if (declaredTypeRaw != null && !decl.nullable()) {
+            throw new IllegalArgumentException(
+                    "El parámetro '" + key + "' es obligatorio (tipo " + decl.baseType()
+                    + ") y no puede omitirse ni enviarse como null.");
+        }
+    }
+
+    /**
+     * ¿Existe alguna entrada en {@code values} que el bucle principal
+     * de {@link #buildStrict} habría emparejado con {@code declaredKey}?
+     * Espejo inverso de la búsqueda hacia adelante (key del cliente →
+     * {@link #canonicalLookupKey} → key declarada) que ya hace ese
+     * bucle — necesario para distinguir "declarado pero nunca
+     * enviado" de "ya se procesó arriba" en el segundo paso.
+     */
+    private static boolean isPresent(Map<String, Object> values, String declaredKey) {
+        if (values.containsKey(declaredKey)) return true;
+        for (String rawKey : values.keySet()) {
+            if (rawKey.equalsIgnoreCase(declaredKey)) return true;
+            String canonical = canonicalLookupKey(rawKey);
+            if (declaredKey.equals(canonical)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Bindea {@code serializedOrNull} bajo {@code key} y sus variantes
+     * canónicas — el mismo esquema de tres alias que V60-bis introdujo
+     * (mayúscula, minúscula, forma canónica con namespace), ahora
+     * compartido entre el camino "valor real" y el camino "NULL"
+     * (V62) para no duplicar la lógica de aliasing.
+     *
+     * <p>Tres aliases, igual que antes:
+     * <ul>
+     *   <li>canonical: namespace-prefixado en MAYÚSCULAS ({@code BODY.X})
+     *       — para SQL con placeholder moderno {@code :BODY.X}.</li>
+     *   <li>upper: mayúsculas — para SQL legacy con {@code :id} en mayúsculas.</li>
+     *   <li>lower: minúsculas — para SQL legacy con {@code :id} en minúsculas.</li>
+     * </ul>
+     * Spring {@code NamedParameterUtils} es case-sensitive sobre los
+     * placeholders del SQL, así que con los tres aliases el bind
+     * funciona en cualquier combinación de cajas y namespaces.
+     */
+    private static void bindWithAliases(MapSqlParameterSource src, String key,
+                                        String serializedOrNull) {
+        src.addValue(key, serializedOrNull);
+        String upper = key.toUpperCase(java.util.Locale.ROOT);
+        String lower = key.toLowerCase(java.util.Locale.ROOT);
+        String canonical = canonicalLookupKey(key);
+        if (canonical != null && !canonical.equals(key)) {
+            src.addValue(canonical, serializedOrNull);
+        }
+        if (!upper.equals(key) && !upper.equals(canonical)) {
+            src.addValue(upper, serializedOrNull);
+        }
+        if (!lower.equals(key) && !lower.equals(canonical) && !lower.equals(upper)) {
+            src.addValue(lower, serializedOrNull);
+        }
     }
 
     /**
@@ -198,6 +297,16 @@ public final class ParamBinder {
             }
         }
         return null;
+    }
+
+    /**
+     * ¿{@code declaredType} es JSONB/JSON escalar (no {@code JSONB[]},
+     * que va por {@link ParamTypes#ARRAY_TYPES}/{@link #toPgArray})?
+     * {@code declaredType} ya viene sin el sufijo de nulabilidad — es
+     * el tipo base que devuelve {@link ParamTypes#parseDeclaration}.
+     */
+    private static boolean isScalarJsonType(String declaredType) {
+        return "JSONB".equals(declaredType) || "JSON".equals(declaredType);
     }
 
     private static Map<String, String> mergeTypes(Map<String, String> base,
@@ -263,15 +372,20 @@ public final class ParamBinder {
             return null;
         }
 
-        // JSONB / JSON — sólo aceptamos Map o String (un
-        // JSON literal que ya viene como String del cliente es
-        // legal; no lo rechazamos).
+        // JSONB / JSON — aceptamos Map (objeto), List (array) o
+        // String (un JSON ya serializado por el cliente, objeto o
+        // array). V63: antes un List se rechazaba acá y obligaba
+        // al cliente a pre-serializar el array a mano
+        // ({@code "SCALES": "[{...}]"}) — ahora el binder serializa
+        // el array nativo correctamente (ver toJsonArrayLiteral),
+        // así que un array real ({@code "SCALES": [{...}]}) es tan
+        // válido como el objeto o el String pre-serializado.
         if ("JSONB".equals(up) || "JSON".equals(up)) {
-            if (val instanceof Map || val instanceof String) return null;
+            if (val instanceof Map || val instanceof List || val instanceof String) return null;
             return "El parámetro '" + key + "' se declaró como " + up
                     + " pero el cliente envió "
                     + val.getClass().getSimpleName()
-                    + ". Para JSONB/JSONB usa BODY_RAW.X con un sub-objeto completo.";
+                    + ". Usa un objeto {...}, un array [...], o un string ya serializado.";
         }
 
         // Booleano
@@ -564,7 +678,6 @@ public final class ParamBinder {
      * ligero. Si los valores son heterogéneos, los strings se quotan y los
      * números/booleanos se serializan con su forma JSON.
      */
-    @SuppressWarnings("unchecked")
     static String toJsonLiteral(Map<?, ?> map) {
         if (map == null) return null;
         StringBuilder sb = new StringBuilder("{");
@@ -573,34 +686,72 @@ public final class ParamBinder {
             if (!first) sb.append(',');
             first = false;
             sb.append('"').append(escapeJson(e.getKey().toString())).append('"').append(':');
-            Object v = e.getValue();
-            if (v == null) {
-                sb.append("null");
-            } else if (v instanceof Map<?, ?> nested) {
-                sb.append(toJsonLiteral(nested));
-            } else if (v instanceof List<?> list) {
-                sb.append('[');
-                boolean firstArr = true;
-                for (Object item : list) {
-                    if (!firstArr) sb.append(',');
-                    firstArr = false;
-                    if (item == null) sb.append("null");
-                    else if (item instanceof String s) sb.append('"').append(escapeJson(s)).append('"');
-                    else if (item instanceof Number || item instanceof Boolean) sb.append(stringify(item));
-                    else if (item instanceof Map<?, ?> m) sb.append(toJsonLiteral(m));
-                    else sb.append('"').append(escapeJson(stringify(item))).append('"');
-                }
-                sb.append(']');
-            } else if (v instanceof String s) {
-                sb.append('"').append(escapeJson(s)).append('"');
-            } else if (v instanceof Number || v instanceof Boolean) {
-                sb.append(stringify(v));
-            } else {
-                sb.append('"').append(escapeJson(stringify(v))).append('"');
-            }
+            appendJsonValue(sb, e.getValue());
         }
         sb.append('}');
         return sb.toString();
+    }
+
+    /**
+     * V63 — serializa un {@code List<?>} (lo que produce Jackson desde un
+     * JSON array) como literal JSON array: {@code [elem1,elem2,...]}. Es
+     * el contrapunto de {@link #toJsonLiteral} para cuando el valor de un
+     * {@code BODY_RAW.X} declarado {@code JSONB}/{@code JSON} es
+     * directamente un array, no un objeto — el caso de
+     * {@code fn_escala_guardar_bulk}, {@code fn_subject_guardar_bulk},
+     * etc., cuyo parámetro {@code jsonb} escalar contiene un array de
+     * registros ({@code [{"...":"..."},{"...":"..."}]}), no un objeto.
+     *
+     * <p>Antes de V63 el cliente tenía que pre-serializar el array a
+     * mano como {@code String} ({@code "SCALES": "[{...}]"}) porque
+     * {@link #validateAgainstDeclared} rechazaba un {@code List} crudo
+     * para JSONB escalar, y aun sorteando esa validación la
+     * serialización caía al fallback de {@link #stringify} —
+     * {@code List.toString()} de Java, que no es JSON válido. Ahora se
+     * acepta el array nativo (más ergonómico y lo que cualquier
+     * cliente REST esperaría) y se serializa acá correctamente; la
+     * forma pre-serializada como {@code String} se sigue aceptando
+     * también, sin cambios.
+     */
+    static String toJsonArrayLiteral(List<?> list) {
+        if (list == null) return null;
+        StringBuilder sb = new StringBuilder("[");
+        boolean first = true;
+        for (Object item : list) {
+            if (!first) sb.append(',');
+            first = false;
+            appendJsonValue(sb, item);
+        }
+        sb.append(']');
+        return sb.toString();
+    }
+
+    /**
+     * Serializa un valor JSON cualquiera (lo que puede salir de un
+     * árbol Jackson: {@code null}, {@code Map}, {@code List}, String,
+     * Number, Boolean, o cualquier otro tipo como fallback a texto
+     * quotado) y lo apendiza a {@code sb}. Punto único de dispatch
+     * compartido por {@link #toJsonLiteral} (valores de un objeto) y
+     * {@link #toJsonArrayLiteral} (elementos de un array) — antes esta
+     * lógica vivía duplicada e inline dentro de {@code toJsonLiteral},
+     * y la rama de List anidada dentro de un Map no manejaba una lista
+     * DENTRO de otra lista (caía al fallback de texto quotado); al
+     * unificar en un método recursivo, ese caso también queda cubierto.
+     */
+    private static void appendJsonValue(StringBuilder sb, Object v) {
+        if (v == null) {
+            sb.append("null");
+        } else if (v instanceof Map<?, ?> nested) {
+            sb.append(toJsonLiteral(nested));
+        } else if (v instanceof List<?> nested) {
+            sb.append(toJsonArrayLiteral(nested));
+        } else if (v instanceof String s) {
+            sb.append('"').append(escapeJson(s)).append('"');
+        } else if (v instanceof Number || v instanceof Boolean) {
+            sb.append(stringify(v));
+        } else {
+            sb.append('"').append(escapeJson(stringify(v))).append('"');
+        }
     }
 
     private static String escapeJson(String s) {
