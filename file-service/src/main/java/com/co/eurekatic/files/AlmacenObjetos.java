@@ -13,6 +13,7 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
@@ -148,6 +149,27 @@ public class AlmacenObjetos {
      */
     public ResponseInputStream<GetObjectResponse> abrir(String clave) {
         return s3.getObject(GetObjectRequest.builder()
+                .bucket(bucket)
+                .key(clave)
+                .build());
+    }
+
+    /**
+     * Borra un objeto ya subido. Existe para deshacer una subida
+     * parcial: si un multipart con varios ficheros sube el primero
+     * con éxito y el segundo falla, {@code TransformadorMultipart}
+     * necesita poder borrar el objeto del primero, no sólo su fila
+     * en {@code TARCHIVO} — sin esto, la fila desaparece pero los
+     * bytes se quedan en el bucket, huérfanos e invisibles, exactamente
+     * el escenario que {@code ArchivoRepository#reservar} documenta
+     * como el que el diseño reserva-antes-de-subir existe para evitar.
+     *
+     * <p>{@code DeleteObject} de S3 es idempotente — borrar una clave
+     * que no existe no lanza, devuelve 204 igual. No hace falta
+     * comprobar existencia antes.
+     */
+    public void borrar(String clave) {
+        s3.deleteObject(DeleteObjectRequest.builder()
                 .bucket(bucket)
                 .key(clave)
                 .build());

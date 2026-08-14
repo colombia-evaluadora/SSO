@@ -5,8 +5,13 @@ import com.co.eurekatic.common.security.JwtProperties;
 import com.co.eurekatic.common.security.JwtTokenService;
 import io.jsonwebtoken.JwtException;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.http.AbortableInputStream;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
+import java.io.ByteArrayInputStream;
 import java.util.Optional;
 import java.util.Set;
 
@@ -212,5 +217,48 @@ class DownloadControllerTest {
         // Tildes y espacios son legítimos y se conservan.
         assertThat(DownloadController.nombreSeguro("informe anual ñ.pdf"))
                 .isEqualTo("informe anual ñ.pdf");
+    }
+
+    /**
+     * El caso real que este test fija: {@code nombreSeguro} conserva
+     * las tildes ({@code "informe anual ñ.pdf"} arriba), pero un
+     * header HTTP sólo admite ISO-8859-1 — escribir el carácter tal
+     * cual serializaba un byte que no es UTF-8 válido por sí solo, y
+     * el navegador mostraba el nombre corrupto en "Guardar como" pese
+     * a que los bytes del archivo llegaban perfectos. Filas reales de
+     * TARCHIVO tienen exactamente este nombre ("Recuperación I Geo
+     * 6.docx", confirmado en la tabla, no hipotético).
+     *
+     * <p>El header final debe traer AMBAS formas de RFC 6266: el
+     * {@code filename*=UTF-8''<percent-encoded>} que todo navegador
+     * moderno prefiere, y un {@code filename="..."} de respaldo.
+     */
+    @Test
+    void elNombreConTildesSeCodificaComoRfc6266EnElHeaderReal() {
+        var jwt = mock(JwtTokenService.class);
+        var repo = mock(ArchivoRepository.class);
+        var almacen = mock(AlmacenObjetos.class);
+        when(repo.buscarActivo(1L)).thenReturn(Optional.of(
+                new ArchivoRepository.Archivo(
+                        1L, "Recuperación I Geo 6.docx", 3L, "clave-cruda.docx")));
+
+        GetObjectResponse respuestaS3 = GetObjectResponse.builder().contentLength(3L).build();
+        var stream = new ResponseInputStream<>(respuestaS3,
+                AbortableInputStream.create(new ByteArrayInputStream("abc".getBytes())));
+        when(almacen.abrir("clave-cruda.docx")).thenReturn(stream);
+
+        var props = new JwtProperties(null, "irrelevante-en-tests",
+                "sso-postgres", 3600, 86400, "Authorization", "Bearer ", null);
+        var respuesta = new DownloadController(repo, almacen, jwt, props, TOKEN_INTERNO)
+                .descargar(TOKEN_INTERNO, null, 1L);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(200);
+        String cd = respuesta.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION);
+        assertThat(cd).isNotNull();
+        // 'ó' es U+00F3 -> %C3%B3 en UTF-8 percent-encoded.
+        assertThat(cd).contains("filename*=UTF-8''Recuperaci%C3%B3n");
+        // Respaldo ASCII-seguro para clientes que no entienden filename*.
+        assertThat(cd).contains("filename=\"");
+        assertThat(cd).startsWith("inline");
     }
 }

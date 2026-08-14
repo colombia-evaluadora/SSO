@@ -73,6 +73,9 @@ public class TransformadorMultipart {
         // Ids ya reservados, para poder deshacerlos si algo falla a
         // media transformación.
         List<Long> reservados = new ArrayList<>();
+        // Subconjunto de `reservados` cuyo objeto SÍ llegó a subirse a
+        // S3 (pk -> clave) — ver el porqué en `deshacer`.
+        Map<Long, String> objetosSubidos = new LinkedHashMap<>();
 
         try {
             for (var entrada : ficheros.entrySet()) {
@@ -84,7 +87,7 @@ public class TransformadorMultipart {
                     if (parte.isEmpty()) {
                         continue;
                     }
-                    ids.add(subirUna(parte, usuario, reservados));
+                    ids.add(subirUna(parte, usuario, reservados, objetosSubidos));
                 }
                 if (ids.isEmpty()) {
                     continue;
@@ -97,19 +100,52 @@ public class TransformadorMultipart {
             return new Resultado(cuerpo, List.copyOf(reservados));
 
         } catch (RuntimeException | IOException e) {
-            // Deshacer lo reservado en esta petición. Sin esto, un
-            // fallo en el tercer fichero dejaría los dos primeros
-            // registrados y sin dueño.
-            for (Long pk : reservados) {
-                archivos.descartar(pk);
-            }
+            deshacer(reservados, objetosSubidos);
             throw new SubidaFallidaException(
                     "No se pudo procesar el multipart: " + e.getMessage(), e);
         }
     }
 
-    private long subirUna(MultipartFile parte, String usuario, List<Long> reservados)
-            throws IOException {
+    /**
+     * Deshace lo reservado en esta petición. Sin esto, un fallo en el
+     * tercer fichero dejaría los dos primeros registrados y sin dueño.
+     *
+     * <p><b>El orden importa</b>: S3 primero, filas después. Un fichero
+     * de {@code objetosSubidos} ya tiene sus bytes en el bucket — si
+     * sólo se borrara la fila (como hacía esto antes), el objeto
+     * quedaría huérfano: invisible, sin ninguna fila que lo referencie,
+     * facturándose indefinidamente, exactamente el escenario que
+     * {@link ArchivoRepository#reservar} documenta como el que el
+     * diseño "reservar antes de subir" existe para evitar — sólo que
+     * aquí el objeto SÍ llegó a existir antes de que la petición
+     * completa fallara por un fichero posterior. Con 408 000 objetos
+     * en el bucket, esa clase de fuga no se detecta comparando el
+     * bucket contra la tabla a mano.
+     *
+     * <p>Si el borrado en S3 falla (recorte de red al almacén, etc.),
+     * se loguea a ERROR y se sigue con la fila igual — no se puede
+     * dejar la fila (que el cliente podría reintentar y reservar de
+     * nuevo) esperando a que S3 responda; mejor un objeto huérfano
+     * detectable por el log que una petición que nunca termina de
+     * fallar.
+     */
+    private void deshacer(List<Long> reservados, Map<Long, String> objetosSubidos) {
+        for (var entrada : objetosSubidos.entrySet()) {
+            try {
+                almacen.borrar(entrada.getValue());
+            } catch (RuntimeException ex) {
+                log.error("rollback de subida fallida: no se pudo borrar el objeto "
+                        + "huérfano pk_tarchivo={} clave={} — requiere limpieza manual",
+                        entrada.getKey(), entrada.getValue(), ex);
+            }
+        }
+        for (Long pk : reservados) {
+            archivos.descartar(pk);
+        }
+    }
+
+    private long subirUna(MultipartFile parte, String usuario, List<Long> reservados,
+                          Map<Long, String> objetosSubidos) throws IOException {
         String nombre = nombreSeguro(parte.getOriginalFilename());
         long peso = parte.getSize();
 
@@ -125,6 +161,14 @@ public class TransformadorMultipart {
 
         try (InputStream in = parte.getInputStream()) {
             String url = almacen.subir(clave, in, peso, parte.getContentType());
+            // A partir de aquí el objeto YA existe en el bucket — si
+            // un fichero POSTERIOR de este mismo multipart falla, el
+            // rollback de `deshacer` tiene que borrar este objeto
+            // también, no sólo la fila. Por eso se registra ANTES de
+            // registrarUrl: si registrarUrl fallara (subida a S3 bien,
+            // UPDATE de la fila mal), el objeto también quedaría
+            // huérfano si no estuviera aquí.
+            objetosSubidos.put(pk, clave);
             // 3. Cerrar la fila con su URL. Sigue inactiva: la activa
             //    ReenvioController cuando el catálogo responde 2xx,
             //    que es el momento en que la operación de negocio
