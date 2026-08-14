@@ -38,8 +38,8 @@
 --      Unidades (antes Logros o Descriptores).
 --      -> FK_TLV_ELEMENTO_DEF / TLISTA_VALOR.ELEMENTO_CALCULO_DEF (ya
 --         existe: "Actividades" calza exacto; "Descriptores de
---         desempeño" es el nombre viejo de "Unidades" — se renombra el
---         dato, ver paso 6 abajo).
+--         desempeño" es el nombre viejo de "Unidades" — V62 renombra el
+--         dato (ver seccion 1c abajo).
 --   8. Criterio para calcular la nota de la asignatura — Promediar /
 --      Ponderar / Sumatoria.
 --      -> NINGUNA columna en ninguna de las dos tablas. Sus valores
@@ -155,11 +155,32 @@ COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_DESEMPENO_SIN_CALIF
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.PORCENTAJE_INICIAL_CALIF IS
     'Campo UI "Nota inicial para las calificaciones" (imagen, columna 1 fila 2). Numero libre, sin lookup de TLISTA_VALOR — limite inferior real de la escala institucional (ej. 0, 1, 10); valores reales observados en la tabla: 0,1,10,20,30,40.';
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_ELEMENTO_DEF IS
-    'Campo UI "Elementos para calcular la nota de la asignatura" (imagen, columna 1 fila 3). Llave foranea de lista valor, categoria ELEMENTO_CALCULO_DEF. Verificado contra el servidor de test, texto exacto: "Actividades" (495) / "Descriptores de desempeño" (494) — el nombre "Unidades" de la especificacion NO existe todavia como dato en la tabla, "Descriptores de desempeño" sigue siendo el nombre vigente (pendiente de renombrar si el negocio lo confirma).';
+    'Campo UI "Elementos para calcular la nota de la asignatura" (imagen, columna 1 fila 3). Llave foranea de lista valor, categoria ELEMENTO_CALCULO_DEF: "Actividades" (495) / "Unidades" (494, renombrada por V62 desde "Descriptores de desempeño" — ver seccion 1c).';
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_CRITERIO_AREA IS
     'Campo UI "Criterio para calcular la nota del area" (imagen, columna 3 fila 3). Llave foranea de lista valor, categoria CRITERIO_AREA. Verificado contra el servidor de test, texto exacto (distinto de la redaccion de la especificacion funcional, mismo significado): "Promediar las Asignaturas" (510, ~"Promediar las asignaturas") / "Cada asignatura tiene un porcentaje" (508, ~"Ponderar las asignaturas") / "Proporcional a la intensidad horaria" (509, ~"De acuerdo a la intensidad horaria").';
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_CRITERIO_FINAL IS
     'Campo UI "Criterio para calcular la nota final" (imagen, columna 1 fila 4). Llave foranea de lista valor, categoria CRITERIO_FINAL_PERACA. Verificado contra el servidor de test, texto exacto (distinto de la redaccion de la especificacion funcional, mismo significado): "Equitativamente de acuerdo al número de PE" (501, ~"Promedio de periodos") / "De acuerdo al porcentaje de cada PE" (502, ~"Ponderacion de periodos"). PE = Periodo de Evaluacion.';
+
+-- ---------------------------------------------------------------------------
+-- 1c. Renombra el dato de TLISTA_VALOR pk_lista_valor=494 (categoria
+--     ELEMENTO_CALCULO_DEF) de "Descriptores de desempeño" a "Unidades",
+--     confirmado por quien conoce el negocio como el nombre vigente del
+--     campo UI "Elementos para calcular la nota de la asignatura" (ver
+--     item 7 arriba). Grep sobre el repo completo confirma que ningun
+--     codigo de aplicacion referencia este NOMBRE como literal (todos los
+--     consumidores pasan por PK_LISTA_VALOR=494), asi que renombrar el
+--     dato no rompe wiring existente. WHERE por PK + NOMBRE viejo hace el
+--     UPDATE idempotente (reintentar la migracion o correrla dos veces no
+--     produce un doble renombre ni error).
+-- ---------------------------------------------------------------------------
+
+UPDATE academico_test.TLISTA_VALOR
+   SET NOMBRE = 'Unidades',
+       MODIFIED_BY = CURRENT_USER,
+       MODIFIED_AT = CURRENT_TIMESTAMP
+ WHERE PK_LISTA_VALOR = 494
+   AND CATEGORIA = 'ELEMENTO_CALCULO_DEF'
+   AND NOMBRE = 'Descriptores de desempeño';
 
 -- ---------------------------------------------------------------------------
 -- 2. Backfill: copiar el valor vigente de TPERIODO_ACADEMICO_CONFIG antes
