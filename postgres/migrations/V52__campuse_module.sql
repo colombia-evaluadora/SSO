@@ -112,8 +112,18 @@ RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_id_creado     BIGINT;
-    v_consecutivo   VARCHAR(2);
+    v_id_creado             BIGINT;
+    v_consecutivo           VARCHAR(2);
+    -- REV2: si el caller no manda EE explicito (el select del front solo
+    -- aparece para super-admin), se intenta resolver el unico EE al que
+    -- esta ligado el usuario como rector/secretaria/jefe de sistema (ver
+    -- fn_resolver_establecimiento_unico en V50). Si sigue NULL (super-admin
+    -- que no mando nada, o usuario ligado a 0 o 2+ EE), la validacion de
+    -- obligatoriedad del bloque 1 sigue disparando igual que antes.
+    v_fk_establecimiento    BIGINT := COALESCE(
+        p_fk_establecimiento,
+        academico_test.fn_resolver_establecimiento_unico(p_pk_usuario_solicitante)
+    );
 BEGIN
     -- -----------------------------------------------------------------
     -- 0. Gate de autorizacion.
@@ -131,7 +141,9 @@ BEGIN
     --    (d) Jefe de sistema (rol 8 via TSEDE_USUARIO activa) que
     --        tenga al menos una vinculacion activa (TSEDE_USUARIO.ACTIVE=TRUE)
     --        en cualquier sede del EE concreto.
-    --    Si ninguno de los cuatro se cumple => 42501.
+    --    Si ninguno de los cuatro se cumple => 42501. Todos los caminos
+    --    se validan contra v_fk_establecimiento (resuelto arriba), no
+    --    contra p_fk_establecimiento directo.
     --
     --    NOTA: el rol 9 (aux. administrativo puro de usuarios) NO pasa
     --    fn_puede_afectar_sede, asi que no llega a este gate; la
@@ -146,7 +158,7 @@ BEGIN
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TESTABLECIMIENTO e
             ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = p_fk_establecimiento
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
            AND e.ACTIVE             = TRUE
            AND f.ACTIVE             = TRUE
            AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
@@ -158,7 +170,7 @@ BEGIN
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TESTABLECIMIENTO e
             ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = p_fk_establecimiento
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
            AND e.ACTIVE             = TRUE
            AND f.ACTIVE             = TRUE
            AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
@@ -170,7 +182,7 @@ BEGIN
           FROM academico_test.TSEDE_USUARIO su
           JOIN academico_test.TSEDE s
             ON s.PK_TSEDE = su.FK_TSEDE
-         WHERE s.FK_TESTABLECIMIENTO = p_fk_establecimiento
+         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
            AND s.ACTIVE              = TRUE
            AND su.ACTIVE             = TRUE
            AND su.FK_TROL            = 8
@@ -201,9 +213,10 @@ BEGIN
             USING ERRCODE = '22023', HINT = 'p_fk_lista_valor_zona no puede ser NULL';
     END IF;
 
-    IF p_fk_establecimiento IS NULL THEN
+    IF v_fk_establecimiento IS NULL THEN
         RAISE EXCEPTION 'Establecimiento (FK_TESTABLECIMIENTO) es obligatorio'
-            USING ERRCODE = '22023', HINT = 'p_fk_establecimiento no puede ser NULL';
+            USING ERRCODE = '22023',
+                  HINT = 'p_fk_establecimiento no puede ser NULL y no se pudo resolver automaticamente (el usuario no esta ligado a exactamente un EE como rector/secretaria/jefe de sistema)';
     END IF;
 
     -- -----------------------------------------------------------------
@@ -212,10 +225,10 @@ BEGIN
     -- -----------------------------------------------------------------
     IF NOT EXISTS (
         SELECT 1 FROM academico_test.TESTABLECIMIENTO
-         WHERE PK_ESTABLECIMIENTO = p_fk_establecimiento
+         WHERE PK_ESTABLECIMIENTO = v_fk_establecimiento
            AND ACTIVE = TRUE
     ) THEN
-        RAISE EXCEPTION 'No existe un TESTABLECIMIENTO activo con PK %', p_fk_establecimiento
+        RAISE EXCEPTION 'No existe un TESTABLECIMIENTO activo con PK %', v_fk_establecimiento
             USING ERRCODE = '22023',
                   HINT    = 'Verifique el establecimiento o use fn_est_buscar_por_nit(..., p_incluir_inactivos=TRUE)';
     END IF;
@@ -253,11 +266,11 @@ BEGIN
     -- la constraint dispara igual si se intenta reusar contra un inactivo.
     IF EXISTS (
         SELECT 1 FROM academico_test.TSEDE
-         WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento
+         WHERE FK_TESTABLECIMIENTO = v_fk_establecimiento
            AND NOMBRE              = p_nombre
            AND ACTIVE              = TRUE
     ) THEN
-        RAISE EXCEPTION 'Ya existe una TSEDE activa con NOMBRE % para el EE %', p_nombre, p_fk_establecimiento
+        RAISE EXCEPTION 'Ya existe una TSEDE activa con NOMBRE % para el EE %', p_nombre, v_fk_establecimiento
             USING ERRCODE = '23505',
                   HINT    = 'Dentro de un EE el NOMBRE de sede debe ser unico entre activas';
     END IF;
@@ -275,7 +288,7 @@ BEGIN
            )
       INTO v_consecutivo
       FROM academico_test.TSEDE
-     WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento
+     WHERE FK_TESTABLECIMIENTO = v_fk_establecimiento
        AND ACTIVE              = TRUE;
 
     -- -----------------------------------------------------------------
@@ -295,7 +308,7 @@ BEGIN
         COALESCE(NULLIF(TRIM(p_barrio),    ''), ''),
         COALESCE(NULLIF(TRIM(p_direccion), ''), ''),
         COALESCE(NULLIF(TRIM(p_telefono),  ''), ''),
-        p_fk_establecimiento, p_georeferenciacion,
+        v_fk_establecimiento, p_georeferenciacion,
         p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP,
         NULL, NULL,
         TRUE
@@ -303,7 +316,7 @@ BEGIN
     RETURNING PK_TSEDE INTO v_id_creado;
 
     RAISE NOTICE 'TSEDE creada: PK=%, CODIGO=%, CONSECUTIVO=%, EE=%',
-        v_id_creado, p_codigo, v_consecutivo, p_fk_establecimiento;
+        v_id_creado, p_codigo, v_consecutivo, v_fk_establecimiento;
 
     RETURN v_id_creado;
 END;
@@ -314,7 +327,7 @@ COMMENT ON FUNCTION academico_test.fn_sed_crear(
     VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR,
     VARCHAR
 )
-    IS 'Crea una TSEDE para un TESTABLECIMIENTO activo. CODIGO/NOMBRE/FK_TLV_ZONA/FK_TESTABLECIMIENTO son obligatorios. CONSECUTIVO se calcula automaticamente (MAX+1, padded a 2 digitos, solo entre sedes activas del mismo EE). Campos NOT NULL del DDL no obligatorios a nivel API se persisten como vacio si llegan nulos. Gate de autorizacion COMPUESTO (cualquiera basta): (a) super-admin via fn_puede_afectar_establecimiento (roles 1-3); (b) rector del EE concreto (TFUNCIONARIO activo con FK_TUSUARIO = p_pk_usuario_solicitante y FK_TFUNCIONARIO_RECTOR del EE); (c) secretaria del EE concreto (TFUNCIONARIO activo con FK_TUSUARIO = p_pk_usuario_solicitante y FK_TFUNCIONARIO_SECRETARIA del EE); (d) jefe de sistema (rol 8 via TSEDE_USUARIO activa) con al menos una vinculacion en cualquier sede del EE concreto. Cualquier otro caso => 42501. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52 y V53).';
+    IS 'Crea una TSEDE para un TESTABLECIMIENTO activo. CODIGO/NOMBRE/FK_TLV_ZONA son obligatorios. p_fk_establecimiento es OPCIONAL (REV2): si llega NULL, se intenta resolver via fn_resolver_establecimiento_unico (V50) -- el select de EE del front solo aparece para super-admin, asi que rector/secretaria/jefe de sistema dependen de esta resolucion automatica (se asume que cada uno esta ligado a un unico EE bajo esos roles). Si no se pudo resolver (super-admin sin mandarlo, o usuario ligado a 0 o 2+ EE) => 22023 igual que antes. CONSECUTIVO se calcula automaticamente (MAX+1, padded a 2 digitos, solo entre sedes activas del mismo EE). Campos NOT NULL del DDL no obligatorios a nivel API se persisten como vacio si llegan nulos. Gate de autorizacion COMPUESTO (cualquiera basta, validado contra el EE ya resuelto): (a) super-admin via fn_puede_afectar_establecimiento (roles 1-3); (b) rector del EE concreto; (c) secretaria del EE concreto; (d) jefe de sistema (rol 8) con al menos una vinculacion en cualquier sede del EE concreto. Cualquier otro caso => 42501. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52 y V53).';
 
 
 -- ---------------------------------------------------------------------------
@@ -1187,6 +1200,121 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_sed_listar(BIGINT, VARCHAR, BIGINT[], VARCHAR, BOOLEAN, INT, INT)
     IS 'Lista TSEDE activas paginadas. Mismos filtros que fn_sed_contar (search/zones). Gate de autorizacion COMPUESTO: super-admin (fn_puede_afectar_establecimiento, roles 1-3) ve todas las sedes activas; cualquier otro solo ve las sedes cuyo FK_TESTABLECIMIENTO pertenezca al conjunto de EE accesibles para el usuario (union de: EE donde es rector, EE donde es secretaria, EE donde es jefe de sistema en alguna sede via TSEDE_USUARIO.ACTIVE con FK_TROL = 8). Si el conjunto de EE accesibles es vacio => 42501. p_sort_campo/p_sort_desc representan sorting[0] ya resuelto por el caller (array vacio => NULL => orden por defecto NOMBRE/PK). p_page_index base 0; p_page_size se acota a (0,100]. No calcula totalCount/pageCount: usar junto con fn_sed_contar / fn_sed_listar_paginado. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52 y V53).';
+
+
+-- ---------------------------------------------------------------------------
+-- fn_sed_listar_todos (NUEVO)
+--   Variante SIN paginar de fn_sed_listar, pensada para selects que
+--   necesitan el universo completo de sedes accesibles (selector de sede
+--   en el dialog de permisos de funcionario, formulario de periodo
+--   academico, etc.) sin las limitaciones de una pagina — mismo motivo que
+--   fn_est_listar_todos en V53.
+--
+--   REV2: trae TODAS las columnas que necesita el `Campus` completo del
+--   front (dane, zona resuelta, barrio, comuna, direccion, telefono), no
+--   solo pk+nombre — a diferencia de fn_est_listar_todos, este listado
+--   alimenta ademas `Permission.campus` (el dialog de permisos de
+--   funcionario arma un `Campus` completo por cada permiso agregado, ver
+--   `findCampusById` en dialog-manage.tsx), que necesita el objeto entero,
+--   no solo id+nombre.
+--
+--   Gate: IDENTICO a fn_sed_listar/fn_sed_contar (super-admin ve todas;
+--   cualquier otro solo las sedes de los EE donde es rector, secretaria,
+--   o jefe de sistema en alguna sede de ese EE).
+--
+--   Retorna: SETOF (pk_sede, codigo, nombre, fk_tlv_zona, zona_nombre,
+--            barrio, comuna, direccion, telefono, fk_establecimiento),
+--            ordenado por NOMBRE/PK.
+--
+--   Excepciones:
+--     SQLSTATE '42501' — El usuario no es super-admin ni rector, secretaria
+--                        o jefe de sistema de ningun EE activo.
+-- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_sed_listar_todos(BIGINT);
+
+CREATE OR REPLACE FUNCTION academico_test.fn_sed_listar_todos(
+    p_pk_usuario_solicitante  BIGINT
+)
+RETURNS TABLE (
+    pk_sede             BIGINT,
+    codigo              VARCHAR,
+    nombre              VARCHAR,
+    fk_tlv_zona         BIGINT,
+    zona_nombre         VARCHAR,
+    barrio              VARCHAR,
+    comuna              VARCHAR,
+    direccion           VARCHAR,
+    telefono            VARCHAR,
+    fk_establecimiento  BIGINT
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
+        RETURN QUERY
+        SELECT s.PK_TSEDE, s.CODIGO, s.NOMBRE, s.FK_TLV_ZONA, tlv.NOMBRE,
+               s.BARRIO, s.COMUNA, s.DIRECCION, s.TELEFONO, s.FK_TESTABLECIMIENTO
+          FROM academico_test.TSEDE s
+     LEFT JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = s.FK_TLV_ZONA
+         WHERE s.ACTIVE = TRUE
+         ORDER BY s.NOMBRE ASC, s.PK_TSEDE ASC;
+        RETURN;
+    END IF;
+
+    IF NOT EXISTS (
+        WITH ee_accesibles AS (
+            SELECT e.PK_ESTABLECIMIENTO
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+            UNION
+            SELECT e.PK_ESTABLECIMIENTO
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+            UNION
+            SELECT DISTINCT s.FK_TESTABLECIMIENTO
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8
+               AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        )
+        SELECT 1 FROM ee_accesibles
+    ) THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    RETURN QUERY
+    SELECT s.PK_TSEDE, s.CODIGO, s.NOMBRE, s.FK_TLV_ZONA, tlv.NOMBRE,
+           s.BARRIO, s.COMUNA, s.DIRECCION, s.TELEFONO, s.FK_TESTABLECIMIENTO
+      FROM academico_test.TSEDE s
+      JOIN (
+          SELECT e2.PK_ESTABLECIMIENTO
+            FROM academico_test.TESTABLECIMIENTO e2
+            JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e2.FK_TFUNCIONARIO_RECTOR
+           WHERE e2.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+          UNION
+          SELECT e2.PK_ESTABLECIMIENTO
+            FROM academico_test.TESTABLECIMIENTO e2
+            JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e2.FK_TFUNCIONARIO_SECRETARIA
+           WHERE e2.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+          UNION
+          SELECT DISTINCT s2.FK_TESTABLECIMIENTO
+            FROM academico_test.TSEDE_USUARIO su
+            JOIN academico_test.TSEDE s2 ON s2.PK_TSEDE = su.FK_TSEDE
+           WHERE s2.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8
+             AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+      ) ee ON ee.PK_ESTABLECIMIENTO = s.FK_TESTABLECIMIENTO
+ LEFT JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = s.FK_TLV_ZONA
+     WHERE s.ACTIVE = TRUE
+     ORDER BY s.NOMBRE ASC, s.PK_TSEDE ASC;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_sed_listar_todos(BIGINT)
+    IS 'Lista TODAS las TSEDE activas que el usuario puede ver, sin paginar, con las columnas necesarias para armar un `Campus` completo del front (codigo/dane, zona resuelta, barrio, comuna, direccion, telefono) mas su EE. Gate identico a fn_sed_listar/fn_sed_contar: super-admin ve todas; el resto ve rector UNION secretaria UNION jefe de sistema (rol 8) de alguna sede del EE. Si ninguno aplica => 42501.';
 
 
 -- ---------------------------------------------------------------------------
