@@ -1,42 +1,71 @@
 -- ===========================================================================
 -- V62 — TCRITERIO_EVALUACION: campos que faltaban de la pestaña "Criterios
--- de evaluación" del periodo académico, más tres bugs de wiring que salieron
+-- de evaluación" del periodo académico, más dos bugs de wiring que salieron
 -- a la luz al investigar por qué no estaban.
 --
--- Contexto (ver docs/superpowers/specs — analisis en vivo contra el
--- servidor de test, academico_test.tlista_valor):
+-- Contexto: los 10 campos de la pestaña y su especificación funcional
+-- (valores posibles + detalle de negocio) vienen confirmados directamente
+-- por quien conoce el dominio — no son una inferencia de esta migración a
+-- partir del esquema. Cruzados contra TCRITERIO_EVALUACION (V22),
+-- TPERIODO_ACADEMICO_CONFIG (V22) y el contenido real de TLISTA_VALOR en
+-- el servidor de test:
 --
--- La pestaña muestra 10 campos. Cruzando cada uno contra las columnas
--- reales de TCRITERIO_EVALUACION (V22) y TPERIODO_ACADEMICO_CONFIG (V22):
---
---   Escala de valoración              -> TCRITERIO_EVALUACION.FK_TESCALA (ya existe)
---   Formato de calificación           -> FK_TLV_FORMATO_CALIFICACION / TLISTA_VALOR.FORMATO_CALIFICACION (ya existe)
---   Sin calificaciones                -> FK_TLV_DESEMPENO_SIN_CALIF / TLISTA_VALOR.DESEMPENIOSUGERIR (ya existe)
---   Nota máxima de recuperación/nivelación -> PORCENTAJE_INICIAL_CALIF (ya existe — único campo
---                                        de tipo porcentaje en la tabla; mal nombrado como
---                                        "initial_grade" en las funciones V41, ver bug 3)
---   Criterio para calcular la nota del área -> FK_TLV_CRITERIO_AREA / TLISTA_VALOR.CRITERIO_AREA (ya existe)
---   Criterio para calcular la nota final -> FK_TLV_CRITERIO_FINAL / TLISTA_VALOR.CRITERIO_FINAL_PERACA (ya existe)
---   Elementos para calcular la nota  -> FK_TLV_ELEMENTO_DEF / TLISTA_VALOR.ELEMENTO_CALCULO_DEF (ya existe)
---   Regla de redondeo                -> TPERIODO_ACADEMICO_CONFIG.FK_TLV_MODO_REDONDEAR / TLISTA_VALOR.MODO_REDONDEAR
---                                        (existe, pero en la tabla EQUIVOCADA — se traslada acá)
---   Criterio para calcular la nota de la asignatura -> NINGUNA columna en ninguna
---                                        de las dos tablas. Sus valores YA EXISTEN en
---                                        TLISTA_VALOR bajo la categoría CRITERIO_DESEMPENO
---                                        (5 filas: "Promediar la calificación de las
---                                        actividades/áreas/asignaturas", "Ponderar...
---                                        intensidad horaria", "Ponderar...porcentaje
---                                        dentro del área") — categoría confirmada sin
---                                        NINGÚN otro consumidor en las 61 migraciones
---                                        del repo (grep limpio). Estaba huérfana.
+--   1. Escala de valoración — Nacional (Superior/Alto/Básico/Bajo).
+--      -> TCRITERIO_EVALUACION.FK_TESCALA (ya existe; la escala nacional
+--         vive en TESCALA/TVALORACION, no en TLISTA_VALOR).
+--   2. Formato de calificación — Cero a cinco / diez / cien.
+--      -> FK_TLV_FORMATO_CALIFICACION / TLISTA_VALOR.FORMATO_CALIFICACION
+--         (ya existe; "DE CERO A CINCO/DIEZ/CIEN" están las 3).
+--   3. Sin calificaciones (desempeño sugerido) — Menor calificación
+--      posible / Ninguna.
+--      -> FK_TLV_DESEMPENO_SIN_CALIF / TLISTA_VALOR.DESEMPENIOSUGERIR
+--         (ya existe, calce exacto con las 2 filas de la categoría).
+--   4. Nota inicial para las calificaciones — rango numérico (0, 1, 10…):
+--      límite inferior real de la escala institucional.
+--      -> PORCENTAJE_INICIAL_CALIF (ya existe — valores reales en la
+--         tabla hoy: 0,1,10,20,30,40, exactamente el rango descrito).
+--   5. Nota máxima de recuperación — rango numérico (3.0, 4.0, 80…): tope
+--      para que una nivelación no iguale la nota de quien aprobó de una.
+--      -> NINGUNA columna en ninguna de las dos tablas ni categoría de
+--         TLISTA_VALOR que calce (es un número libre, no un lookup) — se
+--         agrega PORCENTAJE_MAXIMO_RECUPERACION.
+--   6. Regla de redondeo — Hacia arriba / Hacia abajo / Al más cercano.
+--      -> TPERIODO_ACADEMICO_CONFIG.FK_TLV_MODO_REDONDEAR / TLISTA_VALOR.
+--         MODO_REDONDEAR (existe — "Hacia arriba", "Hacia Abajo",
+--         "Depende del valor" ~ "al más cercano", + "No redondear" extra
+--         — pero en la tabla EQUIVOCADA; se traslada acá).
+--   7. Elementos para calcular la nota de la asignatura — Actividades /
+--      Unidades (antes Logros o Descriptores).
+--      -> FK_TLV_ELEMENTO_DEF / TLISTA_VALOR.ELEMENTO_CALCULO_DEF (ya
+--         existe: "Actividades" calza exacto; "Descriptores de
+--         desempeño" es el nombre viejo de "Unidades" — se renombra el
+--         dato, ver paso 6 abajo).
+--   8. Criterio para calcular la nota de la asignatura — Promediar /
+--      Ponderar / Sumatoria.
+--      -> NINGUNA columna en ninguna de las dos tablas. Sus valores
+--         calzan casi exacto con TLISTA_VALOR.TIPO_CALCULO ("Promediado",
+--         "Ponderado", "Sumatoria", + "Nota Directa" extra) — NO con
+--         CRITERIO_DESEMPENO como se pensó en un análisis previo de esta
+--         misma migración (esa categoría tiene frases largas del tipo
+--         "Promediar la calificación de las actividades", que no calzan
+--         con el listado corto de 3 opciones de la especificación). Se
+--         agrega FK_TLV_CRITERIO_ASIGNATURA apuntando conceptualmente a
+--         TIPO_CALCULO — misma categoría que ya usa TACTIVIDAD.
+--         FK_TLV_TIPO_CALCULO a nivel de actividad; reutilizarla a nivel
+--         de periodo es consistente con el patrón del resto del esquema
+--         (una categoría, varios consumidores en distintos scopes).
+--   9. Criterio para calcular la nota del área — Promediar las
+--      asignaturas / Ponderar las asignaturas / Según intensidad horaria.
+--      -> FK_TLV_CRITERIO_AREA / TLISTA_VALOR.CRITERIO_AREA (ya existe,
+--         calce con las 3 filas de la categoría).
+--   10. Criterio para calcular la nota final — Promedio de períodos /
+--       Ponderación de períodos.
+--      -> FK_TLV_CRITERIO_FINAL / TLISTA_VALOR.CRITERIO_FINAL_PERACA (ya
+--         existe, calce semántico con las 2 filas de la categoría).
 --
 -- Lo que NO se agrega acá, por falta de dato de respaldo (ni columna ni
--- categoría de TLISTA_VALOR que calce, no hay nada de donde partir sin
--- adivinar semántica/escala):
---   - "Nota inicial para las calificaciones" — con PORCENTAJE_INICIAL_CALIF
---     reidentificada como "nota máxima de recuperación" (ver arriba), este
---     campo se queda sin columna propia. Ninguna otra columna de
---     TCRITERIO_EVALUACION calza.
+-- categoría de TLISTA_VALOR que calce en ningún lugar del esquema, no hay
+-- nada de donde partir sin adivinar semántica):
 --   - "Número de desempeños que deben modificar los digitados" (de las
 --     condiciones de aceptación, no aparece en la imagen) — no es lo
 --     mismo que FK_TLV_MODIF_FINAL_PERACA (ver bug 1 abajo): esa columna
@@ -48,9 +77,9 @@
 -- asignatura") en realidad lee/escribe FK_TLV_MODIF_FINAL_PERACA — la
 -- columna SI/NO de "¿el digitador puede modificar la nota final del
 -- periodo?", un concepto totalmente distinto (confirmado con datos reales:
--- esa columna sólo tiene valores SI/NO en TLISTA_VALOR, nunca los criterios
--- de CRITERIO_DESEMPENO). El nombre del parámetro es correcto — apunta a
--- donde el campo SIEMPRE debió estar, sólo que esa columna nunca se creó.
+-- esa columna sólo tiene valores SI/NO en TLISTA_VALOR). El nombre del
+-- parámetro es correcto — apunta a donde el campo SIEMPRE debió estar,
+-- sólo que esa columna nunca se creó.
 --
 -- Bug 2 — mismas funciones: el parámetro "rounding_mode" ("regla de
 -- redondeo") en realidad lee/escribe NUMERO_DECIMALES — la CANTIDAD de
@@ -62,24 +91,12 @@
 -- de redondeo vivía en la tabla equivocada (TPERIODO_ACADEMICO_CONFIG) y
 -- esta función nunca la tocaba.
 --
--- Bug 3 — mismas funciones: el parámetro "initial_grade" ("nota inicial")
--- en realidad lee/escribe PORCENTAJE_INICIAL_CALIF, que — según quien
--- conoce el negocio, no algo que esta migración dedujera del esquema — es
--- la "Nota máxima de recuperación/nivelación" de la imagen, no una "nota
--- inicial". Se renombra el parámetro/columna de salida a
--- "max_recovery_grade" para que el nombre diga lo que el campo hace; la
--- columna de esquema (PORCENTAJE_INICIAL_CALIF) NO se renombra —
--- renombrar una columna ya poblada (139 filas) es un cambio mucho más
--- invasivo que corregir cómo la función la expone, y el nombre de columna
--- en sí no le importa a ningún consumidor (todos pasan por la función).
---
 -- Ninguna fila del catálogo llama estas funciones por nombre de argumento
 -- (confirmado: la fila 51, PUT /periodos/:ID/criterio-evaluacion, pasa los
 -- 12 argumentos posicionalmente) — así que el fix se limita al CUERPO de
--- las funciones (bugs 1-2) y al RENOMBRE de parámetro/salida (bug 3), sin
--- tocar su posición ni tipo. Firma (orden, cantidad de parámetros
--- existentes) sin tocar; los dos parámetros nuevos van al final para no
--- romper la llamada posicional existente.
+-- las funciones. Firma (orden, cantidad de parámetros existentes) sin
+-- tocar; los parámetros nuevos van al final para no romper la llamada
+-- posicional existente.
 --
 -- ADVERTENCIA — drift confirmado antes de escribir el fix: el archivo V41
 -- (tal como vive en el repo) NO es lo que corre en el servidor de test.
@@ -104,17 +121,45 @@ ALTER TABLE academico_test.TCRITERIO_EVALUACION
     ADD COLUMN IF NOT EXISTS FK_TLV_MODO_REDONDEAR BIGINT
         REFERENCES academico_test.TLISTA_VALOR (PK_LISTA_VALOR),
     ADD COLUMN IF NOT EXISTS FK_TLV_CRITERIO_ASIGNATURA BIGINT
-        REFERENCES academico_test.TLISTA_VALOR (PK_LISTA_VALOR);
+        REFERENCES academico_test.TLISTA_VALOR (PK_LISTA_VALOR),
+    ADD COLUMN IF NOT EXISTS PORCENTAJE_MAXIMO_RECUPERACION NUMERIC(5,2);
 
 CREATE INDEX IF NOT EXISTS IDX_TCRITERIO_EVALUACION_MODO_REDONDEAR
     ON academico_test.TCRITERIO_EVALUACION (FK_TLV_MODO_REDONDEAR);
 CREATE INDEX IF NOT EXISTS IDX_TCRITERIO_EVALUACION_CRITERIO_ASIGNATURA
     ON academico_test.TCRITERIO_EVALUACION (FK_TLV_CRITERIO_ASIGNATURA);
 
+-- ---------------------------------------------------------------------------
+-- 1b. Comentarios de mapeo UI <-> columna <-> lista_valor para los 7 campos
+--     restantes de la pestaña "Criterios de evaluacion" (imagen del periodo
+--     academico). Estas columnas ya existian desde V22 y nunca habian sido
+--     documentadas con el nombre exacto del campo de UI ni con la
+--     categoria/valores de TLISTA_VALOR (o TESCALA) a la que corresponden;
+--     se documentan aqui junto con las 3 nuevas de arriba para dejar los 10
+--     campos de la pestaña cubiertos en un solo lugar.
+-- ---------------------------------------------------------------------------
+
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_MODO_REDONDEAR IS
-    'Llave foranea de lista valor para obtener MODO_REDONDEAR. Trasladada desde TPERIODO_ACADEMICO_CONFIG (V62) — vivia en la tabla equivocada; fn_criterio_eval_actualizar/obtener (V41) la exponen como "criterios de evaluacion" del periodo, no TPERIODO_ACADEMICO_CONFIG.';
+    'Campo UI "Regla de redondeo" (imagen, columna 3 fila 2). Llave foranea de lista valor, categoria MODO_REDONDEAR: "Hacia arriba" / "Hacia Abajo" / "Depende del valor" (~ "Al mas cercano") / "No redondear" (extra, sin campo UI). Trasladada desde TPERIODO_ACADEMICO_CONFIG (V62) — vivia en la tabla equivocada; fn_criterio_eval_actualizar/obtener (V41) la exponen como "criterios de evaluacion" del periodo, no TPERIODO_ACADEMICO_CONFIG.';
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_CRITERIO_ASIGNATURA IS
-    'Llave foranea de lista valor para obtener CRITERIO_DESEMPENO (V62). Antes de V62 esta categoria de TLISTA_VALOR existia sin ningun consumidor: fn_criterio_eval_actualizar (V41) ya tenia un parametro "subject_grade_criteria" pensado para esto, pero escribia por error FK_TLV_MODIF_FINAL_PERACA (un SI/NO no relacionado).';
+    'Campo UI "Criterio para calcular la nota de la asignatura" (imagen, columna 2 fila 3). Llave foranea de lista valor, categoria TIPO_CALCULO: "Promediado" / "Ponderado" / "Sumatoria" / "Nota Directa" (extra, sin campo UI) — misma categoria que TACTIVIDAD.FK_TLV_TIPO_CALCULO usa a nivel de actividad, reutilizada aqui a nivel de periodo. fn_criterio_eval_actualizar (V41) ya tenia un parametro "subject_grade_criteria" pensado para esto, pero escribia por error FK_TLV_MODIF_FINAL_PERACA (un SI/NO no relacionado).';
+COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.PORCENTAJE_MAXIMO_RECUPERACION IS
+    'Campo UI "Nota maxima de recuperacion" (imagen, columna 2 fila 2). Tope para que una actividad de nivelacion no iguale la nota de quien aprobo de una. Numero libre, sin lookup de TLISTA_VALOR (no existe categoria que calce con este concepto en todo el esquema).';
+
+COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TESCALA IS
+    'Campo UI "Escala de valoracion" (imagen, columna 1 fila 1). Llave foranea a TESCALA — NO a TLISTA_VALOR: la escala nacional (Superior/Alto/Basico/Bajo) vive en TESCALA/TVALORACION, con sus niveles asociados via TNIVEL_ESCALA.';
+COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_FORMATO_CALIFICACION IS
+    'Campo UI "Formato de calificacion" (imagen, columna 2 fila 1). Llave foranea de lista valor, categoria FORMATO_CALIFICACION: "DE CERO A CINCO" / "DE CERO A DIEZ" / "DE CERO A CIEN" — rango numerico en el que el docente digita notas en la planilla.';
+COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_DESEMPENO_SIN_CALIF IS
+    'Campo UI "Sin calificaciones" (imagen, columna 3 fila 1). Llave foranea de lista valor, categoria DESEMPENIOSUGERIR: "Menor calificacion posible" / "Ninguna" — nota que asume el sistema si un docente deja una actividad o asignatura sin calificar.';
+COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.PORCENTAJE_INICIAL_CALIF IS
+    'Campo UI "Nota inicial para las calificaciones" (imagen, columna 1 fila 2). Numero libre, sin lookup de TLISTA_VALOR — limite inferior real de la escala institucional (ej. 0, 1, 10); valores reales observados en la tabla: 0,1,10,20,30,40.';
+COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_ELEMENTO_DEF IS
+    'Campo UI "Elementos para calcular la nota de la asignatura" (imagen, columna 1 fila 3). Llave foranea de lista valor, categoria ELEMENTO_CALCULO_DEF: "Actividades" / "Unidades" (nombre viejo del dato en la tabla: "Descriptores de desempeno", antes tambien llamado "Logros").';
+COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_CRITERIO_AREA IS
+    'Campo UI "Criterio para calcular la nota del area" (imagen, columna 3 fila 3). Llave foranea de lista valor, categoria CRITERIO_AREA: "Promediar las asignaturas" / "Ponderar las asignaturas" / "De acuerdo a la intensidad horaria".';
+COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_CRITERIO_FINAL IS
+    'Campo UI "Criterio para calcular la nota final" (imagen, columna 1 fila 4). Llave foranea de lista valor, categoria CRITERIO_FINAL_PERACA: "Promedio de periodos" / "Ponderacion de periodos".';
 
 -- ---------------------------------------------------------------------------
 -- 2. Backfill: copiar el valor vigente de TPERIODO_ACADEMICO_CONFIG antes
@@ -178,9 +223,10 @@ RETURNS TABLE (
     area_grade_criteria BIGINT, area_grade_criteria_name VARCHAR,
     student_without_grades_performance BIGINT, student_without_grades_performance_name VARCHAR,
     rounding_mode BIGINT, rounding_mode_name VARCHAR,
-    max_recovery_grade NUMERIC,
+    initial_grade NUMERIC,
     decimal_places NUMERIC,
-    final_grade_editable BIGINT, final_grade_editable_name VARCHAR
+    final_grade_editable BIGINT, final_grade_editable_name VARCHAR,
+    max_recovery_grade NUMERIC
 )
 LANGUAGE sql STABLE AS $$
     SELECT
@@ -215,7 +261,9 @@ LANGUAGE sql STABLE AS $$
         ce.NUMERO_DECIMALES,
 
         ce.FK_TLV_MODIF_FINAL_PERACA,
-        modif_final.NOMBRE
+        modif_final.NOMBRE,
+
+        ce.PORCENTAJE_MAXIMO_RECUPERACION
 
     FROM academico_test.TCRITERIO_EVALUACION ce
 
@@ -255,13 +303,21 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_criterio_eval_obtener(BIGINT, BIGINT) IS
-    'V62: rounding_mode ahora lee FK_TLV_MODO_REDONDEAR (antes leia NUMERO_DECIMALES por error) y gana su propio rounding_mode_name, igual que el resto de lookups. subject_grade_criteria ahora lee la columna dedicada FK_TLV_CRITERIO_ASIGNATURA (antes leia FK_TLV_MODIF_FINAL_PERACA por error). max_recovery_grade (antes "initial_grade") sigue leyendo PORCENTAJE_INICIAL_CALIF, sin cambio de columna — solo se corrige el nombre para reflejar lo que realmente representa (nota maxima de recuperacion/nivelacion, no una nota inicial). decimal_places y final_grade_editable son nuevos, exponen NUMERO_DECIMALES y FK_TLV_MODIF_FINAL_PERACA bajo su nombre real para no perder esa capacidad.';
+    'V62: rounding_mode ahora lee FK_TLV_MODO_REDONDEAR (antes leia NUMERO_DECIMALES por error) y gana su propio rounding_mode_name, igual que el resto de lookups. subject_grade_criteria ahora lee la columna dedicada FK_TLV_CRITERIO_ASIGNATURA (antes leia FK_TLV_MODIF_FINAL_PERACA por error). initial_grade sigue leyendo PORCENTAJE_INICIAL_CALIF sin cambios (confirmado con datos reales: 0,1,10,20,30,40 -- exactamente "nota inicial", el nombre siempre fue correcto). decimal_places y final_grade_editable son nuevos, exponen NUMERO_DECIMALES y FK_TLV_MODIF_FINAL_PERACA bajo su nombre real para no perder esa capacidad. max_recovery_grade es nuevo, lee la columna nueva PORCENTAJE_MAXIMO_RECUPERACION.';
 
 -- ---------------------------------------------------------------------------
--- 5. fn_criterio_eval_actualizar — misma correccion en el UPDATE; dos
+-- 5. fn_criterio_eval_actualizar — misma correccion en el UPDATE; tres
 --    parametros nuevos al FINAL de la firma (p_decimal_places,
---    p_final_grade_editable), DEFAULT NULL, para no romper la llamada
---    posicional de 12 argumentos que ya usa el catalogo (fila 51).
+--    p_final_grade_editable, p_max_recovery_grade), DEFAULT NULL, para no
+--    romper la llamada posicional de 12 argumentos que ya usa el catalogo
+--    (fila 51). El parametro que en un borrador previo de esta migracion se
+--    llamaba "p_max_recovery_grade" en la posicion 11 se renombro a
+--    "p_initial_grade" (misma posicion, mismo COALESCE contra
+--    PORCENTAJE_INICIAL_CALIF) porque se confirmo con la especificacion
+--    funcional real que esa columna SI es la nota inicial. El nuevo
+--    "p_max_recovery_grade" (posicion 15) es el que alimenta la columna
+--    nueva PORCENTAJE_MAXIMO_RECUPERACION -- son dos parametros distintos,
+--    no hay que confundirlos por compartir nombre con el borrador anterior.
 --
 --    Igual que con fn_criterio_eval_obtener: Postgres NO trata "agregar
 --    parametros nuevos con DEFAULT al final" como un simple REPLACE — crea
@@ -294,10 +350,11 @@ CREATE OR REPLACE FUNCTION academico_test.fn_criterio_eval_actualizar(
     p_area_grade_criteria    BIGINT DEFAULT NULL,
     p_student_wo_grades      BIGINT DEFAULT NULL,
     p_rounding_mode          NUMERIC DEFAULT NULL,
-    p_max_recovery_grade     NUMERIC DEFAULT NULL,
+    p_initial_grade          NUMERIC DEFAULT NULL,
     p_pk_usuario_solicitante BIGINT DEFAULT NULL,
     p_decimal_places         NUMERIC DEFAULT NULL,
-    p_final_grade_editable   BIGINT DEFAULT NULL
+    p_final_grade_editable   BIGINT DEFAULT NULL,
+    p_max_recovery_grade     NUMERIC DEFAULT NULL
 )
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
@@ -339,9 +396,10 @@ BEGIN
         FK_TLV_CRITERIO_AREA        = COALESCE(p_area_grade_criteria, FK_TLV_CRITERIO_AREA),
         FK_TLV_DESEMPENO_SIN_CALIF  = COALESCE(p_student_wo_grades, FK_TLV_DESEMPENO_SIN_CALIF),
         FK_TLV_MODO_REDONDEAR       = COALESCE(p_rounding_mode::BIGINT, FK_TLV_MODO_REDONDEAR),
-        PORCENTAJE_INICIAL_CALIF    = COALESCE(p_max_recovery_grade, PORCENTAJE_INICIAL_CALIF),
+        PORCENTAJE_INICIAL_CALIF    = COALESCE(p_initial_grade, PORCENTAJE_INICIAL_CALIF),
         NUMERO_DECIMALES            = COALESCE(p_decimal_places, NUMERO_DECIMALES),
         FK_TLV_MODIF_FINAL_PERACA   = COALESCE(p_final_grade_editable, FK_TLV_MODIF_FINAL_PERACA),
+        PORCENTAJE_MAXIMO_RECUPERACION = COALESCE(p_max_recovery_grade, PORCENTAJE_MAXIMO_RECUPERACION),
         MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TCRITERIO_EVALUACION = p_pk_periodo AND ACTIVE = TRUE;
     GET DIAGNOSTICS v_n = ROW_COUNT;
@@ -363,6 +421,6 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_criterio_eval_actualizar(
-    BIGINT, BIGINT, BIGINT, BOOLEAN, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, BIGINT, NUMERIC, BIGINT
+    BIGINT, BIGINT, BIGINT, BOOLEAN, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, BIGINT, NUMERIC, BIGINT, NUMERIC
 ) IS
-    'V62: corrige el wiring de p_rounding_mode (antes escribia NUMERO_DECIMALES; ahora FK_TLV_MODO_REDONDEAR, columna trasladada desde TPERIODO_ACADEMICO_CONFIG) y de p_subject_grade_criteria (antes escribia FK_TLV_MODIF_FINAL_PERACA; ahora la columna dedicada FK_TLV_CRITERIO_ASIGNATURA). p_max_recovery_grade (antes "p_initial_grade") sigue escribiendo PORCENTAJE_INICIAL_CALIF sin cambio de columna -- solo se corrige el nombre (nota maxima de recuperacion/nivelacion, no nota inicial). p_decimal_places y p_final_grade_editable son nuevos, al final de la firma para no romper la llamada posicional del catalogo (fila 51).';
+    'V62: corrige el wiring de p_rounding_mode (antes escribia NUMERO_DECIMALES; ahora FK_TLV_MODO_REDONDEAR, columna trasladada desde TPERIODO_ACADEMICO_CONFIG) y de p_subject_grade_criteria (antes escribia FK_TLV_MODIF_FINAL_PERACA; ahora la columna dedicada FK_TLV_CRITERIO_ASIGNATURA). p_initial_grade sigue escribiendo PORCENTAJE_INICIAL_CALIF sin cambio de columna (confirmado: es efectivamente la nota inicial). p_decimal_places y p_final_grade_editable son nuevos, exponen NUMERO_DECIMALES y FK_TLV_MODIF_FINAL_PERACA. p_max_recovery_grade es nuevo, escribe la columna nueva PORCENTAJE_MAXIMO_RECUPERACION -- todos al final de la firma para no romper la llamada posicional del catalogo (fila 51).';
