@@ -32,6 +32,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *   <li>DOMAIN types (BOOL_SN, etc.) → serialización a String; el cast
  *       corre en SQL (insertado por SqlRewriter).</li>
  *   <li>BODY_RAW con Map → JSON literal que se castea via jsonb en SQL.</li>
+ *   <li>BODY_RAW con List, tipo JSONB/JSON escalar (no JSONB[]) → JSON
+ *       array literal — array nativo, sin pre-serializar a String —
+ *       ver {@link NativeJsonArrayInScalarJsonb}.</li>
  *   <li>null (o campo omitido) → bindea NULL de SQL si el tipo es
  *       nullable (default); 400 si el tipo lleva el sufijo '!'
  *       (obligatorio) — ver {@link NullabilityTests}.</li>
@@ -326,6 +329,103 @@ class ParamBinderTest {
                 Map.of("BODY_RAW.FILTRO", "JSONB"));
         assertThat(src.getValue("BODY_RAW.FILTRO"))
                 .isEqualTo("{\"msg\":\"hello \\\"world\\\"\\nnext line\"}");
+    }
+
+    /**
+     * V63 — el caso real que motivó esto: {@code fn_escala_guardar_bulk}
+     * y hermanas declaran su parámetro como {@code jsonb} escalar (no
+     * {@code jsonb[]}) pero internamente esperan un ARRAY de registros.
+     * Antes el cliente tenía que pre-serializar el array a mano
+     * ({@code "SCALES": "[{...}]"}) porque un {@code List} crudo se
+     * rechazaba en la validación y, aun sorteándola, caía al fallback
+     * de {@code stringify} — {@code List.toString()} de Java, que NO es
+     * JSON válido. Ahora el array nativo se serializa correctamente.
+     */
+    @Nested
+    class NativeJsonArrayInScalarJsonb {
+
+        @Test
+        void listOfObjectsBecomesJsonArrayLiteral() {
+            Map<String, Object> obj1 = new LinkedHashMap<>();
+            obj1.put("id", 1);
+            obj1.put("nombre", "Excelente");
+            Map<String, Object> obj2 = new LinkedHashMap<>();
+            obj2.put("id", 2);
+            obj2.put("nombre", "Bueno");
+
+            MapSqlParameterSource src = ParamBinder.build(
+                    Map.of("BODY_RAW.SCALES", List.of(obj1, obj2)),
+                    Map.of("BODY_RAW.SCALES", "JSONB"));
+            assertThat(src.getValue("BODY_RAW.SCALES")).isEqualTo(
+                    "[{\"id\":1,\"nombre\":\"Excelente\"},{\"id\":2,\"nombre\":\"Bueno\"}]");
+        }
+
+        @Test
+        void emptyListBecomesEmptyJsonArray() {
+            MapSqlParameterSource src = ParamBinder.build(
+                    Map.of("BODY_RAW.SCALES", List.of()),
+                    Map.of("BODY_RAW.SCALES", "JSONB"));
+            assertThat(src.getValue("BODY_RAW.SCALES")).isEqualTo("[]");
+        }
+
+        @Test
+        void listOfScalarsBecomesJsonArrayLiteral() {
+            MapSqlParameterSource src = ParamBinder.build(
+                    Map.of("BODY_RAW.IDS", List.of(1, 2, 3)),
+                    Map.of("BODY_RAW.IDS", "JSONB"));
+            assertThat(src.getValue("BODY_RAW.IDS")).isEqualTo("[1,2,3]");
+        }
+
+        @Test
+        void listWithNullAndNestedListElements() {
+            List<Object> mixed = new java.util.ArrayList<>();
+            mixed.add(1);
+            mixed.add(null);
+            mixed.add(List.of("a", "b"));
+            MapSqlParameterSource src = ParamBinder.build(
+                    Map.of("BODY_RAW.X", mixed),
+                    Map.of("BODY_RAW.X", "JSONB"));
+            assertThat(src.getValue("BODY_RAW.X")).isEqualTo("[1,null,[\"a\",\"b\"]]");
+        }
+
+        @Test
+        void listElementsAreEscapedCorrectly() {
+            MapSqlParameterSource src = ParamBinder.build(
+                    Map.of("BODY_RAW.X", List.of("hello \"world\"")),
+                    Map.of("BODY_RAW.X", "JSONB"));
+            assertThat(src.getValue("BODY_RAW.X")).isEqualTo("[\"hello \\\"world\\\"\"]");
+        }
+
+        /** Sigue funcionando el shape ya soportado: JSON escrito. */
+        @Test
+        void preSerializedStringArrayStillWorks() {
+            MapSqlParameterSource src = ParamBinder.build(
+                    Map.of("BODY_RAW.SCALES", "[{\"id\":1}]"),
+                    Map.of("BODY_RAW.SCALES", "JSONB"));
+            assertThat(src.getValue("BODY_RAW.SCALES")).isEqualTo("[{\"id\":1}]");
+        }
+
+        /** Validación: un array crudo ya no se rechaza para JSONB escalar. */
+        @Test
+        void strictValidationAcceptsListForScalarJsonb() {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("BODY_RAW.SCALES", List.of(Map.of("id", 1)));
+            assertThat(ParamBinder.buildStrict(values,
+                    Map.of("BODY_RAW.SCALES", "JSONB"), Map.of()))
+                    .isNotNull();
+        }
+
+        /** JSONB[] (array de valores jsonb, tipo distinto) sigue por su
+         *  propio camino — no lo toca este fix. */
+        @Test
+        void jsonbArrayTypeIsUnaffectedByScalarJsonListHandling() {
+            Map<String, Object> obj = Map.of("k", "v");
+            MapSqlParameterSource src = ParamBinder.build(
+                    Map.of("BODY.X", List.of(obj)),
+                    Map.of("BODY.X", "JSONB[]"));
+            // Formato PG-array, no JSON array literal.
+            assertThat(src.getValue("BODY.X")).isEqualTo("{\"{\\\"k\\\":\\\"v\\\"}\"}");
+        }
     }
 
     @Test
