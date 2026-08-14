@@ -32,6 +32,20 @@ import java.sql.SQLException;
  *       after the colon (when present) is propagated to
  *       the client so the caller sees why their invocation
  *       was rejected.</li>
+ *   <li><b>P0002</b> no_data_found → 404 Not Found.
+ *       PL/pgSQL's reserved code for "the row I was asked
+ *       to update/delete isn't there (or isn't active)".
+ *       Widespread convention across {@code academico_test}'s
+ *       {@code *_actualizar}/{@code *_soft_delete}/{@code
+ *       *_eliminar} procedures — e.g. {@code fn_escala_eliminar}:
+ *       {@code RAISE EXCEPTION 'No existe una banda activa con
+ *       PK %', p_pk USING ERRCODE = 'P0002'}. Before this case
+ *       existed, P0002 matched no branch in the switch below,
+ *       fell through {@link #map(SQLException)}'s catch-all,
+ *       and surfaced as an opaque 500 — indistinguishable from
+ *       a real server fault, and silent in the logs too (the
+ *       catch-all doesn't log either, by design: it's meant for
+ *       truly unrecognised states, not this common one).</li>
  *   <li><b>08000-08999</b> connection_exception →
  *       503 Service Unavailable. The backing DB is
  *       unreachable or the pool is exhausted; the client
@@ -136,6 +150,16 @@ public final class PostgresErrorMapper {
                     // RAISE EXCEPTION 'msg' — propagate the message.
                     log.info("RAISE EXCEPTION (SQLState={}): {}", state, ex.getMessage());
                     return new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            extractRaiseMessage(ex.getMessage()));
+                }
+                if ("P0002".equals(state)) {
+                    // RAISE EXCEPTION ... USING ERRCODE = 'P0002' —
+                    // plpgsql's own no_data_found. The row the
+                    // procedure was asked to touch doesn't exist
+                    // (or isn't active); 404 fits better than the
+                    // generic 400 that P0001 gets.
+                    log.info("No data found (SQLState={}): {}", state, ex.getMessage());
+                    return new ResponseStatusException(HttpStatus.NOT_FOUND,
                             extractRaiseMessage(ex.getMessage()));
                 }
                 return null;
