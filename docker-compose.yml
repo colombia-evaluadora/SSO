@@ -876,6 +876,53 @@ services:
       retries: 12
       start_period: 30s
 
+  # Tercera instancia — sirve el catálogo eval-col (microservice_id local
+  # registrado con instancename=eval-col). Mismo patrón que
+  # query-service-postgres-analytics de arriba: mismo Postgres físico,
+  # identidad de instancia distinta para que sso-admin/gateway la traten
+  # como un microservicio propio.
+  query-service-eval-col:
+    build:
+      context: .
+      dockerfile: query-service/Dockerfile
+    image: ${IMAGE_PREFIX:-eurekatic}/query-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
+    container_name: sso-query-service-eval-col
+    restart: unless-stopped
+    mem_limit: 384m
+    mem_reservation: 256m
+    depends_on:
+      eurekaserver:
+        condition: service_started
+      sso-admin:
+        condition: service_healthy
+    environment:
+      QUERY_DS_DIALECT: postgres
+      QUERY_DS_URL: "jdbc:postgresql://${QUERY_DS_POSTGRES_HOST}:${QUERY_DS_POSTGRES_PORT}/${QUERY_DS_POSTGRES_NAME}?sslmode=${QUERY_DS_POSTGRES_SSLMODE}&channel_binding=${QUERY_DS_POSTGRES_CHANNEL_BINDING}"
+      QUERY_DS_USERNAME: ${QUERY_DS_POSTGRES_USER}
+      QUERY_DS_PASSWORD: ${QUERY_DS_POSTGRES_PASSWORD}
+      QUERY_DS_POOL_SIZE: "10"
+      # Distinct instance name → distinct Eureka service-id
+      # → the gateway routes /query-service-eval-col/** here,
+      # and CatalogClient.whoami() resolves this instance to
+      # microservice_id=eval-col in sso-admin.
+      QUERY_INSTANCE_NAME: eval-col
+      EUREKA_URL: "http://eurekaserver:8761/eureka"
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      # Direct to sso-admin, not the gateway — see
+      # query-service-postgres above.
+      QUERY_CATALOG_BASE_URL: "http://sso-admin:8083"
+      QUERY_CATALOG_INTERNAL_TOKEN: ${QUERY_CATALOG_INTERNAL_TOKEN}
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8084; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
   # ===========================================================================
   # provisioner — Docker sidecar that sso-admin calls to spin up
   # query-service containers on demand. The ONLY service in the
