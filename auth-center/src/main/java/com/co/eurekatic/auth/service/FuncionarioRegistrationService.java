@@ -89,8 +89,20 @@ public class FuncionarioRegistrationService {
 
     /**
      * El caller se propaga como {@code p_pk_usuario_solicitante} al gate
-     * {@code fn_puede_afectar_usuarios}. Sin fila en {@code public.users}
-     * no hay identidad que propagar.
+     * {@code fn_puede_afectar_usuarios}, que compara contra
+     * {@code academico_test.tsede_usuario.fk_tusuario} (FK real a
+     * {@code academico_test.tusuario.pk_tusuario}) — NO contra
+     * {@code public.users.id_user}. Son dos secuencias independientes;
+     * solo coinciden para el admin seed porque
+     * {@link com.co.eurekatic.auth.init.AdminAcademicIdentityBootstrap}
+     * fuerza {@code pk_tusuario = id_user} a propósito. Para cualquier
+     * otro usuario (creado por {@code fn_usu_crear}, que asigna
+     * {@code pk_tusuario} por identity) pasar el {@code id_user} crudo
+     * aquí hace que el gate compare IDs de dos espacios distintos y
+     * devuelva FALSE siempre — 403 para todo caller que no sea ese admin
+     * concreto. Se resuelve con el mismo puente que ya usa
+     * {@link #registerFuncionario} para la respuesta
+     * ({@code fn_get_academico_usuario_id}, V48).
      */
     private long resolveCallerId(Authentication auth) {
         if (auth == null || auth.getPrincipal() == null) {
@@ -105,8 +117,15 @@ public class FuncionarioRegistrationService {
         } else {
             email = auth.getName();
         }
-        return userRepository.findByEmail(email)
+        long idUser = userRepository.findByEmail(email)
                 .map(User::getId)
                 .orElseThrow(() -> new ForbiddenException("Caller sin fila en public.users"));
+        Long pkTusuario = jdbc.queryForObject(
+                "SELECT public.fn_get_academico_usuario_id(?)", Long.class, idUser);
+        if (pkTusuario == null) {
+            throw new ForbiddenException(
+                    "Caller sin identidad académica (academico_test.tusuario) — no puede afectar usuarios");
+        }
+        return pkTusuario;
     }
 }
