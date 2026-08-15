@@ -29,12 +29,23 @@ import java.util.UUID;
  * <p>Y el procedimiento del catálogo lo lee como {@code :BODY.PDF} y
  * {@code :BODY.FOTO}, decidiendo él en qué tabla y columna va cada uno.
  *
+ * <p>Un nombre de campo con puntos anida: {@code "usuario.email"} crea
+ * (o reutiliza) un objeto {@code usuario} y le pone {@code email}
+ * dentro. Hace falta cuando el destino no es una query del catálogo
+ * sino un controller normal con un DTO anidado — por ejemplo
+ * {@code auth-center POST /register/funcionario}, cuyo
+ * {@code RegisterFuncionarioRequest} espera
+ * {@code {"usuario": {..., "fkTarchivoFoto": 13}, "fkTmunicipioExpedicion": 1}}
+ * y no un objeto plano. Un campo sin punto se comporta exactamente
+ * como antes — queda en el primer nivel.
+ *
  * <p><b>Esta clase no sabe nada de negocio.</b> No conoce funcionarios
- * ni establecimientos ni matrículas. Su única regla es "sube y
- * sustituye", así que una operación nueva del catálogo no le añade ni
+ * ni establecimientos ni matrículas. Su única regla es "sube, sustituye
+ * y anida según el nombre del campo", así que una operación nueva del
+ * catálogo (o un DTO anidado en cualquier otro servicio) no le añade ni
  * una línea de código. Ésa es la propiedad que hace que el diseño
- * escale: la lógica de dónde va cada id vive en el PL/pgSQL, que es
- * donde ya vive el resto de la lógica de datos.
+ * escale: la lógica de dónde va cada id vive en quien recibe el JSON
+ * (PL/pgSQL o un @RequestBody), no aquí.
  */
 @Component
 public class TransformadorMultipart {
@@ -69,7 +80,8 @@ public class TransformadorMultipart {
     public Resultado transformar(Map<String, String> campos,
                                  Map<String, List<MultipartFile>> ficheros,
                                  String usuario) {
-        Map<String, Object> cuerpo = new LinkedHashMap<>(campos);
+        Map<String, Object> cuerpo = new LinkedHashMap<>();
+        campos.forEach((campo, valor) -> putAnidado(cuerpo, campo, valor));
         // Ids ya reservados, para poder deshacerlos si algo falla a
         // media transformación.
         List<Long> reservados = new ArrayList<>();
@@ -95,7 +107,7 @@ public class TransformadorMultipart {
                 // Un solo fichero en el campo → id suelto.
                 // Varios → lista, que es lo que el JSON del cliente
                 // sugería al repetir el mismo nombre de campo.
-                cuerpo.put(campo, ids.size() == 1 ? ids.get(0) : ids);
+                putAnidado(cuerpo, campo, ids.size() == 1 ? ids.get(0) : ids);
             }
             return new Resultado(cuerpo, List.copyOf(reservados));
 
@@ -104,6 +116,39 @@ public class TransformadorMultipart {
             throw new SubidaFallidaException(
                     "No se pudo procesar el multipart: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Escribe {@code valor} en {@code raiz} bajo la ruta que marca
+     * {@code clave} partida por {@code "."} — {@code "usuario.email"}
+     * crea (o reutiliza) un objeto {@code usuario} y le pone
+     * {@code email} dentro. Sin punto, {@code clave} queda tal cual en
+     * el primer nivel: mismo comportamiento que antes de que existiera
+     * el anidado.
+     *
+     * <p>Si un segmento intermedio ya tiene un valor que no es un
+     * objeto (choque de nombres, p. ej. {@code "usuario"} y
+     * {@code "usuario.email"} en el mismo multipart), se pisa con un
+     * objeto nuevo: quien arma el multipart eligió los nombres de
+     * campo, así que un choque es un error de quien llama, no algo que
+     * este método deba detectar — igual que el resto de la clase, no
+     * valida significado de negocio.
+     */
+    @SuppressWarnings("unchecked")
+    private static void putAnidado(Map<String, Object> raiz, String clave, Object valor) {
+        String[] partes = clave.split("\\.");
+        Map<String, Object> actual = raiz;
+        for (int i = 0; i < partes.length - 1; i++) {
+            Object existente = actual.get(partes[i]);
+            if (existente instanceof Map) {
+                actual = (Map<String, Object>) existente;
+            } else {
+                Map<String, Object> nuevo = new LinkedHashMap<>();
+                actual.put(partes[i], nuevo);
+                actual = nuevo;
+            }
+        }
+        actual.put(partes[partes.length - 1], valor);
     }
 
     /**

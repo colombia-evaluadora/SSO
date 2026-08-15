@@ -3,7 +3,6 @@ package com.co.eurekatic.auth.service;
 import com.co.eurekatic.auth.exception.EmailAlreadyExistsException;
 import com.co.eurekatic.auth.exception.ForbiddenException;
 import com.co.eurekatic.auth.repository.AcademicoJdbcRepository;
-import com.co.eurekatic.auth.web.dto.RegisterFuncionarioRequest;
 import com.co.eurekatic.auth.web.dto.RegisterResponse;
 import com.co.eurekatic.auth.web.dto.RegisterUsuarioRequest;
 import com.co.eurekatic.common.entity.User;
@@ -57,17 +56,18 @@ public class FuncionarioRegistrationService {
     }
 
     @Transactional
-    public RegisterResponse registerFuncionario(RegisterFuncionarioRequest req, Authentication auth) {
+    public RegisterResponse registerFuncionario(RegisterUsuarioRequest req, Authentication auth) {
         long callerId = resolveCallerId(auth);
-        RegisterUsuarioRequest u = req.usuario();
-        PasswordPolicy.validate(u.password());
-        if (userRepository.existsByEmail(u.email())) {
-            throw new EmailAlreadyExistsException(u.email());
+        PasswordPolicy.validate(req.password());
+        if (userRepository.existsByEmail(req.email())) {
+            throw new EmailAlreadyExistsException(req.email());
         }
 
-        String hashed = passwordEncoder.encode(u.password());
-        User saved = userRepository.save(newUser(u, hashed));
+        String hashed = passwordEncoder.encode(req.password());
+        User saved = userRepository.save(newUser(req, hashed));
 
+        // fk_tmunicipio_expedicion ya no se pide aquí (V62): queda NULL
+        // en TFUNCIONARIO y se completa después vía fn_fun_actualizar.
         long pkFuncionario = academicoJdbc.callFunCrear(callerId, req, hashed);
         // fn_fun_crear solo retorna PK_TFUNCIONARIO. Resolvemos PK_TUSUARIO
         // por el bridge public.users.id_user -> academico_test.tusuario (V48).

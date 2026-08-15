@@ -2,6 +2,7 @@ package com.co.eurekatic.files;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.Map;
@@ -86,11 +87,16 @@ class TransformadorMultipartTest {
                 .thenReturn("s3://b/10/a")
                 .thenThrow(new java.io.IOException("almacen caido"));
 
+        // LinkedHashMap, no Map.of: el test depende de que "uno" se
+        // procese antes que "dos" (para saber cuál pk recibe cada uno),
+        // y Map.of aleatoriza el orden de iteración a propósito
+        // (salt por-JVM) — con él este test es flaky.
+        Map<String, List<MultipartFile>> ficheros = new java.util.LinkedHashMap<>();
+        ficheros.put("uno", List.of(fichero("uno", "a.pdf", "A")));
+        ficheros.put("dos", List.of(fichero("dos", "b.pdf", "B")));
+
         assertThatThrownBy(() -> new TransformadorMultipart(almacen, repo).transformar(
-                Map.of(),
-                Map.of("uno", List.of(fichero("uno", "a.pdf", "A")),
-                       "dos", List.of(fichero("dos", "b.pdf", "B"))),
-                "admin@example.com"))
+                Map.of(), ficheros, "admin@example.com"))
                 .isInstanceOf(TransformadorMultipart.SubidaFallidaException.class);
 
         // Las dos reservas se descartan, no sólo la que falló.
@@ -145,6 +151,31 @@ class TransformadorMultipartTest {
 
         verify(almacen, never()).borrar(anyString());
         verify(repo).descartar(30L);
+    }
+
+    /**
+     * Un nombre de campo con puntos anida en vez de quedar plano —
+     * necesario para destinos que no son una query del catálogo sino
+     * un DTO Java anidado (auth-center {@code RegisterFuncionarioRequest}:
+     * {@code {"usuario": {..., "fkTarchivoFoto": id}, "fkTmunicipioExpedicion": ...}}).
+     */
+    @Test
+    void unNombreDeCampoConPuntosAnidaEnVezDeQuedarPlano() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar(anyString(), anyLong(), anyString())).thenReturn(13L);
+        when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/13/firma.pdf");
+
+        Map<String, Object> cuerpo = new TransformadorMultipart(almacen, repo).transformar(
+                Map.of("usuario.email", "func@example.com", "fkTmunicipioExpedicion", "1"),
+                Map.of("usuario.fkTarchivoFoto", List.of(fichero("usuario.fkTarchivoFoto", "firma.pdf", "F"))),
+                "admin@example.com").cuerpo();
+
+        assertThat(cuerpo).containsEntry("fkTmunicipioExpedicion", "1");
+        @SuppressWarnings("unchecked")
+        var usuario = (Map<String, Object>) cuerpo.get("usuario");
+        assertThat(usuario).containsEntry("email", "func@example.com");
+        assertThat(usuario.get("fkTarchivoFoto")).isEqualTo(13L);
     }
 
     @Test
