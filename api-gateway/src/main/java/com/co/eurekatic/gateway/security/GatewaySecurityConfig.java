@@ -167,6 +167,24 @@ public class GatewaySecurityConfig {
                         //
                         // Cae en anyExchange().authenticated(), como
                         // /api/files/** (la subida) y todo lo demás.
+                        //
+                        // /api/files/view/** SÍ lleva permitAll — es el
+                        // caso "<img src>" resuelto de otra forma: el
+                        // front pide antes, autenticado, un token de un
+                        // solo archivo y vida corta a
+                        // POST /api/files/view-token/{id} (ese endpoint
+                        // NO es público, cae en anyExchange().authenticated()
+                        // igual que download), y lo pasa como
+                        // ?token=... en la URL de la imagen. Ese token —
+                        // no la ausencia de autenticación — es lo que
+                        // file-service valida en /files/view/{id} (ver
+                        // ViewTokenService); dejar pasar la petición
+                        // aquí sin JWT es correcto porque la
+                        // autorización real vive en el token, no en esta
+                        // capa. Sin este permitAll, un <img> sin
+                        // Authorization se queda en 401 antes de llegar
+                        // a file-service a validar el token.
+                        .pathMatchers("/api/files/view/**").permitAll()
                         .pathMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info", "/actuator/prometheus").permitAll()
                         // OpenAPI aggregator — Swagger UI + merged doc + webjars.

@@ -52,6 +52,19 @@ files:
   # operativa, pero rotarlos debe hacerse de forma sincronizada).
   internal-token: ${FILES_INTERNAL_TOKEN:}
 
+  # Firma los tokens de GET /files/view/{id}?token=... — acceso de
+  # solo-lectura a UN archivo, de vida corta, para un <img src="...">
+  # que no puede mandar Authorization. Ver ViewTokenService. Vacío =
+  # POST /files/view-token/{id} responde 503: sin secreto no hay forma
+  # segura de acuñar ni validar tokens, así que la puerta se queda
+  # cerrada en vez de acuñar tokens que nadie puede verificar después
+  # de un reinicio (secreto regenerado = tokens ya emitidos, inválidos).
+  view-token-secret: ${FILES_VIEW_TOKEN_SECRET:}
+  # 5 minutos: alcanza para que el navegador cargue la imagen (incluso
+  # con reintentos) sin dejar la URL utilizable por más tiempo del que
+  # hace falta si queda en el historial o en logs de acceso.
+  view-token-ttl-seconds: ${FILES_VIEW_TOKEN_TTL_SECONDS:300}
+
   s3:
     # Vacío = AWS real. Con valor = almacén compatible (Garage en dev).
     endpoint: ${S3_ENDPOINT:}

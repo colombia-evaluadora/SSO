@@ -11,7 +11,9 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import software.amazon.awssdk.core.ResponseInputStream;
@@ -26,6 +28,7 @@ import java.io.OutputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Map;
 
 /**
  * Descarga de archivos a través del api-gateway.
@@ -60,6 +63,20 @@ import java.security.MessageDigest;
  * si en el futuro la ruta del gateway cambia, este método sigue
  * protegiendo el endpoint directamente, sin acoplar la seguridad del
  * catálogo a la del API-gateway.
+ *
+ * <p><b>{@code /files/view/{id}} — visualización directa en
+ * {@code <img src="...">}.</b> {@code /files/download/{id}} exige
+ * {@code Authorization: Bearer} en la cabecera, algo que un
+ * {@code <img>} plano del navegador no puede mandar (por eso el front
+ * lo consume con {@code fetch()} + blob URL). Cuando SÍ hace falta un
+ * {@code <img src>} directo, el flujo es en dos pasos: (1) el front,
+ * ya autenticado, pide {@code POST /files/view-token/{id}} y recibe
+ * un token de un solo archivo, de vida corta ({@link ViewTokenService});
+ * (2) ese token va en la URL de la imagen —
+ * {@code <img src="/files/view/{id}?token=...">} — que el navegador sí
+ * puede pedir sin cabeceras. {@code /files/view/{id}} acepta ese
+ * token O un JWT normal, así que sigue sirviendo también al caso
+ * {@code fetch()} existente sin duplicar código de streaming.
  */
 @RestController
 public class DownloadController {
@@ -73,17 +90,20 @@ public class DownloadController {
     private final JwtTokenService jwt;
     private final JwtProperties jwtProps;
     private final String tokenCompartido;
+    private final ViewTokenService viewTokens;
 
     public DownloadController(ArchivoRepository archivos,
                               AlmacenObjetos almacen,
                               JwtTokenService jwt,
                               JwtProperties jwtProps,
-                              @Value("${files.internal-token:}") String tokenCompartido) {
+                              @Value("${files.internal-token:}") String tokenCompartido,
+                              ViewTokenService viewTokens) {
         this.archivos = archivos;
         this.almacen = almacen;
         this.jwt = jwt;
         this.jwtProps = jwtProps;
         this.tokenCompartido = tokenCompartido == null ? "" : tokenCompartido;
+        this.viewTokens = viewTokens;
     }
 
     /**
@@ -103,10 +123,76 @@ public class DownloadController {
             log.warn("descarga id={} rechazada: ni JWT válido ni token interno", archivoId);
             return ResponseEntity.status(401).build();
         }
+        return streamear(archivoId, quien);
+    }
 
+    /**
+     * Acuña un token de vista para {@code archivoId} — ver javadoc de
+     * clase. Exige el mismo JWT que {@code descargar}: emitir el token
+     * es una acción de sesión normal, sólo lo que se hace CON el token
+     * (pedir {@code /files/view/{id}}) es lo que no puede llevar
+     * cabeceras. 404 si el archivo no existe o está inactivo — no tiene
+     * sentido acuñar un acceso a algo que {@code /files/view} va a
+     * rechazar igual.
+     */
+    @PostMapping("/files/view-token/{archivoId}")
+    public ResponseEntity<Map<String, Object>> emitirTokenVista(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String autorizacion,
+            @PathVariable("archivoId") long archivoId) {
+
+        String quien = identificaLlamante(autorizacion, null);
+        if (quien == null) {
+            return ResponseEntity.status(401).build();
+        }
+        if (!viewTokens.habilitado()) {
+            log.error("view-token id={}: files.view-token-secret no configurado", archivoId);
+            return ResponseEntity.status(503).build();
+        }
+        if (archivos.buscarActivo(archivoId).isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        String token = viewTokens.acunar(archivoId);
+        log.info("view-token id={} acuñado para {} (ttl={}s)", archivoId, quien, viewTokens.ttlSegundos());
+        return ResponseEntity.ok(Map.of(
+                "token", token,
+                "url", "/files/view/" + archivoId + "?token=" + token,
+                "expiresIn", viewTokens.ttlSegundos()));
+    }
+
+    /**
+     * Sirve el archivo para visualización directa — pensado para
+     * {@code <img src="...">}. Acepta el JWT normal (mismo camino que
+     * {@code descargar}) O un token de vista en {@code ?token=}; no
+     * hace falta elegir uno en el cliente, se prueban ambos.
+     */
+    @GetMapping("/files/view/{archivoId}")
+    public ResponseEntity<StreamingResponseBody> ver(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String autorizacion,
+            @RequestParam(value = "token", required = false) String token,
+            @PathVariable("archivoId") long archivoId) {
+
+        String quien = identificaLlamante(autorizacion, null);
+        if (quien == null) {
+            if (!viewTokens.valido(token, archivoId)) {
+                log.warn("view id={} rechazada: ni JWT válido ni token de vista", archivoId);
+                return ResponseEntity.status(401).build();
+            }
+            quien = "token-vista";
+        }
+        return streamear(archivoId, quien);
+    }
+
+    /**
+     * Streaming común a {@code descargar} y {@code ver}: buscar la
+     * fila, resolver la clave S3, abrir el objeto y devolverlo con los
+     * headers de siempre. Ambos endpoints difieren sólo en CÓMO se
+     * autoriza al llamante — una vez identificado, sirven exactamente
+     * el mismo archivo de la misma forma.
+     */
+    private ResponseEntity<StreamingResponseBody> streamear(long archivoId, String quien) {
         var archivo = archivos.buscarActivo(archivoId).orElse(null);
         if (archivo == null) {
-            log.warn("descarga id={} rechazada: fila no encontrada o inactiva", archivoId);
+            log.warn("acceso id={} rechazado: fila no encontrada o inactiva", archivoId);
             return ResponseEntity.notFound().build();
         }
 
@@ -115,7 +201,7 @@ public class DownloadController {
             // urls3 debería ser s3://bucket/key o https://host/bucket/key.
             // Si no encaja, devolvemos 502 — es un dato corrupto, no
             // un archivo que el cliente pidió mal.
-            log.warn("descarga id={}: urls3 malformado: {}", archivoId, archivo.urls3());
+            log.warn("acceso id={}: urls3 malformado: {}", archivoId, archivo.urls3());
             return ResponseEntity.status(502).build();
         }
 
@@ -127,7 +213,7 @@ public class DownloadController {
             // subida nunca cerró — o un job de limpieza borró el
             // objeto pero todavía no la fila. Devolvemos 404 al
             // front y logueamos para revisar.
-            log.warn("descarga id={}: fila activa pero objeto ausente en S3 (clave={})",
+            log.warn("acceso id={}: fila activa pero objeto ausente en S3 (clave={})",
                     archivoId, clave);
             return ResponseEntity.notFound().build();
         } catch (S3Exception e) {
@@ -138,7 +224,7 @@ public class DownloadController {
             // credenciales de otro bucket). Sin el texto del error
             // hay que ir a los logs del propio S3 para enterarse, y
             // contra AWS eso no es una opción.
-            log.error("descarga id={}: S3 respondió {} (clave={}): {}",
+            log.error("acceso id={}: S3 respondió {} (clave={}): {}",
                     archivoId, e.statusCode(), clave,
                     e.awsErrorDetails() == null
                             ? e.getMessage()
@@ -156,7 +242,7 @@ public class DownloadController {
                 // Cliente se desconectó a mitad de la descarga. No es
                 // un error que valga la pena reportar como 5xx — el
                 // log a nivel DEBUG basta para diagnóstico.
-                log.debug("descarga id={} interrumpida por el cliente: {}",
+                log.debug("acceso id={} interrumpido por el cliente: {}",
                         archivoId, e.getMessage());
             }
         };
@@ -207,7 +293,7 @@ public class DownloadController {
         // que ponerlo a mano (hacerlo es un error: es un header
         // hop-by-hop que el contenedor gestiona él mismo).
 
-        log.info("descarga id={} ({} bytes) para {}", archivoId, tamano, quien);
+        log.info("acceso id={} ({} bytes) para {}", archivoId, tamano, quien);
         return ResponseEntity.ok().headers(headers).body(cuerpo);
     }
 

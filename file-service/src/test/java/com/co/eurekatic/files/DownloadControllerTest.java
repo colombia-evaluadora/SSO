@@ -128,10 +128,16 @@ class DownloadControllerTest {
     /** Controller con repositorio vacío: basta para ver si autentica. */
     private static DownloadController controller(JwtTokenService jwt,
                                                  ArchivoRepository repo) {
+        return controller(jwt, repo, mock(AlmacenObjetos.class), mock(ViewTokenService.class));
+    }
+
+    private static DownloadController controller(JwtTokenService jwt,
+                                                 ArchivoRepository repo,
+                                                 AlmacenObjetos almacen,
+                                                 ViewTokenService viewTokens) {
         var props = new JwtProperties(null, "irrelevante-en-tests",
                 "sso-postgres", 3600, 86400, "Authorization", "Bearer ", null);
-        return new DownloadController(repo, mock(AlmacenObjetos.class),
-                jwt, props, TOKEN_INTERNO);
+        return new DownloadController(repo, almacen, jwt, props, TOKEN_INTERNO, viewTokens);
     }
 
     @Test
@@ -247,9 +253,7 @@ class DownloadControllerTest {
                 AbortableInputStream.create(new ByteArrayInputStream("abc".getBytes())));
         when(almacen.abrir("clave-cruda.docx")).thenReturn(stream);
 
-        var props = new JwtProperties(null, "irrelevante-en-tests",
-                "sso-postgres", 3600, 86400, "Authorization", "Bearer ", null);
-        var respuesta = new DownloadController(repo, almacen, jwt, props, TOKEN_INTERNO)
+        var respuesta = controller(jwt, repo, almacen, mock(ViewTokenService.class))
                 .descargar(TOKEN_INTERNO, null, 1L);
 
         assertThat(respuesta.getStatusCode().value()).isEqualTo(200);
@@ -260,5 +264,143 @@ class DownloadControllerTest {
         // Respaldo ASCII-seguro para clientes que no entienden filename*.
         assertThat(cd).contains("filename=\"");
         assertThat(cd).startsWith("inline");
+    }
+
+    // ---------- POST /files/view-token/{id} ----------
+
+    @Test
+    void emitirTokenVistaSinCredencialesEs401() {
+        var repo = mock(ArchivoRepository.class);
+        var respuesta = controller(mock(JwtTokenService.class), repo)
+                .emitirTokenVista(null, 1L);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(401);
+        verifyNoInteractions(repo);
+    }
+
+    @Test
+    void emitirTokenVistaSinSecretoConfiguradoEs503() {
+        var jwt = mock(JwtTokenService.class);
+        var repo = mock(ArchivoRepository.class);
+        var viewTokens = mock(ViewTokenService.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("ana@example.com", 7L, Set.of("USER"), "access"));
+        when(viewTokens.habilitado()).thenReturn(false);
+
+        var respuesta = controller(jwt, repo, mock(AlmacenObjetos.class), viewTokens)
+                .emitirTokenVista("Bearer jwt-bueno", 1L);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(503);
+        // Sin secreto configurado no tiene sentido ni mirar si el
+        // archivo existe: la respuesta va a ser la misma igual.
+        verifyNoInteractions(repo);
+    }
+
+    @Test
+    void emitirTokenVistaParaUnArchivoInexistenteEs404() {
+        var jwt = mock(JwtTokenService.class);
+        var repo = mock(ArchivoRepository.class);
+        var viewTokens = mock(ViewTokenService.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("ana@example.com", 7L, Set.of("USER"), "access"));
+        when(viewTokens.habilitado()).thenReturn(true);
+        when(repo.buscarActivo(1L)).thenReturn(Optional.empty());
+
+        var respuesta = controller(jwt, repo, mock(AlmacenObjetos.class), viewTokens)
+                .emitirTokenVista("Bearer jwt-bueno", 1L);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
+        // No tiene sentido acuñar un acceso a un archivo que no existe.
+        verify(viewTokens, org.mockito.Mockito.never()).acunar(anyLong());
+    }
+
+    @Test
+    void emitirTokenVistaDevuelveElTokenYLaUrlListaParaUsar() {
+        var jwt = mock(JwtTokenService.class);
+        var repo = mock(ArchivoRepository.class);
+        var viewTokens = mock(ViewTokenService.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("ana@example.com", 7L, Set.of("USER"), "access"));
+        when(viewTokens.habilitado()).thenReturn(true);
+        when(viewTokens.acunar(1L)).thenReturn("payload.firma");
+        when(viewTokens.ttlSegundos()).thenReturn(300L);
+        when(repo.buscarActivo(1L)).thenReturn(Optional.of(
+                new ArchivoRepository.Archivo(1L, "foto.png", 10L, "clave.png")));
+
+        var respuesta = controller(jwt, repo, mock(AlmacenObjetos.class), viewTokens)
+                .emitirTokenVista("Bearer jwt-bueno", 1L);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(200);
+        assertThat(respuesta.getBody())
+                .containsEntry("token", "payload.firma")
+                .containsEntry("url", "/files/view/1?token=payload.firma")
+                .containsEntry("expiresIn", 300L);
+    }
+
+    // ---------- GET /files/view/{id} ----------
+
+    @Test
+    void verConJwtValidoNoNecesitaToken() {
+        var jwt = mock(JwtTokenService.class);
+        var repo = mock(ArchivoRepository.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("ana@example.com", 7L, Set.of("USER"), "access"));
+        when(repo.buscarActivo(anyLong())).thenReturn(Optional.empty());
+
+        var respuesta = controller(jwt, repo).ver("Bearer jwt-bueno", null, 1L);
+
+        // 404 y no 401: el JWT solo bastó para pasar la autenticación.
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
+    }
+
+    @Test
+    void verConTokenDeVistaValidoNoNecesitaJwt() {
+        var repo = mock(ArchivoRepository.class);
+        var viewTokens = mock(ViewTokenService.class);
+        when(viewTokens.valido("token-bueno", 1L)).thenReturn(true);
+        when(repo.buscarActivo(1L)).thenReturn(Optional.empty());
+
+        var respuesta = controller(mock(JwtTokenService.class), repo,
+                mock(AlmacenObjetos.class), viewTokens)
+                .ver(null, "token-bueno", 1L);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
+    }
+
+    @Test
+    void verSinJwtNiTokenValidoEs401() {
+        var repo = mock(ArchivoRepository.class);
+        var viewTokens = mock(ViewTokenService.class);
+        when(viewTokens.valido(anyString(), anyLong())).thenReturn(false);
+
+        var respuesta = controller(mock(JwtTokenService.class), repo,
+                mock(AlmacenObjetos.class), viewTokens)
+                .ver(null, "token-malo", 1L);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(401);
+        verifyNoInteractions(repo);
+    }
+
+    /**
+     * El token viene firmado para UN archivo — {@link ViewTokenService}
+     * lo rechaza si {@code archivoId} no coincide con el que se acuñó,
+     * así que pedir el archivo 2 con el token del archivo 1 tiene que
+     * dar el mismo 401 que un token inventado. Este test fija que el
+     * controller pasa el {@code archivoId} correcto a
+     * {@code valido(...)} — no que {@code ViewTokenService} lo valide
+     * bien, eso lo cubre {@code ViewTokenServiceTest}.
+     */
+    @Test
+    void verConTokenDeOtroArchivoEs401() {
+        var repo = mock(ArchivoRepository.class);
+        var viewTokens = mock(ViewTokenService.class);
+        when(viewTokens.valido("token-del-archivo-1", 2L)).thenReturn(false);
+
+        var respuesta = controller(mock(JwtTokenService.class), repo,
+                mock(AlmacenObjetos.class), viewTokens)
+                .ver(null, "token-del-archivo-1", 2L);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(401);
+        verify(viewTokens).valido("token-del-archivo-1", 2L);
     }
 }

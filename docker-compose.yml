@@ -1408,6 +1408,11 @@ services:
       # llegue con cookie de sesión válida, lo cual es seguro pero
       # bloquea el caso "el catálogo arma un enlace temporal".
       FILES_INTERNAL_TOKEN: "${FILES_INTERNAL_TOKEN:-}"
+      # Firma los tokens de un solo archivo de GET /files/view/{id} —
+      # ver ViewTokenService. Vacío = POST /files/view-token/{id}
+      # responde 503 en vez de acuñar tokens que nadie podría validar.
+      FILES_VIEW_TOKEN_SECRET: "${FILES_VIEW_TOKEN_SECRET:-}"
+      FILES_VIEW_TOKEN_TTL_SECONDS: "${FILES_VIEW_TOKEN_TTL_SECONDS:-300}"
       # Clave PÚBLICA del par RS256. file-service verifica firmas en
       # GET /files/download/{id}; no emite tokens, así que no recibe
       # (ni debe recibir) la privada.
