@@ -75,8 +75,6 @@ files:
     # Obligatorio contra un endpoint local: no hay DNS por bucket, así
     # que el SDK debe pedir /bucket/objeto. Contra AWS se pone en false.
     path-style: ${S3_PATH_STYLE:true}
-    # Prefijo con el que se compone la urls3 que se guarda en TARCHIVO.
-    public-base-url: ${S3_PUBLIC_BASE_URL:}
 
 # Bloque de PRIMER NIVEL. Va al final del fichero y no entre medias
 # de `files:` — insertarlo ahí dejaba las claves `s3:` que venían
