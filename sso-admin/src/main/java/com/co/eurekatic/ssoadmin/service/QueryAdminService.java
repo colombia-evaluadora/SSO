@@ -394,6 +394,23 @@ public class QueryAdminService {
                     + "letra y usar sólo letras, dígitos y '_' — ej. 'perfilUsuario', "
                     + "'PRIMER_PERIODO'.");
             }
+            // V65 — FILE:clasificacion:campoEstablecimiento agrega un
+            // tercer componente: el campo de texto del multipart que
+            // trae el código de establecimiento a anteponer en la
+            // clave S3 (ver ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS).
+            // Sólo tiene sentido junto a una clasificación — si el
+            // parseo lo llenó sin clasificación (no puede pasar hoy,
+            // el separador es el mismo y el primero gana la
+            // clasificación, pero se deja explícito por si el formato
+            // cambia) se rechaza igual que un formato inválido.
+            if (declaracion.fileEstablishmentField() != null
+                    && !ParamTypes.isValidFileEstablishmentField(declaracion.fileEstablishmentField())) {
+                throw new IllegalArgumentException(
+                    "PARAM_TYPES['" + upperKey + "']='" + e.getValue()
+                    + "' tiene un campo de establecimiento inválido: '"
+                    + declaracion.fileEstablishmentField() + "'. Debe empezar con una "
+                    + "letra y usar sólo letras, dígitos y '_' — ej. 'idEstablecimiento'.");
+            }
             // Detectar colisiones case-only entre keys
             // (ej. "body.id" y "BODY.ID" envían a la misma
             // key canónica).

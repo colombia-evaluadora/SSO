@@ -34,11 +34,26 @@ import java.util.Map;
  * {@link com.co.eurekatic.common.query.ParamTypes#FILE_CLASSIFICATION_SEPARATOR}.
  * Same reasoning as {@code requiredSuffix}: one source of truth for
  * the literal, not a copy hardcoded on each side.
+ *
+ * <p>V65 — {@code knownFileClassifications} is the suggested catalog
+ * ({@link com.co.eurekatic.common.query.ParamTypes#KNOWN_FILE_CLASSIFICATIONS})
+ * the UI offers in a dropdown instead of a bare free-text input — NOT
+ * a closed list, the backend still accepts any value that matches
+ * {@link com.co.eurekatic.common.query.ParamTypes#isValidFileClassification}.
+ * {@code establishmentScopedFileClassifications} is the subset of
+ * that catalog whose historical S3 layout carries the establishment
+ * code as a path segment
+ * ({@link com.co.eurekatic.common.query.ParamTypes#ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS}) —
+ * the UI uses it to decide when to show the "campo de establecimiento"
+ * input by default (the author can still type it for any other
+ * classification, or skip it for one of these).
  */
 public record ParamTypesResponse(
         List<String> curated,
         Map<String, Integer> jdbcTypes,
         Map<String, String> pgCastName,
         String requiredSuffix,
-        String fileClassificationSeparator
+        String fileClassificationSeparator,
+        List<String> knownFileClassifications,
+        List<String> establishmentScopedFileClassifications
 ) { }
