@@ -423,6 +423,9 @@ class ReenvioControllerTest {
         }
 
         verify(acceso).codigoEstablecimientoValido("120001003751");
+        // V66 — con un valor explícito no vacío, nunca se intenta
+        // derivar del usuario: el campo mandado por el cliente manda.
+        verify(acceso, never()).establecimientoDelUsuario(anyString());
         verify(transformador).transformar(
                 anyMap(),
                 argThat(m -> m.containsKey("foto")),
@@ -457,12 +460,19 @@ class ReenvioControllerTest {
                 Map.of("idEstablecimiento", "inventado"), "foto"), "Bearer jwt-bueno");
 
         assertThat(respuesta.getStatusCode().value()).isEqualTo(400);
+        // Valor explícito (aunque inválido) — nunca se intenta derivar.
+        verify(acceso, never()).establecimientoDelUsuario(anyString());
         verifyNoInteractions(transformador);
     }
 
-    /** El campo de establecimiento que ni siquiera llegó en el multipart es igual de inválido que uno inventado. */
+    /**
+     * El campo de establecimiento que ni siquiera llegó en el multipart
+     * intenta derivarse del usuario (V66) — si ESO también es ambiguo
+     * (el mock de {@code establecimientoDelUsuario} no está stubbed,
+     * default {@code Optional.empty()}), sigue siendo 400.
+     */
     @Test
-    void unCampoDeEstablecimientoAusenteEs400YNoSubeNada() {
+    void unCampoDeEstablecimientoAusenteYNoDerivableEs400YNoSubeNada() {
         var jwt = mock(JwtTokenService.class);
         var acceso = mock(FileDestinationAccessService.class);
         var transformador = mock(TransformadorMultipart.class);
@@ -474,7 +484,7 @@ class ReenvioControllerTest {
                         Set.of("BODY.FOTO"), Set.of(),
                         Map.of("BODY.FOTO", "actividad"),
                         Map.of("BODY.FOTO", "idEstablecimiento")));
-        when(acceso.codigoEstablecimientoValido(null)).thenReturn(false);
+        when(acceso.establecimientoDelUsuario("admin@example.com")).thenReturn(java.util.Optional.empty());
 
         var controller = controller(jwt, transformador, acceso);
 
@@ -482,7 +492,81 @@ class ReenvioControllerTest {
                 peticionConArchivos("/files/eval-col/funcionario", "foto"), "Bearer jwt-bueno");
 
         assertThat(respuesta.getStatusCode().value()).isEqualTo(400);
+        verify(acceso).establecimientoDelUsuario("admin@example.com");
         verifyNoInteractions(transformador);
+    }
+
+    /**
+     * V66 — el caso que motivó el respaldo: un usuario vinculado a UN
+     * solo establecimiento no necesita mandar el campo — se deriva de
+     * sus relaciones {@code tsede_usuario} y la subida sigue.
+     */
+    @Test
+    void unCampoDeEstablecimientoAusenteSeDerivaDelUsuarioSiEsUnico() {
+        var jwt = mock(JwtTokenService.class);
+        var acceso = mock(FileDestinationAccessService.class);
+        var transformador = mock(TransformadorMultipart.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("profesor@example.com", 2L, Set.of("ADMIN"), "access"));
+        when(acceso.puedeSubir("POST", "/files/eval-col/funcionario", Set.of("ADMIN"))).thenReturn(true);
+        when(acceso.resolverDestino("POST", "/eval-col/funcionario")).thenReturn(
+                FileDestinationAccessService.Destino.conCamposDeArchivo(
+                        Set.of("BODY.FOTO"), Set.of(),
+                        Map.of("BODY.FOTO", "actividad"),
+                        Map.of("BODY.FOTO", "idEstablecimiento")));
+        when(acceso.establecimientoDelUsuario("profesor@example.com"))
+                .thenReturn(java.util.Optional.of("EE-SEED-01"));
+        when(acceso.codigoEstablecimientoValido("EE-SEED-01")).thenReturn(true);
+        stubTransformar(transformador);
+
+        var controller = controller(jwt, transformador, acceso);
+
+        try {
+            controller.post(peticionConArchivos("/files/eval-col/funcionario", "foto"), "Bearer jwt-bueno");
+        } catch (RuntimeException ignored) {
+            // Ver comentario de los tests del camino feliz de arriba.
+        }
+
+        verify(transformador).transformar(
+                anyMap(),
+                argThat(m -> m.containsKey("foto")),
+                eq("profesor@example.com"),
+                anyMap(),
+                argThat(est -> "EE-SEED-01".equals(est.get("foto"))));
+    }
+
+    /** Un campo presente pero en blanco se trata igual que ausente: también intenta derivarse. */
+    @Test
+    void unCampoDeEstablecimientoEnBlancoTambienIntentaDerivarDelUsuario() {
+        var jwt = mock(JwtTokenService.class);
+        var acceso = mock(FileDestinationAccessService.class);
+        var transformador = mock(TransformadorMultipart.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("profesor@example.com", 2L, Set.of("ADMIN"), "access"));
+        when(acceso.puedeSubir("POST", "/files/eval-col/funcionario", Set.of("ADMIN"))).thenReturn(true);
+        when(acceso.resolverDestino("POST", "/eval-col/funcionario")).thenReturn(
+                FileDestinationAccessService.Destino.conCamposDeArchivo(
+                        Set.of("BODY.FOTO"), Set.of(),
+                        Map.of("BODY.FOTO", "actividad"),
+                        Map.of("BODY.FOTO", "idEstablecimiento")));
+        when(acceso.establecimientoDelUsuario("profesor@example.com"))
+                .thenReturn(java.util.Optional.of("EE-SEED-01"));
+        when(acceso.codigoEstablecimientoValido("EE-SEED-01")).thenReturn(true);
+        stubTransformar(transformador);
+
+        var controller = controller(jwt, transformador, acceso);
+
+        try {
+            controller.post(peticionConArchivosYCampos("/files/eval-col/funcionario",
+                    Map.of("idEstablecimiento", ""), "foto"), "Bearer jwt-bueno");
+        } catch (RuntimeException ignored) {
+            // Ver comentario de los tests del camino feliz de arriba.
+        }
+
+        verify(acceso).establecimientoDelUsuario("profesor@example.com");
+        verify(transformador).transformar(
+                anyMap(), anyMap(), eq("profesor@example.com"), anyMap(),
+                argThat(est -> "EE-SEED-01".equals(est.get("foto"))));
     }
 
     /** Una clasificación sin tercer componente no dispara ninguna validación de establecimiento. */

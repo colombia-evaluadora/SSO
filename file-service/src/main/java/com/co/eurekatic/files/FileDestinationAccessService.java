@@ -118,6 +118,52 @@ public class FileDestinationAccessService {
     }
 
     /**
+     * V66 — cuando el cliente NO mandó el campo de establecimiento (o lo
+     * mandó vacío), intenta derivarlo de las relaciones de rol/sede del
+     * propio usuario autenticado en vez de exigirlo explícito — el caso
+     * común de un usuario (profesor, etc.) vinculado a UN solo
+     * establecimiento, cuyo cliente ni siquiera necesita mostrar un
+     * selector. {@code ReenvioController} sólo llama a esto como
+     * respaldo, después de comprobar que el campo explícito vino vacío
+     * — ver su javadoc.
+     *
+     * <pre>
+     * tusuario (cuenta == email, case-insensitive — mismo join que
+     *           fn_sync_tsede_usuario_to_role_users)
+     *   → tsede_usuario (activo, tlv_estado = ACTIVO)
+     *     → tsede (activo)
+     *       → testablecimiento.codigo
+     * </pre>
+     *
+     * <p>Devuelve el código sólo si la consulta resuelve a EXACTAMENTE
+     * un establecimiento distinto — varias filas de {@code tsede_usuario}
+     * para la MISMA sede (varios roles/jornadas) siguen contando como
+     * uno solo ({@code SELECT DISTINCT}). Ambiguo (0 o 2+ establecimientos
+     * distintos) devuelve {@link Optional#empty()}: seguir adivinando
+     * cuál de varios establecimientos usar sería peor que exigir el
+     * campo explícito, así que ese caso sigue necesitándolo.
+     */
+    public java.util.Optional<String> establecimientoDelUsuario(String email) {
+        if (email == null || email.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        List<String> codigos = jdbc.query("""
+                SELECT DISTINCT te.codigo
+                  FROM %s.tusuario t
+                  JOIN %s.tsede_usuario su ON su.fk_tusuario = t.pk_tusuario
+                  JOIN %s.tsede s ON s.pk_tsede = su.fk_tsede
+                  JOIN %s.testablecimiento te ON te.pk_establecimiento = s.fk_testablecimiento
+                 WHERE upper(t.cuenta) = upper(:email)
+                   AND t.active
+                   AND su.active AND su.tlv_estado = 'ACTIVO'
+                   AND s.active
+                """.formatted(schema, schema, schema, schema),
+                new MapSqlParameterSource().addValue("email", email),
+                (rs, n) -> rs.getString("codigo"));
+        return codigos.size() == 1 ? java.util.Optional.of(codigos.get(0)) : java.util.Optional.empty();
+    }
+
+    /**
      * ¿Alguno de estos roles tiene un binding {@code role_endpoint}
      * que cubra {@code metodo rutaEntrante} (la ruta {@code /files/...}
      * tal como llegó, ANTES de quitarle el prefijo)? Mismo patrón que

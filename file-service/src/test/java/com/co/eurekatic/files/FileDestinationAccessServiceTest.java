@@ -342,4 +342,40 @@ class FileDestinationAccessServiceTest {
 
         assertThat(service(jdbc).codigoEstablecimientoValido("no-existe")).isFalse();
     }
+
+    // ---------- V66: establecimientoDelUsuario (respaldo vía tsede_usuario) ----------
+
+    @Test
+    void establecimientoDelUsuario_devuelveVacioParaEmailNuloOBlanco() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        assertThat(service(jdbc).establecimientoDelUsuario(null)).isEmpty();
+        assertThat(service(jdbc).establecimientoDelUsuario(" ")).isEmpty();
+    }
+
+    @Test
+    void establecimientoDelUsuario_devuelveElCodigoCuandoResuelveAUnoSolo() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubFilas(jdbc, "tsede_usuario", Map.of("codigo", "EE-SEED-01"));
+
+        assertThat(service(jdbc).establecimientoDelUsuario("profesor@example.com"))
+                .contains("EE-SEED-01");
+    }
+
+    @Test
+    void establecimientoDelUsuario_devuelveVacioSinNingunaRelacion() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubFilas(jdbc, "tsede_usuario");
+
+        assertThat(service(jdbc).establecimientoDelUsuario("nadie@example.com")).isEmpty();
+    }
+
+    /** Ambiguo (2+ establecimientos DISTINTOS) — no adivina, exige el campo explícito. */
+    @Test
+    void establecimientoDelUsuario_devuelveVacioConVariosEstablecimientosDistintos() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubFilas(jdbc, "tsede_usuario",
+                Map.of("codigo", "EE-SEED-01"), Map.of("codigo", "EE-SEED-02"));
+
+        assertThat(service(jdbc).establecimientoDelUsuario("multisede@example.com")).isEmpty();
+    }
 }

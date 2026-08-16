@@ -248,6 +248,43 @@ Reglas:
   llevará ese segmento — es decisión de quien configura el catálogo,
   no algo que el sistema fuerce por el nombre de la clasificación.
 
+### Respaldo: derivarlo del usuario cuando no lo manda (`tsede_usuario`)
+
+Un usuario vinculado a un solo establecimiento (un profesor típico, por
+ejemplo) no debería tener que elegirlo ni mandarlo — su cliente puede
+simplemente omitir el campo. Si `idEstablecimiento` no llega (o llega
+vacío), `file-service` intenta derivarlo de las relaciones de rol/sede
+del propio usuario autenticado ANTES de rechazar:
+
+```
+tusuario (cuenta == email del JWT, case-insensitive)
+  → tsede_usuario (activo, tlv_estado = ACTIVO)
+    → tsede (activo)
+      → testablecimiento.codigo
+```
+
+Ver `FileDestinationAccessService#establecimientoDelUsuario`. Sólo
+resuelve si da con **exactamente un** establecimiento distinto:
+
+- Varias filas de `tsede_usuario` para la MISMA sede (distintos roles o
+  jornadas) siguen contando como una sola — `SELECT DISTINCT` sobre el
+  código.
+- **Ambiguo** (el usuario está vinculado a 2+ establecimientos
+  distintos, o a ninguno) → sigue exigiendo el campo explícito, con un
+  mensaje que lo dice: *"no se pudo derivar automáticamente de tu
+  usuario porque estás vinculado a varios establecimientos (o a
+  ninguno) — mándalo explícito"*.
+- Un valor explícito no vacío **siempre gana** — nunca se intenta
+  derivar si el cliente sí mandó algo (aunque sea inválido: ese caso
+  responde con el mensaje de código inválido de siempre, no con el de
+  ambigüedad).
+
+Esto no cambia nada del lado del catálogo: la declaración sigue siendo
+`FILE:actividad:idEstablecimiento`, el mismo campo que un
+administrador con varios establecimientos SÍ necesita mandar para
+elegir uno. El respaldo sólo cubre el caso en que el cliente ni
+siquiera lo manda.
+
 ## 7. Qué tiene que estar configurado ANTES de que esto funcione
 
 | Requisito | Dónde se configura | Si falta |

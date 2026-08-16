@@ -203,6 +203,15 @@ public class ReenvioController {
         // sin esto cualquier texto que mandara el cliente terminaría
         // siendo una "carpeta" nueva en el bucket, sin relación real
         // con ningún establecimiento.
+        //
+        // V66 — si el campo vino vacío (o el cliente ni lo mandó), antes
+        // de rechazar se intenta derivar el código de las relaciones de
+        // rol/sede del propio usuario autenticado (tsede_usuario) — ver
+        // FileDestinationAccessService#establecimientoDelUsuario. Cubre
+        // el caso común de un usuario vinculado a UN solo establecimiento
+        // (un profesor, p. ej.): su cliente no necesita mostrar ni mandar
+        // un selector de establecimiento — sólo un usuario con más de uno
+        // (o ninguno) sigue necesitando el campo explícito.
         Map<String, String> establecimientosPorCampo = new LinkedHashMap<>();
         for (String campo : ficheros.keySet()) {
             String canonico = canonicoDe(campo);
@@ -211,14 +220,32 @@ public class ReenvioController {
             if (campoEstablecimiento == null) {
                 continue;
             }
-            String codigo = campos.get(campoEstablecimiento);
+            String codigoExplicito = campos.get(campoEstablecimiento);
+            String codigo = codigoExplicito;
+            boolean seIntentoDerivar = codigo == null || codigo.isBlank();
+            if (seIntentoDerivar) {
+                codigo = acceso.establecimientoDelUsuario(principal.email()).orElse(null);
+            }
             if (!acceso.codigoEstablecimientoValido(codigo)) {
+                if (seIntentoDerivar) {
+                    log.warn("{} {} rechazado: campo '{}' (establecimiento de '{}') vacío y no se pudo "
+                                    + "derivar de las sedes de {} (0 o 2+ establecimientos distintos)",
+                            metodo, rutaEntrante, campoEstablecimiento, campo, principal.email());
+                    return ResponseEntity.badRequest()
+                            .body("El campo '" + campoEstablecimiento + "' no vino, y no se pudo derivar "
+                                    + "automáticamente de tu usuario porque estás vinculado a varios "
+                                    + "establecimientos (o a ninguno) — mándalo explícito.");
+                }
                 log.warn("{} {} rechazado: campo '{}' (establecimiento de '{}') = '{}' no es un código "
                                 + "de establecimiento válido",
-                        metodo, rutaEntrante, campoEstablecimiento, campo, codigo);
+                        metodo, rutaEntrante, campoEstablecimiento, campo, codigoExplicito);
                 return ResponseEntity.badRequest()
                         .body("El campo '" + campoEstablecimiento + "' debe traer un código de "
                                 + "establecimiento válido.");
+            }
+            if (seIntentoDerivar) {
+                log.debug("{} {}: campo '{}' vacío, establecimiento derivado de {} = '{}'",
+                        metodo, rutaEntrante, campoEstablecimiento, principal.email(), codigo);
             }
             establecimientosPorCampo.put(campo, codigo);
         }
