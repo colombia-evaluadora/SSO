@@ -195,8 +195,36 @@ public class ReenvioController {
             }
         }
 
-        var resultado =
-                transformador.transformar(campos, ficheros, principal.email(), clasificacionesPorCampo);
+        // V65 — campos declarados "FILE:clasificacion:campoEstablecimiento"
+        // le dicen a ESTE controller (no a TransformadorMultipart, que
+        // no sabe qué es un establecimiento) en qué campo de TEXTO del
+        // mismo multipart buscar el código a anteponer en la clave S3.
+        // Se valida contra testablecimiento.codigo ANTES de usarlo —
+        // sin esto cualquier texto que mandara el cliente terminaría
+        // siendo una "carpeta" nueva en el bucket, sin relación real
+        // con ningún establecimiento.
+        Map<String, String> establecimientosPorCampo = new LinkedHashMap<>();
+        for (String campo : ficheros.keySet()) {
+            String canonico = canonicoDe(campo);
+            String campoEstablecimiento =
+                    canonico == null ? null : destinoResuelto.camposEstablecimiento().get(canonico);
+            if (campoEstablecimiento == null) {
+                continue;
+            }
+            String codigo = campos.get(campoEstablecimiento);
+            if (!acceso.codigoEstablecimientoValido(codigo)) {
+                log.warn("{} {} rechazado: campo '{}' (establecimiento de '{}') = '{}' no es un código "
+                                + "de establecimiento válido",
+                        metodo, rutaEntrante, campoEstablecimiento, campo, codigo);
+                return ResponseEntity.badRequest()
+                        .body("El campo '" + campoEstablecimiento + "' debe traer un código de "
+                                + "establecimiento válido.");
+            }
+            establecimientosPorCampo.put(campo, codigo);
+        }
+
+        var resultado = transformador.transformar(
+                campos, ficheros, principal.email(), clasificacionesPorCampo, establecimientosPorCampo);
 
         log.info("{} {} — {} campo(s), {} con fichero", metodo, destino,
                 campos.size(), ficheros.size());

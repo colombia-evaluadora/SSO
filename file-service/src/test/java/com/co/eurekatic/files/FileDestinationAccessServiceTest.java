@@ -22,7 +22,7 @@ import static org.mockito.Mockito.when;
 class FileDestinationAccessServiceTest {
 
     private static FileDestinationAccessService service(NamedParameterJdbcTemplate jdbc) {
-        return new FileDestinationAccessService(jdbc, new ObjectMapper());
+        return new FileDestinationAccessService(jdbc, new ObjectMapper(), "academico_test");
     }
 
     /**
@@ -286,5 +286,60 @@ class FileDestinationAccessServiceTest {
         var destino = service(jdbc).resolverDestino("POST", "/register/funcionario");
 
         assertThat(destino.clasificaciones()).isEmpty();
+    }
+
+    // ---------- V65: campo de establecimiento (FILE:clasificacion:campo) ----------
+
+    @Test
+    void unCampoFileConCampoDeEstablecimientoQuedaEnElMapa() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubSinEndpoints(jdbc);
+        stubQuery(jdbc, "/funcionario", """
+                {"BODY.FOTO":"FILE:actividad:idEstablecimiento"}
+                """);
+
+        var destino = service(jdbc).resolverDestino("POST", "/eval-col/funcionario");
+
+        assertThat(destino.clasificaciones()).containsEntry("BODY.FOTO", "actividad");
+        assertThat(destino.camposEstablecimiento()).containsEntry("BODY.FOTO", "idEstablecimiento");
+    }
+
+    /** Clasificación sin tercer componente no aparece en el mapa de establecimiento. */
+    @Test
+    void unCampoFileClasificadoSinCampoDeEstablecimientoNoQuedaEnElMapa() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubSinEndpoints(jdbc);
+        stubQuery(jdbc, "/funcionario", """
+                {"BODY.FOTO":"FILE:perfilUsuario"}
+                """);
+
+        var destino = service(jdbc).resolverDestino("POST", "/eval-col/funcionario");
+
+        assertThat(destino.camposEstablecimiento()).isEmpty();
+    }
+
+    // ---------- V65: codigoEstablecimientoValido ----------
+
+    @Test
+    void codigoEstablecimientoValido_devuelveFalsoParaCodigoNuloOBlanco() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        assertThat(service(jdbc).codigoEstablecimientoValido(null)).isFalse();
+        assertThat(service(jdbc).codigoEstablecimientoValido(" ")).isFalse();
+    }
+
+    @Test
+    void codigoEstablecimientoValido_devuelveVerdaderoCuandoLaConsultaDevuelveFila() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubFilas(jdbc, "testablecimiento", Map.of("uno", "1"));
+
+        assertThat(service(jdbc).codigoEstablecimientoValido("120001003751")).isTrue();
+    }
+
+    @Test
+    void codigoEstablecimientoValido_devuelveFalsoCuandoLaConsultaNoDevuelveFilas() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubFilas(jdbc, "testablecimiento");
+
+        assertThat(service(jdbc).codigoEstablecimientoValido("no-existe")).isFalse();
     }
 }

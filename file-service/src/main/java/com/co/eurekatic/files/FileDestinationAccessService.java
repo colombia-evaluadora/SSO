@@ -76,10 +76,45 @@ public class FileDestinationAccessService {
     private final NamedParameterJdbcTemplate jdbc;
     private final ObjectMapper json;
     private final AntPathMatcher antMatcher = new AntPathMatcher();
+    private final String schema;
 
-    public FileDestinationAccessService(NamedParameterJdbcTemplate jdbc, ObjectMapper json) {
+    public FileDestinationAccessService(NamedParameterJdbcTemplate jdbc, ObjectMapper json,
+                                        @org.springframework.beans.factory.annotation.Value(
+                                                "${files.schema:academico_test}") String schema) {
         this.jdbc = jdbc;
         this.json = json;
+        this.schema = schema;
+    }
+
+    /**
+     * V65 — ¿existe {@code codigo} en {@code testablecimiento.codigo}?
+     * Lo llama {@code ReenvioController} para validar el valor que el
+     * cliente mandó en el campo de texto declarado como
+     * {@code FILE:clasificacion:campoEstablecimiento} ANTES de
+     * usarlo como segmento literal de la clave S3 (ver
+     * {@code TransformadorMultipart#claveDe}) — sin este chequeo,
+     * cualquier texto que el cliente eligiera terminaría siendo una
+     * "carpeta" nueva en el bucket, sin relación real con ningún
+     * establecimiento.
+     *
+     * <p>Mismo esquema configurable que {@code ArchivoRepository}
+     * ({@code files.schema}, default {@code academico_test}) — es la
+     * misma base de datos de negocio, sólo una tabla de catálogo
+     * distinta.
+     */
+    public boolean codigoEstablecimientoValido(String codigo) {
+        if (codigo == null || codigo.isBlank()) {
+            return false;
+        }
+        // query + isEmpty en vez de queryForObject: cero filas es el
+        // caso ESPERADO cuando el cliente manda un código inventado,
+        // no una excepción que haya que capturar — queryForObject
+        // lanza EmptyResultDataAccessException en ese caso.
+        List<Integer> filas = jdbc.query(
+                "SELECT 1 FROM %s.testablecimiento WHERE codigo = :codigo".formatted(schema),
+                new MapSqlParameterSource().addValue("codigo", codigo),
+                (rs, n) -> 1);
+        return !filas.isEmpty();
     }
 
     /**
@@ -198,6 +233,7 @@ public class FileDestinationAccessService {
         Set<String> archivos = new LinkedHashSet<>();
         Set<String> obligatorios = new LinkedHashSet<>();
         Map<String, String> clasificaciones = new java.util.LinkedHashMap<>();
+        Map<String, String> establecimientos = new java.util.LinkedHashMap<>();
         for (var entrada : paramTypes.entrySet()) {
             String clave = entrada.getKey();
             if (!clave.startsWith(ParamNamespace.BODY + ".")) {
@@ -218,9 +254,20 @@ public class FileDestinationAccessService {
                 if (decl.fileClassification() != null) {
                     clasificaciones.put(clave, decl.fileClassification());
                 }
+                // V65 — "FILE:actividad:idEstablecimiento": nombre del
+                // campo de texto del multipart que trae el código de
+                // establecimiento. Se guarda por clave canónica del
+                // campo-archivo (igual que `clasificaciones`) — es
+                // ReenvioController quien lo traduce al valor real,
+                // porque es quien tiene tanto los campos de texto del
+                // multipart como el nombre canónico de cada campo con
+                // fichero (ver `canonicoDe`).
+                if (decl.fileEstablishmentField() != null) {
+                    establecimientos.put(clave, decl.fileEstablishmentField());
+                }
             }
         }
-        return Destino.conCamposDeArchivo(archivos, obligatorios, clasificaciones);
+        return Destino.conCamposDeArchivo(archivos, obligatorios, clasificaciones, establecimientos);
     }
 
     private Map<String, String> parsear(String paramTypesJson) {
@@ -278,22 +325,37 @@ public class FileDestinationAccessService {
      *                           trae entrada para los campos que
      *                           efectivamente declararon clasificación;
      *                           un {@code FILE} bare no aparece acá.
+     * @param camposEstablecimiento subconjunto de {@code campos}
+     *                           declarado {@code FILE:clasificacion:campo}
+     *                           (V65) — clave canónica del campo-archivo
+     *                           → NOMBRE del campo de texto del
+     *                           multipart que trae el código de
+     *                           establecimiento (p.ej.
+     *                           {@code "idEstablecimiento"}, no una
+     *                           clave canónica: se busca tal cual en
+     *                           los campos de texto, ver
+     *                           {@code ReenvioController}). Sólo trae
+     *                           entrada para los campos que
+     *                           efectivamente declararon el tercer
+     *                           componente.
      */
     public record Destino(boolean registrado, boolean restringeCampos,
                           Set<String> campos, Set<String> camposObligatorios,
-                          Map<String, String> clasificaciones) {
+                          Map<String, String> clasificaciones,
+                          Map<String, String> camposEstablecimiento) {
 
         public static final Destino NO_REGISTRADO =
-                new Destino(false, false, Set.of(), Set.of(), Map.of());
+                new Destino(false, false, Set.of(), Set.of(), Map.of(), Map.of());
 
         static Destino sinRestriccionDeCampos() {
-            return new Destino(true, false, Set.of(), Set.of(), Map.of());
+            return new Destino(true, false, Set.of(), Set.of(), Map.of(), Map.of());
         }
 
         static Destino conCamposDeArchivo(Set<String> campos, Set<String> obligatorios,
-                                          Map<String, String> clasificaciones) {
+                                          Map<String, String> clasificaciones,
+                                          Map<String, String> camposEstablecimiento) {
             return new Destino(true, true, Set.copyOf(campos), Set.copyOf(obligatorios),
-                    Map.copyOf(clasificaciones));
+                    Map.copyOf(clasificaciones), Map.copyOf(camposEstablecimiento));
         }
     }
 }

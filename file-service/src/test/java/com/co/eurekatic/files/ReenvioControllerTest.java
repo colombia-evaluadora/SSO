@@ -63,12 +63,21 @@ class ReenvioControllerTest {
     }
 
     private static MultipartHttpServletRequest peticionConArchivos(String ruta, String... camposArchivo) {
+        return peticionConArchivosYCampos(ruta, Map.of(), camposArchivo);
+    }
+
+    /** Igual que {@link #peticionConArchivos}, pero además con campos de texto
+     *  (p.ej. el campo que trae el código de establecimiento). */
+    private static MultipartHttpServletRequest peticionConArchivosYCampos(
+            String ruta, Map<String, String> camposTexto, String... camposArchivo) {
         var peticion = mock(MultipartHttpServletRequest.class);
         when(peticion.getRequestURI()).thenReturn(ruta);
         when(peticion.getAttribute(
                 org.springframework.web.servlet.HandlerMapping.PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE))
                 .thenReturn(ruta);
-        when(peticion.getParameterMap()).thenReturn(Map.of());
+        Map<String, String[]> parametros = new java.util.LinkedHashMap<>();
+        camposTexto.forEach((k, v) -> parametros.put(k, new String[] { v }));
+        when(peticion.getParameterMap()).thenReturn(parametros);
         var multiFile = new org.springframework.util.LinkedMultiValueMap<String,
                 org.springframework.web.multipart.MultipartFile>();
         for (String campo : camposArchivo) {
@@ -80,9 +89,9 @@ class ReenvioControllerTest {
         return peticion;
     }
 
-    /** Stub genérico para el mock de transformador: acepta cualquier clasificaciones. */
+    /** Stub genérico para el mock de transformador: acepta cualquier clasificaciones/establecimientos. */
     private static void stubTransformar(TransformadorMultipart transformador) {
-        when(transformador.transformar(anyMap(), anyMap(), anyString(), anyMap()))
+        when(transformador.transformar(anyMap(), anyMap(), anyString(), anyMap(), anyMap()))
                 .thenReturn(new TransformadorMultipart.Resultado(Map.of(), List.of()));
     }
 
@@ -182,7 +191,7 @@ class ReenvioControllerTest {
         when(acceso.puedeSubir("POST", "/files/eval-col/funcionario", Set.of("ADMIN"))).thenReturn(true);
         when(acceso.resolverDestino("POST", "/eval-col/funcionario")).thenReturn(
                 FileDestinationAccessService.Destino.conCamposDeArchivo(
-                        Set.of("BODY.FOTO"), Set.of(), Map.of()));
+                        Set.of("BODY.FOTO"), Set.of(), Map.of(), Map.of()));
 
         var controller = controller(jwt, transformador, acceso);
 
@@ -204,7 +213,7 @@ class ReenvioControllerTest {
         when(acceso.puedeSubir("POST", "/files/eval-col/funcionario", Set.of("ADMIN"))).thenReturn(true);
         when(acceso.resolverDestino("POST", "/eval-col/funcionario")).thenReturn(
                 FileDestinationAccessService.Destino.conCamposDeArchivo(
-                        Set.of("BODY.FOTO"), Set.of(), Map.of()));
+                        Set.of("BODY.FOTO"), Set.of(), Map.of(), Map.of()));
         stubTransformar(transformador);
 
         var controller = controller(jwt, transformador, acceso);
@@ -223,6 +232,7 @@ class ReenvioControllerTest {
                 anyMap(),
                 argThat(m -> m.containsKey("foto")),
                 eq("admin@example.com"),
+                anyMap(),
                 anyMap());
     }
 
@@ -242,7 +252,7 @@ class ReenvioControllerTest {
         when(acceso.puedeSubir("POST", "/files/eval-col/funcionario", Set.of("ADMIN"))).thenReturn(true);
         when(acceso.resolverDestino("POST", "/eval-col/funcionario")).thenReturn(
                 FileDestinationAccessService.Destino.conCamposDeArchivo(
-                        Set.of("BODY.FOTO"), Set.of(), Map.of("BODY.FOTO", "perfilUsuario")));
+                        Set.of("BODY.FOTO"), Set.of(), Map.of("BODY.FOTO", "perfilUsuario"), Map.of()));
         stubTransformar(transformador);
 
         var controller = controller(jwt, transformador, acceso);
@@ -257,7 +267,8 @@ class ReenvioControllerTest {
                 anyMap(),
                 argThat(m -> m.containsKey("foto")),
                 eq("admin@example.com"),
-                argThat(clasif -> "perfilUsuario".equals(clasif.get("foto"))));
+                argThat(clasif -> "perfilUsuario".equals(clasif.get("foto"))),
+                anyMap());
     }
 
     /** Un campo declarado FILE! (obligatorio) que no llega es 400. */
@@ -271,7 +282,7 @@ class ReenvioControllerTest {
         when(acceso.puedeSubir("POST", "/files/eval-col/funcionario", Set.of("ADMIN"))).thenReturn(true);
         when(acceso.resolverDestino("POST", "/eval-col/funcionario")).thenReturn(
                 FileDestinationAccessService.Destino.conCamposDeArchivo(
-                        Set.of("BODY.FOTO"), Set.of("BODY.FOTO"), Map.of()));
+                        Set.of("BODY.FOTO"), Set.of("BODY.FOTO"), Map.of(), Map.of()));
 
         var controller = controller(jwt, transformador, acceso);
 
@@ -308,6 +319,7 @@ class ReenvioControllerTest {
                 anyMap(),
                 argThat(m -> m.containsKey("cualquier-nombre")),
                 eq("admin@example.com"),
+                anyMap(),
                 anyMap());
     }
 
@@ -344,6 +356,7 @@ class ReenvioControllerTest {
                 anyMap(),
                 argThat(m -> m.containsKey("nombre-con-guion")),
                 eq("admin@example.com"),
+                anyMap(),
                 anyMap());
     }
 
@@ -363,7 +376,7 @@ class ReenvioControllerTest {
         when(acceso.puedeSubir("POST", "/files/eval-col/funcionario", Set.of("ADMIN"))).thenReturn(true);
         when(acceso.resolverDestino("POST", "/eval-col/funcionario")).thenReturn(
                 FileDestinationAccessService.Destino.conCamposDeArchivo(
-                        Set.of("BODY.FOTO"), Set.of(), Map.of()));
+                        Set.of("BODY.FOTO"), Set.of(), Map.of(), Map.of()));
 
         var controller = controller(jwt, transformador, acceso);
 
@@ -372,5 +385,129 @@ class ReenvioControllerTest {
 
         assertThat(respuesta.getStatusCode().value()).isEqualTo(400);
         verifyNoInteractions(transformador);
+    }
+
+    // ---------- V65: código de establecimiento (FILE:clasificacion:campo) ----------
+
+    /**
+     * El campo declarado {@code FILE:actividad:idEstablecimiento} hace
+     * que este controller busque {@code idEstablecimiento} entre los
+     * campos de TEXTO del multipart, lo valide contra
+     * {@code testablecimiento.codigo} y lo propague a
+     * TransformadorMultipart — es lo que después decide el segmento de
+     * establecimiento de la clave S3 (ver TransformadorMultipartTest).
+     */
+    @Test
+    void unCampoConEstablecimientoValidoLoPropagaAlMapaDeEstablecimientos() {
+        var jwt = mock(JwtTokenService.class);
+        var acceso = mock(FileDestinationAccessService.class);
+        var transformador = mock(TransformadorMultipart.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("admin@example.com", 1L, Set.of("ADMIN"), "access"));
+        when(acceso.puedeSubir("POST", "/files/eval-col/funcionario", Set.of("ADMIN"))).thenReturn(true);
+        when(acceso.resolverDestino("POST", "/eval-col/funcionario")).thenReturn(
+                FileDestinationAccessService.Destino.conCamposDeArchivo(
+                        Set.of("BODY.FOTO"), Set.of(),
+                        Map.of("BODY.FOTO", "actividad"),
+                        Map.of("BODY.FOTO", "idEstablecimiento")));
+        when(acceso.codigoEstablecimientoValido("120001003751")).thenReturn(true);
+        stubTransformar(transformador);
+
+        var controller = controller(jwt, transformador, acceso);
+
+        try {
+            controller.post(peticionConArchivosYCampos("/files/eval-col/funcionario",
+                    Map.of("idEstablecimiento", "120001003751"), "foto"), "Bearer jwt-bueno");
+        } catch (RuntimeException ignored) {
+            // Ver comentario de los tests del camino feliz de arriba.
+        }
+
+        verify(acceso).codigoEstablecimientoValido("120001003751");
+        verify(transformador).transformar(
+                anyMap(),
+                argThat(m -> m.containsKey("foto")),
+                eq("admin@example.com"),
+                anyMap(),
+                argThat(est -> "120001003751".equals(est.get("foto"))));
+    }
+
+    /**
+     * Un código que no existe en {@code testablecimiento.codigo} es 400
+     * ANTES de tocar S3 — sin este chequeo, cualquier texto que mandara
+     * el cliente terminaría siendo una "carpeta" nueva en el bucket.
+     */
+    @Test
+    void unCodigoDeEstablecimientoInvalidoEs400YNoSubeNada() {
+        var jwt = mock(JwtTokenService.class);
+        var acceso = mock(FileDestinationAccessService.class);
+        var transformador = mock(TransformadorMultipart.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("admin@example.com", 1L, Set.of("ADMIN"), "access"));
+        when(acceso.puedeSubir("POST", "/files/eval-col/funcionario", Set.of("ADMIN"))).thenReturn(true);
+        when(acceso.resolverDestino("POST", "/eval-col/funcionario")).thenReturn(
+                FileDestinationAccessService.Destino.conCamposDeArchivo(
+                        Set.of("BODY.FOTO"), Set.of(),
+                        Map.of("BODY.FOTO", "actividad"),
+                        Map.of("BODY.FOTO", "idEstablecimiento")));
+        when(acceso.codigoEstablecimientoValido("inventado")).thenReturn(false);
+
+        var controller = controller(jwt, transformador, acceso);
+
+        var respuesta = controller.post(peticionConArchivosYCampos("/files/eval-col/funcionario",
+                Map.of("idEstablecimiento", "inventado"), "foto"), "Bearer jwt-bueno");
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(400);
+        verifyNoInteractions(transformador);
+    }
+
+    /** El campo de establecimiento que ni siquiera llegó en el multipart es igual de inválido que uno inventado. */
+    @Test
+    void unCampoDeEstablecimientoAusenteEs400YNoSubeNada() {
+        var jwt = mock(JwtTokenService.class);
+        var acceso = mock(FileDestinationAccessService.class);
+        var transformador = mock(TransformadorMultipart.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("admin@example.com", 1L, Set.of("ADMIN"), "access"));
+        when(acceso.puedeSubir("POST", "/files/eval-col/funcionario", Set.of("ADMIN"))).thenReturn(true);
+        when(acceso.resolverDestino("POST", "/eval-col/funcionario")).thenReturn(
+                FileDestinationAccessService.Destino.conCamposDeArchivo(
+                        Set.of("BODY.FOTO"), Set.of(),
+                        Map.of("BODY.FOTO", "actividad"),
+                        Map.of("BODY.FOTO", "idEstablecimiento")));
+        when(acceso.codigoEstablecimientoValido(null)).thenReturn(false);
+
+        var controller = controller(jwt, transformador, acceso);
+
+        var respuesta = controller.post(
+                peticionConArchivos("/files/eval-col/funcionario", "foto"), "Bearer jwt-bueno");
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(400);
+        verifyNoInteractions(transformador);
+    }
+
+    /** Una clasificación sin tercer componente no dispara ninguna validación de establecimiento. */
+    @Test
+    void unCampoSinCampoDeEstablecimientoDeclaradoNoValidaNada() {
+        var jwt = mock(JwtTokenService.class);
+        var acceso = mock(FileDestinationAccessService.class);
+        var transformador = mock(TransformadorMultipart.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("admin@example.com", 1L, Set.of("ADMIN"), "access"));
+        when(acceso.puedeSubir("POST", "/files/eval-col/funcionario", Set.of("ADMIN"))).thenReturn(true);
+        when(acceso.resolverDestino("POST", "/eval-col/funcionario")).thenReturn(
+                FileDestinationAccessService.Destino.conCamposDeArchivo(
+                        Set.of("BODY.FOTO"), Set.of(),
+                        Map.of("BODY.FOTO", "perfilUsuario"), Map.of()));
+        stubTransformar(transformador);
+
+        var controller = controller(jwt, transformador, acceso);
+
+        try {
+            controller.post(peticionConArchivos("/files/eval-col/funcionario", "foto"), "Bearer jwt-bueno");
+        } catch (RuntimeException ignored) {
+            // Ver comentario de los tests del camino feliz de arriba.
+        }
+
+        verify(acceso, never()).codigoEstablecimientoValido(anyString());
     }
 }
