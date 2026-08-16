@@ -294,6 +294,82 @@ public final class ParamTypes {
     }
 
     /**
+     * V65 — clasificaciones conocidas de {@code TARCHIVO.etiqueta}
+     * que además de un valor libre válido para
+     * {@link #isValidFileClassification} corresponden a un patrón de
+     * ruta S3 histórico real (revisado en la BD de producción, filas
+     * {@code created_by = 'migracion'}). Se expone vía
+     * {@code GET /query/param-types} como catálogo sugerido para el
+     * admin-ui — NO es una lista cerrada: {@link #isValidFileClassification}
+     * sigue aceptando cualquier valor con forma válida, para no
+     * bloquear una clasificación nueva que aún no esté aquí.
+     *
+     * <p>Deliberadamente afuera:
+     * <ul>
+     *   <li>{@code firmaMecanica} — {@code TARCHIVO.urls3} siempre
+     *       vacío en las filas migradas; no hay objeto S3 real detrás
+     *       de esa etiqueta.</li>
+     *   <li>{@code informeFinal}, {@code certificacion},
+     *       {@code informePeriodo} — reportes PDF con una carpeta más
+     *       de profundidad ({@code PA<año>[/<periodo>]}) que este
+     *       esquema de un solo {@link #FILE_ESTABLISHMENT_SEPARATOR}
+     *       no modela; probablemente generados por un proceso batch
+     *       aparte, no por una subida de usuario vía
+     *       {@code FILE:clasificacion}.</li>
+     * </ul>
+     */
+    public static final Set<String> KNOWN_FILE_CLASSIFICATIONS = Set.of(
+            "perfilUsuario", "actividad", "recursoCompartido", "matricula", "candidato", "escudo"
+    );
+
+    /**
+     * V65 — clasificaciones cuyo layout histórico en S3 lleva el
+     * código de establecimiento como segundo segmento de ruta
+     * ({@code <sitio>/<establecimiento.codigo>/<clasificacion>/...}),
+     * a diferencia de {@code perfilUsuario} que no lo lleva. Sólo
+     * tiene efecto informativo/documental — la validación real de
+     * "¿esta clasificación exige el tercer componente
+     * {@code :campoEstablecimiento}?" no se hace aquí: un autor puede
+     * declarar el campo de establecimiento en cualquier clasificación
+     * (incluida una que no esté en {@link #KNOWN_FILE_CLASSIFICATIONS}),
+     * y omitirlo en una que normalmente lo llevaría — el catálogo no
+     * fuerza la relación, sólo la permite.
+     */
+    public static final Set<String> ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS = Set.of(
+            "actividad", "recursoCompartido", "matricula", "candidato", "escudo"
+    );
+
+    private static final java.util.regex.Pattern FILE_ESTABLISHMENT_FIELD_PATTERN =
+            java.util.regex.Pattern.compile("[A-Za-z][A-Za-z0-9_]*");
+
+    /**
+     * V65 — separador entre la clasificación y el nombre del campo
+     * de texto del multipart que trae el código de establecimiento
+     * ({@code "FILE:actividad:idEstablecimiento"}). Mismo carácter
+     * que {@link #FILE_CLASSIFICATION_SEPARATOR} — un tercer
+     * componente, no un separador nuevo — porque la clasificación ya
+     * prohíbe {@code ':'} en su propio patrón
+     * ({@link #FILE_CLASSIFICATION_PATTERN}), así que partir por la
+     * PRIMERA ocurrencia después del prefijo {@code FILE:} es
+     * inambiguo.
+     */
+    public static final String FILE_ESTABLISHMENT_SEPARATOR = FILE_CLASSIFICATION_SEPARATOR;
+
+    /**
+     * ¿Es {@code campo} un nombre válido para referenciar OTRO campo
+     * de texto del mismo multipart ({@code FILE:actividad:<campo>})?
+     * Mismo patrón que {@link #isValidFileClassification} — es,
+     * igual que la clasificación, un identificador elegido por quien
+     * arma el multipart, no un placeholder {@code :BODY.X} del SQL
+     * (ver {@code ReenvioController#canonicoDe}: ese campo se busca
+     * por nombre EXACTO en los campos de texto del multipart, no por
+     * clave canónica).
+     */
+    public static boolean isValidFileEstablishmentField(String campo) {
+        return campo != null && FILE_ESTABLISHMENT_FIELD_PATTERN.matcher(campo).matches();
+    }
+
+    /**
      * V62 — el tipo declarado más el sufijo opcional de
      * obligatoriedad ({@code baseType} sin el {@code '!'}, más
      * {@code nullable}).
@@ -305,13 +381,23 @@ public final class ParamTypes {
      * demás, incluido un {@code FILE} sin clasificar — ese caso
      * sigue siendo válido y usa el formato de clave de siempre
      * ({@code <pk>/<nombre>}), ver {@code TransformadorMultipart}.
+     *
+     * <p>V65 — {@code fileEstablishmentField} sólo se llena cuando
+     * ADEMÁS de la clasificación el autor agregó un tercer componente
+     * ({@code "FILE:actividad:idEstablecimiento"}): el nombre del
+     * campo de texto del multipart que trae el código de
+     * establecimiento a anteponer en la ruta S3. {@code null} si no
+     * se declaró — la clasificación sigue funcionando sin él, sin
+     * segmento de establecimiento (igual que antes de V65).
      */
-    public record Declaration(String baseType, boolean nullable, String fileClassification) {}
+    public record Declaration(String baseType, boolean nullable, String fileClassification,
+                              String fileEstablishmentField) {}
 
     /**
      * Parsea un tipo declarado en el catálogo: el sufijo de
      * nulabilidad ({@code '!'}) y, si el tipo base es {@link #FILE},
-     * la clasificación opcional ({@code ':clasificacion'}).
+     * la clasificación opcional ({@code ':clasificacion'}) y el
+     * campo de establecimiento opcional ({@code ':campo'}).
      *
      * <p><b>Nulabilidad</b> — por defecto, TODO parámetro es
      * <b>nullable</b>: un cliente que manda {@code null} explícito,
@@ -333,16 +419,27 @@ public final class ParamTypes {
      * la clave como {@code <clasificacion>/<pk_tarchivo>.<extensión>}
      * en vez del {@code <pk_tarchivo>/<nombre-original>} genérico,
      * imitando el layout que ya usaban las filas históricas migradas
-     * ({@code .../perfilUsuario/141906.jpeg}). El orden de los dos
-     * sufijos es {@code TIPO[:clasificacion][!]} — el de
-     * obligatoriedad siempre al final ({@code "FILE:perfilUsuario!"},
-     * nunca {@code "FILE!:perfilUsuario"}).
+     * ({@code .../perfilUsuario/141906.jpeg}).
+     *
+     * <p><b>Campo de establecimiento (V65)</b> —
+     * {@code "FILE:actividad:idEstablecimiento"} agrega un TERCER
+     * componente: el nombre de OTRO campo de texto del mismo
+     * multipart cuyo valor {@code file-service} valida contra
+     * {@code testablecimiento.codigo} y antepone a la clasificación
+     * ({@code <sitio>/<código>/<clasificacion>/<pk>.<extensión>}),
+     * imitando el layout histórico de las clasificaciones que sí
+     * llevan establecimiento ({@code .../120001003751/actividad/...}
+     * — ver {@link #ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS}). El
+     * orden final de los tres componentes es
+     * {@code TIPO[:clasificacion[:campoEstablecimiento]][!]} — el
+     * sufijo de obligatoriedad siempre al final.
      *
      * @param raw el valor tal cual está en {@code paramTypes} (p.ej.
-     *            {@code "FILE:perfilUsuario!"}); puede ser {@code null}.
+     *            {@code "FILE:actividad:idEstablecimiento!"}); puede
+     *            ser {@code null}.
      */
     public static Declaration parseDeclaration(String raw) {
-        if (raw == null) return new Declaration(null, true, null);
+        if (raw == null) return new Declaration(null, true, null, null);
         String trimmed = raw.trim();
         boolean required = trimmed.endsWith(REQUIRED_SUFFIX);
         String sinSufijoObligatorio = required
@@ -351,9 +448,14 @@ public final class ParamTypes {
 
         String prefijoFile = FILE + FILE_CLASSIFICATION_SEPARATOR;
         if (sinSufijoObligatorio.startsWith(prefijoFile)) {
-            String clasificacion = sinSufijoObligatorio.substring(prefijoFile.length());
-            return new Declaration(FILE, !required, clasificacion.isEmpty() ? null : clasificacion);
+            String resto = sinSufijoObligatorio.substring(prefijoFile.length());
+            int separador = resto.indexOf(FILE_ESTABLISHMENT_SEPARATOR);
+            String clasificacion = separador < 0 ? resto : resto.substring(0, separador);
+            String campoEstablecimiento = separador < 0 ? null : resto.substring(separador + 1);
+            return new Declaration(FILE, !required,
+                    clasificacion.isEmpty() ? null : clasificacion,
+                    campoEstablecimiento == null || campoEstablecimiento.isEmpty() ? null : campoEstablecimiento);
         }
-        return new Declaration(sinSufijoObligatorio, !required, null);
+        return new Declaration(sinSufijoObligatorio, !required, null, null);
     }
 }

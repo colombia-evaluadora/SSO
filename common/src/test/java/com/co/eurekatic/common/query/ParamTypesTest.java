@@ -229,4 +229,62 @@ class ParamTypesTest {
         assertThat(ParamTypes.isValidFileClassification("con/barra")).isFalse();
         assertThat(ParamTypes.isValidFileClassification("con-guion")).isFalse();
     }
+
+    // ---------- V65: campo de establecimiento (FILE:clasificacion:campo) ----------
+
+    @Test
+    void parseDeclaration_fileWithClassificationAndEstablishmentField() {
+        var decl = ParamTypes.parseDeclaration("FILE:actividad:idEstablecimiento");
+        assertThat(decl.baseType()).isEqualTo("FILE");
+        assertThat(decl.nullable()).isTrue();
+        assertThat(decl.fileClassification()).isEqualTo("actividad");
+        assertThat(decl.fileEstablishmentField()).isEqualTo("idEstablecimiento");
+    }
+
+    /** El sufijo de obligatoriedad sigue yendo al final, después de los tres componentes. */
+    @Test
+    void parseDeclaration_fileWithClassificationAndEstablishmentFieldAndRequiredSuffix() {
+        var decl = ParamTypes.parseDeclaration("FILE:actividad:idEstablecimiento!");
+        assertThat(decl.nullable()).isFalse();
+        assertThat(decl.fileClassification()).isEqualTo("actividad");
+        assertThat(decl.fileEstablishmentField()).isEqualTo("idEstablecimiento");
+    }
+
+    @Test
+    void parseDeclaration_classificationWithoutEstablishmentFieldLeavesItNull() {
+        var decl = ParamTypes.parseDeclaration("FILE:perfilUsuario");
+        assertThat(decl.fileClassification()).isEqualTo("perfilUsuario");
+        assertThat(decl.fileEstablishmentField()).isNull();
+    }
+
+    @Test
+    void parseDeclaration_fileWithClassificationAndEmptyEstablishmentFieldIsTreatedAsAbsent() {
+        var decl = ParamTypes.parseDeclaration("FILE:actividad:");
+        assertThat(decl.fileClassification()).isEqualTo("actividad");
+        assertThat(decl.fileEstablishmentField()).isNull();
+    }
+
+    @Test
+    void isValidFileEstablishmentField_acceptsIdentifiers() {
+        assertThat(ParamTypes.isValidFileEstablishmentField("idEstablecimiento")).isTrue();
+        assertThat(ParamTypes.isValidFileEstablishmentField("ID_ESTABLECIMIENTO")).isTrue();
+    }
+
+    @Test
+    void isValidFileEstablishmentField_rejectsBadInput() {
+        assertThat(ParamTypes.isValidFileEstablishmentField(null)).isFalse();
+        assertThat(ParamTypes.isValidFileEstablishmentField("")).isFalse();
+        assertThat(ParamTypes.isValidFileEstablishmentField("1empiezaConNumero")).isFalse();
+        assertThat(ParamTypes.isValidFileEstablishmentField("con espacio")).isFalse();
+    }
+
+    @Test
+    void knownFileClassifications_matchesEstablishmentScopedSubsetPlusPerfilUsuario() {
+        // perfilUsuario es la única clasificación conocida SIN establecimiento —
+        // ver el javadoc de KNOWN_FILE_CLASSIFICATIONS / ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS.
+        assertThat(ParamTypes.KNOWN_FILE_CLASSIFICATIONS)
+                .containsAll(ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS)
+                .contains("perfilUsuario");
+        assertThat(ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS).doesNotContain("perfilUsuario");
+    }
 }
