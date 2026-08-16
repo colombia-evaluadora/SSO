@@ -34,6 +34,8 @@ class ApplicationYamlTest {
     private static final List<String> CLAVES_REQUERIDAS = List.of(
             // ArchivoRepository
             "files.schema",
+            // TransformadorMultipart
+            "files.site-code",
             // ReenvioController
             "files.catalog-base-url",
             // DownloadController

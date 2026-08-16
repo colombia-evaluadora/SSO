@@ -2,6 +2,7 @@ package com.co.eurekatic.files;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -54,10 +55,13 @@ public class TransformadorMultipart {
 
     private final AlmacenObjetos almacen;
     private final ArchivoRepository archivos;
+    private final String sitio;
 
-    public TransformadorMultipart(AlmacenObjetos almacen, ArchivoRepository archivos) {
+    public TransformadorMultipart(AlmacenObjetos almacen, ArchivoRepository archivos,
+                                  @Value("${files.site-code:}") String sitio) {
         this.almacen = almacen;
         this.archivos = archivos;
+        this.sitio = sitio;
     }
 
     /**
@@ -224,7 +228,7 @@ public class TransformadorMultipart {
         //    <clasificacion>/<pk>.<extensión>. Sin clasificación (o sin
         //    extensión reconocible en el nombre — un campo puede llegar
         //    sin punto), se mantiene el formato genérico de siempre.
-        String clave = claveDe(pk, nombre, clasificacion);
+        String clave = claveDe(pk, nombre, clasificacion, sitio);
 
         try (InputStream in = parte.getInputStream()) {
             String url = almacen.subir(clave, in, peso, parte.getContentType());
@@ -285,15 +289,28 @@ public class TransformadorMultipart {
      * punto), no hay forma de armar {@code pk.extensión} con sentido
      * — se cae al formato genérico en vez de producir una clave con
      * un punto colgando.
+     *
+     * <p>V64 — {@code sitio} (config {@code files.site-code}, p.ej.
+     * {@code "ACADEMICO_VALLEDUPAR"}) se antepone a lo anterior si
+     * viene configurado: las filas históricas migradas casi siempre
+     * traen ese código de sede como primer segmento
+     * ({@code ACADEMICO_VALLEDUPAR/perfilUsuario/141906.jpeg}), algo
+     * que file-service no puede reconstruir por su cuenta — no tiene
+     * ningún concepto de "sede" en el flujo de subida, así que es
+     * una constante de despliegue (una instalación de file-service
+     * sirve UNA sola sede), igual que {@code files.schema}. Vacío
+     * (el default) = sin prefijo, exactamente el comportamiento de
+     * antes de que existiera esta config.
      */
-    static String claveDe(long pk, String nombreSeguro, String clasificacion) {
+    static String claveDe(long pk, String nombreSeguro, String clasificacion, String sitio) {
+        String prefijo = (sitio == null || sitio.isBlank()) ? "" : sitio + "/";
         if (clasificacion == null) {
-            return "%d/%s".formatted(pk, nombreSeguro);
+            return "%s%d/%s".formatted(prefijo, pk, nombreSeguro);
         }
         String extension = extensionDe(nombreSeguro);
         return extension == null
-                ? "%d/%s".formatted(pk, nombreSeguro)
-                : "%s/%d.%s".formatted(clasificacion, pk, extension);
+                ? "%s%d/%s".formatted(prefijo, pk, nombreSeguro)
+                : "%s%s/%d.%s".formatted(prefijo, clasificacion, pk, extension);
     }
 
     private static String extensionDe(String nombreSeguro) {

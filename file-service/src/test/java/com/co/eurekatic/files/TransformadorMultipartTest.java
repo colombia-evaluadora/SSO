@@ -38,7 +38,7 @@ class TransformadorMultipartTest {
         when(almacen.subir(anyString(), any(), anyLong(), anyString()))
                 .thenReturn("s3://b/12/x", "s3://b/13/y");
 
-        Map<String, Object> cuerpo = new TransformadorMultipart(almacen, repo).transformar(
+        Map<String, Object> cuerpo = new TransformadorMultipart(almacen, repo, null).transformar(
                 Map.of("nombre", "Juan Pérez"),
                 Map.of("pdf",  List.of(fichero("pdf", "informe.pdf", "A")),
                        "foto", List.of(fichero("foto", "cara.png", "B"))),
@@ -57,7 +57,7 @@ class TransformadorMultipartTest {
         when(repo.reservar(anyString(), anyLong(), anyString())).thenReturn(1L, 2L, 3L);
         when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/k");
 
-        Map<String, Object> cuerpo = new TransformadorMultipart(almacen, repo).transformar(
+        Map<String, Object> cuerpo = new TransformadorMultipart(almacen, repo, null).transformar(
                 Map.of(),
                 Map.of("anexos", List.of(
                         fichero("anexos", "a.pdf", "1"),
@@ -96,7 +96,7 @@ class TransformadorMultipartTest {
         ficheros.put("uno", List.of(fichero("uno", "a.pdf", "A")));
         ficheros.put("dos", List.of(fichero("dos", "b.pdf", "B")));
 
-        assertThatThrownBy(() -> new TransformadorMultipart(almacen, repo).transformar(
+        assertThatThrownBy(() -> new TransformadorMultipart(almacen, repo, null).transformar(
                 Map.of(), ficheros, "admin@example.com", null))
                 .isInstanceOf(TransformadorMultipart.SubidaFallidaException.class);
 
@@ -128,7 +128,7 @@ class TransformadorMultipartTest {
         org.mockito.Mockito.doThrow(new org.springframework.dao.DataAccessResourceFailureException("db caida"))
                 .when(repo).registrarUrl(20L, "s3://b/20/a.pdf");
 
-        assertThatThrownBy(() -> new TransformadorMultipart(almacen, repo).transformar(
+        assertThatThrownBy(() -> new TransformadorMultipart(almacen, repo, null).transformar(
                 Map.of(), Map.of("f", List.of(fichero("f", "a.pdf", "X"))), "u", null))
                 .isInstanceOf(TransformadorMultipart.SubidaFallidaException.class);
 
@@ -146,7 +146,7 @@ class TransformadorMultipartTest {
         when(almacen.subir(anyString(), any(), anyLong(), any()))
                 .thenThrow(new java.io.IOException("almacen caido"));
 
-        assertThatThrownBy(() -> new TransformadorMultipart(almacen, repo).transformar(
+        assertThatThrownBy(() -> new TransformadorMultipart(almacen, repo, null).transformar(
                 Map.of(), Map.of("f", List.of(fichero("f", "a.pdf", "X"))), "u", null))
                 .isInstanceOf(TransformadorMultipart.SubidaFallidaException.class);
 
@@ -167,7 +167,7 @@ class TransformadorMultipartTest {
         when(repo.reservar(anyString(), anyLong(), anyString())).thenReturn(13L);
         when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/13/firma.pdf");
 
-        Map<String, Object> cuerpo = new TransformadorMultipart(almacen, repo).transformar(
+        Map<String, Object> cuerpo = new TransformadorMultipart(almacen, repo, null).transformar(
                 Map.of("usuario.email", "func@example.com", "fkTmunicipioExpedicion", "1"),
                 Map.of("usuario.fkTarchivoFoto", List.of(fichero("usuario.fkTarchivoFoto", "firma.pdf", "F"))),
                 "admin@example.com", null).cuerpo();
@@ -184,7 +184,7 @@ class TransformadorMultipartTest {
         var almacen = mock(AlmacenObjetos.class);
         var repo = mock(ArchivoRepository.class);
 
-        var resultado = new TransformadorMultipart(almacen, repo)
+        var resultado = new TransformadorMultipart(almacen, repo, null)
                 .transformar(Map.of("nombre", "Ana", "nit", "123"), Map.of(), "u", null);
 
         assertThat(resultado.cuerpo())
@@ -223,7 +223,7 @@ class TransformadorMultipartTest {
         when(repo.reservar(anyString(), anyLong(), anyString())).thenReturn(7L);
         when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/7/a.pdf");
 
-        new TransformadorMultipart(almacen, repo).transformar(
+        new TransformadorMultipart(almacen, repo, null).transformar(
                 Map.of(), Map.of("f", List.of(fichero("f", "a.pdf", "X"))), "u", null);
 
         var orden = org.mockito.Mockito.inOrder(repo, almacen);
@@ -251,7 +251,7 @@ class TransformadorMultipartTest {
         when(repo.reservar(anyString(), anyLong(), anyString())).thenReturn(11L, 12L);
         when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/k");
 
-        var resultado = new TransformadorMultipart(almacen, repo).transformar(
+        var resultado = new TransformadorMultipart(almacen, repo, null).transformar(
                 Map.of(),
                 Map.of("uno", List.of(fichero("uno", "a.pdf", "A")),
                        "dos", List.of(fichero("dos", "b.pdf", "B"))),
@@ -265,27 +265,47 @@ class TransformadorMultipartTest {
 
     @Test
     void claveDe_sinClasificacionUsaElFormatoGenerico() {
-        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", null))
+        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", null, null))
                 .isEqualTo("17/foto.jpg");
     }
 
     @Test
     void claveDe_conClasificacionUsaCarpetaPkPuntoExtension() {
-        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", "perfilUsuario"))
+        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", "perfilUsuario", null))
                 .isEqualTo("perfilUsuario/17.jpg");
     }
 
     @Test
     void claveDe_normalizaLaExtensionAMinuscula() {
-        assertThat(TransformadorMultipart.claveDe(17L, "FOTO.JPG", "perfilUsuario"))
+        assertThat(TransformadorMultipart.claveDe(17L, "FOTO.JPG", "perfilUsuario", null))
                 .isEqualTo("perfilUsuario/17.jpg");
     }
 
     /** Sin extensión reconocible no hay forma de armar "pk.extensión" con sentido. */
     @Test
     void claveDe_sinExtensionCaeAlFormatoGenericoAunqueHayaClasificacion() {
-        assertThat(TransformadorMultipart.claveDe(17L, "sinextension", "perfilUsuario"))
+        assertThat(TransformadorMultipart.claveDe(17L, "sinextension", "perfilUsuario", null))
                 .isEqualTo("17/sinextension");
+    }
+
+    // ---------- V64: código de sede (files.site-code) ----------
+
+    @Test
+    void claveDe_sinSitioConfiguradoNoAntepone() {
+        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", null, ""))
+                .isEqualTo("17/foto.jpg");
+    }
+
+    @Test
+    void claveDe_conSitioLoAntepone_sinClasificacion() {
+        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", null, "ACADEMICO_VALLEDUPAR"))
+                .isEqualTo("ACADEMICO_VALLEDUPAR/17/foto.jpg");
+    }
+
+    @Test
+    void claveDe_conSitioYClasificacion() {
+        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", "perfilUsuario", "ACADEMICO_VALLEDUPAR"))
+                .isEqualTo("ACADEMICO_VALLEDUPAR/perfilUsuario/17.jpg");
     }
 
     /**
@@ -301,7 +321,7 @@ class TransformadorMultipartTest {
         when(almacen.subir(eq("perfilUsuario/17.jpg"), any(), anyLong(), any()))
                 .thenReturn("s3://b/perfilUsuario/17.jpg");
 
-        var resultado = new TransformadorMultipart(almacen, repo).transformar(
+        var resultado = new TransformadorMultipart(almacen, repo, null).transformar(
                 Map.of(),
                 Map.of("foto", List.of(fichero("foto", "foto.jpg", "X"))),
                 "admin@example.com",
@@ -323,7 +343,7 @@ class TransformadorMultipartTest {
         when(almacen.subir(eq("18/foto.jpg"), any(), anyLong(), any()))
                 .thenReturn("s3://b/18/foto.jpg");
 
-        new TransformadorMultipart(almacen, repo).transformar(
+        new TransformadorMultipart(almacen, repo, null).transformar(
                 Map.of(),
                 Map.of("foto", List.of(fichero("foto", "foto.jpg", "X"))),
                 "admin@example.com",
@@ -331,5 +351,27 @@ class TransformadorMultipartTest {
 
         verify(repo).reservar("foto.jpg", 1L, "admin@example.com");
         verify(repo, never()).reservar(anyString(), anyLong(), anyString(), anyString());
+    }
+
+    /**
+     * Con {@code files.site-code} configurado (tercer argumento del
+     * constructor), la clave sube CON el prefijo — de punta a punta,
+     * no sólo en {@code claveDe} aislado.
+     */
+    @Test
+    void conSitioConfiguradoLaClaveSubeConElPrefijo() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar("foto.jpg", 1L, "admin@example.com", "perfilUsuario")).thenReturn(17L);
+        when(almacen.subir(eq("ACADEMICO_VALLEDUPAR/perfilUsuario/17.jpg"), any(), anyLong(), any()))
+                .thenReturn("s3://b/ACADEMICO_VALLEDUPAR/perfilUsuario/17.jpg");
+
+        new TransformadorMultipart(almacen, repo, "ACADEMICO_VALLEDUPAR").transformar(
+                Map.of(),
+                Map.of("foto", List.of(fichero("foto", "foto.jpg", "X"))),
+                "admin@example.com",
+                Map.of("foto", "perfilUsuario"));
+
+        verify(almacen).subir(eq("ACADEMICO_VALLEDUPAR/perfilUsuario/17.jpg"), any(), anyLong(), any());
     }
 }

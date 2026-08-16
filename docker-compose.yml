@@ -1377,6 +1377,11 @@ services:
       FILES_DS_USERNAME: "${FILES_DS_USERNAME:-neondb_owner}"
       FILES_DS_PASSWORD: "${FILES_DS_PASSWORD:-}"
       FILES_SCHEMA: "${FILES_SCHEMA:-academico_test}"
+      # V64 — código de sede antepuesto a la clave S3 de las filas
+      # nuevas, imitando el primer segmento que ya traen las filas
+      # históricas migradas (ACADEMICO_VALLEDUPAR/perfilUsuario/...).
+      # Vacío = sin prefijo. Ver TransformadorMultipart.claveDe.
+      FILES_SITE_CODE: "${FILES_SITE_CODE:-}"
       # Apunta al gateway, no a query-service directo: así la petición
       # reenviada pasa por las mismas reglas de autorización que
       # cualquier otra. Este servicio no es una puerta trasera.

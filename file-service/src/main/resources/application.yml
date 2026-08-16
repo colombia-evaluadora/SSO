@@ -37,6 +37,15 @@ files:
   # Esquema donde vive TARCHIVO.
   schema: ${FILES_SCHEMA:academico_test}
 
+  # V64 — código de sede que se antepone a la clave S3 de las filas
+  # nuevas (TransformadorMultipart.claveDe), imitando el primer
+  # segmento que ya traen las filas históricas migradas
+  # (ACADEMICO_VALLEDUPAR/perfilUsuario/141906.jpeg). Una instalación
+  # de file-service sirve UNA sola sede, así que es una constante de
+  # despliegue — igual que `schema` arriba — no algo que decida cada
+  # subida. Vacío (default) = sin prefijo.
+  site-code: ${FILES_SITE_CODE:}
+
   # A dónde se reenvía el JSON ya transformado. Apunta al gateway para
   # que la petición pase por las mismas reglas de autorización que
   # cualquier otra: este servicio no es una puerta trasera al catálogo.
