@@ -41,20 +41,31 @@ function newQueryUid(): string {
  * clasificación, después el de obligatoriedad
  * ({@code "FILE:perfilUsuario!"}, nunca al revés) — mismo contrato
  * que {@code ParamTypes.parseDeclaration}.
+ *
+ * <p>V65 — un TERCER componente opcional, sólo válido junto a una
+ * clasificación no vacía: el nombre de OTRO campo de texto del mismo
+ * multipart que trae el código de establecimiento
+ * ({@code "FILE:actividad:idEstablecimiento"} → {@code {...,
+ * fileClassification: "actividad", fileEstablishmentField:
+ * "idEstablecimiento"}}).
  */
 function splitDeclaration(
   raw: string | undefined,
   requiredSuffix: string,
   fileClassificationSeparator: string,
-): { base: string; required: boolean; fileClassification: string } {
-  if (!raw) return { base: "", required: false, fileClassification: "" };
+): { base: string; required: boolean; fileClassification: string; fileEstablishmentField: string } {
+  if (!raw) return { base: "", required: false, fileClassification: "", fileEstablishmentField: "" };
   const required = requiredSuffix !== "" && raw.endsWith(requiredSuffix);
   const sinObligatorio = required ? raw.slice(0, -requiredSuffix.length) : raw;
   const filePrefix = `FILE${fileClassificationSeparator}`;
   if (sinObligatorio.startsWith(filePrefix)) {
-    return { base: "FILE", required, fileClassification: sinObligatorio.slice(filePrefix.length) };
+    const resto = sinObligatorio.slice(filePrefix.length);
+    const separador = resto.indexOf(fileClassificationSeparator);
+    const fileClassification = separador < 0 ? resto : resto.slice(0, separador);
+    const fileEstablishmentField = separador < 0 ? "" : resto.slice(separador + 1);
+    return { base: "FILE", required, fileClassification, fileEstablishmentField };
   }
-  return { base: sinObligatorio, required, fileClassification: "" };
+  return { base: sinObligatorio, required, fileClassification: "", fileEstablishmentField: "" };
 }
 
 /** Inverso de {@link splitDeclaration}: recompone el string que se
@@ -63,14 +74,86 @@ function composeDeclaration(
   base: string,
   required: boolean,
   fileClassification: string,
+  fileEstablishmentField: string,
   requiredSuffix: string,
   fileClassificationSeparator: string,
 ): string {
-  const conClasificacion =
-    base === "FILE" && fileClassification
-      ? `FILE${fileClassificationSeparator}${fileClassification}`
-      : base;
+  let conClasificacion = base;
+  if (base === "FILE" && fileClassification) {
+    conClasificacion = `FILE${fileClassificationSeparator}${fileClassification}`;
+    // V65 — el campo de establecimiento sólo tiene sentido pegado a
+    // una clasificación no vacía; sin clasificación se descarta en
+    // silencio (mismo criterio que el backend: parseDeclaration sólo
+    // lo llena si el segundo componente también está presente).
+    if (fileEstablishmentField) {
+      conClasificacion += `${fileClassificationSeparator}${fileEstablishmentField}`;
+    }
+  }
   return required ? `${conClasificacion}${requiredSuffix}` : conClasificacion;
+}
+
+/**
+ * V65 — los dos inputs que aparecen bajo el selector de tipo cuando
+ * éste es {@code FILE}: la clasificación (con sugerencias del
+ * catálogo conocido, pero libre — el backend acepta cualquier valor
+ * con forma válida) y, sólo si hay clasificación, el campo de
+ * establecimiento. Un único componente para no duplicar el JSX entre
+ * la tabla de placeholders detectados y la de tipos manuales, que
+ * antes de esto ya repetían el input de clasificación dos veces.
+ */
+function FileClassificationInputs({
+  placeholder,
+  fileClassification,
+  fileEstablishmentField,
+  onClassificationChange,
+  onEstablishmentFieldChange,
+  knownFileClassifications,
+  establishmentScopedFileClassifications,
+}: {
+  placeholder: string;
+  fileClassification: string;
+  fileEstablishmentField: string;
+  onClassificationChange: (value: string) => void;
+  onEstablishmentFieldChange: (value: string) => void;
+  knownFileClassifications: string[];
+  establishmentScopedFileClassifications: string[];
+}) {
+  const datalistId = `file-classifications-${placeholder}`;
+  const sugiereEstablecimiento = establishmentScopedFileClassifications.includes(fileClassification);
+  return (
+    <>
+      <input
+        type="text"
+        list={datalistId}
+        value={fileClassification}
+        onChange={(e) => onClassificationChange(e.target.value)}
+        placeholder="Clasificación (opcional), ej. perfilUsuario"
+        aria-label={`${placeholder} clasificación de archivo`}
+        title="Carpeta S3 donde file-service guarda este archivo: <clasificación>/<pk>.<extensión>. Vacío = formato genérico <pk>/<nombre>."
+        className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+      />
+      <datalist id={datalistId}>
+        {knownFileClassifications.map((c) => (
+          <option key={c} value={c} />
+        ))}
+      </datalist>
+      {fileClassification && (
+        <input
+          type="text"
+          value={fileEstablishmentField}
+          onChange={(e) => onEstablishmentFieldChange(e.target.value)}
+          placeholder={
+            sugiereEstablecimiento
+              ? "Campo con el código de establecimiento, ej. idEstablecimiento"
+              : "Campo de establecimiento (opcional)"
+          }
+          aria-label={`${placeholder} campo de establecimiento`}
+          title="Nombre de OTRO campo de texto del mismo multipart que trae el código de establecimiento (validado contra testablecimiento.codigo) — se antepone a la clasificación en la clave S3. Vacío = sin ese segmento."
+          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+        />
+      )}
+    </>
+  );
 }
 
 interface Props {
@@ -478,6 +561,11 @@ function ParamTypesSection({
   const curated = data?.curated ?? [];
   const requiredSuffix = data?.requiredSuffix ?? "!";
   const fileClassificationSeparator = data?.fileClassificationSeparator ?? ":";
+  // V65 — catálogo sugerido de clasificaciones y su subconjunto
+  // establishment-scoped, ver el javadoc de ParamTypesResponse.
+  const knownFileClassifications = data?.knownFileClassifications ?? [];
+  const establishmentScopedFileClassifications =
+    data?.establishmentScopedFileClassifications ?? [];
 
   // Cuenta cuántos de los placeholders detectados están tipados.
   // El backend exige tipo explícito en :PARAM.* / :BODY.* / :BODY_RAW.*
@@ -504,13 +592,18 @@ function ParamTypesSection({
       // sufijo de obligatoriedad que ya tuviera la fila. V63 — la
       // clasificación sólo se preserva si el tipo se queda en FILE;
       // cambiar a otro tipo la descarta (no tiene sentido en, p. ej.,
-      // BIGINT).
-      const { required: wasRequired, fileClassification: wasClassification } =
-        splitDeclaration(next[placeholder], requiredSuffix, fileClassificationSeparator);
+      // BIGINT). V65 — el campo de establecimiento sigue la misma
+      // regla que la clasificación.
+      const {
+        required: wasRequired,
+        fileClassification: wasClassification,
+        fileEstablishmentField: wasEstablishmentField,
+      } = splitDeclaration(next[placeholder], requiredSuffix, fileClassificationSeparator);
       next[placeholder] = composeDeclaration(
         type,
         wasRequired,
         type === "FILE" ? wasClassification : "",
+        type === "FILE" ? wasEstablishmentField : "",
         requiredSuffix,
         fileClassificationSeparator,
       );
@@ -526,30 +619,53 @@ function ParamTypesSection({
   function setRequired(placeholder: string, isRequired: boolean) {
     const current = value[placeholder];
     if (!current) return;
-    const { base, fileClassification } =
+    const { base, fileClassification, fileEstablishmentField } =
       splitDeclaration(current, requiredSuffix, fileClassificationSeparator);
     onChange({
       ...value,
       [placeholder]: composeDeclaration(
-        base, isRequired, fileClassification, requiredSuffix, fileClassificationSeparator,
+        base, isRequired, fileClassification, fileEstablishmentField,
+        requiredSuffix, fileClassificationSeparator,
       ),
     });
   }
 
   /**
-   * V63 — input de texto libre que aparece sólo cuando el tipo
-   * elegido es {@code FILE}. Vacío = sin clasificar, mismo formato
-   * de clave que siempre tuvo file-service ({@code <pk>/<nombre>}).
+   * V63 — input (dropdown con opción libre) que aparece sólo cuando
+   * el tipo elegido es {@code FILE}. Vacío = sin clasificar, mismo
+   * formato de clave que siempre tuvo file-service
+   * ({@code <pk>/<nombre>}).
    */
   function setFileClassification(placeholder: string, classification: string) {
     const current = value[placeholder];
     if (!current) return;
-    const { base, required: isRequired } =
+    const { base, required: isRequired, fileEstablishmentField } =
       splitDeclaration(current, requiredSuffix, fileClassificationSeparator);
     onChange({
       ...value,
       [placeholder]: composeDeclaration(
-        base, isRequired, classification, requiredSuffix, fileClassificationSeparator,
+        base, isRequired, classification, fileEstablishmentField,
+        requiredSuffix, fileClassificationSeparator,
+      ),
+    });
+  }
+
+  /**
+   * V65 — input de texto que aparece junto a la clasificación: nombre
+   * de OTRO campo de texto del mismo multipart que trae el código de
+   * establecimiento. Vacío = sin ese segmento en la clave S3 (mismo
+   * comportamiento que antes de V65).
+   */
+  function setFileEstablishmentField(placeholder: string, establishmentField: string) {
+    const current = value[placeholder];
+    if (!current) return;
+    const { base, required: isRequired, fileClassification } =
+      splitDeclaration(current, requiredSuffix, fileClassificationSeparator);
+    onChange({
+      ...value,
+      [placeholder]: composeDeclaration(
+        base, isRequired, fileClassification, establishmentField,
+        requiredSuffix, fileClassificationSeparator,
       ),
     });
   }
@@ -671,7 +787,7 @@ function ParamTypesSection({
                     </tr>
                   );
                 }
-                const { base, required: isRequired, fileClassification } =
+                const { base, required: isRequired, fileClassification, fileEstablishmentField } =
                   splitDeclaration(value[p], requiredSuffix, fileClassificationSeparator);
                 return (
                   <tr key={p} className="border-t border-slate-100">
@@ -690,14 +806,14 @@ function ParamTypesSection({
                         ))}
                       </select>
                       {base === "FILE" && (
-                        <input
-                          type="text"
-                          value={fileClassification}
-                          onChange={(e) => setFileClassification(p, e.target.value)}
-                          placeholder="Clasificación (opcional), ej. perfilUsuario"
-                          aria-label={`${p} clasificación de archivo`}
-                          title="Carpeta S3 donde file-service guarda este archivo: <clasificación>/<pk>.<extensión>. Vacío = formato genérico <pk>/<nombre>."
-                          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                        <FileClassificationInputs
+                          placeholder={p}
+                          fileClassification={fileClassification}
+                          fileEstablishmentField={fileEstablishmentField}
+                          onClassificationChange={(v) => setFileClassification(p, v)}
+                          onEstablishmentFieldChange={(v) => setFileEstablishmentField(p, v)}
+                          knownFileClassifications={knownFileClassifications}
+                          establishmentScopedFileClassifications={establishmentScopedFileClassifications}
                         />
                       )}
                     </td>
@@ -733,7 +849,7 @@ function ParamTypesSection({
             <table className="w-full text-xs">
               <tbody>
                 {manualKeys.map((k) => {
-                  const { base, required: isRequired, fileClassification } =
+                  const { base, required: isRequired, fileClassification, fileEstablishmentField } =
                     splitDeclaration(value[k], requiredSuffix, fileClassificationSeparator);
                   return (
                     <tr key={k} className="border-t border-slate-100 first:border-t-0">
@@ -752,14 +868,14 @@ function ParamTypesSection({
                           ))}
                         </select>
                         {base === "FILE" && (
-                          <input
-                            type="text"
-                            value={fileClassification}
-                            onChange={(e) => setFileClassification(k, e.target.value)}
-                            placeholder="Clasificación (opcional), ej. perfilUsuario"
-                            aria-label={`${k} clasificación de archivo`}
-                            title="Carpeta S3 donde file-service guarda este archivo: <clasificación>/<pk>.<extensión>. Vacío = formato genérico <pk>/<nombre>."
-                            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                          <FileClassificationInputs
+                            placeholder={k}
+                            fileClassification={fileClassification}
+                            fileEstablishmentField={fileEstablishmentField}
+                            onClassificationChange={(v) => setFileClassification(k, v)}
+                            onEstablishmentFieldChange={(v) => setFileEstablishmentField(k, v)}
+                            knownFileClassifications={knownFileClassifications}
+                            establishmentScopedFileClassifications={establishmentScopedFileClassifications}
                           />
                         )}
                       </td>

@@ -265,6 +265,15 @@ const REQUIRED_SUFFIX = "!";
  */
 const FILE_CLASSIFICATION_SEPARATOR = ":";
 const FILE_CLASSIFICATION_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
+/**
+ * V65 — espejo de {@code ParamTypes.isValidFileEstablishmentField} /
+ * {@code FILE_ESTABLISHMENT_SEPARATOR} del backend. Mismo patrón que
+ * la clasificación: {@code "FILE:actividad:idEstablecimiento"} agrega
+ * un TERCER componente, el nombre de OTRO campo de texto del mismo
+ * multipart cuyo valor file-service valida contra
+ * {@code testablecimiento.codigo} y antepone en la clave S3.
+ */
+const FILE_ESTABLISHMENT_FIELD_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
 
 export const queryFormSchema = z
   .object({
@@ -360,17 +369,42 @@ export const queryFormSchema = z
             (v) => {
               // V63 — si hay clasificación (sólo válido tras "FILE:"),
               // su formato tiene que ser un identificador válido —
-              // se vuelve carpeta S3 literal.
+              // se vuelve carpeta S3 literal. V65 — un tercer
+              // componente ("FILE:actividad:idEstablecimiento") sólo
+              // recorta la clasificación en el primer separador; el
+              // campo de establecimiento se valida aparte, abajo.
               const sinObligatorio = v.endsWith(REQUIRED_SUFFIX)
                 ? v.slice(0, -REQUIRED_SUFFIX.length)
                 : v;
               const filePrefix = `FILE${FILE_CLASSIFICATION_SEPARATOR}`;
               if (!sinObligatorio.startsWith(filePrefix)) return true;
-              const clasificacion = sinObligatorio.slice(filePrefix.length);
+              const resto = sinObligatorio.slice(filePrefix.length);
+              const separador = resto.indexOf(FILE_CLASSIFICATION_SEPARATOR);
+              const clasificacion = separador < 0 ? resto : resto.slice(0, separador);
+              if (clasificacion === "") return true;
               return FILE_CLASSIFICATION_PATTERN.test(clasificacion);
             },
             "Clasificación de archivo inválida. Debe empezar con una letra y usar "
               + "sólo letras, dígitos y '_' — ej. 'perfilUsuario', 'PRIMER_PERIODO'.",
+          )
+          .refine(
+            (v) => {
+              // V65 — campo de establecimiento (tercer componente):
+              // mismo formato de identificador que la clasificación.
+              const sinObligatorio = v.endsWith(REQUIRED_SUFFIX)
+                ? v.slice(0, -REQUIRED_SUFFIX.length)
+                : v;
+              const filePrefix = `FILE${FILE_CLASSIFICATION_SEPARATOR}`;
+              if (!sinObligatorio.startsWith(filePrefix)) return true;
+              const resto = sinObligatorio.slice(filePrefix.length);
+              const separador = resto.indexOf(FILE_CLASSIFICATION_SEPARATOR);
+              if (separador < 0) return true;
+              const campoEstablecimiento = resto.slice(separador + 1);
+              if (campoEstablecimiento === "") return true;
+              return FILE_ESTABLISHMENT_FIELD_PATTERN.test(campoEstablecimiento);
+            },
+            "Campo de establecimiento inválido. Debe empezar con una letra y usar "
+              + "sólo letras, dígitos y '_' — ej. 'idEstablecimiento'.",
           ),
       )
       .default({}),
