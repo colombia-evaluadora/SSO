@@ -29,6 +29,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Descarga de archivos a través del api-gateway.
@@ -91,19 +92,22 @@ public class DownloadController {
     private final JwtProperties jwtProps;
     private final String tokenCompartido;
     private final ViewTokenService viewTokens;
+    private final FileAccessService acceso;
 
     public DownloadController(ArchivoRepository archivos,
                               AlmacenObjetos almacen,
                               JwtTokenService jwt,
                               JwtProperties jwtProps,
                               @Value("${files.internal-token:}") String tokenCompartido,
-                              ViewTokenService viewTokens) {
+                              ViewTokenService viewTokens,
+                              FileAccessService acceso) {
         this.archivos = archivos;
         this.almacen = almacen;
         this.jwt = jwt;
         this.jwtProps = jwtProps;
         this.tokenCompartido = tokenCompartido == null ? "" : tokenCompartido;
         this.viewTokens = viewTokens;
+        this.acceso = acceso;
     }
 
     /**
@@ -116,14 +120,23 @@ public class DownloadController {
     public ResponseEntity<StreamingResponseBody> descargar(
             @RequestHeader(value = INTERNAL_HEADER, required = false) String token,
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String autorizacion,
-            @PathVariable("archivoId") long archivoId) {
+            @PathVariable("archivoId") long archivoId,
+            @RequestParam(value = "mimeType", required = false) String mimeType) {
 
-        String quien = identificaLlamante(autorizacion, token);
-        if (quien == null) {
+        Llamante llamante = identificaLlamante(autorizacion, token);
+        if (llamante == null) {
             log.warn("descarga id={} rechazada: ni JWT válido ni token interno", archivoId);
             return ResponseEntity.status(401).build();
         }
-        return streamear(archivoId, quien);
+        if (llamante.esUsuario() && !acceso.puedeVer(archivoId, llamante.email(), llamante.roles())) {
+            // 404 y no 403 a propósito: distinguir "no es tuyo" de "no
+            // existe" le regala a quien prueba ids al azar la
+            // confirmación de que un id concreto SÍ tiene fila activa.
+            log.warn("descarga id={} rechazada: {} sin permiso sobre este archivo",
+                    archivoId, llamante.etiqueta());
+            return ResponseEntity.notFound().build();
+        }
+        return streamear(archivoId, llamante.etiqueta(), mimeType);
     }
 
     /**
@@ -140,8 +153,8 @@ public class DownloadController {
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String autorizacion,
             @PathVariable("archivoId") long archivoId) {
 
-        String quien = identificaLlamante(autorizacion, null);
-        if (quien == null) {
+        Llamante llamante = identificaLlamante(autorizacion, null);
+        if (llamante == null) {
             return ResponseEntity.status(401).build();
         }
         if (!viewTokens.habilitado()) {
@@ -151,11 +164,28 @@ public class DownloadController {
         if (archivos.buscarActivo(archivoId).isEmpty()) {
             return ResponseEntity.notFound().build();
         }
+        // Acuñar el token ES otorgar el acceso: quien no podría ver el
+        // archivo directamente tampoco puede llevarse un token que se
+        // lo entregue por otra puerta.
+        if (llamante.esUsuario() && !acceso.puedeVer(archivoId, llamante.email(), llamante.roles())) {
+            log.warn("view-token id={} rechazado: {} sin permiso sobre este archivo",
+                    archivoId, llamante.etiqueta());
+            return ResponseEntity.notFound().build();
+        }
         String token = viewTokens.acunar(archivoId);
-        log.info("view-token id={} acuñado para {} (ttl={}s)", archivoId, quien, viewTokens.ttlSegundos());
+        log.info("view-token id={} acuñado para {} (ttl={}s)", archivoId, llamante.etiqueta(), viewTokens.ttlSegundos());
         return ResponseEntity.ok(Map.of(
                 "token", token,
-                "url", "/files/view/" + archivoId + "?token=" + token,
+                // Con el prefijo /api: el cliente que llama a este endpoint
+                // ES el navegador, y llega SIEMPRE a través del gateway
+                // (route "api-file-service", StripPrefix=1 —
+                // /api/files/** -> /files/** en este servicio). Sin el
+                // prefijo, la URL de conveniencia apunta a una ruta que el
+                // gateway no reconoce y el <img> recibe 401 en vez de la
+                // imagen — la propia ruta interna que este controller
+                // expone (/files/view/...) nunca es la que el navegador
+                // debe pedir directamente.
+                "url", "/api/files/view/" + archivoId + "?token=" + token,
                 "expiresIn", viewTokens.ttlSegundos()));
     }
 
@@ -169,17 +199,26 @@ public class DownloadController {
     public ResponseEntity<StreamingResponseBody> ver(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String autorizacion,
             @RequestParam(value = "token", required = false) String token,
-            @PathVariable("archivoId") long archivoId) {
+            @PathVariable("archivoId") long archivoId,
+            @RequestParam(value = "mimeType", required = false) String mimeType) {
 
-        String quien = identificaLlamante(autorizacion, null);
-        if (quien == null) {
+        Llamante llamante = identificaLlamante(autorizacion, null);
+        if (llamante == null) {
             if (!viewTokens.valido(token, archivoId)) {
                 log.warn("view id={} rechazada: ni JWT válido ni token de vista", archivoId);
                 return ResponseEntity.status(401).build();
             }
-            quien = "token-vista";
+            // El token de vista ya es, en sí mismo, la autorización:
+            // se acuñó en emitirTokenVista() después de pasar este
+            // mismo chequeo. No se repite aquí.
+            return streamear(archivoId, "token-vista", mimeType);
         }
-        return streamear(archivoId, quien);
+        if (llamante.esUsuario() && !acceso.puedeVer(archivoId, llamante.email(), llamante.roles())) {
+            log.warn("view id={} rechazada: {} sin permiso sobre este archivo",
+                    archivoId, llamante.etiqueta());
+            return ResponseEntity.notFound().build();
+        }
+        return streamear(archivoId, llamante.etiqueta(), mimeType);
     }
 
     /**
@@ -189,11 +228,26 @@ public class DownloadController {
      * autoriza al llamante — una vez identificado, sirven exactamente
      * el mismo archivo de la misma forma.
      */
-    private ResponseEntity<StreamingResponseBody> streamear(long archivoId, String quien) {
+    private ResponseEntity<StreamingResponseBody> streamear(long archivoId, String quien, String mimeType) {
         var archivo = archivos.buscarActivo(archivoId).orElse(null);
         if (archivo == null) {
             log.warn("acceso id={} rechazado: fila no encontrada o inactiva", archivoId);
             return ResponseEntity.notFound().build();
+        }
+
+        MediaType tipoForzado = null;
+        if (mimeType != null && !mimeType.isBlank()) {
+            try {
+                tipoForzado = MediaType.parseMediaType(mimeType);
+            } catch (org.springframework.http.InvalidMediaTypeException e) {
+                // ?mimeType= inválido: 400 en vez de servir el archivo
+                // con un content-type adivinado que el llamante no
+                // pidió. Quien lo manda ya sabe qué es el archivo (ver
+                // javadoc de clase) — un valor roto es un bug del
+                // llamante, no algo que se pueda ignorar en silencio.
+                log.warn("acceso id={}: ?mimeType={} no es un media type válido", archivoId, mimeType);
+                return ResponseEntity.badRequest().build();
+            }
         }
 
         String clave = extraerClave(archivo.urls3());
@@ -248,11 +302,17 @@ public class DownloadController {
         };
 
         HttpHeaders headers = new HttpHeaders();
-        // TARCHIVO no guarda mimetype, así que el content-type sale
-        // de la extensión de la clave. Se pasa null como primer
-        // argumento para dejar explícito que no es que lo hayamos
-        // olvidado: no existe esa columna.
-        headers.setContentType(mediaTypeDe(null, clave));
+        // TARCHIVO no guarda mimetype, así que por defecto el
+        // content-type sale de la extensión de la clave. Cuando el
+        // llamante manda ?mimeType= (el endpoint o query de negocio
+        // que YA sabe qué es este archivo — p.ej. "esto siempre es un
+        // jpeg de perfilUsuario" — gana sobre la adivinanza: filas
+        // como perfilUsuario guardan el nombre real en TARCHIVO.nombre
+        // (un email o un documento de identidad, sin extensión) y sólo
+        // la clave S3 trae el sufijo, así que dejarle al llamante
+        // fijar el tipo evita depender de que ese sufijo siempre esté
+        // bien puesto.
+        headers.setContentType(tipoForzado != null ? tipoForzado : mediaTypeDe(null, clave));
         // attachment vs inline: si el cliente es un <img> en el front,
         // inline; si es un "Descargar" explícito, attachment. El
         // catálogo puede pasar ?disposition=attachment vía query si
@@ -299,8 +359,8 @@ public class DownloadController {
 
     /**
      * Identifica a quien pide el archivo, por cualquiera de las dos
-     * vías legítimas. Devuelve una etiqueta para el log, o
-     * {@code null} si no se pudo autenticar por ninguna.
+     * vías legítimas. Devuelve {@code null} si no se pudo autenticar
+     * por ninguna.
      *
      * <p>Son dos porque hay dos clases de llamante, y ninguna puede
      * usar el mecanismo de la otra:
@@ -308,22 +368,29 @@ public class DownloadController {
      * <ul>
      *   <li><b>Un usuario</b> (el admin-ui pidiendo la firma de un
      *       funcionario) llega con su JWT. Se verifica la FIRMA, no
-     *       la mera presencia de la cabecera.</li>
+     *       la mera presencia de la cabecera. {@link Llamante#esUsuario()}
+     *       es true, y trae email + roles para el chequeo de
+     *       {@link FileAccessService}.</li>
      *   <li><b>El catálogo</b>, cuando arma un enlace en una respuesta,
      *       actúa por su cuenta y no tiene JWT de usuario ninguno que
-     *       presentar. Para eso está el secreto compartido.</li>
+     *       presentar. Para eso está el secreto compartido — y por lo
+     *       mismo no pasa por {@link FileAccessService}: ya es un
+     *       llamante de confianza, no alguien a quien haya que
+     *       preguntarle "¿es tuyo este archivo?".</li>
      * </ul>
      *
      * <p>Se prueba primero el JWT porque es el caso normal; el token
      * interno es la excepción.
      */
-    private String identificaLlamante(String autorizacion, String tokenInterno) {
+    private Llamante identificaLlamante(String autorizacion, String tokenInterno) {
         String prefijo = jwtProps.tokenPrefix();
         if (autorizacion != null && autorizacion.startsWith(prefijo)) {
             String bruto = autorizacion.substring(prefijo.length()).trim();
             if (!bruto.isEmpty()) {
                 try {
-                    return "usuario:" + jwt.parse(bruto).email();
+                    var principal = jwt.parse(bruto);
+                    return new Llamante("usuario:" + principal.email(),
+                            principal.email(), principal.roles());
                 } catch (io.jsonwebtoken.JwtException e) {
                     // Token presente pero inválido (caducado, firma que
                     // no cuadra). No se cae al token interno: quien
@@ -334,7 +401,19 @@ public class DownloadController {
                 }
             }
         }
-        return verificaTokenInterno(tokenInterno) ? "catálogo" : null;
+        return verificaTokenInterno(tokenInterno) ? new Llamante("catálogo", null, null) : null;
+    }
+
+    /**
+     * Quien pide el archivo, ya identificado. {@code email}/{@code roles}
+     * son {@code null} para el catálogo (token interno) — ese llamante
+     * no pasa por {@link FileAccessService#puedeVer}, así que no hacen
+     * falta. {@link #esUsuario()} es la señal de "sí hacen falta".
+     */
+    private record Llamante(String etiqueta, String email, Set<String> roles) {
+        boolean esUsuario() {
+            return email != null;
+        }
     }
 
     /**

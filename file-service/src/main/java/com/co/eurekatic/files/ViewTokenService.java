@@ -1,5 +1,6 @@
 package com.co.eurekatic.files;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -47,6 +48,7 @@ public class ViewTokenService {
     private final long ttlSegundos;
     private final Clock reloj;
 
+    @Autowired
     public ViewTokenService(
             @Value("${files.view-token-secret:}") String secreto,
             @Value("${files.view-token-ttl-seconds:300}") long ttlSegundos) {

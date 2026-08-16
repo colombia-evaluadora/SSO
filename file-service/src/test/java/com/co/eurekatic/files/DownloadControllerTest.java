@@ -135,9 +135,32 @@ class DownloadControllerTest {
                                                  ArchivoRepository repo,
                                                  AlmacenObjetos almacen,
                                                  ViewTokenService viewTokens) {
+        return controller(jwt, repo, almacen, viewTokens, siempreAutoriza());
+    }
+
+    private static DownloadController controller(JwtTokenService jwt,
+                                                 ArchivoRepository repo,
+                                                 AlmacenObjetos almacen,
+                                                 ViewTokenService viewTokens,
+                                                 FileAccessService acceso) {
         var props = new JwtProperties(null, "irrelevante-en-tests",
                 "sso-postgres", 3600, 86400, "Authorization", "Bearer ", null);
-        return new DownloadController(repo, almacen, jwt, props, TOKEN_INTERNO, viewTokens);
+        return new DownloadController(repo, almacen, jwt, props, TOKEN_INTERNO, viewTokens, acceso);
+    }
+
+    /**
+     * La mayoría de los tests de esta clase fijan el comportamiento de
+     * autenticación (¿quién puede pasar la puerta?), no de autorización
+     * por archivo (¿puede ESTE llamante ver ESTE archivo?) — eso lo
+     * cubre {@link FileAccessServiceTest} y los casos explícitos más
+     * abajo. Un mock que siempre autoriza evita que esos tests
+     * empiecen a fallar por una razón que no están probando.
+     */
+    private static FileAccessService siempreAutoriza() {
+        var acceso = mock(FileAccessService.class);
+        when(acceso.puedeVer(anyLong(), anyString(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(true);
+        return acceso;
     }
 
     @Test
@@ -149,7 +172,7 @@ class DownloadControllerTest {
         when(repo.buscarActivo(anyLong())).thenReturn(Optional.empty());
 
         var respuesta = controller(jwt, repo)
-                .descargar(null, "Bearer jwt-bueno", 1L);
+                .descargar(null, "Bearer jwt-bueno", 1L, null);
 
         // 404 y no 401: pasó la autenticación y falló al buscar la fila,
         // que es justo lo que queremos demostrar aquí.
@@ -163,7 +186,7 @@ class DownloadControllerTest {
         var repo = mock(ArchivoRepository.class);
         when(repo.buscarActivo(anyLong())).thenReturn(Optional.empty());
 
-        var respuesta = controller(jwt, repo).descargar(TOKEN_INTERNO, null, 1L);
+        var respuesta = controller(jwt, repo).descargar(TOKEN_INTERNO, null, 1L, null);
 
         assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
         // Sin cabecera Authorization no se toca el verificador de JWT.
@@ -175,7 +198,7 @@ class DownloadControllerTest {
         var repo = mock(ArchivoRepository.class);
 
         var respuesta = controller(mock(JwtTokenService.class), repo)
-                .descargar(null, null, 1L);
+                .descargar(null, null, 1L, null);
 
         assertThat(respuesta.getStatusCode().value()).isEqualTo(401);
         // No debe ni mirar la base de datos si no está autenticado.
@@ -187,7 +210,7 @@ class DownloadControllerTest {
         var repo = mock(ArchivoRepository.class);
 
         var respuesta = controller(mock(JwtTokenService.class), repo)
-                .descargar("no-es-el-secreto", null, 1L);
+                .descargar("no-es-el-secreto", null, 1L, null);
 
         assertThat(respuesta.getStatusCode().value()).isEqualTo(401);
         verifyNoInteractions(repo);
@@ -206,7 +229,7 @@ class DownloadControllerTest {
         when(jwt.parse(anyString())).thenThrow(new JwtException("caducado"));
 
         var respuesta = controller(jwt, repo)
-                .descargar(TOKEN_INTERNO, "Bearer jwt-caducado", 1L);
+                .descargar(TOKEN_INTERNO, "Bearer jwt-caducado", 1L, null);
 
         assertThat(respuesta.getStatusCode().value()).isEqualTo(401);
         verifyNoInteractions(repo);
@@ -254,7 +277,7 @@ class DownloadControllerTest {
         when(almacen.abrir("clave-cruda.docx")).thenReturn(stream);
 
         var respuesta = controller(jwt, repo, almacen, mock(ViewTokenService.class))
-                .descargar(TOKEN_INTERNO, null, 1L);
+                .descargar(TOKEN_INTERNO, null, 1L, null);
 
         assertThat(respuesta.getStatusCode().value()).isEqualTo(200);
         String cd = respuesta.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION);
@@ -333,7 +356,7 @@ class DownloadControllerTest {
         assertThat(respuesta.getStatusCode().value()).isEqualTo(200);
         assertThat(respuesta.getBody())
                 .containsEntry("token", "payload.firma")
-                .containsEntry("url", "/files/view/1?token=payload.firma")
+                .containsEntry("url", "/api/files/view/1?token=payload.firma")
                 .containsEntry("expiresIn", 300L);
     }
 
@@ -347,7 +370,7 @@ class DownloadControllerTest {
                 new AuthPrincipal("ana@example.com", 7L, Set.of("USER"), "access"));
         when(repo.buscarActivo(anyLong())).thenReturn(Optional.empty());
 
-        var respuesta = controller(jwt, repo).ver("Bearer jwt-bueno", null, 1L);
+        var respuesta = controller(jwt, repo).ver("Bearer jwt-bueno", null, 1L, null);
 
         // 404 y no 401: el JWT solo bastó para pasar la autenticación.
         assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
@@ -362,7 +385,7 @@ class DownloadControllerTest {
 
         var respuesta = controller(mock(JwtTokenService.class), repo,
                 mock(AlmacenObjetos.class), viewTokens)
-                .ver(null, "token-bueno", 1L);
+                .ver(null, "token-bueno", 1L, null);
 
         assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
     }
@@ -375,7 +398,7 @@ class DownloadControllerTest {
 
         var respuesta = controller(mock(JwtTokenService.class), repo,
                 mock(AlmacenObjetos.class), viewTokens)
-                .ver(null, "token-malo", 1L);
+                .ver(null, "token-malo", 1L, null);
 
         assertThat(respuesta.getStatusCode().value()).isEqualTo(401);
         verifyNoInteractions(repo);
@@ -398,9 +421,127 @@ class DownloadControllerTest {
 
         var respuesta = controller(mock(JwtTokenService.class), repo,
                 mock(AlmacenObjetos.class), viewTokens)
-                .ver(null, "token-del-archivo-1", 2L);
+                .ver(null, "token-del-archivo-1", 2L, null);
 
         assertThat(respuesta.getStatusCode().value()).isEqualTo(401);
         verify(viewTokens).valido("token-del-archivo-1", 2L);
+    }
+
+    // ---------- FileAccessService: ¿puede ESTE llamante ver ESTE archivo? ----------
+    //
+    // Los tests de arriba fijan la AUTENTICACIÓN (¿pasa la puerta?);
+    // estos fijan la AUTORIZACIÓN (¿puede ver este archivo puntual?),
+    // que es lo que agrega FileAccessService por encima de un JWT
+    // simplemente válido.
+
+    /**
+     * Sin binding role_endpoint y sin ser dueño del archivo: 404, no
+     * 403 — mismo código que "el archivo no existe", a propósito (ver
+     * javadoc de {@code descargar}).
+     */
+    @Test
+    void unUsuarioSinAccesoAlArchivoRecibe404() {
+        var jwt = mock(JwtTokenService.class);
+        var repo = mock(ArchivoRepository.class);
+        var acceso = mock(FileAccessService.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("ana@example.com", 7L, Set.of("USER"), "access"));
+        when(acceso.puedeVer(1L, "ana@example.com", Set.of("USER"))).thenReturn(false);
+
+        var respuesta = controller(jwt, repo, mock(AlmacenObjetos.class),
+                mock(ViewTokenService.class), acceso)
+                .descargar(null, "Bearer jwt-bueno", 1L, null);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
+        // Rechazado antes de tocar la fila: no hace falta ir a S3
+        // para un llamante que ya sabemos que no puede ver nada.
+        verifyNoInteractions(repo);
+    }
+
+    /** El catálogo (token interno) no pasa por FileAccessService: ya es de confianza. */
+    @Test
+    void elCatalogoNoPasaPorElChequeoDeAcceso() {
+        var repo = mock(ArchivoRepository.class);
+        var acceso = mock(FileAccessService.class);
+        when(repo.buscarActivo(anyLong())).thenReturn(Optional.empty());
+
+        var respuesta = controller(mock(JwtTokenService.class), repo,
+                mock(AlmacenObjetos.class), mock(ViewTokenService.class), acceso)
+                .descargar(TOKEN_INTERNO, null, 1L, null);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
+        verifyNoInteractions(acceso);
+    }
+
+    /** Un token de vista ya acuñado tampoco repite el chequeo — nace autorizado. */
+    @Test
+    void unTokenDeVistaNoPasaPorElChequeoDeAccesoDeNuevo() {
+        var repo = mock(ArchivoRepository.class);
+        var acceso = mock(FileAccessService.class);
+        var viewTokens = mock(ViewTokenService.class);
+        when(viewTokens.valido("token-bueno", 1L)).thenReturn(true);
+        when(repo.buscarActivo(anyLong())).thenReturn(Optional.empty());
+
+        var respuesta = controller(mock(JwtTokenService.class), repo,
+                mock(AlmacenObjetos.class), viewTokens, acceso)
+                .ver(null, "token-bueno", 1L, null);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
+        verifyNoInteractions(acceso);
+    }
+
+    /** emitirTokenVista aplica el mismo chequeo: acuñar el token ES otorgar el acceso. */
+    @Test
+    void emitirTokenVistaSinAccesoAlArchivoEs404() {
+        var jwt = mock(JwtTokenService.class);
+        var repo = mock(ArchivoRepository.class);
+        var viewTokens = mock(ViewTokenService.class);
+        var acceso = mock(FileAccessService.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("ana@example.com", 7L, Set.of("USER"), "access"));
+        when(viewTokens.habilitado()).thenReturn(true);
+        when(repo.buscarActivo(1L)).thenReturn(Optional.of(
+                new ArchivoRepository.Archivo(1L, "foto.png", 10L, "clave.png")));
+        when(acceso.puedeVer(1L, "ana@example.com", Set.of("USER"))).thenReturn(false);
+
+        var respuesta = controller(jwt, repo, mock(AlmacenObjetos.class), viewTokens, acceso)
+                .emitirTokenVista("Bearer jwt-bueno", 1L);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
+        verify(viewTokens, org.mockito.Mockito.never()).acunar(anyLong());
+    }
+
+    // ---------- ?mimeType= ----------
+
+    @Test
+    void mimeTypeDeLaQueryGanaSobreLaExtension() {
+        var jwt = mock(JwtTokenService.class);
+        var repo = mock(ArchivoRepository.class);
+        var almacen = mock(AlmacenObjetos.class);
+        when(repo.buscarActivo(1L)).thenReturn(Optional.of(
+                new ArchivoRepository.Archivo(1L, "CC26795317", 3L, "perfilUsuario/141906.jpeg")));
+        GetObjectResponse respuestaS3 = GetObjectResponse.builder().contentLength(3L).build();
+        var stream = new ResponseInputStream<>(respuestaS3,
+                AbortableInputStream.create(new ByteArrayInputStream("abc".getBytes())));
+        when(almacen.abrir("perfilUsuario/141906.jpeg")).thenReturn(stream);
+
+        var respuesta = controller(jwt, repo, almacen, mock(ViewTokenService.class))
+                .descargar(TOKEN_INTERNO, null, 1L, "image/png");
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(200);
+        assertThat(respuesta.getHeaders().getContentType()).isEqualTo(MediaType.IMAGE_PNG);
+    }
+
+    @Test
+    void mimeTypeInvalidoEnLaQueryEs400() {
+        var jwt = mock(JwtTokenService.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.buscarActivo(1L)).thenReturn(Optional.of(
+                new ArchivoRepository.Archivo(1L, "foto.png", 10L, "clave.png")));
+
+        var respuesta = controller(jwt, repo, mock(AlmacenObjetos.class), mock(ViewTokenService.class))
+                .descargar(TOKEN_INTERNO, null, 1L, "no-es-un-media-type");
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(400);
     }
 }
