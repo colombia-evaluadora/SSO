@@ -86,12 +86,27 @@ public class TransformadorMultipart {
      *                 un campo ausente de este mapa sigue el formato
      *                 de clave genérico de siempre. Puede venir vacío
      *                 o {@code null}.
+     * @param establecimientos nombre de campo del multipart → código de
+     *                 establecimiento YA VALIDADO por el llamante
+     *                 (ver {@code FileDestinationAccessService}) contra
+     *                 {@code testablecimiento.codigo}. Sólo trae
+     *                 entrada para los campos cuya clasificación
+     *                 declaró un tercer componente
+     *                 ({@code "FILE:actividad:idEstablecimiento"}) — ver
+     *                 {@code ParamTypes#parseDeclaration}. Esta clase
+     *                 no valida nada, sólo usa el valor tal cual llega
+     *                 como segmento literal de la clave S3 (ver
+     *                 {@link #claveDe}) — la clasificación es lo único
+     *                 que le importa a {@code file-service}, "qué es
+     *                 un establecimiento" es de quien llama. Puede venir
+     *                 vacío o {@code null}.
      * @return el cuerpo JSON a reenviar y los ids reservados
      */
     public Resultado transformar(Map<String, String> campos,
                                  Map<String, List<MultipartFile>> ficheros,
                                  String usuario,
-                                 Map<String, String> clasificaciones) {
+                                 Map<String, String> clasificaciones,
+                                 Map<String, String> establecimientos) {
         Map<String, Object> cuerpo = new LinkedHashMap<>();
         campos.forEach((campo, valor) -> putAnidado(cuerpo, campo, valor));
         // Ids ya reservados, para poder deshacerlos si algo falla a
@@ -102,6 +117,8 @@ public class TransformadorMultipart {
         Map<Long, String> objetosSubidos = new LinkedHashMap<>();
         Map<String, String> clasificacionesPorCampo =
                 clasificaciones == null ? Map.of() : clasificaciones;
+        Map<String, String> establecimientosPorCampo =
+                establecimientos == null ? Map.of() : establecimientos;
 
         try {
             for (var entrada : ficheros.entrySet()) {
@@ -109,12 +126,13 @@ public class TransformadorMultipart {
                 List<MultipartFile> partes = entrada.getValue();
                 List<Long> ids = new ArrayList<>(partes.size());
                 String clasificacion = clasificacionesPorCampo.get(campo);
+                String establecimiento = establecimientosPorCampo.get(campo);
 
                 for (MultipartFile parte : partes) {
                     if (parte.isEmpty()) {
                         continue;
                     }
-                    ids.add(subirUna(parte, usuario, clasificacion, reservados, objetosSubidos));
+                    ids.add(subirUna(parte, usuario, clasificacion, establecimiento, reservados, objetosSubidos));
                 }
                 if (ids.isEmpty()) {
                     continue;
@@ -204,7 +222,7 @@ public class TransformadorMultipart {
         }
     }
 
-    private long subirUna(MultipartFile parte, String usuario, String clasificacion,
+    private long subirUna(MultipartFile parte, String usuario, String clasificacion, String establecimiento,
                           List<Long> reservados, Map<Long, String> objetosSubidos) throws IOException {
         String nombre = nombreSeguro(parte.getOriginalFilename());
         long peso = parte.getSize();
@@ -228,7 +246,7 @@ public class TransformadorMultipart {
         //    <clasificacion>/<pk>.<extensión>. Sin clasificación (o sin
         //    extensión reconocible en el nombre — un campo puede llegar
         //    sin punto), se mantiene el formato genérico de siempre.
-        String clave = claveDe(pk, nombre, clasificacion, sitio);
+        String clave = claveDe(pk, nombre, clasificacion, sitio, establecimiento);
 
         try (InputStream in = parte.getInputStream()) {
             String url = almacen.subir(clave, in, peso, parte.getContentType());
@@ -301,11 +319,31 @@ public class TransformadorMultipart {
      * sirve UNA sola sede), igual que {@code files.schema}. Vacío
      * (el default) = sin prefijo, exactamente el comportamiento de
      * antes de que existiera esta config.
+     *
+     * <p>V65 — {@code establecimiento} (código YA VALIDADO por
+     * {@code FileDestinationAccessService} contra
+     * {@code testablecimiento.codigo}, resuelto por
+     * {@code ReenvioController} desde el campo de texto que la
+     * clasificación declaró — ver {@code ParamTypes#parseDeclaration})
+     * va DESPUÉS del sitio y ANTES de la clasificación, imitando el
+     * layout de las clasificaciones históricas que sí lo llevan
+     * ({@code ACADEMICO_VALLEDUPAR/120001003751/actividad/...} — ver
+     * {@code ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS}).
+     * {@code null} (clasificación sin campo de establecimiento
+     * declarado, o sin clasificación) = sin ese segmento, igual que
+     * antes de V65. No tiene efecto si {@code clasificacion} es
+     * {@code null}: sin carpeta de clasificación tampoco hay carpeta
+     * de establecimiento — sería un segmento suelto sin el resto del
+     * layout que le da sentido.
      */
-    static String claveDe(long pk, String nombreSeguro, String clasificacion, String sitio) {
+    static String claveDe(long pk, String nombreSeguro, String clasificacion, String sitio,
+                          String establecimiento) {
         String prefijo = (sitio == null || sitio.isBlank()) ? "" : sitio + "/";
         if (clasificacion == null) {
             return "%s%d/%s".formatted(prefijo, pk, nombreSeguro);
+        }
+        if (establecimiento != null && !establecimiento.isBlank()) {
+            prefijo = prefijo + establecimiento + "/";
         }
         String extension = extensionDe(nombreSeguro);
         return extension == null
