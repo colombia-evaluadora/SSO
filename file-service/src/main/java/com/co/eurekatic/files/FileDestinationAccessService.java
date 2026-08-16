@@ -1,0 +1,299 @@
+package com.co.eurekatic.files;
+
+import com.co.eurekatic.common.query.ParamNamespace;
+import com.co.eurekatic.common.query.ParamTypes;
+import com.co.eurekatic.common.query.PathTemplateSyntax;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.server.PathContainer;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Component;
+import org.springframework.util.AntPathMatcher;
+import org.springframework.web.util.pattern.PathPattern;
+import org.springframework.web.util.pattern.PathPatternParser;
+
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Preguntas que {@code ReenvioController} tiene que responder ANTES de
+ * tocar S3 o insertar en TARCHIVO — subir un archivo no es gratis
+ * (bytes reales al bucket, una fila nueva) así que todos los chequeos
+ * van antes de {@code TransformadorMultipart}, no después:
+ *
+ * <ol>
+ *   <li>{@link #puedeSubir}: ¿el rol del llamante tiene un binding
+ *       {@code role_endpoint} para subir archivos en absoluto? Mismo
+ *       mecanismo que {@link FileAccessService}, aplicado a
+ *       {@code POST}/{@code PUT /files/**} en vez de a
+ *       {@code GET /files/view/{archivoId}}.</li>
+ *   <li>{@link #resolverDestino}: el cliente elige a mano el destino
+ *       ({@code POST /files/eval-col/funcionario} → reenvía a
+ *       {@code POST /api/eval-col/funcionario}) — nada validaba antes
+ *       que ESE destino fuera una ruta real del sistema, NI que los
+ *       campos que mandó como binario fueran campos que esa ruta
+ *       espera como archivo. Este método resuelve el destino contra
+ *       los dos catálogos que ya son la fuente de verdad del resto
+ *       del sistema — no se inventa un tercero:
+ *       <ul>
+ *         <li>{@code endpoint} — controllers REST estáticos (p.ej.
+ *             {@code auth-center POST /register/funcionario}). Sin
+ *             columna de metadatos por campo, así que un destino
+ *             encontrado aquí no impone qué campos son archivo — se
+ *             acepta cualquiera, igual que antes de este cambio.</li>
+ *         <li>{@code query} — rutas dinámicas de {@code query-service},
+ *             resueltas igual que {@code QueryPathRegistry}: primer
+ *             segmento = {@code microservice.serviceid}, resto contra
+ *             {@code query.path_template} con el mismo verbo. SÍ trae
+ *             {@code param_types}: si el autor declaró algún
+ *             placeholder como {@link ParamTypes#FILE}, esos son los
+ *             ÚNICOS campos del multipart que esa ruta admite como
+ *             archivo — cualquier otro campo binario se rechaza. Una
+ *             query con {@code param_types = {}} (nunca migrada al
+ *             tipado — ver spec 2026-08-10) se trata como el
+ *             {@code endpoint}: sin metadatos, sin restricción, para
+ *             no romper subidas que ya funcionaban antes de que
+ *             existiera {@code FILE}.</li>
+ *       </ul>
+ *   </li>
+ * </ol>
+ *
+ * <p>Sin JPA, igual que {@link FileAccessService} — ver el comentario
+ * del {@code pom.xml} sobre por qué este módulo excluye
+ * {@code spring-boot-starter-data-jpa}.
+ */
+@Component
+public class FileDestinationAccessService {
+
+    private static final Logger log = LoggerFactory.getLogger(FileDestinationAccessService.class);
+    private static final PathPatternParser PATH_PARSER = new PathPatternParser();
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final ObjectMapper json;
+    private final AntPathMatcher antMatcher = new AntPathMatcher();
+
+    public FileDestinationAccessService(NamedParameterJdbcTemplate jdbc, ObjectMapper json) {
+        this.jdbc = jdbc;
+        this.json = json;
+    }
+
+    /**
+     * ¿Alguno de estos roles tiene un binding {@code role_endpoint}
+     * que cubra {@code metodo rutaEntrante} (la ruta {@code /files/...}
+     * tal como llegó, ANTES de quitarle el prefijo)? Mismo patrón que
+     * {@code FileAccessService#esPrivilegiado}: se casa la ruta real
+     * de la petición contra los patrones registrados (p.ej.
+     * {@code POST /files/**}), no al revés.
+     */
+    public boolean puedeSubir(String metodo, String rutaEntrante, Set<String> roles) {
+        if (roles == null || roles.isEmpty()) {
+            return false;
+        }
+        List<String> paths = jdbc.query("""
+                SELECT DISTINCT e.path
+                  FROM public.role_endpoint re
+                  JOIN public.role r ON r.id_role = re.role_id
+                  JOIN public.endpoint e ON e.id_endpoint = re.endpoint_id
+                 WHERE r.name IN (:roles) AND e.method = :metodo
+                """,
+                new MapSqlParameterSource().addValue("roles", roles).addValue("metodo", metodo),
+                (rs, n) -> rs.getString("path"));
+        return paths.stream().anyMatch(p -> antMatcher.match(p, rutaEntrante));
+    }
+
+    /**
+     * Resuelve {@code metodo rutaDestino} (p.ej.
+     * {@code POST /eval-col/funcionario}, sin el prefijo {@code /api})
+     * contra el catálogo. {@link Destino#NO_REGISTRADO} si no existe
+     * en ninguno de los dos — el llamante debe rechazar con 404 sin
+     * seguir mirando nada más.
+     */
+    public Destino resolverDestino(String metodo, String rutaDestino) {
+        if (rutaDestino == null || !rutaDestino.startsWith("/")) {
+            return Destino.NO_REGISTRADO;
+        }
+        if (existeEnEndpoints(metodo, rutaDestino)) {
+            // endpoint no tiene metadatos por campo — permisivo,
+            // como siempre fue.
+            return Destino.sinRestriccionDeCampos();
+        }
+        return resolverEnQueries(metodo, rutaDestino);
+    }
+
+    private boolean existeEnEndpoints(String metodo, String ruta) {
+        List<String> paths = jdbc.query("""
+                SELECT path FROM public.endpoint WHERE method = :metodo
+                """,
+                new MapSqlParameterSource().addValue("metodo", metodo),
+                (rs, n) -> rs.getString("path"));
+        return paths.stream().anyMatch(p -> antMatcher.match(p, ruta));
+    }
+
+    /**
+     * {@code rutaDestino} trae el {@code serviceid} del microservicio
+     * como primer segmento ({@code /eval-col/funcionario} —
+     * {@code ReenvioController.rutaDestino} arma exactamente esa
+     * forma). Se resuelve el microservicio, y el RESTO de la ruta se
+     * casa contra {@code query.path_template} de ESE microservicio —
+     * igual que hace {@code QueryPathRegistry.matchTemplate} en
+     * query-service, para no inventar una segunda gramática de
+     * plantillas.
+     *
+     * <p>Si varias filas matchean (plantillas ambiguas, p.ej.
+     * {@code :ID} contra un literal — el mismo caso que
+     * {@code QueryPathRegistry} desambigua por especificidad) se toma
+     * la primera: aquí sólo importa autorizar la subida, no enrutar
+     * de verdad, así que un empate no tiene el mismo costo que en
+     * query-service.
+     */
+    private Destino resolverEnQueries(String metodo, String ruta) {
+        String sinBarra = ruta.substring(1);
+        int slash = sinBarra.indexOf('/');
+        String servicio = slash < 0 ? sinBarra : sinBarra.substring(0, slash);
+        String resto = slash < 0 ? "/" : sinBarra.substring(slash);
+        if (servicio.isBlank()) {
+            return Destino.NO_REGISTRADO;
+        }
+
+        List<FilaQuery> filas = jdbc.query("""
+                SELECT q.path_template, q.param_types
+                  FROM public.query q
+                  JOIN public.microservice m ON m.id_microservice = q.microservice_id
+                 WHERE m.serviceid = :servicio
+                   AND q.path_template IS NOT NULL
+                   AND upper(coalesce(q.http_method, 'POST')) = :metodo
+                """,
+                new MapSqlParameterSource()
+                        .addValue("servicio", servicio)
+                        .addValue("metodo", metodo.toUpperCase(Locale.ROOT)),
+                (rs, n) -> new FilaQuery(rs.getString("path_template"), rs.getString("param_types")));
+
+        return filas.stream()
+                .filter(f -> matchTemplate(f.pathTemplate(), resto))
+                .findFirst()
+                .map(f -> destinoDe(f.paramTypesJson()))
+                .orElse(Destino.NO_REGISTRADO);
+    }
+
+    /**
+     * Traduce el JSONB {@code param_types} de la fila matcheada a un
+     * {@link Destino}. Las claves declaradas {@link ParamTypes#FILE}
+     * (con o sin el sufijo {@code '!'} de obligatorio — ver
+     * {@link ParamTypes#parseDeclaration}) sólo tienen sentido bajo
+     * el namespace {@code BODY.*}: un archivo viaja en el cuerpo del
+     * multipart, nunca en una variable de ruta o en el query string.
+     */
+    private Destino destinoDe(String paramTypesJson) {
+        Map<String, String> paramTypes = parsear(paramTypesJson);
+        if (paramTypes.isEmpty()) {
+            // Query nunca migrada a param_types tipado — legacy,
+            // sin restricción (ver spec 2026-08-10, fase 1).
+            return Destino.sinRestriccionDeCampos();
+        }
+        Set<String> archivos = new LinkedHashSet<>();
+        Set<String> obligatorios = new LinkedHashSet<>();
+        Map<String, String> clasificaciones = new java.util.LinkedHashMap<>();
+        for (var entrada : paramTypes.entrySet()) {
+            String clave = entrada.getKey();
+            if (!clave.startsWith(ParamNamespace.BODY + ".")) {
+                continue;
+            }
+            var decl = ParamTypes.parseDeclaration(entrada.getValue());
+            if (ParamTypes.FILE.equals(decl.baseType())) {
+                archivos.add(clave);
+                if (!decl.nullable()) {
+                    obligatorios.add(clave);
+                }
+                // V63 — "FILE:perfilUsuario": file-service arma la
+                // clave S3 como <clasificacion>/<pk>.<extensión> en
+                // vez del genérico <pk>/<nombre> — ver
+                // TransformadorMultipart.subirUna. Sin clasificación
+                // (bare FILE), el mapa simplemente no tiene entrada
+                // para esta clave y el formato genérico sigue igual.
+                if (decl.fileClassification() != null) {
+                    clasificaciones.put(clave, decl.fileClassification());
+                }
+            }
+        }
+        return Destino.conCamposDeArchivo(archivos, obligatorios, clasificaciones);
+    }
+
+    private Map<String, String> parsear(String paramTypesJson) {
+        if (paramTypesJson == null || paramTypesJson.isBlank()) {
+            return Map.of();
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, String> mapa = json.readValue(paramTypesJson, Map.class);
+            return mapa;
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            // param_types corrupto no debe tumbar la subida entera —
+            // se trata como si no hubiera metadatos (permisivo) y se
+            // deja rastro en el log para que alguien lo revise.
+            log.warn("param_types ilegible ({}): {}", e.getMessage(), paramTypesJson);
+            return Map.of();
+        }
+    }
+
+    private static boolean matchTemplate(String template, String path) {
+        try {
+            PathPattern pattern = PATH_PARSER.parse(PathTemplateSyntax.toBracePattern(template));
+            return pattern.matches(PathContainer.parsePath(path));
+        } catch (RuntimeException e) {
+            // Una plantilla que ya no parsea (dato viejo, cambio de
+            // gramática) no debe tumbar la validación entera — sólo
+            // esa fila deja de contar como destino válido.
+            log.debug("plantilla '{}' no parseable: {}", template, e.getMessage());
+            return false;
+        }
+    }
+
+    private record FilaQuery(String pathTemplate, String paramTypesJson) {}
+
+    /**
+     * Resultado de {@link #resolverDestino}.
+     *
+     * @param registrado         ¿existe el destino en algún catálogo?
+     * @param restringeCampos    ¿hay que validar los campos-archivo
+     *                           del multipart contra {@code campos}?
+     *                           {@code false} = destino permisivo
+     *                           (endpoint, o query sin param_types
+     *                           tipado) — cualquier campo binario pasa,
+     *                           como siempre.
+     * @param campos             claves canónicas ({@code BODY.FOTO},
+     *                           {@code BODY.USUARIO.FOTO}, ...)
+     *                           declaradas {@code FILE}. Vacío si
+     *                           {@code restringeCampos} es falso.
+     * @param camposObligatorios subconjunto de {@code campos} declarado
+     *                           {@code FILE!} — debe venir sí o sí.
+     * @param clasificaciones    subconjunto de {@code campos} declarado
+     *                           {@code FILE:clasificacion} — clave
+     *                           canónica → valor de clasificación
+     *                           (p.ej. {@code "perfilUsuario"}). Sólo
+     *                           trae entrada para los campos que
+     *                           efectivamente declararon clasificación;
+     *                           un {@code FILE} bare no aparece acá.
+     */
+    public record Destino(boolean registrado, boolean restringeCampos,
+                          Set<String> campos, Set<String> camposObligatorios,
+                          Map<String, String> clasificaciones) {
+
+        public static final Destino NO_REGISTRADO =
+                new Destino(false, false, Set.of(), Set.of(), Map.of());
+
+        static Destino sinRestriccionDeCampos() {
+            return new Destino(true, false, Set.of(), Set.of(), Map.of());
+        }
+
+        static Destino conCamposDeArchivo(Set<String> campos, Set<String> obligatorios,
+                                          Map<String, String> clasificaciones) {
+            return new Destino(true, true, Set.copyOf(campos), Set.copyOf(obligatorios),
+                    Map.copyOf(clasificaciones));
+        }
+    }
+}

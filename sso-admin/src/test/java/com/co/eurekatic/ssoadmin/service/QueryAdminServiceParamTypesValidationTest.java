@@ -200,6 +200,52 @@ class QueryAdminServiceParamTypesValidationTest {
                 .hasMessageContaining("VARCHAR-99!");
     }
 
+    // ---------- V63: clasificación de archivos (FILE:clasificacion) ----------
+
+    @Test
+    void fileWithValidClassificationIsAccepted() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-file-clasificado", "SELECT cast(:BODY.FOTO as bigint)",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.FOTO", "FILE:perfilUsuario"));
+        assertThatCode(() -> invokeValidation(req));
+    }
+
+    @Test
+    void fileWithClassificationAndRequiredSuffixIsAccepted() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-file-clasificado-req", "SELECT cast(:BODY.FOTO as bigint)",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.FOTO", "FILE:perfilUsuario!"));
+        assertThatCode(() -> invokeValidation(req));
+    }
+
+    @Test
+    void fileWithInvalidClassificationFormatIsRejected() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-file-mal-clasificado", "SELECT cast(:BODY.FOTO as bigint)",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.FOTO", "FILE:con espacio"));
+        assertThatThrownBy(() -> invokeValidation(req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("clasificación de archivo inválida");
+    }
+
+    @Test
+    void fileWithClassificationStartingWithDigitIsRejected() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-file-mal-clasificado-2", "SELECT cast(:BODY.FOTO as bigint)",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.FOTO", "FILE:1perfil"));
+        assertThatThrownBy(() -> invokeValidation(req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("clasificación de archivo inválida");
+    }
+
     @Test
     void invalidParamKeyShapeIsRejected() {
         QueryRequest req = new QueryRequest(

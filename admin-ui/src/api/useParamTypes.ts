@@ -15,6 +15,14 @@ export interface ParamTypesResponse {
    * para que ambos lados lean la misma convención.
    */
   requiredSuffix: string;
+  /**
+   * V63 — literal ({@code ":"}) que separa {@code FILE} de la
+   * clasificación que el autor escribe cuando declara un placeholder
+   * como archivo (p. ej. {@code "FILE:perfilUsuario"}). Sólo aplica
+   * cuando el tipo elegido es {@code FILE} — ver
+   * {@code ParamTypes.FILE_CLASSIFICATION_SEPARATOR} en el backend.
+   */
+  fileClassificationSeparator: string;
 }
 
 /**

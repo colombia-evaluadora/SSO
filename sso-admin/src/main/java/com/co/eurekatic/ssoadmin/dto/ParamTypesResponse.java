@@ -26,10 +26,19 @@ import java.util.Map;
  * obligatorio (see {@link com.co.eurekatic.common.query.ParamTypes#parseDeclaration}).
  * Exposed instead of hardcoded on the frontend so both sides read the
  * convention from the same source.
+ *
+ * <p>V63 — {@code fileClassificationSeparator} is the literal
+ * ({@code ":"}) the UI inserts between {@code FILE} and the
+ * classification the author types, when the selected type is
+ * {@code FILE} — see
+ * {@link com.co.eurekatic.common.query.ParamTypes#FILE_CLASSIFICATION_SEPARATOR}.
+ * Same reasoning as {@code requiredSuffix}: one source of truth for
+ * the literal, not a copy hardcoded on each side.
  */
 public record ParamTypesResponse(
         List<String> curated,
         Map<String, Integer> jdbcTypes,
         Map<String, String> pgCastName,
-        String requiredSuffix
+        String requiredSuffix,
+        String fileClassificationSeparator
 ) { }

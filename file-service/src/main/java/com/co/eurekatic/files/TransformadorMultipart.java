@@ -75,11 +75,19 @@ public class TransformadorMultipart {
      * @param campos  partes de texto del multipart, tal cual llegaron
      * @param ficheros partes binarias, agrupadas por nombre de campo
      * @param usuario  identidad verificada del llamante, para auditoría
+     * @param clasificaciones nombre de campo del multipart → clasificación
+     *                 declarada ({@code "FILE:perfilUsuario"} en el
+     *                 catálogo — ver {@code ParamTypes.FILE}). Sólo
+     *                 trae entrada para los campos que la declararon;
+     *                 un campo ausente de este mapa sigue el formato
+     *                 de clave genérico de siempre. Puede venir vacío
+     *                 o {@code null}.
      * @return el cuerpo JSON a reenviar y los ids reservados
      */
     public Resultado transformar(Map<String, String> campos,
                                  Map<String, List<MultipartFile>> ficheros,
-                                 String usuario) {
+                                 String usuario,
+                                 Map<String, String> clasificaciones) {
         Map<String, Object> cuerpo = new LinkedHashMap<>();
         campos.forEach((campo, valor) -> putAnidado(cuerpo, campo, valor));
         // Ids ya reservados, para poder deshacerlos si algo falla a
@@ -88,18 +96,21 @@ public class TransformadorMultipart {
         // Subconjunto de `reservados` cuyo objeto SÍ llegó a subirse a
         // S3 (pk -> clave) — ver el porqué en `deshacer`.
         Map<Long, String> objetosSubidos = new LinkedHashMap<>();
+        Map<String, String> clasificacionesPorCampo =
+                clasificaciones == null ? Map.of() : clasificaciones;
 
         try {
             for (var entrada : ficheros.entrySet()) {
                 String campo = entrada.getKey();
                 List<MultipartFile> partes = entrada.getValue();
                 List<Long> ids = new ArrayList<>(partes.size());
+                String clasificacion = clasificacionesPorCampo.get(campo);
 
                 for (MultipartFile parte : partes) {
                     if (parte.isEmpty()) {
                         continue;
                     }
-                    ids.add(subirUna(parte, usuario, reservados, objetosSubidos));
+                    ids.add(subirUna(parte, usuario, clasificacion, reservados, objetosSubidos));
                 }
                 if (ids.isEmpty()) {
                     continue;
@@ -189,20 +200,31 @@ public class TransformadorMultipart {
         }
     }
 
-    private long subirUna(MultipartFile parte, String usuario, List<Long> reservados,
-                          Map<Long, String> objetosSubidos) throws IOException {
+    private long subirUna(MultipartFile parte, String usuario, String clasificacion,
+                          List<Long> reservados, Map<Long, String> objetosSubidos) throws IOException {
         String nombre = nombreSeguro(parte.getOriginalFilename());
         long peso = parte.getSize();
 
         // 1. Reservar (active = false) — ver ArchivoRepository#reservar
-        //    para por qué este orden y no al revés.
-        long pk = archivos.reservar(nombre, peso, usuario);
+        //    para por qué este orden y no al revés. Si el campo declaró
+        //    clasificación (FILE:perfilUsuario), se guarda también en
+        //    TARCHIVO.etiqueta — consistente con las filas históricas
+        //    migradas, que siempre la traían.
+        long pk = clasificacion == null
+                ? archivos.reservar(nombre, peso, usuario)
+                : archivos.reservar(nombre, peso, usuario, clasificacion);
         reservados.add(pk);
 
         // 2. La clave incluye el pk, así que es única sin necesidad de
         //    consultar el bucket, y permite rastrear un objeto hasta su
         //    fila con sólo mirar el nombre.
-        String clave = "%d/%s".formatted(pk, nombre);
+        //
+        //    Con clasificación declarada, se imita el layout de las
+        //    filas históricas migradas (.../perfilUsuario/141906.jpeg):
+        //    <clasificacion>/<pk>.<extensión>. Sin clasificación (o sin
+        //    extensión reconocible en el nombre — un campo puede llegar
+        //    sin punto), se mantiene el formato genérico de siempre.
+        String clave = claveDe(pk, nombre, clasificacion);
 
         try (InputStream in = parte.getInputStream()) {
             String url = almacen.subir(clave, in, peso, parte.getContentType());
@@ -248,6 +270,38 @@ public class TransformadorMultipart {
             return UUID.randomUUID().toString();
         }
         return base.length() > 120 ? base.substring(base.length() - 120) : base;
+    }
+
+    /**
+     * V63 — arma la clave S3 del objeto. Sin clasificación, el formato
+     * de siempre: {@code <pk>/<nombreSeguro>} (único sin consultar el
+     * bucket, rastreable a su fila con sólo mirar el nombre). Con
+     * clasificación declarada en el catálogo ({@code FILE:perfilUsuario}),
+     * imita el layout de las filas históricas migradas:
+     * {@code <clasificacion>/<pk>.<extensión>}.
+     *
+     * <p>Si no hay extensión reconocible en {@code nombreSeguro}
+     * (puede pasar: un campo sin nombre de archivo cae a un UUID sin
+     * punto), no hay forma de armar {@code pk.extensión} con sentido
+     * — se cae al formato genérico en vez de producir una clave con
+     * un punto colgando.
+     */
+    static String claveDe(long pk, String nombreSeguro, String clasificacion) {
+        if (clasificacion == null) {
+            return "%d/%s".formatted(pk, nombreSeguro);
+        }
+        String extension = extensionDe(nombreSeguro);
+        return extension == null
+                ? "%d/%s".formatted(pk, nombreSeguro)
+                : "%s/%d.%s".formatted(clasificacion, pk, extension);
+    }
+
+    private static String extensionDe(String nombreSeguro) {
+        int punto = nombreSeguro.lastIndexOf('.');
+        if (punto < 0 || punto == nombreSeguro.length() - 1) {
+            return null;
+        }
+        return nombreSeguro.substring(punto + 1).toLowerCase(java.util.Locale.ROOT);
     }
 
     /** Fallo de subida, mapeado a 502 por el manejador global. */

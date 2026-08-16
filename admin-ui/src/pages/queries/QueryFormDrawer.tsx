@@ -32,22 +32,45 @@ function newQueryUid(): string {
  * — sin sufijo, el parámetro es nullable por defecto (null explícito
  * u omitir el campo bindean NULL de SQL en vez de tumbar la
  * petición; ver spec 2026-08-13/14).
+ *
+ * <p>V63 — además separa la clasificación de archivo
+ * ({@code "FILE:perfilUsuario"} → {@code {base: "FILE",
+ * fileClassification: "perfilUsuario", ...}}). Sólo tiene sentido
+ * cuando {@code base === "FILE"}; para cualquier otro tipo queda en
+ * cadena vacía. El orden de los sufijos es fijo: primero la
+ * clasificación, después el de obligatoriedad
+ * ({@code "FILE:perfilUsuario!"}, nunca al revés) — mismo contrato
+ * que {@code ParamTypes.parseDeclaration}.
  */
 function splitDeclaration(
   raw: string | undefined,
-  suffix: string,
-): { base: string; required: boolean } {
-  if (!raw) return { base: "", required: false };
-  if (suffix && raw.endsWith(suffix)) {
-    return { base: raw.slice(0, -suffix.length), required: true };
+  requiredSuffix: string,
+  fileClassificationSeparator: string,
+): { base: string; required: boolean; fileClassification: string } {
+  if (!raw) return { base: "", required: false, fileClassification: "" };
+  const required = requiredSuffix !== "" && raw.endsWith(requiredSuffix);
+  const sinObligatorio = required ? raw.slice(0, -requiredSuffix.length) : raw;
+  const filePrefix = `FILE${fileClassificationSeparator}`;
+  if (sinObligatorio.startsWith(filePrefix)) {
+    return { base: "FILE", required, fileClassification: sinObligatorio.slice(filePrefix.length) };
   }
-  return { base: raw, required: false };
+  return { base: sinObligatorio, required, fileClassification: "" };
 }
 
 /** Inverso de {@link splitDeclaration}: recompone el string que se
  *  guarda en {@code paramTypes}. */
-function composeDeclaration(base: string, required: boolean, suffix: string): string {
-  return required ? `${base}${suffix}` : base;
+function composeDeclaration(
+  base: string,
+  required: boolean,
+  fileClassification: string,
+  requiredSuffix: string,
+  fileClassificationSeparator: string,
+): string {
+  const conClasificacion =
+    base === "FILE" && fileClassification
+      ? `FILE${fileClassificationSeparator}${fileClassification}`
+      : base;
+  return required ? `${conClasificacion}${requiredSuffix}` : conClasificacion;
 }
 
 interface Props {
@@ -454,6 +477,7 @@ function ParamTypesSection({
   const { data, isLoading, error } = useParamTypes();
   const curated = data?.curated ?? [];
   const requiredSuffix = data?.requiredSuffix ?? "!";
+  const fileClassificationSeparator = data?.fileClassificationSeparator ?? ":";
 
   // Cuenta cuántos de los placeholders detectados están tipados.
   // El backend exige tipo explícito en :PARAM.* / :BODY.* / :BODY_RAW.*
@@ -477,9 +501,19 @@ function ParamTypesSection({
       delete next[placeholder];
     } else {
       // V62 — el dropdown sólo elige el tipo base; se preserva el
-      // sufijo de obligatoriedad que ya tuviera la fila.
-      const { required: wasRequired } = splitDeclaration(next[placeholder], requiredSuffix);
-      next[placeholder] = composeDeclaration(type, wasRequired, requiredSuffix);
+      // sufijo de obligatoriedad que ya tuviera la fila. V63 — la
+      // clasificación sólo se preserva si el tipo se queda en FILE;
+      // cambiar a otro tipo la descarta (no tiene sentido en, p. ej.,
+      // BIGINT).
+      const { required: wasRequired, fileClassification: wasClassification } =
+        splitDeclaration(next[placeholder], requiredSuffix, fileClassificationSeparator);
+      next[placeholder] = composeDeclaration(
+        type,
+        wasRequired,
+        type === "FILE" ? wasClassification : "",
+        requiredSuffix,
+        fileClassificationSeparator,
+      );
     }
     onChange(next);
   }
@@ -492,8 +526,32 @@ function ParamTypesSection({
   function setRequired(placeholder: string, isRequired: boolean) {
     const current = value[placeholder];
     if (!current) return;
-    const { base } = splitDeclaration(current, requiredSuffix);
-    onChange({ ...value, [placeholder]: composeDeclaration(base, isRequired, requiredSuffix) });
+    const { base, fileClassification } =
+      splitDeclaration(current, requiredSuffix, fileClassificationSeparator);
+    onChange({
+      ...value,
+      [placeholder]: composeDeclaration(
+        base, isRequired, fileClassification, requiredSuffix, fileClassificationSeparator,
+      ),
+    });
+  }
+
+  /**
+   * V63 — input de texto libre que aparece sólo cuando el tipo
+   * elegido es {@code FILE}. Vacío = sin clasificar, mismo formato
+   * de clave que siempre tuvo file-service ({@code <pk>/<nombre>}).
+   */
+  function setFileClassification(placeholder: string, classification: string) {
+    const current = value[placeholder];
+    if (!current) return;
+    const { base, required: isRequired } =
+      splitDeclaration(current, requiredSuffix, fileClassificationSeparator);
+    onChange({
+      ...value,
+      [placeholder]: composeDeclaration(
+        base, isRequired, classification, requiredSuffix, fileClassificationSeparator,
+      ),
+    });
   }
 
   function addManual() {
@@ -613,7 +671,8 @@ function ParamTypesSection({
                     </tr>
                   );
                 }
-                const { base, required: isRequired } = splitDeclaration(value[p], requiredSuffix);
+                const { base, required: isRequired, fileClassification } =
+                  splitDeclaration(value[p], requiredSuffix, fileClassificationSeparator);
                 return (
                   <tr key={p} className="border-t border-slate-100">
                     <td className="px-2 py-1 font-mono">:{p}</td>
@@ -630,6 +689,17 @@ function ParamTypesSection({
                           </option>
                         ))}
                       </select>
+                      {base === "FILE" && (
+                        <input
+                          type="text"
+                          value={fileClassification}
+                          onChange={(e) => setFileClassification(p, e.target.value)}
+                          placeholder="Clasificación (opcional), ej. perfilUsuario"
+                          aria-label={`${p} clasificación de archivo`}
+                          title="Carpeta S3 donde file-service guarda este archivo: <clasificación>/<pk>.<extensión>. Vacío = formato genérico <pk>/<nombre>."
+                          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                        />
+                      )}
                     </td>
                     <td className="px-2 py-1 text-center">
                       <input
@@ -663,7 +733,8 @@ function ParamTypesSection({
             <table className="w-full text-xs">
               <tbody>
                 {manualKeys.map((k) => {
-                  const { base, required: isRequired } = splitDeclaration(value[k], requiredSuffix);
+                  const { base, required: isRequired, fileClassification } =
+                    splitDeclaration(value[k], requiredSuffix, fileClassificationSeparator);
                   return (
                     <tr key={k} className="border-t border-slate-100 first:border-t-0">
                       <td className="px-2 py-1 font-mono">:{k}</td>
@@ -680,6 +751,17 @@ function ParamTypesSection({
                             </option>
                           ))}
                         </select>
+                        {base === "FILE" && (
+                          <input
+                            type="text"
+                            value={fileClassification}
+                            onChange={(e) => setFileClassification(k, e.target.value)}
+                            placeholder="Clasificación (opcional), ej. perfilUsuario"
+                            aria-label={`${k} clasificación de archivo`}
+                            title="Carpeta S3 donde file-service guarda este archivo: <clasificación>/<pk>.<extensión>. Vacío = formato genérico <pk>/<nombre>."
+                            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                          />
+                        )}
                       </td>
                       <td className="px-2 py-1 text-center">
                         <input

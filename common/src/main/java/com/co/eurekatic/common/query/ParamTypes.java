@@ -60,10 +60,44 @@ public final class ParamTypes {
     );
 
     /** Tipos numéricos enteros — usados por la guardia runtime para
-     *  validar el tipo Java del valor antes de bindear. */
+     *  validar el tipo Java del valor antes de bindear.
+     *
+     *  <p>{@code FILE} entra en este set a propósito, no por
+     *  descuido: ver el javadoc de {@link #FILE}. Para cuando el
+     *  valor llega a {@code ParamBinder} ya es un {@code Long}
+     *  (el {@code pk_tarchivo} que file-service sustituyó en el
+     *  campo), así que la guardia debe tratarlo exactamente igual
+     *  que un {@code BIGINT} — mismo mensaje de error si alguien
+     *  manda otra cosa. */
     public static final Set<String> INTEGER_TYPES = Set.of(
-            "BIGINT", "INTEGER", "SMALLINT"
+            "BIGINT", "INTEGER", "SMALLINT", "FILE"
     );
+
+    /**
+     * Marca un placeholder como "este parámetro es un archivo": el
+     * cliente lo manda como parte binaria de un {@code multipart},
+     * no como campo JSON. {@code file-service} lo intercepta antes
+     * de reenviar al catálogo — sube el binario a S3, reserva la
+     * fila en {@code TARCHIVO}, y sustituye el campo por su
+     * {@code pk_tarchivo} (un {@code Long}). Por eso, en TODOS los
+     * puntos de este archivo donde importa el tipo real de bind
+     * (guardia de {@code ParamBinder}, {@link #JDBC_TYPES}, cast en
+     * {@link #PG_CAST_NAME}), {@code FILE} se comporta exactamente
+     * como {@code BIGINT} — la diferencia sólo le importa a
+     * {@code file-service}, que usa esta declaración para saber
+     * QUÉ campos del multipart debe aceptar como archivo para una
+     * ruta dada (ver {@code FileDestinationAccessService}) y
+     * rechazar cualquier otro. Un placeholder declarado {@code FILE}
+     * que además use {@link #REQUIRED_SUFFIX} ({@code "FILE!"})
+     * exige que el archivo venga sí o sí.
+     *
+     * <p>No hay {@code FILE[]} todavía — un campo con varios
+     * ficheros ({@code TransformadorMultipart} ya soporta "varios
+     * → lista de ids") no tiene aún forma de declararse en el
+     * catálogo. Se añade cuando haga falta, igual que el resto de
+     * los tipos array.
+     */
+    public static final String FILE = "FILE";
 
     /** Tipos numéricos con decimales. */
     public static final Set<String> DECIMAL_TYPES = Set.of(
@@ -103,6 +137,7 @@ public final class ParamTypes {
                 "BOOLEAN",
                 "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ",
                 "UUID", "JSONB", "JSON",
+                FILE,
                 "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]",
                 "DATE[]", "TIMESTAMP[]", "TIMESTAMPTZ[]", "JSONB[]"));
         curated.addAll(DOMAIN_TYPES);
@@ -135,6 +170,9 @@ public final class ParamTypes {
             Map.entry("UUID", "uuid"),
             Map.entry("JSONB", "jsonb"),
             Map.entry("JSON", "json"),
+            // FILE ya llegó a ParamBinder como el Long que
+            // file-service sustituyó — mismo cast que BIGINT.
+            Map.entry("FILE", "bigint"),
             // Arrays built-in
             Map.entry("TEXT[]", "text[]"),
             Map.entry("BIGINT[]", "int8[]"),
@@ -184,6 +222,7 @@ public final class ParamTypes {
             Map.entry("UUID", Types.OTHER),
             Map.entry("JSONB", Types.OTHER),
             Map.entry("JSON", Types.OTHER),
+            Map.entry("FILE", Types.BIGINT),
             Map.entry("TEXT[]", Types.ARRAY),
             Map.entry("BIGINT[]", Types.ARRAY),
             Map.entry("INTEGER[]", Types.ARRAY),
@@ -223,43 +262,98 @@ public final class ParamTypes {
     public static final String REQUIRED_SUFFIX = "!";
 
     /**
+     * V63 — separador entre {@link #FILE} y la clasificación
+     * opcional que sigue ({@code "FILE:perfilUsuario"}). Ver
+     * {@link #parseDeclaration} y {@link #isValidFileClassification}.
+     * Sólo tiene efecto cuando el tipo base es exactamente
+     * {@code FILE} — {@code "BIGINT:algo"} no es una sintaxis válida
+     * para ningún otro tipo, y {@link #parseDeclaration} lo deja tal
+     * cual (fallará después en {@code CURATED.contains(...)}, con un
+     * mensaje de "tipo no soportado" en vez de uno específico de
+     * clasificación — es un tipo mal escrito, no una clasificación
+     * mal escrita).
+     */
+    public static final String FILE_CLASSIFICATION_SEPARATOR = ":";
+
+    private static final java.util.regex.Pattern FILE_CLASSIFICATION_PATTERN =
+            java.util.regex.Pattern.compile("[A-Za-z][A-Za-z0-9_]*");
+
+    /**
+     * ¿Es {@code clasificacion} un nombre válido para usar como
+     * carpeta de S3 ({@code <clasificacion>/<pk>.<extensión>})? Letra
+     * inicial, luego letras/dígitos/guion bajo — deliberadamente
+     * permisivo en mayúsculas (a diferencia de
+     * {@link ParamNamespace#isValidName}, que exige TODO mayúscula):
+     * la clasificación se vuelve un segmento de ruta S3 literal, y el
+     * vocabulario histórico de {@code TARCHIVO.etiqueta} es camelCase
+     * ({@code perfilUsuario}, {@code firmaMecanica}) — forzar
+     * mayúsculas rompería esa convención en vez de mantenerla.
+     */
+    public static boolean isValidFileClassification(String clasificacion) {
+        return clasificacion != null && FILE_CLASSIFICATION_PATTERN.matcher(clasificacion).matches();
+    }
+
+    /**
      * V62 — el tipo declarado más el sufijo opcional de
      * obligatoriedad ({@code baseType} sin el {@code '!'}, más
      * {@code nullable}).
+     *
+     * <p>V63 — {@code fileClassification} sólo se llena cuando
+     * {@code baseType} es {@link #FILE} y el autor agregó
+     * {@code :clasificacion} ({@code "FILE:perfilUsuario"},
+     * {@code "FILE:perfilUsuario!"}). {@code null} para todo lo
+     * demás, incluido un {@code FILE} sin clasificar — ese caso
+     * sigue siendo válido y usa el formato de clave de siempre
+     * ({@code <pk>/<nombre>}), ver {@code TransformadorMultipart}.
      */
-    public record Declaration(String baseType, boolean nullable) {}
+    public record Declaration(String baseType, boolean nullable, String fileClassification) {}
 
     /**
-     * Parsea el sufijo de nulabilidad de un tipo declarado en el
-     * catálogo. Por defecto, TODO parámetro es <b>nullable</b> — un
-     * cliente que manda {@code null} explícito, o que directamente
-     * omite el campo, bindea {@code NULL} de SQL en vez de reventar
-     * (antes de V62 ambos casos dejaban el placeholder sin valor y
-     * Spring fallaba con un {@code 500} opaco antes de llegar
-     * siquiera a Postgres — ver {@code ParamBinder.buildStrict}).
+     * Parsea un tipo declarado en el catálogo: el sufijo de
+     * nulabilidad ({@code '!'}) y, si el tipo base es {@link #FILE},
+     * la clasificación opcional ({@code ':clasificacion'}).
      *
-     * <p>Un autor del catálogo marca un parámetro como
-     * <b>obligatorio</b> añadiendo {@code '!'} al final del tipo:
-     * {@code "BIGINT!"}, {@code "VARCHAR!"}, {@code "BIGINT[]!"}.
+     * <p><b>Nulabilidad</b> — por defecto, TODO parámetro es
+     * <b>nullable</b>: un cliente que manda {@code null} explícito,
+     * o que directamente omite el campo, bindea {@code NULL} de SQL
+     * en vez de reventar (antes de V62 ambos casos dejaban el
+     * placeholder sin valor y Spring fallaba con un {@code 500}
+     * opaco antes de llegar siquiera a Postgres — ver
+     * {@code ParamBinder.buildStrict}). Un autor marca un parámetro
+     * como <b>obligatorio</b> añadiendo {@code '!'} al final del
+     * tipo: {@code "BIGINT!"}, {@code "FILE!"}, {@code "BIGINT[]!"}.
      * Enviarlo como {@code null} u omitirlo entonces responde
-     * {@code 400} nombrando el parámetro, en vez del 500 opaco de
-     * antes o un {@code NULL} silencioso que la función PL/pgSQL
-     * tendría que validar por su cuenta.
+     * {@code 400} nombrando el parámetro. Ningún tipo del set
+     * {@link #CURATED} termina en {@code '!'}, así que el sufijo
+     * nunca colisiona con un nombre de tipo real.
      *
-     * <p>Ningún tipo del set {@link #CURATED} termina en {@code '!'},
-     * así que el sufijo nunca colisiona con un nombre de tipo real.
+     * <p><b>Clasificación (V63)</b> — {@code "FILE:perfilUsuario"}
+     * declara, además de "este placeholder es un archivo", CON QUÉ
+     * NOMBRE de carpeta S3 se organiza — {@code file-service} arma
+     * la clave como {@code <clasificacion>/<pk_tarchivo>.<extensión>}
+     * en vez del {@code <pk_tarchivo>/<nombre-original>} genérico,
+     * imitando el layout que ya usaban las filas históricas migradas
+     * ({@code .../perfilUsuario/141906.jpeg}). El orden de los dos
+     * sufijos es {@code TIPO[:clasificacion][!]} — el de
+     * obligatoriedad siempre al final ({@code "FILE:perfilUsuario!"},
+     * nunca {@code "FILE!:perfilUsuario"}).
      *
      * @param raw el valor tal cual está en {@code paramTypes} (p.ej.
-     *            {@code "BIGINT!"}); puede ser {@code null}.
+     *            {@code "FILE:perfilUsuario!"}); puede ser {@code null}.
      */
     public static Declaration parseDeclaration(String raw) {
-        if (raw == null) return new Declaration(null, true);
+        if (raw == null) return new Declaration(null, true, null);
         String trimmed = raw.trim();
-        if (trimmed.endsWith(REQUIRED_SUFFIX)) {
-            return new Declaration(
-                    trimmed.substring(0, trimmed.length() - REQUIRED_SUFFIX.length()),
-                    false);
+        boolean required = trimmed.endsWith(REQUIRED_SUFFIX);
+        String sinSufijoObligatorio = required
+                ? trimmed.substring(0, trimmed.length() - REQUIRED_SUFFIX.length())
+                : trimmed;
+
+        String prefijoFile = FILE + FILE_CLASSIFICATION_SEPARATOR;
+        if (sinSufijoObligatorio.startsWith(prefijoFile)) {
+            String clasificacion = sinSufijoObligatorio.substring(prefijoFile.length());
+            return new Declaration(FILE, !required, clasificacion.isEmpty() ? null : clasificacion);
         }
-        return new Declaration(trimmed, true);
+        return new Declaration(sinSufijoObligatorio, !required, null);
     }
 }

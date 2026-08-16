@@ -369,7 +369,8 @@ public class QueryAdminService {
             // sólo conoce el tipo base, así que se valida sin el
             // sufijo. El sufijo en sí no se restringe más — cualquier
             // tipo del set curado puede marcarse obligatorio.
-            String baseType = ParamTypes.parseDeclaration(e.getValue()).baseType();
+            var declaracion = ParamTypes.parseDeclaration(e.getValue());
+            String baseType = declaracion.baseType();
             if (!ParamTypes.CURATED.contains(baseType)) {
                 throw new IllegalArgumentException(
                     "PARAM_TYPES['" + upperKey + "']='" + e.getValue()
@@ -377,6 +378,21 @@ public class QueryAdminService {
                     + ParamTypes.CURATED
                     + " (opcionalmente con sufijo '!' para marcarlo obligatorio, "
                     + "p. ej. 'BIGINT!').");
+            }
+            // V63 — FILE:clasificacion declara con qué carpeta S3
+            // arma file-service la clave (ver ParamTypes.FILE). Sólo
+            // se valida el FORMATO acá — un ':' en cualquier tipo que
+            // no sea FILE ya se rechazó arriba (el baseType con ':'
+            // incluido no está en CURATED, así que nunca llega hasta
+            // acá para un tipo distinto).
+            if (declaracion.fileClassification() != null
+                    && !ParamTypes.isValidFileClassification(declaracion.fileClassification())) {
+                throw new IllegalArgumentException(
+                    "PARAM_TYPES['" + upperKey + "']='" + e.getValue()
+                    + "' tiene una clasificación de archivo inválida: '"
+                    + declaracion.fileClassification() + "'. Debe empezar con una "
+                    + "letra y usar sólo letras, dígitos y '_' — ej. 'perfilUsuario', "
+                    + "'PRIMER_PERIODO'.");
             }
             // Detectar colisiones case-only entre keys
             // (ej. "body.id" y "BODY.ID" envían a la misma

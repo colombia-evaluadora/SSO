@@ -113,6 +113,7 @@ public class QueryAdminController {
                 ParamTypes.CURATED.stream().sorted().toList(),
                 ParamTypes.JDBC_TYPES,
                 ParamTypes.PG_CAST_NAME,
-                ParamTypes.REQUIRED_SUFFIX);
+                ParamTypes.REQUIRED_SUFFIX,
+                ParamTypes.FILE_CLASSIFICATION_SEPARATOR);
     }
 }
