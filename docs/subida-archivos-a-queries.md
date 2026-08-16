@@ -137,7 +137,11 @@ file-service imite ESE layout para las filas nuevas:
 GET /sso-admin/query/param-types  →  param_types: {"BODY.FOTO": "FILE:perfilUsuario"}
 
 POST /api/files/eval-col/funcionario/42/foto  (multipart, campo "foto")
-  → clave S3:        perfilUsuario/18.jpg     (<clasificación>/<pk>.<extensión>)
+  → clave S3:        ACADEMICO_VALLEDUPAR/perfilUsuario/18.jpg
+                      (<sitio>/<clasificación>/<pk>.<extensión> — el
+                      prefijo <sitio> viene de FILES_SITE_CODE, ver
+                      TransformadorMultipart.claveDe; vacío por
+                      defecto = sin ese segmento)
   → TARCHIVO.etiqueta: perfilUsuario           (antes quedaba NULL en toda fila nueva)
 ```
 
@@ -155,7 +159,96 @@ Reglas:
   `endpoint` (REST estático) no tiene dónde declarar esto — sigue
   usando el formato genérico siempre.
 
-## 6. Qué tiene que estar configurado ANTES de que esto funcione
+## 6. Catálogo de clasificaciones + relación con un establecimiento
+
+Se revisó `TARCHIVO.etiqueta` completa en el servidor de producción
+para ver qué clasificaciones existen de verdad y con qué forma de
+clave S3. El catálogo resultante (expuesto en
+`GET /sso-admin/query/param-types` como `knownFileClassifications` —
+sugerido para el dropdown del admin-ui, **no** una lista cerrada:
+cualquier valor con forma válida sigue siendo aceptado):
+
+| Clasificación | Filas (histórico) | Layout histórico | ¿Lleva establecimiento? |
+|---|---:|---|---|
+| `perfilUsuario` | 19 607 | `<sitio>/perfilUsuario/<id>.ext` | No |
+| `actividad` | 364 961 | `<sitio>/<establecimiento.codigo>/actividad/<id>.ext` | Sí |
+| `recursoCompartido` | 331 | `<sitio>/<establecimiento.codigo>/recursoCompartido/<uuid>.ext` | Sí |
+| `matricula` | 96 | `<sitio>/<establecimiento.codigo>/matricula/<idLegado>/<uuid>.ext` | Sí |
+| `candidato` | 36 | `<sitio>/<establecimiento.codigo>/candidato/<uuid>.ext` | Sí |
+| `escudo` | 28 | `<sitio>/<establecimiento.codigo>/escudo/<pk_establecimiento>.ext` | Sí |
+
+Deliberadamente afuera del catálogo:
+
+- **`firmaMecanica`** — `TARCHIVO.urls3` siempre vacío en las filas
+  migradas con esa etiqueta; no hay objeto S3 real detrás.
+- **`informeFinal`, `certificacion`, `informePeriodo`** — reportes PDF
+  con una carpeta más de profundidad
+  (`.../informePeriodo/PA<año>/<periodo>/<id>.pdf`, y con DOS formas
+  históricas distintas para `informePeriodo` según la fecha de
+  migración) que este esquema de un solo segmento adicional no modela.
+  Probablemente generados por un proceso batch aparte, no por una
+  subida de usuario vía `FILE:clasificación`.
+
+**El id final nunca es reproducible para clasificaciones establishment-scoped
+salvo `escudo`.** Se comprobó contra la BD real: el número que aparece
+al final de la clave histórica (p. ej. `.../actividad/220537.pdf`, o
+el subdirectorio de `matricula`) es un id del sistema origen de la
+migración — no existe como `pk_tarchivo`, `pk_tmatricula` ni ningún
+otro PK de este esquema. Una fila **nueva** subida por este sistema
+usa su propio `pk_tarchivo` ahí, igual que ya hacía `perfilUsuario` —
+sólo el establecimiento y la clasificación imitan el layout histórico,
+no el id final. La excepción es `escudo`: el id histórico SÍ es
+`pk_establecimiento` (comprobado: `.../escudo/752.jpeg` con
+`pk_establecimiento = 752`), pero una fila nueva usa igual su propio
+`pk_tarchivo` — reproducir el pk del establecimiento exigiría que la
+clasificación conociera esa relación 1:1, que este esquema genérico no
+modela.
+
+### Declarar el campo de establecimiento
+
+Un tercer componente, después de la clasificación, nombra OTRO campo
+de **texto** del mismo multipart que trae el código de establecimiento
+(`testablecimiento.codigo` — el código DANE, no el `pk_establecimiento`
+interno). `file-service` lo valida contra esa tabla ANTES de tocar S3:
+
+```
+param_types: {
+  "BODY.FOTO":              "FILE:actividad:idEstablecimiento",
+  "BODY.IDESTABLECIMIENTO": "TEXT!"
+}
+
+POST /api/files/eval-col/actividad  (multipart)
+  foto              = <jpg>
+  idEstablecimiento = 120001003751
+
+  → GET testablecimiento WHERE codigo = '120001003751'  (existe → OK)
+  → clave S3: ACADEMICO_VALLEDUPAR/120001003751/actividad/21.jpg
+              (<sitio>/<código>/<clasificación>/<pk>.<extensión>)
+```
+
+Reglas:
+
+- El nombre que sigue al segundo `:` es el **nombre literal del campo
+  multipart** (`idEstablecimiento`), no una clave canónica `BODY.*` —
+  `file-service` lo busca tal cual entre los campos de texto de la
+  misma petición (ver `ReenvioController`). Mismo patrón de
+  identificador que la clasificación: empieza con letra, luego
+  letras/dígitos/`_`.
+- Un código que no exista en `testablecimiento.codigo` (o que el campo
+  ni siquiera llegue) responde `400` **antes** de subir nada a S3 —
+  sin este chequeo, cualquier texto que mandara el cliente terminaría
+  siendo una "carpeta" nueva en el bucket sin relación real con ningún
+  establecimiento.
+- El campo de establecimiento sólo tiene efecto si HAY clasificación
+  (`FILE:actividad:idEstablecimiento`, no `FILE::idEstablecimiento`) —
+  sin clasificación no hay carpeta que anteceda.
+- Es opcional incluso en una clasificación de las que históricamente sí
+  llevan establecimiento: declarar sólo `FILE:actividad` (sin el
+  tercer componente) sigue siendo válido, sólo que la clave nueva no
+  llevará ese segmento — es decisión de quien configura el catálogo,
+  no algo que el sistema fuerce por el nombre de la clasificación.
+
+## 7. Qué tiene que estar configurado ANTES de que esto funcione
 
 | Requisito | Dónde se configura | Si falta |
 |---|---|---|
@@ -164,7 +257,7 @@ Reglas:
 | El campo declarado `FILE` en `param_types` (si se quiere restringir) | `/admin/query-catalog` → "Tipos de parámetros" | Sin declarar = permisivo (no rompe, pero tampoco valida) |
 | Rol del usuario con binding `role_query` a esa query (si no es `publicEnd`) | `/admin/query-catalog` → modal "Roles" | `403` en el paso 9 (lo devuelve query-service, no file-service) |
 
-## 7. Límites actuales
+## 8. Límites actuales
 
 - **No hay `FILE[]`** — un campo con varios archivos (`TransformadorMultipart`
   ya soporta "un binario → id suelto, varios → lista de ids") no tiene
@@ -178,3 +271,9 @@ Reglas:
   content-type exacto al servir la imagen de vuelta (`GET /files/view/{id}`),
   puede pasarlo explícito con `?mimeType=image/jpeg` — ver
   [`DownloadController`](../file-service/src/main/java/com/co/eurekatic/files/DownloadController.java).
+- **Un solo segmento de establecimiento, sin más profundidad** — las
+  clasificaciones de reporte (`informeFinal`, `certificacion`,
+  `informePeriodo`) necesitan además año/periodo y no están cubiertas
+  (ver sección 6). No hay tampoco forma de reproducir el id final
+  histórico salvo para `escudo` (pk_establecimiento) — toda fila
+  nueva usa su propio `pk_tarchivo`.
