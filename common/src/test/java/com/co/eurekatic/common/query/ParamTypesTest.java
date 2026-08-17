@@ -287,4 +287,16 @@ class ParamTypesTest {
                 .contains("perfilUsuario");
         assertThat(ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS).doesNotContain("perfilUsuario");
     }
+
+    /**
+     * V67 — PUBLIC_FILE_CLASSIFICATIONS es la puerta de
+     * {@code GET /files/public/**}: nada de datos por-usuario o
+     * por-establecimiento puede colar ahí.
+     */
+    @Test
+    void publicFileClassifications_neverOverlapsEstablishmentScoped() {
+        assertThat(ParamTypes.PUBLIC_FILE_CLASSIFICATIONS)
+                .doesNotContainAnyElementsOf(ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS)
+                .doesNotContain("perfilUsuario");
+    }
 }

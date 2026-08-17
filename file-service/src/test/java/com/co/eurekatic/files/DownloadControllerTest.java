@@ -4,9 +4,11 @@ import com.co.eurekatic.common.security.AuthPrincipal;
 import com.co.eurekatic.common.security.JwtProperties;
 import com.co.eurekatic.common.security.JwtTokenService;
 import io.jsonwebtoken.JwtException;
+import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.web.servlet.HandlerMapping;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.http.AbortableInputStream;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
@@ -541,6 +543,117 @@ class DownloadControllerTest {
 
         var respuesta = controller(jwt, repo, mock(AlmacenObjetos.class), mock(ViewTokenService.class))
                 .descargar(TOKEN_INTERNO, null, 1L, "no-es-un-media-type");
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(400);
+    }
+
+    // ---------- V67: clasificacionDe ----------
+
+    @Test
+    void clasificacionDe_extraeElSegmentoAntesDelNombreDeArchivo() {
+        assertThat(DownloadController.clasificacionDe("ACADEMICO_VALLEDUPAR/graficaCarita/489905.png"))
+                .isEqualTo("graficaCarita");
+        // Sin sitio delante: sigue siendo el penúltimo segmento.
+        assertThat(DownloadController.clasificacionDe("graficaCarita/489905.png"))
+                .isEqualTo("graficaCarita");
+        // Con establecimiento de por medio: el penúltimo sigue siendo
+        // la clasificación real, no el establecimiento.
+        assertThat(DownloadController.clasificacionDe(
+                "ACADEMICO_VALLEDUPAR/120001003751/actividad/463900.pdf"))
+                .isEqualTo("actividad");
+    }
+
+    /** Sin separador no hay clasificación que mirar — nunca es pública. */
+    @Test
+    void clasificacionDe_sinSeparadorDevuelveNull() {
+        assertThat(DownloadController.clasificacionDe("489905.png")).isNull();
+        assertThat(DownloadController.clasificacionDe("")).isNull();
+    }
+
+    // ---------- V67: GET /files/public/** ----------
+
+    private static HttpServletRequest peticionPublica(String rutaCompleta) {
+        var peticion = mock(HttpServletRequest.class);
+        when(peticion.getAttribute(HandlerMapping.PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE))
+                .thenReturn(rutaCompleta);
+        return peticion;
+    }
+
+    /** Cualquier clasificación fuera del allowlist es 404, sin tocar ni la BD ni S3. */
+    @Test
+    void publico_conClasificacionNoPublicaEs404() {
+        var repo = mock(ArchivoRepository.class);
+        var almacen = mock(AlmacenObjetos.class);
+
+        var respuesta = controller(mock(JwtTokenService.class), repo, almacen, mock(ViewTokenService.class))
+                .publico(peticionPublica("/files/public/ACADEMICO_VALLEDUPAR/120001003751/actividad/463900.pdf"), null);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
+        verifyNoInteractions(repo);
+        verifyNoInteractions(almacen);
+    }
+
+    /** Sin ruta bajo el prefijo (o vacía) — 404, sin tocar nada. */
+    @Test
+    void publico_sinClaveEs404() {
+        var repo = mock(ArchivoRepository.class);
+
+        var respuesta = controller(mock(JwtTokenService.class), repo)
+                .publico(peticionPublica("/files/public/"), null);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
+        verifyNoInteractions(repo);
+    }
+
+    /** Clasificación pública pero sin fila activa con esa clave exacta — 404. */
+    @Test
+    void publico_conClasificacionPublicaPeroSinFilaActivaEs404() {
+        var repo = mock(ArchivoRepository.class);
+        when(repo.buscarActivoPorClave("ACADEMICO_VALLEDUPAR/graficaCarita/489905.png"))
+                .thenReturn(Optional.empty());
+
+        var respuesta = controller(mock(JwtTokenService.class), repo)
+                .publico(peticionPublica("/files/public/ACADEMICO_VALLEDUPAR/graficaCarita/489905.png"), null);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(404);
+    }
+
+    /**
+     * El caso central: clasificación pública + fila activa → 200, SIN
+     * ningún JWT ni token de vista de por medio — ni siquiera se
+     * construye un controller con credenciales, a propósito.
+     */
+    @Test
+    void publico_sirveElArchivoSinNingunaCredencial() {
+        var repo = mock(ArchivoRepository.class);
+        var almacen = mock(AlmacenObjetos.class);
+        String clave = "ACADEMICO_VALLEDUPAR/graficaCarita/489905.png";
+        when(repo.buscarActivoPorClave(clave)).thenReturn(Optional.of(
+                new ArchivoRepository.Archivo(489905L, "a.png", 3L, clave)));
+        GetObjectResponse respuestaS3 = GetObjectResponse.builder().contentLength(3L).build();
+        var stream = new ResponseInputStream<>(respuestaS3,
+                AbortableInputStream.create(new ByteArrayInputStream("abc".getBytes())));
+        when(almacen.abrir(clave)).thenReturn(stream);
+
+        var respuesta = controller(mock(JwtTokenService.class), repo, almacen, mock(ViewTokenService.class))
+                .publico(peticionPublica("/files/public/" + clave), null);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(200);
+        assertThat(respuesta.getHeaders().getContentType()).isEqualTo(MediaType.IMAGE_PNG);
+        String cd = respuesta.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION);
+        assertThat(cd).startsWith("inline");
+    }
+
+    /** ?mimeType= inválido sigue respondiendo 400, igual que en descargar/ver. */
+    @Test
+    void publico_conMimeTypeInvalidoEs400() {
+        var repo = mock(ArchivoRepository.class);
+        String clave = "ACADEMICO_VALLEDUPAR/graficaCarita/489905.png";
+        when(repo.buscarActivoPorClave(clave)).thenReturn(Optional.of(
+                new ArchivoRepository.Archivo(489905L, "a.png", 3L, clave)));
+
+        var respuesta = controller(mock(JwtTokenService.class), repo)
+                .publico(peticionPublica("/files/public/" + clave), "no-es-un-media-type");
 
         assertThat(respuesta.getStatusCode().value()).isEqualTo(400);
     }
