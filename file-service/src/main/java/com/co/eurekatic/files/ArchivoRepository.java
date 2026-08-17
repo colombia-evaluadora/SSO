@@ -44,14 +44,29 @@ public class ArchivoRepository {
      * la usa para lo que sirve.
      */
     public long reservar(String nombre, long peso, String usuario) {
+        return reservar(nombre, peso, usuario, null);
+    }
+
+    /**
+     * Igual que {@link #reservar(String, long, String)}, pero además
+     * guarda {@code etiqueta} — la clasificación declarada en el
+     * catálogo ({@code FILE:perfilUsuario}, ver {@code ParamTypes.FILE})
+     * cuando el campo la trae. Consistente con las filas históricas
+     * migradas, que siempre tenían {@code etiqueta} poblada
+     * ({@code perfilUsuario}, {@code escudo}, {@code firmaMecanica}...);
+     * antes de esto, TODA fila nueva subida por file-service dejaba la
+     * columna en {@code NULL}.
+     */
+    public long reservar(String nombre, long peso, String usuario, String etiqueta) {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update("""
-                INSERT INTO %s.tarchivo (nombre, peso, fecha, created_by, created_at, active)
-                VALUES (:nombre, :peso, CURRENT_DATE, :usuario, CURRENT_TIMESTAMP, false)
+                INSERT INTO %s.tarchivo (nombre, peso, etiqueta, fecha, created_by, created_at, active)
+                VALUES (:nombre, :peso, :etiqueta, CURRENT_DATE, :usuario, CURRENT_TIMESTAMP, false)
                 """.formatted(schema),
                 new MapSqlParameterSource()
                         .addValue("nombre", nombre)
                         .addValue("peso", peso)
+                        .addValue("etiqueta", etiqueta)
                         .addValue("usuario", usuario),
                 keys, new String[] { "pk_tarchivo" });
         Number pk = keys.getKey();

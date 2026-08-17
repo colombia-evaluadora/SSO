@@ -15,6 +15,34 @@ export interface ParamTypesResponse {
    * para que ambos lados lean la misma convención.
    */
   requiredSuffix: string;
+  /**
+   * V63 — literal ({@code ":"}) que separa {@code FILE} de la
+   * clasificación que el autor escribe cuando declara un placeholder
+   * como archivo (p. ej. {@code "FILE:perfilUsuario"}). Sólo aplica
+   * cuando el tipo elegido es {@code FILE} — ver
+   * {@code ParamTypes.FILE_CLASSIFICATION_SEPARATOR} en el backend.
+   */
+  fileClassificationSeparator: string;
+  /**
+   * V65 — catálogo SUGERIDO de clasificaciones (revisado contra
+   * {@code TARCHIVO.etiqueta} en producción) para poblar el dropdown
+   * en vez de un input de texto libre a ciegas — ver
+   * {@code ParamTypes.KNOWN_FILE_CLASSIFICATIONS} en el backend. NO
+   * es una lista cerrada: el backend sigue aceptando cualquier valor
+   * con forma válida, así que el input permite escribir uno que no
+   * esté acá.
+   */
+  knownFileClassifications: string[];
+  /**
+   * V65 — subconjunto de {@code knownFileClassifications} cuyo layout
+   * histórico en S3 lleva el código de establecimiento como segmento
+   * de ruta — ver
+   * {@code ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS} en
+   * el backend. La UI lo usa para decidir si mostrar por defecto el
+   * input "campo de establecimiento" cuando el autor elige una de
+   * estas clasificaciones.
+   */
+  establishmentScopedFileClassifications: string[];
 }
 
 /**

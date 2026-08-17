@@ -1,0 +1,139 @@
+package com.co.eurekatic.files;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Component;
+import org.springframework.util.AntPathMatcher;
+
+import java.util.List;
+import java.util.Set;
+
+/**
+ * ¿Puede ESTE llamante ver/descargar ESTE archivo? Dos caminos,
+ * cualquiera basta:
+ *
+ * <ol>
+ *   <li><b>Privilegio de rol</b> — alguno de sus roles tiene un
+ *       binding {@code role_endpoint} para {@code GET
+ *       /files/view/{archivoId}} en el catálogo de {@code public}
+ *       (mismo mecanismo que {@code sso-admin}/{@code auth-center}
+ *       usan para sus propios endpoints, ver {@code
+ *       SsoAdminAccessManager}/{@code AuthCenterEndpointAccessService}).
+ *       Un rol con este binding ve CUALQUIER archivo, sin importar
+ *       de quién sea — es el nivel "superadmin / rol superior
+ *       administrativo".</li>
+ *   <li><b>Relación directa</b> — el archivo es "suyo": hoy sólo
+ *       sabemos resolver esto para fotos de perfil académicas
+ *       ({@code tusuario.fk_tarchivo}) y las de un funcionario
+ *       ligado a esa cuenta ({@code tfuncionario.fk_tarchivo} vía
+ *       {@code tfuncionario.fk_tusuario}). Cualquier otro archivo
+ *       (actividades, soportes, matrículas...) queda fuera de este
+ *       segundo camino hasta que se necesite — añadir un caso es
+ *       una cláusula más en {@link #esPropietario}, no un rediseño.</li>
+ * </ol>
+ *
+ * <p>No hay JPA aquí a propósito — ver el comentario en el {@code
+ * pom.xml} de file-service sobre por qué el módulo excluye {@code
+ * spring-boot-starter-data-jpa}. Esta clase habla SQL puro con
+ * {@link NamedParameterJdbcTemplate}, igual que {@link
+ * ArchivoRepository}, en vez de reusar el {@code EndpointRepository}
+ * de {@code common} (que es JPA).
+ */
+@Component
+public class FileAccessService {
+
+    private static final Logger log = LoggerFactory.getLogger(FileAccessService.class);
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final String schema;
+    private final AntPathMatcher pathMatcher = new AntPathMatcher();
+
+    public FileAccessService(NamedParameterJdbcTemplate jdbc,
+                             @Value("${files.schema:academico_test}") String schema) {
+        this.jdbc = jdbc;
+        this.schema = schema;
+    }
+
+    /**
+     * @param email correo del llamante (el {@code sub} del JWT). Nunca
+     *              null cuando este método se llama — el caso "sin JWT
+     *              de usuario" (catálogo con token interno, o token de
+     *              vista ya acuñado) ni siquiera pasa por aquí; ver
+     *              {@link DownloadController}.
+     */
+    public boolean puedeVer(long archivoId, String email, Set<String> roles) {
+        if (esPrivilegiado(roles)) {
+            return true;
+        }
+        return esPropietario(archivoId, email);
+    }
+
+    /**
+     * Igual chequeo, expuesto por separado porque {@code
+     * DownloadController} lo necesita también en {@code
+     * emitirTokenVista} — acuñar un token de vista es, en los
+     * hechos, otorgar el mismo acceso que verlo directamente.
+     */
+    private boolean esPrivilegiado(Set<String> roles) {
+        if (roles == null || roles.isEmpty()) {
+            return false;
+        }
+        List<Endpoint> bindings = jdbc.query("""
+                SELECT DISTINCT e.method, e.path
+                  FROM public.role_endpoint re
+                  JOIN public.role r ON r.id_role = re.role_id
+                  JOIN public.endpoint e ON e.id_endpoint = re.endpoint_id
+                 WHERE r.name IN (:roles)
+                """,
+                new MapSqlParameterSource().addValue("roles", roles),
+                (rs, n) -> new Endpoint(rs.getString("method"), rs.getString("path")));
+        return bindings.stream().anyMatch(e ->
+                "GET".equalsIgnoreCase(e.method())
+                        && pathMatcher.match(e.path(), "/files/view/{archivoId}"));
+    }
+
+    /**
+     * ¿Este archivo está ligado a la cuenta del llamante? El cruce es
+     * por email porque es lo único que el JWT trae — {@code
+     * tusuario.cuenta} no siempre coincide con el email del usuario
+     * de SSO (son dos espacios de identidad históricamente separados;
+     * confirmado contra la data: sólo una fracción de las cuentas SSO
+     * cruzan por email con {@code tusuario}), así que este camino da
+     * falso para cualquier llamante que no tenga fila propia en el
+     * catálogo académico — no es un bug, es el límite real de la
+     * data hoy.
+     */
+    private boolean esPropietario(long archivoId, String email) {
+        if (email == null || email.isBlank()) {
+            return false;
+        }
+        Integer encontrado = jdbc.queryForObject("""
+                SELECT count(*) FROM (
+                    SELECT 1
+                      FROM %1$s.tusuario u
+                     WHERE u.fk_tarchivo = :archivoId
+                       AND lower(u.cuenta) = lower(:email)
+                    UNION ALL
+                    SELECT 1
+                      FROM %1$s.tfuncionario f
+                      JOIN %1$s.tusuario u ON u.pk_tusuario = f.fk_tusuario
+                     WHERE f.fk_tarchivo = :archivoId
+                       AND lower(u.cuenta) = lower(:email)
+                ) propios
+                """.formatted(schema),
+                new MapSqlParameterSource()
+                        .addValue("archivoId", archivoId)
+                        .addValue("email", email),
+                Integer.class);
+        boolean propio = encontrado != null && encontrado > 0;
+        if (!propio) {
+            log.debug("archivo id={} no está ligado a la cuenta {}", archivoId, email);
+        }
+        return propio;
+    }
+
+    private record Endpoint(String method, String path) {}
+}
