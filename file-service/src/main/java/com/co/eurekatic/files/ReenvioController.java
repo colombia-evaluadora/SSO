@@ -127,7 +127,21 @@ public class ReenvioController {
             return ResponseEntity.notFound().build();
         }
 
-        String destino = catalogoBaseUrl + rutaDestino;
+        // V68 — para un destino `query`, rutaDestino YA es la ruta
+        // externa correcta (el cliente incluyó el serviceid como
+        // primer segmento — `resolverEnQueries` sólo lo usa para
+        // encontrar la fila, no lo transforma). Para un destino
+        // `endpoint`, en cambio, rutaDestino es la ruta INTERNA del
+        // controller (auth-center expone /register/funcionario sin
+        // ningún prefijo) — reenviar eso tal cual daba 404, porque el
+        // gateway sólo enruta bajo el prefijo real que ese
+        // microservicio registró (`microservice.requesturi`, p.ej.
+        // /api/auth/**). destinoResuelto.rutaExterna() ya viene
+        // corregida cuando hace falta (null = no había nada que
+        // corregir, usar rutaDestino como siempre).
+        String rutaReenvio = destinoResuelto.rutaExterna() != null
+                ? destinoResuelto.rutaExterna() : rutaDestino;
+        String destino = catalogoBaseUrl + rutaReenvio;
 
         Map<String, String> campos = new LinkedHashMap<>();
         peticion.getParameterMap().forEach((k, v) -> {

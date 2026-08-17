@@ -359,6 +359,24 @@ la CUENTA (`TUSUARIO.fk_tarchivo`, mismo destino que
 `fn_fun_actualizar` usa vía `p_fk_tarchivo_foto`), no algo ligado a un
 establecimiento.
 
+**Bug encontrado al probar esto en vivo (V68), ya corregido**:
+`endpoint.path` guarda la ruta INTERNA del controller
+(`/register/funcionario`, sin prefijo — es el mismo string que el
+propio `auth-center` usa en su `SecurityConfig`, así que no se puede
+tocar). Pero el gateway sólo enruta a `auth-center` bajo el prefijo
+que su fila de `microservice` declara en `requesturi`
+(`/api/auth/**`) — reenviar a `catalogoBaseUrl + rutaDestino` tal
+cual (lo que ya funcionaba para `query`, porque ahí el cliente
+incluye el `serviceid` como primer segmento) daba `404`, porque le
+faltaba el segmento `/auth`.
+
+`FileDestinationAccessService#rutaExternaDe` calcula la ruta externa
+correcta a partir de `microservice.requesturi` (le quita el `/api`
+inicial y el comodín final, y antepone el segmento que sobra al
+`endpoint.path`), y `ReenvioController` reenvía ahí en vez de a
+`rutaDestino` tal cual cuando esa corrección existe. Para `query` no
+cambia nada — nunca hace falta corregir.
+
 ### Caso real: crear/editar establecimiento — el escudo
 
 `POST /establecimientos` y `PATCH /establecimientos/:ID` sí son

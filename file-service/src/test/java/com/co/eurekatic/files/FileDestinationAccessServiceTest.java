@@ -434,4 +434,82 @@ class FileDestinationAccessServiceTest {
 
         assertThat(destino.campos()).doesNotContain("BODY.OTROCAMPO");
     }
+
+    // ---------- V68: rutaExternaDe (el bug real: forward URL de endpoints) ----------
+
+    @Test
+    void rutaExternaDe_anteponeElSegmentoExtraDelMicroservicio() {
+        assertThat(FileDestinationAccessService.rutaExternaDe("/register/funcionario", "/api/auth/**"))
+                .isEqualTo("/auth/register/funcionario");
+    }
+
+    @Test
+    void rutaExternaDe_conVariosAsteriscosOSoloUno() {
+        assertThat(FileDestinationAccessService.rutaExternaDe("/role", "/api/sso-admin/**"))
+                .isEqualTo("/sso-admin/role");
+        assertThat(FileDestinationAccessService.rutaExternaDe("/role", "/api/sso-admin/*"))
+                .isEqualTo("/sso-admin/role");
+    }
+
+    /** requesturi sin segmento extra ("/api/**" a secas) deja la ruta tal cual. */
+    @Test
+    void rutaExternaDe_sinSegmentoExtraDejaLaRutaIgual() {
+        assertThat(FileDestinationAccessService.rutaExternaDe("/register/funcionario", "/api/**"))
+                .isEqualTo("/register/funcionario");
+    }
+
+    @Test
+    void rutaExternaDe_requestUriNuloOBlancoDevuelveNull() {
+        assertThat(FileDestinationAccessService.rutaExternaDe("/register/funcionario", null)).isNull();
+        assertThat(FileDestinationAccessService.rutaExternaDe("/register/funcionario", " ")).isNull();
+    }
+
+    /** Formato inesperado (no empieza por /api) — mejor no adivinar. */
+    @Test
+    void rutaExternaDe_requestUriSinPrefijoApiDevuelveNull() {
+        assertThat(FileDestinationAccessService.rutaExternaDe("/register/funcionario", "/auth/**")).isNull();
+    }
+
+    /**
+     * El caso real que motivó V68: un endpoint enlazado a un
+     * microservicio cuyo {@code requesturi} agrega un segmento extra
+     * — {@code resolverDestino} tiene que devolver esa ruta corregida,
+     * no la interna.
+     */
+    @Test
+    void unEndpointEnlazadoAUnMicroservicioConSegmentoExtraCorrigeLaRutaExterna() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        var fila = new java.util.LinkedHashMap<String, String>();
+        fila.put("path", "/register/funcionario");
+        fila.put("param_types", "{\"BODY.FKTARCHIVOFOTO\":\"FILE:perfilUsuario\"}");
+        fila.put("requesturi", "/api/auth/**");
+        stubFilas(jdbc, "public.endpoint", fila);
+
+        var destino = service(jdbc).resolverDestino("POST", "/register/funcionario");
+
+        assertThat(destino.rutaExterna()).isEqualTo("/auth/register/funcionario");
+    }
+
+    /** Sin microservicio enlazado (LEFT JOIN sin match, requesturi NULL) — rutaExterna null, comportamiento de siempre. */
+    @Test
+    void unEndpointSinMicroservicioEnlazadoNoCorrigeNada() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubEndpoint(jdbc, "/algo-sin-microservicio");
+
+        var destino = service(jdbc).resolverDestino("POST", "/algo-sin-microservicio");
+
+        assertThat(destino.rutaExterna()).isNull();
+    }
+
+    /** query nunca fija rutaExterna — el cliente ya incluyó el serviceid, no hay nada que corregir. */
+    @Test
+    void unaQueryNuncaFijaRutaExterna() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubSinEndpoints(jdbc);
+        stubQuery(jdbc, "/funcionario", "{}");
+
+        var destino = service(jdbc).resolverDestino("POST", "/eval-col/funcionario");
+
+        assertThat(destino.rutaExterna()).isNull();
+    }
 }
