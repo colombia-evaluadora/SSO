@@ -217,6 +217,20 @@ public class FileDestinationAccessService {
      * sigue comportándose exactamente igual: {@link #destinoDe}
      * trata un JSON vacío como "nunca migrada al tipado", permisivo.
      *
+     * <p>V68 — además calcula {@link Destino#rutaExterna}, porque
+     * {@code endpoint.path} NO es la ruta que el gateway reconoce. Es
+     * la ruta INTERNA del propio controller ({@code auth-center}
+     * expone {@code /register/funcionario} tal cual, sin prefijo —
+     * su propio {@code SecurityConfig} matchea exactamente ese string,
+     * así que {@code endpoint.path} tiene que seguir siendo ese
+     * mismo valor). El gateway, en cambio, sólo enruta bajo el
+     * prefijo que ese microservicio registró en
+     * {@code microservice.requesturi} ({@code /api/auth/**} para
+     * auth-center) — reenviar a {@code catalogoBaseUrl + rutaDestino}
+     * tal cual (lo que ya funciona para {@code query}, porque ahí el
+     * propio cliente incluye el {@code serviceid} como primer
+     * segmento) da 404: falta el segmento {@code /auth} de por medio.
+     *
      * <p>{@code null} (no {@code Destino.NO_REGISTRADO}) si ninguna
      * fila de {@code endpoint} matchea — así {@link #resolverDestino}
      * sabe que tiene que seguir mirando {@code query} en vez de
@@ -224,18 +238,57 @@ public class FileDestinationAccessService {
      */
     private Destino resolverEnEndpoints(String metodo, String ruta) {
         List<FilaEndpoint> filas = jdbc.query("""
-                SELECT path, param_types FROM public.endpoint WHERE method = :metodo
+                SELECT e.path, e.param_types, m.requesturi
+                  FROM public.endpoint e
+                  LEFT JOIN public.endpoint_microservice em ON em.endpoint_id = e.id_endpoint
+                  LEFT JOIN public.microservice m ON m.id_microservice = em.microservice_id
+                 WHERE e.method = :metodo
                 """,
                 new MapSqlParameterSource().addValue("metodo", metodo),
-                (rs, n) -> new FilaEndpoint(rs.getString("path"), rs.getString("param_types")));
+                (rs, n) -> new FilaEndpoint(rs.getString("path"), rs.getString("param_types"),
+                        rs.getString("requesturi")));
         return filas.stream()
                 .filter(f -> antMatcher.match(f.path(), ruta))
                 .findFirst()
-                .map(f -> destinoDe(f.paramTypesJson()))
+                .map(f -> destinoDe(f.paramTypesJson())
+                        .conRutaExterna(rutaExternaDe(f.path(), f.requestUri())))
                 .orElse(null);
     }
 
-    private record FilaEndpoint(String path, String paramTypesJson) {}
+    /**
+     * V68 — {@code requestUri} es {@code microservice.requesturi}
+     * ({@code "/api/auth/**"}, {@code "/api/sso-admin/**"}...): el
+     * prefijo bajo el que el gateway enruta a ESE microservicio.
+     * {@code endpointPath} es la ruta interna del controller
+     * ({@code "/register/funcionario"}). El resultado es lo que hay
+     * que pegarle a {@code files.catalog-base-url} (que YA termina en
+     * {@code /api}) para llegar de verdad: se le quita a
+     * {@code requestUri} el {@code /api} inicial y el comodín final,
+     * dejando sólo el segmento EXTRA que ese microservicio agrega
+     * ({@code "/auth"}), y se antepone a {@code endpointPath}.
+     *
+     * <p>{@code null} si {@code requestUri} viene vacío (el endpoint
+     * no está enlazado a ningún microservicio, o esa columna no está
+     * poblada) o no empieza por {@code "/api"} (formato inesperado —
+     * mejor no adivinar y dejar que {@link #resolverEnEndpoints}
+     * caiga al comportamiento de siempre, {@code endpointPath} tal
+     * cual). Con requestUri {@code "/api/**"} (sin segmento extra) da
+     * cadena vacía, así que el resultado es {@code endpointPath} sin
+     * cambios — mismo comportamiento que antes de V68.
+     */
+    static String rutaExternaDe(String endpointPath, String requestUri) {
+        if (requestUri == null || requestUri.isBlank()) {
+            return null;
+        }
+        String sinComodin = requestUri.replaceAll("/\\*+$", "");
+        if (!sinComodin.startsWith("/api")) {
+            return null;
+        }
+        String prefijoExtra = sinComodin.substring("/api".length());
+        return prefijoExtra + endpointPath;
+    }
+
+    private record FilaEndpoint(String path, String paramTypesJson, String requestUri) {}
 
     /**
      * {@code rutaDestino} trae el {@code serviceid} del microservicio
@@ -406,24 +459,44 @@ public class FileDestinationAccessService {
      *                           entrada para los campos que
      *                           efectivamente declararon el tercer
      *                           componente.
+     * @param rutaExterna        (V68) la ruta a la que {@code ReenvioController}
+     *                           debe reenviar de verdad, si es distinta
+     *                           de la que el cliente pidió — ver
+     *                           {@link #rutaExternaDe}. {@code null}
+     *                           para {@code query} (el cliente ya
+     *                           incluye el {@code serviceid}, no hace
+     *                           falta corregir nada) y para cualquier
+     *                           {@code endpoint} sin microservicio
+     *                           enlazado o con {@code requesturi} en
+     *                           un formato inesperado — en esos casos
+     *                           {@code ReenvioController} sigue usando
+     *                           la ruta que el cliente pidió, tal cual
+     *                           hacía antes de V68.
      */
     public record Destino(boolean registrado, boolean restringeCampos,
                           Set<String> campos, Set<String> camposObligatorios,
                           Map<String, String> clasificaciones,
-                          Map<String, String> camposEstablecimiento) {
+                          Map<String, String> camposEstablecimiento,
+                          String rutaExterna) {
 
         public static final Destino NO_REGISTRADO =
-                new Destino(false, false, Set.of(), Set.of(), Map.of(), Map.of());
+                new Destino(false, false, Set.of(), Set.of(), Map.of(), Map.of(), null);
 
         static Destino sinRestriccionDeCampos() {
-            return new Destino(true, false, Set.of(), Set.of(), Map.of(), Map.of());
+            return new Destino(true, false, Set.of(), Set.of(), Map.of(), Map.of(), null);
         }
 
         static Destino conCamposDeArchivo(Set<String> campos, Set<String> obligatorios,
                                           Map<String, String> clasificaciones,
                                           Map<String, String> camposEstablecimiento) {
             return new Destino(true, true, Set.copyOf(campos), Set.copyOf(obligatorios),
-                    Map.copyOf(clasificaciones), Map.copyOf(camposEstablecimiento));
+                    Map.copyOf(clasificaciones), Map.copyOf(camposEstablecimiento), null);
+        }
+
+        /** V68 — copia este {@code Destino} con {@link #rutaExterna} fijado. */
+        Destino conRutaExterna(String rutaExterna) {
+            return new Destino(registrado, restringeCampos, campos, camposObligatorios,
+                    clasificaciones, camposEstablecimiento, rutaExterna);
         }
     }
 }
