@@ -471,13 +471,21 @@ BEGIN
     --    usuario -- evita acumular basura si /register/funcionario se
     --    llama dos veces antes de enlazar la primera.
     -- ---------------------------------------------------------------------
+    -- REV3: acotado a los ultimos 5 minutos -- antes bloqueaba cualquier
+    -- pendiente sin importar hace cuanto, lo que con datos migrados (todos
+    -- con FK_ESTABLECIMIENTO NULL, nunca retro-llenado) bloqueaba
+    -- incorrectamente a cualquier usuario viejo que intentara registrarse
+    -- en un EE nuevo. La intencion original (evitar doble click / doble
+    -- llamada seguida a /register/funcionario) sigue cubierta: un
+    -- pendiente de hace mas de 5 minutos ya no cuenta como sospechoso.
     IF EXISTS (
         SELECT 1 FROM academico_test.TFUNCIONARIO
          WHERE FK_TUSUARIO         = v_pk_usuario
            AND FK_ESTABLECIMIENTO IS NULL
            AND ACTIVE              = TRUE
+           AND CREATED_AT          >= CURRENT_TIMESTAMP - INTERVAL '5 minutes'
     ) THEN
-        RAISE EXCEPTION 'el usuario (%) ya tiene un TFUNCIONARIO pendiente de enlazar a un establecimiento', v_pk_usuario
+        RAISE EXCEPTION 'el usuario (%) ya tiene un TFUNCIONARIO pendiente de enlazar a un establecimiento (creado hace menos de 5 minutos)', v_pk_usuario
             USING ERRCODE = '23505';
     END IF;
 
@@ -991,9 +999,14 @@ COMMENT ON FUNCTION academico_test.fn_sede_usuario_soft_delete(BIGINT, BIGINT)
 --   fn_usu_crear/fn_fun_crear, fuera de alcance (las usa auth-center via
 --   JDBC posicional).
 -- ---------------------------------------------------------------------------
+-- REV3: renombra el 2do parametro de p_fk_usuario a p_pk_funcionario --
+-- PostgreSQL no permite renombrar un parametro via CREATE OR REPLACE
+-- aunque el tipo no cambie, hace falta el DROP explicito.
+DROP FUNCTION IF EXISTS academico_test.fn_fun_enlazar_establecimiento(BIGINT, BIGINT, BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_fun_enlazar_establecimiento(
     p_pk_usuario_solicitante  BIGINT,
-    p_fk_usuario              BIGINT,  -- PK_TUSUARIO devuelto por /register/funcionario (pkTusuario)
+    p_pk_funcionario          BIGINT,  -- PK_TFUNCIONARIO devuelto por /register/funcionario (pkFuncionario)
     p_fk_establecimiento      BIGINT
 )
 RETURNS BIGINT  -- PK_TFUNCIONARIO enlazado
@@ -1015,8 +1028,8 @@ BEGIN
         RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
             USING ERRCODE = '22023';
     END IF;
-    IF p_fk_usuario IS NULL OR p_fk_usuario <= 0 THEN
-        RAISE EXCEPTION 'p_fk_usuario es obligatorio y debe ser > 0'
+    IF p_pk_funcionario IS NULL OR p_pk_funcionario <= 0 THEN
+        RAISE EXCEPTION 'p_pk_funcionario es obligatorio y debe ser > 0'
             USING ERRCODE = '22023';
     END IF;
     IF v_fk_establecimiento IS NULL THEN
@@ -1068,16 +1081,20 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
+    -- REV3: recibe el PK_TFUNCIONARIO exacto devuelto por /register/funcionario
+    -- (antes lo buscaba por FK_TUSUARIO + FK_ESTABLECIMIENTO IS NULL LIMIT 1,
+    -- ambiguo si llegara a haber mas de un TFUNCIONARIO pendiente a la vez
+    -- para el mismo usuario). El IS NULL se mantiene como chequeo de
+    -- seguridad: no permite re-enlazar un TFUNCIONARIO que ya tiene EE.
     SELECT PK_TFUNCIONARIO
       INTO v_pk_funcionario
       FROM academico_test.TFUNCIONARIO
-     WHERE FK_TUSUARIO = p_fk_usuario
+     WHERE PK_TFUNCIONARIO = p_pk_funcionario
        AND FK_ESTABLECIMIENTO IS NULL
-       AND ACTIVE = TRUE
-     LIMIT 1;
+       AND ACTIVE = TRUE;
 
     IF v_pk_funcionario IS NULL THEN
-        RAISE EXCEPTION 'No se encontro un TFUNCIONARIO pendiente de enlazar (sin FK_ESTABLECIMIENTO) para el usuario %', p_fk_usuario
+        RAISE EXCEPTION 'No existe un TFUNCIONARIO pendiente de enlazar (activo, sin FK_ESTABLECIMIENTO) con PK %', p_pk_funcionario
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -1092,7 +1109,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_fun_enlazar_establecimiento(BIGINT, BIGINT, BIGINT)
-    IS 'Enlaza el TFUNCIONARIO pendiente (FK_ESTABLECIMIENTO NULL) de un usuario al EE elegido en el select del front. p_fk_establecimiento es OPCIONAL (REV2): si llega NULL, se resuelve via fn_resolver_establecimiento_unico (V50) contra el SOLICITANTE -- el select de EE del front solo aparece para super-admin, asi que rector/secretaria/jefe de sistema dependen de esta resolucion automatica. Si no se pudo resolver => 22023. Gate compuesto (validado contra el EE ya resuelto): super-admin, rector/secretaria del EE, o jefe de sistema (rol 8) en alguna sede del EE. P0002 si no hay TFUNCIONARIO pendiente para ese usuario.';
+    IS 'REV3: enlaza el TFUNCIONARIO pendiente (FK_ESTABLECIMIENTO NULL) al EE elegido en el select del front, identificandolo por su PK_TFUNCIONARIO exacto (p_pk_funcionario, el que devuelve /register/funcionario) en vez de buscarlo por FK_TUSUARIO. p_fk_establecimiento es OPCIONAL: si llega NULL, se resuelve via fn_resolver_establecimiento_unico (V50) contra el SOLICITANTE -- el select de EE del front solo aparece para super-admin, asi que rector/secretaria/jefe de sistema dependen de esta resolucion automatica. Si no se pudo resolver => 22023. Gate compuesto (validado contra el EE ya resuelto): super-admin, rector/secretaria del EE, o jefe de sistema (rol 8) en alguna sede del EE. P0002 si el PK no corresponde a un TFUNCIONARIO activo y pendiente (sin EE) -- incluye el caso de intentar re-enlazar uno que ya tiene EE.';
 
 
 -- ---------------------------------------------------------------------------
@@ -1973,6 +1990,15 @@ DROP FUNCTION IF EXISTS academico_test.fn_usu_empleados_contar(
     VARCHAR, BIGINT[], BIGINT[], VARCHAR[], BIGINT
 );
 
+-- REV3: ya no exige FK_ESTABLECIMIENTO NOT NULL (ese campo no discrimina
+-- relevancia para el listado, existe para el flujo de alta/enlazar) y
+-- reemplaza el patron "ee_accesibles" (solo rector/secretaria) por
+-- "funcionarios_ee": resuelve el EE del solicitante via
+-- fn_resolver_establecimiento_unico (V50, cubre rector/secretaria/jefe de
+-- sistema) y ve funcionarios de ese EE que sean rector, secretaria, tengan
+-- FK_ESTABLECIMIENTO = ese EE, o tengan al menos un TSEDE_USUARIO activo en
+-- una sede de ese EE (asi el funcionario aun no tenga rol asignado, o su
+-- FK_ESTABLECIMIENTO no este al dia).
 CREATE OR REPLACE FUNCTION academico_test.fn_usu_empleados_contar(
     p_pk_usuario_solicitante  BIGINT,
     p_search        VARCHAR    DEFAULT NULL,
@@ -1987,19 +2013,25 @@ STABLE
 AS $$
 DECLARE
     v_total BIGINT;
+    v_es_super BOOLEAN := academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante);
+    v_fk_establecimiento BIGINT := academico_test.fn_resolver_establecimiento_unico(p_pk_usuario_solicitante);
 BEGIN
     IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
         RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
             USING ERRCODE = '22023';
     END IF;
 
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
+    IF NOT v_es_super AND v_fk_establecimiento IS NULL THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    IF v_es_super THEN
         SELECT COUNT(DISTINCT f.PK_TFUNCIONARIO)
           INTO v_total
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TUSUARIO      u ON u.PK_TUSUARIO = f.FK_TUSUARIO
          WHERE f.ACTIVE = TRUE
-           AND f.FK_ESTABLECIMIENTO IS NOT NULL
            AND (NULLIF(TRIM(p_search), '') IS NULL
                 OR u.PRIMER_NOMBRE || ' ' || COALESCE(u.SEGUNDO_NOMBRE,'') ILIKE '%' || p_search || '%'
                 OR u.PRIMER_APELLIDO || ' ' || COALESCE(u.SEGUNDO_APELLIDO,'') ILIKE '%' || p_search || '%'
@@ -2045,21 +2077,31 @@ BEGIN
         RETURN v_total;
     END IF;
 
-    WITH ee_accesibles AS (
-        SELECT e.PK_ESTABLECIMIENTO
+    WITH funcionarios_ee AS (
+        SELECT e.FK_TFUNCIONARIO_RECTOR AS pk_tfuncionario
           FROM academico_test.TESTABLECIMIENTO e
-          JOIN academico_test.TFUNCIONARIO  frec ON frec.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-         WHERE e.ACTIVE = TRUE AND frec.ACTIVE = TRUE AND frec.FK_TUSUARIO = p_pk_usuario_solicitante
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento AND e.ACTIVE = TRUE
+           AND e.FK_TFUNCIONARIO_RECTOR IS NOT NULL
         UNION
-        SELECT e.PK_ESTABLECIMIENTO
+        SELECT e.FK_TFUNCIONARIO_SECRETARIA
           FROM academico_test.TESTABLECIMIENTO e
-          JOIN academico_test.TFUNCIONARIO  fsec ON fsec.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-         WHERE e.ACTIVE = TRUE AND fsec.ACTIVE = TRUE AND fsec.FK_TUSUARIO = p_pk_usuario_solicitante
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento AND e.ACTIVE = TRUE
+           AND e.FK_TFUNCIONARIO_SECRETARIA IS NOT NULL
+        UNION
+        SELECT f2.PK_TFUNCIONARIO
+          FROM academico_test.TFUNCIONARIO f2
+         WHERE f2.FK_ESTABLECIMIENTO = v_fk_establecimiento AND f2.ACTIVE = TRUE
+        UNION
+        SELECT f3.PK_TFUNCIONARIO
+          FROM academico_test.TFUNCIONARIO f3
+          JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f3.FK_TUSUARIO AND su.ACTIVE = TRUE
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE AND s.ACTIVE = TRUE
+         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento AND f3.ACTIVE = TRUE
     )
     SELECT COUNT(DISTINCT f.PK_TFUNCIONARIO)
       INTO v_total
       FROM academico_test.TFUNCIONARIO f
-      JOIN ee_accesibles ee ON ee.PK_ESTABLECIMIENTO = f.FK_ESTABLECIMIENTO
+      JOIN funcionarios_ee fee ON fee.pk_tfuncionario = f.PK_TFUNCIONARIO
       JOIN academico_test.TUSUARIO      u ON u.PK_TUSUARIO = f.FK_TUSUARIO
      WHERE f.ACTIVE = TRUE
        AND (NULLIF(TRIM(p_search), '') IS NULL
@@ -2105,11 +2147,6 @@ BEGIN
                AND su5.FK_TLV_JORNADA = ANY(p_work_schedules)
        ));
 
-    IF v_total = 0 AND NOT EXISTS (SELECT 1 FROM ee_accesibles) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
-
     RETURN v_total;
 END;
 $$;
@@ -2117,7 +2154,7 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_usu_empleados_contar(
     BIGINT, VARCHAR, BIGINT[], BIGINT[], VARCHAR[], BIGINT
 )
-    IS 'Cuenta funcionarios (ya enlazados a un EE, FK_ESTABLECIMIENTO NOT NULL) activos aplicando los mismos filtros que fn_usu_empleados_listar (search, roles, work_schedules, statuses, campus_id). search: ILIKE parcial sobre nombre del funcionario (compuesto por nombres+apellidos) y numero de documento, tambien sobre nombres de sede y rol ligados a sus TSEDE_USUARIO activos. statuses: array de ''ACTIVE''/''SUSPENDED'' mapeado a TUSUARIO.ESTADO (''A''/''I''). Los filtros sobre TSEDE_USUARIO (roles, work_schedules, campus_id) se aplican como EXISTS sobre los registros activos del funcionario. Gate de autorizacion: super-admin (fn_puede_afectar_establecimiento) cuenta todos; cualquier otro solo cuenta funcionarios enlazados a un EE donde es rector o secretaria (patron ee_accesibles). Si no es super-admin y no es rector/secretaria de ningun EE => 42501. Usar junto con fn_usu_empleados_listar para armar { rows, pageCount, totalCount } en la capa Java. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52/V53).';
+    IS 'REV3: cuenta funcionarios activos aplicando los mismos filtros que fn_usu_empleados_listar (search, roles, work_schedules, statuses, campus_id). Ya NO exige FK_ESTABLECIMIENTO NOT NULL -- ese campo no discrimina relevancia para el listado (existe para el flujo de alta/enlazar), y excluirlo dejaba fuera datos migrados sin retro-llenar. Gate/scope: super-admin (fn_puede_afectar_establecimiento) cuenta TODOS los funcionarios activos, enlazados o no. Cualquier otro resuelve su EE via fn_resolver_establecimiento_unico (V50, cubre rector/secretaria/jefe de sistema) y cuenta funcionarios de ese EE segun CUALQUIERA de: (a) es el rector, (b) es la secretaria, (c) FK_ESTABLECIMIENTO apunta a ese EE, (d) tiene al menos un TSEDE_USUARIO activo en una sede de ese EE (asi el registro no tenga FK_ESTABLECIMIENTO al dia, o el funcionario aun no tenga rol asignado). Si no es super-admin y no se pudo resolver un EE unico => 42501. Usar junto con fn_usu_empleados_listar para armar { rows, pageCount, totalCount } en la capa Java. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52/V53).';
 
 
 -- ---------------------------------------------------------------------------
@@ -2154,6 +2191,12 @@ DROP FUNCTION IF EXISTS academico_test.fn_usu_empleados_listar(
     VARCHAR, BOOLEAN, INT, INT
 );
 
+-- REV3: mismo criterio que fn_usu_empleados_contar -- ya no exige
+-- FK_ESTABLECIMIENTO NOT NULL, y reemplaza "ee_accesibles" (solo rector/
+-- secretaria) por "funcionarios_ee" (rector, secretaria, FK_ESTABLECIMIENTO
+-- = EE resuelto, o al menos un TSEDE_USUARIO activo en una sede del EE
+-- resuelto via fn_resolver_establecimiento_unico, que ademas cubre jefe de
+-- sistema).
 CREATE OR REPLACE FUNCTION academico_test.fn_usu_empleados_listar(
     p_pk_usuario_solicitante BIGINT,
     p_search         VARCHAR    DEFAULT NULL,
@@ -2189,44 +2232,45 @@ DECLARE
     v_page_size  INT := LEAST(CASE WHEN p_page_size > 0 THEN p_page_size ELSE 10 END, 100);
     v_page_index INT := GREATEST(COALESCE(p_page_index, 0), 0);
     v_es_super   BOOLEAN := academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante);
+    v_fk_establecimiento BIGINT := academico_test.fn_resolver_establecimiento_unico(p_pk_usuario_solicitante);
 BEGIN
     IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
         RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
             USING ERRCODE = '22023';
     END IF;
 
-    IF NOT v_es_super AND NOT EXISTS (
-        SELECT 1
-          FROM academico_test.TESTABLECIMIENTO e
-          JOIN academico_test.TFUNCIONARIO  frec ON frec.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-         WHERE e.ACTIVE = TRUE AND frec.ACTIVE = TRUE AND frec.FK_TUSUARIO = p_pk_usuario_solicitante
-        UNION
-        SELECT 1
-          FROM academico_test.TESTABLECIMIENTO e
-          JOIN academico_test.TFUNCIONARIO  fsec ON fsec.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-         WHERE e.ACTIVE = TRUE AND fsec.ACTIVE = TRUE AND fsec.FK_TUSUARIO = p_pk_usuario_solicitante
-    ) THEN
+    IF NOT v_es_super AND v_fk_establecimiento IS NULL THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
 
     RETURN QUERY
-    WITH ee_accesibles AS (
-        SELECT e.PK_ESTABLECIMIENTO
+    WITH funcionarios_ee AS (
+        SELECT e.FK_TFUNCIONARIO_RECTOR AS pk_tfuncionario
           FROM academico_test.TESTABLECIMIENTO e
-          JOIN academico_test.TFUNCIONARIO  frec ON frec.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-         WHERE e.ACTIVE = TRUE AND frec.ACTIVE = TRUE AND frec.FK_TUSUARIO = p_pk_usuario_solicitante
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento AND e.ACTIVE = TRUE
+           AND e.FK_TFUNCIONARIO_RECTOR IS NOT NULL
         UNION
-        SELECT e.PK_ESTABLECIMIENTO
+        SELECT e.FK_TFUNCIONARIO_SECRETARIA
           FROM academico_test.TESTABLECIMIENTO e
-          JOIN academico_test.TFUNCIONARIO  fsec ON fsec.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-         WHERE e.ACTIVE = TRUE AND fsec.ACTIVE = TRUE AND fsec.FK_TUSUARIO = p_pk_usuario_solicitante
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento AND e.ACTIVE = TRUE
+           AND e.FK_TFUNCIONARIO_SECRETARIA IS NOT NULL
+        UNION
+        SELECT f2.PK_TFUNCIONARIO
+          FROM academico_test.TFUNCIONARIO f2
+         WHERE f2.FK_ESTABLECIMIENTO = v_fk_establecimiento AND f2.ACTIVE = TRUE
+        UNION
+        SELECT f3.PK_TFUNCIONARIO
+          FROM academico_test.TFUNCIONARIO f3
+          JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f3.FK_TUSUARIO AND su.ACTIVE = TRUE
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE AND s.ACTIVE = TRUE
+         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento AND f3.ACTIVE = TRUE
     ),
     base AS (
         -- Funcionarios activos cuyo TUSUARIO matchea search/estado y que
         -- tienen al menos un TSEDE_USUARIO activo que matchea los EXISTS
-        -- con roles/workSchedules/campusId. Enlazados a un EE (siempre) y,
-        -- si no es super-admin, solo a un EE de ee_accesibles.
+        -- con roles/workSchedules/campusId. Ya NO exige FK_ESTABLECIMIENTO
+        -- NOT NULL (ver comentario de la funcion).
         SELECT DISTINCT f.PK_TFUNCIONARIO, u.PK_TUSUARIO, u.IDENTIFICACION,
                u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE,
                u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO,
@@ -2234,8 +2278,7 @@ BEGIN
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TUSUARIO      u ON u.PK_TUSUARIO = f.FK_TUSUARIO
          WHERE f.ACTIVE = TRUE
-           AND f.FK_ESTABLECIMIENTO IS NOT NULL
-           AND (v_es_super OR f.FK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles))
+           AND (v_es_super OR f.PK_TFUNCIONARIO IN (SELECT pk_tfuncionario FROM funcionarios_ee))
            AND (NULLIF(TRIM(p_search), '') IS NULL
                 OR u.PRIMER_NOMBRE  || ' ' || COALESCE(u.SEGUNDO_NOMBRE,'')  ILIKE '%' || p_search || '%'
                 OR u.PRIMER_APELLIDO || ' ' || COALESCE(u.SEGUNDO_APELLIDO,'') ILIKE '%' || p_search || '%'
@@ -2376,7 +2419,7 @@ COMMENT ON FUNCTION academico_test.fn_usu_empleados_listar(
     BIGINT, VARCHAR, BIGINT[], BIGINT[], VARCHAR[], BIGINT,
     VARCHAR, BOOLEAN, INT, INT
 )
-    IS 'Lista funcionarios (enlazados a un EE, FK_ESTABLECIMIENTO NOT NULL) activos paginados segun los mismos filtros que fn_usu_empleados_contar (search, roles, work_schedules, statuses, campus_id). El row devuelto es la version aplanada del empleado: id, documento, nombres, apellidos, nombre completo, estado (''A''/''I'') y label (''ACTIVE''/''SUSPENDED''), jornada (la del TSEDE_USUARIO activo con PREDETERMINADO=1 si existe, si no la de menor ORDEN, NULL si no hay permisos), roles/sedes/estados_permisos agregados como JSONB array de objetos {id, nombre} o ''ACTIVO''/''INACTIVO'' segun corresponda. p_sort_campo/p_sort_desc representan sorting[0] ya resuelto (''name'' => nombre completo, ''document'' => IDENTIFICACION, ''status'' => ESTADO). p_page_index base 0; p_page_size se acota a (0,100]. Gate de autorizacion: super-admin ve todos; cualquier otro solo ve funcionarios enlazados a un EE donde es rector o secretaria (patron ee_accesibles); si no aplica ninguno => 42501. No calcula totalCount/pageCount: usar junto con fn_usu_empleados_contar. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52/V53).';
+    IS 'REV3: lista funcionarios activos paginados segun los mismos filtros que fn_usu_empleados_contar (search, roles, work_schedules, statuses, campus_id). Ya NO exige FK_ESTABLECIMIENTO NOT NULL. El row devuelto es la version aplanada del empleado: id, documento, nombres, apellidos, nombre completo, estado (A/I) y label (ACTIVE/SUSPENDED), jornada (la del TSEDE_USUARIO activo con PREDETERMINADO=1 si existe, si no la de menor ORDEN, NULL si no hay permisos), roles/sedes/estados_permisos agregados como JSONB array. p_sort_campo/p_sort_desc representan sorting[0] ya resuelto (name/document/status). p_page_index base 0; p_page_size se acota a (0,100]. Gate/scope: super-admin ve TODOS los funcionarios activos; cualquier otro resuelve su EE via fn_resolver_establecimiento_unico (V50, cubre rector/secretaria/jefe de sistema) y ve funcionarios de ese EE segun CUALQUIERA de: es el rector, es la secretaria, FK_ESTABLECIMIENTO apunta a ese EE, o tiene al menos un TSEDE_USUARIO activo en una sede de ese EE. Si no aplica ninguno => 42501. No calcula totalCount/pageCount: usar junto con fn_usu_empleados_contar. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52/V53).';
 
 
 -- ---------------------------------------------------------------------------

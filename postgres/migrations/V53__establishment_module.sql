@@ -717,6 +717,12 @@ COMMENT ON FUNCTION academico_test.fn_est_contar(BIGINT, VARCHAR, BIGINT[], BIGI
     IS 'Cuenta TESTABLECIMIENTO activos aplicando los mismos filtros que fn_est_listar (search/departamentos/municipios/estados). Gate de autorizacion: si el usuario pasa fn_puede_afectar_establecimiento cuenta todos los EE activos; en caso contrario solo cuenta los EE donde es rector O secretaria (FK_TFUNCIONARIO_RECTOR / FK_TFUNCIONARIO_SECRETARIA -> TFUNCIONARIO activo con FK_TUSUARIO = p_pk_usuario_solicitante, patron "ee_accesibles" igual que fn_sed_contar en V52). Si no es super-admin y no es rector/secretaria de ningun EE activo => 42501. Usar junto con fn_est_listar para armar { rows, pageCount, totalCount } en la capa Java. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52).';
 
 
+-- REV3: revierte el estado_codigo agregado en REV2 -- ya sobraba, el front
+-- termino usando fk_estado + estado_nombre directo de la fila (ver
+-- use-establishments.ts). Cambia la lista de columnas otra vez, hace falta
+-- el DROP explicito antes del CREATE OR REPLACE.
+DROP FUNCTION IF EXISTS academico_test.fn_est_listar(BIGINT, VARCHAR, BIGINT[], BIGINT[], BIGINT[], VARCHAR, BOOLEAN, INT, INT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_est_listar(
     p_pk_usuario_solicitante  BIGINT,
     p_search        VARCHAR DEFAULT NULL,
@@ -1176,7 +1182,7 @@ BEGIN
            AND ACTIVE = TRUE
          ORDER BY PK_TSEDE
     LOOP
-        PERFORM academico_test.fn_sed_soft_delete(v_pk_sede, p_pk_usuario_solicitante);
+        PERFORM academico_test.fn_sed_soft_delete(p_pk_usuario_solicitante, v_pk_sede);
         v_sedes := v_sedes + 1;
     END LOOP;
 
