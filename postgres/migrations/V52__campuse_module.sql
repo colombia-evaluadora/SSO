@@ -1566,30 +1566,125 @@ COMMENT ON FUNCTION academico_test.fn_sed_listar_paginado(
 
 
 -- ---------------------------------------------------------------------------
--- fn_sed_por_establecimiento
---   Catalogo de sedes (id + nombre) de un EE concreto, para selects del
---   front (p.ej. al vincular un funcionario a una sede del EE elegido).
---   Retorna: SETOF (pk_sede BIGINT, nombre VARCHAR) -- 0..N filas.
+-- fn_sed_por_establecimiento (REV2)
+--   Lista las TSEDE activas de UN establecimiento puntual — a diferencia de
+--   fn_sed_listar_todos (universo completo accesible al usuario), esta
+--   recibe el EE objetivo explicito. Pensada para el endpoint
+--   GET /establecimientos/:ID/sedes (id_query=137) que usara el modulo de
+--   otro compañero mas adelante (recibe la PK de un establecimiento,
+--   devuelve sus sedes).
+--
+--   REV2: la version anterior (V52 original) no tenia gate de autorizacion
+--   (cualquiera con acceso a la query podia listar sedes de CUALQUIER EE) y
+--   solo devolvia pk_sede+nombre. Ahora: gate igual al de fn_sed_buscar_por_pk
+--   / fn_est_buscar_por_pk (validado contra el EE objetivo puntual, no el
+--   universo completo) y mismo shape de columnas que fn_sed_listar_todos
+--   (dane/zona resuelta/barrio/comuna/direccion/telefono), para que sirva
+--   tanto de catalogo simple como de fuente para armar un `Campus` completo.
+--
+--   Gate: super-admin (fn_puede_afectar_establecimiento, roles 1-3) ve
+--   cualquier EE activo; rector o secretaria del EE objetivo (TFUNCIONARIO.
+--   ACTIVE=TRUE con PK_TFUNCIONARIO IN (FK_TFUNCIONARIO_RECTOR,
+--   FK_TFUNCIONARIO_SECRETARIA) y FK_TUSUARIO = p_pk_usuario_solicitante); o
+--   jefe de sistema (rol 8) con vinculacion activa (TSEDE_USUARIO.ACTIVE=TRUE)
+--   en alguna sede del EE objetivo. Cualquier otro caso => 42501.
+--
+--   Excepciones:
+--     SQLSTATE '22023' — p_pk_usuario_solicitante o p_pk_establecimiento
+--                        ausentes o <= 0.
+--     SQLSTATE 'P0002' — No existe TESTABLECIMIENTO activo con esa PK.
+--     SQLSTATE '42501' — Existe, pero el usuario no pasa el gate.
+--   Retorna: SETOF (pk_sede, codigo, nombre, fk_tlv_zona, zona_nombre,
+--            barrio, comuna, direccion, telefono, fk_establecimiento),
+--            ordenado por NOMBRE ASC, PK_TSEDE ASC. Solo ACTIVE=TRUE.
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_sed_por_establecimiento(BIGINT, BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_sed_por_establecimiento(
     p_pk_usuario_solicitante  BIGINT,
-    p_fk_establecimiento      BIGINT
+    p_pk_establecimiento      BIGINT
 )
 RETURNS TABLE (
-    pk_sede  BIGINT,
-    nombre   VARCHAR
+    pk_sede             BIGINT,
+    codigo              VARCHAR,
+    nombre              VARCHAR,
+    fk_tlv_zona         BIGINT,
+    zona_nombre         VARCHAR,
+    barrio              VARCHAR,
+    comuna              VARCHAR,
+    direccion           VARCHAR,
+    telefono            VARCHAR,
+    fk_establecimiento  BIGINT
 )
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $$
-    SELECT s.PK_TSEDE,
-           s.NOMBRE
+BEGIN
+    IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
+        RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+    IF p_pk_establecimiento IS NULL OR p_pk_establecimiento <= 0 THEN
+        RAISE EXCEPTION 'p_pk_establecimiento es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM academico_test.TESTABLECIMIENTO e
+         WHERE e.PK_ESTABLECIMIENTO = p_pk_establecimiento AND e.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No existe TESTABLECIMIENTO con PK_ESTABLECIMIENTO = %', p_pk_establecimiento
+            USING ERRCODE = 'P0002';
+    END IF;
+
+    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TESTABLECIMIENTO e
+          JOIN academico_test.TFUNCIONARIO f
+            ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+         WHERE e.PK_ESTABLECIMIENTO = p_pk_establecimiento
+           AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.FK_TESTABLECIMIENTO = p_pk_establecimiento
+           AND s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8
+           AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    RETURN QUERY
+    SELECT s.PK_TSEDE, s.CODIGO, s.NOMBRE, s.FK_TLV_ZONA, tlv.NOMBRE,
+           s.BARRIO, s.COMUNA, s.DIRECCION, s.TELEFONO, s.FK_TESTABLECIMIENTO
       FROM academico_test.TSEDE s
-     WHERE s.FK_TESTABLECIMIENTO = p_fk_establecimiento
+ LEFT JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = s.FK_TLV_ZONA
+     WHERE s.FK_TESTABLECIMIENTO = p_pk_establecimiento
        AND s.ACTIVE = TRUE
-     ORDER BY s.NOMBRE ASC,
-              s.PK_TSEDE ASC;
+     ORDER BY s.NOMBRE ASC, s.PK_TSEDE ASC;
+END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_sed_por_establecimiento(BIGINT, BIGINT)
-    IS 'Lista las TSEDE activas de un TESTABLECIMIENTO para selects del front. Retorna (pk_sede BIGINT, nombre VARCHAR). Solo ACTIVE=TRUE; orden estable por NOMBRE ASC, PK_TSEDE ASC. Sin gate de autorizacion (catalogo de lookup); p_pk_usuario_solicitante se conserva al inicio de la firma por simetria con el resto de funciones del esquema.';
+    IS 'Lista las TSEDE activas de UN establecimiento puntual (a diferencia de fn_sed_listar_todos, que trae el universo completo accesible al usuario). Columnas: mismo shape que fn_sed_listar_todos (pk_sede, codigo, nombre, zona resuelta, barrio, comuna, direccion, telefono, fk_establecimiento). Gate: super-admin, o rector/secretaria/jefe de sistema (rol 8) del EE objetivo puntual (P0002 si el EE no existe/esta inactivo; 42501 si no pasa el gate).';
+
+-- Registro en `query` (motor SSO): GET /establecimientos/:ID/sedes
+-- (id_query=137 en el ambiente de prueba — el id real depende del entorno).
+-- INSERT INTO query (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types)
+-- VALUES (
+--     '<uuid-generado>',
+--     'SELECT * FROM academico_test.fn_sed_por_establecimiento(
+--         public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+--         CAST(:PARAM.ID AS BIGINT)
+--     );',
+--     'postgres', false, false, '8', '/establecimientos/:ID/sedes', 'SELECT', 'GET',
+--     '{"PARAM.ID": "BIGINT"}'::jsonb
+-- );

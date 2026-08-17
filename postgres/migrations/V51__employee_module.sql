@@ -2197,6 +2197,15 @@ DROP FUNCTION IF EXISTS academico_test.fn_usu_empleados_listar(
 -- = EE resuelto, o al menos un TSEDE_USUARIO activo en una sede del EE
 -- resuelto via fn_resolver_establecimiento_unico, que ademas cubre jefe de
 -- sistema).
+--
+-- REV4: "Secretaria" no tenia fila propia en TROL (a diferencia de "Rector",
+-- PK_TROL=7) porque TESTABLECIMIENTO.FK_TFUNCIONARIO_SECRETARIA nunca paso
+-- por TROL/TSEDE_USUARIO -- se agrega solo para que el "roles" del listado
+-- (ver mas abajo) tenga de donde tomar la etiqueta.
+INSERT INTO academico_test.TROL (PK_TROL, NOMBRE, ESTADO, CODIGO, CREATED_BY, ACTIVE)
+SELECT 17, 'Secretaria', 'A', 'SECRETARIA', 'migracion', TRUE
+ WHERE NOT EXISTS (SELECT 1 FROM academico_test.TROL WHERE PK_TROL = 17);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_usu_empleados_listar(
     p_pk_usuario_solicitante BIGINT,
     p_search         VARCHAR    DEFAULT NULL,
@@ -2328,15 +2337,6 @@ BEGIN
     -- venga filtrado por una sola sede/rol).
     agregados AS (
         SELECT su.FK_TUSUARIO AS pk_usuario,
-               -- roles: lista unica {id, nombre}
-               COALESCE(
-                   (SELECT jsonb_agg(DISTINCT jsonb_build_object('id', r.PK_TROL, 'nombre', r.NOMBRE) ORDER BY jsonb_build_object('id', r.PK_TROL, 'nombre', r.NOMBRE))
-                      FROM academico_test.TSEDE_USUARIO su_r
-                      JOIN academico_test.TROL          r    ON r.PK_TROL = su_r.FK_TROL
-                     WHERE su_r.FK_TUSUARIO = su.FK_TUSUARIO
-                       AND su_r.ACTIVE      = TRUE),
-                   '[]'::jsonb
-               )                              AS roles_agg,
                COALESCE(
                    (SELECT jsonb_agg(DISTINCT jsonb_build_object('id', s.PK_TSEDE, 'nombre', s.NOMBRE) ORDER BY jsonb_build_object('id', s.PK_TSEDE, 'nombre', s.NOMBRE))
                       FROM academico_test.TSEDE_USUARIO su_s
@@ -2388,7 +2388,40 @@ BEGIN
            END)::VARCHAR      AS estado_label,
            jp.jornada_id,
            jp.jornada_nombre,
-           a.roles_agg,
+           -- roles: lista unica {id, nombre} de TSEDE_USUARIO, UNION un tag
+           -- sintetico "Rector"/"Secretaria" (PK_TROL 7/17) si el funcionario
+           -- es FK_TFUNCIONARIO_RECTOR/SECRETARIA de algun EE activo — antes
+           -- SOLO salia de TSEDE_USUARIO, asi que un rector/secretaria sin
+           -- ningun permiso de sede asignado (caso normal para uno recien
+           -- creado, antes de que se decida si se liga a todas las sedes o
+           -- no) aparecia con roles=[] en el listado, aunque en la practica
+           -- si tuviera ese rol sobre su EE. PK_TROL=17 "Secretaria" es un
+           -- catalogo nuevo (no existia una fila de TROL para esto, a
+           -- diferencia de Rector=7): TESTABLECIMIENTO.FK_TFUNCIONARIO_
+           -- SECRETARIA nunca paso por TROL, es un FK directo a TFUNCIONARIO.
+           COALESCE(
+               (SELECT jsonb_agg(DISTINCT role_obj ORDER BY role_obj)
+                  FROM (
+                      SELECT jsonb_build_object('id', r.PK_TROL, 'nombre', r.NOMBRE) AS role_obj
+                        FROM academico_test.TSEDE_USUARIO su_r
+                        JOIN academico_test.TROL          r ON r.PK_TROL = su_r.FK_TROL
+                       WHERE su_r.FK_TUSUARIO = b.PK_TUSUARIO
+                         AND su_r.ACTIVE      = TRUE
+                      UNION
+                      SELECT jsonb_build_object('id', 7, 'nombre', 'Rector')
+                       WHERE EXISTS (
+                           SELECT 1 FROM academico_test.TESTABLECIMIENTO e
+                            WHERE e.FK_TFUNCIONARIO_RECTOR = b.PK_TFUNCIONARIO AND e.ACTIVE = TRUE
+                       )
+                      UNION
+                      SELECT jsonb_build_object('id', 17, 'nombre', 'Secretaria')
+                       WHERE EXISTS (
+                           SELECT 1 FROM academico_test.TESTABLECIMIENTO e
+                            WHERE e.FK_TFUNCIONARIO_SECRETARIA = b.PK_TFUNCIONARIO AND e.ACTIVE = TRUE
+                       )
+                  ) roles_union),
+               '[]'::jsonb
+           )                             AS roles_agg,
            a.sedes_agg,
            a.estados_agg
       FROM base     b
