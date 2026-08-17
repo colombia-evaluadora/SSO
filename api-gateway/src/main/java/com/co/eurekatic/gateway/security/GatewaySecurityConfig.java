@@ -185,6 +185,20 @@ public class GatewaySecurityConfig {
                         // Authorization se queda en 401 antes de llegar
                         // a file-service a validar el token.
                         .pathMatchers("/api/files/view/**").permitAll()
+                        // /api/files/public/** — activos GLOBALES de la
+                        // interfaz (íconos de calificación), pensados
+                        // para un <img src> que vive indefinidamente en
+                        // un dato de catálogo (tlista_valor.valor), no
+                        // para un archivo por-usuario. A diferencia de
+                        // /api/files/view/**, no hay token que validar:
+                        // la única puerta es que la clasificación de la
+                        // clave esté en el allowlist que file-service
+                        // aplica él mismo (ver DownloadController#publico,
+                        // ParamTypes.PUBLIC_FILE_CLASSIFICATIONS) — así
+                        // que dejarlo pasar sin JWT aquí es correcto:
+                        // la autorización real es "¿esta clasificación
+                        // es pública?", no "¿quién sos?".
+                        .pathMatchers("/api/files/public/**").permitAll()
                         .pathMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info", "/actuator/prometheus").permitAll()
                         // OpenAPI aggregator — Swagger UI + merged doc + webjars.

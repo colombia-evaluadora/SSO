@@ -1,7 +1,9 @@
 package com.co.eurekatic.files;
 
+import com.co.eurekatic.common.query.ParamTypes;
 import com.co.eurekatic.common.security.JwtProperties;
 import com.co.eurekatic.common.security.JwtTokenService;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -78,6 +80,18 @@ import java.util.Set;
  * puede pedir sin cabeceras. {@code /files/view/{id}} acepta ese
  * token O un JWT normal, así que sigue sirviendo también al caso
  * {@code fetch()} existente sin duplicar código de streaming.
+ *
+ * <p><b>{@code /files/public/**} — activos globales, sin auth y sin
+ * expirar.</b> {@code /files/view/{id}} resuelve el caso "{@code <img
+ * src>} autenticado" con un token de vida corta; no sirve para un
+ * dato de catálogo ({@code tlista_valor.valor}, p.ej.) que se guarda
+ * una vez y se renderiza indefinidamente después — un token de 5
+ * minutos ahí obligaría a re-mintarlo en cada carga. Este tercer
+ * endpoint no pide nada: la clave S3 completa va en la ruta, y la
+ * única puerta es que su clasificación esté en {@link
+ * com.co.eurekatic.common.query.ParamTypes#PUBLIC_FILE_CLASSIFICATIONS}
+ * (hoy, íconos de calificación — nunca nada por-usuario o
+ * por-establecimiento). Ver {@link #publico}.
  */
 @RestController
 public class DownloadController {
@@ -222,11 +236,67 @@ public class DownloadController {
     }
 
     /**
-     * Streaming común a {@code descargar} y {@code ver}: buscar la
-     * fila, resolver la clave S3, abrir el objeto y devolverlo con los
-     * headers de siempre. Ambos endpoints difieren sólo en CÓMO se
-     * autoriza al llamante — una vez identificado, sirven exactamente
-     * el mismo archivo de la misma forma.
+     * V67 — activos gráficos GLOBALES de la interfaz (caritas/símbolos
+     * de calificación), servidos sin JWT ni token de vista: a
+     * diferencia de {@link #ver}, esto está pensado para un
+     * {@code <img src>} que vive para siempre en un dato de catálogo
+     * ({@code tlista_valor.valor}), no para un archivo por-usuario con
+     * un token que expira en minutos.
+     *
+     * <p>La ruta trae la CLAVE S3 completa, tal cual está guardada en
+     * {@code TARCHIVO.urls3} ({@code /files/public/ACADEMICO_VALLEDUPAR/graficaCarita/489905.png}
+     * → clave {@code ACADEMICO_VALLEDUPAR/graficaCarita/489905.png}).
+     * Dos puertas, ambas obligatorias, antes de tocar S3:
+     *
+     * <ol>
+     *   <li>La CLASIFICACIÓN de la clave (el segmento inmediatamente
+     *       antes del nombre de archivo — ver {@link #clasificacionDe})
+     *       tiene que estar en {@link ParamTypes#PUBLIC_FILE_CLASSIFICATIONS}.
+     *       Una clave con clasificación {@code actividad},
+     *       {@code matricula}, etc. — CUALQUIER cosa fuera de ese set —
+     *       responde 404 sin más, aunque el objeto exista de verdad:
+     *       este endpoint nunca es la puerta para datos por-usuario o
+     *       por-establecimiento.</li>
+     *   <li>Tiene que haber una fila ACTIVA en {@code TARCHIVO} con
+     *       {@code urls3} EXACTAMENTE igual a la clave pedida — ver
+     *       {@link ArchivoRepository#buscarActivoPorClave}. Sin esto,
+     *       un objeto huérfano (fila borrada, bytes que quedaron en el
+     *       bucket) seguiría siendo servible para siempre.</li>
+     * </ol>
+     *
+     * <p>404 y no 403 en ambos casos: no hay nada que "pedir permiso"
+     * — una clave que no cumple no es un recurso protegido, es un
+     * recurso que no existe desde el punto de vista de este endpoint.
+     */
+    @GetMapping("/files/public/**")
+    public ResponseEntity<StreamingResponseBody> publico(
+            HttpServletRequest peticion,
+            @RequestParam(value = "mimeType", required = false) String mimeType) {
+
+        String clave = claveDeLaPeticion(peticion);
+        if (clave == null) {
+            return ResponseEntity.notFound().build();
+        }
+        String clasificacion = clasificacionDe(clave);
+        if (clasificacion == null || !ParamTypes.PUBLIC_FILE_CLASSIFICATIONS.contains(clasificacion)) {
+            log.debug("público rechazado: clasificación '{}' no es pública (clave={})", clasificacion, clave);
+            return ResponseEntity.notFound().build();
+        }
+        var archivo = archivos.buscarActivoPorClave(clave).orElse(null);
+        if (archivo == null) {
+            log.warn("público rechazado: sin fila activa para clave={}", clave);
+            return ResponseEntity.notFound().build();
+        }
+        return streamearArchivo(archivo, mimeType, "público:" + clasificacion);
+    }
+
+    /**
+     * Streaming común a {@code descargar}, {@code ver} y
+     * {@code publico}: resolver la clave S3, abrir el objeto y
+     * devolverlo con los headers de siempre. Los tres endpoints
+     * difieren sólo en CÓMO se autoriza al llamante y en cómo llegan a
+     * la fila de {@code TARCHIVO} — una vez que la tienen, sirven
+     * exactamente el mismo archivo de la misma forma.
      */
     private ResponseEntity<StreamingResponseBody> streamear(long archivoId, String quien, String mimeType) {
         var archivo = archivos.buscarActivo(archivoId).orElse(null);
@@ -234,6 +304,12 @@ public class DownloadController {
             log.warn("acceso id={} rechazado: fila no encontrada o inactiva", archivoId);
             return ResponseEntity.notFound().build();
         }
+        return streamearArchivo(archivo, mimeType, quien);
+    }
+
+    private ResponseEntity<StreamingResponseBody> streamearArchivo(
+            ArchivoRepository.Archivo archivo, String mimeType, String quien) {
+        long archivoId = archivo.pkTarchivo();
 
         MediaType tipoForzado = null;
         if (mimeType != null && !mimeType.isBlank()) {
@@ -428,6 +504,51 @@ public class DownloadController {
         byte[] esperado = tokenCompartido.getBytes(StandardCharsets.UTF_8);
         byte[] dado = recibido.getBytes(StandardCharsets.UTF_8);
         return MessageDigest.isEqual(esperado, dado);
+    }
+
+    /**
+     * V67 — todo lo que venga después de {@code /files/public/} en la
+     * ruta pedida, tal cual (es la clave S3 completa, puede traer
+     * varios segmentos). {@code null} si la petición no cae bajo ese
+     * prefijo o si no queda nada después de él.
+     *
+     * <p>Se lee {@code PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE} en vez
+     * de construir la ruta a mano, mismo patrón que
+     * {@code ReenvioController#rutaDestino} — es el valor que Spring
+     * ya calculó al resolver el {@code /**}, sin que este método tenga
+     * que lidiar con querystring ni con cómo vino codificado.
+     */
+    private static String claveDeLaPeticion(HttpServletRequest peticion) {
+        String ruta = (String) peticion.getAttribute(
+                org.springframework.web.servlet.HandlerMapping.PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE);
+        if (ruta == null) {
+            ruta = peticion.getRequestURI();
+        }
+        String prefijo = "/files/public/";
+        if (ruta == null || !ruta.startsWith(prefijo)) {
+            return null;
+        }
+        String clave = ruta.substring(prefijo.length());
+        return clave.isBlank() ? null : clave;
+    }
+
+    /**
+     * V67 — la clasificación de una clave S3 es el segmento
+     * INMEDIATAMENTE ANTERIOR al nombre de archivo, sin importar
+     * cuántos segmentos vengan antes ({@code <sitio>/}, {@code
+     * <establecimiento>/}, o ninguno de los dos — ver
+     * {@code TransformadorMultipart#claveDe}): para
+     * {@code ACADEMICO_VALLEDUPAR/graficaCarita/489905.png} es
+     * {@code graficaCarita}; para
+     * {@code ACADEMICO_VALLEDUPAR/120001003751/actividad/463900.pdf}
+     * es {@code actividad}. {@code null} si la clave no tiene ni un
+     * separador ({@code "489905.png"} a secas, el formato genérico sin
+     * clasificar) — nunca es pública, porque no HAY clasificación que
+     * mirar.
+     */
+    static String clasificacionDe(String clave) {
+        String[] partes = clave.split("/");
+        return partes.length < 2 ? null : partes[partes.length - 2];
     }
 
     /**

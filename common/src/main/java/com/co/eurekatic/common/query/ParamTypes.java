@@ -339,6 +339,31 @@ public final class ParamTypes {
             "actividad", "recursoCompartido", "matricula", "candidato", "escudo"
     );
 
+    /**
+     * V67 — clasificaciones cuyos objetos S3 son seguros de servir SIN
+     * ninguna autenticación ({@code GET /files/public/**} en
+     * {@code file-service} — ver su javadoc). Deliberadamente NO son
+     * "las mismas que {@link #KNOWN_FILE_CLASSIFICATIONS}": son
+     * activos gráficos globales de la interfaz (caritas/símbolos de
+     * calificación), no datos de un usuario ni de un establecimiento
+     * — nada aquí puede identificar a nadie ni pertenecer a nadie.
+     *
+     * <p>Esta lista es la ÚNICA puerta de {@code /files/public/**}: el
+     * endpoint extrae la clasificación del segmento de ruta
+     * inmediatamente anterior al nombre de archivo en la clave S3
+     * ({@code <clasificacion>/<pk>.<extensión>}, con o sin
+     * {@code <sitio>/} y {@code <establecimiento>/} delante) y
+     * responde 404 si no está en este set — así que agregar una
+     * clasificación aquí la hace pública de INMEDIATO para todo
+     * objeto que la use, presente y futuro. Nunca agregar una
+     * clasificación de {@link #ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS}
+     * (o cualquier otra con datos reales de un usuario/establecimiento)
+     * a este set.
+     */
+    public static final Set<String> PUBLIC_FILE_CLASSIFICATIONS = Set.of(
+            "graficaCarita", "graficaSimbolo"
+    );
+
     private static final java.util.regex.Pattern FILE_ESTABLISHMENT_FIELD_PATTERN =
             java.util.regex.Pattern.compile("[A-Za-z][A-Za-z0-9_]*");
 

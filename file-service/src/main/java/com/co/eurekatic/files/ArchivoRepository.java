@@ -177,6 +177,33 @@ public class ArchivoRepository {
     }
 
     /**
+     * V67 — igual que {@link #buscarActivo(long)}, pero buscando por
+     * {@code urls3} exacto en vez de por pk. La usa {@code
+     * DownloadController#publico} ({@code GET /files/public/**}): ese
+     * endpoint recibe la CLAVE S3 en la ruta (no un id), y este chequeo
+     * es lo que evita servir bytes de un objeto que ya no está en el
+     * catálogo (fila borrada, o nunca cerrada) aunque el objeto siga
+     * físicamente en el bucket.
+     */
+    public java.util.Optional<Archivo> buscarActivoPorClave(String urls3) {
+        var filas = jdbc.query("""
+                SELECT pk_tarchivo, nombre, peso, urls3
+                  FROM %s.tarchivo
+                 WHERE urls3 = :urls3 AND active = true
+                """.formatted(schema),
+                new MapSqlParameterSource().addValue("urls3", urls3),
+                (rs, n) -> {
+                    long peso = rs.getLong("peso");
+                    return new Archivo(
+                            rs.getLong("pk_tarchivo"),
+                            rs.getString("nombre"),
+                            rs.wasNull() ? -1 : peso,
+                            rs.getString("urls3"));
+                });
+        return filas.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(filas.get(0));
+    }
+
+    /**
      * Proyección de las columnas que {@link DownloadController}
      * necesita.
      *

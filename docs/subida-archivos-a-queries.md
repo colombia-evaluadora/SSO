@@ -285,7 +285,52 @@ administrador con varios establecimientos SÍ necesita mandar para
 elegir uno. El respaldo sólo cubre el caso en que el cliente ni
 siquiera lo manda.
 
-## 7. Qué tiene que estar configurado ANTES de que esto funcione
+## 7. `GET /files/public/**` — activos globales sin JWT ni token que expire
+
+`GET /files/view/{id}` (sección 6 del doc de visualización inline)
+resuelve el caso "`<img src>` autenticado" con un token de vida corta
+(5 minutos). No sirve para un dato de CATÁLOGO
+(`tlista_valor.valor`, por ejemplo) que se guarda una vez y se
+renderiza indefinidamente después — habría que re-mintar el token en
+cada carga. Este endpoint no pide nada:
+
+```
+GET /api/files/public/<clave-s3-completa>
+```
+
+La clave va tal cual está en `TARCHIVO.urls3`:
+
+```
+GET /api/files/public/ACADEMICO_VALLEDUPAR/graficaCarita/489905.png
+```
+
+Dos puertas, ambas obligatorias, antes de tocar S3 — ninguna es un
+JWT:
+
+1. La **clasificación** de la clave (el segmento inmediatamente antes
+   del nombre de archivo — `graficaCarita` arriba) tiene que estar en
+   `ParamTypes.PUBLIC_FILE_CLASSIFICATIONS` (hoy: `graficaCarita`,
+   `graficaSimbolo` — íconos de calificación, activos globales de UI,
+   nunca datos por-usuario ni por-establecimiento). Cualquier otra
+   clasificación responde `404`, exista o no el objeto — este
+   endpoint nunca es la puerta para `actividad`, `matricula`,
+   `perfilUsuario`, etc.
+2. Tiene que existir una fila **activa** en `TARCHIVO` con `urls3`
+   EXACTAMENTE igual a la clave pedida (`ArchivoRepository#buscarActivoPorClave`)
+   — evita servir un objeto huérfano que ya no está en el catálogo.
+
+Agregar una clasificación a `PUBLIC_FILE_CLASSIFICATIONS` la hace
+pública de inmediato para TODO objeto que la use, presente y futuro
+— nunca agregar ahí una de
+`ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS` ni ninguna con
+datos reales de un usuario o establecimiento.
+
+El `api-gateway` deja pasar `/api/files/public/**` sin exigir Bearer
+(`GatewaySecurityConfig`) — sin eso, un `<img>` sin `Authorization` se
+quedaría en `401` antes de llegar siquiera a `file-service` a mirar
+si la clasificación es pública.
+
+## 8. Qué tiene que estar configurado ANTES de que esto funcione
 
 | Requisito | Dónde se configura | Si falta |
 |---|---|---|
@@ -294,7 +339,7 @@ siquiera lo manda.
 | El campo declarado `FILE` en `param_types` (si se quiere restringir) | `/admin/query-catalog` → "Tipos de parámetros" | Sin declarar = permisivo (no rompe, pero tampoco valida) |
 | Rol del usuario con binding `role_query` a esa query (si no es `publicEnd`) | `/admin/query-catalog` → modal "Roles" | `403` en el paso 9 (lo devuelve query-service, no file-service) |
 
-## 8. Límites actuales
+## 9. Límites actuales
 
 - **No hay `FILE[]`** — un campo con varios archivos (`TransformadorMultipart`
   ya soporta "un binario → id suelto, varios → lista de ids") no tiene
