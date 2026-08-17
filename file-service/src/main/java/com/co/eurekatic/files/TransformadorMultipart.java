@@ -29,12 +29,23 @@ import java.util.UUID;
  * <p>Y el procedimiento del catálogo lo lee como {@code :BODY.PDF} y
  * {@code :BODY.FOTO}, decidiendo él en qué tabla y columna va cada uno.
  *
+ * <p>Un nombre de campo con puntos anida: {@code "usuario.email"} crea
+ * (o reutiliza) un objeto {@code usuario} y le pone {@code email}
+ * dentro. Hace falta cuando el destino no es una query del catálogo
+ * sino un controller normal con un DTO anidado — por ejemplo
+ * {@code auth-center POST /register/funcionario}, cuyo
+ * {@code RegisterFuncionarioRequest} espera
+ * {@code {"usuario": {..., "fkTarchivoFoto": 13}, "fkTmunicipioExpedicion": 1}}
+ * y no un objeto plano. Un campo sin punto se comporta exactamente
+ * como antes — queda en el primer nivel.
+ *
  * <p><b>Esta clase no sabe nada de negocio.</b> No conoce funcionarios
- * ni establecimientos ni matrículas. Su única regla es "sube y
- * sustituye", así que una operación nueva del catálogo no le añade ni
+ * ni establecimientos ni matrículas. Su única regla es "sube, sustituye
+ * y anida según el nombre del campo", así que una operación nueva del
+ * catálogo (o un DTO anidado en cualquier otro servicio) no le añade ni
  * una línea de código. Ésa es la propiedad que hace que el diseño
- * escale: la lógica de dónde va cada id vive en el PL/pgSQL, que es
- * donde ya vive el resto de la lógica de datos.
+ * escale: la lógica de dónde va cada id vive en quien recibe el JSON
+ * (PL/pgSQL o un @RequestBody), no aquí.
  */
 @Component
 public class TransformadorMultipart {
@@ -69,10 +80,14 @@ public class TransformadorMultipart {
     public Resultado transformar(Map<String, String> campos,
                                  Map<String, List<MultipartFile>> ficheros,
                                  String usuario) {
-        Map<String, Object> cuerpo = new LinkedHashMap<>(campos);
+        Map<String, Object> cuerpo = new LinkedHashMap<>();
+        campos.forEach((campo, valor) -> putAnidado(cuerpo, campo, valor));
         // Ids ya reservados, para poder deshacerlos si algo falla a
         // media transformación.
         List<Long> reservados = new ArrayList<>();
+        // Subconjunto de `reservados` cuyo objeto SÍ llegó a subirse a
+        // S3 (pk -> clave) — ver el porqué en `deshacer`.
+        Map<Long, String> objetosSubidos = new LinkedHashMap<>();
 
         try {
             for (var entrada : ficheros.entrySet()) {
@@ -84,7 +99,7 @@ public class TransformadorMultipart {
                     if (parte.isEmpty()) {
                         continue;
                     }
-                    ids.add(subirUna(parte, usuario, reservados));
+                    ids.add(subirUna(parte, usuario, reservados, objetosSubidos));
                 }
                 if (ids.isEmpty()) {
                     continue;
@@ -92,24 +107,90 @@ public class TransformadorMultipart {
                 // Un solo fichero en el campo → id suelto.
                 // Varios → lista, que es lo que el JSON del cliente
                 // sugería al repetir el mismo nombre de campo.
-                cuerpo.put(campo, ids.size() == 1 ? ids.get(0) : ids);
+                putAnidado(cuerpo, campo, ids.size() == 1 ? ids.get(0) : ids);
             }
             return new Resultado(cuerpo, List.copyOf(reservados));
 
         } catch (RuntimeException | IOException e) {
-            // Deshacer lo reservado en esta petición. Sin esto, un
-            // fallo en el tercer fichero dejaría los dos primeros
-            // registrados y sin dueño.
-            for (Long pk : reservados) {
-                archivos.descartar(pk);
-            }
+            deshacer(reservados, objetosSubidos);
             throw new SubidaFallidaException(
                     "No se pudo procesar el multipart: " + e.getMessage(), e);
         }
     }
 
-    private long subirUna(MultipartFile parte, String usuario, List<Long> reservados)
-            throws IOException {
+    /**
+     * Escribe {@code valor} en {@code raiz} bajo la ruta que marca
+     * {@code clave} partida por {@code "."} — {@code "usuario.email"}
+     * crea (o reutiliza) un objeto {@code usuario} y le pone
+     * {@code email} dentro. Sin punto, {@code clave} queda tal cual en
+     * el primer nivel: mismo comportamiento que antes de que existiera
+     * el anidado.
+     *
+     * <p>Si un segmento intermedio ya tiene un valor que no es un
+     * objeto (choque de nombres, p. ej. {@code "usuario"} y
+     * {@code "usuario.email"} en el mismo multipart), se pisa con un
+     * objeto nuevo: quien arma el multipart eligió los nombres de
+     * campo, así que un choque es un error de quien llama, no algo que
+     * este método deba detectar — igual que el resto de la clase, no
+     * valida significado de negocio.
+     */
+    @SuppressWarnings("unchecked")
+    private static void putAnidado(Map<String, Object> raiz, String clave, Object valor) {
+        String[] partes = clave.split("\\.");
+        Map<String, Object> actual = raiz;
+        for (int i = 0; i < partes.length - 1; i++) {
+            Object existente = actual.get(partes[i]);
+            if (existente instanceof Map) {
+                actual = (Map<String, Object>) existente;
+            } else {
+                Map<String, Object> nuevo = new LinkedHashMap<>();
+                actual.put(partes[i], nuevo);
+                actual = nuevo;
+            }
+        }
+        actual.put(partes[partes.length - 1], valor);
+    }
+
+    /**
+     * Deshace lo reservado en esta petición. Sin esto, un fallo en el
+     * tercer fichero dejaría los dos primeros registrados y sin dueño.
+     *
+     * <p><b>El orden importa</b>: S3 primero, filas después. Un fichero
+     * de {@code objetosSubidos} ya tiene sus bytes en el bucket — si
+     * sólo se borrara la fila (como hacía esto antes), el objeto
+     * quedaría huérfano: invisible, sin ninguna fila que lo referencie,
+     * facturándose indefinidamente, exactamente el escenario que
+     * {@link ArchivoRepository#reservar} documenta como el que el
+     * diseño "reservar antes de subir" existe para evitar — sólo que
+     * aquí el objeto SÍ llegó a existir antes de que la petición
+     * completa fallara por un fichero posterior. Con 408 000 objetos
+     * en el bucket, esa clase de fuga no se detecta comparando el
+     * bucket contra la tabla a mano.
+     *
+     * <p>Si el borrado en S3 falla (recorte de red al almacén, etc.),
+     * se loguea a ERROR y se sigue con la fila igual — no se puede
+     * dejar la fila (que el cliente podría reintentar y reservar de
+     * nuevo) esperando a que S3 responda; mejor un objeto huérfano
+     * detectable por el log que una petición que nunca termina de
+     * fallar.
+     */
+    private void deshacer(List<Long> reservados, Map<Long, String> objetosSubidos) {
+        for (var entrada : objetosSubidos.entrySet()) {
+            try {
+                almacen.borrar(entrada.getValue());
+            } catch (RuntimeException ex) {
+                log.error("rollback de subida fallida: no se pudo borrar el objeto "
+                        + "huérfano pk_tarchivo={} clave={} — requiere limpieza manual",
+                        entrada.getKey(), entrada.getValue(), ex);
+            }
+        }
+        for (Long pk : reservados) {
+            archivos.descartar(pk);
+        }
+    }
+
+    private long subirUna(MultipartFile parte, String usuario, List<Long> reservados,
+                          Map<Long, String> objetosSubidos) throws IOException {
         String nombre = nombreSeguro(parte.getOriginalFilename());
         long peso = parte.getSize();
 
@@ -125,6 +206,14 @@ public class TransformadorMultipart {
 
         try (InputStream in = parte.getInputStream()) {
             String url = almacen.subir(clave, in, peso, parte.getContentType());
+            // A partir de aquí el objeto YA existe en el bucket — si
+            // un fichero POSTERIOR de este mismo multipart falla, el
+            // rollback de `deshacer` tiene que borrar este objeto
+            // también, no sólo la fila. Por eso se registra ANTES de
+            // registrarUrl: si registrarUrl fallara (subida a S3 bien,
+            // UPDATE de la fila mal), el objeto también quedaría
+            // huérfano si no estuviera aquí.
+            objetosSubidos.put(pk, clave);
             // 3. Cerrar la fila con su URL. Sigue inactiva: la activa
             //    ReenvioController cuando el catálogo responde 2xx,
             //    que es el momento en que la operación de negocio

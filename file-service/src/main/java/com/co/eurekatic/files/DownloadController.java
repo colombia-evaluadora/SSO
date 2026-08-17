@@ -5,6 +5,7 @@ import com.co.eurekatic.common.security.JwtTokenService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -171,8 +172,23 @@ public class DownloadController {
         // catálogo puede pasar ?disposition=attachment vía query si
         // lo necesita — por ahora dejamos inline, que es lo que
         // esperan los <img src="..."> que ya tenían URLs prefirmadas.
-        headers.set(HttpHeaders.CONTENT_DISPOSITION,
-                "inline; filename=\"" + nombreSeguro(archivo.nombre()) + "\"");
+        //
+        // ContentDisposition.filename(nombre, UTF_8) y no un
+        // "filename=\"...\"" armado a mano: TARCHIVO.nombre trae
+        // nombres reales con tildes/ñ en filas históricas ("Recuperación
+        // I Geo 6.docx" es un caso real, no hipotético — confirmado en
+        // la tabla). Un header HTTP sólo admite ISO-8859-1; escribir el
+        // carácter tal cual serializa un byte crudo (p.ej. 'ó' -> 0xF3)
+        // que no es UTF-8 válido por sí solo, así que el navegador
+        // muestra el nombre corrupto en el diálogo de "Guardar como"
+        // aunque los bytes del archivo lleguen perfectos. El builder de
+        // Spring sigue RFC 6266: emite un `filename*=UTF-8''<percent-
+        // encoded>` para los clientes que lo entienden (todos los
+        // navegadores modernos) y un `filename="..."` ASCII-seguro de
+        // respaldo para el resto.
+        headers.setContentDisposition(ContentDisposition.builder("inline")
+                .filename(nombreSeguro(archivo.nombre()), StandardCharsets.UTF_8)
+                .build());
 
         // El tamaño lo manda S3, no la fila. TARCHIVO.peso se escribió
         // al subir y puede haber quedado desincronizado (o NULL en

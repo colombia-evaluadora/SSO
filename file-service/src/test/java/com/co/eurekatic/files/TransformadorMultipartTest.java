@@ -2,6 +2,7 @@ package com.co.eurekatic.files;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.Map;
@@ -70,6 +71,12 @@ class TransformadorMultipartTest {
      * Si falla la subida del segundo, el primero NO puede quedarse
      * registrado: sería una fila de TARCHIVO sin dueño, apuntando a un
      * objeto que quizá ni existe.
+     *
+     * <p>Y el objeto del primero, que SÍ llegó a subirse a S3 antes de
+     * que el segundo fallara, tampoco puede quedarse en el bucket sin
+     * fila que lo referencie — antes de este fix sólo se descartaba la
+     * fila, dejando el objeto huérfano (bytes reales, facturándose para
+     * siempre, invisibles porque ninguna fila apunta a ellos).
      */
     @Test
     void deshaceLoReservadoCuandoUnaSubidaFalla() throws Exception {
@@ -80,16 +87,95 @@ class TransformadorMultipartTest {
                 .thenReturn("s3://b/10/a")
                 .thenThrow(new java.io.IOException("almacen caido"));
 
+        // LinkedHashMap, no Map.of: el test depende de que "uno" se
+        // procese antes que "dos" (para saber cuál pk recibe cada uno),
+        // y Map.of aleatoriza el orden de iteración a propósito
+        // (salt por-JVM) — con él este test es flaky.
+        Map<String, List<MultipartFile>> ficheros = new java.util.LinkedHashMap<>();
+        ficheros.put("uno", List.of(fichero("uno", "a.pdf", "A")));
+        ficheros.put("dos", List.of(fichero("dos", "b.pdf", "B")));
+
         assertThatThrownBy(() -> new TransformadorMultipart(almacen, repo).transformar(
-                Map.of(),
-                Map.of("uno", List.of(fichero("uno", "a.pdf", "A")),
-                       "dos", List.of(fichero("dos", "b.pdf", "B"))),
-                "admin@example.com"))
+                Map.of(), ficheros, "admin@example.com"))
                 .isInstanceOf(TransformadorMultipart.SubidaFallidaException.class);
 
         // Las dos reservas se descartan, no sólo la que falló.
         verify(repo).descartar(10L);
         verify(repo).descartar(11L);
+        // El objeto del primer fichero (pk 10) SÍ llegó a subirse — su
+        // clave real es "10/a.pdf" (pk + nombre saneado), no la URL
+        // falsa que devuelve el mock. Se borra en S3.
+        verify(almacen).borrar("10/a.pdf");
+        // El segundo (pk 11) nunca llegó a subir nada — no hay objeto
+        // que borrar para él.
+        verify(almacen, never()).borrar("11/b.pdf");
+    }
+
+    /**
+     * Caso más sutil: la subida a S3 del PRIMER fichero termina bien,
+     * pero registrar la URL en la fila falla (blip de BD justo después
+     * de que el objeto ya existe en el bucket). El objeto igual quedó
+     * creado — el rollback tiene que enterarse por el orden en que se
+     * registra {@code objetosSubidos} (antes del UPDATE, no después).
+     */
+    @Test
+    void siRegistrarUrlFallaTrasSubidaExitosaElObjetoIgualSeBorra() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar(anyString(), anyLong(), anyString())).thenReturn(20L);
+        when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/20/a.pdf");
+        org.mockito.Mockito.doThrow(new org.springframework.dao.DataAccessResourceFailureException("db caida"))
+                .when(repo).registrarUrl(20L, "s3://b/20/a.pdf");
+
+        assertThatThrownBy(() -> new TransformadorMultipart(almacen, repo).transformar(
+                Map.of(), Map.of("f", List.of(fichero("f", "a.pdf", "X"))), "u"))
+                .isInstanceOf(TransformadorMultipart.SubidaFallidaException.class);
+
+        verify(almacen).borrar("20/a.pdf");
+        verify(repo).descartar(20L);
+    }
+
+    /** Si el primer fichero ni siquiera llega a subir, no hay nada que
+     *  borrar en S3 — sólo la fila reservada. */
+    @Test
+    void siLaSubidaFallaDeEntradaNoSeIntentaBorrarNadaEnS3() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar(anyString(), anyLong(), anyString())).thenReturn(30L);
+        when(almacen.subir(anyString(), any(), anyLong(), any()))
+                .thenThrow(new java.io.IOException("almacen caido"));
+
+        assertThatThrownBy(() -> new TransformadorMultipart(almacen, repo).transformar(
+                Map.of(), Map.of("f", List.of(fichero("f", "a.pdf", "X"))), "u"))
+                .isInstanceOf(TransformadorMultipart.SubidaFallidaException.class);
+
+        verify(almacen, never()).borrar(anyString());
+        verify(repo).descartar(30L);
+    }
+
+    /**
+     * Un nombre de campo con puntos anida en vez de quedar plano —
+     * necesario para destinos que no son una query del catálogo sino
+     * un DTO Java anidado (auth-center {@code RegisterFuncionarioRequest}:
+     * {@code {"usuario": {..., "fkTarchivoFoto": id}, "fkTmunicipioExpedicion": ...}}).
+     */
+    @Test
+    void unNombreDeCampoConPuntosAnidaEnVezDeQuedarPlano() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar(anyString(), anyLong(), anyString())).thenReturn(13L);
+        when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/13/firma.pdf");
+
+        Map<String, Object> cuerpo = new TransformadorMultipart(almacen, repo).transformar(
+                Map.of("usuario.email", "func@example.com", "fkTmunicipioExpedicion", "1"),
+                Map.of("usuario.fkTarchivoFoto", List.of(fichero("usuario.fkTarchivoFoto", "firma.pdf", "F"))),
+                "admin@example.com").cuerpo();
+
+        assertThat(cuerpo).containsEntry("fkTmunicipioExpedicion", "1");
+        @SuppressWarnings("unchecked")
+        var usuario = (Map<String, Object>) cuerpo.get("usuario");
+        assertThat(usuario).containsEntry("email", "func@example.com");
+        assertThat(usuario.get("fkTarchivoFoto")).isEqualTo(13L);
     }
 
     @Test

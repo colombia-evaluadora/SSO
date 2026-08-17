@@ -876,6 +876,21 @@ services:
       retries: 12
       start_period: 30s
 
+  # NOTA: NO se define aquí una instancia estática para el catálogo
+  # eval-col (se intentó — ver historial de este archivo — y se
+  # revirtió). eval-col ya corre como `query-service-eval-col`,
+  # creada dinámicamente por `provisioner` cuando sso-admin registra
+  # ese microservicio (ver bloque `provisioner` más abajo). Una
+  # segunda instancia estática con el mismo QUERY_INSTANCE_NAME
+  # registraba dos aplicaciones distintas bajo la misma identidad en
+  # Eureka — redundante en el mejor caso, inconsistente si una de las
+  # dos queda desactualizada. Cualquier instancia nueva de
+  # query-service se crea vía el flujo del provisioner, no a mano en
+  # este archivo — la excepción son las instancias de referencia
+  # (`query-service-postgres`, `-analytics`) que existen para
+  # documentar el patrón, no para servir tráfico real de un
+  # microservicio ya provisionado.
+
   # ===========================================================================
   # provisioner — Docker sidecar that sso-admin calls to spin up
   # query-service containers on demand. The ONLY service in the
