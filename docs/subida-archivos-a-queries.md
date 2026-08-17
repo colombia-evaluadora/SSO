@@ -330,7 +330,64 @@ El `api-gateway` deja pasar `/api/files/public/**` sin exigir Bearer
 quedaría en `401` antes de llegar siquiera a `file-service` a mirar
 si la clasificación es pública.
 
-## 8. Qué tiene que estar configurado ANTES de que esto funcione
+## 8. `endpoint` también acepta `FILE:clasificacion` (V64)
+
+Hasta V64, `FILE:clasificacion[:campo]` sólo existía para filas de
+`query` — un destino tipo `endpoint` (controller REST estático, no
+`query-service`) era SIEMPRE permisivo: `endpoint` no tenía columna
+`param_types`, así que `FileDestinationAccessService` no tenía dónde
+leer una clasificación aunque quisiera.
+
+Desde V64, `endpoint` tiene su propia columna `param_types` (mismo
+tipo, misma convención de claves canónicas `BODY.X`) y
+`FileDestinationAccessService` la traduce con el mismo
+`destinoDe(...)` que ya usaba para `query` — **el mecanismo es
+idéntico**, sólo cambió de dónde sale el JSON.
+
+### Caso real: `POST /register/funcionario` y `POST /register/usuario` (auth-center)
+
+Ambos comparten `RegisterUsuarioRequest.fkTarchivoFoto` — un
+`pk_tarchivo` que file-service sustituye antes de reenviar, igual que
+cualquier campo `FILE`. `param_types` para los dos:
+
+```json
+{"BODY.FKTARCHIVOFOTO": "FILE:perfilUsuario"}
+```
+
+Clasificación `perfilUsuario` (NO establishment-scoped): es la foto de
+la CUENTA (`TUSUARIO.fk_tarchivo`, mismo destino que
+`fn_fun_actualizar` usa vía `p_fk_tarchivo_foto`), no algo ligado a un
+establecimiento.
+
+### Caso real: crear/editar establecimiento — el escudo
+
+`POST /establecimientos` y `PATCH /establecimientos/:ID` sí son
+`query` (llaman a `fn_est_crear`/`fn_est_actualizar`, que YA tenían
+`p_fk_archivo bigint DEFAULT NULL` — el hueco estaba sólo en la fila
+`query`, que nunca lo pasaba en la llamada). `param_types` para las
+dos:
+
+```json
+{"BODY.LOGO": "FILE:escudo"}
+```
+
+Clasificación `escudo`, **sin** el tercer componente (código de
+establecimiento) — a propósito, en las DOS:
+
+- **Crear**: el código todavía no existe en `TESTABLECIMIENTO` en el
+  momento de la subida (se está creando en la MISMA operación) —
+  `codigoEstablecimientoValido()` fallaría siempre.
+- **Editar**: `PATCH` es parcial — el cliente no necesariamente
+  reenvía `BODY.BASICINFO.DANE` si sólo está cambiando el escudo, y
+  derivarlo del usuario autenticado (sección 6) resolvería SU PROPIO
+  establecimiento, no necesariamente el que `:PARAM.ID` identifica.
+
+La clave nueva queda `ACADEMICO_VALLEDUPAR/escudo/<pk_tarchivo>.<ext>`
+— clasificada, pero sin el segmento de establecimiento que sí llevan
+las 28 filas históricas migradas (ver sección 6). Es una limitación
+conocida, no un descuido — ver sección 10.
+
+## 9. Qué tiene que estar configurado ANTES de que esto funcione
 
 | Requisito | Dónde se configura | Si falta |
 |---|---|---|
@@ -339,16 +396,18 @@ si la clasificación es pública.
 | El campo declarado `FILE` en `param_types` (si se quiere restringir) | `/admin/query-catalog` → "Tipos de parámetros" | Sin declarar = permisivo (no rompe, pero tampoco valida) |
 | Rol del usuario con binding `role_query` a esa query (si no es `publicEnd`) | `/admin/query-catalog` → modal "Roles" | `403` en el paso 9 (lo devuelve query-service, no file-service) |
 
-## 9. Límites actuales
+## 10. Límites actuales
 
 - **No hay `FILE[]`** — un campo con varios archivos (`TransformadorMultipart`
   ya soporta "un binario → id suelto, varios → lista de ids") no tiene
   todavía forma de declararse en `param_types`. Se agrega el día que haga
   falta, mismo patrón que los demás tipos array.
-- **Los destinos `endpoint` (REST estático, no `query-service`) no tienen
-  `param_types`** — esa tabla no tiene esa columna. Un destino como
-  `auth-center POST /register/funcionario` sigue aceptando cualquier
-  campo binario sin restricción por nombre.
+- **El escudo de un establecimiento nunca lleva el segmento de
+  establecimiento** en su clave S3 (sección 8) — a diferencia de
+  `actividad`/`matricula`/etc., donde el cliente SÍ puede declarar
+  `FILE:clasificacion:campo`. La razón es el huevo-y-la-gallina: al
+  crear, el código no existe todavía; al editar, no hay garantía de
+  tenerlo a mano en un `PATCH` parcial.
 - `TARCHIVO` no guarda mimetype; si el consumidor final necesita el
   content-type exacto al servir la imagen de vuelta (`GET /files/view/{id}`),
   puede pasarlo explícito con `?mimeType=image/jpeg` — ver

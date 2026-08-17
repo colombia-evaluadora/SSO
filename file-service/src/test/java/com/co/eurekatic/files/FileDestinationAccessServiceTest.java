@@ -63,6 +63,14 @@ class FileDestinationAccessServiceTest {
         stubFilas(jdbc, "public.endpoint");
     }
 
+    /** V64 — igual que {@link #stubEndpoint}, pero con {@code param_types} declarado. */
+    private static void stubEndpointConParamTypes(NamedParameterJdbcTemplate jdbc, String path, String paramTypesJson) {
+        var fila = new java.util.LinkedHashMap<String, String>();
+        fila.put("path", path);
+        fila.put("param_types", paramTypesJson);
+        stubFilas(jdbc, "public.endpoint", fila);
+    }
+
     /** {@code paramTypesJson} null = columna NULL (query nunca migrada al tipado). */
     private static void stubQuery(NamedParameterJdbcTemplate jdbc, String pathTemplate, String paramTypesJson) {
         var fila = new java.util.LinkedHashMap<String, String>();
@@ -377,5 +385,53 @@ class FileDestinationAccessServiceTest {
                 Map.of("codigo", "EE-SEED-01"), Map.of("codigo", "EE-SEED-02"));
 
         assertThat(service(jdbc).establecimientoDelUsuario("multisede@example.com")).isEmpty();
+    }
+
+    // ---------- V64: param_types en endpoint (antes sólo query lo tenía) ----------
+
+    /**
+     * El caso que motivó V64: {@code auth-center POST /register/funcionario}
+     * es un {@code endpoint}, no una {@code query} — antes de esto no
+     * había forma de declarar {@code FILE:perfilUsuario} para su campo
+     * de foto.
+     */
+    @Test
+    void unEndpointConCampoFileDeclaraEseCampoYRestringe() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubEndpointConParamTypes(jdbc, "/register/funcionario", """
+                {"BODY.FKTARCHIVOFOTO":"FILE:perfilUsuario"}
+                """);
+
+        var destino = service(jdbc).resolverDestino("POST", "/register/funcionario");
+
+        assertThat(destino.registrado()).isTrue();
+        assertThat(destino.restringeCampos()).isTrue();
+        assertThat(destino.campos()).containsExactly("BODY.FKTARCHIVOFOTO");
+        assertThat(destino.clasificaciones()).containsEntry("BODY.FKTARCHIVOFOTO", "perfilUsuario");
+    }
+
+    /** Un endpoint sin param_types declarado (el default '{}') sigue permisivo, como siempre. */
+    @Test
+    void unEndpointSinParamTypesDeclaradoSigueSiendoPermisivo() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubEndpointConParamTypes(jdbc, "/register/usuario", "{}");
+
+        var destino = service(jdbc).resolverDestino("POST", "/register/usuario");
+
+        assertThat(destino.registrado()).isTrue();
+        assertThat(destino.restringeCampos()).isFalse();
+    }
+
+    /** Un endpoint restringido rechaza un campo binario no declarado, igual que una query. */
+    @Test
+    void unEndpointConParamTypesRechazaUnCampoNoDeclarado() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubEndpointConParamTypes(jdbc, "/register/funcionario", """
+                {"BODY.FKTARCHIVOFOTO":"FILE:perfilUsuario"}
+                """);
+
+        var destino = service(jdbc).resolverDestino("POST", "/register/funcionario");
+
+        assertThat(destino.campos()).doesNotContain("BODY.OTROCAMPO");
     }
 }

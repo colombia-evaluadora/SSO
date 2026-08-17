@@ -198,22 +198,44 @@ public class FileDestinationAccessService {
         if (rutaDestino == null || !rutaDestino.startsWith("/")) {
             return Destino.NO_REGISTRADO;
         }
-        if (existeEnEndpoints(metodo, rutaDestino)) {
-            // endpoint no tiene metadatos por campo — permisivo,
-            // como siempre fue.
-            return Destino.sinRestriccionDeCampos();
+        Destino enEndpoint = resolverEnEndpoints(metodo, rutaDestino);
+        if (enEndpoint != null) {
+            return enEndpoint;
         }
         return resolverEnQueries(metodo, rutaDestino);
     }
 
-    private boolean existeEnEndpoints(String metodo, String ruta) {
-        List<String> paths = jdbc.query("""
-                SELECT path FROM public.endpoint WHERE method = :metodo
+    /**
+     * V64 — {@code endpoint} (controllers REST estáticos, p.ej.
+     * {@code auth-center POST /register/funcionario}) tiene la MISMA
+     * columna {@code param_types} que {@code query}, así que se
+     * traduce con el mismo {@link #destinoDe} — ni siquiera hace
+     * falta duplicar la lógica de {@code FILE:clasificacion}. Antes de
+     * V64 esta tabla no tenía esa columna, y CUALQUIER destino
+     * encontrado acá era permisivo sin excepción — una fila sin
+     * {@code param_types} declarado (el {@code '{}'} por defecto)
+     * sigue comportándose exactamente igual: {@link #destinoDe}
+     * trata un JSON vacío como "nunca migrada al tipado", permisivo.
+     *
+     * <p>{@code null} (no {@code Destino.NO_REGISTRADO}) si ninguna
+     * fila de {@code endpoint} matchea — así {@link #resolverDestino}
+     * sabe que tiene que seguir mirando {@code query} en vez de
+     * rechazar de una vez.
+     */
+    private Destino resolverEnEndpoints(String metodo, String ruta) {
+        List<FilaEndpoint> filas = jdbc.query("""
+                SELECT path, param_types FROM public.endpoint WHERE method = :metodo
                 """,
                 new MapSqlParameterSource().addValue("metodo", metodo),
-                (rs, n) -> rs.getString("path"));
-        return paths.stream().anyMatch(p -> antMatcher.match(p, ruta));
+                (rs, n) -> new FilaEndpoint(rs.getString("path"), rs.getString("param_types")));
+        return filas.stream()
+                .filter(f -> antMatcher.match(f.path(), ruta))
+                .findFirst()
+                .map(f -> destinoDe(f.paramTypesJson()))
+                .orElse(null);
     }
+
+    private record FilaEndpoint(String path, String paramTypesJson) {}
 
     /**
      * {@code rutaDestino} trae el {@code serviceid} del microservicio
