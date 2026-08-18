@@ -1377,6 +1377,11 @@ services:
       FILES_DS_USERNAME: "${FILES_DS_USERNAME:-neondb_owner}"
       FILES_DS_PASSWORD: "${FILES_DS_PASSWORD:-}"
       FILES_SCHEMA: "${FILES_SCHEMA:-academico_test}"
+      # V64 — código de sede antepuesto a la clave S3 de las filas
+      # nuevas, imitando el primer segmento que ya traen las filas
+      # históricas migradas (ACADEMICO_VALLEDUPAR/perfilUsuario/...).
+      # Vacío = sin prefijo. Ver TransformadorMultipart.claveDe.
+      FILES_SITE_CODE: "${FILES_SITE_CODE:-}"
       # Apunta al gateway, no a query-service directo: así la petición
       # reenviada pasa por las mismas reglas de autorización que
       # cualquier otra. Este servicio no es una puerta trasera.
@@ -1396,7 +1401,6 @@ services:
       S3_ACCESS_KEY: "${S3_ACCESS_KEY:-}"
       S3_SECRET_KEY: "${S3_SECRET_KEY:-}"
       S3_PATH_STYLE: "${S3_PATH_STYLE:-true}"
-      S3_PUBLIC_BASE_URL: "${S3_PUBLIC_BASE_URL:-}"
       # Sin límite, un cliente llena el disco: el servidor está al 85%.
       FILES_MAX_FILE_SIZE: "${FILES_MAX_FILE_SIZE:-25MB}"
       FILES_MAX_REQUEST_SIZE: "${FILES_MAX_REQUEST_SIZE:-30MB}"
@@ -1408,6 +1412,11 @@ services:
       # llegue con cookie de sesión válida, lo cual es seguro pero
       # bloquea el caso "el catálogo arma un enlace temporal".
       FILES_INTERNAL_TOKEN: "${FILES_INTERNAL_TOKEN:-}"
+      # Firma los tokens de un solo archivo de GET /files/view/{id} —
+      # ver ViewTokenService. Vacío = POST /files/view-token/{id}
+      # responde 503 en vez de acuñar tokens que nadie podría validar.
+      FILES_VIEW_TOKEN_SECRET: "${FILES_VIEW_TOKEN_SECRET:-}"
+      FILES_VIEW_TOKEN_TTL_SECONDS: "${FILES_VIEW_TOKEN_TTL_SECONDS:-300}"
       # Clave PÚBLICA del par RS256. file-service verifica firmas en
       # GET /files/download/{id}; no emite tokens, así que no recibe
       # (ni debe recibir) la privada.

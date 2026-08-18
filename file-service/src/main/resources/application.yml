@@ -37,6 +37,15 @@ files:
   # Esquema donde vive TARCHIVO.
   schema: ${FILES_SCHEMA:academico_test}
 
+  # V64 — código de sede que se antepone a la clave S3 de las filas
+  # nuevas (TransformadorMultipart.claveDe), imitando el primer
+  # segmento que ya traen las filas históricas migradas
+  # (ACADEMICO_VALLEDUPAR/perfilUsuario/141906.jpeg). Una instalación
+  # de file-service sirve UNA sola sede, así que es una constante de
+  # despliegue — igual que `schema` arriba — no algo que decida cada
+  # subida. Vacío (default) = sin prefijo.
+  site-code: ${FILES_SITE_CODE:}
+
   # A dónde se reenvía el JSON ya transformado. Apunta al gateway para
   # que la petición pase por las mismas reglas de autorización que
   # cualquier otra: este servicio no es una puerta trasera al catálogo.
@@ -52,6 +61,19 @@ files:
   # operativa, pero rotarlos debe hacerse de forma sincronizada).
   internal-token: ${FILES_INTERNAL_TOKEN:}
 
+  # Firma los tokens de GET /files/view/{id}?token=... — acceso de
+  # solo-lectura a UN archivo, de vida corta, para un <img src="...">
+  # que no puede mandar Authorization. Ver ViewTokenService. Vacío =
+  # POST /files/view-token/{id} responde 503: sin secreto no hay forma
+  # segura de acuñar ni validar tokens, así que la puerta se queda
+  # cerrada en vez de acuñar tokens que nadie puede verificar después
+  # de un reinicio (secreto regenerado = tokens ya emitidos, inválidos).
+  view-token-secret: ${FILES_VIEW_TOKEN_SECRET:}
+  # 5 minutos: alcanza para que el navegador cargue la imagen (incluso
+  # con reintentos) sin dejar la URL utilizable por más tiempo del que
+  # hace falta si queda en el historial o en logs de acceso.
+  view-token-ttl-seconds: ${FILES_VIEW_TOKEN_TTL_SECONDS:300}
+
   s3:
     # Vacío = AWS real. Con valor = almacén compatible (Garage en dev).
     endpoint: ${S3_ENDPOINT:}
@@ -62,8 +84,6 @@ files:
     # Obligatorio contra un endpoint local: no hay DNS por bucket, así
     # que el SDK debe pedir /bucket/objeto. Contra AWS se pone en false.
     path-style: ${S3_PATH_STYLE:true}
-    # Prefijo con el que se compone la urls3 que se guarda en TARCHIVO.
-    public-base-url: ${S3_PUBLIC_BASE_URL:}
 
 # Bloque de PRIMER NIVEL. Va al final del fichero y no entre medias
 # de `files:` — insertarlo ahí dejaba las claves `s3:` que venían

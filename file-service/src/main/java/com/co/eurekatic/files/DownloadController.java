@@ -1,7 +1,9 @@
 package com.co.eurekatic.files;
 
+import com.co.eurekatic.common.query.ParamTypes;
 import com.co.eurekatic.common.security.JwtProperties;
 import com.co.eurekatic.common.security.JwtTokenService;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -11,7 +13,9 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import software.amazon.awssdk.core.ResponseInputStream;
@@ -26,6 +30,8 @@ import java.io.OutputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Descarga de archivos a través del api-gateway.
@@ -60,6 +66,32 @@ import java.security.MessageDigest;
  * si en el futuro la ruta del gateway cambia, este método sigue
  * protegiendo el endpoint directamente, sin acoplar la seguridad del
  * catálogo a la del API-gateway.
+ *
+ * <p><b>{@code /files/view/{id}} — visualización directa en
+ * {@code <img src="...">}.</b> {@code /files/download/{id}} exige
+ * {@code Authorization: Bearer} en la cabecera, algo que un
+ * {@code <img>} plano del navegador no puede mandar (por eso el front
+ * lo consume con {@code fetch()} + blob URL). Cuando SÍ hace falta un
+ * {@code <img src>} directo, el flujo es en dos pasos: (1) el front,
+ * ya autenticado, pide {@code POST /files/view-token/{id}} y recibe
+ * un token de un solo archivo, de vida corta ({@link ViewTokenService});
+ * (2) ese token va en la URL de la imagen —
+ * {@code <img src="/files/view/{id}?token=...">} — que el navegador sí
+ * puede pedir sin cabeceras. {@code /files/view/{id}} acepta ese
+ * token O un JWT normal, así que sigue sirviendo también al caso
+ * {@code fetch()} existente sin duplicar código de streaming.
+ *
+ * <p><b>{@code /files/public/**} — activos globales, sin auth y sin
+ * expirar.</b> {@code /files/view/{id}} resuelve el caso "{@code <img
+ * src>} autenticado" con un token de vida corta; no sirve para un
+ * dato de catálogo ({@code tlista_valor.valor}, p.ej.) que se guarda
+ * una vez y se renderiza indefinidamente después — un token de 5
+ * minutos ahí obligaría a re-mintarlo en cada carga. Este tercer
+ * endpoint no pide nada: la clave S3 completa va en la ruta, y la
+ * única puerta es que su clasificación esté en {@link
+ * com.co.eurekatic.common.query.ParamTypes#PUBLIC_FILE_CLASSIFICATIONS}
+ * (hoy, íconos de calificación — nunca nada por-usuario o
+ * por-establecimiento). Ver {@link #publico}.
  */
 @RestController
 public class DownloadController {
@@ -73,17 +105,23 @@ public class DownloadController {
     private final JwtTokenService jwt;
     private final JwtProperties jwtProps;
     private final String tokenCompartido;
+    private final ViewTokenService viewTokens;
+    private final FileAccessService acceso;
 
     public DownloadController(ArchivoRepository archivos,
                               AlmacenObjetos almacen,
                               JwtTokenService jwt,
                               JwtProperties jwtProps,
-                              @Value("${files.internal-token:}") String tokenCompartido) {
+                              @Value("${files.internal-token:}") String tokenCompartido,
+                              ViewTokenService viewTokens,
+                              FileAccessService acceso) {
         this.archivos = archivos;
         this.almacen = almacen;
         this.jwt = jwt;
         this.jwtProps = jwtProps;
         this.tokenCompartido = tokenCompartido == null ? "" : tokenCompartido;
+        this.viewTokens = viewTokens;
+        this.acceso = acceso;
     }
 
     /**
@@ -96,18 +134,196 @@ public class DownloadController {
     public ResponseEntity<StreamingResponseBody> descargar(
             @RequestHeader(value = INTERNAL_HEADER, required = false) String token,
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String autorizacion,
-            @PathVariable("archivoId") long archivoId) {
+            @PathVariable("archivoId") long archivoId,
+            @RequestParam(value = "mimeType", required = false) String mimeType) {
 
-        String quien = identificaLlamante(autorizacion, token);
-        if (quien == null) {
+        Llamante llamante = identificaLlamante(autorizacion, token);
+        if (llamante == null) {
             log.warn("descarga id={} rechazada: ni JWT válido ni token interno", archivoId);
             return ResponseEntity.status(401).build();
         }
+        if (llamante.esUsuario() && !acceso.puedeVer(archivoId, llamante.email(), llamante.roles())) {
+            // 404 y no 403 a propósito: distinguir "no es tuyo" de "no
+            // existe" le regala a quien prueba ids al azar la
+            // confirmación de que un id concreto SÍ tiene fila activa.
+            log.warn("descarga id={} rechazada: {} sin permiso sobre este archivo",
+                    archivoId, llamante.etiqueta());
+            return ResponseEntity.notFound().build();
+        }
+        return streamear(archivoId, llamante.etiqueta(), mimeType);
+    }
 
+    /**
+     * Acuña un token de vista para {@code archivoId} — ver javadoc de
+     * clase. Exige el mismo JWT que {@code descargar}: emitir el token
+     * es una acción de sesión normal, sólo lo que se hace CON el token
+     * (pedir {@code /files/view/{id}}) es lo que no puede llevar
+     * cabeceras. 404 si el archivo no existe o está inactivo — no tiene
+     * sentido acuñar un acceso a algo que {@code /files/view} va a
+     * rechazar igual.
+     */
+    @PostMapping("/files/view-token/{archivoId}")
+    public ResponseEntity<Map<String, Object>> emitirTokenVista(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String autorizacion,
+            @PathVariable("archivoId") long archivoId) {
+
+        Llamante llamante = identificaLlamante(autorizacion, null);
+        if (llamante == null) {
+            return ResponseEntity.status(401).build();
+        }
+        if (!viewTokens.habilitado()) {
+            log.error("view-token id={}: files.view-token-secret no configurado", archivoId);
+            return ResponseEntity.status(503).build();
+        }
+        if (archivos.buscarActivo(archivoId).isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        // Acuñar el token ES otorgar el acceso: quien no podría ver el
+        // archivo directamente tampoco puede llevarse un token que se
+        // lo entregue por otra puerta.
+        if (llamante.esUsuario() && !acceso.puedeVer(archivoId, llamante.email(), llamante.roles())) {
+            log.warn("view-token id={} rechazado: {} sin permiso sobre este archivo",
+                    archivoId, llamante.etiqueta());
+            return ResponseEntity.notFound().build();
+        }
+        String token = viewTokens.acunar(archivoId);
+        log.info("view-token id={} acuñado para {} (ttl={}s)", archivoId, llamante.etiqueta(), viewTokens.ttlSegundos());
+        return ResponseEntity.ok(Map.of(
+                "token", token,
+                // Con el prefijo /api: el cliente que llama a este endpoint
+                // ES el navegador, y llega SIEMPRE a través del gateway
+                // (route "api-file-service", StripPrefix=1 —
+                // /api/files/** -> /files/** en este servicio). Sin el
+                // prefijo, la URL de conveniencia apunta a una ruta que el
+                // gateway no reconoce y el <img> recibe 401 en vez de la
+                // imagen — la propia ruta interna que este controller
+                // expone (/files/view/...) nunca es la que el navegador
+                // debe pedir directamente.
+                "url", "/api/files/view/" + archivoId + "?token=" + token,
+                "expiresIn", viewTokens.ttlSegundos()));
+    }
+
+    /**
+     * Sirve el archivo para visualización directa — pensado para
+     * {@code <img src="...">}. Acepta el JWT normal (mismo camino que
+     * {@code descargar}) O un token de vista en {@code ?token=}; no
+     * hace falta elegir uno en el cliente, se prueban ambos.
+     */
+    @GetMapping("/files/view/{archivoId}")
+    public ResponseEntity<StreamingResponseBody> ver(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String autorizacion,
+            @RequestParam(value = "token", required = false) String token,
+            @PathVariable("archivoId") long archivoId,
+            @RequestParam(value = "mimeType", required = false) String mimeType) {
+
+        Llamante llamante = identificaLlamante(autorizacion, null);
+        if (llamante == null) {
+            if (!viewTokens.valido(token, archivoId)) {
+                log.warn("view id={} rechazada: ni JWT válido ni token de vista", archivoId);
+                return ResponseEntity.status(401).build();
+            }
+            // El token de vista ya es, en sí mismo, la autorización:
+            // se acuñó en emitirTokenVista() después de pasar este
+            // mismo chequeo. No se repite aquí.
+            return streamear(archivoId, "token-vista", mimeType);
+        }
+        if (llamante.esUsuario() && !acceso.puedeVer(archivoId, llamante.email(), llamante.roles())) {
+            log.warn("view id={} rechazada: {} sin permiso sobre este archivo",
+                    archivoId, llamante.etiqueta());
+            return ResponseEntity.notFound().build();
+        }
+        return streamear(archivoId, llamante.etiqueta(), mimeType);
+    }
+
+    /**
+     * V67 — activos gráficos GLOBALES de la interfaz (caritas/símbolos
+     * de calificación), servidos sin JWT ni token de vista: a
+     * diferencia de {@link #ver}, esto está pensado para un
+     * {@code <img src>} que vive para siempre en un dato de catálogo
+     * ({@code tlista_valor.valor}), no para un archivo por-usuario con
+     * un token que expira en minutos.
+     *
+     * <p>La ruta trae la CLAVE S3 completa, tal cual está guardada en
+     * {@code TARCHIVO.urls3} ({@code /files/public/ACADEMICO_VALLEDUPAR/graficaCarita/489905.png}
+     * → clave {@code ACADEMICO_VALLEDUPAR/graficaCarita/489905.png}).
+     * Dos puertas, ambas obligatorias, antes de tocar S3:
+     *
+     * <ol>
+     *   <li>La CLASIFICACIÓN de la clave (el segmento inmediatamente
+     *       antes del nombre de archivo — ver {@link #clasificacionDe})
+     *       tiene que estar en {@link ParamTypes#PUBLIC_FILE_CLASSIFICATIONS}.
+     *       Una clave con clasificación {@code actividad},
+     *       {@code matricula}, etc. — CUALQUIER cosa fuera de ese set —
+     *       responde 404 sin más, aunque el objeto exista de verdad:
+     *       este endpoint nunca es la puerta para datos por-usuario o
+     *       por-establecimiento.</li>
+     *   <li>Tiene que haber una fila ACTIVA en {@code TARCHIVO} con
+     *       {@code urls3} EXACTAMENTE igual a la clave pedida — ver
+     *       {@link ArchivoRepository#buscarActivoPorClave}. Sin esto,
+     *       un objeto huérfano (fila borrada, bytes que quedaron en el
+     *       bucket) seguiría siendo servible para siempre.</li>
+     * </ol>
+     *
+     * <p>404 y no 403 en ambos casos: no hay nada que "pedir permiso"
+     * — una clave que no cumple no es un recurso protegido, es un
+     * recurso que no existe desde el punto de vista de este endpoint.
+     */
+    @GetMapping("/files/public/**")
+    public ResponseEntity<StreamingResponseBody> publico(
+            HttpServletRequest peticion,
+            @RequestParam(value = "mimeType", required = false) String mimeType) {
+
+        String clave = claveDeLaPeticion(peticion);
+        if (clave == null) {
+            return ResponseEntity.notFound().build();
+        }
+        String clasificacion = clasificacionDe(clave);
+        if (clasificacion == null || !ParamTypes.PUBLIC_FILE_CLASSIFICATIONS.contains(clasificacion)) {
+            log.debug("público rechazado: clasificación '{}' no es pública (clave={})", clasificacion, clave);
+            return ResponseEntity.notFound().build();
+        }
+        var archivo = archivos.buscarActivoPorClave(clave).orElse(null);
+        if (archivo == null) {
+            log.warn("público rechazado: sin fila activa para clave={}", clave);
+            return ResponseEntity.notFound().build();
+        }
+        return streamearArchivo(archivo, mimeType, "público:" + clasificacion);
+    }
+
+    /**
+     * Streaming común a {@code descargar}, {@code ver} y
+     * {@code publico}: resolver la clave S3, abrir el objeto y
+     * devolverlo con los headers de siempre. Los tres endpoints
+     * difieren sólo en CÓMO se autoriza al llamante y en cómo llegan a
+     * la fila de {@code TARCHIVO} — una vez que la tienen, sirven
+     * exactamente el mismo archivo de la misma forma.
+     */
+    private ResponseEntity<StreamingResponseBody> streamear(long archivoId, String quien, String mimeType) {
         var archivo = archivos.buscarActivo(archivoId).orElse(null);
         if (archivo == null) {
-            log.warn("descarga id={} rechazada: fila no encontrada o inactiva", archivoId);
+            log.warn("acceso id={} rechazado: fila no encontrada o inactiva", archivoId);
             return ResponseEntity.notFound().build();
+        }
+        return streamearArchivo(archivo, mimeType, quien);
+    }
+
+    private ResponseEntity<StreamingResponseBody> streamearArchivo(
+            ArchivoRepository.Archivo archivo, String mimeType, String quien) {
+        long archivoId = archivo.pkTarchivo();
+
+        MediaType tipoForzado = null;
+        if (mimeType != null && !mimeType.isBlank()) {
+            try {
+                tipoForzado = MediaType.parseMediaType(mimeType);
+            } catch (org.springframework.http.InvalidMediaTypeException e) {
+                // ?mimeType= inválido: 400 en vez de servir el archivo
+                // con un content-type adivinado que el llamante no
+                // pidió. Quien lo manda ya sabe qué es el archivo (ver
+                // javadoc de clase) — un valor roto es un bug del
+                // llamante, no algo que se pueda ignorar en silencio.
+                log.warn("acceso id={}: ?mimeType={} no es un media type válido", archivoId, mimeType);
+                return ResponseEntity.badRequest().build();
+            }
         }
 
         String clave = extraerClave(archivo.urls3());
@@ -115,7 +331,7 @@ public class DownloadController {
             // urls3 debería ser s3://bucket/key o https://host/bucket/key.
             // Si no encaja, devolvemos 502 — es un dato corrupto, no
             // un archivo que el cliente pidió mal.
-            log.warn("descarga id={}: urls3 malformado: {}", archivoId, archivo.urls3());
+            log.warn("acceso id={}: urls3 malformado: {}", archivoId, archivo.urls3());
             return ResponseEntity.status(502).build();
         }
 
@@ -127,7 +343,7 @@ public class DownloadController {
             // subida nunca cerró — o un job de limpieza borró el
             // objeto pero todavía no la fila. Devolvemos 404 al
             // front y logueamos para revisar.
-            log.warn("descarga id={}: fila activa pero objeto ausente en S3 (clave={})",
+            log.warn("acceso id={}: fila activa pero objeto ausente en S3 (clave={})",
                     archivoId, clave);
             return ResponseEntity.notFound().build();
         } catch (S3Exception e) {
@@ -138,7 +354,7 @@ public class DownloadController {
             // credenciales de otro bucket). Sin el texto del error
             // hay que ir a los logs del propio S3 para enterarse, y
             // contra AWS eso no es una opción.
-            log.error("descarga id={}: S3 respondió {} (clave={}): {}",
+            log.error("acceso id={}: S3 respondió {} (clave={}): {}",
                     archivoId, e.statusCode(), clave,
                     e.awsErrorDetails() == null
                             ? e.getMessage()
@@ -156,17 +372,23 @@ public class DownloadController {
                 // Cliente se desconectó a mitad de la descarga. No es
                 // un error que valga la pena reportar como 5xx — el
                 // log a nivel DEBUG basta para diagnóstico.
-                log.debug("descarga id={} interrumpida por el cliente: {}",
+                log.debug("acceso id={} interrumpido por el cliente: {}",
                         archivoId, e.getMessage());
             }
         };
 
         HttpHeaders headers = new HttpHeaders();
-        // TARCHIVO no guarda mimetype, así que el content-type sale
-        // de la extensión de la clave. Se pasa null como primer
-        // argumento para dejar explícito que no es que lo hayamos
-        // olvidado: no existe esa columna.
-        headers.setContentType(mediaTypeDe(null, clave));
+        // TARCHIVO no guarda mimetype, así que por defecto el
+        // content-type sale de la extensión de la clave. Cuando el
+        // llamante manda ?mimeType= (el endpoint o query de negocio
+        // que YA sabe qué es este archivo — p.ej. "esto siempre es un
+        // jpeg de perfilUsuario" — gana sobre la adivinanza: filas
+        // como perfilUsuario guardan el nombre real en TARCHIVO.nombre
+        // (un email o un documento de identidad, sin extensión) y sólo
+        // la clave S3 trae el sufijo, así que dejarle al llamante
+        // fijar el tipo evita depender de que ese sufijo siempre esté
+        // bien puesto.
+        headers.setContentType(tipoForzado != null ? tipoForzado : mediaTypeDe(null, clave));
         // attachment vs inline: si el cliente es un <img> en el front,
         // inline; si es un "Descargar" explícito, attachment. El
         // catálogo puede pasar ?disposition=attachment vía query si
@@ -207,14 +429,14 @@ public class DownloadController {
         // que ponerlo a mano (hacerlo es un error: es un header
         // hop-by-hop que el contenedor gestiona él mismo).
 
-        log.info("descarga id={} ({} bytes) para {}", archivoId, tamano, quien);
+        log.info("acceso id={} ({} bytes) para {}", archivoId, tamano, quien);
         return ResponseEntity.ok().headers(headers).body(cuerpo);
     }
 
     /**
      * Identifica a quien pide el archivo, por cualquiera de las dos
-     * vías legítimas. Devuelve una etiqueta para el log, o
-     * {@code null} si no se pudo autenticar por ninguna.
+     * vías legítimas. Devuelve {@code null} si no se pudo autenticar
+     * por ninguna.
      *
      * <p>Son dos porque hay dos clases de llamante, y ninguna puede
      * usar el mecanismo de la otra:
@@ -222,22 +444,29 @@ public class DownloadController {
      * <ul>
      *   <li><b>Un usuario</b> (el admin-ui pidiendo la firma de un
      *       funcionario) llega con su JWT. Se verifica la FIRMA, no
-     *       la mera presencia de la cabecera.</li>
+     *       la mera presencia de la cabecera. {@link Llamante#esUsuario()}
+     *       es true, y trae email + roles para el chequeo de
+     *       {@link FileAccessService}.</li>
      *   <li><b>El catálogo</b>, cuando arma un enlace en una respuesta,
      *       actúa por su cuenta y no tiene JWT de usuario ninguno que
-     *       presentar. Para eso está el secreto compartido.</li>
+     *       presentar. Para eso está el secreto compartido — y por lo
+     *       mismo no pasa por {@link FileAccessService}: ya es un
+     *       llamante de confianza, no alguien a quien haya que
+     *       preguntarle "¿es tuyo este archivo?".</li>
      * </ul>
      *
      * <p>Se prueba primero el JWT porque es el caso normal; el token
      * interno es la excepción.
      */
-    private String identificaLlamante(String autorizacion, String tokenInterno) {
+    private Llamante identificaLlamante(String autorizacion, String tokenInterno) {
         String prefijo = jwtProps.tokenPrefix();
         if (autorizacion != null && autorizacion.startsWith(prefijo)) {
             String bruto = autorizacion.substring(prefijo.length()).trim();
             if (!bruto.isEmpty()) {
                 try {
-                    return "usuario:" + jwt.parse(bruto).email();
+                    var principal = jwt.parse(bruto);
+                    return new Llamante("usuario:" + principal.email(),
+                            principal.email(), principal.roles());
                 } catch (io.jsonwebtoken.JwtException e) {
                     // Token presente pero inválido (caducado, firma que
                     // no cuadra). No se cae al token interno: quien
@@ -248,7 +477,19 @@ public class DownloadController {
                 }
             }
         }
-        return verificaTokenInterno(tokenInterno) ? "catálogo" : null;
+        return verificaTokenInterno(tokenInterno) ? new Llamante("catálogo", null, null) : null;
+    }
+
+    /**
+     * Quien pide el archivo, ya identificado. {@code email}/{@code roles}
+     * son {@code null} para el catálogo (token interno) — ese llamante
+     * no pasa por {@link FileAccessService#puedeVer}, así que no hacen
+     * falta. {@link #esUsuario()} es la señal de "sí hacen falta".
+     */
+    private record Llamante(String etiqueta, String email, Set<String> roles) {
+        boolean esUsuario() {
+            return email != null;
+        }
     }
 
     /**
@@ -263,6 +504,51 @@ public class DownloadController {
         byte[] esperado = tokenCompartido.getBytes(StandardCharsets.UTF_8);
         byte[] dado = recibido.getBytes(StandardCharsets.UTF_8);
         return MessageDigest.isEqual(esperado, dado);
+    }
+
+    /**
+     * V67 — todo lo que venga después de {@code /files/public/} en la
+     * ruta pedida, tal cual (es la clave S3 completa, puede traer
+     * varios segmentos). {@code null} si la petición no cae bajo ese
+     * prefijo o si no queda nada después de él.
+     *
+     * <p>Se lee {@code PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE} en vez
+     * de construir la ruta a mano, mismo patrón que
+     * {@code ReenvioController#rutaDestino} — es el valor que Spring
+     * ya calculó al resolver el {@code /**}, sin que este método tenga
+     * que lidiar con querystring ni con cómo vino codificado.
+     */
+    private static String claveDeLaPeticion(HttpServletRequest peticion) {
+        String ruta = (String) peticion.getAttribute(
+                org.springframework.web.servlet.HandlerMapping.PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE);
+        if (ruta == null) {
+            ruta = peticion.getRequestURI();
+        }
+        String prefijo = "/files/public/";
+        if (ruta == null || !ruta.startsWith(prefijo)) {
+            return null;
+        }
+        String clave = ruta.substring(prefijo.length());
+        return clave.isBlank() ? null : clave;
+    }
+
+    /**
+     * V67 — la clasificación de una clave S3 es el segmento
+     * INMEDIATAMENTE ANTERIOR al nombre de archivo, sin importar
+     * cuántos segmentos vengan antes ({@code <sitio>/}, {@code
+     * <establecimiento>/}, o ninguno de los dos — ver
+     * {@code TransformadorMultipart#claveDe}): para
+     * {@code ACADEMICO_VALLEDUPAR/graficaCarita/489905.png} es
+     * {@code graficaCarita}; para
+     * {@code ACADEMICO_VALLEDUPAR/120001003751/actividad/463900.pdf}
+     * es {@code actividad}. {@code null} si la clave no tiene ni un
+     * separador ({@code "489905.png"} a secas, el formato genérico sin
+     * clasificar) — nunca es pública, porque no HAY clasificación que
+     * mirar.
+     */
+    static String clasificacionDe(String clave) {
+        String[] partes = clave.split("/");
+        return partes.length < 2 ? null : partes[partes.length - 2];
     }
 
     /**

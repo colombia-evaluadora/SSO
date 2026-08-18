@@ -200,6 +200,98 @@ class QueryAdminServiceParamTypesValidationTest {
                 .hasMessageContaining("VARCHAR-99!");
     }
 
+    // ---------- V63: clasificación de archivos (FILE:clasificacion) ----------
+
+    @Test
+    void fileWithValidClassificationIsAccepted() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-file-clasificado", "SELECT cast(:BODY.FOTO as bigint)",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.FOTO", "FILE:perfilUsuario"));
+        assertThatCode(() -> invokeValidation(req));
+    }
+
+    @Test
+    void fileWithClassificationAndRequiredSuffixIsAccepted() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-file-clasificado-req", "SELECT cast(:BODY.FOTO as bigint)",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.FOTO", "FILE:perfilUsuario!"));
+        assertThatCode(() -> invokeValidation(req));
+    }
+
+    @Test
+    void fileWithInvalidClassificationFormatIsRejected() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-file-mal-clasificado", "SELECT cast(:BODY.FOTO as bigint)",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.FOTO", "FILE:con espacio"));
+        assertThatThrownBy(() -> invokeValidation(req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("clasificación de archivo inválida");
+    }
+
+    @Test
+    void fileWithClassificationStartingWithDigitIsRejected() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-file-mal-clasificado-2", "SELECT cast(:BODY.FOTO as bigint)",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.FOTO", "FILE:1perfil"));
+        assertThatThrownBy(() -> invokeValidation(req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("clasificación de archivo inválida");
+    }
+
+    // ---------- V65: campo de establecimiento (FILE:clasificacion:campo) ----------
+
+    @Test
+    void fileWithClassificationAndEstablishmentFieldIsAccepted() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-file-establecimiento", "SELECT cast(:BODY.FOTO as bigint)",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.FOTO", "FILE:actividad:idEstablecimiento"));
+        assertThatCode(() -> invokeValidation(req));
+    }
+
+    @Test
+    void fileWithClassificationAndEstablishmentFieldAndRequiredSuffixIsAccepted() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-file-establecimiento-req", "SELECT cast(:BODY.FOTO as bigint)",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.FOTO", "FILE:actividad:idEstablecimiento!"));
+        assertThatCode(() -> invokeValidation(req));
+    }
+
+    @Test
+    void fileWithInvalidEstablishmentFieldFormatIsRejected() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-file-establecimiento-mal", "SELECT cast(:BODY.FOTO as bigint)",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.FOTO", "FILE:actividad:con espacio"));
+        assertThatThrownBy(() -> invokeValidation(req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("campo de establecimiento inválido");
+    }
+
+    @Test
+    void fileWithEstablishmentFieldStartingWithDigitIsRejected() {
+        QueryRequest req = new QueryRequest(
+                null, "uuid-file-establecimiento-mal-2", "SELECT cast(:BODY.FOTO as bigint)",
+                "postgres", false, false, null, null, null,
+                null, null, ExecutionMode.SELECT, null, null,
+                params("BODY.FOTO", "FILE:actividad:1establecimiento"));
+        assertThatThrownBy(() -> invokeValidation(req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("campo de establecimiento inválido");
+    }
+
     @Test
     void invalidParamKeyShapeIsRejected() {
         QueryRequest req = new QueryRequest(

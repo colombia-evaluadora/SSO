@@ -52,7 +52,6 @@ public class AlmacenObjetos {
 
     private final S3Client s3;
     private final String bucket;
-    private final String urlPublicaBase;
 
     public AlmacenObjetos(
             @Value("${files.s3.endpoint:}") String endpoint,
@@ -60,11 +59,9 @@ public class AlmacenObjetos {
             @Value("${files.s3.bucket}") String bucket,
             @Value("${files.s3.access-key}") String accessKey,
             @Value("${files.s3.secret-key}") String secretKey,
-            @Value("${files.s3.path-style:true}") boolean pathStyle,
-            @Value("${files.s3.public-base-url:}") String urlPublicaBase) {
+            @Value("${files.s3.path-style:true}") boolean pathStyle) {
 
         this.bucket = bucket;
-        this.urlPublicaBase = urlPublicaBase;
 
         var builder = S3Client.builder()
                 .region(Region.of(region))
@@ -105,8 +102,9 @@ public class AlmacenObjetos {
     }
 
     /**
-     * Sube el contenido y devuelve la URL con la que se registrará en
-     * {@code TARCHIVO}.
+     * Sube el contenido y devuelve la clave con la que se registrará
+     * en {@code TARCHIVO.urls3} — ver el porqué de "clave, no URL"
+     * más abajo.
      *
      * <p>Recibe un {@link InputStream} y el tamaño ya conocido en
      * vez de un array de bytes: cargar el fichero entero en memoria
@@ -125,14 +123,24 @@ public class AlmacenObjetos {
 
         s3.putObject(req, RequestBody.fromInputStream(contenido, tamano));
 
-        // urls3 sirve para auditoría y para reconstruir la clave
-        // S3 en la descarga (ver DownloadController.extraerClave).
-        // No se le entrega al navegador.
-        String url = urlPublicaBase == null || urlPublicaBase.isBlank()
-                ? "s3://" + bucket + "/" + clave
-                : urlPublicaBase.replaceAll("/+$", "") + "/" + clave;
-        log.debug("subido {} ({} bytes) -> {}", clave, tamano, url);
-        return url;
+        // urls3 guarda la CLAVE cruda, sin esquema ni host — el mismo
+        // formato que ya tiene la inmensa mayoría de las filas
+        // históricas de TARCHIVO (p.ej.
+        // "ACADEMICO_VALLEDUPAR/perfilUsuario/141906.jpeg"). Antes
+        // esto se prefijaba con "s3://bucket/" o, si
+        // files.s3.public-base-url estaba configurado, con esa URL
+        // completa — lo que colaba detalles de infraestructura de
+        // ESTE despliegue (host, puerto, hasta la IP del servidor de
+        // pruebas en un caso real) dentro de una fila que se supone
+        // sobrevive al despliegue. Nada lee ese host de vuelta: la
+        // única función de urls3 es reconstruir la clave en la
+        // descarga (ver DownloadController.extraerClave, que ya
+        // sabía leer este formato porque es el histórico) — el
+        // endpoint/bucket real siempre sale de la configuración del
+        // propio AlmacenObjetos en tiempo de lectura, nunca de la
+        // fila. No se le entrega al navegador.
+        log.debug("subido {} ({} bytes)", clave, tamano);
+        return clave;
     }
 
     /**
