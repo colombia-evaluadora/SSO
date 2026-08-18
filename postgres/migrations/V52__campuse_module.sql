@@ -1039,7 +1039,35 @@ BEGIN
 
     -- Si ademas el conjunto de EE accesibles era vacio => 42501.
     -- (Si v_total > 0 seguro habia EE accesibles, no chequeamos doble.)
+    -- BUG (42P01 "relation ee_accesibles does not exist"): la CTE de
+    -- arriba solo vive dentro de la sentencia WITH...SELECT INTO v_total,
+    -- que termina en su propio ';' -- este IF es una sentencia NUEVA donde
+    -- ee_accesibles ya no existe. Se repite la CTE, autocontenida, igual
+    -- que ya hace fn_sed_listar en su segundo uso.
     IF v_total = 0 AND NOT EXISTS (
+        WITH ee_accesibles AS (
+            SELECT e.PK_ESTABLECIMIENTO
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
+             WHERE e.ACTIVE      = TRUE
+               AND f.ACTIVE      = TRUE
+               AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+            UNION
+            SELECT e.PK_ESTABLECIMIENTO
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
+             WHERE e.ACTIVE      = TRUE
+               AND f.ACTIVE      = TRUE
+               AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+            UNION
+            SELECT DISTINCT s.FK_TESTABLECIMIENTO
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE s.ACTIVE       = TRUE
+               AND su.ACTIVE      = TRUE
+               AND su.FK_TROL     = 8
+               AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        )
         SELECT 1 FROM ee_accesibles
     ) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
