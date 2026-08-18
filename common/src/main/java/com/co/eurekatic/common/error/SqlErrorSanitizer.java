@@ -39,6 +39,15 @@ import java.util.regex.Pattern;
  * puebla {@code constraint}/{@code table} en la respuesta y {@code RAISE} no:
  * lo que viene del motor se reemplaza por un texto genérico, lo que viene del
  * autor se conserva y se le redactan los identificadores.
+ *
+ * <p><b>3. "Genérico" no es lo mismo que "sin pistas".</b> Cuando lo que
+ * falló es literalmente el dato que el llamante mandó en el body/param
+ * (falta un campo, o el valor no tiene el tipo/formato esperado), el
+ * genérico se enriquece con el nombre del campo o el tipo — nunca con el
+ * valor — porque eso es exactamente lo que el cliente de query-service
+ * necesita para corregir la petición, y ni el nombre de un campo ni un
+ * tipo SQL builtin ({@code bigint}, {@code character varying(130)})
+ * identifican tabla o constraint.
  */
 public final class SqlErrorSanitizer {
 
@@ -104,6 +113,24 @@ public final class SqlErrorSanitizer {
             Pattern.CASE_INSENSITIVE);
 
     /**
+     * {@code Key (col1, col2)=(...)} — el DETAIL de una violación de unicidad
+     * o de FK. Sólo se toma la lista de columnas antes del {@code =}; lo que
+     * sigue son los valores reales que colisionaron y nunca se lee.
+     */
+    private static final Pattern DETAIL_COLUMNS = Pattern.compile("Key \\(([^)]+)\\)=");
+
+    private static final Pattern DETAIL_LINE = Pattern.compile("Detail:\\s*(.+)");
+
+    /**
+     * {@code invalid input syntax for type bigint: "abc"} / {@code value too
+     * long for type character varying(130)}. Se corta antes de los dos
+     * puntos para no arrastrar el valor entre comillas que sigue en el
+     * primer caso.
+     */
+    private static final Pattern NATIVE_TYPE =
+            Pattern.compile("for type ([a-zA-Z][a-zA-Z0-9_ ]*(?:\\([0-9, ]+\\))?)");
+
+    /**
      * Clasifica y depura. Recorre la cadena ({@code getNextException} y
      * {@code getCause}) hasta el primer eslabón con SQLState reconocible.
      */
@@ -148,24 +175,95 @@ public final class SqlErrorSanitizer {
 
     /**
      * Texto público. El mensaje del autor sobrevive redactado; el del motor y
-     * cualquier fallo de sintaxis u objeto inexistente se reemplazan enteros —
-     * ahí el texto original sólo nombra tablas, columnas y constraints reales,
-     * o expone detalles de tipo/tamaño de columna que tampoco corresponde
-     * publicar.
+     * cualquier fallo de sintaxis u objeto inexistente se reemplazan por uno
+     * genérico — ahí el texto original sólo nombra tablas, columnas y
+     * constraints reales. La única excepción deliberada: cuando el motor
+     * rechaza el dato en sí (falta un campo, sobra, no tiene el tipo o
+     * formato esperado), el genérico se enriquece con el nombre del campo o
+     * el tipo esperado — nunca con el valor que el cliente envió — porque
+     * ahí sí es lo que el llamante necesita para corregir su body/param.
      */
     private static String messageFor(SQLException ex, String sqlState, SqlErrorKind kind) {
         if (kind == SqlErrorKind.INTERNAL || kind == SqlErrorKind.UNAVAILABLE) {
             return kind.defaultMessage();
         }
         if (sqlState.startsWith("22") && !BUSINESS_DATA_EXCEPTION_STATE.equals(sqlState)) {
-            return kind.defaultMessage();
+            return withTypeHint(kind.defaultMessage(), authorMessage(ex));
         }
         String raw = authorMessage(ex);
-        if (raw == null || engineGenerated(ex, raw)) {
+        if (raw == null) {
             return kind.defaultMessage();
+        }
+        if (engineGenerated(ex, raw)) {
+            return withFieldHint(kind, ex);
         }
         String redacted = redact(raw);
         return redacted.isBlank() ? kind.defaultMessage() : truncate(redacted);
+    }
+
+    /**
+     * Añade el tipo PG esperado ({@code bigint}, {@code character
+     * varying(130)}, …) cuando el mensaje nativo lo trae. El nombre de un
+     * tipo SQL no identifica tabla ni columna — es vocabulario del motor,
+     * no del esquema — así que es seguro reenviarlo.
+     */
+    private static String withTypeHint(String base, String rawMessage) {
+        if (rawMessage == null) {
+            return base;
+        }
+        Matcher m = NATIVE_TYPE.matcher(rawMessage);
+        return m.find() ? base + " (tipo esperado: " + m.group(1).trim() + ")" : base;
+    }
+
+    /**
+     * Añade el/los campo(s) que el motor rechazó — vía {@code getColumn()}
+     * cuando el driver lo puebla ({@code not_null_violation}) o, si no,
+     * parseando sólo la lista de columnas del DETAIL ({@code Key (col)=},
+     * {@code unique_violation}/{@code foreign_key_violation}) sin tocar los
+     * valores que le siguen al {@code =}.
+     */
+    private static String withFieldHint(SqlErrorKind kind, SQLException ex) {
+        String field = fieldName(ex);
+        if (field == null) {
+            return kind.defaultMessage();
+        }
+        return switch (kind) {
+            case MISSING_REQUIRED -> "Falta el campo obligatorio '" + field + "'";
+            case REFERENCE_MISSING -> "La referencia del campo '" + field + "' no existe o no está activa";
+            case DUPLICATE -> "Ya existe un registro con el mismo valor en '" + field + "'";
+            default -> kind.defaultMessage() + " (campo: " + field + ")";
+        };
+    }
+
+    private static String fieldName(SQLException ex) {
+        ServerErrorMessage sem = serverError(ex);
+        if (sem != null && sem.getColumn() != null && !sem.getColumn().isBlank()) {
+            return humanizeFieldName(sem.getColumn());
+        }
+        String detail = sem != null ? sem.getDetail() : detailLine(ex.getMessage());
+        if (detail == null) {
+            return null;
+        }
+        Matcher m = DETAIL_COLUMNS.matcher(detail);
+        if (!m.find()) {
+            return null;
+        }
+        return java.util.Arrays.stream(m.group(1).split(",\\s*"))
+                .map(SqlErrorSanitizer::humanizeFieldName)
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
+
+    private static String detailLine(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        Matcher m = DETAIL_LINE.matcher(raw);
+        return m.find() ? m.group(1) : null;
+    }
+
+    /** {@code fk_tlv_estado} → {@code estado}; reusa el mismo diccionario que {@link #redact}. */
+    private static String humanizeFieldName(String rawColumn) {
+        return redact(rawColumn.toUpperCase(Locale.ROOT)).toLowerCase(Locale.ROOT).replace('_', ' ');
     }
 
     /**

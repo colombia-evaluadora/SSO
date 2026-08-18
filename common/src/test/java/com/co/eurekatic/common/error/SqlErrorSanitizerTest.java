@@ -23,6 +23,11 @@ class SqlErrorSanitizerTest {
      */
     private static SQLException pg(String sqlState, String message, String detail,
                                    String table, String constraint) {
+        return pg(sqlState, message, detail, table, constraint, null);
+    }
+
+    private static SQLException pg(String sqlState, String message, String detail,
+                                   String table, String constraint, String column) {
         StringBuilder wire = new StringBuilder();
         campo(wire, 'S', "ERROR");
         campo(wire, 'C', sqlState);
@@ -30,6 +35,7 @@ class SqlErrorSanitizerTest {
         campo(wire, 'D', detail);
         campo(wire, 't', table);
         campo(wire, 'n', constraint);
+        campo(wire, 'c', column);
         return new PSQLException(new ServerErrorMessage(wire.toString()));
     }
 
@@ -49,7 +55,7 @@ class SqlErrorSanitizerTest {
     class Motor {
 
         @Test
-        void unique_violation_no_filtra_el_valor_que_colisiono() {
+        void unique_violation_nombra_el_campo_pero_no_el_valor_que_colisiono() {
             SQLException ex = pg("23505",
                     "duplicate key value violates unique constraint \"ux_tusuario_correo_electronico\"",
                     "Key (correo_electronico)=(juan.perez@colegio.edu.co) already exists.",
@@ -59,27 +65,71 @@ class SqlErrorSanitizerTest {
 
             assertThat(out.kind()).isEqualTo(SqlErrorKind.DUPLICATE);
             assertThat(out.message())
-                    .isEqualTo(SqlErrorKind.DUPLICATE.defaultMessage())
+                    .isEqualTo("Ya existe un registro con el mismo valor en 'correo electronico'")
                     .doesNotContain("juan.perez@colegio.edu.co")
                     .doesNotContain("ux_tusuario_correo_electronico")
                     .doesNotContain("tusuario");
         }
 
         @Test
-        void not_null_violation_no_nombra_la_columna() {
+        void unique_violation_compuesta_lista_todas_las_columnas() {
+            SQLException ex = pg("23505",
+                    "duplicate key value violates unique constraint \"u_tsede_1\"",
+                    "Key (fk_testablecimiento, nombre)=(1, Sede Principal) already exists.",
+                    "tsede", "u_tsede_1");
+
+            SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(ex);
+
+            assertThat(out.message())
+                    .isEqualTo("Ya existe un registro con el mismo valor en 'establecimiento, nombre'")
+                    .doesNotContain("Sede Principal");
+        }
+
+        @Test
+        void not_null_violation_nombra_el_campo_via_getColumn() {
             SQLException ex = pg("23502",
                     "null value in column \"correo_electronico\" of relation \"tusuario\" "
                             + "violates not-null constraint",
-                    "Failing row contains (1, null).", "tusuario", null);
+                    "Failing row contains (1, null).", "tusuario", null, "correo_electronico");
 
             SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(ex);
 
             assertThat(out.kind()).isEqualTo(SqlErrorKind.MISSING_REQUIRED);
+            assertThat(out.message()).isEqualTo("Falta el campo obligatorio 'correo electronico'");
+        }
+
+        @Test
+        void not_null_violation_sin_getColumn_cae_al_generico() {
+            // Ruta sin driver PG (SQLException plano): no hay getColumn() ni
+            // DETAIL con "Key (col)=", así que no hay de dónde sacar el
+            // nombre sin arriesgar el mensaje crudo — se queda en genérico.
+            SQLException ex = new SQLException(
+                    "ERROR: null value in column \"correo_electronico\" violates not-null constraint",
+                    "23502");
+
+            SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(ex);
+
             assertThat(out.message()).isEqualTo(SqlErrorKind.MISSING_REQUIRED.defaultMessage());
         }
 
         @Test
-        void truncamiento_de_varchar_no_expone_el_tamano_de_columna() {
+        void fk_violation_nombra_el_campo_de_la_referencia() {
+            SQLException ex = pg("23503",
+                    "insert or update on table \"tperiodo_academico\" violates foreign key constraint "
+                            + "\"fk_tperiodo_academico_3\"",
+                    "Key (fk_tlv_estado)=(999999) is not present in table \"tlista_valor\".",
+                    "tperiodo_academico", "fk_tperiodo_academico_3");
+
+            SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(ex);
+
+            assertThat(out.kind()).isEqualTo(SqlErrorKind.REFERENCE_MISSING);
+            assertThat(out.message())
+                    .isEqualTo("La referencia del campo 'estado' no existe o no está activa")
+                    .doesNotContain("999999", "tlista_valor", "tperiodo_academico");
+        }
+
+        @Test
+        void truncamiento_de_varchar_da_el_tipo_esperado_sin_tabla_ni_columna() {
             // 22001 (string_data_right_truncation): el motor no puebla
             // table/constraint aquí, así que el discriminador de la clase 22
             // es el SQLState, no los campos estructurados. Reproducido en
@@ -90,12 +140,23 @@ class SqlErrorSanitizerTest {
 
             assertThat(out.kind()).isEqualTo(SqlErrorKind.INVALID_VALUE);
             assertThat(out.message())
-                    .isEqualTo(SqlErrorKind.INVALID_VALUE.defaultMessage())
-                    .doesNotContain("130", "character varying");
+                    .isEqualTo("Un valor enviado no tiene el formato o el rango esperado "
+                            + "(tipo esperado: character varying(130))");
         }
 
         @Test
-        void division_por_cero_tampoco_es_mensaje_de_autor() {
+        void cast_invalido_da_el_tipo_esperado_sin_el_valor_enviado() {
+            SQLException ex = raise("22P02", "invalid input syntax for type bigint: \"no-soy-un-numero\"");
+
+            SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(ex);
+
+            assertThat(out.message())
+                    .isEqualTo("Un valor enviado no tiene el formato o el rango esperado (tipo esperado: bigint)")
+                    .doesNotContain("no-soy-un-numero");
+        }
+
+        @Test
+        void division_por_cero_no_tiene_tipo_que_ofrecer_y_cae_al_generico() {
             SQLException ex = raise("22012", "division by zero");
 
             SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(ex);
