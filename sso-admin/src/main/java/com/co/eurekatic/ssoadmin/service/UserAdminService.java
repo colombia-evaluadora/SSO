@@ -11,6 +11,7 @@ import com.co.eurekatic.common.security.PasswordPolicy;
 import com.co.eurekatic.ssoadmin.client.SessionInvalidationClient;
 import com.co.eurekatic.ssoadmin.config.EmailProperties;
 import com.co.eurekatic.ssoadmin.dto.CreateAccountRequest;
+import com.co.eurekatic.ssoadmin.dto.ForgotPasswordResponse;
 import com.co.eurekatic.ssoadmin.dto.UpdateAccountRequest;
 import com.co.eurekatic.ssoadmin.dto.UserResponse;
 import com.co.eurekatic.ssoadmin.event.NotificationEventPublisher;
@@ -30,7 +31,9 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -83,6 +86,10 @@ public class UserAdminService {
     // @Email — this is the second line of defense.
     private static final Pattern EMAIL_REGEX =
             Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
+
+    // Espeja RESTORE_TTL_MINUTES de TokenService (30 min). En segundos porque
+    // es lo que consume el front para el contador de la pantalla de aviso.
+    private static final long RESTORE_TTL_SECONDS = 30 * 60;
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -362,24 +369,40 @@ public class UserAdminService {
      * Issues a restore-password email. Always returns
      * successfully (even if the email is unknown) so the API
      * doesn't leak which addresses are registered.
+     *
+     * <p><b>Devuelve el token en la respuesta</b> — ver la advertencia de
+     * seguridad en {@link ForgotPasswordResponse}. Es un vector de apropiacion
+     * de cuenta y se expone a pedido explicito del equipo.
+     *
+     * <p>Para NO delatar que direcciones existen, un correo desconocido recibe
+     * igual un token con la misma forma y vida: se genera al vuelo y no se
+     * persiste, asi que no sirve para restablecer nada. Sin esto, la sola
+     * presencia del token en la respuesta convertiria este endpoint en un
+     * enumerador de cuentas.
      */
     @Transactional
-    public void forgotPassword(String email, String appName) {
-        userRepository.findAll().stream()
+    public ForgotPasswordResponse forgotPassword(String email, String appName) {
+        Optional<User> encontrado = userRepository.findAll().stream()
                 .filter(u -> email.equals(u.getEmail()))
-                .findFirst()
-                .ifPresent(u -> {
-                    String token = tokenService.issueRestoreToken(u);
-                    userRepository.save(u);
+                .findFirst();
 
-                    Map<String, Object> payload = new LinkedHashMap<>();
-                    payload.put("displayName", u.getFullName() == null ? u.getEmail() : u.getFullName());
-                    payload.put("email", u.getEmail());
-                    payload.put("resetLink", resolveRestoreUrl(token, appName));
-                    payload.put("ttlMinutes", 30);
-                    events.publish("email", String.valueOf(u.getId()), u.getEmail(),
-                            "password-reset", payload, null);
-                });
+        if (encontrado.isEmpty()) {
+            return new ForgotPasswordResponse(UUID.randomUUID().toString(), RESTORE_TTL_SECONDS);
+        }
+
+        User u = encontrado.get();
+        String token = tokenService.issueRestoreToken(u);
+        userRepository.save(u);
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("displayName", u.getFullName() == null ? u.getEmail() : u.getFullName());
+        payload.put("email", u.getEmail());
+        payload.put("resetLink", resolveRestoreUrl(token, appName));
+        payload.put("ttlMinutes", RESTORE_TTL_SECONDS / 60);
+        events.publish("email", String.valueOf(u.getId()), u.getEmail(),
+                "password-reset", payload, null);
+
+        return new ForgotPasswordResponse(token, RESTORE_TTL_SECONDS);
     }
 
     private String resolveRestoreUrl(String token, String appName) {
