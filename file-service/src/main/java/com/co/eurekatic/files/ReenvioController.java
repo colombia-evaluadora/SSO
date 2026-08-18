@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -81,6 +82,28 @@ public class ReenvioController {
     public ResponseEntity<String> put(MultipartHttpServletRequest peticion,
                                       @RequestHeader(HttpHeaders.AUTHORIZATION) String autorizacion) {
         return reenviar("PUT", peticion, autorizacion);
+    }
+
+    /**
+     * PATCH — edición parcial con fichero.
+     *
+     * <p>Sin esto, cualquier destino del catálogo registrado como PATCH era
+     * inalcanzable a través de file-service: Spring respondía 500
+     * ({@code HttpRequestMethodNotSupportedException}) antes de mirar la ruta.
+     * Es el caso de {@code PATCH /establecimientos/:ID}, la única forma de
+     * reemplazar el escudo de un establecimiento — y no se puede sustituir por
+     * PUT, porque en ese mismo path PUT es la baja lógica
+     * ({@code fn_est_soft_delete}).
+     *
+     * <p>No hay lógica nueva: {@code reenviar} ya recibe el verbo como
+     * parámetro y lo resuelve con {@code HttpMethod.valueOf}, y
+     * {@code FileDestinationAccessService} busca el destino por (método, ruta)
+     * sin verbos fijos.
+     */
+    @PatchMapping(value = "/files/**", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<String> patch(MultipartHttpServletRequest peticion,
+                                        @RequestHeader(HttpHeaders.AUTHORIZATION) String autorizacion) {
+        return reenviar("PATCH", peticion, autorizacion);
     }
 
     private ResponseEntity<String> reenviar(String metodo,
