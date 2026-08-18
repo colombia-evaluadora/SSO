@@ -3,6 +3,7 @@ package com.co.eurekatic.ssoadmin.controller;
 import com.co.eurekatic.ssoadmin.dto.BindUserRoleRequest;
 import com.co.eurekatic.ssoadmin.dto.CreateAccountRequest;
 import com.co.eurekatic.ssoadmin.dto.ForgotPasswordResponse;
+import com.co.eurekatic.ssoadmin.dto.ResetTokenStatusResponse;
 import com.co.eurekatic.ssoadmin.dto.TokenPasswordRequest;
 import com.co.eurekatic.ssoadmin.dto.UpdateAccountRequest;
 import com.co.eurekatic.ssoadmin.dto.UserResponse;
@@ -98,6 +99,19 @@ public class UserController {
     public ResponseEntity<Void> restorePassword(@Valid @RequestBody TokenPasswordRequest req) {
         service.restorePassword(req.token(), req.password());
         return ResponseEntity.ok().build();
+    }
+
+    /**
+     * Estado de un enlace de reseteo, para la pantalla de confirmacion.
+     *
+     * <p>Publico, como el resto de la familia de recuperacion: lo consulta un
+     * usuario que por definicion no tiene sesion. Siempre responde 200 — un
+     * token inexistente es {@code status: "invalid"}, no un 404: para la UI es
+     * un estado a pintar, no un error.
+     */
+    @GetMapping("/resetTokenStatus")
+    public ResetTokenStatusResponse resetTokenStatus(@RequestParam String token) {
+        return service.resetTokenStatus(token);
     }
 
     @GetMapping("/getUsers")
