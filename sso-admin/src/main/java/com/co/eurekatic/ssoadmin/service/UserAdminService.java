@@ -12,6 +12,7 @@ import com.co.eurekatic.ssoadmin.client.SessionInvalidationClient;
 import com.co.eurekatic.ssoadmin.config.EmailProperties;
 import com.co.eurekatic.ssoadmin.dto.CreateAccountRequest;
 import com.co.eurekatic.ssoadmin.dto.ForgotPasswordResponse;
+import com.co.eurekatic.ssoadmin.dto.ResetTokenStatusResponse;
 import com.co.eurekatic.ssoadmin.dto.UpdateAccountRequest;
 import com.co.eurekatic.ssoadmin.dto.UserResponse;
 import com.co.eurekatic.ssoadmin.event.NotificationEventPublisher;
@@ -27,6 +28,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -403,6 +406,68 @@ public class UserAdminService {
                 "password-reset", payload, null);
 
         return new ForgotPasswordResponse(token, RESTORE_TTL_SECONDS);
+    }
+
+    /**
+     * Estado de un enlace de reseteo. Publico: lo consulta la pantalla de
+     * confirmacion, que corre sin sesion.
+     *
+     * <p>Un token inexistente y uno vencido se distinguen a proposito
+     * ({@code invalid} vs {@code expired}) porque llevan a mensajes distintos:
+     * "solicita uno nuevo" no sirve si el enlace nunca fue valido. No hay fuga
+     * ahi — para preguntar por un token hay que tenerlo, y solo llega por
+     * correo.
+     *
+     * <p>{@code issuedAt} se deriva restandole el TTL al vencimiento en vez de
+     * guardarse aparte: el TTL es fijo, asi que la columna extra seria un dato
+     * redundante que puede desincronizarse.
+     */
+    @Transactional(readOnly = true)
+    public ResetTokenStatusResponse resetTokenStatus(String token) {
+        Optional<User> encontrado = (token == null || token.isBlank())
+                ? Optional.empty()
+                : userRepository.findByTokenRestore(token);
+
+        if (encontrado.isEmpty()) {
+            return new ResetTokenStatusResponse("invalid", 0, RESTORE_TTL_SECONDS, null, null);
+        }
+
+        User u = encontrado.get();
+        Instant expiraEn = u.getTokenRestoreExpiresAt();
+
+        // Sin vencimiento no se puede afirmar que siga vivo: se trata como
+        // expirado, que es el lado seguro.
+        if (expiraEn == null) {
+            return new ResetTokenStatusResponse("expired", 0, RESTORE_TTL_SECONDS,
+                    maskEmail(u.getEmail()), null);
+        }
+
+        long emitidoEn = expiraEn.minusSeconds(RESTORE_TTL_SECONDS).toEpochMilli();
+        long restante = Duration.between(Instant.now(), expiraEn).toSeconds();
+
+        return new ResetTokenStatusResponse(
+                restante > 0 ? "valid" : "expired",
+                Math.max(restante, 0),
+                RESTORE_TTL_SECONDS,
+                maskEmail(u.getEmail()),
+                emitidoEn);
+    }
+
+    /**
+     * {@code jorge@example.com} -> {@code j****@example.com}.
+     *
+     * <p>Alcanza para que quien pidio el reseteo reconozca su propia direccion
+     * sin que la respuesta la revele entera.
+     */
+    private static String maskEmail(String email) {
+        if (email == null || email.isBlank()) {
+            return null;
+        }
+        int arroba = email.indexOf('@');
+        if (arroba <= 0) {
+            return "****";
+        }
+        return email.charAt(0) + "****" + email.substring(arroba);
     }
 
     private String resolveRestoreUrl(String token, String appName) {

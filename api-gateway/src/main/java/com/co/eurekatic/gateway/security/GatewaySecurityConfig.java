@@ -136,12 +136,20 @@ public class GatewaySecurityConfig {
                         // path the SPA actually calls 401'd at the
                         // gateway before ever reaching sso-admin —
                         // found while testing the token-expiry flow.
+                        // `resetTokenStatus` entra por lo mismo: la pantalla
+                        // que pregunta si el enlace sigue vivo corre sin
+                        // sesión. Sin esta línea el gateway responde 401
+                        // antes de llegar a sso-admin, que es justo lo que
+                        // pasaba (y confundía, porque parecía falta de
+                        // permisos cuando el endpoint ni existía todavía).
                         .pathMatchers("/api/sso-admin/activateAccount",
                                 "/api/sso-admin/restorePassword",
                                 "/api/sso-admin/forgotPassword",
+                                "/api/sso-admin/resetTokenStatus",
                                 "/api/sso-admin/user/activateAccount",
                                 "/api/sso-admin/user/restorePassword",
-                                "/api/sso-admin/user/forgotPassword").permitAll()
+                                "/api/sso-admin/user/forgotPassword",
+                                "/api/sso-admin/user/resetTokenStatus").permitAll()
                         .pathMatchers("/auth/login").permitAll()
                         .pathMatchers("/api/auth/login").permitAll()
                         .pathMatchers("/api/auth/refresh", "/api/auth/logout").permitAll()

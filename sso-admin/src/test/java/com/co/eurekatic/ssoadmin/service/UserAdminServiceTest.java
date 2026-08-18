@@ -366,6 +366,64 @@ class UserAdminServiceTest {
                 .isEqualTo("http://localhost/admin/restore-password?token=rtok");
     }
 
+    /* ==================== resetTokenStatus ==================== */
+
+    @Test
+    void resetTokenStatusIsInvalidWhenTokenUnknown() {
+        when(userRepository.findByTokenRestore("nope")).thenReturn(java.util.Optional.empty());
+
+        var res = service.resetTokenStatus("nope");
+
+        assertThat(res.status()).isEqualTo("invalid");
+        assertThat(res.expiresIn()).isZero();
+        // Sin correo: un token que no existe no puede filtrar a quien
+        // pertenece, porque no pertenece a nadie.
+        assertThat(res.maskedEmail()).isNull();
+        assertThat(res.issuedAt()).isNull();
+    }
+
+    @Test
+    void resetTokenStatusIsValidAndMasksEmailWhenLive() {
+        User u = new User();
+        u.setEmail("alice@example.com");
+        u.setTokenRestoreExpiresAt(java.time.Instant.now().plusSeconds(600));
+        when(userRepository.findByTokenRestore("rtok")).thenReturn(java.util.Optional.of(u));
+
+        var res = service.resetTokenStatus("rtok");
+
+        assertThat(res.status()).isEqualTo("valid");
+        assertThat(res.expiresIn()).isBetween(1L, 600L);
+        assertThat(res.ttlSeconds()).isEqualTo(30 * 60);
+        // El correo alcanza para reconocerlo, no para leerlo entero.
+        assertThat(res.maskedEmail()).isEqualTo("a****@example.com");
+        assertThat(res.issuedAt()).isNotNull();
+    }
+
+    @Test
+    void resetTokenStatusIsExpiredWhenPastExpiry() {
+        User u = new User();
+        u.setEmail("alice@example.com");
+        u.setTokenRestoreExpiresAt(java.time.Instant.now().minusSeconds(60));
+        when(userRepository.findByTokenRestore("old")).thenReturn(java.util.Optional.of(u));
+
+        var res = service.resetTokenStatus("old");
+
+        assertThat(res.status()).isEqualTo("expired");
+        // Nunca negativo: la UI pinta este numero como cuenta regresiva.
+        assertThat(res.expiresIn()).isZero();
+    }
+
+    @Test
+    void resetTokenStatusTreatsMissingExpiryAsExpired() {
+        User u = new User();
+        u.setEmail("alice@example.com");
+        u.setTokenRestoreExpiresAt(null);
+        when(userRepository.findByTokenRestore("sinvto")).thenReturn(java.util.Optional.of(u));
+
+        // Sin vencimiento no se puede afirmar que siga vivo: gana el lado seguro.
+        assertThat(service.resetTokenStatus("sinvto").status()).isEqualTo("expired");
+    }
+
     @Test
     void forgotPasswordUsesAppLaunchUrlWhenAppMatches() {
         User u = new User();
