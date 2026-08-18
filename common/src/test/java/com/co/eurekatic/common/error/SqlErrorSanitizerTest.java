@@ -79,6 +79,31 @@ class SqlErrorSanitizerTest {
         }
 
         @Test
+        void truncamiento_de_varchar_no_expone_el_tamano_de_columna() {
+            // 22001 (string_data_right_truncation): el motor no puebla
+            // table/constraint aquí, así que el discriminador de la clase 22
+            // es el SQLState, no los campos estructurados. Reproducido en
+            // vivo contra Postgres: INSERT con un VARCHAR(130) de 200 chars.
+            SQLException ex = raise("22001", "value too long for type character varying(130)");
+
+            SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(ex);
+
+            assertThat(out.kind()).isEqualTo(SqlErrorKind.INVALID_VALUE);
+            assertThat(out.message())
+                    .isEqualTo(SqlErrorKind.INVALID_VALUE.defaultMessage())
+                    .doesNotContain("130", "character varying");
+        }
+
+        @Test
+        void division_por_cero_tampoco_es_mensaje_de_autor() {
+            SQLException ex = raise("22012", "division by zero");
+
+            SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(ex);
+
+            assertThat(out.message()).isEqualTo(SqlErrorKind.INVALID_VALUE.defaultMessage());
+        }
+
+        @Test
         void columna_inexistente_es_interno_y_no_revela_el_identificador() {
             SQLException ex = raise("42703", "column \"fk_testablecimeinto\" does not exist");
 
@@ -104,6 +129,18 @@ class SqlErrorSanitizerTest {
     @Nested
     @DisplayName("RAISE EXCEPTION escrito por el autor de la función")
     class Autor {
+
+        @Test
+        void ec_22023_es_la_unica_clase_22_que_el_esquema_usa_para_negocio() {
+            // Confirmado en vivo contra el catálogo real: crear una sede con
+            // un establecimiento inexistente traduce TESTABLECIMIENTO ->
+            // "establecimiento" y conserva el resto del texto del autor.
+            SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(
+                    raise("22023", "No existe un TESTABLECIMIENTO activo con PK 999999"));
+
+            assertThat(out.kind()).isEqualTo(SqlErrorKind.INVALID_VALUE);
+            assertThat(out.message()).isEqualTo("No existe un establecimiento activo con PK 999999");
+        }
 
         @Test
         void conserva_el_mensaje_de_negocio() {

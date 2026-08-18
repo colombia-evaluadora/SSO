@@ -113,7 +113,7 @@ public final class SqlErrorSanitizer {
             if (state == null || state.length() < 2) {
                 continue;
             }
-            return new Sanitized(kindOf(state), state, messageFor(cur, kindOf(state)));
+            return new Sanitized(kindOf(state), state, messageFor(cur, state, kindOf(state)));
         }
         return new Sanitized(SqlErrorKind.INTERNAL, null, SqlErrorKind.INTERNAL.defaultMessage());
     }
@@ -136,12 +136,28 @@ public final class SqlErrorSanitizer {
     }
 
     /**
+     * SQLState de clase 22 (data_exception) que el propio esquema adopta como
+     * convención para sus {@code RAISE EXCEPTION} de negocio — ver
+     * {@code grep -rhoE "ERRCODE = '2[0-9]{4}'" postgres/migrations/*.sql},
+     * que no devuelve ningún otro código de esa clase. Cualquier otro 22xxx
+     * ({@code 22001} truncamiento, {@code 22P02} cast inválido, {@code 22012}
+     * división por cero, …) sólo lo puede emitir el motor: nadie en el
+     * esquema los levanta a mano.
+     */
+    private static final String BUSINESS_DATA_EXCEPTION_STATE = "22023";
+
+    /**
      * Texto público. El mensaje del autor sobrevive redactado; el del motor y
      * cualquier fallo de sintaxis u objeto inexistente se reemplazan enteros —
-     * ahí el texto original sólo nombra tablas, columnas y constraints reales.
+     * ahí el texto original sólo nombra tablas, columnas y constraints reales,
+     * o expone detalles de tipo/tamaño de columna que tampoco corresponde
+     * publicar.
      */
-    private static String messageFor(SQLException ex, SqlErrorKind kind) {
+    private static String messageFor(SQLException ex, String sqlState, SqlErrorKind kind) {
         if (kind == SqlErrorKind.INTERNAL || kind == SqlErrorKind.UNAVAILABLE) {
+            return kind.defaultMessage();
+        }
+        if (sqlState.startsWith("22") && !BUSINESS_DATA_EXCEPTION_STATE.equals(sqlState)) {
             return kind.defaultMessage();
         }
         String raw = authorMessage(ex);
