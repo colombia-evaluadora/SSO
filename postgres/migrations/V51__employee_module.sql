@@ -130,8 +130,24 @@ BEGIN
     -- 0. Gate de autorizacion: solo roles con permiso de usuarios (1-3, 7-8, 9).
     -- ---------------------------------------------------------------------
     IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
+        -- Fallback: rector o secretaria de CUALQUIER EE activo, via
+        -- TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA --
+        -- fn_puede_afectar_usuarios (-> fn_puede_afectar_sede ->
+        -- fn_puede_afectar_establecimiento) solo reconoce el rol via
+        -- TSEDE_USUARIO (FK_TROL 1-3/7-8/9): un rector/secretaria recien
+        -- asignado, sin ningun TSEDE_USUARIO todavia (caso normal antes de
+        -- que se decida si se liga a todas las sedes o no), quedaba sin
+        -- poder gestionar a sus propios funcionarios.
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f
+                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+        ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
     END IF;
 
     -- ---------------------------------------------------------------------
@@ -395,8 +411,24 @@ BEGIN
     --    falla antes de invocar fn_usu_crear (fail-fast).
     -- ---------------------------------------------------------------------
     IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
+        -- Fallback: rector o secretaria de CUALQUIER EE activo, via
+        -- TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA --
+        -- fn_puede_afectar_usuarios (-> fn_puede_afectar_sede ->
+        -- fn_puede_afectar_establecimiento) solo reconoce el rol via
+        -- TSEDE_USUARIO (FK_TROL 1-3/7-8/9): un rector/secretaria recien
+        -- asignado, sin ningun TSEDE_USUARIO todavia (caso normal antes de
+        -- que se decida si se liga a todas las sedes o no), quedaba sin
+        -- poder gestionar a sus propios funcionarios.
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f
+                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+        ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
     END IF;
 
     -- ---------------------------------------------------------------------
@@ -636,8 +668,24 @@ BEGIN
     -- 0. Gate de autorizacion: solo roles con permiso de usuarios.
     -- ---------------------------------------------------------------------
     IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
+        -- Fallback: rector o secretaria de CUALQUIER EE activo, via
+        -- TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA --
+        -- fn_puede_afectar_usuarios (-> fn_puede_afectar_sede ->
+        -- fn_puede_afectar_establecimiento) solo reconoce el rol via
+        -- TSEDE_USUARIO (FK_TROL 1-3/7-8/9): un rector/secretaria recien
+        -- asignado, sin ningun TSEDE_USUARIO todavia (caso normal antes de
+        -- que se decida si se liga a todas las sedes o no), quedaba sin
+        -- poder gestionar a sus propios funcionarios.
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f
+                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+        ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
     END IF;
 
     -- ---------------------------------------------------------------------
@@ -797,8 +845,24 @@ BEGIN
     -- 0. Gate de autorizacion.
     -- ---------------------------------------------------------------------
     IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
+        -- Fallback: rector o secretaria de CUALQUIER EE activo, via
+        -- TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA --
+        -- fn_puede_afectar_usuarios (-> fn_puede_afectar_sede ->
+        -- fn_puede_afectar_establecimiento) solo reconoce el rol via
+        -- TSEDE_USUARIO (FK_TROL 1-3/7-8/9): un rector/secretaria recien
+        -- asignado, sin ningun TSEDE_USUARIO todavia (caso normal antes de
+        -- que se decida si se liga a todas las sedes o no), quedaba sin
+        -- poder gestionar a sus propios funcionarios.
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f
+                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+        ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
     END IF;
 
     -- ---------------------------------------------------------------------
@@ -920,8 +984,24 @@ BEGIN
     -- 0. Gate de autorizacion.
     -- ---------------------------------------------------------------------
     IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
+        -- Fallback: rector o secretaria de CUALQUIER EE activo, via
+        -- TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA --
+        -- fn_puede_afectar_usuarios (-> fn_puede_afectar_sede ->
+        -- fn_puede_afectar_establecimiento) solo reconoce el rol via
+        -- TSEDE_USUARIO (FK_TROL 1-3/7-8/9): un rector/secretaria recien
+        -- asignado, sin ningun TSEDE_USUARIO todavia (caso normal antes de
+        -- que se decida si se liga a todas las sedes o no), quedaba sin
+        -- poder gestionar a sus propios funcionarios.
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f
+                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+        ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
     END IF;
 
     -- ---------------------------------------------------------------------
@@ -1147,8 +1227,24 @@ DECLARE
     v_perm       RECORD;
 BEGIN
     IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
+        -- Fallback: rector o secretaria de CUALQUIER EE activo, via
+        -- TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA --
+        -- fn_puede_afectar_usuarios (-> fn_puede_afectar_sede ->
+        -- fn_puede_afectar_establecimiento) solo reconoce el rol via
+        -- TSEDE_USUARIO (FK_TROL 1-3/7-8/9): un rector/secretaria recien
+        -- asignado, sin ningun TSEDE_USUARIO todavia (caso normal antes de
+        -- que se decida si se liga a todas las sedes o no), quedaba sin
+        -- poder gestionar a sus propios funcionarios.
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f
+                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+        ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
     END IF;
 
     SELECT ACTIVE, FK_TUSUARIO
@@ -1380,8 +1476,24 @@ BEGIN
     -- 0. Gate de autorizacion.
     -- =====================================================================
     IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
+        -- Fallback: rector o secretaria de CUALQUIER EE activo, via
+        -- TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA --
+        -- fn_puede_afectar_usuarios (-> fn_puede_afectar_sede ->
+        -- fn_puede_afectar_establecimiento) solo reconoce el rol via
+        -- TSEDE_USUARIO (FK_TROL 1-3/7-8/9): un rector/secretaria recien
+        -- asignado, sin ningun TSEDE_USUARIO todavia (caso normal antes de
+        -- que se decida si se liga a todas las sedes o no), quedaba sin
+        -- poder gestionar a sus propios funcionarios.
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f
+                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+        ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
     END IF;
 
     -- =====================================================================
@@ -2563,6 +2675,10 @@ COMMENT ON FUNCTION academico_test.fn_usu_empleados_listar_paginado(
 --                        pendiente de enlazar, FK_ESTABLECIMIENTO NULL,
 --                        que solo un super-admin puede ver).
 -- ---------------------------------------------------------------------------
+-- REV2 cambia el RETURNS TABLE (agrega fk_tarchivo_foto) -- CREATE OR
+-- REPLACE no alcanza cuando cambia la firma de salida, hace falta DROP.
+DROP FUNCTION IF EXISTS academico_test.fn_usu_empleado_buscar_por_pk(BIGINT, BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_usu_empleado_buscar_por_pk(
     p_pk_usuario_solicitante  BIGINT,
     p_pk_funcionario          BIGINT
@@ -2601,6 +2717,13 @@ RETURNS TABLE (
     fk_tlv_tipo_vinculacion    BIGINT,
     tipo_vinculacion_nombre    VARCHAR,
     direccion                  VARCHAR,
+    -- REV2: TUSUARIO.FK_TARCHIVO -- fn_fun_crear/fn_fun_actualizar ya
+    -- escriben aca la foto de perfil subida via file-service
+    -- (FILE:perfilUsuario, param_types de id_query=116/119 y del endpoint
+    -- POST /register/funcionario), pero este GET nunca la devolvia: el
+    -- front no tenia como pintarla de vuelta tras crear/editar un
+    -- funcionario (aunque la subida en si funcionara).
+    fk_tarchivo_foto           BIGINT,
     -- Permisos (TSEDE_USUARIO activos), JSONB array de objetos:
     --   { id, orden, role:{id,code,name}, campus:{id,name,dane,zone,neighborhood,commune,address,phone},
     --     workSchedule:{id,code,name}, status }
@@ -2679,6 +2802,7 @@ BEGIN
         f.FK_TLV_CARGO, cargo.NOMBRE,
         f.FK_TLV_TIPO_VINCULACION, vinculacion.NOMBRE,
         f.DIRECCION,
+        u.FK_TARCHIVO,
         COALESCE(
             (SELECT jsonb_agg(
                         jsonb_build_object(
@@ -2722,7 +2846,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_usu_empleado_buscar_por_pk(BIGINT, BIGINT)
-    IS 'Detalle completo de UN funcionario (TUSUARIO + TFUNCIONARIO + catalogos resueltos + permisos TSEDE_USUARIO activos como JSONB array con Campus completo por permiso, cada uno con su id=PK_TSEDE_USUARIO para poder sincronizar altas/bajas via fn_fun_permisos_actualizar). Gate: mismo patron que fn_usu_empleados_listar/_contar, aplicado contra el EE concreto del funcionario objetivo (super-admin, o rector/secretaria de ese EE puntual). P0002 si no existe o esta inactivo. 42501 si no pasa el gate (incluye el caso de un funcionario pendiente de enlazar, FK_ESTABLECIMIENTO NULL, que solo un super-admin puede consultar). No devuelve CONTRASENA (el front no debe ver el hash).';
+    IS 'Detalle completo de UN funcionario (TUSUARIO + TFUNCIONARIO + catalogos resueltos + permisos TSEDE_USUARIO activos como JSONB array con Campus completo por permiso, cada uno con su id=PK_TSEDE_USUARIO para poder sincronizar altas/bajas via fn_fun_permisos_actualizar). Gate: mismo patron que fn_usu_empleados_listar/_contar, aplicado contra el EE concreto del funcionario objetivo (super-admin, o rector/secretaria de ese EE puntual). P0002 si no existe o esta inactivo. 42501 si no pasa el gate (incluye el caso de un funcionario pendiente de enlazar, FK_ESTABLECIMIENTO NULL, que solo un super-admin puede consultar). No devuelve CONTRASENA (el front no debe ver el hash). REV2: agrega fk_tarchivo_foto (TUSUARIO.FK_TARCHIVO) -- fn_fun_crear/fn_fun_actualizar ya la escribian, este GET nunca la devolvia.';
 
 
 -- ===========================================================================
@@ -2770,8 +2894,24 @@ BEGIN
     -- 0. Gate de autorizacion (FAIL FAST).
     -- ---------------------------------------------------------------------
     IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
+        -- Fallback: rector o secretaria de CUALQUIER EE activo, via
+        -- TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA --
+        -- fn_puede_afectar_usuarios (-> fn_puede_afectar_sede ->
+        -- fn_puede_afectar_establecimiento) solo reconoce el rol via
+        -- TSEDE_USUARIO (FK_TROL 1-3/7-8/9): un rector/secretaria recien
+        -- asignado, sin ningun TSEDE_USUARIO todavia (caso normal antes de
+        -- que se decida si se liga a todas las sedes o no), quedaba sin
+        -- poder gestionar a sus propios funcionarios.
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f
+                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+        ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
     END IF;
 
     -- ---------------------------------------------------------------------
