@@ -2,6 +2,7 @@ package com.co.eurekatic.ssoadmin.controller;
 
 import com.co.eurekatic.ssoadmin.dto.BindUserRoleRequest;
 import com.co.eurekatic.ssoadmin.dto.CreateAccountRequest;
+import com.co.eurekatic.ssoadmin.dto.ForgotPasswordResponse;
 import com.co.eurekatic.ssoadmin.dto.TokenPasswordRequest;
 import com.co.eurekatic.ssoadmin.dto.UpdateAccountRequest;
 import com.co.eurekatic.ssoadmin.dto.UserResponse;
@@ -71,12 +72,18 @@ public class UserController {
      * to receive a restore link. Always returns 200 even when
      * the email is unknown (no enumeration).
      */
+    /**
+     * Devuelve el token de reseteo en el cuerpo, ademas de enviarlo por
+     * correo — ver la advertencia de seguridad en {@link ForgotPasswordResponse}.
+     *
+     * <p>La respuesta tiene la misma forma exista o no el correo, para no
+     * convertir este endpoint en un enumerador de cuentas.
+     */
     @GetMapping("/forgotPassword")
-    public ResponseEntity<Void> forgotPassword(
+    public ResponseEntity<ForgotPasswordResponse> forgotPassword(
             @RequestParam String email,
             @RequestParam(value = "app", required = false) String app) {
-        service.forgotPassword(email, app);
-        return ResponseEntity.ok().build();
+        return ResponseEntity.ok(service.forgotPassword(email, app));
     }
 
     /**

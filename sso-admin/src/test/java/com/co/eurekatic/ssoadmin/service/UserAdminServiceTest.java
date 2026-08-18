@@ -319,10 +319,17 @@ class UserAdminServiceTest {
         when(userRepository.findAll()).thenReturn(List.of());
 
         // Should NOT throw — legacy would have failed noisily.
-        service.forgotPassword("nobody@example.com", null);
+        var res = service.forgotPassword("nobody@example.com", null);
 
         verify(emailService, never()).sendRestorePasswordEmail(any(), anyString());
         verify(tokenService, never()).issueRestoreToken(any());
+        // La respuesta trae token igual, con la misma forma que la del caso
+        // conocido: si un correo inexistente se distinguiera por venir sin
+        // token, el endpoint serviría para enumerar cuentas. Ese token es
+        // descartable — no se persiste, así que no restablece nada.
+        assertThat(res.token()).isNotBlank();
+        assertThat(res.expiresIn()).isPositive();
+        verify(userRepository, never()).save(any());
     }
 
     @Test
@@ -333,7 +340,12 @@ class UserAdminServiceTest {
         when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
         when(userRepository.save(u)).thenReturn(u);
 
-        service.forgotPassword("alice@example.com", null);
+        var res = service.forgotPassword("alice@example.com", null);
+
+        // El token emitido es el que vuelve en la respuesta, no otro: es el
+        // mismo que viaja en el enlace del correo.
+        assertThat(res.token()).isEqualTo("rtok");
+        assertThat(res.expiresIn()).isEqualTo(30 * 60);
 
         // Restore-token must be issued, and the password-reset event
         // is published via NotificationEventPublisher with the token
