@@ -528,7 +528,7 @@ La única implementación real de este contrato en el monorepo (una app-demo, do
 
    `fn_audit_declarar` ya hace *merge*, no *overwrite*, sobre `app.contexto` (diseño original, §6.2) — así que `path` sobrevive intacto cuando la función además mete `establecimiento`/`sede`. Verificado con un test dirigido antes de aplicarlo a las 43 queries: `contexto` termina como `{"path":"POST /areas","establecimiento":"..."}`, ambos presentes.
 
-   La tabla `public.query` es dato administrado por `sso-admin`, no tiene migraciones Flyway propias en este repo (se pobló ad-hoc en este ambiente local) — el wrap se aplicó con `scripts/wrap-write-queries-audit-context.sql` (idempotente, documentado, reproducible en cualquier ambiente).
+   La tabla `public.query` sí tiene su esquema versionado por Flyway (el propio `docker-compose.yml` lo aclara: el servicio `flyway` corre antes que `sso-admin` para que exista, entre otras, la tabla `query`), aunque sus filas normalmente se pueblan desde la aplicación, no desde una migración — este wrap es la excepción: al ser un cambio de datos versionado y reproducible en cualquier ambiente, se aplicó como migración Flyway (`postgres/migrations/V80__wrap_write_queries_audit_context.sql`, idempotente).
 
 ### 14.3 Validación end-to-end
 
@@ -539,5 +539,5 @@ Reconstruida la imagen de `query-service` (`ghcr.io/colombia-evaluadora/sso/quer
 ### 14.4 Pendiente
 
 - `sesion_id`/`familia`: requieren decisión de producto (¿qué representa "familia" en SSO, si algo?) y, para `sesion_id`, un cambio en `auth-center` (emitir un claim `jti`/id de sesión) — no implementado aquí.
-- El script del catálogo (`scripts/wrap-write-queries-audit-context.sql`) solo tocó las 43 queries de escritura de las 49 funciones adoptadas — no las de lectura (no aplica, no mutan nada) ni las 6 funciones sin endpoint registrado localmente (§12.1).
-- Falta decidir si este wrap del catálogo se aplica también en el ambiente real (producción) — ahí `public.query` es la misma clase de dato administrado, así que el mismo script aplicaría, pero requiere coordinación con quien gestiona ese catálogo en producción.
+- La migración del catálogo (`V80__wrap_write_queries_audit_context.sql`) solo tocó las 43 queries de escritura de las 49 funciones adoptadas — no las de lectura (no aplica, no mutan nada) ni las 6 funciones sin endpoint registrado localmente (§12.1).
+- Falta decidir si este wrap del catálogo se aplica también en el ambiente real (producción) — como es una migración Flyway normal, correría sola al desplegar esta rama, pero requiere coordinación con quien gestiona ese catálogo en producción antes de mergear (los `id_query` están hardcodeados a los del catálogo local; si difieren en prod, la migración no tocaría las filas correctas — ver la nota del encabezado de `V80` sobre cómo regenerar la lista).

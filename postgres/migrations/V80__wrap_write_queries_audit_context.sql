@@ -1,4 +1,4 @@
--- Envuelve las queries de escritura del catálogo de sso-admin (tabla
+-- V80 — envuelve las queries de escritura del catálogo de sso-admin (tabla
 -- public.query) para que cada llamada fije app.request_id y funda 'path'
 -- en app.contexto ANTES de invocar la función fn_* real, en la MISMA
 -- sentencia/transacción -- necesario porque query-service no abre una
@@ -16,18 +16,10 @@
 -- URI) al mapa de parámetros de TODA petición -- sin ese cambio estos dos
 -- placeholders llegarían NULL.
 --
--- No es una migración Flyway porque public.query es una tabla de
--- catálogo administrada por sso-admin (dato, no esquema) -- no tiene
--- carpeta de migraciones propia en este repo (ver hallazgo en §13.1 de
--- docs/etiqueta-auditoria-cdc-analisis.md: el catálogo local no está
--- versionado, se pobló ad-hoc). Este script es la forma reproducible de
--- aplicar el cambio; ejecutar contra la base que aloja public.query
--- (sso-postgres, esquema public) cada vez que haga falta (nuevo
--- ambiente, catálogo reseteado, etc.):
+-- Es idempotente (el WHERE excluye filas que ya empiezan con el wrapper),
+-- asi que corre segura tanto en un ambiente nuevo como en uno donde ya se
+-- aplico manualmente antes de convertirse en migracion.
 --
---   psql -h <host> -U <user> -d sso_db -f scripts/wrap-write-queries-audit-context.sql
---
--- Es idempotente (el WHERE excluye filas que ya empiezan con el wrapper).
 -- La lista de id_query es la de las 43 rutas de escritura registradas
 -- localmente para las 49 funciones fn_* que adoptaron fn_audit_declarar
 -- (ver docs/etiqueta-catalogo-funciones-fn.md); si el catálogo de otro
@@ -51,10 +43,3 @@ WHERE id_query IN (
     65,66,67,75,76,77,78,82,85,90,91,92,93,95,99,100,106,108,110,118,133
 )
   AND query NOT ILIKE 'WITH _ctx AS MATERIALIZED%';
-
-SELECT count(*) AS filas_envueltas FROM public.query
-WHERE id_query IN (
-    28,29,30,31,33,34,35,39,40,41,43,44,46,47,48,51,55,57,58,60,61,62,
-    65,66,67,75,76,77,78,82,85,90,91,92,93,95,99,100,106,108,110,118,133
-)
-  AND query ILIKE 'WITH _ctx AS MATERIALIZED%';
