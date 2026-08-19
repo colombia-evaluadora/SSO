@@ -7,6 +7,8 @@
 > **Ver también**: [`etiqueta-catalogo-funciones-fn.md`](etiqueta-catalogo-funciones-fn.md) — catálogo función-por-función (las 67 funciones de escritura realmente desplegadas en `172.233.184.248`, no solo las que aparecen en los archivos de migración) con la etiqueta propuesta para cada una. Corrige un supuesto de este documento: **no existe hoy un módulo de notas/calificaciones** en el catálogo de funciones desplegado — los ejemplos de "calificación de Luis Rafael Puello" de aquí son ilustrativos del patrón, no una función real; la función real más cercana en espíritu es `fn_asignacion_guardar` (asignación docente–materia–grupo).
 >
 > **Alcance de la implementación**: todo el trabajo de código vive **exclusivamente en `SSO`** (rama `feat/etiqueta-auditoria-cdc`, base `origin/dev`) — `db-migrations`/`cdc-sync` (el pipeline Debezium → RabbitMQ → cdc-worker → ClickHouse) **no se toca**. Eso es posible porque `app.user_id`, `app.etiqueta` y `app.contexto` son columnas/GUCs que ya existen de punta a punta (§1); establecimiento/sede/etiquetas de categorización se anidan dentro de `app.contexto` (que ya viaja sin filtrar) en vez de pedir columnas ClickHouse nuevas — ver §6.2. Toda validación de SQL en este documento se hizo contra el **Postgres local de Docker** (`sso-postgres`, esquema sincronizado vía Flyway con el mismo `postgres/migrations/`), nunca contra la base de 172.233.184.248.
+>
+> **⚠️ Hallazgo de la prueba end-to-end (§11)**: adoptar `fn_audit_declarar` en una función real (`fn_grado_actualizar`, V67) y ejecutarla contra el stack local completo de `cdc-sync` confirma que el lado Postgres funciona exactamente como se diseñó — pero descubrió un bloqueador **preexistente y no causado por este trabajo** en `cdc-capture` (`db-migrations`) que impide que `etiqueta`/`app_user`/`contexto` lleguen a ClickHouse en absoluto, para cualquier fila, no solo las de este cambio. Ver §11 para la evidencia — es un hallazgo nuevo que había quedado oculto porque, hasta ahora, nadie había llegado a setear las GUCs para poder notar que ni siquiera así se propagan.
 
 ---
 
@@ -283,5 +285,70 @@ Se espera `app_user=''` en (casi) el 100% de las filas — eso es lo que este an
 | ¿Dónde generarla? | **Dentro de cada función `academico_test.fn_*` de escritura**, justo antes del DML, con `set_config('app.etiqueta', ..., true)` — reutilizando datos que la función ya tiene en variables locales. |
 | ¿Por qué no en `query-service`? | Es un proxy catálogo-genérico: no conoce la semántica de negocio del SQL que ejecuta, así que no puede redactar "modificación de la calificación de Luis Rafael Puello" sin duplicar lógica que el SP ya tiene. |
 | ¿Por qué no en `cdc-worker`? | Solo ve columnas crudas y FKs — resolver nombres ahí es exactamente el problema que la etiqueta busca eliminar, y reintroduce el costo/latencia de cruzar IDs post-hoc. |
-| ¿Requiere tocar `cdc-sync` o el esquema de ClickHouse? | No. |
+| ¿Requiere tocar `cdc-sync` o el esquema de ClickHouse? | No, para lo diseñado aquí — pero §11 encontró un bug preexistente en `cdc-capture` que sí requeriría tocar `db-migrations` para que la etiqueta llegue a producción. |
 | ¿Alcance del cambio? | ~52 funciones de escritura en `postgres/migrations`, más un helper nuevo (`fn_audit_declarar`) y la convención documentada para funciones futuras. |
+
+---
+
+## 11. Prueba end-to-end contra el stack local — resultado y hallazgo bloqueante
+
+Se adoptó `fn_audit_declarar` en una función real (`fn_grado_crear`/`fn_grado_actualizar`, migración `V67__fn_grado_adopta_audit_declarar.sql`) y se ejecutó contra el stack **local** completo de Docker: `sso-postgres` → `cdc-capture` → RabbitMQ → `cdc-worker` → `cdc-clickhouse` (perfil `cdc-sync`, activado con `CDC_SYNC_ENABLED=true ./scripts/sso-stack.sh up -d`; imágenes ya publicadas de `db-migrations`, no se construyó ni editó ese repo).
+
+### 11.1 Lo que SÍ funcionó — la infraestructura CDC funciona de punta a punta
+
+```sql
+-- Ejecutado contra sso-postgres (real, sin ROLLBACK):
+SELECT academico_test.fn_grado_actualizar(1, NULL, 'Octavo', NULL, NULL, 1);
+```
+
+La fila llegó a `auditoria.audit_log` en el ClickHouse local en segundos, con `lsn`/`xid`/`tabla`/`operacion`/`pk` correctos:
+
+```
+lsn:       45226272
+xid:       1182
+tabla:     tgrado
+operacion: u
+pk:        1
+```
+
+(Nota al margen, verificado en el camino: `tabla` guarda el nombre **crudo sin schema** — `tgrado`, no `academico_test.tgrado` como decía `CONTRATO_SP_CLICKHOUSE.md` §8 — el código real (`CdcEvent.tableName()` → `source.table()`) no incluye el schema. Vale la pena corregir esa documentación por separado.)
+
+Esto confirma: WAL lógico, publicación `cdc_pub`, replica identity, slot `cdc_slot`, ruteo por RabbitMQ, y el INSERT a ClickHouse — **todo el esqueleto mecánico del pipeline funciona correctamente**, incluyendo con la función ya modificada por `fn_audit_declarar` (cero errores de sintaxis/ejecución en Postgres).
+
+### 11.2 Lo que NO funcionó — `etiqueta`/`app_user`/`contexto` llegaron vacíos
+
+```
+app_user:  (vacío)
+db_user:   (vacío)
+etiqueta:  (vacío)
+contexto:  (vacío)
+```
+
+En el log de `cdc-capture`, en el mismo instante:
+
+```
+DEBUG AmqpPublisher — Ignoring audit_ctx logical message xid=1182
+```
+
+### 11.3 Por qué esto NO es un problema de `fn_audit_declarar`
+
+Se verificó con un smoke test directo (`BEGIN; ...; ROLLBACK;`) que la función sí deja las GUCs correctamente seteadas en la sesión, ANTES de que corra el `UPDATE`:
+
+```
+app.user_id=[Admin Sistema] app.etiqueta=[Actualización del grado Octavo] app.contexto=[{"establecimiento": "Establecimiento Seed Local"}]
+```
+
+El trigger `trg_audit_ctx` (V26, sin cambios) lee esas mismas GUCs con `current_setting(..., true)` — el diseño de esa parte está correcto y validado.
+
+### 11.4 El bloqueador es preexistente, no causado por este trabajo
+
+Se revisó el historial completo de `cdc-capture` y de `auditoria.audit_log` en el stack local:
+
+- **836 filas históricas en `audit_log` local, 0 con `app_user`/`etiqueta`/`contexto` no vacíos** — el 100%, no una fracción.
+- El log de `cdc-capture` muestra la MISMA línea `"Ignoring audit_ctx logical message xid=<N>"` para **cinco transacciones de una sesión de pruebas del 2026-08-06** (`xid=1437, 1438, 1439, 1441, 1442`) — **13 días antes** de que existiera `fn_audit_declarar` o cualquier cambio de esta rama. En ese momento nadie seteaba ninguna GUC `app.*`, así que el mensaje lógico igual se emitía (con todos los campos `null` dentro del JSON) pero el trigger lo arma siempre con `prefix='audit_ctx'` y un `data` no vacío — la función `AmqpPublisher.parseAuditContext()` solo devuelve `null` (→ "Ignoring") si la forma **estructural** del evento Debezium no calza con lo esperado (`message` no es un mapa, o `prefix`/`data` no están donde se buscan), no por contenido vacío.
+
+**Conclusión**: el mecanismo de correlación de `audit_ctx` (`cdc-capture` → `AmqpPublisher.parseAuditContext` → `AuditContextCache`) parece estar roto de forma sistemática en la imagen actualmente desplegada — independientemente de si el llamador setea las GUCs o no. Esto es un hallazgo **nuevo**, no visible hasta ahora porque nadie había llegado a setear `app.etiqueta`/`app.user_id` para poder notar que, aun haciéndolo bien, el dato se pierde un paso más adelante en la tubería.
+
+**No se investigó más profundo ni se intentó arreglar** — es código de `db-migrations` (`cdc-capture/src/main/java/com/example/cdc/capture/AmqpPublisher.java`, método `parseAuditContext`), fuera del alcance de esta rama por instrucción explícita. Queda documentado aquí para que quien tenga permiso de tocar ese repo lo diagnostique (candidatos a revisar: versión/config de Debezium respecto a cómo serializa `pg_logical_emit_message` como JSON — la forma `{"message": {"prefix": ..., "data": ...}}` que el código espera puede no coincidir con lo que esta versión del conector realmente emite).
+
+**No se verificó si este mismo bug afecta la base de producción** (172.233.184.248) — por instrucción explícita de no probar contra el entorno real; sería el primer chequeo a hacer antes de invertir en adoptar `fn_audit_declarar` en las 65 funciones restantes, porque si el bug también está en producción, ninguna cantidad de trabajo del lado de Postgres hará que la etiqueta llegue a ClickHouse hasta que se arregle `cdc-capture`.
