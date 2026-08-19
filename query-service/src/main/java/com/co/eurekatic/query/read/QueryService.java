@@ -23,6 +23,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.sql.SQLException;
@@ -30,6 +32,7 @@ import java.sql.SQLException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Read-path business logic. The flow:
@@ -726,6 +729,12 @@ public class QueryService {
      */
     private static void injectContextParams(Map<String, Object> target,
                                             Authentication auth) {
+        // V-audit-ctx — REQUEST_ID/PATH van SIEMPRE, autenticado o no: son
+        // datos del transporte HTTP (de dónde vino el request), no de la
+        // identidad. Colocados antes del `return` temprano de abajo para
+        // que un query público también los tenga disponibles.
+        injectRequestParams(target);
+
         if (auth == null || !(auth.getPrincipal() instanceof AuthPrincipal p)) {
             return;
         }
@@ -747,6 +756,48 @@ public class QueryService {
                 + "}";
         target.put(ParamNamespace.CONTEXT + ".ROLES", rolesCsv);
         target.put(ParamNamespace.CONTEXT + ".ROLES_ARRAY", rolesArray);
+    }
+
+    /**
+     * V-audit-ctx — :CONTEXT.REQUEST_ID y :CONTEXT.PATH, para que el
+     * catálogo pueda hacer {@code set_config('app.request_id', ...)} y
+     * fundir {@code path} en {@code app.contexto} en la misma sentencia
+     * que la escritura real (ver {@code fn_audit_ctx()},
+     * {@code postgres/migrations/V26__context-emitter.sql}).
+     *
+     * <p>Mismo patrón que {@code AuditContextAspect} de la app de
+     * referencia (db-migrations/api): {@code X-Request-Id} si el
+     * cliente/gateway ya lo mandó, si no un UUID generado aquí — un
+     * request sin id de correlación es peor que uno con un id que
+     * nadie más va a reusar, porque igual permite agrupar las filas
+     * de auditoría de ESTA transacción. {@code PATH} es
+     * {@code MÉTODO ESPACIO URI}, igual que el {@code endpoint} que
+     * el aspecto de referencia mete en {@code contexto}.
+     *
+     * <p>No dependemos de que el llamado venga por un {@code
+     * @Controller} concreto — {@link RequestContextHolder} expone el
+     * {@code HttpServletRequest} del hilo actual sin necesidad de
+     * inyectarlo en cada firma de método intermedio. Si no hay
+     * request ligado al hilo (tests, llamadas internas), no se agrega
+     * nada — igual que el resto de los CONTEXT.* opcionales.
+     */
+    private static void injectRequestParams(Map<String, Object> target) {
+        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes sra)) {
+            return;
+        }
+        var req = sra.getRequest();
+        String requestId = req.getHeader("X-Request-Id");
+        if (requestId == null || requestId.isBlank()) {
+            requestId = UUID.randomUUID().toString();
+        } else if (requestId.length() > 100) {
+            // El trigger trunca a 100 (ver fn_audit_ctx / LowCardinality en
+            // ClickHouse) — cortamos aquí para no mandar ruido de más.
+            requestId = requestId.substring(0, 100);
+        }
+        target.put(ParamNamespace.CONTEXT + ".REQUEST_ID", requestId);
+
+        String path = req.getMethod() + " " + req.getRequestURI();
+        target.put(ParamNamespace.CONTEXT + ".PATH", path);
     }
 
     /**

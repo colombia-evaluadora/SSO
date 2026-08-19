@@ -493,3 +493,51 @@ Esto es la validación más fuerte posible del diseño `fn_audit_declarar` + `se
 ### 13.4 Estado
 
 Ambas pruebas (secuencial + concurrente + cadena) corrieron contra el stack local completo con `CDC_SYNC_ENABLED=true`. El único fix de código que salió de esta ronda es `V77` (aplicado localmente, pendiente de commit/push junto con este documento). El resto de hallazgos (tabla del §13.1) son bugs preexistentes de drift entre `sso-admin`/`public.query` y las funciones `fn_*`, no introducidos ni corregidos por esta iniciativa — quedan documentados aquí para que el equipo decida si los prioriza aparte.
+
+## 14. `request_id` y `path` — Fase 2 implementada (parcial)
+
+Pregunta del usuario: ¿por qué `sesion_id`/`familia`/`request_id` siguen vacíos en ClickHouse, y desde dónde en el flujo `api-gateway → query-service → Postgres` se pueden inyectar? Ver §6.3 y el trigger `fn_audit_ctx()` (`V26__context-emitter.sql`) para el porqué exacto: son datos del **request HTTP**, no del dominio SQL — ninguna función `fn_*` puede inventarlos, y `query-service` nunca los seteaba.
+
+### 14.1 Semántica de referencia (`db-migrations/api/api` — `AuditContextAspect.java`)
+
+La única implementación real de este contrato en el monorepo (una app-demo, dominio `clientes`/`pedidos`) define:
+
+- **`sesion_id`** = claim `jti` del JWT, validado contra una tabla `sesiones` propia (revocación de sesión).
+- **`familia`** = claim custom `familia` (UUID) — un concepto de agrupación multi-tenant ("familia de cliente").
+- **`request_id`** = header `X-Request-Id`, reenviado tal cual sin validar.
+- Además mete `ip`, `user_agent` y `endpoint` (`MÉTODO URI`) dentro de `contexto`.
+
+**El JWT real de `auth-center` (SSO) no tiene ni `jti` ni `familia`** — solo `sub/iss/roles/typ/iat/exp/uid`. `sesion_id` necesitaría un cambio en `auth-center` (agregar un claim `jti` al emitir el token) que está fuera del alcance de `query-service`; `familia` no tiene ningún concepto equivalente en SSO (tenencia única — lo más parecido, el establecimiento/sede, ya lo cubre `fn_audit_declarar` en `contexto`, sería redundante). **Decisión**: implementar solo `request_id` (autocontenido en `query-service`) y agregar `path` (equivalente al `endpoint` de la referencia) en `contexto`; `sesion_id`/`familia` quedan documentados como pendientes de una decisión de producto que no corresponde inventar aquí.
+
+### 14.2 Dónde se inyecta, y por qué así
+
+`query-service` no tiene ningún `@Transactional`/`TransactionTemplate` (confirmado por grep, §3 de este documento) — cada `jdbc.query()` es su propio statement top-level. Para que un `set_config()` sobreviva hasta que el `fn_*` real lo necesite, tiene que correr **en la misma sentencia SQL**, no en una separada. Dos piezas:
+
+1. **`QueryService.injectRequestParams()`** (nuevo, junto a `injectContextParams()` que ya inyectaba `:CONTEXT.USER_ID`/`EMAIL`/`ROLES` desde el JWT) — agrega `:CONTEXT.REQUEST_ID` (header `X-Request-Id` si vino, si no un `UUID.randomUUID()`) y `:CONTEXT.PATH` (`MÉTODO URI`) al mapa de parámetros de **toda** petición, autenticada o no, vía `RequestContextHolder` (mismo patrón que `AuditContextAspect`, sin necesitar inyectar `HttpServletRequest` en cada firma intermedia).
+2. **El SQL de cada query de escritura del catálogo** (`public.query.query`, en `sso-admin`) se envuelve en un CTE `MATERIALIZED` que fija `app.request_id` y funde `path` en `app.contexto` — **antes** de la subconsulta que llama al `fn_*` real, garantizado por `MATERIALIZED` (fuerza a Postgres a computar el CTE como paso independiente antes de evaluar el resto):
+
+   ```sql
+   WITH _ctx AS MATERIALIZED (
+     SELECT set_config('app.request_id', :CONTEXT.REQUEST_ID, true) AS _rid,
+            set_config('app.contexto', jsonb_build_object('path', :CONTEXT.PATH)::text, true) AS _c
+   )
+   SELECT _orig.* FROM _ctx, (
+     SELECT academico_test.fn_area_crear(...)
+   ) AS _orig;
+   ```
+
+   `fn_audit_declarar` ya hace *merge*, no *overwrite*, sobre `app.contexto` (diseño original, §6.2) — así que `path` sobrevive intacto cuando la función además mete `establecimiento`/`sede`. Verificado con un test dirigido antes de aplicarlo a las 43 queries: `contexto` termina como `{"path":"POST /areas","establecimiento":"..."}`, ambos presentes.
+
+   La tabla `public.query` es dato administrado por `sso-admin`, no tiene migraciones Flyway propias en este repo (se pobló ad-hoc en este ambiente local) — el wrap se aplicó con `scripts/wrap-write-queries-audit-context.sql` (idempotente, documentado, reproducible en cualquier ambiente).
+
+### 14.3 Validación end-to-end
+
+Reconstruida la imagen de `query-service` (`ghcr.io/colombia-evaluadora/sso/query-service:test-latest`, contenedor `sso-query-service-eval-col` recreado) y aplicado el wrap a las 43 queries de escritura. Repetido el arnés completo de §13.1 sin regresiones (mismos 3 fallos preexistentes de la tabla del §13.1, nada nuevo roto), y confirmado en una muestra de ~20 filas across todos los módulos: `request_id` único por request (o el valor exacto del header `X-Request-Id` cuando se manda) y `contexto.path` con el endpoint real (`POST /areas`, `PUT /grados/7`, etc.) en el 100% de las filas.
+
+**Hallazgo adicional (a favor, no un bug)**: cuando un solo request modifica varias tablas en la misma transacción (p. ej. `POST /grados/:ID/plan-asignaturas` → `tplan` + `tasignatura_plan` + `tcriterio_evaluacion_asignatura_plan`), las tres filas de auditoría comparten el **mismo `request_id`** — exactamente el caso de uso para el que existe esa columna: agrupar en ClickHouse todos los cambios de una sola acción del usuario aunque toquen varias tablas, sin depender de que el `xid` de Postgres sea fácil de correlacionar desde afuera.
+
+### 14.4 Pendiente
+
+- `sesion_id`/`familia`: requieren decisión de producto (¿qué representa "familia" en SSO, si algo?) y, para `sesion_id`, un cambio en `auth-center` (emitir un claim `jti`/id de sesión) — no implementado aquí.
+- El script del catálogo (`scripts/wrap-write-queries-audit-context.sql`) solo tocó las 43 queries de escritura de las 49 funciones adoptadas — no las de lectura (no aplica, no mutan nada) ni las 6 funciones sin endpoint registrado localmente (§12.1).
+- Falta decidir si este wrap del catálogo se aplica también en el ambiente real (producción) — ahí `public.query` es la misma clase de dato administrado, así que el mismo script aplicaría, pero requiere coordinación con quien gestiona ese catálogo en producción.
