@@ -759,20 +759,22 @@ public class QueryService {
     }
 
     /**
-     * V-audit-ctx — :CONTEXT.REQUEST_ID y :CONTEXT.PATH, para que el
-     * catálogo pueda hacer {@code set_config('app.request_id', ...)} y
-     * fundir {@code path} en {@code app.contexto} en la misma sentencia
-     * que la escritura real (ver {@code fn_audit_ctx()},
-     * {@code postgres/migrations/V26__context-emitter.sql}).
+     * V-audit-ctx — :CONTEXT.REQUEST_ID, :CONTEXT.PATH y :CONTEXT.HTTP_METHOD,
+     * para que el catálogo pueda hacer {@code set_config('app.request_id', ...)}
+     * / {@code set_config('app.http_method', ...)} y fundir {@code path} en
+     * {@code app.contexto} en la misma sentencia que la escritura real (ver
+     * {@code fn_audit_ctx()}, {@code postgres/migrations/V26__context-emitter.sql}).
+     * {@code HTTP_METHOD} tiene su propia columna en ClickHouse (para
+     * filtrar/agrupar por verbo sin parsear un string) — por eso {@code PATH}
+     * es solo la URI, **sin** el método como prefijo; repetirlo en las dos
+     * partes sería redundante.
      *
      * <p>Mismo patrón que {@code AuditContextAspect} de la app de
      * referencia (db-migrations/api): {@code X-Request-Id} si el
      * cliente/gateway ya lo mandó, si no un UUID generado aquí — un
      * request sin id de correlación es peor que uno con un id que
      * nadie más va a reusar, porque igual permite agrupar las filas
-     * de auditoría de ESTA transacción. {@code PATH} es
-     * {@code MÉTODO ESPACIO URI}, igual que el {@code endpoint} que
-     * el aspecto de referencia mete en {@code contexto}.
+     * de auditoría de ESTA transacción.
      *
      * <p>No dependemos de que el llamado venga por un {@code
      * @Controller} concreto — {@link RequestContextHolder} expone el
@@ -796,8 +798,10 @@ public class QueryService {
         }
         target.put(ParamNamespace.CONTEXT + ".REQUEST_ID", requestId);
 
-        String path = req.getMethod() + " " + req.getRequestURI();
-        target.put(ParamNamespace.CONTEXT + ".PATH", path);
+        // Solo la URI — el método va aparte en :CONTEXT.HTTP_METHOD (columna
+        // propia de ClickHouse), repetirlo aquí sería redundante.
+        target.put(ParamNamespace.CONTEXT + ".PATH", req.getRequestURI());
+        target.put(ParamNamespace.CONTEXT + ".HTTP_METHOD", req.getMethod());
     }
 
     /**

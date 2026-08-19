@@ -74,6 +74,7 @@ public class ClickHouseAuditStage {
         row.put("sesion_id", r.sesionId());
         row.put("familia", r.familia() != null ? r.familia() : "");
         row.put("request_id", r.requestId());
+        row.put("http_method", r.httpMethod() != null ? r.httpMethod() : "");
         row.put("etiqueta", r.etiqueta() != null ? r.etiqueta() : "");
         row.put("contexto", r.contextoJson() != null ? r.contextoJson() : "");
         row.put("ts", java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).toString().replace('T', ' '));

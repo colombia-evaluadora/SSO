@@ -14,15 +14,16 @@ BEGIN
         true,
         'audit_ctx',
         json_build_object(
-            'tabla',      TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME,
-            'op',         LEFT(TG_OP, 1),
-            'app_user',   NULLIF(current_setting('app.user_id', true), ''),
-            'db_user',    session_user,
-            'sesion_id',  v_ctx ->> 'sesion_id',
-            'familia',    v_ctx ->> 'familia',
-            'request_id', LEFT(NULLIF(current_setting('app.request_id', true), ''), 100),
-            'etiqueta',   v_etiq,
-            'contexto',   v_ctx
+            'tabla',       TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME,
+            'op',          LEFT(TG_OP, 1),
+            'app_user',    NULLIF(current_setting('app.user_id', true), ''),
+            'db_user',     session_user,
+            'sesion_id',   v_ctx ->> 'sesion_id',
+            'familia',     v_ctx ->> 'familia',
+            'request_id',  LEFT(NULLIF(current_setting('app.request_id', true), ''), 100),
+            'http_method', LEFT(NULLIF(current_setting('app.http_method', true), ''), 10),
+            'etiqueta',    v_etiq,
+            'contexto',    v_ctx
         )::text
     );
     RETURN NULL;

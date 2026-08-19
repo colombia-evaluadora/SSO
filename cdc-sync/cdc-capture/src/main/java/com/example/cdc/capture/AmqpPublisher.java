@@ -190,6 +190,7 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
                 str(body.get("sesion_id")),
                 str(body.get("familia")),
                 str(body.get("request_id")),
+                str(body.get("http_method")),
                 str(body.get("etiqueta")),
                 contextoMap
         );
@@ -203,6 +204,7 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
         if (ctx.sesionId() != null) m.put("sesion_id", ctx.sesionId());
         if (ctx.familia() != null) m.put("familia", ctx.familia());
         if (ctx.requestId() != null) m.put("request_id", ctx.requestId());
+        if (ctx.httpMethod() != null) m.put("http_method", ctx.httpMethod());
         if (ctx.etiqueta() != null) m.put("etiqueta", ctx.etiqueta());
         if (ctx.contexto() != null) m.put("contexto", ctx.contexto());
         return m;

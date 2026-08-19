@@ -26,6 +26,7 @@ public record AuditRecord(
         String sesionId,
         String familia,        // extraído de contexto.familia (ruta path-of-least-resistance)
         String requestId,
+        String httpMethod,     // verbo HTTP del request que originó el cambio (PUT/POST/PATCH/...)
         String etiqueta,
         String contextoJson
 ) {
@@ -74,6 +75,7 @@ public record AuditRecord(
                 event.context() != null ? event.context().sesionId() : "",
                 familia,
                 event.context() != null ? event.context().requestId() : "",
+                event.context() != null ? event.context().httpMethod() : "",
                 event.context() != null ? event.context().etiqueta() : "",
                 serializeContexto(event.context() == null ? null : event.context().contexto())
         );

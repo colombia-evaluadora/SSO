@@ -12,9 +12,12 @@
 -- Requiere en paralelo el cambio de query-service (QueryService.
 -- injectRequestParams(), commit "feat(query-service): inyectar
 -- CONTEXT.REQUEST_ID/CONTEXT.PATH...") que agrega :CONTEXT.REQUEST_ID
--- (header X-Request-Id, o un UUID si no vino) y :CONTEXT.PATH (método +
--- URI) al mapa de parámetros de TODA petición -- sin ese cambio estos dos
--- placeholders llegarían NULL.
+-- (header X-Request-Id, o un UUID si no vino), :CONTEXT.PATH (método +
+-- URI) y :CONTEXT.HTTP_METHOD (el método solo, para la columna propia de
+-- ClickHouse) al mapa de parámetros de TODA petición -- sin ese cambio
+-- estos placeholders llegarían NULL. El fragmento de app.http_method
+-- requiere además que fn_audit_ctx() (V26) lo lea y lo emita en el
+-- mensaje lógico — ver el cambio en V26__context-emitter.sql.
 --
 -- Es idempotente (el WHERE excluye filas que ya empiezan con el wrapper),
 -- asi que corre segura tanto en un ambiente nuevo como en uno donde ya se
@@ -35,6 +38,7 @@ UPDATE public.query
 SET query =
   'WITH _ctx AS MATERIALIZED (' || E'\n' ||
   '  SELECT set_config(''app.request_id'', :CONTEXT.REQUEST_ID, true) AS _rid,' || E'\n' ||
+  '         set_config(''app.http_method'', :CONTEXT.HTTP_METHOD, true) AS _hm,' || E'\n' ||
   '         set_config(''app.contexto'', jsonb_build_object(''path'', :CONTEXT.PATH)::text, true) AS _c' || E'\n' ||
   ')' || E'\n' ||
   'SELECT _orig.* FROM _ctx, (' || regexp_replace(query, '\s*;\s*$', '') || ') AS _orig;'

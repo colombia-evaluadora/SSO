@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS auditoria.audit_log
     sesion_id  LowCardinality(String),
     familia    LowCardinality(String),
     request_id LowCardinality(String),
+    http_method LowCardinality(String),  -- verbo HTTP del request que originó el cambio (PUT/POST/PATCH/...)
     etiqueta   String               CODEC(ZSTD(1)),
     contexto   String               CODEC(ZSTD(3)),
     ts         DateTime64(3, 'UTC') CODEC(Delta, ZSTD(1)),

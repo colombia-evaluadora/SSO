@@ -93,6 +93,7 @@ public record CdcEvent(
                 toText(node.get("sesion_id")),
                 toText(node.get("familia")),
                 toText(node.get("request_id")),
+                toText(node.get("http_method")),
                 toText(node.get("etiqueta")),
                 toMap(node.get("contexto"))
         );
@@ -124,6 +125,7 @@ public record CdcEvent(
             @JsonProperty("sesion_id") String sesionId,
             @JsonProperty("familia") String familia,
             @JsonProperty("request_id") String requestId,
+            @JsonProperty("http_method") String httpMethod,
             String etiqueta,
             Map<String, Object> contexto
     ) {}
