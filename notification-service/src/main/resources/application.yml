@@ -197,6 +197,11 @@ management:
   otlp:
     metrics:
       export:
+        # Default deshabilitado: sin esto, con el perfil de observabilidad
+        # apagado (Alloy no existe), cualquier arranque que no pase
+        # MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED explicitamente reintenta
+        # cada 10s contra un host que no resuelve.
+        enabled: ${MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED:false}
         url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
         step: 10s
   opentelemetry:
@@ -214,7 +219,10 @@ management:
       service.namespace: sso
       deployment.environment: ${DEPLOY_ENV:dev}
   tracing:
-    enabled: true
+    # El interruptor historico de docker-compose (MANAGEMENT_TRACING_EXPORT_ENABLED)
+    # no correspondia a ninguna propiedad real -- "management.tracing.enabled"
+    # es la real, hardcodeada en "true" hasta ahora.
+    enabled: ${MANAGEMENT_TRACING_EXPORT_ENABLED:false}
     sampling:
       probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
 

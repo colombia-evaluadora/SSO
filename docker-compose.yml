@@ -1421,10 +1421,15 @@ services:
       # GET /files/download/{id}; no emite tokens, así que no recibe
       # (ni debe recibir) la privada.
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      # Observability: push OTLP to Alloy
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      # Interruptor de telemetria: con el perfil de observabilidad
+      # apagado, Alloy no existe y sin esto los nueve servicios
+      # reintentarian contra un endpoint muerto. Nombres verificados
+      # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
     mem_limit: 512m
     healthcheck:
       # `bash`, no `sh`: /dev/tcp NO es un fichero, es una función del
