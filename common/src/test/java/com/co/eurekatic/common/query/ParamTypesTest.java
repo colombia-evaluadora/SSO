@@ -39,6 +39,11 @@ class ParamTypesTest {
                 "BOOLEAN",
                 "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ",
                 "UUID", "JSONB", "JSON",
+                // Placeholder que ParamBinder trata como BIGINT (llega
+                // convertido a pk_tarchivo) pero que sólo file-service
+                // usa para saber qué campos del multipart admite como
+                // archivo — ver ParamTypes.FILE.
+                "FILE",
                 "TEXT[]", "BIGINT[]", "INTEGER[]", "NUMERIC[]", "BOOLEAN[]", "TIME[]",
                 // V61 — arrays temporales que faltaban junto a TIME[].
                 "DATE[]", "TIMESTAMP[]", "TIMESTAMPTZ[]",
@@ -106,5 +111,192 @@ class ParamTypesTest {
                     .as("JDBC_TYPES key %s must also be in CURATED", key)
                     .contains(key);
         }
+    }
+
+    /** No curated type name may end in '!' — that suffix is the V62
+     *  nullability marker, and it must never collide with a real type
+     *  name or {@link ParamTypes#parseDeclaration} would silently
+     *  mis-parse it. */
+    @Test
+    void noCuratedTypeEndsInExclamationMark() {
+        for (String type : ParamTypes.CURATED) {
+            assertThat(type).as("CURATED type %s", type)
+                    .doesNotEndWith(ParamTypes.REQUIRED_SUFFIX);
+        }
+    }
+
+    @Test
+    void parseDeclaration_bareTypeIsNullableByDefault() {
+        var decl = ParamTypes.parseDeclaration("BIGINT");
+        assertThat(decl.baseType()).isEqualTo("BIGINT");
+        assertThat(decl.nullable()).isTrue();
+    }
+
+    @Test
+    void parseDeclaration_exclamationSuffixMeansRequired() {
+        var decl = ParamTypes.parseDeclaration("BIGINT!");
+        assertThat(decl.baseType()).isEqualTo("BIGINT");
+        assertThat(decl.nullable()).isFalse();
+    }
+
+    @Test
+    void parseDeclaration_suffixWorksOnArrayTypes() {
+        var decl = ParamTypes.parseDeclaration("BIGINT[]!");
+        assertThat(decl.baseType()).isEqualTo("BIGINT[]");
+        assertThat(decl.nullable()).isFalse();
+        assertThat(ParamTypes.ARRAY_TYPES).contains(decl.baseType());
+    }
+
+    @Test
+    void parseDeclaration_suffixWorksOnDomainTypes() {
+        var decl = ParamTypes.parseDeclaration("BOOL_SN!");
+        assertThat(decl.baseType()).isEqualTo("BOOL_SN");
+        assertThat(decl.nullable()).isFalse();
+    }
+
+    @Test
+    void parseDeclaration_nullRawIsTreatedAsNullableUndeclared() {
+        var decl = ParamTypes.parseDeclaration(null);
+        assertThat(decl.baseType()).isNull();
+        assertThat(decl.nullable()).isTrue();
+    }
+
+    @Test
+    void parseDeclaration_trimsWhitespaceAroundSuffix() {
+        var decl = ParamTypes.parseDeclaration("  BIGINT!  ");
+        assertThat(decl.baseType()).isEqualTo("BIGINT");
+        assertThat(decl.nullable()).isFalse();
+    }
+
+    // ---------- V63: clasificación de archivos (FILE:clasificacion) ----------
+
+    @Test
+    void parseDeclaration_bareFileHasNoClassification() {
+        var decl = ParamTypes.parseDeclaration("FILE");
+        assertThat(decl.baseType()).isEqualTo("FILE");
+        assertThat(decl.nullable()).isTrue();
+        assertThat(decl.fileClassification()).isNull();
+    }
+
+    @Test
+    void parseDeclaration_fileWithClassification() {
+        var decl = ParamTypes.parseDeclaration("FILE:perfilUsuario");
+        assertThat(decl.baseType()).isEqualTo("FILE");
+        assertThat(decl.nullable()).isTrue();
+        assertThat(decl.fileClassification()).isEqualTo("perfilUsuario");
+    }
+
+    /** El sufijo de obligatoriedad va DESPUÉS de la clasificación. */
+    @Test
+    void parseDeclaration_fileWithClassificationAndRequiredSuffix() {
+        var decl = ParamTypes.parseDeclaration("FILE:perfilUsuario!");
+        assertThat(decl.baseType()).isEqualTo("FILE");
+        assertThat(decl.nullable()).isFalse();
+        assertThat(decl.fileClassification()).isEqualTo("perfilUsuario");
+    }
+
+    /** Sólo FILE entiende el separador ':' — otro tipo con ':' no es clasificación,
+     *  es un nombre de tipo inválido (falla después en CURATED.contains). */
+    @Test
+    void parseDeclaration_colonOnNonFileTypeIsNotClassification() {
+        var decl = ParamTypes.parseDeclaration("BIGINT:algo");
+        assertThat(decl.baseType()).isEqualTo("BIGINT:algo");
+        assertThat(decl.fileClassification()).isNull();
+        assertThat(ParamTypes.CURATED).doesNotContain(decl.baseType());
+    }
+
+    @Test
+    void parseDeclaration_fileWithEmptyClassificationIsTreatedAsUnclassified() {
+        var decl = ParamTypes.parseDeclaration("FILE:");
+        assertThat(decl.baseType()).isEqualTo("FILE");
+        assertThat(decl.fileClassification()).isNull();
+    }
+
+    @Test
+    void isValidFileClassification_acceptsCamelCaseAndUpperSnakeCase() {
+        assertThat(ParamTypes.isValidFileClassification("perfilUsuario")).isTrue();
+        assertThat(ParamTypes.isValidFileClassification("firmaMecanica")).isTrue();
+        assertThat(ParamTypes.isValidFileClassification("PRIMER_PERIODO")).isTrue();
+        assertThat(ParamTypes.isValidFileClassification("escudo")).isTrue();
+    }
+
+    @Test
+    void isValidFileClassification_rejectsBadInput() {
+        assertThat(ParamTypes.isValidFileClassification(null)).isFalse();
+        assertThat(ParamTypes.isValidFileClassification("")).isFalse();
+        assertThat(ParamTypes.isValidFileClassification("1empiezaConNumero")).isFalse();
+        assertThat(ParamTypes.isValidFileClassification("con espacio")).isFalse();
+        assertThat(ParamTypes.isValidFileClassification("con/barra")).isFalse();
+        assertThat(ParamTypes.isValidFileClassification("con-guion")).isFalse();
+    }
+
+    // ---------- V65: campo de establecimiento (FILE:clasificacion:campo) ----------
+
+    @Test
+    void parseDeclaration_fileWithClassificationAndEstablishmentField() {
+        var decl = ParamTypes.parseDeclaration("FILE:actividad:idEstablecimiento");
+        assertThat(decl.baseType()).isEqualTo("FILE");
+        assertThat(decl.nullable()).isTrue();
+        assertThat(decl.fileClassification()).isEqualTo("actividad");
+        assertThat(decl.fileEstablishmentField()).isEqualTo("idEstablecimiento");
+    }
+
+    /** El sufijo de obligatoriedad sigue yendo al final, después de los tres componentes. */
+    @Test
+    void parseDeclaration_fileWithClassificationAndEstablishmentFieldAndRequiredSuffix() {
+        var decl = ParamTypes.parseDeclaration("FILE:actividad:idEstablecimiento!");
+        assertThat(decl.nullable()).isFalse();
+        assertThat(decl.fileClassification()).isEqualTo("actividad");
+        assertThat(decl.fileEstablishmentField()).isEqualTo("idEstablecimiento");
+    }
+
+    @Test
+    void parseDeclaration_classificationWithoutEstablishmentFieldLeavesItNull() {
+        var decl = ParamTypes.parseDeclaration("FILE:perfilUsuario");
+        assertThat(decl.fileClassification()).isEqualTo("perfilUsuario");
+        assertThat(decl.fileEstablishmentField()).isNull();
+    }
+
+    @Test
+    void parseDeclaration_fileWithClassificationAndEmptyEstablishmentFieldIsTreatedAsAbsent() {
+        var decl = ParamTypes.parseDeclaration("FILE:actividad:");
+        assertThat(decl.fileClassification()).isEqualTo("actividad");
+        assertThat(decl.fileEstablishmentField()).isNull();
+    }
+
+    @Test
+    void isValidFileEstablishmentField_acceptsIdentifiers() {
+        assertThat(ParamTypes.isValidFileEstablishmentField("idEstablecimiento")).isTrue();
+        assertThat(ParamTypes.isValidFileEstablishmentField("ID_ESTABLECIMIENTO")).isTrue();
+    }
+
+    @Test
+    void isValidFileEstablishmentField_rejectsBadInput() {
+        assertThat(ParamTypes.isValidFileEstablishmentField(null)).isFalse();
+        assertThat(ParamTypes.isValidFileEstablishmentField("")).isFalse();
+        assertThat(ParamTypes.isValidFileEstablishmentField("1empiezaConNumero")).isFalse();
+        assertThat(ParamTypes.isValidFileEstablishmentField("con espacio")).isFalse();
+    }
+
+    @Test
+    void knownFileClassifications_matchesEstablishmentScopedSubsetPlusPerfilUsuario() {
+        // perfilUsuario es la única clasificación conocida SIN establecimiento —
+        // ver el javadoc de KNOWN_FILE_CLASSIFICATIONS / ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS.
+        assertThat(ParamTypes.KNOWN_FILE_CLASSIFICATIONS)
+                .containsAll(ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS)
+                .contains("perfilUsuario");
+        assertThat(ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS).doesNotContain("perfilUsuario");
+    }
+
+    /**
+     * V67 — PUBLIC_FILE_CLASSIFICATIONS es la puerta de
+     * {@code GET /files/public/**}: nada de datos por-usuario o
+     * por-establecimiento puede colar ahí.
+     */
+    @Test
+    void publicFileClassifications_neverOverlapsEstablishmentScoped() {
+        assertThat(ParamTypes.PUBLIC_FILE_CLASSIFICATIONS)
+                .doesNotContainAnyElementsOf(ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS)
+                .doesNotContain("perfilUsuario");
     }
 }

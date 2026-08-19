@@ -6,8 +6,21 @@
  * única diferencia intencional es que aquí no necesitamos el case
  * insensitivity porque Java ya normaliza a MAYÚSCULAS antes de
  * matching; en TS lo hacemos explícito.
+ *
+ * <p>V62-bis — faltaba {@code BODY_RAW} en la alternancia: el
+ * regex Java lo reconoce desde V49-bis (sub-objetos JSON sin
+ * aplanar), pero este espejo se quedó con los cuatro namespaces
+ * originales. Efecto real: un {@code :BODY_RAW.X} en el SQL nunca
+ * aparecía en la tabla "Tipos de parámetros" del formulario — el
+ * autor no tenía forma de verlo ni asignarle tipo desde el
+ * auto-detectado (sólo a mano, vía "Tipos manuales", si sabía que
+ * tenía que hacerlo). El backend sí lo exige al guardar
+ * (`QueryAdminService.validateCoverage` incluye BODY_RAW en el set
+ * `required`), así que el síntoma era un 400 "PARAM_TYPES
+ * incompleto" al guardar, sin que el formulario hubiera avisado
+ * nada antes.
  */
-const P = /:(PARAM|BODY|QUERY|CONTEXT)(\.[A-Z][A-Z0-9_]*)+/g;
+const P = /:(PARAM|BODY|BODY_RAW|QUERY|CONTEXT)(\.[A-Z][A-Z0-9_]*)+/g;
 
 export function scanPlaceholders(sql: string): string[] {
   if (!sql) return [];

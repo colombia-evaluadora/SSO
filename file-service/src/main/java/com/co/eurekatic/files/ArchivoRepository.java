@@ -44,14 +44,29 @@ public class ArchivoRepository {
      * la usa para lo que sirve.
      */
     public long reservar(String nombre, long peso, String usuario) {
+        return reservar(nombre, peso, usuario, null);
+    }
+
+    /**
+     * Igual que {@link #reservar(String, long, String)}, pero además
+     * guarda {@code etiqueta} — la clasificación declarada en el
+     * catálogo ({@code FILE:perfilUsuario}, ver {@code ParamTypes.FILE})
+     * cuando el campo la trae. Consistente con las filas históricas
+     * migradas, que siempre tenían {@code etiqueta} poblada
+     * ({@code perfilUsuario}, {@code escudo}, {@code firmaMecanica}...);
+     * antes de esto, TODA fila nueva subida por file-service dejaba la
+     * columna en {@code NULL}.
+     */
+    public long reservar(String nombre, long peso, String usuario, String etiqueta) {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update("""
-                INSERT INTO %s.tarchivo (nombre, peso, fecha, created_by, created_at, active)
-                VALUES (:nombre, :peso, CURRENT_DATE, :usuario, CURRENT_TIMESTAMP, false)
+                INSERT INTO %s.tarchivo (nombre, peso, etiqueta, fecha, created_by, created_at, active)
+                VALUES (:nombre, :peso, :etiqueta, CURRENT_DATE, :usuario, CURRENT_TIMESTAMP, false)
                 """.formatted(schema),
                 new MapSqlParameterSource()
                         .addValue("nombre", nombre)
                         .addValue("peso", peso)
+                        .addValue("etiqueta", etiqueta)
                         .addValue("usuario", usuario),
                 keys, new String[] { "pk_tarchivo" });
         Number pk = keys.getKey();
@@ -151,6 +166,33 @@ public class ArchivoRepository {
                     // 0 para NULL, que es indistinguible de un archivo
                     // vacío. Sólo importa para decidir si podemos poner
                     // Content-Length, así que lo normalizamos aquí.
+                    long peso = rs.getLong("peso");
+                    return new Archivo(
+                            rs.getLong("pk_tarchivo"),
+                            rs.getString("nombre"),
+                            rs.wasNull() ? -1 : peso,
+                            rs.getString("urls3"));
+                });
+        return filas.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(filas.get(0));
+    }
+
+    /**
+     * V67 — igual que {@link #buscarActivo(long)}, pero buscando por
+     * {@code urls3} exacto en vez de por pk. La usa {@code
+     * DownloadController#publico} ({@code GET /files/public/**}): ese
+     * endpoint recibe la CLAVE S3 en la ruta (no un id), y este chequeo
+     * es lo que evita servir bytes de un objeto que ya no está en el
+     * catálogo (fila borrada, o nunca cerrada) aunque el objeto siga
+     * físicamente en el bucket.
+     */
+    public java.util.Optional<Archivo> buscarActivoPorClave(String urls3) {
+        var filas = jdbc.query("""
+                SELECT pk_tarchivo, nombre, peso, urls3
+                  FROM %s.tarchivo
+                 WHERE urls3 = :urls3 AND active = true
+                """.formatted(schema),
+                new MapSqlParameterSource().addValue("urls3", urls3),
+                (rs, n) -> {
                     long peso = rs.getLong("peso");
                     return new Archivo(
                             rs.getLong("pk_tarchivo"),

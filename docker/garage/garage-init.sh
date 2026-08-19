@@ -39,12 +39,18 @@ done
 # staged, falla con "nothing to do". La versión se autodetecta para que
 # reaplicar un layout existente no sea un error (el nodo sólo guarda las
 # últimas 10 versiones en su historial).
-if garage layout show 2>/dev/null | grep -q "NO ROLE"; then
-  NODE_ID="$(garage node id -q)"
+if garage status 2>/dev/null | grep -q "NO ROLE"; then
+  # `garage node id -q` en v1.0.1 imprime "id@host:puerto" (la dirección
+  # RPC va pegada al id); `layout assign` sólo acepta el id desnudo.
+  NODE_ID="$(garage node id -q | cut -d@ -f1)"
   echo "· asignando layout al nodo ${NODE_ID}"
   garage layout assign -z dc1 -c 1G "${NODE_ID}"
-  VERSION="$(garage layout show 2>/dev/null | sed -n 's/.*layout version: \([0-9]*\).*/\1/p')"
-  garage layout apply --version "${VERSION:-1}" || true
+  # `layout show` reporta la versión CURRENT (antes de aplicar); `apply`
+  # exige la versión SIGUIENTE (la que deja el `assign` staged), o falla
+  # con "Invalid new layout version".
+  CURRENT_VERSION="$(garage layout show 2>/dev/null | sed -n 's/.*layout version: \([0-9]*\).*/\1/p')"
+  VERSION=$((${CURRENT_VERSION:-0} + 1))
+  garage layout apply --version "${VERSION}"
 else
   echo "· layout ya asignado"
 fi

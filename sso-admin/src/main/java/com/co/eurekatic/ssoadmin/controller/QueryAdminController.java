@@ -112,6 +112,10 @@ public class QueryAdminController {
         return new ParamTypesResponse(
                 ParamTypes.CURATED.stream().sorted().toList(),
                 ParamTypes.JDBC_TYPES,
-                ParamTypes.PG_CAST_NAME);
+                ParamTypes.PG_CAST_NAME,
+                ParamTypes.REQUIRED_SUFFIX,
+                ParamTypes.FILE_CLASSIFICATION_SEPARATOR,
+                ParamTypes.KNOWN_FILE_CLASSIFICATIONS.stream().sorted().toList(),
+                ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS.stream().sorted().toList());
     }
 }

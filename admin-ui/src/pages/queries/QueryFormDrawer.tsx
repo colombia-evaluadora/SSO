@@ -25,6 +25,137 @@ function newQueryUid(): string {
   return `q-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * V62 — separa el tipo base del sufijo de obligatoriedad
+ * ({@code "BIGINT!"} → {@code {base: "BIGINT", required: true}}).
+ * Espejo en TS de {@code ParamTypes.parseDeclaration} en el backend
+ * — sin sufijo, el parámetro es nullable por defecto (null explícito
+ * u omitir el campo bindean NULL de SQL en vez de tumbar la
+ * petición; ver spec 2026-08-13/14).
+ *
+ * <p>V63 — además separa la clasificación de archivo
+ * ({@code "FILE:perfilUsuario"} → {@code {base: "FILE",
+ * fileClassification: "perfilUsuario", ...}}). Sólo tiene sentido
+ * cuando {@code base === "FILE"}; para cualquier otro tipo queda en
+ * cadena vacía. El orden de los sufijos es fijo: primero la
+ * clasificación, después el de obligatoriedad
+ * ({@code "FILE:perfilUsuario!"}, nunca al revés) — mismo contrato
+ * que {@code ParamTypes.parseDeclaration}.
+ *
+ * <p>V65 — un TERCER componente opcional, sólo válido junto a una
+ * clasificación no vacía: el nombre de OTRO campo de texto del mismo
+ * multipart que trae el código de establecimiento
+ * ({@code "FILE:actividad:idEstablecimiento"} → {@code {...,
+ * fileClassification: "actividad", fileEstablishmentField:
+ * "idEstablecimiento"}}).
+ */
+function splitDeclaration(
+  raw: string | undefined,
+  requiredSuffix: string,
+  fileClassificationSeparator: string,
+): { base: string; required: boolean; fileClassification: string; fileEstablishmentField: string } {
+  if (!raw) return { base: "", required: false, fileClassification: "", fileEstablishmentField: "" };
+  const required = requiredSuffix !== "" && raw.endsWith(requiredSuffix);
+  const sinObligatorio = required ? raw.slice(0, -requiredSuffix.length) : raw;
+  const filePrefix = `FILE${fileClassificationSeparator}`;
+  if (sinObligatorio.startsWith(filePrefix)) {
+    const resto = sinObligatorio.slice(filePrefix.length);
+    const separador = resto.indexOf(fileClassificationSeparator);
+    const fileClassification = separador < 0 ? resto : resto.slice(0, separador);
+    const fileEstablishmentField = separador < 0 ? "" : resto.slice(separador + 1);
+    return { base: "FILE", required, fileClassification, fileEstablishmentField };
+  }
+  return { base: sinObligatorio, required, fileClassification: "", fileEstablishmentField: "" };
+}
+
+/** Inverso de {@link splitDeclaration}: recompone el string que se
+ *  guarda en {@code paramTypes}. */
+function composeDeclaration(
+  base: string,
+  required: boolean,
+  fileClassification: string,
+  fileEstablishmentField: string,
+  requiredSuffix: string,
+  fileClassificationSeparator: string,
+): string {
+  let conClasificacion = base;
+  if (base === "FILE" && fileClassification) {
+    conClasificacion = `FILE${fileClassificationSeparator}${fileClassification}`;
+    // V65 — el campo de establecimiento sólo tiene sentido pegado a
+    // una clasificación no vacía; sin clasificación se descarta en
+    // silencio (mismo criterio que el backend: parseDeclaration sólo
+    // lo llena si el segundo componente también está presente).
+    if (fileEstablishmentField) {
+      conClasificacion += `${fileClassificationSeparator}${fileEstablishmentField}`;
+    }
+  }
+  return required ? `${conClasificacion}${requiredSuffix}` : conClasificacion;
+}
+
+/**
+ * V65 — los dos inputs que aparecen bajo el selector de tipo cuando
+ * éste es {@code FILE}: la clasificación (con sugerencias del
+ * catálogo conocido, pero libre — el backend acepta cualquier valor
+ * con forma válida) y, sólo si hay clasificación, el campo de
+ * establecimiento. Un único componente para no duplicar el JSX entre
+ * la tabla de placeholders detectados y la de tipos manuales, que
+ * antes de esto ya repetían el input de clasificación dos veces.
+ */
+function FileClassificationInputs({
+  placeholder,
+  fileClassification,
+  fileEstablishmentField,
+  onClassificationChange,
+  onEstablishmentFieldChange,
+  knownFileClassifications,
+  establishmentScopedFileClassifications,
+}: {
+  placeholder: string;
+  fileClassification: string;
+  fileEstablishmentField: string;
+  onClassificationChange: (value: string) => void;
+  onEstablishmentFieldChange: (value: string) => void;
+  knownFileClassifications: string[];
+  establishmentScopedFileClassifications: string[];
+}) {
+  const datalistId = `file-classifications-${placeholder}`;
+  const sugiereEstablecimiento = establishmentScopedFileClassifications.includes(fileClassification);
+  return (
+    <>
+      <input
+        type="text"
+        list={datalistId}
+        value={fileClassification}
+        onChange={(e) => onClassificationChange(e.target.value)}
+        placeholder="Clasificación (opcional), ej. perfilUsuario"
+        aria-label={`${placeholder} clasificación de archivo`}
+        title="Carpeta S3 donde file-service guarda este archivo: <clasificación>/<pk>.<extensión>. Vacío = formato genérico <pk>/<nombre>."
+        className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+      />
+      <datalist id={datalistId}>
+        {knownFileClassifications.map((c) => (
+          <option key={c} value={c} />
+        ))}
+      </datalist>
+      {fileClassification && (
+        <input
+          type="text"
+          value={fileEstablishmentField}
+          onChange={(e) => onEstablishmentFieldChange(e.target.value)}
+          placeholder={
+            sugiereEstablecimiento
+              ? "Campo con el código de establecimiento, ej. idEstablecimiento"
+              : "Campo de establecimiento (opcional)"
+          }
+          aria-label={`${placeholder} campo de establecimiento`}
+          title="Nombre de OTRO campo de texto del mismo multipart que trae el código de establecimiento (validado contra testablecimiento.codigo) — se antepone a la clasificación en la clave S3. Vacío = sin ese segmento."
+          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+        />
+      )}
+    </>
+  );
+}
+
 interface Props {
   open: boolean;
   query: QueryAdminResponse | null;
@@ -428,13 +559,26 @@ function ParamTypesSection({
 }) {
   const { data, isLoading, error } = useParamTypes();
   const curated = data?.curated ?? [];
+  const requiredSuffix = data?.requiredSuffix ?? "!";
+  const fileClassificationSeparator = data?.fileClassificationSeparator ?? ":";
+  // V65 — catálogo sugerido de clasificaciones y su subconjunto
+  // establishment-scoped, ver el javadoc de ParamTypesResponse.
+  const knownFileClassifications = data?.knownFileClassifications ?? [];
+  const establishmentScopedFileClassifications =
+    data?.establishmentScopedFileClassifications ?? [];
 
   // Cuenta cuántos de los placeholders detectados están tipados.
-  // El backend exige tipo explícito sólo en :PARAM.* / :BODY.* —
-  // :CONTEXT.* y :QUERY.{SIZE,OFFSET} los bindea el sistema y no
-  // cuentan como "faltantes" para el badge, aunque los seguimos
-  // mostrando en la tabla para que el autor los vea.
-  const REQUIRED_NS = new Set(["PARAM", "BODY"]);
+  // El backend exige tipo explícito en :PARAM.* / :BODY.* / :BODY_RAW.*
+  // (QueryAdminService.validateCoverage incluye los tres en el set
+  // `required`) — :CONTEXT.* y :QUERY.{SIZE,OFFSET} los bindea el
+  // sistema y no cuentan como "faltantes" para el badge, aunque los
+  // seguimos mostrando en la tabla para que el autor los vea.
+  //
+  // V62-bis — BODY_RAW faltaba acá (mismo olvido que en el regex de
+  // placeholderScanner.ts): el badge nunca marcaba un :BODY_RAW.X
+  // sin tipar como "faltante", así que el formulario parecía OK
+  // hasta que el guardado rebotaba con 400 "PARAM_TYPES incompleto".
+  const REQUIRED_NS = new Set(["PARAM", "BODY", "BODY_RAW"]);
   const required = detected.filter((p) => REQUIRED_NS.has(p.split(".")[0] ?? ""));
   const typed = required.filter((p) => value[p]).length;
   const missing = required.length - typed;
@@ -444,9 +588,86 @@ function ParamTypesSection({
     if (type === "" || type === undefined) {
       delete next[placeholder];
     } else {
-      next[placeholder] = type;
+      // V62 — el dropdown sólo elige el tipo base; se preserva el
+      // sufijo de obligatoriedad que ya tuviera la fila. V63 — la
+      // clasificación sólo se preserva si el tipo se queda en FILE;
+      // cambiar a otro tipo la descarta (no tiene sentido en, p. ej.,
+      // BIGINT). V65 — el campo de establecimiento sigue la misma
+      // regla que la clasificación.
+      const {
+        required: wasRequired,
+        fileClassification: wasClassification,
+        fileEstablishmentField: wasEstablishmentField,
+      } = splitDeclaration(next[placeholder], requiredSuffix, fileClassificationSeparator);
+      next[placeholder] = composeDeclaration(
+        type,
+        wasRequired,
+        type === "FILE" ? wasClassification : "",
+        type === "FILE" ? wasEstablishmentField : "",
+        requiredSuffix,
+        fileClassificationSeparator,
+      );
     }
     onChange(next);
+  }
+
+  /**
+   * V62 — checkbox "obligatorio" por fila. Sin tipo asignado
+   * todavía no hay nada que marcar como obligatorio — el checkbox
+   * de esas filas viene deshabilitado (ver render).
+   */
+  function setRequired(placeholder: string, isRequired: boolean) {
+    const current = value[placeholder];
+    if (!current) return;
+    const { base, fileClassification, fileEstablishmentField } =
+      splitDeclaration(current, requiredSuffix, fileClassificationSeparator);
+    onChange({
+      ...value,
+      [placeholder]: composeDeclaration(
+        base, isRequired, fileClassification, fileEstablishmentField,
+        requiredSuffix, fileClassificationSeparator,
+      ),
+    });
+  }
+
+  /**
+   * V63 — input (dropdown con opción libre) que aparece sólo cuando
+   * el tipo elegido es {@code FILE}. Vacío = sin clasificar, mismo
+   * formato de clave que siempre tuvo file-service
+   * ({@code <pk>/<nombre>}).
+   */
+  function setFileClassification(placeholder: string, classification: string) {
+    const current = value[placeholder];
+    if (!current) return;
+    const { base, required: isRequired, fileEstablishmentField } =
+      splitDeclaration(current, requiredSuffix, fileClassificationSeparator);
+    onChange({
+      ...value,
+      [placeholder]: composeDeclaration(
+        base, isRequired, classification, fileEstablishmentField,
+        requiredSuffix, fileClassificationSeparator,
+      ),
+    });
+  }
+
+  /**
+   * V65 — input de texto que aparece junto a la clasificación: nombre
+   * de OTRO campo de texto del mismo multipart que trae el código de
+   * establecimiento. Vacío = sin ese segmento en la clave S3 (mismo
+   * comportamiento que antes de V65).
+   */
+  function setFileEstablishmentField(placeholder: string, establishmentField: string) {
+    const current = value[placeholder];
+    if (!current) return;
+    const { base, required: isRequired, fileClassification } =
+      splitDeclaration(current, requiredSuffix, fileClassificationSeparator);
+    onChange({
+      ...value,
+      [placeholder]: composeDeclaration(
+        base, isRequired, fileClassification, establishmentField,
+        requiredSuffix, fileClassificationSeparator,
+      ),
+    });
   }
 
   function addManual() {
@@ -502,6 +723,8 @@ function ParamTypesSection({
           <div className="text-[11px] text-slate-500">
             Auto-detectados del SQL. Asigna un tipo a cada :PARAM.* / :BODY.*.
             :CONTEXT.* y :QUERY.{'{'}SIZE,OFFSET{'}'} los bindea el sistema.
+            Por defecto un parámetro acepta null (u omitirse) sin error — marca
+            "Obligatorio" sólo en los que la función SIEMPRE necesita.
           </div>
         </div>
         <div
@@ -529,6 +752,9 @@ function ParamTypesSection({
               <tr>
                 <th className="px-2 py-1 text-left">Placeholder</th>
                 <th className="px-2 py-1 text-left">Tipo</th>
+                <th className="px-2 py-1 text-center" title="Si no se marca, el parámetro acepta null / omitirse sin error">
+                  Obligatorio
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -557,15 +783,18 @@ function ParamTypesSection({
                           </span>
                         </div>
                       </td>
+                      <td className="px-2 py-1 text-center text-slate-300">—</td>
                     </tr>
                   );
                 }
+                const { base, required: isRequired, fileClassification, fileEstablishmentField } =
+                  splitDeclaration(value[p], requiredSuffix, fileClassificationSeparator);
                 return (
                   <tr key={p} className="border-t border-slate-100">
                     <td className="px-2 py-1 font-mono">:{p}</td>
                     <td className="px-2 py-1">
                       <select
-                        value={value[p] ?? ""}
+                        value={base}
                         onChange={(e) => setType(p, e.target.value)}
                         className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
                       >
@@ -576,6 +805,32 @@ function ParamTypesSection({
                           </option>
                         ))}
                       </select>
+                      {base === "FILE" && (
+                        <FileClassificationInputs
+                          placeholder={p}
+                          fileClassification={fileClassification}
+                          fileEstablishmentField={fileEstablishmentField}
+                          onClassificationChange={(v) => setFileClassification(p, v)}
+                          onEstablishmentFieldChange={(v) => setFileEstablishmentField(p, v)}
+                          knownFileClassifications={knownFileClassifications}
+                          establishmentScopedFileClassifications={establishmentScopedFileClassifications}
+                        />
+                      )}
+                    </td>
+                    <td className="px-2 py-1 text-center">
+                      <input
+                        type="checkbox"
+                        checked={isRequired}
+                        disabled={!base}
+                        onChange={(e) => setRequired(p, e.target.checked)}
+                        aria-label={`${p} es obligatorio`}
+                        title={
+                          base
+                            ? "Sin marcar: acepta null u omitirse (bindea NULL). Marcado: null/omitido responde 400."
+                            : "Asigna un tipo primero"
+                        }
+                        className="h-3.5 w-3.5 cursor-pointer accent-sky-600 disabled:cursor-not-allowed"
+                      />
                     </td>
                   </tr>
                 );
@@ -593,35 +848,65 @@ function ParamTypesSection({
           <div className="overflow-hidden rounded border border-slate-200 bg-white">
             <table className="w-full text-xs">
               <tbody>
-                {manualKeys.map((k) => (
-                  <tr key={k} className="border-t border-slate-100 first:border-t-0">
-                    <td className="px-2 py-1 font-mono">:{k}</td>
-                    <td className="px-2 py-1">
-                      <select
-                        value={value[k] ?? ""}
-                        onChange={(e) => setType(k, e.target.value)}
-                        className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-                      >
-                        <option value="">— sin tipo —</option>
-                        {curated.map((t) => (
-                          <option key={t} value={t}>
-                            {t}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="px-2 py-1 text-right">
-                      <button
-                        type="button"
-                        onClick={() => removeManual(k)}
-                        className="text-rose-600 hover:underline"
-                        title="Quitar tipo manual"
-                      >
-                        ×
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {manualKeys.map((k) => {
+                  const { base, required: isRequired, fileClassification, fileEstablishmentField } =
+                    splitDeclaration(value[k], requiredSuffix, fileClassificationSeparator);
+                  return (
+                    <tr key={k} className="border-t border-slate-100 first:border-t-0">
+                      <td className="px-2 py-1 font-mono">:{k}</td>
+                      <td className="px-2 py-1">
+                        <select
+                          value={base}
+                          onChange={(e) => setType(k, e.target.value)}
+                          className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                        >
+                          <option value="">— sin tipo —</option>
+                          {curated.map((t) => (
+                            <option key={t} value={t}>
+                              {t}
+                            </option>
+                          ))}
+                        </select>
+                        {base === "FILE" && (
+                          <FileClassificationInputs
+                            placeholder={k}
+                            fileClassification={fileClassification}
+                            fileEstablishmentField={fileEstablishmentField}
+                            onClassificationChange={(v) => setFileClassification(k, v)}
+                            onEstablishmentFieldChange={(v) => setFileEstablishmentField(k, v)}
+                            knownFileClassifications={knownFileClassifications}
+                            establishmentScopedFileClassifications={establishmentScopedFileClassifications}
+                          />
+                        )}
+                      </td>
+                      <td className="px-2 py-1 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isRequired}
+                          disabled={!base}
+                          onChange={(e) => setRequired(k, e.target.checked)}
+                          aria-label={`${k} es obligatorio`}
+                          title={
+                            base
+                              ? "Sin marcar: acepta null u omitirse (bindea NULL). Marcado: null/omitido responde 400."
+                              : "Asigna un tipo primero"
+                          }
+                          className="h-3.5 w-3.5 cursor-pointer accent-sky-600 disabled:cursor-not-allowed"
+                        />
+                      </td>
+                      <td className="px-2 py-1 text-right">
+                        <button
+                          type="button"
+                          onClick={() => removeManual(k)}
+                          className="text-rose-600 hover:underline"
+                          title="Quitar tipo manual"
+                        >
+                          ×
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

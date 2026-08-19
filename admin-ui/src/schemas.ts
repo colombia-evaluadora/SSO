@@ -189,9 +189,22 @@ export const appFormSchema = z.object({
  *      `TIME[]` tenía contraparte array entre los temporales.
  *   3. Falta `JSONB[]` — lista de objetos JSON.
  *
+ * V63 — mismo gap, tipo nuevo: falta `FILE` (marca un placeholder
+ * como "este valor llega de un multipart, file-service lo sustituye
+ * por su pk_tarchivo" — ver `ParamTypes.FILE` en el backend). Sin
+ * esta entrada el dropdown de `useParamTypes()` SÍ ofrece "FILE"
+ * (viene del backend, ver arriba), pero elegirlo hacía fallar el
+ * submit en silencio: `queryFormSchema.safeParse` rechazaba el
+ * valor con "Tipo no soportado" y `Form` nunca llamaba a
+ * `onSubmit` — confirmado en vivo contra el admin-ui real, no sólo
+ * leyendo el código.
+ *
  * Este `as const` se usa para validación local (en `paramTypes`)
  * pero el dropdown se llena con la respuesta de `useParamTypes` —
- * la fuente de verdad en runtime es el backend.
+ * la fuente de verdad en runtime es el backend. Cada tipo nuevo en
+ * `ParamTypes.CURATED` tiene que reflejarse acá también, o el
+ * dropdown ofrece una opción que el submit rechaza — exactamente el
+ * bug que V61 y V63 corrigieron.
  */
 const CURATED_PG_TYPES = [
   "TEXT",
@@ -209,6 +222,7 @@ const CURATED_PG_TYPES = [
   "UUID",
   "JSONB",
   "JSON",
+  "FILE",
   "TEXT[]",
   "BIGINT[]",
   "INTEGER[]",
@@ -227,6 +241,39 @@ const CURATED_PG_TYPES = [
   "NODO_CURRICULAR",
   "TITULACION_GRADO",
 ] as const;
+
+/**
+ * V62 — espejo del sufijo de obligatoriedad que expone
+ * {@code GET /query/param-types} (campo {@code requiredSuffix}).
+ * Hardcodeado acá también porque esta validación corre ANTES del
+ * submit, sin acceso al hook de React Query — mismo trade-off que
+ * ya tenía {@code CURATED_PG_TYPES} (comentario arriba): la fuente
+ * de verdad en runtime es el backend, esto es sólo para no dejar
+ * pasar un typo evidente antes de llegar ahí.
+ */
+const REQUIRED_SUFFIX = "!";
+
+/**
+ * V63 — espejo de {@code ParamTypes.FILE_CLASSIFICATION_SEPARATOR} /
+ * {@code isValidFileClassification} del backend. Mismo trade-off que
+ * {@code REQUIRED_SUFFIX}: la fuente de verdad en runtime es el
+ * backend (`QueryAdminService.validateParamTypes`), esto sólo evita
+ * dejar pasar un typo evidente antes de llegar ahí. Sólo aplica
+ * cuando el tipo base es `FILE` — "FILE:perfilUsuario" declara con
+ * qué carpeta S3 arma file-service la clave (ver
+ * `ParamTypes.parseDeclaration`, javadoc).
+ */
+const FILE_CLASSIFICATION_SEPARATOR = ":";
+const FILE_CLASSIFICATION_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
+/**
+ * V65 — espejo de {@code ParamTypes.isValidFileEstablishmentField} /
+ * {@code FILE_ESTABLISHMENT_SEPARATOR} del backend. Mismo patrón que
+ * la clasificación: {@code "FILE:actividad:idEstablecimiento"} agrega
+ * un TERCER componente, el nombre de OTRO campo de texto del mismo
+ * multipart cuyo valor file-service valida contra
+ * {@code testablecimiento.codigo} y antepone en la clave S3.
+ */
+const FILE_ESTABLISHMENT_FIELD_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
 
 export const queryFormSchema = z
   .object({
@@ -301,8 +348,63 @@ export const queryFormSchema = z
         z
           .string()
           .refine(
-            (v) => (CURATED_PG_TYPES as readonly string[]).includes(v),
-            `Tipo no soportado. Permitidos: ${CURATED_PG_TYPES.join(", ")}`,
+            (v) => {
+              // V62 — el valor puede traer el sufijo de obligatoriedad
+              // ("BIGINT!"); se valida el tipo base, igual que el
+              // backend (ParamTypes.parseDeclaration).
+              const sinObligatorio = v.endsWith(REQUIRED_SUFFIX)
+                ? v.slice(0, -REQUIRED_SUFFIX.length)
+                : v;
+              // V63 — "FILE:clasificacion": el tipo base para el check
+              // de CURATED sigue siendo "FILE"; la clasificación se
+              // valida aparte, más abajo.
+              const filePrefix = `FILE${FILE_CLASSIFICATION_SEPARATOR}`;
+              const base = sinObligatorio.startsWith(filePrefix) ? "FILE" : sinObligatorio;
+              return (CURATED_PG_TYPES as readonly string[]).includes(base);
+            },
+            `Tipo no soportado. Permitidos: ${CURATED_PG_TYPES.join(", ")} `
+              + `(opcionalmente con sufijo '${REQUIRED_SUFFIX}' para marcarlo obligatorio).`,
+          )
+          .refine(
+            (v) => {
+              // V63 — si hay clasificación (sólo válido tras "FILE:"),
+              // su formato tiene que ser un identificador válido —
+              // se vuelve carpeta S3 literal. V65 — un tercer
+              // componente ("FILE:actividad:idEstablecimiento") sólo
+              // recorta la clasificación en el primer separador; el
+              // campo de establecimiento se valida aparte, abajo.
+              const sinObligatorio = v.endsWith(REQUIRED_SUFFIX)
+                ? v.slice(0, -REQUIRED_SUFFIX.length)
+                : v;
+              const filePrefix = `FILE${FILE_CLASSIFICATION_SEPARATOR}`;
+              if (!sinObligatorio.startsWith(filePrefix)) return true;
+              const resto = sinObligatorio.slice(filePrefix.length);
+              const separador = resto.indexOf(FILE_CLASSIFICATION_SEPARATOR);
+              const clasificacion = separador < 0 ? resto : resto.slice(0, separador);
+              if (clasificacion === "") return true;
+              return FILE_CLASSIFICATION_PATTERN.test(clasificacion);
+            },
+            "Clasificación de archivo inválida. Debe empezar con una letra y usar "
+              + "sólo letras, dígitos y '_' — ej. 'perfilUsuario', 'PRIMER_PERIODO'.",
+          )
+          .refine(
+            (v) => {
+              // V65 — campo de establecimiento (tercer componente):
+              // mismo formato de identificador que la clasificación.
+              const sinObligatorio = v.endsWith(REQUIRED_SUFFIX)
+                ? v.slice(0, -REQUIRED_SUFFIX.length)
+                : v;
+              const filePrefix = `FILE${FILE_CLASSIFICATION_SEPARATOR}`;
+              if (!sinObligatorio.startsWith(filePrefix)) return true;
+              const resto = sinObligatorio.slice(filePrefix.length);
+              const separador = resto.indexOf(FILE_CLASSIFICATION_SEPARATOR);
+              if (separador < 0) return true;
+              const campoEstablecimiento = resto.slice(separador + 1);
+              if (campoEstablecimiento === "") return true;
+              return FILE_ESTABLISHMENT_FIELD_PATTERN.test(campoEstablecimiento);
+            },
+            "Campo de establecimiento inválido. Debe empezar con una letra y usar "
+              + "sólo letras, dígitos y '_' — ej. 'idEstablecimiento'.",
           ),
       )
       .default({}),

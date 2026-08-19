@@ -3,7 +3,6 @@ package com.co.eurekatic.auth.service;
 import com.co.eurekatic.auth.exception.EmailAlreadyExistsException;
 import com.co.eurekatic.auth.exception.ForbiddenException;
 import com.co.eurekatic.auth.repository.AcademicoJdbcRepository;
-import com.co.eurekatic.auth.web.dto.RegisterFuncionarioRequest;
 import com.co.eurekatic.auth.web.dto.RegisterResponse;
 import com.co.eurekatic.auth.web.dto.RegisterUsuarioRequest;
 import com.co.eurekatic.common.entity.User;
@@ -57,17 +56,18 @@ public class FuncionarioRegistrationService {
     }
 
     @Transactional
-    public RegisterResponse registerFuncionario(RegisterFuncionarioRequest req, Authentication auth) {
+    public RegisterResponse registerFuncionario(RegisterUsuarioRequest req, Authentication auth) {
         long callerId = resolveCallerId(auth);
-        RegisterUsuarioRequest u = req.usuario();
-        PasswordPolicy.validate(u.password());
-        if (userRepository.existsByEmail(u.email())) {
-            throw new EmailAlreadyExistsException(u.email());
+        PasswordPolicy.validate(req.password());
+        if (userRepository.existsByEmail(req.email())) {
+            throw new EmailAlreadyExistsException(req.email());
         }
 
-        String hashed = passwordEncoder.encode(u.password());
-        User saved = userRepository.save(newUser(u, hashed));
+        String hashed = passwordEncoder.encode(req.password());
+        User saved = userRepository.save(newUser(req, hashed));
 
+        // fk_tmunicipio_expedicion ya no se pide aquí (V62): queda NULL
+        // en TFUNCIONARIO y se completa después vía fn_fun_actualizar.
         long pkFuncionario = academicoJdbc.callFunCrear(callerId, req, hashed);
         // fn_fun_crear solo retorna PK_TFUNCIONARIO. Resolvemos PK_TUSUARIO
         // por el bridge public.users.id_user -> academico_test.tusuario (V48).
@@ -89,8 +89,20 @@ public class FuncionarioRegistrationService {
 
     /**
      * El caller se propaga como {@code p_pk_usuario_solicitante} al gate
-     * {@code fn_puede_afectar_usuarios}. Sin fila en {@code public.users}
-     * no hay identidad que propagar.
+     * {@code fn_puede_afectar_usuarios}, que compara contra
+     * {@code academico_test.tsede_usuario.fk_tusuario} (FK real a
+     * {@code academico_test.tusuario.pk_tusuario}) — NO contra
+     * {@code public.users.id_user}. Son dos secuencias independientes;
+     * solo coinciden para el admin seed porque
+     * {@link com.co.eurekatic.auth.init.AdminAcademicIdentityBootstrap}
+     * fuerza {@code pk_tusuario = id_user} a propósito. Para cualquier
+     * otro usuario (creado por {@code fn_usu_crear}, que asigna
+     * {@code pk_tusuario} por identity) pasar el {@code id_user} crudo
+     * aquí hace que el gate compare IDs de dos espacios distintos y
+     * devuelva FALSE siempre — 403 para todo caller que no sea ese admin
+     * concreto. Se resuelve con el mismo puente que ya usa
+     * {@link #registerFuncionario} para la respuesta
+     * ({@code fn_get_academico_usuario_id}, V48).
      */
     private long resolveCallerId(Authentication auth) {
         if (auth == null || auth.getPrincipal() == null) {
@@ -105,8 +117,15 @@ public class FuncionarioRegistrationService {
         } else {
             email = auth.getName();
         }
-        return userRepository.findByEmail(email)
+        long idUser = userRepository.findByEmail(email)
                 .map(User::getId)
                 .orElseThrow(() -> new ForbiddenException("Caller sin fila en public.users"));
+        Long pkTusuario = jdbc.queryForObject(
+                "SELECT public.fn_get_academico_usuario_id(?)", Long.class, idUser);
+        if (pkTusuario == null) {
+            throw new ForbiddenException(
+                    "Caller sin identidad académica (academico_test.tusuario) — no puede afectar usuarios");
+        }
+        return pkTusuario;
     }
 }

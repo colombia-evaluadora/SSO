@@ -3,7 +3,6 @@ package com.co.eurekatic.auth.web;
 import com.co.eurekatic.auth.security.CachedUserSummaryService;
 import com.co.eurekatic.auth.security.EffectiveRolesResolver;
 import com.co.eurekatic.auth.service.FuncionarioRegistrationService;
-import com.co.eurekatic.auth.web.dto.RegisterFuncionarioRequest;
 import com.co.eurekatic.auth.web.dto.RegisterResponse;
 import com.co.eurekatic.auth.web.dto.RegisterUsuarioRequest;
 import com.co.eurekatic.common.dto.AuthDtos.AppSummary;
@@ -173,9 +172,12 @@ public class AuthController {
                 .body(funcionarioRegistrationService.registerUsuario(req, auth));
     }
 
+    // V62 — mismo body que /register/usuario (RegisterUsuarioRequest):
+    // fkTmunicipioExpedicion dejó de ser parte del alta, se completa
+    // después vía fn_fun_actualizar.
     @PostMapping("/register/funcionario")
     public ResponseEntity<RegisterResponse> registerFuncionario(
-            @Valid @RequestBody RegisterFuncionarioRequest req,
+            @Valid @RequestBody RegisterUsuarioRequest req,
             Authentication auth) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(funcionarioRegistrationService.registerFuncionario(req, auth));
