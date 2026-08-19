@@ -28,6 +28,13 @@ public class DebeziumEngineConfig {
         props.setProperty("tombstones.on.delete", "false");
         props.setProperty("decimal.handling.mode", "precise");
         props.setProperty("time.precision.mode", "connect");
+        // Explicito, no el default implicito: AmqpPublisher.parseAuditContext()
+        // Base64-decodifica el "content" de cada mensaje logico (pg_logical_emit_message,
+        // ver 04-context-emitter.sql / trg_audit_ctx). El default de Debezium ("bytes")
+        // produce el mismo resultado hoy (el JsonConverter sin schema codifica BYTES como
+        // Base64 igual), pero fijarlo aqui documenta la suposicion en vez de depender de
+        // un comportamiento implicito de otra libreria que podria cambiar entre versiones.
+        props.setProperty("binary.handling.mode", "base64");
         props.setProperty("offset.storage", "org.apache.kafka.connect.storage.FileOffsetBackingStore");
         // offset.storage.file.filename is set by CaptureRunner.prepare() with the absolute path
         // derived from ${cdc.offsets.dir} — do NOT hardcode it here (would shadow config).

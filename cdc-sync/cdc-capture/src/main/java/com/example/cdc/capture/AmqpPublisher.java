@@ -11,6 +11,8 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -131,15 +133,43 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
         return mapper.readValue(json, HashMap.class);
     }
 
-    /** Parses an audit_ctx logical-message body into the per-xid context cache value. */
+    /**
+     * Parses an audit_ctx logical-message body into the per-xid context cache value.
+     *
+     * <p>Debezium's {@code LogicalDecodingMessageMonitor} (verified against the
+     * decompiled {@code debezium-connector-postgres-3.1.0.Final} constants
+     * {@code DEBEZIUM_LOGICAL_DECODING_MESSAGE_PREFIX_KEY="prefix"} and
+     * {@code DEBEZIUM_LOGICAL_DECODING_MESSAGE_CONTENT_KEY="content"}) puts the
+     * message body under the key {@code content}, NOT {@code data} — this method
+     * previously read the wrong key, which meant {@code parseAuditContext} always
+     * returned {@code null} and every audit_ctx message was silently dropped,
+     * regardless of what the caller set in {@code app.*} GUCs. See
+     * docs/etiqueta-auditoria-cdc-analisis.md §11 for the end-to-end evidence
+     * that surfaced this.
+     *
+     * <p>The value under {@code content} is also not plain text: with the default
+     * {@code binary.handling.mode=bytes}, Debezium hands Kafka Connect a raw byte
+     * array under a {@code Schema.BYTES} field, and the schemaless
+     * {@code JsonConverter} serializes {@code BYTES} as a Base64 string — so the
+     * JSON payload built by {@code fn_audit_ctx()} (04-context-emitter.sql) has to
+     * be Base64-decoded before it can be parsed.
+     */
     private CdcEvent.Context parseAuditContext(Map<String, Object> deb) {
         Object msgObj = deb.get("message");
         if (!(msgObj instanceof Map<?, ?> msg)) return null;
         Object prefix = msg.get("prefix");
         if (!AUDIT_CTX_PREFIX.equals(prefix)) return null;
 
-        Object data = msg.get("data");
-        if (!(data instanceof String payload) || payload.isBlank()) return null;
+        Object contentObj = msg.get("content");
+        if (!(contentObj instanceof String base64) || base64.isBlank()) return null;
+
+        String payload;
+        try {
+            payload = new String(Base64.getDecoder().decode(base64), StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            log.warn("audit_ctx content no es base64 valido: {}", e.getMessage());
+            return null;
+        }
 
         Map<String, Object> body;
         try {
