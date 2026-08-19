@@ -349,6 +349,19 @@ jobs:
     if: needs.changes.outputs.any == 'true'
     strategy:
       fail-fast: false
+      # Maven Central corta por rate limit cuando los 11 servicios
+      # arrancan a la vez: cada uno resuelve el árbol de dependencias
+      # completo desde una IP de runner distinta pero en la misma
+      # ráfaga, y Central responde 429 (y a veces 403). Ha tumbado dos
+      # despliegues el 2026-08-19 — el build no tiene nada malo, sólo
+      # llega en mal momento, y cada reintento era una tirada de dados.
+      #
+      # De 11 en paralelo a 3: el deploy tarda algo más, pero deja de
+      # depender de la suerte. Los Dockerfiles además reintentan las
+      # descargas (ver los -Daether.connector.http.retryHandler.* de
+      # sus invocaciones de mvn); esto reduce la probabilidad de que
+      # haga falta.
+      max-parallel: 3
       # La matriz llega YA FILTRADA desde el job `changes`: un objeto
       # por servicio a reconstruir, con las cuatro claves que los
       # steps de abajo usan.
@@ -530,6 +543,51 @@ jobs:
           ssh -i ~/.ssh/deploy_key "$DEST" \
             'echo ".env desplegado: $(grep -c . /opt/sso/.env) líneas no vacías, permisos $(stat -c %a /opt/sso/.env)"'
 
+      - name: Añadir credenciales de ZeptoMail al .env
+        # Estas dos NO van dentro de TEST_ENV_FILE a propósito. Ese
+        # secreto es el .env entero (170+ líneas), y actualizarlo
+        # obliga a reescribirlo completo: los secretos de GitHub son
+        # de sólo escritura, así que nadie puede leer el valor vigente
+        # para añadirle una línea. Rotar el token de ZeptoMail por esa
+        # vía significaría volcar y reconstruir toda la configuración
+        # de producción a ciegas, y un fallo a media reconstrucción
+        # deja el stack sin credenciales.
+        #
+        # Como secretos propios, rotar el token es un `gh secret set`
+        # y el resto del .env no se toca. El append va después de
+        # escribir el fichero, así que sobrevive a que el deploy lo
+        # regenere en cada despliegue.
+        #
+        # Misma disciplina que el paso anterior: el valor viaja por
+        # STDIN, nunca en argv.
+        env:
+          DEST: ${{ secrets.TEST_SSH_USER }}@${{ secrets.TEST_SSH_HOST }}
+          ZEPTO_USER: ${{ secrets.SMTP_ZEPTOMAIL_USER }}
+          ZEPTO_PASS: ${{ secrets.SMTP_ZEPTOMAIL_PASS }}
+        run: |
+          if [ -z "${ZEPTO_USER:-}" ] || [ -z "${ZEPTO_PASS:-}" ]; then
+            echo "::warning::Sin SMTP_ZEPTOMAIL_USER/PASS; la fila smtp-zeptomail"
+            echo "de provider_config se auto-desactivará y el correo saldrá por el"
+            echo "siguiente proveedor de la lista (smtp-gmail)."
+            exit 0
+          fi
+          # Borrar antes de añadir: TEST_ENV_FILE también puede traer
+          # estas dos variables, y sin el borrado cada despliegue
+          # dejaría el .env con la pareja duplicada. Así estos secretos
+          # son la única fuente de verdad y rotar el token sigue siendo
+          # un `gh secret set`, gane quien gane en el fichero base.
+          ssh -i ~/.ssh/deploy_key "$DEST" 'sed -i "/^SMTP_ZEPTOMAIL_/d" /opt/sso/.env'
+          # El `\n` inicial es deliberado: si el fichero base no acaba
+          # en salto de línea, un append pega la primera variable al
+          # final de la última existente y la corrompe (le pasó a
+          # SMTP_FROM al hacerlo a mano el 2026-08-19). Una línea en
+          # blanco de más en un .env no molesta a nadie.
+          printf '\nSMTP_ZEPTOMAIL_USER=%s\nSMTP_ZEPTOMAIL_PASS=%s\n' "$ZEPTO_USER" "$ZEPTO_PASS" \
+            | ssh -i ~/.ssh/deploy_key "$DEST" \
+              'umask 077 && cat >> /opt/sso/.env'
+          ssh -i ~/.ssh/deploy_key "$DEST" \
+            'echo "ZeptoMail: $(grep -c "^SMTP_ZEPTOMAIL_" /opt/sso/.env) variables añadidas"'
+
       - name: Pull & restart stack
         # Cold-cache JVM starts on a 4GB Linode take 60-90s
         # for the provisioner (the heaviest of the bunch);
@@ -573,14 +631,43 @@ jobs:
           # de flyway (credenciales mal, sslmode/channel_binding
           # incompatible con Neon, error SQL en una migración, etc.)
           # se pierde si no lo volcamos aquí.
-          if ! ./scripts/sso-stack.sh up -d --remove-orphans; then
-            echo "=== flyway logs ==="
+          #
+          # Antes de claudicar: muchos fallos son por checksum mismatch
+          # (cambios locales en migraciones ya aplicadas en commits
+          # anteriores — típicos cuando un fix de una migración V<n>
+          # previa reescribe el archivo y el servidor todavía conserva
+          # el checksum antiguo en flyway_schema_history). Un
+          # `flyway repair` actualiza los checksums sin tocar datos y,
+          # combinado con un nuevo `compose up`, suele bastar para
+          # recuperar el deploy sin tener que entrar por SSH a mano.
+          up_stack() { ./scripts/sso-stack.sh up -d --remove-orphans; }
+          if ! up_stack; then
+            echo "=== primer compose up falló ==="
+            echo "=== flyway logs (last 200) ==="
             docker compose logs --no-color --tail=200 flyway || true
-            echo "=== auth-center logs (last 50) ==="
-            docker compose logs --no-color --tail=50 auth-center || true
-            echo "=== compose ps ==="
-            docker compose ps || true
-            exit 1
+            echo "=== intentando flyway repair ==="
+            if docker compose run --rm flyway repair; then
+              echo "=== flyway repair OK; reintentando compose up ==="
+              if up_stack; then
+                echo "=== compose up exitoso tras repair ==="
+              else
+                echo "=== compose up SIGUE fallando tras repair ==="
+                echo "=== flyway logs (last 200) ==="
+                docker compose logs --no-color --tail=200 flyway || true
+                echo "=== auth-center logs (last 50) ==="
+                docker compose logs --no-color --tail=50 auth-center || true
+                echo "=== compose ps ==="
+                docker compose ps || true
+                exit 1
+              fi
+            else
+              echo "=== flyway repair también falló (no es un checksum mismatch) ==="
+              echo "=== auth-center logs (last 50) ==="
+              docker compose logs --no-color --tail=50 auth-center || true
+              echo "=== compose ps ==="
+              docker compose ps || true
+              exit 1
+            fi
           fi
 
           # Limpia capas de imágenes viejas para no llenar el disco
