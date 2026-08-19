@@ -197,3 +197,39 @@ No se tocó en esta pasada. Si se quiere una etiqueta agregada para el lote (com
 `fn_add_trol`, `fn_associate_menus_to_rol`, `fn_delete_menu`, `fn_dissociate_menus_from_rol`, `fn_reorder_menus`, `fn_sincronizar_rol_publico`, `fn_sync_trol_to_public_role`, `fn_sync_tsede_usuario_to_role_users`, `fn_sync_users_password_to_tusuario`, `fn_upsert_menu` siguen presentes en prod con las firmas viejas. No es una novedad de este análisis — es exactamente el drift que ya describe la memoria de proyecto "V59 server drift cleanup pending" (`v59_cleanup_drift.sql` existe pero no se ha corrido contra prod). Fuera de alcance de la iniciativa de etiquetas; se confirma que sigue ahí, nada más.
 
 (`fn_create_parent_menu_with_submenus`, al revés — existe en local y no en prod — es el mismo grupo, ya excluido arriba.)
+
+---
+
+## V78 — sincronización desde producción (8 funciones)
+
+Resultado de la verificación de arriba: por decisión explícita ("priorizar lo que está en el servidor"), estas 8 funciones se trajeron desde prod (`172.233.184.248`) tal cual — 4 portadas desde cero (no existían en local), 1 reemplazo de implementación completo, y 3 reversiones de firma — y a todas se les agregó `fn_audit_declarar` en la misma pasada. Validadas con smoke test transaccional (`BEGIN...ROLLBACK`) y, donde el catálogo de `sso-admin` tiene ruta registrada, con HTTP real + verificación en ClickHouse (`api-gateway` → `query-service` → Postgres → `cdc-capture` → RabbitMQ → `cdc-worker` → ClickHouse).
+
+### Portadas desde cero (no existían en local)
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_enfasis_actualizar` (sobrecarga de 3 parámetros: `p_pk, p_nombre, p_pk_usuario_solicitante`) | Antes del `UPDATE TENFASIS`, tras validar duplicado de nombre en el establecimiento. | `Actualización del énfasis %s` (usa `COALESCE(p_nombre, r.NOMBRE)` para mostrar el nombre vigente aunque no se edite). | Sí — `r.FK_TESTABLECIMIENTO`, ya resuelto en la fila `r` que la función lee al principio (`SELECT * INTO r FROM TENFASIS ...`). |
+| `fn_enfasis_actualizar` (sobrecarga de 5 parámetros: agrega `p_codigo`, `p_fk_especialidad`) | Antes del `UPDATE TENFASIS`, tras validar duplicados de nombre **y** código. | `Actualización del énfasis %s` (usa `v_nombre`, ya resuelto vía `COALESCE(p_nombre, r.NOMBRE)` unas líneas antes para las validaciones de duplicado). | Sí — mismo patrón, `r.FK_TESTABLECIMIENTO`. |
+| `fn_enfasis_soft_delete` | Antes del `UPDATE ... SET ACTIVE=FALSE`, tras validar que no tenga asignaturas asociadas. | `Eliminación del énfasis %s` | Sí — `v_est`, resuelto en el mismo `SELECT` inicial que trae el nombre. |
+| `fn_fun_baja_establecimiento` | Antes del `UPDATE TFUNCIONARIO` (paso 2, desvinculación), después del bloqueo "es el rector, no se puede dar de baja así". Se agregó una `SELECT` nueva para resolver el nombre del funcionario (mismo patrón que `fn_fun_enlazar_establecimiento`, su inverso — esa función ya la tenía). | `Desvinculación del funcionario %s del establecimiento` | Sí — `v_fk_ee`, ya resuelto al principio de la función. |
+
+### Reemplazo de implementación (existía en ambos lados, pero eran funciones distintas)
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_escala_bulk_delete` | Dentro del `FOREACH`, antes de la cascada de 4 `UPDATE` (`TVALORACION`→`TESCALA_VALORACION`→`TNIVEL_ESCALA`→`TESCALA`), tras validar que no haya bandas en uso por criterios de unidad. Una declaración **por cada escala del lote** (no una sola de lote antes del loop, a diferencia de `fn_est_soft_delete_bulk`/`fn_sed_soft_delete_bulk` — cada escala tiene su propio establecimiento potencialmente distinto, así que cada una necesita su propia llamada con su propio `v_est`). | `Eliminación de la escala %s` | Sí — `v_est`, resuelto por escala vía `fn_periodo_establecimiento` sobre el periodo de su primera `TNIVEL_ESCALA` activa. |
+
+### Reversión de firma a la versión de producción
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_fun_actualizar` | Sin cambios de posición respecto a la versión local anterior (`V76`) — antes de las validaciones de valor (sección 2), justo después de leer nombre/apellidos actuales. Solo cambió la firma (último parámetro `p_direccion` en vez de `p_lista_permisos jsonb`) y el cuerpo alrededor (sin la sección de manejo de `jsonb` de permisos que tenía la versión local). | `Actualización de datos del funcionario %s` (igual que antes) | No — igual que antes (no resuelve establecimiento). |
+| `fn_periodo_actualizar` | Reubicada más temprano que la posición "natural": inmediatamente después de calcular los valores efectivos (`v_sede`, `v_inicio`, `v_hi`, etc.), **antes** del bloque de validación de cambio de sede — porque esta versión (a diferencia de la que reemplaza) hace `INSERT`/`UPDATE` de descansos y de `TANO_LECTIVO` **antes** de terminar todas sus validaciones (jornada, estado, "un solo periodo activo"). Mismo problema que `V77` encontró en `fn_plan_agregar`: declarar tarde habría dejado esas escrituras tempranas sin etiqueta. | `Actualización del periodo académico %s - %s` (año lectivo + jornada, resueltos temprano con una `SELECT` extra que se agregó solo para esto — se re-resuelven después de todas formas, sin conflicto). | Sí — `v_est_new`, resuelto con una `SELECT` nueva (`TSEDE → FK_TESTABLECIMIENTO`) en el mismo punto temprano. |
+| `fn_est_crear` | Antes del `INSERT INTO TESTABLECIMIENTO`, tras la última validación (`FK_TARCHIVO`). Sin cambios de posición respecto al patrón general — lo que cambió es el cuerpo completo alrededor (trae el REV4: sede por defecto + permisos de rector/secretaria automáticos vía `fn_sed_crear`/`fn_fun_permisos_actualizar`). | `Creación del establecimiento %s` (igual que antes) | No — igual que antes (el establecimiento se está creando en esta misma llamada). |
+
+### Notas de esta ronda
+
+- **`fn_sincronizar_rol_publico`** (llamada dos veces al final de `fn_est_crear`, para reflejar rector/secretaria en `public.role_users`) quedó **comentada** — esa función no existe en local (grupo legacy de menús/roles ya excluido). El establecimiento, la sede y los permisos de `TSEDE_USUARIO` sí quedan creados correctamente; solo el espejo a `public.role_users` queda pendiente.
+- Migración `V78` necesitó `DROP FUNCTION` explícito antes del `CREATE OR REPLACE` para las 3 reversiones de firma (Postgres no permite cambiar cantidad/tipo de parámetros, ni renombrarlos, con `CREATE OR REPLACE` solo) — y para `fn_escala_bulk_delete`, cuyo único cambio de firma es el *nombre* del parámetro (`p_ids` → `p_escala_ids`), que también exige `DROP`.
+- `fn_periodo_actualizar` (versión de prod) hace `INSERT ... ON CONFLICT (FK_TESTABLECIMIENTO, NOMBRE) DO NOTHING` sobre `TANO_LECTIVO`. Local tiene esa restricción como **índice único parcial** (`WHERE active = true`, migración `V65`/PR #71) en vez de un `UNIQUE CONSTRAINT` normal como en prod — hubo que agregarle el mismo `WHERE active = true` al `ON CONFLICT` para que matcheara el índice parcial local.
+- Migración `V79` (nueva, separada) agrega 3 valores de catálogo (`TLISTA_VALOR`) que estas funciones necesitan y que el catálogo local no tenía **en absoluto**: la categoría `ESTADO_ESTABLECIMIENTO` (id `533` exacto, porque `fn_est_crear` lo trae hardcodeado como constante), la zona `id=216` ("Urbana y Rural", usada por la sede por defecto del REV4), y la categoría `ESTADOPERIODO` completa (antes ni existía localmente — el periodo semilla `PK=2` apuntaba, por error de seed, a un valor de la categoría `PLAN`, cosa que la validación estricta de la versión de prod ahora rechaza).
