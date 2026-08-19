@@ -530,6 +530,40 @@ jobs:
           ssh -i ~/.ssh/deploy_key "$DEST" \
             'echo ".env desplegado: $(grep -c . /opt/sso/.env) líneas no vacías, permisos $(stat -c %a /opt/sso/.env)"'
 
+      - name: Añadir credenciales de ZeptoMail al .env
+        # Estas dos NO van dentro de TEST_ENV_FILE a propósito. Ese
+        # secreto es el .env entero (170+ líneas), y actualizarlo
+        # obliga a reescribirlo completo: los secretos de GitHub son
+        # de sólo escritura, así que nadie puede leer el valor vigente
+        # para añadirle una línea. Rotar el token de ZeptoMail por esa
+        # vía significaría volcar y reconstruir toda la configuración
+        # de producción a ciegas, y un fallo a media reconstrucción
+        # deja el stack sin credenciales.
+        #
+        # Como secretos propios, rotar el token es un `gh secret set`
+        # y el resto del .env no se toca. El append va después de
+        # escribir el fichero, así que sobrevive a que el deploy lo
+        # regenere en cada despliegue.
+        #
+        # Misma disciplina que el paso anterior: el valor viaja por
+        # STDIN, nunca en argv.
+        env:
+          DEST: ${{ secrets.TEST_SSH_USER }}@${{ secrets.TEST_SSH_HOST }}
+          ZEPTO_USER: ${{ secrets.SMTP_ZEPTOMAIL_USER }}
+          ZEPTO_PASS: ${{ secrets.SMTP_ZEPTOMAIL_PASS }}
+        run: |
+          if [ -z "${ZEPTO_USER:-}" ] || [ -z "${ZEPTO_PASS:-}" ]; then
+            echo "::warning::Sin SMTP_ZEPTOMAIL_USER/PASS; la fila smtp-zeptomail"
+            echo "de provider_config se auto-desactivará y el correo saldrá por el"
+            echo "siguiente proveedor de la lista (smtp-gmail)."
+            exit 0
+          fi
+          printf 'SMTP_ZEPTOMAIL_USER=%s\nSMTP_ZEPTOMAIL_PASS=%s\n' "$ZEPTO_USER" "$ZEPTO_PASS" \
+            | ssh -i ~/.ssh/deploy_key "$DEST" \
+              'umask 077 && cat >> /opt/sso/.env'
+          ssh -i ~/.ssh/deploy_key "$DEST" \
+            'echo "ZeptoMail: $(grep -c "^SMTP_ZEPTOMAIL_" /opt/sso/.env) variables añadidas"'
+
       - name: Pull & restart stack
         # Cold-cache JVM starts on a 4GB Linode take 60-90s
         # for the provisioner (the heaviest of the bunch);

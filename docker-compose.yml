@@ -721,6 +721,11 @@ services:
       SMTP_GMAIL_PASS: ${SMTP_GMAIL_PASS:-}
       SMTP_BREVO_USER: ${SMTP_BREVO_USER:-}
       SMTP_BREVO_PASS: ${SMTP_BREVO_PASS:-}
+      # ZeptoMail: el usuario es la cadena literal `emailapikey` para
+      # todas las cuentas, el token va en PASS. Sin estas dos, la fila
+      # smtp-zeptomail de provider_config se auto-desactiva.
+      SMTP_ZEPTOMAIL_USER: ${SMTP_ZEPTOMAIL_USER:-}
+      SMTP_ZEPTOMAIL_PASS: ${SMTP_ZEPTOMAIL_PASS:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAILJS_SERVICE_ID: ${EMAILJS_SERVICE_ID:-}
       EMAILJS_PUBLIC_KEY: ${EMAILJS_PUBLIC_KEY:-}
