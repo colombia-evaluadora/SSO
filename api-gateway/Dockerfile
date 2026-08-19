@@ -49,7 +49,7 @@ COPY query-service/pom.xml query-service/
 COPY provisioner/pom.xml provisioner/
 COPY notification-service/pom.xml notification-service/
 
-RUN mvn -B -ntp -pl api-gateway -am dependency:go-offline -q
+RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl api-gateway -am dependency:go-offline -q
 
 COPY common/src common/src
 COPY api-gateway/src api-gateway/src
@@ -59,7 +59,7 @@ COPY api-gateway/src api-gateway/src
 # We do this BEFORE `mvn package` so the files end up in the fat jar.
 COPY --from=node-spa /spa/dist/ api-gateway/src/main/resources/static/admin/
 
-RUN mvn -B -ntp -pl api-gateway -am clean package -DskipTests -q
+RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl api-gateway -am clean package -DskipTests -q
 
 # ----- stage 3: runtime -----
 FROM eclipse-temurin:25-jre

@@ -33,11 +33,11 @@ COPY notification-service/pom.xml notification-service/
 # Pre-resolve dependencies (offline) so the actual build doesn't
 # re-download them on every source change. `-pl` restricts the
 # reactor to eurekaserver + its deps.
-RUN mvn -B -ntp -pl eurekaserver -am dependency:go-offline -q
+RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl eurekaserver -am dependency:go-offline -q
 
 # Now copy the source and build the jar.
 COPY eurekaserver/src eurekaserver/src
-RUN mvn -B -ntp -pl eurekaserver -am clean package -DskipTests -q
+RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl eurekaserver -am clean package -DskipTests -q
 
 # ---- runtime stage ----
 FROM eclipse-temurin:25-jre

@@ -349,6 +349,19 @@ jobs:
     if: needs.changes.outputs.any == 'true'
     strategy:
       fail-fast: false
+      # Maven Central corta por rate limit cuando los 11 servicios
+      # arrancan a la vez: cada uno resuelve el árbol de dependencias
+      # completo desde una IP de runner distinta pero en la misma
+      # ráfaga, y Central responde 429 (y a veces 403). Ha tumbado dos
+      # despliegues el 2026-08-19 — el build no tiene nada malo, sólo
+      # llega en mal momento, y cada reintento era una tirada de dados.
+      #
+      # De 11 en paralelo a 3: el deploy tarda algo más, pero deja de
+      # depender de la suerte. Los Dockerfiles además reintentan las
+      # descargas (ver los -Daether.connector.http.retryHandler.* de
+      # sus invocaciones de mvn); esto reduce la probabilidad de que
+      # haga falta.
+      max-parallel: 3
       # La matriz llega YA FILTRADA desde el job `changes`: un objeto
       # por servicio a reconstruir, con las cuatro claves que los
       # steps de abajo usan.

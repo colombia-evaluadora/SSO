@@ -21,11 +21,11 @@ COPY query-service/pom.xml query-service/
 COPY provisioner/pom.xml provisioner/
 COPY notification-service/pom.xml notification-service/
 
-RUN mvn -B -ntp -pl provisioner -am dependency:go-offline -q
+RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl provisioner -am dependency:go-offline -q
 
 COPY common/src common/src
 COPY provisioner/src provisioner/src
-RUN mvn -B -ntp -pl provisioner -am clean package -DskipTests -q
+RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl provisioner -am clean package -DskipTests -q
 
 FROM eclipse-temurin:25-jre-jammy
 WORKDIR /app
