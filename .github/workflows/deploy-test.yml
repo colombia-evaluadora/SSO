@@ -571,7 +571,18 @@ jobs:
             echo "siguiente proveedor de la lista (smtp-gmail)."
             exit 0
           fi
-          printf 'SMTP_ZEPTOMAIL_USER=%s\nSMTP_ZEPTOMAIL_PASS=%s\n' "$ZEPTO_USER" "$ZEPTO_PASS" \
+          # Borrar antes de añadir: TEST_ENV_FILE también puede traer
+          # estas dos variables, y sin el borrado cada despliegue
+          # dejaría el .env con la pareja duplicada. Así estos secretos
+          # son la única fuente de verdad y rotar el token sigue siendo
+          # un `gh secret set`, gane quien gane en el fichero base.
+          ssh -i ~/.ssh/deploy_key "$DEST" 'sed -i "/^SMTP_ZEPTOMAIL_/d" /opt/sso/.env'
+          # El `\n` inicial es deliberado: si el fichero base no acaba
+          # en salto de línea, un append pega la primera variable al
+          # final de la última existente y la corrompe (le pasó a
+          # SMTP_FROM al hacerlo a mano el 2026-08-19). Una línea en
+          # blanco de más en un .env no molesta a nadie.
+          printf '\nSMTP_ZEPTOMAIL_USER=%s\nSMTP_ZEPTOMAIL_PASS=%s\n' "$ZEPTO_USER" "$ZEPTO_PASS" \
             | ssh -i ~/.ssh/deploy_key "$DEST" \
               'umask 077 && cat >> /opt/sso/.env'
           ssh -i ~/.ssh/deploy_key "$DEST" \
