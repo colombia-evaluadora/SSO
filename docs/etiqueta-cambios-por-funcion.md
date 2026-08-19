@@ -18,6 +18,22 @@ PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante, format('<text
 - **Etiqueta**: el string de `format()` tal cual quedó en la función (sin los valores, solo la plantilla).
 - **Info extra**: si se pasó un tercer argumento (`establecimiento_id`) o no, y de dónde sale esa variable — la inmensa mayoría reutiliza una expresión que la función **ya necesitaba** para el chequeo de permisos (`fn_periodo_gate_escritura`/`fn_periodo_usuario_puede_escribir`), no se agregó una consulta nueva solo para esto.
 
+## Pendiente: falta pasar `sede_id`
+
+Ninguna de las 49 llamadas pasa hoy el 4º parámetro de `fn_audit_declarar` (`p_sede_id`) — **se debe pasar**. Es el gap real: el pedido original de este trabajo fue "la etiqueta o campo adicional debe ser la sede **y** establecimiento donde se hizo el cambio" (ver `etiqueta-auditoria-cdc-analisis.md` §1), pero lo implementado hasta ahora solo resuelve establecimiento. Cuando se pasa `p_sede_id`, `fn_audit_declarar` no solo agrega `contexto.sede` — con un solo `JOIN` (`TSEDE → TESTABLECIMIENTO`) también resuelve `contexto.establecimiento`, así que en los casos donde ya se pasa `establecimiento_id` a mano, pasar en cambio `sede_id` es un cambio *equivalente o mejor* (mismo dato de establecimiento, más el de sede), no uno que se suma al de establecimiento.
+
+La buena noticia es que, para la inmensa mayoría de las 49, el `sede_id` **ya está a un paso de distancia** de donde hoy se resuelve el establecimiento — no hace falta una consulta nueva, solo tomar una columna que el `JOIN` existente ya trae:
+
+| Grupo | Funciones | De dónde sale `sede_id` |
+|---|---|---|
+| Resuelven establecimiento vía `fn_periodo_establecimiento(p_fk_periodo)` | `fn_grado_crear/actualizar/soft_delete`, `fn_grupo_crear/actualizar/soft_delete`, `fn_area_crear/actualizar/soft_delete`, `fn_subject_crear/actualizar/soft_delete/guardar_bulk`, `fn_plan_agregar/actualizar/eliminar/soft_delete`, `fn_horario_guardar`, `fn_asignacion_guardar`, `fn_descanso_agregar/eliminar`, `fn_periodo_eval_crear/actualizar/soft_delete`, `fn_criterio_eval_actualizar`, `fn_criterio_prom_guardar`, `fn_escala_eliminar/guardar_bulk/nivel_soft_delete` | `fn_periodo_establecimiento` ya hace `JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE` internamente para llegar al establecimiento — **la sede es `s.PK_TSEDE`, una columna que la función ya toca pero descarta**. Forma más simple: agregar un helper gemelo `fn_periodo_sede(p_fk_periodo)` (mismo `JOIN`, devuelve `pa.FK_TSEDE` en vez de `s.FK_TESTABLECIMIENTO`) y llamarlo junto al existente donde hoy se resuelve `v_establecimiento_id`. |
+| Ya reciben la sede como parámetro de entrada | `fn_periodo_crear` (`p_fk_sede`), `fn_periodo_actualizar` (`p_fk_sede`), `fn_sede_usuario_crear` (`p_fk_sede`) | Ninguna consulta adicional — pasar el parámetro que ya tienen. |
+| Operan directamente sobre una sede | `fn_sed_crear` (recibe `p_fk_establecimiento`, no una sede propia — no aplica, la sede es la que se está creando), `fn_sed_actualizar`/`fn_sed_soft_delete` (reciben `p_pk_sede`) | `p_pk_sede` **es** el `sede_id` — pasar el propio parámetro tal cual, igual que `fn_est_actualizar` ya hace con su propio `p_pk_establecimiento`. |
+| Ya leen la fila de `TSEDE_USUARIO` antes de la llamada | `fn_sede_usuario_actualizar`, `fn_sede_usuario_soft_delete` | Ambas ya hacen `SELECT ... FROM TSEDE_USUARIO WHERE PK_TSEDE_USUARIO = p_pk_sede_usuario` antes de la llamada (para leer `ACTIVE`/columnas actuales) — agregar `FK_TSEDE` a esa misma `SELECT` es gratis. |
+| No aplica — no hay una sede única de la que hablar | `fn_est_crear/actualizar/soft_delete/soft_delete_bulk` (un establecimiento tiene *varias* sedes, no una), `fn_fun_crear/actualizar/enlazar_establecimiento` (el funcionario se liga a un establecimiento, no a una sede, en este esquema), `fn_usu_crear`, `fn_create_plan_from_value`/`fn_delete_plan_from_value` (valores de catálogo globales) | Se deja `p_sede_id` sin pasar (`NULL`), igual que hoy — `fn_audit_declarar` ya maneja ese caso sin error, cae a solo resolver `establecimiento_id` si vino. |
+
+No se tocó ninguna función en esta pasada — es un mapeo de dónde saldría cada `sede_id`, para implementarlo en una migración `V78` cuando se decida hacerlo.
+
 ---
 
 ## V67 — `fn_grado_*` (prueba de concepto)
