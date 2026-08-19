@@ -247,10 +247,10 @@ Uso mínimo (una función que solo quiere actor + etiqueta, sin sede/establecimi
 ## 7. Plan de implementación sugerido
 
 1. ✅ **Agregar `fn_audit_declarar`** (§6.2) — hecho en `postgres/migrations/V66__fn_audit_declarar.sql`, rama `feat/etiqueta-auditoria-cdc`.
-2. **Priorizar por impacto de soporte**, no por orden alfabético — empezar por los módulos que Mesa de Ayuda más consulta hoy (según el pedido original: notas/calificaciones, matrícula, usuarios/funcionarios, permisos). Revisar si existe ya un módulo de notas (`fn_nota_*` / `fn_calificacion_*`); si no, dejarlo como convención obligatoria para cuando se cree.
-3. **Tocar las 52 funciones de escritura** en tandas por módulo (cada `V*__*_module.sql` ya agrupa por dominio — `V43` = grado/grupo, `V51` = funcionario, etc.), agregando la llamada a `fn_audit_declarar` con el texto apropiado a cada `crear`/`actualizar`/`soft_delete`/`bulk_delete`.
-4. **Test de atribución end-to-end** por módulo tocado — el mismo patrón que documenta §6 de `CONTRATO_SP_CLICKHOUSE.md` (`CdcContextAspectOrderingTest`), adaptado: llamar la función vía `query-service` (o directo por psql) y verificar en ClickHouse que `app_user` y `etiqueta` llegan poblados en <N segundos.
-5. **Congelar la convención para funciones nuevas** — agregar el checklist del §10 de `CONTRATO_SP_CLICKHOUSE.md` un ítem: *"Si el SP muta datos, ¿declara `app.user_id` y `app.etiqueta` con `fn_audit_declarar` antes del DML?"*.
+2. ✅ **Validar el mecanismo end-to-end** contra el stack local completo antes de escalar — hecho en §11, encontró y corrigió además el bug preexistente de `cdc-capture` que bloqueaba toda entrega de contexto.
+3. ✅ **Tocar las 51 funciones de escritura restantes** (más `fn_grado_*`, ya cubiertas en `V67`) — hecho en `V68`-`V76`, 49 funciones en total con `fn_audit_declarar`; detalle completo en §12.
+4. **Test de atribución end-to-end** por módulo tocado, contra el stack local con `cdc-capture`/`cdc-worker`/ClickHouse reales — hecho solo para `fn_grado_*` (§11); pendiente repetir para una muestra de `V68`-`V76` (§12.4). La verificación actual de esas 49 funciones es transaccional dentro de Postgres (`BEGIN...ROLLBACK`), no end-to-end contra ClickHouse.
+5. **Congelar la convención para funciones nuevas** — agregar al checklist del §10 de `CONTRATO_SP_CLICKHOUSE.md` un ítem: *"Si el SP muta datos, ¿declara `app.user_id` y `app.etiqueta` con `fn_audit_declarar` antes del DML?"*. Pendiente.
 
 ## 8. Riesgos a vigilar (heredados del contrato ya documentado)
 
@@ -376,3 +376,120 @@ DEBEZIUM_LOGICAL_DECODING_MESSAGE_CONTENT_KEY = "content"  // el código buscaba
 | `contexto` | *(vacío)* | `{"establecimiento":"Establecimiento Seed Local"}` |
 
 Pipeline completo funcionando de punta a punta: Postgres → `trg_audit_ctx` → `cdc-capture` (corregido) → RabbitMQ → `cdc-worker` → ClickHouse.
+
+## 12. Adopción completa de `fn_audit_declarar` — 49 funciones, `V68`-`V76`
+
+Con el pipeline validado end-to-end (§11) y el helper probado en `fn_grado_*` (§6.2, `V67`), se extendió `fn_audit_declarar` a **todas** las funciones `fn_*` de escritura restantes de `academico_test` en el Postgres local (rama basada en `origin/dev`), cerrando el ítem 3 del plan del §7.
+
+### 12.1 Migraciones agregadas
+
+| Migración | Módulo |
+|---|---|
+| `V68__fn_area_subject_grupo_adoptan_audit_declarar.sql` | área / subject / grupo |
+| `V69__fn_escala_adoptan_audit_declarar.sql` | escala |
+| `V70__fn_periodo_adoptan_audit_declarar.sql` | periodo / descanso / periodo_eval |
+| `V71__fn_criterio_plan_horario_asignacion_adoptan_audit_declarar.sql` | criterio / plan / horario / asignación |
+| `V72__fn_est_fun_sede_usuario_pequenas_adoptan_audit_declarar.sql` | est / fun / sede_usuario (funciones pequeñas) |
+| `V73__fn_sed_sedeusuario_usu_adoptan_audit_declarar.sql` | sed / sede_usuario / usu |
+| `V74__fn_sed_crear_actualizar_est_crear_adoptan_audit_declarar.sql` | sed_crear / sed_actualizar / est_crear |
+| `V75__fn_est_actualizar_adopta_audit_declarar.sql` | `fn_est_actualizar` (función grande) |
+| `V76__fn_fun_actualizar_adopta_audit_declarar.sql` | `fn_fun_actualizar` (función grande) |
+
+Todas siguen el mismo patrón que `V67`: capturar (o reutilizar) el `v_establecimiento_id` ya disponible en la función, y llamar `fn_audit_declarar(p_pk_usuario_solicitante, format('<texto natural>', ...), v_establecimiento_id)` justo antes del `INSERT`/`UPDATE`/soft-delete.
+
+### 12.2 Exclusiones deliberadas
+
+No todas las funciones de la lista original reciben su propia llamada:
+
+- **`fn_enfasis_desde_seleccion`, `fn_enfasis_resolver`, `fn_escala_propagar`** — son *helpers* internos invocados desde dentro de otra función que ya declara su propia etiqueta. `set_config(..., true)` es "última llamada gana" dentro de la transacción: si estos helpers declararan la suya, pisarían la etiqueta correcta del caller.
+- **`fn_fun_soft_delete`** — no hace DML directo; solo delega en `fn_sede_usuario_soft_delete`, que sí la declara.
+- **`fn_create_parent_menu_with_submenus`** y el resto del grupo legacy/drift de menús/roles — mismo criterio del catálogo original (§17 de `etiqueta-catalogo-funciones-fn.md`): funciones con drift respecto a prod, fuera de alcance de esta pasada.
+
+### 12.3 Verificación
+
+- Las 9 migraciones se aplicaron sin error contra `sso-postgres` local (`CREATE OR REPLACE FUNCTION` para cada una).
+- `SELECT count(*) FROM pg_proc ... WHERE prosrc ILIKE '%fn_audit_declarar%'` sobre `academico_test.fn_*` → **49**, que reconcilia exacto: 51 funciones del alcance original menos las 4 exclusiones de §12.2 = 47 nuevas + las 2 de `fn_grado_*` (`V67`) = 49.
+- Smoke test transaccional (`BEGIN ... ROLLBACK`, sin persistir nada) ejecutando funciones representativas de cada migración — incluida `fn_fun_actualizar`, la más grande del lote — confirmando que cada llamada deja la `etiqueta` esperada en `current_setting('app.etiqueta', true)` sin errores:
+
+| Función probada | Migración | `etiqueta` resultante |
+|---|---|---|
+| `fn_area_crear` / `fn_area_actualizar` / `fn_area_soft_delete` | V68 | `Creación`/`Actualización`/`Eliminación del área ...` |
+| `fn_periodo_eval_crear` / `fn_periodo_eval_soft_delete` | V70 | `Creación`/`Eliminación del periodo de evaluación ...` |
+| `fn_sed_actualizar` | V73/V74 | `Actualización de la sede ...` |
+| `fn_est_actualizar` | V75 | `Actualización del establecimiento ...` |
+| `fn_sede_usuario_actualizar` | V72 | `Actualización de la asignación de sede/rol ...` |
+| `fn_plan_actualizar` | V71 | `Actualización del plan de estudio: ...` |
+| `fn_fun_actualizar` | V76 | `Actualización de datos del funcionario ...` |
+
+### 12.4 Estado
+
+Commiteado (`d5b9f9c`) y pusheado a `origin/feat/etiqueta-auditoria-cdc`. §13 completa la validación end-to-end pendiente aquí (contra el pipeline CDC real, no solo `BEGIN...ROLLBACK` en Postgres). Pendiente: PR contra `dev`/`main`.
+
+## 13. Prueba end-to-end real por endpoint — api-gateway → query-service → Postgres → cdc-capture → RabbitMQ → cdc-worker → ClickHouse
+
+A diferencia de §11 (una sola función, llamada directo por `psql`), esta ronda ejercita el pipeline **completo incluyendo el api-gateway y el query-service** (`sso-query-service-eval-col`, que resuelve cada ruta contra la tabla `public.query` de `sso-admin` y ejecuta la función `fn_*` correspondiente), con JWT real emitido por `auth-center` y verificación directa en ClickHouse después de cada llamada.
+
+### 13.1 Cobertura secuencial (usuario único, ~30 endpoints)
+
+Se armó un arnés (`e2e_test.py`, en el scratchpad de la sesión) que hace login como `admin@example.com`, y por cada endpoint de escritura registrado en el catálogo local: llama al endpoint real vía `POST http://localhost:8080/api/eval-col/...`, espera la propagación del pipeline y consulta `auditoria.audit_log` para confirmar `etiqueta`/`app_user` poblados.
+
+**29 llamadas, 27 HTTP OK, 24/24 con atribución confirmada en ClickHouse** (3 de las "sin fila" reportadas inicialmente eran un error del arnés de prueba — comprobaban la tabla `tplan` cuando la fila real cae en `tasignatura_plan`; corregido y reverificado). `fn_horario_guardar`/`fn_asignacion_guardar` no dejan fila cuando el `UPDATE` de desactivación afecta 0 registros (grado/funcionario recién creado, sin agenda/asignaciones previas) — comportamiento esperado, no un defecto: sin cambio de fila no hay evento CDC con el que correlacionar el mensaje de contexto (mismo fenómeno que ya documenta §11.3).
+
+Módulos cubiertos con confirmación end-to-end real (HTTP + ClickHouse): área, asignatura/subject, grado, grupo, plan de estudio (agregar/actualizar/eliminar/soft-delete-por-grado), horario, establecimiento→funcionario (vincular), periodo académico (crear/soft-delete), descanso (agregar/eliminar), periodo de evaluación (crear/actualizar/soft-delete).
+
+**Bug real encontrado y corregido en esta ronda — `V77`**: `fn_plan_agregar` insertaba el contenedor `TPLAN` (la fila padre del plan de estudio, creada solo la primera vez que un grado recibe una asignatura) **antes** de llamar a `fn_audit_declarar`. Como `trg_audit_ctx` es `BEFORE STATEMENT`, esa fila puntual llegaba a ClickHouse con `etiqueta`/`app_user` vacíos (el resto de inserts de la misma función sí iban después y no se veían afectados). Corregido en `postgres/migrations/V77__fn_plan_agregar_fix_orden_audit_declarar.sql` moviendo la declaración de la etiqueta al inicio de la función, antes del primer `INSERT`. Reverificado end-to-end: la fila de `tplan` ahora sí trae la etiqueta.
+
+**Hallazgos NO relacionados con este trabajo** (bugs preexistentes de drift entre el catálogo `public.query` de `sso-admin` y las funciones `fn_*` reales, detectados como efecto colateral de probar por HTTP en vez de por `psql` directo — se reportan aquí para que quede constancia, pero están fuera de alcance de esta iniciativa):
+
+| Endpoint | Síntoma | Causa |
+|---|---|---|
+| `PATCH /establecimientos/funcionarios/:ID` (`fn_fun_actualizar`) | 500 `function ... does not exist` | La llamada SQL del catálogo tiene ~20 parámetros menos que la firma real de la función (drift de cuando se le agregaron campos nuevos). |
+| `PUT /periodos-academicos/editar/:ID` (`fn_periodo_actualizar`) | 500 `function ... does not exist` | El catálogo pasa `DESCANSO_INICIO`/`DESCANSO_FIN` como argumentos posicionales que la función ya no acepta (los descansos se separaron a `fn_descanso_agregar`/`fn_descanso_eliminar`). |
+| `POST /plans` (`fn_create_plan_from_value`) | 500 `column "id" does not exist` | El catálogo hace `SELECT id, name FROM fn_create_plan_from_value(...)`; la función devuelve `TABLE(pk_lista_valor, nombre, valor, status)`. |
+| `POST /periodos-academicos` (`fn_periodo_crear`) | 400 `upper bound of FOR loop cannot be null` | Con `DESCANSO_INICIO`/`DESCANSO_FIN` como arreglo vacío `[]` (en vez de `NULL`), `array_length([],1)` es `NULL` en Postgres (no `0`), y el `FOR i IN 1..NULL` revienta. Workaround usado en la prueba: mandar `NULL` en vez de `[]`. |
+| `POST /establecimientos` (`fn_est_crear`) | 500 genérico `Database error`, sin traza SQL en los logs | `BODY.LOGO` está declarado en el catálogo como tipo especial `FILE:escudo`; el query-service no tiene manejo real para ese tipo (no hay código para `"FILE:"` en el binder), así que la petición JSON plana falla antes de llegar a Postgres. Bloquea probar `fn_est_crear` **por HTTP**; la función en sí se probó por `psql` directo (ver §13.2) y funciona correctamente. |
+
+### 13.2 Prueba de cadena — establecimiento con rector/secretaría, sede, vinculación de funcionarios
+
+Pedido explícito: verificar que una creación de establecimiento con rector y secretaría genera una **cadena coherente de etiquetas** a través de varias tablas, no solo una fila aislada. Como `fn_est_crear` está bloqueado por HTTP (tabla de arriba), esta única llamada se hizo por `psql` directo (mismo efecto que tendría el endpoint si el catálogo no tuviera el bug de `LOGO`); el resto de la cadena — sede, vinculación de funcionarios, actualización — se ejecutó **100% por HTTP real** contra `api-gateway`:
+
+1. `fn_est_crear` (directo, `p_pk_usuario_solicitante=1`) — establecimiento nuevo con `p_fk_tfuncionario_rector=4` (Maria Gomez) y `p_fk_tfuncionario_secretaria=5` (Jorge Ramirez).
+2. `POST /establecimientos/sedes` — sede nueva en ese establecimiento.
+3. `POST /funcionario/enlazar-establecimiento` ×2 — vincula a Maria Gomez y a Jorge Ramirez.
+4. `fn_fun_actualizar` (directo, mismo bug de catálogo de la tabla de arriba) — actualiza el teléfono de Maria Gomez.
+5. `PATCH /establecimientos/sedes/:ID`, `PUT .../sedes/:ID` (soft-delete), `PUT /establecimientos/:ID` (soft-delete) — cierre del ciclo.
+
+Cadena resultante en `auditoria.audit_log`, en orden, todas atribuidas correctamente a `Admin Sistema` y con `contexto.establecimiento` propagado donde aplica:
+
+| xid | tabla | etiqueta |
+|---|---|---|
+| 1333 | `testablecimiento` | Creación del establecimiento Establecimiento Cadena Test |
+| 1334 | `tsede` | Creación de la sede Sede Cadena Test (código CHAIN-SEDE-1) |
+| 1335 | `tfuncionario` | Vinculación del funcionario Maria Gomez al establecimiento Establecimiento Cadena Test |
+| 1336 | `tfuncionario` | Vinculación del funcionario Jorge Ramirez al establecimiento Establecimiento Cadena Test |
+| 1337 | `tusuario` **y** `tfuncionario` (mismo xid) | Actualización de datos del funcionario Maria Gomez |
+| 1338 | `tsede` | Actualización de la sede Sede Cadena Test v2 |
+| 1339 | `tsede` | Eliminación de la sede Sede Cadena Test v2 |
+| 1340 | `testablecimiento` | Eliminación del establecimiento Establecimiento Cadena Test |
+
+Hallazgo interesante (no un bug): `xid=1337` toca **dos tablas** (`tusuario` y `tfuncionario`) en la misma transacción porque `fn_fun_actualizar` actualiza ambas filas — y ambas llegan con la **misma etiqueta correcta**, confirmando que `fn_audit_declarar` cubre correctamente el caso de una función que muta más de una tabla por llamada. Se verificó además contra Postgres que el establecimiento quedó con `FK_TFUNCIONARIO_RECTOR=4`/`FK_TFUNCIONARIO_SECRETARIA=5` tal como se pidió — los datos y la auditoría concuerdan.
+
+Nota: la etiqueta de "Creación del establecimiento" no nombra al rector/secretaría en el texto (solo guarda sus FKs); son las llamadas separadas de "Vinculación del funcionario..." las que sí los nombran explícitamente. No es un defecto — es simplemente que `fn_est_crear` no resuelve esos nombres hoy; se podría enriquecer el texto de la etiqueta de creación en una iteración futura si Mesa de Ayuda lo pide.
+
+### 13.3 Prueba de concurrencia — múltiples usuarios, múltiples roles, operaciones simultáneas
+
+Pedido explícito: confirmar que la atribución es correcta incluso con varias transacciones concurrentes de distintos actores sobre la **misma tabla**, que es exactamente el escenario que puede cruzar contextos si `AuditContextCache` (clave `xid`) tuviera un bug de concurrencia.
+
+Se crearon 3 usuarios de prueba reales (vía `POST /createAccount` + activación por token de MailHog + alta del `TUSUARIO`/`TSEDE_USUARIO` correspondiente en `academico_test`, igual que un alta real): `e2e.rector@example.com` (rol `CEVAL-RECTOR`), `e2e.coordinador@example.com` (rol `CEVAL-COORDINADOR`) y `e2e.docente@example.com` (rol `CEVAL-DOCENTE`, de solo lectura — 2 endpoints `GET /select*` nada más). Los 4 actores (los 3 nuevos + `admin`) dispararon **simultáneamente** (con una barrera de hilos) `POST /areas` → `PUT actualizar` → `PUT eliminar`, cada uno con su propio nombre de área.
+
+Resultado:
+
+- `e2e.docente` recibió **403 Forbidden** en el primer intento, como se esperaba (su rol no tiene `POST /areas` en `role_query`) — confirma que el control de autorización a nivel de catálogo funciona antes de llegar siquiera a Postgres.
+- Los otros 3 (`admin`, `rector`, `coordinador`) ejecutaron sus 3 llamadas cada uno **entrelazadas en el tiempo** contra la misma tabla `tarea` (xids consecutivos 1268–1276, algunas actualizaciones de distintos usuarios llegaron fuera de orden de xid pero eso es exactamente el punto: concurrencia real).
+- **9/9 filas en ClickHouse atribuidas al actor correcto, 0 cruces**: cada `etiqueta`/`app_user` correspondió exactamente a quien hizo esa llamada, sin ninguna mezcla entre transacciones concurrentes.
+
+Esto es la validación más fuerte posible del diseño `fn_audit_declarar` + `set_config(..., true)` + `AuditContextCache` por `xid`: sobrevive concurrencia real de múltiples conexiones/usuarios sin cruzar contextos.
+
+### 13.4 Estado
+
+Ambas pruebas (secuencial + concurrente + cadena) corrieron contra el stack local completo con `CDC_SYNC_ENABLED=true`. El único fix de código que salió de esta ronda es `V77` (aplicado localmente, pendiente de commit/push junto con este documento). El resto de hallazgos (tabla del §13.1) son bugs preexistentes de drift entre `sso-admin`/`public.query` y las funciones `fn_*`, no introducidos ni corregidos por esta iniciativa — quedan documentados aquí para que el equipo decida si los prioriza aparte.

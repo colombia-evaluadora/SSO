@@ -12,6 +12,8 @@ Todas siguen el patrón documentado en el análisis previo: reciben `p_pk_usuari
 
 **Convención de etiqueta propuesta**: `PERFORM set_config('app.etiqueta', <texto>, true);` justo antes del `INSERT`/`UPDATE`/`DELETE` principal, usando `format()` y la(s) variable(s) ya pobladas señaladas en la columna "Dato disponible". Ninguna requiere una consulta adicional.
 
+> **✅ Estado de implementación (actualizado 2026-08-19)**: la adopción real se hizo con el helper `fn_audit_declarar` (no `set_config` directo — ver §6.2 de `etiqueta-auditoria-cdc-analisis.md`) sobre las funciones tal como existen en el Postgres local (rama `origin/dev`), que difieren algo de este catálogo original sacado de prod (§4 abajo ya lo advertía). Resultado: **49 funciones** con `fn_audit_declarar` en su cuerpo — `fn_grado_crear`/`fn_grado_actualizar` (`V67`) más 47 funciones más en `V68`-`V76`. Excluidas a propósito: `fn_enfasis_desde_seleccion`, `fn_enfasis_resolver`, `fn_escala_propagar` (helpers internos, ver estrategia 1 del §20 abajo — es la que se aplicó), `fn_fun_soft_delete` (delega en `fn_sede_usuario_soft_delete`, que sí declara), y el grupo legacy/drift de §17. Detalle completo, migraciones y verificación: §12 de `etiqueta-auditoria-cdc-analisis.md`. Commit `d5b9f9c`, rama `feat/etiqueta-auditoria-cdc` (pusheada a origin).
+
 ---
 
 ## 2. Establecimiento educativo (`TESTABLECIMIENTO`)
