@@ -152,3 +152,48 @@ Documentadas también en `etiqueta-auditoria-cdc-analisis.md` §12.2, se repiten
 | `fn_enfasis_desde_seleccion`, `fn_enfasis_resolver`, `fn_escala_propagar` | *Helpers* internos invocados desde dentro de otra función que ya declaró su propia etiqueta. `set_config(..., true)` es "última llamada gana" por transacción — si estos también declararan la suya, pisarían la etiqueta correcta del caller. |
 | `fn_fun_soft_delete` | No hace ningún `INSERT`/`UPDATE` propio — delega enteramente en `fn_sede_usuario_soft_delete`, que sí declara. |
 | `fn_create_parent_menu_with_submenus` y el resto del grupo legacy/drift de menús y roles | Funciones con drift conocido respecto a producción (§17 de `etiqueta-catalogo-funciones-fn.md`), fuera de alcance de esta iniciativa. |
+
+---
+
+## Verificación contra el servidor (`172.233.184.248`, 2026-08-19)
+
+Introspección de solo lectura contra prod (`ssh root@172.233.184.248 "docker exec -i sso-postgres psql ..."`, sin escribir nada — mismo patrón ya usado para armar el catálogo original) para confirmar que las 49 funciones adoptadas existen ahí, y para detectar funciones de escritura que existan en prod pero falten o estén desactualizadas en local (rama `origin/dev`).
+
+### 1. Firma distinta entre local y prod en 3 de las 49 adoptadas
+
+Todas las demás (46) coinciden exactamente. Estas tres no:
+
+| Función | Diferencia | Lectura |
+|---|---|---|
+| `fn_est_crear` | Local tiene un parámetro de más: `p_fk_lv_estado_establecimiento bigint` (al final, antes de `p_fk_archivo`). | `dev` avanzó un campo que prod todavía no tiene — drift hacia adelante, no hacia atrás. Al desplegar, como el número de parámetros cambia, Postgres crea una *sobrecarga nueva* en vez de reemplazar la de prod (dos `fn_est_crear` van a convivir hasta que se limpie la vieja). |
+| `fn_fun_actualizar` | El último parámetro es distinto: local tiene `p_lista_permisos jsonb`, prod tiene `p_direccion character varying` en su lugar. | No es un campo agregado, es uno **reemplazado** — funcionalidad distinta entre lo que hay en `dev` y lo que corre en prod hoy. Esto también explica (más precisamente que lo que decía antes `etiqueta-auditoria-cdc-analisis.md` §13.1) por qué el catálogo de `sso-admin` local no coincide con ninguna de las dos: fue poblado en otro momento, con una tercera forma de la función. |
+| `fn_periodo_actualizar` | Prod tiene 2 parámetros que local **no tiene**: `p_descanso_inicio time[]`, `p_descanso_fin time[]`. | Es al revés que los otros dos: acá `dev` es el que **quitó** algo que prod todavía tiene — los descansos se separaron a `fn_descanso_agregar`/`fn_descanso_eliminar` en `dev`, pero prod sigue con el diseño viejo (el periodo entero con arreglos de horas). **Esto corrige lo que decía la tabla de hallazgos de `etiqueta-auditoria-cdc-analisis.md` §13.1**: no es que "el catálogo tenga un bug" en el vacío — el catálogo local (`public.query`) coincide con la firma que *todavía corre en prod*; es la función local (`dev`) la que quedó adelantada. El bug real, si acaso, es que nadie actualizó el catálogo cuando `dev` refactorizó la función. |
+
+`fn_criterio_eval_actualizar` (14 parámetros) sí hace *match* exacto con una de las tres sobrecargas de prod — la nota del §21 de `etiqueta-catalogo-funciones-fn.md` sobre "sobrecargas duplicadas a resolver" ya lo advertía; ver el punto 3 más abajo.
+
+### 2. Funciones de escritura que existen en prod y NO existen en local — no se pudieron adoptar
+
+Estas sí estaban catalogadas con etiqueta propuesta desde el principio (`etiqueta-catalogo-funciones-fn.md`), pero nunca se les agregó `fn_audit_declarar` porque **la función en sí no existe en la base local** (`origin/dev`) — no hay nada que hacerle `CREATE OR REPLACE`:
+
+| Función | Etiqueta ya propuesta en el catálogo | Por qué no se adoptó |
+|---|---|---|
+| `fn_enfasis_actualizar` (2 sobrecargas en prod: 3 y 5 parámetros) | `format('Actualización del énfasis %s', v_nombre)` | No existe en `academico_test` local, ninguna de las dos firmas. |
+| `fn_enfasis_soft_delete` | `format('Eliminación del énfasis %s', v_nombre)` | No existe en local. |
+| `fn_fun_baja_establecimiento` | `format('Desvinculación del funcionario %s del establecimiento', v_nombre_completo)` | No existe en local — sí existe `fn_fun_enlazar_establecimiento` (el inverso, sí adoptado en `V72`), pero no su contraparte de desvinculación. |
+
+Para adoptar estas tres hace falta primero portar su definición desde prod a una migración local (o confirmar si ya están en el `dev` real de GitHub y este ambiente local simplemente no las tiene aplicadas) — es un paso previo a agregarles `fn_audit_declarar`, no algo que se pueda resolver solo con una migración de auditoría.
+
+### 3. `fn_escala_bulk_delete` — implementación completamente distinta, no solo desactualizada
+
+Esta sí existe en ambos lados, pero **no es la misma función**:
+
+- **Local**: hace un `FOREACH` que llama a `fn_escala_eliminar` por cada id — como ya adoptó `fn_audit_declarar` desde `V69`, cada eliminación individual del lote queda auditada automáticamente, gratis, sin tocar `fn_escala_bulk_delete`.
+- **Prod**: tiene su propia cascada inline de 4 `UPDATE` (`TVALORACION`→`TESCALA_VALORACION`→`TNIVEL_ESCALA`→`TESCALA`), sin llamar a `fn_escala_eliminar` en absoluto, y sin ninguna llamada a `fn_audit_declarar` — si se despliega tal cual está en local, la reemplaza por completo (no es un cambio de auditoría, es un cambio de comportamiento).
+
+No se tocó en esta pasada. Si se quiere una etiqueta agregada para el lote (como sí tienen `fn_est_soft_delete_bulk`/`fn_sed_soft_delete_bulk`, `Eliminación masiva de %s establecimientos/sedes`), el patrón sería agregar `PERFORM fn_audit_declarar(p_pk_usuario_solicitante, format('Eliminación masiva de %s escalas', CARDINALITY(p_ids)))` antes del `FOREACH` — la versión local ya delega en `fn_escala_eliminar` así que ese único agregado bastaría (sin tocar el loop).
+
+### 4. Legacy/drift de menús y roles — confirmado, ya trackeado aparte
+
+`fn_add_trol`, `fn_associate_menus_to_rol`, `fn_delete_menu`, `fn_dissociate_menus_from_rol`, `fn_reorder_menus`, `fn_sincronizar_rol_publico`, `fn_sync_trol_to_public_role`, `fn_sync_tsede_usuario_to_role_users`, `fn_sync_users_password_to_tusuario`, `fn_upsert_menu` siguen presentes en prod con las firmas viejas. No es una novedad de este análisis — es exactamente el drift que ya describe la memoria de proyecto "V59 server drift cleanup pending" (`v59_cleanup_drift.sql` existe pero no se ha corrido contra prod). Fuera de alcance de la iniciativa de etiquetas; se confirma que sigue ahí, nada más.
+
+(`fn_create_parent_menu_with_submenus`, al revés — existe en local y no en prod — es el mismo grupo, ya excluido arriba.)
