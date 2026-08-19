@@ -174,9 +174,11 @@ BEGIN
     IF p_fk_tlv_genero IS NULL THEN
         RAISE EXCEPTION 'genero (fk_tlv_genero) es obligatorio' USING ERRCODE = '23502';
     END IF;
-    IF p_fecha_nacimiento IS NULL THEN
-        RAISE EXCEPTION 'fecha_nacimiento es obligatoria' USING ERRCODE = '23502';
-    END IF;
+    -- p_fecha_nacimiento: REV -- ya NO es obligatoria (sincronizado con el
+    -- DTO Java RegisterUsuarioRequest, que la dejo sin @NotNull, y con el
+    -- front, que tampoco la exige). Genero SI sigue obligatorio -- el
+    -- negocio pidio explicitamente que ese se quedara fijo, a diferencia
+    -- de fecha_nacimiento.
 
     -- ---------------------------------------------------------------------
     -- 2. Validacion de FKs contra listas-validas activas.
@@ -293,7 +295,7 @@ COMMENT ON FUNCTION academico_test.fn_usu_crear(
     BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR,
     VARCHAR, VARCHAR, DATE, BIGINT, VARCHAR, BIGINT, VARCHAR
 )
-    IS 'Crea un TUSUARIO (reusable, contrato generico). p_cuenta y p_contrasena_hasheada son obligatorios: el caller decide que cuenta usar (en este modulo, fn_fun_crear pasa CORREO_ELECTRONICO; en modulos futuros el caller pasara el valor que corresponda). p_fk_tlv_tipo_documento, p_identificacion, p_primer_nombre, p_primer_apellido, p_fk_tlv_genero, p_fecha_nacimiento son obligatorios (libertad del modulo). Valida FKs contra TLISTA_VALOR activos, unicidad de CUENTA y de (FK_TLV_TIPO_DOCUMENTO, IDENTIFICACION) contra TUSUARIO activos, y existencia de p_fk_tarchivo_foto si llega. ESTADO=''A'', VISADO=p_visado o NULL, ACTIVE=TRUE. Auditoria: CREATED_BY=p_pk_usuario_solicitante::VARCHAR, CREATED_AT=now. Requiere p_pk_usuario_solicitante con permiso de usuarios (1-3, 7-8, 9) validado via fn_puede_afectar_usuarios (V50). Retorna PK_TUSUARIO.';
+    IS 'Crea un TUSUARIO (reusable, contrato generico). p_cuenta y p_contrasena_hasheada son obligatorios: el caller decide que cuenta usar (en este modulo, fn_fun_crear pasa CORREO_ELECTRONICO; en modulos futuros el caller pasara el valor que corresponda). p_fk_tlv_tipo_documento, p_identificacion, p_primer_nombre, p_primer_apellido, p_fk_tlv_genero son obligatorios (libertad del modulo). p_fecha_nacimiento REV: ya NO es obligatoria (columna nullable de verdad, sincronizado con RegisterUsuarioRequest/Java y el front). Valida FKs contra TLISTA_VALOR activos, unicidad de CUENTA y de (FK_TLV_TIPO_DOCUMENTO, IDENTIFICACION) contra TUSUARIO activos, y existencia de p_fk_tarchivo_foto si llega. ESTADO=''A'', VISADO=p_visado o NULL, ACTIVE=TRUE. Auditoria: CREATED_BY=p_pk_usuario_solicitante::VARCHAR, CREATED_AT=now. Requiere p_pk_usuario_solicitante con permiso de usuarios (1-3, 7-8, 9) validado via fn_puede_afectar_usuarios (V50). Retorna PK_TUSUARIO.';
 
 
 -- ===========================================================================
