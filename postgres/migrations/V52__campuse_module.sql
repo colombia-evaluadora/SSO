@@ -89,10 +89,28 @@ SET search_path TO academico_test, public;
 --     SQLSTATE '23505' — CODIGO duplicado (entre activos o constraint global).
 --     SQLSTATE '23503' — FK_TLV_ZONA o FK_TESTABLECIMIENTO inexistente.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_sed_crear(p_pk_usuario_solicitante bigint, p_codigo character varying, p_nombre character varying, p_fk_lista_valor_zona bigint, p_fk_establecimiento bigint, p_localidad character varying DEFAULT NULL::character varying, p_comuna character varying DEFAULT NULL::character varying, p_barrio character varying DEFAULT NULL::character varying, p_direccion character varying DEFAULT NULL::character varying, p_telefono character varying DEFAULT NULL::character varying, p_georeferenciacion character varying DEFAULT NULL::character varying)
- RETURNS bigint
- LANGUAGE plpgsql
-AS $function$
+CREATE OR REPLACE FUNCTION academico_test.fn_sed_crear(
+    -- Auditoria / autorizacion: PK_TUSUARIO del super-admin que crea
+    p_pk_usuario_solicitante  BIGINT,
+    p_codigo                  VARCHAR(30),
+    p_nombre                  VARCHAR(130),
+    p_fk_lista_valor_zona     BIGINT,
+    p_fk_establecimiento      BIGINT,
+    -- Campos marcados NOT NULL en DDL pero aceptados como opcionales por
+    -- el front mientras se completa la integracion. Si llegan vacios/NULL
+    -- se persisten como ''. (DEUDA: revisar cuando el front envie siempre
+    -- valor y endurecer la validacion a NOT NULL estricto.)
+    p_localidad               VARCHAR(130)    DEFAULT NULL,
+    p_comuna                  VARCHAR(130)    DEFAULT NULL,
+    p_barrio                  VARCHAR(130)    DEFAULT NULL,
+    p_direccion               VARCHAR(130)    DEFAULT NULL,
+    p_telefono                VARCHAR(60)     DEFAULT NULL,
+    -- Campo realmente opcional (DDL lo define nullable)
+    p_georeferenciacion       VARCHAR(400)    DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
 DECLARE
     v_id_creado     BIGINT;
     v_consecutivo   VARCHAR(2);
@@ -260,10 +278,6 @@ BEGIN
      WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento
        AND ACTIVE              = TRUE;
 
-    PERFORM academico_test.fn_audit_declarar(
-        p_pk_usuario_solicitante, format('Creación de la sede %s (código %s)', p_nombre, p_codigo),
-        p_fk_establecimiento);
-
     -- -----------------------------------------------------------------
     -- 5. INSERT. Las FKs no validadas explicitamente aqui: si alguna no
     --    existe, el INSERT fallara con SQLSTATE '23503'.
@@ -293,7 +307,7 @@ BEGIN
 
     RETURN v_id_creado;
 END;
-$function$;
+$$;
 
 COMMENT ON FUNCTION academico_test.fn_sed_crear(
     BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT,
@@ -360,14 +374,30 @@ COMMENT ON FUNCTION academico_test.fn_sed_crear(
 --     SQLSTATE '23505' — CODIGO o NOMBRE chocan con otra sede activa del
 --                        mismo EE.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_sed_actualizar(p_pk_usuario_solicitante bigint, p_pk_sede bigint, p_codigo character varying DEFAULT NULL::character varying, p_nombre character varying DEFAULT NULL::character varying, p_fk_lista_valor_zona bigint DEFAULT NULL::bigint, p_localidad character varying DEFAULT NULL::character varying, p_comuna character varying DEFAULT NULL::character varying, p_barrio character varying DEFAULT NULL::character varying, p_direccion character varying DEFAULT NULL::character varying, p_telefono character varying DEFAULT NULL::character varying, p_georeferenciacion character varying DEFAULT NULL::character varying)
- RETURNS bigint
- LANGUAGE plpgsql
-AS $function$
+CREATE OR REPLACE FUNCTION academico_test.fn_sed_actualizar(
+    -- Auditoria / autorizacion: PK_TUSUARIO del usuario que actualiza
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_sede                 BIGINT,
+    -- Identificadores modificables (nullable: NULL = no cambia).
+    -- Si se envian, se validan contra el resto de sedes activas.
+    p_codigo                  VARCHAR(30)     DEFAULT NULL,
+    p_nombre                  VARCHAR(130)    DEFAULT NULL,
+    -- Zona (FK a TLISTA_VALOR). Nullable: NULL = no cambia.
+    p_fk_lista_valor_zona     BIGINT          DEFAULT NULL,
+    -- Ubicacion (nullable: NULL = no cambia).
+    p_localidad               VARCHAR(130)    DEFAULT NULL,
+    p_comuna                  VARCHAR(130)    DEFAULT NULL,
+    p_barrio                  VARCHAR(130)    DEFAULT NULL,
+    p_direccion               VARCHAR(130)    DEFAULT NULL,
+    p_telefono                VARCHAR(60)     DEFAULT NULL,
+    p_georeferenciacion       VARCHAR(400)    DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
 DECLARE
     v_estado_actual BOOLEAN;
     v_fk_ee        BIGINT;
-    v_nombre_actual VARCHAR(130);
 BEGIN
     -- -----------------------------------------------------------------
     -- 1. Validaciones de existencia y estado (activo). Se hace ANTES del
@@ -377,8 +407,8 @@ BEGIN
     --    sobre 42501: si la sede no existe, no tiene sentido hablar de
     --    permisos. Sobre inactivas -> 22023.
     -- -----------------------------------------------------------------
-    SELECT ACTIVE, FK_TESTABLECIMIENTO, NOMBRE
-      INTO v_estado_actual, v_fk_ee, v_nombre_actual
+    SELECT ACTIVE, FK_TESTABLECIMIENTO
+      INTO v_estado_actual, v_fk_ee
       FROM academico_test.TSEDE
      WHERE PK_TSEDE = p_pk_sede;
 
@@ -529,9 +559,6 @@ BEGIN
     --        SOLO si al menos una columna efectiva cambio.
     --      * PATCH vacio o PATCH con mismos valores no toca auditoria.
     -- -----------------------------------------------------------------
-    PERFORM academico_test.fn_audit_declarar(
-        p_pk_usuario_solicitante, format('Actualización de la sede %s', COALESCE(p_nombre, v_nombre_actual)), v_fk_ee);
-
     WITH current AS (
         SELECT CODIGO, NOMBRE, FK_TLV_ZONA, LOCALIDAD, COMUNA, BARRIO,
                DIRECCION, TELEFONO, GEOREFERENCIACION
@@ -585,7 +612,7 @@ BEGIN
 
     RETURN p_pk_sede;
 END;
-$function$;
+$$;
 
 COMMENT ON FUNCTION academico_test.fn_sed_actualizar(
     BIGINT,
@@ -643,19 +670,27 @@ COMMENT ON FUNCTION academico_test.fn_sed_actualizar(
 --     SQLSTATE 'P0002' — No existe la TSEDE con ese PK.
 --     SQLSTATE '22023' — La TSEDE ya estaba inactiva.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_sed_soft_delete(p_pk_usuario_solicitante bigint, p_pk_sede bigint)
- RETURNS bigint
- LANGUAGE plpgsql
-AS $function$
+CREATE OR REPLACE FUNCTION academico_test.fn_sed_soft_delete(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_sede                 BIGINT
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
 DECLARE
     v_estado_actual BOOLEAN;
     v_fk_ee         BIGINT;
     v_usuarios     BIGINT := 0;
     v_niveles      BIGINT := 0;
-    v_nombre        VARCHAR(130);
 BEGIN
-    SELECT ACTIVE, FK_TESTABLECIMIENTO, NOMBRE
-      INTO v_estado_actual, v_fk_ee, v_nombre
+    -- -----------------------------------------------------------------
+    -- 1. Validaciones previas: existencia, estado, y captura del EE
+    --    (FK_TESTABLECIMIENTO) sobre el que se valida el gate compuesto.
+    --    El orden es: existencia (P0002) -> estado (22023) -> gate
+    --    (42501). Asi priorizamos mensajes claros sobre info leaks.
+    -- -----------------------------------------------------------------
+    SELECT ACTIVE, FK_TESTABLECIMIENTO
+      INTO v_estado_actual, v_fk_ee
       FROM academico_test.TSEDE
      WHERE PK_TSEDE = p_pk_sede;
 
@@ -670,6 +705,14 @@ BEGIN
                   HINT    = 'Localice la sede mediante una consulta directa sobre TSEDE';
     END IF;
 
+    -- -----------------------------------------------------------------
+    -- 0. Gate de autorizacion COMPUESTO contra v_fk_ee (el EE de la sede).
+    --    Mismo patron que fn_sed_crear / fn_sed_actualizar:
+    --    (a) super-admin (fn_puede_afectar_establecimiento) -> ok.
+    --    (b) rector del EE.
+    --    (c) secretaria del EE.
+    --    (d) jefe de sistema (rol 8) en sede del EE.
+    -- -----------------------------------------------------------------
     IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
         NULL;
     ELSIF EXISTS (
@@ -711,15 +754,20 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
-    PERFORM academico_test.fn_audit_declarar(
-        p_pk_usuario_solicitante, format('Eliminación de la sede %s', COALESCE(v_nombre, p_pk_sede::TEXT)), v_fk_ee);
-
+    -- -----------------------------------------------------------------
+    -- 2. Soft delete de la sede.
+    --    MODIFIED_BY/MODIFIED_AT se actualizan para reflejar la baja.
+    -- -----------------------------------------------------------------
     UPDATE academico_test.TSEDE
        SET ACTIVE       = FALSE,
            MODIFIED_BY  = p_pk_usuario_solicitante::VARCHAR,
            MODIFIED_AT  = CURRENT_TIMESTAMP
      WHERE PK_TSEDE = p_pk_sede;
 
+    -- -----------------------------------------------------------------
+    -- 3. Soft delete en cascada sobre TSEDE_USUARIO.
+    --    Solo activas para no pisar MODIFIED_AT de permisos inactivos.
+    -- -----------------------------------------------------------------
     UPDATE academico_test.TSEDE_USUARIO
        SET ACTIVE       = FALSE,
            MODIFIED_BY  = p_pk_usuario_solicitante::VARCHAR,
@@ -729,6 +777,10 @@ BEGIN
 
     GET DIAGNOSTICS v_usuarios = ROW_COUNT;
 
+    -- -----------------------------------------------------------------
+    -- 4. Soft delete en cascada sobre TSEDE_NIVEL (niveles de ensenanza
+    --    asignados a esta sede). Misma logica: solo activas.
+    -- -----------------------------------------------------------------
     UPDATE academico_test.TSEDE_NIVEL
        SET ACTIVE       = FALSE,
            MODIFIED_BY  = p_pk_usuario_solicitante::VARCHAR,
@@ -738,12 +790,15 @@ BEGIN
 
     GET DIAGNOSTICS v_niveles = ROW_COUNT;
 
+    -- -----------------------------------------------------------------
+    -- 5. Log de auditoria (RAISE NOTICE; no falla la operacion).
+    -- -----------------------------------------------------------------
     RAISE NOTICE 'Soft delete TSEDE=% (autor: %): usuarios TSEDE_USUARIO afectados=%, niveles TSEDE_NIVEL afectados=%',
         p_pk_sede, p_pk_usuario_solicitante, v_usuarios, v_niveles;
 
     RETURN p_pk_sede;
 END;
-$function$;
+$$;
 
 
 -- ---------------------------------------------------------------------------
@@ -790,14 +845,20 @@ $function$;
 --                        el EE concreto de alguna de las sedes (propa-
 --                        gado del single).
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_sed_soft_delete_bulk(p_pk_usuario_solicitante bigint, p_pks bigint[])
- RETURNS bigint
- LANGUAGE plpgsql
-AS $function$
+CREATE OR REPLACE FUNCTION academico_test.fn_sed_soft_delete_bulk(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pks                     BIGINT[]
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
 DECLARE
     v_pk        BIGINT;
     v_procesados BIGINT := 0;
 BEGIN
+    -- -----------------------------------------------------------------
+    -- 0. Validacion de parametros de entrada.
+    -- -----------------------------------------------------------------
     IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
         RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
             USING ERRCODE = '22023';
@@ -808,6 +869,9 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
+    -- Duplicados: si el caller envia el mismo PK dos veces, el primer
+    -- PERFORM lo da de baja y el segundo cae con 'ya inactiva' (22023
+    -- propagado), oscureciendo el problema real. Lo detectamos arriba.
     IF (SELECT COUNT(*) FROM (SELECT unnest(p_pks)) AS x) <> CARDINALITY(p_pks) THEN
         RAISE EXCEPTION 'p_pks contiene PKs duplicados'
             USING ERRCODE = '22023',
@@ -819,12 +883,11 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    -- Etiqueta agregada para el lote; cada fn_sed_soft_delete individual
-    -- declara la suya propia por sede al ejecutarse (ultima llamada gana),
-    -- asi que esta queda como contexto general antes de que arranque el loop.
-    PERFORM academico_test.fn_audit_declarar(
-        p_pk_usuario_solicitante, format('Eliminación masiva de %s sedes', CARDINALITY(p_pks)));
-
+    -- -----------------------------------------------------------------
+    -- 1. Bulk soft delete delegando en el single.
+    --    Cualquier excepcion (P0002, 22023, 42501) aborta la transaccion
+    --    y deshace TODAS las bajas ya aplicadas.
+    -- -----------------------------------------------------------------
     FOREACH v_pk IN ARRAY p_pks
     LOOP
         PERFORM academico_test.fn_sed_soft_delete(p_pk_usuario_solicitante, v_pk);
@@ -836,7 +899,7 @@ BEGIN
 
     RETURN v_procesados;
 END;
-$function$;
+$$;
 
 COMMENT ON FUNCTION academico_test.fn_sed_soft_delete_bulk(BIGINT, BIGINT[])
     IS 'Variante bulk de fn_sed_soft_delete. Recibe un BIGINT[] de PK_TSEDE y aplica soft delete (con cascade a TSEDE_USUARIO y TSEDE_NIVEL via el single) en una sola transaccion. Semantica ATOMICA: si cualquier PK falla (no existe / ya inactiva / el usuario no pasa el gate para el EE concreto de esa sede), la operacion se revierte entera via RAISE EXCEPTION; ningun PK queda parcialmente procesado. Validaciones previas (22023): p_pk_usuario_solicitante > 0, p_pks no nulo ni vacio, sin duplicados, todos los elementos > 0. Retorna el conteo de sedes efectivamente dadas de baja (= cardinalidad de p_pks en caso exitoso). p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que el resto de funciones del esquema).';

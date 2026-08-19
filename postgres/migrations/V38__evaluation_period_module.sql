@@ -82,13 +82,19 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_crear(p_fk_periodo bigint, p_codigo character varying, p_nombre character varying, p_abreviacion character varying, p_fecha_inicio date, p_fecha_fin date, p_fk_estado bigint, p_porcentaje numeric DEFAULT NULL::numeric, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
- RETURNS bigint
- LANGUAGE plpgsql
-AS $function$
-DECLARE
-    v_id BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-    v_establecimiento_id BIGINT;
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_crear(
+    p_fk_periodo     BIGINT,
+    p_codigo         VARCHAR(30),
+    p_nombre         VARCHAR(130),
+    p_abreviacion    VARCHAR(30),
+    p_fecha_inicio   DATE,
+    p_fecha_fin      DATE,
+    p_fk_estado      BIGINT,
+    p_porcentaje     NUMERIC DEFAULT NULL,
+    p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
+RETURNS BIGINT LANGUAGE plpgsql AS $$
+DECLARE v_id BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
     -- Alcance por rol (como V37): gate grueso (algun rol de gestion) + gate fino
     -- (el establecimiento del periodo padre debe estar en su alcance).
@@ -96,11 +102,11 @@ BEGIN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
-    SELECT s.FK_TESTABLECIMIENTO INTO v_establecimiento_id
-      FROM academico_test.TPERIODO_ACADEMICO pa
-      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-     WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo;
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_establecimiento_id) THEN
+    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, (
+             SELECT s.FK_TESTABLECIMIENTO
+               FROM academico_test.TPERIODO_ACADEMICO pa
+               JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+              WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo)) THEN
         RAISE EXCEPTION 'El usuario no puede gestionar periodos de evaluacion de este establecimiento'
             USING ERRCODE = '42501';
     END IF;
@@ -114,9 +120,6 @@ BEGIN
     END IF;
     PERFORM academico_test.fn_periodo_eval_validar(p_fk_periodo, p_fecha_inicio, p_fecha_fin, p_porcentaje, p_codigo, p_nombre, p_abreviacion, NULL);
 
-    PERFORM academico_test.fn_audit_declarar(
-        p_pk_usuario_solicitante, format('Creación del periodo de evaluación %s', p_nombre), v_establecimiento_id);
-
     INSERT INTO academico_test.TPERIODO_EVALUACION
         (CODIGO, NOMBRE, ABREVIACION, FECHA_INICIO, FECHA_FIN, FK_TLV_ESTADO,
          FK_TPERIODO_ACADEMICO, PORCENTAJE, CREATED_BY)
@@ -125,16 +128,23 @@ BEGIN
     RETURNING PK_TPERIODO_EVALUACION INTO v_id;
     RETURN v_id;
 END;
-$function$;
+$$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_actualizar(p_pk bigint, p_codigo character varying DEFAULT NULL::character varying, p_nombre character varying DEFAULT NULL::character varying, p_abreviacion character varying DEFAULT NULL::character varying, p_fecha_inicio date DEFAULT NULL::date, p_fecha_fin date DEFAULT NULL::date, p_fk_estado bigint DEFAULT NULL::bigint, p_porcentaje numeric DEFAULT NULL::numeric, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
- RETURNS bigint
- LANGUAGE plpgsql
-AS $function$
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_actualizar(
+    p_pk             BIGINT,
+    p_codigo         VARCHAR(30) DEFAULT NULL,
+    p_nombre         VARCHAR(130) DEFAULT NULL,
+    p_abreviacion    VARCHAR(30) DEFAULT NULL,
+    p_fecha_inicio   DATE DEFAULT NULL,
+    p_fecha_fin      DATE DEFAULT NULL,
+    p_fk_estado      BIGINT DEFAULT NULL,
+    p_porcentaje     NUMERIC DEFAULT NULL,
+    p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
+RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
     r academico_test.TPERIODO_EVALUACION;
     v_ini DATE; v_fin DATE; v_pct NUMERIC; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-    v_establecimiento_id BIGINT;
 BEGIN
     IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
@@ -149,11 +159,11 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
     -- Gate fino: el establecimiento del periodo padre debe estar en su alcance.
-    SELECT s.FK_TESTABLECIMIENTO INTO v_establecimiento_id
-      FROM academico_test.TPERIODO_ACADEMICO pa
-      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-     WHERE pa.PK_TPERIODO_ACADEMICO = r.FK_TPERIODO_ACADEMICO;
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_establecimiento_id) THEN
+    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, (
+             SELECT s.FK_TESTABLECIMIENTO
+               FROM academico_test.TPERIODO_ACADEMICO pa
+               JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+              WHERE pa.PK_TPERIODO_ACADEMICO = r.FK_TPERIODO_ACADEMICO)) THEN
         RAISE EXCEPTION 'El usuario no puede gestionar periodos de evaluacion de este establecimiento'
             USING ERRCODE = '42501';
     END IF;
@@ -166,11 +176,6 @@ BEGIN
     PERFORM academico_test.fn_periodo_eval_validar(r.FK_TPERIODO_ACADEMICO, v_ini, v_fin, v_pct,
         COALESCE(p_codigo, r.CODIGO), COALESCE(p_nombre, r.NOMBRE), COALESCE(p_abreviacion, r.ABREVIACION), p_pk);
 
-    PERFORM academico_test.fn_audit_declarar(
-        p_pk_usuario_solicitante,
-        format('Actualización del periodo de evaluación %s', COALESCE(p_nombre, r.NOMBRE)),
-        v_establecimiento_id);
-
     UPDATE academico_test.TPERIODO_EVALUACION SET
         CODIGO = COALESCE(p_codigo, CODIGO), NOMBRE = COALESCE(p_nombre, NOMBRE),
         ABREVIACION = COALESCE(p_abreviacion, ABREVIACION),
@@ -180,22 +185,20 @@ BEGIN
      WHERE PK_TPERIODO_EVALUACION = p_pk;
     RETURN p_pk;
 END;
-$function$;
+$$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_soft_delete(p_pk bigint, p_pk_usuario_solicitante bigint)
- RETURNS bigint
- LANGUAGE plpgsql
-AS $function$
-DECLARE
-    v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR; v_est BIGINT;
-    v_nombre VARCHAR(130);
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_soft_delete(
+    p_pk BIGINT, p_pk_usuario_solicitante BIGINT
+)
+RETURNS BIGINT LANGUAGE plpgsql AS $$
+DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR; v_est BIGINT;
 BEGIN
     IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
     -- Gate fino: el establecimiento del periodo padre debe estar en su alcance.
-    SELECT s.FK_TESTABLECIMIENTO, pe.NOMBRE INTO v_est, v_nombre
+    SELECT s.FK_TESTABLECIMIENTO INTO v_est
       FROM academico_test.TPERIODO_EVALUACION pe
       JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = pe.FK_TPERIODO_ACADEMICO
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
@@ -204,11 +207,6 @@ BEGIN
         RAISE EXCEPTION 'El usuario no puede gestionar periodos de evaluacion de este establecimiento'
             USING ERRCODE = '42501';
     END IF;
-
-    PERFORM academico_test.fn_audit_declarar(
-        p_pk_usuario_solicitante, format('Eliminación del periodo de evaluación %s', COALESCE(v_nombre, p_pk::TEXT)),
-        v_est);
-
     UPDATE academico_test.TPERIODO_EVALUACION
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TPERIODO_EVALUACION = p_pk AND ACTIVE = TRUE;
@@ -218,7 +216,7 @@ BEGIN
     END IF;
     RETURN p_pk;
 END;
-$function$;
+$$;
 
 DROP FUNCTION IF EXISTS academico_test.fn_periodo_eval_listar(BIGINT, TEXT, INT, INT);
 DROP FUNCTION IF EXISTS academico_test.fn_periodo_eval_listar(BIGINT, TEXT, INT, INT, BIGINT);

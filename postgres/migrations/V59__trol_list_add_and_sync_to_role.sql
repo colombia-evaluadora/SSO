@@ -1118,11 +1118,20 @@ $$;
 --     (UNIQUE (CATEGORIA, VALOR) lo garantiza, pero lo verificamos antes
 --     para emitir un mensaje claro).
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_create_plan_from_value(p_user_pk bigint, p_nombre character varying)
- RETURNS TABLE(pk_lista_valor bigint, nombre character varying, valor character varying, status character varying)
- LANGUAGE plpgsql
- SET search_path TO 'academico_test', 'public'
-AS $function$
+CREATE OR REPLACE FUNCTION academico_test.fn_create_plan_from_value(
+    p_user_pk BIGINT,
+    p_nombre  VARCHAR
+)
+RETURNS TABLE (
+    pk_lista_valor BIGINT,
+    nombre         VARCHAR,
+    valor          VARCHAR,
+    status         VARCHAR
+)
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = academico_test, public
+AS $$
 DECLARE
     v_nombre    VARCHAR;
     v_valor     VARCHAR;
@@ -1157,9 +1166,6 @@ BEGIN
             v_valor, v_existente;
     END IF;
 
-    PERFORM academico_test.fn_audit_declarar(
-        p_user_pk, format('Creación del valor de catálogo "%s" (plan de estudio)', v_nombre));
-
     INSERT INTO academico_test.tlista_valor (
         categoria, nombre, valor, created_by
     )
@@ -1175,7 +1181,7 @@ BEGIN
     status         := 'inserted';
     RETURN NEXT;
 END;
-$function$;
+$$;
 
 
 -- ---------------------------------------------------------------------------
@@ -1186,11 +1192,19 @@ $function$;
 --     solo necesitamos p_nombre. Conserva el VALOR/CATEGORIA/NOMBRE/CREATED_*
 --     para auditoria; registra modified_by/at con CURRENT_USER.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_delete_plan_from_value(p_user_pk bigint, p_nombre character varying)
- RETURNS TABLE(pk_lista_valor bigint, nombre character varying, was_deleted boolean)
- LANGUAGE plpgsql
- SET search_path TO 'academico_test', 'public'
-AS $function$
+CREATE OR REPLACE FUNCTION academico_test.fn_delete_plan_from_value(
+    p_user_pk BIGINT,
+    p_nombre  VARCHAR
+)
+RETURNS TABLE (
+    pk_lista_valor BIGINT,
+    nombre         VARCHAR,
+    was_deleted    BOOLEAN
+)
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = academico_test, public
+AS $$
 DECLARE
     v_valor VARCHAR;
     v_pk    BIGINT;
@@ -1216,9 +1230,6 @@ BEGIN
      LIMIT 1;
 
     IF v_pk IS NOT NULL THEN
-        PERFORM academico_test.fn_audit_declarar(
-            p_user_pk, format('Eliminación del valor de catálogo "%s" (plan de estudio)', p_nombre));
-
         UPDATE academico_test.tlista_valor lv
            SET active      = FALSE,
                modified_by = CURRENT_USER,
@@ -1235,7 +1246,7 @@ BEGIN
     nombre         := TRIM(p_nombre);
     RETURN NEXT;
 END;
-$function$;
+$$;
 
 
 -- ---------------------------------------------------------------------------

@@ -9,17 +9,19 @@
 SET search_path TO academico_test, public;
 
 DROP FUNCTION IF EXISTS academico_test.fn_asignacion_guardar(BIGINT, VARCHAR, TEXT[], BIGINT);
-CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_guardar(p_academic_period_id bigint, p_fk_funcionario bigint, p_subject_ids text[], p_pk_usuario_solicitante bigint)
- RETURNS integer
- LANGUAGE plpgsql
-AS $function$
+CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_guardar(
+    p_academic_period_id BIGINT,
+    p_fk_funcionario     BIGINT,           -- id del docente (PK_TFUNCIONARIO)
+    p_subject_ids        TEXT[],           -- ["grupoId:asignaturaId", ...]
+    p_pk_usuario_solicitante BIGINT
+)
+RETURNS INT LANGUAGE plpgsql AS $$
 DECLARE
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_func BIGINT; v_count INT := 0; v_pair TEXT; v_grupo BIGINT; v_asig BIGINT;
-    v_establecimiento_id BIGINT := academico_test.fn_periodo_establecimiento(p_academic_period_id);
-    v_func_nombre TEXT; v_periodo_nombre TEXT;
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_academic_period_id));
 
     IF NOT EXISTS (
         SELECT 1 FROM academico_test.TPERIODO_ACADEMICO
@@ -28,22 +30,14 @@ BEGIN
         RAISE EXCEPTION 'El periodo academico % no existe o no esta activo', p_academic_period_id USING ERRCODE = '23503';
     END IF;
 
-    SELECT f.PK_TFUNCIONARIO, TRIM(concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO))
-      INTO v_func, v_func_nombre
+    SELECT f.PK_TFUNCIONARIO INTO v_func
       FROM academico_test.TFUNCIONARIO f
-      JOIN academico_test.TUSUARIO u ON u.PK_TUSUARIO = f.FK_TUSUARIO
      WHERE f.PK_TFUNCIONARIO = p_fk_funcionario AND f.ACTIVE = TRUE;
     IF v_func IS NULL THEN
         RAISE EXCEPTION 'No existe un funcionario con id %', p_fk_funcionario USING ERRCODE = '23503';
     END IF;
-    SELECT NOMBRE INTO v_periodo_nombre FROM academico_test.TPERIODO_ACADEMICO WHERE PK_TPERIODO_ACADEMICO = p_academic_period_id;
 
     PERFORM pg_advisory_xact_lock(hashtext('docasig:' || p_academic_period_id::text || ':' || v_func::text));
-
-    PERFORM academico_test.fn_audit_declarar(
-        p_pk_usuario_solicitante,
-        format('Asignación académica del docente %s para el periodo %s', COALESCE(v_func_nombre, p_fk_funcionario::TEXT), v_periodo_nombre),
-        v_establecimiento_id);
 
     UPDATE academico_test.TDOCENTE_ASIGNATURA
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
@@ -107,7 +101,7 @@ BEGIN
 
     RETURN v_count;
 END;
-$function$;
+$$;
 
 -- Pool asignable: grado x grupo x plan de estudio del periodo.
 -- p_filtro         = busqueda libre (asignatura, grado, grupo o jornada).

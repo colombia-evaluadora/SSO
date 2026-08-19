@@ -91,818 +91,342 @@ SET search_path TO academico_test, public;
 --     SQLSTATE '23503' — Alguna FK no existe (municipio, propiedad juridica,
 --                        funcionario rector/secretaria, archivo, etc.).
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_est_crear(p_pk_usuario_solicitante bigint, p_nombre character varying, p_nit character varying, p_fk_municipio bigint, p_fk_propiedad_juridica bigint, p_codigo character varying, p_localidad character varying DEFAULT NULL::character varying, p_comuna character varying DEFAULT NULL::character varying, p_barrio character varying DEFAULT NULL::character varying, p_direccion character varying DEFAULT NULL::character varying, p_correo_electronico character varying DEFAULT NULL::character varying, p_telefono character varying DEFAULT NULL::character varying, p_fax character varying DEFAULT NULL::character varying, p_idecol character varying DEFAULT NULL::character varying, p_pagina_web character varying DEFAULT NULL::character varying, p_fk_lista_valor_zona bigint DEFAULT NULL::bigint, p_resolucion_aprobacion character varying DEFAULT NULL::character varying, p_licencia_funcionamiento character varying DEFAULT NULL::character varying, p_fecha_licencia date DEFAULT NULL::date, p_fk_lv_calendario bigint DEFAULT NULL::bigint, p_fk_lv_idioma bigint DEFAULT NULL::bigint, p_fk_lv_genero_est bigint DEFAULT NULL::bigint, p_fk_discapacidad bigint DEFAULT NULL::bigint, p_talento academico_test.bool_sn DEFAULT NULL::character varying, p_etnias academico_test.bool_sn DEFAULT NULL::character varying, p_fk_tfuncionario_rector bigint DEFAULT NULL::bigint, p_fk_tfuncionario_secretaria bigint DEFAULT NULL::bigint, p_subsidio academico_test.bool_sn DEFAULT NULL::character varying, p_fk_lv_regimen_catcosto bigint DEFAULT NULL::bigint, p_fk_lv_rango_tarifa bigint DEFAULT NULL::bigint, p_fk_lv_asociacion_nacional bigint DEFAULT NULL::bigint, p_fk_archivo bigint DEFAULT NULL::bigint)
- RETURNS bigint
- LANGUAGE plpgsql
-AS $function$
-
+CREATE OR REPLACE FUNCTION academico_test.fn_est_crear(
+    -- Auditoria / autorizacion: PK_TUSUARIO del super-admin que crea.
+    -- Siempre el primer parametro (mismo patron que V52): evita el 42P13
+    -- "args con default deben ir al final" y estandariza el orden.
+    p_pk_usuario_solicitante  BIGINT,
+    p_nombre                  VARCHAR(130),
+    p_nit                     VARCHAR(30),
+    p_fk_municipio            BIGINT,
+    p_fk_propiedad_juridica   BIGINT,
+    p_codigo                  VARCHAR(30),
+    -- Datos de ubicacion (todos opcionales salvo que se indiquen NOT NULL)
+    p_localidad               VARCHAR(130)    DEFAULT NULL,
+    p_comuna                  VARCHAR(130)    DEFAULT NULL,
+    p_barrio                  VARCHAR(130)    DEFAULT NULL,
+    p_direccion               VARCHAR(130)    DEFAULT NULL,
+    p_correo_electronico      VARCHAR(130)    DEFAULT NULL,
+    p_telefono                VARCHAR(130)    DEFAULT NULL,
+    p_fax                     VARCHAR(130)    DEFAULT NULL,
+    p_idecol                  VARCHAR(7)      DEFAULT NULL,
+    p_pagina_web              VARCHAR(130)    DEFAULT NULL,
+    p_fk_lista_valor_zona     BIGINT          DEFAULT NULL,
+    -- Datos administrativos / licencias
+    p_resolucion_aprobacion   VARCHAR(130)    DEFAULT NULL,
+    p_licencia_funcionamiento VARCHAR(130)    DEFAULT NULL,
+    p_fecha_licencia          DATE            DEFAULT NULL,
+    p_fk_lv_calendario        BIGINT          DEFAULT NULL,
+    p_fk_lv_idioma            BIGINT          DEFAULT NULL,
+    p_fk_lv_genero_est        BIGINT          DEFAULT NULL,
+    p_fk_discapacidad         BIGINT          DEFAULT NULL,
+    p_talento                 academico_test.bool_sn         DEFAULT NULL,
+    p_etnias                  academico_test.bool_sn         DEFAULT NULL,
+    p_FK_TFUNCIONARIO_RECTOR   BIGINT          DEFAULT NULL,
+    p_FK_TFUNCIONARIO_SECRETARIA BIGINT        DEFAULT NULL,
+    p_subsidio                academico_test.bool_sn         DEFAULT NULL,
+    p_fk_lv_regimen_catcosto  BIGINT          DEFAULT NULL,
+    p_fk_lv_rango_tarifa      BIGINT          DEFAULT NULL,
+    p_fk_lv_asociacion_nacional BIGINT        DEFAULT NULL,
+    p_fk_lv_estado_establecimiento BIGINT     DEFAULT NULL,
+    p_fk_archivo              BIGINT          DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
 DECLARE
-
     v_id_creado BIGINT;
-
-    -- Estado "Activo" del catalogo de estados de establecimiento. Ya no se
-
-    -- recibe por parametro: toda alta arranca activa.
-
-    c_fk_lv_estado_activo CONSTANT BIGINT := 533;
-
-    -- REV4 -- sede por defecto (mismo CODIGO/NOMBRE que el EE) + permiso
-
-    -- de rector/secretaria en ella. "Urbana y Rural" (216): zona por
-
-    -- defecto pedida para esta sede -- no hay info real de zona todavia
-
-    -- al momento de crear el EE. "Completa" (51900): jornada por defecto
-
-    -- para el permiso de rector/secretaria -- son cargos administrativos,
-
-    -- no atados a una jornada de aula; ajustar si el negocio prefiere otra.
-
-    c_fk_tlv_zona_defecto    CONSTANT BIGINT := 216;
-
-    c_fk_tlv_jornada_defecto CONSTANT BIGINT := 51900;
-
-    c_fk_trol_rector         CONSTANT BIGINT := 7;
-
-    c_fk_trol_secretaria     CONSTANT BIGINT := 9;
-
-    v_pk_sede_creada         BIGINT;
-
-    v_perm_result            RECORD;
-
 BEGIN
-
     -- -----------------------------------------------------------------
-
     -- 0. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
-
     --    p_pk_usuario_solicitante es obligatorio por firma (sin DEFAULT).
-
     -- -----------------------------------------------------------------
-
     IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
-
         RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
-
             USING ERRCODE = '22023';
-
     END IF;
-
-
 
     IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-
             USING ERRCODE = '42501';
-
     END IF;
 
-
-
     -- -----------------------------------------------------------------
-
     -- 1. Validaciones de obligatoriedad (DDL NOT NULL + NIT funcional)
-
     -- -----------------------------------------------------------------
-
     IF NULLIF(TRIM(p_nombre), '') IS NULL THEN
-
         RAISE EXCEPTION 'Nombre del establecimiento es obligatorio'
-
             USING ERRCODE = '22023', HINT = 'p_nombre no puede ser NULL ni vacio';
-
     END IF;
-
-
 
     IF NULLIF(TRIM(p_nit), '') IS NULL THEN
-
         RAISE EXCEPTION 'NIT del establecimiento es obligatorio'
-
             USING ERRCODE = '22023', HINT = 'p_nit no puede ser NULL ni vacio';
-
     END IF;
-
-
 
     IF NULLIF(TRIM(p_codigo), '') IS NULL THEN
-
         RAISE EXCEPTION 'Codigo del establecimiento es obligatorio'
-
             USING ERRCODE = '22023', HINT = 'p_codigo no puede ser NULL ni vacio';
-
     END IF;
-
-
 
     IF p_fk_municipio IS NULL THEN
-
         RAISE EXCEPTION 'Municipio (FK_TMUNICIPIO) es obligatorio'
-
             USING ERRCODE = '22023', HINT = 'p_fk_municipio no puede ser NULL';
-
     END IF;
-
-
 
     IF p_fk_propiedad_juridica IS NULL THEN
-
         RAISE EXCEPTION 'Propiedad juridica (FK_TPROPIEDAD_JURIDICA) es obligatoria'
-
             USING ERRCODE = '22023', HINT = 'p_fk_propiedad_juridica no puede ser NULL';
-
     END IF;
 
-
-
     -- -----------------------------------------------------------------
-
     -- 2. Validacion de unicidad por NIT (solo activos)
-
     --    CODIGO ya tiene UNIQUE constraint en el DDL (U_TESTABLECIMIENTO_1).
-
     -- -----------------------------------------------------------------
-
     IF EXISTS (
-
         SELECT 1 FROM academico_test.TESTABLECIMIENTO
-
         WHERE NIT = p_nit AND ACTIVE = TRUE
-
     ) THEN
-
         RAISE EXCEPTION 'Ya existe un TESTABLECIMIENTO activo con NIT %', p_nit
-
             USING ERRCODE = '23505',
-
                   HINT    = 'Use fn_est_buscar_por_nit('') para obtener el registro existente';
-
     END IF;
-
-
 
     -- Validacion de CODIGO solo entre activos: la UNIQUE constraint
-
     -- U_TESTABLECIMIENTO_1 cubre TODOS los CODIGO (incluyendo inactivos).
-
     -- Aqui forzamos la misma semantica que NIT: un CODIGO inactivo puede
-
     -- reutilizarse, uno activo no.
-
     IF EXISTS (
-
         SELECT 1 FROM academico_test.TESTABLECIMIENTO
-
         WHERE CODIGO = p_codigo AND ACTIVE = TRUE
-
     ) THEN
-
         RAISE EXCEPTION 'Ya existe un TESTABLECIMIENTO activo con CODIGO %', p_codigo
-
             USING ERRCODE = '23505',
-
                   HINT    = 'Use fn_est_buscar_por_nit('') o un SELECT directo para localizarlo';
-
     END IF;
 
-
-
     -- -----------------------------------------------------------------
-
     -- 2a. Validacion de FKs obligatorias (no se delega al INSERT para
-
     --     dar un mensaje claro al caller en vez del SQLSTATE '23503'
-
     --     generico del DDL).
-
     -- -----------------------------------------------------------------
-
     IF NOT EXISTS (
-
         SELECT 1 FROM academico_test.TMUNICIPIO
-
          WHERE PK_TMUNICIPIO = p_fk_municipio
-
     ) THEN
-
         RAISE EXCEPTION 'FK_TMUNICIPIO (%) no existe en TMUNICIPIO', p_fk_municipio
-
             USING ERRCODE = '23503';
-
     END IF;
-
-
 
     IF NOT EXISTS (
-
         SELECT 1 FROM academico_test.TPROPIEDAD_JURIDICA
-
          WHERE PK_PROPIEDAD_JURIDICA = p_fk_propiedad_juridica
-
            AND ACTIVE = TRUE
-
     ) THEN
-
         RAISE EXCEPTION 'FK_TPROPIEDAD_JURIDICA (%) no existe o no esta activa en TPROPIEDAD_JURIDICA',
-
             p_fk_propiedad_juridica
-
             USING ERRCODE = '23503';
-
     END IF;
 
-
-
     -- -----------------------------------------------------------------
-
     -- 2b. Validacion de FKs opcionales contra TLISTA_VALOR.
-
     --     Solo se validan las que llegaron con valor (no NULL).
-
     --     Se valida existencia + ACTIVE=TRUE para mantener consistencia
-
     --     con el resto de las funciones del modulo academico.
-
     -- -----------------------------------------------------------------
-
     IF p_fk_lista_valor_zona IS NOT NULL
-
        AND NOT EXISTS (
-
             SELECT 1 FROM academico_test.TLISTA_VALOR
-
              WHERE PK_LISTA_VALOR = p_fk_lista_valor_zona
-
                AND ACTIVE = TRUE
-
           )
-
     THEN
-
         RAISE EXCEPTION 'FK_TLISTA_VALOR_ZONA (%) no existe o no esta activa en TLISTA_VALOR',
-
             p_fk_lista_valor_zona
-
             USING ERRCODE = '23503';
-
     END IF;
-
-
 
     IF p_fk_lv_calendario IS NOT NULL
-
        AND NOT EXISTS (
-
             SELECT 1 FROM academico_test.TLISTA_VALOR
-
              WHERE PK_LISTA_VALOR = p_fk_lv_calendario
-
                AND ACTIVE = TRUE
-
           )
-
     THEN
-
         RAISE EXCEPTION 'FK_TLV_CALENDARIO (%) no existe o no esta activa en TLISTA_VALOR',
-
             p_fk_lv_calendario
-
             USING ERRCODE = '23503';
-
     END IF;
-
-
 
     IF p_fk_lv_idioma IS NOT NULL
-
        AND NOT EXISTS (
-
             SELECT 1 FROM academico_test.TLISTA_VALOR
-
              WHERE PK_LISTA_VALOR = p_fk_lv_idioma
-
                AND ACTIVE = TRUE
-
           )
-
     THEN
-
         RAISE EXCEPTION 'FK_TLV_IDIOMA (%) no existe o no esta activa en TLISTA_VALOR',
-
             p_fk_lv_idioma
-
             USING ERRCODE = '23503';
-
     END IF;
-
-
 
     IF p_fk_lv_genero_est IS NOT NULL
-
        AND NOT EXISTS (
-
             SELECT 1 FROM academico_test.TLISTA_VALOR
-
              WHERE PK_LISTA_VALOR = p_fk_lv_genero_est
-
                AND ACTIVE = TRUE
-
           )
-
     THEN
-
         RAISE EXCEPTION 'FK_TLV_GENERO_EST (%) no existe o no esta activa en TLISTA_VALOR',
-
             p_fk_lv_genero_est
-
             USING ERRCODE = '23503';
-
     END IF;
-
-
 
     IF p_fk_lv_regimen_catcosto IS NOT NULL
-
        AND NOT EXISTS (
-
             SELECT 1 FROM academico_test.TLISTA_VALOR
-
              WHERE PK_LISTA_VALOR = p_fk_lv_regimen_catcosto
-
                AND ACTIVE = TRUE
-
           )
-
     THEN
-
         RAISE EXCEPTION 'FK_TLV_REGIMEN_CATCOSTO (%) no existe o no esta activa en TLISTA_VALOR',
-
             p_fk_lv_regimen_catcosto
-
             USING ERRCODE = '23503';
-
     END IF;
-
-
 
     IF p_fk_lv_rango_tarifa IS NOT NULL
-
        AND NOT EXISTS (
-
             SELECT 1 FROM academico_test.TLISTA_VALOR
-
              WHERE PK_LISTA_VALOR = p_fk_lv_rango_tarifa
-
                AND ACTIVE = TRUE
-
           )
-
     THEN
-
         RAISE EXCEPTION 'FK_TLV_RANGO_TARIFA (%) no existe o no esta activa en TLISTA_VALOR',
-
             p_fk_lv_rango_tarifa
-
             USING ERRCODE = '23503';
-
     END IF;
-
-
 
     IF p_fk_lv_asociacion_nacional IS NOT NULL
-
        AND NOT EXISTS (
-
             SELECT 1 FROM academico_test.TLISTA_VALOR
-
              WHERE PK_LISTA_VALOR = p_fk_lv_asociacion_nacional
-
                AND ACTIVE = TRUE
-
           )
-
     THEN
-
         RAISE EXCEPTION 'FK_TLV_ASOCIACION_NACIONAL (%) no existe o no esta activa en TLISTA_VALOR',
-
             p_fk_lv_asociacion_nacional
-
             USING ERRCODE = '23503';
-
     END IF;
 
-
+    IF p_fk_lv_estado_establecimiento IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TLISTA_VALOR
+             WHERE PK_LISTA_VALOR = p_fk_lv_estado_establecimiento
+               AND ACTIVE = TRUE
+          )
+    THEN
+        RAISE EXCEPTION 'FK_TLV_ESTADO_ESTABLECIMIENTO (%) no existe o no esta activa en TLISTA_VALOR',
+            p_fk_lv_estado_establecimiento
+            USING ERRCODE = '23503';
+    END IF;
 
     -- -----------------------------------------------------------------
-
     -- 2c. Validacion de FK_TDISCAPACIDAD opcional.
-
     -- -----------------------------------------------------------------
-
     IF p_fk_discapacidad IS NOT NULL
-
        AND NOT EXISTS (
-
             SELECT 1 FROM academico_test.TDISCAPACIDAD
-
              WHERE PK_DISCAPACIDAD = p_fk_discapacidad
-
                AND ACTIVE = TRUE
-
           )
-
     THEN
-
         RAISE EXCEPTION 'FK_TDISCAPACIDAD (%) no existe o no esta activa en TDISCAPACIDAD',
-
             p_fk_discapacidad
-
             USING ERRCODE = '23503';
-
     END IF;
 
-
-
     -- -----------------------------------------------------------------
-
     -- 2d. Validacion de FK_TFUNCIONARIO_RECTOR / SECRETARIA opcionales.
-
     --     Ambos deben ser funcionarios activos.
-
     -- -----------------------------------------------------------------
-
-    IF p_fk_tfuncionario_rector IS NOT NULL
-
+    IF p_FK_TFUNCIONARIO_RECTOR IS NOT NULL
        AND NOT EXISTS (
-
             SELECT 1 FROM academico_test.TFUNCIONARIO
-
-             WHERE PK_TFUNCIONARIO = p_fk_tfuncionario_rector
-
+             WHERE PK_TFUNCIONARIO = p_FK_TFUNCIONARIO_RECTOR
                AND ACTIVE = TRUE
-
           )
-
     THEN
-
         RAISE EXCEPTION 'FK_TFUNCIONARIO_RECTOR (%) no existe o no esta activo en TFUNCIONARIO',
-
-            p_fk_tfuncionario_rector
-
+            p_FK_TFUNCIONARIO_RECTOR
             USING ERRCODE = '23503';
-
     END IF;
 
-
-
-    IF p_fk_tfuncionario_secretaria IS NOT NULL
-
+    IF p_FK_TFUNCIONARIO_SECRETARIA IS NOT NULL
        AND NOT EXISTS (
-
             SELECT 1 FROM academico_test.TFUNCIONARIO
-
-             WHERE PK_TFUNCIONARIO = p_fk_tfuncionario_secretaria
-
+             WHERE PK_TFUNCIONARIO = p_FK_TFUNCIONARIO_SECRETARIA
                AND ACTIVE = TRUE
-
           )
-
     THEN
-
         RAISE EXCEPTION 'FK_TFUNCIONARIO_SECRETARIA (%) no existe o no esta activo en TFUNCIONARIO',
-
-            p_fk_tfuncionario_secretaria
-
+            p_FK_TFUNCIONARIO_SECRETARIA
             USING ERRCODE = '23503';
-
     END IF;
 
-
-
     -- -----------------------------------------------------------------
-
     -- 2e. Validacion de FK_TARCHIVO opcional.
-
     -- -----------------------------------------------------------------
-
     IF p_fk_archivo IS NOT NULL
-
        AND NOT EXISTS (
-
             SELECT 1 FROM academico_test.TARCHIVO
-
              WHERE PK_TARCHIVO = p_fk_archivo
-
           )
-
     THEN
-
         RAISE EXCEPTION 'FK_TARCHIVO (%) no existe en TARCHIVO', p_fk_archivo
-
             USING ERRCODE = '23503';
-
     END IF;
 
-
-
-    -- V78: revierte la firma a la version de produccion (quita
-
-    -- p_fk_lv_estado_establecimiento, que la version local habia agregado --
-
-    -- ver docs/etiqueta-cambios-por-funcion.md) y trae el REV4 completo
-
-    -- (sede + permisos de rector/secretaria por defecto). fn_audit_declarar
-
-    -- agregada antes del INSERT, tras la ultima validacion. No pasa
-
-    -- establecimiento_id: el establecimiento se esta creando en esta misma
-
-    -- llamada, no tiene PK todavia en este punto.
-
-    PERFORM academico_test.fn_audit_declarar(
-
-        p_pk_usuario_solicitante, format('Creación del establecimiento %s', p_nombre));
-
-
-
     -- -----------------------------------------------------------------
-
     -- 3. INSERT. Las FKs no validadas explicitamente aqui: si alguna no
-
     --    existe, el INSERT fallara con SQLSTATE '23503' (FK violation)
-
     --    y ese mensaje sera suficientemente claro para el caller.
-
-    --    FK_TLV_ESTADO_ESTABLECIMIENTO ya no llega por parametro: todo
-
-    --    alta se crea con c_fk_lv_estado_activo (533, "Activo").
-
     -- -----------------------------------------------------------------
-
     INSERT INTO academico_test.TESTABLECIMIENTO (
-
         CODIGO, NOMBRE, NIT,
-
         FK_TMUNICIPIO, FK_TLISTA_VALOR_ZONA,
-
         LOCALIDAD, COMUNA, BARRIO, DIRECCION,
-
         CORREO_ELECTRONICO, TELEFONO, FAX, IDECOL, PAGINA_WEB,
-
         RESOLUCION_APROBACION, LICENCIA_FUNCIONAMIENTO, FECHA_LICENCIA,
-
         FK_TPROPIEDAD_JURIDICA,
-
         FK_TLV_CALENDARIO, FK_TLV_IDIOMA, FK_TLV_GENERO_EST, FK_TDISCAPACIDAD,
-
         TALENTO, ETNIAS,
-
         FK_TFUNCIONARIO_RECTOR, FK_TFUNCIONARIO_SECRETARIA, SUBSIDIO,
-
         FK_TLV_REGIMEN_CATCOSTO, FK_TLV_RANGO_TARIFA,
-
         FK_TLV_ASOCIACION_NACIONAL, FK_TLV_ESTADO_ESTABLECIMIENTO,
-
         FK_TARCHIVO,
-
         CREATED_BY, CREATED_AT, MODIFIED_BY, MODIFIED_AT, ACTIVE
-
     ) VALUES (
-
         p_codigo, p_nombre, p_nit,
-
         p_fk_municipio, p_fk_lista_valor_zona,
-
         p_localidad, p_comuna, p_barrio, p_direccion,
-
         p_correo_electronico, p_telefono, p_fax, p_idecol, p_pagina_web,
-
         p_resolucion_aprobacion, p_licencia_funcionamiento, p_fecha_licencia,
-
         p_fk_propiedad_juridica,
-
         p_fk_lv_calendario, p_fk_lv_idioma, p_fk_lv_genero_est, p_fk_discapacidad,
-
         p_talento, p_etnias,
-
-        p_fk_tfuncionario_rector, p_fk_tfuncionario_secretaria, p_subsidio,
-
+        p_FK_TFUNCIONARIO_RECTOR, p_FK_TFUNCIONARIO_SECRETARIA, p_subsidio,
         p_fk_lv_regimen_catcosto, p_fk_lv_rango_tarifa,
-
-        p_fk_lv_asociacion_nacional, c_fk_lv_estado_activo,
-
+        p_fk_lv_asociacion_nacional, p_fk_lv_estado_establecimiento,
         p_fk_archivo,
-
         p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP,
-
         NULL, NULL,
-
         TRUE
-
     )
-
     RETURNING PK_ESTABLECIMIENTO INTO v_id_creado;
 
-
-
-    -- -----------------------------------------------------------------
-
-    -- 4. REV4 -- Sede por defecto: mismo CODIGO/NOMBRE que el EE recien
-
-    --    creado, zona c_fk_tlv_zona_defecto ("Urbana y Rural"). Se delega
-
-    --    en fn_sed_crear (mismas validaciones/consecutivo/auditoria que
-
-    --    una sede creada a mano) en vez de duplicar el INSERT -- el gate
-
-    --    de fn_sed_crear siempre deja pasar a quien ya paso el gate de
-
-    --    este mismo fn_est_crear (solo super-admin llega hasta aca).
-
-    -- -----------------------------------------------------------------
-
-    v_pk_sede_creada := academico_test.fn_sed_crear(
-
-        p_pk_usuario_solicitante => p_pk_usuario_solicitante,
-
-        p_codigo                 => p_codigo,
-
-        p_nombre                 => p_nombre,
-
-        p_fk_lista_valor_zona    => c_fk_tlv_zona_defecto,
-
-        p_fk_establecimiento     => v_id_creado
-
-    );
-
-
-
-    -- -----------------------------------------------------------------
-
-    -- 5. REV4 -- Permiso por defecto del rector (rol 7) y de la
-
-    --    secretaria (rol 9, Auxiliar administrativo) en la sede recien
-
-    --    creada. Antes quedaban sin ningun TSEDE_USUARIO hasta que
-
-    --    alguien se lo asignara a mano -- por eso el listado de
-
-    --    funcionarios necesito un tag sintetico para mostrar su rol (ver
-
-    --    fn_usu_empleados_listar). Se usa fn_fun_permisos_actualizar (la
-
-    --    misma funcion que ya usa el front para sincronizar permisos) en
-
-    --    vez de insertar TSEDE_USUARIO a mano.
-
-    --
-
-    --    fn_fun_permisos_actualizar NO lanza excepcion si el permiso no
-
-    --    se pudo crear (devuelve status='error:...' por fila) -- se
-
-    --    captura el resultado y se relanza como excepcion real para que
-
-    --    un problema acá no quede en silencio.
-
-    -- -----------------------------------------------------------------
-
-    IF p_fk_tfuncionario_rector IS NOT NULL THEN
-
-        SELECT * INTO v_perm_result
-
-          FROM academico_test.fn_fun_permisos_actualizar(
-
-              p_pk_usuario_solicitante,
-
-              p_fk_tfuncionario_rector,
-
-              jsonb_build_array(jsonb_build_object(
-
-                  'accion', 'crear',
-
-                  'orden', 1,
-
-                  'fk_rol', c_fk_trol_rector,
-
-                  'fk_sede', v_pk_sede_creada,
-
-                  'fk_jornada', c_fk_tlv_jornada_defecto,
-
-                  'predeterminado', 1
-
-              ))
-
-          );
-
-        IF v_perm_result.status IS DISTINCT FROM 'creado' THEN
-
-            RAISE EXCEPTION 'No se pudo crear el permiso por defecto del rector (TFUNCIONARIO %) en la sede %: %',
-
-                p_fk_tfuncionario_rector, v_pk_sede_creada, v_perm_result.status;
-
-        END IF;
-
-    END IF;
-
-
-
-    IF p_fk_tfuncionario_secretaria IS NOT NULL THEN
-
-        SELECT * INTO v_perm_result
-
-          FROM academico_test.fn_fun_permisos_actualizar(
-
-              p_pk_usuario_solicitante,
-
-              p_fk_tfuncionario_secretaria,
-
-              jsonb_build_array(jsonb_build_object(
-
-                  'accion', 'crear',
-
-                  'orden', 1,
-
-                  'fk_rol', c_fk_trol_secretaria,
-
-                  'fk_sede', v_pk_sede_creada,
-
-                  'fk_jornada', c_fk_tlv_jornada_defecto,
-
-                  'predeterminado', 1
-
-              ))
-
-          );
-
-        IF v_perm_result.status IS DISTINCT FROM 'creado' THEN
-
-            RAISE EXCEPTION 'No se pudo crear el permiso por defecto de la secretaria (TFUNCIONARIO %) en la sede %: %',
-
-                p_fk_tfuncionario_secretaria, v_pk_sede_creada, v_perm_result.status;
-
-        END IF;
-
-    END IF;
-
-
-
-    -- V70 — refleja al rector/secretaria recien asignado en
-
-    -- public.role_users. Van por FK_TUSUARIO del TFUNCIONARIO, no por
-
-    -- el PK del establecimiento.
-
-    --
-
-    -- V78 -- COMENTADO: fn_sincronizar_rol_publico no existe en la base
-
-    -- local (es parte del grupo legacy de menus/roles ya excluido de esta
-
-    -- iniciativa -- ver docs/etiqueta-cambios-por-funcion.md, seccion de
-
-    -- verificacion contra el servidor, y la memoria "V59 server drift
-
-    -- cleanup pending"). El establecimiento, la sede y los permisos de
-
-    -- TSEDE_USUARIO SI quedan creados correctamente arriba; solo el
-
-    -- espejo a public.role_users queda pendiente hasta que se decida que
-
-    -- hacer con esa funcion (portarla, o resolver el drift de V59).
-
-    -- IF p_fk_tfuncionario_rector IS NOT NULL THEN
-
-    --     PERFORM academico_test.fn_sincronizar_rol_publico(
-
-    --         (SELECT FK_TUSUARIO FROM academico_test.TFUNCIONARIO
-
-    --           WHERE PK_TFUNCIONARIO = p_fk_tfuncionario_rector)
-
-    --     );
-
-    -- END IF;
-
-    -- IF p_fk_tfuncionario_secretaria IS NOT NULL THEN
-
-    --     PERFORM academico_test.fn_sincronizar_rol_publico(
-
-    --         (SELECT FK_TUSUARIO FROM academico_test.TFUNCIONARIO
-
-    --           WHERE PK_TFUNCIONARIO = p_fk_tfuncionario_secretaria)
-
-    --     );
-
-    -- END IF;
-
-
-
     RETURN v_id_creado;
-
 END;
-
-$function$;
+$$;
 
 COMMENT ON FUNCTION academico_test.fn_est_crear(
     BIGINT,
@@ -914,9 +438,9 @@ COMMENT ON FUNCTION academico_test.fn_est_crear(
     BIGINT, BIGINT, BIGINT, BIGINT,
     academico_test.bool_sn, academico_test.bool_sn,
     BIGINT, BIGINT, academico_test.bool_sn,
-    BIGINT, BIGINT, BIGINT,
+    BIGINT, BIGINT, BIGINT, BIGINT,
     BIGINT
-) IS 'Crea un TESTABLECIMIENTO validando obligatorios (NOMBRE, NIT, CODIGO, FK_TMUNICIPIO, FK_TPROPIEDAD_JURIDICA) y unicidad por NIT/CODIGO activos. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento). Version sincronizada desde produccion (172.233.184.248) en V78/V53 -- ya no recibe p_fk_lv_estado_establecimiento (toda alta arranca con el estado "Activo" fijo, constante interna); trae ademas el REV4: crea automaticamente una sede por defecto (delegando en fn_sed_crear) y, si vienen rector/secretaria, sus permisos por defecto (via fn_fun_permisos_actualizar) en esa sede. Las llamadas a fn_sincronizar_rol_publico para reflejar rector/secretaria en public.role_users quedan comentadas -- esa funcion no esta versionada en este repo (grupo legacy de menus/roles, ver memoria "V59 server drift cleanup pending"). Retorna PK_ESTABLECIMIENTO. Auditoria via fn_audit_declarar antes del INSERT.';
+) IS 'Crea un TESTABLECIMIENTO validando obligatorios (NOMBRE, NIT, CODIGO, FK_TMUNICIPIO, FK_TPROPIEDAD_JURIDICA) y unicidad por NIT/CODIGO activos. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento). p_pk_usuario_solicitante va al inicio sin DEFAULT (obligatorio, mismo patron que V52). Retorna PK_ESTABLECIMIENTO. La columna LOGO del DDL NO se escribe desde esta funcion (no hay modulo de archivos todavia); se pobla posteriormente via UPDATE directo. Auditoria: CREATED_BY=p_pk_usuario_solicitante::VARCHAR, CREATED_AT=now. MODIFIED_BY y MODIFIED_AT quedan NULL (se llenan en la primera edicion via fn_est_actualizar).';
 
 
 -- ---------------------------------------------------------------------------
@@ -1453,23 +977,31 @@ COMMENT ON FUNCTION academico_test.fn_est_listar_paginado(
 --                        si una sede no existe, ya estaba inactiva o el
 --                        usuario perdio permisos a mitad del cascade.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_est_soft_delete(p_pk_usuario_solicitante bigint, p_pk_establecimiento bigint)
- RETURNS bigint
- LANGUAGE plpgsql
-AS $function$
+CREATE OR REPLACE FUNCTION academico_test.fn_est_soft_delete(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_establecimiento      BIGINT
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
 DECLARE
     v_estado_actual BOOLEAN;
     v_sedes         BIGINT := 0;
     v_pk_sede       BIGINT;
-    v_nombre        VARCHAR(130);
 BEGIN
+    -- -----------------------------------------------------------------
+    -- 0. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
+    -- -----------------------------------------------------------------
     IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
 
-    SELECT ACTIVE, NOMBRE
-      INTO v_estado_actual, v_nombre
+    -- -----------------------------------------------------------------
+    -- 1. Validaciones previas
+    -- -----------------------------------------------------------------
+    SELECT ACTIVE
+      INTO v_estado_actual
       FROM academico_test.TESTABLECIMIENTO
      WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
 
@@ -1484,17 +1016,25 @@ BEGIN
                   HINT    = 'Use fn_est_buscar_por_nit(..., p_incluir_inactivos=TRUE) para localizar registros dados de baja';
     END IF;
 
-    PERFORM academico_test.fn_audit_declarar(
-        p_pk_usuario_solicitante, format('Eliminación del establecimiento %s', COALESCE(v_nombre, p_pk_establecimiento::TEXT)));
-
+    -- -----------------------------------------------------------------
+    -- 2. Soft delete del establecimiento.
+    --    MODIFIED_BY/MODIFIED_AT se actualizan para reflejar la baja.
+    -- -----------------------------------------------------------------
     UPDATE academico_test.TESTABLECIMIENTO
        SET ACTIVE       = FALSE,
            MODIFIED_BY  = p_pk_usuario_solicitante::VARCHAR,
            MODIFIED_AT  = CURRENT_TIMESTAMP
      WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
 
-    -- Cascade a las sedes del EE (cada una declara su propia etiqueta al
-    -- ejecutarse — ver V73 fn_sed_soft_delete).
+    -- -----------------------------------------------------------------
+    -- 3. Cascade a las sedes del EE.
+    --    Recorremos SOLO las sedes que estuvieran activas al momento del
+    --    borrado, para evitar re-bajar inactivas (que seria no-op y
+    --    ademas pisaria MODIFIED_AT previo). Por cada una, delegamos en
+    --    fn_sed_soft_delete (V52), que se encarga de TSEDE, TSEDE_USUARIO
+    --    y TSEDE_NIVEL. Usamos PERFORM (no SELECT) porque solo nos
+    --    interesa el efecto; el PK devuelto se ignora.
+    -- -----------------------------------------------------------------
     FOR v_pk_sede IN
         SELECT PK_TSEDE
           FROM academico_test.TSEDE
@@ -1506,12 +1046,15 @@ BEGIN
         v_sedes := v_sedes + 1;
     END LOOP;
 
+    -- -----------------------------------------------------------------
+    -- 4. Log de auditoria (RAISE NOTICE; no falla la operacion).
+    -- -----------------------------------------------------------------
     RAISE NOTICE 'Soft delete TESTABLECIMIENTO=% (autor: %): sedes dadas de baja via V52=%',
         p_pk_establecimiento, p_pk_usuario_solicitante, v_sedes;
 
     RETURN p_pk_establecimiento;
 END;
-$function$;
+$$;
 
 COMMENT ON FUNCTION academico_test.fn_est_soft_delete(BIGINT, BIGINT)
     IS 'Baja logica en cascada: marca ACTIVE=FALSE en TESTABLECIMIENTO y delega en academico_test.fn_sed_soft_delete (V52) para cada sede activa del EE. fn_sed_soft_delete se encarga a su vez de TSEDE, TSEDE_USUARIO y TSEDE_NIVEL (cuyo detalle vive en V52). Todo en una sola transaccion: si la delegation falla para cualquier sede, todo el borrado se revierte. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento, definida en V50). p_pk_usuario_solicitante va primero en la firma (obligatorio, mismo patron que V52). Retorna PK_ESTABLECIMIENTO dado de baja.';
@@ -1568,14 +1111,20 @@ COMMENT ON FUNCTION academico_test.fn_est_soft_delete(BIGINT, BIGINT)
 --     SQLSTATE 'P0002'/'22023'/'42501' propagados desde fn_sed_soft_delete
 --                        si una sede de la cascade falla.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_est_soft_delete_bulk(p_pk_usuario_solicitante bigint, p_pks bigint[])
- RETURNS bigint
- LANGUAGE plpgsql
-AS $function$
+CREATE OR REPLACE FUNCTION academico_test.fn_est_soft_delete_bulk(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pks                     BIGINT[]
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
 DECLARE
     v_pk         BIGINT;
     v_procesados BIGINT := 0;
 BEGIN
+    -- -----------------------------------------------------------------
+    -- 0. Validacion de parametros de entrada.
+    -- -----------------------------------------------------------------
     IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
         RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
             USING ERRCODE = '22023';
@@ -1586,6 +1135,9 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
+    -- Duplicados: si el caller envia el mismo PK dos veces, el primer
+    -- PERFORM lo da de baja y el segundo cae con 'ya inactivo' (22023
+    -- propagado), oscureciendo el problema real. Lo detectamos arriba.
     IF (SELECT COUNT(*) FROM (SELECT unnest(p_pks)) AS x) <> CARDINALITY(p_pks) THEN
         RAISE EXCEPTION 'p_pks contiene PKs duplicados'
             USING ERRCODE = '22023',
@@ -1597,14 +1149,21 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
+    -- -----------------------------------------------------------------
+    -- 1. Gate de super-admin (mismo patron que fn_est_soft_delete).
+    --    Se valida UNA sola vez al inicio: si no pasa, no tocamos nada.
+    -- -----------------------------------------------------------------
     IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
 
-    PERFORM academico_test.fn_audit_declarar(
-        p_pk_usuario_solicitante, format('Eliminación masiva de %s establecimientos', CARDINALITY(p_pks)));
-
+    -- -----------------------------------------------------------------
+    -- 2. Bulk soft delete delegando en el single.
+    --    Cualquier excepcion (P0002, 22023, 42501 desde la cascade de
+    --    sedes) aborta la transaccion y deshace TODAS las bajas ya
+    --    aplicadas.
+    -- -----------------------------------------------------------------
     FOREACH v_pk IN ARRAY p_pks
     LOOP
         PERFORM academico_test.fn_est_soft_delete(p_pk_usuario_solicitante, v_pk);
@@ -1616,7 +1175,7 @@ BEGIN
 
     RETURN v_procesados;
 END;
-$function$;
+$$;
 
 COMMENT ON FUNCTION academico_test.fn_est_soft_delete_bulk(BIGINT, BIGINT[])
     IS 'Variante bulk de fn_est_soft_delete. Recibe un BIGINT[] de PK_ESTABLECIMIENTO y aplica soft delete (con cascade a sedes -> usuarios de sede / niveles via fn_sed_soft_delete) en una sola transaccion. Semantica ATOMICA: si cualquier PK falla (no existe / ya inactivo / el usuario no pasa el gate de super-admin), la operacion se revierte entera via RAISE EXCEPTION; ningun EE queda parcialmente procesado. Validaciones previas (22023): p_pk_usuario_solicitante > 0, p_pks no nulo ni vacio, sin duplicados, todos los elementos > 0. Gate de super-admin validado una sola vez al inicio (42501). Retorna el conteo de EE efectivamente dados de baja (= cardinalidad de p_pks en caso exitoso). p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que el resto de funciones del esquema).';
@@ -1662,15 +1221,60 @@ COMMENT ON FUNCTION academico_test.fn_est_soft_delete_bulk(BIGINT, BIGINT[])
 --                        obligatorio llego vacio.
 --     SQLSTATE '23503' — Alguna FK nueva no existe.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_est_actualizar(p_pk_usuario_solicitante bigint, p_pk_establecimiento bigint, p_nombre character varying DEFAULT NULL::character varying, p_nit character varying DEFAULT NULL::character varying, p_fk_municipio bigint DEFAULT NULL::bigint, p_fk_propiedad_juridica bigint DEFAULT NULL::bigint, p_codigo character varying DEFAULT NULL::character varying, p_localidad character varying DEFAULT NULL::character varying, p_comuna character varying DEFAULT NULL::character varying, p_barrio character varying DEFAULT NULL::character varying, p_direccion character varying DEFAULT NULL::character varying, p_correo_electronico character varying DEFAULT NULL::character varying, p_telefono character varying DEFAULT NULL::character varying, p_fax character varying DEFAULT NULL::character varying, p_idecol character varying DEFAULT NULL::character varying, p_pagina_web character varying DEFAULT NULL::character varying, p_fk_lista_valor_zona bigint DEFAULT NULL::bigint, p_resolucion_aprobacion character varying DEFAULT NULL::character varying, p_licencia_funcionamiento character varying DEFAULT NULL::character varying, p_fecha_licencia date DEFAULT NULL::date, p_fk_lv_calendario bigint DEFAULT NULL::bigint, p_fk_lv_idioma bigint DEFAULT NULL::bigint, p_fk_lv_genero_est bigint DEFAULT NULL::bigint, p_fk_discapacidad bigint DEFAULT NULL::bigint, p_talento academico_test.bool_sn DEFAULT NULL::character varying, p_etnias academico_test.bool_sn DEFAULT NULL::character varying, p_fk_tfuncionario_rector bigint DEFAULT NULL::bigint, p_fk_tfuncionario_secretaria bigint DEFAULT NULL::bigint, p_subsidio academico_test.bool_sn DEFAULT NULL::character varying, p_fk_lv_regimen_catcosto bigint DEFAULT NULL::bigint, p_fk_lv_rango_tarifa bigint DEFAULT NULL::bigint, p_fk_lv_asociacion_nacional bigint DEFAULT NULL::bigint, p_fk_lv_estado_establecimiento bigint DEFAULT NULL::bigint, p_fk_archivo bigint DEFAULT NULL::bigint)
- RETURNS bigint
- LANGUAGE plpgsql
-AS $function$
+CREATE OR REPLACE FUNCTION academico_test.fn_est_actualizar(
+    -- Auditoria / autorizacion: PK_TUSUARIO del usuario que actualiza.
+    -- Siempre el primer parametro (mismo patron que V52): evita el 42P13
+    -- "args con default deben ir al final" y estandariza el orden.
+    p_pk_usuario_solicitante  BIGINT,
+    -- PK del EE a actualizar. Obligatorio. Se coloca inmediatamente
+    -- despues de p_pk_usuario_solicitante (mismo patron que V52) y el
+    -- resto de parametros mantiene el orden de fn_est_crear, con todos
+    -- los campos en DEFAULT NULL (NULL = no cambia; si se envian, se
+    -- validan contra el resto de EE activos para evitar colision y
+    -- pueden reutilizar valores de EE inactivos).
+    p_pk_establecimiento      BIGINT,
+    p_nombre                  VARCHAR(130)    DEFAULT NULL,
+    p_nit                     VARCHAR(30)     DEFAULT NULL,
+    p_fk_municipio            BIGINT          DEFAULT NULL,
+    p_fk_propiedad_juridica   BIGINT          DEFAULT NULL,
+    p_codigo                  VARCHAR(30)     DEFAULT NULL,
+    -- Datos de ubicacion (nullable: NULL = no cambia)
+    p_localidad               VARCHAR(130)    DEFAULT NULL,
+    p_comuna                  VARCHAR(130)    DEFAULT NULL,
+    p_barrio                  VARCHAR(130)    DEFAULT NULL,
+    p_direccion               VARCHAR(130)    DEFAULT NULL,
+    p_correo_electronico      VARCHAR(130)    DEFAULT NULL,
+    p_telefono                VARCHAR(130)    DEFAULT NULL,
+    p_fax                     VARCHAR(130)    DEFAULT NULL,
+    p_idecol                  VARCHAR(7)      DEFAULT NULL,
+    p_pagina_web              VARCHAR(130)    DEFAULT NULL,
+    p_fk_lista_valor_zona     BIGINT          DEFAULT NULL,
+    -- Datos administrativos / licencias
+    p_resolucion_aprobacion   VARCHAR(130)    DEFAULT NULL,
+    p_licencia_funcionamiento VARCHAR(130)    DEFAULT NULL,
+    p_fecha_licencia          DATE            DEFAULT NULL,
+    p_fk_lv_calendario        BIGINT          DEFAULT NULL,
+    p_fk_lv_idioma            BIGINT          DEFAULT NULL,
+    p_fk_lv_genero_est        BIGINT          DEFAULT NULL,
+    p_fk_discapacidad         BIGINT          DEFAULT NULL,
+    p_talento                 academico_test.bool_sn         DEFAULT NULL,
+    p_etnias                  academico_test.bool_sn         DEFAULT NULL,
+    p_FK_TFUNCIONARIO_RECTOR   BIGINT          DEFAULT NULL,
+    p_FK_TFUNCIONARIO_SECRETARIA BIGINT        DEFAULT NULL,
+    p_subsidio                academico_test.bool_sn         DEFAULT NULL,
+    p_fk_lv_regimen_catcosto  BIGINT          DEFAULT NULL,
+    p_fk_lv_rango_tarifa      BIGINT          DEFAULT NULL,
+    p_fk_lv_asociacion_nacional BIGINT        DEFAULT NULL,
+    p_fk_lv_estado_establecimiento BIGINT     DEFAULT NULL,
+    p_fk_archivo              BIGINT          DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
 DECLARE
     v_estado_actual  BOOLEAN;
     v_fk_rector     BIGINT;
     v_es_rector     BOOLEAN := FALSE;
-    v_nombre_actual VARCHAR(150);
 BEGIN
     -- -----------------------------------------------------------------
     -- 0. Validacion de parametros clave (obligatorios por firma).
@@ -1719,8 +1323,8 @@ BEGIN
     -- -----------------------------------------------------------------
     -- 1. Validaciones de existencia y estado (activo).
     -- -----------------------------------------------------------------
-    SELECT ACTIVE, NOMBRE
-      INTO v_estado_actual, v_nombre_actual
+    SELECT ACTIVE
+      INTO v_estado_actual
       FROM academico_test.TESTABLECIMIENTO
      WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
 
@@ -1987,10 +1591,6 @@ BEGIN
     --        SOLO si al menos una columna efectiva cambio.
     --      * PATCH vacio o PATCH con mismos valores no toca auditoria.
     -- -----------------------------------------------------------------
-    PERFORM academico_test.fn_audit_declarar(
-        p_pk_usuario_solicitante, format('Actualización del establecimiento %s', COALESCE(p_nombre, v_nombre_actual)),
-        p_pk_establecimiento);
-
     WITH current_row AS (
         SELECT CODIGO, NIT, NOMBRE,
                FK_TMUNICIPIO, FK_TLISTA_VALOR_ZONA,
@@ -2117,7 +1717,7 @@ BEGIN
 
     RETURN p_pk_establecimiento;
 END;
-$function$;
+$$;
 
 COMMENT ON FUNCTION academico_test.fn_est_actualizar(
     BIGINT, BIGINT,

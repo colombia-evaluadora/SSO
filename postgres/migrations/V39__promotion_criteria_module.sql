@@ -10,15 +10,28 @@ SET search_path TO academico_test, public;
 
 -- Crear/actualizar el criterio (upsert por periodo-default o por grado).
 -- Si p_fk_grado es NULL -> default del periodo; si no -> override del grado.
-CREATE OR REPLACE FUNCTION academico_test.fn_criterio_prom_guardar(p_fk_periodo bigint, p_fk_grado bigint DEFAULT NULL::bigint, p_nodo_curricular academico_test.nodo_curricular DEFAULT NULL::character varying, p_cantidad_nivelar numeric DEFAULT NULL::numeric, p_asignatura_obligatoria academico_test.bool_sn DEFAULT NULL::character varying, p_aprobacion_promedio academico_test.bool_sn DEFAULT NULL::character varying, p_desempenho_min_general numeric DEFAULT NULL::numeric, p_desempenho_minimo numeric DEFAULT NULL::numeric, p_max_asig_promedio numeric DEFAULT NULL::numeric, p_minimo_inasistencias numeric DEFAULT NULL::numeric, p_max_asig_nivelar_prom numeric DEFAULT NULL::numeric, p_obligatorias bigint[] DEFAULT NULL::bigint[], p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
- RETURNS bigint
- LANGUAGE plpgsql
-AS $function$
+CREATE OR REPLACE FUNCTION academico_test.fn_criterio_prom_guardar(
+    p_fk_periodo              BIGINT,
+    p_fk_grado               BIGINT      DEFAULT NULL,
+    p_nodo_curricular        nodo_curricular DEFAULT NULL,
+    p_cantidad_nivelar       NUMERIC     DEFAULT NULL,
+    p_asignatura_obligatoria bool_sn     DEFAULT NULL,
+    p_aprobacion_promedio    bool_sn     DEFAULT NULL,
+    p_desempenho_min_general NUMERIC     DEFAULT NULL,
+    p_desempenho_minimo      NUMERIC     DEFAULT NULL,
+    p_max_asig_promedio      NUMERIC     DEFAULT NULL,
+    p_minimo_inasistencias   NUMERIC     DEFAULT NULL,
+    p_max_asig_nivelar_prom  NUMERIC     DEFAULT NULL,
+    -- Areas/asignaturas obligatorias (XOR por elemento). NULL = no tocar;
+    -- [] = limpiar; [{asignaturaId?},{areaId?},...] = reescribir el set.
+    p_obligatorias           jsonb       DEFAULT NULL,
+    p_pk_usuario_solicitante BIGINT      DEFAULT NULL
+)
+RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
     v_id BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     d academico_test.TCRITERIO_PROMOCION;
-    v_pk BIGINT; v_asig BIGINT; v_area BIGINT;
-    v_establecimiento_id BIGINT; v_nombre_grado VARCHAR(130);
+    it jsonb; v_asig BIGINT; v_area BIGINT;
 BEGIN
     -- Alcance por rol (como V37): gate grueso + gate fino por establecimiento.
     IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
@@ -28,11 +41,11 @@ BEGIN
     IF p_fk_periodo IS NULL THEN
         RAISE EXCEPTION 'El periodo academico es obligatorio' USING ERRCODE = '22023';
     END IF;
-    SELECT s.FK_TESTABLECIMIENTO INTO v_establecimiento_id
-      FROM academico_test.TPERIODO_ACADEMICO pa
-      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-     WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo;
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_establecimiento_id) THEN
+    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, (
+             SELECT s.FK_TESTABLECIMIENTO
+               FROM academico_test.TPERIODO_ACADEMICO pa
+               JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+              WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo)) THEN
         RAISE EXCEPTION 'El usuario no puede gestionar criterios de promocion de este establecimiento'
             USING ERRCODE = '42501';
     END IF;
@@ -42,16 +55,6 @@ BEGIN
         RAISE EXCEPTION 'Los valores numericos del criterio de promocion no pueden ser negativos'
             USING ERRCODE = '22023';
     END IF;
-
-    IF p_fk_grado IS NOT NULL THEN
-        SELECT NOMBRE INTO v_nombre_grado FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_grado;
-    END IF;
-
-    PERFORM academico_test.fn_audit_declarar(
-        p_pk_usuario_solicitante,
-        format('Configuración del criterio de promoción%s',
-            CASE WHEN p_fk_grado IS NULL THEN ' general del periodo' ELSE format(' del grado %s', v_nombre_grado) END),
-        v_establecimiento_id);
 
     -- Buscar la fila existente (default del periodo o override del grado).
     IF p_fk_grado IS NULL THEN
@@ -104,42 +107,51 @@ BEGIN
          WHERE PK_TCRITERIO_PROMOCION = v_id;
     END IF;
 
-    -- Areas/asignaturas obligatorias. Reescribe el set del criterio.
-    -- p_nodo_curricular decide si los ids de p_obligatorias son de
-    -- TASIGNATURA ('AS') o de TAREA ('AR') -- el lote es de un solo tipo,
-    -- nunca mixto (asi lo arma el front, ver resolve-required-subjects.ts).
+    -- Areas/asignaturas obligatorias (XOR). Reescribe el set del criterio.
     IF p_obligatorias IS NOT NULL THEN
+        -- Solapamiento: no se puede incluir un area obligatoria y a la vez una
+        -- asignatura que pertenece a esa misma area (la cobertura del area ya la
+        -- abarca). Se valida sobre todo el set antes de tocar nada.
+        IF EXISTS (
+            SELECT 1
+              FROM jsonb_array_elements(p_obligatorias) e
+              JOIN academico_test.TASIGNATURA s
+                ON s.PK_TASIGNATURA = NULLIF(e->>'asignaturaId','')::BIGINT
+             WHERE s.FK_TAREA IN (
+                     SELECT NULLIF(e2->>'areaId','')::BIGINT
+                       FROM jsonb_array_elements(p_obligatorias) e2
+                      WHERE NULLIF(e2->>'areaId','') IS NOT NULL)
+        ) THEN
+            RAISE EXCEPTION 'No se puede incluir un area obligatoria junto con una asignatura de esa misma area'
+                USING ERRCODE = '23505';
+        END IF;
+
         UPDATE academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
            SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
          WHERE FK_TCRITERIO_PROMOCION = v_id AND ACTIVE = TRUE;
 
-        FOREACH v_pk IN ARRAY p_obligatorias
+        FOR it IN SELECT * FROM jsonb_array_elements(p_obligatorias)
         LOOP
-            v_asig := NULL; v_area := NULL;
-            IF p_nodo_curricular = 'AS' THEN
-                v_asig := v_pk;
-                IF NOT EXISTS (
-                    SELECT 1 FROM academico_test.TASIGNATURA s
-                      JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
-                     WHERE s.PK_TASIGNATURA = v_asig AND s.ACTIVE = TRUE
-                       AND a.FK_TPERIODO_ACADEMICO = p_fk_periodo
-                ) THEN
-                    RAISE EXCEPTION 'La asignatura % no existe, esta inactiva o no pertenece al periodo', v_asig
-                        USING ERRCODE = '23503';
-                END IF;
-            ELSIF p_nodo_curricular = 'AR' THEN
-                v_area := v_pk;
-                IF NOT EXISTS (
-                    SELECT 1 FROM academico_test.TAREA
-                     WHERE PK_TAREA = v_area AND ACTIVE = TRUE
-                       AND FK_TPERIODO_ACADEMICO = p_fk_periodo
-                ) THEN
-                    RAISE EXCEPTION 'El area % no existe, esta inactiva o no pertenece al periodo', v_area
-                        USING ERRCODE = '23503';
-                END IF;
-            ELSE
-                RAISE EXCEPTION 'nodo_curricular debe ser AS o AR para guardar obligatorias'
+            v_asig := NULLIF(it->>'asignaturaId','')::BIGINT;
+            v_area := NULLIF(it->>'areaId','')::BIGINT;
+            IF (v_asig IS NULL) = (v_area IS NULL) THEN
+                RAISE EXCEPTION 'Cada obligatoria debe indicar exactamente una asignatura o una area'
                     USING ERRCODE = '22023';
+            END IF;
+            IF v_asig IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM academico_test.TASIGNATURA s
+                  JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
+                 WHERE s.PK_TASIGNATURA = v_asig AND s.ACTIVE = TRUE
+                   AND a.FK_TPERIODO_ACADEMICO = p_fk_periodo
+            ) THEN
+                RAISE EXCEPTION 'La asignatura % no existe, esta inactiva o no pertenece al periodo', v_asig USING ERRCODE = '23503';
+            END IF;
+            IF v_area IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM academico_test.TAREA
+                 WHERE PK_TAREA = v_area AND ACTIVE = TRUE
+                   AND FK_TPERIODO_ACADEMICO = p_fk_periodo
+            ) THEN
+                RAISE EXCEPTION 'El area % no existe, esta inactiva o no pertenece al periodo', v_area USING ERRCODE = '23503';
             END IF;
             -- Sin duplicados dentro del set.
             IF EXISTS (
@@ -158,7 +170,7 @@ BEGIN
 
     RETURN v_id;
 END;
-$function$;
+$$;
 
 -- Lectura: criterio por periodo (default) o por grado (override).
 -- DROP porque cambia el RETURNS TABLE (se agrego mandatory_subjects).
