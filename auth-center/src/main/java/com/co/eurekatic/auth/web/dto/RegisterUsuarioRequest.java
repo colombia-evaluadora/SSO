@@ -12,9 +12,20 @@ public record RegisterUsuarioRequest(
     @NotBlank @Size(max = 30) String identificacion,
     @NotBlank @Size(max = 40) String primerNombre,
     @NotBlank @Size(max = 40) String primerApellido,
+    // fechaNacimiento: sin @NotNull a propósito -- es uno de los dos
+    // campos que el negocio pidió dejar opcional (columna nullable de
+    // verdad en TUSUARIO, fn_usu_crear no la exige a nivel de fila).
     @Past LocalDate fechaNacimiento,
-    @Positive Long fkTlvTipoDocumento,
-    @Positive Long fkTlvGenero,
+    // fkTlvTipoDocumento: @NotNull vuelto a agregar -- es uno de los 4
+    // mínimos fijos (tipo/número de documento, nombre, apellido), nunca
+    // debió quedar opcional; se había perdido junto con el @NotNull de
+    // fkTlvGenero al relajar fechaNacimiento/fkTlvGenero.
+    @NotNull @Positive Long fkTlvTipoDocumento,
+    // fkTlvGenero: @NotNull restaurado -- el negocio volvió a pedir que
+    // género sea obligatorio al crear (a diferencia de fechaNacimiento,
+    // que sí se queda opcional). fn_usu_crear (SQL) nunca dejó de
+    // exigirlo tampoco, así que esto solo estaba desalineado acá.
+    @NotNull @Positive Long fkTlvGenero,
     @Size(max = 40) String segundoNombre,
     @Size(max = 40) String segundoApellido,
     @Size(max = 30) String telefono,
