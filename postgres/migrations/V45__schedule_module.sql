@@ -9,31 +9,31 @@
 
 SET search_path TO academico_test, public;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_horario_guardar(
-    p_fk_grado  BIGINT,
-    p_entries   jsonb,
-    p_pk_usuario_solicitante BIGINT
-)
-RETURNS INT LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION academico_test.fn_horario_guardar(p_fk_grado bigint, p_entries jsonb, p_pk_usuario_solicitante bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_max_bloques BIGINT; v_count INT := 0;
     v_bloque INT; v_grupo BIGINT; v_asig BIGINT; v_dia BIGINT; v_planitem BIGINT;
     entry jsonb;
+    v_establecimiento_id BIGINT; v_grado_nombre VARCHAR(130);
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado));
-
-    SELECT pa.BLOQUES_POR_DEFECTO INTO v_max_bloques
+    SELECT pa.BLOQUES_POR_DEFECTO, academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO), g.NOMBRE
+      INTO v_max_bloques, v_establecimiento_id, v_grado_nombre
       FROM academico_test.TGRADO g JOIN academico_test.TPERIODO_ACADEMICO pa
         ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
      WHERE g.PK_TGRADO = p_fk_grado AND g.ACTIVE = TRUE;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     IF v_max_bloques IS NULL THEN
         RAISE EXCEPTION 'El grado % no existe o esta inactivo', p_fk_grado USING ERRCODE = '23503';
     END IF;
 
     PERFORM pg_advisory_xact_lock(hashtext('horario:' || p_fk_grado::text));
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, format('Configuración del horario del grado %s', v_grado_nombre), v_establecimiento_id);
 
     UPDATE academico_test.THORARIO h
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
@@ -93,7 +93,7 @@ BEGIN
 
     RETURN v_count;
 END;
-$$;
+$function$;
 
 DROP FUNCTION IF EXISTS academico_test.fn_horario_listar(BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_horario_listar(BIGINT, BIGINT, BIGINT);

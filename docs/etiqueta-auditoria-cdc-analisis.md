@@ -379,6 +379,8 @@ Pipeline completo funcionando de punta a punta: Postgres → `trg_audit_ctx` →
 
 ## 12. Adopción completa de `fn_audit_declarar` — 49 funciones, `V68`-`V76`
 
+> **Nota**: las migraciones `V67`–`V79` mencionadas en esta sección y en la §13 **ya no existen como archivos separados** — se fusionaron en las migraciones que originalmente definen cada función (`V37`–`V59`), para no tener que redefinir la función completa dos veces. El detalle función por función y la tabla de "dónde vive cada cambio hoy" están en [`etiqueta-cambios-por-funcion.md`](etiqueta-cambios-por-funcion.md); esta sección se deja tal cual como registro histórico de cómo se hizo originalmente.
+
 Con el pipeline validado end-to-end (§11) y el helper probado en `fn_grado_*` (§6.2, `V67`), se extendió `fn_audit_declarar` a **todas** las funciones `fn_*` de escritura restantes de `academico_test` en el Postgres local (rama basada en `origin/dev`), cerrando el ítem 3 del plan del §7.
 
 ### 12.1 Migraciones agregadas

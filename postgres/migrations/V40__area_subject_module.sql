@@ -44,19 +44,15 @@ $$;
 
 -- ----- AREA (TAREA) --------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_area_crear(BIGINT, BIGINT, VARCHAR, VARCHAR, VARCHAR, NUMERIC, BIGINT);
-CREATE OR REPLACE FUNCTION academico_test.fn_area_crear(
-    p_fk_periodo          BIGINT,
-    p_fk_area_asignatura  BIGINT,
-    p_nombre_interno      VARCHAR(130),
-    p_abreviacion         VARCHAR(30),   -- va a CODIGO (el front lo manda como "abreviacion")
-    p_orden_reportes      NUMERIC     DEFAULT 0,
-    p_pk_usuario_solicitante BIGINT   DEFAULT NULL
-)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_id BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+CREATE OR REPLACE FUNCTION academico_test.fn_area_crear(p_fk_periodo bigint, p_fk_area_asignatura bigint, p_nombre_interno character varying, p_abreviacion character varying, p_orden_reportes numeric DEFAULT 0, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_id BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT := academico_test.fn_periodo_establecimiento(p_fk_periodo);
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(
-        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_fk_periodo));
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     IF p_fk_periodo IS NULL OR p_fk_area_asignatura IS NULL
        OR NULLIF(TRIM(p_nombre_interno),'') IS NULL OR NULLIF(TRIM(p_abreviacion),'') IS NULL THEN
         RAISE EXCEPTION 'Faltan campos obligatorios del area' USING ERRCODE = '22023';
@@ -83,6 +79,10 @@ BEGIN
         RAISE EXCEPTION 'Ya existe un area con el codigo % en este periodo academico',
             p_abreviacion USING ERRCODE = '23505';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, format('Creación del área %s', p_nombre_interno), v_establecimiento_id);
+
     INSERT INTO academico_test.TAREA
         (CODIGO, NOMBRE, FK_TPERIODO_ACADEMICO, FK_TAREA_ASIGNATURA, ORDEN_REPORTE, CREATED_BY)
     VALUES (p_abreviacion, p_nombre_interno, p_fk_periodo,
@@ -90,25 +90,22 @@ BEGIN
     RETURNING PK_TAREA INTO v_id;
     RETURN v_id;
 END;
-$$;
+$function$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_area_actualizar(
-    p_pk                  BIGINT,
-    p_fk_area_asignatura  BIGINT DEFAULT NULL,
-    p_nombre_interno      VARCHAR(130) DEFAULT NULL,
-    p_abreviacion         VARCHAR(30) DEFAULT NULL,
-    p_orden_reportes      NUMERIC DEFAULT NULL,
-    p_pk_usuario_solicitante BIGINT DEFAULT NULL
-)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION academico_test.fn_area_actualizar(p_pk bigint, p_fk_area_asignatura bigint DEFAULT NULL::bigint, p_nombre_interno character varying DEFAULT NULL::character varying, p_abreviacion character varying DEFAULT NULL::character varying, p_orden_reportes numeric DEFAULT NULL::numeric, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
     r academico_test.TAREA;
     v_nombre VARCHAR(130); v_abrev VARCHAR(30);
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT;
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TAREA a WHERE a.PK_TAREA = p_pk));
+    SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
+      INTO v_establecimiento_id
+      FROM academico_test.TAREA a WHERE a.PK_TAREA = p_pk;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     SELECT * INTO r FROM academico_test.TAREA WHERE PK_TAREA = p_pk AND ACTIVE = TRUE;
     IF NOT FOUND THEN RAISE EXCEPTION 'No existe un area activa con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
     IF p_nombre_interno IS NOT NULL AND NULLIF(TRIM(p_nombre_interno),'') IS NULL THEN
@@ -141,6 +138,10 @@ BEGIN
         RAISE EXCEPTION 'Ya existe un area con el codigo % en este periodo academico', v_abrev
             USING ERRCODE = '23505';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, format('Actualización del área %s', v_nombre), v_establecimiento_id);
+
     UPDATE academico_test.TAREA SET
         FK_TAREA_ASIGNATURA = COALESCE(p_fk_area_asignatura, FK_TAREA_ASIGNATURA),
         NOMBRE = v_nombre,
@@ -150,28 +151,38 @@ BEGIN
      WHERE PK_TAREA = p_pk;
     RETURN p_pk;
 END;
-$$;
+$function$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_area_soft_delete(p_pk BIGINT, p_pk_usuario_solicitante BIGINT)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+CREATE OR REPLACE FUNCTION academico_test.fn_area_soft_delete(p_pk bigint, p_pk_usuario_solicitante bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT; v_nombre VARCHAR(130);
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TAREA a WHERE a.PK_TAREA = p_pk));
+    SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO), a.NOMBRE
+      INTO v_establecimiento_id, v_nombre
+      FROM academico_test.TAREA a WHERE a.PK_TAREA = p_pk;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     -- No se puede eliminar un area con asignaturas activas.
     IF EXISTS (
         SELECT 1 FROM academico_test.TASIGNATURA WHERE FK_TAREA = p_pk AND ACTIVE = TRUE
     ) THEN
         RAISE EXCEPTION 'No se puede eliminar el area %: tiene asignaturas asociadas', p_pk USING ERRCODE = '23503';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, format('Eliminación del área %s', COALESCE(v_nombre, p_pk::TEXT)),
+        v_establecimiento_id);
+
     UPDATE academico_test.TAREA SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TAREA = p_pk AND ACTIVE = TRUE;
     GET DIAGNOSTICS v_n = ROW_COUNT;
     IF v_n = 0 THEN RAISE EXCEPTION 'No existe un area activa con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
     RETURN p_pk;
 END;
-$$;
+$function$;
 
 DROP FUNCTION IF EXISTS academico_test.fn_area_listar(BIGINT, TEXT, INT, INT);
 DROP FUNCTION IF EXISTS academico_test.fn_area_listar(BIGINT, TEXT, INT, INT, BIGINT);
@@ -279,17 +290,10 @@ END;
 $$;
 
 -- ----- ASIGNATURA (TASIGNATURA) — "abreviacion" del front = CODIGO ----------
-CREATE OR REPLACE FUNCTION academico_test.fn_subject_crear(
-    p_fk_area             BIGINT,
-    p_fk_area_asignatura  BIGINT,
-    p_nombre_interno      VARCHAR(130),
-    p_abreviacion         VARCHAR(30),               -- va a CODIGO
-    p_fk_enfasis          BIGINT      DEFAULT 2,
-    p_color               VARCHAR(10) DEFAULT NULL,
-    p_orden_reportes      NUMERIC     DEFAULT 0,
-    p_pk_usuario_solicitante BIGINT   DEFAULT NULL
-)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION academico_test.fn_subject_crear(p_fk_area bigint, p_fk_area_asignatura bigint, p_nombre_interno character varying, p_abreviacion character varying, p_fk_enfasis bigint DEFAULT 2, p_color character varying DEFAULT NULL::character varying, p_orden_reportes numeric DEFAULT 0, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
 DECLARE v_id BIGINT; v_est BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
     PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
@@ -337,6 +341,10 @@ BEGIN
         RAISE EXCEPTION 'Ya existe una asignatura con la abreviacion % en esta area', p_abreviacion
             USING ERRCODE = '23505';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, format('Creación de la asignatura %s', p_nombre_interno), v_est);
+
     INSERT INTO academico_test.TASIGNATURA
         (CODIGO, NOMBRE, FK_TAREA, FK_TAREA_ASIGNATURA, FK_TENFASIS, COLOR, ORDEN_REPORTE, CREATED_BY)
     VALUES (p_abreviacion, p_nombre_interno, p_fk_area, p_fk_area_asignatura, p_fk_enfasis,
@@ -344,28 +352,23 @@ BEGIN
     RETURNING PK_TASIGNATURA INTO v_id;
     RETURN v_id;
 END;
-$$;
+$function$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_subject_actualizar(
-    p_pk                  BIGINT,
-    p_fk_area_asignatura  BIGINT      DEFAULT NULL,
-    p_nombre_interno      VARCHAR(130) DEFAULT NULL,
-    p_abreviacion         VARCHAR(30) DEFAULT NULL,
-    p_fk_enfasis          BIGINT      DEFAULT NULL,
-    p_color               VARCHAR(10) DEFAULT NULL,
-    p_orden_reportes      NUMERIC     DEFAULT NULL,
-    p_pk_usuario_solicitante BIGINT   DEFAULT NULL
-)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION academico_test.fn_subject_actualizar(p_pk bigint, p_fk_area_asignatura bigint DEFAULT NULL::bigint, p_nombre_interno character varying DEFAULT NULL::character varying, p_abreviacion character varying DEFAULT NULL::character varying, p_fk_enfasis bigint DEFAULT NULL::bigint, p_color character varying DEFAULT NULL::character varying, p_orden_reportes numeric DEFAULT NULL::numeric, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
     r academico_test.TASIGNATURA;
     v_nombre VARCHAR(130); v_codigo VARCHAR(30); v_enfasis BIGINT; v_est BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT;
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TASIGNATURA s JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
-         WHERE s.PK_TASIGNATURA = p_pk));
+    SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
+      INTO v_establecimiento_id
+      FROM academico_test.TASIGNATURA s JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
+     WHERE s.PK_TASIGNATURA = p_pk;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     SELECT * INTO r FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_pk AND ACTIVE = TRUE;
     IF NOT FOUND THEN RAISE EXCEPTION 'No existe una asignatura activa con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
     IF p_nombre_interno IS NOT NULL AND NULLIF(TRIM(p_nombre_interno),'') IS NULL THEN
@@ -414,6 +417,10 @@ BEGIN
         RAISE EXCEPTION 'Ya existe una asignatura con la abreviacion % en esta area', v_codigo
             USING ERRCODE = '23505';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, format('Actualización de la asignatura %s', v_nombre), v_establecimiento_id);
+
     UPDATE academico_test.TASIGNATURA SET
         FK_TAREA_ASIGNATURA = COALESCE(p_fk_area_asignatura, FK_TAREA_ASIGNATURA),
         NOMBRE = v_nombre,
@@ -425,16 +432,21 @@ BEGIN
      WHERE PK_TASIGNATURA = p_pk;
     RETURN p_pk;
 END;
-$$;
+$function$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_subject_soft_delete(p_pk BIGINT, p_pk_usuario_solicitante BIGINT)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+CREATE OR REPLACE FUNCTION academico_test.fn_subject_soft_delete(p_pk bigint, p_pk_usuario_solicitante bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT; v_nombre VARCHAR(130);
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TASIGNATURA s JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
-         WHERE s.PK_TASIGNATURA = p_pk));
+    SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO), s.NOMBRE
+      INTO v_establecimiento_id, v_nombre
+      FROM academico_test.TASIGNATURA s JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
+     WHERE s.PK_TASIGNATURA = p_pk;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     -- Bloqueo por dependencias (solo filas activas).
     IF EXISTS (
         SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
@@ -450,13 +462,18 @@ BEGIN
         RAISE EXCEPTION 'No se puede eliminar la asignatura %: existen horarios asociados', p_pk
             USING ERRCODE = '23503';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, format('Eliminación de la asignatura %s', COALESCE(v_nombre, p_pk::TEXT)),
+        v_establecimiento_id);
+
     UPDATE academico_test.TASIGNATURA SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TASIGNATURA = p_pk AND ACTIVE = TRUE;
     GET DIAGNOSTICS v_n = ROW_COUNT;
     IF v_n = 0 THEN RAISE EXCEPTION 'No existe una asignatura activa con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
     RETURN p_pk;
 END;
-$$;
+$function$;
 
 DROP FUNCTION IF EXISTS academico_test.fn_subject_listar(BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_subject_listar(
@@ -538,25 +555,23 @@ $$;
 -- llega como ID (fk_area_asignatura). `especialidad` llega como NOMBRE: si es una
 -- especialidad global se resuelve-o-crea como enfasis (FK_TESPECIALIDAD real +
 -- codigo incremental); si es un nombre nuevo, se crea enfasis con especialidad "Otro".
-CREATE OR REPLACE FUNCTION academico_test.fn_subject_guardar_bulk(
-    p_fk_area             BIGINT,
-    p_asignaturas         jsonb,
-    p_pk_usuario_solicitante BIGINT
-)
-RETURNS INT LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION academico_test.fn_subject_guardar_bulk(p_fk_area bigint, p_asignaturas jsonb, p_pk_usuario_solicitante bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_est BIGINT; v_count INT := 0; it jsonb;
     v_id BIGINT; v_nombre VARCHAR(130); v_codigo VARCHAR(30);
     v_aa BIGINT; v_enf BIGINT; v_esp BIGINT; v_color VARCHAR(10); v_orden NUMERIC;
-    v_enf_name TEXT;
+    v_enf_name TEXT; v_area_nombre VARCHAR(130);
 BEGIN
     IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
     -- Establecimiento del area (valida que el area exista/activa).
-    SELECT s.FK_TESTABLECIMIENTO INTO v_est
+    SELECT s.FK_TESTABLECIMIENTO, a.NOMBRE INTO v_est, v_area_nombre
       FROM academico_test.TAREA a
       JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = a.FK_TPERIODO_ACADEMICO
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
@@ -569,6 +584,9 @@ BEGIN
         RAISE EXCEPTION 'El usuario no puede gestionar datos academicos de este establecimiento'
             USING ERRCODE = '42501';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, format('Configuración masiva de asignaturas del área %s', v_area_nombre), v_est);
 
     -- Reemplazo: baja logica de las asignaturas del area que NO vienen en el set.
     UPDATE academico_test.TASIGNATURA
@@ -650,7 +668,7 @@ BEGIN
     END LOOP;
     RETURN v_count;
 END;
-$$;
+$function$;
 
 -- Borrado multiple de areas: intenta cada id; salta las bloqueadas.
 -- Devuelve una fila por id: eliminado=TRUE, o FALSE con error_code (SQLSTATE)

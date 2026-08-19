@@ -8,20 +8,16 @@
 SET search_path TO academico_test, public;
 
 -- ----- GRADO ---------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_grado_crear(
-    p_fk_periodo          BIGINT,
-    p_fk_nivel            BIGINT,
-    p_nombre              VARCHAR(130),     -- al crear = valor del catalogo GRADOS
-    p_fk_grado_siguiente  BIGINT DEFAULT NULL,
-    p_pk_usuario_solicitante BIGINT DEFAULT NULL
-)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION academico_test.fn_grado_crear(p_fk_periodo bigint, p_fk_nivel bigint, p_nombre character varying, p_fk_grado_siguiente bigint DEFAULT NULL::bigint, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
     v_id BIGINT; v_codigo VARCHAR(30);
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT := academico_test.fn_periodo_establecimiento(p_fk_periodo);
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(
-        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_fk_periodo));
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     IF p_fk_periodo IS NULL OR p_fk_nivel IS NULL OR NULLIF(TRIM(p_nombre),'') IS NULL THEN
         RAISE EXCEPTION 'Faltan campos obligatorios del grado' USING ERRCODE = '22023';
     END IF;
@@ -68,6 +64,14 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Ya existe un grado con el codigo % en este periodo', v_codigo USING ERRCODE = '23505';
     END IF;
+
+    -- V67: declara atribución + etiqueta antes del INSERT, misma transacción.
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Creación del grado %s', p_nombre),
+        v_establecimiento_id
+    );
+
     INSERT INTO academico_test.TGRADO
         (CODIGO, NOMBRE, FK_TPERIODO_ACADEMICO, FK_TNIVEL_ENSENANZA, FK_TLV_GRADO_SIGUIENTE,
          TIENE_GRADO_SIGUIENTE, CREATED_BY)
@@ -76,25 +80,22 @@ BEGIN
     RETURNING PK_TGRADO INTO v_id;
     RETURN v_id;
 END;
-$$;
+$function$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_grado_actualizar(
-    p_pk                  BIGINT,
-    p_fk_nivel            BIGINT DEFAULT NULL,
-    p_nombre              VARCHAR(130) DEFAULT NULL,   -- editable libre tras crear
-    p_fk_grado_siguiente  BIGINT DEFAULT NULL,
-    p_tiene_grado_siguiente BOOLEAN DEFAULT NULL,  -- para poder poner FK en NULL explicito
-    p_pk_usuario_solicitante BIGINT DEFAULT NULL
-)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION academico_test.fn_grado_actualizar(p_pk bigint, p_fk_nivel bigint DEFAULT NULL::bigint, p_nombre character varying DEFAULT NULL::character varying, p_fk_grado_siguiente bigint DEFAULT NULL::bigint, p_tiene_grado_siguiente boolean DEFAULT NULL::boolean, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
     r academico_test.TGRADO;
     v_nombre VARCHAR(130); v_fk_sig BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT;
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_pk));
+    SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+      INTO v_establecimiento_id
+      FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_pk;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     SELECT * INTO r FROM academico_test.TGRADO WHERE PK_TGRADO = p_pk AND ACTIVE = TRUE;
     IF NOT FOUND THEN RAISE EXCEPTION 'No existe un grado activo con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
     IF p_nombre IS NOT NULL AND NULLIF(TRIM(p_nombre),'') IS NULL THEN
@@ -125,6 +126,14 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Ya existe un grado con el nombre % en este periodo', v_nombre USING ERRCODE = '23505';
     END IF;
+
+    -- V67: declara atribución + etiqueta antes del UPDATE, misma transacción.
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Actualización del grado %s', v_nombre),
+        v_establecimiento_id
+    );
+
     UPDATE academico_test.TGRADO SET
         FK_TNIVEL_ENSENANZA = COALESCE(p_fk_nivel, FK_TNIVEL_ENSENANZA),
         NOMBRE = v_nombre,
@@ -134,15 +143,20 @@ BEGIN
      WHERE PK_TGRADO = p_pk;
     RETURN p_pk;
 END;
-$$;
+$function$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_grado_soft_delete(p_pk BIGINT, p_pk_usuario_solicitante BIGINT)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+CREATE OR REPLACE FUNCTION academico_test.fn_grado_soft_delete(p_pk bigint, p_pk_usuario_solicitante bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT; v_nombre VARCHAR(130);
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_pk));
+    SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO), g.NOMBRE
+      INTO v_establecimiento_id, v_nombre
+      FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_pk;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     -- Bloqueo por dependencias (solo filas activas), de lo mas especifico a lo general.
     IF EXISTS (
         SELECT 1 FROM academico_test.TMATRICULA m
@@ -168,6 +182,11 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'No se puede eliminar el grado %: existen grupos activos', p_pk USING ERRCODE = '23503';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, format('Eliminación del grado %s', COALESCE(v_nombre, p_pk::TEXT)),
+        v_establecimiento_id);
+
     -- Cascade: el criterio de promocion override del grado (POR_DEFECTO='N') y sus
     -- obligatorias son propiedad del grado, se dan de baja con el.
     UPDATE academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
@@ -184,7 +203,7 @@ BEGIN
     IF v_n = 0 THEN RAISE EXCEPTION 'No existe un grado activo con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
     RETURN p_pk;
 END;
-$$;
+$function$;
 
 DROP FUNCTION IF EXISTS academico_test.fn_grado_listar(BIGINT, TEXT, INT, INT);
 DROP FUNCTION IF EXISTS academico_test.fn_grado_listar(BIGINT, TEXT, INT, INT, BIGINT);
@@ -234,20 +253,18 @@ $$;
 -- ----- GRUPO ---------------------------------------------------------------
 -- DROP de la firma con p_fk_rol (7 args) por si quedo aplicada; se recrea sin rol.
 DROP FUNCTION IF EXISTS academico_test.fn_grupo_crear(BIGINT, VARCHAR, BIGINT, NUMERIC, BIGINT, BIGINT, BIGINT);
-CREATE OR REPLACE FUNCTION academico_test.fn_grupo_crear(
-    p_fk_grado            BIGINT,
-    p_nombre              VARCHAR(130),     -- campo "Grupo"
-    p_fk_modelo_pedagogico BIGINT,
-    p_capacidad           NUMERIC,
-    p_fk_funcionario      BIGINT DEFAULT NULL,   -- director (id)
-    p_pk_usuario_solicitante BIGINT DEFAULT NULL
-)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_id BIGINT; v_jornada BIGINT; v_sede BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+CREATE OR REPLACE FUNCTION academico_test.fn_grupo_crear(p_fk_grado bigint, p_nombre character varying, p_fk_modelo_pedagogico bigint, p_capacidad numeric, p_fk_funcionario bigint DEFAULT NULL::bigint, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_id BIGINT; v_jornada BIGINT; v_sede BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT;
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado));
+    SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+      INTO v_establecimiento_id
+      FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     IF p_fk_grado IS NULL OR NULLIF(TRIM(p_nombre),'') IS NULL OR p_fk_modelo_pedagogico IS NULL
        OR p_capacidad IS NULL THEN
         RAISE EXCEPTION 'Faltan campos obligatorios del grupo' USING ERRCODE = '22023';
@@ -284,33 +301,34 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Ya existe un grupo con el nombre % en este grado y jornada', p_nombre USING ERRCODE = '23505';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, format('Creación del grupo %s', p_nombre), v_establecimiento_id);
+
     INSERT INTO academico_test.TGRUPO
         (NOMBRE, FK_TGRADO, FK_TLV_JORNADA, FK_TLV_MODELO_PEDAGOGICO, CAPACIDAD, FK_TFUNCIONARIO, CREATED_BY)
     VALUES (p_nombre, p_fk_grado, v_jornada, p_fk_modelo_pedagogico, p_capacidad, p_fk_funcionario, v_audit)
     RETURNING PK_TGRUPO INTO v_id;
     RETURN v_id;
 END;
-$$;
+$function$;
 
 -- DROP de la firma con p_fk_rol (7 args) por si quedo aplicada; se recrea sin rol.
 DROP FUNCTION IF EXISTS academico_test.fn_grupo_actualizar(BIGINT, VARCHAR, BIGINT, NUMERIC, BIGINT, BIGINT, BIGINT);
-CREATE OR REPLACE FUNCTION academico_test.fn_grupo_actualizar(
-    p_pk                  BIGINT,
-    p_nombre              VARCHAR(130) DEFAULT NULL,
-    p_fk_modelo_pedagogico BIGINT DEFAULT NULL,
-    p_capacidad           NUMERIC DEFAULT NULL,
-    p_fk_funcionario      BIGINT DEFAULT NULL,
-    p_pk_usuario_solicitante BIGINT DEFAULT NULL
-)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION academico_test.fn_grupo_actualizar(p_pk bigint, p_nombre character varying DEFAULT NULL::character varying, p_fk_modelo_pedagogico bigint DEFAULT NULL::bigint, p_capacidad numeric DEFAULT NULL::numeric, p_fk_funcionario bigint DEFAULT NULL::bigint, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
     r academico_test.TGRUPO; v_nombre VARCHAR(130);
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT;
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TGRUPO gr JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
-         WHERE gr.PK_TGRUPO = p_pk));
+    SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+      INTO v_establecimiento_id
+      FROM academico_test.TGRUPO gr JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+     WHERE gr.PK_TGRUPO = p_pk;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     SELECT * INTO r FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_pk AND ACTIVE = TRUE;
     IF NOT FOUND THEN RAISE EXCEPTION 'No existe un grupo activo con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
     IF p_nombre IS NOT NULL AND NULLIF(TRIM(p_nombre),'') IS NULL THEN
@@ -344,6 +362,10 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Ya existe un grupo con el nombre % en este grado y jornada', v_nombre USING ERRCODE = '23505';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, format('Actualización del grupo %s', v_nombre), v_establecimiento_id);
+
     UPDATE academico_test.TGRUPO SET
         NOMBRE = v_nombre,
         FK_TLV_MODELO_PEDAGOGICO = COALESCE(p_fk_modelo_pedagogico, FK_TLV_MODELO_PEDAGOGICO),
@@ -353,16 +375,21 @@ BEGIN
      WHERE PK_TGRUPO = p_pk;
     RETURN p_pk;
 END;
-$$;
+$function$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_grupo_soft_delete(p_pk BIGINT, p_pk_usuario_solicitante BIGINT)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+CREATE OR REPLACE FUNCTION academico_test.fn_grupo_soft_delete(p_pk bigint, p_pk_usuario_solicitante bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT; v_nombre VARCHAR(130);
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TGRUPO gr JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
-         WHERE gr.PK_TGRUPO = p_pk));
+    SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO), gr.NOMBRE
+      INTO v_establecimiento_id, v_nombre
+      FROM academico_test.TGRUPO gr JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+     WHERE gr.PK_TGRUPO = p_pk;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     -- Bloqueo por dependencias (solo filas activas).
     IF EXISTS (
         SELECT 1 FROM academico_test.TMATRICULA m WHERE m.FK_TGRUPO = p_pk AND m.ACTIVE = TRUE
@@ -379,13 +406,18 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'No se puede eliminar el grupo %: existen horarios configurados', p_pk USING ERRCODE = '23503';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, format('Eliminación del grupo %s', COALESCE(v_nombre, p_pk::TEXT)),
+        v_establecimiento_id);
+
     UPDATE academico_test.TGRUPO SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TGRUPO = p_pk AND ACTIVE = TRUE;
     GET DIAGNOSTICS v_n = ROW_COUNT;
     IF v_n = 0 THEN RAISE EXCEPTION 'No existe un grupo activo con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
     RETURN p_pk;
 END;
-$$;
+$function$;
 
 DROP FUNCTION IF EXISTS academico_test.fn_grupo_listar(BIGINT, TEXT, INT, INT);
 CREATE OR REPLACE FUNCTION academico_test.fn_grupo_listar(

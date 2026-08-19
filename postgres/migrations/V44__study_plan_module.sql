@@ -7,27 +7,19 @@
 
 SET search_path TO academico_test, public;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_plan_agregar(
-    p_fk_grado             BIGINT,
-    p_fk_asignatura        BIGINT,
-    p_numero_hora          NUMERIC,
-    p_influencia_area      NUMERIC,
-    p_numero_credito       BIGINT,
-    p_influye_desempeno    BOOLEAN,
-    p_matricula_obligatoria BOOLEAN,
-    p_aprobacion_obligatoria BOOLEAN,
-    p_fk_formato_calif     BIGINT DEFAULT NULL,
-    p_fk_criterio_nota     BIGINT DEFAULT NULL,
-    p_pk_usuario_solicitante BIGINT DEFAULT NULL
-)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION academico_test.fn_plan_agregar(p_fk_grado bigint, p_fk_asignatura bigint, p_numero_hora numeric, p_influencia_area numeric, p_numero_credito bigint, p_influye_desempeno boolean, p_matricula_obligatoria boolean, p_aprobacion_obligatoria boolean, p_fk_formato_calif bigint DEFAULT NULL::bigint, p_fk_criterio_nota bigint DEFAULT NULL::bigint, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
     v_grado_nom TEXT; v_plan_id BIGINT; v_id BIGINT; v_periodo BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT; v_asignatura_nom TEXT;
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado));
+    SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+      INTO v_establecimiento_id
+      FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     IF p_fk_grado IS NULL OR p_fk_asignatura IS NULL THEN
         RAISE EXCEPTION 'Grado y asignatura son obligatorios' USING ERRCODE = '22023';
     END IF;
@@ -46,11 +38,17 @@ BEGIN
     IF v_grado_nom IS NULL THEN
         RAISE EXCEPTION 'El grado % no existe o esta inactivo', p_fk_grado USING ERRCODE = '23503';
     END IF;
-    IF NOT EXISTS (
-        SELECT 1 FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_fk_asignatura AND ACTIVE = TRUE
-    ) THEN
+    SELECT NOMBRE INTO v_asignatura_nom FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_fk_asignatura AND ACTIVE = TRUE;
+    IF v_asignatura_nom IS NULL THEN
         RAISE EXCEPTION 'La asignatura % no existe o esta inactiva', p_fk_asignatura USING ERRCODE = '23503';
     END IF;
+
+    -- V77: la etiqueta se declara ANTES de tocar TPLAN/TASIGNATURA_PLAN (antes
+    -- iba despues del INSERT INTO TPLAN, dejando esa fila puntual sin contexto).
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Asignación de %s al plan de estudio del grado %s', v_asignatura_nom, v_grado_nom),
+        v_establecimiento_id);
 
     PERFORM pg_advisory_xact_lock(hashtext('plan:' || p_fk_grado::text));
     SELECT PK_TPLAN INTO v_plan_id FROM academico_test.TPLAN WHERE FK_TGRADO = p_fk_grado AND ACTIVE = TRUE;
@@ -95,30 +93,24 @@ BEGIN
     END IF;
     RETURN v_id;
 END;
-$$;
+$function$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_plan_actualizar(
-    p_pk                   BIGINT,
-    p_fk_asignatura        BIGINT  DEFAULT NULL,
-    p_numero_hora          NUMERIC DEFAULT NULL,
-    p_influencia_area      NUMERIC DEFAULT NULL,
-    p_numero_credito       BIGINT  DEFAULT NULL,
-    p_influye_desempeno    BOOLEAN DEFAULT NULL,
-    p_matricula_obligatoria BOOLEAN DEFAULT NULL,
-    p_aprobacion_obligatoria BOOLEAN DEFAULT NULL,
-    p_fk_formato_calif     BIGINT  DEFAULT NULL,
-    p_fk_criterio_nota     BIGINT  DEFAULT NULL,
-    p_pk_usuario_solicitante BIGINT DEFAULT NULL
-)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+CREATE OR REPLACE FUNCTION academico_test.fn_plan_actualizar(p_pk bigint, p_fk_asignatura bigint DEFAULT NULL::bigint, p_numero_hora numeric DEFAULT NULL::numeric, p_influencia_area numeric DEFAULT NULL::numeric, p_numero_credito bigint DEFAULT NULL::bigint, p_influye_desempeno boolean DEFAULT NULL::boolean, p_matricula_obligatoria boolean DEFAULT NULL::boolean, p_aprobacion_obligatoria boolean DEFAULT NULL::boolean, p_fk_formato_calif bigint DEFAULT NULL::bigint, p_fk_criterio_nota bigint DEFAULT NULL::bigint, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT; v_grado_nom VARCHAR(130); v_asignatura_nom VARCHAR(130);
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TASIGNATURA_PLAN ap
-          JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
-          JOIN academico_test.TGRADO g ON g.PK_TGRADO = pl.FK_TGRADO
-         WHERE ap.PK_TASIGNATURA_PLAN = p_pk));
+    SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO), g.NOMBRE, s.NOMBRE
+      INTO v_establecimiento_id, v_grado_nom, v_asignatura_nom
+      FROM academico_test.TASIGNATURA_PLAN ap
+      JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
+      JOIN academico_test.TGRADO g ON g.PK_TGRADO = pl.FK_TGRADO
+      JOIN academico_test.TASIGNATURA s ON s.PK_TASIGNATURA = ap.FK_TASIGNATURA
+     WHERE ap.PK_TASIGNATURA_PLAN = p_pk;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     -- Validaciones numericas (solo si vienen).
     IF p_numero_hora IS NOT NULL AND p_numero_hora <= 0 THEN
         RAISE EXCEPTION 'La intensidad horaria debe ser mayor a 0' USING ERRCODE = '22023';
@@ -146,6 +138,12 @@ BEGIN
                 USING ERRCODE = '23505';
         END IF;
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Actualización del plan de estudio: %s en %s', v_asignatura_nom, v_grado_nom),
+        v_establecimiento_id);
+
     -- formato/criterio se setean SIEMPRE (permiten volver a NULL = heredar).
     UPDATE academico_test.TASIGNATURA_PLAN SET
         FK_TASIGNATURA = COALESCE(p_fk_asignatura, FK_TASIGNATURA),
@@ -166,18 +164,24 @@ BEGIN
     IF v_n = 0 THEN RAISE EXCEPTION 'No existe un renglon de plan activo con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
     RETURN p_pk;
 END;
-$$;
+$function$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_plan_eliminar(p_pk BIGINT, p_pk_usuario_solicitante BIGINT)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+CREATE OR REPLACE FUNCTION academico_test.fn_plan_eliminar(p_pk bigint, p_pk_usuario_solicitante bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT; v_grado_nom VARCHAR(130); v_asignatura_nom VARCHAR(130);
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TASIGNATURA_PLAN ap
-          JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
-          JOIN academico_test.TGRADO g ON g.PK_TGRADO = pl.FK_TGRADO
-         WHERE ap.PK_TASIGNATURA_PLAN = p_pk));
+    SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO), g.NOMBRE, s.NOMBRE
+      INTO v_establecimiento_id, v_grado_nom, v_asignatura_nom
+      FROM academico_test.TASIGNATURA_PLAN ap
+      JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
+      JOIN academico_test.TGRADO g ON g.PK_TGRADO = pl.FK_TGRADO
+      JOIN academico_test.TASIGNATURA s ON s.PK_TASIGNATURA = ap.FK_TASIGNATURA
+     WHERE ap.PK_TASIGNATURA_PLAN = p_pk;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     -- Bloqueo: la asignatura del renglon tiene asignaciones docente activas en
     -- algun grupo del grado del plan.
     IF EXISTS (
@@ -192,6 +196,12 @@ BEGIN
         RAISE EXCEPTION 'No se puede eliminar: la asignatura tiene asignaciones academicas (docentes) en grupos del grado'
             USING ERRCODE = '23503';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Eliminación de %s del plan de estudio de %s', COALESCE(v_asignatura_nom, p_pk::TEXT), v_grado_nom),
+        v_establecimiento_id);
+
     UPDATE academico_test.TASIGNATURA_PLAN SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TASIGNATURA_PLAN = p_pk AND ACTIVE = TRUE;
     GET DIAGNOSTICS v_n = ROW_COUNT;
@@ -202,7 +212,7 @@ BEGIN
      WHERE FK_TASIGNATURA_PLAN = p_pk AND ACTIVE = TRUE;
     RETURN p_pk;
 END;
-$$;
+$function$;
 
 -- ---------------------------------------------------------------------------
 -- fn_plan_soft_delete — baja logica del plan COMPLETO de un grado: el header
@@ -213,13 +223,18 @@ $$;
 -- activo tiene asignaciones docente activas en grupos del grado (mismo criterio
 -- que fn_plan_eliminar, generalizado al plan entero).
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_plan_soft_delete(p_fk_grado BIGINT, p_pk_usuario_solicitante BIGINT)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_pk_plan BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+CREATE OR REPLACE FUNCTION academico_test.fn_plan_soft_delete(p_fk_grado bigint, p_pk_usuario_solicitante bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_pk_plan BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT; v_grado_nombre VARCHAR(130);
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado));
+    SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO), g.NOMBRE
+      INTO v_establecimiento_id, v_grado_nombre
+      FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     SELECT PK_TPLAN INTO v_pk_plan FROM academico_test.TPLAN
      WHERE FK_TGRADO = p_fk_grado AND ACTIVE = TRUE;
     IF v_pk_plan IS NULL THEN
@@ -237,6 +252,11 @@ BEGIN
         RAISE EXCEPTION 'No se puede eliminar el plan del grado %: hay asignaturas con asignaciones academicas (docentes) activas', p_fk_grado
             USING ERRCODE = '23503';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, format('Eliminación del plan de estudio completo del grado %s', v_grado_nombre),
+        v_establecimiento_id);
+
     -- Enlaces al criterio de evaluacion de los renglones del plan.
     UPDATE academico_test.TCRITERIO_EVALUACION_ASIGNATURA_PLAN
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
@@ -252,7 +272,7 @@ BEGIN
      WHERE PK_TPLAN = v_pk_plan AND ACTIVE = TRUE;
     RETURN v_pk_plan;
 END;
-$$;
+$function$;
 
 -- Devuelve el valor EFECTIVO de formato/criterio-nota: el override del renglon
 -- del plan si existe, si no lo heredado del criterio de evaluacion enlazado.
