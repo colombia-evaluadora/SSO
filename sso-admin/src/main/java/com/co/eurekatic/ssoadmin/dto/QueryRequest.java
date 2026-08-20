@@ -81,7 +81,20 @@ public record QueryRequest(
          * then treats as "no types declared" — the strict check
          * fires and rejects the save if any placeholder is present.
          */
-        Map<String, String>         paramTypes
+        Map<String, String>         paramTypes,
+        /**
+         * V110 — opt-in: {@code query-service} may cache this row's
+         * {@code GET} result in Redis when {@code true}. Default
+         * {@code false} — the field is a checkbox on the admin-ui
+         * form, unchecked by default, matching pre-V110 behavior.
+         */
+        boolean                     cacheable,
+        /**
+         * V110 — staleness window in seconds when {@code cacheable}
+         * is {@code true}. Validated positive by
+         * {@code QueryAdminService}; ignored otherwise.
+         */
+        Integer                     cacheTtlSeconds
 ) {
 
     /** Back-compat constructor for callers that haven't migrated to V27/V28 yet. */
@@ -143,9 +156,30 @@ public record QueryRequest(
     }
 
     /**
+     * V110 back-compat (sin cacheable/cacheTtlSeconds). Conserva la
+     * forma de 15 argumentos que los llamantes usaban antes de V110;
+     * cacheable cae a false, que es el comportamiento previo
+     * (siempre golpea la base).
+     */
+    public QueryRequest(Long id, String uuid, String query, String type,
+                        boolean publicEnd, boolean captcha,
+                        String detail, String action, String style,
+                        Long microserviceId, String pathTemplate,
+                        ExecutionMode executionMode, String outParamNames,
+                        String httpMethod, Map<String, String> paramTypes) {
+        this(id, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             pathTemplate, executionMode, outParamNames, httpMethod,
+             paramTypes, false, null);
+    }
+
+    /**
      * Constructor canónico. Acepta {@code paramTypes} null y lo
      * convierte en mapa vacío — la validación estricta vive en
      * {@code QueryAdminService.validateParamTypes}, no aquí.
+     * {@code cacheTtlSeconds} null (sin valor enviado por el
+     * cliente) cae al default que aplica
+     * {@code QueryAdminService.copy} sobre la entidad.
      */
     public QueryRequest {
         paramTypes = paramTypes == null ? new LinkedHashMap<>() : paramTypes;

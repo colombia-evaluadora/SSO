@@ -56,7 +56,11 @@ public record QueryResponse(
          * Empty map means the row is legacy or has no caller-controlled
          * placeholders.
          */
-        Map<String, String> paramTypes
+        Map<String, String> paramTypes,
+        /** V110 — ver {@link com.co.eurekatic.common.entity.Query#isCacheable()}. */
+        boolean cacheable,
+        /** V110 — ver {@link com.co.eurekatic.common.entity.Query#getCacheTtlSeconds()}. */
+        int cacheTtlSeconds
 ) {
     public static QueryResponse fromEntity(Query q) {
         Microservice m = q.getMicroservice();
@@ -79,6 +83,8 @@ public record QueryResponse(
                 ExecutionMode.fromString(q.getExecutionMode()),
                 q.getOutParamNames(),
                 q.getHttpMethod(),
-                q.getParamTypes());
+                q.getParamTypes(),
+                q.isCacheable(),
+                q.getCacheTtlSeconds());
     }
 }
