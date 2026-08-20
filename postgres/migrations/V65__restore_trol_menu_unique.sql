@@ -45,12 +45,28 @@
 --
 -- Idempotent on purpose: this was applied by hand to the test environment to
 -- unblock it, so Flyway must be able to re-run it without erroring out.
+--
+-- Bug fixed here: the original version issued `DROP INDEX IF EXISTS
+-- academico_test.u_trol_menu_1` unconditionally, BEFORE checking whether the
+-- constraint already existed. `IF EXISTS` only guards against the index
+-- being absent — it does nothing when the index IS present but now backs a
+-- constraint (exactly the state on the server this migration describes
+-- having hand-patched already): Postgres refuses `DROP INDEX` on a
+-- constraint-backing index no matter what, with
+--
+--     ERROR: cannot drop index u_trol_menu_1 because constraint
+--     u_trol_menu_1 on table trol_menu requires it
+--     HINT: You can drop constraint u_trol_menu_1 on table trol_menu instead.
+--
+-- which is precisely what broke Flyway on re-run: the constraint from the
+-- hand-fix was already in place, so `DROP INDEX` failed before the migration
+-- ever reached the `IF NOT EXISTS (...)` guard below it. Moving the DROP
+-- INDEX inside that SAME guard closes the gap — if the constraint already
+-- exists, NEITHER statement runs, which is exactly the "nothing left to do"
+-- case this migration is supposed to be a no-op for.
 -- =============================================================================
 
 SET search_path TO academico_test, public;
-
--- The full UNIQUE below subsumes it: same columns, no predicate.
-DROP INDEX IF EXISTS academico_test.u_trol_menu_1;
 
 DO $$
 BEGIN
@@ -60,6 +76,12 @@ BEGIN
          WHERE conrelid = 'academico_test.trol_menu'::regclass
            AND conname  = 'u_trol_menu_1'
     ) THEN
+        -- The full UNIQUE below subsumes the partial index: same
+        -- columns, no predicate. Only reached when the constraint
+        -- doesn't exist yet, i.e. the index (if present at all) is
+        -- still the old bare partial one, not a constraint's backing
+        -- index — so DROP INDEX is safe here.
+        DROP INDEX IF EXISTS academico_test.u_trol_menu_1;
         ALTER TABLE academico_test.trol_menu
             ADD CONSTRAINT u_trol_menu_1 UNIQUE (fk_trol, fk_tmenu);
     END IF;
