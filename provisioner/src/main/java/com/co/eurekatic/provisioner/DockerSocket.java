@@ -360,6 +360,20 @@ public class DockerSocket {
         if (props.getCatalogInternalToken() != null && !props.getCatalogInternalToken().isBlank()) {
             env.add("QUERY_CATALOG_INTERNAL_TOKEN=" + props.getCatalogInternalToken());
         }
+        // Shared sso-redis instance — backs the spawned instance's
+        // @Cacheable("tables")/@Cacheable("columns") schema-metadata
+        // caches and the opt-in catalog-GET cache (see
+        // RedisCacheConfig in query-service). Without this the
+        // container falls back to its application.yml default of
+        // "localhost", which inside the container resolves to
+        // itself, not the compose "redis" service — the
+        // RedisCacheManager bean would fail to connect and every
+        // cache read/write would error instead of silently missing.
+        env.add("REDIS_HOST=" + props.getRedisHost());
+        env.add("REDIS_PORT=" + props.getRedisPort());
+        if (props.getRedisPassword() != null && !props.getRedisPassword().isBlank()) {
+            env.add("REDIS_PASSWORD=" + props.getRedisPassword());
+        }
         // OTLP endpoint so the spawneado query-service exports
         // sus trazas / métricas / logs al colector del stack
         // (Alloy por defecto). Sin esto el application.yml del
