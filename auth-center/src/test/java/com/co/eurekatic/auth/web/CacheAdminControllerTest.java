@@ -38,7 +38,7 @@ class CacheAdminControllerTest {
     @BeforeEach
     void setUp() {
         props = new SessionCacheProperties(
-                3600L, "sso:session:user-roles", SECRET, true, 60L);
+                3600L, "sso:session:user-roles", SECRET, true, 60L, 300L, 60L);
         CacheAdminController controller = new CacheAdminController(invalidator, props);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
@@ -66,7 +66,7 @@ class CacheAdminControllerTest {
         // (operator forgot to set SSO_SESSION_USER_ROLES_INVALIDATION_SECRET).
         // Any supplied header should be rejected.
         props = new SessionCacheProperties(
-                3600L, "sso:session:user-roles", "", true, 60L);
+                3600L, "sso:session:user-roles", "", true, 60L, 300L, 60L);
         CacheAdminController controller = new CacheAdminController(invalidator, props);
         MockMvc isolatedMvc = MockMvcBuilders.standaloneSetup(controller).build();
 
