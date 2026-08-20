@@ -497,31 +497,40 @@ BEGIN
     END IF;
 
     -- ---------------------------------------------------------------------
-    -- 4. Crear TFUNCIONARIO enlazado al TUSUARIO (nuevo o reusado). Ya NO
-    --    se bloquea si el usuario ya es funcionario en OTRO EE (constraint
-    --    ahora es UNIQUE(FK_TUSUARIO, FK_ESTABLECIMIENTO), no
-    --    UNIQUE(FK_TUSUARIO) solo). Lo que SI se sigue bloqueando: un
-    --    segundo TFUNCIONARIO PENDIENTE (sin enlazar) para el mismo
-    --    usuario -- evita acumular basura si /register/funcionario se
-    --    llama dos veces antes de enlazar la primera.
+    -- 4. Reusar el TFUNCIONARIO activo del TUSUARIO si ya tiene uno (REV5,
+    --    cambio de modelo -- ver header del archivo). Con TFUNCIONARIO como
+    --    una fila por persona, no por establecimiento, el viejo
+    --    UNIQUE(FK_TUSUARIO, FK_ESTABLECIMIENTO) ya NO evita duplicados:
+    --    FK_ESTABLECIMIENTO vale NULL siempre, y Postgres no aplica UNIQUE
+    --    entre NULLs -- sin este chequeo, dos llamadas seguidas (doble
+    --    submit que se cuela pese a la proteccion del front, dos pestañas,
+    --    un caller que no pasa por el autocompletado, etc.) creaban DOS
+    --    TFUNCIONARIO activos para el mismo TUSUARIO. Confirmado con una
+    --    prueba en vivo antes de este fix.
     -- ---------------------------------------------------------------------
-    -- REV3: acotado a los ultimos 5 minutos -- antes bloqueaba cualquier
-    -- pendiente sin importar hace cuanto, lo que con datos migrados (todos
-    -- con FK_ESTABLECIMIENTO NULL, nunca retro-llenado) bloqueaba
-    -- incorrectamente a cualquier usuario viejo que intentara registrarse
-    -- en un EE nuevo. La intencion original (evitar doble click / doble
-    -- llamada seguida a /register/funcionario) sigue cubierta: un
-    -- pendiente de hace mas de 5 minutos ya no cuenta como sospechoso.
-    IF EXISTS (
-        SELECT 1 FROM academico_test.TFUNCIONARIO
-         WHERE FK_TUSUARIO         = v_pk_usuario
-           AND FK_ESTABLECIMIENTO IS NULL
-           AND ACTIVE              = TRUE
-           AND CREATED_AT          >= CURRENT_TIMESTAMP - INTERVAL '5 minutes'
-    ) THEN
-        RAISE EXCEPTION 'el usuario (%) ya tiene un TFUNCIONARIO pendiente de enlazar a un establecimiento (creado hace menos de 5 minutos)', v_pk_usuario
-            USING ERRCODE = '23505';
+    SELECT PK_TFUNCIONARIO
+      INTO v_pk_funcionario
+      FROM academico_test.TFUNCIONARIO
+     WHERE FK_TUSUARIO = v_pk_usuario
+       AND ACTIVE = TRUE
+     ORDER BY PK_TFUNCIONARIO
+     LIMIT 1;
+
+    IF v_pk_funcionario IS NOT NULL THEN
+        RETURN v_pk_funcionario;
     END IF;
+
+    -- ---------------------------------------------------------------------
+    -- 5. Crear TFUNCIONARIO enlazado al TUSUARIO (nuevo o reusado).
+    -- ---------------------------------------------------------------------
+    -- REV4 -- se QUITA el guard de "TFUNCIONARIO pendiente duplicado"
+    -- (antes bloqueaba un segundo pendiente del mismo usuario dentro de los
+    -- ultimos 5 minutos). El front ya protege el doble click/doble submit
+    -- (isSavingMain), asi que dejaba de tener sentido en el uso real -- y
+    -- en la practica generaba falsos positivos molestos cuando testers
+    -- reusaban el mismo usuario en pruebas seguidas. El costo real de
+    -- quitarlo ahora lo cubre el paso 4 de arriba: ya no puede quedar un
+    -- TFUNCIONARIO duplicado activo, cualquier reintento reusa el mismo.
 
     INSERT INTO academico_test.TFUNCIONARIO (
         FK_TMUNICIPIO_EXPEDICION,
@@ -547,7 +556,7 @@ COMMENT ON FUNCTION academico_test.fn_fun_crear(
     BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR,
     VARCHAR, DATE, BIGINT, VARCHAR, BIGINT, VARCHAR, BIGINT
 )
-    IS 'Crea un funcionario en dos pasos orquestados: (1) resuelve el TUSUARIO -- reusa uno activo existente con la misma cuenta (correo) o el mismo (tipo_documento, identificacion) en vez de abortar; si no existe ninguno, lo crea via fn_usu_crear (que si sigue rechazando duplicados, la usa tambien /register/usuario en solitario), (2) crea TFUNCIONARIO enlazado por FK_TUSUARIO al PK resuelto/creado. p_fk_tmunicipio_expedicion ya no es obligatorio (columna dejo de ser NOT NULL, V60+). El resto de campos del funcionario (cargos, sede, escalafon, etc.) se completan via fn_fun_actualizar (PATCH). Validaciones: gate de autorizacion (fn_puede_afectar_usuarios), FK de municipio si llega. Bloquea (23505) si el TUSUARIO resuelto ya tiene un TFUNCIONARIO PENDIENTE (FK_ESTABLECIMIENTO NULL) activo -- evita duplicar el pendiente; NO bloquea si ya es funcionario ENLAZADO en otro EE (constraint UNIQUE paso de (FK_TUSUARIO) a (FK_TUSUARIO, FK_ESTABLECIMIENTO), ver ALTER TABLE en este archivo). Retorna PK_TFUNCIONARIO.';
+    IS 'REV5: crea (o reusa) un funcionario en dos pasos orquestados: (1) resuelve el TUSUARIO -- reusa uno activo existente con la misma cuenta (correo) o el mismo (tipo_documento, identificacion) en vez de abortar; si no existe ninguno, lo crea via fn_usu_crear, (2) resuelve el TFUNCIONARIO -- si el TUSUARIO resuelto YA tiene un TFUNCIONARIO activo, lo REUSA y retorna su PK sin crear uno nuevo (TFUNCIONARIO es una fila por persona, no por establecimiento, ver header del archivo; el viejo UNIQUE(FK_TUSUARIO, FK_ESTABLECIMIENTO) no evita duplicados porque esa columna vale NULL siempre); si no tiene ninguno, crea uno nuevo. p_fk_tmunicipio_expedicion ya no es obligatorio (columna dejo de ser NOT NULL, V60+). El resto de campos del funcionario (cargos, sede, escalafon, etc.) se completan via fn_fun_actualizar (PATCH). Validaciones: gate de autorizacion (fn_puede_afectar_usuarios), FK de municipio si llega. Retorna PK_TFUNCIONARIO (nuevo o reusado).';
 
 
 -- ---------------------------------------------------------------------------
@@ -2109,10 +2118,15 @@ DROP FUNCTION IF EXISTS academico_test.fn_usu_empleados_contar(
 -- reemplaza el patron "ee_accesibles" (solo rector/secretaria) por
 -- "funcionarios_ee": resuelve el EE del solicitante via
 -- fn_resolver_establecimiento_unico (V50, cubre rector/secretaria/jefe de
--- sistema) y ve funcionarios de ese EE que sean rector, secretaria, tengan
--- FK_ESTABLECIMIENTO = ese EE, o tengan al menos un TSEDE_USUARIO activo en
--- una sede de ese EE (asi el funcionario aun no tenga rol asignado, o su
--- FK_ESTABLECIMIENTO no este al dia).
+-- sistema) y ve funcionarios de ese EE que sean rector, secretaria, o
+-- tengan al menos un TSEDE_USUARIO activo en una sede de ese EE (asi el
+-- funcionario aun no tenga rol asignado).
+--
+-- REV4 (cambio de modelo, ver header del archivo): se quita la rama
+-- "FK_ESTABLECIMIENTO = ese EE" de "funcionarios_ee" -- TFUNCIONARIO deja
+-- de ser una fila por establecimiento (esa columna queda sin proposito),
+-- asi que ya no aporta nada que las otras tres ramas (rector, secretaria,
+-- TSEDE_USUARIO en una sede del EE) no cubran.
 CREATE OR REPLACE FUNCTION academico_test.fn_usu_empleados_contar(
     p_pk_usuario_solicitante  BIGINT,
     p_search        VARCHAR    DEFAULT NULL,
@@ -2202,10 +2216,6 @@ BEGIN
          WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento AND e.ACTIVE = TRUE
            AND e.FK_TFUNCIONARIO_SECRETARIA IS NOT NULL
         UNION
-        SELECT f2.PK_TFUNCIONARIO
-          FROM academico_test.TFUNCIONARIO f2
-         WHERE f2.FK_ESTABLECIMIENTO = v_fk_establecimiento AND f2.ACTIVE = TRUE
-        UNION
         SELECT f3.PK_TFUNCIONARIO
           FROM academico_test.TFUNCIONARIO f3
           JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f3.FK_TUSUARIO AND su.ACTIVE = TRUE
@@ -2268,7 +2278,7 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_usu_empleados_contar(
     BIGINT, VARCHAR, BIGINT[], BIGINT[], VARCHAR[], BIGINT
 )
-    IS 'REV3: cuenta funcionarios activos aplicando los mismos filtros que fn_usu_empleados_listar (search, roles, work_schedules, statuses, campus_id). Ya NO exige FK_ESTABLECIMIENTO NOT NULL -- ese campo no discrimina relevancia para el listado (existe para el flujo de alta/enlazar), y excluirlo dejaba fuera datos migrados sin retro-llenar. Gate/scope: super-admin (fn_puede_afectar_establecimiento) cuenta TODOS los funcionarios activos, enlazados o no. Cualquier otro resuelve su EE via fn_resolver_establecimiento_unico (V50, cubre rector/secretaria/jefe de sistema) y cuenta funcionarios de ese EE segun CUALQUIERA de: (a) es el rector, (b) es la secretaria, (c) FK_ESTABLECIMIENTO apunta a ese EE, (d) tiene al menos un TSEDE_USUARIO activo en una sede de ese EE (asi el registro no tenga FK_ESTABLECIMIENTO al dia, o el funcionario aun no tenga rol asignado). Si no es super-admin y no se pudo resolver un EE unico => 42501. Usar junto con fn_usu_empleados_listar para armar { rows, pageCount, totalCount } en la capa Java. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52/V53).';
+    IS 'REV4: cuenta funcionarios activos aplicando los mismos filtros que fn_usu_empleados_listar (search, roles, work_schedules, statuses, campus_id). Ya NO exige FK_ESTABLECIMIENTO NOT NULL, y (REV4) ya NO usa FK_ESTABLECIMIENTO para nada -- TFUNCIONARIO dejo de ser una fila por establecimiento, esa columna no discrimina relevancia. Gate/scope: super-admin (fn_puede_afectar_establecimiento) cuenta TODOS los funcionarios activos. Cualquier otro resuelve su EE via fn_resolver_establecimiento_unico (V50, cubre rector/secretaria/jefe de sistema) y cuenta funcionarios de ese EE segun CUALQUIERA de: (a) es el rector, (b) es la secretaria, (c) tiene al menos un TSEDE_USUARIO activo en una sede de ese EE (asi el funcionario aun no tenga rol asignado). Si no es super-admin y no se pudo resolver un EE unico => 42501. Usar junto con fn_usu_empleados_listar para armar { rows, pageCount, totalCount } en la capa Java. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52/V53).';
 
 
 -- ---------------------------------------------------------------------------
@@ -2311,6 +2321,12 @@ DROP FUNCTION IF EXISTS academico_test.fn_usu_empleados_listar(
 -- = EE resuelto, o al menos un TSEDE_USUARIO activo en una sede del EE
 -- resuelto via fn_resolver_establecimiento_unico, que ademas cubre jefe de
 -- sistema).
+--
+-- REV5 (cambio de modelo, ver header del archivo): se quita la rama
+-- "FK_ESTABLECIMIENTO = ese EE" de "funcionarios_ee" -- TFUNCIONARIO deja
+-- de ser una fila por establecimiento (esa columna queda sin proposito),
+-- asi que ya no aporta nada que las otras tres ramas (rector, secretaria,
+-- TSEDE_USUARIO en una sede del EE) no cubran.
 --
 -- REV4: "Secretaria" no tenia fila propia en TROL (a diferencia de "Rector",
 -- PK_TROL=7) porque TESTABLECIMIENTO.FK_TFUNCIONARIO_SECRETARIA nunca paso
@@ -2378,10 +2394,6 @@ BEGIN
           FROM academico_test.TESTABLECIMIENTO e
          WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento AND e.ACTIVE = TRUE
            AND e.FK_TFUNCIONARIO_SECRETARIA IS NOT NULL
-        UNION
-        SELECT f2.PK_TFUNCIONARIO
-          FROM academico_test.TFUNCIONARIO f2
-         WHERE f2.FK_ESTABLECIMIENTO = v_fk_establecimiento AND f2.ACTIVE = TRUE
         UNION
         SELECT f3.PK_TFUNCIONARIO
           FROM academico_test.TFUNCIONARIO f3
@@ -2566,7 +2578,7 @@ COMMENT ON FUNCTION academico_test.fn_usu_empleados_listar(
     BIGINT, VARCHAR, BIGINT[], BIGINT[], VARCHAR[], BIGINT,
     VARCHAR, BOOLEAN, INT, INT
 )
-    IS 'REV3: lista funcionarios activos paginados segun los mismos filtros que fn_usu_empleados_contar (search, roles, work_schedules, statuses, campus_id). Ya NO exige FK_ESTABLECIMIENTO NOT NULL. El row devuelto es la version aplanada del empleado: id, documento, nombres, apellidos, nombre completo, estado (A/I) y label (ACTIVE/SUSPENDED), jornada (la del TSEDE_USUARIO activo con PREDETERMINADO=1 si existe, si no la de menor ORDEN, NULL si no hay permisos), roles/sedes/estados_permisos agregados como JSONB array. p_sort_campo/p_sort_desc representan sorting[0] ya resuelto (name/document/status). p_page_index base 0; p_page_size se acota a (0,100]. Gate/scope: super-admin ve TODOS los funcionarios activos; cualquier otro resuelve su EE via fn_resolver_establecimiento_unico (V50, cubre rector/secretaria/jefe de sistema) y ve funcionarios de ese EE segun CUALQUIERA de: es el rector, es la secretaria, FK_ESTABLECIMIENTO apunta a ese EE, o tiene al menos un TSEDE_USUARIO activo en una sede de ese EE. Si no aplica ninguno => 42501. No calcula totalCount/pageCount: usar junto con fn_usu_empleados_contar. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52/V53).';
+    IS 'REV5: lista funcionarios activos paginados segun los mismos filtros que fn_usu_empleados_contar (search, roles, work_schedules, statuses, campus_id). Ya NO exige FK_ESTABLECIMIENTO NOT NULL, y (REV5) ya NO usa FK_ESTABLECIMIENTO para nada -- TFUNCIONARIO dejo de ser una fila por establecimiento. El row devuelto es la version aplanada del empleado: id, documento, nombres, apellidos, nombre completo, estado (A/I) y label (ACTIVE/SUSPENDED), jornada (la del TSEDE_USUARIO activo con PREDETERMINADO=1 si existe, si no la de menor ORDEN, NULL si no hay permisos), roles/sedes/estados_permisos agregados como JSONB array. p_sort_campo/p_sort_desc representan sorting[0] ya resuelto (name/document/status). p_page_index base 0; p_page_size se acota a (0,100]. Gate/scope: super-admin ve TODOS los funcionarios activos; cualquier otro resuelve su EE via fn_resolver_establecimiento_unico (V50, cubre rector/secretaria/jefe de sistema) y ve funcionarios de ese EE segun CUALQUIERA de: es el rector, es la secretaria, o tiene al menos un TSEDE_USUARIO activo en una sede de ese EE. Si no aplica ninguno => 42501. No calcula totalCount/pageCount: usar junto con fn_usu_empleados_contar. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52/V53).';
 
 
 -- ---------------------------------------------------------------------------
@@ -3214,3 +3226,273 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_fun_baja_establecimiento_bulk(BIGINT, BIGINT[])
     IS 'Variante bulk de fn_fun_baja_establecimiento. Recibe un BIGINT[] de PK_TFUNCIONARIO (deduplicado) y aplica la misma baja a cada uno, EN SAVEPOINTS INDEPENDIENTES (bloque BEGIN/EXCEPTION por PK): un PK que falle NO aborta el resto del lote. Caso explicito: si el rector de un EE viene en el lote, se omite (status=''omitido:rector'') pero el resto del lote se da de baja igual. Retorna SETOF (pk_funcionario, status) con un registro por PK. status en {''eliminado'', ''omitido:rector'', ''error:no_encontrado'', ''error:sin_establecimiento'', ''error:sin_permiso'', ''error:<mensaje>''}. p_pk_usuario_solicitante va al inicio (obligatorio).';
+
+
+-- ---------------------------------------------------------------------------
+-- fn_fun_cancelar_pendiente (REV5)
+--   Cancela (soft delete) un TFUNCIONARIO que todavia no se uso en ningun
+--   lado -- pensada para que el front deshaga un registro que quedo
+--   huerfano porque el paso siguiente (crear/actualizar el establecimiento
+--   que lo iba a referenciar) fallo despues de que /register/funcionario
+--   ya lo hubiera creado. Sin esto, ese TFUNCIONARIO quedaba como basura
+--   permanente sin ninguna forma de deshacerlo desde el front.
+--
+--   REV5 (cambio de modelo, ver header del archivo): la guarda de "es un
+--   pendiente cancelable" ya NO puede basarse en FK_ESTABLECIMIENTO IS
+--   NULL -- con TFUNCIONARIO como una sola fila por persona (no por
+--   establecimiento), esa columna vale NULL SIEMPRE, tambien para
+--   funcionarios reales en uso. La guarda pasa a ser "no se usa en ningun
+--   lado todavia": ni es rector/secretaria de un EE activo
+--   (TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA), ni su TUSUARIO
+--   tiene ningun TSEDE_USUARIO activo (permiso asignado en alguna sede).
+--
+--   Por que no reusar fn_fun_baja_establecimiento ni fn_fun_soft_delete:
+--     * fn_fun_baja_establecimiento esta pensada para el caso contrario,
+--       dar de baja a alguien YA en uso como rector/secretaria de un EE.
+--     * fn_fun_soft_delete solo desactiva TSEDE_USUARIO en UNA sede
+--       puntual (parametro obligatorio) -- un pendiente nunca llego a
+--       tener ninguno, y esta funcion ademas inactiva el TFUNCIONARIO en
+--       si, cosa que fn_fun_soft_delete nunca toca.
+--
+--   Idempotente: si ya esta inactivo, retorna el PK sin error.
+--
+--   Gate: fn_puede_afectar_usuarios (con su fallback de rector/secretaria
+--   de EE) O el propio TUSUARIO dueno del pendiente -- cubre el caso mas
+--   comun (rollback del propio submit fallido, mismo solicitante que ya
+--   paso el gate de fn_fun_crear para crearlo un instante antes).
+--
+--   Excepciones:
+--     SQLSTATE '22023' — parametros faltantes/invalidos, o el TFUNCIONARIO
+--                        ya esta en uso (rector/secretaria de un EE, o
+--                        tiene permisos TSEDE_USUARIO).
+--     SQLSTATE 'P0002' — no existe TFUNCIONARIO con ese PK.
+--     SQLSTATE '42501' — no paso el gate.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_fun_cancelar_pendiente(
+    p_pk_usuario_solicitante BIGINT,
+    p_pk_funcionario         BIGINT
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_fk_usuario BIGINT;
+    v_active     BOOLEAN;
+BEGIN
+    IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
+        RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+    IF p_pk_funcionario IS NULL OR p_pk_funcionario <= 0 THEN
+        RAISE EXCEPTION 'p_pk_funcionario es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+
+    SELECT FK_TUSUARIO, ACTIVE
+      INTO v_fk_usuario, v_active
+      FROM academico_test.TFUNCIONARIO
+     WHERE PK_TFUNCIONARIO = p_pk_funcionario;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No existe TFUNCIONARIO con PK_TFUNCIONARIO = %', p_pk_funcionario
+            USING ERRCODE = 'P0002';
+    END IF;
+
+    IF v_active = FALSE THEN
+        RETURN p_pk_funcionario;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+          FROM academico_test.TESTABLECIMIENTO e
+         WHERE e.ACTIVE = TRUE
+           AND p_pk_funcionario IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+    ) THEN
+        RAISE EXCEPTION 'TFUNCIONARIO % ya esta asignado como rector/secretaria de un establecimiento -- no es un pendiente cancelable', p_pk_funcionario
+            USING ERRCODE = '22023',
+                  HINT    = 'Un funcionario ya asignado se reemplaza reasignando el rol del EE, o se da de baja con fn_fun_baja_establecimiento';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+          FROM academico_test.TSEDE_USUARIO su
+         WHERE su.FK_TUSUARIO = v_fk_usuario
+           AND su.ACTIVE      = TRUE
+    ) THEN
+        RAISE EXCEPTION 'TFUNCIONARIO % ya tiene permisos asignados (TSEDE_USUARIO) -- no es un pendiente cancelable', p_pk_funcionario
+            USING ERRCODE = '22023',
+                  HINT    = 'Usa fn_fun_soft_delete para dar de baja los permisos de un funcionario real';
+    END IF;
+
+    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante)
+       AND v_fk_usuario <> p_pk_usuario_solicitante
+    THEN
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f
+                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+        ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
+    END IF;
+
+    UPDATE academico_test.TFUNCIONARIO
+       SET ACTIVE      = FALSE,
+           MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+           MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TFUNCIONARIO = p_pk_funcionario;
+
+    RAISE NOTICE 'TFUNCIONARIO % pendiente cancelado por usuario %', p_pk_funcionario, p_pk_usuario_solicitante;
+
+    RETURN p_pk_funcionario;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_fun_cancelar_pendiente(BIGINT, BIGINT)
+    IS 'REV5: cancela (soft delete) un TFUNCIONARIO que todavia no se uso en ningun lado -- ni es rector/secretaria de un establecimiento activo, ni tiene ningun TSEDE_USUARIO activo. Pensada para que el front deshaga un registro que quedo huerfano porque el paso siguiente (crear/actualizar el establecimiento que lo iba a referenciar) fallo. Rechaza con 22023 si el funcionario YA esta en uso por cualquiera de esos dos caminos. Idempotente si ya estaba inactivo. Gate: fn_puede_afectar_usuarios (con su fallback de rector/secretaria de EE) O el propio TUSUARIO dueno del pendiente.';
+
+-- Registro en `query` (motor SSO): POST /funcionario/cancelar-pendiente
+-- (id_query=145 en el ambiente de prueba -- el id real depende del entorno).
+-- INSERT INTO query (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types)
+-- VALUES (
+--     '<uuid-generado>',
+--     'SELECT academico_test.fn_fun_cancelar_pendiente(
+--         public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+--         CAST(:BODY.PKFUNCIONARIO AS BIGINT)
+--     ) AS pk_funcionario_cancelado;',
+--     'postgres', false, false, '8', '/funcionario/cancelar-pendiente', 'SELECT', 'POST',
+--     '{"BODY.PKFUNCIONARIO": "BIGINT"}'::jsonb
+-- );
+
+
+-- ---------------------------------------------------------------------------
+-- fn_fun_activo_por_usuario
+--   Dado un PK_TUSUARIO, devuelve el PK_TFUNCIONARIO activo enlazado a el
+--   si existe, o NULL. Con el cambio de modelo (TFUNCIONARIO ya es una fila
+--   por persona, no por establecimiento -- ver header del archivo) a lo
+--   sumo hay uno solo, por eso LIMIT 1 en vez de SETOF.
+--
+--   Uso: el autocompletado por documento del front primero resuelve el
+--   TUSUARIO via fn_usu_buscar_por_documento; con su PK_TUSUARIO llama
+--   aparte a esta funcion para saber si esa persona YA es funcionario
+--   activo -- de ser asi, el alta se trata como edicion de ese
+--   PK_TFUNCIONARIO en vez de crear uno nuevo (habilita de una los botones
+--   de permisos/informacion complementaria en el dialogo de funcionario).
+--
+--   NO requiere gate de autorizacion: solo lectura (STABLE), mismo criterio
+--   que fn_usu_buscar_por_documento -- el control de acceso al resultado se
+--   enforza en la capa de servicio.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_fun_activo_por_usuario(
+    p_fk_tusuario BIGINT
+)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT PK_TFUNCIONARIO
+      FROM academico_test.TFUNCIONARIO
+     WHERE FK_TUSUARIO = p_fk_tusuario
+       AND ACTIVE = TRUE
+     ORDER BY PK_TFUNCIONARIO
+     LIMIT 1;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_fun_activo_por_usuario(BIGINT)
+    IS 'Dado un PK_TUSUARIO, devuelve el PK_TFUNCIONARIO activo enlazado a el si existe, o NULL. Con TFUNCIONARIO como una fila por persona (no por establecimiento, ver header del archivo) a lo sumo hay uno solo -- LIMIT 1 en vez de SETOF. NO requiere gate: solo lectura (STABLE). NOTA: el autocompletado por documento del front (findPersonByDocument) ya NO llama esta funcion por separado -- usa fn_usu_autocompletar_por_documento (mas abajo), que resuelve TUSUARIO + este PK en una sola consulta. Esta funcion se deja registrada por si algun otro caller la necesita sola.';
+
+-- Registro en `query` (motor SSO): GET /funcionarios/activo-por-usuario
+-- (id_query=149 en el ambiente de prueba -- el id real depende del entorno).
+-- INSERT INTO query (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types)
+-- VALUES (
+--     '<uuid-generado>',
+--     'SELECT academico_test.fn_fun_activo_por_usuario(
+--         CAST(:QUERY.FKUSUARIO AS BIGINT)
+--     ) AS pk_tfuncionario_activo;',
+--     'postgres', false, false, '8', '/funcionarios/activo-por-usuario', 'SELECT', 'GET',
+--     '{"QUERY.FKUSUARIO": "BIGINT"}'::jsonb
+-- );
+
+
+-- ---------------------------------------------------------------------------
+-- fn_usu_autocompletar_por_documento
+--   Autocompletado del form de persona (rector/secretaria de
+--   establecimiento, alta de funcionario, ver `use-user-by-document.ts`):
+--   busca un TUSUARIO por (tipo de documento, identificacion) y en la MISMA
+--   consulta resuelve si ya tiene un TFUNCIONARIO activo
+--   (pk_tfuncionario_activo, a lo sumo uno con el modelo actual -- ver
+--   fn_fun_activo_por_usuario).
+--
+--   REV: reemplaza el par fn_usu_buscar_por_documento + fn_fun_activo_por_usuario
+--   que usaba el front para este caso puntual (dos round trips). De paso
+--   corrige un bug real: fn_usu_buscar_por_documento devuelve TUSUARIO
+--   completo (incluye FK_TLV_GENERO), pero el front nunca lo leia de esa
+--   fila -- el genero quedaba en blanco despues de autocompletar aunque la
+--   persona si lo tuviera cargado. Esta funcion trae genero_nombre (JOIN
+--   TLISTA_VALOR, mismo patron que fn_usu_empleado_buscar_por_pk) para que
+--   el front pueda armar un CatalogItem completo, no solo el id.
+--
+--   NO requiere gate de autorizacion: solo lectura (STABLE), mismo criterio
+--   que fn_usu_buscar_por_documento/fn_fun_activo_por_usuario.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_usu_autocompletar_por_documento(
+    p_fk_tlv_tipo_documento BIGINT,
+    p_identificacion        VARCHAR
+)
+RETURNS TABLE (
+    pk_tusuario            BIGINT,
+    identificacion         VARCHAR,
+    primer_nombre          VARCHAR,
+    segundo_nombre         VARCHAR,
+    primer_apellido        VARCHAR,
+    segundo_apellido       VARCHAR,
+    fecha_nacimiento       DATE,
+    fk_tlv_genero          BIGINT,
+    genero_nombre          VARCHAR,
+    telefono               VARCHAR,
+    correo_electronico     VARCHAR,
+    pk_tfuncionario_activo BIGINT
+)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT
+        u.PK_TUSUARIO,
+        u.IDENTIFICACION,
+        u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO,
+        u.FECHA_NACIMIENTO,
+        u.FK_TLV_GENERO, gen.NOMBRE,
+        u.TELEFONO,
+        u.CORREO_ELECTRONICO,
+        (SELECT f.PK_TFUNCIONARIO
+           FROM academico_test.TFUNCIONARIO f
+          WHERE f.FK_TUSUARIO = u.PK_TUSUARIO
+            AND f.ACTIVE = TRUE
+          ORDER BY f.PK_TFUNCIONARIO
+          LIMIT 1) AS pk_tfuncionario_activo
+      FROM academico_test.TUSUARIO u
+ LEFT JOIN academico_test.TLISTA_VALOR gen ON gen.PK_LISTA_VALOR = u.FK_TLV_GENERO
+     WHERE u.FK_TLV_TIPO_DOCUMENTO = p_fk_tlv_tipo_documento
+       AND u.IDENTIFICACION        = p_identificacion
+       AND u.ACTIVE                = TRUE
+     LIMIT 1;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_usu_autocompletar_por_documento(BIGINT, VARCHAR)
+    IS 'Autocompletado del form de persona (rector/secretaria de establecimiento, alta de funcionario): busca un TUSUARIO por (tipo de documento, identificacion) y en la MISMA consulta resuelve si ya tiene un TFUNCIONARIO activo (pk_tfuncionario_activo, a lo sumo uno con el modelo actual -- ver fn_fun_activo_por_usuario). Reemplaza el par fn_usu_buscar_por_documento + fn_fun_activo_por_usuario que usaba el front para este caso puntual (dos round trips, y el primero nunca traia FK_TLV_GENERO ni su nombre resuelto -- bug real, no solo de UI: el genero quedaba en blanco tras autocompletar). Trae genero_nombre (JOIN TLISTA_VALOR) para poder armar un CatalogItem completo en el front, igual que fn_usu_empleado_buscar_por_pk. NO requiere gate: solo lectura (STABLE), mismo criterio que las funciones que reemplaza. NULL row si no hay match.';
+
+-- Registro en `query` (motor SSO): GET /usuarios/autocompletar-por-documento
+-- (id_query=150 en el ambiente de prueba -- el id real depende del entorno).
+-- INSERT INTO query (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types)
+-- VALUES (
+--     '<uuid-generado>',
+--     'SELECT * FROM academico_test.fn_usu_autocompletar_por_documento(
+--         CAST(:QUERY.FKTLVTIPODOCUMENTO AS BIGINT),
+--         CAST(:QUERY.IDENTIFICACION AS VARCHAR)
+--     );',
+--     'postgres', false, false, '8', '/usuarios/autocompletar-por-documento', 'SELECT', 'GET',
+--     '{"QUERY.FKTLVTIPODOCUMENTO": "BIGINT", "QUERY.IDENTIFICACION": "VARCHAR"}'::jsonb
+-- );
