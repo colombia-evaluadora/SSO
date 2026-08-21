@@ -1449,6 +1449,48 @@ services:
       retries: 10
       start_period: 60s
 
+  # Reportes (PDF / Excel) de los mismos listados de pantalla.
+  #
+  # No lleva base de datos ni credenciales propias: pide las filas al
+  # query-service reenviando el JWT del usuario, asi que un reporte
+  # nunca puede mostrar mas de lo que ese usuario ve en la tabla.
+  reporting-service:
+    build:
+      context: .
+      dockerfile: reporting-service/Dockerfile
+    image: ${IMAGE_PREFIX:-eurekatic}/reporting-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
+    container_name: sso-reporting-service
+    restart: unless-stopped
+    # Jasper arma el documento entero en memoria antes de exportarlo.
+    # El Excel en cambio va por streaming (SXSSF) y casi no pesa.
+    mem_limit: 512m
+    mem_reservation: 320m
+    depends_on:
+      eurekaserver:
+        condition: service_started
+    environment:
+      EUREKA_URL: "http://eurekaserver:8761/eureka"
+      # Directo a la instancia del catalogo eval-col: es la que tiene
+      # registradas las filas query de reporte (V67).
+      REPORTING_QUERY_SERVICE_URL: "${REPORTING_QUERY_SERVICE_URL:-http://query-service-eval-col:8084}"
+      REPORTING_MAX_ROWS: "${REPORTING_MAX_ROWS:-50000}"
+      # Clave PUBLICA del par RS256: verifica firmas, no acuña tokens,
+      # asi que no recibe (ni debe recibir) la privada.
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+    healthcheck:
+      # bash y no sh: /dev/tcp es una funcion de bash, dash no la tiene.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8087; printf 'GET /actuator/health HTTP/1.0
+
+' >&3; grep -q UP <&3"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
 volumes:
   postgres-data:
     # Named volume keeps the database across `docker compose down`

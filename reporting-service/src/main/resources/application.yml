@@ -1,0 +1,133 @@
+server:
+  # 8087 — los ocupados: 8080 gateway, 8081 auth-center, 8082 hello,
+  # 8083 sso-admin, 8084 query-service, 8085 notification, 8086 file.
+  port: ${PORT:8087}
+  shutdown: graceful
+
+spring:
+  application:
+    name: reporting-service
+  main:
+    banner-mode: off
+
+  # Este servicio no tiene base de datos: los datos llegan por HTTP
+  # desde el query-service. Sin estas exclusiones el autoconfig de Boot
+  # arma un DataSource fantasma y el arranque muere con "Failed to
+  # determine a suitable driver class". Son los mismos nombres (ya
+  # movidos a los modulos de Boot 4) que excluye query-service.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceTransactionManagerAutoConfiguration
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+
+  # Un reporte sin paginar viaja completo en una respuesta JSON desde el
+  # query-service. Los defaults de Jackson cortan cadenas largas mucho
+  # antes de eso.
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
+    parser:
+      max-string-length: 20971520
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka}
+    healthcheck:
+      enabled: false
+  instance:
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
+
+reporting:
+  # Directo al query-service del catalogo eval-col, no al gateway: ya
+  # estamos dentro de la red y dar la vuelta solo suma un salto.
+  query-service-base-url: ${REPORTING_QUERY_SERVICE_URL:http://query-service-eval-col:8084}
+
+  # Tope duro. V66 quito el LIMIT de las funciones, asi que este es el
+  # unico freno que queda entre un filtro mal puesto y un PDF de
+  # cientos de miles de filas.
+  max-rows: ${REPORTING_MAX_ROWS:50000}
+
+  # Un reporte completo tarda mucho mas que una pagina de 10 filas.
+  request-timeout: ${REPORTING_REQUEST_TIMEOUT:3m}
+
+  # ---------------------------------------------------------------
+  # Catalogo de reportes. `path` es el path_template de la fila
+  # public.query creada en V67 — la que llama a fn_X_listar con las
+  # paginas en NULL.
+  #
+  # `columns` fija QUE columnas salen y en que orden. Se declaran a
+  # proposito en vez de volcar todo lo que devuelve la funcion: las
+  # columnas fk_* y pk_* son llaves internas que no significan nada
+  # para quien lee el reporte. Ademas, el orden de las claves de un
+  # objeto JSON no esta garantizado, asi que sin esta lista el orden de
+  # las columnas podria cambiar entre ejecuciones.
+  #
+  # Agregar un reporte = una fila query (migracion) + una entrada aca.
+  # Si ademas se quiere diseno propio, un reportes/<clave>.jrxml.
+  # ---------------------------------------------------------------
+  reports:
+    funcionarios:
+      path: /establecimientos/funcionarios/reporte
+      title: Funcionarios
+      file-name: funcionarios
+      columns:
+        numero_documento: Documento
+        nombre_completo: Nombre completo
+        estado_label: Estado
+        jornada_nombre: Jornada
+        roles: Roles
+        sedes: Sedes
+
+    establecimientos:
+      path: /establecimientos/reporte
+      title: Establecimientos educativos
+      file-name: establecimientos
+      columns:
+        codigo: Codigo
+        nombre: Nombre
+        nit: NIT
+        departamento_nombre: Departamento
+        municipio_nombre: Municipio
+        estado_nombre: Estado
+
+    sedes:
+      path: /establecimientos/sedes/reporte
+      title: Sedes educativas
+      file-name: sedes
+      columns:
+        codigo: Codigo
+        nombre: Nombre
+        consecutivo: Consecutivo
+        zona_nombre: Zona
+        direccion: Direccion
+        telefono: Telefono
+
+sso:
+  jwt:
+    # Solo la publica: este servicio verifica firmas, no emite tokens.
+    # Tiene que ser la pareja de la JWT_PRIVATE_KEY de auth-center.
+    public-key: ${JWT_PUBLIC_KEY}
+    issuer: sso-postgres
+    header-name: Authorization
+    token-prefix: "Bearer "
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  level:
+    com.co.eurekatic.reporting: ${REPORTING_LOG_LEVEL:INFO}
+    # Jasper habla mucho al compilar una plantilla; en INFO tapa el log
+    # util del propio servicio.
+    net.sf.jasperreports: WARN
