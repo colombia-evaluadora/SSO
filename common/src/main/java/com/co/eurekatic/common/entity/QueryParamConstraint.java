@@ -60,6 +60,14 @@ public class QueryParamConstraint {
     @Column(name = "MAX_DIGITS")
     private Integer maxDigits;
 
+    /** V83 — rango de valor (distinto de {@code maxDigits}, que limita
+     *  cifras, no magnitud). Ver la migración V83. */
+    @Column(name = "MIN_VALUE")
+    private java.math.BigDecimal minValue;
+
+    @Column(name = "MAX_VALUE")
+    private java.math.BigDecimal maxValue;
+
     @Column(name = "NUMERIC_TEXT")
     private Boolean numericText;
 
@@ -74,12 +82,15 @@ public class QueryParamConstraint {
 
     public QueryParamConstraint(Query query, String paramKey,
                                 Boolean onlyPositive, Boolean allowDecimals, Integer maxDigits,
+                                java.math.BigDecimal minValue, java.math.BigDecimal maxValue,
                                 Boolean numericText, Integer minLength, Integer maxLength) {
         this.query = query;
         this.paramKey = paramKey;
         this.onlyPositive = onlyPositive;
         this.allowDecimals = allowDecimals;
         this.maxDigits = maxDigits;
+        this.minValue = minValue;
+        this.maxValue = maxValue;
         this.numericText = numericText;
         this.minLength = minLength;
         this.maxLength = maxLength;

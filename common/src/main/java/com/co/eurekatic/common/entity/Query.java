@@ -286,6 +286,8 @@ public class Query {
                 existing.setOnlyPositive(updated.getOnlyPositive());
                 existing.setAllowDecimals(updated.getAllowDecimals());
                 existing.setMaxDigits(updated.getMaxDigits());
+                existing.setMinValue(updated.getMinValue());
+                existing.setMaxValue(updated.getMaxValue());
                 existing.setNumericText(updated.getNumericText());
                 existing.setMinLength(updated.getMinLength());
                 existing.setMaxLength(updated.getMaxLength());

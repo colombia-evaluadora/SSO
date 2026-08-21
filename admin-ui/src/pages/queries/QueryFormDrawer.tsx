@@ -614,6 +614,8 @@ function ParamTypesSection({
       rule.onlyPositive != null ||
       rule.allowDecimals != null ||
       rule.maxDigits != null ||
+      rule.minValue != null ||
+      rule.maxValue != null ||
       rule.numericText != null ||
       rule.minLength != null ||
       rule.maxLength != null
@@ -1115,6 +1117,30 @@ function ParamConstraintModal({
               className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
             />
           </label>
+          {/* V83 — rango de VALOR, distinto de maxDigits (cifras, no
+              magnitud): un maxDigits=5 deja pasar 99999, esto no. */}
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium text-slate-700">Valor mínimo</span>
+              <input
+                type="number"
+                value={rule.minValue ?? ""}
+                onChange={(e) => onChange({ minValue: numberOrNull(e.target.value) })}
+                placeholder="Sin mínimo"
+                className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium text-slate-700">Valor máximo</span>
+              <input
+                type="number"
+                value={rule.maxValue ?? ""}
+                onChange={(e) => onChange({ maxValue: numberOrNull(e.target.value) })}
+                placeholder="Sin máximo"
+                className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+              />
+            </label>
+          </div>
         </div>
       ) : (
         <div className="grid gap-3">

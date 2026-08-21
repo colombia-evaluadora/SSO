@@ -530,6 +530,12 @@ public class QueryAdminService {
                 throw new IllegalArgumentException(
                     "PARAM_CONSTRAINTS['" + key + "'].maxDigits debe ser mayor que cero.");
             }
+            if (rule.minValue() != null && rule.maxValue() != null
+                    && rule.minValue().compareTo(rule.maxValue()) > 0) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'].minValue (" + rule.minValue()
+                    + ") no puede ser mayor que maxValue (" + rule.maxValue() + ").");
+            }
             if (rule.minLength() != null && rule.minLength() < 0) {
                 throw new IllegalArgumentException(
                     "PARAM_CONSTRAINTS['" + key + "'].minLength no puede ser negativo.");
@@ -564,6 +570,7 @@ public class QueryAdminService {
             if (r == null || (!r.hasNumericRules() && !r.hasTextRules())) continue;
             out.add(new QueryParamConstraint(q, e.getKey(),
                     r.onlyPositive(), r.allowDecimals(), r.maxDigits(),
+                    r.minValue(), r.maxValue(),
                     r.numericText(), r.minLength(), r.maxLength()));
         }
         return out;

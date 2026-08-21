@@ -61,7 +61,7 @@ class QueryAdminServiceParamConstraintsValidationTest {
     @Test
     void numericRulesOnDeclaredIntegerTypePass() {
         Map<String, ParamConstraint> constraints = new LinkedHashMap<>();
-        constraints.put("BODY.ID", new ParamConstraint(true, false, 6, null, null, null));
+        constraints.put("BODY.ID", new ParamConstraint(true, false, 6, null, null, null, null, null));
         assertThatCode(() -> invokeValidation(req(Map.of("BODY.ID", "BIGINT"), constraints)))
                 .doesNotThrowAnyException();
     }
@@ -69,7 +69,7 @@ class QueryAdminServiceParamConstraintsValidationTest {
     @Test
     void textRulesOnDeclaredTextTypePass() {
         Map<String, ParamConstraint> constraints = new LinkedHashMap<>();
-        constraints.put("BODY.ID", new ParamConstraint(null, null, null, true, 4, 12));
+        constraints.put("BODY.ID", new ParamConstraint(null, null, null, null, null, true, 4, 12));
         assertThatCode(() -> invokeValidation(req(Map.of("BODY.ID", "TEXT"), constraints)))
                 .doesNotThrowAnyException();
     }
@@ -77,7 +77,7 @@ class QueryAdminServiceParamConstraintsValidationTest {
     @Test
     void rejectsConstraintOnUndeclaredParam() {
         Map<String, ParamConstraint> constraints = new LinkedHashMap<>();
-        constraints.put("BODY.MISSING", new ParamConstraint(true, null, null, null, null, null));
+        constraints.put("BODY.MISSING", new ParamConstraint(true, null, null, null, null, null, null, null));
         assertThatThrownBy(() -> invokeValidation(req(Map.of("BODY.ID", "BIGINT"), constraints)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("BODY.MISSING")
@@ -87,7 +87,7 @@ class QueryAdminServiceParamConstraintsValidationTest {
     @Test
     void rejectsNumericRuleOnTextType() {
         Map<String, ParamConstraint> constraints = new LinkedHashMap<>();
-        constraints.put("BODY.ID", new ParamConstraint(true, null, null, null, null, null));
+        constraints.put("BODY.ID", new ParamConstraint(true, null, null, null, null, null, null, null));
         assertThatThrownBy(() -> invokeValidation(req(Map.of("BODY.ID", "TEXT"), constraints)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("numéricas");
@@ -96,7 +96,7 @@ class QueryAdminServiceParamConstraintsValidationTest {
     @Test
     void rejectsTextRuleOnNumericType() {
         Map<String, ParamConstraint> constraints = new LinkedHashMap<>();
-        constraints.put("BODY.ID", new ParamConstraint(null, null, null, null, 4, 12));
+        constraints.put("BODY.ID", new ParamConstraint(null, null, null, null, null, null, 4, 12));
         assertThatThrownBy(() -> invokeValidation(req(Map.of("BODY.ID", "BIGINT"), constraints)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("texto");
@@ -105,7 +105,7 @@ class QueryAdminServiceParamConstraintsValidationTest {
     @Test
     void rejectsNonPositiveMaxDigits() {
         Map<String, ParamConstraint> constraints = new LinkedHashMap<>();
-        constraints.put("BODY.ID", new ParamConstraint(null, null, 0, null, null, null));
+        constraints.put("BODY.ID", new ParamConstraint(null, null, 0, null, null, null, null, null));
         assertThatThrownBy(() -> invokeValidation(req(Map.of("BODY.ID", "BIGINT"), constraints)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("maxDigits");
@@ -114,7 +114,7 @@ class QueryAdminServiceParamConstraintsValidationTest {
     @Test
     void rejectsMinLengthGreaterThanMaxLength() {
         Map<String, ParamConstraint> constraints = new LinkedHashMap<>();
-        constraints.put("BODY.ID", new ParamConstraint(null, null, null, null, 10, 4));
+        constraints.put("BODY.ID", new ParamConstraint(null, null, null, null, null, null, 10, 4));
         assertThatThrownBy(() -> invokeValidation(req(Map.of("BODY.ID", "TEXT"), constraints)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("minLength");
@@ -123,9 +123,38 @@ class QueryAdminServiceParamConstraintsValidationTest {
     @Test
     void rejectsNegativeMinLength() {
         Map<String, ParamConstraint> constraints = new LinkedHashMap<>();
-        constraints.put("BODY.ID", new ParamConstraint(null, null, null, null, -1, null));
+        constraints.put("BODY.ID", new ParamConstraint(null, null, null, null, null, null, -1, null));
         assertThatThrownBy(() -> invokeValidation(req(Map.of("BODY.ID", "TEXT"), constraints)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("minLength");
+    }
+
+    @Test
+    void minMaxValueOnDeclaredNumericTypePasses() {
+        Map<String, ParamConstraint> constraints = new LinkedHashMap<>();
+        constraints.put("BODY.VALORACION", new ParamConstraint(null, null, null,
+                java.math.BigDecimal.ZERO, java.math.BigDecimal.valueOf(100), null, null, null));
+        assertThatCode(() -> invokeValidation(req(Map.of("BODY.VALORACION", "NUMERIC"), constraints)))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void rejectsMinValueGreaterThanMaxValue() {
+        Map<String, ParamConstraint> constraints = new LinkedHashMap<>();
+        constraints.put("BODY.ID", new ParamConstraint(null, null, null,
+                java.math.BigDecimal.valueOf(10), java.math.BigDecimal.valueOf(4), null, null, null));
+        assertThatThrownBy(() -> invokeValidation(req(Map.of("BODY.ID", "BIGINT"), constraints)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("minValue");
+    }
+
+    @Test
+    void rejectsMinValueOnTextType() {
+        Map<String, ParamConstraint> constraints = new LinkedHashMap<>();
+        constraints.put("BODY.ID", new ParamConstraint(null, null, null,
+                java.math.BigDecimal.ZERO, null, null, null, null));
+        assertThatThrownBy(() -> invokeValidation(req(Map.of("BODY.ID", "TEXT"), constraints)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("numéricas");
     }
 }

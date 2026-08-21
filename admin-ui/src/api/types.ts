@@ -368,6 +368,9 @@ export interface ParamConstraint {
   onlyPositive?: boolean | null | undefined;
   allowDecimals?: boolean | null | undefined;
   maxDigits?: number | null | undefined;
+  /** V83 — rango de VALOR, distinto de maxDigits (cifras, no magnitud). */
+  minValue?: number | null | undefined;
+  maxValue?: number | null | undefined;
   numericText?: boolean | null | undefined;
   minLength?: number | null | undefined;
   maxLength?: number | null | undefined;

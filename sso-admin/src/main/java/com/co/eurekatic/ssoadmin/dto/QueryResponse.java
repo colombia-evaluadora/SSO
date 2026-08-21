@@ -73,6 +73,7 @@ public record QueryResponse(
         for (var c : q.getParamConstraints()) {
             constraints.put(c.getParamKey(), new ParamConstraint(
                     c.getOnlyPositive(), c.getAllowDecimals(), c.getMaxDigits(),
+                    c.getMinValue(), c.getMaxValue(),
                     c.getNumericText(), c.getMinLength(), c.getMaxLength()));
         }
         return new QueryResponse(

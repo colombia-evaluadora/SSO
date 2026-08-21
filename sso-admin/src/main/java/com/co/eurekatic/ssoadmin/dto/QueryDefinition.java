@@ -167,6 +167,7 @@ public record QueryDefinition(
         for (var c : q.getParamConstraints()) {
             out.put(c.getParamKey(), new ParamConstraint(
                     c.getOnlyPositive(), c.getAllowDecimals(), c.getMaxDigits(),
+                    c.getMinValue(), c.getMaxValue(),
                     c.getNumericText(), c.getMinLength(), c.getMaxLength()));
         }
         return out;

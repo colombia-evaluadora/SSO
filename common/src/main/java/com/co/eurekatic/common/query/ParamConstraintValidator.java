@@ -102,6 +102,18 @@ public final class ParamConstraintValidator {
                         + " cifra(s) significativa(s) (recibido " + digits + ": " + plain(num) + ").";
             }
         }
+
+        // V83 — rango de VALOR, distinto de maxDigits (que limita
+        // cifras, no magnitud). Refleja CHECK (col >= x AND col <= y)
+        // reales del schema, p. ej. teval_docente_detalle.valoracion.
+        if (rule.minValue() != null && num.compareTo(rule.minValue()) < 0) {
+            return "El campo '" + key + "' debe ser mayor o igual que " + plain(rule.minValue())
+                    + " (recibido: " + plain(num) + ").";
+        }
+        if (rule.maxValue() != null && num.compareTo(rule.maxValue()) > 0) {
+            return "El campo '" + key + "' debe ser menor o igual que " + plain(rule.maxValue())
+                    + " (recibido: " + plain(num) + ").";
+        }
         return null;
     }
 

@@ -30,7 +30,7 @@ class ParamConstraintValidatorTest {
     @Test
     void nullValueIsNeverAViolation() {
         Map<String, ParamConstraint> constraints = Map.of(
-                "BODY.ID", new ParamConstraint(true, null, null, null, null, null));
+                "BODY.ID", new ParamConstraint(true, null, null, null, null, null, null, null));
         var values = new LinkedHashMap<String, Object>();
         values.put("BODY.ID", null);
         var violations = ParamConstraintValidator.validate(
@@ -41,7 +41,7 @@ class ParamConstraintValidatorTest {
     @Test
     void onlyPositiveRejectsNegativeAndZero() {
         Map<String, ParamConstraint> constraints = Map.of(
-                "BODY.EDAD", new ParamConstraint(true, null, null, null, null, null));
+                "BODY.EDAD", new ParamConstraint(true, null, null, null, null, null, null, null));
         var neg = ParamConstraintValidator.validate(
                 values("BODY.EDAD", -1), Map.of("BODY.EDAD", "INTEGER"), constraints);
         assertThat(neg).containsKey("BODY.EDAD");
@@ -59,7 +59,7 @@ class ParamConstraintValidatorTest {
     @Test
     void allowDecimalsFalseRejectsDecimalValue() {
         Map<String, ParamConstraint> constraints = Map.of(
-                "BODY.MONTO", new ParamConstraint(null, false, null, null, null, null));
+                "BODY.MONTO", new ParamConstraint(null, false, null, null, null, null, null, null));
         var bad = ParamConstraintValidator.validate(
                 values("BODY.MONTO", new java.math.BigDecimal("10.5")),
                 Map.of("BODY.MONTO", "NUMERIC"), constraints);
@@ -73,9 +73,38 @@ class ParamConstraintValidatorTest {
     }
 
     @Test
+    void minMaxValueRejectOutOfRangeNumber() {
+        // V83 — rango de VALOR, distinto de maxDigits (cifras, no
+        // magnitud): teval_docente_detalle.valoracion en el schema
+        // real es CHECK (valoracion >= 0 AND valoracion <= 100).
+        Map<String, ParamConstraint> constraints = Map.of(
+                "BODY.VALORACION", new ParamConstraint(
+                        null, null, null,
+                        new java.math.BigDecimal("0"), new java.math.BigDecimal("100"),
+                        null, null, null));
+
+        var tooLow = ParamConstraintValidator.validate(
+                values("BODY.VALORACION", -1), Map.of("BODY.VALORACION", "NUMERIC"), constraints);
+        assertThat(tooLow.get("BODY.VALORACION")).contains("mayor o igual que 0");
+
+        var tooHigh = ParamConstraintValidator.validate(
+                values("BODY.VALORACION", 150), Map.of("BODY.VALORACION", "NUMERIC"), constraints);
+        assertThat(tooHigh.get("BODY.VALORACION")).contains("menor o igual que 100");
+
+        var ok = ParamConstraintValidator.validate(
+                values("BODY.VALORACION", 75), Map.of("BODY.VALORACION", "NUMERIC"), constraints);
+        assertThat(ok).isEmpty();
+
+        // Límites inclusive.
+        var atBounds = ParamConstraintValidator.validate(
+                values("BODY.VALORACION", 0), Map.of("BODY.VALORACION", "NUMERIC"), constraints);
+        assertThat(atBounds).isEmpty();
+    }
+
+    @Test
     void maxDigitsRejectsExcessSignificantDigits() {
         Map<String, ParamConstraint> constraints = Map.of(
-                "BODY.CODIGO", new ParamConstraint(null, null, 4, null, null, null));
+                "BODY.CODIGO", new ParamConstraint(null, null, 4, null, null, null, null, null));
         var bad = ParamConstraintValidator.validate(
                 values("BODY.CODIGO", 123456L), Map.of("BODY.CODIGO", "BIGINT"), constraints);
         assertThat(bad).containsKey("BODY.CODIGO");
@@ -89,7 +118,7 @@ class ParamConstraintValidatorTest {
     @Test
     void numericTextRejectsNonDigitCharacters() {
         Map<String, ParamConstraint> constraints = Map.of(
-                "BODY.DOC", new ParamConstraint(null, null, null, true, null, null));
+                "BODY.DOC", new ParamConstraint(null, null, null, null, null, true, null, null));
         var bad = ParamConstraintValidator.validate(
                 values("BODY.DOC", "12A34"), Map.of("BODY.DOC", "TEXT"), constraints);
         assertThat(bad).containsKey("BODY.DOC");
@@ -102,7 +131,7 @@ class ParamConstraintValidatorTest {
     @Test
     void lengthRulesRejectOutOfRangeText() {
         Map<String, ParamConstraint> constraints = Map.of(
-                "BODY.NOMBRE", new ParamConstraint(null, null, null, null, 4, 8));
+                "BODY.NOMBRE", new ParamConstraint(null, null, null, null, null, null, 4, 8));
         var tooShort = ParamConstraintValidator.validate(
                 values("BODY.NOMBRE", "ab"), Map.of("BODY.NOMBRE", "TEXT"), constraints);
         assertThat(tooShort.get("BODY.NOMBRE")).contains("4");
@@ -123,7 +152,7 @@ class ParamConstraintValidatorTest {
         // this combination already; the runtime validator just
         // ignores it defensively rather than crashing.
         Map<String, ParamConstraint> constraints = Map.of(
-                "BODY.X", new ParamConstraint(true, null, null, null, null, null));
+                "BODY.X", new ParamConstraint(true, null, null, null, null, null, null, null));
         var result = ParamConstraintValidator.validate(
                 values("BODY.X", "hello"), Map.of("BODY.X", "TEXT"), constraints);
         assertThat(result).isEmpty();
@@ -132,8 +161,8 @@ class ParamConstraintValidatorTest {
     @Test
     void multipleViolatingFieldsAreAllReported() {
         Map<String, ParamConstraint> constraints = new LinkedHashMap<>();
-        constraints.put("BODY.EDAD", new ParamConstraint(true, null, null, null, null, null));
-        constraints.put("BODY.DOC", new ParamConstraint(null, null, null, true, null, null));
+        constraints.put("BODY.EDAD", new ParamConstraint(true, null, null, null, null, null, null, null));
+        constraints.put("BODY.DOC", new ParamConstraint(null, null, null, null, null, true, null, null));
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("BODY.EDAD", -3);
         values.put("BODY.DOC", "12A");
@@ -148,7 +177,7 @@ class ParamConstraintValidatorTest {
     @Test
     void requiredSuffixOnDeclaredTypeIsStrippedBeforeCheckingBaseType() {
         Map<String, ParamConstraint> constraints = Map.of(
-                "BODY.EDAD", new ParamConstraint(true, null, null, null, null, null));
+                "BODY.EDAD", new ParamConstraint(true, null, null, null, null, null, null, null));
         var violations = ParamConstraintValidator.validate(
                 values("BODY.EDAD", -1), Map.of("BODY.EDAD", "INTEGER!"), constraints);
         assertThat(violations).containsKey("BODY.EDAD");

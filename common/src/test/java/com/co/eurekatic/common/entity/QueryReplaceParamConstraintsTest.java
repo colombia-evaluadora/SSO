@@ -23,12 +23,12 @@ class QueryReplaceParamConstraintsTest {
     void sameKeysAreUpdatedInPlaceNotReplaced() {
         Query q = new Query();
         QueryParamConstraint original = new QueryParamConstraint(
-                q, "BODY.EDAD", true, null, null, null, null, null);
+                q, "BODY.EDAD", true, null, null, null, null, null, null, null);
         q.replaceParamConstraints(List.of(original));
         assertThat(q.getParamConstraints()).hasSize(1);
 
         QueryParamConstraint updated = new QueryParamConstraint(
-                null, "BODY.EDAD", false, true, 4, null, null, null);
+                null, "BODY.EDAD", false, true, 4, null, null, null, null, null);
         q.replaceParamConstraints(List.of(updated));
 
         // Misma instancia in-memory (identidad), sólo con los campos
@@ -45,12 +45,12 @@ class QueryReplaceParamConstraintsTest {
     void removedKeyIsDroppedFromCollection() {
         Query q = new Query();
         q.replaceParamConstraints(List.of(
-                new QueryParamConstraint(q, "BODY.A", true, null, null, null, null, null),
-                new QueryParamConstraint(q, "BODY.B", null, null, null, true, null, null)));
+                new QueryParamConstraint(q, "BODY.A", true, null, null, null, null, null, null, null),
+                new QueryParamConstraint(q, "BODY.B", null, null, null, null, null, true, null, null)));
         assertThat(q.getParamConstraints()).hasSize(2);
 
         q.replaceParamConstraints(List.of(
-                new QueryParamConstraint(q, "BODY.A", true, null, null, null, null, null)));
+                new QueryParamConstraint(q, "BODY.A", true, null, null, null, null, null, null, null)));
 
         assertThat(q.getParamConstraints()).hasSize(1);
         assertThat(q.getParamConstraints().get(0).getParamKey()).isEqualTo("BODY.A");
@@ -60,11 +60,11 @@ class QueryReplaceParamConstraintsTest {
     void newKeyIsAppended() {
         Query q = new Query();
         q.replaceParamConstraints(List.of(
-                new QueryParamConstraint(q, "BODY.A", true, null, null, null, null, null)));
+                new QueryParamConstraint(q, "BODY.A", true, null, null, null, null, null, null, null)));
 
         q.replaceParamConstraints(List.of(
-                new QueryParamConstraint(q, "BODY.A", true, null, null, null, null, null),
-                new QueryParamConstraint(q, "BODY.B", null, null, null, true, 2, 8)));
+                new QueryParamConstraint(q, "BODY.A", true, null, null, null, null, null, null, null),
+                new QueryParamConstraint(q, "BODY.B", null, null, null, null, null, true, 2, 8)));
 
         assertThat(q.getParamConstraints()).hasSize(2);
         assertThat(q.getParamConstraints().stream().map(QueryParamConstraint::getParamKey).toList())
@@ -79,7 +79,7 @@ class QueryReplaceParamConstraintsTest {
     void emptyNextClearsEverything() {
         Query q = new Query();
         q.replaceParamConstraints(List.of(
-                new QueryParamConstraint(q, "BODY.A", true, null, null, null, null, null)));
+                new QueryParamConstraint(q, "BODY.A", true, null, null, null, null, null, null, null)));
         q.replaceParamConstraints(List.of());
         assertThat(q.getParamConstraints()).isEmpty();
     }
