@@ -417,3 +417,73 @@ Igual que 1.7 — la generación de archivo es capa de aplicación; la query que
 | `/audit-tables/.../revert` | ❌ Escritura — fuera de alcance de "queries SELECT" por definición |
 | `/audits/*` (todo el árbol) | ⚠️ Todas las queries **corren** y devuelven el shape correcto, pero sobre una sesión **sintética** (heurística de inactividad de 30 min sobre `app_user`) — no hay forma de que sean "correctas" hasta que exista una entidad de sesión real en `auth-center` |
 | Pendiente transversal | 🔶 `LIMIT`/`OFFSET` deben ser literales en ClickHouse — toda paginación de arriba necesita esto resuelto antes de ser un catálogo real |
+
+---
+
+## Actualización (2026-08-21, más tarde) — implementado y probado como migraciones reales
+
+Las 9 queries "✅ sólido"/"⚠️ funciona" de arriba (1.1, 1.2, 1.3, 1.4, 1.6, 2.2, 2.3, 2.4, 2.5 — todo
+excepto `revert` y los `export*`, que no son SELECT) se implementaron como migraciones Flyway reales
+(`postgres/migrations/V84`-`V87`) y se probaron end-to-end contra una instancia real de
+`query-service` en modo ClickHouse — no solo en papel. Validado con un ciclo completo de
+borrar-todo → reaplicar V84→V87 → confirmar los 9 endpoints en `200`, simulando lo que un ambiente
+nuevo vería.
+
+**Bugs reales encontrados escribiendo el SQL de verdad** (ninguno visible solo leyendo la spec o
+razonando en abstracto — todos salieron de ejecutar contra ClickHouse real, versión 24.8.14.39):
+
+1. **`audit_log.tabla` NO lleva prefijo de schema.** Es `tarea`, no `academico_test.tarea` — un
+   drift entre lo que dice `CONTRATO_SP_CLICKHOUSE.md` y lo que el pipeline realmente escribe, ya
+   detectado en una sesión anterior pero que igual se me volvió a colar al escribir el catálogo
+   literal de tablas (§1.1/§1.2 del cuerpo de este documento usan el nombre correcto ya
+   corregido). Costó `operationsToday: 0` en todas las tablas hasta que se corrigió.
+
+2. **ClickHouse NO hace short-circuit de `OR`.** `(x = '' OR parseDateTimeBestEffort(x) >= ts)`
+   revienta con `CANNOT_PARSE_DATETIME`/`CANNOT_CONVERT_TYPE` cuando `x` es `''` o `NULL`, porque
+   ClickHouse evalúa **ambos** lados del `OR` siempre — a diferencia de Postgres, donde ese patrón
+   es idiomático y seguro. Fix real: envolver el argumento con `if(x = '', '<sentinela>', x)` para
+   que la función que puede fallar NUNCA reciba un valor inválido, en vez de confiar en que el
+   `OR` "salve" el caso vacío. Aplicado a todos los filtros de rango de fecha.
+
+3. **`CAST(NULL, 'tipo')` es ilegal contra un tipo no-nullable — y es lo que genera
+   `SqlRewriter` cuando un placeholder con `paramType` declarado se bindea `NULL`.** Pasa cuando el
+   caller **omite por completo** una key opcional del body en vez de mandarla como string vacío —
+   `ParamBinder` bindea `NULL` para el placeholder declarado-pero-ausente, y `CAST(NULL, 'varchar')`
+   truena con `Cannot convert NULL to a non-nullable type` sin importar qué lo envuelva (ni
+   siquiera `coalesce()` lo salva, porque el `CAST` en sí mismo es lo que falla, antes de que
+   `coalesce` reciba nada). **Contrato resultante**: el caller de estos endpoints debe mandar
+   **todas** las keys declaradas de `filters`, aunque sea con string vacío — omitirlas hace que el
+   catálogo actual falle. Alternativa no explorada: no declarar `paramType` para esas keys (cae al
+   auto-derive de Spring) — pero eso reabre el guard V49 de "placeholder sin tipo declarado" para
+   cualquier key que el caller SÍ mande.
+
+4. **Cualquier key presente en el body de la petición necesita `paramType` declarado, la use o no
+   el SQL de esa fila.** El guard V49 de query-service itera **todo** `allParams` (no solo lo que
+   aparece en el texto SQL) — un body 100%-spec-compliant que manda `sorting`/`pageIndex`/
+   `pageSize`/`tableSlug` (campos que estas queries simplificadas no usan) los rechaza con 400 si
+   no están en `param_types`, aunque la query nunca los referencie. Se declaran igual, con
+   `VARCHAR` como tipo — como no se bindean en ningún placeholder del SQL, el tipo declarado no
+   importa funcionalmente, solo necesita **existir**.
+
+5. **ClickHouse no soporta subconsultas correlacionadas fila-a-fila** (`"Resolve identifier 'a1.x'
+   from parent scope only supported for constants and CTE"`) — el patrón Postgres de
+   `(SELECT ... FROM t2 WHERE t2.col = t1.col)` dentro de un `SELECT ... FROM t1` no funciona igual.
+   Fix (1.4): materializar la fila de interés en un CTE de una sola fila, y referenciarlo con
+   subconsultas escalares `(SELECT campo FROM cte)` en vez de un alias correlacionado — eso SÍ está
+   permitido ("constants and CTE").
+
+6. **`now()` (`DateTime`, precisión de segundo) y una columna `DateTime64(3, 'UTC')` no se pueden
+   restar directamente** — `now() - max(ts)` truena con `Illegal types DateTime and DateTime64(3,
+   'UTC') of arguments of function minus`. Fix: `dateDiff('minute', max(ts), now()) < 30` en vez de
+   `now() - max(ts) < INTERVAL 30 MINUTE` — mismo resultado, sin el choque de tipos.
+
+7. **La autorización del catálogo (`role_query`) tarda hasta ~60s en propagarse** después de
+   insertar una fila nueva — hay una capa de caché en `sso-admin` (`QueryCatalogService`, TTL corto
+   pero no instantáneo) que sigue sirviendo "no autorizado" un rato después de que la fila ya existe
+   en la base. No es un bug, pero cuesta tiempo real de iteración si no se sabe — cada ciclo de
+   prueba de este documento necesitó ese margen.
+
+**Migración nueva, `V87`**: sin una fila `role_query` explícita, TODAS estas queries responden 403 a
+cualquier caller — el catálogo no tiene bypass implícito ni para ADMIN. `V87` las vincula a
+`CEVAL-SUPER_ADMINISTRADOR` como punto de partida deliberadamente angosto (el histórico completo de
+auditoría es información sensible); a quién más darle acceso es una decisión de producto, no técnica.
