@@ -111,11 +111,50 @@ CREATE TABLE IF NOT EXISTS auditoria.app_log
     request_id LowCardinality(String) DEFAULT '',
     tabla      LowCardinality(String) DEFAULT '',
     operacion  LowCardinality(String) DEFAULT '',
-    mensaje    String CODEC(ZSTD(3)),
-    excepcion  String CODEC(ZSTD(3)),
-    contexto   String CODEC(ZSTD(3))
+    mensaje    String                                 CODEC(ZSTD(1)),
+    excepcion  String                                 CODEC(ZSTD(3)),
+    contexto   String                                 CODEC(ZSTD(3))
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(ts)
 ORDER BY (servicio, nivel, ts)
 TTL toDate(ts) + INTERVAL 30 DAY;
+
+-- V-audit-ctx-4 (sesiones reales) -- mirror de
+-- academico_test.tsesion_web (Postgres) en ClickHouse. Misma forma
+-- que la tabla origen, alimentada por ClickHouseSessionMirrorStage
+-- en el pipeline CDC. La fuente de verdad sigue siendo Postgres
+-- (esta tabla se reconstruye por completo desde Debezium si hace
+-- falta) -- ClickHouse la mantiene porque /audits/* (V90) prefiere
+-- servir single-roundtrip contra esta tabla antes que un JOIN
+-- Postgres→ClickHouse por request.
+--
+-- ORDER BY (family_id): la PK lógica es family_id (UUID del refresh
+-- token family, único por la constraint uq_tsesion_web_family de
+-- V88). Un UPDATE sobre la misma familia llega como un INSERT nuevo
+-- con lsn mayor; ReplacingMergeTree dedupe en compactación. La
+-- surrogate pk_tsesion_web se conserva como columna informativa pero
+-- NO es clave de ordenamiento -- un UPDATE que cambia pk_tsesion_web
+-- no existe (BIGSERIAL, asignado en INSERT y nunca tocado).
+--
+-- last_seen_at tiene bloom filter para que el filtro "sesiones
+-- activas" (now() - last_seen_at < 30min, equivalente a
+-- ended_at_computed IS NULL) use el índice en vez de scan completo.
+CREATE TABLE IF NOT EXISTS auditoria.tsesion_web
+(
+    pk_tsesion_web  Int64                              CODEC(Delta, ZSTD(1)),
+    family_id       LowCardinality(String)             CODEC(ZSTD(1)),
+    fk_tusuario     Nullable(Int64)                    CODEC(Delta, ZSTD(1)),
+    started_at      DateTime64(3, 'UTC')               CODEC(Delta, ZSTD(1)),
+    ended_at        Nullable(DateTime64(3, 'UTC'))     CODEC(Delta, ZSTD(1)),
+    last_seen_at    DateTime64(3, 'UTC')               CODEC(Delta, ZSTD(1)),
+    close_reason    LowCardinality(String)             CODEC(ZSTD(1)),
+    lsn             UInt64                             CODEC(Delta, ZSTD(1)),
+    INDEX idx_family        family_id                  TYPE bloom_filter GRANULARITY 4,
+    INDEX idx_tsesion_fk    fk_tusuario                TYPE bloom_filter GRANULARITY 4,
+    INDEX idx_tsesion_last  last_seen_at               TYPE minmax        GRANULARITY 4,
+    INDEX idx_tsesion_end   ended_at                   TYPE minmax        GRANULARITY 4
+)
+ENGINE = ReplacingMergeTree(lsn)
+PARTITION BY toYYYYMM(started_at)
+ORDER BY (family_id);

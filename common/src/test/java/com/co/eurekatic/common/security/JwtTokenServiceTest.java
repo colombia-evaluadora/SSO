@@ -385,4 +385,74 @@ class JwtTokenServiceTest {
         assertThat(principal.email()).isEqualTo("alice");
         assertThat(principal.userId()).isNull();
     }
+
+    /* ====================== V-audit-ctx-4 — fid claim round-trip ====================== */
+
+    @Test
+    void roundTripPreservesFidClaim() {
+        JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
+
+        String token = svc.issueAccessToken("alice", 42L, "fam-uuid-abc123", Set.of("USER"));
+        AuthPrincipal principal = svc.parse(token);
+
+        assertThat(principal.email()).isEqualTo("alice");
+        assertThat(principal.userId()).isEqualTo(42L);
+        assertThat(principal.familyId()).isEqualTo("fam-uuid-abc123");
+    }
+
+    @Test
+    void fidNullAtIssueOmitsClaim() {
+        // Llamar el overload de 3 args (pre-V-audit-ctx-4) no emite
+        // `fid` -- tokens existentes siguen funcionando sin el claim
+        // y parsean con familyId=null.
+        JwtTokenService svc = new JwtTokenService(DEFAULT_PROPS);
+        String token = svc.issueAccessToken("alice", 42L, Set.of("USER"));
+
+        AuthPrincipal principal = svc.parse(token);
+        assertThat(principal.familyId()).isNull();
+    }
+
+    @Test
+    void tokenWithoutFidClaimParsesToNullFamilyId() {
+        // Token pre-V-audit-ctx-4 -- forjado sin el claim, debe
+        // parsear limpio con familyId=null (igual que el caso de
+        // uid pre-V29).
+        SecretKey key = Keys.hmacShaKeyFor(GOOD_SECRET.getBytes(StandardCharsets.UTF_8));
+        String legacyToken = io.jsonwebtoken.Jwts.builder()
+                .subject("alice")
+                .issuer("sso-postgres")
+                .claim("roles", java.util.List.of("USER"))
+                .claim("typ", "access")
+                .issuedAt(new java.util.Date())
+                .expiration(new java.util.Date(System.currentTimeMillis() + 60_000))
+                .signWith(key, io.jsonwebtoken.Jwts.SIG.HS256)
+                .compact();
+
+        JwtTokenService svc = new JwtTokenService(hmacProps());
+        AuthPrincipal principal = svc.parse(legacyToken);
+
+        assertThat(principal.email()).isEqualTo("alice");
+        assertThat(principal.familyId()).isNull();
+        assertThat(principal.userId()).isNull();
+    }
+
+    @Test
+    void blankFidClaimParsesToNullFamilyId() {
+        // Token con `fid` explícitamente vacío -- lo normalizamos
+        // a null en vez de propagar el string vacío, que haría que
+        // downstream lo escriba como sesion_id="" en ClickHouse.
+        SecretKey key = Keys.hmacShaKeyFor(GOOD_SECRET.getBytes(StandardCharsets.UTF_8));
+        String blankToken = io.jsonwebtoken.Jwts.builder()
+                .subject("alice")
+                .issuer("sso-postgres")
+                .claim("fid", "")
+                .claim("roles", java.util.List.of("USER"))
+                .issuedAt(new java.util.Date())
+                .expiration(new java.util.Date(System.currentTimeMillis() + 60_000))
+                .signWith(key, io.jsonwebtoken.Jwts.SIG.HS256)
+                .compact();
+
+        JwtTokenService svc = new JwtTokenService(hmacProps());
+        assertThat(svc.parse(blankToken).familyId()).isNull();
+    }
 }

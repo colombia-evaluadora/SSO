@@ -171,7 +171,29 @@ public class RefreshController {
         // token carries the uid claim just like the original. Same
         // lookup that already populated `user` is reused — no extra
         // DB hit.
-        String accessToken = jwt.issueAccessToken(user.getEmail(), user.getId(), roles);
+        // V-audit-ctx-4 (sesiones reales): same familyId that
+        // was already on the original token (rotate preserves the
+        // family -- the UUID doesn't change across rotations, just
+        // the raw token). peek()'s lookup carries familyId; we
+        // forward it as the `fid` claim of the new access token so
+        // write-sites downstream see the same sesion_id for the
+        // whole refresh cycle, no matter which rotated token they
+        // arrived with.
+        String accessToken = jwt.issueAccessToken(user.getEmail(), user.getId(),
+                lookup.familyId(), roles);
+
+        // V-audit-ctx-4 (touch-on-refresh): cada refresh exitoso
+        // toca last_seen_at de la fila de tracking. Best-effort:
+        // si esto falla, el refresh YA mintó un token válido y el
+        // cliente YA va a recibir 200 -- un fallo de tracking no
+        // debe afectar la respuesta. Log a warn con stacktrace para
+        // que quede visible sin tumbar la operación.
+        try {
+            sessionTracking.touchSession(lookup.familyId());
+        } catch (RuntimeException touchEx) {
+            log.warn("No se pudo tocar last_seen_at para family={}",
+                    lookup.familyId(), touchEx);
+        }
 
         response.addHeader(HttpHeaders.SET_COOKIE,
                 JsonLoginFilter.buildRefreshCookie(next.rawToken(), next.ttlSeconds(), request));

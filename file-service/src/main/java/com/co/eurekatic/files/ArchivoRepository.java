@@ -8,7 +8,10 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -57,6 +60,21 @@ public class ArchivoRepository {
                         "SELECT public.fn_get_academico_usuario_id(?)", Long.class, idUser);
         Optional<AuditContext> ctx = AuditContextExtractor.fromCurrentRequest(Map.of());
 
+        // V-audit-ctx-4 (sesiones reales): sesion_id/familia viajan
+        // en el header X-Authenticated-Family-Id que api-gateway
+        // forwardea. Lo leemos directamente del request (mismo
+        // patrón que AuditContextExtractor) en vez de propagarlo por
+        // cada signature de ReenvioController -- el costo de un
+        // header lookup por escritura es cero, y centraliza la
+        // captura de la familia en este único punto.
+        String familyId = currentFamilyHeader();
+
+        Map<String, Object> contexto = new LinkedHashMap<>();
+        if (familyId != null && !familyId.isBlank()) {
+            contexto.put("sesion_id", familyId);
+            contexto.put("familia", familyId);
+        }
+
         jdbc.getJdbcOperations().queryForList(
                 "SELECT set_config('app.user_id', ?, true), "
                         + "set_config('app.user_pk', ?, true), "
@@ -64,14 +82,32 @@ public class ArchivoRepository {
                         + "set_config('app.request_id', ?, true), "
                         + "set_config('app.http_method', ?, true), "
                         + "set_config('app.client_ip', ?, true), "
-                        + "set_config('app.user_agent', ?, true)",
+                        + "set_config('app.user_agent', ?, true), "
+                        + "set_config('app.contexto', ?, true)",
                 usuario,
                 pkTusuario == null ? null : pkTusuario.toString(),
                 etiqueta,
                 ctx.map(AuditContext::requestId).orElse(null),
                 ctx.map(AuditContext::httpMethod).orElse("PATCH"),
                 ctx.map(AuditContext::clientIp).orElse(null),
-                ctx.map(AuditContext::userAgent).orElse(null));
+                ctx.map(AuditContext::userAgent).orElse(null),
+                contexto.isEmpty() ? null : writeJson(contexto));
+    }
+
+    private static String currentFamilyHeader() {
+        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes sra)) {
+            return null;
+        }
+        String v = sra.getRequest().getHeader("X-Authenticated-Family-Id");
+        return (v == null || v.isBlank()) ? null : v;
+    }
+
+    private static String writeJson(Map<String, Object> map) {
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(map);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**

@@ -124,6 +124,15 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         String userId = uid == null ? email : String.valueOf(uid);
         Set<String> roles = effectiveRoles.forEmail(email);
 
+        // V-audit-ctx-4 (sesiones reales): el familyId del refresh
+        // token se mintea PRIMERO (necesario para emitir el access
+        // token con el claim `fid` correcto) y DESPUÉS se pasa al
+        // JwtTokenService. Antes este código generaba el UUID
+        // dentro del try de mint -- había que moverlo arriba para
+        // que el access token y la fila de tsesion_web compartan
+        // exactamente el mismo identificador.
+        String familyId = UUID.randomUUID().toString().replace("-", "");
+
         // V29: include the numeric userId as the uid claim so
         // downstream services can pass it to procedures without a DB
         // lookup. Null is tolerated by the token builder (see
@@ -132,7 +141,10 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         // User entity wasn't materialised — shouldn't happen here
         // since AppUserDetailsService returns the entity directly,
         // but the guard is cheap).
-        String accessToken = jwt.issueAccessToken(email, uid, roles);
+        // V-audit-ctx-4: also include the familyId as the `fid`
+        // claim so downstream write-sites can merge sesion_id/familia
+        // into app.contexto without a Redis lookup.
+        String accessToken = jwt.issueAccessToken(email, uid, familyId, roles);
 
         // Mint a new refresh token via the store. Each login starts a
         // fresh family so multi-device sessions are independent. If the
@@ -141,7 +153,6 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         String refreshToken;
         long ttlSeconds;
         try {
-            String familyId = UUID.randomUUID().toString().replace("-", "");
             RefreshTokenStore.RefreshTokenHandle handle =
                     refreshTokenStore.mint(email, userId, familyId);
             refreshToken = handle.rawToken();

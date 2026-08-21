@@ -87,7 +87,9 @@ class UserForwardingGlobalFilterTest {
         Set<String> roles = new LinkedHashSet<>(List.of("USER", "ADMIN"));
         // V29: include userId in the principal so the filter
         // exercises the X-Authenticated-User-Id branch.
-        AuthPrincipal principal = new AuthPrincipal("alice", 42L, roles, "access");
+        // V-audit-ctx-4: familyId included so the filter also
+        // exercises X-Authenticated-Family-Id.
+        AuthPrincipal principal = new AuthPrincipal("alice", 42L, roles, "access", "fam-uuid-abc");
         UsernamePasswordAuthenticationToken auth =
                 new UsernamePasswordAuthenticationToken(principal, "token",
                         List.<GrantedAuthority>of(new SimpleGrantedAuthority("USER"),
@@ -123,6 +125,9 @@ class UserForwardingGlobalFilterTest {
         // V29: numeric userId is forwarded as a header.
         assertThat(headers.getFirst(UserForwardingGlobalFilter.HEADER_USER_ID))
                 .isEqualTo("42");
+        // V-audit-ctx-4: familyId is forwarded as a header.
+        assertThat(headers.getFirst(UserForwardingGlobalFilter.HEADER_FAMILY_ID))
+                .isEqualTo("fam-uuid-abc");
     }
 
     @Test
@@ -133,7 +138,7 @@ class UserForwardingGlobalFilterTest {
         // services can detect the legacy state explicitly
         // rather than via header absence.
         Set<String> roles = new LinkedHashSet<>(List.of("USER"));
-        AuthPrincipal principal = new AuthPrincipal("alice", null, roles, "access");
+        AuthPrincipal principal = new AuthPrincipal("alice", null, roles, "access", null);
         UsernamePasswordAuthenticationToken auth =
                 new UsernamePasswordAuthenticationToken(principal, "token",
                         List.<GrantedAuthority>of(new SimpleGrantedAuthority("USER")));
@@ -158,6 +163,9 @@ class UserForwardingGlobalFilterTest {
         // NOT absent. Downstream can distinguish "header missing"
         // from "userId unknown" if it wants to.
         assertThat(headers.getFirst(UserForwardingGlobalFilter.HEADER_USER_ID))
+                .isEqualTo("");
+        // V-audit-ctx-4: familyId null → header vacío (mismo patrón).
+        assertThat(headers.getFirst(UserForwardingGlobalFilter.HEADER_FAMILY_ID))
                 .isEqualTo("");
     }
 

@@ -507,7 +507,9 @@ La única implementación real de este contrato en el monorepo (una app-demo, do
 - **`request_id`** = header `X-Request-Id`, reenviado tal cual sin validar.
 - Además mete `ip`, `user_agent` y `endpoint` (`MÉTODO URI`) dentro de `contexto`.
 
-**El JWT real de `auth-center` (SSO) no tiene ni `jti` ni `familia`** — solo `sub/iss/roles/typ/iat/exp/uid`. `sesion_id` necesitaría un cambio en `auth-center` (agregar un claim `jti` al emitir el token) que está fuera del alcance de `query-service`; `familia` no tiene ningún concepto equivalente en SSO (tenencia única — lo más parecido, el establecimiento/sede, ya lo cubre `fn_audit_declarar` en `contexto`, sería redundante). **Decisión**: implementar solo `request_id` (autocontenido en `query-service`) y agregar `path` (equivalente al `endpoint` de la referencia) en `contexto`; `sesion_id`/`familia` quedan documentados como pendientes de una decisión de producto que no corresponde inventar aquí.
+**Decisión original (Fase 2, ~2025)**: `sesion_id`/`familia` pendientes de una decisión de producto — el JWT real de `auth-center` (SSO) no tiene ni `jti` ni `familia` en ese entonces.
+
+**Resuelto en V-audit-ctx-4** (commit actual): `family_id` ya existía como UUID estable por familia de refresh token (empezó como `RefreshTokenStore.mint()` output, V29+). Se decidió que **en este sistema family_id ES la sesion_id** — son sinónimos, viajan siempre iguales. La justificación completa está en §V-audit-ctx-4 más abajo. Implementación: claim `fid` en JWT (igual que `uid`, omitido cuando es null para compatibilidad con tokens pre-V-audit-ctx-4), header `X-Authenticated-Family-Id` forwardeado por api-gateway, merge a `app.contexto` en query-service / sso-admin / file-service. ClickHouse recibe ambos como columnas dedicadas (`LowCardinality(String)` con bloom filter). `tsesion_web` se espeja completo vía CDC para que /audits/* consulte source-of-truth ClickHouse.
 
 ### 14.2 Dónde se inyecta, y por qué así
 
@@ -538,7 +540,59 @@ Reconstruida la imagen de `query-service` (`ghcr.io/colombia-evaluadora/sso/quer
 
 ### 14.4 Pendiente
 
-- `sesion_id`/`familia`: requieren decisión de producto (¿qué representa "familia" en SSO, si algo?) y, para `sesion_id`, un cambio en `auth-center` (emitir un claim `jti`/id de sesión) — no implementado aquí.
+- ~~`sesion_id`/`familia`: requieren decisión de producto~~ — **RESUELTO en V-audit-ctx-4** (ver §V-audit-ctx-4 abajo).
+
+## 15. V-audit-ctx-4 — sesiones reales de punta a punta
+
+Este trabajo cierra el gap pendiente de §14.4: `sesion_id`/`familia` ya NO están vacías en ClickHouse, y `/audits/*` ya NO usa el heurístico sintético de gaps de 30 min — consume la entidad `tsesion_web` real.
+
+### 15.1 Decisión de naming: `sesion_id` y `familia` son sinónimos
+
+`family_id` es el UUID estable que `RefreshTokenStore.mint()` emite al login y que se preserva a través de cada rotación de refresh token — un identificador único por sesión de navegador. En el sistema actual **ese mismo UUID ES la clave primaria lógica de `academico_test.tsesion_web`** (V88, `UNIQUE (family_id)`), y por construcción también es el "sesion_id" que el reporte de auditoría quiere agrupar.
+
+Por eso un solo campo (`fid` en el JWT, `X-Authenticated-Family-Id` en el header, `family_id` en la tabla) sirve para los dos nombres de columna en `auditoria.audit_log` (`sesion_id` y `familia` ambos `LowCardinality(String)`). Decidir nombres distintos para el mismo UUID habría multiplicado identificadores sin agregar información.
+
+### 15.2 Touch-on-refresh: por qué eliminamos el reaper periódico
+
+El reaper original (V88) consultaba ClickHouse cada 15 min preguntando "¿esta familia tuvo actividad reciente?" y, si no, la cerraba con `close_reason='expired'`. Con múltiples réplicas de auth-center detrás de un load balancer, el `@Scheduled` corría en cada una y duplicaba trabajo sin coordinación.
+
+La observación clave: **el refresh YA es un heartbeat natural**. El access token dura 3600s; un cliente vivo llama `POST /auth/refresh` cada hora. `RefreshController.refresh` actualiza `last_seen_at` de la familia en cada rotación exitosa — un solo UPDATE por usuario activo por hora, disparado por tráfico que de todas formas ya estaba pasando. Sin tarea periódica, sin competencia entre réplicas.
+
+El cierre silencioso (sesión que murió sin logout, refresh token caduca en Redis a los 30 días) **deja de escribirse como `close_reason='expired'`**. Se infiere al leer:
+
+```sql
+CASE
+    WHEN close_reason IS NOT NULL THEN ended_at              -- logout/reuse_detected: evento real, con timestamp exacto
+    WHEN now() - last_seen_at > INTERVAL '30 min'             -- sin refresh reciente
+        THEN last_seen_at                                     -- "terminó" = la última señal real que tuvimos
+    ELSE NULL                                                  -- sigue activa
+END AS ended_at_computed
+```
+
+Esto es honesto: el `ended_at` que el reaper escribía era aproximado de todas formas (`started_at` como fallback para sesiones sin actividad). `last_seen_at` es estrictamente mejor como cota inferior del momento real de muerte.
+
+### 15.3 GC desacoplado: pg_cron, no `@Scheduled`
+
+`tsesion_web` acumula filas con `ended_at IS NULL` para el caso silencioso — crecimiento sin límite físico. El GC (DELETE de filas certeramente muertas, >40 días = 30 TTL del refresh + 10 días de margen) corre en pg_cron (V91), NO en auth-center:
+
+- Diario, no cada 15 min.
+- Una sola ejecución por día, no N (una por réplica).
+- Desacoplado del runtime de auth-center — un reinicio del servicio no afecta el cleanup.
+- No requiere nueva infra: pg_cron ya está disponible en la imagen Docker de Postgres.
+
+### 15.4 Pipeline de propagación de `sesion_id`/`familia`
+
+El JWT de auth-center ahora emite un claim `fid` (family UUID). El api-gateway lo forwardea como `X-Authenticated-Family-Id`. Los write-sites lo leen y lo fundean en `app.contexto` antes del `INSERT`/`UPDATE`/`DELETE`:
+
+- `query-service` (`AUDIT_CTX_CTE_HEADER`): MERGE `app.contexto` con `{path, sesion_id, familia}`, no OVERWRITE — respeta cualquier valor que `fn_audit_declarar` (V66) haya podido fijar antes.
+- `sso-admin` (`AuditRevertService`): mismo patrón, lee el header directamente.
+- `file-service` (`ArchivoRepository`): mismo patrón, lee el header directamente.
+
+El trigger `fn_audit_ctx()` (V26) extrae `sesion_id` y `familia` del JSON de `app.contexto` y los emite como top-level fields en el envelope `audit_ctx`. El CDC pipeline (`cdc-capture` → RabbitMQ → `cdc-worker` → `ClickHouseAuditStage`) los promueve a columnas dedicadas en `auditoria.audit_log`. La pipeline YA estaba lista — sólo faltaba que algo Java poble `app.contexto`.
+
+### 15.5 `tsesion_web` mirror en ClickHouse
+
+`/audits/*` necesita leer el estado actual de cada sesión (started/ended/last_seen_at/close_reason), no sólo los eventos de auditoría. Postgres no es práctico para servir miles de sesiones con JOIN contra `audit_log`. Solución: nueva tabla `auditoria.tsesion_web` en ClickHouse (mirror vía `ClickHouseSessionMirrorStage`, `ReplacingMergeTree(lsn)` ordenado por `family_id` para dedupe). Las queries de V90 reescriben `/audits/query`, `/audits/sessions/:ID`, `/audits/sessions/:ID/operations`, `/audits/stats` sobre este mirror — sin heurística, source-of-truth unificada en ClickHouse.
 
 **Actualización (V-audit-ctx-2)**: los dos puntos de abajo describían `V80__wrap_write_queries_audit_context.sql`, que ya **no existe** — el wrap del CTE de contexto se movió de texto guardado en `public.query.query` a lógica automática en `QueryService.wrapWithAuditContext()` (query-service), aplicada a CUALQUIER query en modo SELECT/FUNCTION cuya fila tenga `http_method != GET`, sin que el catálogo necesite saber que el wrap existe ni un admin tenga que verlo/editarlo en el SQL Editor. Esto elimina de raíz el problema de la lista de `id_query` hardcodeada — ya no hace falta regenerarla por ambiente, ni una migración de datos aparte:
 - ~~La migración del catálogo (`V80__wrap_write_queries_audit_context.sql`) solo tocó las 43 queries de escritura de las 49 funciones adoptadas — no las de lectura (no aplica, no mutan nada) ni las 6 funciones sin endpoint registrado localmente (§12.1).~~

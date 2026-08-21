@@ -303,6 +303,20 @@ class QueryServiceUnitTest {
                 .contains("'app.user_id'")
                 .contains("academico_test.fn_resolver_actor")
                 .contains("'app.user_pk'")
+                // V-audit-ctx-4 — sesion_id y familia viajan como
+                // placeholders CONTEXT.* para que se funden en
+                // app.contexto y lleguen como columnas dedicadas a
+                // auditoria.audit_log.
+                .contains(":CONTEXT.SESION_ID")
+                .contains(":CONTEXT.FAMILIA")
+                // MERGE (no OVERWRITE): respeta un app.contexto
+                // preexistente que fn_audit_declarar (V66) haya
+                // podido fijar antes -- COALESCE al '{}' para
+                // arranque limpio, || para añadir sin pisar.
+                .contains("current_setting('app.contexto', true)")
+                .contains("|| jsonb_build_object")
+                .contains("'sesion_id'")
+                .contains("'familia'")
                 .contains("SELECT * FROM academico_test.fn_area_crear(:BODY.NOMBRE)")
                 .endsWith(") AS _orig;");
     }

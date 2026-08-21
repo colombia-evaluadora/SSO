@@ -761,6 +761,17 @@ public class QueryService {
         if (p.email() != null) {
             target.put(ParamNamespace.CONTEXT + ".EMAIL", p.email());
         }
+        // V-audit-ctx-4 (sesiones reales): familyId llega como
+        // claim `fid` del JWT (V29-style: ausente en tokens legacy,
+        // se omite el placeholder). Un solo placeholder sirve para
+        // SESION_ID y FAMILIA -- en este sistema son sinónimos
+        // (family_id ES la sesion_id, ambos campos de
+        // auditoria.audit_log reciben el mismo valor vía
+        // AUDIT_CTX_CTE_HEADER abajo).
+        if (p.familyId() != null) {
+            target.put(ParamNamespace.CONTEXT + ".FAMILIA", p.familyId());
+            target.put(ParamNamespace.CONTEXT + ".SESION_ID", p.familyId());
+        }
         // Roles en dos formatos para que el autor elija el
         // que le convenga:
         //   :CONTEXT.ROLES        → "ADMIN,EVALUADOR"  (LIKE en PL/pgSQL)
@@ -943,7 +954,20 @@ public class QueryService {
           + "         set_config('app.request_body', :CONTEXT.REQUEST_BODY, true) AS _body,\n"
           + "         set_config('app.user_id', COALESCE(academico_test.fn_resolver_actor((SELECT pk_tusuario FROM _actor)), (SELECT pk_tusuario FROM _actor)::text), true) AS _uid,\n"
           + "         set_config('app.user_pk', (SELECT pk_tusuario FROM _actor)::text, true) AS _upk,\n"
-          + "         set_config('app.contexto', jsonb_build_object('path', :CONTEXT.PATH)::text, true) AS _c\n"
+          // V-audit-ctx-4 (sesiones reales): MERGE (no OVERWRITE)
+          // con app.contexto preexistente -- el helper fn_audit_declarar
+          // (V66) ya respeta sesion_id/familia si están, pero esta capa
+          // (que corre para queries que NO llaman fn_audit_declarar)
+          // también tiene que respetarlos. COALESCE al '{}' para el caso
+          // de la primera escritura del request. familyId puede ser NULL
+          // (token legacy pre-V-audit-ctx-4) -- en ese caso
+          // jsonb_build_object devuelve NULL para esa clave, lo que en
+          // ClickHouse queda como string vacío y en Postgres como
+          // ausente; cualquiera de los dos es aceptable para la query de
+          // auditoría. La razón de usar || y NO jsonb_set() es la misma
+          // que en V66: precedence clara, sin ambigüedad con claves
+          // existentes.
+          + "         set_config('app.contexto', (COALESCE(NULLIF(current_setting('app.contexto', true), '')::jsonb, '{}'::jsonb) || jsonb_build_object('path', :CONTEXT.PATH, 'sesion_id', :CONTEXT.SESION_ID, 'familia', :CONTEXT.FAMILIA))::text, true) AS _c\n"
           + ")\n"
           + "SELECT _orig.* FROM _ctx, (";
 

@@ -141,7 +141,13 @@ Este documento es del 19-ago; desde entonces se hizo trabajo real en `feat/etiqu
 
 - **§2, `entityName`/`authorName` — YA NO llegan vacías.** `fn_audit_declarar` está adoptado en las 49 funciones `fn_*` de escritura. Confirmado con una fila real: `etiqueta="Eliminación del área ..."`, `app_user="Admin Sistema"`.
 - **§4.2, `ip` — YA EXISTE.** `audit_log.client_ip` (`Nullable(IPv6)`, indexado con bloom filter) se agregó como columna dedicada, capturada en `query-service` desde el header `X-Client-Ip` que setea `api-gateway` (con la IP real de la conexión TCP, nunca confiando en lo que el cliente mande). También se agregaron `user_agent`, `headers` (whitelist) y `request_body` (redactado) — más de lo que pedía la spec original.
-- **`sesion_id`/`familia` (§6) siguen vacías** — sin cambios, sigue siendo un gap real de captura en `auth-center` no relacionado con ClickHouse.
+- **`sesion_id`/`familia` (§6) — RESUELTO en V-audit-ctx-4**:
+  - Postgres: `tsesion_web.family_id` es la PK lógica (V88), con `last_seen_at` tocado en cada refresh (V89), close_reason limitado a `logout`/`reuse_detected`.
+  - JWT: claim `fid` emitido por auth-center (login y refresh), propagado por api-gateway como header `X-Authenticated-Family-Id`.
+  - ClickHouse: columna dedicada `LowCardinality(String)` con bloom filter (ya estaba en el esquema), `auditoria.tsesion_web` mirror vía CDC (`ClickHouseSessionMirrorStage`).
+  - /audits/*: queries reescritas (V90) sobre el mirror, sin heurística de 30min.
+  - GC: pg_cron diario (V91), fuera de auth-center, sin competencia entre réplicas.
+  - Cierre silencioso: ya no se escribe — se INFIERE en lectura (`now() - last_seen_at > 30min`).
 - **§5, `revert` — parcialmente resuelto, no cerrado.** Se implementó una fase 1 real: `POST /audit/revert` en `sso-admin`, pero **deliberadamente limitada al patrón soft-delete/soft-restore** (toggle de la bandera `active`) — no cubre INSERT/DELETE físico, PK compuesta, ni reversión de campo arbitrario como pide la spec original (`.../changes/revert` sobre cualquier columna). Ver `AuditRevertService` para el detalle; sigue siendo cierto que un revert de campo arbitrario "es un proyecto aparte", solo que ahora hay una base real sobre la que construirlo en vez de partir de cero.
 
 ### 9.1 Nuevo hallazgo: ¿es viable un microservicio ClickHouse-only para `/audit-tables/*`?

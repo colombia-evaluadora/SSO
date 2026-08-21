@@ -149,6 +149,19 @@ public class AuditRevertService {
         contexto.put("revert_of_request_id", plan.row.requestId());
         contexto.put("revert_of_lsn", lsn);
         contexto.put("revert_of_seq", seq);
+        // V-audit-ctx-4 (sesiones reales): misma sesión que originó
+        // el cambio se está revirtiendo. La familia viaja en el
+        // header que api-gateway forwardea -- sin un lookup a
+        // Redis y sin pedirle a la fila auditada que la llevara
+        // (la fila original puede tener sesion_id vacío si era
+        // pre-V-audit-ctx-4, así que la fuente es el header, no la
+        // fila). Mismo valor para sesion_id y familia: en este
+        // sistema son sinónimos (family_id ES la sesion_id).
+        String familyId = currentFamilyHeader();
+        if (familyId != null && !familyId.isBlank()) {
+            contexto.put("sesion_id", familyId);
+            contexto.put("familia", familyId);
+        }
         String contextoJson = writeJson(contexto);
 
         // actingUserId es el claim `uid` del JWT — public.users.id_user, NO
@@ -218,6 +231,15 @@ public class AuditRevertService {
         if (v instanceof Boolean b) return b;
         if (v instanceof String s) return "true".equalsIgnoreCase(s) || "t".equalsIgnoreCase(s);
         return false;
+    }
+
+    private static String currentFamilyHeader() {
+        if (!(org.springframework.web.context.request.RequestContextHolder.getRequestAttributes()
+                instanceof org.springframework.web.context.request.ServletRequestAttributes sra)) {
+            return null;
+        }
+        String v = sra.getRequest().getHeader("X-Authenticated-Family-Id");
+        return (v == null || v.isBlank()) ? null : v;
     }
 
     private Map<String, Object> parseJson(String json) {

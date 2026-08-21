@@ -8,8 +8,6 @@ import org.springframework.boot.persistence.autoconfigure.EntityScan;
 import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
-import org.springframework.scheduling.annotation.EnableScheduling;
-
 import java.util.Locale;
 
 /**
@@ -25,11 +23,17 @@ import java.util.Locale;
  * {@code org.springframework.boot.autoconfigure.domain} to
  * {@code org.springframework.boot.persistence.autoconfigure} as part of
  * the per-stack split in Boot 4.0.x. The class itself is unchanged.
+ *
+ * <p><b>V-audit-ctx-4 (touch-on-refresh):</b> tras eliminar
+ * {@code SessionReaperService} el módulo ya no tiene tareas
+ * periódicas propias -- el GC de {@code tsesion_web} se delega a
+ * {@code pg_cron} en Postgres (V91), así que {@code @EnableScheduling}
+ * se va también: una anotación huérfana hoy, y mañana un
+ * {@code @Scheduled} accidental que dispara en cada réplica de un
+ * servicio horizontalmente escalado.
  */
 @SpringBootApplication
 @EnableDiscoveryClient
-// V-audit-ctx-4 (sesiones reales) -- SessionReaperService.
-@EnableScheduling
 @ComponentScan(basePackages = {
         "com.co.eurekatic.auth",
         "com.co.eurekatic.common.entity",

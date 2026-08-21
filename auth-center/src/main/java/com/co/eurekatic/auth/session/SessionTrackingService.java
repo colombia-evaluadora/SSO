@@ -8,23 +8,27 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 
 /**
- * V-audit-ctx-4 (sesiones reales) — abre y cierra filas de
+ * V-audit-ctx-4 (sesiones reales) — abre, toca y cierra filas de
  * {@code academico_test.tsesion_web}, correlacionadas al
  * {@code familyId} que {@link com.co.eurekatic.common.security.RefreshTokenStore}
  * ya usa como identificador de sesión (un UUID por login, estable a
  * través de cada rotación de refresh token).
  *
- * <p>Los tres puntos de captura (ver
+ * <p>Los cuatro puntos de captura (ver
  * {@code postgres/migrations/V88__tsesion_web.sql} para el porqué del
  * diseño):
  * <ul>
  *   <li>{@link #openSession} — {@code JsonLoginFilter.successfulAuthentication},
  *       justo después de {@code refreshTokenStore.mint(...)}.</li>
+ *   <li>{@link #touchSession} — {@code RefreshController.refresh},
+ *       rama {@code RefreshOutcome.Rotated}. Cada refresh exitoso
+ *       toca {@code last_seen_at}, reemplazando el antiguo reaper
+ *       periódico (eliminado en V-audit-ctx-4 / V89). El refresh
+ *       mismo es el heartbeat natural de la sesión.</li>
  *   <li>{@link #closeSession} con {@code close_reason='logout'} —
  *       {@code RefreshController.logout}, después de
  *       {@code revokeToken}.</li>
@@ -32,13 +36,16 @@ import java.util.Optional;
  *       {@code RefreshController.refresh}, rama
  *       {@code RefreshOutcome.ReuseDetected}.</li>
  * </ul>
- * El cuarto camino de cierre ({@code close_reason='expired'}, cuando
- * nadie llama a logout y el refresh token simplemente caduca en
- * Redis) lo cubre {@link SessionReaperService}, reusando este mismo
- * {@link #closeSession}.
+ * El "cierre silencioso" (sesión que muere sin logout, refresh token
+ * caduca en Redis a los 30 días) ya no se escribe como
+ * {@code close_reason='expired'} — se infiere al leer en V90 desde
+ * {@code last_seen_at} (la fórmula
+ * {@code CASE WHEN now() - last_seen_at > 30min THEN last_seen_at ELSE NULL}).
+ * GC de filas certeramente muertas (>40 días) corre en el sidecar
+ * tsesion-web-gc (V91, dcron + psql), no en auth-center.
  *
- * <p>Ambos métodos son <b>best-effort</b> desde el punto de vista del
- * llamante: una falla acá NUNCA debe bloquear un login/logout real
+ * <p>Los tres métodos son <b>best-effort</b> desde el punto de vista del
+ * llamante: una falla acá NUNCA debe bloquear un login/logout/refresh real
  * (a diferencia de {@code RefreshTokenStore}, que si falla el login
  * SÍ debe fallar con 503 — el refresh token es parte del contrato de
  * auth, el tracking de sesión es solo observabilidad). Los llamantes
@@ -82,10 +89,52 @@ public class SessionTrackingService {
             return;
         }
 
-        applyAuditGucs(pkTusuario, "Inicio de sesión", requestBodySnapshot);
+        applyAuditGucs(pkTusuario, "Inicio de sesión", requestBodySnapshot, familyId);
+        // last_seen_at = now() explícito para no depender del DEFAULT
+        // (V89 lo creó con DEFAULT now() pero escribirlo acá hace
+        // explícito que en el momento del open ambos timestamps son
+        // el mismo -- coherente con "acaba de iniciar").
         jdbc.update(
-                "INSERT INTO academico_test.tsesion_web (fk_tusuario, family_id) VALUES (?, ?)",
+                "INSERT INTO academico_test.tsesion_web (fk_tusuario, family_id, last_seen_at) "
+                        + "VALUES (?, ?, now())",
                 pkTusuario, familyId);
+    }
+
+    /**
+     * V-audit-ctx-4 (touch-on-refresh): el refresh token es el
+     * heartbeat natural de una sesión viva. Cada {@code POST
+     * /auth/refresh} exitoso (rama {@code RefreshOutcome.Rotated})
+     * actualiza {@code last_seen_at} de su familia, sin necesidad
+     * de un reaper periódico.
+     *
+     * <p>Idempotente: si la familia ya está cerrada, el
+     * {@code WHERE ended_at IS NULL} afecta cero filas y no pasa
+     * nada. No lanza si la familia ni siquiera existe (caso
+     * legítimo si la fila se borró por el sidecar tsesion-web-gc, después de 40
+     * días).
+     *
+     * <p>Best-effort desde el punto de vista del llamante: un
+     * fallo acá NUNCA debe afectar la respuesta de refresh (el
+     * refresh token es parte del contrato de auth, el tracking de
+     * sesión es solo observabilidad). El llamante envuelve en
+     * try/catch; este servicio no absorbe para que el stacktrace
+     * quede visible.
+     */
+    @Transactional
+    public void touchSession(String familyId) {
+        int updated = jdbc.update(
+                "UPDATE academico_test.tsesion_web SET last_seen_at = now() "
+                        + "WHERE family_id = ? AND ended_at IS NULL",
+                familyId);
+        if (updated == 0) {
+            // Familia cerrada o ausente -- no es un error, solo que
+            // esta rotación no corresponde a una sesión abierta. El
+            // GC del sidecar tsesion-web-gc (V91) puede haberla borrado después de
+            // 40 días, o el logout/reuse_detected la cerró justo
+            // antes. Log a debug para no contaminar warn.
+            log.debug("touchSession: 0 filas afectadas para family={} (cerrada o ausente)",
+                    shortFamily(familyId));
+        }
     }
 
     /**
@@ -102,36 +151,24 @@ public class SessionTrackingService {
      * {@code /auth/logout} y {@code /auth/refresh} son
      * {@code permitAll()} (la cookie es la credencial, no
      * necesariamente hay un {@code SecurityContext} con un
-     * principal resuelto), y {@link SessionReaperService} corre sin
-     * ningún request HTTP en absoluto.
+     * principal resuelto).
+     *
+     * <p>Único método (ya no hay overload de 3 argumentos con un
+     * {@code Instant endedAt} explícito): ese parámetro solo lo
+     * usaba el reaper periódico (para cerrar con la última
+     * actividad real, no {@code now()}), y el reaper se eliminó en
+     * V-audit-ctx-4 (touch-on-refresh, ver V89) — los dos únicos
+     * llamantes que quedan (logout, reuse_detected) SIEMPRE cierran
+     * "ahora mismo", así que el parámetro era vestigial. De paso
+     * elimina el patrón de auto-invocación this.closeSession(...)
+     * que un overload delegando en otro tenía antes (una llamada
+     * this. nunca pasa por el proxy AOP de Spring -- el
+     * @Transactional del método delegado quedaba inerte; encontrado
+     * en vivo: el UPDATE de logout llegaba a ClickHouse con
+     * app_user/app_user_id/etiqueta vacíos).
      */
-    // @Transactional acá TAMBIÉN, no solo en el overload de 3
-    // argumentos: la llamada de abajo es this.closeSession(...), una
-    // auto-invocación que NUNCA pasa por el proxy AOP de Spring --
-    // sin esta anotación el @Transactional del overload de 3
-    // argumentos queda inerte, applyAuditGucs() y el UPDATE corren
-    // como dos statements autocommited posiblemente en conexiones
-    // pooled distintas, y el UPDATE llega sin ninguna GUC fijada
-    // (encontrado en vivo: el cierre por logout quedaba en
-    // ClickHouse con app_user/app_user_id/etiqueta vacíos).
     @Transactional
     public void closeSession(String familyId, String closeReason) {
-        closeSession(familyId, closeReason, null);
-    }
-
-    /**
-     * @param endedAt momento real de cierre a registrar, o
-     *                {@code null} para usar {@code now()} (el caso
-     *                normal: logout/reuse_detected están cerrando
-     *                AHORA). {@link SessionReaperService} pasa la
-     *                última actividad real conocida en vez de
-     *                {@code now()} -- una sesión "expired" terminó
-     *                cuando dejó de haber actividad, no cuando el
-     *                reaper finalmente lo notó (hasta
-     *                {@code inactivity-minutes} después).
-     */
-    @Transactional
-    public void closeSession(String familyId, String closeReason, Instant endedAt) {
         Long pkTusuario = jdbc.query(
                 "SELECT fk_tusuario FROM academico_test.tsesion_web WHERE family_id = ? AND ended_at IS NULL",
                 rs -> rs.next() ? rs.getObject("fk_tusuario", Long.class) : null,
@@ -141,11 +178,11 @@ public class SessionTrackingService {
             return;
         }
 
-        applyAuditGucs(pkTusuario, "Cierre de sesión (" + closeReason + ")", Map.of());
+        applyAuditGucs(pkTusuario, "Cierre de sesión (" + closeReason + ")", Map.of(), familyId);
         int updated = jdbc.update(
-                "UPDATE academico_test.tsesion_web SET ended_at = ?, close_reason = ? "
+                "UPDATE academico_test.tsesion_web SET ended_at = now(), close_reason = ? "
                         + "WHERE family_id = ? AND ended_at IS NULL",
-                java.sql.Timestamp.from(endedAt == null ? Instant.now() : endedAt), closeReason, familyId);
+                closeReason, familyId);
         if (updated == 0) {
             // Carrera con otro cierre concurrente (p.ej. el reaper y un
             // logout casi simultáneos) -- no es un error, solo perdió
@@ -167,8 +204,21 @@ public class SessionTrackingService {
      * logout sí lo tienen; el reaper no) — el helper ya maneja ese
      * caso devolviendo {@link Optional#empty()} sin lanzar.
      */
-    private void applyAuditGucs(long pkTusuario, String etiqueta, Map<String, Object> requestBodySnapshot) {
+    private void applyAuditGucs(long pkTusuario, String etiqueta, Map<String, Object> requestBodySnapshot, String familyId) {
         Optional<AuditContext> ctx = AuditContextExtractor.fromCurrentRequest(requestBodySnapshot);
+        // V-audit-ctx-4 (sesiones reales): funde sesion_id y familia
+        // dentro de app.contexto para que fn_audit_ctx() (V26) los
+        // emita como top-level fields en el envelope audit_ctx, y el
+        // pipeline CDC los escriba como columnas dedicadas
+        // sesion_id/familia en auditoria.audit_log (V-audit-clickhouse).
+        // En este sistema sesion_id y familia son el mismo valor
+        // (family_id ES la sesion_id, ver §V-audit-ctx-4 del analysis
+        // doc) -- se mandan ambos para mantener simetría con el
+        // contrato del trigger.
+        String contextoJson = null;
+        if (familyId != null && !familyId.isBlank()) {
+            contextoJson = "{\"sesion_id\":\"" + familyId + "\",\"familia\":\"" + familyId + "\"}";
+        }
         jdbc.queryForList(
                 "SELECT set_config('app.user_id', COALESCE(academico_test.fn_resolver_actor(?), ?), true), "
                         + "set_config('app.user_pk', ?, true), "
@@ -176,14 +226,16 @@ public class SessionTrackingService {
                         + "set_config('app.request_id', ?, true), "
                         + "set_config('app.http_method', ?, true), "
                         + "set_config('app.client_ip', ?, true), "
-                        + "set_config('app.user_agent', ?, true)",
+                        + "set_config('app.user_agent', ?, true), "
+                        + "set_config('app.contexto', ?, true)",
                 pkTusuario, String.valueOf(pkTusuario),
                 String.valueOf(pkTusuario),
                 etiqueta,
                 ctx.map(AuditContext::requestId).orElse(null),
                 ctx.map(AuditContext::httpMethod).orElse("POST"),
                 ctx.map(AuditContext::clientIp).orElse(null),
-                ctx.map(AuditContext::userAgent).orElse(null));
+                ctx.map(AuditContext::userAgent).orElse(null),
+                contextoJson);
     }
 
     private static String shortFamily(String familyId) {
