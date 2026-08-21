@@ -258,7 +258,15 @@ public class GatewaySecurityConfig {
         cfg.setAllowedOrigins(props.allowedOrigins());
         cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         cfg.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With"));
-        cfg.setExposedHeaders(List.of("Authorization", "Set-Cookie"));
+        // Content-Disposition y X-Report-Rows los lee el front al descargar un
+        // reporte: de la primera saca el nombre del archivo y de la segunda
+        // cuantos registros salieron. Hoy no hace falta —el SPA usa /api
+        // relativo, o sea mismo origen, y CORS ni se aplica—, pero si alguna
+        // vez se sirve desde otro dominio el navegador las ocultaria y la
+        // descarga quedaria con un nombre generico y sin conteo, sin ningun
+        // error visible que lo explique.
+        cfg.setExposedHeaders(List.of(
+                "Authorization", "Set-Cookie", "Content-Disposition", "X-Report-Rows"));
         cfg.setAllowCredentials(true);
         cfg.setMaxAge(3600L);
 

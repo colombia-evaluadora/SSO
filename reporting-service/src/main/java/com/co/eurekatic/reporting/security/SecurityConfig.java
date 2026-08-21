@@ -82,7 +82,7 @@ public class SecurityConfig {
         cfg.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With"));
         // Content-Disposition tiene que quedar visible: es de donde el
         // navegador saca el nombre del archivo al descargarlo.
-        cfg.setExposedHeaders(List.of("Content-Disposition"));
+        cfg.setExposedHeaders(List.of("Content-Disposition", "X-Report-Rows"));
         cfg.setAllowCredentials(false);
         cfg.setMaxAge(3600L);
 
