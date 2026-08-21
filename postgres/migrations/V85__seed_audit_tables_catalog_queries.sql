@@ -37,6 +37,8 @@ VALUES (
         UNION ALL SELECT ''tgrado'', ''tGrado'', ''Grado'', ''GraduationCap-Icon''
         UNION ALL SELECT ''testablecimiento'', ''tEstablecimiento'', ''Establecimiento'', ''Bank-Icon''
         UNION ALL SELECT ''tperiodo_academico'', ''tPeriodoAcademico'', ''Periodo académico'', ''Calendar-Icon''
+        UNION ALL SELECT ''tsede'', ''tSede'', ''Sede'', ''Building-Icon''
+        UNION ALL SELECT ''tasignatura'', ''tAsignatura'', ''Asignatura'', ''Book-Icon''
     )
 )
 SELECT
@@ -74,6 +76,8 @@ VALUES (
         UNION ALL SELECT ''tgrado'', ''tGrado'', ''Grado'', ''GraduationCap-Icon''
         UNION ALL SELECT ''testablecimiento'', ''tEstablecimiento'', ''Establecimiento'', ''Bank-Icon''
         UNION ALL SELECT ''tperiodo_academico'', ''tPeriodoAcademico'', ''Periodo académico'', ''Calendar-Icon''
+        UNION ALL SELECT ''tsede'', ''tSede'', ''Sede'', ''Building-Icon''
+        UNION ALL SELECT ''tasignatura'', ''tAsignatura'', ''Asignatura'', ''Book-Icon''
     )
 )
 SELECT
@@ -120,6 +124,8 @@ WHERE tabla = CASE :PARAM.SLUG
         WHEN ''tGrado'' THEN ''tgrado''
         WHEN ''tEstablecimiento'' THEN ''testablecimiento''
         WHEN ''tPeriodoAcademico'' THEN ''tperiodo_academico''
+        WHEN ''tSede'' THEN ''tsede''
+        WHEN ''tAsignatura'' THEN ''tasignatura''
         ELSE ''''
       END
   AND operacion != ''r''
@@ -207,6 +213,8 @@ WHERE tabla = CASE :PARAM.SLUG
         WHEN ''tGrado'' THEN ''tgrado''
         WHEN ''tEstablecimiento'' THEN ''testablecimiento''
         WHEN ''tPeriodoAcademico'' THEN ''tperiodo_academico''
+        WHEN ''tSede'' THEN ''tsede''
+        WHEN ''tAsignatura'' THEN ''tasignatura''
         ELSE ''''
       END
   AND operacion != ''r''
