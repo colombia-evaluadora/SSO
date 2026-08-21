@@ -3,12 +3,45 @@
 -- docs/auditoria-queries-por-endpoint-clickhouse.md §1. Corren contra
 -- la instancia registrada en V84.
 --
--- Simplificaciones deliberadas frente a la spec completa (documentadas
--- también en el .md hermano — no son un compromiso silencioso):
---   - El catálogo de tablas auditables (slug/nombre/ícono) es un CTE
---     literal con 4 tablas de ejemplo, no una tabla real. Extender
---     agregando más filas al UNION ALL de cada query, o migrar a una
---     tabla real (public.audit_table_catalog) cuando la lista crezca.
+-- Slug algorítmico (no catálogo literal) — corrección post-V85 inicial.
+--   La primera versión de esta migración traía un catálogo literal de 6
+--   tablas de ejemplo (UNION ALL). Eso dejó de ser correcto en cuanto se
+--   confirmó que la publicación de Debezium (`cdc_pub`) cubre las 147
+--   tablas de `academico_test` -- no solo esas 6 -- así que la mayoría
+--   de las tablas auditadas quedaban invisibles para /audit-tables/query.
+--   Fix: el slug se DERIVA del nombre real de la tabla con una fórmula
+--   determinista, tanto para listar (tabla → slug) como para buscar
+--   (slug → tabla), en vez de mantenerse en una lista que hay que
+--   actualizar a mano por cada tabla nueva.
+--
+--   Fórmula (tabla → slug): quitar el prefijo `t`, separar el resto por
+--   `_`, capitalizar cada segmento y unir sin separador, y volver a
+--   anteponer `t` en minúscula. `tperiodo_academico` → `tPeriodoAcademico`.
+--   Asume la convención húngara de todo `academico_test` (CADA tabla del
+--   esquema arranca con `t` minúscula — verificado contra las 147 tablas
+--   de la publicación) — de ahí el filtro `tabla LIKE 't%'` en el CTE de
+--   catálogo, que de paso descarta ruido de nombres de tabla que no
+--   siguen esa convención (p. ej. filas viejas/huérfanas de pruebas
+--   anteriores a que la publicación se acotara a academico_test).
+--
+--   Fórmula inversa (slug → tabla), usada en los `WHERE tabla = ...` de
+--   1.3/1.6 en vez del `CASE :PARAM.SLUG WHEN ... END` literal de antes:
+--   insertar `_` antes de cada mayúscula del slug (sin contar la
+--   primera), pasar a minúscula, y anteponer `t`. Ambas fórmulas
+--   validadas contra los datos reales de auditoria.audit_log antes de
+--   aplicar esta migración (ver docs/auditoria-queries-por-endpoint-clickhouse.md).
+--
+-- Otras simplificaciones deliberadas frente a la spec completa
+-- (documentadas también en el .md hermano — no son un compromiso silencioso):
+--   - `name`/`icon` ya NO son curados (Español con tilde + ícono
+--     específico) porque dejaron de venir de un catálogo literal: `name`
+--     se deriva con la misma fórmula pero uniendo con espacio en vez de
+--     vacío (`tPeriodoAcademico` → "Periodo Academico", sin tilde — la
+--     fórmula no puede inventar acentos que no están en el nombre de
+--     columna crudo), e `icon` queda fijo en un ícono genérico para toda
+--     tabla. Migrar a nombres/íconos curados por tabla requiere la tabla
+--     de catálogo real que el gap-analysis ya señala como pendiente
+--     (`public.audit_table_catalog` — fuera de alcance de esta migración).
 --   - `entityFields`/el diff antes-después se devuelven como JSON crudo
 --     (fila_new_raw/fila_old_raw) en vez de un mapa por nombre de campo
 --     legible — construir ese mapeo por campo requeriría una fila de
@@ -32,14 +65,12 @@ INSERT INTO public.query
 VALUES (
     gen_random_uuid()::text,
     'WITH catalogo AS (
-    SELECT * FROM (
-        SELECT ''tarea'' AS tabla_real, ''tArea'' AS slug, ''Área'' AS name, ''BookOpen-Icon'' AS icon
-        UNION ALL SELECT ''tgrado'', ''tGrado'', ''Grado'', ''GraduationCap-Icon''
-        UNION ALL SELECT ''testablecimiento'', ''tEstablecimiento'', ''Establecimiento'', ''Bank-Icon''
-        UNION ALL SELECT ''tperiodo_academico'', ''tPeriodoAcademico'', ''Periodo académico'', ''Calendar-Icon''
-        UNION ALL SELECT ''tsede'', ''tSede'', ''Sede'', ''Building-Icon''
-        UNION ALL SELECT ''tasignatura'', ''tAsignatura'', ''Asignatura'', ''Book-Icon''
-    )
+    SELECT
+        tabla_real,
+        concat(''t'', arrayStringConcat(arrayMap(w -> concat(upper(substring(w,1,1)), lower(substring(w,2))), splitByChar(''_'', substring(tabla_real, 2))), '''')) AS slug,
+        arrayStringConcat(arrayMap(w -> concat(upper(substring(w,1,1)), lower(substring(w,2))), splitByChar(''_'', substring(tabla_real, 2))), '' '') AS name,
+        ''Table-Icon'' AS icon
+    FROM (SELECT DISTINCT tabla AS tabla_real FROM auditoria.audit_log WHERE tabla LIKE ''t%'')
 )
 SELECT
     c.slug,
@@ -56,7 +87,7 @@ LIMIT 100;',
     'clickhouse',
     false,
     false,
-    'V85 — audit-tables/query: catálogo (literal, ver comentario de cabecera) + operationsToday calculado en vivo',
+    'V85 — audit-tables/query: catálogo derivado algorítmicamente del nombre de tabla (ver comentario de cabecera) + operationsToday calculado en vivo',
     '/audit-tables/query',
     'SELECT',
     'POST',
@@ -71,14 +102,12 @@ INSERT INTO public.query
 VALUES (
     gen_random_uuid()::text,
     'WITH catalogo AS (
-    SELECT * FROM (
-        SELECT ''tarea'' AS tabla_real, ''tArea'' AS slug, ''Área'' AS name, ''BookOpen-Icon'' AS icon
-        UNION ALL SELECT ''tgrado'', ''tGrado'', ''Grado'', ''GraduationCap-Icon''
-        UNION ALL SELECT ''testablecimiento'', ''tEstablecimiento'', ''Establecimiento'', ''Bank-Icon''
-        UNION ALL SELECT ''tperiodo_academico'', ''tPeriodoAcademico'', ''Periodo académico'', ''Calendar-Icon''
-        UNION ALL SELECT ''tsede'', ''tSede'', ''Sede'', ''Building-Icon''
-        UNION ALL SELECT ''tasignatura'', ''tAsignatura'', ''Asignatura'', ''Book-Icon''
-    )
+    SELECT
+        tabla_real,
+        concat(''t'', arrayStringConcat(arrayMap(w -> concat(upper(substring(w,1,1)), lower(substring(w,2))), splitByChar(''_'', substring(tabla_real, 2))), '''')) AS slug,
+        arrayStringConcat(arrayMap(w -> concat(upper(substring(w,1,1)), lower(substring(w,2))), splitByChar(''_'', substring(tabla_real, 2))), '' '') AS name,
+        ''Table-Icon'' AS icon
+    FROM (SELECT DISTINCT tabla AS tabla_real FROM auditoria.audit_log WHERE tabla LIKE ''t%'')
 )
 SELECT
     c.slug,
@@ -119,15 +148,11 @@ VALUES (
     fila_new_raw AS entityFieldsRaw,
     count() OVER() AS totalCount
 FROM auditoria.audit_log
-WHERE tabla = CASE :PARAM.SLUG
-        WHEN ''tArea'' THEN ''tarea''
-        WHEN ''tGrado'' THEN ''tgrado''
-        WHEN ''tEstablecimiento'' THEN ''testablecimiento''
-        WHEN ''tPeriodoAcademico'' THEN ''tperiodo_academico''
-        WHEN ''tSede'' THEN ''tsede''
-        WHEN ''tAsignatura'' THEN ''tasignatura''
-        ELSE ''''
-      END
+-- Fórmula inversa slug -> tabla (ver comentario de cabecera): inserta
+-- ''_'' antes de cada mayúscula del slug (sin contar la primera),
+-- minúscula, y antepone ''t''. Reemplaza el CASE literal de 6 tablas de
+-- la versión anterior de esta migración.
+WHERE tabla = concat(''t'', substring(lower(replaceRegexpAll(substring(:PARAM.SLUG, 2), ''([A-Z])'', ''_\1'')), 2))
   AND operacion != ''r''
   AND (coalesce(:BODY.FILTERS.AUTHOR, '''') = '''' OR positionCaseInsensitive(app_user, :BODY.FILTERS.AUTHOR) > 0
                                    OR positionCaseInsensitive(toString(client_ip), :BODY.FILTERS.AUTHOR) > 0)
@@ -144,7 +169,7 @@ LIMIT 100;',
     'clickhouse',
     false,
     false,
-    'V85 — audit-tables/{slug}/operations/query: listado paginado y filtrable. operation ya mapeado c/u/d->INSERT/UPDATE/DELETE. entityFieldsRaw es JSON crudo (ver simplificaciones de cabecera)',
+    'V85 — audit-tables/{slug}/operations/query: listado paginado y filtrable. operation ya mapeado c/u/d->INSERT/UPDATE/DELETE. entityFieldsRaw es JSON crudo (ver simplificaciones de cabecera). tabla resuelta con la fórmula inversa slug->tabla, no un CASE literal',
     '/audit-tables/:SLUG/operations/query',
     'SELECT',
     'POST',
@@ -208,22 +233,15 @@ VALUES (
     countIf(operacion = ''u'') AS updates,
     countIf(operacion = ''d'') AS deletes
 FROM auditoria.audit_log
-WHERE tabla = CASE :PARAM.SLUG
-        WHEN ''tArea'' THEN ''tarea''
-        WHEN ''tGrado'' THEN ''tgrado''
-        WHEN ''tEstablecimiento'' THEN ''testablecimiento''
-        WHEN ''tPeriodoAcademico'' THEN ''tperiodo_academico''
-        WHEN ''tSede'' THEN ''tsede''
-        WHEN ''tAsignatura'' THEN ''tasignatura''
-        ELSE ''''
-      END
+-- Fórmula inversa slug -> tabla — ver comentario de cabecera y 1.3.
+WHERE tabla = concat(''t'', substring(lower(replaceRegexpAll(substring(:PARAM.SLUG, 2), ''([A-Z])'', ''_\1'')), 2))
   AND operacion != ''r''
   AND ts >= parseDateTimeBestEffort(if(:BODY.FILTERS.OCCURREDFROM = '''', ''1970-01-01'', :BODY.FILTERS.OCCURREDFROM))
   AND ts <= parseDateTimeBestEffort(if(:BODY.FILTERS.OCCURREDTO = '''', ''2999-12-31'', :BODY.FILTERS.OCCURREDTO));',
     'clickhouse',
     false,
     false,
-    'V85 — audit-tables/{slug}/operations/stats: conteo inserts/updates/deletes',
+    'V85 — audit-tables/{slug}/operations/stats: conteo inserts/updates/deletes. tabla resuelta con la fórmula inversa slug->tabla, no un CASE literal',
     '/audit-tables/:SLUG/operations/stats',
     'SELECT',
     'POST',

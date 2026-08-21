@@ -487,3 +487,50 @@ razonando en abstracto — todos salieron de ejecutar contra ClickHouse real, ve
 cualquier caller — el catálogo no tiene bypass implícito ni para ADMIN. `V87` las vincula a
 `CEVAL-SUPER_ADMINISTRADOR` como punto de partida deliberadamente angosto (el histórico completo de
 auditoría es información sensible); a quién más darle acceso es una decisión de producto, no técnica.
+
+## Actualización (2026-08-21, aún más tarde) — slug algorítmico, no catálogo literal
+
+`V85` traía un catálogo literal de 6 tablas de ejemplo (§1.1/§1.2 de arriba). Eso dejó de ser
+correcto en cuanto se confirmó contra el Postgres real que la publicación de Debezium (`cdc_pub`)
+cubre **las 147 tablas de `academico_test`**, no esas 6 — la mayoría de las tablas realmente
+auditadas eran invisibles para `/audit-tables/query`. Muestra en vivo el mismo día: 28 tablas
+distintas con actividad reciente en `auditoria.audit_log`, todas con el prefijo húngaro `t` que usa
+todo el esquema `academico_test` (`tarea`, `tperiodo_academico`, `tsede_usuario`, ...).
+
+**Fix**: el slug se deriva del nombre real de la tabla con una fórmula determinista, en vez de
+mantenerse en una lista a mano.
+
+- **Tabla → slug** (listar, 1.1/1.2): quitar el prefijo `t`, separar el resto por `_`, capitalizar
+  cada segmento y unir sin separador, volver a anteponer `t` minúscula.
+  `tperiodo_academico → tPeriodoAcademico`. En ClickHouse:
+  ```sql
+  concat('t', arrayStringConcat(arrayMap(
+      w -> concat(upper(substring(w,1,1)), lower(substring(w,2))),
+      splitByChar('_', substring(tabla, 2))
+  ), ''))
+  ```
+  El catálogo del CTE pasa de un `UNION ALL` literal a `SELECT DISTINCT tabla FROM
+  auditoria.audit_log WHERE tabla LIKE 't%'` — el filtro `LIKE 't%'` además descarta ruido de filas
+  viejas/huérfanas (`app`, `role`, `endpoint`, `notification_log`, ...) que quedaron en
+  `audit_log` de una snapshot inicial de hace 17 días, de antes de que la publicación se acotara a
+  `academico_test` — nunca se limpiaron porque `ReplacingMergeTree` no las purga solo.
+
+- **Slug → tabla** (buscar, 1.3/1.6): inversa de lo anterior — insertar `_` antes de cada mayúscula
+  del slug (sin contar la primera), pasar a minúscula, anteponer `t`. Reemplaza el
+  `CASE :PARAM.SLUG WHEN 'tArea' THEN 'tarea' ... END` literal:
+  ```sql
+  concat('t', substring(lower(replaceRegexpAll(substring(:PARAM.SLUG, 2), '([A-Z])', '_\1')), 2))
+  ```
+
+Ambas fórmulas se validaron contra los 28 nombres de tabla reales de `auditoria.audit_log`
+(`docker exec cdc-clickhouse clickhouse-client`) antes de aplicarlas — incluyendo el caso de
+múltiples segmentos (`tCriterioEvaluacionAsignaturaPlan ↔ tcriterio_evaluacion_asignatura_plan`),
+no solo los 6 casos de un segmento que ya cubría el catálogo literal anterior.
+
+**Costo aceptado**: `name`/`icon` dejan de ser curados (español con tilde + ícono específico por
+tabla) porque ya no vienen de un catálogo de valores fijos — `name` se deriva con la misma fórmula
+pero uniendo con espacio (`tPeriodoAcademico → "Periodo Academico"`, sin tilde: la fórmula no puede
+inventar un acento que no está en el nombre de columna crudo), e `icon` queda fijo en un genérico
+para toda tabla. Migrar a nombres/íconos curados por tabla sigue necesitando la tabla de catálogo
+real que el gap-analysis ya señalaba como pendiente (`public.audit_table_catalog`) — este fix no la
+reemplaza, sólo resuelve el problema más urgente (28 tablas invisibles) sin ella.
