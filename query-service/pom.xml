@@ -97,6 +97,17 @@
             <artifactId>mssql-jdbc</artifactId>
             <version>12.10.0.jre11</version>
         </dependency>
+        <!-- V-audit-clickhouse — cuarto dialecto, para instancias
+             que sirven auditoria.audit_log de solo lectura (ver
+             docs/auditoria-api-gap-analysis-clickhouse.md). Mismo
+             patrón que Oracle/SQL Server: declarado siempre, cada
+             contenedor decide qué dialecto usar vía QUERY_DS_DIALECT. -->
+        <dependency>
+            <groupId>com.clickhouse</groupId>
+            <artifactId>clickhouse-jdbc</artifactId>
+            <version>0.7.1</version>
+            <classifier>http</classifier>
+        </dependency>
 
         <!-- V33 — Resilience4j: programmatic Bulkhead + RateLimiter.
              Mirrors notification-service's pattern (no AOP starter
