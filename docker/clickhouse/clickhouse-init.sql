@@ -39,6 +39,18 @@ CREATE TABLE IF NOT EXISTS auditoria.audit_log
                   padre_id_json Array(Tuple(name String, value Nullable(String)))
               ) CODEC(ZSTD(3)),
 
+    -- V-audit-revert: copia CRUDA de event.after()/event.before() (el
+    -- Map<String,Object> de Debezium ANTES de que JsonTypedRowBuilder lo
+    -- proyecte a los slots tipados de arriba). fila_new/fila_old son
+    -- convenientes para mostrar/consultar pero son LOSSY: el algoritmo
+    -- "primer slot gana" puede colapsar dos columnas reales bajo el mismo
+    -- nombre genérico (p.ej. "codigo"), perdiendo el nombre de columna
+    -- real de la que perdió el slot. fila_new_raw/fila_old_raw son JSON
+    -- plano {columna_real: valor} sin esa pérdida — necesario para poder
+    -- reconstruir un UPDATE/INSERT/DELETE de reversión sin ambigüedad.
+    fila_new_raw String CODEC(ZSTD(3)),
+    fila_old_raw String CODEC(ZSTD(3)),
+
     -- Columnas operacionales (no del envelope Debezium original)
     tabla_origen String               CODEC(ZSTD(1)),  -- tabla Oracle destino (si aplica)
     estado       Enum8('OK'=1,'WARN'=2,'ERROR'=3,'DLQ'=4) DEFAULT 'OK',

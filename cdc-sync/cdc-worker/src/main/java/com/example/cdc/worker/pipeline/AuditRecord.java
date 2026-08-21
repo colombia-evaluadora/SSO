@@ -32,9 +32,23 @@ public record AuditRecord(
         Map<String, Object> headers,    // whitelist curada, va directo a un ClickHouse Map — no se serializa
         String requestBodyJson,         // body/params del caller, redactado — serializado como contexto
         String etiqueta,
-        String contextoJson
+        String contextoJson,
+        // V-audit-revert — copia CRUDA de event.after()/event.before(),
+        // ANTES de que JsonTypedRowBuilder los proyecte a los slots
+        // tipados de filaNew/filaOld. Necesaria porque el algoritmo
+        // "primer slot gana" de JsonTypedRowBuilder puede colapsar dos
+        // columnas reales bajo el mismo nombre genérico (p.ej. "codigo"),
+        // perdiendo el nombre de columna real de la que perdió el slot —
+        // sin este raw no hay forma confiable de reconstruir un
+        // UPDATE/INSERT/DELETE de reversión.
+        String filaNewRawJson,
+        String filaOldRawJson
 ) {
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())
+            // ISO-8601, no timestamps numéricos — fila_new_raw/fila_old_raw
+            // deben quedar legibles para reconstruir SQL a mano si hace falta.
+            .disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     public static AuditRecord fromEvent(CdcEvent event, int seq, long lsn, long xid,
                                         String tablaOrigen, String estado,
@@ -85,7 +99,13 @@ public record AuditRecord(
                 event.context() != null ? event.context().headers() : Map.of(),
                 serializeJson(event.context() == null ? null : event.context().requestBody()),
                 event.context() != null ? event.context().etiqueta() : "",
-                serializeJson(event.context() == null ? null : event.context().contexto())
+                serializeJson(event.context() == null ? null : event.context().contexto()),
+                // Crudo — antes del builder, no después. filaNew/filaOld de
+                // arriba SÍ pasan por el builder (para los slots tipados);
+                // esto es event.after()/event.before() tal cual llegó de
+                // Debezium, columna real -> valor, sin colisiones de slot.
+                serializeJson(event.after()),
+                serializeJson(event.before())
         );
     }
 

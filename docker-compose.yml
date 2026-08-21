@@ -518,6 +518,10 @@ services:
       # the whole /internal/** surface 401s while the stack still
       # reports healthy.
       SSO_INTERNAL_TOKEN: ${SSO_INTERNAL_TOKEN}
+      # V-audit-revert — interfaz HTTP de ClickHouse, mismo host que
+      # CDC_CLICKHOUSE_URL usa cdc-worker. sso-admin solo lee de acá
+      # (ClickHouseAuditClient) para resolver el cambio a revertir.
+      CLICKHOUSE_URL: ${CDC_CLICKHOUSE_URL:-http://default:demopass@cdc-clickhouse:8123}
       # SMTP — in dev, point at the mailhog service.
       SMTP_HOST: mailhog
       SMTP_PORT: "1025"

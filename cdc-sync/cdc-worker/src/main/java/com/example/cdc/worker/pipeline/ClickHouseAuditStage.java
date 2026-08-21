@@ -65,6 +65,8 @@ public class ClickHouseAuditStage {
         row.put("pk", r.pk());
         row.put("fila_new", r.filaNew() != null ? r.filaNew() : Map.of());
         row.put("fila_old", r.filaOld() != null ? r.filaOld() : Map.of());
+        row.put("fila_new_raw", r.filaNewRawJson() != null ? r.filaNewRawJson() : "");
+        row.put("fila_old_raw", r.filaOldRawJson() != null ? r.filaOldRawJson() : "");
         row.put("tabla_origen", r.tablaOrigen() != null ? r.tablaOrigen() : "");
         row.put("estado", r.estado());
         row.put("latencia_ms", r.latenciaMs());

@@ -189,6 +189,12 @@ sso:
     restore-url: ${SSO_RESTORE_URL:http://localhost:8080/admin/restore-password}
     activation-template: activation-account.html
     restore-template: restore-password-account.html
+  # V-audit-revert — interfaz HTTP de ClickHouse, solo lectura (ver
+  # ClickHouseAuditClient). Mismo host que CDC_CLICKHOUSE_URL en
+  # cdc-worker; sso-admin nunca escribe en ClickHouse, solo consulta
+  # el cambio que se va a revertir en Postgres.
+  clickhouse:
+    url: ${CLICKHOUSE_URL:http://default:demopass@cdc-clickhouse:8123}
 
 management:
   endpoints:
