@@ -227,6 +227,23 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * V81 — una o más restricciones de formato declaradas en
+     * {@code QUERY_PARAM_CONSTRAINT} (ver
+     * {@code com.co.eurekatic.common.query.ParamConstraintValidator})
+     * fallaron. Mismo envelope {@code {code, message, fields}} que
+     * {@link #handleArgumentNotValid} usa para Bean Validation — el
+     * admin-ui ya sabe renderizar un error por campo con esa forma.
+     */
+    @ExceptionHandler(ParamConstraintViolationException.class)
+    public ResponseEntity<Map<String, Object>> handleParamConstraintViolation(
+            ParamConstraintViolationException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
+                "code", "PARAM_CONSTRAINT_VIOLATION",
+                "message", "Uno o más parámetros no cumplen las restricciones de formato",
+                "fields", ex.getFieldErrors()));
+    }
+
+    /**
      * Content-Type no soportado por el endpoint. 415 con el
      * {@code Accept} correcto para que el cliente pueda
      * corregirse sin tener que mirar la documentación.

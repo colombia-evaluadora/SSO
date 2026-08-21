@@ -1,5 +1,6 @@
 package com.co.eurekatic.query.catalog;
 
+import com.co.eurekatic.common.query.ParamConstraint;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -63,7 +64,16 @@ public record QueryDefinition(
          * Nullable for back-compat with pre-V49 servers; treated as
          * empty map by {@code ParamBinder} (legacy auto-derive path).
          */
-        @JsonProperty("paramTypes") Map<String, String> paramTypes
+        @JsonProperty("paramTypes") Map<String, String> paramTypes,
+
+        /**
+         * V81 — restricciones de formato opcionales por placeholder,
+         * adicionales a lo que declara {@code paramTypes}. Nullable
+         * para back-compat con servidores pre-V81; tratado como mapa
+         * vacío por {@code ParamConstraintValidator} ("sin
+         * restricciones adicionales").
+         */
+        @JsonProperty("paramConstraints") Map<String, ParamConstraint> paramConstraints
 ) {
     /**
      * Back-compat constructor for callers that pre-date V27/V28
@@ -76,7 +86,7 @@ public record QueryDefinition(
                            String type, boolean publicEnd, boolean captcha,
                            String detail, String action, String style) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
-             detail, action, style, null, "SELECT", null, "POST", null);
+             detail, action, style, null, "SELECT", null, "POST", null, null);
     }
 
     /**
@@ -88,7 +98,7 @@ public record QueryDefinition(
                            String detail, String action, String style,
                            String pathTemplate, String executionMode) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
-             detail, action, style, pathTemplate, executionMode, null, "POST", null);
+             detail, action, style, pathTemplate, executionMode, null, "POST", null, null);
     }
 
     /**
@@ -102,7 +112,7 @@ public record QueryDefinition(
                            String outParamNames) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, pathTemplate, executionMode,
-             outParamNames, "POST", null);
+             outParamNames, "POST", null, null);
     }
 
     /**
@@ -119,6 +129,24 @@ public record QueryDefinition(
                            String outParamNames, String httpMethod) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, pathTemplate, executionMode,
-             outParamNames, httpMethod, null);
+             outParamNames, httpMethod, null, null);
+    }
+
+    /**
+     * V81 back-compat (sin paramConstraints). Conserva la forma de 14
+     * argumentos que los llamantes usaban antes de V81; el mapa de
+     * restricciones cae a {@code null}, que
+     * {@code ParamConstraintValidator} trata como "sin restricciones
+     * adicionales".
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           String pathTemplate, String executionMode,
+                           String outParamNames, String httpMethod,
+                           Map<String, String> paramTypes) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, pathTemplate, executionMode,
+             outParamNames, httpMethod, paramTypes, null);
     }
 }

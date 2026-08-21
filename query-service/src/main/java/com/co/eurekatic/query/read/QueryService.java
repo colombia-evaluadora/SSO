@@ -272,6 +272,21 @@ public class QueryService {
             }
         }
 
+        // V81 — restricciones de formato adicionales (positivo, sin
+        // decimales, máximo de cifras, longitud de texto, sólo
+        // dígitos...). Se validan ANTES del bind, sobre los mismos
+        // allParams que ParamBinder va a usar, y ANTES del chequeo de
+        // tipo Java de ParamBinder (más abajo) porque esa validación
+        // rechaza en el primer error — ésta acumula todas las
+        // violaciones para devolverlas juntas.
+        if (def.paramConstraints() != null && !def.paramConstraints().isEmpty()) {
+            Map<String, String> violations = com.co.eurekatic.common.query.ParamConstraintValidator
+                    .validate(allParams, def.paramTypes(), def.paramConstraints());
+            if (!violations.isEmpty()) {
+                throw new com.co.eurekatic.query.exception.ParamConstraintViolationException(violations);
+            }
+        }
+
         // bind con tipos. def.paramTypes() puede ser null en filas
         // legacy — ParamBinder lo trata como mapa vacío y devuelve
         // comportamiento idéntico al anterior a V49.
