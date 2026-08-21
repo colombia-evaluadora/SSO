@@ -6,6 +6,7 @@ import com.co.eurekatic.auth.security.EffectiveRolesResolver;
 import com.co.eurekatic.auth.security.JsonAuthHandlers;
 import com.co.eurekatic.auth.security.JsonLoginFilter;
 import com.co.eurekatic.auth.security.JwtAuthenticationFilter;
+import com.co.eurekatic.auth.session.SessionTrackingService;
 import com.co.eurekatic.common.security.CorsProperties;
 import com.co.eurekatic.common.security.JwtTokenService;
 import com.co.eurekatic.common.security.RefreshTokenStore;
@@ -84,11 +85,12 @@ public class SecurityConfig {
             JsonAuthHandlers handlers,
             RefreshTokenStore refreshTokenStore,
             EffectiveRolesResolver effectiveRolesResolver,
-            AuthCenterAccessManager authCenterAccessManager) throws Exception {
+            AuthCenterAccessManager authCenterAccessManager,
+            SessionTrackingService sessionTracking) throws Exception {
 
         JsonLoginFilter loginFilter = new JsonLoginFilter(
                 authenticationManager, jwt, objectMapper, jwtProperties, refreshTokenStore,
-                effectiveRolesResolver);
+                effectiveRolesResolver, sessionTracking);
         JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(jwt, jwtProperties);
 
         return http

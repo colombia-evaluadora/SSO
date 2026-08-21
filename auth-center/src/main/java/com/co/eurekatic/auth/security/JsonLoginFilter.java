@@ -1,5 +1,6 @@
 package com.co.eurekatic.auth.security;
 
+import com.co.eurekatic.auth.session.SessionTrackingService;
 import com.co.eurekatic.common.dto.AuthDtos.LoginRequest;
 import com.co.eurekatic.common.dto.AuthDtos.TokenResponse;
 import com.co.eurekatic.common.entity.User;
@@ -12,6 +13,8 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
@@ -48,18 +51,22 @@ import java.util.UUID;
  */
 public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
 
+    private static final Logger log = LoggerFactory.getLogger(JsonLoginFilter.class);
+
     private final JwtTokenService jwt;
     private final ObjectMapper mapper;
     private final JwtProperties props;
     private final RefreshTokenStore refreshTokenStore;
     private final EffectiveRolesResolver effectiveRoles;
+    private final SessionTrackingService sessionTracking;
 
     public JsonLoginFilter(AuthenticationManager authenticationManager,
                            JwtTokenService jwt,
                            ObjectMapper mapper,
                            JwtProperties props,
                            RefreshTokenStore refreshTokenStore,
-                           EffectiveRolesResolver effectiveRoles) {
+                           EffectiveRolesResolver effectiveRoles,
+                           SessionTrackingService sessionTracking) {
         // Spring Security 7 migration: AntPathRequestMatcher (from
         // spring-security-web 6.x) was removed. The replacement is
         // PathPatternRequestMatcher, built from Spring's PathPatternParser
@@ -74,6 +81,7 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         this.props = props;
         this.refreshTokenStore = refreshTokenStore;
         this.effectiveRoles = effectiveRoles;
+        this.sessionTracking = sessionTracking;
         // We are stateless; do not create or persist HttpSession-bound
         // security contexts across requests.
         setSecurityContextRepository(new org.springframework.security.web.context.NullSecurityContextRepository());
@@ -138,6 +146,17 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
                     refreshTokenStore.mint(email, userId, familyId);
             refreshToken = handle.rawToken();
             ttlSeconds = handle.ttlSeconds();
+
+            // V-audit-ctx-4 (sesiones reales) -- best-effort: un login
+            // real nunca debe fallar por un problema de tracking. La
+            // excepción queda visible en logs con su stacktrace propio
+            // en vez de que este catch se la trague en silencio.
+            try {
+                sessionTracking.openSession(uid, familyId, Map.of());
+            } catch (RuntimeException trackingEx) {
+                log.warn("No se pudo abrir sesión de tracking para email={} family={}",
+                        email, familyId.substring(0, 8), trackingEx);
+            }
         } catch (RefreshUnavailableException e) {
             response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);

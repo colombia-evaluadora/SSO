@@ -2,6 +2,7 @@ package com.co.eurekatic.auth.web;
 
 import com.co.eurekatic.auth.security.EffectiveRolesResolver;
 import com.co.eurekatic.auth.security.JsonLoginFilter;
+import com.co.eurekatic.auth.session.SessionTrackingService;
 import com.co.eurekatic.common.dto.AuthDtos.TokenResponse;
 import com.co.eurekatic.common.entity.User;
 import com.co.eurekatic.common.repository.UserRepository;
@@ -53,17 +54,20 @@ public class RefreshController {
     private final JwtTokenService jwt;
     private final JwtProperties props;
     private final EffectiveRolesResolver effectiveRoles;
+    private final SessionTrackingService sessionTracking;
 
     public RefreshController(RefreshTokenStore refreshTokenStore,
                               UserRepository userRepository,
                               JwtTokenService jwt,
                               JwtProperties props,
-                              EffectiveRolesResolver effectiveRoles) {
+                              EffectiveRolesResolver effectiveRoles,
+                              SessionTrackingService sessionTracking) {
         this.refreshTokenStore = refreshTokenStore;
         this.userRepository = userRepository;
         this.jwt = jwt;
         this.props = props;
         this.effectiveRoles = effectiveRoles;
+        this.sessionTracking = sessionTracking;
     }
 
     /**
@@ -108,6 +112,15 @@ public class RefreshController {
         if (outcome instanceof RefreshTokenStore.RefreshOutcome.ReuseDetected reuse) {
             log.warn("Refresh-token reuse detected; family wiped — user={} family={} ip={}",
                     reuse.email(), reuse.familyId(), clientIp(request));
+            // V-audit-ctx-4 (sesiones reales) -- best-effort, ver
+            // JsonLoginFilter para el porqué de no dejar que esto
+            // afecte la respuesta.
+            try {
+                sessionTracking.closeSession(reuse.familyId(), "reuse_detected");
+            } catch (RuntimeException trackingEx) {
+                log.warn("No se pudo cerrar sesión de tracking tras reuse_detected family={}",
+                        reuse.familyId(), trackingEx);
+            }
             // Clear the cookie so the browser stops presenting the
             // stolen value.
             response.addHeader(HttpHeaders.SET_COOKIE, buildClearCookie(request));
@@ -176,9 +189,28 @@ public class RefreshController {
                                                       HttpServletResponse response) {
         String raw = readRefreshCookie(request);
         if (raw != null && !raw.isBlank()) {
+            // peek ANTES de revokeToken -- una vez revocado el token ya
+            // no está en el store, y necesitamos el familyId para
+            // cerrar la fila de tracking correcta. peek es de solo
+            // lectura, no consume el token (a diferencia de rotate).
+            String familyId = null;
+            try {
+                RefreshTokenStore.RefreshTokenLookup lookup = refreshTokenStore.peek(raw);
+                familyId = lookup == null ? null : lookup.familyId();
+            } catch (RuntimeException e) {
+                log.warn("No se pudo resolver familyId antes de logout -- se revoca igual", e);
+            }
             try {
                 refreshTokenStore.revokeToken(raw);
                 log.info("Refresh-token family revoked on logout");
+                if (familyId != null) {
+                    try {
+                        sessionTracking.closeSession(familyId, "logout");
+                    } catch (RuntimeException trackingEx) {
+                        log.warn("No se pudo cerrar sesión de tracking en logout family={}",
+                                familyId, trackingEx);
+                    }
+                }
             } catch (RuntimeException e) {
                 // Best-effort. We still clear the cookie so the
                 // browser stops presenting the value; the next

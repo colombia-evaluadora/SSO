@@ -311,6 +311,15 @@ services:
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      # V-audit-ctx-4 -- SessionReaperService (ClickHouseSessionActivityClient)
+      # lee auditoria.audit_log para saber la última actividad de cada
+      # sesión abierta. Mismo default que sso-admin ya usa para el mismo
+      # ClickHouse -- ver el comentario de CLICKHOUSE_URL en sso-admin
+      # más abajo.
+      CLICKHOUSE_URL: ${CDC_CLICKHOUSE_URL:-http://default:demopass@cdc-clickhouse:8123}
+      SSO_SESSION_REAPER_INTERVAL_MS: ${SSO_SESSION_REAPER_INTERVAL_MS:-900000}
+      SSO_SESSION_REAPER_INITIAL_DELAY_MS: ${SSO_SESSION_REAPER_INITIAL_DELAY_MS:-60000}
+      SSO_SESSION_INACTIVITY_MINUTES: ${SSO_SESSION_INACTIVITY_MINUTES:-30}
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8081; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
