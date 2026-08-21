@@ -206,6 +206,22 @@ public class HttpContainerProvisioner implements ContainerProvisioner {
      * to {@code ""} — RestClient would otherwise return null
      * for an empty 200, and the admin-ui would have to
      * special-case that on every render.
+     *
+     * <p><b>{@code .accept(TEXT_PLAIN)}</b> — {@code client} lleva
+     * {@code Accept: application/json} como default header (útil
+     * para {@code /provision} y {@code /status}, que sí devuelven
+     * JSON), pero {@code ProvisionerController.logs} declara
+     * {@code produces = TEXT_PLAIN_VALUE} en exclusiva. Sin este
+     * override, el default se colaba en ESTA llamada también, y el
+     * provisioner nunca podía satisfacer el Accept — Spring lanzaba
+     * {@code HttpMediaTypeNotAcceptableException} ANTES de correr
+     * el método (406), que el {@code onStatus(is4xxClientError)}
+     * de abajo envolvía como {@code CONTAINER_CREATE_FAILED} → 502
+     * al admin-ui. El síntoma en el modal de logs era idéntico al
+     * bug del lado admin-ui→sso-admin (mismo Accept/produces
+     * mismatch, un salto más abajo en la cadena) — "El provisioner
+     * rechazó los logs" sin más detalle, aunque el provisioner ni
+     * siquiera había llegado a ejecutar {@code docker.logs(...)}.
      */
     @Override
     public String logs(String fullInstanceName, int tail) {
@@ -215,6 +231,7 @@ public class HttpContainerProvisioner implements ContainerProvisioner {
                             .path("/provision/{name}/logs")
                             .queryParam("tail", Math.max(1, tail))
                             .build(fullInstanceName))
+                    .accept(MediaType.TEXT_PLAIN)
                     .retrieve()
                     .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {
                         throw new ProvisioningException(

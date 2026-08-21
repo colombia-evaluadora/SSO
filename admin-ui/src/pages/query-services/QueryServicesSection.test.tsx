@@ -157,9 +157,18 @@ describe("QueryServicesSection", () => {
     const row = mkMs({ id: 7, instanceName: "oracle-dev" });
     fetchSpy.mockResolvedValueOnce(jsonResponse([row]));
     fetchSpy.mockResolvedValueOnce(jsonResponse(mkStatus()));
-    // The apiClient decodes the body via resp.json() — a JSON-encoded
-    // string is what the production logs endpoint returns.
-    fetchSpy.mockResolvedValueOnce(jsonResponse("Hello\nworld\n"));
+    // El endpoint real es `text/plain` (produces = TEXT_PLAIN_VALUE
+    // en MicroserviceController.containerLogs) — texto crudo, NO un
+    // string JSON-encoded. apiClient.getText lee resp.text()
+    // directamente, sin pasar por JSON.parse (a diferencia de
+    // apiClient.get, que sí lo hace y por eso NO se usa aquí — un
+    // log real no es JSON válido y tiraría SyntaxError).
+    fetchSpy.mockResolvedValueOnce(
+      new Response("Hello\nworld\n", {
+        status: 200,
+        headers: { "Content-Type": "text/plain" },
+      }),
+    );
 
     renderPage();
     await userEvent.click(await screen.findByTestId("view-logs-7"));
@@ -169,6 +178,13 @@ describe("QueryServicesSection", () => {
     expect(body).toHaveTextContent(/world/);
     // Logs request should hit /container/logs?tail=200
     expect(findFetchCall(fetchSpy, "/container/logs?tail=200")).toBeDefined();
+    // El request debe pedir text/plain, NO application/json — ese
+    // era justo el bug: Accept: application/json contra un endpoint
+    // que sólo produce text/plain nunca hacía match en el backend
+    // (HttpMediaTypeNotAcceptableException → 500 opaco).
+    const logsCall = findFetchCall(fetchSpy, "/container/logs?tail=200");
+    const headers = logsCall?.[1]?.headers as Record<string, string> | undefined;
+    expect(headers?.Accept).toMatch(/text\/plain/);
   });
 
   it("fires a restart POST and toasts on success", async () => {
