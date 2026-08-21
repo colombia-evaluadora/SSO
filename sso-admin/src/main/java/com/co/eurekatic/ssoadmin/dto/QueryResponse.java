@@ -3,8 +3,10 @@ package com.co.eurekatic.ssoadmin.dto;
 import com.co.eurekatic.common.entity.ExecutionMode;
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
+import com.co.eurekatic.common.query.ParamConstraint;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
@@ -56,10 +58,23 @@ public record QueryResponse(
          * Empty map means the row is legacy or has no caller-controlled
          * placeholders.
          */
-        Map<String, String> paramTypes
+        Map<String, String> paramTypes,
+        /**
+         * V81 — restricciones de formato opcionales por placeholder.
+         * Ver {@code Query#getParamConstraints()} y
+         * {@code ParamConstraint}. Empty map = sin restricciones
+         * adicionales.
+         */
+        Map<String, ParamConstraint> paramConstraints
 ) {
     public static QueryResponse fromEntity(Query q) {
         Microservice m = q.getMicroservice();
+        Map<String, ParamConstraint> constraints = new LinkedHashMap<>();
+        for (var c : q.getParamConstraints()) {
+            constraints.put(c.getParamKey(), new ParamConstraint(
+                    c.getOnlyPositive(), c.getAllowDecimals(), c.getMaxDigits(),
+                    c.getNumericText(), c.getMinLength(), c.getMaxLength()));
+        }
         return new QueryResponse(
                 q.getId(),
                 q.getUuid(),
@@ -79,6 +94,7 @@ public record QueryResponse(
                 ExecutionMode.fromString(q.getExecutionMode()),
                 q.getOutParamNames(),
                 q.getHttpMethod(),
-                q.getParamTypes());
+                q.getParamTypes(),
+                constraints);
     }
 }

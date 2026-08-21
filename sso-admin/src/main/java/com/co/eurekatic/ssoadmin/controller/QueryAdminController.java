@@ -116,6 +116,10 @@ public class QueryAdminController {
                 ParamTypes.REQUIRED_SUFFIX,
                 ParamTypes.FILE_CLASSIFICATION_SEPARATOR,
                 ParamTypes.KNOWN_FILE_CLASSIFICATIONS.stream().sorted().toList(),
-                ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS.stream().sorted().toList());
+                ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS.stream().sorted().toList(),
+                java.util.stream.Stream.concat(
+                        ParamTypes.INTEGER_TYPES.stream(), ParamTypes.DECIMAL_TYPES.stream())
+                        .sorted().toList(),
+                ParamTypes.STRING_TYPES.stream().sorted().toList());
     }
 }

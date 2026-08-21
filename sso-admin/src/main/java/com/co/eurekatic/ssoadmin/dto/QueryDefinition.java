@@ -3,6 +3,7 @@ package com.co.eurekatic.ssoadmin.dto;
 import com.co.eurekatic.common.entity.ExecutionMode;
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
+import com.co.eurekatic.common.query.ParamConstraint;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -63,7 +64,15 @@ public record QueryDefinition(
          * Empty map when the row has no caller-controlled placeholders or
          * when the row is legacy (pre-V49 server doesn't carry it).
          */
-        Map<String, String> paramTypes
+        Map<String, String> paramTypes,
+        /**
+         * V81 — restricciones de formato opcionales por placeholder,
+         * adicionales al tipo/obligatoriedad de {@code paramTypes}.
+         * Wire format: {@code {"BODY.EDAD": {"onlyPositive": true, ...}}}.
+         * Vacío cuando la fila no tiene restricciones adicionales o el
+         * servidor es pre-V81.
+         */
+        Map<String, ParamConstraint> paramConstraints
 ) {
     /**
      * V31 — back-compat constructor for callers that pre-date
@@ -77,7 +86,8 @@ public record QueryDefinition(
                            Long microserviceId) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
-             null, ExecutionMode.SELECT, null, null, new LinkedHashMap<>());
+             null, ExecutionMode.SELECT, null, null, new LinkedHashMap<>(),
+             new LinkedHashMap<>());
     }
 
     /**
@@ -91,7 +101,8 @@ public record QueryDefinition(
                            String pathTemplate, ExecutionMode executionMode) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
-             pathTemplate, executionMode, null, null, new LinkedHashMap<>());
+             pathTemplate, executionMode, null, null, new LinkedHashMap<>(),
+             new LinkedHashMap<>());
     }
 
     /**
@@ -108,7 +119,26 @@ public record QueryDefinition(
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
              pathTemplate, executionMode, outParamNames, httpMethod,
-             new LinkedHashMap<>());
+             new LinkedHashMap<>(), new LinkedHashMap<>());
+    }
+
+    /**
+     * V81 back-compat (sin paramConstraints). Conserva la forma de 15
+     * argumentos que los llamantes usaban antes de V81; el mapa de
+     * restricciones cae a vacío, que {@code ParamConstraintValidator}
+     * trata como "sin restricciones adicionales".
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           Long microserviceId,
+                           String pathTemplate, ExecutionMode executionMode,
+                           String outParamNames, String httpMethod,
+                           Map<String, String> paramTypes) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             pathTemplate, executionMode, outParamNames, httpMethod,
+             paramTypes, new LinkedHashMap<>());
     }
 
     public static QueryDefinition fromEntity(Query q) {
@@ -128,6 +158,17 @@ public record QueryDefinition(
                 ExecutionMode.fromString(q.getExecutionMode()),
                 q.getOutParamNames(),
                 q.getHttpMethod(),
-                q.getParamTypes());
+                q.getParamTypes(),
+                toConstraintMap(q));
+    }
+
+    private static Map<String, ParamConstraint> toConstraintMap(Query q) {
+        Map<String, ParamConstraint> out = new LinkedHashMap<>();
+        for (var c : q.getParamConstraints()) {
+            out.put(c.getParamKey(), new ParamConstraint(
+                    c.getOnlyPositive(), c.getAllowDecimals(), c.getMaxDigits(),
+                    c.getNumericText(), c.getMinLength(), c.getMaxLength()));
+        }
+        return out;
     }
 }
