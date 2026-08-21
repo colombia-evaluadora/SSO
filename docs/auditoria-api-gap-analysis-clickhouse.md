@@ -5,6 +5,8 @@
 > Fuente del estado actual: esquema real de `auditoria.audit_log` (`db-migrations/cdc-sync/docker/clickhouse/clickhouse-init.sql`), pipeline `cdc-sync` (lectura, sin tocar el repo), y Postgres local (`sso-postgres`, sincronizado con producción vía Flyway — no se consultó la base real).
 >
 > La spec documenta un **mock**: `audits/operations-query.mdx` lo dice explícito — *"Las operaciones se generan determinísticamente on-the-fly en el mock; en backend real salen de la tabla de auditoría."* Este documento evalúa qué tan lejos está esa "tabla de auditoría" real (ClickHouse) de poder respaldar ese mock.
+>
+> **Ver también**: [`auditoria-queries-por-endpoint-clickhouse.md`](./auditoria-queries-por-endpoint-clickhouse.md) — la query SELECT concreta para cada uno de los endpoints de este documento, contra el esquema real actual de ClickHouse.
 
 ---
 
