@@ -36,6 +36,8 @@ DECLARE
     c_criterio_area        CONSTANT BIGINT := 508;
     c_desempeno_sin_calif  CONSTANT BIGINT := 522;
     c_modif_final_peraca   CONSTANT BIGINT := 511;
+    c_modo_redondear       CONSTANT BIGINT := 515;
+    c_criterio_asignatura  CONSTANT BIGINT := 264;
 BEGIN
     -- 0. Autorizacion (gate grueso: algun rol de gestion).
     IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
@@ -160,13 +162,18 @@ BEGIN
     )
     RETURNING PK_TPERIODO_ACADEMICO INTO v_id;
 
-    -- 8. Criterio de evaluacion por defecto (1:1, PK compartida).
+    -- 8. Criterio de evaluacion por defecto (1:1, PK compartida). Restauradas
+    -- FK_TLV_CRITERIO_ASIGNATURA, FK_TLV_MODO_REDONDEAR y
+    -- PORCENTAJE_MAXIMO_RECUPERACION, que V100 había perdido.
     INSERT INTO academico_test.TCRITERIO_EVALUACION (
         PK_TCRITERIO_EVALUACION, FK_TLV_FORMATO_CALIFICACION, FK_TLV_ELEMENTO_DEF,
-        FK_TLV_CRITERIO_FINAL, FK_TLV_CRITERIO_AREA, FK_TLV_DESEMPENO_SIN_CALIF,
-        FK_TLV_MODIF_FINAL_PERACA, CREATED_BY
-    ) VALUES (v_id, c_formato_calif, c_elemento_def, c_criterio_final, c_criterio_area,
-              c_desempeno_sin_calif, c_modif_final_peraca, v_audit)
+        FK_TLV_MODIF_FINAL_PERACA, FK_TLV_CRITERIO_ASIGNATURA, FK_TLV_CRITERIO_FINAL,
+        FK_TLV_CRITERIO_AREA, FK_TLV_DESEMPENO_SIN_CALIF, FK_TLV_MODO_REDONDEAR,
+        PORCENTAJE_MAXIMO_RECUPERACION, CREATED_BY
+    ) VALUES (
+        v_id, c_formato_calif, c_elemento_def, c_modif_final_peraca, c_criterio_asignatura,
+        c_criterio_final, c_criterio_area, c_desempeno_sin_calif, c_modo_redondear, 1, v_audit
+    )
     ON CONFLICT (PK_TCRITERIO_EVALUACION) DO NOTHING;
 
     -- 9. Descansos anidados (opcional). Validan contra el horario del periodo.
