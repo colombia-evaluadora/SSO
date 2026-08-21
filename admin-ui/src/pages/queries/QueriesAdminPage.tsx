@@ -20,6 +20,7 @@ import {
 import { useExecuteQuery } from "@/hooks/useQueries";
 import { useMicroservices } from "@/hooks/useMicroservices";
 import type {
+  ParamConstraint,
   QueryAdminResponse,
   QueryExecutionResponse,
   QueryParamValue,
@@ -77,6 +78,26 @@ function filterParamTypesToSql(
   return out;
 }
 
+/**
+ * V81 — mismo filtrado que {@link filterParamTypesToSql}, aplicado a
+ * {@code paramConstraints}: una restricción sólo se envía si su
+ * placeholder sobrevivió el filtro de tipos (está en el SQL Y quedó
+ * tipado). El backend rechaza una restricción cuyo key no exista en
+ * {@code paramTypes} — filtrar acá evita ese 400 cuando el autor
+ * borró el placeholder del SQL pero la restricción manual seguía en
+ * el state local.
+ */
+function filterParamConstraintsToTypes(
+  paramConstraints: Record<string, ParamConstraint>,
+  filteredParamTypes: Record<string, string>,
+): Record<string, ParamConstraint> {
+  const out: Record<string, ParamConstraint> = {};
+  for (const [k, v] of Object.entries(paramConstraints)) {
+    if (filteredParamTypes[k]) out[k] = v;
+  }
+  return out;
+}
+
 export function QueriesAdminPage() {
   const queries = useAdminQueries();
   const services = useMicroservices();
@@ -93,16 +114,28 @@ export function QueriesAdminPage() {
     useState<QueryAdminResponse | null>(null);
   const [executing, setExecuting] = useState<QueryAdminResponse | null>(null);
   const [search, setSearch] = useState("");
+  // "" = todos los métodos. Sólo los verbos que el backend admite
+  // para una fila con path template (ver QueryAdminService
+  // .normalizeHttpMethod) — DELETE queda fuera a propósito, nunca
+  // aparece en los datos: para borrar se publica un procedimiento y
+  // se llama con CALL.
+  const [methodFilter, setMethodFilter] = useState<
+    "" | "GET" | "POST" | "PUT" | "PATCH"
+  >("");
 
   const filteredQueries = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return queries.data ?? [];
-    return (queries.data ?? []).filter(
-      (query) =>
+    return (queries.data ?? []).filter((query) => {
+      const matchesSearch =
+        q === "" ||
         query.uuid.toLowerCase().includes(q) ||
-        (query.type ?? "").toLowerCase().includes(q),
-    );
-  }, [queries.data, search]);
+        (query.type ?? "").toLowerCase().includes(q) ||
+        (query.pathTemplate ?? "").toLowerCase().includes(q);
+      const matchesMethod =
+        methodFilter === "" || (query.httpMethod ?? "POST") === methodFilter;
+      return matchesSearch && matchesMethod;
+    });
+  }, [queries.data, search, methodFilter]);
 
   async function handleSubmit(values: QueryFormValues & { id?: number }) {
     const body = {
@@ -132,6 +165,13 @@ export function QueriesAdminPage() {
       // mapa tal cual, con el filtrado de "sólo placeholders que
       // existen en el SQL" aplicado al armar el body.
       paramTypes: filterParamTypesToSql(values.paramTypes ?? {}, values.query ?? ""),
+      // V81 — restricciones de formato opcionales por placeholder,
+      // filtradas para que sólo viajen las que quedaron con un
+      // placeholder tipado tras el filtro de arriba.
+      paramConstraints: filterParamConstraintsToTypes(
+        values.paramConstraints ?? {},
+        filterParamTypesToSql(values.paramTypes ?? {}, values.query ?? ""),
+      ),
     };
     if (values.id) {
       await updateQ.mutateAsync({ id: values.id, ...body });
@@ -296,12 +336,29 @@ export function QueriesAdminPage() {
         </Button>
       </header>
 
-      <div className="mb-3">
-        <SearchInput
-          value={search}
-          onChange={setSearch}
-          placeholder="Buscar por UUID o tipo…"
-        />
+      <div className="mb-3 flex items-center gap-2">
+        <div className="flex-1">
+          <SearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Buscar por UUID, tipo o path…"
+          />
+        </div>
+        <select
+          value={methodFilter}
+          onChange={(e) =>
+            setMethodFilter(e.target.value as typeof methodFilter)
+          }
+          aria-label="Filtrar por método HTTP"
+          data-testid="method-filter"
+          className="rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+        >
+          <option value="">Todos los métodos</option>
+          <option value="GET">GET</option>
+          <option value="POST">POST</option>
+          <option value="PUT">PUT</option>
+          <option value="PATCH">PATCH</option>
+        </select>
       </div>
 
       <Table
