@@ -179,8 +179,12 @@ public class FuncionarioRegistrationService {
                         + "set_config('app.http_method', ?, true), "
                         + "set_config('app.client_ip', ?, true), "
                         + "set_config('app.user_agent', ?, true), "
-                        + "set_config('app.headers', ?::json, true), "
-                        + "set_config('app.request_body', ?::json, true)",
+                        // set_config's 2do argumento es SIEMPRE TEXT -- ::json aquí
+                        // rompe con "function set_config(unknown, json, boolean) does
+                        // not exist" (no hay overload que acepte json). El cast a json
+                        // pasa al LEER, dentro de fn_audit_ctx (V26), no al escribir.
+                        + "set_config('app.headers', ?, true), "
+                        + "set_config('app.request_body', ?, true)",
                 callerActorId, String.valueOf(callerActorId),
                 String.valueOf(callerActorId),
                 etiqueta,
