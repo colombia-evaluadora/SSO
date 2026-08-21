@@ -51,6 +51,24 @@ CREATE TABLE IF NOT EXISTS auditoria.audit_log
     familia    LowCardinality(String),
     request_id LowCardinality(String),
     http_method LowCardinality(String),  -- verbo HTTP del request que originó el cambio (PUT/POST/PATCH/...)
+
+    -- V-audit-ctx-2: contexto de transporte HTTP para auditoría de
+    -- seguridad ("¿desde dónde y con qué se hizo este cambio?").
+    -- client_ip como IPv6 tipado (ClickHouse mapea IPv4 dentro de la
+    -- misma columna) para poder usar funciones de rango/CIDR más
+    -- adelante. Nullable porque no todo request trae IP resoluble
+    -- (llamadas internas, tests). headers es un Map real, no JSON en
+    -- texto, para poder filtrar por clave sin parsear
+    -- (headers['user-agent']); es una whitelist curada en
+    -- query-service, NUNCA Authorization/Cookie. request_body es
+    -- String (igual que contexto) porque cada función fn_* tiene una
+    -- forma de body distinta -- no vale la pena tipar su JSON como se
+    -- hizo con fila_new/fila_old.
+    client_ip    Nullable(IPv6)                         CODEC(ZSTD(1)),
+    user_agent   String                                 CODEC(ZSTD(1)),
+    headers      Map(LowCardinality(String), String)    CODEC(ZSTD(3)),
+    request_body String                                 CODEC(ZSTD(3)),
+
     etiqueta   String               CODEC(ZSTD(1)),
     contexto   String               CODEC(ZSTD(3)),
     ts         DateTime64(3, 'UTC') CODEC(Delta, ZSTD(1)),
@@ -58,6 +76,7 @@ CREATE TABLE IF NOT EXISTS auditoria.audit_log
     INDEX idx_sesion  sesion_id  TYPE bloom_filter GRANULARITY 4,
     INDEX idx_appuser app_user   TYPE bloom_filter GRANULARITY 4,
     INDEX idx_request request_id TYPE bloom_filter GRANULARITY 4,
+    INDEX idx_ip      client_ip  TYPE bloom_filter GRANULARITY 4,
     INDEX idx_ts      ts         TYPE minmax       GRANULARITY 4,
     INDEX idx_tabla   tabla      TYPE bloom_filter GRANULARITY 4
 )

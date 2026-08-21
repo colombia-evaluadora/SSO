@@ -94,6 +94,10 @@ public record CdcEvent(
                 toText(node.get("familia")),
                 toText(node.get("request_id")),
                 toText(node.get("http_method")),
+                toText(node.get("client_ip")),
+                toText(node.get("user_agent")),
+                toMap(node.get("headers")),
+                toMap(node.get("request_body")),
                 toText(node.get("etiqueta")),
                 toMap(node.get("contexto"))
         );
@@ -126,6 +130,13 @@ public record CdcEvent(
             @JsonProperty("familia") String familia,
             @JsonProperty("request_id") String requestId,
             @JsonProperty("http_method") String httpMethod,
+            // V-audit-ctx-2 — transporte HTTP para auditoría de seguridad.
+            // headers/requestBody llegan ya como Map (fn_audit_ctx los
+            // castea a json en Postgres) igual que `contexto`.
+            @JsonProperty("client_ip") String clientIp,
+            @JsonProperty("user_agent") String userAgent,
+            Map<String, Object> headers,
+            @JsonProperty("request_body") Map<String, Object> requestBody,
             String etiqueta,
             Map<String, Object> contexto
     ) {}

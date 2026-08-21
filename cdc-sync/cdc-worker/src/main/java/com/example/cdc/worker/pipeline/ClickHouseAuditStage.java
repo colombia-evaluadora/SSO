@@ -75,6 +75,15 @@ public class ClickHouseAuditStage {
         row.put("familia", r.familia() != null ? r.familia() : "");
         row.put("request_id", r.requestId());
         row.put("http_method", r.httpMethod() != null ? r.httpMethod() : "");
+        // client_ip es Nullable(IPv6) en ClickHouse — omitimos la clave
+        // (en vez de mandar "") cuando no hay IP, así ClickHouse la deja
+        // NULL en vez de fallar el parseo de un string vacío como IPv6.
+        if (r.clientIp() != null && !r.clientIp().isBlank()) {
+            row.put("client_ip", r.clientIp());
+        }
+        row.put("user_agent", r.userAgent() != null ? r.userAgent() : "");
+        row.put("headers", r.headers() != null ? r.headers() : Map.of());
+        row.put("request_body", r.requestBodyJson() != null ? r.requestBodyJson() : "");
         row.put("etiqueta", r.etiqueta() != null ? r.etiqueta() : "");
         row.put("contexto", r.contextoJson() != null ? r.contextoJson() : "");
         row.put("ts", java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).toString().replace('T', ' '));

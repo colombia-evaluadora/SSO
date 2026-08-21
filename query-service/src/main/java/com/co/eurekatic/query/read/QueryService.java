@@ -320,7 +320,24 @@ public class QueryService {
         // silencio para PROCEDURE. La paginación ahora la escribe
         // el autor con :QUERY.SIZE / :QUERY.OFFSET, lo que además
         // le da control del dialecto y del orden de las cláusulas.
-        String sql = rewrittenSql;
+        //
+        // V-audit-ctx-2 — la ÚNICA excepción: el wrap de contexto de
+        // auditoría (ver wrapWithAuditContext) SÍ se le añade por
+        // fuera del catálogo, nunca a través de él. Antes (V80) el
+        // wrap vivía como texto literal dentro de la fila
+        // `public.query.query` — el autor lo veía (y podía romperlo)
+        // en el editor SQL del catálogo, y una lista de id_query
+        // hardcodeada decidía a qué filas aplicaba, lista que había
+        // que regenerar a mano por ambiente. Ahora es automático:
+        // CUALQUIER query en modo SELECT/FUNCTION que invoque una
+        // función academico_test.fn_* (la convención de nombres que
+        // TODAS las funciones de escritura auditadas siguen) y cuyo
+        // verbo no sea GET lo recibe, sin que el catálogo sepa que
+        // existe — no hace falta curar una lista ni tocar SQL
+        // guardado cuando se agrega una función nueva.
+        String sql = isAuditWrappable(mode, def.httpMethod(), rewrittenSql)
+                ? wrapWithAuditContext(rewrittenSql)
+                : rewrittenSql;
 
         // V33 — wrap the JDBC execution in a per-dialect
         // bulkhead. tryAcquirePermission() returns false
@@ -782,12 +799,50 @@ public class QueryService {
      * inyectarlo en cada firma de método intermedio. Si no hay
      * request ligado al hilo (tests, llamadas internas), no se agrega
      * nada — igual que el resto de los CONTEXT.* opcionales.
+     *
+     * <p>V-audit-ctx-2 agrega cuatro placeholders más, todos para
+     * auditoría de seguridad ("¿desde dónde y con qué se hizo este
+     * cambio?"), no de negocio:
+     * <ul>
+     *   <li>{@code :CONTEXT.CLIENT_IP} — {@code X-Client-Ip} (header
+     *       propio, seteado por {@code ClientIpGlobalFilter} en
+     *       api-gateway a partir de la conexión TCP real; DELIBERADAMENTE
+     *       no {@code X-Forwarded-For} — Spring Cloud Gateway 5 lo
+     *       descarta antes de reenviar la petición, confirmado
+     *       empíricamente). Fallback a {@code X-Forwarded-For} (por si
+     *       algo llama a query-service sin pasar por este gateway) y
+     *       finalmente a la IP de la conexión TCP directa.</li>
+     *   <li>{@code :CONTEXT.USER_AGENT} — el header tal cual.</li>
+     *   <li>{@code :CONTEXT.HEADERS} — JSON de una whitelist explícita
+     *       ({@link #HEADER_WHITELIST}). {@code Authorization}/{@code
+     *       Cookie} NUNCA se incluyen, ni siquiera redactados — son
+     *       credenciales de sesión, no contexto de auditoría, y no
+     *       tienen nada que hacer en ClickHouse en texto plano.</li>
+     *   <li>{@code :CONTEXT.REQUEST_BODY} — JSON de lo que el cliente
+     *       pidió escribir (snapshot de {@code target} ANTES de que
+     *       este método agregue sus propios {@code CONTEXT.*}), con
+     *       claves sensibles ({@link #SENSITIVE_KEY_PATTERN} — token,
+     *       secret, password) redactadas. Distinto de
+     *       {@code fila_new}/{@code fila_old} en ClickHouse, que son
+     *       el estado de la fila DESPUÉS de escribir — esto es lo que
+     *       el cliente pidió, útil cuando difiere (defaults, triggers).</li>
+     * </ul>
+     * Los cuatro viajan como GUCs de sesión igual que REQUEST_ID/PATH
+     * (ver {@link #wrapWithAuditContext}); HEADERS/REQUEST_BODY
+     * llegan ya serializados a JSON así que {@code fn_audit_ctx()} (V26)
+     * los castea con {@code ::json} en vez de truncarlos como TEXT.
      */
     private static void injectRequestParams(Map<String, Object> target) {
         if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes sra)) {
             return;
         }
         var req = sra.getRequest();
+
+        // Snapshot ANTES de que este método agregue sus propios
+        // CONTEXT.* — así REQUEST_BODY solo refleja lo que trajo el
+        // caller (PARAM.*/BODY.*), no metadata derivada por nosotros.
+        Map<String, Object> redactedBody = redactSensitiveKeys(target);
+
         String requestId = req.getHeader("X-Request-Id");
         if (requestId == null || requestId.isBlank()) {
             requestId = UUID.randomUUID().toString();
@@ -802,6 +857,173 @@ public class QueryService {
         // propia de ClickHouse), repetirlo aquí sería redundante.
         target.put(ParamNamespace.CONTEXT + ".PATH", req.getRequestURI());
         target.put(ParamNamespace.CONTEXT + ".HTTP_METHOD", req.getMethod());
+
+        // client_ip: X-Client-Ip (api-gateway's ClientIpGlobalFilter,
+        // authoritative) → X-Forwarded-For (unverified, only relevant
+        // when NOT behind this gateway) → conexión TCP directa.
+        String clientIp = req.getHeader("X-Client-Ip");
+        if (clientIp == null || clientIp.isBlank()) {
+            clientIp = req.getHeader("X-Forwarded-For");
+            if (clientIp != null && !clientIp.isBlank()) {
+                clientIp = clientIp.split(",")[0].trim();
+            }
+        }
+        if (clientIp == null || clientIp.isBlank()) {
+            clientIp = req.getRemoteAddr();
+        }
+        if (clientIp != null && !clientIp.isBlank()) {
+            target.put(ParamNamespace.CONTEXT + ".CLIENT_IP", clientIp);
+        }
+
+        String userAgent = req.getHeader("User-Agent");
+        if (userAgent != null && !userAgent.isBlank()) {
+            target.put(ParamNamespace.CONTEXT + ".USER_AGENT", userAgent);
+        }
+
+        Map<String, String> headers = new LinkedHashMap<>();
+        for (String name : HEADER_WHITELIST) {
+            String value = req.getHeader(name);
+            if (value != null && !value.isBlank()) {
+                headers.put(name.toLowerCase(java.util.Locale.ROOT), value);
+            }
+        }
+        if (!headers.isEmpty()) {
+            target.put(ParamNamespace.CONTEXT + ".HEADERS", toJson(headers));
+        }
+
+        if (!redactedBody.isEmpty()) {
+            target.put(ParamNamespace.CONTEXT + ".REQUEST_BODY", toJson(redactedBody));
+        }
+    }
+
+    /**
+     * V-audit-ctx-2 — el CTE que ANTES vivía como texto literal en
+     * {@code public.query.query} (ver el ya-eliminado
+     * {@code V80__wrap_write_queries_audit_context.sql}). {@code
+     * MATERIALIZED} fuerza a Postgres a computar el CTE (y por tanto
+     * ejecutar los {@code set_config}) ANTES de evaluar la subconsulta
+     * que llama a la función de escritura real — necesario porque
+     * query-service no abre una transacción explícita que abarque más
+     * de un statement (cada {@code jdbc.query()} es su propio
+     * top-level statement), así que un {@code set_config()} previo en
+     * un statement separado no sobreviviría hasta el {@code fn_*} real.
+     *
+     * <p>Los siete placeholders (:CONTEXT.REQUEST_ID, .HTTP_METHOD,
+     * .CLIENT_IP, .USER_AGENT, .HEADERS, .REQUEST_BODY, .PATH) ya están
+     * en {@code allParams} para TODA petición gracias a {@link
+     * #injectRequestParams} — el wrap es puro texto, no necesita el
+     * catálogo para nada.
+     */
+    private static final String AUDIT_CTX_CTE_HEADER =
+            "WITH _ctx AS MATERIALIZED (\n"
+          + "  SELECT set_config('app.request_id', :CONTEXT.REQUEST_ID, true) AS _rid,\n"
+          + "         set_config('app.http_method', :CONTEXT.HTTP_METHOD, true) AS _hm,\n"
+          + "         set_config('app.client_ip', :CONTEXT.CLIENT_IP, true) AS _ip,\n"
+          + "         set_config('app.user_agent', :CONTEXT.USER_AGENT, true) AS _ua,\n"
+          + "         set_config('app.headers', :CONTEXT.HEADERS, true) AS _hdrs,\n"
+          + "         set_config('app.request_body', :CONTEXT.REQUEST_BODY, true) AS _body,\n"
+          + "         set_config('app.contexto', jsonb_build_object('path', :CONTEXT.PATH)::text, true) AS _c\n"
+          + ")\n"
+          + "SELECT _orig.* FROM _ctx, (";
+
+    private static final String AUDIT_CTX_CTE_FOOTER = ") AS _orig";
+
+    /**
+     * Detecta una llamada a {@code academico_test.fn_*} en el SQL —
+     * la convención de nombres que sigue TODA función de escritura que
+     * declara {@code fn_audit_declarar} (ver {@code
+     * postgres/migrations/V66__fn_audit_declarar.sql} y las funciones
+     * que lo adoptan). Puramente textual y case-insensitive: no
+     * requiere mantenimiento cuando se agrega un módulo nuevo (áreas,
+     * grados, etc.) — a diferencia del regex por-módulo que usaba el
+     * ya-eliminado {@code V80} para generar su lista de {@code
+     * id_query}.
+     */
+    private static final java.util.regex.Pattern ACADEMICO_TEST_FN_CALL =
+            java.util.regex.Pattern.compile("academico_test\\.fn_", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Gate para el wrap automático de contexto de auditoría:
+     * <ul>
+     *   <li>Solo SELECT/FUNCTION son envolvibles — el truco mete el
+     *       SQL original como subconsulta en un FROM, lo que exige
+     *       que sea una expresión que devuelve filas. Un {@code
+     *       INSERT}/{@code UPDATE} directo (modo DML) o un {@code
+     *       CALL} (modo PROCEDURE) no son sintácticamente válidos
+     *       ahí — igual que antes de este cambio, esos dos modos se
+     *       quedan sin auditoría automática de contexto.</li>
+     *   <li>El SQL debe llamar a {@code academico_test.fn_*}
+     *       ({@link #ACADEMICO_TEST_FN_CALL}) — sin esto, cualquier
+     *       {@code SELECT} de solo lectura con {@code http_method}
+     *       distinto de GET (una convención legado real: muchas filas
+     *       nunca declararon el verbo y cayeron al default histórico
+     *       POST aunque son lecturas puras) recibiría el wrap sin
+     *       necesitarlo, rompiendo contra datasources que no son
+     *       Postgres/academico_test y agregando trabajo inútil.</li>
+     *   <li>{@code httpMethod} nulo cuenta como escritura (POST es el
+     *       default histórico de una fila sin verbo declarado — ver
+     *       el javadoc de {@link QueryDefinition#httpMethod()}); esto
+     *       importa poco en la práctica porque toda función
+     *       academico_test.fn_* real ya viene con un verbo explícito,
+     *       pero mantiene el gate conservador (envolver de más es
+     *       inofensivo, no envolver una escritura real no lo es).</li>
+     * </ul>
+     */
+    static boolean isAuditWrappable(String mode, String httpMethod, String sql) {
+        boolean wrappableMode = "SELECT".equals(mode) || "FUNCTION".equals(mode);
+        boolean isWrite = !"GET".equalsIgnoreCase(httpMethod == null ? "POST" : httpMethod);
+        return wrappableMode && isWrite && ACADEMICO_TEST_FN_CALL.matcher(sql).find();
+    }
+
+    static String wrapWithAuditContext(String sql) {
+        String trimmed = sql.strip();
+        if (trimmed.endsWith(";")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        return AUDIT_CTX_CTE_HEADER + trimmed + AUDIT_CTX_CTE_FOOTER + ";";
+    }
+
+    /**
+     * Headers permitidos en {@code :CONTEXT.HEADERS}. Deliberadamente NO
+     * incluye {@code Authorization}/{@code Cookie} — ver el javadoc de
+     * {@link #injectRequestParams}. {@code X-Forwarded-For} tampoco está
+     * acá porque ya se captura aparte como {@code :CONTEXT.CLIENT_IP}.
+     */
+    private static final List<String> HEADER_WHITELIST =
+            List.of("User-Agent", "Accept-Language", "Referer");
+
+    /**
+     * Nombres de placeholder que nunca deben llegar a ClickHouse en texto
+     * plano dentro de {@code :CONTEXT.REQUEST_BODY}. Se compara contra el
+     * nombre "local" (después del namespace — {@code BODY.PASSWORD} →
+     * {@code PASSWORD}), case-insensitive.
+     */
+    private static final java.util.regex.Pattern SENSITIVE_KEY_PATTERN =
+            java.util.regex.Pattern.compile("(?i).*(TOKEN|SECRET|PASSWORD|CONTRASENA|CONTRASEÑA).*");
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper CONTEXT_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /** Copia {@code source} redactando los valores cuyas keys matchean {@link #SENSITIVE_KEY_PATTERN}. */
+    private static Map<String, Object> redactSensitiveKeys(Map<String, Object> source) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : source.entrySet()) {
+            String key = e.getKey();
+            int dot = key.indexOf('.');
+            String localName = dot >= 0 ? key.substring(dot + 1) : key;
+            copy.put(key, SENSITIVE_KEY_PATTERN.matcher(localName).matches()
+                    ? "[REDACTED]" : e.getValue());
+        }
+        return copy;
+    }
+
+    private static String toJson(Object value) {
+        try {
+            return CONTEXT_MAPPER.writeValueAsString(value);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            log.warn("No se pudo serializar un valor de CONTEXT.* a JSON: {}", e.getMessage());
+            return null;
+        }
     }
 
     /**

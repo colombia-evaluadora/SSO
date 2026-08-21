@@ -183,6 +183,14 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
         Map<String, Object> contextoMap = (contextoRaw instanceof Map<?, ?> cmap)
                 ? toStringKeyedMap(cmap)
                 : null;
+        Object headersRaw = body.get("headers");
+        Map<String, Object> headersMap = (headersRaw instanceof Map<?, ?> hmap)
+                ? toStringKeyedMap(hmap)
+                : null;
+        Object requestBodyRaw = body.get("request_body");
+        Map<String, Object> requestBodyMap = (requestBodyRaw instanceof Map<?, ?> bmap)
+                ? toStringKeyedMap(bmap)
+                : null;
 
         return new CdcEvent.Context(
                 str(body.get("app_user")),
@@ -191,6 +199,10 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
                 str(body.get("familia")),
                 str(body.get("request_id")),
                 str(body.get("http_method")),
+                str(body.get("client_ip")),
+                str(body.get("user_agent")),
+                headersMap,
+                requestBodyMap,
                 str(body.get("etiqueta")),
                 contextoMap
         );
@@ -205,6 +217,10 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
         if (ctx.familia() != null) m.put("familia", ctx.familia());
         if (ctx.requestId() != null) m.put("request_id", ctx.requestId());
         if (ctx.httpMethod() != null) m.put("http_method", ctx.httpMethod());
+        if (ctx.clientIp() != null) m.put("client_ip", ctx.clientIp());
+        if (ctx.userAgent() != null) m.put("user_agent", ctx.userAgent());
+        if (ctx.headers() != null) m.put("headers", ctx.headers());
+        if (ctx.requestBody() != null) m.put("request_body", ctx.requestBody());
         if (ctx.etiqueta() != null) m.put("etiqueta", ctx.etiqueta());
         if (ctx.contexto() != null) m.put("contexto", ctx.contexto());
         return m;

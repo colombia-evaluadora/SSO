@@ -22,6 +22,14 @@ BEGIN
             'familia',     v_ctx ->> 'familia',
             'request_id',  LEFT(NULLIF(current_setting('app.request_id', true), ''), 100),
             'http_method', LEFT(NULLIF(current_setting('app.http_method', true), ''), 10),
+            -- V-audit-ctx-2: IP/user-agent/headers/body para auditoría de
+            -- seguridad. headers/request_body llegan ya serializados como
+            -- JSON (ver QueryService.injectRequestParams) así que se
+            -- castean, no se truncan como los TEXT sueltos de arriba.
+            'client_ip',    LEFT(NULLIF(current_setting('app.client_ip', true), ''), 45),
+            'user_agent',   LEFT(NULLIF(current_setting('app.user_agent', true), ''), 500),
+            'headers',      NULLIF(current_setting('app.headers', true), '')::json,
+            'request_body', NULLIF(current_setting('app.request_body', true), '')::json,
             'etiqueta',    v_etiq,
             'contexto',    v_ctx
         )::text

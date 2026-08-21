@@ -233,4 +233,79 @@ class QueryServiceUnitTest {
 
         assertThat(QueryService.normalizeColumnValue(pg, MAPPER)).isNull();
     }
+
+    // --- V-audit-ctx-2: wrap automático de contexto de auditoría ---
+
+    @Test
+    void wrapsAcademicoTestFnCallOnNonGetWrite() {
+        assertThat(QueryService.isAuditWrappable("SELECT", "POST",
+                "SELECT * FROM academico_test.fn_area_crear(:BODY.NOMBRE)"))
+                .isTrue();
+        assertThat(QueryService.isAuditWrappable("FUNCTION", "PUT",
+                "SELECT academico_test.fn_area_actualizar(:BODY.ID)"))
+                .isTrue();
+    }
+
+    @Test
+    void doesNotWrapPlainSelectEvenIfHttpMethodIsNotGet() {
+        // El caso real que rompía antes del fix: filas legado sin
+        // http_method declarado caen al default histórico POST aunque
+        // sean lecturas puras — no deben recibir el CTE de auditoría.
+        assertThat(QueryService.isAuditWrappable("SELECT", "POST",
+                "SELECT id, name FROM users ORDER BY id"))
+                .isFalse();
+    }
+
+    @Test
+    void doesNotWrapAcademicoTestCallOnGet() {
+        assertThat(QueryService.isAuditWrappable("SELECT", "GET",
+                "SELECT * FROM academico_test.fn_area_listar()"))
+                .isFalse();
+    }
+
+    @Test
+    void doesNotWrapDmlOrProcedureModeEvenForAcademicoTestCall() {
+        // El truco del CTE mete el SQL como subconsulta en un FROM;
+        // un INSERT/UPDATE directo o un CALL no son válidos ahí.
+        assertThat(QueryService.isAuditWrappable("DML", "POST",
+                "INSERT INTO academico_test.tarea (nombre) VALUES (:BODY.NOMBRE)"))
+                .isFalse();
+        assertThat(QueryService.isAuditWrappable("PROCEDURE", "POST",
+                "CALL academico_test.fn_area_crear(:BODY.NOMBRE)"))
+                .isFalse();
+    }
+
+    @Test
+    void nullHttpMethodDefaultsToWriteForWrapping() {
+        assertThat(QueryService.isAuditWrappable("SELECT", null,
+                "SELECT * FROM academico_test.fn_area_crear(:BODY.NOMBRE)"))
+                .isTrue();
+    }
+
+    @Test
+    void wrapWithAuditContextPrependsCteAndReferencesAllContextPlaceholders() {
+        String wrapped = QueryService.wrapWithAuditContext(
+                "SELECT * FROM academico_test.fn_area_crear(:BODY.NOMBRE)");
+
+        assertThat(wrapped)
+                .startsWith("WITH _ctx AS MATERIALIZED (")
+                .contains(":CONTEXT.REQUEST_ID")
+                .contains(":CONTEXT.HTTP_METHOD")
+                .contains(":CONTEXT.CLIENT_IP")
+                .contains(":CONTEXT.USER_AGENT")
+                .contains(":CONTEXT.HEADERS")
+                .contains(":CONTEXT.REQUEST_BODY")
+                .contains(":CONTEXT.PATH")
+                .contains("SELECT * FROM academico_test.fn_area_crear(:BODY.NOMBRE)")
+                .endsWith(") AS _orig;");
+    }
+
+    @Test
+    void wrapWithAuditContextStripsExistingTrailingSemicolon() {
+        String wrapped = QueryService.wrapWithAuditContext(
+                "SELECT academico_test.fn_area_crear(:BODY.NOMBRE);");
+
+        // Un solo ';' final — no dos.
+        assertThat(wrapped.chars().filter(c -> c == ';').count()).isEqualTo(1);
+    }
 }

@@ -27,6 +27,10 @@ public record AuditRecord(
         String familia,        // extraído de contexto.familia (ruta path-of-least-resistance)
         String requestId,
         String httpMethod,     // verbo HTTP del request que originó el cambio (PUT/POST/PATCH/...)
+        String clientIp,       // V-audit-ctx-2 — IP del cliente (X-Forwarded-For o conexión directa)
+        String userAgent,
+        Map<String, Object> headers,    // whitelist curada, va directo a un ClickHouse Map — no se serializa
+        String requestBodyJson,         // body/params del caller, redactado — serializado como contexto
         String etiqueta,
         String contextoJson
 ) {
@@ -76,23 +80,29 @@ public record AuditRecord(
                 familia,
                 event.context() != null ? event.context().requestId() : "",
                 event.context() != null ? event.context().httpMethod() : "",
+                event.context() != null ? event.context().clientIp() : "",
+                event.context() != null ? event.context().userAgent() : "",
+                event.context() != null ? event.context().headers() : Map.of(),
+                serializeJson(event.context() == null ? null : event.context().requestBody()),
                 event.context() != null ? event.context().etiqueta() : "",
-                serializeContexto(event.context() == null ? null : event.context().contexto())
+                serializeJson(event.context() == null ? null : event.context().contexto())
         );
     }
 
     /**
-     * JSON-serialize the contexto map so ClickHouse stores valid JSON instead
+     * JSON-serialize a context map so ClickHouse stores valid JSON instead
      * of {@link Map#toString()}'s {@code key=value} debug format. Triggered
      * by the production data check that revealed contexto was previously
-     * emitted as Java Map debug notation.
+     * emitted as Java Map debug notation. Reused for both {@code contexto}
+     * and {@code request_body} — same "opaque JSON blob in a String column"
+     * shape, unlike {@code headers} which maps to a real ClickHouse Map.
      */
-    private static String serializeContexto(Map<String, Object> contexto) {
-        if (contexto == null || contexto.isEmpty()) return "";
+    private static String serializeJson(Map<String, Object> map) {
+        if (map == null || map.isEmpty()) return "";
         try {
-            return MAPPER.writeValueAsString(contexto);
+            return MAPPER.writeValueAsString(map);
         } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize contexto", e);
+            throw new IllegalStateException("Failed to serialize JSON context field", e);
         }
     }
 
