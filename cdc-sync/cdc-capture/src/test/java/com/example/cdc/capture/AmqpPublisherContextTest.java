@@ -76,6 +76,7 @@ class AmqpPublisherContextTest {
     void row_event_after_logical_message_picks_up_cached_context() throws Exception {
         String auditJson = mapper.writeValueAsString(Map.of(
                 "app_user", "alice",
+                "app_user_id", "42",
                 "db_user", "postgres",
                 "sesion_id", "S-42",
                 "familia", "ADMIN",
@@ -109,6 +110,7 @@ class AmqpPublisherContextTest {
         assertThat(envelope).containsKey("context");
         Map<String, Object> ctx = (Map<String, Object>) envelope.get("context");
         assertThat(ctx).containsEntry("app_user", "alice");
+        assertThat(ctx).containsEntry("app_user_id", "42");
         assertThat(ctx).containsEntry("familia", "ADMIN");
         assertThat(ctx).containsEntry("request_id", "req-7");
     }

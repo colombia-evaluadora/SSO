@@ -89,6 +89,7 @@ public record CdcEvent(
         if (node == null || node.isNull()) return null;
         return new Context(
                 toText(node.get("app_user")),
+                toText(node.get("app_user_id")),
                 toText(node.get("db_user")),
                 toText(node.get("sesion_id")),
                 toText(node.get("familia")),
@@ -125,6 +126,10 @@ public record CdcEvent(
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Context(
             @JsonProperty("app_user") String appUser,
+            // V-audit-ctx-3 — PK numérico crudo del actor (String hasta el
+            // borde de inserción en ClickHouse, igual que el resto de este
+            // record; ver ClickHouseAuditStage.toRow para el parseo a Long).
+            @JsonProperty("app_user_id") String appUserId,
             @JsonProperty("db_user") String dbUser,
             @JsonProperty("sesion_id") String sesionId,
             @JsonProperty("familia") String familia,

@@ -5,15 +5,23 @@ import com.co.eurekatic.auth.exception.ForbiddenException;
 import com.co.eurekatic.auth.repository.AcademicoJdbcRepository;
 import com.co.eurekatic.auth.web.dto.RegisterResponse;
 import com.co.eurekatic.auth.web.dto.RegisterUsuarioRequest;
+import com.co.eurekatic.common.audit.AuditContext;
+import com.co.eurekatic.common.audit.AuditContextExtractor;
 import com.co.eurekatic.common.entity.User;
 import com.co.eurekatic.common.repository.UserRepository;
 import com.co.eurekatic.common.security.AuthPrincipal;
 import com.co.eurekatic.common.security.PasswordPolicy;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * Orquesta el alta en las dos caras del sistema: la fila de
@@ -29,15 +37,18 @@ public class FuncionarioRegistrationService {
     private final PasswordEncoder passwordEncoder;
     private final AcademicoJdbcRepository academicoJdbc;
     private final JdbcTemplate jdbc;
+    private final ObjectMapper objectMapper;
 
     public FuncionarioRegistrationService(UserRepository userRepository,
                                           PasswordEncoder passwordEncoder,
                                           AcademicoJdbcRepository academicoJdbc,
-                                          JdbcTemplate jdbc) {
+                                          JdbcTemplate jdbc,
+                                          ObjectMapper objectMapper) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.academicoJdbc = academicoJdbc;
         this.jdbc = jdbc;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
@@ -51,6 +62,10 @@ public class FuncionarioRegistrationService {
         String hashed = passwordEncoder.encode(req.password());
         User saved = userRepository.save(newUser(req, hashed));
 
+        // Misma conexión/transacción que callUsuCrear de abajo — igual
+        // patrón que AuditRevertService (sso-admin): @Transactional real,
+        // no hace falta el truco del CTE MATERIALIZED de query-service.
+        applyAuditContext(callerId, "Alta de usuario " + req.email(), req);
         long pkTusuario = academicoJdbc.callUsuCrear(callerId, req, hashed);
         return new RegisterResponse(saved.getId(), pkTusuario, null, saved.getEmail());
     }
@@ -68,6 +83,7 @@ public class FuncionarioRegistrationService {
 
         // fk_tmunicipio_expedicion ya no se pide aquí (V62): queda NULL
         // en TFUNCIONARIO y se completa después vía fn_fun_actualizar.
+        applyAuditContext(callerId, "Alta de funcionario " + req.email(), req);
         long pkFuncionario = academicoJdbc.callFunCrear(callerId, req, hashed);
         // fn_fun_crear solo retorna PK_TFUNCIONARIO. Resolvemos PK_TUSUARIO
         // por el bridge public.users.id_user -> academico_test.tusuario (V48).
@@ -127,5 +143,60 @@ public class FuncionarioRegistrationService {
                     "Caller sin identidad académica (academico_test.tusuario) — no puede afectar usuarios");
         }
         return pkTusuario;
+    }
+
+    /**
+     * Fija las GUCs de sesión que {@code academico_test.fn_audit_ctx()}
+     * (V26) lee, para que el {@code INSERT} que {@code fn_usu_crear}/
+     * {@code fn_fun_crear} hacen sobre {@code TUSUARIO}/{@code TFUNCIONARIO}
+     * quede atribuido — hoy llega vacío porque nadie las fija antes de
+     * llamarlas. Mismo patrón que {@code AuditRevertService} (sso-admin):
+     * un {@code SELECT set_config(...)} plano en la misma
+     * {@code @Transactional} que la escritura real, sin el truco de CTE
+     * MATERIALIZED que necesita query-service (ver
+     * QueryService.wrapWithAuditContext).
+     *
+     * @param callerActorId PK_TUSUARIO del caller (ya resuelto por {@link
+     *                       #resolveCallerId} — NO {@code public.users.id_user}).
+     * @param etiqueta      texto de negocio (p.ej. "Alta de usuario x@y.com").
+     * @param requestBody   el DTO de la petición, para el snapshot redactado
+     *                      de {@code app.request_body}.
+     */
+    private void applyAuditContext(long callerActorId, String etiqueta, Object requestBody) {
+        Map<String, Object> bodySnapshot;
+        try {
+            bodySnapshot = objectMapper.convertValue(requestBody, new TypeReference<Map<String, Object>>() {});
+        } catch (IllegalArgumentException e) {
+            bodySnapshot = Map.of();
+        }
+        Optional<AuditContext> ctx = AuditContextExtractor.fromCurrentRequest(bodySnapshot);
+
+        jdbc.queryForList(
+                "SELECT set_config('app.user_id', COALESCE(academico_test.fn_resolver_actor(?), ?), true), "
+                        + "set_config('app.user_pk', ?, true), "
+                        + "set_config('app.etiqueta', ?, true), "
+                        + "set_config('app.request_id', ?, true), "
+                        + "set_config('app.http_method', ?, true), "
+                        + "set_config('app.client_ip', ?, true), "
+                        + "set_config('app.user_agent', ?, true), "
+                        + "set_config('app.headers', ?::json, true), "
+                        + "set_config('app.request_body', ?::json, true)",
+                callerActorId, String.valueOf(callerActorId),
+                String.valueOf(callerActorId),
+                etiqueta,
+                ctx.map(AuditContext::requestId).orElse(null),
+                ctx.map(AuditContext::httpMethod).orElse("POST"),
+                ctx.map(AuditContext::clientIp).orElse(null),
+                ctx.map(AuditContext::userAgent).orElse(null),
+                ctx.map(c -> toJson(c.headers())).orElse(null),
+                ctx.map(AuditContext::requestBodyJson).orElse(null));
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            return null;
+        }
     }
 }

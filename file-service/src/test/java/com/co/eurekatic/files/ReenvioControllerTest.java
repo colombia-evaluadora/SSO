@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -91,7 +92,7 @@ class ReenvioControllerTest {
 
     /** Stub genérico para el mock de transformador: acepta cualquier clasificaciones/establecimientos. */
     private static void stubTransformar(TransformadorMultipart transformador) {
-        when(transformador.transformar(anyMap(), anyMap(), anyString(), anyMap(), anyMap()))
+        when(transformador.transformar(anyMap(), anyMap(), anyString(), any(), anyMap(), anyMap()))
                 .thenReturn(new TransformadorMultipart.Resultado(Map.of(), List.of()));
     }
 
@@ -231,7 +232,7 @@ class ReenvioControllerTest {
         verify(transformador).transformar(
                 anyMap(),
                 argThat(m -> m.containsKey("foto")),
-                eq("admin@example.com"),
+                eq("admin@example.com"), any(),
                 anyMap(),
                 anyMap());
     }
@@ -266,7 +267,7 @@ class ReenvioControllerTest {
         verify(transformador).transformar(
                 anyMap(),
                 argThat(m -> m.containsKey("foto")),
-                eq("admin@example.com"),
+                eq("admin@example.com"), any(),
                 argThat(clasif -> "perfilUsuario".equals(clasif.get("foto"))),
                 anyMap());
     }
@@ -318,7 +319,7 @@ class ReenvioControllerTest {
         verify(transformador).transformar(
                 anyMap(),
                 argThat(m -> m.containsKey("cualquier-nombre")),
-                eq("admin@example.com"),
+                eq("admin@example.com"), any(),
                 anyMap(),
                 anyMap());
     }
@@ -355,7 +356,7 @@ class ReenvioControllerTest {
         verify(transformador).transformar(
                 anyMap(),
                 argThat(m -> m.containsKey("nombre-con-guion")),
-                eq("admin@example.com"),
+                eq("admin@example.com"), any(),
                 anyMap(),
                 anyMap());
     }
@@ -429,7 +430,7 @@ class ReenvioControllerTest {
         verify(transformador).transformar(
                 anyMap(),
                 argThat(m -> m.containsKey("foto")),
-                eq("admin@example.com"),
+                eq("admin@example.com"), any(),
                 anyMap(),
                 argThat(est -> "120001003751".equals(est.get("foto"))));
     }
@@ -530,7 +531,7 @@ class ReenvioControllerTest {
         verify(transformador).transformar(
                 anyMap(),
                 argThat(m -> m.containsKey("foto")),
-                eq("profesor@example.com"),
+                eq("profesor@example.com"), any(),
                 anyMap(),
                 argThat(est -> "EE-SEED-01".equals(est.get("foto"))));
     }
@@ -565,7 +566,7 @@ class ReenvioControllerTest {
 
         verify(acceso).establecimientoDelUsuario("profesor@example.com");
         verify(transformador).transformar(
-                anyMap(), anyMap(), eq("profesor@example.com"), anyMap(),
+                anyMap(), anyMap(), eq("profesor@example.com"), any(), anyMap(),
                 argThat(est -> "EE-SEED-01".equals(est.get("foto"))));
     }
 

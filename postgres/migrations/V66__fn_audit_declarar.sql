@@ -54,6 +54,29 @@
 --   query-service empieza a inyectarlos (ver docs/etiqueta-auditoria-cdc-analisis.md
 --   §6.3, todavía no implementado).
 
+-- fn_resolver_actor: extraído del COALESCE que antes vivía inline en
+-- fn_audit_declarar (a) para poder reutilizarlo desde SQL plano (la CTE de
+-- QueryService.wrapWithAuditContext y AuditRevertService, que no pueden
+-- correr un bloque DECLARE/BEGIN de PL/pgSQL) sin duplicar la lógica de
+-- resolución de nombre legible.
+CREATE OR REPLACE FUNCTION academico_test.fn_resolver_actor(p_usuario_id BIGINT)
+RETURNS TEXT LANGUAGE sql STABLE AS $$
+    SELECT COALESCE(
+               NULLIF(TRIM(concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE,
+                                      u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO)), ''),
+               u.CORREO_ELECTRONICO,
+               u.CUENTA
+           )
+      FROM academico_test.TUSUARIO u
+     WHERE u.PK_TUSUARIO = p_usuario_id
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_resolver_actor IS
+    'Resuelve el PK de TUSUARIO a un nombre legible (nombre completo > correo > '
+    'cuenta), o NULL si no existe. Reutilizado por fn_audit_declarar y por '
+    'cualquier caller de SQL plano que necesite fijar app.user_id sin duplicar '
+    'la lógica de resolución.';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_audit_declarar(
     p_usuario_id         BIGINT,
     p_etiqueta           TEXT,
@@ -71,18 +94,15 @@ BEGIN
     -- (a) Actor legible. COALESCE en orden de preferencia humana:
     -- nombre completo > correo > cuenta > el PK crudo como último recurso
     -- (nunca dejar la columna vacía si el usuario existe).
+    -- app.user_pk se fija SIEMPRE, en una llamada aparte de app.user_id, para
+    -- que el PK numérico crudo del actor nunca se pierda -- ni cuando la
+    -- resolución de nombre falla, ni cuando en el futuro alguien cambie el
+    -- orden de preferencia del COALESCE de arriba (ver V26__context-emitter.sql).
     IF p_usuario_id IS NOT NULL THEN
-        SELECT COALESCE(
-                   NULLIF(TRIM(concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE,
-                                          u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO)), ''),
-                   u.CORREO_ELECTRONICO,
-                   u.CUENTA
-               )
-          INTO v_actor
-          FROM academico_test.TUSUARIO u
-         WHERE u.PK_TUSUARIO = p_usuario_id;
+        v_actor := academico_test.fn_resolver_actor(p_usuario_id);
 
         PERFORM set_config('app.user_id', COALESCE(v_actor, p_usuario_id::TEXT), true);
+        PERFORM set_config('app.user_pk', p_usuario_id::TEXT, true);
     END IF;
 
     -- (c) Establecimiento / sede legibles. p_sede_id resuelve ambos con un

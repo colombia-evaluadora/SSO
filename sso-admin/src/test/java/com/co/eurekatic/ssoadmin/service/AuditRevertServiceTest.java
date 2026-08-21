@@ -75,6 +75,11 @@ class AuditRevertServiceTest {
     void revertSetsContextGucsThenUpdatesActiveInSameOrder() {
         when(clickHouse.findByLsnSeq(100L, 2L)).thenReturn(Optional.of(softDeleteRow()));
         when(jdbc.queryForObject(anyString(), eq(Boolean.class), any())).thenReturn(false);
+        // actingUserId (7L, JWT `uid` = public.users.id_user) se puentea a
+        // PK_TUSUARIO antes de fijar las GUCs — mismo bug de espacio de ID
+        // que query-service resuelve con esta misma función puente.
+        when(jdbc.queryForObject(eq("SELECT public.fn_get_academico_usuario_id(?)"), eq(Long.class), eq(7L)))
+                .thenReturn(77L);
 
         AuditRevertResponse resp = service.revert(100L, 2L, 7L);
 
@@ -83,7 +88,8 @@ class AuditRevertServiceTest {
 
         var inOrder = org.mockito.Mockito.inOrder(jdbc);
         inOrder.verify(jdbc).queryForList(anyString(),
-                any(Object.class), any(Object.class), any(Object.class), any(Object.class));
+                any(Object.class), any(Object.class), any(Object.class),
+                any(Object.class), any(Object.class), any(Object.class));
         inOrder.verify(jdbc).update(eq("UPDATE academico_test.area SET active = ? WHERE pk_area = ?"),
                 eq(true), eq(42));
     }

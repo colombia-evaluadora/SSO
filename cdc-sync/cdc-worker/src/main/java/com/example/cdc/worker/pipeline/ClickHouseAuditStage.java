@@ -72,6 +72,18 @@ public class ClickHouseAuditStage {
         row.put("latencia_ms", r.latenciaMs());
         row.put("snapshot", r.snapshot() ? "true" : "false");
         row.put("app_user", r.appUser());
+        // app_user_id es Nullable(Int64) en ClickHouse — mismo criterio que
+        // client_ip: omitimos la clave (en vez de mandar "" o 0) cuando no
+        // hay PK numérico, y no propagamos un valor no-numérico (GUC
+        // corrupto/legado) en vez de fallar todo el insert por una fila.
+        if (r.appUserId() != null && !r.appUserId().isBlank()) {
+            try {
+                row.put("app_user_id", Long.parseLong(r.appUserId()));
+            } catch (NumberFormatException ignored) {
+                // app.user_pk traía algo no numérico -- se omite en vez de
+                // reventar el batch completo por una fila.
+            }
+        }
         row.put("db_user", r.dbUser());
         row.put("sesion_id", r.sesionId());
         row.put("familia", r.familia() != null ? r.familia() : "");

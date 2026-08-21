@@ -913,15 +913,36 @@ public class QueryService {
      * en {@code allParams} para TODA petición gracias a {@link
      * #injectRequestParams} — el wrap es puro texto, no necesita el
      * catálogo para nada.
+     *
+     * <p>V-audit-ctx-3 — {@code app.user_id}/{@code app.user_pk}: hasta
+     * ahora este wrap NUNCA los fijaba (confirmado al auditar este
+     * método) — {@code auditoria.audit_log.app_user}/{@code app_user_id}
+     * llegaban vacíos para TODA escritura de query-service, no solo las
+     * que no pasaban por {@code fn_audit_declarar}. {@code :CONTEXT.USER_ID}
+     * (línea ~759, {@code AuthPrincipal.userId()}) es {@code
+     * public.users.id_user} — un espacio de ID DISTINTO de {@code
+     * academico_test.TUSUARIO.PK_TUSUARIO}, el mismo puente que cada
+     * {@code fn_*} de escritura ya usa para {@code
+     * p_pk_usuario_solicitante} (ver p.ej. {@code fn_sed_crear} en
+     * V64). El CTE {@code _actor} resuelve ese puente UNA vez; {@code
+     * app.user_id} usa {@code academico_test.fn_resolver_actor} (V66)
+     * para el nombre legible, con el PK crudo como último recurso;
+     * {@code app.user_pk} lleva SIEMPRE el PK crudo, nunca pisado por
+     * la resolución de nombre — mismo contrato dual que V26/V66.
      */
     private static final String AUDIT_CTX_CTE_HEADER =
-            "WITH _ctx AS MATERIALIZED (\n"
+            "WITH _actor AS MATERIALIZED (\n"
+          + "  SELECT public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT) AS pk_tusuario\n"
+          + "),\n"
+          + "_ctx AS MATERIALIZED (\n"
           + "  SELECT set_config('app.request_id', :CONTEXT.REQUEST_ID, true) AS _rid,\n"
           + "         set_config('app.http_method', :CONTEXT.HTTP_METHOD, true) AS _hm,\n"
           + "         set_config('app.client_ip', :CONTEXT.CLIENT_IP, true) AS _ip,\n"
           + "         set_config('app.user_agent', :CONTEXT.USER_AGENT, true) AS _ua,\n"
           + "         set_config('app.headers', :CONTEXT.HEADERS, true) AS _hdrs,\n"
           + "         set_config('app.request_body', :CONTEXT.REQUEST_BODY, true) AS _body,\n"
+          + "         set_config('app.user_id', COALESCE(academico_test.fn_resolver_actor((SELECT pk_tusuario FROM _actor)), (SELECT pk_tusuario FROM _actor)::text), true) AS _uid,\n"
+          + "         set_config('app.user_pk', (SELECT pk_tusuario FROM _actor)::text, true) AS _upk,\n"
           + "         set_config('app.contexto', jsonb_build_object('path', :CONTEXT.PATH)::text, true) AS _c\n"
           + ")\n"
           + "SELECT _orig.* FROM _ctx, (";

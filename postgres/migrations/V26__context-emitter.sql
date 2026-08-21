@@ -17,6 +17,12 @@ BEGIN
             'tabla',       TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME,
             'op',          LEFT(TG_OP, 1),
             'app_user',    NULLIF(current_setting('app.user_id', true), ''),
+            -- V-audit-ctx-3: PK numérico crudo del actor, además del nombre
+            -- legible de arriba. fn_audit_declarar (V66) resuelve el nombre
+            -- y SOBREESCRIBE app.user_id con él -- este campo aparte nunca
+            -- se pisa, así que el PK sobrevive incluso cuando la resolución
+            -- de nombre falla o el actor no existe en TUSUARIO.
+            'app_user_id', NULLIF(current_setting('app.user_pk', true), ''),
             'db_user',     session_user,
             'sesion_id',   v_ctx ->> 'sesion_id',
             'familia',     v_ctx ->> 'familia',

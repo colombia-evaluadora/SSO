@@ -288,7 +288,7 @@ class QueryServiceUnitTest {
                 "SELECT * FROM academico_test.fn_area_crear(:BODY.NOMBRE)");
 
         assertThat(wrapped)
-                .startsWith("WITH _ctx AS MATERIALIZED (")
+                .startsWith("WITH _actor AS MATERIALIZED (")
                 .contains(":CONTEXT.REQUEST_ID")
                 .contains(":CONTEXT.HTTP_METHOD")
                 .contains(":CONTEXT.CLIENT_IP")
@@ -296,6 +296,13 @@ class QueryServiceUnitTest {
                 .contains(":CONTEXT.HEADERS")
                 .contains(":CONTEXT.REQUEST_BODY")
                 .contains(":CONTEXT.PATH")
+                // V-audit-ctx-3 — puente public.users.id_user -> TUSUARIO.PK_TUSUARIO
+                // y las dos GUCs duales (nombre legible + PK crudo).
+                .contains(":CONTEXT.USER_ID")
+                .contains("public.fn_get_academico_usuario_id")
+                .contains("'app.user_id'")
+                .contains("academico_test.fn_resolver_actor")
+                .contains("'app.user_pk'")
                 .contains("SELECT * FROM academico_test.fn_area_crear(:BODY.NOMBRE)")
                 .endsWith(") AS _orig;");
     }

@@ -194,6 +194,7 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
 
         return new CdcEvent.Context(
                 str(body.get("app_user")),
+                str(body.get("app_user_id")),
                 str(body.get("db_user")),
                 str(body.get("sesion_id")),
                 str(body.get("familia")),
@@ -212,6 +213,7 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
     private static Map<String, Object> contextToMap(CdcEvent.Context ctx) {
         Map<String, Object> m = new LinkedHashMap<>();
         if (ctx.appUser() != null) m.put("app_user", ctx.appUser());
+        if (ctx.appUserId() != null) m.put("app_user_id", ctx.appUserId());
         if (ctx.dbUser() != null) m.put("db_user", ctx.dbUser());
         if (ctx.sesionId() != null) m.put("sesion_id", ctx.sesionId());
         if (ctx.familia() != null) m.put("familia", ctx.familia());

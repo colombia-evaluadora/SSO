@@ -151,17 +151,32 @@ public class AuditRevertService {
         contexto.put("revert_of_seq", seq);
         String contextoJson = writeJson(contexto);
 
+        // actingUserId es el claim `uid` del JWT — public.users.id_user, NO
+        // academico_test.TUSUARIO.PK_TUSUARIO (mismo bug de espacio de ID que
+        // query-service ya resuelve con esta misma función puente para cada
+        // fn_* que recibe p_pk_usuario_solicitante). Se resuelve UNA vez y se
+        // reutiliza para las dos GUCs de abajo.
+        Long pkTusuario = actingUserId == null ? null
+                : jdbc.queryForObject("SELECT public.fn_get_academico_usuario_id(?)", Long.class, actingUserId);
+
         // Misma conexión/transacción que el UPDATE de abajo — a
         // diferencia de query-service, sso-admin SÍ tiene @Transactional
         // real, así que no hace falta el truco del CTE MATERIALIZED.
+        // app.user_id lleva el nombre legible (o el PK crudo si no se
+        // pudo resolver); app.user_pk lleva SIEMPRE el PK crudo de
+        // TUSUARIO, sin pisar ni ser pisado por la resolución de nombre
+        // (mismo contrato dual que V26/V66 — ver etiqueta-auditoria-cdc-project).
         jdbc.queryForList(
                 "SELECT set_config('app.request_id', ?, true), "
-                        + "set_config('app.user_id', ?, true), "
+                        + "set_config('app.user_id', COALESCE(academico_test.fn_resolver_actor(?), ?), true), "
+                        + "set_config('app.user_pk', ?, true), "
                         + "set_config('app.http_method', 'POST', true), "
                         + "set_config('app.etiqueta', ?, true), "
                         + "set_config('app.contexto', ?, true)",
                 revertRequestId,
-                actingUserId == null ? null : actingUserId.toString(),
+                pkTusuario,
+                pkTusuario == null ? null : pkTusuario.toString(),
+                pkTusuario == null ? null : pkTusuario.toString(),
                 etiqueta,
                 contextoJson);
 

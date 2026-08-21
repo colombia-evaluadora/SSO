@@ -22,6 +22,7 @@ public record AuditRecord(
         long latenciaMs,
         boolean snapshot,
         String appUser,
+        String appUserId,      // V-audit-ctx-3 — PK crudo de TUSUARIO, texto hasta el borde de ClickHouse (ver ClickHouseAuditStage.toRow)
         String dbUser,
         String sesionId,
         String familia,        // extraído de contexto.familia (ruta path-of-least-resistance)
@@ -89,6 +90,7 @@ public record AuditRecord(
                 latenciaMs,
                 event.isSnapshotEvent(),
                 event.context() != null ? event.context().appUser() : "",
+                event.context() != null ? event.context().appUserId() : "",
                 event.context() != null ? event.context().dbUser() : "",
                 event.context() != null ? event.context().sesionId() : "",
                 familia,

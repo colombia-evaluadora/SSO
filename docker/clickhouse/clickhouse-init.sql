@@ -57,7 +57,12 @@ CREATE TABLE IF NOT EXISTS auditoria.audit_log
     latencia_ms  UInt32               CODEC(ZSTD(1)),  -- ahora - ts_ms
     snapshot     Enum8('true'=1,'false'=2,'last'=3) DEFAULT 'false',
 
-    app_user   String               CODEC(ZSTD(1)),
+    app_user    String               CODEC(ZSTD(1)),
+    -- V-audit-ctx-3: PK numérico crudo del actor (academico_test.TUSUARIO.PK_TUSUARIO),
+    -- además del nombre legible de app_user. Nullable porque no todo escritor
+    -- fija app.user_pk hoy (servicios aún no instrumentados) y porque tokens
+    -- legado sin claim de usuario no tienen PK que propagar.
+    app_user_id Nullable(Int64)      CODEC(ZSTD(1)),
     db_user    LowCardinality(String),
     sesion_id  LowCardinality(String),
     familia    LowCardinality(String),
@@ -87,6 +92,7 @@ CREATE TABLE IF NOT EXISTS auditoria.audit_log
 
     INDEX idx_sesion  sesion_id  TYPE bloom_filter GRANULARITY 4,
     INDEX idx_appuser app_user   TYPE bloom_filter GRANULARITY 4,
+    INDEX idx_appuserid app_user_id TYPE bloom_filter GRANULARITY 4,
     INDEX idx_request request_id TYPE bloom_filter GRANULARITY 4,
     INDEX idx_ip      client_ip  TYPE bloom_filter GRANULARITY 4,
     INDEX idx_ts      ts         TYPE minmax       GRANULARITY 4,
