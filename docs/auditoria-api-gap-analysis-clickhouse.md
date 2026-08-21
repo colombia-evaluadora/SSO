@@ -130,3 +130,40 @@ Del lado de ClickHouse, `sesion_id` es solo una etiqueta de correlación por fil
 3. **Diseñar el catálogo de tablas auditables** (slug/nombre/ícono/campos-legibles) — es el bloqueador que toca más endpoints (`/audit-tables/query`, `/audit-tables/{slug}`, `fieldFilters`, `entityFields`).
 4. **Decidir qué hacer con `/audits/*` (sesiones)** antes de construirlo — o se define una entidad de sesión real (auth-center empieza a persistir login/logout + IP), o se reformula esa parte de la spec para trabajar sobre agrupaciones de `audit_log` por `app_user`/rango de fecha en vez de una sesión con ciclo de vida propio.
 5. **`revert` queda para el final** — es la pieza de mayor riesgo (escritura arbitraria a producción) y la que menos reutiliza lo que ya existe.
+
+---
+
+## 9. Actualización (2026-08-21) — varios de estos gaps ya se cerraron
+
+Este documento es del 19-ago; desde entonces se hizo trabajo real en `feat/etiqueta-auditoria-cdc` (PR #75) que **invalida algunos de los hallazgos de arriba**. Verificado en vivo contra ClickHouse antes de escribir esto:
+
+- **§2, `entityName`/`authorName` — YA NO llegan vacías.** `fn_audit_declarar` está adoptado en las 49 funciones `fn_*` de escritura. Confirmado con una fila real: `etiqueta="Eliminación del área ..."`, `app_user="Admin Sistema"`.
+- **§4.2, `ip` — YA EXISTE.** `audit_log.client_ip` (`Nullable(IPv6)`, indexado con bloom filter) se agregó como columna dedicada, capturada en `query-service` desde el header `X-Client-Ip` que setea `api-gateway` (con la IP real de la conexión TCP, nunca confiando en lo que el cliente mande). También se agregaron `user_agent`, `headers` (whitelist) y `request_body` (redactado) — más de lo que pedía la spec original.
+- **`sesion_id`/`familia` (§6) siguen vacías** — sin cambios, sigue siendo un gap real de captura en `auth-center` no relacionado con ClickHouse.
+- **§5, `revert` — parcialmente resuelto, no cerrado.** Se implementó una fase 1 real: `POST /audit/revert` en `sso-admin`, pero **deliberadamente limitada al patrón soft-delete/soft-restore** (toggle de la bandera `active`) — no cubre INSERT/DELETE físico, PK compuesta, ni reversión de campo arbitrario como pide la spec original (`.../changes/revert` sobre cualquier columna). Ver `AuditRevertService` para el detalle; sigue siendo cierto que un revert de campo arbitrario "es un proyecto aparte", solo que ahora hay una base real sobre la que construirlo en vez de partir de cero.
+
+### 9.1 Nuevo hallazgo: ¿es viable un microservicio ClickHouse-only para `/audit-tables/*`?
+
+Se evaluó (y se probó end-to-end, no solo en teoría) usar el mismo motor genérico de `query-service` — el "instance mode" que ya usa `eval-col` contra Postgres — apuntado a ClickHouse en vez de Postgres, para servir `/audit-tables/*/operations/query` y `/operations/stats` con SQL puro. **Funciona.** Se agregó `com.clickhouse:clickhouse-jdbc` como cuarto dialecto (junto a postgres/oracle/sqlserver) y se validó con una instancia real (`QUERY_DS_DIALECT=clickhouse`) y una fila de catálogo de prueba:
+
+```sql
+SELECT lsn, seq, tabla, pk,
+       CASE operacion WHEN 'c' THEN 'INSERT' WHEN 'u' THEN 'UPDATE' WHEN 'd' THEN 'DELETE' ELSE 'SNAPSHOT' END AS operation,
+       etiqueta AS entityName, app_user AS authorName, toString(client_ip) AS authorIp,
+       http_method, ts AS occurredAt, count() OVER() AS totalCount
+FROM auditoria.audit_log
+WHERE tabla = :PARAM.TABLA AND operacion != 'r'
+ORDER BY ts DESC LIMIT 20;
+```
+
+Respondió correctamente vía HTTP, con `entityName`/`authorName`/`authorIp` ya poblados y `totalCount` calculado con una función de ventana (`count() OVER()`, soportada en ClickHouse desde 21.3).
+
+**Un hallazgo real de sintaxis, no cosmético**: ClickHouse exige que `LIMIT`/`OFFSET` sean **literales constantes en el texto SQL**, no parámetros bindeados vía JDBC — `LIMIT :QUERY.SIZE OFFSET :QUERY.OFFSET` (el patrón que sí funciona en cada fila de catálogo Postgres del sistema) falla contra ClickHouse con `Code: 440. DB::Exception: LIMIT expression must be constant with numeric type`, porque el driver manda los parámetros como strings citados (`LIMIT '0', '5'`). Esto bloquea la paginación estándar del catálogo (`:QUERY.SIZE`/`:QUERY.OFFSET`) tal como está hoy — habría que resolverlo antes de construir el endpoint real (posiblemente validando el entero en la capa Java e interpolándolo como literal seguro, en vez de bindearlo, algo que `SqlRewriter`/`ParamBinder` no hacen para ninguna cláusula hoy — es la única pieza nueva de código que haría falta).
+
+**Lo que este approach NO puede resolver, por diseño** (no es un límite del driver, es un límite de qué datos existen):
+
+- **Catálogo de tablas auditables (§3.1)** — slug/nombre/ícono/campos-legibles. No hay ninguna fuente de esto en ClickHouse. Es servible como SQL literal (`SELECT 'tgrado' AS slug, 'Grado' AS nombre, ... UNION ALL ...`) si la lista de tablas es pequeña y estable — sigue siendo "solo SELECT contra ClickHouse", pero deja de ser sostenible si esa lista empieza a crecer o necesita mantenimiento activo por un no-programador.
+- **`revert` de campo arbitrario (§5)** — imposible por construcción desde una instancia que "se conecta solo a ClickHouse": escribir de vuelta a `academico_test.*` requiere una conexión a Postgres, que por definición esta instancia no tiene. Es exactamente por esto que el revert (fase 1) se implementó en `sso-admin`, no aquí.
+- **`/audits/*` (sesiones, §6)** — sigue sin existir la fuente de datos en ningún lado; ningún microservicio, sea cual sea su arquitectura, puede servir una entidad que no existe.
+
+**Conclusión**: el bloque de solo-lectura de `/audit-tables/*` (query + stats + changes) es genuinamente construible hoy como una instancia `query-service` dedicada a ClickHouse — es el patrón correcto y ya validado extremo a extremo. `revert` de campo arbitrario y `/audits/*` de sesiones siguen siendo, como decía la §8 original, proyectos aparte.
