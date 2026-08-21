@@ -202,6 +202,29 @@ describe("QueryServicesSection", () => {
     expect(await screen.findByText(/Reinicio solicitado — oracle-dev/i)).toBeInTheDocument();
   });
 
+  it("Recrear opens a confirm modal and fires POST /container/recreate on confirm", async () => {
+    const row = mkMs({ id: 4, instanceName: "oracle-dev" });
+    fetchSpy.mockResolvedValueOnce(jsonResponse([row]));
+    fetchSpy.mockResolvedValueOnce(jsonResponse(mkStatus()));
+    // recreate returns 202 Accepted
+    fetchSpy.mockResolvedValueOnce(new Response(null, { status: 202 }));
+
+    renderPage();
+    await userEvent.click(await screen.findByTestId("recreate-4"));
+
+    // Confirmación antes de disparar la llamada real — es una
+    // operación destructiva (borra el contenedor actual).
+    expect(
+      findFetchCall(fetchSpy, "/microservice/4/container/recreate"),
+    ).toBeUndefined();
+    await userEvent.click(await screen.findByTestId("confirm-recreate"));
+
+    expect(findFetchCall(fetchSpy, "/microservice/4/container/recreate")).toBeDefined();
+    expect(
+      await screen.findByText(/Contenedor de oracle-dev recreado con la imagen actual/i),
+    ).toBeInTheDocument();
+  });
+
   it("renders an error state when the list endpoint fails", async () => {
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify({ code: "DOWN", message: "sso-admin down", timestamp: "" }), {

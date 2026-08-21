@@ -194,6 +194,14 @@ export const queryServicesApi = {
     apiClient.getText(`/sso-admin/microservice/${id}/container/logs?tail=${tail}`),
   restart: (id: number) =>
     apiClient.post<void>(`/sso-admin/microservice/${id}/container/restart`),
+  // Borra el contenedor existente (si lo hay) y levanta uno nuevo
+  // con la MISMA spec de la fila, tomando la imagen `query-service`
+  // que el provisioner tenga configurada ahora. A diferencia de
+  // `restart` (mismo contenedor, mismo filesystem viejo), esto es
+  // lo que hace falta después de reconstruir/redesplegar la imagen
+  // — ver MicroserviceService.recreateContainer en el backend.
+  recreate: (id: number) =>
+    apiClient.post<void>(`/sso-admin/microservice/${id}/container/recreate`),
 };
 
 // ====================== endpoint ======================

@@ -158,6 +158,27 @@ public class MicroserviceController {
         return ResponseEntity.accepted().build();
     }
 
+    /**
+     * Borra el contenedor existente (si lo hay) y levanta uno
+     * nuevo con la misma spec de la fila, tomando la imagen
+     * {@code query-service} que el provisioner tenga configurada
+     * AHORA. A diferencia de {@code /container/restart} (que
+     * reinicia el MISMO contenedor con el filesystem viejo), esto
+     * es lo que hace falta después de reconstruir/redesplegar la
+     * imagen para que la fila corra el código nuevo — ver el
+     * javadoc de {@link MicroserviceService#recreateContainer}.
+     *
+     * <p>Devuelve 202 porque, igual que {@code create}, el
+     * provisioning es una llamada bloqueante que puede tardar
+     * varios segundos (crear + arrancar el contenedor + esperar
+     * el registro en Eureka).
+     */
+    @PostMapping("/{id}/container/recreate")
+    public ResponseEntity<Void> containerRecreate(@PathVariable Long id) {
+        service.recreateContainer(id);
+        return ResponseEntity.accepted().build();
+    }
+
     /* ====================== internals ====================== */
 
     /**

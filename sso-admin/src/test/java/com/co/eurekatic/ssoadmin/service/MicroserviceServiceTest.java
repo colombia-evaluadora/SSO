@@ -312,4 +312,83 @@ class MicroserviceServiceTest {
         verify(provisioner).deprovision("query-service-oracle-dev");
         verify(repo).delete(m);
     }
+
+    /* ====================== recreateContainer ====================== */
+
+    @Test
+    void recreateContainerDeprovisionsThenReprovisionsWithTheRowsPersistedSpec() {
+        Microservice m = sample(12L);
+        m.setKind("QUERY");
+        m.setDialect("postgres");
+        m.setJdbcUrl("jdbc:postgresql://db:5432/x");
+        m.setDbUsername("query");
+        m.setDbPassword("secret");
+        m.setPoolSize(15);
+        m.setInstanceName("eval-col");
+        when(repo.findById(12L)).thenReturn(Optional.of(m));
+
+        service.recreateContainer(12L);
+
+        // deprovision antes que provision — recrear es borrar +
+        // volver a crear, no un simple restart del mismo contenedor
+        // (que reutilizaría el filesystem de la imagen vieja).
+        var inOrder = org.mockito.Mockito.inOrder(provisioner);
+        inOrder.verify(provisioner).deprovision("query-service-eval-col");
+        inOrder.verify(provisioner).provision(new ProvisionSpec(
+                "eval-col", "postgres", "jdbc:postgresql://db:5432/x",
+                "query", "secret", 15));
+        verify(readinessProbe).waitForInstance("query-service-eval-col");
+    }
+
+    @Test
+    void recreateContainerDefaultsPoolSizeToTenWhenRowHasNone() {
+        Microservice m = sample(13L);
+        m.setKind("QUERY");
+        m.setDialect("oracle");
+        m.setInstanceName("oracle-dev");
+        m.setPoolSize(null);
+        when(repo.findById(13L)).thenReturn(Optional.of(m));
+
+        service.recreateContainer(13L);
+
+        verify(provisioner).provision(new ProvisionSpec(
+                "oracle-dev", "oracle", m.getJdbcUrl(), m.getDbUsername(), m.getDbPassword(), 10));
+    }
+
+    @Test
+    void recreateContainerFallsBackToDialectWhenInstanceNameIsNull() {
+        Microservice m = sample(14L);
+        m.setKind("QUERY");
+        m.setDialect("sqlserver");
+        m.setInstanceName(null);
+        when(repo.findById(14L)).thenReturn(Optional.of(m));
+
+        service.recreateContainer(14L);
+
+        verify(provisioner).deprovision("query-service-sqlserver");
+        verify(readinessProbe).waitForInstance("query-service-sqlserver");
+    }
+
+    @Test
+    void recreateContainerThrowsNotFoundWhenRowMissing() {
+        when(repo.findById(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.recreateContainer(999L))
+                .isInstanceOf(NotFoundException.class);
+        verify(provisioner, never()).deprovision(anyString());
+        verify(provisioner, never()).provision(any());
+    }
+
+    @Test
+    void recreateContainerRejectsRestRows() {
+        Microservice m = sample(15L);
+        m.setKind("REST");
+        when(repo.findById(15L)).thenReturn(Optional.of(m));
+
+        assertThatThrownBy(() -> service.recreateContainer(15L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("kind=QUERY");
+        verify(provisioner, never()).deprovision(anyString());
+        verify(provisioner, never()).provision(any());
+    }
 }
