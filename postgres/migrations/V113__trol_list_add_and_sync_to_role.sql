@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V59 — Gestion administrativa de TROL/TMENU/TLISTA_VALOR (academico_test),
+-- V113 — Gestion administrativa de TROL/TMENU/TLISTA_VALOR (academico_test),
 -- cableada para servir el contrato de docs/roles-permisos-dtos.md via el
 -- catalogo publico.QUERY (SELECT * FROM academico_test.fn_xxx(...)).
 --
@@ -34,7 +34,7 @@
 --     P0001 (default, RAISE EXCEPTION sin USING) -> 400 Bad Request
 --     CUALQUIER OTRO INCLUYENDO P0002 -> 500 Internal Server Error (!)
 --   El mapper de esta rama NO tiene caso para 404 — ninguno de los ERRCODE
---   disponibles produce HttpStatus.NOT_FOUND. Por eso V59 usa esta
+--   disponibles produce HttpStatus.NOT_FOUND. Por eso V113 usa esta
 --   convencion, aplicada consistentemente en las tres categorias:
 --     * 42501  -> exclusivo de fn_assert_superadmin (autorizacion).
 --     * 23505  -> "ya existe" (violacion de unicidad): duplicar CODIGO/
@@ -123,7 +123,7 @@
 --   7. fn_upsert_menu(...) -> TABLE(pk_tmenu, pk_padre, nombre, path,
 --                                   icono, orden, visible, plan_id,
 --                                   type, status)
---      Reemplaza y absorbe a fn_create_parent_menu_with_submenus (V59
+--      Reemplaza y absorbe a fn_create_parent_menu_with_submenus (V113
 --      original). Tres modos segun que parametros opcionales lleguen:
 --        MODO EDITAR    (p_pk_tmenu_editar IS NOT NULL)
 --          -> PATCH /menus/{id}: UPDATE de esa unica fila. No toca orden.
@@ -144,12 +144,12 @@
 --          (fk_tmenu=NULL). Si ademas viene p_submenus (JSONB array), se
 --          crean N hijos bajo ese nuevo padre en la misma llamada (flujo
 --          batch "Crear nuevo menu principal" con grilla de submenus) —
---          se preserva por compatibilidad con el flujo original de V59.
+--          se preserva por compatibilidad con el flujo original de V113.
 --          Cada elemento de p_submenus admite {nombre,url,visible,orden,
 --          plan_id}; se procesan per-row (un error no aborta la lista).
 --      p_plan_id (o el "plan_id" de cada submenu del array) se valida
 --      contra tlista_valor CATEGORIA='PLAN' y se persiste en tmenu.fk_tplan
---      — este es el unico lugar de todo V59 donde se escribe esa columna,
+--      — este es el unico lugar de todo V113 donde se escribe esa columna,
 --      consistente con la decision de que el plan es propiedad del MENU
 --      (catalogo), no de la asignacion rol x menu.
 --
@@ -218,8 +218,8 @@
 --   * ADD COLUMN IF NOT EXISTS + CREATE INDEX IF NOT EXISTS para
 --     tmenu.fk_tplan y trol_menu.orden_rol.
 --
--- Historial de diseno (por que cambio desde la primera version de V59):
---   * V59 originalmente until esta revision guardaba el plan en
+-- Historial de diseno (por que cambio desde la primera version de V113):
+--   * V113 originalmente until esta revision guardaba el plan en
 --     trol_menu.fk_tplan (plan por asignacion rol x submenu). Al cablear
 --     el contrato real (docs/roles-permisos-dtos.md), MenuDto.planId /
 --     SaveMenuRequest.planId resultaron ser propiedades del MENU en
@@ -270,7 +270,7 @@ SET search_path TO academico_test, public;
 -- ---------------------------------------------------------------------------
 -- H) fn_assert_superadmin (helper interno)
 --    Unico punto donde vive la regla "solo superadministradores pueden
---    ejecutar las funciones administrativas de V59". La autorizacion se
+--    ejecutar las funciones administrativas de V113". La autorizacion se
 --    hace por ROL, no por lista hardcoded de pks: la funcion consulta
 --    public.role_users (unido a public.role por id_role) y exige que
 --    public.users.id_user = p_user_pk tenga vinculado el rol cuyo
@@ -318,7 +318,7 @@ $$;
 -- Idempotente (WHERE NOT EXISTS). No asigna el rol a ningun usuario.
 -- ---------------------------------------------------------------------------
 INSERT INTO public.role (name, description)
-SELECT 'CEVAL-SUPER_ADMINISTRADOR', 'Super Administrador del sistema academico (V59 seed)'
+SELECT 'CEVAL-SUPER_ADMINISTRADOR', 'Super Administrador del sistema academico (V113 seed)'
  WHERE NOT EXISTS (
        SELECT 1 FROM public.role WHERE name = 'CEVAL-SUPER_ADMINISTRADOR'
        );
@@ -352,7 +352,7 @@ ADD COLUMN IF NOT EXISTS orden_rol NUMERIC;
 
 
 -- ---------------------------------------------------------------------------
--- Limpieza de firmas anteriores de V59 que cambian de forma en esta
+-- Limpieza de firmas anteriores de V113 que cambian de forma en esta
 -- revision. CREATE OR REPLACE FUNCTION no puede cambiar el tipo de
 -- retorno (RETURNS TABLE) de una funcion existente — Postgres exige un
 -- DROP primero (InvalidFunctionDefinition: "cannot change return type of
@@ -361,7 +361,7 @@ ADD COLUMN IF NOT EXISTS orden_rol NUMERIC;
 -- fn_create_parent_menu_with_submenus -> fn_upsert_menu) para que no
 -- queden huerfanas en un entorno donde ya se aplico una version anterior
 -- de este mismo archivo. IF EXISTS hace esto seguro tanto en un entorno
--- nuevo (nada que borrar) como en uno con la V59 previa ya aplicada.
+-- nuevo (nada que borrar) como en uno con la V113 previa ya aplicada.
 -- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_list_trol_names_for_superadmin(BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_add_trol(BIGINT, VARCHAR, VARCHAR, VARCHAR);
@@ -1700,7 +1700,7 @@ SELECT r.id_route, ro.id_role
 -- Comentarios de documentacion
 -- ---------------------------------------------------------------------------
 COMMENT ON FUNCTION academico_test.fn_assert_superadmin(BIGINT) IS
-    'Helper interno de V59. Unico punto donde vive la regla "tener el rol CEVAL-SUPER_ADMINISTRADOR para ejecutar las funciones administrativas". Validacion por JOIN entre public.role_users (user_id=p_user_pk) y public.role (name=''CEVAL-SUPER_ADMINISTRADOR''). Cualquier pk sin ese rol (NULL incluida) dispara RAISE EXCEPTION con ERRCODE=''42501'' (insufficient_privilege -> 403).';
+    'Helper interno de V113. Unico punto donde vive la regla "tener el rol CEVAL-SUPER_ADMINISTRADOR para ejecutar las funciones administrativas". Validacion por JOIN entre public.role_users (user_id=p_user_pk) y public.role (name=''CEVAL-SUPER_ADMINISTRADOR''). Cualquier pk sin ese rol (NULL incluida) dispara RAISE EXCEPTION con ERRCODE=''42501'' (insufficient_privilege -> 403).';
 
 COMMENT ON FUNCTION academico_test.fn_list_roles(BIGINT) IS
     'GET /roles -> RoleDto[]. Lista (id, name) de academico_test.trol activos. REQUIERE p_user_pk (fn_assert_superadmin). Reemplaza a fn_list_trol_names_for_superadmin (solo devolvia el nombre).';
