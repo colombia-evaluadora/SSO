@@ -1,4 +1,4 @@
--- V69 — fn_fun_actualizar exigía TARCHIVO.ACTIVE = TRUE para
+-- V72 — fn_fun_actualizar exigía TARCHIVO.ACTIVE = TRUE para
 -- p_fk_tarchivo_foto y p_fk_tarchivo, un huevo-y-la-gallina con el
 -- flujo de subida de file-service: la fila se reserva con
 -- active=false, se sube a S3, y sólo se activa DESPUÉS de que el
@@ -114,7 +114,7 @@ BEGIN
             USING ERRCODE = '23503';
     END IF;
 
-    -- V69 — sin "AND ACTIVE = TRUE": ver comentario de cabecera.
+    -- V72 — sin "AND ACTIVE = TRUE": ver comentario de cabecera.
     IF p_fk_tarchivo_foto IS NOT NULL
        AND NOT EXISTS (
             SELECT 1 FROM academico_test.TARCHIVO
@@ -343,7 +343,7 @@ BEGIN
             USING ERRCODE = '23503';
     END IF;
 
-    -- V69 — sin "AND ACTIVE = TRUE": ver comentario de cabecera.
+    -- V72 — sin "AND ACTIVE = TRUE": ver comentario de cabecera.
     IF p_fk_tarchivo IS NOT NULL
        AND NOT EXISTS (
             SELECT 1 FROM academico_test.TARCHIVO
