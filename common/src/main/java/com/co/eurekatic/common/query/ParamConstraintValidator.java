@@ -5,7 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * V81 — valida el valor recibido de un placeholder contra las reglas
+ * V70 — valida el valor recibido de un placeholder contra las reglas
  * opcionales declaradas en {@link ParamConstraint}, ADEMÁS del chequeo
  * de tipo Java que ya hace {@code ParamBinder.validateAgainstDeclared}.
  *

@@ -1,4 +1,4 @@
--- V81 — restricciones de validación opcionales por parámetro del
+-- V70 — restricciones de validación opcionales por parámetro del
 -- catálogo de queries. `QUERY.PARAM_TYPES` (V49/V62) ya declara el
 -- TIPO y la OBLIGATORIEDAD de cada placeholder caller-controlled
 -- (":PARAM.*" / ":BODY.*"), pero no su FORMATO: un `BIGINT` no

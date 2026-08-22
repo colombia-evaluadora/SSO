@@ -84,7 +84,7 @@ public record QueryRequest(
          */
         Map<String, String>         paramTypes,
         /**
-         * V81 — restricciones de formato opcionales por placeholder,
+         * V70 — restricciones de formato opcionales por placeholder,
          * adicionales al tipo/obligatoriedad de {@code paramTypes}.
          * Cada key debe existir en {@code paramTypes}; sólo las
          * reglas numéricas aplican a tipos numéricos y sólo las de
@@ -169,7 +169,7 @@ public record QueryRequest(
     }
 
     /**
-     * V81/V110 back-compat (sin paramConstraints ni
+     * V70/V110 back-compat (sin paramConstraints ni
      * cacheable/cacheTtlSeconds). Conserva la forma de 15
      * argumentos que los llamantes usaban antes de esos dos
      * campos; ambos caen a su default (mapa vacío / sin cachear).
@@ -188,7 +188,7 @@ public record QueryRequest(
 
     /**
      * V110 back-compat (sin cacheable/cacheTtlSeconds). Conserva la
-     * forma de 16 argumentos que los llamantes usaban entre V81 y
+     * forma de 16 argumentos que los llamantes usaban entre V70 y
      * V110; ambos caen a su default (sin cachear).
      */
     public QueryRequest(Long id, String uuid, String query, String type,

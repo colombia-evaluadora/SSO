@@ -60,7 +60,7 @@ public record QueryResponse(
          */
         Map<String, String> paramTypes,
         /**
-         * V81 — restricciones de formato opcionales por placeholder.
+         * V70 — restricciones de formato opcionales por placeholder.
          * Ver {@code Query#getParamConstraints()} y
          * {@code ParamConstraint}. Empty map = sin restricciones
          * adicionales.

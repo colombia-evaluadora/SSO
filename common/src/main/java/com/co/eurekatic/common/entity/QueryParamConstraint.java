@@ -18,10 +18,10 @@ import java.time.OffsetDateTime;
 import java.util.Objects;
 
 /**
- * V81 — una fila = las restricciones de formato adicionales de UN
+ * V70 — una fila = las restricciones de formato adicionales de UN
  * placeholder de UNA {@link Query}, más allá del tipo/obligatoriedad
  * que ya declara {@code Query.paramTypes}. Ver la migración
- * {@code V81__query_param_constraints.sql} y
+ * {@code V70__query_param_constraints.sql} y
  * {@code com.co.eurekatic.common.query.ParamConstraint} (la forma
  * "wire" que el catálogo expone a {@code query-service}).
  *

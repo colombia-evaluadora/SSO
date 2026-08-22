@@ -3,7 +3,7 @@ package com.co.eurekatic.query.exception;
 import java.util.Map;
 
 /**
- * V81 — el cuerpo/params de la petición viola una o más restricciones
+ * V70 — el cuerpo/params de la petición viola una o más restricciones
  * de formato declaradas en {@code QUERY_PARAM_CONSTRAINT} (ver
  * {@code com.co.eurekatic.common.query.ParamConstraintValidator}).
  *

@@ -227,7 +227,7 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * V81 — una o más restricciones de formato declaradas en
+     * V70 — una o más restricciones de formato declaradas en
      * {@code QUERY_PARAM_CONSTRAINT} (ver
      * {@code com.co.eurekatic.common.query.ParamConstraintValidator})
      * fallaron. Mismo envelope {@code {code, message, fields}} que

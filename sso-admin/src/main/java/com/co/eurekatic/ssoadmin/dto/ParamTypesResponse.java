@@ -57,7 +57,7 @@ public record ParamTypesResponse(
         List<String> knownFileClassifications,
         List<String> establishmentScopedFileClassifications,
         /**
-         * V81 — subconjunto de {@code curated} que admite las reglas
+         * V70 — subconjunto de {@code curated} que admite las reglas
          * numéricas de {@code paramConstraints} (positivo / decimales /
          * máximo de cifras) — unión de
          * {@link com.co.eurekatic.common.query.ParamTypes#INTEGER_TYPES}
@@ -67,7 +67,7 @@ public record ParamTypesResponse(
          */
         List<String> numericTypes,
         /**
-         * V81 — subconjunto de {@code curated} que admite las reglas de
+         * V70 — subconjunto de {@code curated} que admite las reglas de
          * texto de {@code paramConstraints} (sólo dígitos / longitud
          * mínima / máxima) —
          * {@link com.co.eurekatic.common.query.ParamTypes#STRING_TYPES}.

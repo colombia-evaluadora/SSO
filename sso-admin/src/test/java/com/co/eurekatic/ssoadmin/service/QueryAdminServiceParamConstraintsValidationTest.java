@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 /**
- * V81 — verifica {@code QueryAdminService.validateParamConstraints}.
+ * V70 — verifica {@code QueryAdminService.validateParamConstraints}.
  * Misma técnica de invocación por reflexión que
  * {@link QueryAdminServiceParamTypesValidationTest}: la validación es
  * private y no queremos arrastrar toda la cadena de {@code create}.

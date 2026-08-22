@@ -67,9 +67,9 @@ public record QueryDefinition(
         @JsonProperty("paramTypes") Map<String, String> paramTypes,
 
         /**
-         * V81 — restricciones de formato opcionales por placeholder,
+         * V70 — restricciones de formato opcionales por placeholder,
          * adicionales a lo que declara {@code paramTypes}. Nullable
-         * para back-compat con servidores pre-V81; tratado como mapa
+         * para back-compat con servidores pre-V70; tratado como mapa
          * vacío por {@code ParamConstraintValidator} ("sin
          * restricciones adicionales").
          */
@@ -91,9 +91,9 @@ public record QueryDefinition(
         @JsonProperty("cacheTtlSeconds") int cacheTtlSeconds
 ) {
     /**
-     * V81/V110 back-compat (sin paramConstraints ni
+     * V70/V110 back-compat (sin paramConstraints ni
      * cacheable/cacheTtlSeconds) — servidores de catálogo
-     * pre-V81/pre-V110 no mandan esos campos; Jackson invoca este
+     * pre-V70/pre-V110 no mandan esos campos; Jackson invoca este
      * constructor y cae a los defaults seguros (sin restricciones
      * adicionales, sin cachear).
      */
