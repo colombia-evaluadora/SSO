@@ -63,8 +63,37 @@ public record QueryDefinition(
          * Empty map when the row has no caller-controlled placeholders or
          * when the row is legacy (pre-V49 server doesn't carry it).
          */
-        Map<String, String> paramTypes
+        Map<String, String> paramTypes,
+        /**
+         * V110 — opt-in: {@code query-service} may cache this row's
+         * {@code GET} result in Redis when {@code true}. Default
+         * {@code false} for pre-V110 servers/tests.
+         */
+        boolean cacheable,
+        /**
+         * V110 — staleness window in seconds when {@link #cacheable}
+         * is {@code true}. Ignored otherwise.
+         */
+        int cacheTtlSeconds
 ) {
+    /**
+     * V110 back-compat (sin cacheable/cacheTtlSeconds). Conserva la
+     * forma de 15 argumentos; cacheable cae a false, que es el
+     * comportamiento previo a V110 (siempre golpea la base).
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           Long microserviceId,
+                           String pathTemplate, ExecutionMode executionMode,
+                           String outParamNames, String httpMethod,
+                           Map<String, String> paramTypes) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             pathTemplate, executionMode, outParamNames, httpMethod,
+             paramTypes, false, 60);
+    }
+
     /**
      * V31 — back-compat constructor for callers that pre-date
      * V27 + V28 + V31 (i.e. the 10-arg shape). The new fields
@@ -128,6 +157,8 @@ public record QueryDefinition(
                 ExecutionMode.fromString(q.getExecutionMode()),
                 q.getOutParamNames(),
                 q.getHttpMethod(),
-                q.getParamTypes());
+                q.getParamTypes(),
+                q.isCacheable(),
+                q.getCacheTtlSeconds());
     }
 }

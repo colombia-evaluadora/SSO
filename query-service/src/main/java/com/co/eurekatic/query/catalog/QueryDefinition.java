@@ -63,8 +63,40 @@ public record QueryDefinition(
          * Nullable for back-compat with pre-V49 servers; treated as
          * empty map by {@code ParamBinder} (legacy auto-derive path).
          */
-        @JsonProperty("paramTypes") Map<String, String> paramTypes
+        @JsonProperty("paramTypes") Map<String, String> paramTypes,
+
+        /**
+         * V110 — opt-in: when {@code true}, {@code QueryPathController}
+         * may serve this row's {@code GET} result from Redis instead
+         * of re-running the SQL. {@code false} (the default for
+         * pre-V110 catalog servers, since the field is simply absent
+         * from their JSON) preserves the always-hit-the-DB behavior.
+         */
+        @JsonProperty("cacheable") boolean cacheable,
+
+        /**
+         * V110 — staleness window in seconds when {@link #cacheable}
+         * is {@code true}. Ignored otherwise.
+         */
+        @JsonProperty("cacheTtlSeconds") int cacheTtlSeconds
 ) {
+    /**
+     * V110 back-compat (sin cacheable/cacheTtlSeconds) — servidores
+     * de catálogo pre-V110 no mandan estos campos; Jackson invoca
+     * este constructor cuando el JSON no trae {@code cacheable} ni
+     * {@code cacheTtlSeconds}, y cae al default seguro (no cachear).
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           String pathTemplate, String executionMode,
+                           String outParamNames, String httpMethod,
+                           Map<String, String> paramTypes) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, pathTemplate, executionMode,
+             outParamNames, httpMethod, paramTypes, false, 60);
+    }
+
     /**
      * Back-compat constructor for callers that pre-date V27/V28
      * (tests, mock setups, internal callers). Defaults

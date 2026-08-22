@@ -33,6 +33,18 @@ spring:
     hikari:
       maximum-pool-size: ${FILES_DS_POOL_SIZE:5}
 
+  data:
+    redis:
+      # Same shared sso-redis instance as auth-center/query-service —
+      # backs CachedFileBlobService (small-file S3 blob cache behind
+      # GET /files/download|view|public). Defaults are localhost so
+      # `mvn spring-boot:run` on the host works without the compose
+      # stack.
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2s
+
 files:
   # Esquema donde vive TARCHIVO.
   schema: ${FILES_SCHEMA:academico_test}
@@ -84,6 +96,27 @@ files:
     # Obligatorio contra un endpoint local: no hay DNS por bucket, así
     # que el SDK debe pedir /bucket/objeto. Contra AWS se pone en false.
     path-style: ${S3_PATH_STYLE:true}
+
+  # Cache de Redis para el blob de S3 detrás de GET
+  # /files/download|view|public — ver CachedFileBlobService. Se
+  # aplica DESPUÉS de la verificación de autorización de cada
+  # endpoint (JWT/token de vista/token interno + FileAccessService),
+  # nunca en su lugar: la caché sólo evita el round-trip a S3, jamás
+  # el chequeo de "¿puede este llamante ver este archivo?".
+  cache:
+    enabled: ${FILES_CACHE_ENABLED:true}
+    # 5 minutos — mismo orden de magnitud que el TTL del token de
+    # vista, así que un archivo cacheado no sobrevive mucho más que
+    # la ventana en la que ya se consideraba "reciente".
+    ttl-seconds: ${FILES_CACHE_TTL_SECONDS:300}
+    # Tope de tamaño para meter un archivo en Redis. Por encima de
+    # esto, el endpoint sigue funcionando exactamente igual que hoy
+    # (streaming directo desde S3, sin caché) — este servicio sirve
+    # PDFs de decenas de MB junto a íconos de unos pocos KB, y Redis
+    # no es el lugar para lo primero. 2 MB cubre avatares, firmas e
+    # íconos de calificación (los casos de acceso repetido de verdad)
+    # sin arriesgar la memoria de sso-redis con un solo PDF grande.
+    max-cacheable-bytes: ${FILES_CACHE_MAX_CACHEABLE_BYTES:2097152}
 
 # Bloque de PRIMER NIVEL. Va al final del fichero y no entre medias
 # de `files:` — insertarlo ahí dejaba las claves `s3:` que venían

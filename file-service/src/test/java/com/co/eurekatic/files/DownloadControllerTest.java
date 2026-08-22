@@ -147,7 +147,17 @@ class DownloadControllerTest {
                                                  FileAccessService acceso) {
         var props = new JwtProperties(null, "irrelevante-en-tests",
                 "sso-postgres", 3600, 86400, "Authorization", "Bearer ", null);
-        return new DownloadController(repo, almacen, jwt, props, TOKEN_INTERNO, viewTokens, acceso);
+        // Cache deshabilitada en estos tests: lo que fijan es
+        // autenticación/autorización, no el camino de caché (eso lo
+        // cubre CachedFileBlobServiceTest). enabled=false hace que
+        // CachedFileBlobService nunca toque el RedisTemplate mock,
+        // así que un mock sin stubbing es suficiente.
+        var cacheProps = new FileCacheProperties();
+        cacheProps.setEnabled(false);
+        var blobCache = new CachedFileBlobService(
+                mock(org.springframework.data.redis.core.RedisTemplate.class), cacheProps);
+        return new DownloadController(repo, almacen, jwt, props, TOKEN_INTERNO, viewTokens, acceso,
+                blobCache, cacheProps);
     }
 
     /**

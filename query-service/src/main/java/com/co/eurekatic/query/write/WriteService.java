@@ -5,6 +5,7 @@ import com.co.eurekatic.query.catalog.CatalogClient;
 import com.co.eurekatic.query.catalog.WriteDefinition;
 import com.co.eurekatic.query.config.JdbcTemplateRegistry;
 import com.co.eurekatic.query.exception.PostgresErrorMapper;
+import com.co.eurekatic.query.routing.CatalogResultCacheService;
 import com.co.eurekatic.query.web.WriteRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,10 +66,13 @@ public class WriteService {
 
     private final CatalogClient catalog;
     private final JdbcTemplateRegistry registry;
+    private final CatalogResultCacheService resultCache;
 
-    public WriteService(CatalogClient catalog, JdbcTemplateRegistry registry) {
+    public WriteService(CatalogClient catalog, JdbcTemplateRegistry registry,
+                        CatalogResultCacheService resultCache) {
         this.catalog = catalog;
         this.registry = registry;
+        this.resultCache = resultCache;
     }
 
     /**
@@ -164,6 +168,14 @@ public class WriteService {
             throw dae;
         }
         log.info("Write uuid={} ({}) affected {} rows", req.uuid(), def.writeType(), rows);
+        // V66 — every WriteService call is by definition a mutation
+        // (INSERT/UPDATE — see class javadoc), so unlike
+        // QueryService there's no read-only mode to branch on: any
+        // successful write here always invalidates this instance's
+        // catalog-get cache. See CatalogResultCacheService's javadoc
+        // for why this is a full-instance wipe rather than a
+        // targeted one.
+        resultCache.invalidateAll();
         return rows;
     }
 

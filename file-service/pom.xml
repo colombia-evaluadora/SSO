@@ -79,6 +79,12 @@
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
         </dependency>
+        <!-- Redis-backed @Cacheable for the S3 blob fetch behind
+             GET /files/download|view|public — see CachedFileBlobService. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
         <!--
             SDK v2 de AWS. Sirve igual para Garage en local y para S3
             en producción: la diferencia son endpoint y credenciales,

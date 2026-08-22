@@ -107,6 +107,8 @@ public class DownloadController {
     private final String tokenCompartido;
     private final ViewTokenService viewTokens;
     private final FileAccessService acceso;
+    private final CachedFileBlobService blobCache;
+    private final FileCacheProperties cacheProps;
 
     public DownloadController(ArchivoRepository archivos,
                               AlmacenObjetos almacen,
@@ -114,7 +116,9 @@ public class DownloadController {
                               JwtProperties jwtProps,
                               @Value("${files.internal-token:}") String tokenCompartido,
                               ViewTokenService viewTokens,
-                              FileAccessService acceso) {
+                              FileAccessService acceso,
+                              CachedFileBlobService blobCache,
+                              FileCacheProperties cacheProps) {
         this.archivos = archivos;
         this.almacen = almacen;
         this.jwt = jwt;
@@ -122,6 +126,8 @@ public class DownloadController {
         this.tokenCompartido = tokenCompartido == null ? "" : tokenCompartido;
         this.viewTokens = viewTokens;
         this.acceso = acceso;
+        this.blobCache = blobCache;
+        this.cacheProps = cacheProps;
     }
 
     /**
@@ -335,6 +341,19 @@ public class DownloadController {
             return ResponseEntity.status(502).build();
         }
 
+        // V65 — cache-hit: los bytes ya están en Redis, ni siquiera
+        // tocamos S3. Seguro porque este método SÓLO se llama después
+        // de que el caller de turno ya pasó su propio chequeo de
+        // autorización — ver el javadoc de clase de
+        // CachedFileBlobService para por qué eso es lo que hace que
+        // esto sea seguro y no una fuga entre usuarios.
+        byte[] cacheados = blobCache.get(clave).orElse(null);
+        if (cacheados != null) {
+            HttpHeaders headers = headersFor(tipoForzado, clave, archivo, (long) cacheados.length);
+            log.info("acceso id={} ({} bytes, cache HIT) para {}", archivoId, cacheados.length, quien);
+            return ResponseEntity.ok().headers(headers).body(salidaDesdeBytes(cacheados));
+        }
+
         ResponseInputStream<GetObjectResponse> objeto;
         try {
             objeto = almacen.abrir(clave);
@@ -362,6 +381,40 @@ public class DownloadController {
             return ResponseEntity.status(502).build();
         }
 
+        // El tamaño lo manda S3, no la fila. TARCHIVO.peso se escribió
+        // al subir y puede haber quedado desincronizado (o NULL en
+        // filas antiguas); anunciar un Content-Length que no coincide
+        // con los bytes que se van a escribir deja al navegador
+        // esperando datos que no llegan, o truncando la descarga.
+        // El GetObjectResponse trae el valor real del objeto.
+        Long tamano = objeto.response().contentLength();
+        if (tamano == null || tamano <= 0) {
+            tamano = archivo.peso() > 0 ? archivo.peso() : null;
+        }
+        HttpHeaders headers = headersFor(tipoForzado, clave, archivo, tamano);
+
+        // V65 — sólo materializamos el objeto entero en memoria (para
+        // poder cachearlo) cuando su tamaño conocido cabe bajo el
+        // tope configurado. Un tamaño desconocido (tamano == null) se
+        // trata igual que "demasiado grande": mejor streamear sin
+        // cachear que arriesgarse a cargar en heap un archivo del que
+        // no sabemos el tamaño de antemano.
+        if (tamano != null && tamano <= cacheProps.getMaxCacheableBytes()) {
+            byte[] bytes;
+            try (InputStream in = objeto) {
+                bytes = in.readAllBytes();
+            } catch (IOException e) {
+                log.warn("acceso id={}: fallo leyendo el objeto completo para cachear (clave={}): {}",
+                        archivoId, clave, e.getMessage());
+                return ResponseEntity.status(502).build();
+            }
+            blobCache.put(clave, bytes);
+            log.info("acceso id={} ({} bytes, cache MISS→escrito) para {}", archivoId, bytes.length, quien);
+            return ResponseEntity.ok().headers(headers).body(salidaDesdeBytes(bytes));
+        }
+
+        // Demasiado grande (o tamaño desconocido) para cachear:
+        // streaming directo desde S3, exactamente como antes de V65.
         StreamingResponseBody cuerpo = (OutputStream out) -> {
             // try-with-resources NO funciona aquí: el header ya se
             // escribió cuando Spring aceptó la respuesta; el stream
@@ -376,7 +429,22 @@ public class DownloadController {
                         archivoId, e.getMessage());
             }
         };
+        // Sin Content-Length, Tomcat usa chunked por su cuenta; no hay
+        // que ponerlo a mano (hacerlo es un error: es un header
+        // hop-by-hop que el contenedor gestiona él mismo).
 
+        log.info("acceso id={} ({} bytes, sin cachear) para {}", archivoId, tamano, quien);
+        return ResponseEntity.ok().headers(headers).body(cuerpo);
+    }
+
+    /**
+     * Headers comunes a las tres rutas de {@link #streamearArchivo}
+     * (cache hit, cache miss-y-escritura, streaming sin cachear) —
+     * dependen sólo de {@code tipoForzado}/{@code clave}/{@code archivo}
+     * y del tamaño ya resuelto, nunca de CÓMO se obtuvieron los bytes.
+     */
+    private HttpHeaders headersFor(MediaType tipoForzado, String clave,
+                                   ArchivoRepository.Archivo archivo, Long tamano) {
         HttpHeaders headers = new HttpHeaders();
         // TARCHIVO no guarda mimetype, así que por defecto el
         // content-type sale de la extensión de la clave. Cuando el
@@ -411,26 +479,19 @@ public class DownloadController {
         headers.setContentDisposition(ContentDisposition.builder("inline")
                 .filename(nombreSeguro(archivo.nombre()), StandardCharsets.UTF_8)
                 .build());
-
-        // El tamaño lo manda S3, no la fila. TARCHIVO.peso se escribió
-        // al subir y puede haber quedado desincronizado (o NULL en
-        // filas antiguas); anunciar un Content-Length que no coincide
-        // con los bytes que se van a escribir deja al navegador
-        // esperando datos que no llegan, o truncando la descarga.
-        // El GetObjectResponse trae el valor real del objeto.
-        Long tamano = objeto.response().contentLength();
-        if (tamano == null || tamano <= 0) {
-            tamano = archivo.peso() > 0 ? archivo.peso() : null;
-        }
         if (tamano != null) {
             headers.setContentLength(tamano);
         }
-        // Sin Content-Length, Tomcat usa chunked por su cuenta; no hay
-        // que ponerlo a mano (hacerlo es un error: es un header
-        // hop-by-hop que el contenedor gestiona él mismo).
+        return headers;
+    }
 
-        log.info("acceso id={} ({} bytes) para {}", archivoId, tamano, quien);
-        return ResponseEntity.ok().headers(headers).body(cuerpo);
+    /** Envuelve un {@code byte[]} ya resuelto (cache hit o recién
+     *  materializado desde S3) en el mismo tipo de cuerpo que el
+     *  camino de streaming, así el controller siempre devuelve
+     *  {@code ResponseEntity<StreamingResponseBody>} sin un tercer
+     *  tipo de retorno para el caso "ya tengo los bytes en memoria". */
+    private static StreamingResponseBody salidaDesdeBytes(byte[] bytes) {
+        return out -> out.write(bytes);
     }
 
     /**

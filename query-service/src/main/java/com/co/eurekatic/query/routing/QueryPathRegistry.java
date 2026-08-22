@@ -70,7 +70,7 @@ public class QueryPathRegistry {
      * corresponde. PathPattern hace exactamente eso.
      */
     private static final PathPatternParser PARSER = new PathPatternParser();
-    private final AtomicReference<Map<RouteKey, String>> tableRef =
+    private final AtomicReference<Map<RouteKey, RouteEntry>> tableRef =
             new AtomicReference<>(Map.of());
 
     /**
@@ -80,6 +80,15 @@ public class QueryPathRegistry {
      * distintas sobre la misma ruta.
      */
     public record RouteKey(String method, String template) {}
+
+    /**
+     * V110 — lo que el registro guarda por ruta, además del uuid:
+     * el opt-in de cache y su TTL, tal cual los declaró el autor
+     * de la fila en el catálogo. Viajan junto al uuid porque
+     * {@link QueryPathController} los necesita en el momento del
+     * dispatch, sin un segundo round-trip al catálogo.
+     */
+    public record RouteEntry(String uuid, boolean cacheable, int cacheTtlSeconds) {}
     private final String instanceName;
     /**
      * V32 — resolved at boot via {@code /internal/whoami}.
@@ -167,7 +176,7 @@ public class QueryPathRegistry {
         // restart.
         resolveMyMicroserviceId();
         try {
-            Map<RouteKey, String> next = new LinkedHashMap<>();
+            Map<RouteKey, RouteEntry> next = new LinkedHashMap<>();
             // V30+V32 — call the dedicated internal endpoint
             // /internal/pathTemplates (server-side filtered to
             // rows with a non-null pathTemplate). Auth is the
@@ -185,7 +194,16 @@ public class QueryPathRegistry {
                     String method = q.httpMethod() == null || q.httpMethod().isBlank()
                             ? "POST"
                             : q.httpMethod().trim().toUpperCase(java.util.Locale.ROOT);
-                    next.put(new RouteKey(method, q.pathTemplate()), q.uuid());
+                    // V110 — cacheable is meaningful for GET rows
+                    // only; QueryPathController additionally never
+                    // caches a non-GET dispatch regardless of this
+                    // flag, but we also refuse to carry it through
+                    // here so a catalog author's mistake (marking a
+                    // POST/PUT/PATCH row cacheable) can't even reach
+                    // the controller as true.
+                    boolean cacheable = "GET".equals(method) && q.cacheable();
+                    next.put(new RouteKey(method, q.pathTemplate()),
+                            new RouteEntry(q.uuid(), cacheable, q.cacheTtlSeconds()));
                 }
             }
             tableRef.set(Map.copyOf(next));
@@ -246,27 +264,27 @@ public class QueryPathRegistry {
      * {@link #matchTemplate} deja la gramática probable sin montar
      * el contexto de Spring.
      */
-    static Optional<Match> matchAgainst(Map<RouteKey, String> table, String method, String path) {
+    static Optional<Match> matchAgainst(Map<RouteKey, RouteEntry> table, String method, String path) {
         if (path == null || path.isEmpty()) {
             return Optional.empty();
         }
-        String bestUuid = null;
+        RouteEntry best = null;
         Map<String, String> bestVars = null;
         int bestSpecificity = Integer.MAX_VALUE;
-        for (Map.Entry<RouteKey, String> e : table.entrySet()) {
+        for (Map.Entry<RouteKey, RouteEntry> e : table.entrySet()) {
             if (!e.getKey().method().equals(method)) {
                 continue;
             }
             Optional<Map<String, String>> vars = matchTemplate(e.getKey().template(), path);
             if (vars.isPresent() && vars.get().size() < bestSpecificity) {
                 bestSpecificity = vars.get().size();
-                bestUuid = e.getValue();
+                best = e.getValue();
                 bestVars = vars.get();
             }
         }
-        return bestUuid == null
+        return best == null
                 ? Optional.empty()
-                : Optional.of(new Match(bestUuid, bestVars));
+                : Optional.of(new Match(best.uuid(), bestVars, best.cacheable(), best.cacheTtlSeconds()));
     }
 
     /**
@@ -308,7 +326,8 @@ public class QueryPathRegistry {
         return tableRef.get().size();
     }
 
-    public record Match(String uuid, Map<String, String> pathVars) {}
+    public record Match(String uuid, Map<String, String> pathVars,
+                        boolean cacheable, int cacheTtlSeconds) {}
 
     /**
      * V33 — immediate refresh trigger exposed via the
