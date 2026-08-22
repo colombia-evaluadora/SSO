@@ -183,30 +183,54 @@ UPDATE academico_test.TLISTA_VALOR
    AND NOMBRE = 'Descriptores de desempeño';
 
 -- ---------------------------------------------------------------------------
--- 2. Backfill: copiar el valor vigente de TPERIODO_ACADEMICO_CONFIG antes
---    de borrar la columna de origen. Relacion 1:1 via PK compartida con
---    TPERIODO_ACADEMICO (mismo patron que TCRITERIO_EVALUACION — ver V22,
---    ambas tablas tienen PK_x = PK_TPERIODO_ACADEMICO).
+-- 2 + 3. Backfill y drop de la columna de origen -- agrupados en un solo
+--    DO $$ para que el migration sea 100% idempotente: si el re-apply cae
+--    sobre un schema donde la columna origen ya no existe (porque una
+--    corrida previa abortada alcanzo a dropearla), o donde ya hubo un
+--    backfill exitoso, salimos sin tocar nada y sin fallar.
+--
+--    Guard 1: information_schema.columns confirma que la columna sigue en
+--    TPERIODO_ACADEMICO_CONFIG. Si no esta, la V62 ya completo el
+--    traslado en una corrida previa -- salir inmediatamente.
+--
+--    Guard 2: el UPDATE lleva AND ce.FK_TLV_MODO_REDONDEAR IS NULL: solo
+--    llena filas vacias. Aunque el guard 1 hubiera dejado pasar el re-run
+--    (carrera concurrente, etc.), una fila ya copiada no se pisa.
+--
+--    Relacion 1:1 via PK compartida con TPERIODO_ACADEMICO (mismo patron
+--    que TCRITERIO_EVALUACION -- ver V22, ambas tablas tienen PK_x =
+--    PK_TPERIODO_ACADEMICO).
+--
+--    DROP del indice + FK + columna se hace via SQL dinamico dentro del
+--    mismo bloque, ya validada la existencia arriba. Los IF EXISTS en
+--    cada DROP son belt-and-suspenders contra una posible doble
+--    ejecucion concurrente (improbable, pero gratis cubrirla).
 -- ---------------------------------------------------------------------------
 
-UPDATE academico_test.TCRITERIO_EVALUACION ce
-   SET FK_TLV_MODO_REDONDEAR = cfg.FK_TLV_MODO_REDONDEAR
-  FROM academico_test.TPERIODO_ACADEMICO_CONFIG cfg
- WHERE cfg.PK_TPERIODO_ACADEMICO_CONFIG = ce.PK_TCRITERIO_EVALUACION
-   AND cfg.FK_TLV_MODO_REDONDEAR IS NOT NULL;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = 'academico_test'
+           AND table_name   = 'tperiodo_academico_config'
+           AND column_name  = 'fk_tlv_modo_redondear'
+    ) THEN
+        RETURN;
+    END IF;
 
--- ---------------------------------------------------------------------------
--- 3. Traslado completo: la columna deja de existir en TPERIODO_ACADEMICO_CONFIG
---    (drop del indice + la FK antes de la columna, Postgres los arrastra con
---    CASCADE de todas formas al hacer DROP COLUMN, pero se listan explicitos
---    por trazabilidad con lo que V22 registro).
--- ---------------------------------------------------------------------------
+    UPDATE academico_test.TCRITERIO_EVALUACION ce
+       SET FK_TLV_MODO_REDONDEAR = cfg.FK_TLV_MODO_REDONDEAR
+      FROM academico_test.TPERIODO_ACADEMICO_CONFIG cfg
+     WHERE cfg.PK_TPERIODO_ACADEMICO_CONFIG = ce.PK_TCRITERIO_EVALUACION
+       AND cfg.FK_TLV_MODO_REDONDEAR IS NOT NULL
+       AND ce.FK_TLV_MODO_REDONDEAR IS NULL;
 
-DROP INDEX IF EXISTS academico_test.IDX_TPERIODO_ACADEMICO_CFG_21;
-
-ALTER TABLE academico_test.TPERIODO_ACADEMICO_CONFIG
-    DROP CONSTRAINT IF EXISTS FK_TPERIDO_ACADEMICO_CONFIG_14,
-    DROP COLUMN IF EXISTS FK_TLV_MODO_REDONDEAR;
+    EXECUTE 'DROP INDEX IF EXISTS academico_test.IDX_TPERIODO_ACADEMICO_CFG_21';
+    EXECUTE 'ALTER TABLE academico_test.TPERIODO_ACADEMICO_CONFIG
+                DROP CONSTRAINT IF EXISTS FK_TPERIDO_ACADEMICO_CONFIG_14,
+                DROP COLUMN IF EXISTS FK_TLV_MODO_REDONDEAR';
+END $$;
 
 -- ---------------------------------------------------------------------------
 -- 4. fn_criterio_eval_obtener — reconstruida sobre la definicion REAL (ver
