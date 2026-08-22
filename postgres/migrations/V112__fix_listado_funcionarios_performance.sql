@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V71 — Fix de performance del listado de funcionarios (>10s -> <100ms).
+-- V112 — Fix de performance del listado de funcionarios (>10s -> <100ms).
 --
 -- Contexto y evidencia completa: docs/funcionarios-listado-performance-analysis.md
 -- (medido con EXPLAIN ANALYZE contra el servidor de test, 2026-08-18).
@@ -117,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_tsede_usuario_fk_tusuario_activo
  WHERE ACTIVE = TRUE;
 
 COMMENT ON INDEX academico_test.idx_tsede_usuario_fk_tusuario_activo
-    IS 'Soporta (a) lookups puntuales FK_TUSUARIO+ACTIVE de fn_usu_empleados_listar/contar (sedes_agg, estados_agg, roles_agg, EXISTS de roles/campus/work_schedules), y (b) el pick de jornada (LEFT JOIN LATERAL ... ORDER BY PREDETERMINADO DESC, ORDEN, PK_TSEDE_USUARIO LIMIT 1) sin sort externo. V71.';
+    IS 'Soporta (a) lookups puntuales FK_TUSUARIO+ACTIVE de fn_usu_empleados_listar/contar (sedes_agg, estados_agg, roles_agg, EXISTS de roles/campus/work_schedules), y (b) el pick de jornada (LEFT JOIN LATERAL ... ORDER BY PREDETERMINADO DESC, ORDEN, PK_TSEDE_USUARIO LIMIT 1) sin sort externo. V112.';
 
 -- Punto 2: indice de expresion para busqueda libre. El texto de la
 -- expresion DEBE coincidir caracter a caracter con el usado en el WHERE
@@ -133,7 +133,7 @@ CREATE INDEX IF NOT EXISTS idx_tusuario_busqueda_trgm
  );
 
 COMMENT ON INDEX academico_test.idx_tusuario_busqueda_trgm
-    IS 'GIN trigram sobre nombres+apellidos+identificacion concatenados, para que p_search (ILIKE %texto%) de fn_usu_empleados_listar/contar deje de hacer Seq Scan sobre TUSUARIO. El texto de la expresion debe coincidir exacto con el del WHERE de esas funciones. V71.';
+    IS 'GIN trigram sobre nombres+apellidos+identificacion concatenados, para que p_search (ILIKE %texto%) de fn_usu_empleados_listar/contar deje de hacer Seq Scan sobre TUSUARIO. El texto de la expresion debe coincidir exacto con el del WHERE de esas funciones. V112.';
 
 
 -- ===========================================================================
@@ -159,7 +159,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_puede_afectar_establecimiento(BIGINT)
-    IS 'TRUE si el usuario tiene un TSEDE_USUARIO activo con FK_TROL IN (1,2,3) (roles de superadmin/nivel alto): ve todos los establecimientos, no solo el suyo. Baseline capturado del servidor en V71 (no existia en ninguna migracion previa del repo — ver nota de drift en el header de este archivo). Sin cambios de logica.';
+    IS 'TRUE si el usuario tiene un TSEDE_USUARIO activo con FK_TROL IN (1,2,3) (roles de superadmin/nivel alto): ve todos los establecimientos, no solo el suyo. Baseline capturado del servidor en V112 (no existia en ninguna migracion previa del repo — ver nota de drift en el header de este archivo). Sin cambios de logica.';
 
 
 CREATE OR REPLACE FUNCTION academico_test.fn_resolver_establecimiento_unico(p_pk_usuario BIGINT)
@@ -192,7 +192,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_resolver_establecimiento_unico(BIGINT)
-    IS 'Resuelve el establecimiento del usuario cuando es inequivoco: rector o secretaria de un establecimiento, o vinculado (FK_TROL=8) a exactamente una sede cuyo establecimiento coincide. Si el usuario esta ligado a mas de un establecimiento por esas vias, retorna NULL (ambiguo -> el caller trata esto como "sin permiso" salvo que sea superadmin). Baseline capturado del servidor en V71 (no existia en ninguna migracion previa del repo). Sin cambios de logica.';
+    IS 'Resuelve el establecimiento del usuario cuando es inequivoco: rector o secretaria de un establecimiento, o vinculado (FK_TROL=8) a exactamente una sede cuyo establecimiento coincide. Si el usuario esta ligado a mas de un establecimiento por esas vias, retorna NULL (ambiguo -> el caller trata esto como "sin permiso" salvo que sea superadmin). Baseline capturado del servidor en V112 (no existia en ninguna migracion previa del repo). Sin cambios de logica.';
 
 
 -- ===========================================================================
@@ -357,7 +357,7 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_usu_empleados_contar(
     BIGINT, VARCHAR, BIGINT[], BIGINT[], VARCHAR[], BIGINT
 )
-    IS 'Cuenta funcionarios activos visibles para p_pk_usuario_solicitante (todos si es superadmin via fn_puede_afectar_establecimiento; acotado a su establecimiento via fn_resolver_establecimiento_unico + CTE funcionarios_ee si no), aplicando los mismos filtros que fn_usu_empleados_listar (search, roles, work_schedules, statuses, campus_id). search: ILIKE parcial sobre nombres+apellidos+identificacion concatenados (indexable via idx_tusuario_busqueda_trgm, V71) y sobre nombres de sede/rol ligados via TSEDE_USUARIO activos. statuses: array de ACTIVE/SUSPENDED mapeado a TUSUARIO.ESTADO (A/I). Usar junto con fn_usu_empleados_listar para armar { rows, pageCount, totalCount }. V71: alineado el filtro de busqueda con el indice trigram nuevo (mismo criterio de match, ahora indexable); sin cambios de comportamiento.';
+    IS 'Cuenta funcionarios activos visibles para p_pk_usuario_solicitante (todos si es superadmin via fn_puede_afectar_establecimiento; acotado a su establecimiento via fn_resolver_establecimiento_unico + CTE funcionarios_ee si no), aplicando los mismos filtros que fn_usu_empleados_listar (search, roles, work_schedules, statuses, campus_id). search: ILIKE parcial sobre nombres+apellidos+identificacion concatenados (indexable via idx_tusuario_busqueda_trgm, V112) y sobre nombres de sede/rol ligados via TSEDE_USUARIO activos. statuses: array de ACTIVE/SUSPENDED mapeado a TUSUARIO.ESTADO (A/I). Usar junto con fn_usu_empleados_listar para armar { rows, pageCount, totalCount }. V112: alineado el filtro de busqueda con el indice trigram nuevo (mismo criterio de match, ahora indexable); sin cambios de comportamiento.';
 
 
 -- ===========================================================================
@@ -534,7 +534,7 @@ BEGIN
                   ) roles_union),
                '[]'::jsonb
            )                             AS roles_agg,
-           -- sedes_agg / estados_agg: FIX V71. Antes venian de un CTE
+           -- sedes_agg / estados_agg: FIX V112. Antes venian de un CTE
            -- `agregados` con GROUP BY sobre TODO TSEDE_USUARIO activo
            -- (126 704 usuarios en el servidor de test), unido con LEFT
            -- JOIN normal -> Postgres no podia empujar el filtro de `base`
@@ -558,13 +558,13 @@ BEGIN
                '[]'::jsonb
            )                             AS estados_agg
       FROM base b
-      -- jornada: FIX V71. Antes CTE `jornada_pick` con DISTINCT ON sobre
+      -- jornada: FIX V112. Antes CTE `jornada_pick` con DISTINCT ON sobre
       -- TODO TSEDE_USUARIO activo (mismo problema de alcance que
       -- `agregados`, aunque con costo propio menor: ~165ms aislado por el
       -- sort de 130K filas). LATERAL + LIMIT 1 aplica exactamente la
       -- misma regla (PREDETERMINADO=1 si existe, si no ORDEN minimo) pero
       -- solo para las filas de `base`, y usa
-      -- idx_tsede_usuario_fk_tusuario_activo (V71) para resolver el
+      -- idx_tsede_usuario_fk_tusuario_activo (V112) para resolver el
       -- ORDER BY sin sort.
       LEFT JOIN LATERAL (
             SELECT su.FK_TLV_JORNADA AS jornada_id, tlv.NOMBRE AS jornada_nombre
@@ -599,7 +599,7 @@ COMMENT ON FUNCTION academico_test.fn_usu_empleados_listar(
     BIGINT, VARCHAR, BIGINT[], BIGINT[], VARCHAR[], BIGINT,
     VARCHAR, BOOLEAN, INT, INT
 )
-    IS 'Lista funcionarios visibles para p_pk_usuario_solicitante (todos si es superadmin via fn_puede_afectar_establecimiento; acotado a su establecimiento via fn_resolver_establecimiento_unico + CTE funcionarios_ee si no), paginados segun los mismos filtros que fn_usu_empleados_contar. Fila aplanada: id, documento, nombres, apellidos, nombre completo, estado (A/I) y label (ACTIVE/SUSPENDED), jornada (TSEDE_USUARIO activo con PREDETERMINADO=1 si existe, si no el de menor ORDEN, NULL si no hay permiso), roles/sedes/estados_permisos como JSONB array. p_sort_campo/p_sort_desc = sorting[0] resuelto (name/document/status). p_page_index base 0; p_page_size acotado a (0,100]. No calcula totalCount/pageCount: usar junto con fn_usu_empleados_contar. V71: sedes_agg/estados_agg/jornada dejaron de calcularse en CTEs con GROUP BY/DISTINCT ON sobre TODO TSEDE_USUARIO activo (O(usuarios del sistema), ~11.5s medidos con 126K usuarios) y pasaron a subqueries/LATERAL correlacionadas por fila (O(page_size), ~80ms medidos) — mismo contrato y mismo output, ver docs/funcionarios-listado-performance-analysis.md. Tambien se unifico el filtro p_search en una sola expresion indexable via idx_tusuario_busqueda_trgm.';
+    IS 'Lista funcionarios visibles para p_pk_usuario_solicitante (todos si es superadmin via fn_puede_afectar_establecimiento; acotado a su establecimiento via fn_resolver_establecimiento_unico + CTE funcionarios_ee si no), paginados segun los mismos filtros que fn_usu_empleados_contar. Fila aplanada: id, documento, nombres, apellidos, nombre completo, estado (A/I) y label (ACTIVE/SUSPENDED), jornada (TSEDE_USUARIO activo con PREDETERMINADO=1 si existe, si no el de menor ORDEN, NULL si no hay permiso), roles/sedes/estados_permisos como JSONB array. p_sort_campo/p_sort_desc = sorting[0] resuelto (name/document/status). p_page_index base 0; p_page_size acotado a (0,100]. No calcula totalCount/pageCount: usar junto con fn_usu_empleados_contar. V112: sedes_agg/estados_agg/jornada dejaron de calcularse en CTEs con GROUP BY/DISTINCT ON sobre TODO TSEDE_USUARIO activo (O(usuarios del sistema), ~11.5s medidos con 126K usuarios) y pasaron a subqueries/LATERAL correlacionadas por fila (O(page_size), ~80ms medidos) — mismo contrato y mismo output, ver docs/funcionarios-listado-performance-analysis.md. Tambien se unifico el filtro p_search en una sola expresion indexable via idx_tusuario_busqueda_trgm.';
 
 
 -- ===========================================================================

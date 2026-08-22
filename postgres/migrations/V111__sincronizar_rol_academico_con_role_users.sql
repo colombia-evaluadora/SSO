@@ -1,4 +1,4 @@
--- V70 — vincula los roles academicos con public.role_users, para que
+-- V111 — vincula los roles academicos con public.role_users, para que
 -- realmente lleguen al JWT. Dos mecanismos independientes de "rol
 -- academico" quedan cubiertos:
 --
@@ -297,7 +297,7 @@ BEGIN
     )
     RETURNING PK_TSEDE_USUARIO INTO v_pk_sede_usuario;
 
-    -- V70 — refleja el rol recien asignado en public.role_users, para
+    -- V111 — refleja el rol recien asignado en public.role_users, para
     -- que el JWT del usuario lo vea sin esperar a su proximo login.
     PERFORM academico_test.fn_sincronizar_rol_publico(p_fk_usuario);
 
@@ -354,7 +354,7 @@ BEGIN
            MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TSEDE_USUARIO = p_pk_sede_usuario;
 
-    -- V70 — si esta era la ultima sede activa que le daba este TROL al
+    -- V111 — si esta era la ultima sede activa que le daba este TROL al
     -- usuario, fn_sincronizar_rol_publico le quita el CEVAL-<codigo> de
     -- public.role_users. Si le queda otra sede con el mismo rol, no pasa
     -- nada (full-resync, no resta a ciegas).
@@ -654,7 +654,7 @@ BEGIN
     )
     RETURNING PK_ESTABLECIMIENTO INTO v_id_creado;
 
-    -- V70 — refleja al rector/secretaria recien asignado en
+    -- V111 — refleja al rector/secretaria recien asignado en
     -- public.role_users. Van por FK_TUSUARIO del TFUNCIONARIO, no por
     -- el PK del establecimiento.
     IF p_fk_tfuncionario_rector IS NOT NULL THEN
@@ -686,7 +686,7 @@ DECLARE
     v_estado_actual  BOOLEAN;
     v_fk_rector     BIGINT;
     v_es_rector     BOOLEAN := FALSE;
-    -- V70 — rector/secretaria PREVIOS, capturados antes del UPDATE para
+    -- V111 — rector/secretaria PREVIOS, capturados antes del UPDATE para
     -- poder sincronizar tambien a quien pierde el rol si cambia.
     v_old_rector      BIGINT;
     v_old_secretaria  BIGINT;
@@ -737,7 +737,7 @@ BEGIN
 
     -- -----------------------------------------------------------------
     -- 1. Validaciones de existencia y estado (activo). De paso
-    --    capturamos el rector/secretaria PREVIOS (V70) para poder
+    --    capturamos el rector/secretaria PREVIOS (V111) para poder
     --    sincronizar a quien pierde el rol si el UPDATE lo cambia.
     -- -----------------------------------------------------------------
     SELECT ACTIVE, FK_TFUNCIONARIO_RECTOR, FK_TFUNCIONARIO_SECRETARIA
@@ -1128,7 +1128,7 @@ BEGIN
        AND t.ACTIVE             = TRUE;
 
     -- -----------------------------------------------------------------
-    -- 3b. V70 — si el rector/secretaria cambio, sincroniza tanto al que
+    -- 3b. V111 — si el rector/secretaria cambio, sincroniza tanto al que
     --     gana el rol como al que lo pierde (si habia alguien antes).
     --     p_FK_TFUNCIONARIO_* NULL significa "no tocar este campo" (ver
     --     COALESCE arriba), asi que solo sincronizamos cuando el
