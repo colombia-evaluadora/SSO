@@ -1,27 +1,34 @@
--- ===========================================================================
--- V42 — Modulo de Escalas de Valoracion (academico_test). 
--- Una "escala" del front es una banda de valoracion que
--- se reparte en TESCALA (contenedor por nivel+periodo via TNIVEL_ESCALA),
--- TVALORACION (valoracion: nombre, codigo=abreviacion, tipo, icono) y
--- TESCALA_VALORACION (banda: rango en %). Alta en lote (niveles x valoraciones).
--- Las notas se guardan en % (0-100) contra el formato del periodo; la lectura
--- convierte de vuelta. Icono y tipo se resuelven desde TLISTA_VALOR por id que
--- manda el front: icono (categoria GRAFICA_CARITA/GRAFICA_SIMBOLO) -> su VALOR
--- (URL) en GRAFICA_CARITAS/GRAFICA_SIMBOLO; tipo (categoria TIPO_VALORACION,
--- Fortaleza/Debilidad) -> FK_TVL_TIPO_VALORACION. Requiere quitar los UNIQUE de
--- TESCALA/TVALORACION (nombre,codigo).
--- ===========================================================================
-
-SET search_path TO academico_test, public;
+-- fn_escala_guardar_bulk y fn_escala_listar resuelven el rango del formato
+-- de calificacion contra TLISTA_VALOR.VALOR (categoria FORMATO_CALIFICACION),
+-- pero comparaban ese VALOR contra el texto humano completo
+-- ('DE CERO A CINCO', 'DE CERO A DIEZ') -- el VALOR real es un codigo corto
+-- (confirmado: PK 51857 NOMBRE='DE CERO A CINCO' pero VALOR='CINCO'; PK 51882
+-- NOMBRE='DE CERO A DIEZ' VALOR='DIEZ'; PK 51889 NOMBRE='DE CERO A CIEN'
+-- VALOR='CIEN'). La comparacion nunca matcheaba 'CINCO'/'DIEZ' contra el
+-- texto largo, asi que el rango caia siempre al ELSE 100 sin importar el
+-- formato real del periodo.
+--
+-- Efecto del bug: una banda creada con formato "DE CERO A CINCO" mandando
+-- notaMaxima=5 se guardaba con LIMITE_SUPERIOR = (5-0)/(100-0)*100 = 5 en vez
+-- de (5-0)/(5-0)*100 = 100. Al leer, la misma banda se reconvertia con el
+-- mismo ELSE 100 (round(5/100*100,2) = 5) -- guardado y lectura se
+-- compensaban entre si MIENTRAS el formato real fuera "DE CERO A CIEN"
+-- (donde el ELSE 100 es coincidencialmente correcto). En cuanto el formato
+-- del periodo cambiaba a "DE CERO A CINCO"/"DE CERO A DIEZ", la lectura
+-- seguia cayendo en ELSE 100 (el bug no se corrige solo), y una banda vieja
+-- guardada como 20 (bajo el formato anterior 0-100) se seguia mostrando "20"
+-- en vez de re-escalarse a "1" -- exactamente el sintoma reportado.
+--
+-- Fix: los literales del CASE pasan a ser los codigos reales de VALOR
+-- ('CINCO'/'DIEZ'), no el texto de NOMBRE.
 
 CREATE OR REPLACE FUNCTION academico_test.fn_escala_guardar_bulk(
-    p_academic_period_id  BIGINT,
-    p_teaching_level_ids  BIGINT[],
-    p_scales              jsonb,     -- [{nombre,abreviacion,tipoId,iconoId,iconoCategoria,notaMinima,notaMaxima,notaEquivalente}]
-                                     -- tipoId e iconoId son PK_LISTA_VALOR; iconoCategoria: 'GRAFICA_CARITA'|'GRAFICA_SIMBOLO'.
+    p_academic_period_id BIGINT,
+    p_teaching_level_ids BIGINT[],
+    p_scales jsonb,
     p_pk_usuario_solicitante BIGINT
 )
-RETURNS INT LANGUAGE plpgsql AS $$
+RETURNS INTEGER LANGUAGE plpgsql AS $$
 DECLARE
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_fmt TEXT; v_min NUMERIC; v_max NUMERIC;
@@ -37,16 +44,16 @@ BEGIN
         p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_academic_period_id));
 
     -- Rango del formato de calificacion del periodo (para % ). El rango base es
-    -- 0-100; solo "DE CERO A CINCO"/"DE CERO A DIEZ" cambian el maximo. El resto
-    -- (DE CERO A CIEN, Caritas, Simbolos, Valoraciones, ...) es 0-100.
+    -- 0-100; solo "CINCO"/"DIEZ" (VALOR) cambian el maximo. El resto (CIEN,
+    -- CARITA, SIMBOLO, LITERAL, ...) es 0-100.
     SELECT lv.VALOR INTO v_fmt
       FROM academico_test.TCRITERIO_EVALUACION ce
       JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = ce.FK_TLV_FORMATO_CALIFICACION
      WHERE ce.PK_TCRITERIO_EVALUACION = p_academic_period_id;
     v_min := 0;
     v_max := CASE UPPER(TRIM(COALESCE(v_fmt, '')))
-               WHEN 'DE CERO A CINCO' THEN 5
-               WHEN 'DE CERO A DIEZ'  THEN 10
+               WHEN 'CINCO' THEN 5
+               WHEN 'DIEZ'  THEN 10
                ELSE 100
              END;
 
@@ -142,88 +149,11 @@ BEGIN
 END;
 $$;
 
--- Baja logica de una banda puntual.
-CREATE OR REPLACE FUNCTION academico_test.fn_escala_eliminar(p_pk BIGINT, p_pk_usuario_solicitante BIGINT)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(ne.FK_PERIODO_ACADEMICO)
-          FROM academico_test.TESCALA_VALORACION ev
-          JOIN academico_test.TNIVEL_ESCALA ne ON ne.FK_TESCALA = ev.FK_TESCALA AND ne.ACTIVE = TRUE
-         WHERE ev.PK_TESCALA_VALORACION = p_pk));
-    UPDATE academico_test.TESCALA_VALORACION SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE PK_TESCALA_VALORACION = p_pk AND ACTIVE = TRUE;
-    GET DIAGNOSTICS v_n = ROW_COUNT;
-    IF v_n = 0 THEN RAISE EXCEPTION 'No existe una banda activa con PK %', p_pk USING ERRCODE = 'P0002'; END IF;
-    RETURN p_pk;
-END;
-$$;
-
--- ---------------------------------------------------------------------------
--- fn_escala_nivel_soft_delete — baja logica de la escala COMPLETA de un nivel
--- en un periodo: su vinculo TNIVEL_ESCALA, el contenedor TESCALA, todas sus
--- bandas TESCALA_VALORACION y las TVALORACION de esas bandas. fn_escala_eliminar
--- solo baja UNA banda; sin esta funcion el bloqueo del periodo por TNIVEL_ESCALA
--- activa (V37) no se podia limpiar. Bloquea si alguna banda esta en uso por
--- criterios de unidad (TNIVEL_CRITERIO_UNIDAD), para no dejar descriptores
--- calificados apuntando a bandas inactivas.
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_escala_nivel_soft_delete(
-    p_academic_period_id BIGINT, p_teaching_level_id BIGINT, p_pk_usuario_solicitante BIGINT
-)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_escala BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(
-        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_academic_period_id));
-    SELECT ne.FK_TESCALA INTO v_escala FROM academico_test.TNIVEL_ESCALA ne
-     WHERE ne.FK_PERIODO_ACADEMICO = p_academic_period_id
-       AND ne.FK_TNIVEL_ENSENANZA = p_teaching_level_id AND ne.ACTIVE = TRUE;
-    IF v_escala IS NULL THEN
-        RAISE EXCEPTION 'No existe una escala activa para el periodo % y nivel %', p_academic_period_id, p_teaching_level_id
-            USING ERRCODE = 'P0002';
-    END IF;
-    -- Bloqueo: bandas en uso por criterios de unidad.
-    IF EXISTS (
-        SELECT 1 FROM academico_test.TNIVEL_CRITERIO_UNIDAD ncu
-          JOIN academico_test.TESCALA_VALORACION ev ON ev.PK_TESCALA_VALORACION = ncu.FK_TESCALA_VALORACION
-         WHERE ev.FK_TESCALA = v_escala AND ncu.ACTIVE = TRUE
-    ) THEN
-        RAISE EXCEPTION 'No se puede eliminar la escala del nivel %: hay bandas en uso por criterios de unidad', p_teaching_level_id
-            USING ERRCODE = '23503';
-    END IF;
-    -- Valoraciones de las bandas.
-    UPDATE academico_test.TVALORACION SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE PK_TVALORACION IN (
-         SELECT FK_TVALORACION FROM academico_test.TESCALA_VALORACION
-          WHERE FK_TESCALA = v_escala AND ACTIVE = TRUE
-     );
-    -- Bandas.
-    UPDATE academico_test.TESCALA_VALORACION SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE FK_TESCALA = v_escala AND ACTIVE = TRUE;
-    -- Vinculo nivel-escala-periodo.
-    UPDATE academico_test.TNIVEL_ESCALA SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE FK_TESCALA = v_escala AND FK_PERIODO_ACADEMICO = p_academic_period_id
-       AND FK_TNIVEL_ENSENANZA = p_teaching_level_id AND ACTIVE = TRUE;
-    -- Contenedor TESCALA.
-    UPDATE academico_test.TESCALA SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE PK_TESCALA = v_escala AND ACTIVE = TRUE;
-    RETURN v_escala;
-END;
-$$;
-
--- Lista: convierte el % de vuelta al formato del periodo.
-DROP FUNCTION IF EXISTS academico_test.fn_escala_listar(BIGINT, TEXT, INT, INT);
-DROP FUNCTION IF EXISTS academico_test.fn_escala_listar(BIGINT, TEXT, INT, INT, BIGINT);
-DROP FUNCTION IF EXISTS academico_test.fn_escala_listar(BIGINT, TEXT, INT, INT, BIGINT, BIGINT);
-DROP FUNCTION IF EXISTS academico_test.fn_escala_listar(BIGINT, TEXT, BIGINT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_escala_listar(BIGINT, TEXT, BIGINT, BIGINT, TEXT, TEXT);
 CREATE OR REPLACE FUNCTION academico_test.fn_escala_listar(
     p_academic_period_id BIGINT, p_filtro TEXT DEFAULT NULL,
-    p_pk_usuario BIGINT DEFAULT NULL,  -- alcance (global / establecimiento)
-    p_teaching_level_id BIGINT DEFAULT NULL,  -- filtro opcional por nivel de ensenanza
-    -- Orden: id de columna del front + direccion ('asc'/'desc'), igual que fn_periodo_listar (V37).
+    p_pk_usuario BIGINT DEFAULT NULL,
+    p_teaching_level_id BIGINT DEFAULT NULL,
     p_sort_by TEXT DEFAULT NULL,
     p_sort_dir TEXT DEFAULT NULL
 )
@@ -253,8 +183,8 @@ BEGIN
         WITH fmt AS (
             SELECT 0::numeric AS mn,
                    CASE UPPER(TRIM(lv.VALOR))
-                     WHEN 'DE CERO A CINCO' THEN 5
-                     WHEN 'DE CERO A DIEZ'  THEN 10
+                     WHEN 'CINCO' THEN 5
+                     WHEN 'DIEZ'  THEN 10
                      ELSE 100
                    END::numeric AS mx
               FROM academico_test.TCRITERIO_EVALUACION ce
@@ -280,34 +210,5 @@ BEGIN
          ORDER BY %s %s, ev.ORDEN
     $q$, v_col, v_dir)
     USING p_academic_period_id, NULLIF(TRIM(p_filtro),''), p_pk_usuario, p_teaching_level_id;
-END;
-$$;
-
--- Borrado multiple de bandas de valoracion.
--- Devuelve una fila por id: eliminado=TRUE, o FALSE con error_code (SQLSTATE)
--- y error_mensaje. Cada id en su subtransaccion; un fallo no revierte al resto.
-DROP FUNCTION IF EXISTS academico_test.fn_escala_bulk_delete(BIGINT[], BIGINT);
-CREATE OR REPLACE FUNCTION academico_test.fn_escala_bulk_delete(
-    p_ids BIGINT[], p_pk_usuario_solicitante BIGINT
-)
-RETURNS TABLE (id BIGINT, eliminado BOOLEAN, error_code TEXT, error_mensaje TEXT)
-LANGUAGE plpgsql AS $$
-DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
-BEGIN
-    -- Gate grueso; el fino por establecimiento lo aplica fn_escala_eliminar.
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, NULL);
-    IF p_ids IS NULL THEN RETURN; END IF;
-    FOREACH v_id IN ARRAY p_ids LOOP
-        BEGIN
-            PERFORM academico_test.fn_escala_eliminar(v_id, p_pk_usuario_solicitante);
-            id := v_id; eliminado := TRUE; error_code := NULL; error_mensaje := NULL;
-            RETURN NEXT;
-        EXCEPTION WHEN OTHERS THEN
-            GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
-            id := v_id; eliminado := FALSE; error_code := v_state; error_mensaje := v_msg;
-            RETURN NEXT;
-        END;
-    END LOOP;
-    RETURN;
 END;
 $$;
