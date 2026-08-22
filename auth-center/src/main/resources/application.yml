@@ -180,31 +180,6 @@ sso:
       # eviction hop. The cache lives in auth-center only — there
       # is no cross-service writer to invalidate from.
       user-by-email-ttl-seconds: 60
-    # V-audit-ctx-4 -- SessionReaperService, cierra sesiones de
-    # academico_test.tsesion_web (V88) que nadie cerró
-    # explícitamente (el refresh token simplemente caducó en Redis
-    # sin que ningún /auth/logout se llamara).
-    reaper:
-      # Cada cuánto corre el ciclo. fixedDelay (no fixedRate): un
-      # ciclo lento nunca se solapa con el siguiente.
-      interval-ms: ${SSO_SESSION_REAPER_INTERVAL_MS:900000}       # 15 min
-      initial-delay-ms: ${SSO_SESSION_REAPER_INITIAL_DELAY_MS:60000}
-      # Minutos sin actividad (última fila en ClickHouse para el
-      # family_id, o started_at si nunca escribió nada) antes de
-      # cerrar la sesión con close_reason='expired'. Mismo umbral
-      # que el heurístico sintético que este trabajo reemplaza.
-      inactivity-minutes: ${SSO_SESSION_INACTIVITY_MINUTES:30}
-
-  # V-audit-ctx-4 -- mismo cliente HTTP plano que sso-admin usa para
-  # auditoria.audit_log (ClickHouseAuditClient), reusado acá por
-  # ClickHouseSessionActivityClient para que el reaper sepa la última
-  # actividad real de cada sesión abierta. Mismo nombre de variable y
-  # mismo default (con credenciales embebidas en la URL, ver
-  # sso-admin/application.yml) que sso-admin ya usa para el mismo
-  # ClickHouse -- CLICKHOUSE_URL sin credenciales devuelve 403
-  # AUTHENTICATION_FAILED (encontrado en vivo probando el reaper).
-  clickhouse:
-    url: ${CLICKHOUSE_URL:http://default:demopass@cdc-clickhouse:8123}
 
 management:
   endpoints:
