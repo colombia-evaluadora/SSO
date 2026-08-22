@@ -1,5 +1,6 @@
 package com.co.eurekatic.query.catalog;
 
+import com.co.eurekatic.common.query.ParamConstraint;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -66,6 +67,15 @@ public record QueryDefinition(
         @JsonProperty("paramTypes") Map<String, String> paramTypes,
 
         /**
+         * V81 — restricciones de formato opcionales por placeholder,
+         * adicionales a lo que declara {@code paramTypes}. Nullable
+         * para back-compat con servidores pre-V81; tratado como mapa
+         * vacío por {@code ParamConstraintValidator} ("sin
+         * restricciones adicionales").
+         */
+        @JsonProperty("paramConstraints") Map<String, ParamConstraint> paramConstraints,
+
+        /**
          * V110 — opt-in: when {@code true}, {@code QueryPathController}
          * may serve this row's {@code GET} result from Redis instead
          * of re-running the SQL. {@code false} (the default for
@@ -81,10 +91,11 @@ public record QueryDefinition(
         @JsonProperty("cacheTtlSeconds") int cacheTtlSeconds
 ) {
     /**
-     * V110 back-compat (sin cacheable/cacheTtlSeconds) — servidores
-     * de catálogo pre-V110 no mandan estos campos; Jackson invoca
-     * este constructor cuando el JSON no trae {@code cacheable} ni
-     * {@code cacheTtlSeconds}, y cae al default seguro (no cachear).
+     * V81/V110 back-compat (sin paramConstraints ni
+     * cacheable/cacheTtlSeconds) — servidores de catálogo
+     * pre-V81/pre-V110 no mandan esos campos; Jackson invoca este
+     * constructor y cae a los defaults seguros (sin restricciones
+     * adicionales, sin cachear).
      */
     public QueryDefinition(Long idQuery, String uuid, String query,
                            String type, boolean publicEnd, boolean captcha,
@@ -94,7 +105,7 @@ public record QueryDefinition(
                            Map<String, String> paramTypes) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, pathTemplate, executionMode,
-             outParamNames, httpMethod, paramTypes, false, 60);
+             outParamNames, httpMethod, paramTypes, null, false, 60);
     }
 
     /**

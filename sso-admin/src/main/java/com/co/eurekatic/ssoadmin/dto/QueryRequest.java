@@ -1,6 +1,7 @@
 package com.co.eurekatic.ssoadmin.dto;
 
 import com.co.eurekatic.common.entity.ExecutionMode;
+import com.co.eurekatic.common.query.ParamConstraint;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
@@ -83,6 +84,18 @@ public record QueryRequest(
          */
         Map<String, String>         paramTypes,
         /**
+         * V81 — restricciones de formato opcionales por placeholder,
+         * adicionales al tipo/obligatoriedad de {@code paramTypes}.
+         * Cada key debe existir en {@code paramTypes}; sólo las
+         * reglas numéricas aplican a tipos numéricos y sólo las de
+         * texto a tipos de texto — ver
+         * {@code QueryAdminService.validateParamConstraints}.
+         *
+         * <p>Nullable: un cliente que no manda el campo cae a mapa
+         * vacío (sin restricciones adicionales).
+         */
+        Map<String, ParamConstraint> paramConstraints,
+        /**
          * V110 — opt-in: {@code query-service} may cache this row's
          * {@code GET} result in Redis when {@code true}. Default
          * {@code false} — the field is a checkbox on the admin-ui
@@ -104,7 +117,7 @@ public record QueryRequest(
                         Long microserviceId) {
         this(id, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId, null,
-             ExecutionMode.SELECT, null, null, null);
+             ExecutionMode.SELECT, null, null, null, null, false, null);
     }
 
     /**
@@ -118,7 +131,7 @@ public record QueryRequest(
                         String pathTemplate, ExecutionMode executionMode) {
         this(id, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
-             pathTemplate, executionMode, null, null, null);
+             pathTemplate, executionMode, null, null, null, null, false, null);
     }
 
     /**
@@ -133,7 +146,7 @@ public record QueryRequest(
                         ExecutionMode executionMode, String outParamNames) {
         this(id, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
-             pathTemplate, executionMode, outParamNames, null, null);
+             pathTemplate, executionMode, outParamNames, null, null, null, false, null);
     }
 
     /**
@@ -152,14 +165,14 @@ public record QueryRequest(
         this(id, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
              pathTemplate, executionMode, outParamNames, httpMethod,
-             null);
+             null, null, false, null);
     }
 
     /**
-     * V110 back-compat (sin cacheable/cacheTtlSeconds). Conserva la
-     * forma de 15 argumentos que los llamantes usaban antes de V110;
-     * cacheable cae a false, que es el comportamiento previo
-     * (siempre golpea la base).
+     * V81/V110 back-compat (sin paramConstraints ni
+     * cacheable/cacheTtlSeconds). Conserva la forma de 15
+     * argumentos que los llamantes usaban antes de esos dos
+     * campos; ambos caen a su default (mapa vacío / sin cachear).
      */
     public QueryRequest(Long id, String uuid, String query, String type,
                         boolean publicEnd, boolean captcha,
@@ -170,7 +183,25 @@ public record QueryRequest(
         this(id, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
              pathTemplate, executionMode, outParamNames, httpMethod,
-             paramTypes, false, null);
+             paramTypes, null, false, null);
+    }
+
+    /**
+     * V110 back-compat (sin cacheable/cacheTtlSeconds). Conserva la
+     * forma de 16 argumentos que los llamantes usaban entre V81 y
+     * V110; ambos caen a su default (sin cachear).
+     */
+    public QueryRequest(Long id, String uuid, String query, String type,
+                        boolean publicEnd, boolean captcha,
+                        String detail, String action, String style,
+                        Long microserviceId, String pathTemplate,
+                        ExecutionMode executionMode, String outParamNames,
+                        String httpMethod, Map<String, String> paramTypes,
+                        Map<String, ParamConstraint> paramConstraints) {
+        this(id, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             pathTemplate, executionMode, outParamNames, httpMethod,
+             paramTypes, paramConstraints, false, null);
     }
 
     /**
@@ -183,5 +214,6 @@ public record QueryRequest(
      */
     public QueryRequest {
         paramTypes = paramTypes == null ? new LinkedHashMap<>() : paramTypes;
+        paramConstraints = paramConstraints == null ? new LinkedHashMap<>() : paramConstraints;
     }
 }

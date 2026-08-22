@@ -2,7 +2,9 @@ package com.co.eurekatic.ssoadmin.service;
 
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
+import com.co.eurekatic.common.entity.QueryParamConstraint;
 import com.co.eurekatic.common.entity.Role;
+import com.co.eurekatic.common.query.ParamConstraint;
 import com.co.eurekatic.common.query.ParamNamespace;
 import com.co.eurekatic.common.query.ParamTypes;
 import com.co.eurekatic.common.query.PathTemplateSyntax;
@@ -85,6 +87,7 @@ public class QueryAdminService {
         validatePathTemplate(req, null);
         validateOutParams(req);
         validateParamTypes(req);
+        validateParamConstraints(req);
         Query q = new Query();
         copy(req, q, uuid);
         QueryResponse response = QueryResponse.fromEntity(queryRepo.save(q));
@@ -119,6 +122,7 @@ public class QueryAdminService {
         validatePathTemplate(req, q.getId());
         validateOutParams(req);
         validateParamTypes(req);
+        validateParamConstraints(req);
         copy(req, q, uuid);
         QueryResponse response = QueryResponse.fromEntity(queryRepo.save(q));
         // V33 — same invalidate-on-write as create().
@@ -253,6 +257,9 @@ public class QueryAdminService {
         // called from create()/update() before copy(). LinkedHashMap
         // to preserve insertion order for deterministic API responses.
         q.setParamTypes(new LinkedHashMap<>(req.paramTypes()));
+        // V81: reescribe el set completo de restricciones de esta
+        // query en cada guardado, igual que paramTypes de arriba.
+        q.replaceParamConstraints(buildParamConstraintEntities(req, q));
         // V110: opt-in cache flag + TTL. A null cacheTtlSeconds
         // (back-compat callers, or a client that just checked the
         // "cacheable" box without touching the TTL field) falls
@@ -482,6 +489,117 @@ public class QueryAdminService {
                 + ". Asigna un tipo a cada uno antes de guardar "
                 + "(o usa 'TEXT' si no tienes preferencia).");
         }
+    }
+
+    /**
+     * V81 — strict validation of {@code paramConstraints} at write
+     * time. Cada entrada debe:
+     *
+     * <ol>
+     *   <li>Referenciar una key que exista en {@code paramTypes} —
+     *       una restricción sobre un placeholder no declarado no
+     *       tiene tipo base contra el cual aplicarse.</li>
+     *   <li>Traer sólo reglas compatibles con el tipo base declarado:
+     *       {@code onlyPositive}/{@code allowDecimals}/{@code maxDigits}
+     *       sólo sobre un tipo numérico ({@link ParamTypes#INTEGER_TYPES}
+     *       / {@link ParamTypes#DECIMAL_TYPES}); {@code numericText}/
+     *       {@code minLength}/{@code maxLength} sólo sobre un tipo de
+     *       texto ({@link ParamTypes#STRING_TYPES}). Mezclar (p. ej.
+     *       {@code maxDigits} sobre un {@code TEXT}) se rechaza — sería
+     *       una regla que {@code query-service} nunca aplicaría, sin
+     *       avisar al autor.</li>
+     *   <li>Traer valores sanos: {@code maxDigits > 0},
+     *       {@code minLength >= 0}, {@code maxLength > 0},
+     *       {@code minLength <= maxLength} cuando ambos están
+     *       presentes. El {@code CHECK} de la migración es la red de
+     *       seguridad; esto da un 400 legible antes de tocar la BD.</li>
+     * </ol>
+     */
+    private void validateParamConstraints(QueryRequest req) {
+        Map<String, ParamConstraint> constraints = req.paramConstraints();
+        if (constraints == null || constraints.isEmpty()) {
+            return;
+        }
+        Map<String, String> paramTypes = req.paramTypes() == null ? Map.of() : req.paramTypes();
+        for (Map.Entry<String, ParamConstraint> e : constraints.entrySet()) {
+            String key = e.getKey();
+            ParamConstraint rule = e.getValue();
+            if (rule == null) continue;
+
+            String upperKey = key.toUpperCase(java.util.Locale.ROOT);
+            String declaredTypeRaw = paramTypes.get(key) != null
+                    ? paramTypes.get(key) : paramTypes.get(upperKey);
+            if (declaredTypeRaw == null) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'] no tiene un tipo declarado en "
+                    + "PARAM_TYPES. Declara primero el tipo del placeholder antes de "
+                    + "agregarle restricciones de formato.");
+            }
+            String baseType = ParamTypes.parseDeclaration(declaredTypeRaw).baseType();
+            boolean numericType = ParamTypes.INTEGER_TYPES.contains(baseType)
+                    || ParamTypes.DECIMAL_TYPES.contains(baseType);
+            boolean textType = ParamTypes.STRING_TYPES.contains(baseType);
+
+            if (rule.hasNumericRules() && !numericType) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'] declara reglas numéricas "
+                    + "(onlyPositive/allowDecimals/maxDigits) pero el tipo declarado es "
+                    + baseType + ", no numérico.");
+            }
+            if (rule.hasTextRules() && !textType) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'] declara reglas de texto "
+                    + "(numericText/minLength/maxLength) pero el tipo declarado es "
+                    + baseType + ", no textual.");
+            }
+            if (rule.maxDigits() != null && rule.maxDigits() <= 0) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'].maxDigits debe ser mayor que cero.");
+            }
+            if (rule.minValue() != null && rule.maxValue() != null
+                    && rule.minValue().compareTo(rule.maxValue()) > 0) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'].minValue (" + rule.minValue()
+                    + ") no puede ser mayor que maxValue (" + rule.maxValue() + ").");
+            }
+            if (rule.minLength() != null && rule.minLength() < 0) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'].minLength no puede ser negativo.");
+            }
+            if (rule.maxLength() != null && rule.maxLength() <= 0) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'].maxLength debe ser mayor que cero.");
+            }
+            if (rule.minLength() != null && rule.maxLength() != null
+                    && rule.minLength() > rule.maxLength()) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'].minLength (" + rule.minLength()
+                    + ") no puede ser mayor que maxLength (" + rule.maxLength() + ").");
+            }
+        }
+    }
+
+    /**
+     * Traduce {@code req.paramConstraints()} a las entidades hijas
+     * que {@link Query#replaceParamConstraints} va a persistir.
+     * Filas con las seis reglas en {@code null} se omiten — no
+     * aportan restricción alguna, así que no vale la pena guardar la
+     * fila.
+     */
+    private static java.util.List<QueryParamConstraint> buildParamConstraintEntities(
+            QueryRequest req, Query q) {
+        java.util.List<QueryParamConstraint> out = new java.util.ArrayList<>();
+        Map<String, ParamConstraint> constraints = req.paramConstraints();
+        if (constraints == null) return out;
+        for (Map.Entry<String, ParamConstraint> e : constraints.entrySet()) {
+            ParamConstraint r = e.getValue();
+            if (r == null || (!r.hasNumericRules() && !r.hasTextRules())) continue;
+            out.add(new QueryParamConstraint(q, e.getKey(),
+                    r.onlyPositive(), r.allowDecimals(), r.maxDigits(),
+                    r.minValue(), r.maxValue(),
+                    r.numericText(), r.minLength(), r.maxLength()));
+        }
+        return out;
     }
 
     /**

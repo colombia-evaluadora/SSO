@@ -88,6 +88,67 @@ export class ApiClient {
     return this.handleBlobResponse(retried);
   }
 
+  /**
+   * GET de texto plano — mismo Bearer y mismo reintento tras
+   * refrescar que el resto de llamadas, pero SIN pasar la
+   * respuesta por {@code JSON.parse}.
+   *
+   * <p>Existe porque {@link get} SIEMPRE hace
+   * {@code JSON.parse(text)} en {@link handleResponse} — correcto
+   * para el 99% de los endpoints (JSON), pero
+   * {@code GET /microservice/{id}/container/logs} devuelve
+   * {@code text/plain} (líneas de log crudas de
+   * stdout+stderr, ver {@code MicroserviceController.containerLogs}
+   * — {@code produces = MediaType.TEXT_PLAIN_VALUE}). Cualquier log
+   * real no es JSON válido, así que {@code apiClient.get<string>}
+   * ahí tira {@code SyntaxError} en el primer 200 con contenido —
+   * el modal de logs del admin-ui lo capturaba como "Ocurrió un
+   * error inesperado" sin importar que el provisioner respondiera
+   * bien.
+   */
+  async getText(path: string, init?: { base?: string | null }): Promise<string> {
+    // `Accept: text/plain` (con `*/*` de respaldo) — NO
+    // "application/json" (el default de fetchOnce). El endpoint de
+    // logs declara `produces = TEXT_PLAIN_VALUE`; pedir con Accept
+    // json no calza con ningún media type que pueda producir y
+    // Spring lanza HttpMediaTypeNotAcceptableException ANTES de
+    // llegar al método — eso, no un fallo del provisioner, era la
+    // causa real del "Ocurrió un error inesperado" en el modal de
+    // logs.
+    const accept = "text/plain, */*;q=0.1";
+    const resp = await this.fetchOnce("GET", path, undefined, false, init?.base, accept);
+    if (resp.status !== 401) {
+      return this.handleTextResponse(resp);
+    }
+    const refreshed = await this.refreshLock.acquire();
+    if (!refreshed) {
+      this.onAuthFailure();
+      throw new ApiError(401, "AUTH_EXPIRED", "La sesión expiró; inicia sesión de nuevo");
+    }
+    const retried = await this.fetchOnce("GET", path, undefined, false, init?.base, accept);
+    return this.handleTextResponse(retried);
+  }
+
+  private async handleTextResponse(resp: Response): Promise<string> {
+    if (resp.ok) {
+      return resp.text();
+    }
+    // El cuerpo de error de estos endpoints SÍ es JSON (el
+    // envelope estándar {code, message}) aunque el éxito sea texto
+    // plano — mismo criterio que handleBlobResponse.
+    let payload: ErrorResponse | null = null;
+    try {
+      payload = JSON.parse(await resp.text()) as ErrorResponse;
+    } catch {
+      // ignore: el error no era JSON
+    }
+    throw new ApiError(
+      resp.status,
+      payload?.code ?? "HTTP_ERROR",
+      payload?.message ?? `${resp.status} ${resp.statusText}`,
+    );
+  }
+
   private async handleBlobResponse(resp: Response): Promise<Blob> {
     if (resp.ok) {
       return resp.blob();
@@ -138,9 +199,10 @@ export class ApiClient {
     body?: unknown,
     skipAuth = false,
     base: string | null = null,
+    accept = "application/json",
   ): Promise<Response> {
     const headers: Record<string, string> = {
-      Accept: "application/json",
+      Accept: accept,
     };
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";
