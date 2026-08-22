@@ -301,6 +301,51 @@ public class Query {
             this.paramConstraints.add(fresh);
         }
     }
+    /*
+     * V110 — opt-in flag: when {@code true}, {@code query-service}
+     * may serve this row's {@code GET} result from Redis instead of
+     * re-running the SQL on every request. Default {@code false}
+     * preserves pre-V110 behaviour for every existing row.
+     *
+     * <p>Deliberately opt-in and not blanket: a {@code GET} row can
+     * carry {@code :CONTEXT.*} binds (userId/email/roles) and
+     * caller-supplied query/path/body params, so caching is only
+     * safe once the query author has actively decided the result is
+     * reusable across identical requests for a bounded window. See
+     * {@code query-service}'s {@code CatalogResultCacheService}.
+     */
+    @Column(name = "CACHEABLE", nullable = false)
+    private boolean cacheable = false;
+
+    /**
+     * V110 — staleness window in seconds when {@link #cacheable} is
+     * {@code true}. Ignored otherwise. Default 60s; the author picks
+     * a wider window for near-static catalogs and a narrower one for
+     * anything closer to live.
+     *
+     * <p><b>V66 — this is now an upper bound, not the typical
+     * staleness.</b> {@code query-service} invalidates every cached
+     * {@code GET} for its own instance as soon as a {@code PROCEDURE}
+     * / {@code DML} row (or the legacy {@code /write} endpoint)
+     * successfully mutates data — see {@code CatalogResultCacheService
+     * #invalidateAll}. In the normal case a GET issued right after a
+     * write already sees fresh data; {@code cacheTtlSeconds} only
+     * matters as a ceiling for the case Redis itself is unreachable
+     * at invalidation time (fail-open — the write still succeeds, the
+     * cache entry just outlives it by up to this many seconds
+     * instead of being cleared immediately).
+     *
+     * <p>The invalidation is instance-scoped and blunt on purpose:
+     * ANY write clears ALL of this instance's cached GETs, not just
+     * the ones the write actually affected — there's no catalog
+     * metadata linking a write row to the reads it touches. Pick a
+     * TTL as if that fine-grained mapping didn't exist; the
+     * invalidation is a bonus that makes the common case feel
+     * instant, not the mechanism you're meant to rely on for
+     * correctness.
+     */
+    @Column(name = "CACHE_TTL_SECONDS", nullable = false)
+    private int cacheTtlSeconds = 60;
 
     /**
      * Roles authorized to invoke this query through the catalog

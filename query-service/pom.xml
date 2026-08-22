@@ -55,6 +55,14 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
+        <!-- Redis-backed @Cacheable — schema-metadata endpoints
+             (/tables, /columns) and opt-in catalog GET caching.
+             Same starter, same shared sso-redis instance, as
+             auth-center's RedisConfig. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
         <!-- Observability: pure-OTLP export via the single Boot 4 starter. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

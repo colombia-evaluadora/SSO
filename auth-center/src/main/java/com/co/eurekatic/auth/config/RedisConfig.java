@@ -144,9 +144,26 @@ public class RedisConfig {
                 .serializeValuesWith(RedisSerializationContext.SerializationPair
                         .fromSerializer(userSummaryJson));
 
+        // "my-apps" (List<AppSummary>) and "users-sso" (List<UserSummary>)
+        // stay on `defaults` — the generic, untyped
+        // GenericJackson2JsonRedisSerializer — unlike "user-by-email"
+        // above. Both cache a List, which GenericJackson2JsonRedisSerializer
+        // round-trips fine on its own (it embeds the concrete list
+        // type in the JSON payload); "user-by-email" needed its own
+        // typed serializer for a different, narrower reason
+        // documented on this method's javadoc, not because
+        // GenericJackson2JsonRedisSerializer can't handle records.
+        RedisCacheConfiguration myAppsConfig =
+                defaults.entryTtl(Duration.ofSeconds(props.myAppsTtlSeconds()));
+        RedisCacheConfiguration usersSsoConfig =
+                defaults.entryTtl(Duration.ofSeconds(props.usersSsoTtlSeconds()));
+
         return RedisCacheManager.builder(connectionFactory)
                 .cacheDefaults(defaults)
-                .withInitialCacheConfigurations(Map.of("user-by-email", userByEmailConfig))
+                .withInitialCacheConfigurations(Map.of(
+                        "user-by-email", userByEmailConfig,
+                        "my-apps", myAppsConfig,
+                        "users-sso", usersSsoConfig))
                 .build();
     }
 }

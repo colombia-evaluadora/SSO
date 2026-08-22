@@ -66,6 +66,10 @@ public record QueryResponse(
          * adicionales.
          */
         Map<String, ParamConstraint> paramConstraints
+        /** V110 — ver {@link com.co.eurekatic.common.entity.Query#isCacheable()}. */
+        boolean cacheable,
+        /** V110 — ver {@link com.co.eurekatic.common.entity.Query#getCacheTtlSeconds()}. */
+        int cacheTtlSeconds
 ) {
     public static QueryResponse fromEntity(Query q) {
         Microservice m = q.getMicroservice();
@@ -96,6 +100,8 @@ public record QueryResponse(
                 q.getOutParamNames(),
                 q.getHttpMethod(),
                 q.getParamTypes(),
-                constraints);
+                constraints,
+                q.isCacheable(),
+                q.getCacheTtlSeconds());
     }
 }

@@ -11,6 +11,7 @@ import com.co.eurekatic.query.config.JdbcTemplateRegistry;
 import com.co.eurekatic.query.exception.PostgresErrorMapper;
 import com.co.eurekatic.query.observability.QueryMetrics;
 import com.co.eurekatic.query.resilience.QueryResilience;
+import com.co.eurekatic.query.routing.CatalogResultCacheService;
 import com.co.eurekatic.query.web.QueryRequest;
 import io.github.resilience4j.bulkhead.BulkheadFullException;
 import org.postgresql.util.PGobject;
@@ -67,15 +68,18 @@ public class QueryService {
     private final QueryMetrics metrics;
     private final QueryResilience resilience;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final CatalogResultCacheService resultCache;
 
     public QueryService(CatalogClient catalog, JdbcTemplateRegistry registry,
                          QueryMetrics metrics, QueryResilience resilience,
-                         com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
+                         com.fasterxml.jackson.databind.ObjectMapper objectMapper,
+                         CatalogResultCacheService resultCache) {
         this.catalog = catalog;
         this.registry = registry;
         this.metrics = metrics;
         this.resilience = resilience;
         this.objectMapper = objectMapper;
+        this.resultCache = resultCache;
     }
 
     /**
@@ -109,10 +113,48 @@ public class QueryService {
         // slot is what we mutate. Confined to this thread, so no
         // synchronisation is needed.
         final String[] mode = { "SELECT" };
+        // V66 — the row's declared HTTP verb and path template,
+        // published alongside mode. httpMethod decides WHETHER a
+        // successful call just wrote data (see the invalidation call
+        // below for why HTTP verb, not execution mode, is the right
+        // signal); pathTemplate decides WHICH cached resource to
+        // clear (see CatalogResultCacheService#invalidateForResource).
+        final String[] httpMethod = { "GET" };
+        final String[] pathTemplate = { null };
         try {
-            QueryResult result = doExecute(req, publicOk, m -> mode[0] = m);
+            QueryResult result = doExecute(req, publicOk,
+                    (m, hm, pt) -> { mode[0] = m; httpMethod[0] = hm; pathTemplate[0] = pt; });
             metrics.recordExecution(mode[0], QueryMetrics.Outcome.SUCCESS,
                     System.nanoTime() - start);
+            // V66 — invalidate on HTTP verb, not execution mode. A
+            // catalog row can be executionMode=SELECT and still
+            // write: "SELECT ... FROM some_schema.fn_upsert_x(...)"
+            // parses as a read-only SELECT prefix (rejectIfMutating
+            // never fires) while the called function does an INSERT
+            // under the hood — this catalog has real rows shaped
+            // exactly like that (see fn_upsert_menu). Execution mode
+            // was the wrong signal to trust; the row's HTTP verb
+            // (what {@code QueryAdminService}/the admin-ui actually
+            // gate "does this row write" on — see V33's HTTP_METHOD
+            // column javadoc) is the one the catalog author already
+            // committed to meaning "this mutates". A GET row NEVER
+            // invalidates, even if the catalog author declared it
+            // PROCEDURE mode for a read-only stored procedure — that
+            // would otherwise defeat every OTHER cached GET on this
+            // instance on every single request.
+            //
+            // invalidateForResource scopes the wipe to this row's
+            // resource tag (its path template's first segment) so a
+            // write under /menus/** never evicts /roles/**'s cached
+            // GETs — see that method's javadoc for the null-path
+            // fallback (legacy rows with no pathTemplate).
+            //
+            // Invalidating AFTER metrics.recordExecution and BEFORE
+            // returning to the caller means no GET dispatched once
+            // this call returns can observe a stale cache entry.
+            if (!"GET".equalsIgnoreCase(httpMethod[0])) {
+                resultCache.invalidateForResource(pathTemplate[0]);
+            }
             return result;
         } catch (BulkheadFullException bfe) {
             // V33 — a slow query on this dialect has filled
@@ -133,14 +175,28 @@ public class QueryService {
     }
 
     /**
+     * Three-argument sink for {@link #doExecute} to publish what it
+     * resolved about the catalog row back to {@link #execute}. No
+     * built-in {@code java.util.function} interface takes three
+     * arguments, hence this tiny one instead of nesting {@code
+     * BiConsumer<String, Object[]>} or similar.
+     */
+    @FunctionalInterface
+    private interface ResolvedSink {
+        void accept(String mode, String httpMethod, String pathTemplate);
+    }
+
+    /**
      * The actual query pipeline. Wrapped by {@link #execute} for
      * metrics — keeps the happy-path code free of try/finally noise.
-     * Uses the {@code modeSink} consumer to publish the resolved
-     * execution mode back to the caller so the SUCCESS/FAILURE
-     * metric carries the right tag.
+     * Uses the {@code resolvedSink} callback to publish the resolved
+     * execution mode, the row's HTTP verb, and its path template
+     * back to the caller — mode for the SUCCESS/FAILURE metric tag,
+     * httpMethod + pathTemplate for the V66 write-invalidation
+     * decision (see {@link #execute}).
      */
     private QueryResult doExecute(QueryRequest req, boolean publicOk,
-                                 java.util.function.Consumer<String> modeSink) {
+                                 ResolvedSink resolvedSink) {
 
         Authentication auth = currentAuthentication();
         // Public path: forward whatever token we have (or
@@ -162,7 +218,14 @@ public class QueryService {
         String mode = def.executionMode() == null
                 ? "SELECT"
                 : def.executionMode().trim().toUpperCase();
-        modeSink.accept(mode);
+        // Null httpMethod (rows predating V33, or the legacy
+        // uuid-in-body flow) defaults to POST — same convention
+        // QueryPathRegistry#refresh already applies when building
+        // the path-dispatch table.
+        String httpMethod = def.httpMethod() == null || def.httpMethod().isBlank()
+                ? "POST"
+                : def.httpMethod().trim().toUpperCase();
+        resolvedSink.accept(mode, httpMethod, def.pathTemplate());
         if ("SELECT".equals(mode) || "FUNCTION".equals(mode)) {
             // SELECT and FUNCTION share the same prefix
             // (FUNCTION is called as "SELECT * FROM func()").

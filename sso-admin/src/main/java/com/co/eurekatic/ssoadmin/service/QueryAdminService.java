@@ -240,7 +240,8 @@ public class QueryAdminService {
         // Derivado del SQL, no pedido al admin. Ver
         // deriveExecutionMode para por qué el campo sobraba.
         q.setExecutionMode(deriveExecutionMode(req.query()));
-        q.setHttpMethod(normalizeHttpMethod(req.httpMethod()));
+        String httpMethod = normalizeHttpMethod(req.httpMethod());
+        q.setHttpMethod(httpMethod);
         // V27: nullable. When set, the unique partial index
         // (microservice_id, path_template) catches concurrent
         // insert races; the service-layer check below catches
@@ -259,6 +260,31 @@ public class QueryAdminService {
         // V81: reescribe el set completo de restricciones de esta
         // query en cada guardado, igual que paramTypes de arriba.
         q.replaceParamConstraints(buildParamConstraintEntities(req, q));
+        // V110: opt-in cache flag + TTL. A null cacheTtlSeconds
+        // (back-compat callers, or a client that just checked the
+        // "cacheable" box without touching the TTL field) falls
+        // back to the entity's own default (60s) instead of writing
+        // zero/negative into a column the DB CHECK requires positive.
+        // Defense in depth: cacheable only makes sense for a GET
+        // row (see Query#isCacheable's javadoc — POST/PUT/PATCH
+        // mutate and must never be served from a stale cache entry).
+        // QueryPathRegistry already refuses to carry a true flag
+        // through for a non-GET row regardless, but rejecting it
+        // here means the admin-ui form gets an immediate 400 instead
+        // of a silently-ignored checkbox.
+        if (req.cacheable() && !"GET".equals(httpMethod)) {
+            throw new IllegalArgumentException(
+                    "cacheable solo aplica a filas GET (httpMethod=" + httpMethod + ")");
+        }
+        q.setCacheable(req.cacheable());
+        if (req.cacheTtlSeconds() != null) {
+            if (req.cacheTtlSeconds() <= 0) {
+                throw new IllegalArgumentException(
+                        "cacheTtlSeconds debe ser mayor que cero (recibido: "
+                                + req.cacheTtlSeconds() + ")");
+            }
+            q.setCacheTtlSeconds(req.cacheTtlSeconds());
+        }
         // Resolve microservice binding. Null clears the
         // association (back to "global" — any instance may
         // serve). A non-null id MUST resolve to a kind=QUERY

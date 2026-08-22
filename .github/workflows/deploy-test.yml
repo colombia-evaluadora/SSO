@@ -251,7 +251,7 @@ jobs:
           fi
           echo "Ficheros cambiados:"; echo "$CAMBIADOS" | sed 's/^/  /'
 
-          TODOS='"eurekaserver","auth-center","api-gateway","sso-admin","query-service","file-service","provisioner","notification-service","hello-service","cdc-capture","cdc-worker"'
+          TODOS='"eurekaserver","auth-center","api-gateway","sso-admin","query-service","file-service","reporting-service","provisioner","notification-service","hello-service","cdc-capture","cdc-worker"'
 
           # `common` y el pom raíz son dependencias de 7 de los 8
           # módulos, así que tocarlos obliga a reconstruir todo.
@@ -266,6 +266,7 @@ jobs:
             echo "$CAMBIADOS" | grep -q '^sso-admin/'            && add sso-admin
             echo "$CAMBIADOS" | grep -q '^query-service/'        && add query-service
             echo "$CAMBIADOS" | grep -q '^file-service/'         && add file-service
+            echo "$CAMBIADOS" | grep -q '^reporting-service/'    && add reporting-service
             echo "$CAMBIADOS" | grep -q '^provisioner/'          && add provisioner
             echo "$CAMBIADOS" | grep -q '^notification-service/' && add notification-service
             echo "$CAMBIADOS" | grep -q '^hello-service/'        && add hello-service
@@ -319,7 +320,7 @@ jobs:
           }
 
           MATRIZ=""
-          for svc in eurekaserver auth-center api-gateway sso-admin notification-service hello-service file-service provisioner query-service cdc-capture cdc-worker; do
+          for svc in eurekaserver auth-center api-gateway sso-admin notification-service hello-service file-service reporting-service provisioner query-service cdc-capture cdc-worker; do
             if echo ",$SERVICIOS," | grep -qE "(,|\")${svc}(,|\")"; then
               MATRIZ="${MATRIZ:+$MATRIZ,}$(matriz_de "$svc")"
             fi

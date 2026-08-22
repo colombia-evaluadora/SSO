@@ -4,6 +4,7 @@ import com.co.eurekatic.query.web.metadata.ColumnInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import javax.sql.DataSource;
@@ -95,6 +96,11 @@ public class ColumnsService {
      *         malformed identifiers — all map to 400 via
      *         {@code GlobalExceptionHandler}.
      */
+    // Redis-backed — same rationale as TablesService#list: the
+    // result depends only on (dialect, schemaPattern, table), never
+    // on the caller. TTL from
+    // QueryCacheProperties#getMetadataTtlSeconds().
+    @Cacheable("columns")
     public List<ColumnInfo> list(String dialect, String schemaPattern, String table) {
         if (dialect == null || dialect.isBlank()) {
             throw new IllegalArgumentException("dialect is required");
