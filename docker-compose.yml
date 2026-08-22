@@ -1498,6 +1498,15 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/reporting-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-reporting-service
     restart: unless-stopped
+    # PID 1 es el JVM crudo (sin tini/dumb-init), asi que no reapea hijos
+    # huerfanos. El healthcheck de abajo forkea bash+grep cada intervalo;
+    # si grep queda huerfano (carrera al cortar la sesion del exec antes
+    # de que bash lo reapee) se vuelve zombie para siempre bajo el PID 1.
+    # init:true pone tini como PID 1 para que los reapee. Sin esto, los
+    # zombies se acumulan durante dias hasta que el propio healthcheck
+    # empieza a exceder su timeout de 5s (namespace de PIDs inflado) y
+    # el contenedor queda marcado unhealthy aunque la app este sana.
+    init: true
     # Jasper arma el documento entero en memoria antes de exportarlo.
     # El Excel en cambio va por streaming (SXSSF) y casi no pesa.
     mem_limit: 512m
