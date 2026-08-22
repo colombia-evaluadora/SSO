@@ -94,7 +94,7 @@ public record QueryRequest(
          * <p>Nullable: un cliente que no manda el campo cae a mapa
          * vacío (sin restricciones adicionales).
          */
-        Map<String, ParamConstraint> paramConstraints
+        Map<String, ParamConstraint> paramConstraints,
         /**
          * V110 — opt-in: {@code query-service} may cache this row's
          * {@code GET} result in Redis when {@code true}. Default
@@ -117,7 +117,7 @@ public record QueryRequest(
                         Long microserviceId) {
         this(id, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId, null,
-             ExecutionMode.SELECT, null, null, null, null);
+             ExecutionMode.SELECT, null, null, null, null, false, null);
     }
 
     /**
@@ -131,7 +131,7 @@ public record QueryRequest(
                         String pathTemplate, ExecutionMode executionMode) {
         this(id, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
-             pathTemplate, executionMode, null, null, null, null);
+             pathTemplate, executionMode, null, null, null, null, false, null);
     }
 
     /**
@@ -146,7 +146,7 @@ public record QueryRequest(
                         ExecutionMode executionMode, String outParamNames) {
         this(id, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
-             pathTemplate, executionMode, outParamNames, null, null, null);
+             pathTemplate, executionMode, outParamNames, null, null, null, false, null);
     }
 
     /**
@@ -165,13 +165,14 @@ public record QueryRequest(
         this(id, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
              pathTemplate, executionMode, outParamNames, httpMethod,
-             null, null);
+             null, null, false, null);
     }
 
     /**
-     * V81 back-compat (sin paramConstraints). Conserva la forma de
-     * 15 argumentos que los llamantes usaban antes de V81; el mapa
-     * de restricciones cae a vacío.
+     * V81/V110 back-compat (sin paramConstraints ni
+     * cacheable/cacheTtlSeconds). Conserva la forma de 15
+     * argumentos que los llamantes usaban antes de esos dos
+     * campos; ambos caen a su default (mapa vacío / sin cachear).
      */
     public QueryRequest(Long id, String uuid, String query, String type,
                         boolean publicEnd, boolean captcha,
@@ -182,25 +183,25 @@ public record QueryRequest(
         this(id, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
              pathTemplate, executionMode, outParamNames, httpMethod,
-             paramTypes, null);
+             paramTypes, null, false, null);
     }
 
     /**
      * V110 back-compat (sin cacheable/cacheTtlSeconds). Conserva la
-     * forma de 15 argumentos que los llamantes usaban antes de V110;
-     * cacheable cae a false, que es el comportamiento previo
-     * (siempre golpea la base).
+     * forma de 16 argumentos que los llamantes usaban entre V81 y
+     * V110; ambos caen a su default (sin cachear).
      */
     public QueryRequest(Long id, String uuid, String query, String type,
                         boolean publicEnd, boolean captcha,
                         String detail, String action, String style,
                         Long microserviceId, String pathTemplate,
                         ExecutionMode executionMode, String outParamNames,
-                        String httpMethod, Map<String, String> paramTypes) {
+                        String httpMethod, Map<String, String> paramTypes,
+                        Map<String, ParamConstraint> paramConstraints) {
         this(id, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
              pathTemplate, executionMode, outParamNames, httpMethod,
-             paramTypes, false, null);
+             paramTypes, paramConstraints, false, null);
     }
 
     /**

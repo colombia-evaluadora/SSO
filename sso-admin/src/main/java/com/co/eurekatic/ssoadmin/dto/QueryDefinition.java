@@ -72,8 +72,8 @@ public record QueryDefinition(
          * Vacío cuando la fila no tiene restricciones adicionales o el
          * servidor es pre-V81.
          */
-        Map<String, ParamConstraint> paramConstraints
-        /*
+        Map<String, ParamConstraint> paramConstraints,
+        /**
          * V110 — opt-in: {@code query-service} may cache this row's
          * {@code GET} result in Redis when {@code true}. Default
          * {@code false} for pre-V110 servers/tests.
@@ -87,7 +87,7 @@ public record QueryDefinition(
 ) {
     /**
      * V110 back-compat (sin cacheable/cacheTtlSeconds). Conserva la
-     * forma de 15 argumentos; cacheable cae a false, que es el
+     * forma de 16 argumentos; cacheable cae a false, que es el
      * comportamiento previo a V110 (siempre golpea la base).
      */
     public QueryDefinition(Long idQuery, String uuid, String query,
@@ -96,11 +96,12 @@ public record QueryDefinition(
                            Long microserviceId,
                            String pathTemplate, ExecutionMode executionMode,
                            String outParamNames, String httpMethod,
-                           Map<String, String> paramTypes) {
+                           Map<String, String> paramTypes,
+                           Map<String, ParamConstraint> paramConstraints) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
              pathTemplate, executionMode, outParamNames, httpMethod,
-             paramTypes, false, 60);
+             paramTypes, paramConstraints, false, 60);
     }
 
     /**
@@ -116,7 +117,7 @@ public record QueryDefinition(
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
              null, ExecutionMode.SELECT, null, null, new LinkedHashMap<>(),
-             new LinkedHashMap<>());
+             new LinkedHashMap<>(), false, 60);
     }
 
     /**
@@ -131,7 +132,7 @@ public record QueryDefinition(
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
              pathTemplate, executionMode, null, null, new LinkedHashMap<>(),
-             new LinkedHashMap<>());
+             new LinkedHashMap<>(), false, 60);
     }
 
     /**
@@ -148,7 +149,7 @@ public record QueryDefinition(
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
              pathTemplate, executionMode, outParamNames, httpMethod,
-             new LinkedHashMap<>(), new LinkedHashMap<>());
+             new LinkedHashMap<>(), new LinkedHashMap<>(), false, 60);
     }
 
     /**
@@ -167,7 +168,7 @@ public record QueryDefinition(
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
              pathTemplate, executionMode, outParamNames, httpMethod,
-             paramTypes, new LinkedHashMap<>());
+             paramTypes, new LinkedHashMap<>(), false, 60);
     }
 
     public static QueryDefinition fromEntity(Query q) {

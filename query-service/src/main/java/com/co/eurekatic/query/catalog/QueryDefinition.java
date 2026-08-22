@@ -73,8 +73,9 @@ public record QueryDefinition(
          * vacío por {@code ParamConstraintValidator} ("sin
          * restricciones adicionales").
          */
-        @JsonProperty("paramConstraints") Map<String, ParamConstraint> paramConstraints
-        /*
+        @JsonProperty("paramConstraints") Map<String, ParamConstraint> paramConstraints,
+
+        /**
          * V110 — opt-in: when {@code true}, {@code QueryPathController}
          * may serve this row's {@code GET} result from Redis instead
          * of re-running the SQL. {@code false} (the default for
@@ -90,10 +91,11 @@ public record QueryDefinition(
         @JsonProperty("cacheTtlSeconds") int cacheTtlSeconds
 ) {
     /**
-     * V110 back-compat (sin cacheable/cacheTtlSeconds) — servidores
-     * de catálogo pre-V110 no mandan estos campos; Jackson invoca
-     * este constructor cuando el JSON no trae {@code cacheable} ni
-     * {@code cacheTtlSeconds}, y cae al default seguro (no cachear).
+     * V81/V110 back-compat (sin paramConstraints ni
+     * cacheable/cacheTtlSeconds) — servidores de catálogo
+     * pre-V81/pre-V110 no mandan esos campos; Jackson invoca este
+     * constructor y cae a los defaults seguros (sin restricciones
+     * adicionales, sin cachear).
      */
     public QueryDefinition(Long idQuery, String uuid, String query,
                            String type, boolean publicEnd, boolean captcha,
@@ -103,7 +105,7 @@ public record QueryDefinition(
                            Map<String, String> paramTypes) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, pathTemplate, executionMode,
-             outParamNames, httpMethod, paramTypes, false, 60);
+             outParamNames, httpMethod, paramTypes, null, false, 60);
     }
 
     /**
@@ -117,7 +119,7 @@ public record QueryDefinition(
                            String type, boolean publicEnd, boolean captcha,
                            String detail, String action, String style) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
-             detail, action, style, null, "SELECT", null, "POST", null, null);
+             detail, action, style, null, "SELECT", null, "POST", null);
     }
 
     /**
@@ -129,7 +131,7 @@ public record QueryDefinition(
                            String detail, String action, String style,
                            String pathTemplate, String executionMode) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
-             detail, action, style, pathTemplate, executionMode, null, "POST", null, null);
+             detail, action, style, pathTemplate, executionMode, null, "POST", null);
     }
 
     /**
@@ -143,7 +145,7 @@ public record QueryDefinition(
                            String outParamNames) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, pathTemplate, executionMode,
-             outParamNames, "POST", null, null);
+             outParamNames, "POST", null);
     }
 
     /**
@@ -160,24 +162,6 @@ public record QueryDefinition(
                            String outParamNames, String httpMethod) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, pathTemplate, executionMode,
-             outParamNames, httpMethod, null, null);
-    }
-
-    /**
-     * V81 back-compat (sin paramConstraints). Conserva la forma de 14
-     * argumentos que los llamantes usaban antes de V81; el mapa de
-     * restricciones cae a {@code null}, que
-     * {@code ParamConstraintValidator} trata como "sin restricciones
-     * adicionales".
-     */
-    public QueryDefinition(Long idQuery, String uuid, String query,
-                           String type, boolean publicEnd, boolean captcha,
-                           String detail, String action, String style,
-                           String pathTemplate, String executionMode,
-                           String outParamNames, String httpMethod,
-                           Map<String, String> paramTypes) {
-        this(idQuery, uuid, query, type, publicEnd, captcha,
-             detail, action, style, pathTemplate, executionMode,
-             outParamNames, httpMethod, paramTypes, null);
+             outParamNames, httpMethod, null);
     }
 }

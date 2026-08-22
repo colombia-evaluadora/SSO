@@ -301,7 +301,8 @@ public class Query {
             this.paramConstraints.add(fresh);
         }
     }
-    /*
+
+    /**
      * V110 — opt-in flag: when {@code true}, {@code query-service}
      * may serve this row's {@code GET} result from Redis instead of
      * re-running the SQL on every request. Default {@code false}

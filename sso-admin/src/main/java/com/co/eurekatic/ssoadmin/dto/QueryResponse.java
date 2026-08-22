@@ -65,7 +65,7 @@ public record QueryResponse(
          * {@code ParamConstraint}. Empty map = sin restricciones
          * adicionales.
          */
-        Map<String, ParamConstraint> paramConstraints
+        Map<String, ParamConstraint> paramConstraints,
         /** V110 — ver {@link com.co.eurekatic.common.entity.Query#isCacheable()}. */
         boolean cacheable,
         /** V110 — ver {@link com.co.eurekatic.common.entity.Query#getCacheTtlSeconds()}. */
