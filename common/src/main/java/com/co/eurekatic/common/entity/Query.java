@@ -228,7 +228,7 @@ public class Query {
     private Map<String, String> paramTypes = new LinkedHashMap<>();
 
     /**
-     * V81 — restricciones de formato opcionales por placeholder,
+     * V70 — restricciones de formato opcionales por placeholder,
      * adicionales al tipo/obligatoriedad de {@link #paramTypes}.
      * Cada fila referencia esta query ({@code query_id} FK,
      * {@code ON DELETE CASCADE} en BD; {@code cascade=ALL,

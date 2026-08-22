@@ -1,7 +1,7 @@
 package com.co.eurekatic.common.query;
 
 /**
- * V81 — restricciones de formato opcionales para UN placeholder,
+ * V70 — restricciones de formato opcionales para UN placeholder,
  * adicionales al tipo/obligatoriedad que ya declara
  * {@code QUERY.PARAM_TYPES} (ver {@link ParamTypes}). Persistidas en
  * la tabla {@code QUERY_PARAM_CONSTRAINT} (una fila por placeholder

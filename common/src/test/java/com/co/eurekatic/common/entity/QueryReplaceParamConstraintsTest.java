@@ -7,7 +7,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * V81 — {@link Query#replaceParamConstraints}. Cubre el bug real que
+ * V70 — {@link Query#replaceParamConstraints}. Cubre el bug real que
  * motivó el diff-por-key en vez de {@code clear()} + re-add: editar
  * una query SIN cambiar sus placeholders (el caso común) no debe
  * crear entidades nuevas para keys que ya existían — sólo actualizar

@@ -66,11 +66,11 @@ public record QueryDefinition(
          */
         Map<String, String> paramTypes,
         /**
-         * V81 — restricciones de formato opcionales por placeholder,
+         * V70 — restricciones de formato opcionales por placeholder,
          * adicionales al tipo/obligatoriedad de {@code paramTypes}.
          * Wire format: {@code {"BODY.EDAD": {"onlyPositive": true, ...}}}.
          * Vacío cuando la fila no tiene restricciones adicionales o el
-         * servidor es pre-V81.
+         * servidor es pre-V70.
          */
         Map<String, ParamConstraint> paramConstraints,
         /**
@@ -153,8 +153,8 @@ public record QueryDefinition(
     }
 
     /**
-     * V81 back-compat (sin paramConstraints). Conserva la forma de 15
-     * argumentos que los llamantes usaban antes de V81; el mapa de
+     * V70 back-compat (sin paramConstraints). Conserva la forma de 15
+     * argumentos que los llamantes usaban antes de V70; el mapa de
      * restricciones cae a vacío, que {@code ParamConstraintValidator}
      * trata como "sin restricciones adicionales".
      */

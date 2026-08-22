@@ -335,7 +335,7 @@ public class QueryService {
             }
         }
 
-        // V81 — restricciones de formato adicionales (positivo, sin
+        // V70 — restricciones de formato adicionales (positivo, sin
         // decimales, máximo de cifras, longitud de texto, sólo
         // dígitos...). Se validan ANTES del bind, sobre los mismos
         // allParams que ParamBinder va a usar, y ANTES del chequeo de

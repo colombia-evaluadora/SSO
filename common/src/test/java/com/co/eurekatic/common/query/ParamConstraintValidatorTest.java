@@ -8,7 +8,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * V81 — {@link ParamConstraintValidator}. Cubre las seis reglas
+ * V70 — {@link ParamConstraintValidator}. Cubre las seis reglas
  * (numéricas: positivo, decimales, cifras máximas; texto: numérico,
  * longitud mínima/máxima) y el caso "sin restricciones declaradas".
  */

@@ -257,7 +257,7 @@ public class QueryAdminService {
         // called from create()/update() before copy(). LinkedHashMap
         // to preserve insertion order for deterministic API responses.
         q.setParamTypes(new LinkedHashMap<>(req.paramTypes()));
-        // V81: reescribe el set completo de restricciones de esta
+        // V70: reescribe el set completo de restricciones de esta
         // query en cada guardado, igual que paramTypes de arriba.
         q.replaceParamConstraints(buildParamConstraintEntities(req, q));
         // V110: opt-in cache flag + TTL. A null cacheTtlSeconds
@@ -492,7 +492,7 @@ public class QueryAdminService {
     }
 
     /**
-     * V81 — strict validation of {@code paramConstraints} at write
+     * V70 — strict validation of {@code paramConstraints} at write
      * time. Cada entrada debe:
      *
      * <ol>
