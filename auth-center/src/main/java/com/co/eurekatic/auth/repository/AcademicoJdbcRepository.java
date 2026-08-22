@@ -4,6 +4,8 @@ import com.co.eurekatic.auth.web.dto.RegisterUsuarioRequest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
+
 /**
  * Llamadas a las funciones PL/pgSQL del módulo de empleados (V51).
  * Las validaciones (obligatorios, FKs, unicidad, gate de autorización)
@@ -34,10 +36,49 @@ public class AcademicoJdbcRepository {
                 ?::bigint, ?::varchar, ?::bigint, ?::varchar)
             """;
 
+    // V71 — mismo criterio que fn_fun_crear (SQL) usa para decidir si
+    // reutilizar un TUSUARIO en vez de crear uno nuevo: mismo correo
+    // (CUENTA) O mismo (tipo de documento, identificación), solo entre
+    // activos. LIMIT 1 porque TUSUARIO ya tiene UNIQUE en ambos criterios
+    // por separado (fn_usu_crear los valida al crear), así que a lo sumo
+    // hay una fila que matchee.
+    private static final String SQL_FIND_EXISTING_ACCOUNT_EMAIL = """
+            SELECT cuenta
+              FROM academico_test.tusuario
+             WHERE active = TRUE
+               AND (upper(cuenta) = upper(?::varchar)
+                    OR (fk_tlv_tipo_documento = ?::bigint AND identificacion = ?::varchar))
+             ORDER BY pk_tusuario
+             LIMIT 1
+            """;
+
     private final JdbcTemplate jdbc;
 
     public AcademicoJdbcRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
+    }
+
+    /**
+     * ¿Ya existe un TUSUARIO activo para esta persona? Se usa ANTES de
+     * decidir si crear una fila nueva en {@code public.users} o reutilizar
+     * la existente — sin esto, {@code registerFuncionario} siempre creaba
+     * una cuenta nueva (o rechazaba con 409 si el correo ya estaba
+     * tomado), sin dejarle a {@code fn_fun_crear} (que sí sabe reutilizar
+     * el TUSUARIO) la oportunidad de hacerlo. Caso típico: vincular como
+     * rector/secretaria a alguien que ya es funcionario en otro
+     * establecimiento.
+     *
+     * @return la {@code CUENTA} (correo) real con la que esa persona ya
+     *         está registrada — no necesariamente {@code r.email()}, que
+     *         puede venir distinto si el formulario lo dejó desactualizado
+     *         — o {@code null} si no hay ningún TUSUARIO que coincida.
+     */
+    public String findExistingAccountEmail(RegisterUsuarioRequest r) {
+        List<String> rows = jdbc.query(
+                SQL_FIND_EXISTING_ACCOUNT_EMAIL,
+                (rs, rowNum) -> rs.getString("cuenta"),
+                r.email(), r.fkTlvTipoDocumento(), r.identificacion());
+        return rows.isEmpty() ? null : rows.get(0);
     }
 
     /** @return PK_TUSUARIO del usuario creado. */

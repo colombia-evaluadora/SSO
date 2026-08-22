@@ -11,7 +11,11 @@ import {
   useMicroservices,
   useUpdateMicroservice,
 } from "@/hooks/useMicroservices";
-import { useQueryServiceStatus, useRestartQueryService } from "@/hooks/useQueryServices";
+import {
+  useQueryServiceStatus,
+  useRecreateQueryService,
+  useRestartQueryService,
+} from "@/hooks/useQueryServices";
 import type { MicroserviceResponse } from "@/api/types";
 import type { MicroserviceFormValues } from "@/schemas";
 import { LogsModal } from "./LogsModal";
@@ -38,12 +42,14 @@ export function QueryServicesSection() {
   const updateMs = useUpdateMicroservice();
   const deleteMs = useDeleteMicroservice();
   const restart = useRestartQueryService();
+  const recreate = useRecreateQueryService();
   const toast = useToast();
 
   const [editing, setEditing] = useState<MicroserviceResponse | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<MicroserviceResponse | null>(null);
   const [logsFor, setLogsFor] = useState<MicroserviceResponse | null>(null);
+  const [recreating, setRecreating] = useState<MicroserviceResponse | null>(null);
   const [search, setSearch] = useState("");
 
   const rows = useMemo(
@@ -85,6 +91,32 @@ export function QueryServicesSection() {
         `No se pudo reiniciar ${m.instanceName ?? m.serviceId}: ${(err as Error).message}`,
         "error",
       );
+    }
+  }
+
+  async function confirmRecreate() {
+    if (!recreating) return;
+    // Re-entrancy guard: `Button`'s `disabled` only lands on the NEXT
+    // render after `recreate.isPending` flips, and this is a
+    // destructive operation (deletes the running container before
+    // recreating it) — a second click/retry inside that gap must be
+    // a no-op, not a second `deprovision + provision` racing the
+    // first against the same container name.
+    if (recreate.isPending) return;
+    const m = recreating;
+    try {
+      await recreate.mutateAsync(m.id);
+      toast.show(
+        `Contenedor de ${m.instanceName ?? m.serviceId} recreado con la imagen actual`,
+        "success",
+      );
+    } catch (err) {
+      toast.show(
+        `No se pudo recrear ${m.instanceName ?? m.serviceId}: ${(err as Error).message}`,
+        "error",
+      );
+    } finally {
+      setRecreating(null);
     }
   }
 
@@ -146,6 +178,15 @@ export function QueryServicesSection() {
               onClick={() => handleRestart(m)}
             >
               Reiniciar
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setRecreating(m)}
+              data-testid={`recreate-${m.id}`}
+              title="Borra el contenedor y lo vuelve a crear con la imagen query-service actual (a diferencia de Reiniciar, que reutiliza la imagen vieja del contenedor)"
+            >
+              Recrear
             </Button>
             <Button
               size="sm"
@@ -255,6 +296,36 @@ export function QueryServicesSection() {
       >
         <p className="text-sm text-slate-600">
           Esto también des-aprovisiona el contenedor asociado vía el sidecar.
+        </p>
+      </Modal>
+
+      <Modal
+        open={recreating !== null}
+        onClose={() => setRecreating(null)}
+        title="Recrear contenedor"
+        description={`¿Recrear el contenedor de "${recreating?.instanceName ?? recreating?.serviceId}" con la imagen query-service actual?`}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRecreating(null)}>
+              Cancelar
+            </Button>
+            <Button
+              variant="primary"
+              loading={recreate.isPending}
+              onClick={() => void confirmRecreate()}
+              data-testid="confirm-recreate"
+            >
+              Recrear
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-slate-600">
+          Borra el contenedor actual y levanta uno nuevo con la misma configuración de la fila,
+          tomando la imagen <code>query-service</code> que el provisioner tenga disponible ahora.
+          Útil después de reconstruir/redesplegar la imagen — <code>Reiniciar</code> por sí solo
+          reutiliza el contenedor viejo y no recoge el cambio. Hay una breve interrupción mientras
+          el contenedor nuevo arranca y se registra en Eureka.
         </p>
       </Modal>
 

@@ -70,19 +70,65 @@ public class FuncionarioRegistrationService {
         return new RegisterResponse(saved.getId(), pkTusuario, null, saved.getEmail());
     }
 
+    /**
+     * V71 — antes esto SIEMPRE creaba una fila nueva en {@code public.users}
+     * (o rechazaba con 409 si el correo ya estaba tomado ahí), sin dejarle
+     * a {@code fn_fun_crear} (que sí sabe reutilizar un TUSUARIO existente
+     * por correo o por documento) la oportunidad de hacerlo. El caso típico
+     * que se rompía: vincular como rector/secretaria a alguien que ya es
+     * funcionario en otro establecimiento — el correo real de esa persona
+     * siempre "ya existía", así que el registro fallaba antes de que la
+     * capa SQL pudiera reutilizar su cuenta.
+     *
+     * <p>Ahora se pregunta primero si ya hay un TUSUARIO activo para esta
+     * persona (mismo correo O mismo documento — {@link
+     * AcademicoJdbcRepository#findExistingAccountEmail}). Si lo hay, se
+     * reutiliza la cuenta real de {@code public.users} (por la CUENTA que
+     * ya tiene el TUSUARIO, no necesariamente {@code req.email()}) en vez
+     * de crear una nueva — y si esa cuenta de {@code public.users} no
+     * existe todavía (TUSUARIO migrado que nunca tuvo login, caso real en
+     * los datos históricos), se le provisiona una con la CUENTA correcta.
+     * Solo si la persona es genuinamente nueva se valida la contraseña y
+     * se aplica el chequeo de correo duplicado de siempre.
+     */
     @Transactional
     public RegisterResponse registerFuncionario(RegisterUsuarioRequest req, Authentication auth) {
         long callerId = resolveCallerId(auth);
-        PasswordPolicy.validate(req.password());
-        if (userRepository.existsByEmail(req.email())) {
-            throw new EmailAlreadyExistsException(req.email());
-        }
+        String existingAccountEmail = academicoJdbc.findExistingAccountEmail(req);
 
-        String hashed = passwordEncoder.encode(req.password());
-        User saved = userRepository.save(newUser(req, hashed));
+        User saved;
+        String hashed;
+        if (existingAccountEmail != null) {
+            Optional<User> existingUser = userRepository.findByEmail(existingAccountEmail);
+            if (existingUser.isPresent()) {
+                // Cuenta ya utilizable: no se toca su contraseña ni se
+                // vuelve a validar la que venga en el request (fn_fun_crear
+                // no la va a usar de todas formas, ver más abajo).
+                saved = existingUser.get();
+                hashed = saved.getPassword();
+            } else {
+                // TUSUARIO existente pero sin fila en public.users (datos
+                // migrados que nunca tuvieron login) — se provisiona una,
+                // con la CUENTA real del TUSUARIO, no con req.email() (que
+                // puede venir distinto si el formulario quedó desactualizado).
+                PasswordPolicy.validate(req.password());
+                hashed = passwordEncoder.encode(req.password());
+                saved = userRepository.save(newUser(existingAccountEmail, req, hashed));
+            }
+        } else {
+            PasswordPolicy.validate(req.password());
+            if (userRepository.existsByEmail(req.email())) {
+                throw new EmailAlreadyExistsException(req.email());
+            }
+            hashed = passwordEncoder.encode(req.password());
+            saved = userRepository.save(newUser(req.email(), req, hashed));
+        }
 
         // fk_tmunicipio_expedicion ya no se pide aquí (V62): queda NULL
         // en TFUNCIONARIO y se completa después vía fn_fun_actualizar.
+        // `hashed` solo se usa de verdad si fn_fun_crear termina creando un
+        // TUSUARIO nuevo (fn_usu_crear) — si reutiliza uno existente por
+        // correo/documento, el parámetro se ignora del lado SQL.
         applyAuditContext(callerId, "Alta de funcionario " + req.email(), req);
         long pkFuncionario = academicoJdbc.callFunCrear(callerId, req, hashed);
         // fn_fun_crear solo retorna PK_TFUNCIONARIO. Resolvemos PK_TUSUARIO
@@ -93,8 +139,12 @@ public class FuncionarioRegistrationService {
     }
 
     private User newUser(RegisterUsuarioRequest req, String hashedPwd) {
+        return newUser(req.email(), req, hashedPwd);
+    }
+
+    private User newUser(String email, RegisterUsuarioRequest req, String hashedPwd) {
         User user = new User();
-        user.setEmail(req.email());
+        user.setEmail(email);
         user.setFullName(req.fullName());
         user.setPassword(hashedPwd);
         user.setActive(true);

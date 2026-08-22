@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -128,6 +129,31 @@ public class GlobalExceptionHandler {
             case INVALID_SPEC        -> HttpStatus.BAD_REQUEST;
         };
         return error(status, ex.getCode().name(), ex.getMessage());
+    }
+
+    /**
+     * {@code GET /microservice/{id}/container/logs} declara
+     * {@code produces = TEXT_PLAIN_VALUE} (ver
+     * {@code MicroserviceController.containerLogs}) — el cuerpo son
+     * líneas de log crudas, no JSON. Un caller que manda
+     * {@code Accept: application/json} sin más (como el
+     * {@code apiClient} genérico del admin-ui, que lo fija por
+     * defecto en TODAS sus llamadas) no calza con ningún media type
+     * que el handler pueda producir, y Spring lanza esta excepción
+     * ANTES de llegar al método — sin este handler explícito caía
+     * al catch-all de abajo y salía como un 500 opaco
+     * "Ocurrió un error inesperado", que no le decía nada al
+     * cliente sobre qué corregir. Mapeado a 406, el código HTTP
+     * correcto para "no puedo producir lo que aceptas".
+     */
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<Map<String, Object>> handleMediaTypeNotAcceptable(
+            HttpMediaTypeNotAcceptableException ex) {
+        String produced = ex.getSupportedMediaTypes().stream()
+                .map(Object::toString)
+                .collect(Collectors.joining(", "));
+        return error(HttpStatus.NOT_ACCEPTABLE, "NOT_ACCEPTABLE",
+                "El servidor sólo puede producir: " + produced);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

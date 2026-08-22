@@ -115,9 +115,9 @@ class QueryPathRegistryMatchTest {
      */
     @Test
     void literalTemplateWinsOverShadowingWildcardRegardlessOfInsertionOrder() {
-        Map<QueryPathRegistry.RouteKey, String> table = new LinkedHashMap<>();
-        table.put(new QueryPathRegistry.RouteKey("PUT", "/grados/:ID"), "uuid-wildcard");
-        table.put(new QueryPathRegistry.RouteKey("PUT", "/grados/eliminacion-masiva"), "uuid-literal");
+        Map<QueryPathRegistry.RouteKey, QueryPathRegistry.RouteEntry> table = new LinkedHashMap<>();
+        table.put(new QueryPathRegistry.RouteKey("PUT", "/grados/:ID"), new QueryPathRegistry.RouteEntry("uuid-wildcard", false, 60));
+        table.put(new QueryPathRegistry.RouteKey("PUT", "/grados/eliminacion-masiva"), new QueryPathRegistry.RouteEntry("uuid-literal", false, 60));
 
         var match = QueryPathRegistry.matchAgainst(table, "PUT", "/grados/eliminacion-masiva");
 
@@ -129,9 +129,9 @@ class QueryPathRegistryMatchTest {
      *  que el resultado no depende del orden de inserción. */
     @Test
     void literalTemplateWinsOverShadowingWildcardEvenWhenInsertedFirst() {
-        Map<QueryPathRegistry.RouteKey, String> table = new LinkedHashMap<>();
-        table.put(new QueryPathRegistry.RouteKey("PUT", "/establecimientos/sedes/bulk-delete"), "uuid-literal");
-        table.put(new QueryPathRegistry.RouteKey("PUT", "/establecimientos/sedes/:ID"), "uuid-wildcard");
+        Map<QueryPathRegistry.RouteKey, QueryPathRegistry.RouteEntry> table = new LinkedHashMap<>();
+        table.put(new QueryPathRegistry.RouteKey("PUT", "/establecimientos/sedes/bulk-delete"), new QueryPathRegistry.RouteEntry("uuid-literal", false, 60));
+        table.put(new QueryPathRegistry.RouteKey("PUT", "/establecimientos/sedes/:ID"), new QueryPathRegistry.RouteEntry("uuid-wildcard", false, 60));
 
         var match = QueryPathRegistry.matchAgainst(table, "PUT", "/establecimientos/sedes/bulk-delete");
 
@@ -143,9 +143,9 @@ class QueryPathRegistryMatchTest {
      *  colisionan con ningún literal registrado. */
     @Test
     void wildcardStillMatchesRealIds() {
-        Map<QueryPathRegistry.RouteKey, String> table = new LinkedHashMap<>();
-        table.put(new QueryPathRegistry.RouteKey("PUT", "/grados/:ID"), "uuid-wildcard");
-        table.put(new QueryPathRegistry.RouteKey("PUT", "/grados/eliminacion-masiva"), "uuid-literal");
+        Map<QueryPathRegistry.RouteKey, QueryPathRegistry.RouteEntry> table = new LinkedHashMap<>();
+        table.put(new QueryPathRegistry.RouteKey("PUT", "/grados/:ID"), new QueryPathRegistry.RouteEntry("uuid-wildcard", false, 60));
+        table.put(new QueryPathRegistry.RouteKey("PUT", "/grados/eliminacion-masiva"), new QueryPathRegistry.RouteEntry("uuid-literal", false, 60));
 
         var match = QueryPathRegistry.matchAgainst(table, "PUT", "/grados/1750");
 
@@ -163,9 +163,9 @@ class QueryPathRegistryMatchTest {
     void tiesFallBackToInsertionOrder() {
         // Ambas plantillas matchean "/a/b/c" con exactamente 1
         // variable extraída — empate genuino de especificidad.
-        Map<QueryPathRegistry.RouteKey, String> table = new LinkedHashMap<>();
-        table.put(new QueryPathRegistry.RouteKey("GET", "/a/:X/c"), "uuid-first");
-        table.put(new QueryPathRegistry.RouteKey("GET", "/a/b/:Y"), "uuid-second");
+        Map<QueryPathRegistry.RouteKey, QueryPathRegistry.RouteEntry> table = new LinkedHashMap<>();
+        table.put(new QueryPathRegistry.RouteKey("GET", "/a/:X/c"), new QueryPathRegistry.RouteEntry("uuid-first", false, 60));
+        table.put(new QueryPathRegistry.RouteKey("GET", "/a/b/:Y"), new QueryPathRegistry.RouteEntry("uuid-second", false, 60));
 
         var match = QueryPathRegistry.matchAgainst(table, "GET", "/a/b/c");
 
@@ -175,8 +175,8 @@ class QueryPathRegistryMatchTest {
 
     @Test
     void noMatchReturnsEmpty() {
-        Map<QueryPathRegistry.RouteKey, String> table = new LinkedHashMap<>();
-        table.put(new QueryPathRegistry.RouteKey("GET", "/grados/:ID"), "uuid-wildcard");
+        Map<QueryPathRegistry.RouteKey, QueryPathRegistry.RouteEntry> table = new LinkedHashMap<>();
+        table.put(new QueryPathRegistry.RouteKey("GET", "/grados/:ID"), new QueryPathRegistry.RouteEntry("uuid-wildcard", false, 60));
 
         assertThat(QueryPathRegistry.matchAgainst(table, "PUT", "/grados/1750")).isEmpty();
         assertThat(QueryPathRegistry.matchAgainst(table, "GET", "/otra/cosa")).isEmpty();
