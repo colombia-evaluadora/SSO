@@ -762,6 +762,17 @@ services:
   # QUERY_DS_URL).
   # ===========================================================================
   query-service-postgres:
+    # profiles: mismo criterio que hello-service (ver ese bloque más
+    # arriba) — es una instancia de REFERENCIA del patrón
+    # instance-mode documentado arriba (dos backends Postgres de
+    # ejemplo), no tráfico real: eval-col y las instancias que
+    # admin-ui aprovisiona vía el provisioner son las que sirven
+    # consultas de verdad. Nada en este archivo la depends_on.
+    # Gateada tras `diagnostics` para no prenderla siempre — mem_limit
+    # 384m + la de -analytics de abajo son ~768MB que no hacen falta
+    # si nadie está probando el patrón instance-mode. Sigue
+    # levantable a mano con `docker compose up -d query-service-postgres`.
+    profiles: ["diagnostics"]
     build:
       context: .
       dockerfile: query-service/Dockerfile
@@ -844,6 +855,11 @@ services:
   # "SQLServer", "analytics-shard", etc., provisioned by
   # admin-ui when a new backing store is registered).
   query-service-postgres-analytics:
+    # profiles: misma instancia de REFERENCIA que
+    # query-service-postgres arriba (segundo backend de ejemplo), no
+    # tráfico real. Gateada tras `diagnostics` — ver comentario
+    # completo arriba.
+    profiles: ["diagnostics"]
     build:
       context: .
       dockerfile: query-service/Dockerfile
