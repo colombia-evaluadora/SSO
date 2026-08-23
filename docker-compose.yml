@@ -808,18 +808,16 @@ services:
   # QUERY_DS_URL).
   # ===========================================================================
   query-service-postgres:
-    # Mismo criterio que hello-service: es una instancia de
-    # REFERENCIA del patrón instance-mode de arriba (dos backends
-    # Postgres de ejemplo), no tráfico real de producción --
-    # audit-clickhouse y las instancias reales que admin-ui
-    # aprovisiona son las que sirven consultas de verdad. Nada en
-    # este archivo la depends_on (ver grep de esta sección). Detrás
-    # de `diagnostics` para no prenderla siempre en dev/test.
-    # .env.example trae COMPOSE_PROFILES=diagnostics por defecto, así
-    # que dev sigue levantándola como parte del stack completo; el
-    # .env del servidor de test NO define esa var a propósito, así
-    # que ahí queda apagada y ahorra RAM. Sigue levantable a mano con
-    # `docker compose up -d query-service-postgres`.
+    # profiles: mismo criterio que hello-service (ver ese bloque más
+    # arriba) — es una instancia de REFERENCIA del patrón
+    # instance-mode documentado arriba (dos backends Postgres de
+    # ejemplo), no tráfico real: eval-col y las instancias que
+    # admin-ui aprovisiona vía el provisioner son las que sirven
+    # consultas de verdad. Nada en este archivo la depends_on.
+    # Gateada tras `diagnostics` para no prenderla siempre — mem_limit
+    # 384m + la de -analytics de abajo son ~768MB que no hacen falta
+    # si nadie está probando el patrón instance-mode. Sigue
+    # levantable a mano con `docker compose up -d query-service-postgres`.
     profiles: ["diagnostics"]
     build:
       context: .
@@ -903,9 +901,10 @@ services:
   # "SQLServer", "analytics-shard", etc., provisioned by
   # admin-ui when a new backing store is registered).
   query-service-postgres-analytics:
-    # Mismo criterio que query-service-postgres arriba: instancia de
-    # REFERENCIA (segundo backend de ejemplo), no tráfico real.
-    # Detrás de `diagnostics` -- ver comentario completo arriba.
+    # profiles: misma instancia de REFERENCIA que
+    # query-service-postgres arriba (segundo backend de ejemplo), no
+    # tráfico real. Gateada tras `diagnostics` — ver comentario
+    # completo arriba.
     profiles: ["diagnostics"]
     build:
       context: .
