@@ -1304,63 +1304,41 @@ COMMENT ON FUNCTION academico_test.fn_est_soft_delete(BIGINT, BIGINT)
 -- fn_est_soft_delete_bulk
 --   Variante bulk de fn_est_soft_delete: en lugar de un solo PK_ESTABLE-
 --   CIMIENTO recibe un BIGINT[] de PKs y les aplica soft delete (con
---   cascade a sus sedes via fn_sed_soft_delete) a todos en una sola
---   transaccion PL/pgSQL.
+--   cascade a sus sedes via fn_sed_soft_delete).
 --
---   Semantica: ATOMICO TODO-O-NADA. Si CUALQUIER PK del array falla
---   (no existe / ya estaba inactivo / el usuario no pasa el gate de
---   super-admin) la operacion se revierte entera via RAISE EXCEPTION;
---   ningun EE queda parcialmente procesado. Esta decision mantiene el
---   mismo contrato transaccional que fn_est_soft_delete / fn_sed_soft_
---   delete. Si el caller necesita tolerancia a fallos por fila, debe
---   llamar al single N veces y manejar las excepciones por su cuenta.
+--   REV: mismo patron que fn_fun_baja_establecimiento_bulk -- cada PK
+--   corre en su propio savepoint (BEGIN/EXCEPTION), asi que un fallo en
+--   una fila NO aborta el resto ni deshace lo que ya se dio de baja.
+--   Antes era atomico todo-o-nada (un solo FOREACH sin capturar
+--   excepciones, devolvia un contador, y el gate de super-admin se
+--   validaba una sola vez al inicio); ahora devuelve una fila
+--   (pk_establecimiento, status) por cada PK, y el gate se revalida por
+--   fila (delegado en fn_est_soft_delete).
 --
---   Por cada PK del array se valida el gate de super-admin (via
---   fn_puede_afectar_establecimiento) y luego se delega en
---   fn_est_soft_delete(p_pk_usuario_solicitante, p_pk_establecimiento),
---   que es la fuente de verdad de la cascade EE -> sedes -> usuarios
---   de sede / niveles. Asi, cualquier cambio futuro en la cascade del
---   single se refleja automaticamente aqui.
+--   Por cada PK del array se delega en fn_est_soft_delete(p_pk_usuario_
+--   solicitante, p_pk_establecimiento), que es la fuente de verdad de la
+--   cascade EE -> sedes -> usuarios de sede / niveles. Asi, cualquier
+--   cambio futuro en la cascade del single se refleja automaticamente aqui.
 --
---   Validaciones previas (antes de tocar nada):
---     * p_pk_usuario_solicitante > 0 (22023).
---     * p_pks no nulo, no vacio (22023).
---     * Sin duplicados (22023 con HINT) — si llegan duplicados, la
---       delegation fallaria con 'ya inactivo' en la segunda pasada y
---       oscureceria el error real; lo detectamos arriba para mensaje
---       claro.
---     * Todos los PKs > 0 (22023).
---     * Gate de super-admin para el solicitante (42501). Se valida UNA
---       sola vez al inicio (no por cada EE): si no pasa, se aborta sin
---       tocar nada. Es consistente con que fn_est_soft_delete aplica el
---       mismo gate, y evita gastar trabajo en un caller que claramente
---       no tiene permiso.
---
---   Retorna: BIGINT con el conteo de EE efectivamente dados de baja
---   (= cardinalidad del array, en el caso exitoso).
---
---   Excepciones:
---     SQLSTATE '22023' — Parametros de entrada invalidos (solicitante
---                        <= 0, p_pks nulo/vacio/con duplicados/con
---                        elementos <= 0).
---     SQLSTATE '42501' — El usuario no es super-admin.
---     SQLSTATE 'P0002' — Alguna EE del array no existe (propagado del
---                        single).
---     SQLSTATE '22023' — Alguna EE del array ya estaba inactiva (propa-
---                        gado del single).
---     SQLSTATE 'P0002'/'22023'/'42501' propagados desde fn_sed_soft_delete
---                        si una sede de la cascade falla.
+--   Retorna: TABLE(pk_establecimiento BIGINT, status VARCHAR) -- una fila
+--   por cada PK recibido (deduplicados), con status:
+--     'eliminado'              — baja exitosa.
+--     'error:no_encontrado'    — P0002, no existe ese EE.
+--     'error:sin_permiso'      — 42501, el usuario no es super-admin.
+--     'error:ya_inactivo'      — 22023, ya estaba inactivo.
+--     'error:<mensaje>'        — cualquier otra excepcion no prevista
+--                                (incluye fallas propagadas desde la
+--                                cascade a fn_sed_soft_delete).
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_est_soft_delete_bulk(
     p_pk_usuario_solicitante  BIGINT,
     p_pks                     BIGINT[]
 )
-RETURNS BIGINT
+RETURNS TABLE(pk_establecimiento BIGINT, status VARCHAR)
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_pk         BIGINT;
-    v_procesados BIGINT := 0;
+    v_pk BIGINT;
 BEGIN
     -- -----------------------------------------------------------------
     -- 0. Validacion de parametros de entrada.
@@ -1375,50 +1353,37 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    -- Duplicados: si el caller envia el mismo PK dos veces, el primer
-    -- PERFORM lo da de baja y el segundo cae con 'ya inactivo' (22023
-    -- propagado), oscureciendo el problema real. Lo detectamos arriba.
-    IF (SELECT COUNT(*) FROM (SELECT unnest(p_pks)) AS x) <> CARDINALITY(p_pks) THEN
-        RAISE EXCEPTION 'p_pks contiene PKs duplicados'
-            USING ERRCODE = '22023',
-                  HINT    = 'Elimine duplicados antes de invocar la funcion';
-    END IF;
-
-    IF EXISTS (SELECT 1 FROM unnest(p_pks) AS pk WHERE pk IS NULL OR pk <= 0) THEN
-        RAISE EXCEPTION 'p_pks contiene elementos nulos o <= 0'
-            USING ERRCODE = '22023';
-    END IF;
-
-    -- -----------------------------------------------------------------
-    -- 1. Gate de super-admin (mismo patron que fn_est_soft_delete).
-    --    Se valida UNA sola vez al inicio: si no pasa, no tocamos nada.
-    -- -----------------------------------------------------------------
-    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
-
-    -- -----------------------------------------------------------------
-    -- 2. Bulk soft delete delegando en el single.
-    --    Cualquier excepcion (P0002, 22023, 42501 desde la cascade de
-    --    sedes) aborta la transaccion y deshace TODAS las bajas ya
-    --    aplicadas.
-    -- -----------------------------------------------------------------
-    FOREACH v_pk IN ARRAY p_pks
+    FOR v_pk IN SELECT DISTINCT x FROM unnest(p_pks) AS x ORDER BY x
     LOOP
-        PERFORM academico_test.fn_est_soft_delete(p_pk_usuario_solicitante, v_pk);
-        v_procesados := v_procesados + 1;
+        BEGIN
+            PERFORM academico_test.fn_est_soft_delete(p_pk_usuario_solicitante, v_pk);
+            pk_establecimiento := v_pk;
+            status             := 'eliminado';
+            RETURN NEXT;
+        EXCEPTION
+            WHEN SQLSTATE 'P0002' THEN
+                pk_establecimiento := v_pk;
+                status             := 'error:no_encontrado';
+                RETURN NEXT;
+            WHEN SQLSTATE '42501' THEN
+                pk_establecimiento := v_pk;
+                status             := 'error:sin_permiso';
+                RETURN NEXT;
+            WHEN SQLSTATE '22023' THEN
+                pk_establecimiento := v_pk;
+                status             := 'error:ya_inactivo';
+                RETURN NEXT;
+            WHEN OTHERS THEN
+                pk_establecimiento := v_pk;
+                status             := 'error:' || SQLERRM;
+                RETURN NEXT;
+        END;
     END LOOP;
-
-    RAISE NOTICE 'Soft delete bulk TESTABLECIMIENTO: autor=%, pks=% (procesados=%)',
-        p_pk_usuario_solicitante, p_pks, v_procesados;
-
-    RETURN v_procesados;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_est_soft_delete_bulk(BIGINT, BIGINT[])
-    IS 'Variante bulk de fn_est_soft_delete. Recibe un BIGINT[] de PK_ESTABLECIMIENTO y aplica soft delete (con cascade a sedes -> usuarios de sede / niveles via fn_sed_soft_delete) en una sola transaccion. Semantica ATOMICA: si cualquier PK falla (no existe / ya inactivo / el usuario no pasa el gate de super-admin), la operacion se revierte entera via RAISE EXCEPTION; ningun EE queda parcialmente procesado. Validaciones previas (22023): p_pk_usuario_solicitante > 0, p_pks no nulo ni vacio, sin duplicados, todos los elementos > 0. Gate de super-admin validado una sola vez al inicio (42501). Retorna el conteo de EE efectivamente dados de baja (= cardinalidad de p_pks en caso exitoso). p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que el resto de funciones del esquema).';
+    IS 'REV: baja logica en lote de establecimientos, una fila (pk_establecimiento, status) por PK -- cada uno en su propio savepoint via fn_est_soft_delete, asi que un fallo en uno no aborta ni deshace el resto (antes era todo-o-nada, devolvia un solo total_procesados, con el gate de super-admin validado una sola vez al inicio). status: eliminado | error:no_encontrado (P0002) | error:sin_permiso (42501) | error:ya_inactivo (22023) | error:<mensaje> para cualquier otra excepcion. Mismo patron que fn_fun_baja_establecimiento_bulk.';
 
 
 -- ---------------------------------------------------------------------------
@@ -1531,6 +1496,10 @@ DECLARE
     c_fk_tlv_jornada_defecto CONSTANT BIGINT := 51900;
     c_fk_trol_rector         CONSTANT BIGINT := 7;
     c_fk_trol_secretaria     CONSTANT BIGINT := 9;
+    -- REV5 -- PK_TSEDE_USUARIO del permiso por defecto que hay que quitar
+    -- a quien PIERDE el puesto de rector/secretaria (reusado entre los dos
+    -- bloques de abajo).
+    v_pk_permiso_a_quitar    BIGINT;
 BEGIN
     -- -----------------------------------------------------------------
     -- 0. Validacion de parametros clave (obligatorios por firma).
@@ -2085,6 +2054,54 @@ BEGIN
     END IF;
 
     -- -----------------------------------------------------------------
+    -- 3d. REV5 -- si el rector/secretaria cambio a alguien NUEVO, se le
+    --     quita al que PERDIO el puesto su permiso por defecto (mismo rol,
+    --     misma sede "por defecto" de 3c) -- decision de negocio: un
+    --     rector/secretaria reemplazado deja de figurar con ese rol en esa
+    --     sede, no se queda "duplicado" con el nuevo. Solo toca el permiso
+    --     puntual (fk_rol + fk_sede exactos, via fn_sede_usuario_soft_delete
+    --     por PK_TSEDE_USUARIO) -- nunca los demas permisos que el saliente
+    --     pueda tener en otras sedes/roles, esos no se tocan.
+    -- -----------------------------------------------------------------
+    IF v_pk_sede_defecto IS NOT NULL
+       AND p_FK_TFUNCIONARIO_RECTOR IS NOT NULL
+       AND p_FK_TFUNCIONARIO_RECTOR IS DISTINCT FROM v_old_rector
+       AND v_old_rector IS NOT NULL
+    THEN
+        SELECT su.PK_TSEDE_USUARIO INTO v_pk_permiso_a_quitar
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TFUNCIONARIO f ON f.FK_TUSUARIO = su.FK_TUSUARIO
+         WHERE f.PK_TFUNCIONARIO = v_old_rector
+           AND su.FK_TSEDE = v_pk_sede_defecto
+           AND su.FK_TROL  = c_fk_trol_rector
+           AND su.ACTIVE   = TRUE
+         LIMIT 1;
+
+        IF v_pk_permiso_a_quitar IS NOT NULL THEN
+            PERFORM academico_test.fn_sede_usuario_soft_delete(v_pk_permiso_a_quitar, p_pk_usuario_solicitante);
+        END IF;
+    END IF;
+
+    IF v_pk_sede_defecto IS NOT NULL
+       AND p_FK_TFUNCIONARIO_SECRETARIA IS NOT NULL
+       AND p_FK_TFUNCIONARIO_SECRETARIA IS DISTINCT FROM v_old_secretaria
+       AND v_old_secretaria IS NOT NULL
+    THEN
+        SELECT su.PK_TSEDE_USUARIO INTO v_pk_permiso_a_quitar
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TFUNCIONARIO f ON f.FK_TUSUARIO = su.FK_TUSUARIO
+         WHERE f.PK_TFUNCIONARIO = v_old_secretaria
+           AND su.FK_TSEDE = v_pk_sede_defecto
+           AND su.FK_TROL  = c_fk_trol_secretaria
+           AND su.ACTIVE   = TRUE
+         LIMIT 1;
+
+        IF v_pk_permiso_a_quitar IS NOT NULL THEN
+            PERFORM academico_test.fn_sede_usuario_soft_delete(v_pk_permiso_a_quitar, p_pk_usuario_solicitante);
+        END IF;
+    END IF;
+
+    -- -----------------------------------------------------------------
     -- 4. Reporte y retorno.
     -- -----------------------------------------------------------------
     RAISE NOTICE 'fn_est_actualizar: TESTABLECIMIENTO=% procesado por usuario=%', p_pk_establecimiento, p_pk_usuario_solicitante;
@@ -2108,4 +2125,4 @@ COMMENT ON FUNCTION academico_test.fn_est_actualizar(
     BIGINT, BIGINT, academico_test.bool_sn,
     BIGINT, BIGINT, BIGINT, BIGINT,
     BIGINT
-) IS 'Actualizacion parcial (estilo PATCH) de TESTABLECIMIENTO. Cada parametro NULL no modifica su columna; cada valor no NULL se aplica. NIT y CODIGO son modificables: si se envian, se validan contra el resto de EE activos (excluyendo el propio PK) y se aplican. Solo opera sobre EE activos. Actualiza MODIFIED_BY/MODIFIED_AT solo si hay cambios. Gate de autorizacion compuesto: (a) el usuario pasa fn_puede_afectar_establecimiento (roles 1-3) => puede modificar cualquier EE activo; (b) en caso contrario, se valida que el FK_TFUNCIONARIO_RECTOR del EE apunte a un TFUNCIONARIO activo cuyo FK_TUSUARIO coincida con p_pk_usuario_solicitante. Cualquier otro caso => 42501. p_pk_usuario_solicitante y p_pk_establecimiento van al inicio sin DEFAULT (obligatorios, mismo patron que V52). Retorna PK_ESTABLECIMIENTO. V70: si FK_TFUNCIONARIO_RECTOR/SECRETARIA cambia, sincroniza al que gana Y al que pierde el rol en public.role_users (fn_sincronizar_rol_publico). REV4: ademas, si el rector/secretaria cambia a alguien NUEVO (no nulo, distinto del anterior), le crea un permiso TSEDE_USUARIO por defecto (via fn_fun_permisos_actualizar) en la sede cuyo NOMBRE/CODIGO coincide con el EE (la "sede por defecto" que arma fn_est_crear) -- rector con FK_TROL=7, secretaria con FK_TROL=9, jornada "Completa" (51900); si esa sede no existe (EE viejo, sede renombrada/borrada) no crea nada. Con guarda anti-duplicados: si el funcionario ya tiene un permiso activo con ese rol en esa sede, no crea uno igual.';
+) IS 'Actualizacion parcial (estilo PATCH) de TESTABLECIMIENTO. Cada parametro NULL no modifica su columna; cada valor no NULL se aplica. NIT y CODIGO son modificables: si se envian, se validan contra el resto de EE activos (excluyendo el propio PK) y se aplican. Solo opera sobre EE activos. Actualiza MODIFIED_BY/MODIFIED_AT solo si hay cambios. Gate de autorizacion compuesto: (a) el usuario pasa fn_puede_afectar_establecimiento (roles 1-3) => puede modificar cualquier EE activo; (b) en caso contrario, se valida que el FK_TFUNCIONARIO_RECTOR del EE apunte a un TFUNCIONARIO activo cuyo FK_TUSUARIO coincida con p_pk_usuario_solicitante. Cualquier otro caso => 42501. p_pk_usuario_solicitante y p_pk_establecimiento van al inicio sin DEFAULT (obligatorios, mismo patron que V52). Retorna PK_ESTABLECIMIENTO. V70: si FK_TFUNCIONARIO_RECTOR/SECRETARIA cambia, sincroniza al que gana Y al que pierde el rol en public.role_users (fn_sincronizar_rol_publico). REV4: ademas, si el rector/secretaria cambia a alguien NUEVO (no nulo, distinto del anterior), le crea un permiso TSEDE_USUARIO por defecto (via fn_fun_permisos_actualizar) en la sede cuyo NOMBRE/CODIGO coincide con el EE (la "sede por defecto" que arma fn_est_crear) -- rector con FK_TROL=7, secretaria con FK_TROL=9, jornada "Completa" (51900); si esa sede no existe (EE viejo, sede renombrada/borrada) no crea nada. Con guarda anti-duplicados: si el funcionario ya tiene un permiso activo con ese rol en esa sede, no crea uno igual. REV5: ademas, al que PIERDE el puesto de rector/secretaria (habia alguien antes, distinto del nuevo) se le desactiva (fn_sede_usuario_soft_delete) su permiso por defecto puntual -- mismo rol, misma sede por defecto -- sin tocar ningun otro permiso que tenga en otras sedes/roles.';
