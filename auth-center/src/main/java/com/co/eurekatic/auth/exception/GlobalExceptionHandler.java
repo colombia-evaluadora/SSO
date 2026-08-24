@@ -1,7 +1,10 @@
 package com.co.eurekatic.auth.exception;
 
+import com.co.eurekatic.common.error.SqlErrorKind;
+import com.co.eurekatic.common.error.SqlErrorSanitizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -69,35 +72,52 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * Translates PostgreSQL integrity violations into the matching
-     * HTTP status. The trigger and PL/pgSQL functions raise errors
-     * with deterministic SQLSTATE codes; we unpack the wrapped
-     * {@link SQLException} via {@code DataIntegrityViolationException}
-     * to recover {@code getSQLState()}.
+     * Cualquier fallo que venga de la base. Cubre las violaciones de integridad
+     * que Spring envuelve en {@link DataIntegrityViolationException} y también
+     * los {@code RAISE EXCEPTION} de las funciones PL/pgSQL (P0001, P0002,
+     * 42501), que antes caían en la caza-todo y perdían el mensaje que el autor
+     * de la función sí quiso comunicar.
+     *
+     * <p>El texto que sale lo depura {@link SqlErrorSanitizer}: nunca lleva
+     * nombres de tabla ni el DETAIL del motor, que en una {@code
+     * unique_violation} contiene el valor real que colisionó.
      */
-    @ExceptionHandler(DataIntegrityViolationException.class)
-    public ResponseEntity<Map<String, Object>> handleDataIntegrity(DataIntegrityViolationException ex) {
+    @ExceptionHandler(DataAccessException.class)
+    public ResponseEntity<Map<String, Object>> handleDataAccess(DataAccessException ex) {
         SQLException sql = findSqlException(ex);
-        String sqlState = sql != null ? sql.getSQLState() : null;
-        String message = sql != null && sql.getMessage() != null ? sql.getMessage() : ex.getMostSpecificCause().getMessage();
+        if (sql == null) {
+            log.error("DataAccessException sin SQLException subyacente", ex);
+            return error(HttpStatus.INTERNAL_SERVER_ERROR, SqlErrorKind.INTERNAL.code(),
+                    SqlErrorKind.INTERNAL.defaultMessage(), null);
+        }
+        return fromSql(sql, ex);
+    }
 
-        if ("23505".equals(sqlState)) {
-            return error(HttpStatus.CONFLICT, "DUPLICATE", message, Map.of("sqlState", sqlState));
+    @ExceptionHandler(SQLException.class)
+    public ResponseEntity<Map<String, Object>> handleSql(SQLException ex) {
+        return fromSql(ex, ex);
+    }
+
+    private ResponseEntity<Map<String, Object>> fromSql(SQLException sql, Throwable original) {
+        SqlErrorSanitizer.Sanitized sanitized = SqlErrorSanitizer.sanitize(sql);
+        if (sanitized.kind() == SqlErrorKind.INTERNAL) {
+            log.error("SQL error sqlState={}: {}", sanitized.sqlState(), sql.getMessage(), original);
+        } else {
+            log.info("SQL rechazado sqlState={}: {}", sanitized.sqlState(), sql.getMessage());
         }
-        if ("23502".equals(sqlState)) {
-            return error(HttpStatus.BAD_REQUEST, "VALIDATION_REQUIRED", message, null);
-        }
-        if ("23503".equals(sqlState)) {
-            return error(HttpStatus.UNPROCESSABLE_ENTITY, "FK_NOT_FOUND", message, null);
-        }
-        if ("42501".equals(sqlState)) {
-            return error(HttpStatus.FORBIDDEN, "FORBIDDEN", message, null);
-        }
-        if ("22023".equals(sqlState)) {
-            return error(HttpStatus.UNPROCESSABLE_ENTITY, "INVALID_VALUE", message, null);
-        }
-        log.error("Unhandled DataIntegrityViolationException sqlState={}", sqlState, ex);
-        return error(HttpStatus.INTERNAL_SERVER_ERROR, "DB_ERROR", message, null);
+        return error(statusFor(sanitized.kind()), sanitized.code(), sanitized.message(), null);
+    }
+
+    private static HttpStatus statusFor(SqlErrorKind kind) {
+        return switch (kind) {
+            case NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case PERMISSION_DENIED -> HttpStatus.FORBIDDEN;
+            case DUPLICATE, CONFLICT -> HttpStatus.CONFLICT;
+            case MISSING_REQUIRED, BUSINESS_RULE -> HttpStatus.BAD_REQUEST;
+            case REFERENCE_MISSING, INVALID_VALUE -> HttpStatus.UNPROCESSABLE_ENTITY;
+            case UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
+            case INTERNAL -> HttpStatus.INTERNAL_SERVER_ERROR;
+        };
     }
 
     @ExceptionHandler(Exception.class)

@@ -1,11 +1,13 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Drawer } from "@/components/ui/Drawer";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
+import { Modal } from "@/components/ui/Modal";
 import { Form, zodFieldErrors } from "@/components/forms/Form";
+import { SqlEditor } from "@/components/forms/SqlEditor";
 import { queryFormSchema, type QueryFormValues } from "@/schemas";
 import { useMicroservices } from "@/hooks/useMicroservices";
-import type { QueryAdminResponse } from "@/api/types";
+import type { ParamConstraint, QueryAdminResponse } from "@/api/types";
 import { useParamTypes } from "@/api/useParamTypes";
 import { scanPlaceholders, getImplicitSystemType } from "@/lib/placeholderScanner";
 
@@ -208,6 +210,8 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
       pathTemplate: query?.pathTemplate ?? null,
       outParamNames: query?.outParamNames ?? null,
       paramTypes: (query?.paramTypes ?? {}) as Record<string, string>,
+      // V81 — restricciones de formato opcionales por placeholder.
+      paramConstraints: (query?.paramConstraints ?? {}) as Record<string, ParamConstraint>,
     }),
     [query, open],
   );
@@ -252,6 +256,10 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
           const placeholders = scanPlaceholders(values.query ?? "");
           const detected = placeholders;
           const paramTypes = (values.paramTypes ?? {}) as Record<string, string>;
+          const paramConstraints = (values.paramConstraints ?? {}) as Record<
+            string,
+            ParamConstraint
+          >;
           return (
           <>
             <div className="grid grid-cols-2 gap-3">
@@ -350,17 +358,12 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
               <span className="mb-1 block font-medium text-slate-700">
                 SQL<span className="ml-0.5 text-red-600">*</span>
               </span>
-              <textarea
+              <SqlEditor
                 value={values.query}
-                onChange={(e) => setField("query", e.target.value)}
+                onChange={(next) => setField("query", next)}
                 rows={6}
-                className={[
-                  "w-full rounded border bg-white px-3 py-2 font-mono text-xs text-slate-900 outline-none focus:ring-1",
-                  errors.query
-                    ? "border-red-400 focus:border-red-500 focus:ring-red-500"
-                    : "border-slate-300 focus:border-sky-500 focus:ring-sky-500",
-                ].join(" ")}
-                aria-invalid={errors.query ? true : undefined}
+                invalid={!!errors.query}
+                ariaLabel="SQL"
                 placeholder={
                   "SELECT id, nombre FROM establecimiento\nWHERE nombre LIKE :PARAM.NOMBRE\n  AND owner = :CONTEXT.USER_ID\nLIMIT :QUERY.SIZE"
                 }
@@ -392,6 +395,8 @@ export function QueryFormDrawer({ open, query, onClose, onSubmit }: Props) {
               detected={detected}
               value={paramTypes}
               onChange={(next) => setField("paramTypes", next)}
+              constraints={paramConstraints}
+              onConstraintsChange={(next) => setField("paramConstraints", next)}
             />
             <div className="h-3" />
             <div className="grid grid-cols-2 gap-3">
@@ -552,10 +557,14 @@ function ParamTypesSection({
   detected,
   value,
   onChange,
+  constraints,
+  onConstraintsChange,
 }: {
   detected: string[];
   value: Record<string, string>;
   onChange: (next: Record<string, string>) => void;
+  constraints: Record<string, ParamConstraint>;
+  onConstraintsChange: (next: Record<string, ParamConstraint>) => void;
 }) {
   const { data, isLoading, error } = useParamTypes();
   const curated = data?.curated ?? [];
@@ -566,6 +575,77 @@ function ParamTypesSection({
   const knownFileClassifications = data?.knownFileClassifications ?? [];
   const establishmentScopedFileClassifications =
     data?.establishmentScopedFileClassifications ?? [];
+  // V81 — subconjuntos que deciden qué reglas ofrece el modal de
+  // restricciones para cada placeholder.
+  const numericTypes = data?.numericTypes ?? [];
+  const textTypes = data?.textTypes ?? [];
+
+  // V81 — placeholder cuya modal de restricciones está abierta ahora
+  // mismo (null = cerrada). Una sola modal reutilizada para todas las
+  // filas — evita montar N <dialog> ocultos.
+  const [editingConstraintsFor, setEditingConstraintsFor] = useState<string | null>(null);
+
+  function setConstraint(placeholder: string, patch: ParamConstraint) {
+    onConstraintsChange({ ...constraints, [placeholder]: { ...constraints[placeholder], ...patch } });
+  }
+
+  function clearConstraint(placeholder: string) {
+    const next = { ...constraints };
+    delete next[placeholder];
+    onConstraintsChange(next);
+  }
+
+  /**
+   * V81 — ¿este placeholder puede tener restricciones de formato, y
+   * de qué familia? Sólo {@code :BODY.*} (pedido explícitamente: las
+   * reglas de formato son para campos del cuerpo, no para variables
+   * de ruta ni query string) con un tipo base numérico o textual.
+   */
+  function constraintKind(placeholder: string, base: string): "numeric" | "text" | null {
+    if (placeholder.split(".")[0] !== "BODY") return null;
+    if (numericTypes.includes(base)) return "numeric";
+    if (textTypes.includes(base)) return "text";
+    return null;
+  }
+
+  function hasAnyRule(rule: ParamConstraint | undefined): boolean {
+    if (!rule) return false;
+    return (
+      rule.onlyPositive != null ||
+      rule.allowDecimals != null ||
+      rule.maxDigits != null ||
+      rule.minValue != null ||
+      rule.maxValue != null ||
+      rule.numericText != null ||
+      rule.minLength != null ||
+      rule.maxLength != null
+    );
+  }
+
+  /** Celda "Restricciones" compartida por la tabla de detectados y
+   *  la de tipos manuales — {@code "—"} cuando no aplica. */
+  function renderConstraintsCell(placeholder: string, base: string) {
+    const kind = constraintKind(placeholder, base);
+    if (!kind) {
+      return <span className="text-slate-300">—</span>;
+    }
+    const configured = hasAnyRule(constraints[placeholder]);
+    return (
+      <button
+        type="button"
+        onClick={() => setEditingConstraintsFor(placeholder)}
+        className={
+          "rounded px-2 py-0.5 text-[11px] font-medium " +
+          (configured
+            ? "bg-sky-100 text-sky-800 hover:bg-sky-200"
+            : "bg-slate-100 text-slate-600 hover:bg-slate-200")
+        }
+        title="Restricciones de formato adicionales (positivo, decimales, longitud, sólo dígitos...)"
+      >
+        {configured ? "Editado ✓" : "Configurar"}
+      </button>
+    );
+  }
 
   // Cuenta cuántos de los placeholders detectados están tipados.
   // El backend exige tipo explícito en :PARAM.* / :BODY.* / :BODY_RAW.*
@@ -755,6 +835,9 @@ function ParamTypesSection({
                 <th className="px-2 py-1 text-center" title="Si no se marca, el parámetro acepta null / omitirse sin error">
                   Obligatorio
                 </th>
+                <th className="px-2 py-1 text-center" title="Sólo para :BODY.* numéricos o de texto">
+                  Restricciones
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -783,6 +866,7 @@ function ParamTypesSection({
                           </span>
                         </div>
                       </td>
+                      <td className="px-2 py-1 text-center text-slate-300">—</td>
                       <td className="px-2 py-1 text-center text-slate-300">—</td>
                     </tr>
                   );
@@ -831,6 +915,9 @@ function ParamTypesSection({
                         }
                         className="h-3.5 w-3.5 cursor-pointer accent-sky-600 disabled:cursor-not-allowed"
                       />
+                    </td>
+                    <td className="px-2 py-1 text-center">
+                      {renderConstraintsCell(p, base)}
                     </td>
                   </tr>
                 );
@@ -894,6 +981,9 @@ function ParamTypesSection({
                           className="h-3.5 w-3.5 cursor-pointer accent-sky-600 disabled:cursor-not-allowed"
                         />
                       </td>
+                      <td className="px-2 py-1 text-center">
+                        {renderConstraintsCell(k, base)}
+                      </td>
                       <td className="px-2 py-1 text-right">
                         <button
                           type="button"
@@ -920,6 +1010,175 @@ function ParamTypesSection({
       >
         + Agregar tipo manualmente
       </button>
+
+      {editingConstraintsFor && (() => {
+        const placeholder = editingConstraintsFor;
+        const base = splitDeclaration(
+          value[placeholder], requiredSuffix, fileClassificationSeparator,
+        ).base;
+        const kind = constraintKind(placeholder, base);
+        if (!kind) return null;
+        const rule = constraints[placeholder] ?? {};
+        return (
+          <ParamConstraintModal
+            placeholder={placeholder}
+            kind={kind}
+            rule={rule}
+            onChange={(patch) => setConstraint(placeholder, patch)}
+            onClear={() => clearConstraint(placeholder)}
+            onClose={() => setEditingConstraintsFor(null)}
+          />
+        );
+      })()}
     </div>
+  );
+}
+
+/**
+ * V81 — modal con las reglas de formato de un placeholder
+ * {@code :BODY.*}. Sólo dos "familias" mutuamente excluyentes según
+ * el tipo base declarado: numérica (positivo / decimales / máximo de
+ * cifras) o de texto (sólo dígitos / longitud mínima y máxima) — ver
+ * {@code ParamConstraint} en el backend.
+ */
+function ParamConstraintModal({
+  placeholder,
+  kind,
+  rule,
+  onChange,
+  onClear,
+  onClose,
+}: {
+  placeholder: string;
+  kind: "numeric" | "text";
+  rule: ParamConstraint;
+  onChange: (patch: ParamConstraint) => void;
+  onClear: () => void;
+  onClose: () => void;
+}) {
+  function numberOrNull(raw: string): number | null {
+    if (raw.trim() === "") return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  return (
+    <Modal
+      open={true}
+      onClose={onClose}
+      title={`Restricciones — :${placeholder}`}
+      description={
+        kind === "numeric"
+          ? "Reglas adicionales de formato para este número. Vacío = sin restricción en ese aspecto."
+          : "Reglas adicionales de formato para este texto. Vacío = sin restricción en ese aspecto."
+      }
+      size="sm"
+      footer={
+        <>
+          <Button type="button" variant="secondary" onClick={onClear}>
+            Quitar restricciones
+          </Button>
+          <Button type="button" onClick={onClose}>
+            Listo
+          </Button>
+        </>
+      }
+    >
+      {kind === "numeric" ? (
+        <div className="grid gap-3">
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={rule.onlyPositive ?? false}
+              onChange={(e) => onChange({ onlyPositive: e.target.checked || null })}
+              className="rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+            />
+            Sólo admite números positivos (rechaza ≤ 0)
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={rule.allowDecimals === false}
+              onChange={(e) => onChange({ allowDecimals: e.target.checked ? false : null })}
+              className="rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+            />
+            No admite cifras decimales
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1 block font-medium text-slate-700">
+              Máximo de cifras significativas
+            </span>
+            <input
+              type="number"
+              min={1}
+              value={rule.maxDigits ?? ""}
+              onChange={(e) => onChange({ maxDigits: numberOrNull(e.target.value) })}
+              placeholder="Sin límite"
+              className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+            />
+          </label>
+          {/* V83 — rango de VALOR, distinto de maxDigits (cifras, no
+              magnitud): un maxDigits=5 deja pasar 99999, esto no. */}
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium text-slate-700">Valor mínimo</span>
+              <input
+                type="number"
+                value={rule.minValue ?? ""}
+                onChange={(e) => onChange({ minValue: numberOrNull(e.target.value) })}
+                placeholder="Sin mínimo"
+                className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium text-slate-700">Valor máximo</span>
+              <input
+                type="number"
+                value={rule.maxValue ?? ""}
+                onChange={(e) => onChange({ maxValue: numberOrNull(e.target.value) })}
+                placeholder="Sin máximo"
+                className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+              />
+            </label>
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-3">
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={rule.numericText ?? false}
+              onChange={(e) => onChange({ numericText: e.target.checked || null })}
+              className="rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+            />
+            El texto debe ser enteramente numérico (sólo dígitos)
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium text-slate-700">Mínimo de caracteres</span>
+              <input
+                type="number"
+                min={0}
+                value={rule.minLength ?? ""}
+                onChange={(e) => onChange({ minLength: numberOrNull(e.target.value) })}
+                placeholder="Sin mínimo"
+                className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium text-slate-700">Máximo de caracteres</span>
+              <input
+                type="number"
+                min={1}
+                value={rule.maxLength ?? ""}
+                onChange={(e) => onChange({ maxLength: numberOrNull(e.target.value) })}
+                placeholder="Sin máximo"
+                className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+              />
+            </label>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }

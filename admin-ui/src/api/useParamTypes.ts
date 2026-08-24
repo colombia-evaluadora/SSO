@@ -43,6 +43,19 @@ export interface ParamTypesResponse {
    * estas clasificaciones.
    */
   establishmentScopedFileClassifications: string[];
+  /**
+   * V81 — subconjunto de {@code curated} que admite las reglas
+   * numéricas de {@code paramConstraints} (positivo / decimales /
+   * máximo de cifras). La UI la usa para decidir si el botón
+   * "Restricciones" de una fila muestra las reglas numéricas.
+   */
+  numericTypes: string[];
+  /**
+   * V81 — subconjunto de {@code curated} que admite las reglas de
+   * texto de {@code paramConstraints} (sólo dígitos / longitud
+   * mínima / máxima).
+   */
+  textTypes: string[];
 }
 
 /**

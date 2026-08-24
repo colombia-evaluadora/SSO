@@ -118,10 +118,14 @@ public class SecurityConfig {
                         // the hasRole("ADMIN") fallback and got 403).
                         // Fixed in this branch — all three flows now
                         // sit on equal footing under permitAll().
+                        // `resetTokenStatus` va en la misma bolsa: lo consulta
+                        // la pantalla de confirmacion, que corre sin sesion.
+                        // Portar el token ES la autorizacion, igual que en
+                        // `restorePassword`.
                         .requestMatchers("/activateAccount", "/restorePassword",
-                                "/forgotPassword",
+                                "/forgotPassword", "/resetTokenStatus",
                                 "/user/activateAccount", "/user/restorePassword",
-                                "/user/forgotPassword").permitAll()
+                                "/user/forgotPassword", "/user/resetTokenStatus").permitAll()
                         // Health probes + Grafana Alloy scrape endpoint. Same trust
                         // boundary argument: the scraper lives on the
                         // internal docker network, not on the LAN.

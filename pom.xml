@@ -141,5 +141,6 @@
         <module>provisioner</module>
         <module>notification-service</module>
         <module>file-service</module>
+        <module>reporting-service</module>
     </modules>
 </project>

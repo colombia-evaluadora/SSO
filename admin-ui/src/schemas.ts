@@ -408,6 +408,40 @@ export const queryFormSchema = z
           ),
       )
       .default({}),
+    // V81 — restricciones de formato opcionales por placeholder,
+    // adicionales al tipo/obligatoriedad de `paramTypes`. La
+    // validación fuerte (key debe existir en paramTypes, sólo reglas
+    // numéricas sobre tipo numérico y sólo de texto sobre tipo de
+    // texto) vive en el backend (QueryAdminService.validateParamConstraints);
+    // aquí sólo se valida el shape para fallar rápido en casos obvios
+    // (números negativos donde no tiene sentido, min > max).
+    paramConstraints: z
+      .record(
+        z.string(),
+        z
+          .object({
+            onlyPositive: z.boolean().nullable().optional(),
+            allowDecimals: z.boolean().nullable().optional(),
+            maxDigits: z.number().int().positive().nullable().optional(),
+            // V83 — rango de VALOR, distinto de maxDigits (cifras, no magnitud).
+            minValue: z.number().nullable().optional(),
+            maxValue: z.number().nullable().optional(),
+            numericText: z.boolean().nullable().optional(),
+            minLength: z.number().int().min(0).nullable().optional(),
+            maxLength: z.number().int().positive().nullable().optional(),
+          })
+          .refine(
+            (r) =>
+              r.minLength == null || r.maxLength == null || r.minLength <= r.maxLength,
+            "La longitud mínima no puede ser mayor que la máxima",
+          )
+          .refine(
+            (r) =>
+              r.minValue == null || r.maxValue == null || r.minValue <= r.maxValue,
+            "El valor mínimo no puede ser mayor que el máximo",
+          ),
+      )
+      .default({}),
   })
   .superRefine((v, ctx) => {
     if (v.pathTemplate != null && !v.pathTemplate.startsWith("/")) {

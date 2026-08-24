@@ -180,6 +180,14 @@ sso:
       # eviction hop. The cache lives in auth-center only — there
       # is no cross-service writer to invalidate from.
       user-by-email-ttl-seconds: 60
+      # TTL for the @Cacheable("my-apps") backing GET /myApps,
+      # keyed by the caller's role set. Longer than user-by-email
+      # because role_app bindings change far less often.
+      my-apps-ttl-seconds: 300
+      # TTL for the @Cacheable("users-sso") backing GET
+      # /getUsersSSO (single full-list entry, no key). Short for
+      # the same reason as user-by-email.
+      users-sso-ttl-seconds: 60
 
 management:
   endpoints:

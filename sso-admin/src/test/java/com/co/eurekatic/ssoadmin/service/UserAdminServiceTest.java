@@ -319,10 +319,17 @@ class UserAdminServiceTest {
         when(userRepository.findAll()).thenReturn(List.of());
 
         // Should NOT throw — legacy would have failed noisily.
-        service.forgotPassword("nobody@example.com", null);
+        var res = service.forgotPassword("nobody@example.com", null);
 
         verify(emailService, never()).sendRestorePasswordEmail(any(), anyString());
         verify(tokenService, never()).issueRestoreToken(any());
+        // La respuesta trae token igual, con la misma forma que la del caso
+        // conocido: si un correo inexistente se distinguiera por venir sin
+        // token, el endpoint serviría para enumerar cuentas. Ese token es
+        // descartable — no se persiste, así que no restablece nada.
+        assertThat(res.token()).isNotBlank();
+        assertThat(res.expiresIn()).isPositive();
+        verify(userRepository, never()).save(any());
     }
 
     @Test
@@ -333,7 +340,12 @@ class UserAdminServiceTest {
         when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
         when(userRepository.save(u)).thenReturn(u);
 
-        service.forgotPassword("alice@example.com", null);
+        var res = service.forgotPassword("alice@example.com", null);
+
+        // El token emitido es el que vuelve en la respuesta, no otro: es el
+        // mismo que viaja en el enlace del correo.
+        assertThat(res.token()).isEqualTo("rtok");
+        assertThat(res.expiresIn()).isEqualTo(30 * 60);
 
         // Restore-token must be issued, and the password-reset event
         // is published via NotificationEventPublisher with the token
@@ -352,6 +364,64 @@ class UserAdminServiceTest {
         Map<String, Object> p = payload.getValue();
         assertThat(p.get("resetLink").toString())
                 .isEqualTo("http://localhost/admin/restore-password?token=rtok");
+    }
+
+    /* ==================== resetTokenStatus ==================== */
+
+    @Test
+    void resetTokenStatusIsInvalidWhenTokenUnknown() {
+        when(userRepository.findByTokenRestore("nope")).thenReturn(java.util.Optional.empty());
+
+        var res = service.resetTokenStatus("nope");
+
+        assertThat(res.status()).isEqualTo("invalid");
+        assertThat(res.expiresIn()).isZero();
+        // Sin correo: un token que no existe no puede filtrar a quien
+        // pertenece, porque no pertenece a nadie.
+        assertThat(res.maskedEmail()).isNull();
+        assertThat(res.issuedAt()).isNull();
+    }
+
+    @Test
+    void resetTokenStatusIsValidAndMasksEmailWhenLive() {
+        User u = new User();
+        u.setEmail("alice@example.com");
+        u.setTokenRestoreExpiresAt(java.time.Instant.now().plusSeconds(600));
+        when(userRepository.findByTokenRestore("rtok")).thenReturn(java.util.Optional.of(u));
+
+        var res = service.resetTokenStatus("rtok");
+
+        assertThat(res.status()).isEqualTo("valid");
+        assertThat(res.expiresIn()).isBetween(1L, 600L);
+        assertThat(res.ttlSeconds()).isEqualTo(30 * 60);
+        // El correo alcanza para reconocerlo, no para leerlo entero.
+        assertThat(res.maskedEmail()).isEqualTo("a****@example.com");
+        assertThat(res.issuedAt()).isNotNull();
+    }
+
+    @Test
+    void resetTokenStatusIsExpiredWhenPastExpiry() {
+        User u = new User();
+        u.setEmail("alice@example.com");
+        u.setTokenRestoreExpiresAt(java.time.Instant.now().minusSeconds(60));
+        when(userRepository.findByTokenRestore("old")).thenReturn(java.util.Optional.of(u));
+
+        var res = service.resetTokenStatus("old");
+
+        assertThat(res.status()).isEqualTo("expired");
+        // Nunca negativo: la UI pinta este numero como cuenta regresiva.
+        assertThat(res.expiresIn()).isZero();
+    }
+
+    @Test
+    void resetTokenStatusTreatsMissingExpiryAsExpired() {
+        User u = new User();
+        u.setEmail("alice@example.com");
+        u.setTokenRestoreExpiresAt(null);
+        when(userRepository.findByTokenRestore("sinvto")).thenReturn(java.util.Optional.of(u));
+
+        // Sin vencimiento no se puede afirmar que siga vivo: gana el lado seguro.
+        assertThat(service.resetTokenStatus("sinvto").status()).isEqualTo("expired");
     }
 
     @Test

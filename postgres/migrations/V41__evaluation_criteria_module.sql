@@ -91,7 +91,10 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_criterio_eval_obtener(p_pk_periodo BIGINT)
+DROP FUNCTION IF EXISTS academico_test.fn_criterio_eval_obtener(BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_criterio_eval_obtener(
+    p_pk_periodo BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
 RETURNS TABLE (
     academic_period_id BIGINT, grading_format BIGINT, grading_scale BIGINT,
     period_calculation_elements BIGINT, subject_grade_criteria BIGINT,
@@ -99,12 +102,14 @@ RETURNS TABLE (
     student_without_grades_performance BIGINT, rounding_mode NUMERIC, initial_grade NUMERIC
 )
 LANGUAGE sql STABLE AS $$
+    -- PK_TCRITERIO_EVALUACION comparte PK con el periodo academico (V37).
     SELECT ce.PK_TCRITERIO_EVALUACION, ce.FK_TLV_FORMATO_CALIFICACION, ce.FK_TESCALA,
            ce.FK_TLV_ELEMENTO_DEF, ce.FK_TLV_MODIF_FINAL_PERACA, ce.FK_TLV_CRITERIO_FINAL,
            ce.FK_TLV_CRITERIO_AREA, ce.FK_TLV_DESEMPENO_SIN_CALIF, ce.NUMERO_DECIMALES,
            ce.PORCENTAJE_INICIAL_CALIF
       FROM academico_test.TCRITERIO_EVALUACION ce
-     WHERE ce.PK_TCRITERIO_EVALUACION = p_pk_periodo AND ce.ACTIVE = TRUE;
+     WHERE ce.PK_TCRITERIO_EVALUACION = p_pk_periodo AND ce.ACTIVE = TRUE
+       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario_solicitante, p_pk_periodo);
 $$;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_criterio_eval_actualizar(

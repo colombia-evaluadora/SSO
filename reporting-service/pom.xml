@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/0/POM4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/0/POM4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.co.eurekatic</groupId>
+        <artifactId>sso-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>reporting-service</artifactId>
+    <name>reporting-service</name>
+    <description>
+        Genera reportes (PDF / Excel) de los mismos listados que
+        alimentan las pantallas. No habla con la base: le pide las
+        filas al query-service usando el JWT del llamante, de modo
+        que el reporte ve exactamente lo que ese usuario puede ver.
+        Sin paginacion — las filas de query "…/reporte" llaman a
+        fn_X_listar con las paginas en NULL (V66/V67).
+    </description>
+
+    <properties>
+        <start-class>com.co.eurekatic.reporting.ReportingServiceApplication</start-class>
+        <jasperreports.version>7.0.8</jasperreports.version>
+        <poi.version>5.5.1</poi.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Servlet, no reactivo: el llenado de un reporte Jasper es
+             CPU-bound y bloqueante de punta a punta; envolverlo en Mono
+             solo agregaria saltos de hilo. Mismo criterio que
+             query-service. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-opentelemetry</artifactId>
+        </dependency>
+
+        <!-- Discovery: al registrarse en Eureka el gateway crea solo
+             la ruta /reporting-service/** -> lb://reporting-service. -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+
+        <!--
+            JasperReports 7 esta partido en modulos. Hacen falta tres:
+              * jasperreports      — motor (compilar, llenar, JasperPrint)
+              * jasperreports-pdf  — el exportador PDF (OpenPDF); en 7.x
+                                     salio del core
+              * jasperreports-jdt  — compilador de expresiones. Se compilan
+                                     los .jrxml en caliente al arrancar, y
+                                     sin el compilador Jasper falla en
+                                     tiempo de ejecucion, no de build.
+            NOTA: el export a XLSX NO viene con Jasper 7 (no existe un
+            jasperreports-poi para esta version; se verifico contra Maven
+            Central). Ver ExcelRenderer para por que Excel se escribe con
+            POI directo, que ademas es lo correcto para este caso.
+        -->
+        <dependency>
+            <groupId>net.sf.jasperreports</groupId>
+            <artifactId>jasperreports</artifactId>
+            <version>${jasperreports.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>net.sf.jasperreports</groupId>
+            <artifactId>jasperreports-pdf</artifactId>
+            <version>${jasperreports.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>net.sf.jasperreports</groupId>
+            <artifactId>jasperreports-jdt</artifactId>
+            <version>${jasperreports.version}</version>
+        </dependency>
+
+        <!-- Excel. SXSSF escribe por streaming manteniendo pocas filas
+             en memoria: es justamente lo que necesita un reporte que por
+             definicion no tiene tope de filas. -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>${poi.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>reporting-service</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>${start-class}</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

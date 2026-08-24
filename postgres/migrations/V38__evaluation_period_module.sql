@@ -207,6 +207,19 @@ BEGIN
         RAISE EXCEPTION 'El usuario no puede gestionar periodos de evaluacion de este establecimiento'
             USING ERRCODE = '42501';
     END IF;
+    -- Bloqueo: existen calificaciones (notas) registradas contra este periodo de
+    -- evaluacion. Protege informacion historica (TAREA_NOTA/TASIGNATURA_NOTA no
+    -- dependen de que la matricula siga activa).
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TASIGNATURA_NOTA an
+         WHERE an.FK_TPERIODO_EVALUACION = p_pk AND an.ACTIVE = TRUE
+    ) OR EXISTS (
+        SELECT 1 FROM academico_test.TAREA_NOTA tn
+         WHERE tn.FK_TPERIODO_EVALUACION = p_pk AND tn.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No se puede eliminar el periodo de evaluacion %: existen calificaciones registradas', p_pk
+            USING ERRCODE = '23503';
+    END IF;
     UPDATE academico_test.TPERIODO_EVALUACION
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TPERIODO_EVALUACION = p_pk AND ACTIVE = TRUE;
@@ -220,33 +233,58 @@ $$;
 
 DROP FUNCTION IF EXISTS academico_test.fn_periodo_eval_listar(BIGINT, TEXT, INT, INT);
 DROP FUNCTION IF EXISTS academico_test.fn_periodo_eval_listar(BIGINT, TEXT, INT, INT, BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_eval_listar(BIGINT, TEXT, INT, INT, BIGINT, TEXT, TEXT);
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_listar(
     p_fk_periodo BIGINT,
     p_filtro     TEXT DEFAULT NULL,
     p_page_index INT  DEFAULT 0,
     p_page_size  INT  DEFAULT 10,
-    p_pk_usuario BIGINT DEFAULT NULL   -- alcance (global / establecimiento)
+    p_pk_usuario BIGINT DEFAULT NULL,  -- alcance (global / establecimiento)
+    -- Orden: id de columna del front + direccion ('asc'/'desc'), igual que fn_periodo_listar (V37).
+    p_sort_by    TEXT DEFAULT NULL,
+    p_sort_dir   TEXT DEFAULT NULL
 )
 RETURNS TABLE (
     id BIGINT, codigo VARCHAR, nombre VARCHAR, abreviacion VARCHAR,
     start_date DATE, end_date DATE, peso NUMERIC, status_id BIGINT, estado VARCHAR, estado_name VARCHAR,
     academic_period_id BIGINT, total_count BIGINT
 )
-LANGUAGE sql STABLE AS $$
-    SELECT pe.PK_TPERIODO_EVALUACION, pe.CODIGO, pe.NOMBRE, pe.ABREVIACION,
-           pe.FECHA_INICIO, pe.FECHA_FIN, pe.PORCENTAJE, pe.FK_TLV_ESTADO, est.VALOR, est.NOMBRE,
-           pe.FK_TPERIODO_ACADEMICO, count(*) OVER()::BIGINT
-      FROM academico_test.TPERIODO_EVALUACION pe
-      JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pe.FK_TLV_ESTADO
-     WHERE pe.FK_TPERIODO_ACADEMICO = p_fk_periodo AND pe.ACTIVE = TRUE
-       AND (NULLIF(TRIM(p_filtro),'') IS NULL
-            OR pe.NOMBRE ILIKE '%' || p_filtro || '%'
-            OR pe.CODIGO ILIKE '%' || p_filtro || '%')
-       -- Alcance por rol: global ve todo; establecimiento solo el suyo.
-       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, pe.FK_TPERIODO_ACADEMICO)
-     ORDER BY pe.FECHA_INICIO
-     LIMIT NULLIF(p_page_size, 0)
-    OFFSET COALESCE(p_page_index, 0) * COALESCE(NULLIF(p_page_size, 0), 0);
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_col TEXT;
+    v_dir TEXT;
+BEGIN
+    -- Whitelist: mapea el id de columna del front -> columna real. Cualquier
+    -- valor no listado cae al default (fecha de inicio). Nunca se interpola
+    -- input del usuario crudo -> sin riesgo de inyeccion.
+    v_col := CASE lower(coalesce(p_sort_by, ''))
+        WHEN 'codigo'      THEN 'pe.CODIGO'
+        WHEN 'nombre'      THEN 'pe.NOMBRE'
+        WHEN 'abreviacion' THEN 'pe.ABREVIACION'
+        WHEN 'startdate'   THEN 'pe.FECHA_INICIO'
+        WHEN 'enddate'     THEN 'pe.FECHA_FIN'
+        WHEN 'peso'        THEN 'pe.PORCENTAJE'
+        WHEN 'estado'      THEN 'est.VALOR'
+        ELSE 'pe.FECHA_INICIO'
+    END;
+    v_dir := CASE WHEN lower(coalesce(p_sort_dir, '')) = 'desc' THEN 'DESC' ELSE 'ASC' END;
+
+    RETURN QUERY EXECUTE format($q$
+        SELECT pe.PK_TPERIODO_EVALUACION, pe.CODIGO, pe.NOMBRE, pe.ABREVIACION,
+               pe.FECHA_INICIO, pe.FECHA_FIN, pe.PORCENTAJE, pe.FK_TLV_ESTADO, est.VALOR, est.NOMBRE,
+               pe.FK_TPERIODO_ACADEMICO, count(*) OVER()::BIGINT
+          FROM academico_test.TPERIODO_EVALUACION pe
+          JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pe.FK_TLV_ESTADO
+         WHERE pe.FK_TPERIODO_ACADEMICO = $1 AND pe.ACTIVE = TRUE
+           AND ($2 IS NULL OR pe.NOMBRE ILIKE '%%' || $2 || '%%' OR pe.CODIGO ILIKE '%%' || $2 || '%%')
+           -- Alcance por rol: global ve todo; establecimiento solo el suyo.
+           AND academico_test.fn_periodo_usuario_puede_ver($5, pe.FK_TPERIODO_ACADEMICO)
+         ORDER BY %s %s, pe.PK_TPERIODO_EVALUACION DESC
+         LIMIT NULLIF($4, 0)
+        OFFSET COALESCE($3, 0) * COALESCE(NULLIF($4, 0), 0)
+    $q$, v_col, v_dir)
+    USING p_fk_periodo, NULLIF(TRIM(p_filtro),''), p_page_index, p_page_size, p_pk_usuario;
+END;
 $$;
 
 -- Un periodo de evaluacion por PK (mismos campos que el listado).

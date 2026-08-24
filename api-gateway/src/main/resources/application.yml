@@ -291,6 +291,27 @@ spring:
               filters:
                 - StripPrefix=1
                 - AddResponseHeader=X-Source, api-gateway
+            # ─── Reportes (PDF / Excel) ───
+            #
+            #   POST /api/reportes/{clave}  { format, filters, sorting }
+            #     └─ reporting-service pide las filas al query-service
+            #        reenviando ESTE mismo JWT, corre la funcion PL/pgSQL
+            #        sin paginar y devuelve el binario.
+            #
+            # StripPrefix=1 quita /api y deja /reportes/..., que es donde
+            # escucha el controlador — igual que file-service. NO se deja
+            # que lo genere la ruta dinamica del catalogo: esa calcula el
+            # strip contando segmentos (/api/reportes/** -> 2) y entregaria
+            # /{clave}, sin el /reportes que el controlador espera. Es la
+            # misma razon por la que las filas REST se rutean aqui y no
+            # desde public.microservice.
+            - id: api-reporting-service
+              uri: lb://reporting-service
+              predicates:
+                - Path=/api/reportes/**
+              filters:
+                - StripPrefix=1
+                - AddResponseHeader=X-Source, api-gateway
             # ─── OpenAPI / Swagger UI: deliberately NO routes ───
             # There used to be five `forward:` routes here
             # (openapi-ui-self, openapi-spec-self,

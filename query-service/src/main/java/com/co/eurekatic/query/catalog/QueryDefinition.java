@@ -1,5 +1,6 @@
 package com.co.eurekatic.query.catalog;
 
+import com.co.eurekatic.common.query.ParamConstraint;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -63,8 +64,50 @@ public record QueryDefinition(
          * Nullable for back-compat with pre-V49 servers; treated as
          * empty map by {@code ParamBinder} (legacy auto-derive path).
          */
-        @JsonProperty("paramTypes") Map<String, String> paramTypes
+        @JsonProperty("paramTypes") Map<String, String> paramTypes,
+
+        /**
+         * V70 — restricciones de formato opcionales por placeholder,
+         * adicionales a lo que declara {@code paramTypes}. Nullable
+         * para back-compat con servidores pre-V70; tratado como mapa
+         * vacío por {@code ParamConstraintValidator} ("sin
+         * restricciones adicionales").
+         */
+        @JsonProperty("paramConstraints") Map<String, ParamConstraint> paramConstraints,
+
+        /**
+         * V110 — opt-in: when {@code true}, {@code QueryPathController}
+         * may serve this row's {@code GET} result from Redis instead
+         * of re-running the SQL. {@code false} (the default for
+         * pre-V110 catalog servers, since the field is simply absent
+         * from their JSON) preserves the always-hit-the-DB behavior.
+         */
+        @JsonProperty("cacheable") boolean cacheable,
+
+        /**
+         * V110 — staleness window in seconds when {@link #cacheable}
+         * is {@code true}. Ignored otherwise.
+         */
+        @JsonProperty("cacheTtlSeconds") int cacheTtlSeconds
 ) {
+    /**
+     * V70/V110 back-compat (sin paramConstraints ni
+     * cacheable/cacheTtlSeconds) — servidores de catálogo
+     * pre-V70/pre-V110 no mandan esos campos; Jackson invoca este
+     * constructor y cae a los defaults seguros (sin restricciones
+     * adicionales, sin cachear).
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           String pathTemplate, String executionMode,
+                           String outParamNames, String httpMethod,
+                           Map<String, String> paramTypes) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, pathTemplate, executionMode,
+             outParamNames, httpMethod, paramTypes, null, false, 60);
+    }
+
     /**
      * Back-compat constructor for callers that pre-date V27/V28
      * (tests, mock setups, internal callers). Defaults

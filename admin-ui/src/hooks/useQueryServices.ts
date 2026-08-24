@@ -73,3 +73,20 @@ export function useRestartQueryService() {
     },
   });
 }
+
+/**
+ * Borra + vuelve a crear el contenedor con la imagen actual —
+ * distinto de {@link useRestartQueryService} (mismo contenedor,
+ * filesystem viejo). El backend bloquea hasta que el contenedor
+ * nuevo aparece en Eureka (puede tardar varios segundos), así que
+ * el botón que dispare esto debe mostrar loading todo ese tiempo.
+ */
+export function useRecreateQueryService() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => queryServicesApi.recreate(id),
+    onSuccess: (_void, id) => {
+      void qc.invalidateQueries({ queryKey: queryServiceKeys.status(id) });
+    },
+  });
+}

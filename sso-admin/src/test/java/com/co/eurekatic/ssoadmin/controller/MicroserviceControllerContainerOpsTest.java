@@ -48,13 +48,14 @@ class MicroserviceControllerContainerOpsTest {
 
     private MicroserviceRepository repo;
     private ContainerProvisioner provisioner;
+    private MicroserviceService service;
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
         repo = mock(MicroserviceRepository.class);
         provisioner = mock(ContainerProvisioner.class);
-        MicroserviceService service = mock(MicroserviceService.class);
+        service = mock(MicroserviceService.class);
         mvc = MockMvcBuilders
                 .standaloneSetup(new MicroserviceController(service, repo, provisioner))
                 .setControllerAdvice(new GlobalExceptionHandler())
@@ -209,6 +210,38 @@ class MicroserviceControllerContainerOpsTest {
         mvc.perform(post("/microservice/11/container/restart"))
                 .andExpect(status().isBadRequest());
         verify(provisioner, never()).restart(anyString());
+    }
+
+    /* ====================== POST /container/recreate ====================== */
+
+    @Test
+    void postRecreateReturns202AndDelegatesToService() throws Exception {
+        mvc.perform(post("/microservice/7/container/recreate"))
+                .andExpect(status().isAccepted());
+        verify(service).recreateContainer(7L);
+    }
+
+    @Test
+    void postRecreatePropagatesNotFoundFromService() throws Exception {
+        org.mockito.Mockito.doThrow(new com.co.eurekatic.ssoadmin.exception.NotFoundException(
+                        "Microservice", 99L))
+                .when(service).recreateContainer(99L);
+
+        mvc.perform(post("/microservice/99/container/recreate"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"));
+    }
+
+    @Test
+    void postRecreatePropagatesProvisioningFailureAs502() throws Exception {
+        org.mockito.Mockito.doThrow(new ProvisioningException(
+                        ProvisioningException.Code.CONTAINER_CREATE_FAILED,
+                        "Docker rejected the create"))
+                .when(service).recreateContainer(7L);
+
+        mvc.perform(post("/microservice/7/container/recreate"))
+                .andExpect(status().isBadGateway())
+                .andExpect(jsonPath("$.code").value("CONTAINER_CREATE_FAILED"));
     }
 
     /* ====================== helpers ====================== */
