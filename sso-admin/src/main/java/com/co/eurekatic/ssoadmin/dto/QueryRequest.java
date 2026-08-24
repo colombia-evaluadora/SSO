@@ -100,8 +100,17 @@ public record QueryRequest(
          * {@code GET} result in Redis when {@code true}. Default
          * {@code false} — the field is a checkbox on the admin-ui
          * form, unchecked by default, matching pre-V110 behavior.
+         *
+         * <p>Wrapper type (not primitive {@code boolean}) on purpose:
+         * a caller that omits the field entirely — as admin-ui still
+         * does, the checkbox isn't wired into the form yet — leaves
+         * Jackson with no value to bind for this constructor param.
+         * With a primitive that throws {@code MismatchedInputException}
+         * ("Cannot map null into type boolean") before the compact
+         * constructor even runs. {@code null} is normalized to
+         * {@code false} below instead.
          */
-        boolean                     cacheable,
+        Boolean                     cacheable,
         /**
          * V110 — staleness window in seconds when {@code cacheable}
          * is {@code true}. Validated positive by
@@ -215,5 +224,6 @@ public record QueryRequest(
     public QueryRequest {
         paramTypes = paramTypes == null ? new LinkedHashMap<>() : paramTypes;
         paramConstraints = paramConstraints == null ? new LinkedHashMap<>() : paramConstraints;
+        cacheable = cacheable == null ? Boolean.FALSE : cacheable;
     }
 }
