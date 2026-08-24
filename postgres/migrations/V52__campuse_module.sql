@@ -114,16 +114,15 @@ AS $$
 DECLARE
     v_id_creado             BIGINT;
     v_consecutivo           VARCHAR(2);
-    -- REV2: si el caller no manda EE explicito (el select del front solo
-    -- aparece para super-admin), se intenta resolver el unico EE al que
-    -- esta ligado el usuario como rector/secretaria/jefe de sistema (ver
-    -- fn_resolver_establecimiento_unico en V50). Si sigue NULL (super-admin
-    -- que no mando nada, o usuario ligado a 0 o 2+ EE), la validacion de
-    -- obligatoriedad del bloque 1 sigue disparando igual que antes.
-    v_fk_establecimiento    BIGINT := COALESCE(
-        p_fk_establecimiento,
-        academico_test.fn_resolver_establecimiento_unico(p_pk_usuario_solicitante)
-    );
+    -- REV3 -- se quita el fallback "resolver el unico EE" (via
+    -- fn_resolver_establecimiento_unico): el select de EE del front ahora
+    -- se muestra SIEMPRE en el alta, para cualquier rol (ya no es
+    -- exclusivo de super-admin) -- p_fk_establecimiento siempre llega
+    -- explicito. Ese fallback ademas se rompia con NULL (=> 22023 "es
+    -- obligatorio", enmascarado como 42501 en el gate de mas abajo) para
+    -- cualquiera que administrara 2+ EE a la vez (algo que dejo de ser
+    -- raro con el cambio de modelo de TFUNCIONARIO, ver V51 REV5/REV6).
+    v_fk_establecimiento    BIGINT := p_fk_establecimiento;
 BEGIN
     -- -----------------------------------------------------------------
     -- 0. Gate de autorizacion.
@@ -327,7 +326,7 @@ COMMENT ON FUNCTION academico_test.fn_sed_crear(
     VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR,
     VARCHAR
 )
-    IS 'Crea una TSEDE para un TESTABLECIMIENTO activo. CODIGO/NOMBRE/FK_TLV_ZONA son obligatorios. p_fk_establecimiento es OPCIONAL (REV2): si llega NULL, se intenta resolver via fn_resolver_establecimiento_unico (V50) -- el select de EE del front solo aparece para super-admin, asi que rector/secretaria/jefe de sistema dependen de esta resolucion automatica (se asume que cada uno esta ligado a un unico EE bajo esos roles). Si no se pudo resolver (super-admin sin mandarlo, o usuario ligado a 0 o 2+ EE) => 22023 igual que antes. CONSECUTIVO se calcula automaticamente (MAX+1, padded a 2 digitos, solo entre sedes activas del mismo EE). Campos NOT NULL del DDL no obligatorios a nivel API se persisten como vacio si llegan nulos. Gate de autorizacion COMPUESTO (cualquiera basta, validado contra el EE ya resuelto): (a) super-admin via fn_puede_afectar_establecimiento (roles 1-3); (b) rector del EE concreto; (c) secretaria del EE concreto; (d) jefe de sistema (rol 8) con al menos una vinculacion en cualquier sede del EE concreto. Cualquier otro caso => 42501. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52 y V53).';
+    IS 'REV3: crea una TSEDE para un TESTABLECIMIENTO activo. CODIGO/NOMBRE/FK_TLV_ZONA/p_fk_establecimiento son obligatorios (p_fk_establecimiento sin DEFAULT en la firma). El select de EE del front ahora se muestra siempre en el alta, para cualquier rol -- ya no se intenta resolver "el unico EE" del solicitante (fn_resolver_establecimiento_unico, retirado de esta funcion): ese fallback se rompia si el solicitante administraba 2+ EE a la vez. Si llega NULL => 22023 (o 42501 si ademas no es super-admin, el gate corre antes que la validacion de obligatoriedad). CONSECUTIVO se calcula automaticamente (MAX+1, padded a 2 digitos, solo entre sedes activas del mismo EE). Campos NOT NULL del DDL no obligatorios a nivel API se persisten como vacio si llegan nulos. Gate de autorizacion COMPUESTO (cualquiera basta, validado contra el EE recibido): (a) super-admin via fn_puede_afectar_establecimiento (roles 1-3); (b) rector del EE concreto; (c) secretaria del EE concreto; (d) jefe de sistema (rol 8) con al menos una vinculacion en cualquier sede del EE concreto. Cualquier otro caso => 42501. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52 y V53).';
 
 
 -- ---------------------------------------------------------------------------
@@ -817,57 +816,37 @@ $$;
 -- ---------------------------------------------------------------------------
 -- fn_sed_soft_delete_bulk
 --   Variante bulk de fn_sed_soft_delete: en lugar de un solo PK_TSEDE
---   recibe un BIGINT[] de PKs y les aplica soft delete a todos en una
---   sola transaccion PL/pgSQL.
+--   recibe un BIGINT[] de PKs y les aplica soft delete.
 --
---   Semantica: ATOMICO TODO-O-NADA. Si CUALQUIER PK del array falla
---   (no existe / ya estaba inactiva / el usuario no pasa el gate para
---   el EE concreto de esa sede) la operacion se revierte entera via
---   RAISE EXCEPTION; ningun PK queda parcialmente procesado.
---   Esta decision mantiene el mismo contrato transaccional que
---   fn_sed_soft_delete y que fn_est_soft_delete (que delega en este).
---   Si el caller necesita tolerancia a fallos por fila, debe llamar al
---   single N veces y manejar las excepciones por su cuenta.
+--   REV: mismo patron que fn_fun_baja_establecimiento_bulk -- cada PK
+--   corre en su propio savepoint (BEGIN/EXCEPTION), asi que un fallo en
+--   una fila NO aborta el resto ni deshace lo que ya se dio de baja.
+--   Antes era atomico todo-o-nada (un solo FOREACH sin capturar
+--   excepciones, devolvia un contador); ahora devuelve una fila
+--   (pk_sede, status) por cada PK, tolerante a fallos parciales.
 --
 --   Por cada PK del array se delega en fn_sed_soft_delete(p_pk_usuario_
 --   solicitante, p_pk_sede), que es la fuente de verdad de la cascade
---   (TSEDE + TSEDE_USUARIO + TSEDE_NIVEL). Asi, cualquier cambio futuro
---   en la cascade del single se refleja automaticamente aqui.
+--   (TSEDE + TSEDE_USUARIO + TSEDE_NIVEL) y del gate compuesto (se
+--   revalida por fila, no una sola vez al inicio).
 --
---   Validaciones previas (antes de tocar nada):
---     * p_pk_usuario_solicitante > 0 (22023).
---     * p_pks no nulo, no vacio (22023).
---     * Sin duplicados (22023 con HINT) — si llegan duplicados, la
---       delegation fallaria con 'ya inactiva' en la segunda pasada y
---       oscureceria el error real; lo detectamos arriba para mensaje
---       claro.
---     * Todos los PKs > 0 (22023).
---
---   Retorna: BIGINT con el conteo de sedes efectivamente dadas de baja
---   (= cardinalidad del array, en el caso exitoso).
---
---   Excepciones:
---     SQLSTATE '22023' — Parametros de entrada invalidos (solicitante
---                        <= 0, p_pks nulo/vacio/con duplicados/con
---                        elementos <= 0).
---     SQLSTATE 'P0002' — Alguna sede del array no existe (propagado del
---                        single).
---     SQLSTATE '22023' — Alguna sede del array ya estaba inactiva (pro-
---                        pagado del single).
---     SQLSTATE '42501' — El usuario no satisface el gate compuesto para
---                        el EE concreto de alguna de las sedes (propa-
---                        gado del single).
+--   Retorna: TABLE(pk_sede BIGINT, status VARCHAR) -- una fila por cada
+--   PK recibido (deduplicados), con status:
+--     'eliminado'              — baja exitosa.
+--     'error:no_encontrado'    — P0002, no existe esa TSEDE.
+--     'error:sin_permiso'      — 42501, no pasa el gate para el EE de esa sede.
+--     'error:ya_inactivo'      — 22023, ya estaba inactiva.
+--     'error:<mensaje>'        — cualquier otra excepcion no prevista.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_sed_soft_delete_bulk(
     p_pk_usuario_solicitante  BIGINT,
     p_pks                     BIGINT[]
 )
-RETURNS BIGINT
+RETURNS TABLE(pk_sede BIGINT, status VARCHAR)
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_pk        BIGINT;
-    v_procesados BIGINT := 0;
+    v_pk BIGINT;
 BEGIN
     -- -----------------------------------------------------------------
     -- 0. Validacion de parametros de entrada.
@@ -882,40 +861,37 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    -- Duplicados: si el caller envia el mismo PK dos veces, el primer
-    -- PERFORM lo da de baja y el segundo cae con 'ya inactiva' (22023
-    -- propagado), oscureciendo el problema real. Lo detectamos arriba.
-    IF (SELECT COUNT(*) FROM (SELECT unnest(p_pks)) AS x) <> CARDINALITY(p_pks) THEN
-        RAISE EXCEPTION 'p_pks contiene PKs duplicados'
-            USING ERRCODE = '22023',
-                  HINT    = 'Elimine duplicados antes de invocar la funcion';
-    END IF;
-
-    IF EXISTS (SELECT 1 FROM unnest(p_pks) AS pk WHERE pk IS NULL OR pk <= 0) THEN
-        RAISE EXCEPTION 'p_pks contiene elementos nulos o <= 0'
-            USING ERRCODE = '22023';
-    END IF;
-
-    -- -----------------------------------------------------------------
-    -- 1. Bulk soft delete delegando en el single.
-    --    Cualquier excepcion (P0002, 22023, 42501) aborta la transaccion
-    --    y deshace TODAS las bajas ya aplicadas.
-    -- -----------------------------------------------------------------
-    FOREACH v_pk IN ARRAY p_pks
+    FOR v_pk IN SELECT DISTINCT x FROM unnest(p_pks) AS x ORDER BY x
     LOOP
-        PERFORM academico_test.fn_sed_soft_delete(p_pk_usuario_solicitante, v_pk);
-        v_procesados := v_procesados + 1;
+        BEGIN
+            PERFORM academico_test.fn_sed_soft_delete(p_pk_usuario_solicitante, v_pk);
+            pk_sede := v_pk;
+            status  := 'eliminado';
+            RETURN NEXT;
+        EXCEPTION
+            WHEN SQLSTATE 'P0002' THEN
+                pk_sede := v_pk;
+                status  := 'error:no_encontrado';
+                RETURN NEXT;
+            WHEN SQLSTATE '42501' THEN
+                pk_sede := v_pk;
+                status  := 'error:sin_permiso';
+                RETURN NEXT;
+            WHEN SQLSTATE '22023' THEN
+                pk_sede := v_pk;
+                status  := 'error:ya_inactivo';
+                RETURN NEXT;
+            WHEN OTHERS THEN
+                pk_sede := v_pk;
+                status  := 'error:' || SQLERRM;
+                RETURN NEXT;
+        END;
     END LOOP;
-
-    RAISE NOTICE 'Soft delete bulk TSEDE: autor=%, pks=% (procesados=%)',
-        p_pk_usuario_solicitante, p_pks, v_procesados;
-
-    RETURN v_procesados;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_sed_soft_delete_bulk(BIGINT, BIGINT[])
-    IS 'Variante bulk de fn_sed_soft_delete. Recibe un BIGINT[] de PK_TSEDE y aplica soft delete (con cascade a TSEDE_USUARIO y TSEDE_NIVEL via el single) en una sola transaccion. Semantica ATOMICA: si cualquier PK falla (no existe / ya inactiva / el usuario no pasa el gate para el EE concreto de esa sede), la operacion se revierte entera via RAISE EXCEPTION; ningun PK queda parcialmente procesado. Validaciones previas (22023): p_pk_usuario_solicitante > 0, p_pks no nulo ni vacio, sin duplicados, todos los elementos > 0. Retorna el conteo de sedes efectivamente dadas de baja (= cardinalidad de p_pks en caso exitoso). p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que el resto de funciones del esquema).';
+    IS 'REV: baja logica en lote de sedes, una fila (pk_sede, status) por PK -- cada uno en su propio savepoint via fn_sed_soft_delete, asi que un fallo en uno no aborta ni deshace el resto (antes era todo-o-nada, devolvia un solo total_procesados). status: eliminado | error:no_encontrado (P0002) | error:sin_permiso (42501) | error:ya_inactivo (22023) | error:<mensaje> para cualquier otra excepcion. Mismo patron que fn_fun_baja_establecimiento_bulk.';
 
 COMMENT ON FUNCTION academico_test.fn_sed_soft_delete(BIGINT, BIGINT)
     IS 'Baja logica en cascada: marca ACTIVE=FALSE en TSEDE, en sus TSEDE_USUARIO y en sus TSEDE_NIVEL. No afecta TPERIODO_ACADEMICO (modulo externo), TINF_*, TSEDE_CONVENIO (CASCADE duro en DDL), TARCHIVO ni TUSUARIO_ROL_PERMISO (ver alcance en cuerpo de la funcion). fn_est_soft_delete (V53) YA delega aqui para la cascade por EE. Solo afecta filas activas. Gate de autorizacion COMPUESTO contra el EE de la sede (mismo patron que fn_sed_crear / fn_sed_actualizar): (a) super-admin via fn_puede_afectar_establecimiento; (b) rector del EE (TFUNCIONARIO activo con FK_TUSUARIO = p_pk_usuario_solicitante y FK_TFUNCIONARIO_RECTOR del EE); (c) secretaria del EE (FK_TFUNCIONARIO_SECRETARIA); (d) jefe de sistema (rol 8 en TSEDE_USUARIO activa) con vinculacion en cualquier sede del EE. Cualquier otro caso => 42501. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52 y V53).';
