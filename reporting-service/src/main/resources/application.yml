@@ -101,6 +101,33 @@ reporting:
         municipio_nombre: Municipio
         estado_nombre: Estado
 
+    periodos-academicos:
+      path: /periodos-academicos/reporte
+      title: Periodos academicos
+      file-name: periodos-academicos
+      columns:
+        name: Periodo
+        school_year_name: Año
+        sede_name: Sede
+        jornada_name: Jornada
+        start_date: Inicio
+        end_date: Fin
+        enrollment_deadline: Limite matricula
+        status_name: Estado
+
+    periodos-evaluacion:
+      path: /periodo-evaluacion/reporte
+      title: Periodos de evaluacion
+      file-name: periodos-evaluacion
+      columns:
+        codigo: Codigo
+        nombre: Nombre
+        abreviacion: Abreviacion
+        start_date: Inicio
+        end_date: Fin
+        peso: Peso
+        estado_name: Estado
+
     sedes:
       path: /establecimientos/sedes/reporte
       title: Sedes educativas

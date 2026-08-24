@@ -29,7 +29,19 @@ public record ReportMeta(String usuario, Map<String, Object> filtros) {
             Map.entry("department", "Departamento"),
             Map.entry("municipality", "Municipio"),
             Map.entry("status", "Estado"),
-            Map.entry("zones", "Zonas"));
+            Map.entry("zones", "Zonas"),
+            // Periodo academico: el listado manda los filtros en MAYUSCULAS y
+            // planos (FK_SEDE, ANO...), asi que sin estas entradas el membrete
+            // imprimiria "Fk Sede" y "Ano".
+            Map.entry("NOMBRE_SEDE", "Sede"),
+            Map.entry("ANO", "Año"),
+            Map.entry("FK_ESTADO", "Estado"),
+            Map.entry("FECHA_DESDE", "Desde"),
+            Map.entry("FECHA_HASTA", "Hasta"),
+            Map.entry("FILTRO", "Búsqueda"),
+            Map.entry("FK_PERIODO", "Periodo"),
+            Map.entry("FK_SEDE", "Sede"),
+            Map.entry("IDS", "Selección"));
 
     /**
      * Los filtros en una linea, listos para imprimir. Cadena vacia cuando no

@@ -1,0 +1,235 @@
+# Cambios por función — adopción de `fn_audit_declarar`
+
+> Referencia función por función de lo que cambió cada migración `V67` a `V77` en cada una de las 49 funciones `academico_test.fn_*` de escritura. Complementa [`etiqueta-auditoria-cdc-analisis.md`](etiqueta-auditoria-cdc-analisis.md) (el porqué del diseño) y [`etiqueta-catalogo-funciones-fn.md`](etiqueta-catalogo-funciones-fn.md) (el catálogo original de candidatas). Este documento solo cubre, por función: **en qué posición del cuerpo se insertó la llamada** a `fn_audit_declarar`, y **si se le mandó información extra** (más allá de actor+etiqueta) y de dónde salió.
+
+## El cambio, en una línea
+
+En todas las funciones el cambio es el mismo gesto: agregar
+
+```sql
+PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante, format('<texto>', ...) [, <establecimiento_id>]);
+```
+
+**una sola vez, justo antes del primer `INSERT`/`UPDATE` que hace la función**, después de que ya pasaron todas las validaciones (`RAISE EXCEPTION`) — así una llamada que termina en error nunca deja una fila de auditoría a medias. `fn_audit_declarar(p_usuario_id, p_etiqueta, p_establecimiento_id, p_sede_id, p_etiquetas)` (`V66`) hace tres cosas con eso: resuelve el actor legible (`app.user_id`), fija el texto de la etiqueta (`app.etiqueta`), y si le pasaron `establecimiento_id`/`sede_id` funde su nombre legible dentro de `app.contexto` (JSON, *merge* no *overwrite* — no pisa lo que ya hubiera ahí). Ninguna de las 49 funciones pasa `p_sede_id` ni `p_etiquetas` (los dos parámetros extra que existen en el helper pero nadie usa todavía) — la única "información extra" real que se manda hoy es `p_establecimiento_id`.
+
+## Cómo leer las tablas
+
+- **Posición**: qué validación es la última que corre antes de la llamada, y qué `INSERT`/`UPDATE` es el primero que corre después.
+- **Etiqueta**: el string de `format()` tal cual quedó en la función (sin los valores, solo la plantilla).
+- **Info extra**: si se pasó un tercer argumento (`establecimiento_id`) o no, y de dónde sale esa variable — la inmensa mayoría reutiliza una expresión que la función **ya necesitaba** para el chequeo de permisos (`fn_periodo_gate_escritura`/`fn_periodo_usuario_puede_escribir`), no se agregó una consulta nueva solo para esto.
+
+## Pendiente: falta pasar `sede_id`
+
+Ninguna de las 49 llamadas pasa hoy el 4º parámetro de `fn_audit_declarar` (`p_sede_id`) — **se debe pasar**. Es el gap real: el pedido original de este trabajo fue "la etiqueta o campo adicional debe ser la sede **y** establecimiento donde se hizo el cambio" (ver `etiqueta-auditoria-cdc-analisis.md` §1), pero lo implementado hasta ahora solo resuelve establecimiento. Cuando se pasa `p_sede_id`, `fn_audit_declarar` no solo agrega `contexto.sede` — con un solo `JOIN` (`TSEDE → TESTABLECIMIENTO`) también resuelve `contexto.establecimiento`, así que en los casos donde ya se pasa `establecimiento_id` a mano, pasar en cambio `sede_id` es un cambio *equivalente o mejor* (mismo dato de establecimiento, más el de sede), no uno que se suma al de establecimiento.
+
+La buena noticia es que, para la inmensa mayoría de las 49, el `sede_id` **ya está a un paso de distancia** de donde hoy se resuelve el establecimiento — no hace falta una consulta nueva, solo tomar una columna que el `JOIN` existente ya trae:
+
+| Grupo | Funciones | De dónde sale `sede_id` |
+|---|---|---|
+| Resuelven establecimiento vía `fn_periodo_establecimiento(p_fk_periodo)` | `fn_grado_crear/actualizar/soft_delete`, `fn_grupo_crear/actualizar/soft_delete`, `fn_area_crear/actualizar/soft_delete`, `fn_subject_crear/actualizar/soft_delete/guardar_bulk`, `fn_plan_agregar/actualizar/eliminar/soft_delete`, `fn_horario_guardar`, `fn_asignacion_guardar`, `fn_descanso_agregar/eliminar`, `fn_periodo_eval_crear/actualizar/soft_delete`, `fn_criterio_eval_actualizar`, `fn_criterio_prom_guardar`, `fn_escala_eliminar/guardar_bulk/nivel_soft_delete` | `fn_periodo_establecimiento` ya hace `JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE` internamente para llegar al establecimiento — **la sede es `s.PK_TSEDE`, una columna que la función ya toca pero descarta**. Forma más simple: agregar un helper gemelo `fn_periodo_sede(p_fk_periodo)` (mismo `JOIN`, devuelve `pa.FK_TSEDE` en vez de `s.FK_TESTABLECIMIENTO`) y llamarlo junto al existente donde hoy se resuelve `v_establecimiento_id`. |
+| Ya reciben la sede como parámetro de entrada | `fn_periodo_crear` (`p_fk_sede`), `fn_periodo_actualizar` (`p_fk_sede`), `fn_sede_usuario_crear` (`p_fk_sede`) | Ninguna consulta adicional — pasar el parámetro que ya tienen. |
+| Operan directamente sobre una sede | `fn_sed_crear` (recibe `p_fk_establecimiento`, no una sede propia — no aplica, la sede es la que se está creando), `fn_sed_actualizar`/`fn_sed_soft_delete` (reciben `p_pk_sede`) | `p_pk_sede` **es** el `sede_id` — pasar el propio parámetro tal cual, igual que `fn_est_actualizar` ya hace con su propio `p_pk_establecimiento`. |
+| Ya leen la fila de `TSEDE_USUARIO` antes de la llamada | `fn_sede_usuario_actualizar`, `fn_sede_usuario_soft_delete` | Ambas ya hacen `SELECT ... FROM TSEDE_USUARIO WHERE PK_TSEDE_USUARIO = p_pk_sede_usuario` antes de la llamada (para leer `ACTIVE`/columnas actuales) — agregar `FK_TSEDE` a esa misma `SELECT` es gratis. |
+| No aplica — no hay una sede única de la que hablar | `fn_est_crear/actualizar/soft_delete/soft_delete_bulk` (un establecimiento tiene *varias* sedes, no una), `fn_fun_crear/actualizar/enlazar_establecimiento` (el funcionario se liga a un establecimiento, no a una sede, en este esquema), `fn_usu_crear`, `fn_create_plan_from_value`/`fn_delete_plan_from_value` (valores de catálogo globales) | Se deja `p_sede_id` sin pasar (`NULL`), igual que hoy — `fn_audit_declarar` ya maneja ese caso sin error, cae a solo resolver `establecimiento_id` si vino. |
+
+No se tocó ninguna función en esta pasada — es un mapeo de dónde saldría cada `sede_id`, para implementarlo en una migración `V78` cuando se decida hacerlo.
+
+---
+
+## V67 — `fn_grado_*` (prueba de concepto)
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_grado_crear` | Justo antes del `INSERT INTO TGRADO`, después de validar que no exista ya un grado con ese código en el periodo. | `Creación del grado %s` | Sí — `v_establecimiento_id`, ya resuelto antes vía `fn_periodo_establecimiento(p_fk_periodo)` para el gate de permisos. |
+| `fn_grado_actualizar` | Justo antes del `UPDATE TGRADO`, después de validar duplicado de nombre. | `Actualización del grado %s` | Sí — mismo `v_establecimiento_id` reutilizado. |
+
+## V68 — área / asignatura(*subject*) / grupo
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_area_crear` | Antes del `INSERT INTO TAREA`, tras validar duplicado por código. | `Creación del área %s` | Sí — `v_establecimiento_id` (de `fn_periodo_establecimiento`). |
+| `fn_area_actualizar` | Antes del `UPDATE TAREA`, tras validar duplicado por código. | `Actualización del área %s` | Sí — mismo patrón. |
+| `fn_area_soft_delete` | Antes del `UPDATE ... SET ACTIVE=FALSE`, tras validar que no tenga asignaturas activas asociadas. | `Eliminación del área %s` (usa `COALESCE(v_nombre, pk::TEXT)` por si el nombre no se pudo resolver). | Sí. |
+| `fn_grado_soft_delete` | Antes del `UPDATE` en cascada (grado + criterio de promoción), tras validar que no tenga grupos activos. | `Eliminación del grado %s` | Sí. |
+| `fn_grupo_crear` | Antes del `INSERT INTO TGRUPO`, tras validar duplicado de nombre en grado+jornada. | `Creación del grupo %s` | Sí. |
+| `fn_grupo_actualizar` | Antes del `UPDATE TGRUPO`, tras la misma validación de duplicado. | `Actualización del grupo %s` | Sí. |
+| `fn_grupo_soft_delete` | Antes del `UPDATE ... SET ACTIVE=FALSE`, tras validar que no tenga horarios configurados. | `Eliminación del grupo %s` | Sí. |
+| `fn_subject_crear` | Antes del `INSERT INTO TASIGNATURA`, tras validar duplicado de abreviación en el área. | `Creación de la asignatura %s` | Sí — variable `v_est`. |
+| `fn_subject_actualizar` | Antes del `UPDATE TASIGNATURA`, misma validación previa. | `Actualización de la asignatura %s` | Sí — `v_establecimiento_id`. |
+| `fn_subject_soft_delete` | Antes del `UPDATE ... SET ACTIVE=FALSE`, tras validar que no tenga horarios asociados. | `Eliminación de la asignatura %s` | Sí. |
+| `fn_subject_guardar_bulk` | Antes del primer `UPDATE` (baja lógica de las asignaturas que no vienen en el set nuevo), tras el chequeo de permisos sobre el área. | `Configuración masiva de asignaturas del área %s` | Sí — `v_est`. |
+
+## V69 — escalas de valoración
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_escala_eliminar` | Antes del `UPDATE TESCALA_VALORACION`, justo después de resolver el establecimiento y llamar `fn_periodo_gate_escritura`. | `Eliminación de la banda de valoración %s` | Sí. |
+| `fn_escala_guardar_bulk` | Al inicio de la función, inmediatamente después del gate de permisos (antes de cualquier validación de negocio del lote). Es un texto fijo, no un `format()`. | `'Configuración masiva de escalas de valoración'` (literal, sin interpolación) | Sí — `v_establecimiento_id`. |
+| `fn_escala_nivel_soft_delete` | Antes del primer `UPDATE` (valoraciones de las bandas), tras validar que no haya bandas en uso por criterios de unidad. | `Eliminación de la escala de valoración del nivel %s` | Sí. |
+
+## V70 — periodo académico / descansos / periodo de evaluación
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_periodo_crear` | Antes del `INSERT INTO TPERIODO_ACADEMICO`, tras validar que la jornada exista. | `Creación del periodo académico %s - %s` (año lectivo + jornada) | Sí — `v_establecimiento`. |
+| `fn_periodo_actualizar` | Antes del `UPDATE TPERIODO_ACADEMICO`, misma validación de jornada. | `Actualización del periodo académico %s - %s` | Sí — `v_establecimiento_id`. |
+| `fn_periodo_soft_delete` | Antes del `UPDATE ... SET ACTIVE=FALSE`, tras validar que no existan grados/grupos configurados. | `Eliminación del periodo académico %s` | Sí. |
+| `fn_descanso_agregar` | Antes del `INSERT INTO TDESCANSOS`, tras validar que no se traslape con otro descanso existente. | `Agregado de descanso %s-%s al periodo académico` | Sí. |
+| `fn_descanso_eliminar` | Antes del `UPDATE TDESCANSOS`, justo después del chequeo de permisos (`fn_periodo_usuario_puede_escribir`). | `Eliminación del descanso %s-%s` | Sí. |
+| `fn_periodo_eval_crear` | Antes del `INSERT INTO TPERIODO_EVALUACION`, tras `fn_periodo_eval_validar` (fechas/solapamiento). | `Creación del periodo de evaluación %s` | Sí — `v_establecimiento_id`. |
+| `fn_periodo_eval_actualizar` | Antes del `UPDATE TPERIODO_EVALUACION`, misma validación de solapamiento. | `Actualización del periodo de evaluación %s` (usa `COALESCE(p_nombre, r.NOMBRE)` para mostrar el nombre vigente aunque no se edite). | Sí. |
+| `fn_periodo_eval_soft_delete` | Antes del `UPDATE ... SET ACTIVE=FALSE`, tras el chequeo de permisos sobre el establecimiento. | `Eliminación del periodo de evaluación %s` | Sí — variable `v_est`. |
+
+## V71 — criterios de evaluación/promoción, plan de estudio, horario, asignación docente
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_criterio_eval_actualizar` | Antes del `UPDATE TCRITERIO_EVALUACION`, tras leer la escala/formato actuales. | `Actualización del criterio de evaluación del periodo %s` | Sí — `v_establecimiento_id`. |
+| `fn_criterio_prom_guardar` | Antes de buscar/crear la fila (criterio general del periodo o override de un grado), tras resolver el nombre del grado si aplica. | `Configuración del criterio de promoción` + (` general del periodo` **o** ` del grado %s`, según si `p_fk_grado` viene o no). | Sí. |
+| `fn_plan_agregar` | **Reubicada en `V77`** — originalmente (V71) quedó *después* del `INSERT INTO TPLAN` (el contenedor del plan, creado la primera vez que un grado recibe una asignatura); `V77` la movió a *antes*, junto con el resto (ver abajo). | `Asignación de %s al plan de estudio del grado %s` | Sí. |
+| `fn_plan_actualizar` | Antes del `UPDATE TASIGNATURA_PLAN`, tras validar que la nueva asignatura (si cambia) no esté ya en el plan. | `Actualización del plan de estudio: %s en %s` (asignatura + grado) | Sí. |
+| `fn_plan_eliminar` | Antes del `UPDATE ... SET ACTIVE=FALSE` (renglón individual del plan), tras validar que no tenga asignaciones docentes activas. | `Eliminación de %s del plan de estudio de %s` | Sí. |
+| `fn_plan_soft_delete` | Antes del primer `UPDATE` en cascada (todo el plan del grado), tras validar que ninguna asignatura tenga asignaciones docentes activas. | `Eliminación del plan de estudio completo del grado %s` | Sí. |
+| `fn_horario_guardar` | Antes del `UPDATE THORARIO` (desactivación del horario previo del grado), tras tomar el advisory lock y validar que el grado exista. | `Configuración del horario del grado %s` | Sí. |
+| `fn_asignacion_guardar` | Antes del `UPDATE TDOCENTE_ASIGNATURA` (desactivación de asignaciones previas), tras validar que el funcionario exista y tomar el advisory lock. | `Asignación académica del docente %s para el periodo %s` | Sí. |
+
+## V72 — establecimiento (soft-delete), catálogo PLAN, funcionario↔establecimiento, sede_usuario (parte 1)
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_est_soft_delete` | Antes del `UPDATE TESTABLECIMIENTO`, tras validar que no esté ya inactivo. | `Eliminación del establecimiento %s` | **No** — el establecimiento que se está eliminando es la propia entidad de la etiqueta; no aplica pasar su propio id como "contexto adicional". |
+| `fn_est_soft_delete_bulk` | Al inicio, tras el chequeo de permisos (`fn_puede_afectar_establecimiento`) y antes del `FOREACH` que llama a `fn_est_soft_delete` por cada uno. Etiqueta agregada del lote — cada llamada individual dentro del loop declara la suya propia (última gana), esta es solo el contexto general previo al loop. | `Eliminación masiva de %s establecimientos` | No. |
+| `fn_fun_enlazar_establecimiento` | Antes del `UPDATE TFUNCIONARIO` (fija `FK_ESTABLECIMIENTO`), tras validar que el funcionario esté pendiente de enlazar. | `Vinculación del funcionario %s al establecimiento %s` | Sí — `v_fk_establecimiento` (el establecimiento al que se está vinculando). |
+| `fn_sede_usuario_actualizar` | Antes del `UPDATE TSEDE_USUARIO`, tras validar que la jornada exista. | `Actualización de la asignación de sede/rol %s` | No — resolver el establecimiento de un `TSEDE_USUARIO` pediría un `JOIN` extra (sede→establecimiento) que la función no necesitaba antes; se dejó fuera para no agregar una consulta nueva solo para esto. |
+| `fn_sede_usuario_soft_delete` | Antes del `UPDATE ... SET ACTIVE=FALSE`, tras el chequeo de idempotencia (si ya estaba inactivo, retorna sin error). | `Eliminación de la asignación de sede/rol %s` | No — mismo motivo. |
+| `fn_sed_soft_delete_bulk` | Al inicio, antes del `FOREACH` que llama a `fn_sed_soft_delete` por cada sede. Mismo patrón que `fn_est_soft_delete_bulk`: etiqueta del lote, cada llamada individual pisa la suya. | `Eliminación masiva de %s sedes` | No. |
+| `fn_create_plan_from_value` | Antes del `INSERT INTO tlista_valor`, tras validar que no exista ya un valor activo con ese nombre en la categoría `PLAN`. | `Creación del valor de catálogo "%s" (plan de estudio)` | No — es un valor de catálogo global (`TLISTA_VALOR`), no pertenece a un establecimiento. |
+| `fn_delete_plan_from_value` | Antes del `UPDATE tlista_valor ... SET active=FALSE`, dentro del `IF v_pk IS NOT NULL`. | `Eliminación del valor de catálogo "%s" (plan de estudio)` | No — mismo motivo. |
+| `fn_fun_crear` | Antes del `INSERT INTO TFUNCIONARIO`, tras validar que el usuario no sea ya funcionario activo. | `Creación del funcionario %s` | No — un funcionario recién creado todavía no tiene establecimiento asignado (eso lo hace `fn_fun_enlazar_establecimiento` después, en otra llamada). |
+
+## V73 — sede (soft-delete), sede_usuario (parte 2), usuario
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_sed_soft_delete` | Antes del `UPDATE TSEDE`, tras el chequeo de permisos. | `Eliminación de la sede %s` | Sí — `v_fk_ee` (el establecimiento dueño de la sede). |
+| `fn_sede_usuario_crear` | Antes del `INSERT INTO TSEDE_USUARIO`, tras validar que no exista ya una asignación activa idéntica (sede+rol+usuario+orden). | `Asignación del rol %s al usuario %s en la sede %s` | No — mismo motivo que `fn_sede_usuario_actualizar`/`soft_delete` en V72 (requeriría un `JOIN` sede→establecimiento extra). |
+| `fn_usu_crear` | Antes del `INSERT INTO TUSUARIO`, tras validar que el archivo de foto (si viene) exista. | `Creación del usuario %s (cuenta %s)` | No — un usuario nuevo aún no tiene ninguna asignación de sede/establecimiento. |
+
+## V74 — sede (crear/actualizar), establecimiento (crear)
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_sed_crear` | Antes del `INSERT INTO TSEDE`, tras calcular el consecutivo de sedes del establecimiento. | `Creación de la sede %s (código %s)` | Sí — `p_fk_establecimiento` directamente (el parámetro de entrada, no hizo falta resolver nada). |
+| `fn_sed_actualizar` | Antes del `UPDATE TSEDE` (el patrón CTE que detecta columnas cambiadas), justo después del comentario que explica que `MODIFIED_BY`/`MODIFIED_AT` solo se tocan si algo cambió. | `Actualización de la sede %s` | Sí — `v_fk_ee`. |
+| `fn_est_crear` | Antes del `INSERT INTO TESTABLECIMIENTO`, tras validar que el archivo del logo (si viene) exista. | `Creación del establecimiento %s` | No — el establecimiento se está creando en esta misma llamada, todavía no tiene PK que pasar como "establecimiento donde ocurrió el cambio" (el cambio *es* la creación de ese establecimiento). |
+
+## V75 — establecimiento (actualizar)
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_est_actualizar` | Antes del `UPDATE TESTABLECIMIENTO` (patrón CTE de columnas cambiadas), en el mismo punto que `fn_sed_actualizar`. | `Actualización del establecimiento %s` (usa `COALESCE(p_nombre, v_nombre_actual)` para mostrar el nombre vigente aunque no se edite). | Sí — `p_pk_establecimiento` directamente (es la función que edita ese establecimiento, su propia PK ya es el establecimiento_id). |
+
+## V76 — funcionario (actualizar)
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_fun_actualizar` | Antes de las validaciones de valor (sección 2 de la función), justo después de leer nombre/apellidos actuales del funcionario — necesarios para armar la etiqueta aunque el `PATCH` no traiga esos campos. | `Actualización de datos del funcionario %s` (nombre completo, usando `COALESCE` entre lo nuevo y lo actual campo por campo). | No — esta función no resuelve el establecimiento del funcionario (viene de una tabla distinta, `FK_ESTABLECIMIENTO`, y no se necesitaba antes para el resto de la función); queda como candidato para una iteración futura si Mesa de Ayuda lo pide. Nota: esta es la función que en la prueba end-to-end (§13.2 del análisis) demostró que una sola llamada puede declarar la etiqueta para **dos tablas** (`TUSUARIO` y `TFUNCIONARIO`) en la misma transacción. |
+
+## V77 — corrección de orden en `fn_plan_agregar`
+
+| Función | Qué cambió | Por qué |
+|---|---|---|
+| `fn_plan_agregar` | Se movió la llamada a `fn_audit_declarar` de **después** del `INSERT INTO TPLAN` a **antes** de él — ahora es lo primero que corre tras la última validación (`RAISE EXCEPTION` de asignatura inexistente/inactiva), antes incluso del `pg_advisory_xact_lock`. | La primera vez que un grado recibe una asignatura, la función crea primero la fila contenedora `TPLAN` (el "plan de estudio" del grado) y luego la fila `TASIGNATURA_PLAN` (el renglón). Como `trg_audit_ctx` es `BEFORE STATEMENT`, el `INSERT INTO TPLAN` original (antes de `V77`) disparaba el trigger **antes** de que `fn_audit_declarar` hubiera fijado `app.etiqueta`/`app.contexto` — esa fila puntual llegaba a ClickHouse vacía, aunque el `INSERT INTO TASIGNATURA_PLAN` que venía después sí quedaba bien etiquetado. Encontrado con la prueba end-to-end real (api-gateway → ClickHouse), no por inspección de código — ver §13.1 de `etiqueta-auditoria-cdc-analisis.md`. |
+
+---
+
+## Funciones excluidas a propósito (no llevan `fn_audit_declarar` propio)
+
+Documentadas también en `etiqueta-auditoria-cdc-analisis.md` §12.2, se repiten aquí por completitud ya que forman parte del mismo universo de 51 funciones candidatas:
+
+| Función | Por qué no |
+|---|---|
+| `fn_enfasis_desde_seleccion`, `fn_enfasis_resolver`, `fn_escala_propagar` | *Helpers* internos invocados desde dentro de otra función que ya declaró su propia etiqueta. `set_config(..., true)` es "última llamada gana" por transacción — si estos también declararan la suya, pisarían la etiqueta correcta del caller. |
+| `fn_fun_soft_delete` | No hace ningún `INSERT`/`UPDATE` propio — delega enteramente en `fn_sede_usuario_soft_delete`, que sí declara. |
+| `fn_create_parent_menu_with_submenus` y el resto del grupo legacy/drift de menús y roles | Funciones con drift conocido respecto a producción (§17 de `etiqueta-catalogo-funciones-fn.md`), fuera de alcance de esta iniciativa. |
+
+---
+
+## Verificación contra el servidor (`172.233.184.248`, 2026-08-19)
+
+Introspección de solo lectura contra prod (`ssh root@172.233.184.248 "docker exec -i sso-postgres psql ..."`, sin escribir nada — mismo patrón ya usado para armar el catálogo original) para confirmar que las 49 funciones adoptadas existen ahí, y para detectar funciones de escritura que existan en prod pero falten o estén desactualizadas en local (rama `origin/dev`).
+
+### 1. Firma distinta entre local y prod en 3 de las 49 adoptadas
+
+Todas las demás (46) coinciden exactamente. Estas tres no:
+
+| Función | Diferencia | Lectura |
+|---|---|---|
+| `fn_est_crear` | Local tiene un parámetro de más: `p_fk_lv_estado_establecimiento bigint` (al final, antes de `p_fk_archivo`). | `dev` avanzó un campo que prod todavía no tiene — drift hacia adelante, no hacia atrás. Al desplegar, como el número de parámetros cambia, Postgres crea una *sobrecarga nueva* en vez de reemplazar la de prod (dos `fn_est_crear` van a convivir hasta que se limpie la vieja). |
+| `fn_fun_actualizar` | El último parámetro es distinto: local tiene `p_lista_permisos jsonb`, prod tiene `p_direccion character varying` en su lugar. | No es un campo agregado, es uno **reemplazado** — funcionalidad distinta entre lo que hay en `dev` y lo que corre en prod hoy. Esto también explica (más precisamente que lo que decía antes `etiqueta-auditoria-cdc-analisis.md` §13.1) por qué el catálogo de `sso-admin` local no coincide con ninguna de las dos: fue poblado en otro momento, con una tercera forma de la función. |
+| `fn_periodo_actualizar` | Prod tiene 2 parámetros que local **no tiene**: `p_descanso_inicio time[]`, `p_descanso_fin time[]`. | Es al revés que los otros dos: acá `dev` es el que **quitó** algo que prod todavía tiene — los descansos se separaron a `fn_descanso_agregar`/`fn_descanso_eliminar` en `dev`, pero prod sigue con el diseño viejo (el periodo entero con arreglos de horas). **Esto corrige lo que decía la tabla de hallazgos de `etiqueta-auditoria-cdc-analisis.md` §13.1**: no es que "el catálogo tenga un bug" en el vacío — el catálogo local (`public.query`) coincide con la firma que *todavía corre en prod*; es la función local (`dev`) la que quedó adelantada. El bug real, si acaso, es que nadie actualizó el catálogo cuando `dev` refactorizó la función. |
+
+`fn_criterio_eval_actualizar` (14 parámetros) sí hace *match* exacto con una de las tres sobrecargas de prod — la nota del §21 de `etiqueta-catalogo-funciones-fn.md` sobre "sobrecargas duplicadas a resolver" ya lo advertía; ver el punto 3 más abajo.
+
+### 2. Funciones de escritura que existen en prod y NO existen en local — no se pudieron adoptar
+
+Estas sí estaban catalogadas con etiqueta propuesta desde el principio (`etiqueta-catalogo-funciones-fn.md`), pero nunca se les agregó `fn_audit_declarar` porque **la función en sí no existe en la base local** (`origin/dev`) — no hay nada que hacerle `CREATE OR REPLACE`:
+
+| Función | Etiqueta ya propuesta en el catálogo | Por qué no se adoptó |
+|---|---|---|
+| `fn_enfasis_actualizar` (2 sobrecargas en prod: 3 y 5 parámetros) | `format('Actualización del énfasis %s', v_nombre)` | No existe en `academico_test` local, ninguna de las dos firmas. |
+| `fn_enfasis_soft_delete` | `format('Eliminación del énfasis %s', v_nombre)` | No existe en local. |
+| `fn_fun_baja_establecimiento` | `format('Desvinculación del funcionario %s del establecimiento', v_nombre_completo)` | No existe en local — sí existe `fn_fun_enlazar_establecimiento` (el inverso, sí adoptado en `V72`), pero no su contraparte de desvinculación. |
+
+Para adoptar estas tres hace falta primero portar su definición desde prod a una migración local (o confirmar si ya están en el `dev` real de GitHub y este ambiente local simplemente no las tiene aplicadas) — es un paso previo a agregarles `fn_audit_declarar`, no algo que se pueda resolver solo con una migración de auditoría.
+
+### 3. `fn_escala_bulk_delete` — implementación completamente distinta, no solo desactualizada
+
+Esta sí existe en ambos lados, pero **no es la misma función**:
+
+- **Local**: hace un `FOREACH` que llama a `fn_escala_eliminar` por cada id — como ya adoptó `fn_audit_declarar` desde `V69`, cada eliminación individual del lote queda auditada automáticamente, gratis, sin tocar `fn_escala_bulk_delete`.
+- **Prod**: tiene su propia cascada inline de 4 `UPDATE` (`TVALORACION`→`TESCALA_VALORACION`→`TNIVEL_ESCALA`→`TESCALA`), sin llamar a `fn_escala_eliminar` en absoluto, y sin ninguna llamada a `fn_audit_declarar` — si se despliega tal cual está en local, la reemplaza por completo (no es un cambio de auditoría, es un cambio de comportamiento).
+
+No se tocó en esta pasada. Si se quiere una etiqueta agregada para el lote (como sí tienen `fn_est_soft_delete_bulk`/`fn_sed_soft_delete_bulk`, `Eliminación masiva de %s establecimientos/sedes`), el patrón sería agregar `PERFORM fn_audit_declarar(p_pk_usuario_solicitante, format('Eliminación masiva de %s escalas', CARDINALITY(p_ids)))` antes del `FOREACH` — la versión local ya delega en `fn_escala_eliminar` así que ese único agregado bastaría (sin tocar el loop).
+
+### 4. Legacy/drift de menús y roles — confirmado, ya trackeado aparte
+
+`fn_add_trol`, `fn_associate_menus_to_rol`, `fn_delete_menu`, `fn_dissociate_menus_from_rol`, `fn_reorder_menus`, `fn_sincronizar_rol_publico`, `fn_sync_trol_to_public_role`, `fn_sync_tsede_usuario_to_role_users`, `fn_sync_users_password_to_tusuario`, `fn_upsert_menu` siguen presentes en prod con las firmas viejas. No es una novedad de este análisis — es exactamente el drift que ya describe la memoria de proyecto "V59 server drift cleanup pending" (`v59_cleanup_drift.sql` existe pero no se ha corrido contra prod). Fuera de alcance de la iniciativa de etiquetas; se confirma que sigue ahí, nada más.
+
+(`fn_create_parent_menu_with_submenus`, al revés — existe en local y no en prod — es el mismo grupo, ya excluido arriba.)
+
+---
+
+## V78 — sincronización desde producción (8 funciones)
+
+Resultado de la verificación de arriba: por decisión explícita ("priorizar lo que está en el servidor"), estas 8 funciones se trajeron desde prod (`172.233.184.248`) tal cual — 4 portadas desde cero (no existían en local), 1 reemplazo de implementación completo, y 3 reversiones de firma — y a todas se les agregó `fn_audit_declarar` en la misma pasada. Validadas con smoke test transaccional (`BEGIN...ROLLBACK`) y, donde el catálogo de `sso-admin` tiene ruta registrada, con HTTP real + verificación en ClickHouse (`api-gateway` → `query-service` → Postgres → `cdc-capture` → RabbitMQ → `cdc-worker` → ClickHouse).
+
+### Portadas desde cero (no existían en local)
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_enfasis_actualizar` (sobrecarga de 3 parámetros: `p_pk, p_nombre, p_pk_usuario_solicitante`) | Antes del `UPDATE TENFASIS`, tras validar duplicado de nombre en el establecimiento. | `Actualización del énfasis %s` (usa `COALESCE(p_nombre, r.NOMBRE)` para mostrar el nombre vigente aunque no se edite). | Sí — `r.FK_TESTABLECIMIENTO`, ya resuelto en la fila `r` que la función lee al principio (`SELECT * INTO r FROM TENFASIS ...`). |
+| `fn_enfasis_actualizar` (sobrecarga de 5 parámetros: agrega `p_codigo`, `p_fk_especialidad`) | Antes del `UPDATE TENFASIS`, tras validar duplicados de nombre **y** código. | `Actualización del énfasis %s` (usa `v_nombre`, ya resuelto vía `COALESCE(p_nombre, r.NOMBRE)` unas líneas antes para las validaciones de duplicado). | Sí — mismo patrón, `r.FK_TESTABLECIMIENTO`. |
+| `fn_enfasis_soft_delete` | Antes del `UPDATE ... SET ACTIVE=FALSE`, tras validar que no tenga asignaturas asociadas. | `Eliminación del énfasis %s` | Sí — `v_est`, resuelto en el mismo `SELECT` inicial que trae el nombre. |
+| `fn_fun_baja_establecimiento` | Antes del `UPDATE TFUNCIONARIO` (paso 2, desvinculación), después del bloqueo "es el rector, no se puede dar de baja así". Se agregó una `SELECT` nueva para resolver el nombre del funcionario (mismo patrón que `fn_fun_enlazar_establecimiento`, su inverso — esa función ya la tenía). | `Desvinculación del funcionario %s del establecimiento` | Sí — `v_fk_ee`, ya resuelto al principio de la función. |
+
+### Reemplazo de implementación (existía en ambos lados, pero eran funciones distintas)
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_escala_bulk_delete` | Dentro del `FOREACH`, antes de la cascada de 4 `UPDATE` (`TVALORACION`→`TESCALA_VALORACION`→`TNIVEL_ESCALA`→`TESCALA`), tras validar que no haya bandas en uso por criterios de unidad. Una declaración **por cada escala del lote** (no una sola de lote antes del loop, a diferencia de `fn_est_soft_delete_bulk`/`fn_sed_soft_delete_bulk` — cada escala tiene su propio establecimiento potencialmente distinto, así que cada una necesita su propia llamada con su propio `v_est`). | `Eliminación de la escala %s` | Sí — `v_est`, resuelto por escala vía `fn_periodo_establecimiento` sobre el periodo de su primera `TNIVEL_ESCALA` activa. |
+
+### Reversión de firma a la versión de producción
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_fun_actualizar` | Sin cambios de posición respecto a la versión local anterior (`V76`) — antes de las validaciones de valor (sección 2), justo después de leer nombre/apellidos actuales. Solo cambió la firma (último parámetro `p_direccion` en vez de `p_lista_permisos jsonb`) y el cuerpo alrededor (sin la sección de manejo de `jsonb` de permisos que tenía la versión local). | `Actualización de datos del funcionario %s` (igual que antes) | No — igual que antes (no resuelve establecimiento). |
+| `fn_periodo_actualizar` | Reubicada más temprano que la posición "natural": inmediatamente después de calcular los valores efectivos (`v_sede`, `v_inicio`, `v_hi`, etc.), **antes** del bloque de validación de cambio de sede — porque esta versión (a diferencia de la que reemplaza) hace `INSERT`/`UPDATE` de descansos y de `TANO_LECTIVO` **antes** de terminar todas sus validaciones (jornada, estado, "un solo periodo activo"). Mismo problema que `V77` encontró en `fn_plan_agregar`: declarar tarde habría dejado esas escrituras tempranas sin etiqueta. | `Actualización del periodo académico %s - %s` (año lectivo + jornada, resueltos temprano con una `SELECT` extra que se agregó solo para esto — se re-resuelven después de todas formas, sin conflicto). | Sí — `v_est_new`, resuelto con una `SELECT` nueva (`TSEDE → FK_TESTABLECIMIENTO`) en el mismo punto temprano. |
+| `fn_est_crear` | Antes del `INSERT INTO TESTABLECIMIENTO`, tras la última validación (`FK_TARCHIVO`). Sin cambios de posición respecto al patrón general — lo que cambió es el cuerpo completo alrededor (trae el REV4: sede por defecto + permisos de rector/secretaria automáticos vía `fn_sed_crear`/`fn_fun_permisos_actualizar`). | `Creación del establecimiento %s` (igual que antes) | No — igual que antes (el establecimiento se está creando en esta misma llamada). |
+
+### Notas de esta ronda
+
+- **`fn_sincronizar_rol_publico`** (llamada dos veces al final de `fn_est_crear`, para reflejar rector/secretaria en `public.role_users`) quedó **comentada** — esa función no existe en local (grupo legacy de menús/roles ya excluido). El establecimiento, la sede y los permisos de `TSEDE_USUARIO` sí quedan creados correctamente; solo el espejo a `public.role_users` queda pendiente.
+- Migración `V78` necesitó `DROP FUNCTION` explícito antes del `CREATE OR REPLACE` para las 3 reversiones de firma (Postgres no permite cambiar cantidad/tipo de parámetros, ni renombrarlos, con `CREATE OR REPLACE` solo) — y para `fn_escala_bulk_delete`, cuyo único cambio de firma es el *nombre* del parámetro (`p_ids` → `p_escala_ids`), que también exige `DROP`.
+- `fn_periodo_actualizar` (versión de prod) hace `INSERT ... ON CONFLICT (FK_TESTABLECIMIENTO, NOMBRE) DO NOTHING` sobre `TANO_LECTIVO`. Local tiene esa restricción como **índice único parcial** (`WHERE active = true`, migración `V65`/PR #71) en vez de un `UNIQUE CONSTRAINT` normal como en prod — hubo que agregarle el mismo `WHERE active = true` al `ON CONFLICT` para que matcheara el índice parcial local.
+- Migración `V79` (nueva, separada) agrega 3 valores de catálogo (`TLISTA_VALOR`) que estas funciones necesitan y que el catálogo local no tenía **en absoluto**: la categoría `ESTADO_ESTABLECIMIENTO` (id `533` exacto, porque `fn_est_crear` lo trae hardcodeado como constante), la zona `id=216` ("Urbana y Rural", usada por la sede por defecto del REV4), y la categoría `ESTADOPERIODO` completa (antes ni existía localmente — el periodo semilla `PK=2` apuntaba, por error de seed, a un valor de la categoría `PLAN`, cosa que la validación estricta de la versión de prod ahora rechaza).

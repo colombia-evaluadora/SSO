@@ -177,6 +177,14 @@ management:
   otlp:
     metrics:
       export:
+        # Default deshabilitado: si el perfil de observabilidad esta apagado
+        # (Alloy no existe) y algo arranca el jar sin pasar
+        # MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED explicitamente (docker-compose
+        # SI lo pasa siempre, pero un `docker run` a mano o un test no), el
+        # default de Spring Boot Actuator para esta propiedad es "true" ---
+        # sin este override el registry igual arranca e intenta pushear cada
+        # 10s contra un host que no resuelve.
+        enabled: ${MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED:false}
         url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
         step: 10s
   opentelemetry:
@@ -192,7 +200,13 @@ management:
       service.namespace: sso
       deployment.environment: ${DEPLOY_ENV:dev}
   tracing:
-    enabled: true
+    # Mismo motivo que arriba, y ademas conecta la variable real: el nombre
+    # historico en docker-compose.yml (MANAGEMENT_TRACING_EXPORT_ENABLED) no
+    # correspondia a ninguna propiedad real de Spring (no existe
+    # "management.tracing.export.enabled") -- la unica que existe es
+    # "management.tracing.enabled", hardcodeada en "true" hasta ahora, asi
+    # que el interruptor de docker-compose nunca apagaba tracing de verdad.
+    enabled: ${MANAGEMENT_TRACING_EXPORT_ENABLED:false}
     sampling:
       probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
 

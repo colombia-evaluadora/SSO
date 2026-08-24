@@ -14,15 +14,30 @@ BEGIN
         true,
         'audit_ctx',
         json_build_object(
-            'tabla',      TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME,
-            'op',         LEFT(TG_OP, 1),
-            'app_user',   NULLIF(current_setting('app.user_id', true), ''),
-            'db_user',    session_user,
-            'sesion_id',  v_ctx ->> 'sesion_id',
-            'familia',    v_ctx ->> 'familia',
-            'request_id', LEFT(NULLIF(current_setting('app.request_id', true), ''), 100),
-            'etiqueta',   v_etiq,
-            'contexto',   v_ctx
+            'tabla',       TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME,
+            'op',          LEFT(TG_OP, 1),
+            'app_user',    NULLIF(current_setting('app.user_id', true), ''),
+            -- V-audit-ctx-3: PK numérico crudo del actor, además del nombre
+            -- legible de arriba. fn_audit_declarar (V66) resuelve el nombre
+            -- y SOBREESCRIBE app.user_id con él -- este campo aparte nunca
+            -- se pisa, así que el PK sobrevive incluso cuando la resolución
+            -- de nombre falla o el actor no existe en TUSUARIO.
+            'app_user_id', NULLIF(current_setting('app.user_pk', true), ''),
+            'db_user',     session_user,
+            'sesion_id',   v_ctx ->> 'sesion_id',
+            'familia',     v_ctx ->> 'familia',
+            'request_id',  LEFT(NULLIF(current_setting('app.request_id', true), ''), 100),
+            'http_method', LEFT(NULLIF(current_setting('app.http_method', true), ''), 10),
+            -- V-audit-ctx-2: IP/user-agent/headers/body para auditoría de
+            -- seguridad. headers/request_body llegan ya serializados como
+            -- JSON (ver QueryService.injectRequestParams) así que se
+            -- castean, no se truncan como los TEXT sueltos de arriba.
+            'client_ip',    LEFT(NULLIF(current_setting('app.client_ip', true), ''), 45),
+            'user_agent',   LEFT(NULLIF(current_setting('app.user_agent', true), ''), 500),
+            'headers',      NULLIF(current_setting('app.headers', true), '')::json,
+            'request_body', NULLIF(current_setting('app.request_body', true), '')::json,
+            'etiqueta',    v_etiq,
+            'contexto',    v_ctx
         )::text
     );
     RETURN NULL;

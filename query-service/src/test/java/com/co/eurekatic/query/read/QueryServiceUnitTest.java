@@ -233,4 +233,100 @@ class QueryServiceUnitTest {
 
         assertThat(QueryService.normalizeColumnValue(pg, MAPPER)).isNull();
     }
+
+    // --- V-audit-ctx-2: wrap automático de contexto de auditoría ---
+
+    @Test
+    void wrapsAcademicoTestFnCallOnNonGetWrite() {
+        assertThat(QueryService.isAuditWrappable("SELECT", "POST",
+                "SELECT * FROM academico_test.fn_area_crear(:BODY.NOMBRE)"))
+                .isTrue();
+        assertThat(QueryService.isAuditWrappable("FUNCTION", "PUT",
+                "SELECT academico_test.fn_area_actualizar(:BODY.ID)"))
+                .isTrue();
+    }
+
+    @Test
+    void doesNotWrapPlainSelectEvenIfHttpMethodIsNotGet() {
+        // El caso real que rompía antes del fix: filas legado sin
+        // http_method declarado caen al default histórico POST aunque
+        // sean lecturas puras — no deben recibir el CTE de auditoría.
+        assertThat(QueryService.isAuditWrappable("SELECT", "POST",
+                "SELECT id, name FROM users ORDER BY id"))
+                .isFalse();
+    }
+
+    @Test
+    void doesNotWrapAcademicoTestCallOnGet() {
+        assertThat(QueryService.isAuditWrappable("SELECT", "GET",
+                "SELECT * FROM academico_test.fn_area_listar()"))
+                .isFalse();
+    }
+
+    @Test
+    void doesNotWrapDmlOrProcedureModeEvenForAcademicoTestCall() {
+        // El truco del CTE mete el SQL como subconsulta en un FROM;
+        // un INSERT/UPDATE directo o un CALL no son válidos ahí.
+        assertThat(QueryService.isAuditWrappable("DML", "POST",
+                "INSERT INTO academico_test.tarea (nombre) VALUES (:BODY.NOMBRE)"))
+                .isFalse();
+        assertThat(QueryService.isAuditWrappable("PROCEDURE", "POST",
+                "CALL academico_test.fn_area_crear(:BODY.NOMBRE)"))
+                .isFalse();
+    }
+
+    @Test
+    void nullHttpMethodDefaultsToWriteForWrapping() {
+        assertThat(QueryService.isAuditWrappable("SELECT", null,
+                "SELECT * FROM academico_test.fn_area_crear(:BODY.NOMBRE)"))
+                .isTrue();
+    }
+
+    @Test
+    void wrapWithAuditContextPrependsCteAndReferencesAllContextPlaceholders() {
+        String wrapped = QueryService.wrapWithAuditContext(
+                "SELECT * FROM academico_test.fn_area_crear(:BODY.NOMBRE)");
+
+        assertThat(wrapped)
+                .startsWith("WITH _actor AS MATERIALIZED (")
+                .contains(":CONTEXT.REQUEST_ID")
+                .contains(":CONTEXT.HTTP_METHOD")
+                .contains(":CONTEXT.CLIENT_IP")
+                .contains(":CONTEXT.USER_AGENT")
+                .contains(":CONTEXT.HEADERS")
+                .contains(":CONTEXT.REQUEST_BODY")
+                .contains(":CONTEXT.PATH")
+                // V-audit-ctx-3 — puente public.users.id_user -> TUSUARIO.PK_TUSUARIO
+                // y las dos GUCs duales (nombre legible + PK crudo).
+                .contains(":CONTEXT.USER_ID")
+                .contains("public.fn_get_academico_usuario_id")
+                .contains("'app.user_id'")
+                .contains("academico_test.fn_resolver_actor")
+                .contains("'app.user_pk'")
+                // V-audit-ctx-4 — sesion_id y familia viajan como
+                // placeholders CONTEXT.* para que se funden en
+                // app.contexto y lleguen como columnas dedicadas a
+                // auditoria.audit_log.
+                .contains(":CONTEXT.SESION_ID")
+                .contains(":CONTEXT.FAMILIA")
+                // MERGE (no OVERWRITE): respeta un app.contexto
+                // preexistente que fn_audit_declarar (V66) haya
+                // podido fijar antes -- COALESCE al '{}' para
+                // arranque limpio, || para añadir sin pisar.
+                .contains("current_setting('app.contexto', true)")
+                .contains("|| jsonb_build_object")
+                .contains("'sesion_id'")
+                .contains("'familia'")
+                .contains("SELECT * FROM academico_test.fn_area_crear(:BODY.NOMBRE)")
+                .endsWith(") AS _orig;");
+    }
+
+    @Test
+    void wrapWithAuditContextStripsExistingTrailingSemicolon() {
+        String wrapped = QueryService.wrapWithAuditContext(
+                "SELECT academico_test.fn_area_crear(:BODY.NOMBRE);");
+
+        // Un solo ';' final — no dos.
+        assertThat(wrapped.chars().filter(c -> c == ';').count()).isEqualTo(1);
+    }
 }

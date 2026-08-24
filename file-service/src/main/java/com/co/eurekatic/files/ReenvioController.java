@@ -288,7 +288,8 @@ public class ReenvioController {
         }
 
         var resultado = transformador.transformar(
-                campos, ficheros, principal.email(), clasificacionesPorCampo, establecimientosPorCampo);
+                campos, ficheros, principal.email(), principal.idUser(),
+                clasificacionesPorCampo, establecimientosPorCampo);
 
         log.info("{} {} — {} campo(s), {} con fichero", metodo, destino,
                 campos.size(), ficheros.size());
@@ -322,7 +323,7 @@ public class ReenvioController {
         // Quedan inactivas, que es justo el estado que la limpieza
         // periódica busca.
         if (respuesta.getStatusCode().is2xxSuccessful()) {
-            archivos.activar(resultado.archivoIds());
+            archivos.activar(resultado.archivoIds(), principal.email(), principal.idUser());
         } else if (!resultado.archivoIds().isEmpty()) {
             log.warn("el catálogo respondió {} — {} fila(s) quedan inactivas: {}",
                     respuesta.getStatusCode().value(),
@@ -379,14 +380,22 @@ public class ReenvioController {
         }
         try {
             var auth = jwt.parse(bruto);
-            return new Principal(auth.email(), auth.roles());
+            return new Principal(auth.email(), auth.roles(), auth.userId());
         } catch (io.jsonwebtoken.JwtException e) {
             log.debug("JWT rechazado: {}", e.getMessage());
             return null;
         }
     }
 
-    private record Principal(String email, java.util.Set<String> roles) {}
+    /**
+     * @param idUser {@code public.users.id_user} (claim {@code uid} del
+     *               JWT) — antes se descartaba acá; ahora se propaga hasta
+     *               {@code ArchivoRepository} para que las escrituras en
+     *               {@code TARCHIVO} queden atribuidas con {@code app.user_pk}
+     *               (V-audit-ctx-3). {@code null} para tokens legado sin
+     *               ese claim.
+     */
+    private record Principal(String email, java.util.Set<String> roles, Long idUser) {}
 
     /**
      * {@code ParamNamespace.canonicalKeyFor} exige que cada segmento del

@@ -79,6 +79,12 @@ public class TransformadorMultipart {
      * @param campos  partes de texto del multipart, tal cual llegaron
      * @param ficheros partes binarias, agrupadas por nombre de campo
      * @param usuario  identidad verificada del llamante, para auditoría
+     * @param idUser   {@code public.users.id_user} del llamante (claim
+     *                 {@code uid} del JWT) — se puentea a
+     *                 {@code academico_test.TUSUARIO.PK_TUSUARIO} para
+     *                 {@code app.user_pk} (ver
+     *                 {@code ArchivoRepository#applyAuditContext}).
+     *                 {@code null} para tokens legado sin ese claim.
      * @param clasificaciones nombre de campo del multipart → clasificación
      *                 declarada ({@code "FILE:perfilUsuario"} en el
      *                 catálogo — ver {@code ParamTypes.FILE}). Sólo
@@ -105,6 +111,7 @@ public class TransformadorMultipart {
     public Resultado transformar(Map<String, String> campos,
                                  Map<String, List<MultipartFile>> ficheros,
                                  String usuario,
+                                 Long idUser,
                                  Map<String, String> clasificaciones,
                                  Map<String, String> establecimientos) {
         Map<String, Object> cuerpo = new LinkedHashMap<>();
@@ -132,7 +139,7 @@ public class TransformadorMultipart {
                     if (parte.isEmpty()) {
                         continue;
                     }
-                    ids.add(subirUna(parte, usuario, clasificacion, establecimiento, reservados, objetosSubidos));
+                    ids.add(subirUna(parte, usuario, idUser, clasificacion, establecimiento, reservados, objetosSubidos));
                 }
                 if (ids.isEmpty()) {
                     continue;
@@ -145,7 +152,7 @@ public class TransformadorMultipart {
             return new Resultado(cuerpo, List.copyOf(reservados));
 
         } catch (RuntimeException | IOException e) {
-            deshacer(reservados, objetosSubidos);
+            deshacer(reservados, objetosSubidos, usuario, idUser);
             throw new SubidaFallidaException(
                     "No se pudo procesar el multipart: " + e.getMessage(), e);
         }
@@ -207,7 +214,7 @@ public class TransformadorMultipart {
      * detectable por el log que una petición que nunca termina de
      * fallar.
      */
-    private void deshacer(List<Long> reservados, Map<Long, String> objetosSubidos) {
+    private void deshacer(List<Long> reservados, Map<Long, String> objetosSubidos, String usuario, Long idUser) {
         for (var entrada : objetosSubidos.entrySet()) {
             try {
                 almacen.borrar(entrada.getValue());
@@ -218,11 +225,11 @@ public class TransformadorMultipart {
             }
         }
         for (Long pk : reservados) {
-            archivos.descartar(pk);
+            archivos.descartar(pk, usuario, idUser);
         }
     }
 
-    private long subirUna(MultipartFile parte, String usuario, String clasificacion, String establecimiento,
+    private long subirUna(MultipartFile parte, String usuario, Long idUser, String clasificacion, String establecimiento,
                           List<Long> reservados, Map<Long, String> objetosSubidos) throws IOException {
         String nombre = nombreSeguro(parte.getOriginalFilename());
         long peso = parte.getSize();
@@ -233,8 +240,8 @@ public class TransformadorMultipart {
         //    TARCHIVO.etiqueta — consistente con las filas históricas
         //    migradas, que siempre la traían.
         long pk = clasificacion == null
-                ? archivos.reservar(nombre, peso, usuario)
-                : archivos.reservar(nombre, peso, usuario, clasificacion);
+                ? archivos.reservar(nombre, peso, usuario, idUser)
+                : archivos.reservar(nombre, peso, usuario, idUser, clasificacion);
         reservados.add(pk);
 
         // 2. La clave incluye el pk, así que es única sin necesidad de
@@ -263,7 +270,7 @@ public class TransformadorMultipart {
             //    que es el momento en que la operación de negocio
             //    completa se sabe terminada. Ver
             //    ArchivoRepository#activar.
-            archivos.registrarUrl(pk, url);
+            archivos.registrarUrl(pk, url, usuario, idUser);
         }
         log.debug("campo con fichero '{}' -> pk_tarchivo={}", nombre, pk);
         return pk;

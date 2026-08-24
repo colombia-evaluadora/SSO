@@ -638,9 +638,20 @@ jobs:
           # anteriores — típicos cuando un fix de una migración V<n>
           # previa reescribe el archivo y el servidor todavía conserva
           # el checksum antiguo en flyway_schema_history). Un
-          # `flyway repair` actualiza los checksums sin tocar datos y,
-          # combinado con un nuevo `compose up`, suele bastar para
-          # recuperar el deploy sin tener que entrar por SSH a mano.
+          # `flyway repair` actualiza los checksums sin tocar datos.
+          #
+          # Pero repair por sí solo no basta cuando el mismatch venía
+          # acompañado de migraciones "resueltas pero no aplicadas" con
+          # version menor a la ya aplicada más alta (mismo patrón que
+          # V62/71/72 detectado en Docker local: un fix reescribe un
+          # V<n> viejo, el checksum se repara, pero flyway sigue
+          # rechazando el migrate porque V<n> quedaría fuera de orden).
+          # Por eso, tras un repair exitoso, se corre un
+          # `flyway -outOfOrder=true migrate` EXPLÍCITO antes de
+          # reintentar `compose up`: es el paso que de verdad re-ejecuta
+          # el archivo que cambió. El `compose up` posterior deja el
+          # servicio flyway del stack en estado ya migrado (no-op) y
+          # solo sirve para levantar el resto de contenedores.
           up_stack() { ./scripts/sso-stack.sh up -d --remove-orphans; }
           if ! up_stack; then
             echo "=== primer compose up falló ==="
@@ -648,17 +659,25 @@ jobs:
             docker compose logs --no-color --tail=200 flyway || true
             echo "=== intentando flyway repair ==="
             if docker compose run --rm flyway repair; then
-              echo "=== flyway repair OK; reintentando compose up ==="
-              if up_stack; then
-                echo "=== compose up exitoso tras repair ==="
+              echo "=== flyway repair OK; migrando con -outOfOrder=true ==="
+              if docker compose run --rm flyway -outOfOrder=true migrate; then
+                echo "=== flyway migrate (outOfOrder) OK; reintentando compose up ==="
+                if up_stack; then
+                  echo "=== compose up exitoso tras repair + migrate outOfOrder ==="
+                else
+                  echo "=== compose up SIGUE fallando tras repair + migrate outOfOrder ==="
+                  echo "=== flyway logs (last 200) ==="
+                  docker compose logs --no-color --tail=200 flyway || true
+                  echo "=== auth-center logs (last 50) ==="
+                  docker compose logs --no-color --tail=50 auth-center || true
+                  echo "=== compose ps ==="
+                  docker compose ps || true
+                  exit 1
+                fi
               else
-                echo "=== compose up SIGUE fallando tras repair ==="
+                echo "=== flyway migrate -outOfOrder=true falló tras repair ==="
                 echo "=== flyway logs (last 200) ==="
                 docker compose logs --no-color --tail=200 flyway || true
-                echo "=== auth-center logs (last 50) ==="
-                docker compose logs --no-color --tail=50 auth-center || true
-                echo "=== compose ps ==="
-                docker compose ps || true
                 exit 1
               fi
             else

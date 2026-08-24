@@ -134,6 +134,48 @@ services:
       retries: 20
       start_period: 10s
 
+  # V91 -- GC diario de academico_test.tsesion_web. Sidecar con
+  # dcron + psql, fuera del cluster Postgres (no requiere
+  # pg_cron/shared_preload_libraries en la imagen de Postgres -- que
+  # la imagen de debezium no trae y no queremos cambiar). El cron
+  # corre a las 03:00 UTC y ejecuta scripts/tsesion-web-gc.sh, que
+  # es el ÚNICO lugar donde vive la regla de retención. Un cambio
+  # de threshold se hace vía TSESION_WEB_GC_THRESHOLD_DAYS en .env,
+  # sin recompilar la imagen.
+  tsesion-web-gc:
+    profiles: ["local-only"]
+    image: alpine:3.20
+    container_name: sso-tsesion-web-gc
+    restart: unless-stopped
+    # Alpine + dcron + postgresql16-client (la 16 matchea con la
+    # imagen de Postgres del cluster). No usamos la imagen de
+    # debezium/postgres para esto -- sería sobredimensionada
+    # (incluye wal2json, decoderbufs, etc.) y arrancaría un
+    # postmaster que no queremos.
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache postgresql16-client dcron bash \
+          && echo "0 3 * * * sh /scripts/tsesion-web-gc.sh 2>&1" | crontab - \
+          && crond -f -d 0 -L /dev/stdout
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      # Regla de retención (días). 40 = 30d refresh TTL + 10d
+      # margen. Modificable sin tocar la imagen.
+      TSESION_WEB_GC_THRESHOLD_DAYS: "${TSESION_WEB_GC_THRESHOLD_DAYS:-40}"
+    volumes:
+      - ./scripts/tsesion-web-gc.sh:/scripts/tsesion-web-gc.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Sin ports ni healthcheck -- es un job silencioso que se
+    # autovigila (cron logs a stdout).
+
   # ===========================================================================
   # flyway — one-shot schema migrator against Neon. Every Spring service
   # depends_on service_completed_successfully, so the schema is guaranteed
@@ -518,6 +560,10 @@ services:
       # the whole /internal/** surface 401s while the stack still
       # reports healthy.
       SSO_INTERNAL_TOKEN: ${SSO_INTERNAL_TOKEN}
+      # V-audit-revert — interfaz HTTP de ClickHouse, mismo host que
+      # CDC_CLICKHOUSE_URL usa cdc-worker. sso-admin solo lee de acá
+      # (ClickHouseAuditClient) para resolver el cambio a revertir.
+      CLICKHOUSE_URL: ${CDC_CLICKHOUSE_URL:-http://default:demopass@cdc-clickhouse:8123}
       # SMTP — in dev, point at the mailhog service.
       SMTP_HOST: mailhog
       SMTP_PORT: "1025"
@@ -914,6 +960,31 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+
+  # V-audit-clickhouse — backend del microservicio `audit-clickhouse`
+  # (catalog microservice_id=7). El contenedor lo aprovisiona el
+  # sidecar `sso-provisioner` con el nombre canónico
+  # `query-service-audit-clickhouse` (que el gateway espera en
+  # Eureka via `eurekaServiceId(microservice)`); NO se declara acá
+  # para no competir con esa única fuente de verdad. La imagen que
+  # usa el provisioner es `${IMAGE_PREFIX}/query-service:${IMAGE_TAG}`
+  # (ver docker-compose.yml del provisioner), así que un cambio de
+  # código en query-service se propaga con
+  # `docker compose build query-service && docker tag <local> <ghcr>`.
+
+  # V-audit-clickhouse — backend del microservicio `audit-clickhouse`
+  # (catalog microservice_id=7). Sirve /audits/* contra ClickHouse.
+  # Mismo patrón instance-mode que query-service-postgres /
+  # V-audit-clickhouse — backend del microservicio `audit-clickhouse`
+  # (catalog microservice_id=7). El contenedor lo aprovisiona el
+  # sidecar `sso-provisioner` con el nombre canónico
+  # `query-service-audit-clickhouse` (que el gateway espera en
+  # Eureka via `eurekaServiceId(microservice)`); NO se declara acá
+  # para no competir con esa única fuente de verdad. La imagen que
+  # usa el provisioner es `${IMAGE_PREFIX}/query-service:${IMAGE_TAG}`
+  # (ver docker-compose.yml del provisioner), así que un cambio de
+  # código en query-service se propaga con
+  # `docker compose build query-service && docker tag <local> <ghcr>`.
 
   # NOTA: NO se define aquí una instancia estática para el catálogo
   # eval-col (se intentó — ver historial de este archivo — y se
@@ -1414,6 +1485,9 @@ services:
   # de la autenticación.
   # ===========================================================================
   file-service:
+    build:
+      context: .
+      dockerfile: file-service/Dockerfile
     image: ${IMAGE_PREFIX:-eurekatic}/file-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-file-service
     restart: unless-stopped
@@ -1479,10 +1553,15 @@ services:
       # GET /files/download/{id}; no emite tokens, así que no recibe
       # (ni debe recibir) la privada.
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      # Observability: push OTLP to Alloy
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      # Interruptor de telemetria: con el perfil de observabilidad
+      # apagado, Alloy no existe y sin esto los nueve servicios
+      # reintentarian contra un endpoint muerto. Nombres verificados
+      # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
     mem_limit: 512m
     healthcheck:
       # `bash`, no `sh`: /dev/tcp NO es un fichero, es una función del

@@ -29,6 +29,7 @@ class CdcEventContextTest {
               "routing_key": "audit_ctx",
               "context": {
                 "app_user": "alice",
+                "app_user_id": "42",
                 "db_user": "postgres",
                 "sesion_id": "S-42",
                 "familia": "ADMIN",
@@ -48,6 +49,7 @@ class CdcEventContextTest {
         assertThat(event.message().data()).contains("alice");
         assertThat(event.context()).isNotNull();
         assertThat(event.context().appUser()).isEqualTo("alice");
+        assertThat(event.context().appUserId()).isEqualTo("42");
         assertThat(event.context().dbUser()).isEqualTo("postgres");
         assertThat(event.context().sesionId()).isEqualTo("S-42");
         assertThat(event.context().familia()).isEqualTo("ADMIN");
