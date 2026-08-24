@@ -24,6 +24,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.sql.SQLException;
@@ -31,6 +33,7 @@ import java.sql.SQLException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Read-path business logic. The flow:
@@ -395,7 +398,24 @@ public class QueryService {
         // silencio para PROCEDURE. La paginación ahora la escribe
         // el autor con :QUERY.SIZE / :QUERY.OFFSET, lo que además
         // le da control del dialecto y del orden de las cláusulas.
-        String sql = rewrittenSql;
+        //
+        // V-audit-ctx-2 — la ÚNICA excepción: el wrap de contexto de
+        // auditoría (ver wrapWithAuditContext) SÍ se le añade por
+        // fuera del catálogo, nunca a través de él. Antes (V80) el
+        // wrap vivía como texto literal dentro de la fila
+        // `public.query.query` — el autor lo veía (y podía romperlo)
+        // en el editor SQL del catálogo, y una lista de id_query
+        // hardcodeada decidía a qué filas aplicaba, lista que había
+        // que regenerar a mano por ambiente. Ahora es automático:
+        // CUALQUIER query en modo SELECT/FUNCTION que invoque una
+        // función academico_test.fn_* (la convención de nombres que
+        // TODAS las funciones de escritura auditadas siguen) y cuyo
+        // verbo no sea GET lo recibe, sin que el catálogo sepa que
+        // existe — no hace falta curar una lista ni tocar SQL
+        // guardado cuando se agrega una función nueva.
+        String sql = isAuditWrappable(mode, def.httpMethod(), rewrittenSql)
+                ? wrapWithAuditContext(rewrittenSql)
+                : rewrittenSql;
 
         // V33 — wrap the JDBC execution in a per-dialect
         // bulkhead. tryAcquirePermission() returns false
@@ -804,6 +824,12 @@ public class QueryService {
      */
     private static void injectContextParams(Map<String, Object> target,
                                             Authentication auth) {
+        // V-audit-ctx — REQUEST_ID/PATH van SIEMPRE, autenticado o no: son
+        // datos del transporte HTTP (de dónde vino el request), no de la
+        // identidad. Colocados antes del `return` temprano de abajo para
+        // que un query público también los tenga disponibles.
+        injectRequestParams(target);
+
         if (auth == null || !(auth.getPrincipal() instanceof AuthPrincipal p)) {
             return;
         }
@@ -812,6 +838,17 @@ public class QueryService {
         }
         if (p.email() != null) {
             target.put(ParamNamespace.CONTEXT + ".EMAIL", p.email());
+        }
+        // V-audit-ctx-4 (sesiones reales): familyId llega como
+        // claim `fid` del JWT (V29-style: ausente en tokens legacy,
+        // se omite el placeholder). Un solo placeholder sirve para
+        // SESION_ID y FAMILIA -- en este sistema son sinónimos
+        // (family_id ES la sesion_id, ambos campos de
+        // auditoria.audit_log reciben el mismo valor vía
+        // AUDIT_CTX_CTE_HEADER abajo).
+        if (p.familyId() != null) {
+            target.put(ParamNamespace.CONTEXT + ".FAMILIA", p.familyId());
+            target.put(ParamNamespace.CONTEXT + ".SESION_ID", p.familyId());
         }
         // Roles en dos formatos para que el autor elija el
         // que le convenga:
@@ -825,6 +862,291 @@ public class QueryService {
                 + "}";
         target.put(ParamNamespace.CONTEXT + ".ROLES", rolesCsv);
         target.put(ParamNamespace.CONTEXT + ".ROLES_ARRAY", rolesArray);
+    }
+
+    /**
+     * V-audit-ctx — :CONTEXT.REQUEST_ID, :CONTEXT.PATH y :CONTEXT.HTTP_METHOD,
+     * para que el catálogo pueda hacer {@code set_config('app.request_id', ...)}
+     * / {@code set_config('app.http_method', ...)} y fundir {@code path} en
+     * {@code app.contexto} en la misma sentencia que la escritura real (ver
+     * {@code fn_audit_ctx()}, {@code postgres/migrations/V26__context-emitter.sql}).
+     * {@code HTTP_METHOD} tiene su propia columna en ClickHouse (para
+     * filtrar/agrupar por verbo sin parsear un string) — por eso {@code PATH}
+     * es solo la URI, **sin** el método como prefijo; repetirlo en las dos
+     * partes sería redundante.
+     *
+     * <p>Mismo patrón que {@code AuditContextAspect} de la app de
+     * referencia (db-migrations/api): {@code X-Request-Id} si el
+     * cliente/gateway ya lo mandó, si no un UUID generado aquí — un
+     * request sin id de correlación es peor que uno con un id que
+     * nadie más va a reusar, porque igual permite agrupar las filas
+     * de auditoría de ESTA transacción.
+     *
+     * <p>No dependemos de que el llamado venga por un {@code
+     * @Controller} concreto — {@link RequestContextHolder} expone el
+     * {@code HttpServletRequest} del hilo actual sin necesidad de
+     * inyectarlo en cada firma de método intermedio. Si no hay
+     * request ligado al hilo (tests, llamadas internas), no se agrega
+     * nada — igual que el resto de los CONTEXT.* opcionales.
+     *
+     * <p>V-audit-ctx-2 agrega cuatro placeholders más, todos para
+     * auditoría de seguridad ("¿desde dónde y con qué se hizo este
+     * cambio?"), no de negocio:
+     * <ul>
+     *   <li>{@code :CONTEXT.CLIENT_IP} — {@code X-Client-Ip} (header
+     *       propio, seteado por {@code ClientIpGlobalFilter} en
+     *       api-gateway a partir de la conexión TCP real; DELIBERADAMENTE
+     *       no {@code X-Forwarded-For} — Spring Cloud Gateway 5 lo
+     *       descarta antes de reenviar la petición, confirmado
+     *       empíricamente). Fallback a {@code X-Forwarded-For} (por si
+     *       algo llama a query-service sin pasar por este gateway) y
+     *       finalmente a la IP de la conexión TCP directa.</li>
+     *   <li>{@code :CONTEXT.USER_AGENT} — el header tal cual.</li>
+     *   <li>{@code :CONTEXT.HEADERS} — JSON de una whitelist explícita
+     *       ({@link #HEADER_WHITELIST}). {@code Authorization}/{@code
+     *       Cookie} NUNCA se incluyen, ni siquiera redactados — son
+     *       credenciales de sesión, no contexto de auditoría, y no
+     *       tienen nada que hacer en ClickHouse en texto plano.</li>
+     *   <li>{@code :CONTEXT.REQUEST_BODY} — JSON de lo que el cliente
+     *       pidió escribir (snapshot de {@code target} ANTES de que
+     *       este método agregue sus propios {@code CONTEXT.*}), con
+     *       claves sensibles ({@link #SENSITIVE_KEY_PATTERN} — token,
+     *       secret, password) redactadas. Distinto de
+     *       {@code fila_new}/{@code fila_old} en ClickHouse, que son
+     *       el estado de la fila DESPUÉS de escribir — esto es lo que
+     *       el cliente pidió, útil cuando difiere (defaults, triggers).</li>
+     * </ul>
+     * Los cuatro viajan como GUCs de sesión igual que REQUEST_ID/PATH
+     * (ver {@link #wrapWithAuditContext}); HEADERS/REQUEST_BODY
+     * llegan ya serializados a JSON así que {@code fn_audit_ctx()} (V26)
+     * los castea con {@code ::json} en vez de truncarlos como TEXT.
+     */
+    private static void injectRequestParams(Map<String, Object> target) {
+        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes sra)) {
+            return;
+        }
+        var req = sra.getRequest();
+
+        // Snapshot ANTES de que este método agregue sus propios
+        // CONTEXT.* — así REQUEST_BODY solo refleja lo que trajo el
+        // caller (PARAM.*/BODY.*), no metadata derivada por nosotros.
+        Map<String, Object> redactedBody = redactSensitiveKeys(target);
+
+        String requestId = req.getHeader("X-Request-Id");
+        if (requestId == null || requestId.isBlank()) {
+            requestId = UUID.randomUUID().toString();
+        } else if (requestId.length() > 100) {
+            // El trigger trunca a 100 (ver fn_audit_ctx / LowCardinality en
+            // ClickHouse) — cortamos aquí para no mandar ruido de más.
+            requestId = requestId.substring(0, 100);
+        }
+        target.put(ParamNamespace.CONTEXT + ".REQUEST_ID", requestId);
+
+        // Solo la URI — el método va aparte en :CONTEXT.HTTP_METHOD (columna
+        // propia de ClickHouse), repetirlo aquí sería redundante.
+        target.put(ParamNamespace.CONTEXT + ".PATH", req.getRequestURI());
+        target.put(ParamNamespace.CONTEXT + ".HTTP_METHOD", req.getMethod());
+
+        // client_ip: X-Client-Ip (api-gateway's ClientIpGlobalFilter,
+        // authoritative) → X-Forwarded-For (unverified, only relevant
+        // when NOT behind this gateway) → conexión TCP directa.
+        String clientIp = req.getHeader("X-Client-Ip");
+        if (clientIp == null || clientIp.isBlank()) {
+            clientIp = req.getHeader("X-Forwarded-For");
+            if (clientIp != null && !clientIp.isBlank()) {
+                clientIp = clientIp.split(",")[0].trim();
+            }
+        }
+        if (clientIp == null || clientIp.isBlank()) {
+            clientIp = req.getRemoteAddr();
+        }
+        if (clientIp != null && !clientIp.isBlank()) {
+            target.put(ParamNamespace.CONTEXT + ".CLIENT_IP", clientIp);
+        }
+
+        String userAgent = req.getHeader("User-Agent");
+        if (userAgent != null && !userAgent.isBlank()) {
+            target.put(ParamNamespace.CONTEXT + ".USER_AGENT", userAgent);
+        }
+
+        Map<String, String> headers = new LinkedHashMap<>();
+        for (String name : HEADER_WHITELIST) {
+            String value = req.getHeader(name);
+            if (value != null && !value.isBlank()) {
+                headers.put(name.toLowerCase(java.util.Locale.ROOT), value);
+            }
+        }
+        if (!headers.isEmpty()) {
+            target.put(ParamNamespace.CONTEXT + ".HEADERS", toJson(headers));
+        }
+
+        if (!redactedBody.isEmpty()) {
+            target.put(ParamNamespace.CONTEXT + ".REQUEST_BODY", toJson(redactedBody));
+        }
+    }
+
+    /**
+     * V-audit-ctx-2 — el CTE que ANTES vivía como texto literal en
+     * {@code public.query.query} (ver el ya-eliminado
+     * {@code V80__wrap_write_queries_audit_context.sql}). {@code
+     * MATERIALIZED} fuerza a Postgres a computar el CTE (y por tanto
+     * ejecutar los {@code set_config}) ANTES de evaluar la subconsulta
+     * que llama a la función de escritura real — necesario porque
+     * query-service no abre una transacción explícita que abarque más
+     * de un statement (cada {@code jdbc.query()} es su propio
+     * top-level statement), así que un {@code set_config()} previo en
+     * un statement separado no sobreviviría hasta el {@code fn_*} real.
+     *
+     * <p>Los siete placeholders (:CONTEXT.REQUEST_ID, .HTTP_METHOD,
+     * .CLIENT_IP, .USER_AGENT, .HEADERS, .REQUEST_BODY, .PATH) ya están
+     * en {@code allParams} para TODA petición gracias a {@link
+     * #injectRequestParams} — el wrap es puro texto, no necesita el
+     * catálogo para nada.
+     *
+     * <p>V-audit-ctx-3 — {@code app.user_id}/{@code app.user_pk}: hasta
+     * ahora este wrap NUNCA los fijaba (confirmado al auditar este
+     * método) — {@code auditoria.audit_log.app_user}/{@code app_user_id}
+     * llegaban vacíos para TODA escritura de query-service, no solo las
+     * que no pasaban por {@code fn_audit_declarar}. {@code :CONTEXT.USER_ID}
+     * (línea ~759, {@code AuthPrincipal.userId()}) es {@code
+     * public.users.id_user} — un espacio de ID DISTINTO de {@code
+     * academico_test.TUSUARIO.PK_TUSUARIO}, el mismo puente que cada
+     * {@code fn_*} de escritura ya usa para {@code
+     * p_pk_usuario_solicitante} (ver p.ej. {@code fn_sed_crear} en
+     * V64). El CTE {@code _actor} resuelve ese puente UNA vez; {@code
+     * app.user_id} usa {@code academico_test.fn_resolver_actor} (V66)
+     * para el nombre legible, con el PK crudo como último recurso;
+     * {@code app.user_pk} lleva SIEMPRE el PK crudo, nunca pisado por
+     * la resolución de nombre — mismo contrato dual que V26/V66.
+     */
+    private static final String AUDIT_CTX_CTE_HEADER =
+            "WITH _actor AS MATERIALIZED (\n"
+          + "  SELECT public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT) AS pk_tusuario\n"
+          + "),\n"
+          + "_ctx AS MATERIALIZED (\n"
+          + "  SELECT set_config('app.request_id', :CONTEXT.REQUEST_ID, true) AS _rid,\n"
+          + "         set_config('app.http_method', :CONTEXT.HTTP_METHOD, true) AS _hm,\n"
+          + "         set_config('app.client_ip', :CONTEXT.CLIENT_IP, true) AS _ip,\n"
+          + "         set_config('app.user_agent', :CONTEXT.USER_AGENT, true) AS _ua,\n"
+          + "         set_config('app.headers', :CONTEXT.HEADERS, true) AS _hdrs,\n"
+          + "         set_config('app.request_body', :CONTEXT.REQUEST_BODY, true) AS _body,\n"
+          + "         set_config('app.user_id', COALESCE(academico_test.fn_resolver_actor((SELECT pk_tusuario FROM _actor)), (SELECT pk_tusuario FROM _actor)::text), true) AS _uid,\n"
+          + "         set_config('app.user_pk', (SELECT pk_tusuario FROM _actor)::text, true) AS _upk,\n"
+          // V-audit-ctx-4 (sesiones reales): MERGE (no OVERWRITE)
+          // con app.contexto preexistente -- el helper fn_audit_declarar
+          // (V66) ya respeta sesion_id/familia si están, pero esta capa
+          // (que corre para queries que NO llaman fn_audit_declarar)
+          // también tiene que respetarlos. COALESCE al '{}' para el caso
+          // de la primera escritura del request. familyId puede ser NULL
+          // (token legacy pre-V-audit-ctx-4) -- en ese caso
+          // jsonb_build_object devuelve NULL para esa clave, lo que en
+          // ClickHouse queda como string vacío y en Postgres como
+          // ausente; cualquiera de los dos es aceptable para la query de
+          // auditoría. La razón de usar || y NO jsonb_set() es la misma
+          // que en V66: precedence clara, sin ambigüedad con claves
+          // existentes.
+          + "         set_config('app.contexto', (COALESCE(NULLIF(current_setting('app.contexto', true), '')::jsonb, '{}'::jsonb) || jsonb_build_object('path', :CONTEXT.PATH, 'sesion_id', :CONTEXT.SESION_ID, 'familia', :CONTEXT.FAMILIA))::text, true) AS _c\n"
+          + ")\n"
+          + "SELECT _orig.* FROM _ctx, (";
+
+    private static final String AUDIT_CTX_CTE_FOOTER = ") AS _orig";
+
+    /**
+     * Detecta una llamada a {@code academico_test.fn_*} en el SQL —
+     * la convención de nombres que sigue TODA función de escritura que
+     * declara {@code fn_audit_declarar} (ver {@code
+     * postgres/migrations/V66__fn_audit_declarar.sql} y las funciones
+     * que lo adoptan). Puramente textual y case-insensitive: no
+     * requiere mantenimiento cuando se agrega un módulo nuevo (áreas,
+     * grados, etc.) — a diferencia del regex por-módulo que usaba el
+     * ya-eliminado {@code V80} para generar su lista de {@code
+     * id_query}.
+     */
+    private static final java.util.regex.Pattern ACADEMICO_TEST_FN_CALL =
+            java.util.regex.Pattern.compile("academico_test\\.fn_", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Gate para el wrap automático de contexto de auditoría:
+     * <ul>
+     *   <li>Solo SELECT/FUNCTION son envolvibles — el truco mete el
+     *       SQL original como subconsulta en un FROM, lo que exige
+     *       que sea una expresión que devuelve filas. Un {@code
+     *       INSERT}/{@code UPDATE} directo (modo DML) o un {@code
+     *       CALL} (modo PROCEDURE) no son sintácticamente válidos
+     *       ahí — igual que antes de este cambio, esos dos modos se
+     *       quedan sin auditoría automática de contexto.</li>
+     *   <li>El SQL debe llamar a {@code academico_test.fn_*}
+     *       ({@link #ACADEMICO_TEST_FN_CALL}) — sin esto, cualquier
+     *       {@code SELECT} de solo lectura con {@code http_method}
+     *       distinto de GET (una convención legado real: muchas filas
+     *       nunca declararon el verbo y cayeron al default histórico
+     *       POST aunque son lecturas puras) recibiría el wrap sin
+     *       necesitarlo, rompiendo contra datasources que no son
+     *       Postgres/academico_test y agregando trabajo inútil.</li>
+     *   <li>{@code httpMethod} nulo cuenta como escritura (POST es el
+     *       default histórico de una fila sin verbo declarado — ver
+     *       el javadoc de {@link QueryDefinition#httpMethod()}); esto
+     *       importa poco en la práctica porque toda función
+     *       academico_test.fn_* real ya viene con un verbo explícito,
+     *       pero mantiene el gate conservador (envolver de más es
+     *       inofensivo, no envolver una escritura real no lo es).</li>
+     * </ul>
+     */
+    static boolean isAuditWrappable(String mode, String httpMethod, String sql) {
+        boolean wrappableMode = "SELECT".equals(mode) || "FUNCTION".equals(mode);
+        boolean isWrite = !"GET".equalsIgnoreCase(httpMethod == null ? "POST" : httpMethod);
+        return wrappableMode && isWrite && ACADEMICO_TEST_FN_CALL.matcher(sql).find();
+    }
+
+    static String wrapWithAuditContext(String sql) {
+        String trimmed = sql.strip();
+        if (trimmed.endsWith(";")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        return AUDIT_CTX_CTE_HEADER + trimmed + AUDIT_CTX_CTE_FOOTER + ";";
+    }
+
+    /**
+     * Headers permitidos en {@code :CONTEXT.HEADERS}. Deliberadamente NO
+     * incluye {@code Authorization}/{@code Cookie} — ver el javadoc de
+     * {@link #injectRequestParams}. {@code X-Forwarded-For} tampoco está
+     * acá porque ya se captura aparte como {@code :CONTEXT.CLIENT_IP}.
+     */
+    private static final List<String> HEADER_WHITELIST =
+            List.of("User-Agent", "Accept-Language", "Referer");
+
+    /**
+     * Nombres de placeholder que nunca deben llegar a ClickHouse en texto
+     * plano dentro de {@code :CONTEXT.REQUEST_BODY}. Se compara contra el
+     * nombre "local" (después del namespace — {@code BODY.PASSWORD} →
+     * {@code PASSWORD}), case-insensitive.
+     */
+    private static final java.util.regex.Pattern SENSITIVE_KEY_PATTERN =
+            java.util.regex.Pattern.compile("(?i).*(TOKEN|SECRET|PASSWORD|CONTRASENA|CONTRASEÑA).*");
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper CONTEXT_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /** Copia {@code source} redactando los valores cuyas keys matchean {@link #SENSITIVE_KEY_PATTERN}. */
+    private static Map<String, Object> redactSensitiveKeys(Map<String, Object> source) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : source.entrySet()) {
+            String key = e.getKey();
+            int dot = key.indexOf('.');
+            String localName = dot >= 0 ? key.substring(dot + 1) : key;
+            copy.put(key, SENSITIVE_KEY_PATTERN.matcher(localName).matches()
+                    ? "[REDACTED]" : e.getValue());
+        }
+        return copy;
+    }
+
+    private static String toJson(Object value) {
+        try {
+            return CONTEXT_MAPPER.writeValueAsString(value);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            log.warn("No se pudo serializar un valor de CONTEXT.* a JSON: {}", e.getMessage());
+            return null;
+        }
     }
 
     /**

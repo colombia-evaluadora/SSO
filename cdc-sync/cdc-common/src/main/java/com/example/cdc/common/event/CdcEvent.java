@@ -89,10 +89,16 @@ public record CdcEvent(
         if (node == null || node.isNull()) return null;
         return new Context(
                 toText(node.get("app_user")),
+                toText(node.get("app_user_id")),
                 toText(node.get("db_user")),
                 toText(node.get("sesion_id")),
                 toText(node.get("familia")),
                 toText(node.get("request_id")),
+                toText(node.get("http_method")),
+                toText(node.get("client_ip")),
+                toText(node.get("user_agent")),
+                toMap(node.get("headers")),
+                toMap(node.get("request_body")),
                 toText(node.get("etiqueta")),
                 toMap(node.get("contexto"))
         );
@@ -120,10 +126,22 @@ public record CdcEvent(
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Context(
             @JsonProperty("app_user") String appUser,
+            // V-audit-ctx-3 — PK numérico crudo del actor (String hasta el
+            // borde de inserción en ClickHouse, igual que el resto de este
+            // record; ver ClickHouseAuditStage.toRow para el parseo a Long).
+            @JsonProperty("app_user_id") String appUserId,
             @JsonProperty("db_user") String dbUser,
             @JsonProperty("sesion_id") String sesionId,
             @JsonProperty("familia") String familia,
             @JsonProperty("request_id") String requestId,
+            @JsonProperty("http_method") String httpMethod,
+            // V-audit-ctx-2 — transporte HTTP para auditoría de seguridad.
+            // headers/requestBody llegan ya como Map (fn_audit_ctx los
+            // castea a json en Postgres) igual que `contexto`.
+            @JsonProperty("client_ip") String clientIp,
+            @JsonProperty("user_agent") String userAgent,
+            Map<String, Object> headers,
+            @JsonProperty("request_body") Map<String, Object> requestBody,
             String etiqueta,
             Map<String, Object> contexto
     ) {}

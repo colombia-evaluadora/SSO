@@ -36,6 +36,18 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.CONFLICT, "DUPLICATE", ex.getMessage());
     }
 
+    /** V-audit-revert — el cambio no calza con lo que fase 1 sabe revertir (ver AuditRevertService). */
+    @ExceptionHandler(UnsupportedRevertException.class)
+    public ResponseEntity<Map<String, Object>> handleUnsupportedRevert(UnsupportedRevertException ex) {
+        return error(HttpStatus.UNPROCESSABLE_ENTITY, "UNSUPPORTED_REVERT", ex.getMessage());
+    }
+
+    /** V-audit-revert — la fila cambió después del evento que se quería revertir. */
+    @ExceptionHandler(RevertConflictException.class)
+    public ResponseEntity<Map<String, Object>> handleRevertConflict(RevertConflictException ex) {
+        return error(HttpStatus.CONFLICT, "REVERT_CONFLICT", ex.getMessage());
+    }
+
     @ExceptionHandler(EmailInvalidException.class)
     public ResponseEntity<Map<String, Object>> handleEmailInvalid(EmailInvalidException ex) {
         return error(HttpStatus.UNPROCESSABLE_ENTITY, "EMAIL_INVALID", ex.getMessage());

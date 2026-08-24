@@ -11,6 +11,8 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -53,7 +55,7 @@ class AmqpPublisherContextTest {
                 "op", "m",
                 "source", Map.of("schema", "public", "table", "tusuario",
                         "txId", 555, "lsn", 100, "snapshot", "false"),
-                "message", Map.of("prefix", "audit_ctx", "data", auditJson)
+                "message", Map.of("prefix", "audit_ctx", "content", b64(auditJson))
         );
 
         handleSingle(payload);
@@ -74,6 +76,7 @@ class AmqpPublisherContextTest {
     void row_event_after_logical_message_picks_up_cached_context() throws Exception {
         String auditJson = mapper.writeValueAsString(Map.of(
                 "app_user", "alice",
+                "app_user_id", "42",
                 "db_user", "postgres",
                 "sesion_id", "S-42",
                 "familia", "ADMIN",
@@ -86,7 +89,7 @@ class AmqpPublisherContextTest {
                 "op", "m",
                 "source", Map.of("schema", "public", "table", "tusuario",
                         "txId", 555, "lsn", 100, "snapshot", "false"),
-                "message", Map.of("prefix", "audit_ctx", "data", auditJson)
+                "message", Map.of("prefix", "audit_ctx", "content", b64(auditJson))
         ));
 
         // Second: a real INSERT in the same transaction.
@@ -107,6 +110,7 @@ class AmqpPublisherContextTest {
         assertThat(envelope).containsKey("context");
         Map<String, Object> ctx = (Map<String, Object>) envelope.get("context");
         assertThat(ctx).containsEntry("app_user", "alice");
+        assertThat(ctx).containsEntry("app_user_id", "42");
         assertThat(ctx).containsEntry("familia", "ADMIN");
         assertThat(ctx).containsEntry("request_id", "req-7");
     }
@@ -137,7 +141,7 @@ class AmqpPublisherContextTest {
                 "op", "m",
                 "source", Map.of("schema", "public", "table", "tusuario",
                         "txId", 100, "lsn", 1, "snapshot", "false"),
-                "message", Map.of("prefix", "other_audit", "data", "{}")
+                "message", Map.of("prefix", "other_audit", "content", b64("{}"))
         );
 
         handleSingle(payload);
@@ -166,6 +170,17 @@ class AmqpPublisherContextTest {
 
         verify(template, never()).convertAndSend(any(), any(), any(Object.class), any(MessagePostProcessor.class));
         verify(metrics).incrementSnapshotSkipped("tusuario");
+    }
+
+    /**
+     * Matches the real shape Debezium's {@code LogicalDecodingMessageMonitor}
+     * produces for a logical message's {@code content} field under the default
+     * {@code binary.handling.mode} — see {@link AmqpPublisher#parseAuditContext}.
+     * Fixtures using plain text under {@code data} (the old, wrong key) let this
+     * suite pass while the real pipeline silently dropped every audit_ctx message.
+     */
+    private static String b64(String s) {
+        return Base64.getEncoder().encodeToString(s.getBytes(StandardCharsets.UTF_8));
     }
 
     private void handleSingle(Map<String, Object> payload) throws Exception {

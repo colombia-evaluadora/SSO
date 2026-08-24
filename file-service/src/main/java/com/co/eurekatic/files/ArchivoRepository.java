@@ -1,10 +1,19 @@
 package com.co.eurekatic.files;
 
+import com.co.eurekatic.common.audit.AuditContext;
+import com.co.eurekatic.common.audit.AuditContextExtractor;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * La única tabla que este servicio escribe: {@code TARCHIVO}.
@@ -27,6 +36,81 @@ public class ArchivoRepository {
     }
 
     /**
+     * Fija las GUCs de sesión que {@code academico_test.fn_audit_ctx()}
+     * (V26) lee, para que el INSERT/UPDATE/DELETE que sigue en el mismo
+     * método quede atribuido — hoy llega vacío porque nadie las fija.
+     * {@code @Transactional} en cada método público de esta clase
+     * garantiza que este {@code set_config} y la escritura real comparten
+     * conexión — sin eso, el pool podría entregar una conexión distinta
+     * para cada llamada JDBC y la GUC nunca llegaría al trigger.
+     *
+     * @param usuario correo del caller (ya humano-legible — a diferencia
+     *                de auth-center/sso-admin, no hace falta resolver un
+     *                nombre vía {@code fn_resolver_actor}, así que se usa
+     *                tal cual para {@code app.user_id}).
+     * @param idUser  {@code public.users.id_user} del caller (claim
+     *                {@code uid} del JWT), o {@code null} para tokens
+     *                legado sin ese claim. Se puentea a
+     *                {@code academico_test.TUSUARIO.PK_TUSUARIO} — mismo
+     *                espacio de ID que necesita {@code app.user_pk}.
+     */
+    private void applyAuditContext(String usuario, Long idUser, String etiqueta) {
+        Long pkTusuario = idUser == null ? null
+                : jdbc.getJdbcOperations().queryForObject(
+                        "SELECT public.fn_get_academico_usuario_id(?)", Long.class, idUser);
+        Optional<AuditContext> ctx = AuditContextExtractor.fromCurrentRequest(Map.of());
+
+        // V-audit-ctx-4 (sesiones reales): sesion_id/familia viajan
+        // en el header X-Authenticated-Family-Id que api-gateway
+        // forwardea. Lo leemos directamente del request (mismo
+        // patrón que AuditContextExtractor) en vez de propagarlo por
+        // cada signature de ReenvioController -- el costo de un
+        // header lookup por escritura es cero, y centraliza la
+        // captura de la familia en este único punto.
+        String familyId = currentFamilyHeader();
+
+        Map<String, Object> contexto = new LinkedHashMap<>();
+        if (familyId != null && !familyId.isBlank()) {
+            contexto.put("sesion_id", familyId);
+            contexto.put("familia", familyId);
+        }
+
+        jdbc.getJdbcOperations().queryForList(
+                "SELECT set_config('app.user_id', ?, true), "
+                        + "set_config('app.user_pk', ?, true), "
+                        + "set_config('app.etiqueta', ?, true), "
+                        + "set_config('app.request_id', ?, true), "
+                        + "set_config('app.http_method', ?, true), "
+                        + "set_config('app.client_ip', ?, true), "
+                        + "set_config('app.user_agent', ?, true), "
+                        + "set_config('app.contexto', ?, true)",
+                usuario,
+                pkTusuario == null ? null : pkTusuario.toString(),
+                etiqueta,
+                ctx.map(AuditContext::requestId).orElse(null),
+                ctx.map(AuditContext::httpMethod).orElse("PATCH"),
+                ctx.map(AuditContext::clientIp).orElse(null),
+                ctx.map(AuditContext::userAgent).orElse(null),
+                contexto.isEmpty() ? null : writeJson(contexto));
+    }
+
+    private static String currentFamilyHeader() {
+        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes sra)) {
+            return null;
+        }
+        String v = sra.getRequest().getHeader("X-Authenticated-Family-Id");
+        return (v == null || v.isBlank()) ? null : v;
+    }
+
+    private static String writeJson(Map<String, Object> map) {
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(map);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
      * Reserva la fila ANTES de subir a S3, con {@code active = false}.
      *
      * <p>El orden es deliberado. Si se subiera primero y el registro
@@ -43,8 +127,8 @@ public class ArchivoRepository {
      * <p>La columna {@code active} ya existía en el esquema; esto sólo
      * la usa para lo que sirve.
      */
-    public long reservar(String nombre, long peso, String usuario) {
-        return reservar(nombre, peso, usuario, null);
+    public long reservar(String nombre, long peso, String usuario, Long idUser) {
+        return reservar(nombre, peso, usuario, idUser, null);
     }
 
     /**
@@ -57,7 +141,9 @@ public class ArchivoRepository {
      * antes de esto, TODA fila nueva subida por file-service dejaba la
      * columna en {@code NULL}.
      */
-    public long reservar(String nombre, long peso, String usuario, String etiqueta) {
+    @Transactional
+    public long reservar(String nombre, long peso, String usuario, Long idUser, String etiqueta) {
+        applyAuditContext(usuario, idUser, "Subida de archivo " + nombre);
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update("""
                 INSERT INTO %s.tarchivo (nombre, peso, etiqueta, fecha, created_by, created_at, active)
@@ -85,7 +171,9 @@ public class ArchivoRepository {
      * operación de negocio completa tuvo éxito. Si el {@code CALL}
      * final falla, esta fila se queda inactiva y la recoge la limpieza.
      */
-    public void registrarUrl(long pkTarchivo, String url) {
+    @Transactional
+    public void registrarUrl(long pkTarchivo, String url, String usuario, Long idUser) {
+        applyAuditContext(usuario, idUser, "Cierre de subida pk_tarchivo=" + pkTarchivo);
         jdbc.update("""
                 UPDATE %s.tarchivo
                    SET urls3 = :url, modified_at = CURRENT_TIMESTAMP
@@ -102,8 +190,10 @@ public class ArchivoRepository {
      * recoge igual. Por eso no propaga la excepción — enmascararía el
      * error real de la subida, que es el que le interesa al llamante.
      */
-    public void descartar(long pkTarchivo) {
+    @Transactional
+    public void descartar(long pkTarchivo, String usuario, Long idUser) {
         try {
+            applyAuditContext(usuario, idUser, "Rollback de subida pk_tarchivo=" + pkTarchivo);
             jdbc.update("DELETE FROM %s.tarchivo WHERE pk_tarchivo = :pk AND active = false"
                             .formatted(schema),
                     new MapSqlParameterSource().addValue("pk", pkTarchivo));
@@ -132,10 +222,12 @@ public class ArchivoRepository {
      * regla en cada query nueva que aceptara un fichero, y olvidarla
      * fallaba en silencio.
      */
-    public void activar(java.util.List<Long> pks) {
+    @Transactional
+    public void activar(java.util.List<Long> pks, String usuario, Long idUser) {
         if (pks == null || pks.isEmpty()) {
             return;
         }
+        applyAuditContext(usuario, idUser, "Activación de " + pks.size() + " archivo(s)");
         jdbc.update("""
                 UPDATE %s.tarchivo
                    SET active = true, modified_at = CURRENT_TIMESTAMP

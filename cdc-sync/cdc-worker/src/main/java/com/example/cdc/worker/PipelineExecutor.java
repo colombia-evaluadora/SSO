@@ -4,6 +4,7 @@ import com.example.cdc.audit.ColumnTypeRegistry;
 import com.example.cdc.common.event.CdcEvent;
 import com.example.cdc.worker.pipeline.AuditRecord;
 import com.example.cdc.worker.pipeline.ClickHouseAuditStage;
+import com.example.cdc.worker.pipeline.ClickHouseSessionMirrorStage;
 import com.example.cdc.worker.pipeline.JsonTypedRowBuilder;
 import com.example.cdc.worker.pipeline.OracleReverseStage;
 import org.slf4j.Logger;
@@ -16,7 +17,19 @@ public class PipelineExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(PipelineExecutor.class);
 
+    /**
+     * Tabla cuyo cambio se replica a un mirror en ClickHouse además
+     * del audit_log estándar. El match se hace contra el nombre
+     * CORTO que devuelve {@link CdcEvent#tableName()} ({@code
+     * source.table()} en la envelope Debezium), sin prefijo de
+     * schema. La suposición de un solo schema académico es segura
+     * hoy; si en el futuro tsesion_web se replica en otro schema,
+     * comparar también {@code event.schemaName()}.
+     */
+    private static final String TSESION_WEB_TABLE = "tsesion_web";
+
     private final ClickHouseAuditStage clickHouseStage;
+    private final ClickHouseSessionMirrorStage sessionMirrorStage;
     private final OracleReverseStage oracleStage;
     private final WorkerMetrics workerMetrics;
     private final JsonTypedRowBuilder typedRowBuilder;
@@ -27,6 +40,7 @@ public class PipelineExecutor {
     private final boolean oracleEnabled;
 
     public PipelineExecutor(ClickHouseAuditStage clickHouseStage,
+                            ClickHouseSessionMirrorStage sessionMirrorStage,
                             OracleReverseStage oracleStage,
                             WorkerMetrics workerMetrics,
                             ColumnTypeRegistry registry,
@@ -36,6 +50,7 @@ public class PipelineExecutor {
                             @Value("${cdc.destinations.clickhouse.enabled:true}") boolean clickhouseEnabled,
                             @Value("${cdc.destinations.oracle.enabled:true}") boolean oracleEnabled) {
         this.clickHouseStage = clickHouseStage;
+        this.sessionMirrorStage = sessionMirrorStage;
         this.oracleStage = oracleStage;
         this.workerMetrics = workerMetrics;
         this.typedRowBuilder = new JsonTypedRowBuilder(registry);
@@ -75,6 +90,27 @@ public class PipelineExecutor {
             } finally {
                 long chMillis = (System.nanoTime() - chStart) / 1_000_000;
                 workerMetrics.recordClickHouseInsert(chMillis);
+            }
+            // V-audit-ctx-4 (sesiones reales): además del audit_log
+            // row, tsesion_web se espeja a su tabla ClickHouse para que
+            // /audits/* (V90) pueda consultar el estado actual de cada
+            // familia sin acoplar ClickHouse a la red de Postgres.
+            // Misma conexión lógica (mismo evento, mismo retry budget
+            // -- falla junto con el audit_log row vía el catch de
+            // arriba). Si la inserción del mirror falla, la fila de
+            // audit_log YA quedó -- aceptable: audit_log tiene la fila
+            // y tsesion_web se reconcilia en el siguiente cambio.
+            if (TSESION_WEB_TABLE.equalsIgnoreCase(event.tableName())) {
+                long mirrorStart = System.nanoTime();
+                try {
+                    sessionMirrorStage.execute(event, lsn);
+                } catch (Exception mirrorEx) {
+                    log.warn("SessionMirrorStage falló para tabla={} lsn={}: {}",
+                            event.tableName(), lsn, mirrorEx.getMessage());
+                } finally {
+                    long mirrorMillis = (System.nanoTime() - mirrorStart) / 1_000_000;
+                    workerMetrics.recordClickHouseInsert(mirrorMillis);
+                }
             }
         }
 
