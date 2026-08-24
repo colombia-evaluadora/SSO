@@ -732,7 +732,7 @@ BEGIN
          WHERE PK_TSEDE = p_fk_sede
            AND ACTIVE   = TRUE
     ) THEN
-        RAISE EXCEPTION 'TSEDE (%) no existe o no esta activa', p_fk_sede
+        RAISE EXCEPTION 'La sede indicada no existe o no esta activa'
             USING ERRCODE = '23503';
     END IF;
 
@@ -885,7 +885,7 @@ BEGIN
      WHERE PK_TSEDE_USUARIO = p_pk_sede_usuario;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'no existe TSEDE_USUARIO con PK %', p_pk_sede_usuario
+        RAISE EXCEPTION 'No se encontro el permiso solicitado'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -1025,7 +1025,7 @@ BEGIN
      WHERE PK_TSEDE_USUARIO = p_pk_sede_usuario;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'no existe TSEDE_USUARIO con PK %', p_pk_sede_usuario
+        RAISE EXCEPTION 'No se encontro el permiso solicitado'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -1264,7 +1264,7 @@ BEGIN
      WHERE PK_TFUNCIONARIO = p_pk_funcionario;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'no existe TFUNCIONARIO con PK %', p_pk_funcionario
+        RAISE EXCEPTION 'No se encontro el funcionario solicitado'
             USING ERRCODE = 'P0002';
     END IF;
     IF v_active_fun = FALSE THEN
@@ -1517,7 +1517,7 @@ BEGIN
      WHERE PK_TFUNCIONARIO = p_pk_funcionario;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'no existe TFUNCIONARIO con PK %', p_pk_funcionario
+        RAISE EXCEPTION 'No se encontro el funcionario solicitado'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -2849,7 +2849,7 @@ BEGIN
      WHERE f.PK_TFUNCIONARIO = p_pk_funcionario;
 
     IF NOT FOUND OR v_active = FALSE THEN
-        RAISE EXCEPTION 'No existe TFUNCIONARIO activo con PK_TFUNCIONARIO = %', p_pk_funcionario
+        RAISE EXCEPTION 'No se encontro un funcionario activo con ese identificador'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -3107,7 +3107,7 @@ BEGIN
      WHERE f.PK_TFUNCIONARIO = p_pk_funcionario;
 
     IF NOT FOUND OR v_active = FALSE THEN
-        RAISE EXCEPTION 'No existe TFUNCIONARIO activo con PK_TFUNCIONARIO = %', p_pk_funcionario
+        RAISE EXCEPTION 'No se encontro un funcionario activo con ese identificador'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -3181,7 +3181,7 @@ BEGIN
     ) INTO v_es_rector;
 
     IF v_es_rector AND NOT v_es_super THEN
-        RAISE EXCEPTION 'TFUNCIONARIO % es rector de un establecimiento activo; solo un super-admin puede darlo de baja desde aqui', p_pk_funcionario
+        RAISE EXCEPTION 'Este funcionario es rector de un establecimiento activo; solo un super-admin puede darlo de baja desde aqui'
             USING ERRCODE = '22023',
                   HINT    = 'Reasigne el rector desde el establecimiento, o pida a un super-admin que lo de de baja';
     END IF;
@@ -3472,7 +3472,7 @@ BEGIN
      WHERE PK_TFUNCIONARIO = p_pk_funcionario;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'No existe TFUNCIONARIO con PK_TFUNCIONARIO = %', p_pk_funcionario
+        RAISE EXCEPTION 'No se encontro el funcionario solicitado'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -3486,7 +3486,7 @@ BEGIN
          WHERE e.ACTIVE = TRUE
            AND p_pk_funcionario IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
     ) THEN
-        RAISE EXCEPTION 'TFUNCIONARIO % ya esta asignado como rector/secretaria de un establecimiento -- no es un pendiente cancelable', p_pk_funcionario
+        RAISE EXCEPTION 'Este funcionario ya esta asignado como rector/secretaria de un establecimiento -- no es un pendiente cancelable'
             USING ERRCODE = '22023',
                   HINT    = 'Un funcionario ya asignado se reemplaza reasignando el rol del EE, o se da de baja con fn_fun_baja_establecimiento';
     END IF;
@@ -3497,7 +3497,7 @@ BEGIN
          WHERE su.FK_TUSUARIO = v_fk_usuario
            AND su.ACTIVE      = TRUE
     ) THEN
-        RAISE EXCEPTION 'TFUNCIONARIO % ya tiene permisos asignados (TSEDE_USUARIO) -- no es un pendiente cancelable', p_pk_funcionario
+        RAISE EXCEPTION 'Este funcionario ya tiene permisos asignados -- no es un pendiente cancelable'
             USING ERRCODE = '22023',
                   HINT    = 'Usa fn_fun_permisos_actualizar (accion eliminar) para dar de baja los permisos de un funcionario real';
     END IF;

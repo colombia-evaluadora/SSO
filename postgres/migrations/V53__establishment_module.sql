@@ -463,59 +463,15 @@ BEGIN
     );
 
     -- -----------------------------------------------------------------
-    -- 5. REV4 -- Permiso por defecto del rector (rol 7) y de la
+    -- 5. REV5 -- El permiso por defecto del rector (rol 7) y de la
     --    secretaria (rol 9, Auxiliar administrativo) en la sede recien
-    --    creada. Antes quedaban sin ningun TSEDE_USUARIO hasta que
-    --    alguien se lo asignara a mano -- por eso el listado de
-    --    funcionarios necesito un tag sintetico para mostrar su rol (ver
-    --    fn_usu_empleados_listar). Se usa fn_fun_permisos_actualizar (la
-    --    misma funcion que ya usa el front para sincronizar permisos) en
-    --    vez de insertar TSEDE_USUARIO a mano.
-    --
-    --    fn_fun_permisos_actualizar NO lanza excepcion si el permiso no
-    --    se pudo crear (devuelve status='error:...' por fila) -- se
-    --    captura el resultado y se relanza como excepcion real para que
-    --    un problema acá no quede en silencio.
+    --    creada YA NO se hace aca: fn_sed_crear (llamado en el paso 4) lo
+    --    hace solo, leyendo el rector/secretaria directo de TESTABLECIMIENTO
+    --    (que ya quedo con esos valores en el INSERT del paso 3, antes de
+    --    llegar aca) -- ver su paso 6. Asi el mismo comportamiento aplica
+    --    tambien cuando se agrega una sede adicional despues, no solo a
+    --    la sede por defecto del alta.
     -- -----------------------------------------------------------------
-    IF p_fk_tfuncionario_rector IS NOT NULL THEN
-        SELECT * INTO v_perm_result
-          FROM academico_test.fn_fun_permisos_actualizar(
-              p_pk_usuario_solicitante,
-              p_fk_tfuncionario_rector,
-              jsonb_build_array(jsonb_build_object(
-                  'accion', 'crear',
-                  'orden', 1,
-                  'fk_rol', c_fk_trol_rector,
-                  'fk_sede', v_pk_sede_creada,
-                  'fk_jornada', c_fk_tlv_jornada_defecto,
-                  'predeterminado', 1
-              ))
-          );
-        IF v_perm_result.status IS DISTINCT FROM 'creado' THEN
-            RAISE EXCEPTION 'No se pudo crear el permiso por defecto del rector (TFUNCIONARIO %) en la sede %: %',
-                p_fk_tfuncionario_rector, v_pk_sede_creada, v_perm_result.status;
-        END IF;
-    END IF;
-
-    IF p_fk_tfuncionario_secretaria IS NOT NULL THEN
-        SELECT * INTO v_perm_result
-          FROM academico_test.fn_fun_permisos_actualizar(
-              p_pk_usuario_solicitante,
-              p_fk_tfuncionario_secretaria,
-              jsonb_build_array(jsonb_build_object(
-                  'accion', 'crear',
-                  'orden', 1,
-                  'fk_rol', c_fk_trol_secretaria,
-                  'fk_sede', v_pk_sede_creada,
-                  'fk_jornada', c_fk_tlv_jornada_defecto,
-                  'predeterminado', 1
-              ))
-          );
-        IF v_perm_result.status IS DISTINCT FROM 'creado' THEN
-            RAISE EXCEPTION 'No se pudo crear el permiso por defecto de la secretaria (TFUNCIONARIO %) en la sede %: %',
-                p_fk_tfuncionario_secretaria, v_pk_sede_creada, v_perm_result.status;
-        END IF;
-    END IF;
 
     -- V70 — refleja al rector/secretaria recien asignado en
     -- public.role_users. Van por FK_TUSUARIO del TFUNCIONARIO, no por
@@ -550,7 +506,7 @@ COMMENT ON FUNCTION academico_test.fn_est_crear(
     BIGINT, BIGINT, academico_test.bool_sn,
     BIGINT, BIGINT, BIGINT,
     BIGINT
-) IS 'Crea un TESTABLECIMIENTO validando obligatorios (NOMBRE, NIT, CODIGO, FK_TMUNICIPIO, FK_TPROPIEDAD_JURIDICA) y unicidad por NIT/CODIGO activos. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento). p_pk_usuario_solicitante va al inicio sin DEFAULT (obligatorio, mismo patron que V52). Retorna PK_ESTABLECIMIENTO. Ya NO recibe p_fk_lv_estado_establecimiento: el INSERT fija FK_TLV_ESTADO_ESTABLECIMIENTO=533 ("Activo") de forma fija via c_fk_lv_estado_activo. La columna LOGO del DDL NO se escribe desde esta funcion (no hay modulo de archivos todavia); se pobla posteriormente via UPDATE directo. Auditoria: CREATED_BY=p_pk_usuario_solicitante::VARCHAR, CREATED_AT=now. MODIFIED_BY y MODIFIED_AT quedan NULL (se llenan en la primera edicion via fn_est_actualizar). REV4: ademas crea (via fn_sed_crear) una TSEDE por defecto con el mismo CODIGO/NOMBRE del EE y zona "Urbana y Rural" (216), y si vinieron p_fk_tfuncionario_rector/secretaria les crea (via fn_fun_permisos_actualizar) un permiso TSEDE_USUARIO en esa sede -- rector con FK_TROL=7, secretaria con FK_TROL=9 (Auxiliar administrativo), jornada "Completa" (51900), predeterminado=1. Antes rector/secretaria quedaban sin ningun TSEDE_USUARIO hasta que alguien se los asignara a mano.';
+) IS 'Crea un TESTABLECIMIENTO validando obligatorios (NOMBRE, NIT, CODIGO, FK_TMUNICIPIO, FK_TPROPIEDAD_JURIDICA) y unicidad por NIT/CODIGO activos. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento). p_pk_usuario_solicitante va al inicio sin DEFAULT (obligatorio, mismo patron que V52). Retorna PK_ESTABLECIMIENTO. Ya NO recibe p_fk_lv_estado_establecimiento: el INSERT fija FK_TLV_ESTADO_ESTABLECIMIENTO=533 ("Activo") de forma fija via c_fk_lv_estado_activo. La columna LOGO del DDL NO se escribe desde esta funcion (no hay modulo de archivos todavia); se pobla posteriormente via UPDATE directo. Auditoria: CREATED_BY=p_pk_usuario_solicitante::VARCHAR, CREATED_AT=now. MODIFIED_BY y MODIFIED_AT quedan NULL (se llenan en la primera edicion via fn_est_actualizar). REV4: ademas crea (via fn_sed_crear) una TSEDE por defecto con el mismo CODIGO/NOMBRE del EE y zona "Urbana y Rural" (216). REV5: el permiso de rector/secretaria en esa sede por defecto ya NO se crea aca -- fn_sed_crear lo hace solo (lee el rector/secretaria directo de TESTABLECIMIENTO, que esta funcion ya dejo seteado antes de llamarlo), asi que el mismo comportamiento aplica igual de forma automatica cuando se agrega una sede adicional despues del alta.';
 
 
 -- ---------------------------------------------------------------------------
@@ -637,7 +593,7 @@ BEGIN
      WHERE e.PK_ESTABLECIMIENTO = p_pk_establecimiento;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'No existe TESTABLECIMIENTO con PK_ESTABLECIMIENTO = %', p_pk_establecimiento
+        RAISE EXCEPTION 'No se encontro el establecimiento solicitado'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -1226,6 +1182,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_estado_actual BOOLEAN;
+    v_nombre_actual VARCHAR;
     v_sedes         BIGINT := 0;
     v_pk_sede       BIGINT;
 BEGIN
@@ -1240,18 +1197,18 @@ BEGIN
     -- -----------------------------------------------------------------
     -- 1. Validaciones previas
     -- -----------------------------------------------------------------
-    SELECT ACTIVE
-      INTO v_estado_actual
+    SELECT ACTIVE, NOMBRE
+      INTO v_estado_actual, v_nombre_actual
       FROM academico_test.TESTABLECIMIENTO
      WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'No existe TESTABLECIMIENTO con PK_ESTABLECIMIENTO = %', p_pk_establecimiento
+        RAISE EXCEPTION 'No se encontro el establecimiento solicitado'
             USING ERRCODE = 'P0002';
     END IF;
 
     IF v_estado_actual = FALSE THEN
-        RAISE EXCEPTION 'TESTABLECIMIENTO % ya se encuentra inactivo', p_pk_establecimiento
+        RAISE EXCEPTION 'El establecimiento "%" ya se encuentra inactivo', v_nombre_actual
             USING ERRCODE = '22023',
                   HINT    = 'Use fn_est_buscar_por_nit(..., p_incluir_inactivos=TRUE) para localizar registros dados de baja';
     END IF;
@@ -1484,14 +1441,11 @@ DECLARE
     -- poder sincronizar tambien a quien pierde el rol si cambia.
     v_old_rector      BIGINT;
     v_old_secretaria  BIGINT;
-    -- REV4 -- NOMBRE/CODIGO actuales (antes del UPDATE), para ubicar la
-    -- sede "por defecto" (misma NOMBRE/CODIGO que el EE, la que arma
-    -- fn_est_crear al crear) y darle ahi el permiso a un rector/secretaria
-    -- NUEVO. "Completa" (51900): jornada por defecto, mismo criterio que
-    -- fn_est_crear.
-    v_nombre_actual        VARCHAR;
-    v_codigo_actual        VARCHAR;
-    v_pk_sede_defecto      BIGINT;
+    -- REV6 -- ya no se ubica "la sede por defecto" por NOMBRE/CODIGO: se
+    -- sincroniza el permiso del rector/secretaria en TODAS las sedes
+    -- activas del EE (ver 3c/3d mas abajo). "Completa" (51900): jornada
+    -- por defecto, mismo criterio que fn_est_crear.
+    v_pk_sede_loop         BIGINT;
     v_perm_result          RECORD;
     c_fk_tlv_jornada_defecto CONSTANT BIGINT := 51900;
     c_fk_trol_rector         CONSTANT BIGINT := 7;
@@ -1550,13 +1504,13 @@ BEGIN
     --    capturamos el rector/secretaria PREVIOS (V70) para poder
     --    sincronizar a quien pierde el rol si el UPDATE lo cambia.
     -- -----------------------------------------------------------------
-    SELECT ACTIVE, FK_TFUNCIONARIO_RECTOR, FK_TFUNCIONARIO_SECRETARIA, NOMBRE, CODIGO
-      INTO v_estado_actual, v_old_rector, v_old_secretaria, v_nombre_actual, v_codigo_actual
+    SELECT ACTIVE, FK_TFUNCIONARIO_RECTOR, FK_TFUNCIONARIO_SECRETARIA
+      INTO v_estado_actual, v_old_rector, v_old_secretaria
       FROM academico_test.TESTABLECIMIENTO
      WHERE PK_ESTABLECIMIENTO = p_pk_establecimiento;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'No existe TESTABLECIMIENTO con PK_ESTABLECIMIENTO = %', p_pk_establecimiento
+        RAISE EXCEPTION 'No se encontro el establecimiento solicitado'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -1971,135 +1925,121 @@ BEGIN
     END IF;
 
     -- -----------------------------------------------------------------
-    -- 3c. REV4 -- si el rector/secretaria cambio a alguien NUEVO (no
-    --     nulo, distinto del anterior), se le crea el permiso por
-    --     defecto en la sede que coincide en NOMBRE+CODIGO con el EE
-    --     (la que arma fn_est_crear) -- si esa sede no existe (EE viejo,
-    --     sede renombrada o borrada), v_pk_sede_defecto queda NULL y no
-    --     se crea nada, igual que antes de este cambio. Se guarda contra
-    --     duplicados: si el funcionario YA tiene un permiso activo en
-    --     esa sede con ese rol (p.ej. fue rector, lo sacaron, lo volvieron
-    --     a poner), no se crea uno igual encima.
+    -- 3c/3d. REV6 -- si el rector/secretaria cambio a alguien NUEVO (no
+    --     nulo, distinto del anterior), se sincroniza su permiso en TODAS
+    --     las sedes ACTIVAS del EE (antes solo en la "sede por defecto"
+    --     que coincide en NOMBRE+CODIGO -- REV4/REV5). Mismo criterio que
+    --     fn_sed_crear al crear una sede nueva: el invariante es "rector/
+    --     secretaria tiene permiso en TODAS las sedes de su EE", asi que
+    --     al reasignar el puesto hay que sincronizar cada sede existente,
+    --     no solo una. Por cada sede: se crea el permiso del ENTRANTE (si
+    --     no lo tenia ya ahi -- guarda anti-duplicados) y se revoca el del
+    --     SALIENTE (si lo tenia). predeterminado=0 siempre -- con
+    --     potencialmente varias sedes de por medio, ninguna se marca como
+    --     la jornada/sede por defecto automaticamente.
     -- -----------------------------------------------------------------
-    SELECT PK_TSEDE INTO v_pk_sede_defecto
-      FROM academico_test.TSEDE
-     WHERE FK_TESTABLECIMIENTO = p_pk_establecimiento
-       AND ACTIVE = TRUE
-       AND NOMBRE = v_nombre_actual
-       AND CODIGO = v_codigo_actual
-     LIMIT 1;
+    FOR v_pk_sede_loop IN
+        SELECT PK_TSEDE FROM academico_test.TSEDE
+         WHERE FK_TESTABLECIMIENTO = p_pk_establecimiento AND ACTIVE = TRUE
+    LOOP
+        IF p_FK_TFUNCIONARIO_RECTOR IS NOT NULL
+           AND p_FK_TFUNCIONARIO_RECTOR IS DISTINCT FROM v_old_rector
+           AND NOT EXISTS (
+                SELECT 1
+                  FROM academico_test.TSEDE_USUARIO su
+                  JOIN academico_test.TFUNCIONARIO f ON f.FK_TUSUARIO = su.FK_TUSUARIO
+                 WHERE f.PK_TFUNCIONARIO = p_FK_TFUNCIONARIO_RECTOR
+                   AND su.FK_TSEDE = v_pk_sede_loop
+                   AND su.FK_TROL  = c_fk_trol_rector
+                   AND su.ACTIVE   = TRUE
+           )
+        THEN
+            SELECT * INTO v_perm_result
+              FROM academico_test.fn_fun_permisos_actualizar(
+                  p_pk_usuario_solicitante,
+                  p_FK_TFUNCIONARIO_RECTOR,
+                  jsonb_build_array(jsonb_build_object(
+                      'accion', 'crear',
+                      'orden', 1,
+                      'fk_rol', c_fk_trol_rector,
+                      'fk_sede', v_pk_sede_loop,
+                      'fk_jornada', c_fk_tlv_jornada_defecto,
+                      'predeterminado', 0
+                  ))
+              );
+            IF v_perm_result.status IS DISTINCT FROM 'creado' THEN
+                RAISE EXCEPTION 'No se pudo crear el permiso del nuevo rector (TFUNCIONARIO %) en la sede %: %',
+                    p_FK_TFUNCIONARIO_RECTOR, v_pk_sede_loop, v_perm_result.status;
+            END IF;
+        END IF;
 
-    IF v_pk_sede_defecto IS NOT NULL
-       AND p_FK_TFUNCIONARIO_RECTOR IS NOT NULL
-       AND p_FK_TFUNCIONARIO_RECTOR IS DISTINCT FROM v_old_rector
-       AND NOT EXISTS (
-            SELECT 1
+        IF p_FK_TFUNCIONARIO_SECRETARIA IS NOT NULL
+           AND p_FK_TFUNCIONARIO_SECRETARIA IS DISTINCT FROM v_old_secretaria
+           AND NOT EXISTS (
+                SELECT 1
+                  FROM academico_test.TSEDE_USUARIO su
+                  JOIN academico_test.TFUNCIONARIO f ON f.FK_TUSUARIO = su.FK_TUSUARIO
+                 WHERE f.PK_TFUNCIONARIO = p_FK_TFUNCIONARIO_SECRETARIA
+                   AND su.FK_TSEDE = v_pk_sede_loop
+                   AND su.FK_TROL  = c_fk_trol_secretaria
+                   AND su.ACTIVE   = TRUE
+           )
+        THEN
+            SELECT * INTO v_perm_result
+              FROM academico_test.fn_fun_permisos_actualizar(
+                  p_pk_usuario_solicitante,
+                  p_FK_TFUNCIONARIO_SECRETARIA,
+                  jsonb_build_array(jsonb_build_object(
+                      'accion', 'crear',
+                      'orden', 1,
+                      'fk_rol', c_fk_trol_secretaria,
+                      'fk_sede', v_pk_sede_loop,
+                      'fk_jornada', c_fk_tlv_jornada_defecto,
+                      'predeterminado', 0
+                  ))
+              );
+            IF v_perm_result.status IS DISTINCT FROM 'creado' THEN
+                RAISE EXCEPTION 'No se pudo crear el permiso de la nueva secretaria (TFUNCIONARIO %) en la sede %: %',
+                    p_FK_TFUNCIONARIO_SECRETARIA, v_pk_sede_loop, v_perm_result.status;
+            END IF;
+        END IF;
+
+        IF p_FK_TFUNCIONARIO_RECTOR IS NOT NULL
+           AND p_FK_TFUNCIONARIO_RECTOR IS DISTINCT FROM v_old_rector
+           AND v_old_rector IS NOT NULL
+        THEN
+            SELECT su.PK_TSEDE_USUARIO INTO v_pk_permiso_a_quitar
               FROM academico_test.TSEDE_USUARIO su
               JOIN academico_test.TFUNCIONARIO f ON f.FK_TUSUARIO = su.FK_TUSUARIO
-             WHERE f.PK_TFUNCIONARIO = p_FK_TFUNCIONARIO_RECTOR
-               AND su.FK_TSEDE = v_pk_sede_defecto
+             WHERE f.PK_TFUNCIONARIO = v_old_rector
+               AND su.FK_TSEDE = v_pk_sede_loop
                AND su.FK_TROL  = c_fk_trol_rector
                AND su.ACTIVE   = TRUE
-       )
-    THEN
-        SELECT * INTO v_perm_result
-          FROM academico_test.fn_fun_permisos_actualizar(
-              p_pk_usuario_solicitante,
-              p_FK_TFUNCIONARIO_RECTOR,
-              jsonb_build_array(jsonb_build_object(
-                  'accion', 'crear',
-                  'orden', 1,
-                  'fk_rol', c_fk_trol_rector,
-                  'fk_sede', v_pk_sede_defecto,
-                  'fk_jornada', c_fk_tlv_jornada_defecto,
-                  'predeterminado', 1
-              ))
-          );
-        IF v_perm_result.status IS DISTINCT FROM 'creado' THEN
-            RAISE EXCEPTION 'No se pudo crear el permiso por defecto del nuevo rector (TFUNCIONARIO %) en la sede %: %',
-                p_FK_TFUNCIONARIO_RECTOR, v_pk_sede_defecto, v_perm_result.status;
-        END IF;
-    END IF;
+             LIMIT 1;
 
-    IF v_pk_sede_defecto IS NOT NULL
-       AND p_FK_TFUNCIONARIO_SECRETARIA IS NOT NULL
-       AND p_FK_TFUNCIONARIO_SECRETARIA IS DISTINCT FROM v_old_secretaria
-       AND NOT EXISTS (
-            SELECT 1
+            IF v_pk_permiso_a_quitar IS NOT NULL THEN
+                PERFORM academico_test.fn_sede_usuario_soft_delete(v_pk_permiso_a_quitar, p_pk_usuario_solicitante);
+            END IF;
+        END IF;
+
+        IF p_FK_TFUNCIONARIO_SECRETARIA IS NOT NULL
+           AND p_FK_TFUNCIONARIO_SECRETARIA IS DISTINCT FROM v_old_secretaria
+           AND v_old_secretaria IS NOT NULL
+        THEN
+            SELECT su.PK_TSEDE_USUARIO INTO v_pk_permiso_a_quitar
               FROM academico_test.TSEDE_USUARIO su
               JOIN academico_test.TFUNCIONARIO f ON f.FK_TUSUARIO = su.FK_TUSUARIO
-             WHERE f.PK_TFUNCIONARIO = p_FK_TFUNCIONARIO_SECRETARIA
-               AND su.FK_TSEDE = v_pk_sede_defecto
+             WHERE f.PK_TFUNCIONARIO = v_old_secretaria
+               AND su.FK_TSEDE = v_pk_sede_loop
                AND su.FK_TROL  = c_fk_trol_secretaria
                AND su.ACTIVE   = TRUE
-       )
-    THEN
-        SELECT * INTO v_perm_result
-          FROM academico_test.fn_fun_permisos_actualizar(
-              p_pk_usuario_solicitante,
-              p_FK_TFUNCIONARIO_SECRETARIA,
-              jsonb_build_array(jsonb_build_object(
-                  'accion', 'crear',
-                  'orden', 1,
-                  'fk_rol', c_fk_trol_secretaria,
-                  'fk_sede', v_pk_sede_defecto,
-                  'fk_jornada', c_fk_tlv_jornada_defecto,
-                  'predeterminado', 1
-              ))
-          );
-        IF v_perm_result.status IS DISTINCT FROM 'creado' THEN
-            RAISE EXCEPTION 'No se pudo crear el permiso por defecto de la nueva secretaria (TFUNCIONARIO %) en la sede %: %',
-                p_FK_TFUNCIONARIO_SECRETARIA, v_pk_sede_defecto, v_perm_result.status;
+             LIMIT 1;
+
+            IF v_pk_permiso_a_quitar IS NOT NULL THEN
+                PERFORM academico_test.fn_sede_usuario_soft_delete(v_pk_permiso_a_quitar, p_pk_usuario_solicitante);
+            END IF;
         END IF;
-    END IF;
-
-    -- -----------------------------------------------------------------
-    -- 3d. REV5 -- si el rector/secretaria cambio a alguien NUEVO, se le
-    --     quita al que PERDIO el puesto su permiso por defecto (mismo rol,
-    --     misma sede "por defecto" de 3c) -- decision de negocio: un
-    --     rector/secretaria reemplazado deja de figurar con ese rol en esa
-    --     sede, no se queda "duplicado" con el nuevo. Solo toca el permiso
-    --     puntual (fk_rol + fk_sede exactos, via fn_sede_usuario_soft_delete
-    --     por PK_TSEDE_USUARIO) -- nunca los demas permisos que el saliente
-    --     pueda tener en otras sedes/roles, esos no se tocan.
-    -- -----------------------------------------------------------------
-    IF v_pk_sede_defecto IS NOT NULL
-       AND p_FK_TFUNCIONARIO_RECTOR IS NOT NULL
-       AND p_FK_TFUNCIONARIO_RECTOR IS DISTINCT FROM v_old_rector
-       AND v_old_rector IS NOT NULL
-    THEN
-        SELECT su.PK_TSEDE_USUARIO INTO v_pk_permiso_a_quitar
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TFUNCIONARIO f ON f.FK_TUSUARIO = su.FK_TUSUARIO
-         WHERE f.PK_TFUNCIONARIO = v_old_rector
-           AND su.FK_TSEDE = v_pk_sede_defecto
-           AND su.FK_TROL  = c_fk_trol_rector
-           AND su.ACTIVE   = TRUE
-         LIMIT 1;
-
-        IF v_pk_permiso_a_quitar IS NOT NULL THEN
-            PERFORM academico_test.fn_sede_usuario_soft_delete(v_pk_permiso_a_quitar, p_pk_usuario_solicitante);
-        END IF;
-    END IF;
-
-    IF v_pk_sede_defecto IS NOT NULL
-       AND p_FK_TFUNCIONARIO_SECRETARIA IS NOT NULL
-       AND p_FK_TFUNCIONARIO_SECRETARIA IS DISTINCT FROM v_old_secretaria
-       AND v_old_secretaria IS NOT NULL
-    THEN
-        SELECT su.PK_TSEDE_USUARIO INTO v_pk_permiso_a_quitar
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TFUNCIONARIO f ON f.FK_TUSUARIO = su.FK_TUSUARIO
-         WHERE f.PK_TFUNCIONARIO = v_old_secretaria
-           AND su.FK_TSEDE = v_pk_sede_defecto
-           AND su.FK_TROL  = c_fk_trol_secretaria
-           AND su.ACTIVE   = TRUE
-         LIMIT 1;
-
-        IF v_pk_permiso_a_quitar IS NOT NULL THEN
-            PERFORM academico_test.fn_sede_usuario_soft_delete(v_pk_permiso_a_quitar, p_pk_usuario_solicitante);
-        END IF;
-    END IF;
+    END LOOP;
 
     -- -----------------------------------------------------------------
     -- 4. Reporte y retorno.
@@ -2125,4 +2065,4 @@ COMMENT ON FUNCTION academico_test.fn_est_actualizar(
     BIGINT, BIGINT, academico_test.bool_sn,
     BIGINT, BIGINT, BIGINT, BIGINT,
     BIGINT
-) IS 'Actualizacion parcial (estilo PATCH) de TESTABLECIMIENTO. Cada parametro NULL no modifica su columna; cada valor no NULL se aplica. NIT y CODIGO son modificables: si se envian, se validan contra el resto de EE activos (excluyendo el propio PK) y se aplican. Solo opera sobre EE activos. Actualiza MODIFIED_BY/MODIFIED_AT solo si hay cambios. Gate de autorizacion compuesto: (a) el usuario pasa fn_puede_afectar_establecimiento (roles 1-3) => puede modificar cualquier EE activo; (b) en caso contrario, se valida que el FK_TFUNCIONARIO_RECTOR del EE apunte a un TFUNCIONARIO activo cuyo FK_TUSUARIO coincida con p_pk_usuario_solicitante. Cualquier otro caso => 42501. p_pk_usuario_solicitante y p_pk_establecimiento van al inicio sin DEFAULT (obligatorios, mismo patron que V52). Retorna PK_ESTABLECIMIENTO. V70: si FK_TFUNCIONARIO_RECTOR/SECRETARIA cambia, sincroniza al que gana Y al que pierde el rol en public.role_users (fn_sincronizar_rol_publico). REV4: ademas, si el rector/secretaria cambia a alguien NUEVO (no nulo, distinto del anterior), le crea un permiso TSEDE_USUARIO por defecto (via fn_fun_permisos_actualizar) en la sede cuyo NOMBRE/CODIGO coincide con el EE (la "sede por defecto" que arma fn_est_crear) -- rector con FK_TROL=7, secretaria con FK_TROL=9, jornada "Completa" (51900); si esa sede no existe (EE viejo, sede renombrada/borrada) no crea nada. Con guarda anti-duplicados: si el funcionario ya tiene un permiso activo con ese rol en esa sede, no crea uno igual. REV5: ademas, al que PIERDE el puesto de rector/secretaria (habia alguien antes, distinto del nuevo) se le desactiva (fn_sede_usuario_soft_delete) su permiso por defecto puntual -- mismo rol, misma sede por defecto -- sin tocar ningun otro permiso que tenga en otras sedes/roles.';
+) IS 'Actualizacion parcial (estilo PATCH) de TESTABLECIMIENTO. Cada parametro NULL no modifica su columna; cada valor no NULL se aplica. NIT y CODIGO son modificables: si se envian, se validan contra el resto de EE activos (excluyendo el propio PK) y se aplican. Solo opera sobre EE activos. Actualiza MODIFIED_BY/MODIFIED_AT solo si hay cambios. Gate de autorizacion compuesto: (a) el usuario pasa fn_puede_afectar_establecimiento (roles 1-3) => puede modificar cualquier EE activo; (b) en caso contrario, se valida que el FK_TFUNCIONARIO_RECTOR del EE apunte a un TFUNCIONARIO activo cuyo FK_TUSUARIO coincida con p_pk_usuario_solicitante. Cualquier otro caso => 42501. p_pk_usuario_solicitante y p_pk_establecimiento van al inicio sin DEFAULT (obligatorios, mismo patron que V52). Retorna PK_ESTABLECIMIENTO. V70: si FK_TFUNCIONARIO_RECTOR/SECRETARIA cambia, sincroniza al que gana Y al que pierde el rol en public.role_users (fn_sincronizar_rol_publico). REV6 (reemplaza REV4/REV5): si el rector/secretaria cambia a alguien NUEVO (no nulo, distinto del anterior), se sincroniza su permiso TSEDE_USUARIO en TODAS las sedes ACTIVAS del EE (antes solo en la "sede por defecto" que coincidia en NOMBRE/CODIGO con el EE) -- rector con FK_TROL=7, secretaria con FK_TROL=9, jornada "Completa" (51900), predeterminado=0; con guarda anti-duplicados por sede. Al mismo tiempo, en cada una de esas sedes se desactiva (fn_sede_usuario_soft_delete) el permiso puntual del que PIERDE el puesto (si lo tenia), sin tocar ningun otro permiso que tenga en sedes de otros EE. Mismo invariante que mantiene fn_sed_crear al crear una sede nueva: "rector/secretaria tiene permiso en TODAS las sedes de su EE".';

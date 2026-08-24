@@ -114,6 +114,14 @@ AS $$
 DECLARE
     v_id_creado             BIGINT;
     v_consecutivo           VARCHAR(2);
+    -- REV4 -- sincroniza al rector/secretaria ACTUAL del EE en la sede que
+    -- se esta creando (ver paso 6 mas abajo).
+    v_pk_rector              BIGINT;
+    v_pk_secretaria          BIGINT;
+    v_perm_result            RECORD;
+    c_fk_trol_rector         CONSTANT BIGINT := 7;
+    c_fk_trol_secretaria     CONSTANT BIGINT := 9;
+    c_fk_tlv_jornada_defecto CONSTANT BIGINT := 51900;
     -- REV3 -- se quita el fallback "resolver el unico EE" (via
     -- fn_resolver_establecimiento_unico): el select de EE del front ahora
     -- se muestra SIEMPRE en el alta, para cualquier rol (ya no es
@@ -227,7 +235,7 @@ BEGIN
          WHERE PK_ESTABLECIMIENTO = v_fk_establecimiento
            AND ACTIVE = TRUE
     ) THEN
-        RAISE EXCEPTION 'No existe un TESTABLECIMIENTO activo con PK %', v_fk_establecimiento
+        RAISE EXCEPTION 'No se encontro un establecimiento activo con ese identificador'
             USING ERRCODE = '22023',
                   HINT    = 'Verifique el establecimiento o use fn_est_buscar_por_nit(..., p_incluir_inactivos=TRUE)';
     END IF;
@@ -269,7 +277,7 @@ BEGIN
            AND NOMBRE              = p_nombre
            AND ACTIVE              = TRUE
     ) THEN
-        RAISE EXCEPTION 'Ya existe una TSEDE activa con NOMBRE % para el EE %', p_nombre, v_fk_establecimiento
+        RAISE EXCEPTION 'Ya existe una sede activa con el nombre "%" en este establecimiento', p_nombre
             USING ERRCODE = '23505',
                   HINT    = 'Dentro de un EE el NOMBRE de sede debe ser unico entre activas';
     END IF;
@@ -314,6 +322,64 @@ BEGIN
     )
     RETURNING PK_TSEDE INTO v_id_creado;
 
+    -- -----------------------------------------------------------------
+    -- 6. REV4 -- Sincroniza al rector/secretaria ACTUAL del EE en esta
+    --    sede: si el EE ya tiene rector y/o secretaria asignados, se les
+    --    da su permiso (rol 7/9, jornada "Completa") en la sede recien
+    --    creada. Mantiene el invariante "rector/secretaria tiene permiso
+    --    en TODAS las sedes de su EE", sin importar si la sede se crea
+    --    junto con el EE (fn_est_crear delega aqui para su sede por
+    --    defecto) o despues, como una sede adicional agregada a mano.
+    --    Sin guarda anti-duplicados: la sede es nueva, no puede existir
+    --    ya un permiso suyo ahi. predeterminado=0 siempre -- una sede
+    --    adicional nunca reemplaza la jornada/sede que el usuario ya
+    --    tenia marcada como predeterminada.
+    -- -----------------------------------------------------------------
+    SELECT FK_TFUNCIONARIO_RECTOR, FK_TFUNCIONARIO_SECRETARIA
+      INTO v_pk_rector, v_pk_secretaria
+      FROM academico_test.TESTABLECIMIENTO
+     WHERE PK_ESTABLECIMIENTO = v_fk_establecimiento;
+
+    IF v_pk_rector IS NOT NULL THEN
+        SELECT * INTO v_perm_result
+          FROM academico_test.fn_fun_permisos_actualizar(
+              p_pk_usuario_solicitante,
+              v_pk_rector,
+              jsonb_build_array(jsonb_build_object(
+                  'accion', 'crear',
+                  'orden', 1,
+                  'fk_rol', c_fk_trol_rector,
+                  'fk_sede', v_id_creado,
+                  'fk_jornada', c_fk_tlv_jornada_defecto,
+                  'predeterminado', 0
+              ))
+          );
+        IF v_perm_result.status IS DISTINCT FROM 'creado' THEN
+            RAISE EXCEPTION 'No se pudo crear el permiso del rector (TFUNCIONARIO %) en la nueva sede %: %',
+                v_pk_rector, v_id_creado, v_perm_result.status;
+        END IF;
+    END IF;
+
+    IF v_pk_secretaria IS NOT NULL THEN
+        SELECT * INTO v_perm_result
+          FROM academico_test.fn_fun_permisos_actualizar(
+              p_pk_usuario_solicitante,
+              v_pk_secretaria,
+              jsonb_build_array(jsonb_build_object(
+                  'accion', 'crear',
+                  'orden', 1,
+                  'fk_rol', c_fk_trol_secretaria,
+                  'fk_sede', v_id_creado,
+                  'fk_jornada', c_fk_tlv_jornada_defecto,
+                  'predeterminado', 0
+              ))
+          );
+        IF v_perm_result.status IS DISTINCT FROM 'creado' THEN
+            RAISE EXCEPTION 'No se pudo crear el permiso de la secretaria (TFUNCIONARIO %) en la nueva sede %: %',
+                v_pk_secretaria, v_id_creado, v_perm_result.status;
+        END IF;
+    END IF;
+
     RAISE NOTICE 'TSEDE creada: PK=%, CODIGO=%, CONSECUTIVO=%, EE=%',
         v_id_creado, p_codigo, v_consecutivo, v_fk_establecimiento;
 
@@ -326,7 +392,7 @@ COMMENT ON FUNCTION academico_test.fn_sed_crear(
     VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR,
     VARCHAR
 )
-    IS 'REV3: crea una TSEDE para un TESTABLECIMIENTO activo. CODIGO/NOMBRE/FK_TLV_ZONA/p_fk_establecimiento son obligatorios (p_fk_establecimiento sin DEFAULT en la firma). El select de EE del front ahora se muestra siempre en el alta, para cualquier rol -- ya no se intenta resolver "el unico EE" del solicitante (fn_resolver_establecimiento_unico, retirado de esta funcion): ese fallback se rompia si el solicitante administraba 2+ EE a la vez. Si llega NULL => 22023 (o 42501 si ademas no es super-admin, el gate corre antes que la validacion de obligatoriedad). CONSECUTIVO se calcula automaticamente (MAX+1, padded a 2 digitos, solo entre sedes activas del mismo EE). Campos NOT NULL del DDL no obligatorios a nivel API se persisten como vacio si llegan nulos. Gate de autorizacion COMPUESTO (cualquiera basta, validado contra el EE recibido): (a) super-admin via fn_puede_afectar_establecimiento (roles 1-3); (b) rector del EE concreto; (c) secretaria del EE concreto; (d) jefe de sistema (rol 8) con al menos una vinculacion en cualquier sede del EE concreto. Cualquier otro caso => 42501. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52 y V53).';
+    IS 'REV4: crea una TSEDE para un TESTABLECIMIENTO activo. CODIGO/NOMBRE/FK_TLV_ZONA/p_fk_establecimiento son obligatorios (p_fk_establecimiento sin DEFAULT en la firma). El select de EE del front ahora se muestra siempre en el alta, para cualquier rol -- ya no se intenta resolver "el unico EE" del solicitante (fn_resolver_establecimiento_unico, retirado de esta funcion): ese fallback se rompia si el solicitante administraba 2+ EE a la vez. Si llega NULL => 22023 (o 42501 si ademas no es super-admin, el gate corre antes que la validacion de obligatoriedad). CONSECUTIVO se calcula automaticamente (MAX+1, padded a 2 digitos, solo entre sedes activas del mismo EE). Campos NOT NULL del DDL no obligatorios a nivel API se persisten como vacio si llegan nulos. Gate de autorizacion COMPUESTO (cualquiera basta, validado contra el EE recibido): (a) super-admin via fn_puede_afectar_establecimiento (roles 1-3); (b) rector del EE concreto; (c) secretaria del EE concreto; (d) jefe de sistema (rol 8) con al menos una vinculacion en cualquier sede del EE concreto. Cualquier otro caso => 42501. REV4: ademas, si el EE ya tiene rector y/o secretaria asignados, se les crea su permiso por defecto (rol 7/9, jornada "Completa", predeterminado=0) en la sede recien creada -- mantiene el invariante "rector/secretaria tiene permiso en TODAS las sedes de su EE" sin importar cuando se cree cada sede. fn_est_crear delega aqui para su sede por defecto, asi que este mismo comportamiento aplica ahi tambien. p_pk_usuario_solicitante va al inicio (obligatorio, mismo patron que V52 y V53).';
 
 
 -- ---------------------------------------------------------------------------
@@ -409,6 +475,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_estado_actual BOOLEAN;
+    v_nombre_actual VARCHAR;
     v_fk_ee        BIGINT;
 BEGIN
     -- -----------------------------------------------------------------
@@ -419,13 +486,13 @@ BEGIN
     --    sobre 42501: si la sede no existe, no tiene sentido hablar de
     --    permisos. Sobre inactivas -> 22023.
     -- -----------------------------------------------------------------
-    SELECT ACTIVE, FK_TESTABLECIMIENTO
-      INTO v_estado_actual, v_fk_ee
+    SELECT ACTIVE, FK_TESTABLECIMIENTO, NOMBRE
+      INTO v_estado_actual, v_fk_ee, v_nombre_actual
       FROM academico_test.TSEDE
      WHERE PK_TSEDE = p_pk_sede;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'No existe TSEDE con PK_TSEDE = %', p_pk_sede
+        RAISE EXCEPTION 'No se encontro la sede solicitada'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -483,7 +550,7 @@ BEGIN
     END IF;
 
     IF v_estado_actual = FALSE THEN
-        RAISE EXCEPTION 'TSEDE % se encuentra inactiva; no se puede actualizar', p_pk_sede
+        RAISE EXCEPTION 'La sede "%" se encuentra inactiva; no se puede actualizar', v_nombre_actual
             USING ERRCODE = '22023',
                   HINT    = 'Localice la sede mediante una consulta directa sobre TSEDE';
     END IF;
@@ -691,6 +758,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_estado_actual BOOLEAN;
+    v_nombre_actual VARCHAR;
     v_fk_ee         BIGINT;
     v_usuarios     BIGINT := 0;
     v_niveles      BIGINT := 0;
@@ -701,18 +769,18 @@ BEGIN
     --    El orden es: existencia (P0002) -> estado (22023) -> gate
     --    (42501). Asi priorizamos mensajes claros sobre info leaks.
     -- -----------------------------------------------------------------
-    SELECT ACTIVE, FK_TESTABLECIMIENTO
-      INTO v_estado_actual, v_fk_ee
+    SELECT ACTIVE, FK_TESTABLECIMIENTO, NOMBRE
+      INTO v_estado_actual, v_fk_ee, v_nombre_actual
       FROM academico_test.TSEDE
      WHERE PK_TSEDE = p_pk_sede;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'No existe TSEDE con PK_TSEDE = %', p_pk_sede
+        RAISE EXCEPTION 'No se encontro la sede solicitada'
             USING ERRCODE = 'P0002';
     END IF;
 
     IF v_estado_actual = FALSE THEN
-        RAISE EXCEPTION 'TSEDE % ya se encuentra inactiva', p_pk_sede
+        RAISE EXCEPTION 'La sede "%" ya se encuentra inactiva', v_nombre_actual
             USING ERRCODE = '22023',
                   HINT    = 'Localice la sede mediante una consulta directa sobre TSEDE';
     END IF;
@@ -1384,7 +1452,7 @@ BEGIN
      WHERE s.PK_TSEDE = p_pk_sede;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'No existe TSEDE con PK_TSEDE = %', p_pk_sede
+        RAISE EXCEPTION 'No se encontro la sede solicitada'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -1637,7 +1705,7 @@ BEGIN
         SELECT 1 FROM academico_test.TESTABLECIMIENTO e
          WHERE e.PK_ESTABLECIMIENTO = p_pk_establecimiento AND e.ACTIVE = TRUE
     ) THEN
-        RAISE EXCEPTION 'No existe TESTABLECIMIENTO con PK_ESTABLECIMIENTO = %', p_pk_establecimiento
+        RAISE EXCEPTION 'No se encontro el establecimiento solicitado'
             USING ERRCODE = 'P0002';
     END IF;
 

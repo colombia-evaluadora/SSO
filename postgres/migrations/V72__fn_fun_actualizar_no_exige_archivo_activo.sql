@@ -30,8 +30,24 @@ BEGIN
     -- 0. Gate de autorizacion.
     -- =====================================================================
     IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
+        -- Fallback: rector o secretaria de CUALQUIER EE activo, via
+        -- TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA --
+        -- fn_puede_afectar_usuarios (-> fn_puede_afectar_sede ->
+        -- fn_puede_afectar_establecimiento) solo reconoce el rol via
+        -- TSEDE_USUARIO (FK_TROL 1-3/7-8/9): un rector/secretaria recien
+        -- asignado, sin ningun TSEDE_USUARIO todavia (caso normal antes de
+        -- que se decida si se liga a todas las sedes o no), quedaba sin
+        -- poder gestionar a sus propios funcionarios.
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f
+                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+        ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
     END IF;
 
     -- =====================================================================
@@ -44,7 +60,7 @@ BEGIN
      WHERE PK_TFUNCIONARIO = p_pk_funcionario;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'no existe TFUNCIONARIO con PK %', p_pk_funcionario
+        RAISE EXCEPTION 'No se encontro el funcionario solicitado'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -114,14 +130,14 @@ BEGIN
             USING ERRCODE = '23503';
     END IF;
 
-    -- V72 — sin "AND ACTIVE = TRUE": ver comentario de cabecera.
     IF p_fk_tarchivo_foto IS NOT NULL
        AND NOT EXISTS (
             SELECT 1 FROM academico_test.TARCHIVO
              WHERE PK_TARCHIVO = p_fk_tarchivo_foto
+               AND ACTIVE       = TRUE
           )
     THEN
-        RAISE EXCEPTION 'archivo de foto (%) no existe en TARCHIVO', p_fk_tarchivo_foto
+        RAISE EXCEPTION 'archivo de foto (%) no existe o no esta activo', p_fk_tarchivo_foto
             USING ERRCODE = '23503';
     END IF;
 
@@ -343,14 +359,14 @@ BEGIN
             USING ERRCODE = '23503';
     END IF;
 
-    -- V72 — sin "AND ACTIVE = TRUE": ver comentario de cabecera.
     IF p_fk_tarchivo IS NOT NULL
        AND NOT EXISTS (
             SELECT 1 FROM academico_test.TARCHIVO
              WHERE PK_TARCHIVO = p_fk_tarchivo
+               AND ACTIVE       = TRUE
           )
     THEN
-        RAISE EXCEPTION 'archivo (%) no existe en TARCHIVO', p_fk_tarchivo
+        RAISE EXCEPTION 'archivo (%) no existe o no esta activo en TARCHIVO', p_fk_tarchivo
             USING ERRCODE = '23503';
     END IF;
 
