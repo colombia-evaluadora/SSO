@@ -5,12 +5,14 @@ import java.awt.Color;
 /**
  * La identidad visual de los reportes, en un solo lugar.
  *
- * <p>Los colores salen de la app (`--primary: #0D99FF`, `--secondary:
- * #618200`) pero NO se usan tal cual: el azul de pantalla es muy saturado y
- * en papel, aplicado a una banda entera, chilla y se come el tóner. Lo que se
- * hace es lo mismo que haría un diseñador al pasar una identidad a impreso —
- * conservar el matiz y bajarle el brillo para los trazos, y usar una versión
- * muy diluida del mismo matiz para los fondos.
+ * <p>Los colores NO salen de las variables CSS de la app sino de los activos
+ * de marca ya aprobados: el azul del logo que llevan los correos y el navy de
+ * su banda de encabezado. El documento carga ese logo impreso, así que su
+ * identidad tiene que venir de ahí — un reporte con el logo en un azul y las
+ * reglas en otro se lee como dos marcas peleando en la misma hoja.
+ *
+ * <p>El `--primary: #0D99FF` de pantalla se descartó a propósito: es muy
+ * saturado y en papel, aplicado a una banda entera, chilla y se come el tóner.
  *
  * <p>Un solo acento. El olivo de la marca queda fuera a propósito: dos colores
  * compitiendo en una tabla de datos agregan ruido sin agregar información. El
@@ -21,11 +23,15 @@ final class ReportTheme {
 
     private ReportTheme() {}
 
-    /** Azul de marca oscurecido para impresión: mismo matiz, legible sobre blanco. */
-    static final Color ACENTO = new Color(0x0A, 0x6F, 0xBA);
+    /** El azul del logo. Se usa tal cual: ya es un tono medio que imprime bien. */
+    static final Color ACENTO = new Color(0x16, 0x88, 0xC8);
 
-    /** Tinta de titulares — azul tan oscuro que se lee como negro, pero no lo es. */
-    static final Color TINTA_FUERTE = new Color(0x0B, 0x2B, 0x45);
+    /**
+     * Navy de titulares. Es el mismo `#16305c` de la banda de encabezado de
+     * las plantillas de correo: el reporte y el mail que lo anuncia comparten
+     * color de titular.
+     */
+    static final Color TINTA_FUERTE = new Color(0x16, 0x30, 0x5C);
 
     /** Texto del cuerpo. */
     static final Color TINTA = new Color(0x1F, 0x29, 0x33);
@@ -33,8 +39,8 @@ final class ReportTheme {
     /** Metadatos: fecha, usuario, filtros, pie. */
     static final Color TINTA_SUAVE = new Color(0x5B, 0x66, 0x72);
 
-    /** Fondo del encabezado de columnas: el acento diluido. */
-    static final Color FONDO_ENCABEZADO = new Color(0xEA, 0xF5, 0xFE);
+    /** Fondo del encabezado de columnas: el azul del logo, muy diluido. */
+    static final Color FONDO_ENCABEZADO = new Color(0xE8, 0xF4, 0xFB);
 
     /** Fondo de las filas pares. Casi imperceptible, que es el punto: guía el
      *  ojo a lo largo de la fila sin convertirse en un patrón que distraiga. */
@@ -49,6 +55,17 @@ final class ReportTheme {
     static final int ANCHO_PAGINA = 842;
     static final int ALTO_PAGINA = 595;
     static final int MARGEN = 28;
+
+    /** Logo, en classpath. Es el MISMO archivo que usan los correos. */
+    static final String LOGO = "logo.png";
+
+    /**
+     * 480x132 en el original (ratio 3.64). A 132pt de ancho el tagline
+     * 'e-government for education' todavia se lee impreso; mas chico se
+     * convierte en una mancha y el logo deja de cumplir su funcion.
+     */
+    static final int LOGO_ANCHO = 132;
+    static final int LOGO_ALTO = 36;
 
     static final int ALTO_FILA = 15;
     static final int ALTO_ENCABEZADO = 19;

@@ -11,6 +11,7 @@ import net.sf.jasperreports.engine.design.JRDesignBand;
 import net.sf.jasperreports.engine.design.JRDesignConditionalStyle;
 import net.sf.jasperreports.engine.design.JRDesignExpression;
 import net.sf.jasperreports.engine.design.JRDesignField;
+import net.sf.jasperreports.engine.design.JRDesignImage;
 import net.sf.jasperreports.engine.design.JRDesignLine;
 import net.sf.jasperreports.engine.design.JRDesignParameter;
 import net.sf.jasperreports.engine.design.JRDesignRectangle;
@@ -24,6 +25,7 @@ import net.sf.jasperreports.engine.type.HorizontalTextAlignEnum;
 import net.sf.jasperreports.engine.type.ModeEnum;
 import net.sf.jasperreports.engine.type.OrientationEnum;
 import net.sf.jasperreports.engine.type.PositionTypeEnum;
+import net.sf.jasperreports.engine.type.ScaleImageEnum;
 import net.sf.jasperreports.engine.type.StretchTypeEnum;
 import net.sf.jasperreports.engine.type.TextAdjustEnum;
 import net.sf.jasperreports.engine.type.VerticalTextAlignEnum;
@@ -212,22 +214,26 @@ public class PdfRenderer {
         d.addStyle(filaStyle);
 
         int ancho = usableWidth();
-        d.setTitle(bandaTitulo(ancho));
+        d.setTitle(bandaTitulo(ancho, d));
         d.setPageHeader(bandaFiltros(ancho));
         d.setColumnHeader(bandaEncabezados(columnas, anchos));
         ((JRDesignSection) d.getDetailSection()).addBand(bandaDetalle(columnas, anchos, filaStyle));
         d.setPageFooter(bandaPie(ancho));
-        d.setNoData(bandaSinDatos(ancho));
+        d.setNoData(bandaSinDatos(ancho, d));
 
         return d;
     }
 
-    /** Membrete: título, línea de contexto y la regla del acento. */
-    private JRDesignBand bandaTitulo(int ancho) {
+    /** Membrete: logo, título, línea de contexto y la regla del acento. */
+    private JRDesignBand bandaTitulo(int ancho, JasperDesign d) {
         JRDesignBand banda = new JRDesignBand();
         banda.setHeight(52);
 
-        JRDesignTextField titulo = campoExpr("$P{TITULO}", 0, 0, ancho, 20,
+        banda.addElement(logo(d, ancho));
+
+        // El título se acorta para no chocar con el logo de la derecha.
+        JRDesignTextField titulo = campoExpr("$P{TITULO}", 0, 0,
+                ancho - ReportTheme.LOGO_ANCHO - 16, 20,
                 ReportTheme.TAM_TITULO, true, HorizontalTextAlignEnum.LEFT);
         titulo.setForecolor(ReportTheme.TINTA_FUERTE);
         banda.addElement(titulo);
@@ -425,11 +431,14 @@ public class PdfRenderer {
         return banda;
     }
 
-    private JRDesignBand bandaSinDatos(int ancho) {
+    private JRDesignBand bandaSinDatos(int ancho, JasperDesign d) {
         JRDesignBand banda = new JRDesignBand();
         banda.setHeight(90);
 
-        JRDesignTextField titulo = campoExpr("$P{TITULO}", 0, 0, ancho, 20,
+        banda.addElement(logo(d, ancho));
+
+        JRDesignTextField titulo = campoExpr("$P{TITULO}", 0, 0,
+                ancho - ReportTheme.LOGO_ANCHO - 16, 20,
                 ReportTheme.TAM_TITULO, true, HorizontalTextAlignEnum.LEFT);
         titulo.setForecolor(ReportTheme.TINTA_FUERTE);
         banda.addElement(titulo);
@@ -490,6 +499,31 @@ public class PdfRenderer {
         int total = 0;
         for (int v : valores) total += v;
         return total;
+    }
+
+    /**
+     * El logo, arriba a la derecha. RETAIN_SHAPE conserva la proporción
+     * dentro de la caja en vez de deformarlo para llenarla.
+     *
+     * <p>La expresión es la ruta en el classpath: Jasper la resuelve como
+     * recurso. usingCache evita releer y redecodificar el PNG en cada
+     * página — el logo se repite en el membrete de cada reporte.
+     */
+    private JRDesignImage logo(JasperDesign d, int ancho) {
+        JRDesignImage img = new JRDesignImage(d);
+        JRDesignExpression expr = new JRDesignExpression();
+        expr.setText("\"" + ReportTheme.LOGO + "\"");
+        img.setExpression(expr);
+        img.setX(ancho - ReportTheme.LOGO_ANCHO);
+        img.setY(0);
+        img.setWidth(ReportTheme.LOGO_ANCHO);
+        img.setHeight(ReportTheme.LOGO_ALTO);
+        img.setScaleImage(ScaleImageEnum.RETAIN_SHAPE);
+        img.setUsingCache(true);
+        // Si el PNG faltara, el reporte sale sin logo en vez de fallar: es
+        // un adorno, no un dato.
+        img.setOnErrorType(net.sf.jasperreports.engine.type.OnErrorTypeEnum.BLANK);
+        return img;
     }
 
     private JRDesignParameter parametro(String nombre, Class<?> tipo) {
