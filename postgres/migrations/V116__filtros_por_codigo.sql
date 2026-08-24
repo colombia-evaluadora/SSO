@@ -272,7 +272,15 @@ CREATE OR REPLACE FUNCTION academico_test.fn_usu_empleados_listar(p_pk_usuario_s
  STABLE
 AS $function$
 DECLARE
-    v_page_size  INT := LEAST(CASE WHEN p_page_size > 0 THEN p_page_size ELSE 10 END, 100);
+    -- V114, reaplicado sobre esta firma: p_page_size NULL se propaga como
+    -- NULL en vez de caer al default de 10 -- lo necesita el reporte sin
+    -- paginar (fn_usu_empleados_listar_paginado no se ve afectado: siempre
+    -- envia un v_page_size ya normalizado, nunca NULL). Cualquier valor
+    -- NO nulo se comporta identico a antes, incluido 0 -> 10 y el tope 100.
+    v_page_size  INT := CASE
+        WHEN p_page_size IS NULL THEN NULL   -- reporte: sin limite
+        ELSE LEAST(CASE WHEN p_page_size > 0 THEN p_page_size ELSE 10 END, 100)
+    END;
     v_page_index INT := GREATEST(COALESCE(p_page_index, 0), 0);
     v_es_super   BOOLEAN := academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante);
 BEGIN
@@ -358,11 +366,14 @@ BEGIN
           JOIN academico_test.TUSUARIO      u ON u.PK_TUSUARIO = f.FK_TUSUARIO
          WHERE f.ACTIVE = TRUE
            AND (v_es_super OR f.PK_TFUNCIONARIO IN (SELECT pk_tfuncionario FROM funcionarios_ee))
+           -- V112 (punto 2), reaplicado sobre esta firma: 1 sola expresion
+           -- concatenada en vez de 4 ILIKE sueltos, para que matchee el
+           -- texto de idx_tusuario_busqueda_trgm (V112, sigue vivo en el
+           -- servidor) y el planner pueda usarlo en vez de Seq Scan.
            AND (NULLIF(TRIM(p_search), '') IS NULL
-                OR u.PRIMER_NOMBRE  || ' ' || COALESCE(u.SEGUNDO_NOMBRE,'')  ILIKE '%' || p_search || '%'
-                OR u.PRIMER_APELLIDO || ' ' || COALESCE(u.SEGUNDO_APELLIDO,'') ILIKE '%' || p_search || '%'
-                OR (u.PRIMER_NOMBRE || ' ' || COALESCE(u.PRIMER_APELLIDO,'')) ILIKE '%' || p_search || '%'
-                OR u.IDENTIFICACION ILIKE '%' || p_search || '%'
+                OR (COALESCE(u.PRIMER_NOMBRE,'') || ' ' || COALESCE(u.SEGUNDO_NOMBRE,'') || ' ' ||
+                    COALESCE(u.PRIMER_APELLIDO,'') || ' ' || COALESCE(u.SEGUNDO_APELLIDO,'') || ' ' ||
+                    COALESCE(u.IDENTIFICACION,'')) ILIKE '%' || p_search || '%'
                 OR EXISTS (
                     SELECT 1 FROM academico_test.TSEDE_USUARIO su2
                       JOIN academico_test.TSEDE  s ON s.PK_TSEDE = su2.FK_TSEDE
@@ -401,48 +412,19 @@ BEGIN
                    AND su5.FK_TLV_JORNADA IN (SELECT lv.PK_LISTA_VALOR FROM academico_test.TLISTA_VALOR lv
                         WHERE lv.CATEGORIA = 'JORNADA' AND lv.VALOR = ANY(p_work_schedules))
            ))
-    ),
-    -- Agregados: roles, sedes, estados_permisos a partir de TODOS los
-    -- TSEDE_USUARIO activos del funcionario (sin filtros EXISTS, o sea,
-    -- el agregado refleja la realidad completa del funcionario aunque
-    -- venga filtrado por una sola sede/rol).
-    agregados AS (
-        SELECT su.FK_TUSUARIO AS pk_usuario,
-               COALESCE(
-                   (SELECT jsonb_agg(DISTINCT jsonb_build_object('id', s.PK_TSEDE, 'nombre', s.NOMBRE) ORDER BY jsonb_build_object('id', s.PK_TSEDE, 'nombre', s.NOMBRE))
-                      FROM academico_test.TSEDE_USUARIO su_s
-                      JOIN academico_test.TSEDE         s    ON s.PK_TSEDE = su_s.FK_TSEDE
-                     WHERE su_s.FK_TUSUARIO = su.FK_TUSUARIO
-                       AND su_s.ACTIVE      = TRUE),
-                   '[]'::jsonb
-               )                              AS sedes_agg,
-               COALESCE(
-                   (SELECT jsonb_agg(DISTINCT su_e.TLV_ESTADO ORDER BY su_e.TLV_ESTADO)
-                      FROM academico_test.TSEDE_USUARIO su_e
-                     WHERE su_e.FK_TUSUARIO = su.FK_TUSUARIO
-                       AND su_e.ACTIVE      = TRUE),
-                   '[]'::jsonb
-               )                              AS estados_agg
-          FROM academico_test.TSEDE_USUARIO su
-         WHERE su.ACTIVE = TRUE
-         GROUP BY su.FK_TUSUARIO
-    ),
-    jornada_pick AS (
-        -- Una sola fila por usuario con el TSEDE_USUARIO activo que define
-        -- la jornada a mostrar en la grilla: PREDETERMINADO=1 si existe,
-        -- si no el de menor ORDEN.
-        SELECT DISTINCT ON (su.FK_TUSUARIO)
-               su.FK_TUSUARIO   AS pk_usuario,
-               su.FK_TLV_JORNADA AS jornada_id,
-               tlv.NOMBRE        AS jornada_nombre
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = su.FK_TLV_JORNADA
-         WHERE su.ACTIVE = TRUE
-         ORDER BY su.FK_TUSUARIO,
-                  su.PREDETERMINADO DESC,
-                  su.ORDEN         ASC,
-                  su.PK_TSEDE_USUARIO ASC
     )
+    -- sedes_agg/estados_agg/jornada: FIX V112, reaplicado sobre esta firma.
+    -- Antes venian de dos CTEs (`agregados` con GROUP BY, `jornada_pick`
+    -- con DISTINCT ON) evaluados sobre TODO TSEDE_USUARIO activo y unidos a
+    -- `base` con LEFT JOIN normal -> el planner no podia empujar el filtro
+    -- de `base` adentro y materializaba el agregado completo del sistema
+    -- antes de filtrar (11.5s medidos en V112 con 126K usuarios). Ahora son
+    -- subqueries correlacionadas directas contra b.PK_TUSUARIO (mismo
+    -- patron que roles_agg, que ya estaba bien escrito) y un
+    -- LEFT JOIN LATERAL ... LIMIT 1 para jornada — Postgres los evalua
+    -- perezosamente solo para las <=v_page_size filas que sobreviven
+    -- ORDER BY + LIMIT, y el LATERAL usa idx_tsede_usuario_fk_tusuario_activo
+    -- (V112) para resolver el ORDER BY sin sort.
     SELECT b.PK_TFUNCIONARIO,
            b.IDENTIFICACION,
            b.PRIMER_NOMBRE,
@@ -493,11 +475,29 @@ BEGIN
                   ) roles_union),
                '[]'::jsonb
            )                             AS roles_agg,
-           a.sedes_agg,
-           a.estados_agg
-      FROM base     b
-      LEFT JOIN agregados   a ON a.pk_usuario = b.PK_TUSUARIO
-      LEFT JOIN jornada_pick jp ON jp.pk_usuario = b.PK_TUSUARIO
+           COALESCE(
+               (SELECT jsonb_agg(DISTINCT jsonb_build_object('id', s.PK_TSEDE, 'nombre', s.NOMBRE)
+                                  ORDER BY jsonb_build_object('id', s.PK_TSEDE, 'nombre', s.NOMBRE))
+                  FROM academico_test.TSEDE_USUARIO su_s
+                  JOIN academico_test.TSEDE         s ON s.PK_TSEDE = su_s.FK_TSEDE
+                 WHERE su_s.FK_TUSUARIO = b.PK_TUSUARIO AND su_s.ACTIVE = TRUE),
+               '[]'::jsonb
+           )                             AS sedes_agg,
+           COALESCE(
+               (SELECT jsonb_agg(DISTINCT su_e.TLV_ESTADO ORDER BY su_e.TLV_ESTADO)
+                  FROM academico_test.TSEDE_USUARIO su_e
+                 WHERE su_e.FK_TUSUARIO = b.PK_TUSUARIO AND su_e.ACTIVE = TRUE),
+               '[]'::jsonb
+           )                             AS estados_agg
+      FROM base b
+      LEFT JOIN LATERAL (
+            SELECT su.FK_TLV_JORNADA AS jornada_id, tlv.NOMBRE AS jornada_nombre
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TLISTA_VALOR  tlv ON tlv.PK_LISTA_VALOR = su.FK_TLV_JORNADA
+             WHERE su.FK_TUSUARIO = b.PK_TUSUARIO AND su.ACTIVE = TRUE
+             ORDER BY su.PREDETERMINADO DESC, su.ORDEN ASC, su.PK_TSEDE_USUARIO ASC
+             LIMIT 1
+      ) jp ON TRUE
      ORDER BY
         CASE WHEN p_sort_campo = 'name'      AND NOT p_sort_desc
              THEN TRIM(COALESCE(b.PRIMER_NOMBRE,'') || ' ' || COALESCE(b.SEGUNDO_NOMBRE,'')
@@ -515,7 +515,7 @@ BEGIN
         b.PRIMER_APELLIDO ASC,
         b.PK_TFUNCIONARIO ASC
      LIMIT v_page_size
-    OFFSET v_page_index * v_page_size;
+    OFFSET v_page_index * COALESCE(v_page_size, 0);
 END;
 $function$;
 
