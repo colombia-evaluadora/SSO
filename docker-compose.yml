@@ -762,6 +762,17 @@ services:
   # QUERY_DS_URL).
   # ===========================================================================
   query-service-postgres:
+    # profiles: mismo criterio que hello-service (ver ese bloque más
+    # arriba) — es una instancia de REFERENCIA del patrón
+    # instance-mode documentado arriba (dos backends Postgres de
+    # ejemplo), no tráfico real: eval-col y las instancias que
+    # admin-ui aprovisiona vía el provisioner son las que sirven
+    # consultas de verdad. Nada en este archivo la depends_on.
+    # Gateada tras `diagnostics` para no prenderla siempre — mem_limit
+    # 384m + la de -analytics de abajo son ~768MB que no hacen falta
+    # si nadie está probando el patrón instance-mode. Sigue
+    # levantable a mano con `docker compose up -d query-service-postgres`.
+    profiles: ["diagnostics"]
     build:
       context: .
       dockerfile: query-service/Dockerfile
@@ -778,6 +789,8 @@ services:
         # /getQuery and /getWrite catalog endpoints on
         # every request, so it cannot serve traffic until
         # sso-admin is healthy.
+        condition: service_healthy
+      redis:
         condition: service_healthy
     # No host-side port mapping — the gateway is the
     # public ingress and it talks to the container over
@@ -823,6 +836,13 @@ services:
       # The path-registry fails closed without it (503) and the
       # instance can't resolve path-template routes.
       QUERY_CATALOG_INTERNAL_TOKEN: ${QUERY_CATALOG_INTERNAL_TOKEN}
+      # Shared sso-redis instance — see RedisCacheConfig in
+      # query-service. Same host/port/password as auth-center.
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      QUERY_CACHE_METADATA_TTL_SECONDS: "${QUERY_CACHE_METADATA_TTL_SECONDS:-600}"
+      QUERY_CACHE_CATALOG_ENABLED: "${QUERY_CACHE_CATALOG_ENABLED:-true}"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8084; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -835,6 +855,11 @@ services:
   # "SQLServer", "analytics-shard", etc., provisioned by
   # admin-ui when a new backing store is registered).
   query-service-postgres-analytics:
+    # profiles: misma instancia de REFERENCIA que
+    # query-service-postgres arriba (segundo backend de ejemplo), no
+    # tráfico real. Gateada tras `diagnostics` — ver comentario
+    # completo arriba.
+    profiles: ["diagnostics"]
     build:
       context: .
       dockerfile: query-service/Dockerfile
@@ -847,6 +872,8 @@ services:
       eurekaserver:
         condition: service_started
       sso-admin:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     environment:
       QUERY_DS_DIALECT: postgres
@@ -865,6 +892,13 @@ services:
       QUERY_CATALOG_BASE_URL: "http://sso-admin:8083"
       # V30 — see query-service-postgres above.
       QUERY_CATALOG_INTERNAL_TOKEN: ${QUERY_CATALOG_INTERNAL_TOKEN}
+      # Shared sso-redis instance — see RedisCacheConfig in
+      # query-service. Same host/port/password as auth-center.
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      QUERY_CACHE_METADATA_TTL_SECONDS: "${QUERY_CACHE_METADATA_TTL_SECONDS:-600}"
+      QUERY_CACHE_CATALOG_ENABLED: "${QUERY_CACHE_CATALOG_ENABLED:-true}"
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
       # Interruptor de telemetria: con el perfil de observabilidad
@@ -962,6 +996,16 @@ services:
       # Con RS256 el provisioner ya no maneja material de
       # firma: sólo reparte la mitad pública.
       DOCKER_JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      # Shared sso-redis instance, propagated to every spawned
+      # query-service container as REDIS_HOST/REDIS_PORT/
+      # REDIS_PASSWORD (see DockerSocket#buildEnv). Same
+      # DOCKER_-prefixed relaxed-binding pattern as
+      # DOCKER_JWT_PUBLIC_KEY above — ProvisionerProperties has no
+      # explicit application.yml entry for these either, Spring
+      # binds them straight off the env var name.
+      DOCKER_REDIS_HOST: "redis"
+      DOCKER_REDIS_PORT: "6379"
+      DOCKER_REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       # V30 — se propaga tal cual como QUERY_CATALOG_INTERNAL_TOKEN
       # a cada query-service que el provisioner crea (ver
       # DockerSocket#buildEnv). Los query-service estáticos lo
@@ -1376,6 +1420,8 @@ services:
     depends_on:
       eurekaserver:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       FILES_DS_URL: "${FILES_DS_URL:-jdbc:postgresql://sso-postgres:5432/sso_db}"
@@ -1422,6 +1468,13 @@ services:
       # responde 503 en vez de acuñar tokens que nadie podría validar.
       FILES_VIEW_TOKEN_SECRET: "${FILES_VIEW_TOKEN_SECRET:-}"
       FILES_VIEW_TOKEN_TTL_SECONDS: "${FILES_VIEW_TOKEN_TTL_SECONDS:-300}"
+      # Shared sso-redis instance — see CachedFileBlobService.
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      FILES_CACHE_ENABLED: "${FILES_CACHE_ENABLED:-true}"
+      FILES_CACHE_TTL_SECONDS: "${FILES_CACHE_TTL_SECONDS:-300}"
+      FILES_CACHE_MAX_CACHEABLE_BYTES: "${FILES_CACHE_MAX_CACHEABLE_BYTES:-2097152}"
       # Clave PÚBLICA del par RS256. file-service verifica firmas en
       # GET /files/download/{id}; no emite tokens, así que no recibe
       # (ni debe recibir) la privada.
@@ -1461,6 +1514,15 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/reporting-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-reporting-service
     restart: unless-stopped
+    # PID 1 es el JVM crudo (sin tini/dumb-init), asi que no reapea hijos
+    # huerfanos. El healthcheck de abajo forkea bash+grep cada intervalo;
+    # si grep queda huerfano (carrera al cortar la sesion del exec antes
+    # de que bash lo reapee) se vuelve zombie para siempre bajo el PID 1.
+    # init:true pone tini como PID 1 para que los reapee. Sin esto, los
+    # zombies se acumulan durante dias hasta que el propio healthcheck
+    # empieza a exceder su timeout de 5s (namespace de PIDs inflado) y
+    # el contenedor queda marcado unhealthy aunque la app este sana.
+    init: true
     # Jasper arma el documento entero en memoria antes de exportarlo.
     # El Excel en cambio va por streaming (SXSSF) y casi no pesa.
     mem_limit: 512m

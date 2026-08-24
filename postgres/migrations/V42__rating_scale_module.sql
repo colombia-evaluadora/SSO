@@ -218,47 +218,69 @@ DROP FUNCTION IF EXISTS academico_test.fn_escala_listar(BIGINT, TEXT, INT, INT);
 DROP FUNCTION IF EXISTS academico_test.fn_escala_listar(BIGINT, TEXT, INT, INT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_escala_listar(BIGINT, TEXT, INT, INT, BIGINT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_escala_listar(BIGINT, TEXT, BIGINT, BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_escala_listar(BIGINT, TEXT, BIGINT, BIGINT, TEXT, TEXT);
 CREATE OR REPLACE FUNCTION academico_test.fn_escala_listar(
     p_academic_period_id BIGINT, p_filtro TEXT DEFAULT NULL,
     p_pk_usuario BIGINT DEFAULT NULL,  -- alcance (global / establecimiento)
-    p_teaching_level_id BIGINT DEFAULT NULL   -- filtro opcional por nivel de ensenanza
+    p_teaching_level_id BIGINT DEFAULT NULL,  -- filtro opcional por nivel de ensenanza
+    -- Orden: id de columna del front + direccion ('asc'/'desc'), igual que fn_periodo_listar (V37).
+    p_sort_by TEXT DEFAULT NULL,
+    p_sort_dir TEXT DEFAULT NULL
 )
 RETURNS TABLE (
     id BIGINT, nombre VARCHAR, abreviacion VARCHAR, tipo VARCHAR, tipo_name VARCHAR, iconografia VARCHAR,
     teaching_level_id BIGINT, teaching_level_name VARCHAR,
     nota_minima NUMERIC, nota_maxima NUMERIC, nota_equivalente NUMERIC
 )
-LANGUAGE sql STABLE AS $$
-    WITH fmt AS (
-        SELECT 0::numeric AS mn,
-               CASE UPPER(TRIM(lv.VALOR))
-                 WHEN 'DE CERO A CINCO' THEN 5
-                 WHEN 'DE CERO A DIEZ'  THEN 10
-                 ELSE 100
-               END::numeric AS mx
-          FROM academico_test.TCRITERIO_EVALUACION ce
-          JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = ce.FK_TLV_FORMATO_CALIFICACION
-         WHERE ce.PK_TCRITERIO_EVALUACION = p_academic_period_id
-    )
-    SELECT ev.PK_TESCALA_VALORACION, v.NOMBRE, v.CODIGO, tv.VALOR, tv.NOMBRE,
-           COALESCE(v.GRAFICA_CARITAS, v.GRAFICA_SIMBOLO),
-           ne.FK_TNIVEL_ENSENANZA, nen.NOMBRE,
-           round(ev.LIMITE_INFERIOR / 100 * (fmt.mx - fmt.mn) + fmt.mn, 2),
-           round(ev.LIMITE_SUPERIOR / 100 * (fmt.mx - fmt.mn) + fmt.mn, 2),
-           round(ev.LIMITE_PROMEDIO / 100 * (fmt.mx - fmt.mn) + fmt.mn, 2)
-      FROM academico_test.TESCALA_VALORACION ev
-      JOIN academico_test.TVALORACION v    ON v.PK_TVALORACION = ev.FK_TVALORACION
-      JOIN academico_test.TLISTA_VALOR tv  ON tv.PK_LISTA_VALOR = ev.FK_TVL_TIPO_VALORACION
-      JOIN academico_test.TNIVEL_ESCALA ne ON ne.FK_TESCALA = ev.FK_TESCALA
-      JOIN academico_test.TNIVEL_ENSENANZA nen ON nen.PK_NIVEL_ENSENANZA = ne.FK_TNIVEL_ENSENANZA
-      CROSS JOIN fmt
-     WHERE ne.FK_PERIODO_ACADEMICO = p_academic_period_id AND ev.ACTIVE = TRUE
-       AND (p_teaching_level_id IS NULL OR ne.FK_TNIVEL_ENSENANZA = p_teaching_level_id)
-       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_academic_period_id)
-       AND (NULLIF(TRIM(p_filtro),'') IS NULL
-            OR v.NOMBRE ILIKE '%' || p_filtro || '%'
-            OR v.CODIGO ILIKE '%' || p_filtro || '%')
-     ORDER BY ne.FK_TNIVEL_ENSENANZA, ev.ORDEN;
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_col TEXT;
+    v_dir TEXT;
+BEGIN
+    v_col := CASE lower(coalesce(p_sort_by, ''))
+        WHEN 'nombre'            THEN 'v.NOMBRE'
+        WHEN 'abreviacion'       THEN 'v.CODIGO'
+        WHEN 'tipo'              THEN 'tv.VALOR'
+        WHEN 'teachinglevelname' THEN 'nen.NOMBRE'
+        WHEN 'notaminima'        THEN 'nota_minima'
+        WHEN 'notamaxima'        THEN 'nota_maxima'
+        WHEN 'notaequivalente'   THEN 'nota_equivalente'
+        ELSE 'ne.FK_TNIVEL_ENSENANZA'
+    END;
+    v_dir := CASE WHEN lower(coalesce(p_sort_dir, '')) = 'desc' THEN 'DESC' ELSE 'ASC' END;
+
+    RETURN QUERY EXECUTE format($q$
+        WITH fmt AS (
+            SELECT 0::numeric AS mn,
+                   CASE UPPER(TRIM(lv.VALOR))
+                     WHEN 'DE CERO A CINCO' THEN 5
+                     WHEN 'DE CERO A DIEZ'  THEN 10
+                     ELSE 100
+                   END::numeric AS mx
+              FROM academico_test.TCRITERIO_EVALUACION ce
+              JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = ce.FK_TLV_FORMATO_CALIFICACION
+             WHERE ce.PK_TCRITERIO_EVALUACION = $1
+        )
+        SELECT ev.PK_TESCALA_VALORACION, v.NOMBRE, v.CODIGO, tv.VALOR, tv.NOMBRE,
+               COALESCE(v.GRAFICA_CARITAS, v.GRAFICA_SIMBOLO),
+               ne.FK_TNIVEL_ENSENANZA, nen.NOMBRE,
+               round(ev.LIMITE_INFERIOR / 100 * (fmt.mx - fmt.mn) + fmt.mn, 2) AS nota_minima,
+               round(ev.LIMITE_SUPERIOR / 100 * (fmt.mx - fmt.mn) + fmt.mn, 2) AS nota_maxima,
+               round(ev.LIMITE_PROMEDIO / 100 * (fmt.mx - fmt.mn) + fmt.mn, 2) AS nota_equivalente
+          FROM academico_test.TESCALA_VALORACION ev
+          JOIN academico_test.TVALORACION v    ON v.PK_TVALORACION = ev.FK_TVALORACION
+          JOIN academico_test.TLISTA_VALOR tv  ON tv.PK_LISTA_VALOR = ev.FK_TVL_TIPO_VALORACION
+          JOIN academico_test.TNIVEL_ESCALA ne ON ne.FK_TESCALA = ev.FK_TESCALA
+          JOIN academico_test.TNIVEL_ENSENANZA nen ON nen.PK_NIVEL_ENSENANZA = ne.FK_TNIVEL_ENSENANZA
+          CROSS JOIN fmt
+         WHERE ne.FK_PERIODO_ACADEMICO = $1 AND ev.ACTIVE = TRUE
+           AND ($4 IS NULL OR ne.FK_TNIVEL_ENSENANZA = $4)
+           AND academico_test.fn_periodo_usuario_puede_ver($3, $1)
+           AND ($2 IS NULL OR v.NOMBRE ILIKE '%%' || $2 || '%%' OR v.CODIGO ILIKE '%%' || $2 || '%%')
+         ORDER BY %s %s, ev.ORDEN
+    $q$, v_col, v_dir)
+    USING p_academic_period_id, NULLIF(TRIM(p_filtro),''), p_pk_usuario, p_teaching_level_id;
+END;
 $$;
 
 -- Borrado multiple de bandas de valoracion.

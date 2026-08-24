@@ -185,10 +185,23 @@ export const microservicesApi = {
 export const queryServicesApi = {
   status: (id: number) =>
     apiClient.get<ContainerStatusResponse>(`/sso-admin/microservice/${id}/container/status`),
+  // text/plain, no JSON — ver apiClient.getText para por qué NO se
+  // usa apiClient.get<string> aquí (JSON.parse sobre líneas de log
+  // reales explota, y antes de eso el Accept: application/json
+  // del helper genérico ni siquiera calzaba con lo que este
+  // endpoint puede producir).
   logs: (id: number, tail = 200) =>
-    apiClient.get<string>(`/sso-admin/microservice/${id}/container/logs?tail=${tail}`),
+    apiClient.getText(`/sso-admin/microservice/${id}/container/logs?tail=${tail}`),
   restart: (id: number) =>
     apiClient.post<void>(`/sso-admin/microservice/${id}/container/restart`),
+  // Borra el contenedor existente (si lo hay) y levanta uno nuevo
+  // con la MISMA spec de la fila, tomando la imagen `query-service`
+  // que el provisioner tenga configurada ahora. A diferencia de
+  // `restart` (mismo contenedor, mismo filesystem viejo), esto es
+  // lo que hace falta después de reconstruir/redesplegar la imagen
+  // — ver MicroserviceService.recreateContainer en el backend.
+  recreate: (id: number) =>
+    apiClient.post<void>(`/sso-admin/microservice/${id}/container/recreate`),
 };
 
 // ====================== endpoint ======================

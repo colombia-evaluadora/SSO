@@ -8,11 +8,14 @@
 --                                 año lectivo desde FECHA_INICIO y arma el
 --                                 NOMBRE = "<año> - <jornada>". Retorna PK.
 --   fn_periodo_actualizar(...)  — PATCH; re-deriva año/nombre; no permite
---                                 mover a otro establecimiento.
+--                                 mover a otro establecimiento; reconcilia los
+--                                 descansos (reemplazo total del set).
 --   fn_periodo_soft_delete(...) — baja logica en cascada (periodo + criterio
 --                                 + descansos).
 --   fn_periodo_listar(...)      — lista con filtros opcionales.
 --   fn_periodo_detalle(...)     — un periodo por PK.
+--   fn_periodo_anteriores_por_sede(...) — candidatos a "periodo anterior" de
+--                                 una sede (picker del formulario).
 --   fn_descanso_agregar / fn_descanso_eliminar — edicion de descansos suelta.
 --
 -- SQLSTATE: 42501 no autorizado, 22023 obligatorio/invalido, 23505 duplicado,
@@ -137,16 +140,19 @@ CREATE OR REPLACE FUNCTION academico_test.fn_periodo_crear(
 RETURNS BIGINT
 LANGUAGE plpgsql AS $$
 DECLARE
-    v_establecimiento BIGINT;
-    v_nombre_ano      VARCHAR(50);
-    v_nombre_jornada  TEXT;
-    v_ano_id          BIGINT;
-    v_id              BIGINT;
-    v_audit           VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-    i                 INT;
-    j                 INT;
+    v_establecimiento    BIGINT;
+    v_nombre_ano         VARCHAR(50);
+    v_nombre_jornada     TEXT;
+    v_nombre_estado      TEXT;
+    v_categoria_jornada  VARCHAR(30);
+    v_categoria_estado   VARCHAR(30);
+    v_ano_id             BIGINT;
+    v_id                 BIGINT;
+    v_audit              VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    i                    INT;
+    j                    INT;
     -- Valores por defecto del criterio de evaluacion (catalogo TLISTA_VALOR).
-    c_formato_calif        CONSTANT BIGINT := 5286;
+    c_formato_calif        CONSTANT BIGINT := 51889;
     c_elemento_def         CONSTANT BIGINT := 494;
     c_criterio_final       CONSTANT BIGINT := 501;
     c_criterio_area        CONSTANT BIGINT := 508;
@@ -228,11 +234,28 @@ BEGIN
             p_fk_sede, v_nombre_ano USING ERRCODE = '23505';
     END IF;
 
-    -- 6. Nombre derivado.
-    SELECT VALOR INTO v_nombre_jornada
+    -- 6a. Validar FK_TLV_ESTADO — debe existir y pertenecer a la categoria
+    --     ESTADOPERIODO en TLISTA_VALOR.
+    SELECT VALOR, CATEGORIA INTO v_nombre_estado, v_categoria_estado
+      FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = p_fk_estado;
+    IF v_nombre_estado IS NULL THEN
+        RAISE EXCEPTION 'El estado % no existe', p_fk_estado USING ERRCODE = '23503';
+    END IF;
+    IF v_categoria_estado <> 'ESTADOPERIODO' THEN
+        RAISE EXCEPTION 'El estado % no pertenece a la categoria ESTADOPERIODO (es %)',
+            p_fk_estado, v_categoria_estado USING ERRCODE = '22023';
+    END IF;
+
+    -- 6b. Nombre derivado de la jornada — debe existir y pertenecer a la
+    --     categoria JORNADA en TLISTA_VALOR.
+    SELECT VALOR, CATEGORIA INTO v_nombre_jornada, v_categoria_jornada
       FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = p_fk_jornada;
     IF v_nombre_jornada IS NULL THEN
         RAISE EXCEPTION 'La jornada % no existe', p_fk_jornada USING ERRCODE = '23503';
+    END IF;
+    IF v_categoria_jornada <> 'JORNADA' THEN
+        RAISE EXCEPTION 'La jornada % no pertenece a la categoria JORNADA (es %)',
+            p_fk_jornada, v_categoria_jornada USING ERRCODE = '22023';
     END IF;
 
     -- 7. Insert del periodo.
@@ -259,11 +282,13 @@ BEGIN
 
     -- 9. Descansos anidados (opcional). Validan contra el horario del periodo.
     IF p_descanso_inicio IS NOT NULL THEN
-        IF p_descanso_fin IS NULL OR array_length(p_descanso_inicio,1) <> array_length(p_descanso_fin,1) THEN
+        IF p_descanso_fin IS NULL
+           OR COALESCE(array_length(p_descanso_inicio, 1), 0) <> COALESCE(array_length(p_descanso_fin, 1), 0) THEN
             RAISE EXCEPTION 'Los arreglos de inicio/fin de descansos deben tener la misma longitud'
                 USING ERRCODE = '22023';
         END IF;
-        FOR i IN 1 .. array_length(p_descanso_inicio, 1) LOOP
+        IF array_length(p_descanso_inicio, 1) IS NOT NULL THEN
+            FOR i IN 1 .. array_length(p_descanso_inicio, 1) LOOP
             IF p_descanso_fin[i] < p_descanso_inicio[i] THEN
                 RAISE EXCEPTION 'Descanso %: hora fin anterior a inicio', i USING ERRCODE = '22023';
             END IF;
@@ -281,6 +306,7 @@ BEGIN
             INSERT INTO academico_test.TDESCANSOS (FK_TPERIODO_ACADEMICO, HORA_INICIO, HORA_FIN, CREATED_BY)
             VALUES (v_id, p_descanso_inicio[i], p_descanso_fin[i], v_audit);
         END LOOP;
+        END IF;
     END IF;
 
     RETURN v_id;
@@ -289,8 +315,33 @@ $$;
 
 -- ---------------------------------------------------------------------------
 -- fn_periodo_actualizar (PATCH: NULL = no cambia). Re-deriva año/nombre y no
--- permite mover el periodo a otro establecimiento.
+-- permite mover el periodo a otro establecimiento. Reconcilia descansos:
+--   p_descanso_inicio IS NULL → no los toca (los existentes deben caber en el
+--                               nuevo horario); un arreglo (incluso vacio) →
+--                               reemplazo total (soft-delete de los activos +
+--                               insert del set provisto).
 -- ---------------------------------------------------------------------------
+-- Firma anterior (13 args, sin descansos): se elimina para no dejar el overload
+-- viejo conviviendo con el nuevo y evitar llamadas ambiguas.
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_actualizar(
+    BIGINT, BIGINT, BIGINT, DATE, DATE, DATE, BIGINT, bool_sn, BIGINT, BIGINT, TIME, TIME, BIGINT);
+    DROP FUNCTION IF EXISTS academico_test.fn_periodo_actualizar(
+    BIGINT,
+    BIGINT,
+    BIGINT,
+    DATE,
+    DATE,
+    DATE,
+    BIGINT,
+    bool_sn,
+    BIGINT,
+    BIGINT,
+    TIME,
+    TIME,
+    TIME[],
+    TIME[],
+    BIGINT
+);
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_actualizar(
     p_pk_periodo              BIGINT,
     p_fk_estado               BIGINT   DEFAULT NULL,
@@ -304,6 +355,9 @@ CREATE OR REPLACE FUNCTION academico_test.fn_periodo_actualizar(
     p_fk_periodo_anterior     BIGINT   DEFAULT NULL,
     p_hora_inicio             TIME     DEFAULT NULL,
     p_hora_fin                TIME     DEFAULT NULL,
+    -- Descansos como arreglos paralelos (misma longitud). NULL = no tocarlos.
+    p_descanso_inicio         TIME[]   DEFAULT NULL,
+    p_descanso_fin            TIME[]   DEFAULT NULL,
     p_pk_usuario_solicitante  BIGINT   DEFAULT NULL
 )
 RETURNS BIGINT
@@ -315,14 +369,19 @@ DECLARE
     v_fin             DATE;
     v_limite          DATE;
     v_jornada         BIGINT;
+    v_estado          BIGINT;
     v_est_old         BIGINT;
     v_est_new         BIGINT;
     v_hi              TIME;
     v_hf              TIME;
     v_nombre_ano      VARCHAR(50);
     v_nombre_jornada  TEXT;
+    v_categoria_jornada VARCHAR(30);
+    v_categoria_estado  VARCHAR(30);
     v_ano_id          BIGINT;
     v_audit           VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    i                 INT;
+    j                 INT;
 BEGIN
     IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
@@ -351,6 +410,7 @@ BEGIN
     v_fin     := COALESCE(p_fecha_fin, r.FECHA_FIN);
     v_limite  := COALESCE(p_fecha_limite_matricula, r.FECHA_LIMITE_MATRICULA);
     v_jornada := COALESCE(p_fk_jornada, r.FK_TLV_JORNADA);
+    v_estado  := COALESCE(p_fk_estado, r.FK_TLV_ESTADO);
     v_hi      := COALESCE(p_hora_inicio, r.HORA_INICIO);
     v_hf      := COALESCE(p_hora_fin, r.HORA_FIN);
 
@@ -380,14 +440,66 @@ BEGIN
         RAISE EXCEPTION 'La hora fin (%) no puede ser anterior a la hora inicio (%)', v_hf, v_hi
             USING ERRCODE = '22023';
     END IF;
-    -- Los descansos existentes deben seguir dentro del nuevo horario.
-    IF EXISTS (
-        SELECT 1 FROM academico_test.TDESCANSOS
-         WHERE FK_TPERIODO_ACADEMICO = p_pk_periodo AND ACTIVE = TRUE
-           AND (HORA_INICIO < v_hi OR HORA_FIN > v_hf)
-    ) THEN
-        RAISE EXCEPTION 'El nuevo horario (% a %) deja descansos existentes fuera de rango; ajustelos primero',
-            v_hi, v_hf USING ERRCODE = '22023';
+    -- Reconciliacion de descansos.
+    --   p_descanso_inicio IS NULL → no se tocan; se conserva el guard: los
+    --     descansos existentes deben seguir dentro del nuevo horario.
+    --   arreglo provisto (incluso vacio) → reemplazo total: se validan contra el
+    --     nuevo horario/entre si, se da de baja el set activo y se inserta el nuevo.
+    IF p_descanso_inicio IS NULL THEN
+        IF EXISTS (
+            SELECT 1 FROM academico_test.TDESCANSOS
+             WHERE FK_TPERIODO_ACADEMICO = p_pk_periodo AND ACTIVE = TRUE
+               AND (HORA_INICIO < v_hi OR HORA_FIN > v_hf)
+        ) THEN
+            RAISE EXCEPTION 'El nuevo horario (% a %) deja descansos existentes fuera de rango; ajustelos primero',
+                v_hi, v_hf USING ERRCODE = '22023';
+        END IF;
+    ELSE
+        IF p_descanso_fin IS NULL
+           OR COALESCE(array_length(p_descanso_inicio, 1), 0) <> COALESCE(array_length(p_descanso_fin, 1), 0) THEN
+            RAISE EXCEPTION 'Los arreglos de inicio/fin de descansos deben tener la misma longitud'
+                USING ERRCODE = '22023';
+        END IF;
+        -- Validacion (misma que fn_periodo_crear, pero contra el horario efectivo).
+        IF array_length(p_descanso_inicio, 1) IS NOT NULL THEN
+            FOR i IN 1 .. array_length(p_descanso_inicio, 1) LOOP
+                IF p_descanso_fin[i] < p_descanso_inicio[i] THEN
+                    RAISE EXCEPTION 'Descanso %: hora fin anterior a inicio', i USING ERRCODE = '22023';
+                END IF;
+                IF p_descanso_inicio[i] < v_hi OR p_descanso_fin[i] > v_hf THEN
+                    RAISE EXCEPTION 'Descanso % (% a %) fuera del horario del periodo (% a %)',
+                        i, p_descanso_inicio[i], p_descanso_fin[i], v_hi, v_hf USING ERRCODE = '22023';
+                END IF;
+                FOR j IN 1 .. i - 1 LOOP
+                    IF p_descanso_inicio[i] < p_descanso_fin[j] AND p_descanso_fin[i] > p_descanso_inicio[j] THEN
+                        RAISE EXCEPTION 'Los descansos % y % se traslapan', j, i USING ERRCODE = '22023';
+                    END IF;
+                END LOOP;
+            END LOOP;
+        END IF;
+        -- Reconciliacion por diff (evita churn de PKs): se comparan los activos
+        -- contra el set provisto por (HORA_INICIO, HORA_FIN).
+        --   1) baja los activos que ya NO estan en el set provisto,
+        --   2) inserta los provistos que aun NO existen activos,
+        --   3) los que coinciden quedan intactos (conservan su PK).
+        -- Set vacio ('{}') → el paso 1 los baja a todos y el 2 no inserta nada.
+        UPDATE academico_test.TDESCANSOS d
+           SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE d.FK_TPERIODO_ACADEMICO = p_pk_periodo AND d.ACTIVE = TRUE
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM unnest(p_descanso_inicio, p_descanso_fin) AS nuevo(hi, hf)
+                WHERE nuevo.hi = d.HORA_INICIO AND nuevo.hf = d.HORA_FIN
+           );
+
+        INSERT INTO academico_test.TDESCANSOS (FK_TPERIODO_ACADEMICO, HORA_INICIO, HORA_FIN, CREATED_BY)
+        SELECT p_pk_periodo, nuevo.hi, nuevo.hf, v_audit
+          FROM unnest(p_descanso_inicio, p_descanso_fin) AS nuevo(hi, hf)
+         WHERE NOT EXISTS (
+               SELECT 1 FROM academico_test.TDESCANSOS d
+                WHERE d.FK_TPERIODO_ACADEMICO = p_pk_periodo AND d.ACTIVE = TRUE
+                  AND d.HORA_INICIO = nuevo.hi AND d.HORA_FIN = nuevo.hf
+           );
     END IF;
 
     -- Re-resolver año lectivo (por si cambio la fecha de inicio).
@@ -431,10 +543,28 @@ BEGIN
             v_sede, v_nombre_ano USING ERRCODE = '23505';
     END IF;
 
-    -- Nombre derivado.
-    SELECT VALOR INTO v_nombre_jornada FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = v_jornada;
+    -- Validar FK_TLV_ESTADO efectivo — debe existir y pertenecer a la categoria
+    -- ESTADOPERIODO en TLISTA_VALOR.
+    SELECT CATEGORIA INTO v_categoria_estado
+      FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = v_estado;
+    IF v_categoria_estado IS NULL THEN
+        RAISE EXCEPTION 'El estado % no existe', v_estado USING ERRCODE = '23503';
+    END IF;
+    IF v_categoria_estado <> 'ESTADOPERIODO' THEN
+        RAISE EXCEPTION 'El estado % no pertenece a la categoria ESTADOPERIODO (es %)',
+            v_estado, v_categoria_estado USING ERRCODE = '22023';
+    END IF;
+
+    -- Nombre derivado de la jornada — debe existir y pertenecer a la categoria
+    -- JORNADA en TLISTA_VALOR.
+    SELECT VALOR, CATEGORIA INTO v_nombre_jornada, v_categoria_jornada
+      FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = v_jornada;
     IF v_nombre_jornada IS NULL THEN
         RAISE EXCEPTION 'La jornada % no existe', v_jornada USING ERRCODE = '23503';
+    END IF;
+    IF v_categoria_jornada <> 'JORNADA' THEN
+        RAISE EXCEPTION 'La jornada % no pertenece a la categoria JORNADA (es %)',
+            v_jornada, v_categoria_jornada USING ERRCODE = '22023';
     END IF;
 
     UPDATE academico_test.TPERIODO_ACADEMICO SET
@@ -579,9 +709,11 @@ $$;
 
 -- ---------------------------------------------------------------------------
 -- fn_periodo_listar — lista con filtros opcionales (NULL = ignora). Sin gate
--- (lectura). Devuelve nombres resueltos (sede, año, estado).
+-- (lectura). Devuelve nombres resueltos (sede, año, estado). Ordena por la
+-- columna pedida (p_sort_by/p_sort_dir); si no viene, por fecha de inicio desc.
 -- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_periodo_listar(BIGINT, TEXT, TEXT, BIGINT, DATE, DATE, BIGINT, INT, INT);
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_listar(BIGINT, TEXT, TEXT, BIGINT, DATE, DATE, BIGINT, INT, INT, TEXT, TEXT);
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_listar(
     p_fk_sede      BIGINT   DEFAULT NULL,
     p_nombre_sede  TEXT     DEFAULT NULL,
@@ -591,7 +723,10 @@ CREATE OR REPLACE FUNCTION academico_test.fn_periodo_listar(
     p_fecha_hasta  DATE     DEFAULT NULL,
     p_pk_usuario   BIGINT   DEFAULT NULL,   -- alcance (global / establecimiento)
     p_page_index   INT      DEFAULT 0,
-    p_page_size    INT      DEFAULT 10
+    p_page_size    INT      DEFAULT 10,
+    -- Orden: id de columna del front + direccion ('asc'/'desc').
+    p_sort_by      TEXT     DEFAULT NULL,
+    p_sort_dir     TEXT     DEFAULT NULL
 )
 RETURNS TABLE (
     id BIGINT, sede_id BIGINT, sede_name VARCHAR, school_year_id BIGINT,
@@ -601,35 +736,59 @@ RETURNS TABLE (
     reserva bool_sn, default_blocks_count BIGINT,
     schedule_start_time TIME, schedule_end_time TIME, total_count BIGINT
 )
-LANGUAGE sql STABLE AS $$
-    SELECT pa.PK_TPERIODO_ACADEMICO, pa.FK_TSEDE, s.NOMBRE, pa.FK_TANO_LECTIVO,
-           al.NOMBRE, pa.FK_TLV_ESTADO, est.VALOR, est.NOMBRE,
-           pa.FECHA_INICIO, pa.FECHA_FIN, pa.FECHA_LIMITE_MATRICULA, pa.NOMBRE,
-           pa.FK_TLV_JORNADA, jor.VALOR, jor.NOMBRE, pa.RESERVA, pa.BLOQUES_POR_DEFECTO,
-           pa.HORA_INICIO, pa.HORA_FIN, count(*) OVER()::BIGINT
-      FROM academico_test.TPERIODO_ACADEMICO pa
-      JOIN academico_test.TSEDE s          ON s.PK_TSEDE = pa.FK_TSEDE
-      JOIN academico_test.TANO_LECTIVO al  ON al.PK_ANO_LECTIVO = pa.FK_TANO_LECTIVO
-      JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pa.FK_TLV_ESTADO
-      JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = pa.FK_TLV_JORNADA
-     WHERE pa.ACTIVE = TRUE
-       AND (p_fk_sede     IS NULL OR pa.FK_TSEDE = p_fk_sede)
-       AND (p_nombre_sede IS NULL OR s.NOMBRE ILIKE '%' || p_nombre_sede || '%')
-       AND (p_ano         IS NULL OR al.NOMBRE = p_ano)
-       AND (p_fk_estado   IS NULL OR pa.FK_TLV_ESTADO = p_fk_estado)
-       AND (p_fecha_desde IS NULL OR pa.FECHA_INICIO >= p_fecha_desde)
-       AND (p_fecha_hasta IS NULL OR pa.FECHA_INICIO <= p_fecha_hasta)
-       -- Alcance por rol: global (1/2/3) ve todo; establecimiento (7/8/9) el
-       -- suyo; SEDE (11 coordinador) solo la sede exacta del periodo.
-       AND (academico_test.fn_periodo_usuario_global(p_pk_usuario)
-            OR s.FK_TESTABLECIMIENTO IN (
-                SELECT establecimiento_id
-                  FROM academico_test.fn_periodo_usuario_establecimientos(p_pk_usuario))
-            OR pa.FK_TSEDE IN (
-                SELECT sede_id FROM academico_test.fn_periodo_usuario_sedes(p_pk_usuario)))
-     ORDER BY pa.FECHA_INICIO DESC
-     LIMIT NULLIF(p_page_size, 0)
-    OFFSET COALESCE(p_page_index, 0) * COALESCE(NULLIF(p_page_size, 0), 0);
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_col TEXT;
+    v_dir TEXT;
+BEGIN
+    -- Whitelist: mapea el id de columna del front → columna real. Cualquier
+    -- valor no listado cae al default (fecha de inicio). Nunca se interpola
+    -- input del usuario crudo → sin riesgo de inyeccion.
+    v_col := CASE lower(coalesce(p_sort_by, ''))
+        WHEN 'sedename'           THEN 's.NOMBRE'
+        WHEN 'schoolyearid'       THEN 'al.NOMBRE'
+        WHEN 'status'             THEN 'est.VALOR'
+        WHEN 'startdate'          THEN 'pa.FECHA_INICIO'
+        WHEN 'enddate'            THEN 'pa.FECHA_FIN'
+        WHEN 'enrollmentdeadline' THEN 'pa.FECHA_LIMITE_MATRICULA'
+        WHEN 'name'               THEN 'pa.NOMBRE'
+        ELSE 'pa.FECHA_INICIO'
+    END;
+    v_dir := CASE WHEN lower(coalesce(p_sort_dir, '')) = 'asc' THEN 'ASC' ELSE 'DESC' END;
+
+    RETURN QUERY EXECUTE format($q$
+        SELECT pa.PK_TPERIODO_ACADEMICO, pa.FK_TSEDE, s.NOMBRE, pa.FK_TANO_LECTIVO,
+               al.NOMBRE, pa.FK_TLV_ESTADO, est.VALOR, est.NOMBRE,
+               pa.FECHA_INICIO, pa.FECHA_FIN, pa.FECHA_LIMITE_MATRICULA, pa.NOMBRE,
+               pa.FK_TLV_JORNADA, jor.VALOR, jor.NOMBRE, pa.RESERVA, pa.BLOQUES_POR_DEFECTO,
+               pa.HORA_INICIO, pa.HORA_FIN, count(*) OVER()::BIGINT
+          FROM academico_test.TPERIODO_ACADEMICO pa
+          JOIN academico_test.TSEDE s          ON s.PK_TSEDE = pa.FK_TSEDE
+          JOIN academico_test.TANO_LECTIVO al  ON al.PK_ANO_LECTIVO = pa.FK_TANO_LECTIVO
+          JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pa.FK_TLV_ESTADO
+          JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = pa.FK_TLV_JORNADA
+         WHERE pa.ACTIVE = TRUE
+           AND ($1 IS NULL OR pa.FK_TSEDE = $1)
+           AND ($2 IS NULL OR s.NOMBRE ILIKE '%%' || $2 || '%%')
+           AND ($3 IS NULL OR al.NOMBRE = $3)
+           AND ($4 IS NULL OR pa.FK_TLV_ESTADO = $4)
+           AND ($5 IS NULL OR pa.FECHA_INICIO >= $5)
+           AND ($6 IS NULL OR pa.FECHA_INICIO <= $6)
+           -- Alcance por rol: global (1/2/3) ve todo; establecimiento (7/8/9)
+           -- el suyo; SEDE (11 coordinador) solo la sede exacta del periodo.
+           AND (academico_test.fn_periodo_usuario_global($7)
+                OR s.FK_TESTABLECIMIENTO IN (
+                    SELECT establecimiento_id
+                      FROM academico_test.fn_periodo_usuario_establecimientos($7))
+                OR pa.FK_TSEDE IN (
+                    SELECT sede_id FROM academico_test.fn_periodo_usuario_sedes($7)))
+         ORDER BY %s %s, pa.PK_TPERIODO_ACADEMICO DESC
+         LIMIT NULLIF($9, 0)
+        OFFSET COALESCE($8, 0) * COALESCE(NULLIF($9, 0), 0)
+    $q$, v_col, v_dir)
+    USING p_fk_sede, p_nombre_sede, p_ano, p_fk_estado, p_fecha_desde,
+          p_fecha_hasta, p_pk_usuario, p_page_index, p_page_size;
+END;
 $$;
 
 -- ---------------------------------------------------------------------------
@@ -672,6 +831,29 @@ LANGUAGE sql STABLE AS $$
       JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = pa.FK_TLV_JORNADA
      WHERE pa.PK_TPERIODO_ACADEMICO = p_pk_periodo AND pa.ACTIVE = TRUE
        AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_pk_periodo);
+$$;
+
+-- ---------------------------------------------------------------------------
+-- fn_periodo_anteriores_por_sede — candidatos a "periodo anterior" para el
+-- formulario: periodos activos de la sede dada, dentro del alcance del usuario,
+-- excluyendo (opcional) el periodo que se esta editando. Ordenados por fecha
+-- de inicio desc. Sin gate de escritura (es un picker de lectura).
+-- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_anteriores_por_sede(BIGINT, BIGINT, BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_anteriores_por_sede(
+    p_fk_sede          BIGINT,
+    p_excluir_periodo  BIGINT DEFAULT NULL,
+    p_pk_usuario       BIGINT DEFAULT NULL
+)
+RETURNS TABLE (id BIGINT, name VARCHAR, start_date DATE)
+LANGUAGE sql STABLE AS $$
+    SELECT pa.PK_TPERIODO_ACADEMICO, pa.NOMBRE, pa.FECHA_INICIO
+      FROM academico_test.TPERIODO_ACADEMICO pa
+     WHERE pa.FK_TSEDE = p_fk_sede
+       AND pa.ACTIVE = TRUE
+       AND (p_excluir_periodo IS NULL OR pa.PK_TPERIODO_ACADEMICO <> p_excluir_periodo)
+       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, pa.PK_TPERIODO_ACADEMICO)
+     ORDER BY pa.FECHA_INICIO DESC;
 $$;
 
 -- ---------------------------------------------------------------------------

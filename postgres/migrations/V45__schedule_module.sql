@@ -118,6 +118,7 @@ LANGUAGE sql STABLE AS $$
       LEFT JOIN academico_test.TASIGNATURA_PLAN ap ON ap.FK_TPLAN = pl.PK_TPLAN
            AND ap.FK_TASIGNATURA = h.FK_TASIGNATURA AND ap.ACTIVE = TRUE
      WHERE gr.FK_TGRADO = p_fk_grado AND h.ACTIVE = TRUE
+       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario_solicitante, g.FK_TPERIODO_ACADEMICO)
        AND (p_fk_grupo IS NULL OR h.FK_TGRUPO = p_fk_grupo)
      ORDER BY h.FK_TGRUPO, h.FK_TLV_DIA_SEMANA, h.NUMERO_BLOQUE;
 $$;
@@ -125,7 +126,10 @@ $$;
 -- Asignaturas del plan del grado (para las "fichas" arrastrables del horario).
 -- plan_item_id = PK_TASIGNATURA_PLAN (el subjectId de la grilla). bloques = la
 -- intensidad horaria (cuantos bloques colocar).
-CREATE OR REPLACE FUNCTION academico_test.fn_horario_asignaturas(p_fk_grado BIGINT)
+DROP FUNCTION IF EXISTS academico_test.fn_horario_asignaturas(BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_horario_asignaturas(
+    p_fk_grado BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
 RETURNS TABLE (plan_item_id BIGINT, nombre VARCHAR, bloques NUMERIC, color VARCHAR)
 LANGUAGE sql STABLE AS $$
     SELECT ap.PK_TASIGNATURA_PLAN, s.NOMBRE, ap.NUMERO_HORA, s.COLOR
@@ -133,5 +137,7 @@ LANGUAGE sql STABLE AS $$
       JOIN academico_test.TPLAN pl       ON pl.PK_TPLAN = ap.FK_TPLAN AND pl.ACTIVE = TRUE
       JOIN academico_test.TASIGNATURA s  ON s.PK_TASIGNATURA = ap.FK_TASIGNATURA AND s.ACTIVE = TRUE
      WHERE pl.FK_TGRADO = p_fk_grado AND ap.ACTIVE = TRUE
+       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario_solicitante,
+             (SELECT g.FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado))
      ORDER BY s.NOMBRE;
 $$;

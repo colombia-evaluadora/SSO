@@ -4,6 +4,7 @@ import com.co.eurekatic.query.web.metadata.TableInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import javax.sql.DataSource;
@@ -85,6 +86,14 @@ public class TablesService {
      *         malformed {@code schema} — both map to 400 via
      *         {@code GlobalExceptionHandler}.
      */
+    // Redis-backed — schema shape changes rarely, and the result
+    // depends only on (dialect, schemaPattern), never on the
+    // caller, so a single shared cache entry is safe to reuse
+    // across every principal. TTL from
+    // QueryCacheProperties#getMetadataTtlSeconds(). An
+    // IllegalArgumentException from the validation above is never
+    // cached — @Cacheable only caches normal returns.
+    @Cacheable("tables")
     public List<TableInfo> list(String dialect, String schemaPattern) {
         if (dialect == null || dialect.isBlank()) {
             throw new IllegalArgumentException("dialect is required");

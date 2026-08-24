@@ -238,6 +238,61 @@ describe("QueriesAdminPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("search box also matches the path template, not just uuid/type", async () => {
+    const byPath = mkQuery({
+      id: 1,
+      uuid: "alpha",
+      type: "select",
+      pathTemplate: "/establecimientos/sedes/query",
+      httpMethod: "POST",
+    });
+    const other = mkQuery({ id: 2, uuid: "beta", type: "report" });
+    const spy = buildFetchSpy({ queries: [byPath, other], microservices: [] });
+    vi.stubGlobal("fetch", spy);
+
+    renderPage();
+    await screen.findByText("alpha");
+    expect(screen.getByText("beta")).toBeInTheDocument();
+
+    const search = screen.getByPlaceholderText(/Buscar por UUID, tipo o path/i);
+    await userEvent.type(search, "sedes/query");
+
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+    expect(screen.queryByText("beta")).not.toBeInTheDocument();
+  });
+
+  it("the method select filters rows by httpMethod (default POST when null)", async () => {
+    const getRow = mkQuery({ id: 1, uuid: "get-row", httpMethod: "GET" });
+    const postRow = mkQuery({ id: 2, uuid: "post-row", httpMethod: null });
+    const putRow = mkQuery({ id: 3, uuid: "put-row", httpMethod: "PUT" });
+    const spy = buildFetchSpy({
+      queries: [getRow, postRow, putRow],
+      microservices: [],
+    });
+    vi.stubGlobal("fetch", spy);
+
+    renderPage();
+    await screen.findByText("get-row");
+    expect(screen.getByText("post-row")).toBeInTheDocument();
+    expect(screen.getByText("put-row")).toBeInTheDocument();
+
+    const select = screen.getByTestId("method-filter");
+    await userEvent.selectOptions(select, "GET");
+    expect(screen.getByText("get-row")).toBeInTheDocument();
+    expect(screen.queryByText("post-row")).not.toBeInTheDocument();
+    expect(screen.queryByText("put-row")).not.toBeInTheDocument();
+
+    // Null httpMethod counts as POST — the default the backend applies.
+    await userEvent.selectOptions(select, "POST");
+    expect(screen.getByText("post-row")).toBeInTheDocument();
+    expect(screen.queryByText("get-row")).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(select, "");
+    expect(screen.getByText("get-row")).toBeInTheDocument();
+    expect(screen.getByText("post-row")).toBeInTheDocument();
+    expect(screen.getByText("put-row")).toBeInTheDocument();
+  });
+
   it("defaults the httpMethod to POST when it is null in the response", async () => {
     // null httpMethod is the legacy wire shape (pre-V33). The cell
     // must still render — POST is the historical default — so the

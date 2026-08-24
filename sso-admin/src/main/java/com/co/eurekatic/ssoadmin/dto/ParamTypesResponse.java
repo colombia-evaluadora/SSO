@@ -55,5 +55,22 @@ public record ParamTypesResponse(
         String requiredSuffix,
         String fileClassificationSeparator,
         List<String> knownFileClassifications,
-        List<String> establishmentScopedFileClassifications
+        List<String> establishmentScopedFileClassifications,
+        /**
+         * V70 — subconjunto de {@code curated} que admite las reglas
+         * numéricas de {@code paramConstraints} (positivo / decimales /
+         * máximo de cifras) — unión de
+         * {@link com.co.eurekatic.common.query.ParamTypes#INTEGER_TYPES}
+         * y {@link com.co.eurekatic.common.query.ParamTypes#DECIMAL_TYPES}.
+         * La UI la usa para decidir si mostrar el botón "Restricciones"
+         * con las reglas numéricas en la fila de un placeholder.
+         */
+        List<String> numericTypes,
+        /**
+         * V70 — subconjunto de {@code curated} que admite las reglas de
+         * texto de {@code paramConstraints} (sólo dígitos / longitud
+         * mínima / máxima) —
+         * {@link com.co.eurekatic.common.query.ParamTypes#STRING_TYPES}.
+         */
+        List<String> textTypes
 ) { }

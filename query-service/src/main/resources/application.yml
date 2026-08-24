@@ -52,6 +52,20 @@ spring:
       max-string-length: 1048576
       max-number-length: 1000
 
+  data:
+    redis:
+      # Same shared sso-redis instance as auth-center — wired from
+      # REDIS_HOST/REDIS_PORT/REDIS_PASSWORD via docker-compose (and,
+      # for provisioner-spawned instances, DockerSocket#buildEnv).
+      # Defaults are localhost so `mvn spring-boot:run` on the host
+      # works without the compose stack.
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      # Short timeout — a read endpoint should fall through to the
+      # DB/JDBC path fast when Redis is unreachable, not hang.
+      timeout: 2s
+
 eureka:
   client:
     service-url:
@@ -127,6 +141,19 @@ query:
     rate-limit:
       rps: ${QUERY_RATE_LIMIT_RPS:100}
       window: ${QUERY_RATE_LIMIT_WINDOW:1s}
+  # Redis-backed @Cacheable settings.
+  cache:
+    # TTL for "schema-metadata" (@Cacheable("tables") /
+    # @Cacheable("columns")) — GET /tables and GET /columns.
+    # Schema shape changes rarely, so this is intentionally long;
+    # an admin who just altered a table can bump this down or
+    # flush Redis manually if they need the picker to reflect it
+    # immediately.
+    metadata-ttl-seconds: ${QUERY_CACHE_METADATA_TTL_SECONDS:600}
+    # Master switch for catalog-opt-in caching of GET /** rows —
+    # see QueryPathController. Independent of the metadata caches
+    # above; turning this off does not disable /tables or /columns.
+    catalog-enabled: ${QUERY_CACHE_CATALOG_ENABLED:true}
 
 sso:
   jwt:
