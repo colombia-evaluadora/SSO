@@ -1,5 +1,15 @@
 -- =============================================================================
--- V66 — p_page_size NULL significa "sin limite" en las funciones de listado.
+-- V123 — p_page_size NULL significa "sin limite" en las funciones de listado.
+--
+-- Renumerada de V66 a V123: dos ramas paralelas (esta y
+-- feat/etiqueta-auditoria-cdc, PR #75) tomaron el mismo numero de
+-- version -- V66__fn_audit_declarar.sql llego primero a dev y ademas
+-- esta citado por nombre en la documentacion de auditoria, asi que se
+-- deja fijo y esta migracion se renumera al siguiente libre despues
+-- de la punta actual (V122). Bloqueaba TODO el deploy: Flyway no
+-- puede resolver el directorio con dos archivos de la misma version
+-- (visto en el run de deploy-test del 2026-08-24, "Found more than
+-- one migration with version 66"). Contenido sin cambios.
 --
 -- Motivacion: el servicio de reporting (JasperReports) tiene que correr las
 -- MISMAS funciones que alimentan los listados de pantalla, con los mismos
