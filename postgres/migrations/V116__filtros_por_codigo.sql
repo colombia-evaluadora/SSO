@@ -352,6 +352,7 @@ BEGIN
           JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f3.FK_TUSUARIO AND su.ACTIVE = TRUE
           JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
          WHERE s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles) AND f3.ACTIVE = TRUE
+           AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
     ),
     base AS (
         -- Funcionarios activos cuyo TUSUARIO matchea search/estado y que
@@ -398,12 +399,14 @@ BEGIN
                  WHERE su3.FK_TUSUARIO = u.PK_TUSUARIO
                    AND su3.ACTIVE      = TRUE
                    AND su3.FK_TSEDE    = p_campus_id
+                   AND su3.FK_TROL >= 7 AND su3.FK_TROL NOT IN (15, 16)
            ))
            AND (p_roles IS NULL OR CARDINALITY(p_roles) = 0 OR EXISTS (
                 SELECT 1 FROM academico_test.TSEDE_USUARIO su4
                  WHERE su4.FK_TUSUARIO = u.PK_TUSUARIO
                    AND su4.ACTIVE      = TRUE
                    AND su4.FK_TROL     IN (SELECT t.PK_TROL FROM academico_test.TROL t WHERE t.CODIGO = ANY(p_roles))
+                   AND su4.FK_TROL >= 7 AND su4.FK_TROL NOT IN (15, 16)
            ))
            AND (p_work_schedules IS NULL OR CARDINALITY(p_work_schedules) = 0 OR EXISTS (
                 SELECT 1 FROM academico_test.TSEDE_USUARIO su5
@@ -411,6 +414,7 @@ BEGIN
                    AND su5.ACTIVE         = TRUE
                    AND su5.FK_TLV_JORNADA IN (SELECT lv.PK_LISTA_VALOR FROM academico_test.TLISTA_VALOR lv
                         WHERE lv.CATEGORIA = 'JORNADA' AND lv.VALOR = ANY(p_work_schedules))
+                   AND su5.FK_TROL >= 7 AND su5.FK_TROL NOT IN (15, 16)
            ))
     )
     -- sedes_agg/estados_agg/jornada: FIX V112, reaplicado sobre esta firma.
@@ -460,6 +464,7 @@ BEGIN
                         JOIN academico_test.TROL          r ON r.PK_TROL = su_r.FK_TROL
                        WHERE su_r.FK_TUSUARIO = b.PK_TUSUARIO
                          AND su_r.ACTIVE      = TRUE
+                         AND su_r.FK_TROL >= 7 AND su_r.FK_TROL NOT IN (15, 16)
                       UNION
                       SELECT jsonb_build_object('id', 7, 'nombre', 'Rector')
                        WHERE EXISTS (
@@ -480,13 +485,15 @@ BEGIN
                                   ORDER BY jsonb_build_object('id', s.PK_TSEDE, 'nombre', s.NOMBRE))
                   FROM academico_test.TSEDE_USUARIO su_s
                   JOIN academico_test.TSEDE         s ON s.PK_TSEDE = su_s.FK_TSEDE
-                 WHERE su_s.FK_TUSUARIO = b.PK_TUSUARIO AND su_s.ACTIVE = TRUE),
+                 WHERE su_s.FK_TUSUARIO = b.PK_TUSUARIO AND su_s.ACTIVE = TRUE
+                   AND su_s.FK_TROL >= 7 AND su_s.FK_TROL NOT IN (15, 16)),
                '[]'::jsonb
            )                             AS sedes_agg,
            COALESCE(
                (SELECT jsonb_agg(DISTINCT su_e.TLV_ESTADO ORDER BY su_e.TLV_ESTADO)
                   FROM academico_test.TSEDE_USUARIO su_e
-                 WHERE su_e.FK_TUSUARIO = b.PK_TUSUARIO AND su_e.ACTIVE = TRUE),
+                 WHERE su_e.FK_TUSUARIO = b.PK_TUSUARIO AND su_e.ACTIVE = TRUE
+                   AND su_e.FK_TROL >= 7 AND su_e.FK_TROL NOT IN (15, 16)),
                '[]'::jsonb
            )                             AS estados_agg
       FROM base b
@@ -495,6 +502,7 @@ BEGIN
               FROM academico_test.TSEDE_USUARIO su
               JOIN academico_test.TLISTA_VALOR  tlv ON tlv.PK_LISTA_VALOR = su.FK_TLV_JORNADA
              WHERE su.FK_TUSUARIO = b.PK_TUSUARIO AND su.ACTIVE = TRUE
+               AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
              ORDER BY su.PREDETERMINADO DESC, su.ORDEN ASC, su.PK_TSEDE_USUARIO ASC
              LIMIT 1
       ) jp ON TRUE
@@ -599,12 +607,14 @@ BEGIN
                  WHERE su3.FK_TUSUARIO = u.PK_TUSUARIO
                    AND su3.ACTIVE      = TRUE
                    AND su3.FK_TSEDE    = p_campus_id
+                   AND su3.FK_TROL >= 7 AND su3.FK_TROL NOT IN (15, 16)
            ))
            AND (p_roles IS NULL OR CARDINALITY(p_roles) = 0 OR EXISTS (
                 SELECT 1 FROM academico_test.TSEDE_USUARIO su4
                  WHERE su4.FK_TUSUARIO = u.PK_TUSUARIO
                    AND su4.ACTIVE      = TRUE
                    AND su4.FK_TROL     IN (SELECT t.PK_TROL FROM academico_test.TROL t WHERE t.CODIGO = ANY(p_roles))
+                   AND su4.FK_TROL >= 7 AND su4.FK_TROL NOT IN (15, 16)
            ))
            AND (p_work_schedules IS NULL OR CARDINALITY(p_work_schedules) = 0 OR EXISTS (
                 SELECT 1 FROM academico_test.TSEDE_USUARIO su5
@@ -612,6 +622,7 @@ BEGIN
                    AND su5.ACTIVE         = TRUE
                    AND su5.FK_TLV_JORNADA IN (SELECT lv.PK_LISTA_VALOR FROM academico_test.TLISTA_VALOR lv
                         WHERE lv.CATEGORIA = 'JORNADA' AND lv.VALOR = ANY(p_work_schedules))
+                   AND su5.FK_TROL >= 7 AND su5.FK_TROL NOT IN (15, 16)
            ));
         RETURN v_total;
     END IF;
@@ -648,6 +659,7 @@ BEGIN
           JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f3.FK_TUSUARIO AND su.ACTIVE = TRUE
           JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
          WHERE s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles) AND f3.ACTIVE = TRUE
+           AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
     )
     SELECT COUNT(DISTINCT f.PK_TFUNCIONARIO)
       INTO v_total
@@ -684,12 +696,14 @@ BEGIN
              WHERE su3.FK_TUSUARIO = u.PK_TUSUARIO
                AND su3.ACTIVE      = TRUE
                AND su3.FK_TSEDE    = p_campus_id
+               AND su3.FK_TROL >= 7 AND su3.FK_TROL NOT IN (15, 16)
        ))
        AND (p_roles IS NULL OR CARDINALITY(p_roles) = 0 OR EXISTS (
             SELECT 1 FROM academico_test.TSEDE_USUARIO su4
              WHERE su4.FK_TUSUARIO = u.PK_TUSUARIO
                AND su4.ACTIVE      = TRUE
                AND su4.FK_TROL     IN (SELECT t.PK_TROL FROM academico_test.TROL t WHERE t.CODIGO = ANY(p_roles))
+               AND su4.FK_TROL >= 7 AND su4.FK_TROL NOT IN (15, 16)
        ))
        AND (p_work_schedules IS NULL OR CARDINALITY(p_work_schedules) = 0 OR EXISTS (
             SELECT 1 FROM academico_test.TSEDE_USUARIO su5
@@ -697,6 +711,7 @@ BEGIN
                AND su5.ACTIVE         = TRUE
                AND su5.FK_TLV_JORNADA IN (SELECT lv.PK_LISTA_VALOR FROM academico_test.TLISTA_VALOR lv
                         WHERE lv.CATEGORIA = 'JORNADA' AND lv.VALOR = ANY(p_work_schedules))
+               AND su5.FK_TROL >= 7 AND su5.FK_TROL NOT IN (15, 16)
        ));
 
     RETURN v_total;
