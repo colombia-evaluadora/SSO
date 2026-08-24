@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Familia de fuentes embebida en el PDF.
+
+  Sin esto, Jasper MIDE el texto con la fuente de AWT (que en el contenedor
+  resuelve a DejaVu) pero lo ESCRIBE en el PDF con las metricas de Helvetica.
+  Las dos no coinciden, asi que cada glifo queda posicionado segun un ancho y
+  dibujado con otro: el resultado son huecos y encimados dentro de las
+  palabras ("E stablecim ientos educativos"). Con la fuente embebida, medir y
+  dibujar usan el MISMO archivo y el problema desaparece.
+
+  pdfEmbedded=true hace que el TTF viaje dentro del PDF: el documento se ve
+  igual en cualquier maquina, tenga o no DejaVu instalada.
+-->
+<fontFamilies>
+  <fontFamily name="DejaVu Sans">
+    <normal>fonts/DejaVuSans.ttf</normal>
+    <bold>fonts/DejaVuSans-Bold.ttf</bold>
+    <!-- No se embeben itálica ni bold-itálica: el diseño no las usa y son
+         700 KB cada una. Jasper sintetiza la itálica inclinando la normal,
+         que para la línea de filtros alcanza. -->
+    <pdfEncoding>Identity-H</pdfEncoding>
+    <pdfEmbedded>true</pdfEmbedded>
+  </fontFamily>
+</fontFamilies>

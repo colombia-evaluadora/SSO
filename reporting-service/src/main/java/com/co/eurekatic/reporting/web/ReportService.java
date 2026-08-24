@@ -3,6 +3,7 @@ package com.co.eurekatic.reporting.web;
 import com.co.eurekatic.reporting.config.ReportingProperties;
 import com.co.eurekatic.reporting.data.QueryServiceClient;
 import com.co.eurekatic.reporting.render.ExcelRenderer;
+import com.co.eurekatic.reporting.render.ReportMeta;
 import com.co.eurekatic.reporting.render.PdfRenderer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,7 +46,8 @@ public class ReportService {
     /** Archivo generado, listo para responder. */
     public record Rendered(byte[] content, MediaType contentType, String fileName, int rows) {}
 
-    public Rendered generate(String clave, ReportRequest request, String bearer) {
+    public Rendered generate(String clave, ReportRequest request, String bearer,
+                             String usuario) {
 
         ReportingProperties.Report def = props.getReports().get(clave);
         if (def == null) {
@@ -77,9 +79,15 @@ public class ReportService {
                     + props.getMaxRows() + ". Agrega filtros para acotarlo.");
         }
 
+        // El reporte lleva impreso con que filtros salio: un PDF exportado
+        // circula por correo y sobrevive al contexto donde se genero, asi que
+        // sin esa linea nadie puede distinguir "el padron completo" de "los
+        // de una sola sede".
+        ReportMeta meta = new ReportMeta(usuario, request == null ? null : request.filters());
+
         byte[] content = switch (formato) {
-            case PDF -> pdf.render(clave, def, rows);
-            case EXCEL -> excel.render(clave, def, rows);
+            case PDF -> pdf.render(clave, def, rows, meta);
+            case EXCEL -> excel.render(clave, def, rows, meta);
         };
 
         String base = def.getFileName() == null ? clave : def.getFileName();

@@ -4,6 +4,7 @@ import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import com.co.eurekatic.common.security.AuthPrincipal;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -39,7 +40,7 @@ public class ReportController {
     public ResponseEntity<byte[]> generar(@PathVariable String clave,
                                           @RequestBody(required = false) ReportRequest request) {
 
-        ReportService.Rendered r = service.generate(clave, request, currentToken());
+        ReportService.Rendered r = service.generate(clave, request, currentToken(), currentUser());
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(r.contentType());
@@ -64,6 +65,19 @@ public class ReportController {
      * servicio, cualquier usuario terminaria exportando lo que el
      * servicio puede ver, no lo que el puede ver.
      */
+    /**
+     * Correo de quien pidio el reporte, para imprimirlo en el membrete.
+     * Devuelve null si no se puede resolver: el membrete omite esa parte en
+     * vez de romper la generacion por un dato decorativo.
+     */
+    private String currentUser() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && auth.getPrincipal() instanceof AuthPrincipal p) {
+            return p.email();
+        }
+        return null;
+    }
+
     private String currentToken() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null || !(auth.getCredentials() instanceof String token) || token.isBlank()) {

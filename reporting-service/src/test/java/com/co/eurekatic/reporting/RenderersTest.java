@@ -3,6 +3,7 @@ package com.co.eurekatic.reporting;
 import com.co.eurekatic.reporting.config.ReportingProperties;
 import com.co.eurekatic.reporting.render.ExcelRenderer;
 import com.co.eurekatic.reporting.render.PdfRenderer;
+import com.co.eurekatic.reporting.render.ReportMeta;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
@@ -59,9 +60,37 @@ class RenderersTest {
         return def;
     }
 
+    /** Con usuario y filtros: asi el membrete y la linea de filtros se
+     *  ejercitan de verdad y no solo la rama vacia. */
+    private static ReportMeta meta() {
+        Map<String, Object> filtros = new LinkedHashMap<>();
+        filtros.put("search", "mar");
+        filtros.put("statuses", List.of("Activo"));
+        filtros.put("ids", List.of(1, 2, 3, 4, 5, 6, 7, 8));
+        return new ReportMeta("laura@example.com", filtros);
+    }
+
+    @Test
+    void elResumenDeFiltrosEsLegible() {
+        String texto = meta().filtrosLegibles();
+        assertTrue(texto.contains("Búsqueda: mar"), texto);
+        assertTrue(texto.contains("Estados: Activo"), texto);
+        // Una lista larga se resume: nadie lee 8 ids impresos, pero si
+        // importa saber que el reporte salio de una seleccion manual.
+        assertTrue(texto.contains("8 elementos seleccionados"), texto);
+    }
+
+    @Test
+    void sinFiltrosElResumenQuedaVacio() {
+        assertEquals("", new ReportMeta(null, Map.of()).filtrosLegibles());
+        // Un filtro presente pero vacio es "sin filtrar": no debe ensuciar
+        // el membrete con ruido que no cambio el resultado.
+        assertEquals("", new ReportMeta(null, Map.of("search", "  ")).filtrosLegibles());
+    }
+
     @Test
     void elPdfSaleValidoYNoVacio() {
-        byte[] pdf = new PdfRenderer().render("funcionarios", definicion(), filas());
+        byte[] pdf = new PdfRenderer().render("funcionarios", definicion(), filas(), meta());
 
         // %PDF- es la firma del formato. Si Jasper fallara a mitad del
         // export, saldrian bytes sin cabecera y el visor diria "corrupto".
@@ -73,14 +102,14 @@ class RenderersTest {
     void elPdfSinFilasIgualEsUnDocumentoAbrible() {
         // Un filtro sin resultados no debe producir un archivo de cero
         // paginas: eso es justo lo que los visores rechazan como corrupto.
-        byte[] pdf = new PdfRenderer().render("vacio", definicion(), List.of());
+        byte[] pdf = new PdfRenderer().render("vacio", definicion(), List.of(), meta());
         assertEquals("%PDF-", new String(pdf, 0, 5));
         assertTrue(pdf.length > 300);
     }
 
     @Test
     void elExcelSaleValidoYNoVacio() {
-        byte[] xlsx = new ExcelRenderer().render("funcionarios", definicion(), filas());
+        byte[] xlsx = new ExcelRenderer().render("funcionarios", definicion(), filas(), meta());
 
         // Un .xlsx es un ZIP: empieza con PK\003\004.
         assertTrue(xlsx.length > 500, "el Excel salio sospechosamente chico: " + xlsx.length);
@@ -92,7 +121,7 @@ class RenderersTest {
     void elExcelSinFilasNoRevienta() {
         // El autofiltro se aplica sobre un rango; con 0 filas de datos
         // POI rechaza el rango invertido si no se lo saltea.
-        byte[] xlsx = new ExcelRenderer().render("vacio", definicion(), List.of());
+        byte[] xlsx = new ExcelRenderer().render("vacio", definicion(), List.of(), meta());
         assertEquals('P', (char) xlsx[0]);
     }
 }
