@@ -59,6 +59,26 @@ public class QueryServiceClient {
     }
 
     /**
+     * Saca el `message` del cuerpo de error del query-service. Si no viene o
+     * no es JSON, cae a un texto generico — un error sin mensaje es peor que
+     * uno impreciso.
+     */
+    private String mensajeDe(String cuerpo) {
+        if (cuerpo == null || cuerpo.isBlank()) {
+            return "No se pudieron obtener los datos del reporte.";
+        }
+        int i = cuerpo.indexOf("\"message\"");
+        if (i < 0) {
+            return "No se pudieron obtener los datos del reporte.";
+        }
+        int desde = cuerpo.indexOf(34, cuerpo.indexOf(58, i) + 1);
+        int hasta = desde < 0 ? -1 : cuerpo.indexOf(34, desde + 1);
+        return desde < 0 || hasta < 0
+                ? "No se pudieron obtener los datos del reporte."
+                : cuerpo.substring(desde + 1, hasta);
+    }
+
+    /**
      * Pide las filas de un endpoint sin paginar.
      *
      * @param path       ruta registrada en {@code public.query} (V67)
@@ -95,10 +115,18 @@ public class QueryServiceClient {
             // Se propaga el codigo del query-service en vez de traducir
             // todo a 500: un 403 por rol o un 400 por un filtro invalido
             // son respuestas del usuario, no fallas del reporte.
-            log.warn("query-service respondio {} para {}: {}",
-                    e.getStatusCode(), path, e.getResponseBodyAsString());
-            throw new ResponseStatusException(e.getStatusCode(),
-                    "No se pudieron obtener los datos del reporte.");
+            String cuerpo = e.getResponseBodyAsString();
+            log.warn("query-service respondio {} para {}: {}", e.getStatusCode(), path, cuerpo);
+            // En un 4xx el problema es lo que mando el llamante, y el mensaje
+            // del query-service dice EXACTAMENTE cual es ("el elemento [0] es
+            // String, esperado Long"). Tragarselo obliga a entrar al servidor a
+            // leer logs para diagnosticar un error del front; propagarlo lo deja
+            // visible en la pestaña Network. Los 5xx si se generalizan: ahi el
+            // detalle es interno y no le sirve a nadie del otro lado.
+            String motivo = e.getStatusCode().is4xxClientError()
+                    ? mensajeDe(cuerpo)
+                    : "No se pudieron obtener los datos del reporte.";
+            throw new ResponseStatusException(e.getStatusCode(), motivo);
         } catch (RestClientException e) {
             log.error("Fallo la llamada al query-service para {}", path, e);
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,

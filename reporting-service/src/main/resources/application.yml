@@ -3,6 +3,13 @@ server:
   # 8083 sso-admin, 8084 query-service, 8085 notification, 8086 file.
   port: ${PORT:8087}
   shutdown: graceful
+  error:
+    # Sin esto el `reason` de un ResponseStatusException NO viaja al cliente:
+    # el cuerpo sale con timestamp/status/error/path y nada mas, y diagnosticar
+    # un 400 obliga a entrar al servidor a leer logs. Lo que se propaga es
+    # deliberado (ver QueryServiceClient): en 4xx el mensaje del query-service,
+    # que ya viene saneado; en 5xx uno generico.
+    include-message: always
 
 spring:
   application:
