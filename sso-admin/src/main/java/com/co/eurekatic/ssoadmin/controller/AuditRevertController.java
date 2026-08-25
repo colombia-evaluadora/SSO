@@ -13,13 +13,17 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * V-audit-revert — fase 1 (solo el patrón soft-delete/soft-restore, ver
+ * V-audit-revert — fase 2: INSERT (revertido como soft-delete), UPDATE
+ * genérico (cualquier columna) y DELETE físico (rechazado — ver
  * {@link AuditRevertService}). Cae bajo la regla catch-all de {@code
  * SecurityConfig} ({@code ssoAdminAccessManager}) igual que el resto de
  * endpoints de este módulo: necesita una fila {@code endpoint} y un
- * {@code role_endpoint} bindeado a quien deba poder usarlo — dado lo
- * destructivo de la operación, esa asignación de rol debería quedar
- * MUY restringida (no ADMIN genérico) cuando se configure.
+ * {@code role_endpoint} bindeado a quien deba poder usarlo. Dado lo
+ * destructivo de la operación, esa asignación queda MUY restringida —
+ * {@code CEVAL-SUPER_ADMINISTRADOR}, no ADMIN genérico (ver
+ * {@code postgres/migrations/V125__seed_audit_revert_endpoint.sql}),
+ * mismo nivel de privilegio que V87 le dio a la lectura del historial
+ * completo de auditoría.
  *
  * <p>{@code dryRun=true} (el default del DTO) nunca escribe — solo
  * valida y muestra qué pasaría. Es la forma recomendada de usar este

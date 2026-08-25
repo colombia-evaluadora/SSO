@@ -27,10 +27,11 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Unit tests for {@link AuditRevertService} — fase 1 del revert de
- * auditoría (solo el patrón soft-delete/soft-restore de la bandera
- * {@code active}). {@link JdbcTemplate} y {@link ClickHouseAuditClient}
- * están mockeados; no hay Postgres/ClickHouse real acá.
+ * Unit tests for {@link AuditRevertService} — fase 2: INSERT ('c',
+ * revertido como soft-delete), UPDATE ('u', cualquier columna) y DELETE
+ * físico ('d', rechazado). {@link JdbcTemplate} y
+ * {@link ClickHouseAuditClient} están mockeados; no hay Postgres/
+ * ClickHouse real acá.
  */
 @ExtendWith(MockitoExtension.class)
 class AuditRevertServiceTest {
@@ -53,19 +54,24 @@ class AuditRevertServiceTest {
                 "{\"pk_area\":42,\"active\":true,\"nombre\":\"Matemáticas\"}");
     }
 
+    // ---- UPDATE (soft-delete/soft-restore, caso particular del UPDATE genérico) ----
+
     @Test
     void previewReturnsApplyFalseAndDoesNotWriteAnything() {
         when(clickHouse.findByLsnSeq(100L, 2L)).thenReturn(Optional.of(softDeleteRow()));
-        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any())).thenReturn(false);
+        when(jdbc.queryForObject(anyString(), eq(Object.class), any())).thenReturn(false);
 
         AuditRevertResponse resp = service.preview(100L, 2L);
 
         assertThat(resp.applied()).isFalse();
         assertThat(resp.tabla()).isEqualTo("area");
+        assertThat(resp.operacionOriginal()).isEqualTo("u");
         assertThat(resp.pkColumn()).isEqualTo("pk_area");
         assertThat(resp.pkValue()).isEqualTo("42");
-        assertThat(resp.activeBefore()).isFalse();
-        assertThat(resp.activeAfter()).isTrue();
+        assertThat(resp.cambios()).hasSize(1);
+        assertThat(resp.cambios().get(0).columna()).isEqualTo("active");
+        assertThat(resp.cambios().get(0).antes()).isEqualTo(false);
+        assertThat(resp.cambios().get(0).despues()).isEqualTo(true);
         assertThat(resp.originalRequestId()).isEqualTo("req-original");
 
         verify(jdbc, times(0)).update(anyString(), any(Object[].class));
@@ -74,7 +80,7 @@ class AuditRevertServiceTest {
     @Test
     void revertSetsContextGucsThenUpdatesActiveInSameOrder() {
         when(clickHouse.findByLsnSeq(100L, 2L)).thenReturn(Optional.of(softDeleteRow()));
-        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any())).thenReturn(false);
+        when(jdbc.queryForObject(anyString(), eq(Object.class), any())).thenReturn(false);
         // actingUserId (7L, JWT `uid` = public.users.id_user) se puentea a
         // PK_TUSUARIO antes de fijar las GUCs — mismo bug de espacio de ID
         // que query-service resuelve con esta misma función puente.
@@ -84,7 +90,7 @@ class AuditRevertServiceTest {
         AuditRevertResponse resp = service.revert(100L, 2L, 7L);
 
         assertThat(resp.applied()).isTrue();
-        assertThat(resp.activeAfter()).isTrue();
+        assertThat(resp.cambios().get(0).despues()).isEqualTo(true);
 
         var inOrder = org.mockito.Mockito.inOrder(jdbc);
         inOrder.verify(jdbc).queryForList(anyString(),
@@ -94,42 +100,45 @@ class AuditRevertServiceTest {
                 eq(true), eq(42));
     }
 
-    @Test
-    void rejectsNonUpdateOperations() {
-        AuditLogRow insertRow = new AuditLogRow("area", "c", "42", "req", "Área creada",
-                "admin@example.com", "{\"pk_area\":42,\"active\":true}", "{}");
-        when(clickHouse.findByLsnSeq(1L, 1L)).thenReturn(Optional.of(insertRow));
-
-        assertThatThrownBy(() -> service.preview(1L, 1L))
-                .isInstanceOf(UnsupportedRevertException.class)
-                .hasMessageContaining("UPDATE");
-        verifyNoInteractions(jdbc);
-    }
+    // ---- UPDATE genérico (columnas distintas de 'active') ----
 
     @Test
-    void rejectsChangesThatDontToggleActive() {
+    void revertsMultipleChangedColumnsOnGenericUpdate() {
         AuditLogRow renameRow = new AuditLogRow("area", "u", "42", "req", "Área renombrada",
                 "admin@example.com",
-                "{\"pk_area\":42,\"active\":true,\"nombre\":\"Física\"}",
-                "{\"pk_area\":42,\"active\":true,\"nombre\":\"Matemáticas\"}");
+                "{\"pk_area\":42,\"active\":true,\"nombre\":\"Física\",\"codigo\":\"FIS\"}",
+                "{\"pk_area\":42,\"active\":true,\"nombre\":\"Matemáticas\",\"codigo\":\"MAT\"}");
         when(clickHouse.findByLsnSeq(1L, 1L)).thenReturn(Optional.of(renameRow));
+        when(jdbc.queryForObject(eq("SELECT nombre FROM academico_test.area WHERE pk_area = ?"),
+                eq(Object.class), eq(42))).thenReturn("Física");
+        when(jdbc.queryForObject(eq("SELECT codigo FROM academico_test.area WHERE pk_area = ?"),
+                eq(Object.class), eq(42))).thenReturn("FIS");
 
-        assertThatThrownBy(() -> service.preview(1L, 1L))
-                .isInstanceOf(UnsupportedRevertException.class)
-                .hasMessageContaining("active");
+        AuditRevertResponse resp = service.preview(1L, 1L);
+
+        assertThat(resp.cambios()).hasSize(2);
+        assertThat(resp.cambios()).anySatisfy(c -> {
+            assertThat(c.columna()).isEqualTo("nombre");
+            assertThat(c.despues()).isEqualTo("Matemáticas");
+        });
+        assertThat(resp.cambios()).anySatisfy(c -> {
+            assertThat(c.columna()).isEqualTo("codigo");
+            assertThat(c.despues()).isEqualTo("MAT");
+        });
     }
 
     @Test
-    void rejectsRowsWithoutActiveColumn() {
-        AuditLogRow noActiveRow = new AuditLogRow("area", "u", "42", "req", "Área renombrada",
+    void rejectsUpdatesThatDidNotChangeAnyComparableColumn() {
+        AuditLogRow noopRow = new AuditLogRow("area", "u", "42", "req", "etq",
                 "admin@example.com",
-                "{\"pk_area\":42,\"nombre\":\"Física\"}",
-                "{\"pk_area\":42,\"nombre\":\"Matemáticas\"}");
-        when(clickHouse.findByLsnSeq(1L, 1L)).thenReturn(Optional.of(noActiveRow));
+                "{\"pk_area\":42,\"active\":true,\"nombre\":\"Matemáticas\"}",
+                "{\"pk_area\":42,\"active\":true,\"nombre\":\"Matemáticas\"}");
+        when(clickHouse.findByLsnSeq(1L, 1L)).thenReturn(Optional.of(noopRow));
 
         assertThatThrownBy(() -> service.preview(1L, 1L))
                 .isInstanceOf(UnsupportedRevertException.class)
-                .hasMessageContaining("active");
+                .hasMessageContaining("nada que revertir");
+        verifyNoInteractions(jdbc);
     }
 
     @Test
@@ -151,7 +160,7 @@ class AuditRevertServiceTest {
         // pero Postgres YA tiene active=true — alguien lo revirtió/tocó
         // después. No debe pisar ese cambio intermedio.
         when(clickHouse.findByLsnSeq(1L, 1L)).thenReturn(Optional.of(softDeleteRow()));
-        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any())).thenReturn(true);
+        when(jdbc.queryForObject(anyString(), eq(Object.class), any())).thenReturn(true);
 
         assertThatThrownBy(() -> service.preview(1L, 1L))
                 .isInstanceOf(RevertConflictException.class);
@@ -165,5 +174,63 @@ class AuditRevertServiceTest {
 
         assertThatThrownBy(() -> service.preview(999L, 1L))
                 .isInstanceOf(NotFoundException.class);
+    }
+
+    // ---- INSERT ('c') → revertir como soft-delete ----
+
+    @Test
+    void revertsInsertByDeactivatingTheCreatedRow() {
+        AuditLogRow insertRow = new AuditLogRow("area", "c", "42", "req", "Área creada",
+                "admin@example.com",
+                "{\"pk_area\":42,\"active\":true,\"nombre\":\"Matemáticas\"}", "{}");
+        when(clickHouse.findByLsnSeq(1L, 1L)).thenReturn(Optional.of(insertRow));
+        when(jdbc.queryForObject(eq("SELECT active FROM academico_test.area WHERE pk_area = ?"),
+                eq(Object.class), eq(42))).thenReturn(true);
+
+        AuditRevertResponse resp = service.preview(1L, 1L);
+
+        assertThat(resp.operacionOriginal()).isEqualTo("c");
+        assertThat(resp.cambios()).hasSize(1);
+        assertThat(resp.cambios().get(0).columna()).isEqualTo("active");
+        assertThat(resp.cambios().get(0).despues()).isEqualTo(false);
+    }
+
+    @Test
+    void rejectsInsertRevertOnTablesWithoutActiveColumn() {
+        AuditLogRow insertRow = new AuditLogRow("rel_x_y", "c", "1", "req", "etq",
+                "admin@example.com", "{\"pk_rel_x_y\":1,\"fk_x\":1,\"fk_y\":2}", "{}");
+        when(clickHouse.findByLsnSeq(1L, 1L)).thenReturn(Optional.of(insertRow));
+
+        assertThatThrownBy(() -> service.preview(1L, 1L))
+                .isInstanceOf(UnsupportedRevertException.class)
+                .hasMessageContaining("active");
+    }
+
+    @Test
+    void rejectsInsertConflictWhenRowWasAlreadyTouchedAfterCreation() {
+        AuditLogRow insertRow = new AuditLogRow("area", "c", "42", "req", "Área creada",
+                "admin@example.com",
+                "{\"pk_area\":42,\"active\":true,\"nombre\":\"Matemáticas\"}", "{}");
+        when(clickHouse.findByLsnSeq(1L, 1L)).thenReturn(Optional.of(insertRow));
+        // ya la desactivaron después de crearla
+        when(jdbc.queryForObject(eq("SELECT active FROM academico_test.area WHERE pk_area = ?"),
+                eq(Object.class), eq(42))).thenReturn(false);
+
+        assertThatThrownBy(() -> service.preview(1L, 1L))
+                .isInstanceOf(RevertConflictException.class);
+    }
+
+    // ---- DELETE físico ('d') → rechazado explícitamente ----
+
+    @Test
+    void rejectsPhysicalDeleteOperations() {
+        AuditLogRow deleteRow = new AuditLogRow("area", "d", "42", "req", "etq",
+                "admin@example.com", "{}", "{\"pk_area\":42,\"active\":true,\"nombre\":\"Matemáticas\"}");
+        when(clickHouse.findByLsnSeq(1L, 1L)).thenReturn(Optional.of(deleteRow));
+
+        assertThatThrownBy(() -> service.preview(1L, 1L))
+                .isInstanceOf(UnsupportedRevertException.class)
+                .hasMessageContaining("DELETE físico");
+        verifyNoInteractions(jdbc);
     }
 }

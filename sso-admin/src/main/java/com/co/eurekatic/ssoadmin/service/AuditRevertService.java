@@ -3,6 +3,7 @@ package com.co.eurekatic.ssoadmin.service;
 import com.co.eurekatic.ssoadmin.client.ClickHouseAuditClient;
 import com.co.eurekatic.ssoadmin.client.ClickHouseAuditClient.AuditLogRow;
 import com.co.eurekatic.ssoadmin.dto.AuditRevertResponse;
+import com.co.eurekatic.ssoadmin.dto.AuditRevertResponse.ColumnRevert;
 import com.co.eurekatic.ssoadmin.exception.NotFoundException;
 import com.co.eurekatic.ssoadmin.exception.RevertConflictException;
 import com.co.eurekatic.ssoadmin.exception.UnsupportedRevertException;
@@ -15,21 +16,45 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
- * V-audit-revert — fase 1: dado un cambio puntual identificado por
- * {@code (lsn, seq)} en {@code auditoria.audit_log}, revierte SOLO el
- * patrón soft-delete/soft-restore (un UPDATE que cambió la bandera
- * {@code active}). Cualquier otro caso (INSERT, DELETE físico, UPDATE
- * de otra columna, tabla con PK compuesta) se rechaza explícitamente —
- * ver {@code docs/etiqueta-auditoria-cdc-analisis.md} para el análisis
- * completo de por qué el alcance es tan angosto en esta primera fase.
+ * V-audit-revert — dado un cambio puntual identificado por
+ * {@code (lsn, seq)} en {@code auditoria.audit_log}, revierte esa fila
+ * en Postgres a su estado anterior. Fase 2: se cubren las tres formas
+ * reales que produce este sistema (ver
+ * {@code docs/audit-revert-fase2-analisis.md} para el análisis
+ * completo):
+ *
+ * <ul>
+ *   <li><b>INSERT ('c')</b> → se revierte desactivando la fila
+ *       ({@code active = false}). El sistema nunca hace DELETE físico
+ *       de negocio (todo pasa por la bandera {@code active}), así que
+ *       "deshacer una creación" es, en la práctica, el mismo soft-delete
+ *       que ya usa el resto del sistema — no un {@code DELETE FROM}.
+ *       Solo soportado en tablas que tienen esa columna.</li>
+ *   <li><b>UPDATE ('u')</b> → se revierte CUALQUIER columna que haya
+ *       cambiado (no solo {@code active}, como en fase 1) a su valor
+ *       anterior. Incluye el patrón soft-delete/soft-restore
+ *       ({@code active} true↔false) como caso particular.</li>
+ *   <li><b>DELETE físico ('d')</b> → rechazado explícitamente. Ninguna
+ *       función de escritura de {@code academico_test} hace hoy un
+ *       {@code DELETE FROM} de negocio (verificado contra
+ *       {@code postgres/migrations}) — si esta operación aparece es una
+ *       tabla fuera del patrón habitual, y revertirla exigiría
+ *       reinsertar la fila completa con {@code fila_old_raw}, algo que
+ *       no se ha validado todavía (llaves foráneas que pudieron
+ *       borrarse en cascada, columnas generadas, etc.). Queda fuera de
+ *       alcance de esta fase.</li>
+ * </ul>
  *
  * <p>Depende de {@code fila_new_raw}/{@code fila_old_raw}
  * (columnas nuevas en ClickHouse) — {@code fila_new}/{@code fila_old}
@@ -71,9 +96,7 @@ public class AuditRevertService {
     /** Vista previa — no escribe nada, solo valida y muestra qué pasaría. */
     public AuditRevertResponse preview(long lsn, long seq) {
         Plan plan = resolvePlan(lsn, seq);
-        return new AuditRevertResponse(false, plan.row.tabla(), plan.pkColumn(), String.valueOf(plan.pkValue()),
-                plan.currentActive(), plan.revertTo(), plan.row.requestId(), plan.row.etiqueta(), plan.row.appUser(),
-                "Vista previa — nada se escribió. Repite con dryRun=false para aplicar.");
+        return toResponse(plan, false, "Vista previa — nada se escribió. Repite con dryRun=false para aplicar.");
     }
 
     /** Ejecuta la reversión. {@code actingUserId} puede ser null (token legado sin claim uid). */
@@ -81,16 +104,24 @@ public class AuditRevertService {
     public AuditRevertResponse revert(long lsn, long seq, Long actingUserId) {
         Plan plan = resolvePlan(lsn, seq);
         applyRevert(plan, lsn, seq, actingUserId);
-        log.info("Reversión aplicada: tabla={} pk={} active {}->{} (request original={})",
-                plan.row.tabla(), plan.pkValue(), plan.currentActive(), plan.revertTo(), plan.row.requestId());
-        return new AuditRevertResponse(true, plan.row.tabla(), plan.pkColumn(), String.valueOf(plan.pkValue()),
-                plan.currentActive(), plan.revertTo(), plan.row.requestId(), plan.row.etiqueta(), plan.row.appUser(),
-                "Reversión aplicada.");
+        log.info("Reversión aplicada: tabla={} pk={} operación_original={} columnas={} (request original={})",
+                plan.row.tabla(), plan.pkValue(), plan.row.operacion(),
+                plan.changes().stream().map(ColumnChange::column).toList(), plan.row.requestId());
+        return toResponse(plan, true, "Reversión aplicada.");
+    }
+
+    private AuditRevertResponse toResponse(Plan plan, boolean applied, String message) {
+        List<ColumnRevert> cambios = plan.changes().stream()
+                .map(c -> new ColumnRevert(c.column(), c.expectedCurrent(), c.revertTo()))
+                .toList();
+        return new AuditRevertResponse(applied, plan.row.tabla(), plan.row.operacion(), plan.pkColumn(),
+                String.valueOf(plan.pkValue()), cambios, plan.row.requestId(), plan.row.etiqueta(),
+                plan.row.appUser(), message);
     }
 
     /**
      * Resuelve y valida TODO antes de escribir nada: existe el cambio,
-     * es un UPDATE, toca 'active', y el estado actual de Postgres
+     * su operación es revertible, y el estado actual de Postgres
      * todavía coincide con lo que el cambio original dejó (si no,
      * alguien lo tocó después — {@link RevertConflictException}).
      */
@@ -98,24 +129,66 @@ public class AuditRevertService {
         AuditLogRow row = clickHouse.findByLsnSeq(lsn, seq)
                 .orElseThrow(() -> new NotFoundException("cambio de auditoría", lsn + "/" + seq));
 
-        if (!"u".equals(row.operacion())) {
+        return switch (row.operacion()) {
+            case "u" -> resolveUpdatePlan(row);
+            case "c" -> resolveInsertPlan(row);
+            case "d" -> throw new UnsupportedRevertException(
+                    "Reversión de DELETE físico no está soportada — ninguna función de escritura de "
+                            + "academico_test hace hoy un DELETE de negocio (todo pasa por soft-delete vía "
+                            + "'active'). Si esta fila apareció como operación 'd', es una tabla fuera del "
+                            + "patrón habitual del sistema; revísala manualmente.");
+            default -> throw new UnsupportedRevertException(
+                    "Operación de auditoría desconocida: '" + row.operacion() + "'.");
+        };
+    }
+
+    /** INSERT → revertir = desactivar la fila creada (mismo mecanismo de soft-delete de todo el sistema). */
+    private Plan resolveInsertPlan(AuditLogRow row) {
+        Map<String, Object> newRaw = parseJson(row.filaNewRawJson());
+        if (newRaw.isEmpty()) {
+            throw new UnsupportedRevertException("No se pudo leer 'fila_new_raw' para este INSERT.");
+        }
+        if (!newRaw.containsKey("active")) {
             throw new UnsupportedRevertException(
-                    "Fase 1 solo revierte operaciones UPDATE — esta fila es operación '"
-                            + row.operacion() + "'. INSERT/DELETE físico no están soportados todavía.");
+                    "Solo se puede revertir un INSERT en tablas con bandera 'active' (la convención de "
+                            + "soft-delete de este sistema) — se revierte desactivando la fila. Esta tabla no "
+                            + "tiene esa columna, así que no hay una forma segura de deshacer la creación.");
         }
 
-        Map<String, Object> newRaw = parseJson(row.filaNewRawJson());
-        Map<String, Object> oldRaw = parseJson(row.filaOldRawJson());
-        if (!newRaw.containsKey("active") || !oldRaw.containsKey("active")) {
+        String pkColumn = findPkColumn(newRaw);
+        Object pkValue = newRaw.get(pkColumn);
+        if (pkValue == null) {
             throw new UnsupportedRevertException(
-                    "Fase 1 solo revierte cambios de la bandera 'active' (soft-delete/soft-restore) "
-                            + "— esta fila no la tiene.");
+                    "No se pudo determinar el valor de PK para '" + row.tabla() + "'.");
         }
+        validateIdentifier(row.tabla());
+        validateIdentifier(pkColumn);
 
         boolean expectedBefore = asBoolean(newRaw.get("active"));
-        boolean revertTo = asBoolean(oldRaw.get("active"));
-        if (expectedBefore == revertTo) {
-            throw new UnsupportedRevertException("El cambio original no modificó 'active' — nada que revertir.");
+        if (!expectedBefore) {
+            throw new UnsupportedRevertException(
+                    "La fila se creó con active=false — no hay nada que desactivar.");
+        }
+
+        Object current = fetchCurrentColumn(row.tabla(), pkColumn, pkValue, "active");
+        if (!jsonValuesEqual(current, expectedBefore)) {
+            throw new RevertConflictException(
+                    "La fila cambió después de este evento (active actual=" + current
+                            + ", se esperaba " + expectedBefore + " justo después de crearla) — "
+                            + "revertir a ciegas pisaría ese cambio posterior. Revisa manualmente.");
+        }
+
+        List<ColumnChange> changes = List.of(new ColumnChange("active", true, false));
+        return new Plan(row, pkColumn, pkValue, changes);
+    }
+
+    /** UPDATE → revertir CUALQUIER columna que cambió (no solo 'active', como en fase 1). */
+    private Plan resolveUpdatePlan(AuditLogRow row) {
+        Map<String, Object> newRaw = parseJson(row.filaNewRawJson());
+        Map<String, Object> oldRaw = parseJson(row.filaOldRawJson());
+        if (newRaw.isEmpty() || oldRaw.isEmpty()) {
+            throw new UnsupportedRevertException(
+                    "No se pudo leer 'fila_new_raw'/'fila_old_raw' para este UPDATE.");
         }
 
         String pkColumn = findPkColumn(oldRaw);
@@ -127,28 +200,50 @@ public class AuditRevertService {
         validateIdentifier(row.tabla());
         validateIdentifier(pkColumn);
 
-        boolean currentActive = fetchCurrentActive(row.tabla(), pkColumn, pkValue);
-        if (currentActive != expectedBefore) {
-            throw new RevertConflictException(
-                    "La fila cambió después de este evento (active actual=" + currentActive
-                            + ", se esperaba " + expectedBefore + " antes de revertir) — "
-                            + "revertir a ciegas pisaría ese cambio posterior. Revisa manualmente.");
+        List<ColumnChange> changes = new ArrayList<>();
+        for (String col : oldRaw.keySet()) {
+            if (col.equalsIgnoreCase(pkColumn)) continue; // la PK no se revierte
+            if (!newRaw.containsKey(col)) continue; // no comparable si no está en ambos lados
+            Object despues = newRaw.get(col); // lo que dejó el cambio original ("actual" esperado)
+            Object antes = oldRaw.get(col);   // a lo que se revierte
+            if (!jsonValuesEqual(despues, antes)) {
+                validateIdentifier(col);
+                changes.add(new ColumnChange(col, despues, antes));
+            }
+        }
+        if (changes.isEmpty()) {
+            throw new UnsupportedRevertException(
+                    "El cambio original no modificó ninguna columna comparable — nada que revertir.");
         }
 
-        return new Plan(row, pkColumn, pkValue, currentActive, revertTo);
+        for (ColumnChange c : changes) {
+            Object current = fetchCurrentColumn(row.tabla(), pkColumn, pkValue, c.column());
+            if (!jsonValuesEqual(current, c.expectedCurrent())) {
+                throw new RevertConflictException(
+                        "La columna '" + c.column() + "' de '" + row.tabla() + "' cambió después de este "
+                                + "evento (valor actual=" + current + ", se esperaba " + c.expectedCurrent()
+                                + " antes de revertir) — revertir a ciegas pisaría ese cambio posterior. "
+                                + "Revisa manualmente.");
+            }
+        }
+
+        return new Plan(row, pkColumn, pkValue, changes);
     }
 
     private void applyRevert(Plan plan, long lsn, long seq, Long actingUserId) {
         String revertRequestId = UUID.randomUUID().toString();
         String etiquetaOriginal = plan.row.etiqueta() == null || plan.row.etiqueta().isBlank()
                 ? "(sin etiqueta)" : plan.row.etiqueta();
-        String etiqueta = "REVERSIÓN: " + etiquetaOriginal + " [request original " + plan.row.requestId() + "]";
+        String columnasTxt = plan.changes().stream().map(ColumnChange::column).collect(Collectors.joining(", "));
+        String etiqueta = "REVERSIÓN (" + columnasTxt + "): " + etiquetaOriginal
+                + " [request original " + plan.row.requestId() + "]";
         if (etiqueta.length() > 200) etiqueta = etiqueta.substring(0, 200); // mismo límite que fn_audit_ctx (V26)
 
         Map<String, Object> contexto = new LinkedHashMap<>();
         contexto.put("revert_of_request_id", plan.row.requestId());
         contexto.put("revert_of_lsn", lsn);
         contexto.put("revert_of_seq", seq);
+        contexto.put("revert_of_operacion", plan.row.operacion());
         // V-audit-ctx-4 (sesiones reales): misma sesión que originó
         // el cambio se está revirtiendo. La familia viaja en el
         // header que api-gateway forwardea -- sin un lookup a
@@ -193,29 +288,35 @@ public class AuditRevertService {
                 etiqueta,
                 contextoJson);
 
-        jdbc.update("UPDATE academico_test." + plan.row.tabla() + " SET active = ? WHERE "
-                + plan.pkColumn() + " = ?", plan.revertTo(), plan.pkValue());
+        String setClause = plan.changes().stream()
+                .map(c -> c.column() + " = ?")
+                .collect(Collectors.joining(", "));
+        List<Object> params = new ArrayList<>();
+        for (ColumnChange c : plan.changes()) params.add(c.revertTo());
+        params.add(plan.pkValue());
+
+        jdbc.update("UPDATE academico_test." + plan.row.tabla() + " SET " + setClause + " WHERE "
+                + plan.pkColumn() + " = ?", params.toArray());
     }
 
-    private boolean fetchCurrentActive(String tabla, String pkColumn, Object pkValue) {
+    private Object fetchCurrentColumn(String tabla, String pkColumn, Object pkValue, String column) {
         try {
-            Boolean active = jdbc.queryForObject(
-                    "SELECT active FROM academico_test." + tabla + " WHERE " + pkColumn + " = ?",
-                    Boolean.class, pkValue);
-            return Boolean.TRUE.equals(active);
+            return jdbc.queryForObject(
+                    "SELECT " + column + " FROM academico_test." + tabla + " WHERE " + pkColumn + " = ?",
+                    Object.class, pkValue);
         } catch (EmptyResultDataAccessException e) {
             throw new NotFoundException("fila en " + tabla, pkValue);
         }
     }
 
-    /** Exactamente una columna {@code pk_*} — PK compuesta no soportada en fase 1. */
+    /** Exactamente una columna {@code pk_*} — PK compuesta no soportada. */
     private static String findPkColumn(Map<String, Object> row) {
         List<String> pkCols = row.keySet().stream()
                 .filter(k -> k.toLowerCase(Locale.ROOT).startsWith("pk_"))
                 .toList();
         if (pkCols.size() != 1) {
             throw new UnsupportedRevertException(
-                    "Fase 1 solo revierte tablas con una sola columna PK (pk_*) — se encontraron "
+                    "Solo se revierten tablas con una sola columna PK (pk_*) — se encontraron "
                             + pkCols.size() + " en '" + row + "'.");
         }
         return pkCols.get(0);
@@ -231,6 +332,27 @@ public class AuditRevertService {
         if (v instanceof Boolean b) return b;
         if (v instanceof String s) return "true".equalsIgnoreCase(s) || "t".equalsIgnoreCase(s);
         return false;
+    }
+
+    /**
+     * Compara un valor leído de JSON (Jackson: Boolean/Integer/Long/Double/String/null)
+     * contra un valor leído por JDBC (Boolean/Number/BigDecimal/String/Timestamp/null).
+     * Normaliza a texto para tolerar la diferencia de representación entre ambos
+     * mundos — suficiente para tipos simples (booleanos, números, texto), NO
+     * garantizado para columnas jsonb/array/timestamp con formato ambiguo (ver
+     * limitaciones documentadas en {@code docs/audit-revert-fase2-analisis.md}).
+     * Ante la duda, esto falla CERRADO: una comparación que no calza se trata
+     * como conflicto (rechaza el revert) en vez de aplicar algo dudoso.
+     */
+    private static boolean jsonValuesEqual(Object a, Object b) {
+        if (a == null || b == null) return a == null && b == null;
+        if (a instanceof Boolean || b instanceof Boolean) return asBoolean(a) == asBoolean(b);
+        return normalizeForCompare(a).equals(normalizeForCompare(b));
+    }
+
+    private static String normalizeForCompare(Object v) {
+        if (v instanceof BigDecimal bd) return bd.stripTrailingZeros().toPlainString();
+        return String.valueOf(v);
     }
 
     private static String currentFamilyHeader() {
@@ -259,6 +381,8 @@ public class AuditRevertService {
         }
     }
 
-    private record Plan(AuditLogRow row, String pkColumn, Object pkValue,
-                        boolean currentActive, boolean revertTo) {}
+    /** Una columna a revertir: {@code expectedCurrent} es lo que Postgres debe tener AHORA; {@code revertTo} es a lo que se cambia. */
+    private record ColumnChange(String column, Object expectedCurrent, Object revertTo) {}
+
+    private record Plan(AuditLogRow row, String pkColumn, Object pkValue, List<ColumnChange> changes) {}
 }
