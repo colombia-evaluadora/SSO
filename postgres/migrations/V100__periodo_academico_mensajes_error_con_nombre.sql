@@ -107,6 +107,13 @@ BEGIN
 
     -- 4. Resolver/crear el año lectivo (nombre = año de FECHA_INICIO).
     v_nombre_ano := to_char(p_fecha_inicio, 'YYYY');
+    -- Etiqueta dedicada ANTES de este INSERT (no la de mas abajo, que llega
+    -- tarde para esta fila puntual): el trigger de auditoria es BEFORE
+    -- STATEMENT, asi que sin esto el ON CONFLICT ... RETURNING de abajo deja
+    -- la fila de TANO_LECTIVO auditada sin etiqueta/actor cuando SI inserta
+    -- un año lectivo nuevo (mismo bug que V77 encontro en fn_plan_agregar).
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Creación del año lectivo %s', v_nombre_ano), v_establecimiento);
     INSERT INTO academico_test.TANO_LECTIVO (NOMBRE, FK_TESTABLECIMIENTO, CREATED_BY)
     VALUES (v_nombre_ano, v_establecimiento, v_audit)
     ON CONFLICT (FK_TESTABLECIMIENTO, NOMBRE) DO NOTHING
@@ -421,6 +428,10 @@ BEGIN
     END IF;
 
     v_nombre_ano := to_char(v_inicio, 'YYYY');
+    -- Etiqueta dedicada para esta fila puntual (en vez de heredar la del
+    -- periodo, declarada mas abajo) -- mismo criterio que fn_periodo_crear.
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Creación del año lectivo %s', v_nombre_ano), v_est_new);
     INSERT INTO academico_test.TANO_LECTIVO (NOMBRE, FK_TESTABLECIMIENTO, CREATED_BY)
     VALUES (v_nombre_ano, v_est_new, v_audit)
     ON CONFLICT (FK_TESTABLECIMIENTO, NOMBRE) DO NOTHING
