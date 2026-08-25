@@ -354,6 +354,21 @@ BEGIN
           JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
          WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
     ),
+    -- REV8 -- todas las sedes donde el solicitante tiene alguna autoridad
+    -- (las de sus EE accesibles, mas la suya propia si es coordinador).
+    -- Se usa para acotar roles_agg/sedes_agg/estados_agg/jornada: antes,
+    -- una vez que un funcionario compartido entre EE quedaba visible (por
+    -- UN permiso en un EE accesible), se mostraban TODOS sus permisos,
+    -- incluidos los de sedes/EE totalmente ajenos al solicitante. Ahora
+    -- cada agregado solo trae lo que cae dentro de esta sede-alcance
+    -- (super-admin no se filtra, ve todo).
+    sedes_accesibles AS (
+        SELECT s.PK_TSEDE
+          FROM academico_test.TSEDE s
+         WHERE s.ACTIVE = TRUE AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
+        UNION
+        SELECT FK_TSEDE FROM sedes_coordinador
+    ),
     funcionarios_ee AS (
         SELECT e.FK_TFUNCIONARIO_RECTOR AS pk_tfuncionario
           FROM academico_test.TESTABLECIMIENTO e
@@ -493,17 +508,20 @@ BEGIN
                        WHERE su_r.FK_TUSUARIO = b.PK_TUSUARIO
                          AND su_r.ACTIVE      = TRUE
                          AND su_r.FK_TROL >= 7 AND su_r.FK_TROL NOT IN (15, 16)
+                         AND (v_es_super OR su_r.FK_TSEDE IN (SELECT PK_TSEDE FROM sedes_accesibles))
                       UNION
                       SELECT jsonb_build_object('id', 7, 'nombre', 'Rector')
                        WHERE EXISTS (
                            SELECT 1 FROM academico_test.TESTABLECIMIENTO e
                             WHERE e.FK_TFUNCIONARIO_RECTOR = b.PK_TFUNCIONARIO AND e.ACTIVE = TRUE
+                              AND (v_es_super OR e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles))
                        )
                       UNION
                       SELECT jsonb_build_object('id', 17, 'nombre', 'Secretaria')
                        WHERE EXISTS (
                            SELECT 1 FROM academico_test.TESTABLECIMIENTO e
                             WHERE e.FK_TFUNCIONARIO_SECRETARIA = b.PK_TFUNCIONARIO AND e.ACTIVE = TRUE
+                              AND (v_es_super OR e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles))
                        )
                   ) roles_union),
                '[]'::jsonb
@@ -514,14 +532,16 @@ BEGIN
                   FROM academico_test.TSEDE_USUARIO su_s
                   JOIN academico_test.TSEDE         s ON s.PK_TSEDE = su_s.FK_TSEDE
                  WHERE su_s.FK_TUSUARIO = b.PK_TUSUARIO AND su_s.ACTIVE = TRUE
-                   AND su_s.FK_TROL >= 7 AND su_s.FK_TROL NOT IN (15, 16)),
+                   AND su_s.FK_TROL >= 7 AND su_s.FK_TROL NOT IN (15, 16)
+                   AND (v_es_super OR su_s.FK_TSEDE IN (SELECT PK_TSEDE FROM sedes_accesibles))),
                '[]'::jsonb
            )                             AS sedes_agg,
            COALESCE(
                (SELECT jsonb_agg(DISTINCT su_e.TLV_ESTADO ORDER BY su_e.TLV_ESTADO)
                   FROM academico_test.TSEDE_USUARIO su_e
                  WHERE su_e.FK_TUSUARIO = b.PK_TUSUARIO AND su_e.ACTIVE = TRUE
-                   AND su_e.FK_TROL >= 7 AND su_e.FK_TROL NOT IN (15, 16)),
+                   AND su_e.FK_TROL >= 7 AND su_e.FK_TROL NOT IN (15, 16)
+                   AND (v_es_super OR su_e.FK_TSEDE IN (SELECT PK_TSEDE FROM sedes_accesibles))),
                '[]'::jsonb
            )                             AS estados_agg
       FROM base b
@@ -531,6 +551,7 @@ BEGIN
               JOIN academico_test.TLISTA_VALOR  tlv ON tlv.PK_LISTA_VALOR = su.FK_TLV_JORNADA
              WHERE su.FK_TUSUARIO = b.PK_TUSUARIO AND su.ACTIVE = TRUE
                AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
+               AND (v_es_super OR su.FK_TSEDE IN (SELECT PK_TSEDE FROM sedes_accesibles))
              ORDER BY su.PREDETERMINADO DESC, su.ORDEN ASC, su.PK_TSEDE_USUARIO ASC
              LIMIT 1
       ) jp ON TRUE

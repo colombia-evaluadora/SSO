@@ -1304,23 +1304,10 @@ COMMENT ON FUNCTION academico_test.fn_sed_listar(BIGINT, VARCHAR, BIGINT[], VARC
 -- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_sed_listar_todos(BIGINT);
 
-CREATE OR REPLACE FUNCTION academico_test.fn_sed_listar_todos(
-    p_pk_usuario_solicitante  BIGINT
-)
-RETURNS TABLE (
-    pk_sede             BIGINT,
-    codigo              VARCHAR,
-    nombre              VARCHAR,
-    fk_tlv_zona         BIGINT,
-    zona_nombre         VARCHAR,
-    barrio              VARCHAR,
-    comuna              VARCHAR,
-    direccion           VARCHAR,
-    telefono            VARCHAR,
-    fk_establecimiento  BIGINT
-)
-LANGUAGE plpgsql
-STABLE
+CREATE OR REPLACE FUNCTION academico_test.fn_sed_listar_todos(p_pk_usuario_solicitante bigint)
+ RETURNS TABLE(pk_sede bigint, codigo character varying, nombre character varying, fk_tlv_zona bigint, zona_nombre character varying, barrio character varying, comuna character varying, direccion character varying, telefono character varying, fk_establecimiento bigint)
+ LANGUAGE plpgsql
+ STABLE
 AS $$
 BEGIN
     IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
@@ -1334,6 +1321,12 @@ BEGIN
         RETURN;
     END IF;
 
+    -- REV1 -- coordinador (rol 11) de una sede puntual: alcance de SEDE,
+    -- no de establecimiento (mismo patron que fn_usu_empleados_listar/
+    -- fn_fun_baja_establecimiento/etc). Antes esta funcion no reconocia
+    -- al coordinador en absoluto: quedaba fuera del gate y no podia ni
+    -- siquiera ver su propia sede en el select (usado, entre otros, al
+    -- crear un funcionario o asignarle permisos).
     IF NOT EXISTS (
         WITH ee_accesibles AS (
             SELECT e.PK_ESTABLECIMIENTO
@@ -1353,6 +1346,12 @@ BEGIN
                AND su.FK_TUSUARIO = p_pk_usuario_solicitante
         )
         SELECT 1 FROM ee_accesibles
+        UNION ALL
+        SELECT 1
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11
+           AND su.FK_TUSUARIO = p_pk_usuario_solicitante
     ) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
@@ -1362,25 +1361,35 @@ BEGIN
     SELECT s.PK_TSEDE, s.CODIGO, s.NOMBRE, s.FK_TLV_ZONA, tlv.NOMBRE,
            s.BARRIO, s.COMUNA, s.DIRECCION, s.TELEFONO, s.FK_TESTABLECIMIENTO
       FROM academico_test.TSEDE s
-      JOIN (
-          SELECT e2.PK_ESTABLECIMIENTO
-            FROM academico_test.TESTABLECIMIENTO e2
-            JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e2.FK_TFUNCIONARIO_RECTOR
-           WHERE e2.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-          UNION
-          SELECT e2.PK_ESTABLECIMIENTO
-            FROM academico_test.TESTABLECIMIENTO e2
-            JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e2.FK_TFUNCIONARIO_SECRETARIA
-           WHERE e2.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-          UNION
-          SELECT DISTINCT s2.FK_TESTABLECIMIENTO
-            FROM academico_test.TSEDE_USUARIO su
-            JOIN academico_test.TSEDE s2 ON s2.PK_TSEDE = su.FK_TSEDE
-           WHERE s2.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8
-             AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-      ) ee ON ee.PK_ESTABLECIMIENTO = s.FK_TESTABLECIMIENTO
  LEFT JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = s.FK_TLV_ZONA
      WHERE s.ACTIVE = TRUE
+       AND (
+            s.FK_TESTABLECIMIENTO IN (
+                SELECT e2.PK_ESTABLECIMIENTO
+                  FROM academico_test.TESTABLECIMIENTO e2
+                  JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e2.FK_TFUNCIONARIO_RECTOR
+                 WHERE e2.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+                UNION
+                SELECT e2.PK_ESTABLECIMIENTO
+                  FROM academico_test.TESTABLECIMIENTO e2
+                  JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e2.FK_TFUNCIONARIO_SECRETARIA
+                 WHERE e2.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+                UNION
+                SELECT DISTINCT s2.FK_TESTABLECIMIENTO
+                  FROM academico_test.TSEDE_USUARIO su
+                  JOIN academico_test.TSEDE s2 ON s2.PK_TSEDE = su.FK_TSEDE
+                 WHERE s2.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8
+                   AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+            )
+            -- REV1 -- coordinador: SOLO su propia sede, nunca el resto del EE.
+            OR s.PK_TSEDE IN (
+                SELECT su.FK_TSEDE
+                  FROM academico_test.TSEDE_USUARIO su
+                  JOIN academico_test.TSEDE s3 ON s3.PK_TSEDE = su.FK_TSEDE
+                 WHERE s3.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11
+                   AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+            )
+       )
      ORDER BY s.NOMBRE ASC, s.PK_TSEDE ASC;
 END;
 $$;

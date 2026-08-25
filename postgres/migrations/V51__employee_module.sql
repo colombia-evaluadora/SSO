@@ -2893,9 +2893,17 @@ CREATE OR REPLACE FUNCTION academico_test.fn_usu_empleado_buscar_por_pk(p_pk_usu
  STABLE
 AS $$
 DECLARE
-    v_pk_usuario   BIGINT;
-    v_active       BOOLEAN;
-    v_visible      BOOLEAN;
+    v_pk_usuario        BIGINT;
+    v_active            BOOLEAN;
+    v_visible           BOOLEAN;
+    v_es_super          BOOLEAN;
+    -- REV4 -- todas las sedes donde el solicitante tiene autoridad (las de
+    -- sus EE accesibles, mas la suya propia si es coordinador). Se usa
+    -- para acotar el array `permisos`: antes, una vez que el gate dejaba
+    -- ver a un funcionario compartido entre EE (por UN permiso en un EE
+    -- accesible), se devolvian TODOS sus permisos, incluidos los de
+    -- sedes/EE totalmente ajenos al solicitante.
+    v_sedes_accesibles  BIGINT[];
 BEGIN
     IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
         RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
@@ -2923,7 +2931,9 @@ BEGIN
     -- (antes esto dejaba a rector/secretaria SIEMPRE fuera del gate, ya
     -- que v_fk_ee IS NOT NULL nunca se cumplia -- solo super-admin podia
     -- ver el detalle de un funcionario).
-    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
+    v_es_super := academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante);
+
+    IF NOT v_es_super THEN
         WITH ee_accesibles AS (
             SELECT e.PK_ESTABLECIMIENTO
               FROM academico_test.TESTABLECIMIENTO e
@@ -2948,32 +2958,43 @@ BEGIN
               JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
              WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
         )
-        SELECT EXISTS (
-            SELECT 1
-              FROM academico_test.TESTABLECIMIENTO e
-             WHERE e.ACTIVE = TRUE
-               AND e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-               AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
-            UNION ALL
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE su.FK_TUSUARIO = v_pk_usuario
-               AND su.ACTIVE      = TRUE
-               AND s.ACTIVE       = TRUE
-               AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-               AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
-            UNION ALL
-            -- REV3 -- coordinador: solo si el permiso del funcionario
-            -- objetivo esta en SU sede, y es "otro cargo" (excluye
-            -- ademas rector/jefe de sistema).
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-             WHERE su.FK_TUSUARIO = v_pk_usuario
-               AND su.ACTIVE      = TRUE
-               AND su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador)
-               AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
-        ) INTO v_visible;
+        SELECT
+            EXISTS (
+                SELECT 1
+                  FROM academico_test.TESTABLECIMIENTO e
+                 WHERE e.ACTIVE = TRUE
+                   AND e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
+                   AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
+                UNION ALL
+                SELECT 1
+                  FROM academico_test.TSEDE_USUARIO su
+                  JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+                 WHERE su.FK_TUSUARIO = v_pk_usuario
+                   AND su.ACTIVE      = TRUE
+                   AND s.ACTIVE       = TRUE
+                   AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
+                   AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
+                UNION ALL
+                -- REV3 -- coordinador: solo si el permiso del funcionario
+                -- objetivo esta en SU sede, y es "otro cargo" (excluye
+                -- ademas rector/jefe de sistema).
+                SELECT 1
+                  FROM academico_test.TSEDE_USUARIO su
+                 WHERE su.FK_TUSUARIO = v_pk_usuario
+                   AND su.ACTIVE      = TRUE
+                   AND su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador)
+                   AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
+            ),
+            -- REV4 -- union de todas las sedes con autoridad, para acotar
+            -- el array `permisos` mas abajo.
+            ARRAY(
+                SELECT s.PK_TSEDE
+                  FROM academico_test.TSEDE s
+                 WHERE s.ACTIVE = TRUE AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
+                UNION
+                SELECT FK_TSEDE FROM sedes_coordinador
+            )
+        INTO v_visible, v_sedes_accesibles;
 
         IF NOT v_visible THEN
             RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
@@ -3026,7 +3047,9 @@ BEGIN
                JOIN academico_test.TLISTA_VALOR  jor ON jor.PK_LISTA_VALOR = su.FK_TLV_JORNADA
           LEFT JOIN academico_test.TLISTA_VALOR  zn  ON zn.PK_LISTA_VALOR = s.FK_TLV_ZONA
               WHERE su.FK_TUSUARIO = u.PK_TUSUARIO
-                AND su.ACTIVE      = TRUE),
+                AND su.ACTIVE      = TRUE
+                AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
+                AND (v_es_super OR su.FK_TSEDE = ANY(v_sedes_accesibles))),
             '[]'::JSONB
         )
       FROM academico_test.TFUNCIONARIO f
