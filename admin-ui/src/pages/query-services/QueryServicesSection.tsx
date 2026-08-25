@@ -58,12 +58,23 @@ export function QueryServicesSection() {
   );
 
   async function handleSubmit(values: MicroserviceFormValues & { id?: number }) {
+    // V143 — a diferencia de dialect/jdbcUrl/dbUsername/instanceName
+    // (obligatorios para kind=QUERY, nunca llegan vacíos), el
+    // override de almacenamiento de archivos es opcional: "" debe
+    // viajar como null, no como string vacío — el backend distingue
+    // "sin override" (null, usa el destino por defecto) de "override
+    // configurado" por presencia de valor, no por longitud.
+    const body = {
+      ...values,
+      fileStorageSchema: values.fileStorageSchema.trim() === "" ? null : values.fileStorageSchema,
+      fileStorageTable: values.fileStorageTable.trim() === "" ? null : values.fileStorageTable,
+    };
     try {
-      if (values.id) {
-        await updateMs.mutateAsync(values as Parameters<typeof updateMs.mutateAsync>[0]);
+      if (body.id) {
+        await updateMs.mutateAsync(body as Parameters<typeof updateMs.mutateAsync>[0]);
         toast.show("Query service actualizado", "success");
       } else {
-        await createMs.mutateAsync(values as Parameters<typeof createMs.mutateAsync>[0]);
+        await createMs.mutateAsync(body as Parameters<typeof createMs.mutateAsync>[0]);
         toast.show("Query service creado; aprovisionando…", "success");
       }
       setEditing(null);
