@@ -428,14 +428,27 @@ BEGIN
                             OR r.NOMBRE ILIKE '%' || p_search || '%')
                   )
            )
+           -- REV9 -- filtra por el estado del PERMISO (TSEDE_USUARIO.TLV_ESTADO),
+           -- no por el estado de la cuenta (TUSUARIO.ESTADO): son dos campos
+           -- distintos, y el front (badges de la tabla, estados_agg) siempre
+           -- mostro el primero. Filtrar por el segundo dejaba el filtro sin
+           -- relacion con lo que se ve en pantalla. "Al menos un permiso con
+           -- ese estado" -- mismo criterio que estados_agg (puede mostrar
+           -- "Activo, Suspendido" a la vez si los permisos estan mezclados).
            AND (p_statuses IS NULL OR CARDINALITY(p_statuses) = 0
-                OR u.ESTADO = ANY(
-                    SELECT CASE
-                             WHEN x = 'ACTIVE'    THEN 'A'
-                             WHEN x = 'SUSPENDED' THEN 'I'
-                           END
-                      FROM unnest(p_statuses) AS x
-                     WHERE x IN ('ACTIVE','SUSPENDED')
+                OR EXISTS (
+                    SELECT 1 FROM academico_test.TSEDE_USUARIO su6
+                     WHERE su6.FK_TUSUARIO = u.PK_TUSUARIO
+                       AND su6.ACTIVE      = TRUE
+                       AND su6.FK_TROL >= 7 AND su6.FK_TROL NOT IN (15, 16)
+                       AND su6.TLV_ESTADO = ANY(
+                           SELECT CASE
+                                    WHEN x = 'ACTIVE'    THEN 'ACTIVO'
+                                    WHEN x = 'SUSPENDED' THEN 'INACTIVO'
+                                  END
+                             FROM unnest(p_statuses) AS x
+                            WHERE x IN ('ACTIVE','SUSPENDED')
+                       )
                 ))
            AND (p_campus_id IS NULL OR EXISTS (
                 SELECT 1 FROM academico_test.TSEDE_USUARIO su3
@@ -652,13 +665,19 @@ BEGIN
                   )
            )
            AND (p_statuses IS NULL OR CARDINALITY(p_statuses) = 0
-                OR u.ESTADO = ANY(
-                    SELECT CASE
-                             WHEN x = 'ACTIVE'    THEN 'A'
-                             WHEN x = 'SUSPENDED' THEN 'I'
-                           END
-                      FROM unnest(p_statuses) AS x
-                     WHERE x IN ('ACTIVE','SUSPENDED')
+                OR EXISTS (
+                    SELECT 1 FROM academico_test.TSEDE_USUARIO su6
+                     WHERE su6.FK_TUSUARIO = u.PK_TUSUARIO
+                       AND su6.ACTIVE      = TRUE
+                       AND su6.FK_TROL >= 7 AND su6.FK_TROL NOT IN (15, 16)
+                       AND su6.TLV_ESTADO = ANY(
+                           SELECT CASE
+                                    WHEN x = 'ACTIVE'    THEN 'ACTIVO'
+                                    WHEN x = 'SUSPENDED' THEN 'INACTIVO'
+                                  END
+                             FROM unnest(p_statuses) AS x
+                            WHERE x IN ('ACTIVE','SUSPENDED')
+                       )
                 ))
            AND (p_campus_id IS NULL OR EXISTS (
                 SELECT 1 FROM academico_test.TSEDE_USUARIO su3
@@ -754,13 +773,19 @@ BEGIN
               )
        )
        AND (p_statuses IS NULL OR CARDINALITY(p_statuses) = 0
-            OR u.ESTADO = ANY(
-                SELECT CASE
-                         WHEN x = 'ACTIVE'    THEN 'A'
-                         WHEN x = 'SUSPENDED' THEN 'I'
-                       END
-                  FROM unnest(p_statuses) AS x
-                 WHERE x IN ('ACTIVE','SUSPENDED')
+            OR EXISTS (
+                SELECT 1 FROM academico_test.TSEDE_USUARIO su6
+                 WHERE su6.FK_TUSUARIO = u.PK_TUSUARIO
+                   AND su6.ACTIVE      = TRUE
+                   AND su6.FK_TROL >= 7 AND su6.FK_TROL NOT IN (15, 16)
+                   AND su6.TLV_ESTADO = ANY(
+                       SELECT CASE
+                                WHEN x = 'ACTIVE'    THEN 'ACTIVO'
+                                WHEN x = 'SUSPENDED' THEN 'INACTIVO'
+                              END
+                         FROM unnest(p_statuses) AS x
+                        WHERE x IN ('ACTIVE','SUSPENDED')
+                   )
             ))
        AND (p_campus_id IS NULL OR EXISTS (
             SELECT 1 FROM academico_test.TSEDE_USUARIO su3
