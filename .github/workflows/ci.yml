@@ -31,8 +31,8 @@
 # Para activar branch protection, ir a Settings → Branches → Add rule
 # sobre `dev` (script: `scripts/branch-protection.sh`) con
 # required checks: `maven-common`, `maven-auth-center`,
-# `maven-sso-admin`, `maven-api-gateway`, `admin-ui-typecheck`,
-# `admin-ui-test`, `admin-ui-lint`, `admin-ui-build`.
+# `maven-sso-admin`, `maven-api-gateway`, `flyway-migrations`,
+# `admin-ui-typecheck`, `admin-ui-test`, `admin-ui-lint`, `admin-ui-build`.
 # =============================================================================
 
 name: CI
@@ -106,8 +106,22 @@ jobs:
       api-gateway:   ${{ steps.filter.outputs.api-gateway }}
       cdc:           ${{ steps.filter.outputs.cdc }}
       admin-ui:      ${{ steps.filter.outputs.admin-ui }}
+      migrations:    ${{ steps.filter.outputs.migrations }}
     steps:
+      # fetch-depth: 2 (no el default de 1) es obligatorio para que
+      # dorny/paths-filter pueda diffear en eventos `push`. En `pull_request`
+      # el propio action resuelve el diff vía la API de GitHub y no necesita
+      # historial local, pero en `push` hace `git diff` contra el commit
+      # anterior (`before`) usando el checkout local — con fetch-depth: 1 ese
+      # commit no está presente, el diff no se puede calcular, y el action
+      # cae al fallback seguro de "todo cambió". Ese fallback silencioso era
+      # justo lo que hacía que un push a `dev` (tras mergear una PR)
+      # recompilara los 8 módulos aunque la PR sólo tocara uno: en PR
+      # filtraba bien, en push corría todo. deploy-test.yml ya usa
+      # fetch-depth: 2 en su propio job `changes` por este mismo motivo.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -145,6 +159,92 @@ jobs:
             admin-ui:
               - 'admin-ui/**'
               - '.github/workflows/ci.yml'
+            migrations:
+              - 'postgres/migrations/**'
+              - '.github/scripts/check-flyway-migrations.sh'
+              - '.github/workflows/ci.yml'
+
+  # ───────── Migraciones Flyway: choque de versión + idempotencia ─────────
+  #
+  # Sin esto, dos ramas podían crear cada una un V<n> distinto con el mismo
+  # número (ej. las dos usan V125 porque cada una lo calculó contra su propio
+  # `dev` local) y el choque sólo se descubría al hacer merge — o peor, en
+  # el deploy, con flyway ya corriendo contra el servidor real. También
+  # faltaba cualquier señal de que una migración nueva no fuera idempotente,
+  # lo cual importa porque el flujo de recuperación de deploy-test.yml
+  # (`flyway repair` + `migrate -outOfOrder=true`) puede reaplicar
+  # migraciones recientes.
+  #
+  # Corre contra un Postgres 16 efímero (mismo major que el `flyway/flyway`
+  # de producción) usando el historial COMPLETO de postgres/migrations, no
+  # sólo las nuevas: si una migración vieja ya no aplica limpia sobre un
+  # esquema nuevo, mejor enterarse en CI que en un deploy.
+  flyway-migrations:
+    name: flyway-migrations
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.migrations == 'true'
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: flyway_ci
+          POSTGRES_PASSWORD: flyway_ci
+          POSTGRES_DB: flyway_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flyway_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      # fetch-depth: 0 (historial completo): el chequeo de colisión de
+      # versión necesita poder listar el árbol de la rama destino con
+      # `git ls-tree`, y eso exige tener sus commits disponibles localmente.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determinar rama/commit destino para el diff
+        id: target
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch origin "${{ github.event.pull_request.base.ref }}" --no-tags
+            echo "ref=origin/${{ github.event.pull_request.base.ref }}" >> "$GITHUB_OUTPUT"
+          else
+            # push a dev: comparar contra el tip previo del propio push.
+            echo "ref=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Aplicar historial completo de migraciones (flyway migrate)
+        # `docker run` directo (no `uses: docker://…`): esa forma sólo
+        # funciona bien cuando la imagen trae su propio action.yml, que la
+        # de flyway/flyway no tiene. `--network host` es la forma más simple
+        # de que el contenedor vea el Postgres del `services:` del job (que
+        # el runner publica en localhost:5432).
+        run: |
+          docker run --rm --network host \
+            -v "${{ github.workspace }}/postgres/migrations:/flyway/sql:ro" \
+            flyway/flyway:11-alpine \
+            -url=jdbc:postgresql://localhost:5432/flyway_ci \
+            -user=flyway_ci \
+            -password=flyway_ci \
+            -connectRetries=10 \
+            migrate
+
+      - name: Instalar cliente psql
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Colisión de versión + idempotencia
+        run: |
+          chmod +x .github/scripts/check-flyway-migrations.sh
+          .github/scripts/check-flyway-migrations.sh \
+            "${{ steps.target.outputs.ref }}" \
+            localhost 5432 flyway_ci flyway_ci flyway_ci
 
   # ───────── Backend: common (compilación + unit tests) ─────────
   maven-common:
@@ -477,6 +577,7 @@ jobs:
     if: always()
     needs:
       - changes
+      - flyway-migrations
       - maven-common
       - maven-auth-center
       - maven-sso-admin
@@ -502,6 +603,7 @@ jobs:
           # es una expresión trivial.
           for r in \
             '${{ needs.changes.result }}' \
+            '${{ needs.flyway-migrations.result }}' \
             '${{ needs.maven-common.result }}' \
             '${{ needs.maven-auth-center.result }}' \
             '${{ needs.maven-sso-admin.result }}' \
