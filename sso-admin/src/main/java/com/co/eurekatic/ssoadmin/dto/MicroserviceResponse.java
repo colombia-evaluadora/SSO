@@ -43,7 +43,14 @@ public record MicroserviceResponse(
         Integer poolSize,
         String instanceName,
         Long appId,
-        String appName
+        String appName,
+        /**
+         * V143 — override opcional (sólo {@code kind=QUERY}): ver
+         * {@link com.co.eurekatic.common.entity.Microservice#getFileStorageSchema()}.
+         */
+        String fileStorageSchema,
+        /** Tabla del override anterior. Ver {@link #fileStorageSchema}. */
+        String fileStorageTable
 ) {
     public static MicroserviceResponse fromEntity(Microservice m) {
         App app = m.getApp();
@@ -65,6 +72,8 @@ public record MicroserviceResponse(
                 m.getPoolSize(),
                 m.getInstanceName(),
                 app != null ? app.getId() : null,
-                app != null ? app.getName() : null);
+                app != null ? app.getName() : null,
+                m.getFileStorageSchema(),
+                m.getFileStorageTable());
     }
 }
