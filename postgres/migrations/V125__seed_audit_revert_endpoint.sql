@@ -1,4 +1,4 @@
--- V135 — registra en el catálogo el endpoint `POST /audit/revert`
+-- V125 — registra en el catálogo el endpoint `POST /audit/revert`
 -- (AuditRevertController, sso-admin). Se agregó en la rama de fase 1
 -- de V-audit-revert pero nunca se sembró en `endpoint`/`role_endpoint`
 -- — sin esta fila, SsoAdminAccessManager responde 403 a TODO el
