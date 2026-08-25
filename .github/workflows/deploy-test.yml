@@ -30,7 +30,12 @@
 #     3. deploy     : rsync de docker-compose.yml + postgres/migrations
 #                     + observability/ + docker/ + scripts/ al servidor,
 #                     escribe /opt/sso/.env desde el secreto TEST_ENV_FILE,
-#                     y luego `docker compose pull && up -d` por SSH.
+#                     y luego `docker compose pull && up -d` por SSH. Con
+#                     todo el stack ya arriba (compose gatea el orden:
+#                     flyway antes que los servicios Spring), corre una
+#                     validación final `flyway validate` — si detecta
+#                     drift, repara y reaplica antes de las comprobaciones
+#                     de api-gateway.
 #
 # El gate es `workflow_run` sobre CI (no un push directo) para que
 # nunca se despliegue un commit cuyos tests fallaron. `workflow_dispatch`
@@ -688,6 +693,42 @@ jobs:
               docker compose ps || true
               exit 1
             fi
+          fi
+
+          # ─── Validación final de flyway (todo el stack ya está arriba) ───
+          #
+          # `up_stack` arriba ya GATEA el arranque de los servicios Spring
+          # con `depends_on: flyway: condition: service_completed_successfully`
+          # (ver docker-compose.yml), así que si llegamos aquí flyway salió
+          # con éxito y el resto del stack está levantado sobre un esquema
+          # migrado. Este paso es una segunda comprobación explícita, no un
+          # gate de arranque: corre `flyway validate` contra el servidor ya
+          # corriendo para detectar drift que `migrate` no ve por sí solo
+          # (checksums que cambiaron por un fix posterior al deploy, un
+          # archivo de migración editado a mano en el servidor, etc.). Si
+          # falla, repara y reaplica igual que en el fallback de más arriba,
+          # y vuelve a levantar el stack antes de que corran las
+          # comprobaciones de api-gateway.
+          echo "=== validación final de flyway ==="
+          if ! docker compose run --rm flyway validate; then
+            echo "=== flyway validate falló tras el arranque; ejecutando repair + migrate ==="
+            docker compose logs --no-color --tail=100 flyway || true
+            if docker compose run --rm flyway repair \
+               && docker compose run --rm flyway -outOfOrder=true migrate; then
+              echo "=== repair + migrate OK; re-levantando el stack ==="
+              if ! up_stack; then
+                echo "=== compose up SIGUE fallando tras la validación final ==="
+                docker compose logs --no-color --tail=200 flyway || true
+                docker compose ps || true
+                exit 1
+              fi
+            else
+              echo "::error::flyway validate falló y repair + migrate no lo resolvió. Revisar antes de confiar en el deploy."
+              docker compose logs --no-color --tail=200 flyway || true
+              exit 1
+            fi
+          else
+            echo "flyway validate OK: el esquema del servidor coincide con postgres/migrations."
           fi
 
           # Limpia capas de imágenes viejas para no llenar el disco
