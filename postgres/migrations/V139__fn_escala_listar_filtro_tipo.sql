@@ -1,26 +1,28 @@
--- Bug de contrato: "Escala de valoración" en criterio de evaluación mezclaba
--- TRES espacios de id distintos como si fueran el mismo campo:
---   - GET  (fn_criterio_eval_obtener) devuelve grading_scale = FK_TESCALA
---     (el PK de la escala contenedora, TESCALA).
---   - PUT  (fn_criterio_eval_actualizar, ver V95) espera p_grading_scale =
---     PK_TESCALA_VALORACION (el PK de UNA banda individual).
---   - El front arma el selector de "Escala de valoración" agrupando por
---     NIVEL DE ENSEÑANZA (lvl.id) — un tercer espacio de id, sin relación
---     con los otros dos — porque fn_escala_listar nunca exponía el
---     FK_TESCALA de cada banda, así que el front no tenía forma de resolver
---     "en qué nivel está esta escala" ni "qué escala corresponde a este
---     nivel" sin ese dato.
+-- Reporte "Escalas de valoración" (RN: filtrar antes de exportar por nivel de
+-- enseñanza Y tipo de desempeño): `fn_escala_listar` (V37/V97/V105/V123) ya
+-- trae TODO el periodo sin paginar (nunca tuvo LIMIT/OFFSET) y ya soporta
+-- filtro opcional por nivel de enseñanza (`p_teaching_level_id`) -- lo único
+-- que le falta es el filtro por tipo. Se agrega `p_tipo` al FINAL de la firma
+-- (con DEFAULT NULL) para no romper ninguna llamada posicional existente que
+-- pase los 6 argumentos actuales.
 --
--- Este fix es el primer paso (backend): agrega FK_TESCALA a lo que devuelve
--- fn_escala_listar, para que el front pueda armar el mapeo
--- nivel<->escala<->banda-representativa que hace falta para no seguir
--- mandando un nivel donde el back espera un PK_TESCALA_VALORACION.
+-- `p_tipo` filtra por `TLISTA_VALOR.VALOR` (cat. TIPO_VALORACION, ej.
+-- "FORTALEZA"/"DEBILIDAD") en vez de PK: es lo mismo que ya expone
+-- `useRatingScaleTypesQuery` en el front (catálogo por VALOR, no por id), así
+-- que no hace falta resolver un id aparte.
 DROP FUNCTION IF EXISTS academico_test.fn_escala_listar(bigint, text, bigint, bigint, text, text);
-
-CREATE OR REPLACE FUNCTION academico_test.fn_escala_listar(p_academic_period_id bigint, p_filtro text DEFAULT NULL::text, p_pk_usuario bigint DEFAULT NULL::bigint, p_teaching_level_id bigint DEFAULT NULL::bigint, p_sort_by text DEFAULT NULL::text, p_sort_dir text DEFAULT NULL::text)
- RETURNS TABLE(id bigint, nombre character varying, abreviacion character varying, tipo character varying, tipo_name character varying, iconografia character varying, teaching_level_id bigint, teaching_level_name character varying, nota_minima numeric, nota_maxima numeric, nota_equivalente numeric, escala_id bigint)
- LANGUAGE plpgsql
- STABLE
+CREATE OR REPLACE FUNCTION academico_test.fn_escala_listar(
+    p_academic_period_id bigint,
+    p_filtro             text DEFAULT NULL::text,
+    p_pk_usuario          bigint DEFAULT NULL::bigint,
+    p_teaching_level_id  bigint DEFAULT NULL::bigint,
+    p_sort_by            text DEFAULT NULL::text,
+    p_sort_dir            text DEFAULT NULL::text,
+    p_tipo                text DEFAULT NULL::text
+)
+RETURNS TABLE(id bigint, nombre character varying, abreviacion character varying, tipo character varying, tipo_name character varying, iconografia character varying, teaching_level_id bigint, teaching_level_name character varying, nota_minima numeric, nota_maxima numeric, nota_equivalente numeric, escala_id bigint)
+LANGUAGE plpgsql
+STABLE
 AS $function$
 DECLARE
     v_col TEXT;
@@ -65,10 +67,11 @@ BEGIN
           CROSS JOIN fmt
          WHERE ne.FK_PERIODO_ACADEMICO = $1 AND ev.ACTIVE = TRUE
            AND ($4 IS NULL OR ne.FK_TNIVEL_ENSENANZA = $4)
+           AND ($5 IS NULL OR tv.VALOR = $5)
            AND academico_test.fn_periodo_usuario_puede_ver($3, $1)
            AND ($2 IS NULL OR v.NOMBRE ILIKE '%%' || $2 || '%%' OR v.CODIGO ILIKE '%%' || $2 || '%%')
          ORDER BY %s %s, ev.ORDEN
     $q$, v_col, v_dir)
-    USING p_academic_period_id, NULLIF(TRIM(p_filtro),''), p_pk_usuario, p_teaching_level_id;
+    USING p_academic_period_id, NULLIF(TRIM(p_filtro),''), p_pk_usuario, p_teaching_level_id, NULLIF(TRIM(p_tipo),'');
 END;
 $function$;

@@ -15,6 +15,7 @@ AS $function$
 DECLARE
     r academico_test.TPERIODO_EVALUACION;
     v_ini DATE; v_fin DATE; v_pct NUMERIC; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT;
 BEGIN
     IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
@@ -29,11 +30,11 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
     -- Gate fino: el establecimiento del periodo padre debe estar en su alcance.
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, (
-             SELECT s.FK_TESTABLECIMIENTO
-               FROM academico_test.TPERIODO_ACADEMICO pa
-               JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-              WHERE pa.PK_TPERIODO_ACADEMICO = r.FK_TPERIODO_ACADEMICO)) THEN
+    SELECT s.FK_TESTABLECIMIENTO INTO v_establecimiento_id
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE pa.PK_TPERIODO_ACADEMICO = r.FK_TPERIODO_ACADEMICO;
+    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_establecimiento_id) THEN
         RAISE EXCEPTION 'El usuario no puede gestionar periodos de evaluacion de este establecimiento'
             USING ERRCODE = '42501';
     END IF;
@@ -45,6 +46,9 @@ BEGIN
     END IF;
     PERFORM academico_test.fn_periodo_eval_validar(r.FK_TPERIODO_ACADEMICO, v_ini, v_fin, v_pct,
         COALESCE(p_codigo, r.CODIGO), COALESCE(p_nombre, r.NOMBRE), COALESCE(p_abreviacion, r.ABREVIACION), p_pk);
+
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización del periodo de evaluación %s', COALESCE(p_nombre, r.NOMBRE)), v_establecimiento_id);
 
     UPDATE academico_test.TPERIODO_EVALUACION SET
         CODIGO = COALESCE(p_codigo, CODIGO), NOMBRE = COALESCE(p_nombre, NOMBRE),
@@ -73,7 +77,9 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
     -- Gate fino: el establecimiento del periodo padre debe estar en su alcance.
-    SELECT s.FK_TESTABLECIMIENTO INTO v_est
+    -- Se trae tambien el NOMBRE aqui (antes solo se leia en la rama de error)
+    -- porque la etiqueta de auditoria lo necesita en el camino feliz.
+    SELECT s.FK_TESTABLECIMIENTO, pe.NOMBRE INTO v_est, v_nombre_periodo_eval
       FROM academico_test.TPERIODO_EVALUACION pe
       JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = pe.FK_TPERIODO_ACADEMICO
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
@@ -102,6 +108,10 @@ BEGIN
                 USING ERRCODE = '23503';
         END IF;
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación del periodo de evaluación %s', v_nombre_periodo_eval), v_est);
+
     UPDATE academico_test.TPERIODO_EVALUACION
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TPERIODO_EVALUACION = p_pk AND ACTIVE = TRUE;

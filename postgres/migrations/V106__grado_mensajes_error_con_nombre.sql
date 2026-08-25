@@ -186,6 +186,12 @@ BEGIN
             USING ERRCODE = '23505';
     END IF;
 
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Creación del grado %s', v_nombre),
+        academico_test.fn_periodo_establecimiento(p_fk_periodo)
+    );
+
     INSERT INTO academico_test.TGRADO (
         CODIGO,
         NOMBRE,
@@ -278,6 +284,12 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Ya existe un grado con el nombre % en este periodo', v_nombre USING ERRCODE = '23505';
     END IF;
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Actualización del grado %s', v_nombre),
+        academico_test.fn_periodo_establecimiento(r.FK_TPERIODO_ACADEMICO)
+    );
+
     UPDATE academico_test.TGRADO SET
         FK_TNIVEL_ENSENANZA = COALESCE(p_fk_nivel, FK_TNIVEL_ENSENANZA),
         NOMBRE = v_nombre,
@@ -330,6 +342,13 @@ BEGIN
         RAISE EXCEPTION 'No se puede eliminar el grado "%": existen grupos activos',
             COALESCE(v_nombre_grado, p_pk::TEXT) USING ERRCODE = '23503';
     END IF;
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Eliminación del grado %s', COALESCE(v_nombre_grado, p_pk::TEXT)),
+        academico_test.fn_periodo_establecimiento((
+            SELECT FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO WHERE PK_TGRADO = p_pk))
+    );
+
     -- Cascade: el criterio de promocion override del grado (POR_DEFECTO='N') y sus
     -- obligatorias son propiedad del grado, se dan de baja con el.
     UPDATE academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
@@ -422,6 +441,13 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Ya existe un grupo con el nombre % en este grado y jornada', p_nombre USING ERRCODE = '23505';
     END IF;
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Creación del grupo %s', p_nombre),
+        academico_test.fn_periodo_establecimiento((
+            SELECT FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_grado))
+    );
+
     INSERT INTO academico_test.TGRUPO
         (NOMBRE, FK_TGRADO, FK_TLV_JORNADA, FK_TLV_MODELO_PEDAGOGICO, CAPACIDAD, FK_TFUNCIONARIO, CREATED_BY)
     VALUES (p_nombre, p_fk_grado, v_jornada, p_fk_modelo_pedagogico, p_capacidad, p_fk_funcionario, v_audit)
@@ -499,6 +525,13 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Ya existe un grupo con el nombre % en este grado y jornada', v_nombre USING ERRCODE = '23505';
     END IF;
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Actualización del grupo %s', v_nombre),
+        academico_test.fn_periodo_establecimiento((
+            SELECT g.FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO g WHERE g.PK_TGRADO = r.FK_TGRADO))
+    );
+
     UPDATE academico_test.TGRUPO SET
         NOMBRE = v_nombre,
         FK_TLV_MODELO_PEDAGOGICO = COALESCE(p_fk_modelo_pedagogico, FK_TLV_MODELO_PEDAGOGICO),
@@ -560,6 +593,15 @@ BEGIN
         RAISE EXCEPTION 'No se puede eliminar el grupo "%": existen calificaciones registradas para sus estudiantes',
             COALESCE(v_nombre_grupo, p_pk::TEXT) USING ERRCODE = '23503';
     END IF;
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Eliminación del grupo %s', COALESCE(v_nombre_grupo, p_pk::TEXT)),
+        academico_test.fn_periodo_establecimiento((
+            SELECT g.FK_TPERIODO_ACADEMICO FROM academico_test.TGRUPO gr
+              JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+             WHERE gr.PK_TGRUPO = p_pk))
+    );
+
     UPDATE academico_test.TGRUPO SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TGRUPO = p_pk AND ACTIVE = TRUE;
     GET DIAGNOSTICS v_n = ROW_COUNT;
@@ -571,5 +613,131 @@ BEGIN
         END IF;
     END IF;
     RETURN p_pk;
+END;
+$$;
+
+-- ===========================================================================
+-- fn_grado_listar: consolidada aqui para dejar el modulo autocontenido.
+-- No tiene RAISE EXCEPTION (no le tocaba nada a este archivo por su nombre),
+-- pero SI cambio de firma/cuerpo entre la creacion del modulo (V43, sin
+-- paginacion) y V99: V78__fix_grade_module.sql le agrego p_pk_usuario
+-- (visibilidad via fn_periodo_usuario_puede_ver) y despues, en el mismo V78,
+-- p_sort_by/p_sort_dir (whitelist de columna ordenable + direccion, mismo
+-- patron que fn_periodo_listar). No hay ninguna migracion posterior a V78 y
+-- anterior a V100 que la vuelva a tocar, asi que este es su estado vigente
+-- justo antes de V100. Se copia tal cual de V78 (DROP FUNCTION IF EXISTS de
+-- las firmas previas incluido, porque la firma si cambio).
+-- ===========================================================================
+
+DROP FUNCTION IF EXISTS academico_test.fn_grado_listar(BIGINT, TEXT, INT, INT);
+DROP FUNCTION IF EXISTS academico_test.fn_grado_listar(BIGINT, TEXT, INT, INT, BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_grado_listar(BIGINT, TEXT, INT, INT, BIGINT, TEXT, TEXT);
+
+CREATE OR REPLACE FUNCTION academico_test.fn_grado_listar(
+    p_fk_periodo BIGINT,
+    p_filtro     TEXT DEFAULT NULL,
+    p_page_index INT  DEFAULT 0,
+    p_page_size  INT  DEFAULT 10,
+    p_pk_usuario BIGINT DEFAULT NULL,
+    p_sort_by    TEXT DEFAULT NULL,
+    p_sort_dir   TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+    id BIGINT,
+    nombre VARCHAR,
+    grado VARCHAR,
+    teaching_level_id BIGINT,
+    teaching_level_name VARCHAR,
+    grado_siguiente VARCHAR,
+    grado_siguiente_name VARCHAR,
+    tiene_grado_siguiente BOOLEAN,
+    total_count BIGINT
+)
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_col TEXT;
+    v_dir TEXT;
+BEGIN
+    v_col := CASE lower(coalesce(p_sort_by, ''))
+        WHEN 'nombre'             THEN 'g.NOMBRE'
+        WHEN 'grado'              THEN 'g.NOMBRE'
+        WHEN 'teachinglevelname'  THEN 'ne.NOMBRE'
+        WHEN 'gradosiguientename' THEN 'gs.NOMBRE'
+        ELSE 'g.NOMBRE'
+    END;
+
+    v_dir := CASE
+        WHEN lower(coalesce(p_sort_dir, '')) = 'desc'
+        THEN 'DESC'
+        ELSE 'ASC'
+    END;
+
+    RETURN QUERY EXECUTE format($q$
+        SELECT
+            g.PK_TGRADO,
+            g.NOMBRE,
+            g.NOMBRE,
+            g.FK_TNIVEL_ENSENANZA,
+            ne.NOMBRE,
+            gs.VALOR,
+            gs.NOMBRE,
+            (g.TIENE_GRADO_SIGUIENTE = 'S'),
+            count(*) OVER()::BIGINT AS total_count
+
+        FROM academico_test.TGRADO g
+
+        JOIN academico_test.TNIVEL_ENSENANZA ne
+            ON ne.PK_NIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
+
+        LEFT JOIN academico_test.TLISTA_VALOR gs
+            ON gs.PK_LISTA_VALOR = g.FK_TLV_GRADO_SIGUIENTE
+
+        WHERE g.FK_TPERIODO_ACADEMICO = $1
+          AND g.ACTIVE = TRUE
+          AND academico_test.fn_periodo_usuario_puede_ver($5, $1)
+          AND ($2 IS NULL OR g.NOMBRE ILIKE '%%' || $2 || '%%')
+
+        ORDER BY %s %s, g.PK_TGRADO
+
+        LIMIT NULLIF($4, 0)
+        OFFSET COALESCE($3, 0) * COALESCE(NULLIF($4, 0), 0)
+
+    $q$, v_col, v_dir)
+    USING
+        p_fk_periodo,
+        NULLIF(TRIM(p_filtro), ''),
+        p_page_index,
+        p_page_size,
+        p_pk_usuario;
+END;
+$$;
+
+-- Consolidado desde V113 (fn_grupo_bulk_delete.sql): nueva capacidad,
+-- eliminar varios grupos (TGRUPO) de un grado en un solo lote. Mismo patron
+-- que fn_periodo_bulk_delete/fn_escala_valoracion_bulk_delete: delega en
+-- fn_grupo_soft_delete por fila (que ya trae toda la validacion de permisos,
+-- existencia y bloqueo por matriculas/horarios/asignaciones/calificaciones) y
+-- captura la excepcion para un resultado parcial.
+CREATE OR REPLACE FUNCTION academico_test.fn_grupo_bulk_delete(
+    p_ids bigint[],
+    p_pk_usuario_solicitante bigint
+)
+RETURNS TABLE(id bigint, eliminado boolean, error_code text, error_mensaje text)
+LANGUAGE plpgsql AS $$
+DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
+BEGIN
+    IF p_ids IS NULL THEN RETURN; END IF;
+    FOREACH v_id IN ARRAY p_ids LOOP
+        BEGIN
+            PERFORM academico_test.fn_grupo_soft_delete(v_id, p_pk_usuario_solicitante);
+            id := v_id; eliminado := TRUE; error_code := NULL; error_mensaje := NULL;
+            RETURN NEXT;
+        EXCEPTION WHEN OTHERS THEN
+            GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
+            id := v_id; eliminado := FALSE; error_code := v_state; error_mensaje := v_msg;
+            RETURN NEXT;
+        END;
+    END LOOP;
+    RETURN;
 END;
 $$;
