@@ -312,8 +312,18 @@ BEGIN
               FROM academico_test.TSEDE_USUARIO su
               JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
              WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        ),
+        -- REV7 -- coordinador (rol 11) de una sede puntual: alcance de SEDE,
+        -- no de establecimiento (ver funcionarios_ee mas abajo).
+        sedes_coordinador AS (
+            SELECT su.FK_TSEDE
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
         )
         SELECT 1 FROM ee_accesibles
+        UNION ALL
+        SELECT 1 FROM sedes_coordinador
     ) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
@@ -336,6 +346,14 @@ BEGIN
               JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
              WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
     ),
+    -- REV7 -- coordinador (rol 11) de una sede puntual: alcance de SEDE, no
+    -- de establecimiento (ver funcionarios_ee mas abajo).
+    sedes_coordinador AS (
+        SELECT su.FK_TSEDE
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+    ),
     funcionarios_ee AS (
         SELECT e.FK_TFUNCIONARIO_RECTOR AS pk_tfuncionario
           FROM academico_test.TESTABLECIMIENTO e
@@ -353,6 +371,16 @@ BEGIN
           JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
          WHERE s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles) AND f3.ACTIVE = TRUE
            AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
+        -- REV7 -- coordinador: SOLO funcionarios con permiso activo en SU
+        -- propia sede (no todo el EE), y solo "otros cargos": excluye
+        -- ademas rector(7)/jefe de sistema(8) -- el coordinador no tiene
+        -- esa autoridad, aunque tecnicamente compartiera sede con alguno.
+        UNION
+        SELECT f4.PK_TFUNCIONARIO
+          FROM academico_test.TFUNCIONARIO f4
+          JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f4.FK_TUSUARIO AND su.ACTIVE = TRUE
+         WHERE su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador) AND f4.ACTIVE = TRUE
+           AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
     ),
     base AS (
         -- Funcionarios activos cuyo TUSUARIO matchea search/estado y que
@@ -565,8 +593,17 @@ BEGIN
               FROM academico_test.TSEDE_USUARIO su
               JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
              WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        ),
+        -- REV3 -- coordinador (rol 11) de una sede puntual.
+        sedes_coordinador AS (
+            SELECT su.FK_TSEDE
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
         )
         SELECT 1 FROM ee_accesibles
+        UNION ALL
+        SELECT 1 FROM sedes_coordinador
     ) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
@@ -643,6 +680,13 @@ BEGIN
               JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
              WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
     ),
+    -- REV3 -- coordinador (rol 11) de una sede puntual.
+    sedes_coordinador AS (
+        SELECT su.FK_TSEDE
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+    ),
     funcionarios_ee AS (
         SELECT e.FK_TFUNCIONARIO_RECTOR AS pk_tfuncionario
           FROM academico_test.TESTABLECIMIENTO e
@@ -660,6 +704,12 @@ BEGIN
           JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
          WHERE s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles) AND f3.ACTIVE = TRUE
            AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
+        UNION
+        SELECT f4.PK_TFUNCIONARIO
+          FROM academico_test.TFUNCIONARIO f4
+          JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f4.FK_TUSUARIO AND su.ACTIVE = TRUE
+         WHERE su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador) AND f4.ACTIVE = TRUE
+           AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
     )
     SELECT COUNT(DISTINCT f.PK_TFUNCIONARIO)
       INTO v_total

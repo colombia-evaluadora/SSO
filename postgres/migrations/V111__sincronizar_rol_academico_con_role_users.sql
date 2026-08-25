@@ -174,9 +174,27 @@ DECLARE
     v_pk_sede_usuario  BIGINT;
 BEGIN
     -- ---------------------------------------------------------------------
-    -- 0. Gate de autorizacion: solo roles con permiso de usuarios.
+    -- 0. Gate de autorizacion: roles con permiso de usuarios (fn_puede_
+    --    afectar_usuarios), O coordinador (rol 11) de la sede puntual
+    --    p_fk_sede, y solo si el rol que esta asignando es "otro cargo"
+    --    (9-14, nunca rector/jefe de sistema) -- REV2. El caller de mas
+    --    arriba (fn_fun_permisos_actualizar) ya valida esto mismo antes de
+    --    llegar aca, pero esta funcion tiene su propio gate porque otros
+    --    callers (fn_est_crear, fn_sed_crear) la invocan directo.
     -- ---------------------------------------------------------------------
-    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
+    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante)
+       AND NOT (
+           p_fk_rol >= 9 AND p_fk_rol NOT IN (15, 16)
+           AND EXISTS (
+               SELECT 1
+                 FROM academico_test.TSEDE_USUARIO su
+                 JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+                WHERE s.PK_TSEDE = p_fk_sede
+                  AND s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11
+                  AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+           )
+       )
+    THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
@@ -316,27 +334,48 @@ AS $function$
 DECLARE
     v_active       BOOLEAN;
     v_pk_tusuario  BIGINT;
+    v_fk_sede      BIGINT;
+    v_fk_rol       BIGINT;
 BEGIN
     -- ---------------------------------------------------------------------
-    -- 0. Gate de autorizacion.
+    -- 1. Validacion de existencia primero -- el gate (paso 0 mas abajo)
+    --    necesita saber la sede/rol de este permiso puntual para decidir
+    --    si un coordinador puede tocarlo. (Idempotente: si ya esta
+    --    inactivo, retornamos el PK sin error, sin pasar por el gate --
+    --    ver mas abajo.)
     -- ---------------------------------------------------------------------
-    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
-
-    -- ---------------------------------------------------------------------
-    -- 1. Validacion de existencia. (Idempotente: si ya esta inactivo,
-    --    retornamos el PK sin error.)
-    -- ---------------------------------------------------------------------
-    SELECT ACTIVE, FK_TUSUARIO
-      INTO v_active, v_pk_tusuario
+    SELECT ACTIVE, FK_TUSUARIO, FK_TSEDE, FK_TROL
+      INTO v_active, v_pk_tusuario, v_fk_sede, v_fk_rol
       FROM academico_test.TSEDE_USUARIO
      WHERE PK_TSEDE_USUARIO = p_pk_sede_usuario;
 
     IF NOT FOUND THEN
         RAISE EXCEPTION 'No se encontro el permiso solicitado'
             USING ERRCODE = 'P0002';
+    END IF;
+
+    -- ---------------------------------------------------------------------
+    -- 0. Gate de autorizacion: roles con permiso de usuarios, O
+    --    coordinador (rol 11) de la sede de ESTE permiso puntual, y solo
+    --    si el permiso que se esta quitando es de "otro cargo" (9-14,
+    --    nunca rector/jefe de sistema) -- REV2, mismo criterio que
+    --    fn_sede_usuario_crear.
+    -- ---------------------------------------------------------------------
+    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante)
+       AND NOT (
+           v_fk_rol >= 9 AND v_fk_rol NOT IN (15, 16)
+           AND EXISTS (
+               SELECT 1
+                 FROM academico_test.TSEDE_USUARIO su
+                 JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+                WHERE s.PK_TSEDE = v_fk_sede
+                  AND s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11
+                  AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+           )
+       )
+    THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
     END IF;
 
     IF v_active = FALSE THEN
