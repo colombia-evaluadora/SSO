@@ -13,7 +13,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * V-audit-revert — fase 1 (solo el patrón soft-delete/soft-restore, ver
+ * V-audit-revert — fase 2: INSERT (revertido como soft-delete), UPDATE
+ * genérico (cualquier columna) y DELETE físico (rechazado — ver
  * {@link AuditRevertService}). Cae bajo la regla catch-all de {@code
  * SecurityConfig} ({@code ssoAdminAccessManager}) igual que el resto de
  * endpoints de este módulo: necesita una fila {@code endpoint} y un
