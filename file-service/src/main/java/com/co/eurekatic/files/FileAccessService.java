@@ -116,6 +116,21 @@ public class FileAccessService {
      * esto, {@code POST /files/view-token/{id}} devolvía 404 para el
      * propio archivo que la secretaria acababa de subir: esPropietario
      * no conocía esta tabla en absoluto.
+     *
+     * <p>V-pigse-visor-ente — cuarta rama: mismo documento
+     * institucional, pero visto desde el lado del Ente Territorial en
+     * vez del establecimiento. Un usuario con fila ACTIVA en
+     * {@code TENTE_USUARIO} para un {@code TENTE} que a su vez tenga
+     * el establecimiento del documento en {@code TENTE_ESTABLECIMIENTO}
+     * (también activa) es "propietario" del documento por jurisdicción
+     * — el director/jefe de área de la secretaría de educación que
+     * supervisa ese colegio, no sólo quien trabaja en él. Complementa
+     * (no reemplaza) el binding {@code role_endpoint} privilegiado que
+     * V155 le da a los roles Ente Territorial: ese es un bypass global
+     * ("ve cualquier archivo"); esta rama es el camino que sigue
+     * siendo correcto incluso si algún día ese binding se retira,
+     * porque depende del dato real de jurisdicción y no de un
+     * privilegio de rol.
      */
     private boolean esPropietario(long archivoId, String email) {
         if (email == null || email.isBlank()) {
@@ -143,6 +158,17 @@ public class FileAccessService {
                        AND di.active
                        AND lower(u.cuenta) = lower(:email)
                        AND u.active AND su.active AND su.tlv_estado = 'ACTIVO' AND s.active
+                    UNION ALL
+                    SELECT 1
+                      FROM %1$s.tdocumento_institucional di
+                      JOIN %1$s.tente_establecimiento te ON te.fk_testablecimiento = di.fk_testablecimiento
+                      JOIN %1$s.tente_usuario tu ON tu.fk_tente = te.fk_tente
+                      JOIN %1$s.tusuario u ON u.pk_tusuario = tu.fk_tusuario
+                     WHERE di.fk_tarchivo = :archivoId
+                       AND di.active
+                       AND te.active
+                       AND lower(u.cuenta) = lower(:email)
+                       AND u.active AND tu.active AND tu.tlv_estado = 'ACTIVO'
                 ) propios
                 """.formatted(schema),
                 new MapSqlParameterSource()
