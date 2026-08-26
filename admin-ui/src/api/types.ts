@@ -173,6 +173,27 @@ export interface MicroserviceResponse {
   fileStorageTable: string | null;
 }
 
+// ====================== sso-admin / file-references ======================
+
+/**
+ * Mirrors {@code public.file_reference_location} (V143/V147) via
+ * {@code com.co.eurekatic.ssoadmin.dto.FileReferenceLocationResponse}
+ * -- dónde vive realmente un {@code pk_tarchivo} de cara a
+ * file-service. Ver {@code FileReferencesPage}.
+ */
+export interface FileReferenceLocationResponse {
+  pkTarchivo: number;
+  schemaName: string;
+  tableName: string;
+  urls3: string | null;
+  createdAt: string;
+}
+
+export interface FileReferenceLocationRequest {
+  schemaName: string;
+  tableName: string;
+}
+
 export interface MicroserviceRequest {
   id?: number;
   serviceId: string;
