@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "d4a7e2c1-9f3b-4c6a-8e2d-1b7f5a9c0e6d",
     "name": "PIGSE — descarga de documentos institucionales",
-    "description": "Documenta la prueba de descarga de documentos (PEI/PEC/PMI) hecha en vivo contra el servidor: la secretaria sube un PDF real, y se compara byte a byte lo que descarga la propia secretaria (dueña) contra lo que descarga un usuario de Ente Territorial de OTRO establecimiento (acceso privilegiado, ver V155 y la extensión de `FileAccessService#esPropietario`).\n\n**El flujo real**\n\n1. `POST /api/files/pigse/documentos/upload` (multipart, como la secretaria) — sube el binario, lo registra en `academico_test.tarchivo` + `public.file_reference_location`, y actualiza `tdocumento_institucional`.\n2. **Resolver el `archivoId`** — hoy NINGÚN endpoint HTTP de PIGSE devuelve el `pk_tarchivo` (ni `/documentos`, ni `/cumplimiento/listar`: sólo exponen `fileName`/`status`/`sizeBytes`). Es una limitación real y confirmada del diseño actual, no un descuido de esta colección — ver la carpeta 3 para cómo resolverlo a mano mientras tanto.\n3. `GET /api/files/download/{archivoId}` — dos veces, con dos identidades distintas, y se comparan tamaño Y hash SHA-256 de la respuesta.\n4. `POST /api/files/view-token/{archivoId}` + `GET /api/files/view/{archivoId}?token=...` — el mismo archivo por el camino de visor (sin cabecera `Authorization`, como lo pediría un `<img>`/`<iframe>`).\n\n**Antes de empezar**\n\n- Elige el entorno `PIGSE — descargas` y rellena `passwordSecretaria`/`passwordEnte` si los dejaste en blanco.\n- El paso de subida necesita que **selecciones un fichero** a mano: Postman no permite incrustar binarios en una colección. Ve a *Body → form-data → ARCHIVO* y elige cualquier PDF real (no uno sintético) — así la comparación de hashes es representativa.\n\n**Dos identidades, dos tokens.** A diferencia de otras colecciones de este repo (que reutilizan `{{token}}` con login automático), aquí se necesitan DOS sesiones vivas a la vez — la de la secretaria (dueña del documento) y la del Ente Territorial (acceso privilegiado a un establecimiento ajeno). Corre la carpeta 1 completa antes que nada; guarda `tokenSecretaria` y `tokenEnte` como variables de colección.\n\nLa carpeta *Rechazos esperados* comprueba que lo que debe fallar, falla. Un 200 ahí es un problema de seguridad, no un éxito.",
+    "description": "Documenta la prueba de descarga de documentos (PEI/PEC/PMI) hecha en vivo contra el servidor: la secretaria sube un PDF real, y se compara byte a byte lo que descarga la propia secretaria (dueña) contra lo que descarga un usuario de Ente Territorial de OTRO establecimiento (acceso privilegiado, ver V155 y la extensión de `FileAccessService#esPropietario`).\n\n**El flujo real, 100% HTTP de punta a punta (V156)**\n\n1. `POST /api/files/pigse/documentos/upload` (multipart, como la secretaria) — sube el binario, lo registra en `academico_test.tarchivo` + `public.file_reference_location`, y actualiza `tdocumento_institucional`.\n2. `GET /api/pigse/documentos` — desde V156, esta lista trae `archivoId` y `downloadUrl` por cada tipo (antes sólo traía `fileName`/`status`/`sizeBytes`, y había que resolver el `pk_tarchivo` por SQL directo — ver la carpeta 3 para el detalle de ese gap ya cerrado).\n3. `GET /api/files/download/{archivoId}` (usando el `downloadUrl` de la respuesta anterior, sin construirlo a mano) — dos veces, con dos identidades distintas, y se comparan tamaño Y hash SHA-256 de la respuesta.\n4. `POST /api/files/view-token/{archivoId}` + `GET /api/files/view/{archivoId}?token=...` — el mismo archivo por el camino de visor (sin cabecera `Authorization`, como lo pediría un `<img>`/`<iframe>`).\n\n**Antes de empezar**\n\n- Elige el entorno `PIGSE — descargas` y rellena `passwordSecretaria`/`passwordEnte` si los dejaste en blanco.\n- El paso de subida necesita que **selecciones un fichero** a mano: Postman no permite incrustar binarios en una colección. Ve a *Body → form-data → ARCHIVO* y elige cualquier PDF real (no uno sintético) — así la comparación de hashes es representativa.\n\n**Dos identidades, dos tokens.** A diferencia de otras colecciones de este repo (que reutilizan `{{token}}` con login automático), aquí se necesitan DOS sesiones vivas a la vez — la de la secretaria (dueña del documento) y la del Ente Territorial (acceso privilegiado a un establecimiento ajeno). Corre la carpeta 1 completa antes que nada; guarda `tokenSecretaria` y `tokenEnte` como variables de colección.\n\nLa carpeta *Rechazos esperados* comprueba que lo que debe fallar, falla. Un 200 ahí es un problema de seguridad, no un éxito.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -165,19 +165,46 @@
       ]
     },
     {
-      "name": "3 — Resolver archivoId (manual, gap conocido)",
+      "name": "3 — Resolver archivoId (100% HTTP, V156)",
       "item": [
         {
-          "name": "Cómo obtener el pk_tarchivo",
+          "name": "GET /api/pigse/documentos (trae archivoId + downloadUrl)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "",
+                  "const tipo = pm.collectionVariables.get('tipoDocumento');",
+                  "const fila = pm.response.json().rows.find(r => r.id === tipo);",
+                  "",
+                  "pm.test('el tipo subido aparece COMPLETO', () => {",
+                  "    pm.expect(fila, 'no está en el listado').to.not.be.undefined;",
+                  "    pm.expect(fila.status).to.eql('COMPLETO');",
+                  "});",
+                  "pm.test('trae archivoId y downloadUrl (V156 -- antes no existían)', () => {",
+                  "    pm.expect(fila.archivoId).to.be.a('number');",
+                  "    pm.expect(fila.downloadUrl).to.eql('/api/files/download/' + fila.archivoId);",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set('archivoId', fila.archivoId);",
+                  "pm.collectionVariables.set('downloadUrl', fila.downloadUrl);",
+                  "console.log('archivoId resuelto por HTTP:', fila.archivoId);"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "GET",
-            "header": [],
+            "header": [{ "key": "Authorization", "value": "Bearer {{tokenSecretaria}}" }],
             "url": {
-              "raw": "{{baseUrl}}/actuator/health",
+              "raw": "{{baseUrl}}/api/pigse/documentos",
               "host": ["{{baseUrl}}"],
-              "path": ["actuator", "health"]
+              "path": ["api", "pigse", "documentos"]
             },
-            "description": "**Gap real, no un descuido de esta colección**: ni `GET /api/pigse/documentos` ni `GET /api/pigse/cumplimiento/listar` devuelven el `pk_tarchivo` — sólo `fileName`/`status`/`sizeBytes`/`uploadedAt`. No hay forma 100% HTTP de encadenar la subida del paso 2 con la descarga del paso 4.\n\nMientras eso no se resuelva, tras subir corre esto por SSH contra el servidor y copia el `fk_tarchivo` a la variable de colección `archivoId` (panel derecho de Postman, o Environment quick-look):\n\n```sh\nssh root@172.233.184.248 \"docker exec -i sso-postgres psql -U neondb_owner -d sso_db -c \\\"\nSELECT pk_documento_institucional, tipo, fk_tarchivo, active\n  FROM academico_test.tdocumento_institucional\n WHERE tipo = '{{tipoDocumento}}'\n ORDER BY modified_at DESC NULLS LAST, created_at DESC\n LIMIT 1;\\\"\"\n```\n\n(Filtra además por `fk_testablecimiento = 871` si tu servidor tiene más de un establecimiento de prueba con el mismo tipo pendiente.)"
+            "description": "Hasta V156 este endpoint sólo traía `fileName`/`status`/`sizeBytes`/`uploadedAt` -- no había forma HTTP de encadenar la subida del paso 2 con la descarga del paso 4, había que ir a psql por el `pk_tarchivo`.\n\nAhora cada fila trae `archivoId` (el pk crudo) y `downloadUrl` (la ruta ya armada, mismo patrón que `eval-col/funcionario.archivo_descarga_url`). La carpeta 4 usa `{{archivoId}}` tal cual sale de aquí, sin construir nada a mano."
           },
           "response": []
         }
@@ -422,6 +449,7 @@
     { "key": "sizeSubido", "value": "", "type": "string" },
     { "key": "nombreSubido", "value": "", "type": "string" },
     { "key": "archivoId", "value": "", "type": "string" },
+    { "key": "downloadUrl", "value": "", "type": "string" },
     { "key": "hashSecretaria", "value": "", "type": "string" },
     { "key": "sizeSecretaria", "value": "", "type": "string" },
     { "key": "hashEnte", "value": "", "type": "string" },
