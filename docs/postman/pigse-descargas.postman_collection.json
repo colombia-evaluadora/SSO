@@ -1,0 +1,431 @@
+{
+  "info": {
+    "_postman_id": "d4a7e2c1-9f3b-4c6a-8e2d-1b7f5a9c0e6d",
+    "name": "PIGSE — descarga de documentos institucionales",
+    "description": "Documenta la prueba de descarga de documentos (PEI/PEC/PMI) hecha en vivo contra el servidor: la secretaria sube un PDF real, y se compara byte a byte lo que descarga la propia secretaria (dueña) contra lo que descarga un usuario de Ente Territorial de OTRO establecimiento (acceso privilegiado, ver V155 y la extensión de `FileAccessService#esPropietario`).\n\n**El flujo real**\n\n1. `POST /api/files/pigse/documentos/upload` (multipart, como la secretaria) — sube el binario, lo registra en `academico_test.tarchivo` + `public.file_reference_location`, y actualiza `tdocumento_institucional`.\n2. **Resolver el `archivoId`** — hoy NINGÚN endpoint HTTP de PIGSE devuelve el `pk_tarchivo` (ni `/documentos`, ni `/cumplimiento/listar`: sólo exponen `fileName`/`status`/`sizeBytes`). Es una limitación real y confirmada del diseño actual, no un descuido de esta colección — ver la carpeta 3 para cómo resolverlo a mano mientras tanto.\n3. `GET /api/files/download/{archivoId}` — dos veces, con dos identidades distintas, y se comparan tamaño Y hash SHA-256 de la respuesta.\n4. `POST /api/files/view-token/{archivoId}` + `GET /api/files/view/{archivoId}?token=...` — el mismo archivo por el camino de visor (sin cabecera `Authorization`, como lo pediría un `<img>`/`<iframe>`).\n\n**Antes de empezar**\n\n- Elige el entorno `PIGSE — descargas` y rellena `passwordSecretaria`/`passwordEnte` si los dejaste en blanco.\n- El paso de subida necesita que **selecciones un fichero** a mano: Postman no permite incrustar binarios en una colección. Ve a *Body → form-data → ARCHIVO* y elige cualquier PDF real (no uno sintético) — así la comparación de hashes es representativa.\n\n**Dos identidades, dos tokens.** A diferencia de otras colecciones de este repo (que reutilizan `{{token}}` con login automático), aquí se necesitan DOS sesiones vivas a la vez — la de la secretaria (dueña del documento) y la del Ente Territorial (acceso privilegiado a un establecimiento ajeno). Corre la carpeta 1 completa antes que nada; guarda `tokenSecretaria` y `tokenEnte` como variables de colección.\n\nLa carpeta *Rechazos esperados* comprueba que lo que debe fallar, falla. Un 200 ahí es un problema de seguridad, no un éxito.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0 — Salud",
+      "item": [
+        {
+          "name": "Gateway arriba",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('status UP', () => {",
+                  "    pm.expect(pm.response.json().status).to.eql('UP');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["actuator", "health"]
+            },
+            "description": "Comprobación previa. Si esto falla, no sigas: el resto dará errores que parecen de la aplicación y son de red o de un contenedor caído."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1 — Login (dos identidades)",
+      "item": [
+        {
+          "name": "Login secretaria (dueña del documento)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "",
+                  "const token = pm.response.json().token;",
+                  "pm.test('devuelve un token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.collectionVariables.set('tokenSecretaria', token);",
+                  "console.log('tokenSecretaria guardado');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailSecretaria}}\",\n  \"password\": \"{{passwordSecretaria}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "La secretaria de \"PIGSE QA TEST EE\" — es quien va a subir el documento y, más adelante, la referencia de \"dueña\" contra la que se compara el acceso privilegiado del Ente Territorial."
+          },
+          "response": []
+        },
+        {
+          "name": "Login Ente Territorial (otro establecimiento)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "",
+                  "const token = pm.response.json().token;",
+                  "pm.test('devuelve un token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.collectionVariables.set('tokenEnte', token);",
+                  "console.log('tokenEnte guardado');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailEnte}}\",\n  \"password\": \"{{passwordEnte}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "Rol `PIGSE-SECRETARIA_TERRITORIAL`. NO pertenece al establecimiento del documento (ni comparte `tsede_usuario` ni jurisdicción real vía `TENTE_USUARIO`) — su acceso viene exclusivamente del binding privilegiado `role_endpoint` sembrado en V155."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2 — Subida (secretaria)",
+      "item": [
+        {
+          "name": "POST subir PMI (multipart, PDF real)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "",
+                  "const fila = pm.response.json().rows[0];",
+                  "pm.test('queda COMPLETO', () => pm.expect(fila.status).to.eql('COMPLETO'));",
+                  "pm.test('trae tamaño en bytes', () => pm.expect(fila.sizeBytes).to.be.a('number').above(0));",
+                  "",
+                  "pm.collectionVariables.set('sizeSubido', fila.sizeBytes);",
+                  "pm.collectionVariables.set('nombreSubido', fila.fileName);",
+                  "console.log('subido:', fila.fileName, fila.sizeBytes, 'bytes');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{tokenSecretaria}}" }],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "TIPO", "value": "{{tipoDocumento}}", "type": "text" },
+                {
+                  "key": "ARCHIVO",
+                  "type": "file",
+                  "src": [],
+                  "description": "ELIGE UN PDF REAL AQUÍ (no un .txt renombrado). Postman no permite incrustar binarios en la colección."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/files/pigse/documentos/upload",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "files", "pigse", "documentos", "upload"]
+            },
+            "description": "Sube por el prefijo `/api/files/**` (file-service), NUNCA directo a `/api/pigse/documentos/upload` — el query-service no entiende multipart y responde 415.\n\n`TIPO` por defecto es `PMI` (siempre aplica, sin exclusión PEI/PEC — ver V152). Si cambias `{{tipoDocumento}}` a `PEI` o `PEC`, recuerda que son excluyentes entre sí según `ETNIAS` del establecimiento."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3 — Resolver archivoId (manual, gap conocido)",
+      "item": [
+        {
+          "name": "Cómo obtener el pk_tarchivo",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["actuator", "health"]
+            },
+            "description": "**Gap real, no un descuido de esta colección**: ni `GET /api/pigse/documentos` ni `GET /api/pigse/cumplimiento/listar` devuelven el `pk_tarchivo` — sólo `fileName`/`status`/`sizeBytes`/`uploadedAt`. No hay forma 100% HTTP de encadenar la subida del paso 2 con la descarga del paso 4.\n\nMientras eso no se resuelva, tras subir corre esto por SSH contra el servidor y copia el `fk_tarchivo` a la variable de colección `archivoId` (panel derecho de Postman, o Environment quick-look):\n\n```sh\nssh root@172.233.184.248 \"docker exec -i sso-postgres psql -U neondb_owner -d sso_db -c \\\"\nSELECT pk_documento_institucional, tipo, fk_tarchivo, active\n  FROM academico_test.tdocumento_institucional\n WHERE tipo = '{{tipoDocumento}}'\n ORDER BY modified_at DESC NULLS LAST, created_at DESC\n LIMIT 1;\\\"\"\n```\n\n(Filtra además por `fk_testablecimiento = 871` si tu servidor tiene más de un establecimiento de prueba con el mismo tipo pendiente.)"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4 — Descarga y comparación de bytes",
+      "item": [
+        {
+          "name": "GET descarga (secretaria, dueña)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('llega contenido', () => pm.expect(pm.response.responseSize).to.be.above(0));",
+                  "",
+                  "const esperado = pm.collectionVariables.get('sizeSubido');",
+                  "pm.test('tamaño coincide con lo subido', () => {",
+                  "    pm.expect(pm.response.responseSize).to.eql(Number(esperado));",
+                  "});",
+                  "",
+                  "// Hash SHA-256 sobre los bytes crudos (no sobre .text(), que",
+                  "// puede reinterpretar bytes binarios y falsear el hash).",
+                  "const wordArray = CryptoJS.lib.WordArray.create(pm.response.stream);",
+                  "const hash = CryptoJS.SHA256(wordArray).toString();",
+                  "pm.collectionVariables.set('hashSecretaria', hash);",
+                  "pm.collectionVariables.set('sizeSecretaria', pm.response.responseSize);",
+                  "console.log('secretaria — tamaño:', pm.response.responseSize, 'sha256:', hash);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{tokenSecretaria}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/files/download/{{archivoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "files", "download", "{{archivoId}}"]
+            },
+            "description": "Camino de propiedad directa: el documento pertenece al establecimiento de la secretaria (vía `tsede_usuario`, ver `FileAccessService#esPropietario`, tercera rama)."
+          },
+          "response": []
+        },
+        {
+          "name": "GET descarga (Ente Territorial, privilegiado)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 (no 404 -- el binding V155 la deja pasar)', () => pm.response.to.have.status(200));",
+                  "",
+                  "const wordArray = CryptoJS.lib.WordArray.create(pm.response.stream);",
+                  "const hash = CryptoJS.SHA256(wordArray).toString();",
+                  "pm.collectionVariables.set('hashEnte', hash);",
+                  "pm.collectionVariables.set('sizeEnte', pm.response.responseSize);",
+                  "console.log('ente — tamaño:', pm.response.responseSize, 'sha256:', hash);",
+                  "",
+                  "const sizeSecretaria = Number(pm.collectionVariables.get('sizeSecretaria'));",
+                  "pm.test('mismo tamaño que descargó la secretaria', () => {",
+                  "    pm.expect(pm.response.responseSize).to.eql(sizeSecretaria);",
+                  "});",
+                  "",
+                  "const hashSecretaria = pm.collectionVariables.get('hashSecretaria');",
+                  "pm.test('mismo SHA-256 que descargó la secretaria (bytes idénticos)', () => {",
+                  "    pm.expect(hash).to.eql(hashSecretaria);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{tokenEnte}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/files/download/{{archivoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "files", "download", "{{archivoId}}"]
+            },
+            "description": "Mismo archivoId, identidad completamente distinta y sin relación de establecimiento con el documento. Sólo pasa por el binding `role_endpoint` de V155 (`esPrivilegiado`), no por ownership.\n\nEste es EL test que documenta la colección: si el tamaño o el hash no coinciden con la petición anterior, algo está corrompiendo o truncando los bytes en el camino privilegiado."
+          },
+          "response": []
+        },
+        {
+          "name": "POST view-token (secretaria)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('trae token y url', () => {",
+                  "    pm.expect(body.token).to.be.a('string').and.not.empty;",
+                  "    pm.expect(body.url).to.include('/api/files/view/');",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set('viewToken', body.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{tokenSecretaria}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/files/view-token/{{archivoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "files", "view-token", "{{archivoId}}"]
+            },
+            "description": "Acuñar el token de vista ES otorgar el acceso (mismo chequeo `puedeVer` que `descargar`) -- token de un solo archivo, vida corta (por defecto 300 s)."
+          },
+          "response": []
+        },
+        {
+          "name": "GET view con token (sin JWT, como un <img>)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "",
+                  "const wordArray = CryptoJS.lib.WordArray.create(pm.response.stream);",
+                  "const hash = CryptoJS.SHA256(wordArray).toString();",
+                  "const hashSecretaria = pm.collectionVariables.get('hashSecretaria');",
+                  "pm.test('mismos bytes que la descarga directa', () => {",
+                  "    pm.expect(hash).to.eql(hashSecretaria);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/files/view/{{archivoId}}?token={{viewToken}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "files", "view", "{{archivoId}}"],
+              "query": [{ "key": "token", "value": "{{viewToken}}" }]
+            },
+            "description": "A propósito SIN cabecera Authorization: así es como lo pediría un `<img src=\"...\">`/`<iframe>` real -- el token de la URL es la única autorización."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5 — Rechazos esperados",
+      "description": "Aquí un 200 es un fallo de seguridad. Todas deben dar 401 o 404.",
+      "item": [
+        {
+          "name": "Sin credenciales → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 (lo rechaza el gateway)', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/files/download/{{archivoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "files", "download", "{{archivoId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "JWT inválido → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer basura.basura.basura" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/files/download/{{archivoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "files", "download", "{{archivoId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Archivo inexistente → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{tokenSecretaria}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/files/download/99999999",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "files", "download", "99999999"]
+            },
+            "description": "404 y no 403 a propósito -- ver el javadoc de `DownloadController#descargar`: distingue \"no es tuyo\" de \"no existe\" regalaría a quien prueba ids al azar la confirmación de que un id concreto SÍ tiene fila activa."
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "tokenSecretaria", "value": "", "type": "string" },
+    { "key": "tokenEnte", "value": "", "type": "string" },
+    { "key": "tipoDocumento", "value": "PMI", "type": "string" },
+    { "key": "sizeSubido", "value": "", "type": "string" },
+    { "key": "nombreSubido", "value": "", "type": "string" },
+    { "key": "archivoId", "value": "", "type": "string" },
+    { "key": "hashSecretaria", "value": "", "type": "string" },
+    { "key": "sizeSecretaria", "value": "", "type": "string" },
+    { "key": "hashEnte", "value": "", "type": "string" },
+    { "key": "sizeEnte", "value": "", "type": "string" },
+    { "key": "viewToken", "value": "", "type": "string" }
+  ]
+}
