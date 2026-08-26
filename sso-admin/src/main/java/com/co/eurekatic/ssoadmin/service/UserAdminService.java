@@ -555,7 +555,7 @@ public class UserAdminService {
             evictUserByEmailCache(saved.getEmail());
             // V151 — el nuevo rol puede traer un role_app hacia un app
             // que este usuario todavía no tenía en su roster.
-            jdbc.update("SELECT public.fn_sync_app_users(?)", saved.getId());
+            syncAppUsers(saved.getId());
         }
     }
 
@@ -585,8 +585,24 @@ public class UserAdminService {
             evictUserByEmailCache(saved.getEmail());
             // V151 — si ese era el último rol que le daba acceso a
             // algún app, lo saca del roster.
-            jdbc.update("SELECT public.fn_sync_app_users(?)", saved.getId());
+            syncAppUsers(saved.getId());
         }
+    }
+
+    /**
+     * {@code SELECT public.fn_sync_app_users(?)} SIGUE siendo un
+     * {@code SELECT} aunque la función devuelva {@code VOID} —
+     * Postgres igual entrega una fila de una columna (NULL). Un
+     * {@code jdbc.update(...)} contra eso lanza
+     * {@code "Se retornó un resultado cuando no se esperaba
+     * ninguno"} ({@link JdbcTemplate#update} espera rowcount, no un
+     * resultset) — hay que consultarlo con {@code query}, no
+     * ejecutarlo con {@code update}, igual que
+     * {@code EnteUsuarioAdminService} hace con las funciones que sí
+     * devuelven un valor.
+     */
+    private void syncAppUsers(Long userId) {
+        jdbc.query("SELECT public.fn_sync_app_users(?)", rs -> null, userId);
     }
 
     /**
