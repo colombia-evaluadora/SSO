@@ -29,6 +29,7 @@ DECLARE
     d academico_test.TCRITERIO_PROMOCION;
     v_pk BIGINT; v_asig BIGINT; v_area BIGINT;
     v_nombre_asig VARCHAR(130); v_nombre_area VARCHAR(130);
+    v_nombre_grado VARCHAR(130); v_establecimiento_id BIGINT;
 BEGIN
     -- Alcance por rol (como V37): gate grueso + gate fino por establecimiento.
     IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
@@ -38,11 +39,11 @@ BEGIN
     IF p_fk_periodo IS NULL THEN
         RAISE EXCEPTION 'El periodo academico es obligatorio' USING ERRCODE = '22023';
     END IF;
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, (
-             SELECT s.FK_TESTABLECIMIENTO
-               FROM academico_test.TPERIODO_ACADEMICO pa
-               JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-              WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo)) THEN
+    SELECT s.FK_TESTABLECIMIENTO INTO v_establecimiento_id
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo;
+    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_establecimiento_id) THEN
         RAISE EXCEPTION 'El usuario no puede gestionar criterios de promocion de este establecimiento'
             USING ERRCODE = '42501';
     END IF;
@@ -61,6 +62,16 @@ BEGIN
         SELECT PK_TCRITERIO_PROMOCION INTO v_id FROM academico_test.TCRITERIO_PROMOCION
          WHERE FK_TGRADO = p_fk_grado AND ACTIVE = TRUE;
     END IF;
+
+    IF p_fk_grado IS NOT NULL THEN
+        SELECT NOMBRE INTO v_nombre_grado FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_grado;
+    END IF;
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        CASE WHEN p_fk_grado IS NULL
+             THEN 'Configuración del criterio de promoción general del periodo'
+             ELSE format('Configuración del criterio de promoción del grado %s', v_nombre_grado)
+        END,
+        v_establecimiento_id);
 
     IF v_id IS NULL THEN
         -- Override de un grado: hereda del criterio por defecto del periodo lo que
