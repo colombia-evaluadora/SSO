@@ -304,27 +304,23 @@ COMMENT ON FUNCTION academico_test.fn_usu_crear(
 
 
 -- ---------------------------------------------------------------------------
--- Relaja U_TFUNCIONARIO_2: antes UNIQUE(FK_TUSUARIO) (un TUSUARIO solo podia
--- tener UN TFUNCIONARIO en toda su vida), ahora UNIQUE(FK_TUSUARIO,
--- FK_ESTABLECIMIENTO) (un TUSUARIO puede tener un TFUNCIONARIO por cada EE
--- en el que trabaja). Necesario para que fn_fun_crear (mas abajo) pueda
--- reusar un TUSUARIO existente y crearle un TFUNCIONARIO nuevo sin violar
--- unicidad. FK_ESTABLECIMIENTO NULL (pendiente de enlazar) no colisiona
--- entre si: Postgres no aplica UNIQUE entre valores NULL.
+-- U_TFUNCIONARIO_2: NO se toca aqui.
+--
+-- Historia: este archivo llego a relajar el UNIQUE(FK_TUSUARIO) de V22 a
+-- UNIQUE(FK_TUSUARIO, FK_ESTABLECIMIENTO) para soportar "un TFUNCIONARIO por
+-- EE". Ese modelo se revirtio (ver REV5/REV6 en el header y en fn_fun_crear:
+-- TFUNCIONARIO volvio a ser una fila por persona y FK_ESTABLECIMIENTO quedo
+-- siempre NULL, sin proposito). Ademas la columna FK_ESTABLECIMIENTO no
+-- existe hasta V60, asi que un `flyway migrate` desde cero rompia aqui con
+-- 42703 (column "fk_establecimiento" does not exist).
+--
+-- El estado final de U_TFUNCIONARIO_2 lo fija V71:
+--   DROP CONSTRAINT IF EXISTS u_tfuncionario_2
+--   + CREATE UNIQUE INDEX u_tfuncionario_2 (fk_tusuario, fk_establecimiento)
+--     WHERE active = true
+-- fn_fun_crear no usa ON CONFLICT sobre este nombre (hace su chequeo de
+-- existencia explicito), asi que quitar el bloque no cambia comportamiento.
 -- ---------------------------------------------------------------------------
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM pg_constraint
-         WHERE conname = 'u_tfuncionario_2'
-           AND conrelid = 'academico_test.tfuncionario'::regclass
-    ) THEN
-        ALTER TABLE academico_test.TFUNCIONARIO DROP CONSTRAINT U_TFUNCIONARIO_2;
-    END IF;
-END $$;
-
-ALTER TABLE academico_test.TFUNCIONARIO
-    ADD CONSTRAINT U_TFUNCIONARIO_2 UNIQUE (FK_TUSUARIO, FK_ESTABLECIMIENTO);
 
 
 -- ---------------------------------------------------------------------------

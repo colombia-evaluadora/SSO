@@ -51,6 +51,12 @@
 
 SET search_path TO academico_test, public;
 
+-- V42 creo esta funcion con el primer parametro llamado p_ids; aqui se
+-- renombra a p_escala_ids. CREATE OR REPLACE no puede cambiar el nombre de
+-- un parametro de entrada (42P13), asi que hay que soltar la version previa
+-- primero. Mismo patron que usa V42 antes de su propio CREATE.
+DROP FUNCTION IF EXISTS academico_test.fn_escala_bulk_delete(bigint[], bigint);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_escala_bulk_delete(p_escala_ids bigint[], p_pk_usuario_solicitante bigint)
  RETURNS TABLE(id bigint, eliminado boolean, error_code text, error_mensaje text)
  LANGUAGE plpgsql
