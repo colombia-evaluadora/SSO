@@ -1,5 +1,5 @@
 -- =============================================================================
--- V135 — reactiva las definiciones ORIGINALES de V85/V90 (client_ip,
+-- V183 — reactiva las definiciones ORIGINALES de V85/V90 (client_ip,
 -- fila_new_raw/fila_old_raw, tsesion_web mirror) que V131-V134 habían
 -- reemplazado por versiones degradadas, ahora que la causa real ya está
 -- resuelta: el ClickHouse del servidor tenía el esquema desincronizado con
@@ -80,7 +80,7 @@ WHERE tabla = concat('t', substring(lower(replaceRegexpAll(substring(:PARAM.SLUG
   AND (coalesce(:BODY.FILTERS.AUTHOR, '') = '' OR positionCaseInsensitive(app_user, :BODY.FILTERS.AUTHOR) > 0
                                    OR positionCaseInsensitive(toString(client_ip), :BODY.FILTERS.AUTHOR) > 0)
   AND (coalesce(:BODY.FILTERS.OPERATIONCH, '') = '' OR operacion = :BODY.FILTERS.OPERATIONCH)
-  -- V125/V135: coalesce(:X, '') en vez de :X -- NULL-safe cuando el
+  -- V125/V183: coalesce(:X, '') en vez de :X -- NULL-safe cuando el
   -- cliente omite la clave del filtro (bind NULL, no '').
   AND ts >= parseDateTimeBestEffort(if(coalesce(:BODY.FILTERS.OCCURREDFROM, '') = '', '1970-01-01', :BODY.FILTERS.OCCURREDFROM))
   AND ts <= parseDateTimeBestEffort(if(coalesce(:BODY.FILTERS.OCCURREDTO, '') = '', '2999-12-31', :BODY.FILTERS.OCCURREDTO))

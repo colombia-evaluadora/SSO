@@ -1,11 +1,11 @@
 -- ===========================================================================
--- V137 — fn_usuario_permisos_menu: permisos de menu efectivos de un usuario,
+-- V185 — fn_usuario_permisos_menu: permisos de menu efectivos de un usuario,
 -- para que el front pueda decidir que botones (crear/editar/eliminar/ver)
 -- mostrar segun su rol.
 --
 -- CU-86e2w4xdt — Fix validacion front botones segun permisos.
 --
--- Renumerada de V131 -> V137: V131 quedo tomado por otra migracion real
+-- Renumerada de V131 -> V185: V131 quedo tomado por otra migracion real
 -- (param_types_clickhouse_sin_cast_pg) que ya se habia mergeado a dev en
 -- paralelo -- mismo patron de resolucion que las colisiones V66/V123 de
 -- este repo: renombrar el archivo nuevo, nunca borrar el que ya esta en
@@ -144,7 +144,7 @@ SELECT
     'postgres', false, false,
     m.id_microservice, '/usuarios/:PK_TUSUARIO/permisos-menu', 'SELECT', 'GET',
     '{"PARAM.PK_TUSUARIO": "BIGINT"}'::jsonb,
-    'V137 -- permisos de menu (crear/editar/eliminar/ver) del usuario, para que el front decida que botones mostrar segun su rol'
+    'V185 -- permisos de menu (crear/editar/eliminar/ver) del usuario, para que el front decida que botones mostrar segun su rol'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;

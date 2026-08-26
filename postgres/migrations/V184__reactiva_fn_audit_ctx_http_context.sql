@@ -1,5 +1,5 @@
 -- =============================================================================
--- V136 — reactiva la definicion COMPLETA de academico_test.fn_audit_ctx
+-- V184 — reactiva la definicion COMPLETA de academico_test.fn_audit_ctx
 -- (V-audit-ctx-2/V-audit-ctx-3: client_ip, http_method, user_agent, headers,
 -- request_body, app_user_id) en el servidor de pruebas, donde seguia corriendo
 -- una version mas vieja del trigger sin esos campos.
@@ -87,4 +87,4 @@ END;
 $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION academico_test.fn_audit_ctx() IS
-    'Trigger BEFORE STATEMENT en las 148 tablas de academico_test (V26): emite pg_logical_emit_message(''audit_ctx'', ...) con el contexto completo -- incluye V-audit-ctx-2 (client_ip, user_agent, headers, request_body) y V-audit-ctx-3 (app_user_id) ademas de los campos originales. Reactivada en V136 tras confirmar que el servidor de pruebas seguia con una version anterior sin estos campos (drift Flyway -- el archivo V26 se actualizo despues de que esa version quedara marcada como aplicada).';
+    'Trigger BEFORE STATEMENT en las 148 tablas de academico_test (V26): emite pg_logical_emit_message(''audit_ctx'', ...) con el contexto completo -- incluye V-audit-ctx-2 (client_ip, user_agent, headers, request_body) y V-audit-ctx-3 (app_user_id) ademas de los campos originales. Reactivada en V184 tras confirmar que el servidor de pruebas seguia con una version anterior sin estos campos (drift Flyway -- el archivo V26 se actualizo despues de que esa version quedara marcada como aplicada).';
