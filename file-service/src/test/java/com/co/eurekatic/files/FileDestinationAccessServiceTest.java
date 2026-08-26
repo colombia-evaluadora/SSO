@@ -73,9 +73,18 @@ class FileDestinationAccessServiceTest {
 
     /** {@code paramTypesJson} null = columna NULL (query nunca migrada al tipado). */
     private static void stubQuery(NamedParameterJdbcTemplate jdbc, String pathTemplate, String paramTypesJson) {
+        stubQuery(jdbc, pathTemplate, paramTypesJson, null, null);
+    }
+
+    /** V143 — igual que {@link #stubQuery(NamedParameterJdbcTemplate, String, String)},
+     *  pero además fija el override de destino de almacenamiento. */
+    private static void stubQuery(NamedParameterJdbcTemplate jdbc, String pathTemplate, String paramTypesJson,
+                                  String fileStorageSchema, String fileStorageTable) {
         var fila = new java.util.LinkedHashMap<String, String>();
         fila.put("path_template", pathTemplate);
         fila.put("param_types", paramTypesJson);
+        fila.put("file_storage_schema", fileStorageSchema);
+        fila.put("file_storage_table", fileStorageTable);
         stubFilas(jdbc, "q.path_template", fila);
     }
 
@@ -511,5 +520,51 @@ class FileDestinationAccessServiceTest {
         var destino = service(jdbc).resolverDestino("POST", "/eval-col/funcionario");
 
         assertThat(destino.rutaExterna()).isNull();
+    }
+
+    // ---------- V143: file_storage_schema/table (override de destino de archivo) ----------
+
+    /**
+     * El caso central de V143: una query que declaró
+     * {@code file_storage_schema}/{@code file_storage_table} le pasa ese
+     * override a {@code ReenvioController} en el {@code Destino}
+     * resuelto — es lo que después decide en qué tabla escribe
+     * {@code ArchivoRepository} (ver {@code ReenvioControllerTest}).
+     */
+    @Test
+    void unaQueryConFileStorageDeclaradoLoPropagaAlDestino() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubSinEndpoints(jdbc);
+        stubQuery(jdbc, "/funcionario", "{}", "eval_col", "tarchivo_evaluacion");
+
+        var destino = service(jdbc).resolverDestino("POST", "/eval-col/funcionario");
+
+        assertThat(destino.fileStorageSchema()).isEqualTo("eval_col");
+        assertThat(destino.fileStorageTable()).isEqualTo("tarchivo_evaluacion");
+    }
+
+    /** Sin las columnas declaradas (el caso de siempre), el override queda en null — sin efecto. */
+    @Test
+    void unaQuerySinFileStorageDeclaradoNoTraeOverride() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubSinEndpoints(jdbc);
+        stubQuery(jdbc, "/funcionario", "{}");
+
+        var destino = service(jdbc).resolverDestino("POST", "/eval-col/funcionario");
+
+        assertThat(destino.fileStorageSchema()).isNull();
+        assertThat(destino.fileStorageTable()).isNull();
+    }
+
+    /** Un endpoint nunca trae override -- sólo query lo declara. */
+    @Test
+    void unEndpointNuncaTraeFileStorage() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubEndpoint(jdbc, "/register/funcionario");
+
+        var destino = service(jdbc).resolverDestino("POST", "/register/funcionario");
+
+        assertThat(destino.fileStorageSchema()).isNull();
+        assertThat(destino.fileStorageTable()).isNull();
     }
 }

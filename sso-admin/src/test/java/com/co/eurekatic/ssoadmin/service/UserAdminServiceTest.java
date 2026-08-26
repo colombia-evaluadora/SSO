@@ -60,6 +60,7 @@ class UserAdminServiceTest {
     @Mock NotificationEventPublisher events;
     @Mock SessionInvalidationClient sessionInvalidationClient;
     @Mock CacheManager cacheManager;
+    @Mock org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     UserAdminService service;
 
@@ -86,7 +87,7 @@ class UserAdminServiceTest {
                 "restore-password-account.html");
         service = new UserAdminService(userRepository, roleRepository,
                 appRepository, passwordEncoder, tokenService, emailService,
-                emailProps, events, sessionInvalidationClient, cacheManager);
+                emailProps, events, sessionInvalidationClient, cacheManager, jdbc);
     }
 
     /* ====================== createAccount ====================== */

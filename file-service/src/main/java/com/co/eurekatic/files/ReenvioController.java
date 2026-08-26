@@ -289,7 +289,8 @@ public class ReenvioController {
 
         var resultado = transformador.transformar(
                 campos, ficheros, principal.email(), principal.idUser(),
-                clasificacionesPorCampo, establecimientosPorCampo);
+                clasificacionesPorCampo, establecimientosPorCampo,
+                destinoResuelto.fileStorageSchema(), destinoResuelto.fileStorageTable());
 
         log.info("{} {} — {} campo(s), {} con fichero", metodo, destino,
                 campos.size(), ficheros.size());

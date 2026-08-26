@@ -33,7 +33,8 @@ final class ResourceLabels {
             Map.entry("Query", "la consulta"),
             Map.entry("Microservice", "el microservicio"),
             Map.entry("Microservice.instanceName", "el microservicio con instanceName"),
-            Map.entry("WriteDefinition", "la definición de escritura"));
+            Map.entry("WriteDefinition", "la definición de escritura"),
+            Map.entry("FileReferenceLocation", "la referencia de archivo"));
 
     private ResourceLabels() {
     }

@@ -56,5 +56,19 @@ public record MicroserviceRequest(
          * the {@code 06-create-app-tables} migration land
          * with {@code app_id=null}.
          */
-        Long appId
+        Long appId,
+        /**
+         * V143 — override opcional (sólo {@code kind=QUERY}): schema
+         * donde file-service debe guardar la referencia (pk) de los
+         * archivos subidos por CUALQUIER query servida por este
+         * query-service, en vez del default del servicio
+         * ({@code academico_test.tarchivo}). Va siempre junto con
+         * {@code fileStorageTable} — {@code MicroserviceService}
+         * rechaza uno sin el otro con 400 (mismo CHECK que impone la
+         * BD, validado antes para un mensaje más claro), y también
+         * rechaza declararlo en una fila {@code kind=REST}.
+         */
+        String fileStorageSchema,
+        /** Tabla del override anterior. Ver {@code fileStorageSchema}. */
+        String fileStorageTable
 ) {}

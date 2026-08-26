@@ -77,6 +77,16 @@ export const microserviceFormSchema = z
     dbPassword: z.string().default(""),
     poolSize: z.coerce.number().int().min(1).max(1000).default(10),
     instanceName: z.string().default(""),
+    // V143 — override opcional de dónde file-service guarda la
+    // referencia (pk) de los archivos subidos por las queries que
+    // corren en este query-service, en vez del destino por defecto
+    // (academico_test.tarchivo). Sólo tiene sentido para kind=QUERY
+    // — mismo lugar que dialect/jdbcUrl/dbUsername/instanceName —
+    // pero se declara sin condicionar al `kind` (igual que esos
+    // cuatro) para que la fila REST conserve la forma de
+    // MicroserviceFormValues con defaults vacíos.
+    fileStorageSchema: z.string().max(128).default(""),
+    fileStorageTable: z.string().max(128).default(""),
   })
   .superRefine((v, ctx) => {
     if (v.kind !== "QUERY") return;
@@ -97,6 +107,17 @@ export const microserviceFormSchema = z
     }
     if (!v.instanceName) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["instanceName"], message: "Requerido" });
+    }
+    // V143 — mismo patrón "ambos o ninguno" que el CHECK del
+    // backend (MicroserviceService.create/update). El error se
+    // pone en el campo que falta por llenar.
+    if (Boolean(v.fileStorageSchema) !== Boolean(v.fileStorageTable)) {
+      const emptyField = v.fileStorageSchema ? "fileStorageTable" : "fileStorageSchema";
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [emptyField],
+        message: "Completa los dos campos (schema y tabla) o deja ambos vacíos",
+      });
     }
   });
 
