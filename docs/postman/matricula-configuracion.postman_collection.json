@@ -1,0 +1,476 @@
+{
+  "info": {
+    "_postman_id": "b7a1f2c4-9d38-4e6a-8c02-1f5e7a90d3b2",
+    "name": "SSO — configuración de matrícula (query-service eval-col)",
+    "description": "Consumo y edición de la **configuración de parámetros de matrícula** de un establecimiento (CU-86e2z8aff).\n\nDos endpoints, servidos por el query-service `eval-col` a través del gateway:\n\n| Método | Ruta | Función Postgres |\n| --- | --- | --- |\n| `GET`  | `/api/eval-col/matricula/configuracion` | `academico_test.fn_matricula_config_obtener` |\n| `PUT`  | `/api/eval-col/matricula/configuracion/campo/:campoId` | `academico_test.fn_matricula_config_editar_campo` |\n\n**Quién puede usarlos** — el usuario del JWT debe ser, en el módulo académico, **rector**, **secretaria** o **jefe de sistema** de **un único** establecimiento (`fn_matricula_config_ee_solicitante`). El establecimiento sale de esa relación, no se manda. El super-admin no entra por aquí (usa `fn_matricula_config_actualizar` con el EE explícito). A nivel de gateway, además, la fila `role_query` sólo admite los roles `CEVAL-RECTOR`, `CEVAL-AUXILIAR_ADMINISTRATIVO` y `CEVAL-JEFE_SISTEMA_ESTABLECIMIENTO`.\n\n**Forma de la respuesta (ambos endpoints)** — el query-service envuelve el resultado como `{ \"rows\": [ { \"config\": <objeto> } ] }`. El objeto `config` es:\n\n```json\n{\n  \"fk_establecimiento\": 871,\n  \"establecimiento\": \"PIGSE QA TEST EE\",\n  \"pk_matricula_config\": 81,\n  \"secciones\": [\n    {\n      \"seccion\": \"Información de matrícula\",\n      \"campos\": [\n        { \"fk_campo\": 1, \"nombre\": \"Sede\", \"editable\": false, \"requerido\": true, \"visible\": true }\n      ]\n    }\n  ]\n}\n```\n\nYa viene **agrupado por sección y en el orden de la UI** (13 secciones). Cada campo trae `requerido` y `visible` como booleanos (el estado de los dos toggles) y `editable`: cuando es `false` los toggles se pintan deshabilitados y su valor **no se puede cambiar** — siempre queda `requerido:true / visible:true`. `fk_campo` es el id que se manda en el `PUT`.\n\n**Editar un campo** — `PUT .../campo/:campoId` con body `{ \"requerido\": bool, \"visible\": bool }`. Ambos son opcionales pero hay que mandar **al menos uno**; el que se omite no se toca. Devuelve la configuración completa ya actualizada (mismo shape que el `GET`).\n\n**Códigos de error**\n\n| SQLSTATE | HTTP | Caso |\n| --- | --- | --- |\n| — | `401` | sin token / token inválido |\n| — | `403` | rol no permitido por `role_query` |\n| `42501` | `403` | el usuario no es rector/secretaria/jefe de sistema de ningún EE, **o** el campo no es editable |\n| `22023` | `400` | `campoId` inválido, body sin `requerido` ni `visible`, valor no booleano, o el usuario administra 2+ EE (ambiguo) |\n| `23503` | `409` | el campo no existe o está inactivo |\n\n**Antes de empezar**\n\n1. Elige el entorno **SSO — matrícula QA** e introduce `password`.\n2. `email` viene con el rector de pruebas (`pigse-qa-rector@example.com`, EE 871). Cámbialo por `pigse-qa-secretaria@example.com` para probar como secretaria — misma configuración, mismo EE.\n\n**El login es automático**: un script de colección pide el token antes de cada petición y lo reutiliza hasta que caduca (1 h). La petición *Login* sólo sirve para ver la respuesta.\n\nLa carpeta *Rechazos esperados* comprueba que lo que debe fallar, falla. Un 2xx ahí es un bug, no un éxito. Ninguna de esas peticiones deja datos: o fallan antes de escribir, o el candado de campo no editable las neutraliza.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Login automático antes de CADA petición: si el token vivo ya",
+          "// está en la variable de colección, no hace nada.",
+          "const rutaLogin = '/api/auth/login';",
+          "if (pm.request.url.getPath().endsWith(rutaLogin)) { return; }",
+          "",
+          "// Las pruebas de rechazo de credencial (sin token / token roto /",
+          "// otro rol) llevan su Authorization escrito en la propia",
+          "// petición y no usan {{token}}: refrescarlo no las afecta.",
+          "",
+          "function caducado(jwt) {",
+          "    try {",
+          "        const carga = JSON.parse(atob(jwt.split('.')[1]));",
+          "        return !carga.exp || (carga.exp - 30) * 1000 < Date.now();",
+          "    } catch (e) { return true; }",
+          "}",
+          "",
+          "const actual = pm.collectionVariables.get('token');",
+          "if (actual && !caducado(actual)) { return; }",
+          "",
+          "const clave = pm.environment.get('password');",
+          "if (!clave) {",
+          "    throw new Error('Falta `password` en el entorno «SSO — matrícula QA».');",
+          "}",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + rutaLogin,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "        email: pm.environment.get('email'),",
+          "        password: clave",
+          "    }) }",
+          "}, (err, res) => {",
+          "    if (err) { throw new Error('No se pudo contactar con el gateway: ' + err); }",
+          "    if (res.code !== 200) {",
+          "        throw new Error('Login rechazado (' + res.code + '). Revisa `email` y `password`.');",
+          "    }",
+          "    pm.collectionVariables.set('token', res.json().token);",
+          "    console.log('token renovado automáticamente');",
+          "});"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "0 — Login",
+      "item": [
+        {
+          "name": "Login (ver la respuesta)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const token = pm.response.json().token;",
+                  "pm.test('devuelve token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+                  "pm.collectionVariables.set('token', token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "No hace falta ejecutarla: el script de colección obtiene el token solo antes de cada petición. Se queda para ver la respuesta y para forzar un token nuevo.\n\nUsuarios de prueba (misma `password`):\n- `pigse-qa-rector@example.com` — rector del EE 871 «PIGSE QA TEST EE».\n- `pigse-qa-secretaria@example.com` — secretaria del mismo EE.\n- `pigse-qa-ente@example.com` — ente territorial (sin rol de EE): se usa en la carpeta de rechazos."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1 — Configuración",
+      "item": [
+        {
+          "name": "Ver configuración",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const cfg = pm.response.json().rows[0].config;",
+                  "pm.test('trae el establecimiento del usuario', () => {",
+                  "    pm.expect(cfg.fk_establecimiento).to.be.a('number');",
+                  "    pm.expect(cfg.establecimiento).to.be.a('string');",
+                  "});",
+                  "pm.test('viene agrupado por sección', () => {",
+                  "    pm.expect(cfg.secciones).to.be.an('array').and.not.empty;",
+                  "    pm.expect(cfg.secciones[0]).to.have.keys('seccion', 'campos');",
+                  "    pm.expect(cfg.secciones[0].campos[0]).to.have.keys('fk_campo', 'nombre', 'editable', 'requerido', 'visible');",
+                  "});",
+                  "// Deja a mano un fk_campo editable para el PUT de al lado.",
+                  "const editable = cfg.secciones.flatMap(s => s.campos).find(c => c.editable);",
+                  "if (editable) { pm.collectionVariables.set('campoId', editable.fk_campo); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/matricula/configuracion",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "matricula", "configuracion"]
+            },
+            "description": "Devuelve la configuración de matrícula del establecimiento del que el usuario del token es rector / secretaria / jefe de sistema. **No recibe parámetros** — el EE sale de esa relación.\n\nRespuesta: `{ rows: [ { config: {...} } ] }`. El `config` trae `fk_establecimiento`, `establecimiento`, `pk_matricula_config` y `secciones` (array ya ordenado como la UI). Cada sección tiene `seccion` (título de la tarjeta) y `campos`, y cada campo:\n\n- `fk_campo` — id para el `PUT`.\n- `nombre` — etiqueta.\n- `editable` — `false` ⇒ toggles deshabilitados, valor fijo en `true/true`.\n- `requerido`, `visible` — estado de los dos toggles (booleanos).\n\nEl test guarda en `{{campoId}}` el primer campo editable, para encadenar con «Editar un campo»."
+          },
+          "response": [
+            {
+              "name": "200 — configuración agrupada",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/matricula/configuracion",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "eval-col", "matricula", "configuracion"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [\n    {\n      \"config\": {\n        \"fk_establecimiento\": 871,\n        \"establecimiento\": \"PIGSE QA TEST EE\",\n        \"pk_matricula_config\": 81,\n        \"secciones\": [\n          {\n            \"seccion\": \"Información de matrícula\",\n            \"campos\": [\n              { \"fk_campo\": 1, \"nombre\": \"Sede\",   \"editable\": false, \"requerido\": true, \"visible\": true },\n              { \"fk_campo\": 2, \"nombre\": \"Jornada\", \"editable\": false, \"requerido\": true, \"visible\": true },\n              { \"fk_campo\": 6, \"nombre\": \"Caracter / Especialidad / Enfasis\", \"editable\": true, \"requerido\": true, \"visible\": true }\n            ]\n          },\n          {\n            \"seccion\": \"Información de contacto del estudiante\",\n            \"campos\": [\n              { \"fk_campo\": 23, \"nombre\": \"Telefono de estudiante\", \"editable\": true, \"requerido\": true, \"visible\": true },\n              { \"fk_campo\": 24, \"nombre\": \"Email estudiante\",        \"editable\": true, \"requerido\": true, \"visible\": true }\n            ]\n          }\n        ]\n      }\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "Editar un campo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const cfg = pm.response.json().rows[0].config;",
+                  "const campo = cfg.secciones.flatMap(s => s.campos).find(c => String(c.fk_campo) === String(pm.collectionVariables.get('campoId')));",
+                  "pm.test('el campo quedó como se pidió', () => {",
+                  "    pm.expect(campo).to.be.an('object');",
+                  "    pm.expect(campo.requerido).to.eql(true);",
+                  "    pm.expect(campo.visible).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"requerido\": true,\n  \"visible\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/matricula/configuracion/campo/{{campoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "matricula", "configuracion", "campo", "{{campoId}}"],
+              "variable": [
+                {
+                  "key": "campoId",
+                  "value": "{{campoId}}",
+                  "description": "fk_campo del campo a editar (de `secciones[].campos[].fk_campo`). Por defecto lo rellena «Ver configuración» con un campo editable; 24 = «Email estudiante»."
+                }
+              ]
+            },
+            "description": "Cambia `requerido` y/o `visible` de **un** campo de la configuración del EE del usuario.\n\n- Body `{ \"requerido\": bool, \"visible\": bool }`. Los dos son opcionales; hay que mandar **al menos uno**. El que se omite **no se toca**.\n- Sólo acepta `true` / `false` (no `\"S\"/\"N\"`, no `0/1`).\n- Si el campo tiene `editable:false` ⇒ **403** (`El campo \"X\" no es editable...`). El valor se queda en `true/true`.\n- Devuelve la **configuración completa** ya actualizada (mismo shape que `GET`)."
+          },
+          "response": [
+            {
+              "name": "200 — campo actualizado (respuesta recortada)",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  { "key": "Authorization", "value": "Bearer {{token}}" },
+                  { "key": "Content-Type", "value": "application/json" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"requerido\": true,\n  \"visible\": false\n}" },
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/matricula/configuracion/campo/24",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "eval-col", "matricula", "configuracion", "campo", "24"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [\n    {\n      \"config\": {\n        \"fk_establecimiento\": 871,\n        \"establecimiento\": \"PIGSE QA TEST EE\",\n        \"pk_matricula_config\": 81,\n        \"secciones\": [\n          {\n            \"seccion\": \"Información de contacto del estudiante\",\n            \"campos\": [\n              { \"fk_campo\": 24, \"nombre\": \"Email estudiante\", \"editable\": true, \"requerido\": true, \"visible\": false }\n            ]\n          }\n        ]\n      }\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "Restaurar el campo (requerido/visible = true)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"requerido\": true,\n  \"visible\": true\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/matricula/configuracion/campo/{{campoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "matricula", "configuracion", "campo", "{{campoId}}"]
+            },
+            "description": "Deja `{{campoId}}` otra vez en `true/true`, para no ensuciar la configuración del EE de pruebas."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2 — Rechazos esperados",
+      "item": [
+        {
+          "name": "Campo NO editable → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));",
+                  "pm.test('mensaje de campo no editable', () => {",
+                  "    pm.expect(pm.response.json().message).to.include('no es editable');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"requerido\": false\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/matricula/configuracion/campo/4",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "matricula", "configuracion", "campo", "4"]
+            },
+            "description": "`fk_campo` 4 = «Grupo», uno de los 11 campos fijos (columna destino `NOT NULL`). El candado (`trg_matricula_valor_no_editable` + chequeo en la función) devuelve `42501` → **403** y no escribe nada."
+          },
+          "response": []
+        },
+        {
+          "name": "Campo inexistente → 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409', () => pm.response.to.have.status(409));",
+                  "pm.test('mensaje de campo inexistente', () => {",
+                  "    pm.expect(pm.response.json().message).to.include('no existe');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"requerido\": true\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/matricula/configuracion/campo/999999",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "matricula", "configuracion", "campo", "999999"]
+            },
+            "description": "`fk_campo` que no está en el catálogo ⇒ `23503` → **409**."
+          },
+          "response": []
+        },
+        {
+          "name": "Body sin requerido ni visible → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('pide al menos un flag', () => {",
+                  "    pm.expect(pm.response.json().message).to.include('al menos uno');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/matricula/configuracion/campo/{{campoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "matricula", "configuracion", "campo", "{{campoId}}"]
+            },
+            "description": "Sin `requerido` ni `visible` ⇒ `22023` → **400**."
+          },
+          "response": []
+        },
+        {
+          "name": "Valor no booleano → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"requerido\": \"S\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/matricula/configuracion/campo/{{campoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "matricula", "configuracion", "campo", "{{campoId}}"]
+            },
+            "description": "El query-service valida el tipo del parámetro antes de tocar la BD: `\"S\"` en un campo declarado `BOOLEAN` ⇒ **400** («...usa true/false y no 0/1 o \"S\"/\"N\"»)."
+          },
+          "response": []
+        },
+        {
+          "name": "Otro rol (ente territorial) → 403",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Login propio como ente territorial (sin rol de EE).",
+                  "pm.sendRequest({",
+                  "    url: pm.environment.get('baseUrl') + '/api/auth/login',",
+                  "    method: 'POST',",
+                  "    header: { 'Content-Type': 'application/json' },",
+                  "    body: { mode: 'raw', raw: JSON.stringify({",
+                  "        email: pm.environment.get('emailEnteTerritorial'),",
+                  "        password: pm.environment.get('password')",
+                  "    }) }",
+                  "}, (err, res) => {",
+                  "    if (err || res.code !== 200) { throw new Error('No se pudo loguear al ente territorial'); }",
+                  "    pm.collectionVariables.set('tokenEnte', res.json().token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));",
+                  "// Bloqueado en el gateway por role_query: el ente no tiene",
+                  "// ningún rol CEVAL-RECTOR / AUXILIAR_ADMINISTRATIVO / JEFE_SISTEMA.",
+                  "pm.test('rechazado por el catálogo', () => {",
+                  "    pm.expect(pm.response.json().message || '').to.include('catálogo');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{tokenEnte}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/matricula/configuracion",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "matricula", "configuracion"]
+            },
+            "description": "`pigse-qa-ente@example.com` sólo tiene `PIGSE-SECRETARIA_TERRITORIAL`, que no está en la fila `role_query` del endpoint ⇒ el gateway/query-service responde **403** («El catálogo rechazó la consulta») sin llegar a la función.\n\nNota: si un usuario **con** rol CEVAL pero **sin** relación de rector/secretaria/jefe de sistema llamara, pasaría el gateway y la función devolvería `42501` → 403 con otro mensaje."
+          },
+          "response": []
+        },
+        {
+          "name": "Sin token → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('401', () => pm.response.to.have.status(401));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer " }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/matricula/configuracion",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "matricula", "configuracion"]
+            },
+            "description": "Sin credencial ⇒ **401**."
+          },
+          "response": []
+        },
+        {
+          "name": "Token inválido → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('401', () => pm.response.to.have.status(401));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer basura.basura.basura" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/matricula/configuracion",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "matricula", "configuracion"]
+            },
+            "description": "JWT ilegible ⇒ **401** (`invalid_token`)."
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "token", "value": "", "type": "string" },
+    { "key": "tokenEnte", "value": "", "type": "string" },
+    { "key": "campoId", "value": "24", "type": "string" }
+  ]
+}
