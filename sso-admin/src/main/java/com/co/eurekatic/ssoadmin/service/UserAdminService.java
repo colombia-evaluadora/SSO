@@ -24,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -104,6 +105,17 @@ public class UserAdminService {
     private final NotificationEventPublisher events;
     private final SessionInvalidationClient sessionInvalidationClient;
     private final CacheManager cacheManager;
+    /**
+     * V151 — resincroniza {@code public.app_users} (el roster que
+     * muestra la pantalla de Apps) después de un bind/unbind de rol
+     * manual. El camino académico (TSEDE_USUARIO/TENTE_USUARIO/
+     * rector/secretaria) ya lo dispara desde
+     * {@code academico_test.fn_sincronizar_rol_publico}; éste es el
+     * mismo enganche del lado administrativo — sin él, un rol
+     * otorgado a mano (p.ej. PIGSE-ADMINISTRADOR, que no tiene fuente
+     * académica) nunca aparecía en el roster de su app.
+     */
+    private final JdbcTemplate jdbc;
 
     public UserAdminService(UserRepository userRepository,
                             RoleRepository roleRepository,
@@ -114,7 +126,8 @@ public class UserAdminService {
                             EmailProperties emailProps,
                             NotificationEventPublisher events,
                             SessionInvalidationClient sessionInvalidationClient,
-                            CacheManager cacheManager) {
+                            CacheManager cacheManager,
+                            JdbcTemplate jdbc) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.appRepository = appRepository;
@@ -125,6 +138,7 @@ public class UserAdminService {
         this.events = events;
         this.sessionInvalidationClient = sessionInvalidationClient;
         this.cacheManager = cacheManager;
+        this.jdbc = jdbc;
     }
 
     /**
@@ -539,6 +553,9 @@ public class UserAdminService {
             // JWT that includes the new role.
             sessionInvalidationClient.invalidate(saved.getEmail());
             evictUserByEmailCache(saved.getEmail());
+            // V151 — el nuevo rol puede traer un role_app hacia un app
+            // que este usuario todavía no tenía en su roster.
+            jdbc.update("SELECT public.fn_sync_app_users(?)", saved.getId());
         }
     }
 
@@ -566,6 +583,9 @@ public class UserAdminService {
             // user's authorities. Drop it.
             sessionInvalidationClient.invalidate(saved.getEmail());
             evictUserByEmailCache(saved.getEmail());
+            // V151 — si ese era el último rol que le daba acceso a
+            // algún app, lo saca del roster.
+            jdbc.update("SELECT public.fn_sync_app_users(?)", saved.getId());
         }
     }
 
