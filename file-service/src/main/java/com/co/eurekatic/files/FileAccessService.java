@@ -105,6 +105,17 @@ public class FileAccessService {
      * falso para cualquier llamante que no tenga fila propia en el
      * catálogo académico — no es un bug, es el límite real de la
      * data hoy.
+     *
+     * <p>V-pigse-visor — tercera rama: un documento institucional
+     * (PEI/PEC/PMI, {@code tdocumento_institucional.fk_tarchivo}) es
+     * "propio" de cualquier usuario cuyo establecimiento (vía
+     * {@code tsede_usuario}, mismo join que
+     * {@code FileDestinationAccessService#establecimientoDelUsuario})
+     * sea el mismo que el del documento — el rector/secretaria que lo
+     * subió, o cualquier otro funcionario activo del mismo EE. Sin
+     * esto, {@code POST /files/view-token/{id}} devolvía 404 para el
+     * propio archivo que la secretaria acababa de subir: esPropietario
+     * no conocía esta tabla en absoluto.
      */
     private boolean esPropietario(long archivoId, String email) {
         if (email == null || email.isBlank()) {
@@ -122,6 +133,16 @@ public class FileAccessService {
                       JOIN %1$s.tusuario u ON u.pk_tusuario = f.fk_tusuario
                      WHERE f.fk_tarchivo = :archivoId
                        AND lower(u.cuenta) = lower(:email)
+                    UNION ALL
+                    SELECT 1
+                      FROM %1$s.tdocumento_institucional di
+                      JOIN %1$s.tsede s ON s.fk_testablecimiento = di.fk_testablecimiento
+                      JOIN %1$s.tsede_usuario su ON su.fk_tsede = s.pk_tsede
+                      JOIN %1$s.tusuario u ON u.pk_tusuario = su.fk_tusuario
+                     WHERE di.fk_tarchivo = :archivoId
+                       AND di.active
+                       AND lower(u.cuenta) = lower(:email)
+                       AND u.active AND su.active AND su.tlv_estado = 'ACTIVO' AND s.active
                 ) propios
                 """.formatted(schema),
                 new MapSqlParameterSource()
