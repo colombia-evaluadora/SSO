@@ -30,7 +30,20 @@
 #     3. deploy     : rsync de docker-compose.yml + postgres/migrations
 #                     + observability/ + docker/ + scripts/ al servidor,
 #                     escribe /opt/sso/.env desde el secreto TEST_ENV_FILE,
-#                     y luego `docker compose pull && up -d` por SSH.
+#                     y luego levanta el stack por SSH en dos modos:
+#                       - arranque en frío (nada del tier gateado por
+#                         flyway está corriendo): infra sin dependencia de
+#                         flyway primero, luego flyway migra, y recién
+#                         entonces `up -d` trae auth-center/sso-admin/
+#                         api-gateway/etc. (compose los gatea vía
+#                         depends_on: service_completed_successfully).
+#                       - redeploy en caliente (esos servicios ya están
+#                         arriba): infra primero igual, y luego se
+#                         recrean con `--no-deps` sólo los contenedores
+#                         cuya imagen cambió — sin esperar a flyway.
+#                     En ambos casos, al final (todo el stack arriba, antes
+#                     del smoke check de api-gateway) corre `flyway migrate`
+#                     + `flyway validate`; si algo falla, repara y reaplica.
 #
 # El gate es `workflow_run` sobre CI (no un push directo) para que
 # nunca se despliegue un commit cuyos tests fallaron. `workflow_dispatch`
@@ -603,13 +616,30 @@ jobs:
           DEST: ${{ secrets.TEST_SSH_USER }}@${{ secrets.TEST_SSH_HOST }}
           GHCR_PULL_USER: ${{ secrets.GHCR_PULL_USER }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          # Lista de servicios cuya imagen cambió en este deploy (ya
+          # filtrada por el job `changes` contra el diff real). La usa el
+          # redeploy "en caliente" de más abajo para saber qué recrear sin
+          # pasarle el JSON crudo al shell remoto.
+          CHANGED_SERVICES_JSON: ${{ needs.changes.outputs.services }}
         run: |
           # Login a GHCR en el servidor en cada deploy (el token va por
           # stdin, nunca en argv ni en el heredoc). Queda cacheado en
           # ~/.docker/config.json del usuario de deploy.
           printf '%s' "$GHCR_PULL_TOKEN" | ssh -i ~/.ssh/deploy_key "$DEST" \
             "docker login ghcr.io -u '$GHCR_PULL_USER' --password-stdin"
-          ssh -i ~/.ssh/deploy_key "$DEST" bash -s <<'EOF'
+
+          # JSON → lista separada por espacios. Los nombres vienen de un
+          # whitelist fijo en el job `changes` (case/add() ahí), así que son
+          # seguros para interpolar en la línea de comando remota de abajo
+          # (sin espacios, sin metacaracteres de shell).
+          CHANGED_SERVICES="$(echo "$CHANGED_SERVICES_JSON" | jq -r 'join(" ")')"
+          echo "Servicios cuya imagen cambió: ${CHANGED_SERVICES:-<ninguno>}"
+
+          # CHANGED_SERVICES viaja como variable de entorno del comando
+          # remoto (no dentro del heredoc, que va comillado a propósito
+          # para que $DEST, $(...) etc. de las líneas de abajo se evalúen
+          # en el servidor y no aquí).
+          ssh -i ~/.ssh/deploy_key "$DEST" "CHANGED_SERVICES='$CHANGED_SERVICES' bash -s" <<'EOF'
           set -euo pipefail
           cd /opt/sso
           # El .env lo acaba de escribir el paso anterior desde el
@@ -623,6 +653,45 @@ jobs:
           # apagaría los servicios CDC en el deploy automático — el
           # override `docker-compose.cdc-off.yml` no se concatenaría.
           ./scripts/sso-stack.sh pull --quiet
+
+          # ─── Servicios gateados por flyway vs. servicios independientes ───
+          #
+          # Calculado una vez con `docker compose config --format json` +
+          # BFS sobre `depends_on` hasta `flyway` (no a ojo — dos servicios
+          # que "suenan" a que dependen del esquema, file-service y
+          # reporting-service, en realidad NO tienen depends_on:flyway en
+          # docker-compose.yml hoy). Si el grafo de dependencias cambia,
+          # recalcular con ese mismo comando.
+          #
+          #   GATED_SERVICES   → arrastran flyway transitivamente
+          #                       (auth-center/sso-admin lo declaran
+          #                       directo; api-gateway lo hereda de ambos).
+          #   INFRA_SERVICES   → no dependen de flyway. Se levantan
+          #                       siempre primero, gate o no gate.
+          GATED_SERVICES="api-gateway auth-center cdc-capture cdc-pg-slot-init notification-service sso-admin"
+          INFRA_SERVICES="cdc-clickhouse cdc-worker eurekaserver file-service mailhog provisioner rabbitmq redis reporting-service tsesion-web-gc alloy grafana loki mimir tempo"
+
+          # Filtra una lista de servicios contra el grafo ACTIVO de compose
+          # (respeta COMPOSE_PROFILES ya resuelto por sso-stack.sh: si
+          # observability o cdc-sync están apagados en .env, sus servicios
+          # no están en este listado y no los forzamos a arrancar
+          # nombrándolos explícitamente).
+          active_services() { ./scripts/sso-stack.sh config --services 2>/dev/null; }
+          ACTIVE="$(active_services)"
+          filter_active() {
+            local out=""
+            for s in "$@"; do
+              echo "$ACTIVE" | grep -qx "$s" && out="${out:+$out }$s"
+            done
+            echo "$out"
+          }
+
+          INFRA_TO_START="$(filter_active $INFRA_SERVICES)"
+          echo "=== infraestructura sin dependencia de flyway (siempre primero) ==="
+          echo "Servicios: ${INFRA_TO_START:-<ninguno activo>}"
+          if [ -n "$INFRA_TO_START" ]; then
+            ./scripts/sso-stack.sh up -d --remove-orphans $INFRA_TO_START
+          fi
 
           # Si `compose up` falla, casi siempre es porque flyway salió
           # con código !=0 y el resto de servicios dependen de
@@ -648,15 +717,9 @@ jobs:
           # rechazando el migrate porque V<n> quedaría fuera de orden).
           # Por eso, tras un repair exitoso, se corre un
           # `flyway -outOfOrder=true migrate` EXPLÍCITO antes de
-          # reintentar `compose up`: es el paso que de verdad re-ejecuta
-          # el archivo que cambió. El `compose up` posterior deja el
-          # servicio flyway del stack en estado ya migrado (no-op) y
-          # solo sirve para levantar el resto de contenedores.
+          # reintentar `compose up`.
           up_stack() { ./scripts/sso-stack.sh up -d --remove-orphans; }
-          if ! up_stack; then
-            echo "=== primer compose up falló ==="
-            echo "=== flyway logs (last 200) ==="
-            docker compose logs --no-color --tail=200 flyway || true
+          repair_and_retry() {
             echo "=== intentando flyway repair ==="
             if docker compose run --rm flyway repair; then
               echo "=== flyway repair OK; migrando con -outOfOrder=true ==="
@@ -664,30 +727,86 @@ jobs:
                 echo "=== flyway migrate (outOfOrder) OK; reintentando compose up ==="
                 if up_stack; then
                   echo "=== compose up exitoso tras repair + migrate outOfOrder ==="
-                else
-                  echo "=== compose up SIGUE fallando tras repair + migrate outOfOrder ==="
-                  echo "=== flyway logs (last 200) ==="
-                  docker compose logs --no-color --tail=200 flyway || true
-                  echo "=== auth-center logs (last 50) ==="
-                  docker compose logs --no-color --tail=50 auth-center || true
-                  echo "=== compose ps ==="
-                  docker compose ps || true
-                  exit 1
+                  return 0
                 fi
+                echo "=== compose up SIGUE fallando tras repair + migrate outOfOrder ==="
               else
                 echo "=== flyway migrate -outOfOrder=true falló tras repair ==="
-                echo "=== flyway logs (last 200) ==="
-                docker compose logs --no-color --tail=200 flyway || true
-                exit 1
               fi
             else
               echo "=== flyway repair también falló (no es un checksum mismatch) ==="
-              echo "=== auth-center logs (last 50) ==="
-              docker compose logs --no-color --tail=50 auth-center || true
-              echo "=== compose ps ==="
-              docker compose ps || true
-              exit 1
             fi
+            echo "=== flyway logs (last 200) ==="
+            docker compose logs --no-color --tail=200 flyway || true
+            echo "=== auth-center logs (last 50) ==="
+            docker compose logs --no-color --tail=50 auth-center || true
+            echo "=== compose ps ==="
+            docker compose ps || true
+            return 1
+          }
+
+          # ─── ¿Arranque en frío o redeploy en caliente? ───
+          #
+          # Si ninguno de los servicios gateados por flyway está corriendo,
+          # este stack está arrancando desde cero (o venía completamente
+          # abajo): flyway tiene que migrar ANTES de que compose intente
+          # levantar auth-center/sso-admin/api-gateway/etc., porque su
+          # depends_on:service_completed_successfully así lo exige.
+          #
+          # Si YA hay servicios gateados corriendo, es un redeploy sobre un
+          # stack sano: no hace falta esperar a flyway para recrear sólo
+          # los contenedores cuya imagen cambió — compose `--no-deps` los
+          # reemplaza sin reevaluar su cadena de dependencias (ni siquiera
+          # las de servicio-a-servicio, como api-gateway→auth-center, que
+          # ya están satisfechas porque esos contenedores siguen arriba).
+          # flyway se aplica y valida al final, siempre, antes del smoke
+          # check — ver el bloque de abajo.
+          RUNNING_SERVICES="$(docker compose ps --status running --services 2>/dev/null || true)"
+          RUNNING_GATED=""
+          for s in $GATED_SERVICES; do
+            echo "$RUNNING_SERVICES" | grep -qx "$s" && RUNNING_GATED="${RUNNING_GATED:+$RUNNING_GATED }$s"
+          done
+
+          if [ -z "$RUNNING_GATED" ]; then
+            echo "=== arranque en frío: ningún servicio gateado por flyway está corriendo ==="
+            echo "=== flyway migra ANTES de levantar los servicios que dependen de él ==="
+            if ! up_stack; then
+              echo "=== primer compose up falló ==="
+              repair_and_retry || exit 1
+            fi
+          else
+            echo "=== redeploy en caliente: ya corriendo → $RUNNING_GATED ==="
+            echo "=== se recrean sólo los servicios que cambiaron, SIN esperar a flyway ==="
+            RECREATE="$(filter_active $CHANGED_SERVICES)"
+            if [ -n "$RECREATE" ]; then
+              echo "Recreando: $RECREATE"
+              ./scripts/sso-stack.sh up -d --no-deps --remove-orphans $RECREATE
+            else
+              echo "Ningún servicio de aplicación cambió de imagen; nada que recrear."
+            fi
+          fi
+
+          # ─── flyway al final, siempre (todo el stack ya está arriba) ───
+          #
+          # En el camino frío, flyway ya migró como parte del gate de
+          # arriba — este `migrate` es un no-op que sólo confirma. En el
+          # camino caliente es la primera vez que corre en este deploy: es
+          # el que de verdad aplica las migraciones nuevas contra los
+          # contenedores recién recreados. `validate` después detecta
+          # drift que `migrate` no ve por sí solo (checksums que cambiaron
+          # por un fix posterior, un archivo editado a mano en el
+          # servidor). Si algo falla, repara y reaplica antes del smoke
+          # check de api-gateway.
+          echo "=== flyway: aplicar pendientes + validar ==="
+          if ! docker compose run --rm flyway; then
+            echo "=== flyway migrate falló en la validación final ==="
+            repair_and_retry || exit 1
+          fi
+          if ! docker compose run --rm flyway validate; then
+            echo "=== flyway validate falló tras migrar; ejecutando repair + migrate ==="
+            repair_and_retry || { echo "::error::flyway validate falló y repair + migrate no lo resolvió. Revisar antes de confiar en el deploy."; exit 1; }
+          else
+            echo "flyway validate OK: el esquema del servidor coincide con postgres/migrations."
           fi
 
           # Limpia capas de imágenes viejas para no llenar el disco

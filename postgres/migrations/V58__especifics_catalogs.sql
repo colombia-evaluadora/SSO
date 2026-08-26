@@ -62,7 +62,7 @@ SET search_path TO academico_test, public;
 -- fn_cat_municipios_listar
 --   Lista los municipios activos para alimentar selects del front
 --   (formulario de creacion/edicion de establecimiento, filtros, etc.).
---   Retorna: SETOF (pk_municipio BIGINT, nombre VARCHAR,
+--   Retorna: SETOF (pk_municipio BIGINT, codigo VARCHAR, nombre VARCHAR,
 --            pk_departamento BIGINT, departamento_nombre VARCHAR) -- 0..N filas.
 --
 --   REV2: agrega pk_departamento/departamento_nombre. El tipo `Municipality`
@@ -72,8 +72,15 @@ SET search_path TO academico_test, public;
 --   se muestra en tabla/detalle aunque no viaje como FK propia en
 --   TESTABLECIMIENTO). Sin este dato el front tendria que pedir un catalogo
 --   de departamentos aparte solo para mostrar el nombre.
+--
+--   REV3: agrega CODIGO (el codigo DANE real del municipio, columna propia
+--   de TMUNICIPIO -- NO confundir con PK_TMUNICIPIO). El select de
+--   municipio en el front mostraba pk_municipio como si fuera el codigo
+--   DANE (ej. "2 - ABEJORRAL" en vez de "05002 - ANTIOQUIA - ABEJORRAL"),
+--   que es la PK interna autoincremental, sin relacion con el codigo DANE
+--   real (ej. "05002").
 -- ---------------------------------------------------------------------------
--- Cambia el RETURNS TABLE (agrega 2 columnas): CREATE OR REPLACE no
+-- Cambia el RETURNS TABLE (agrega columnas): CREATE OR REPLACE no
 -- permite eso, hay que borrar la firma vieja primero.
 DROP FUNCTION IF EXISTS academico_test.fn_cat_municipios_listar(BIGINT);
 
@@ -82,6 +89,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_cat_municipios_listar(
 )
 RETURNS TABLE (
     pk_municipio         BIGINT,
+    codigo               VARCHAR,
     nombre               VARCHAR,
     pk_departamento      BIGINT,
     departamento_nombre  VARCHAR
@@ -90,6 +98,7 @@ LANGUAGE sql
 STABLE
 AS $$
     SELECT m.PK_TMUNICIPIO,
+           m.CODIGO,
            m.NOMBRE,
            d.PK_DEPARTAMENTO,
            d.NOMBRE
@@ -101,7 +110,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_cat_municipios_listar(BIGINT)
-    IS 'Lista los TMUNICIPIO activos para selects del front, con su TDEPARTAMENTO resuelto (pk_departamento, departamento_nombre) porque el front necesita mostrar/guardar el departamento del municipio elegido. Retorna (pk_municipio BIGINT, nombre VARCHAR, pk_departamento BIGINT, departamento_nombre VARCHAR). Solo registros con ACTIVE=TRUE (el departamento no se valida activo aparte: si el municipio esta activo, se asume su departamento tambien). Orden estable por NOMBRE ASC, PK_TMUNICIPIO ASC. Sin gate de autorizacion (catalogo maestro de lectura libre); p_pk_usuario_solicitante se conserva al inicio de la firma por simetria con el resto de funciones del esquema y para reusar el binding :CONTEXT.USER_ID en la capa Java. Si p_pk_usuario_solicitante es nulo o <= 0, la plataforma debe lanzar 22023 antes de invocar.';
+    IS 'Lista los TMUNICIPIO activos para selects del front, con su TDEPARTAMENTO resuelto (pk_departamento, departamento_nombre) porque el front necesita mostrar/guardar el departamento del municipio elegido. Retorna (pk_municipio BIGINT, codigo VARCHAR, nombre VARCHAR, pk_departamento BIGINT, departamento_nombre VARCHAR). REV3: agrega CODIGO (el codigo DANE real del municipio) -- antes el front mostraba pk_municipio (la PK interna autoincremental) como si fuera el codigo DANE, que no lo es. Solo registros con ACTIVE=TRUE (el departamento no se valida activo aparte: si el municipio esta activo, se asume su departamento tambien). Orden estable por NOMBRE ASC, PK_TMUNICIPIO ASC. Sin gate de autorizacion (catalogo maestro de lectura libre); p_pk_usuario_solicitante se conserva al inicio de la firma por simetria con el resto de funciones del esquema y para reusar el binding :CONTEXT.USER_ID en la capa Java. Si p_pk_usuario_solicitante es nulo o <= 0, la plataforma debe lanzar 22023 antes de invocar.';
 
 
 -- ---------------------------------------------------------------------------
