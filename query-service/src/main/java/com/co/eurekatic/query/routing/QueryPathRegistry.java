@@ -70,7 +70,7 @@ public class QueryPathRegistry {
      * corresponde. PathPattern hace exactamente eso.
      */
     private static final PathPatternParser PARSER = new PathPatternParser();
-    private final AtomicReference<Map<RouteKey, String>> tableRef =
+    private final AtomicReference<Map<RouteKey, RouteEntry>> tableRef =
             new AtomicReference<>(Map.of());
 
     /**
@@ -80,6 +80,15 @@ public class QueryPathRegistry {
      * distintas sobre la misma ruta.
      */
     public record RouteKey(String method, String template) {}
+
+    /**
+     * V110 — lo que el registro guarda por ruta, además del uuid:
+     * el opt-in de cache y su TTL, tal cual los declaró el autor
+     * de la fila en el catálogo. Viajan junto al uuid porque
+     * {@link QueryPathController} los necesita en el momento del
+     * dispatch, sin un segundo round-trip al catálogo.
+     */
+    public record RouteEntry(String uuid, boolean cacheable, int cacheTtlSeconds) {}
     private final String instanceName;
     /**
      * V32 — resolved at boot via {@code /internal/whoami}.
@@ -167,7 +176,7 @@ public class QueryPathRegistry {
         // restart.
         resolveMyMicroserviceId();
         try {
-            Map<RouteKey, String> next = new LinkedHashMap<>();
+            Map<RouteKey, RouteEntry> next = new LinkedHashMap<>();
             // V30+V32 — call the dedicated internal endpoint
             // /internal/pathTemplates (server-side filtered to
             // rows with a non-null pathTemplate). Auth is the
@@ -185,7 +194,16 @@ public class QueryPathRegistry {
                     String method = q.httpMethod() == null || q.httpMethod().isBlank()
                             ? "POST"
                             : q.httpMethod().trim().toUpperCase(java.util.Locale.ROOT);
-                    next.put(new RouteKey(method, q.pathTemplate()), q.uuid());
+                    // V110 — cacheable is meaningful for GET rows
+                    // only; QueryPathController additionally never
+                    // caches a non-GET dispatch regardless of this
+                    // flag, but we also refuse to carry it through
+                    // here so a catalog author's mistake (marking a
+                    // POST/PUT/PATCH row cacheable) can't even reach
+                    // the controller as true.
+                    boolean cacheable = "GET".equals(method) && q.cacheable();
+                    next.put(new RouteKey(method, q.pathTemplate()),
+                            new RouteEntry(q.uuid(), cacheable, q.cacheTtlSeconds()));
                 }
             }
             tableRef.set(Map.copyOf(next));
@@ -201,28 +219,72 @@ public class QueryPathRegistry {
 
     /**
      * Match an incoming path against the registered templates.
-     * Returns the uuid + extracted path variables on the first
-     * match (templates are walked in iteration order, so the
-     * catalog author can rely on declaration order — more
-     * specific templates declared first).
+     *
+     * <p>Antes esto devolvía el primer match en orden de
+     * iteración, con el comentario de que "el autor del
+     * catálogo declara las plantillas más específicas
+     * primero". Ese contrato era imposible de cumplir: el
+     * orden de iteración es el de {@code next.put(...)} en
+     * {@link #refresh()}, que sigue el orden en que
+     * {@code fetchPathTemplates} devuelve las filas (en la
+     * práctica, {@code id_query} ascendente) — nada que el
+     * autor controle desde el formulario del catálogo. El
+     * síntoma real: {@code PUT /grados/:ID} (id 58) shadowa
+     * para siempre a {@code PUT /grados/eliminacion-masiva}
+     * (id 69) porque {@code :ID} matchea el literal
+     * "eliminacion-masiva" igual de bien que un id real, y 58
+     * se insertó antes que 69. Mismo bug con
+     * {@code PUT /establecimientos/sedes/:ID} (92) tapando
+     * {@code PUT /establecimientos/sedes/bulk-delete} (96).
+     * Ambos endpoints bulk quedaban inalcanzables en
+     * producción, no sólo en el harness de pruebas.
+     *
+     * <p>Ahora se recorren TODOS los templates del método y se
+     * queda con el que extrajo MENOS variables de ruta — un
+     * template sin {@code :VAR} es estrictamente más
+     * específico que uno con, así que "menos variables" es un
+     * proxy correcto de especificidad sin tener que enseñarle
+     * a {@code PathPattern} nada de scoring. En empate (dos
+     * templates con la misma cantidad de variables que
+     * matchean la misma ruta — ambigüedad real de catálogo, no
+     * shadowing) gana el primero en orden de iteración, igual
+     * que antes.
      */
     public Optional<Match> match(String method, String path) {
+        Optional<Match> result = matchAgainst(tableRef.get(), method, path);
+        metrics.recordRegistryMatch(result.isPresent()
+                ? QueryMetrics.Match.HIT : QueryMetrics.Match.MISS);
+        return result;
+    }
+
+    /**
+     * La lógica de {@link #match(String, String)} sin la
+     * dependencia de {@link #tableRef} ni de {@link #metrics}, para
+     * poder probarla contra una tabla armada a mano — igual que
+     * {@link #matchTemplate} deja la gramática probable sin montar
+     * el contexto de Spring.
+     */
+    static Optional<Match> matchAgainst(Map<RouteKey, RouteEntry> table, String method, String path) {
         if (path == null || path.isEmpty()) {
             return Optional.empty();
         }
-        Map<RouteKey, String> snapshot = tableRef.get();
-        for (Map.Entry<RouteKey, String> e : snapshot.entrySet()) {
+        RouteEntry best = null;
+        Map<String, String> bestVars = null;
+        int bestSpecificity = Integer.MAX_VALUE;
+        for (Map.Entry<RouteKey, RouteEntry> e : table.entrySet()) {
             if (!e.getKey().method().equals(method)) {
                 continue;
             }
             Optional<Map<String, String>> vars = matchTemplate(e.getKey().template(), path);
-            if (vars.isPresent()) {
-                metrics.recordRegistryMatch(QueryMetrics.Match.HIT);
-                return Optional.of(new Match(e.getValue(), vars.get()));
+            if (vars.isPresent() && vars.get().size() < bestSpecificity) {
+                bestSpecificity = vars.get().size();
+                best = e.getValue();
+                bestVars = vars.get();
             }
         }
-        metrics.recordRegistryMatch(QueryMetrics.Match.MISS);
-        return Optional.empty();
+        return best == null
+                ? Optional.empty()
+                : Optional.of(new Match(best.uuid(), bestVars, best.cacheable(), best.cacheTtlSeconds()));
     }
 
     /**
@@ -264,7 +326,8 @@ public class QueryPathRegistry {
         return tableRef.get().size();
     }
 
-    public record Match(String uuid, Map<String, String> pathVars) {}
+    public record Match(String uuid, Map<String, String> pathVars,
+                        boolean cacheable, int cacheTtlSeconds) {}
 
     /**
      * V33 — immediate refresh trigger exposed via the

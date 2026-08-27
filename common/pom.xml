@@ -53,6 +53,34 @@
             <version>${postgresql.version}</version>
             <scope>provided</scope>
         </dependency>
+        <!--
+            AuditContextExtractor (com.co.eurekatic.common.audit) needs
+            HttpServletRequest to read the audit-context headers/IP the same
+            way query-service's QueryService.injectRequestParams already
+            does. `provided` because common itself has no servlet container —
+            every consumer that actually calls this class (auth-center,
+            file-service, sso-admin) already carries spring-boot-starter-web
+            transitively, which supplies the real jar at runtime. Modules
+            without a web starter (e.g. notification-service, which doesn't
+            use this class) are unaffected.
+        -->
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <!-- RequestContextHolder/ServletRequestAttributes live here, not in jakarta.servlet-api. Same `provided` rationale as above. -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-web</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <!-- ObjectMapper for AuditContextExtractor's request-body serialization. Same `provided` rationale: every consumer already carries jackson-databind via spring-boot-starter-web/-json. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <scope>provided</scope>
+        </dependency>
 
         <!--
             JJWT 0.12.x: split into api / impl / jackson. The impl and

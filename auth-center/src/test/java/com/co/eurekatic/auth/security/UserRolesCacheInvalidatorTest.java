@@ -32,7 +32,7 @@ class UserRolesCacheInvalidatorTest {
     @BeforeEach
     void setUp() {
         props = new SessionCacheProperties(
-                3600L, "sso:session:user-roles", "secret", true, 60L);
+                3600L, "sso:session:user-roles", "secret", true, 60L, 300L, 60L);
         invalidator = new UserRolesCacheInvalidator(redis, props);
     }
 
@@ -66,7 +66,7 @@ class UserRolesCacheInvalidatorTest {
     @Test
     void invalidateSkipsRedisWhenCacheDisabled() {
         props = new SessionCacheProperties(
-                3600L, "sso:session:user-roles", "secret", false, 60L);
+                3600L, "sso:session:user-roles", "secret", false, 60L, 300L, 60L);
         invalidator = new UserRolesCacheInvalidator(redis, props);
 
         invalidator.invalidate("alice@example.com");

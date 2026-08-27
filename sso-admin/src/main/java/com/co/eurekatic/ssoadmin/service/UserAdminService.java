@@ -11,6 +11,8 @@ import com.co.eurekatic.common.security.PasswordPolicy;
 import com.co.eurekatic.ssoadmin.client.SessionInvalidationClient;
 import com.co.eurekatic.ssoadmin.config.EmailProperties;
 import com.co.eurekatic.ssoadmin.dto.CreateAccountRequest;
+import com.co.eurekatic.ssoadmin.dto.ForgotPasswordResponse;
+import com.co.eurekatic.ssoadmin.dto.ResetTokenStatusResponse;
 import com.co.eurekatic.ssoadmin.dto.UpdateAccountRequest;
 import com.co.eurekatic.ssoadmin.dto.UserResponse;
 import com.co.eurekatic.ssoadmin.event.NotificationEventPublisher;
@@ -22,15 +24,20 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -84,6 +91,10 @@ public class UserAdminService {
     private static final Pattern EMAIL_REGEX =
             Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
 
+    // Espeja RESTORE_TTL_MINUTES de TokenService (30 min). En segundos porque
+    // es lo que consume el front para el contador de la pantalla de aviso.
+    private static final long RESTORE_TTL_SECONDS = 30 * 60;
+
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final AppRepository appRepository;
@@ -94,6 +105,17 @@ public class UserAdminService {
     private final NotificationEventPublisher events;
     private final SessionInvalidationClient sessionInvalidationClient;
     private final CacheManager cacheManager;
+    /**
+     * V151 — resincroniza {@code public.app_users} (el roster que
+     * muestra la pantalla de Apps) después de un bind/unbind de rol
+     * manual. El camino académico (TSEDE_USUARIO/TENTE_USUARIO/
+     * rector/secretaria) ya lo dispara desde
+     * {@code academico_test.fn_sincronizar_rol_publico}; éste es el
+     * mismo enganche del lado administrativo — sin él, un rol
+     * otorgado a mano (p.ej. PIGSE-ADMINISTRADOR, que no tiene fuente
+     * académica) nunca aparecía en el roster de su app.
+     */
+    private final JdbcTemplate jdbc;
 
     public UserAdminService(UserRepository userRepository,
                             RoleRepository roleRepository,
@@ -104,7 +126,8 @@ public class UserAdminService {
                             EmailProperties emailProps,
                             NotificationEventPublisher events,
                             SessionInvalidationClient sessionInvalidationClient,
-                            CacheManager cacheManager) {
+                            CacheManager cacheManager,
+                            JdbcTemplate jdbc) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.appRepository = appRepository;
@@ -115,6 +138,7 @@ public class UserAdminService {
         this.events = events;
         this.sessionInvalidationClient = sessionInvalidationClient;
         this.cacheManager = cacheManager;
+        this.jdbc = jdbc;
     }
 
     /**
@@ -362,24 +386,102 @@ public class UserAdminService {
      * Issues a restore-password email. Always returns
      * successfully (even if the email is unknown) so the API
      * doesn't leak which addresses are registered.
+     *
+     * <p><b>Devuelve el token en la respuesta</b> — ver la advertencia de
+     * seguridad en {@link ForgotPasswordResponse}. Es un vector de apropiacion
+     * de cuenta y se expone a pedido explicito del equipo.
+     *
+     * <p>Para NO delatar que direcciones existen, un correo desconocido recibe
+     * igual un token con la misma forma y vida: se genera al vuelo y no se
+     * persiste, asi que no sirve para restablecer nada. Sin esto, la sola
+     * presencia del token en la respuesta convertiria este endpoint en un
+     * enumerador de cuentas.
      */
     @Transactional
-    public void forgotPassword(String email, String appName) {
-        userRepository.findAll().stream()
+    public ForgotPasswordResponse forgotPassword(String email, String appName) {
+        Optional<User> encontrado = userRepository.findAll().stream()
                 .filter(u -> email.equals(u.getEmail()))
-                .findFirst()
-                .ifPresent(u -> {
-                    String token = tokenService.issueRestoreToken(u);
-                    userRepository.save(u);
+                .findFirst();
 
-                    Map<String, Object> payload = new LinkedHashMap<>();
-                    payload.put("displayName", u.getFullName() == null ? u.getEmail() : u.getFullName());
-                    payload.put("email", u.getEmail());
-                    payload.put("resetLink", resolveRestoreUrl(token, appName));
-                    payload.put("ttlMinutes", 30);
-                    events.publish("email", String.valueOf(u.getId()), u.getEmail(),
-                            "password-reset", payload, null);
-                });
+        if (encontrado.isEmpty()) {
+            return new ForgotPasswordResponse(UUID.randomUUID().toString(), RESTORE_TTL_SECONDS);
+        }
+
+        User u = encontrado.get();
+        String token = tokenService.issueRestoreToken(u);
+        userRepository.save(u);
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("displayName", u.getFullName() == null ? u.getEmail() : u.getFullName());
+        payload.put("email", u.getEmail());
+        payload.put("resetLink", resolveRestoreUrl(token, appName));
+        payload.put("ttlMinutes", RESTORE_TTL_SECONDS / 60);
+        events.publish("email", String.valueOf(u.getId()), u.getEmail(),
+                "password-reset", payload, null);
+
+        return new ForgotPasswordResponse(token, RESTORE_TTL_SECONDS);
+    }
+
+    /**
+     * Estado de un enlace de reseteo. Publico: lo consulta la pantalla de
+     * confirmacion, que corre sin sesion.
+     *
+     * <p>Un token inexistente y uno vencido se distinguen a proposito
+     * ({@code invalid} vs {@code expired}) porque llevan a mensajes distintos:
+     * "solicita uno nuevo" no sirve si el enlace nunca fue valido. No hay fuga
+     * ahi — para preguntar por un token hay que tenerlo, y solo llega por
+     * correo.
+     *
+     * <p>{@code issuedAt} se deriva restandole el TTL al vencimiento en vez de
+     * guardarse aparte: el TTL es fijo, asi que la columna extra seria un dato
+     * redundante que puede desincronizarse.
+     */
+    @Transactional(readOnly = true)
+    public ResetTokenStatusResponse resetTokenStatus(String token) {
+        Optional<User> encontrado = (token == null || token.isBlank())
+                ? Optional.empty()
+                : userRepository.findByTokenRestore(token);
+
+        if (encontrado.isEmpty()) {
+            return new ResetTokenStatusResponse("invalid", 0, RESTORE_TTL_SECONDS, null, null);
+        }
+
+        User u = encontrado.get();
+        Instant expiraEn = u.getTokenRestoreExpiresAt();
+
+        // Sin vencimiento no se puede afirmar que siga vivo: se trata como
+        // expirado, que es el lado seguro.
+        if (expiraEn == null) {
+            return new ResetTokenStatusResponse("expired", 0, RESTORE_TTL_SECONDS,
+                    maskEmail(u.getEmail()), null);
+        }
+
+        long emitidoEn = expiraEn.minusSeconds(RESTORE_TTL_SECONDS).toEpochMilli();
+        long restante = Duration.between(Instant.now(), expiraEn).toSeconds();
+
+        return new ResetTokenStatusResponse(
+                restante > 0 ? "valid" : "expired",
+                Math.max(restante, 0),
+                RESTORE_TTL_SECONDS,
+                maskEmail(u.getEmail()),
+                emitidoEn);
+    }
+
+    /**
+     * {@code jorge@example.com} -> {@code j****@example.com}.
+     *
+     * <p>Alcanza para que quien pidio el reseteo reconozca su propia direccion
+     * sin que la respuesta la revele entera.
+     */
+    private static String maskEmail(String email) {
+        if (email == null || email.isBlank()) {
+            return null;
+        }
+        int arroba = email.indexOf('@');
+        if (arroba <= 0) {
+            return "****";
+        }
+        return email.charAt(0) + "****" + email.substring(arroba);
     }
 
     private String resolveRestoreUrl(String token, String appName) {
@@ -451,6 +553,9 @@ public class UserAdminService {
             // JWT that includes the new role.
             sessionInvalidationClient.invalidate(saved.getEmail());
             evictUserByEmailCache(saved.getEmail());
+            // V151 — el nuevo rol puede traer un role_app hacia un app
+            // que este usuario todavía no tenía en su roster.
+            syncAppUsers(saved.getId());
         }
     }
 
@@ -478,7 +583,26 @@ public class UserAdminService {
             // user's authorities. Drop it.
             sessionInvalidationClient.invalidate(saved.getEmail());
             evictUserByEmailCache(saved.getEmail());
+            // V151 — si ese era el último rol que le daba acceso a
+            // algún app, lo saca del roster.
+            syncAppUsers(saved.getId());
         }
+    }
+
+    /**
+     * {@code SELECT public.fn_sync_app_users(?)} SIGUE siendo un
+     * {@code SELECT} aunque la función devuelva {@code VOID} —
+     * Postgres igual entrega una fila de una columna (NULL). Un
+     * {@code jdbc.update(...)} contra eso lanza
+     * {@code "Se retornó un resultado cuando no se esperaba
+     * ninguno"} ({@link JdbcTemplate#update} espera rowcount, no un
+     * resultset) — hay que consultarlo con {@code query}, no
+     * ejecutarlo con {@code update}, igual que
+     * {@code EnteUsuarioAdminService} hace con las funciones que sí
+     * devuelven un valor.
+     */
+    private void syncAppUsers(Long userId) {
+        jdbc.query("SELECT public.fn_sync_app_users(?)", rs -> null, userId);
     }
 
     /**

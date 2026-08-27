@@ -56,4 +56,20 @@ public class EmailProviderConfig {
     public ChannelProvider smtpMailhog(@Lazy ProviderRegistry registry) {
         return new SmtpEmailProvider("smtp-mailhog", registry);
     }
+
+    /**
+     * ZeptoMail (Zoho), sembrado por {@code V3__seed_smtp_zeptomail.sql}.
+     * El usuario SMTP es la cadena literal {@code emailapikey} para todas
+     * las cuentas — lo que identifica la cuenta es la contraseña, que es
+     * el token. No es una errata en el {@code .env}.
+     *
+     * <p>El nombre del bean tiene que coincidir EXACTO con el
+     * {@code provider_key} de la fila: {@link ProviderRegistry#refresh()}
+     * las casa por ese nombre y descarta con un WARN las filas sin bean.
+     * Por eso dar de alta un proveedor nuevo no es solo un INSERT.
+     */
+    @Bean(name = "smtp-zeptomail")
+    public ChannelProvider smtpZeptomail(@Lazy ProviderRegistry registry) {
+        return new SmtpEmailProvider("smtp-zeptomail", registry);
+    }
 }

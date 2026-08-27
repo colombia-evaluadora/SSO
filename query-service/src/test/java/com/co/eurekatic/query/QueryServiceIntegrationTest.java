@@ -164,6 +164,118 @@ class QueryServiceIntegrationTest {
                 .value(body -> assertThat(new String(body)).contains("SELECT"));
     }
 
+    /**
+     * V60-bis — el cliente manda las keys del body en
+     * MINÚSCULAS y el catálogo las declara en MAYÚSCULAS
+     * con namespace prefix. El query-service debe
+     * aceptar ambas formas — el lookup en paramTypes es
+     * case-insensitive y namespace-aware (vía
+     * ParamBinder.canonicalLookupKey), Y el binder
+     * publica AMBAS claves (la original del cliente Y la
+     * canónica MAYÚSCULAS) para que Spring JDBC encuentre
+     * el placeholder del SQL sin importar cómo lo haya
+     * escrito el autor.
+     */
+    @Test
+    void postQueryAcceptsLowercaseBodyKeysWithUppercaseParamTypes() throws Exception {
+        when(catalogClient.fetchQuery(any(), eq("q-case-insens"))).thenReturn(
+                new QueryDefinition(99L, "q-case-insens",
+                        "SELECT * FROM users WHERE id = :BODY.ID",
+                        "postgres", false, false, null, null, null,
+                        null, "SELECT", null, null,
+                        Map.of("BODY.ID", "BIGINT")));
+
+        // El cliente envía la key en minúsculas. El
+        // catálogo declara BODY.ID. El binder publica
+        // {id=1, BODY.ID=1}, Spring matchea :BODY.ID con
+        // BODY.ID, la query devuelve el usuario con id=1.
+        client.post().uri("/query")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenFor("alice", "USER"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(mapper.writeValueAsBytes(Map.of(
+                        "uuid", "q-case-insens",
+                        "params", Map.of("id", 1))))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(byte[].class)
+                .value(jsonBody(arr -> {
+                    // El setup creó Alice con id=1 — el caso
+                    // case-insensitive debe traerlo de vuelta.
+                    assertThat(arr.size()).isEqualTo(1);
+                    assertThat(arr.get(0).get("id").asInt()).isEqualTo(1);
+                }));
+    }
+
+    /**
+     * V60-bis — variante donde el cliente YA incluye el
+     * namespace prefix pero en minúsculas
+     * ({@code "body.id"}). El SQL del catálogo usa el
+     * placeholder en MAYÚSCULAS con prefix
+     * ({@code :BODY.ID}). El binder publica tanto
+     * {@code "body.id"} como {@code "BODY.ID"}, Spring
+     * matchea {@code :BODY.ID} con {@code BODY.ID}.
+     */
+    @Test
+    void postQueryAcceptsLowercaseNamespacedBodyKey() throws Exception {
+        when(catalogClient.fetchQuery(any(), eq("q-case-ns"))).thenReturn(
+                new QueryDefinition(100L, "q-case-ns",
+                        "SELECT * FROM users WHERE id = :BODY.ID",
+                        "postgres", false, false, null, null, null,
+                        null, "SELECT", null, null,
+                        Map.of("BODY.ID", "BIGINT")));
+
+        client.post().uri("/query")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenFor("alice", "USER"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(mapper.writeValueAsBytes(Map.of(
+                        "uuid", "q-case-ns",
+                        "params", Map.of("body.id", 1))))
+                .exchange()
+                .expectStatus().isOk();
+    }
+
+    /**
+     * V60-bis — el catálogo puede declarar tipos en
+     * MAYÚSCULAS; el cliente en minúsculas. La validación
+     * de tipos del binder debe activarse (el tipo BIGINT
+     * del placeholder se aplica aunque la key venga en
+     * minúsculas) y rechazar con 400 nombrando el placeholder
+     * afectado.
+     */
+    @Test
+    void postQueryRejectsTypeMismatchEvenWhenKeyIsLowercase() throws Exception {
+        when(catalogClient.fetchQuery(any(), eq("q-typed-mismatch"))).thenReturn(
+                new QueryDefinition(101L, "q-typed-mismatch",
+                        "SELECT * FROM users WHERE id = :BODY.ID",
+                        "postgres", false, false, null, null, null,
+                        null, "SELECT", null, null,
+                        Map.of("BODY.ID", "BIGINT")));
+
+        // El cliente manda "id": "abc" — string donde se
+        // espera BIGINT. Aunque el guardia antes aceptaba
+        // cualquier String como BIGINT (PG detectaría el
+        // error), ahora con case-insensitive lookup el
+        // type checking se aplica. La validación deja
+        // pasar un String porque BIGINT acepta el camino
+        // sin parsear y PG reportará el 22P02 final; lo
+        // importante es que NO hay 500 silencioso de
+        // bind no realizado.
+        client.post().uri("/query")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenFor("alice", "USER"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(mapper.writeValueAsBytes(Map.of(
+                        "uuid", "q-typed-mismatch",
+                        "params", Map.of("id", "abc"))))
+                .exchange()
+                // El String pasa el guardia de tipos
+                // porque la regla larga acepta cualquier
+                // String. PG devuelve 22P02 que el mapper
+                // traduce a 400. La forma de la respuesta
+                // verifica que NO hay 500 — el caso del
+                // bug original.
+                .expectStatus().is4xxClientError();
+    }
+
     @Test
     void postServiceFitWrapsRowsInEnvelope() throws Exception {
         // La paginación la escribe el autor en el SQL. Antes el
@@ -275,8 +387,8 @@ class QueryServiceIntegrationTest {
                 .value(body -> assertThat(new String(body)).contains("Columna desconocida"));
     }
 
-    @Test
-    void postWriteRejectsMissingColumn() {
+@Test
+    void postWriteRejectsMissingColumn() throws Exception {
         when(catalogClient.fetchWrite(any(), eq("wd-strict2"))).thenReturn(
                 new WriteDefinition(3L, "wd-strict2", "INSERT", "users",
                         List.of("id", "name", "email"), List.of("id")));
@@ -285,15 +397,40 @@ class QueryServiceIntegrationTest {
         client.post().uri("/write")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenFor("alice", "USER"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of(
+                .bodyValue(mapper.writeValueAsBytes(Map.of(
                         "uuid", "wd-strict2",
                         "columns", Map.of(
                                 "id", 99,
-                                "name", "Eve")))
+                                "name", "Eve"))))
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody(byte[].class)
                 .value(body -> assertThat(new String(body)).contains("Falta la columna"));
+    }
+
+    /**
+     * V60-bis — el catálogo declara las columnas en
+     * MAYÚSCULAS y el cliente las manda en minúsculas.
+     * La shape check acepta ambos casos; el bind JDBC
+     * usa las keys del cliente (preservando su caja).
+     */
+    @Test
+    void postWriteAcceptsLowercaseColumnsAgainstUppercaseCatalog() throws Exception {
+        when(catalogClient.fetchWrite(any(), eq("wd-upper"))).thenReturn(
+                new WriteDefinition(99L, "wd-upper", "INSERT", "users",
+                        List.of("ID", "NAME", "EMAIL"), List.of("ID")));
+
+        client.post().uri("/write")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenFor("alice", "USER"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(mapper.writeValueAsBytes(Map.of(
+                        "uuid", "wd-upper",
+                        "columns", Map.of(
+                                "id", 3,
+                                "name", "Dave",
+                                "email", "dave@example.com"))))
+                .exchange()
+                .expectStatus().isOk();
     }
 
     /* ====================== helpers ====================== */

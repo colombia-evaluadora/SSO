@@ -125,6 +125,29 @@ class HttpContainerProvisionerTest {
         server.verify();
     }
 
+    /**
+     * Regression test for the content-negotiation bug: {@link #client}
+     * carries {@code Accept: application/json} as a DEFAULT header
+     * (see the {@code status} tests above), but
+     * {@code ProvisionerController.logs} only produces
+     * {@code text/plain}. Against a real Spring server that mismatch
+     * throws {@code HttpMediaTypeNotAcceptableException} (406) BEFORE
+     * the handler even runs — {@link MockRestServiceServer} doesn't
+     * do real content negotiation, so it would happily respond
+     * regardless of the Accept header, which is exactly why the bug
+     * slipped through this suite originally. Asserting the header
+     * value explicitly is what would have caught it.
+     */
+    @Test
+    void logsRequestsTextPlainNotTheClientDefaultJson() {
+        server.expect(requestTo(BASE + "/provision/query-service-oracle-dev/logs?tail=200"))
+                .andExpect(header("Accept", MediaType.TEXT_PLAIN_VALUE))
+                .andRespond(withSuccess("log line\n", MediaType.TEXT_PLAIN));
+
+        assertThat(provisioner.logs("query-service-oracle-dev", 200)).isEqualTo("log line\n");
+        server.verify();
+    }
+
     @Test
     void logsReturnsEmptyStringWhenProvisionerReturnsEmpty() {
         server.expect(requestTo(BASE + "/provision/query-service-x/logs?tail=200"))

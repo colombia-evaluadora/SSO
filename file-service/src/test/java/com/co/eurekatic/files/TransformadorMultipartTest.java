@@ -2,6 +2,7 @@ package com.co.eurekatic.files;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.Map;
@@ -11,6 +12,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -32,15 +34,15 @@ class TransformadorMultipartTest {
     void sustituyeElBinarioPorSuIdConservandoElNombreDelCampo() throws Exception {
         var almacen = mock(AlmacenObjetos.class);
         var repo = mock(ArchivoRepository.class);
-        when(repo.reservar(anyString(), anyLong(), anyString())).thenReturn(12L, 13L);
+        when(repo.reservar(anyString(), anyLong(), anyString(), any())).thenReturn(12L, 13L);
         when(almacen.subir(anyString(), any(), anyLong(), anyString()))
                 .thenReturn("s3://b/12/x", "s3://b/13/y");
 
-        Map<String, Object> cuerpo = new TransformadorMultipart(almacen, repo).transformar(
+        Map<String, Object> cuerpo = new TransformadorMultipart(almacen, repo, null).transformar(
                 Map.of("nombre", "Juan Pérez"),
                 Map.of("pdf",  List.of(fichero("pdf", "informe.pdf", "A")),
                        "foto", List.of(fichero("foto", "cara.png", "B"))),
-                "admin@example.com").cuerpo();
+                "admin@example.com", null, null, null).cuerpo();
 
         assertThat(cuerpo).containsEntry("nombre", "Juan Pérez");
         assertThat(cuerpo.get("pdf")).isInstanceOf(Long.class);
@@ -52,16 +54,16 @@ class TransformadorMultipartTest {
     void variosFicherosEnUnCampoProducenUnaLista() throws Exception {
         var almacen = mock(AlmacenObjetos.class);
         var repo = mock(ArchivoRepository.class);
-        when(repo.reservar(anyString(), anyLong(), anyString())).thenReturn(1L, 2L, 3L);
+        when(repo.reservar(anyString(), anyLong(), anyString(), any())).thenReturn(1L, 2L, 3L);
         when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/k");
 
-        Map<String, Object> cuerpo = new TransformadorMultipart(almacen, repo).transformar(
+        Map<String, Object> cuerpo = new TransformadorMultipart(almacen, repo, null).transformar(
                 Map.of(),
                 Map.of("anexos", List.of(
                         fichero("anexos", "a.pdf", "1"),
                         fichero("anexos", "b.pdf", "2"),
                         fichero("anexos", "c.pdf", "3"))),
-                "admin@example.com").cuerpo();
+                "admin@example.com", null, null, null).cuerpo();
 
         assertThat(cuerpo.get("anexos")).isEqualTo(List.of(1L, 2L, 3L));
     }
@@ -70,26 +72,111 @@ class TransformadorMultipartTest {
      * Si falla la subida del segundo, el primero NO puede quedarse
      * registrado: sería una fila de TARCHIVO sin dueño, apuntando a un
      * objeto que quizá ni existe.
+     *
+     * <p>Y el objeto del primero, que SÍ llegó a subirse a S3 antes de
+     * que el segundo fallara, tampoco puede quedarse en el bucket sin
+     * fila que lo referencie — antes de este fix sólo se descartaba la
+     * fila, dejando el objeto huérfano (bytes reales, facturándose para
+     * siempre, invisibles porque ninguna fila apunta a ellos).
      */
     @Test
     void deshaceLoReservadoCuandoUnaSubidaFalla() throws Exception {
         var almacen = mock(AlmacenObjetos.class);
         var repo = mock(ArchivoRepository.class);
-        when(repo.reservar(anyString(), anyLong(), anyString())).thenReturn(10L, 11L);
+        when(repo.reservar(anyString(), anyLong(), anyString(), any())).thenReturn(10L, 11L);
         when(almacen.subir(anyString(), any(), anyLong(), any()))
                 .thenReturn("s3://b/10/a")
                 .thenThrow(new java.io.IOException("almacen caido"));
 
-        assertThatThrownBy(() -> new TransformadorMultipart(almacen, repo).transformar(
-                Map.of(),
-                Map.of("uno", List.of(fichero("uno", "a.pdf", "A")),
-                       "dos", List.of(fichero("dos", "b.pdf", "B"))),
-                "admin@example.com"))
+        // LinkedHashMap, no Map.of: el test depende de que "uno" se
+        // procese antes que "dos" (para saber cuál pk recibe cada uno),
+        // y Map.of aleatoriza el orden de iteración a propósito
+        // (salt por-JVM) — con él este test es flaky.
+        Map<String, List<MultipartFile>> ficheros = new java.util.LinkedHashMap<>();
+        ficheros.put("uno", List.of(fichero("uno", "a.pdf", "A")));
+        ficheros.put("dos", List.of(fichero("dos", "b.pdf", "B")));
+
+        assertThatThrownBy(() -> new TransformadorMultipart(almacen, repo, null).transformar(
+                Map.of(), ficheros, "admin@example.com", null, null, null))
                 .isInstanceOf(TransformadorMultipart.SubidaFallidaException.class);
 
         // Las dos reservas se descartan, no sólo la que falló.
-        verify(repo).descartar(10L);
-        verify(repo).descartar(11L);
+        verify(repo).descartar(eq(10L), anyString(), any());
+        verify(repo).descartar(eq(11L), anyString(), any());
+        // El objeto del primer fichero (pk 10) SÍ llegó a subirse — su
+        // clave real es "10/a.pdf" (pk + nombre saneado), no la URL
+        // falsa que devuelve el mock. Se borra en S3.
+        verify(almacen).borrar("10/a.pdf");
+        // El segundo (pk 11) nunca llegó a subir nada — no hay objeto
+        // que borrar para él.
+        verify(almacen, never()).borrar("11/b.pdf");
+    }
+
+    /**
+     * Caso más sutil: la subida a S3 del PRIMER fichero termina bien,
+     * pero registrar la URL en la fila falla (blip de BD justo después
+     * de que el objeto ya existe en el bucket). El objeto igual quedó
+     * creado — el rollback tiene que enterarse por el orden en que se
+     * registra {@code objetosSubidos} (antes del UPDATE, no después).
+     */
+    @Test
+    void siRegistrarUrlFallaTrasSubidaExitosaElObjetoIgualSeBorra() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar(anyString(), anyLong(), anyString(), any())).thenReturn(20L);
+        when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/20/a.pdf");
+        org.mockito.Mockito.doThrow(new org.springframework.dao.DataAccessResourceFailureException("db caida"))
+                .when(repo).registrarUrl(eq(20L), eq("s3://b/20/a.pdf"), anyString(), any());
+
+        assertThatThrownBy(() -> new TransformadorMultipart(almacen, repo, null).transformar(
+                Map.of(), Map.of("f", List.of(fichero("f", "a.pdf", "X"))), "u", null, null, null))
+                .isInstanceOf(TransformadorMultipart.SubidaFallidaException.class);
+
+        verify(almacen).borrar("20/a.pdf");
+        verify(repo).descartar(eq(20L), anyString(), any());
+    }
+
+    /** Si el primer fichero ni siquiera llega a subir, no hay nada que
+     *  borrar en S3 — sólo la fila reservada. */
+    @Test
+    void siLaSubidaFallaDeEntradaNoSeIntentaBorrarNadaEnS3() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar(anyString(), anyLong(), anyString(), any())).thenReturn(30L);
+        when(almacen.subir(anyString(), any(), anyLong(), any()))
+                .thenThrow(new java.io.IOException("almacen caido"));
+
+        assertThatThrownBy(() -> new TransformadorMultipart(almacen, repo, null).transformar(
+                Map.of(), Map.of("f", List.of(fichero("f", "a.pdf", "X"))), "u", null, null, null))
+                .isInstanceOf(TransformadorMultipart.SubidaFallidaException.class);
+
+        verify(almacen, never()).borrar(anyString());
+        verify(repo).descartar(eq(30L), anyString(), any());
+    }
+
+    /**
+     * Un nombre de campo con puntos anida en vez de quedar plano —
+     * necesario para destinos que no son una query del catálogo sino
+     * un DTO Java anidado (auth-center {@code RegisterFuncionarioRequest}:
+     * {@code {"usuario": {..., "fkTarchivoFoto": id}, "fkTmunicipioExpedicion": ...}}).
+     */
+    @Test
+    void unNombreDeCampoConPuntosAnidaEnVezDeQuedarPlano() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar(anyString(), anyLong(), anyString(), any())).thenReturn(13L);
+        when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/13/firma.pdf");
+
+        Map<String, Object> cuerpo = new TransformadorMultipart(almacen, repo, null).transformar(
+                Map.of("usuario.email", "func@example.com", "fkTmunicipioExpedicion", "1"),
+                Map.of("usuario.fkTarchivoFoto", List.of(fichero("usuario.fkTarchivoFoto", "firma.pdf", "F"))),
+                "admin@example.com", null, null, null).cuerpo();
+
+        assertThat(cuerpo).containsEntry("fkTmunicipioExpedicion", "1");
+        @SuppressWarnings("unchecked")
+        var usuario = (Map<String, Object>) cuerpo.get("usuario");
+        assertThat(usuario).containsEntry("email", "func@example.com");
+        assertThat(usuario.get("fkTarchivoFoto")).isEqualTo(13L);
     }
 
     @Test
@@ -97,14 +184,14 @@ class TransformadorMultipartTest {
         var almacen = mock(AlmacenObjetos.class);
         var repo = mock(ArchivoRepository.class);
 
-        var resultado = new TransformadorMultipart(almacen, repo)
-                .transformar(Map.of("nombre", "Ana", "nit", "123"), Map.of(), "u");
+        var resultado = new TransformadorMultipart(almacen, repo, null)
+                .transformar(Map.of("nombre", "Ana", "nit", "123"), Map.of(), "u", null, null, null);
 
         assertThat(resultado.cuerpo())
                 .containsEntry("nombre", "Ana").containsEntry("nit", "123");
         // Sin ficheros no hay nada que activar después.
         assertThat(resultado.archivoIds()).isEmpty();
-        verify(repo, never()).reservar(anyString(), anyLong(), anyString());
+        verify(repo, never()).reservar(anyString(), anyLong(), anyString(), any());
     }
 
     /**
@@ -133,17 +220,17 @@ class TransformadorMultipartTest {
     void reservaAntesDeSubirYRegistraLaUrlDespues() throws Exception {
         var almacen = mock(AlmacenObjetos.class);
         var repo = mock(ArchivoRepository.class);
-        when(repo.reservar(anyString(), anyLong(), anyString())).thenReturn(7L);
+        when(repo.reservar(anyString(), anyLong(), anyString(), any())).thenReturn(7L);
         when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/7/a.pdf");
 
-        new TransformadorMultipart(almacen, repo).transformar(
-                Map.of(), Map.of("f", List.of(fichero("f", "a.pdf", "X"))), "u");
+        new TransformadorMultipart(almacen, repo, null).transformar(
+                Map.of(), Map.of("f", List.of(fichero("f", "a.pdf", "X"))), "u", null, null, null);
 
         var orden = org.mockito.Mockito.inOrder(repo, almacen);
-        orden.verify(repo).reservar(anyString(), anyLong(), anyString());
+        orden.verify(repo).reservar(anyString(), anyLong(), anyString(), any());
         orden.verify(almacen).subir(anyString(), any(), anyLong(), any());
-        orden.verify(repo).registrarUrl(7L, "s3://b/7/a.pdf");
-        verify(repo, times(0)).descartar(anyLong());
+        orden.verify(repo).registrarUrl(eq(7L), eq("s3://b/7/a.pdf"), anyString(), any());
+        verify(repo, times(0)).descartar(anyLong(), anyString(), any());
     }
 
     /**
@@ -161,16 +248,248 @@ class TransformadorMultipartTest {
     void devuelveLosIdsReservadosSinActivarlos() throws Exception {
         var almacen = mock(AlmacenObjetos.class);
         var repo = mock(ArchivoRepository.class);
-        when(repo.reservar(anyString(), anyLong(), anyString())).thenReturn(11L, 12L);
+        when(repo.reservar(anyString(), anyLong(), anyString(), any())).thenReturn(11L, 12L);
         when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/k");
 
-        var resultado = new TransformadorMultipart(almacen, repo).transformar(
+        var resultado = new TransformadorMultipart(almacen, repo, null).transformar(
                 Map.of(),
                 Map.of("uno", List.of(fichero("uno", "a.pdf", "A")),
                        "dos", List.of(fichero("dos", "b.pdf", "B"))),
-                "u");
+                "u", null, null, null);
 
         assertThat(resultado.archivoIds()).containsExactly(11L, 12L);
-        verify(repo, never()).activar(any());
+        verify(repo, never()).activar(any(), anyString(), any());
+    }
+
+    // ---------- V63: clasificación de archivos (FILE:clasificacion) ----------
+
+    @Test
+    void claveDe_sinClasificacionUsaElFormatoGenerico() {
+        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", null, null, null))
+                .isEqualTo("17/foto.jpg");
+    }
+
+    @Test
+    void claveDe_conClasificacionUsaCarpetaPkPuntoExtension() {
+        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", "perfilUsuario", null, null))
+                .isEqualTo("perfilUsuario/17.jpg");
+    }
+
+    @Test
+    void claveDe_normalizaLaExtensionAMinuscula() {
+        assertThat(TransformadorMultipart.claveDe(17L, "FOTO.JPG", "perfilUsuario", null, null))
+                .isEqualTo("perfilUsuario/17.jpg");
+    }
+
+    /** Sin extensión reconocible no hay forma de armar "pk.extensión" con sentido. */
+    @Test
+    void claveDe_sinExtensionCaeAlFormatoGenericoAunqueHayaClasificacion() {
+        assertThat(TransformadorMultipart.claveDe(17L, "sinextension", "perfilUsuario", null, null))
+                .isEqualTo("17/sinextension");
+    }
+
+    // ---------- V64: código de sede (files.site-code) ----------
+
+    @Test
+    void claveDe_sinSitioConfiguradoNoAntepone() {
+        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", null, "", null))
+                .isEqualTo("17/foto.jpg");
+    }
+
+    @Test
+    void claveDe_conSitioLoAntepone_sinClasificacion() {
+        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", null, "ACADEMICO_VALLEDUPAR", null))
+                .isEqualTo("ACADEMICO_VALLEDUPAR/17/foto.jpg");
+    }
+
+    @Test
+    void claveDe_conSitioYClasificacion() {
+        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", "perfilUsuario", "ACADEMICO_VALLEDUPAR", null))
+                .isEqualTo("ACADEMICO_VALLEDUPAR/perfilUsuario/17.jpg");
+    }
+
+    /**
+     * Un campo con clasificación reserva con el overload de 4 argumentos
+     * (guarda {@code etiqueta}) y sube con la clave clasificada — el
+     * caso completo, de punta a punta.
+     */
+    @Test
+    void unCampoConClasificacionReservaConEtiquetaYSubeConClaveClasificada() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar("foto.jpg", 1L, "admin@example.com", null, "perfilUsuario")).thenReturn(17L);
+        when(almacen.subir(eq("perfilUsuario/17.jpg"), any(), anyLong(), any()))
+                .thenReturn("s3://b/perfilUsuario/17.jpg");
+
+        var resultado = new TransformadorMultipart(almacen, repo, null).transformar(
+                Map.of(),
+                Map.of("foto", List.of(fichero("foto", "foto.jpg", "X"))),
+                "admin@example.com", null,
+                Map.of("foto", "perfilUsuario"), null);
+
+        assertThat(resultado.archivoIds()).containsExactly(17L);
+        verify(repo).reservar("foto.jpg", 1L, "admin@example.com", null, "perfilUsuario");
+        verify(almacen).subir(eq("perfilUsuario/17.jpg"), any(), anyLong(), any());
+        // El overload SIN etiqueta no se llama para este campo.
+        verify(repo, never()).reservar(anyString(), anyLong(), anyString(), any());
+    }
+
+    /** Un campo SIN clasificación en el mapa sigue el camino de siempre, sin tocar etiqueta. */
+    @Test
+    void unCampoSinClasificacionNoTocaEtiqueta() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar(anyString(), anyLong(), anyString(), any())).thenReturn(18L);
+        when(almacen.subir(eq("18/foto.jpg"), any(), anyLong(), any()))
+                .thenReturn("s3://b/18/foto.jpg");
+
+        new TransformadorMultipart(almacen, repo, null).transformar(
+                Map.of(),
+                Map.of("foto", List.of(fichero("foto", "foto.jpg", "X"))),
+                "admin@example.com", null,
+                Map.of("otroCampo", "escudo"), null);
+
+        verify(repo).reservar("foto.jpg", 1L, "admin@example.com", null);
+        verify(repo, never()).reservar(anyString(), anyLong(), anyString(), any(), anyString());
+    }
+
+    /**
+     * Con {@code files.site-code} configurado (tercer argumento del
+     * constructor), la clave sube CON el prefijo — de punta a punta,
+     * no sólo en {@code claveDe} aislado.
+     */
+    @Test
+    void conSitioConfiguradoLaClaveSubeConElPrefijo() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar("foto.jpg", 1L, "admin@example.com", null, "perfilUsuario")).thenReturn(17L);
+        when(almacen.subir(eq("ACADEMICO_VALLEDUPAR/perfilUsuario/17.jpg"), any(), anyLong(), any()))
+                .thenReturn("s3://b/ACADEMICO_VALLEDUPAR/perfilUsuario/17.jpg");
+
+        new TransformadorMultipart(almacen, repo, "ACADEMICO_VALLEDUPAR").transformar(
+                Map.of(),
+                Map.of("foto", List.of(fichero("foto", "foto.jpg", "X"))),
+                "admin@example.com", null,
+                Map.of("foto", "perfilUsuario"), null);
+
+        verify(almacen).subir(eq("ACADEMICO_VALLEDUPAR/perfilUsuario/17.jpg"), any(), anyLong(), any());
+    }
+
+    // ---------- V65: código de establecimiento (FILE:clasificacion:campo) ----------
+
+    @Test
+    void claveDe_conEstablecimientoVaEntreSitioYClasificacion() {
+        assertThat(TransformadorMultipart.claveDe(
+                17L, "foto.jpg", "actividad", "ACADEMICO_VALLEDUPAR", "120001003751"))
+                .isEqualTo("ACADEMICO_VALLEDUPAR/120001003751/actividad/17.jpg");
+    }
+
+    @Test
+    void claveDe_conEstablecimientoSinSitioLoAnteponeIgual() {
+        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", "actividad", null, "120001003751"))
+                .isEqualTo("120001003751/actividad/17.jpg");
+    }
+
+    /** Sin clasificación no hay carpeta que anteceda — un establecimiento
+     *  suelto no tendría sentido en el layout genérico {@code <pk>/<nombre>}. */
+    @Test
+    void claveDe_establecimientoSinClasificacionNoTieneEfecto() {
+        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", null, "ACADEMICO_VALLEDUPAR", "120001003751"))
+                .isEqualTo("ACADEMICO_VALLEDUPAR/17/foto.jpg");
+    }
+
+    @Test
+    void claveDe_establecimientoEnBlancoSeIgnora() {
+        assertThat(TransformadorMultipart.claveDe(17L, "foto.jpg", "actividad", "ACADEMICO_VALLEDUPAR", " "))
+                .isEqualTo("ACADEMICO_VALLEDUPAR/actividad/17.jpg");
+    }
+
+    /**
+     * Un campo con clasificación Y establecimiento reserva con etiqueta
+     * y sube con los tres segmentos — de punta a punta.
+     */
+    @Test
+    void unCampoConClasificacionYEstablecimientoSubeConLosTresSegmentos() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar("foto.jpg", 1L, "admin@example.com", null, "actividad")).thenReturn(21L);
+        when(almacen.subir(eq("ACADEMICO_VALLEDUPAR/120001003751/actividad/21.jpg"), any(), anyLong(), any()))
+                .thenReturn("s3://b/ACADEMICO_VALLEDUPAR/120001003751/actividad/21.jpg");
+
+        var resultado = new TransformadorMultipart(almacen, repo, "ACADEMICO_VALLEDUPAR").transformar(
+                Map.of(),
+                Map.of("foto", List.of(fichero("foto", "foto.jpg", "X"))),
+                "admin@example.com", null,
+                Map.of("foto", "actividad"),
+                Map.of("foto", "120001003751"));
+
+        assertThat(resultado.archivoIds()).containsExactly(21L);
+        verify(almacen).subir(eq("ACADEMICO_VALLEDUPAR/120001003751/actividad/21.jpg"), any(), anyLong(), any());
+    }
+
+    // ---------- V143: file_storage_schema/table (override de destino de archivo) ----------
+
+    /**
+     * Con override de destino (los dos últimos argumentos del overload
+     * de 8), {@code subirUna} llama al overload de 7 argumentos de
+     * {@code reservar} en vez de los de 4/5 — es lo que deja que
+     * {@code ArchivoRepository} escriba en otra tabla.
+     */
+    @Test
+    void conOverrideDeDestinoReservaConElOverloadDeSieteArgumentos() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar("foto.jpg", 1L, "admin@example.com", null, null, "eval_col", "tarchivo_evaluacion"))
+                .thenReturn(99L);
+        when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/x");
+
+        var resultado = new TransformadorMultipart(almacen, repo, null).transformar(
+                Map.of(),
+                Map.of("foto", List.of(fichero("foto", "foto.jpg", "X"))),
+                "admin@example.com", null, null, null,
+                "eval_col", "tarchivo_evaluacion");
+
+        assertThat(resultado.archivoIds()).containsExactly(99L);
+        verify(repo).reservar("foto.jpg", 1L, "admin@example.com", null, null, "eval_col", "tarchivo_evaluacion");
+        // Ninguno de los overloads sin override se llama para este campo.
+        verify(repo, never()).reservar(anyString(), anyLong(), anyString(), any());
+        verify(repo, never()).reservar(anyString(), anyLong(), anyString(), any(), anyString());
+    }
+
+    /** Sin override (el overload de 6 argumentos delega con null, null), sigue reservando con los overloads de siempre. */
+    @Test
+    void sinOverrideDeDestinoSigueUsandoLosOverloadsDeSiempre() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar(anyString(), anyLong(), anyString(), any())).thenReturn(5L);
+        when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/x");
+
+        new TransformadorMultipart(almacen, repo, null).transformar(
+                Map.of(),
+                Map.of("foto", List.of(fichero("foto", "foto.jpg", "X"))),
+                "admin@example.com", null, null, null);
+
+        verify(repo).reservar("foto.jpg", 1L, "admin@example.com", null);
+        verify(repo, never()).reservar(anyString(), anyLong(), anyString(), any(), any(), anyString(), anyString());
+    }
+
+    /** Un campo cuya clasificación no declaró campo de establecimiento
+     *  no se ve afectado por el mapa (vacío para él). */
+    @Test
+    void unCampoSinEstablecimientoDeclaradoNoLoRecibe() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar("foto.jpg", 1L, "admin@example.com", null, "perfilUsuario")).thenReturn(19L);
+        when(almacen.subir(eq("perfilUsuario/19.jpg"), any(), anyLong(), any()))
+                .thenReturn("s3://b/perfilUsuario/19.jpg");
+
+        new TransformadorMultipart(almacen, repo, null).transformar(
+                Map.of(),
+                Map.of("foto", List.of(fichero("foto", "foto.jpg", "X"))),
+                "admin@example.com", null,
+                Map.of("foto", "perfilUsuario"),
+                Map.of("otroCampo", "120001003751"));
+
+        verify(almacen).subir(eq("perfilUsuario/19.jpg"), any(), anyLong(), any());
     }
 }

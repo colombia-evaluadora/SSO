@@ -55,7 +55,7 @@ class CachedEffectiveRolesResolverTest {
         // UserRepository to grab via reflection.
         delegate = new EffectiveRolesResolver(userRepository);
         props = new SessionCacheProperties(
-                3600L, "sso:session:user-roles", "secret", true, 60L);
+                3600L, "sso:session:user-roles", "secret", true, 60L, 300L, 60L);
         cached = new CachedEffectiveRolesResolver(delegate, redis, new ObjectMapper(), props);
     }
 
@@ -141,7 +141,7 @@ class CachedEffectiveRolesResolverTest {
     @Test
     void disabledCacheBypassesRedisEntirely() {
         props = new SessionCacheProperties(
-                3600L, "sso:session:user-roles", "secret", false, 60L);
+                3600L, "sso:session:user-roles", "secret", false, 60L, 300L, 60L);
         cached = new CachedEffectiveRolesResolver(delegate, redis, new ObjectMapper(), props);
         when(userRepository.findByEmailWithEffectiveRoles("alice"))
                 .thenReturn(Optional.of(userWithRoles("alice", role("ADMIN"))));

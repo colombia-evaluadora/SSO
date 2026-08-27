@@ -11,6 +11,8 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -131,15 +133,43 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
         return mapper.readValue(json, HashMap.class);
     }
 
-    /** Parses an audit_ctx logical-message body into the per-xid context cache value. */
+    /**
+     * Parses an audit_ctx logical-message body into the per-xid context cache value.
+     *
+     * <p>Debezium's {@code LogicalDecodingMessageMonitor} (verified against the
+     * decompiled {@code debezium-connector-postgres-3.1.0.Final} constants
+     * {@code DEBEZIUM_LOGICAL_DECODING_MESSAGE_PREFIX_KEY="prefix"} and
+     * {@code DEBEZIUM_LOGICAL_DECODING_MESSAGE_CONTENT_KEY="content"}) puts the
+     * message body under the key {@code content}, NOT {@code data} — this method
+     * previously read the wrong key, which meant {@code parseAuditContext} always
+     * returned {@code null} and every audit_ctx message was silently dropped,
+     * regardless of what the caller set in {@code app.*} GUCs. See
+     * docs/etiqueta-auditoria-cdc-analisis.md §11 for the end-to-end evidence
+     * that surfaced this.
+     *
+     * <p>The value under {@code content} is also not plain text: with the default
+     * {@code binary.handling.mode=bytes}, Debezium hands Kafka Connect a raw byte
+     * array under a {@code Schema.BYTES} field, and the schemaless
+     * {@code JsonConverter} serializes {@code BYTES} as a Base64 string — so the
+     * JSON payload built by {@code fn_audit_ctx()} (04-context-emitter.sql) has to
+     * be Base64-decoded before it can be parsed.
+     */
     private CdcEvent.Context parseAuditContext(Map<String, Object> deb) {
         Object msgObj = deb.get("message");
         if (!(msgObj instanceof Map<?, ?> msg)) return null;
         Object prefix = msg.get("prefix");
         if (!AUDIT_CTX_PREFIX.equals(prefix)) return null;
 
-        Object data = msg.get("data");
-        if (!(data instanceof String payload) || payload.isBlank()) return null;
+        Object contentObj = msg.get("content");
+        if (!(contentObj instanceof String base64) || base64.isBlank()) return null;
+
+        String payload;
+        try {
+            payload = new String(Base64.getDecoder().decode(base64), StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            log.warn("audit_ctx content no es base64 valido: {}", e.getMessage());
+            return null;
+        }
 
         Map<String, Object> body;
         try {
@@ -153,13 +183,27 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
         Map<String, Object> contextoMap = (contextoRaw instanceof Map<?, ?> cmap)
                 ? toStringKeyedMap(cmap)
                 : null;
+        Object headersRaw = body.get("headers");
+        Map<String, Object> headersMap = (headersRaw instanceof Map<?, ?> hmap)
+                ? toStringKeyedMap(hmap)
+                : null;
+        Object requestBodyRaw = body.get("request_body");
+        Map<String, Object> requestBodyMap = (requestBodyRaw instanceof Map<?, ?> bmap)
+                ? toStringKeyedMap(bmap)
+                : null;
 
         return new CdcEvent.Context(
                 str(body.get("app_user")),
+                str(body.get("app_user_id")),
                 str(body.get("db_user")),
                 str(body.get("sesion_id")),
                 str(body.get("familia")),
                 str(body.get("request_id")),
+                str(body.get("http_method")),
+                str(body.get("client_ip")),
+                str(body.get("user_agent")),
+                headersMap,
+                requestBodyMap,
                 str(body.get("etiqueta")),
                 contextoMap
         );
@@ -169,10 +213,16 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
     private static Map<String, Object> contextToMap(CdcEvent.Context ctx) {
         Map<String, Object> m = new LinkedHashMap<>();
         if (ctx.appUser() != null) m.put("app_user", ctx.appUser());
+        if (ctx.appUserId() != null) m.put("app_user_id", ctx.appUserId());
         if (ctx.dbUser() != null) m.put("db_user", ctx.dbUser());
         if (ctx.sesionId() != null) m.put("sesion_id", ctx.sesionId());
         if (ctx.familia() != null) m.put("familia", ctx.familia());
         if (ctx.requestId() != null) m.put("request_id", ctx.requestId());
+        if (ctx.httpMethod() != null) m.put("http_method", ctx.httpMethod());
+        if (ctx.clientIp() != null) m.put("client_ip", ctx.clientIp());
+        if (ctx.userAgent() != null) m.put("user_agent", ctx.userAgent());
+        if (ctx.headers() != null) m.put("headers", ctx.headers());
+        if (ctx.requestBody() != null) m.put("request_body", ctx.requestBody());
         if (ctx.etiqueta() != null) m.put("etiqueta", ctx.etiqueta());
         if (ctx.contexto() != null) m.put("contexto", ctx.contexto());
         return m;

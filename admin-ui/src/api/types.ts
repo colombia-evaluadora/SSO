@@ -163,6 +163,35 @@ export interface MicroserviceResponse {
   dbPassword: string | null;
   poolSize: number | null;
   instanceName: string | null;
+  /** V143 — override opcional de dónde file-service guarda la
+   *  referencia (pk) de los archivos subidos por las queries que
+   *  corren en este query-service. Null para filas REST y para
+   *  filas QUERY que usan el destino por defecto
+   *  (academico_test.tarchivo). Ambos o ninguno — el backend lo
+   *  valida igual que dialect/jdbcUrl/dbUsername para kind=QUERY. */
+  fileStorageSchema: string | null;
+  fileStorageTable: string | null;
+}
+
+// ====================== sso-admin / file-references ======================
+
+/**
+ * Mirrors {@code public.file_reference_location} (V143/V147) via
+ * {@code com.co.eurekatic.ssoadmin.dto.FileReferenceLocationResponse}
+ * -- dónde vive realmente un {@code pk_tarchivo} de cara a
+ * file-service. Ver {@code FileReferencesPage}.
+ */
+export interface FileReferenceLocationResponse {
+  pkTarchivo: number;
+  schemaName: string;
+  tableName: string;
+  urls3: string | null;
+  createdAt: string;
+}
+
+export interface FileReferenceLocationRequest {
+  schemaName: string;
+  tableName: string;
 }
 
 export interface MicroserviceRequest {
@@ -183,6 +212,9 @@ export interface MicroserviceRequest {
   dbPassword?: string | null;
   poolSize?: number | null;
   instanceName?: string | null;
+  /** V143 — ver el mismo par de campos en {@link MicroserviceResponse}. */
+  fileStorageSchema?: string | null;
+  fileStorageTable?: string | null;
 }
 
 /* ====================== testConnection probe ======================
@@ -355,6 +387,27 @@ export interface QueryDefinition {
   microserviceId: number | null;
 }
 
+/**
+ * V81 — restricciones de formato opcionales para UN placeholder,
+ * adicionales al tipo/obligatoriedad de {@code paramTypes}. Mirrors
+ * {@code com.co.eurekatic.common.query.ParamConstraint} on the
+ * backend. Cada campo {@code null}/ausente = sin restricción en ese
+ * aspecto; sólo las reglas numéricas aplican a tipos numéricos y
+ * sólo las de texto a tipos de texto (ver
+ * {@code QueryAdminService.validateParamConstraints}).
+ */
+export interface ParamConstraint {
+  onlyPositive?: boolean | null | undefined;
+  allowDecimals?: boolean | null | undefined;
+  maxDigits?: number | null | undefined;
+  /** V83 — rango de VALOR, distinto de maxDigits (cifras, no magnitud). */
+  minValue?: number | null | undefined;
+  maxValue?: number | null | undefined;
+  numericText?: boolean | null | undefined;
+  minLength?: number | null | undefined;
+  maxLength?: number | null | undefined;
+}
+
 /** Admin CRUD request for the catalog. Mirrors
  *  {@code QueryRequest} on the backend, including
  *  {@code microserviceId} which binds the query to a
@@ -378,13 +431,21 @@ export interface QueryAdminRequest {
    *  the query as a first-class HTTP endpoint. Null = legacy (uuid in body). */
   pathTemplate?: string | null;
 
-  httpMethod?: "GET" | "POST" | "PUT" | null;
+  httpMethod?: "GET" | "POST" | "PUT" | "PATCH" | null;
   /** V28 — SELECT (default) | PROCEDURE | FUNCTION. The backend validates
    *  that the SQL's first keyword matches the mode at save time. */
   executionMode?: "SELECT" | "PROCEDURE" | "FUNCTION";
   /** V31 — comma-separated :placeholder names that are OUT params of
    *  a PROCEDURE-mode row. Null/empty = no OUT params (legacy). */
   outParamNames?: string | null;
+  /** V49 — author-declared JDBC/PG type per caller-controlled
+   *  placeholder. Strict at write time: every :PARAM.* / :BODY.*
+   *  in `query` must appear as a key. */
+  paramTypes?: Record<string, string> | null;
+  /** V81 — restricciones de formato opcionales por placeholder,
+   *  adicionales a `paramTypes`. Cada key debe existir en
+   *  `paramTypes`. */
+  paramConstraints?: Record<string, ParamConstraint> | null;
 }
 
 /** Admin CRUD response shape — mirrors {@code QueryResponse}
@@ -408,12 +469,16 @@ export interface QueryAdminResponse {
   /** V27 — optional for back-compat with pre-V27 test fixtures
    *  that don't set this field. The wire always carries it. */
   pathTemplate?: string | null;
-  /** V33 — verbo HTTP que expone esta fila. Null = POST. */
-  httpMethod?: "GET" | "POST" | "PUT" | null;
+  /** V33 — verbo HTTP que expone esta fila. Null = POST. V50 añade PATCH. */
+  httpMethod?: "GET" | "POST" | "PUT" | "PATCH" | null;
   /** V28 — defaults to "SELECT" when omitted (pre-V28 server). */
   executionMode?: "SELECT" | "PROCEDURE" | "FUNCTION";
   /** V31 */
   outParamNames?: string | null;
+  /** V49 */
+  paramTypes?: Record<string, string> | null;
+  /** V81 — ver el mismo campo en {@link QueryAdminRequest}. */
+  paramConstraints?: Record<string, ParamConstraint> | null;
 }
 
 /** Per-row role binding checkbox list — mirrors

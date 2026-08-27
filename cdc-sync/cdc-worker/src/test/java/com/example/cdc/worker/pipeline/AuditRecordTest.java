@@ -79,6 +79,37 @@ class AuditRecordTest {
                 .doesNotContainKey("categoria");
     }
 
+    @Test
+    void fila_new_raw_preserves_real_column_names_the_typed_projection_loses() {
+        // Mismo evento del test de arriba: el proyector tipado renombra
+        // "categoria" a "codigo" y esa identidad real desaparece — el raw
+        // es justo lo que hace falta para reconstruir un revert sin
+        // adivinar de qué columna venía el slot.
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("pk_lista_valor", 42L);
+        after.put("categoria", "TYPED");
+        CdcEvent event = event(Operation.INSERT, null, after);
+
+        AuditRecord record = AuditRecord.fromEvent(event, 0, 123L, 7L,
+                null, "OK", 1L, builder);
+
+        assertThat(record.filaNewRawJson())
+                .contains("\"pk_lista_valor\":42")
+                .contains("\"categoria\":\"TYPED\"");
+    }
+
+    @Test
+    void fila_old_raw_is_empty_string_for_null_before() {
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("pk_lista_valor", 42L);
+        CdcEvent event = event(Operation.INSERT, null, after);
+
+        AuditRecord record = AuditRecord.fromEvent(event, 0, 123L, 7L,
+                null, "OK", 1L, builder);
+
+        assertThat(record.filaOldRawJson()).isEmpty();
+    }
+
     private static CdcEvent event(Operation operation,
                                   Map<String, Object> before,
                                   Map<String, Object> after) {

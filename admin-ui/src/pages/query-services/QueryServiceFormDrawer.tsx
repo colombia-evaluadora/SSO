@@ -59,6 +59,8 @@ export function QueryServiceFormDrawer({
       dbPassword: microservice?.dbPassword ?? "",
       poolSize: microservice?.poolSize ?? 10,
       instanceName: microservice?.instanceName ?? "",
+      fileStorageSchema: microservice?.fileStorageSchema ?? "",
+      fileStorageTable: microservice?.fileStorageTable ?? "",
     }),
     [microservice],
   );
@@ -199,6 +201,26 @@ export function QueryServiceFormDrawer({
                 value={String(values.poolSize ?? 10)}
                 onChange={(e) => setField("poolSize", Number(e.target.value))}
                 error={errors.poolSize}
+              />
+            </div>
+            <div className="h-3" />
+            {/* V143 — override opcional de destino de almacenamiento de
+                archivos, sólo tiene sentido junto al resto de la
+                metadata JDBC de este query-service. */}
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Schema de almacenamiento de archivos"
+                value={values.fileStorageSchema}
+                onChange={(e) => setField("fileStorageSchema", e.target.value)}
+                error={errors.fileStorageSchema}
+                hint="Opcional. Vacío = usa el destino por defecto del servicio (academico_test.tarchivo)."
+              />
+              <Input
+                label="Tabla de almacenamiento de archivos"
+                value={values.fileStorageTable}
+                onChange={(e) => setField("fileStorageTable", e.target.value)}
+                error={errors.fileStorageTable}
+                hint="La tabla debe tener el mismo formato de columnas que tarchivo."
               />
             </div>
             <div className="h-4" />

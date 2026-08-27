@@ -73,6 +73,8 @@ function mkMs(over: Partial<MicroserviceResponse> = {}): MicroserviceResponse {
     dbPassword: null,
     poolSize: 10,
     instanceName: "pg",
+    fileStorageSchema: null,
+    fileStorageTable: null,
     ...over,
   };
 }
@@ -204,6 +206,112 @@ describe("QueriesAdminPage", () => {
     expect(screen.getByTestId("edit-1")).toBeInTheDocument();
     expect(screen.getByTestId("delete-1")).toBeInTheDocument();
     expect(screen.getByTestId("bind-roles-1")).toBeInTheDocument();
+  });
+
+  it("renders path-template next to uuid when the query has one", async () => {
+    // Filas con path-template exponen la URL completa del query-service
+    // debajo del uuid. Sin path-template (legacy uuid-in-body) la
+    // línea secundaria se omite para no sugerir un endpoint que no
+    // existe.
+    const exposed = mkQuery({
+      id: 1,
+      uuid: "reporte-ventas",
+      pathTemplate: "/reporte/ventas",
+      httpMethod: "GET",
+    });
+    const legacy = mkQuery({ id: 2, uuid: "legacy-uuid-only" });
+    const spy = buildFetchSpy({
+      queries: [exposed, legacy],
+      microservices: [],
+    });
+    vi.stubGlobal("fetch", spy);
+
+    renderPage();
+    expect(await screen.findByTestId("query-uuid-1")).toHaveTextContent(
+      "reporte-ventas",
+    );
+    const pathEl = await screen.findByTestId("query-path-template-1");
+    expect(pathEl).toHaveTextContent("GET");
+    expect(pathEl).toHaveTextContent("/reporte/ventas");
+
+    // Legacy row: no path-template child. The testid is absent.
+    expect(
+      screen.queryByTestId("query-path-template-2"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("search box also matches the path template, not just uuid/type", async () => {
+    const byPath = mkQuery({
+      id: 1,
+      uuid: "alpha",
+      type: "select",
+      pathTemplate: "/establecimientos/sedes/query",
+      httpMethod: "POST",
+    });
+    const other = mkQuery({ id: 2, uuid: "beta", type: "report" });
+    const spy = buildFetchSpy({ queries: [byPath, other], microservices: [] });
+    vi.stubGlobal("fetch", spy);
+
+    renderPage();
+    await screen.findByText("alpha");
+    expect(screen.getByText("beta")).toBeInTheDocument();
+
+    const search = screen.getByPlaceholderText(/Buscar por UUID, tipo o path/i);
+    await userEvent.type(search, "sedes/query");
+
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+    expect(screen.queryByText("beta")).not.toBeInTheDocument();
+  });
+
+  it("the method select filters rows by httpMethod (default POST when null)", async () => {
+    const getRow = mkQuery({ id: 1, uuid: "get-row", httpMethod: "GET" });
+    const postRow = mkQuery({ id: 2, uuid: "post-row", httpMethod: null });
+    const putRow = mkQuery({ id: 3, uuid: "put-row", httpMethod: "PUT" });
+    const spy = buildFetchSpy({
+      queries: [getRow, postRow, putRow],
+      microservices: [],
+    });
+    vi.stubGlobal("fetch", spy);
+
+    renderPage();
+    await screen.findByText("get-row");
+    expect(screen.getByText("post-row")).toBeInTheDocument();
+    expect(screen.getByText("put-row")).toBeInTheDocument();
+
+    const select = screen.getByTestId("method-filter");
+    await userEvent.selectOptions(select, "GET");
+    expect(screen.getByText("get-row")).toBeInTheDocument();
+    expect(screen.queryByText("post-row")).not.toBeInTheDocument();
+    expect(screen.queryByText("put-row")).not.toBeInTheDocument();
+
+    // Null httpMethod counts as POST — the default the backend applies.
+    await userEvent.selectOptions(select, "POST");
+    expect(screen.getByText("post-row")).toBeInTheDocument();
+    expect(screen.queryByText("get-row")).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(select, "");
+    expect(screen.getByText("get-row")).toBeInTheDocument();
+    expect(screen.getByText("post-row")).toBeInTheDocument();
+    expect(screen.getByText("put-row")).toBeInTheDocument();
+  });
+
+  it("defaults the httpMethod to POST when it is null in the response", async () => {
+    // null httpMethod is the legacy wire shape (pre-V33). The cell
+    // must still render — POST is the historical default — so the
+    // URL the admin sees matches what the dispatcher actually does.
+    const q = mkQuery({
+      id: 1,
+      uuid: "by-uuid-legacy",
+      pathTemplate: "/legacy/path",
+      httpMethod: null,
+    });
+    const spy = buildFetchSpy({ queries: [q], microservices: [] });
+    vi.stubGlobal("fetch", spy);
+
+    renderPage();
+    const pathEl = await screen.findByTestId("query-path-template-1");
+    expect(pathEl).toHaveTextContent("POST");
+    expect(pathEl).toHaveTextContent("/legacy/path");
   });
 
   it("resolves the microservice column via /getMicroservices and falls back to #<id>", async () => {

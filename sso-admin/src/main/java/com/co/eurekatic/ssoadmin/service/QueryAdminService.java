@@ -1,9 +1,16 @@
 package com.co.eurekatic.ssoadmin.service;
 
+import com.co.eurekatic.common.entity.App;
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
+import com.co.eurekatic.common.entity.QueryParamConstraint;
 import com.co.eurekatic.common.entity.Role;
+import com.co.eurekatic.common.query.ParamConstraint;
+import com.co.eurekatic.common.query.ParamNamespace;
+import com.co.eurekatic.common.query.ParamTypes;
 import com.co.eurekatic.common.query.PathTemplateSyntax;
+import com.co.eurekatic.common.query.PlaceholderScanner;
+import com.co.eurekatic.common.repository.AppRepository;
 import com.co.eurekatic.common.repository.MicroserviceRepository;
 import com.co.eurekatic.common.repository.QueryRepository;
 import com.co.eurekatic.common.repository.RoleRepository;
@@ -16,9 +23,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 /**
  * Query CRUD plus role bindings. Mirrors the shape of
@@ -55,15 +66,18 @@ public class QueryAdminService {
     private final QueryRepository queryRepo;
     private final RoleRepository roleRepo;
     private final MicroserviceRepository microserviceRepo;
+    private final AppRepository appRepo;
     private final PathRegistryNotifier pathRegistryNotifier;
 
     public QueryAdminService(QueryRepository queryRepo,
                              RoleRepository roleRepo,
                              MicroserviceRepository microserviceRepo,
+                             AppRepository appRepo,
                              PathRegistryNotifier pathRegistryNotifier) {
         this.queryRepo = queryRepo;
         this.roleRepo = roleRepo;
         this.microserviceRepo = microserviceRepo;
+        this.appRepo = appRepo;
         this.pathRegistryNotifier = pathRegistryNotifier;
     }
 
@@ -77,6 +91,8 @@ public class QueryAdminService {
 
         validatePathTemplate(req, null);
         validateOutParams(req);
+        validateParamTypes(req);
+        validateParamConstraints(req);
         Query q = new Query();
         copy(req, q, uuid);
         QueryResponse response = QueryResponse.fromEntity(queryRepo.save(q));
@@ -110,6 +126,8 @@ public class QueryAdminService {
 
         validatePathTemplate(req, q.getId());
         validateOutParams(req);
+        validateParamTypes(req);
+        validateParamConstraints(req);
         copy(req, q, uuid);
         QueryResponse response = QueryResponse.fromEntity(queryRepo.save(q));
         // V33 — same invalidate-on-write as create().
@@ -149,6 +167,16 @@ public class QueryAdminService {
                 .orElseThrow(() -> new NotFoundException("Query", queryId));
         Role r = roleRepo.findById(roleId)
                 .orElseThrow(() -> new NotFoundException("Role", roleId));
+        // El bind directo por API (no sólo el desplegable filtrado del
+        // admin-ui) es el camino que de verdad importa asegurar — un
+        // POST /query/{id}/role/{roleId} a mano se saltaba el filtro
+        // de la UI y podía atar cualquier rol a cualquier query,
+        // aunque fueran de apps distintas.
+        Set<Role> permitidos = rolesPermitidosPara(q);
+        if (permitidos != null && !permitidos.contains(r)) {
+            throw new IllegalArgumentException(
+                    "El rol '" + r.getName() + "' no pertenece al app del microservicio de esta query");
+        }
         q.addRole(r);
     }
 
@@ -159,6 +187,58 @@ public class QueryAdminService {
         Role r = roleRepo.findById(roleId)
                 .orElseThrow(() -> new NotFoundException("Role", roleId));
         q.removeRole(r);
+    }
+
+    /**
+     * Roles elegibles para atar a {@code q} vía {@link #bindRole} —
+     * la unión de los roles de TODOS los apps a los que está atado el
+     * microservicio de la query, contando las DOS relaciones que
+     * existen entre {@code Microservice} y {@code App}:
+     *
+     * <ul>
+     *   <li>{@code app_microservice} (M:N) — la que el admin-ui usa de
+     *       verdad hoy: pestaña "Microservices" del formulario de App
+     *       ({@code AppService#bindMicroservice}). Se consulta con
+     *       {@link AppRepository#findByMicroserviceId}, no navegando
+     *       {@code Microservice} (no tiene el lado inverso mapeado —
+     *       igual que {@code Endpoint#getMicroservices()} tampoco lo
+     *       expone en la entidad opuesta).</li>
+     *   <li>{@code Microservice#getApp()} (FK {@code id_app}, "app
+     *       primario") — ningún formulario del admin-ui lo expone hoy
+     *       ({@code MicroserviceRequest#appId} sólo se puede setear
+     *       por API directa), pero se sigue contando por si alguna
+     *       fila lo trae poblado (importación, API directa).</li>
+     * </ul>
+     *
+     * <p>{@code null} = "sin restricción": el microservicio no está
+     * atado a NINGÚN app por ninguna de las dos vías (el caso
+     * legado/"global"). Se mantiene permisivo ahí a propósito — no hay
+     * app contra el cual filtrar, y exigir uno rompería queries
+     * globales que ya funcionan hoy.
+     *
+     * <p>Si SÍ hay al menos un app atado pero ninguno tiene roles
+     * (`role_app` vacío), el resultado es un {@link Set} vacío
+     * (no {@code null}) — eso bloquea todo bind, correctamente: hay
+     * un app contra el cual filtrar, simplemente no autoriza a nadie
+     * todavía.
+     */
+    private Set<Role> rolesPermitidosPara(Query q) {
+        Microservice m = q.getMicroservice();
+        if (m == null) {
+            return null;
+        }
+        List<App> apps = new java.util.ArrayList<>(appRepo.findByMicroserviceId(m.getId()));
+        if (m.getApp() != null && !apps.contains(m.getApp())) {
+            apps.add(m.getApp());
+        }
+        if (apps.isEmpty()) {
+            return null;
+        }
+        Set<Role> roles = new LinkedHashSet<>();
+        for (App app : apps) {
+            roles.addAll(app.getRoles());
+        }
+        return roles;
     }
 
     /**
@@ -178,6 +258,14 @@ public class QueryAdminService {
      */
     public record RoleChecked(Long roleId, String name, boolean checked) {}
 
+    /**
+     * Lista de candidatos a mostrar en el desplegable de binding —
+     * ver {@link #rolesPermitidosPara} para el filtro. Ya no es
+     * {@code roleRepo.findAll()} sin más: mostrar un rol que
+     * {@link #bindRole} va a rechazar de todas formas era el bug
+     * concreto que motivó este cambio (cualquier rol se podía atar a
+     * cualquier query, sin importar el app del query-service).
+     */
     @Transactional(readOnly = true)
     public List<RoleChecked> getRolesForQueryChecked(Long queryId) {
         Query q = queryRepo.findById(queryId)
@@ -185,7 +273,10 @@ public class QueryAdminService {
         Set<Long> bound = q.getRoles().stream()
                 .map(Role::getId)
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-        return roleRepo.findAll().stream()
+        Set<Role> permitidos = rolesPermitidosPara(q);
+        var candidatos = permitidos == null ? roleRepo.findAll() : List.copyOf(permitidos);
+        return candidatos.stream()
+                .sorted(java.util.Comparator.comparing(Role::getName))
                 .map(r -> new RoleChecked(r.getId(), r.getName(), bound.contains(r.getId())))
                 .toList();
     }
@@ -227,7 +318,8 @@ public class QueryAdminService {
         // Derivado del SQL, no pedido al admin. Ver
         // deriveExecutionMode para por qué el campo sobraba.
         q.setExecutionMode(deriveExecutionMode(req.query()));
-        q.setHttpMethod(normalizeHttpMethod(req.httpMethod()));
+        String httpMethod = normalizeHttpMethod(req.httpMethod());
+        q.setHttpMethod(httpMethod);
         // V27: nullable. When set, the unique partial index
         // (microservice_id, path_template) catches concurrent
         // insert races; the service-layer check below catches
@@ -238,6 +330,39 @@ public class QueryAdminService {
         // in validateOutParams() (must contain a placeholder
         // that exists in the SQL; only meaningful for PROCEDURE).
         q.setOutParamNames(normalizeOutParams(req.outParamNames()));
+        // V49: author-declared JDBC/PG type per caller-controlled
+        // placeholder. Strict validation lives in validateParamTypes(),
+        // called from create()/update() before copy(). LinkedHashMap
+        // to preserve insertion order for deterministic API responses.
+        q.setParamTypes(new LinkedHashMap<>(req.paramTypes()));
+        // V70: reescribe el set completo de restricciones de esta
+        // query en cada guardado, igual que paramTypes de arriba.
+        q.replaceParamConstraints(buildParamConstraintEntities(req, q));
+        // V110: opt-in cache flag + TTL. A null cacheTtlSeconds
+        // (back-compat callers, or a client that just checked the
+        // "cacheable" box without touching the TTL field) falls
+        // back to the entity's own default (60s) instead of writing
+        // zero/negative into a column the DB CHECK requires positive.
+        // Defense in depth: cacheable only makes sense for a GET
+        // row (see Query#isCacheable's javadoc — POST/PUT/PATCH
+        // mutate and must never be served from a stale cache entry).
+        // QueryPathRegistry already refuses to carry a true flag
+        // through for a non-GET row regardless, but rejecting it
+        // here means the admin-ui form gets an immediate 400 instead
+        // of a silently-ignored checkbox.
+        if (req.cacheable() && !"GET".equals(httpMethod)) {
+            throw new IllegalArgumentException(
+                    "cacheable solo aplica a filas GET (httpMethod=" + httpMethod + ")");
+        }
+        q.setCacheable(req.cacheable());
+        if (req.cacheTtlSeconds() != null) {
+            if (req.cacheTtlSeconds() <= 0) {
+                throw new IllegalArgumentException(
+                        "cacheTtlSeconds debe ser mayor que cero (recibido: "
+                                + req.cacheTtlSeconds() + ")");
+            }
+            q.setCacheTtlSeconds(req.cacheTtlSeconds());
+        }
         // Resolve microservice binding. Null clears the
         // association (back to "global" — any instance may
         // serve). A non-null id MUST resolve to a kind=QUERY
@@ -302,6 +427,257 @@ public class QueryAdminService {
                     + "in the query SQL");
             }
         }
+    }
+
+    /**
+     * V49 — strict validation of {@code paramTypes} at write time.
+     *
+     * <p>Two checks, en este orden:
+     *
+     * <ol>
+     *   <li><b>Shape</b>: cada clave debe ser un placeholder válido
+     *       ({@link ParamTypes#isValidKey}) y cada valor un tipo del
+     *       set curado ({@link ParamTypes#CURATED}). Una entrada mal
+     *       formada se rechaza con 400 mencionando el set permitido.</li>
+     *   <li><b>Cobertura</b>: todo placeholder {@code :PARAM.*} o
+     *       {@code :BODY.*} presente en el SQL debe tener una entrada
+     *       en {@code paramTypes}. {@code :CONTEXT.*} y
+     *       {@code :QUERY.{SIZE,OFFSET}} son del sistema y no
+     *       requieren entrada.</li>
+     * </ol>
+     *
+     * <p>El mensaje de error nombra los placeholders sin tipo en
+     * orden alfabético ({@link TreeSet}) para que el autor pueda
+     * copiarlos a la UI sin reordenar.
+     */
+    private void validateParamTypes(QueryRequest req) {
+        Map<String, String> raw = req.paramTypes() == null
+                ? Map.of() : req.paramTypes();
+        if (raw.isEmpty()) {
+            // Aún sin tipos declarados, validamos la cobertura
+            // (el SQL podría tener placeholders sin soportar
+            // — debe ser 0 o todos declarados).
+            validateCoverage(req.query(), Map.of());
+            return;
+        }
+
+        // V60-bis — canonicalizamos keys a MAYÚSCULAS para
+        // tolerar clientes (admins) que las escriban en
+        // cualquier caja — la cobertura y el lookup en
+        // query-service son case-insensitive desde V60-bis.
+        Map<String, String> declared = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, String> e : raw.entrySet()) {
+            String upperKey = e.getKey().toUpperCase(java.util.Locale.ROOT);
+            if (!ParamTypes.isValidKey(upperKey)) {
+                throw new IllegalArgumentException(
+                    "PARAM_TYPES key inválida: '" + e.getKey()
+                    + "' (canonical='" + upperKey + "'). Cada segmento debe "
+                    + "coincidir con [A-Z][A-Z0-9_]* (namespace incluido). "
+                    + "Ejemplos válidos: 'PARAM.NOMBRE', 'BODY.USER.EMAIL'.");
+            }
+            // V62 — el valor puede traer el sufijo de obligatoriedad
+            // ('!', ver ParamTypes#parseDeclaration); el set curado
+            // sólo conoce el tipo base, así que se valida sin el
+            // sufijo. El sufijo en sí no se restringe más — cualquier
+            // tipo del set curado puede marcarse obligatorio.
+            var declaracion = ParamTypes.parseDeclaration(e.getValue());
+            String baseType = declaracion.baseType();
+            if (!ParamTypes.CURATED.contains(baseType)) {
+                throw new IllegalArgumentException(
+                    "PARAM_TYPES['" + upperKey + "']='" + e.getValue()
+                    + "' no es un tipo soportado. Permitidos: "
+                    + ParamTypes.CURATED
+                    + " (opcionalmente con sufijo '!' para marcarlo obligatorio, "
+                    + "p. ej. 'BIGINT!').");
+            }
+            // V63 — FILE:clasificacion declara con qué carpeta S3
+            // arma file-service la clave (ver ParamTypes.FILE). Sólo
+            // se valida el FORMATO acá — un ':' en cualquier tipo que
+            // no sea FILE ya se rechazó arriba (el baseType con ':'
+            // incluido no está en CURATED, así que nunca llega hasta
+            // acá para un tipo distinto).
+            if (declaracion.fileClassification() != null
+                    && !ParamTypes.isValidFileClassification(declaracion.fileClassification())) {
+                throw new IllegalArgumentException(
+                    "PARAM_TYPES['" + upperKey + "']='" + e.getValue()
+                    + "' tiene una clasificación de archivo inválida: '"
+                    + declaracion.fileClassification() + "'. Debe empezar con una "
+                    + "letra y usar sólo letras, dígitos y '_' — ej. 'perfilUsuario', "
+                    + "'PRIMER_PERIODO'.");
+            }
+            // V65 — FILE:clasificacion:campoEstablecimiento agrega un
+            // tercer componente: el campo de texto del multipart que
+            // trae el código de establecimiento a anteponer en la
+            // clave S3 (ver ParamTypes.ESTABLISHMENT_SCOPED_FILE_CLASSIFICATIONS).
+            // Sólo tiene sentido junto a una clasificación — si el
+            // parseo lo llenó sin clasificación (no puede pasar hoy,
+            // el separador es el mismo y el primero gana la
+            // clasificación, pero se deja explícito por si el formato
+            // cambia) se rechaza igual que un formato inválido.
+            if (declaracion.fileEstablishmentField() != null
+                    && !ParamTypes.isValidFileEstablishmentField(declaracion.fileEstablishmentField())) {
+                throw new IllegalArgumentException(
+                    "PARAM_TYPES['" + upperKey + "']='" + e.getValue()
+                    + "' tiene un campo de establecimiento inválido: '"
+                    + declaracion.fileEstablishmentField() + "'. Debe empezar con una "
+                    + "letra y usar sólo letras, dígitos y '_' — ej. 'idEstablecimiento'.");
+            }
+            // Detectar colisiones case-only entre keys
+            // (ej. "body.id" y "BODY.ID" envían a la misma
+            // key canónica).
+            String prev = declared.putIfAbsent(upperKey, e.getValue());
+            if (prev != null) {
+                throw new IllegalArgumentException(
+                    "PARAM_TYPES tiene las dos claves '" + e.getKey()
+                    + "' y '" + prev + "' que difieren sólo por mayúsculas. "
+                    + "Envía sólo una (la forma canónica es '" + upperKey + "').");
+            }
+        }
+
+        validateCoverage(req.query(), declared);
+    }
+
+    private void validateCoverage(String sql, Map<String, String> declared) {
+        Set<String> inSql = sql == null ? Set.of() : PlaceholderScanner.scan(sql);
+        Set<String> required = inSql.stream()
+                .filter(p -> {
+                    String ns = p.split("\\.", 2)[0];
+                    return ParamNamespace.PARAM.equals(ns)
+                            || ParamNamespace.BODY.equals(ns)
+                            || ParamNamespace.BODY_RAW.equals(ns);
+                })
+                .collect(Collectors.toCollection(TreeSet::new));
+
+        // La cobertura es case-insensitive — los placeholders
+        // del SQL pueden estar en cualquier caja (el rewriter
+        // los uppercase-es para el lookup) y las keys de
+        // paramTypes están canonicalizadas.
+        Set<String> declaredUpper = declared.keySet().stream()
+                .map(s -> s.toUpperCase(java.util.Locale.ROOT))
+                .collect(Collectors.toCollection(TreeSet::new));
+        Set<String> requiredUpper = required.stream()
+                .map(s -> s.toUpperCase(java.util.Locale.ROOT))
+                .collect(Collectors.toCollection(TreeSet::new));
+        Set<String> missing = new TreeSet<>(requiredUpper);
+        missing.removeAll(declaredUpper);
+        if (!missing.isEmpty()) {
+            throw new IllegalArgumentException(
+                "PARAM_TYPES incompleto. Placeholders del SQL sin tipo "
+                + "declarado: " + missing
+                + ". Asigna un tipo a cada uno antes de guardar "
+                + "(o usa 'TEXT' si no tienes preferencia).");
+        }
+    }
+
+    /**
+     * V70 — strict validation of {@code paramConstraints} at write
+     * time. Cada entrada debe:
+     *
+     * <ol>
+     *   <li>Referenciar una key que exista en {@code paramTypes} —
+     *       una restricción sobre un placeholder no declarado no
+     *       tiene tipo base contra el cual aplicarse.</li>
+     *   <li>Traer sólo reglas compatibles con el tipo base declarado:
+     *       {@code onlyPositive}/{@code allowDecimals}/{@code maxDigits}
+     *       sólo sobre un tipo numérico ({@link ParamTypes#INTEGER_TYPES}
+     *       / {@link ParamTypes#DECIMAL_TYPES}); {@code numericText}/
+     *       {@code minLength}/{@code maxLength} sólo sobre un tipo de
+     *       texto ({@link ParamTypes#STRING_TYPES}). Mezclar (p. ej.
+     *       {@code maxDigits} sobre un {@code TEXT}) se rechaza — sería
+     *       una regla que {@code query-service} nunca aplicaría, sin
+     *       avisar al autor.</li>
+     *   <li>Traer valores sanos: {@code maxDigits > 0},
+     *       {@code minLength >= 0}, {@code maxLength > 0},
+     *       {@code minLength <= maxLength} cuando ambos están
+     *       presentes. El {@code CHECK} de la migración es la red de
+     *       seguridad; esto da un 400 legible antes de tocar la BD.</li>
+     * </ol>
+     */
+    private void validateParamConstraints(QueryRequest req) {
+        Map<String, ParamConstraint> constraints = req.paramConstraints();
+        if (constraints == null || constraints.isEmpty()) {
+            return;
+        }
+        Map<String, String> paramTypes = req.paramTypes() == null ? Map.of() : req.paramTypes();
+        for (Map.Entry<String, ParamConstraint> e : constraints.entrySet()) {
+            String key = e.getKey();
+            ParamConstraint rule = e.getValue();
+            if (rule == null) continue;
+
+            String upperKey = key.toUpperCase(java.util.Locale.ROOT);
+            String declaredTypeRaw = paramTypes.get(key) != null
+                    ? paramTypes.get(key) : paramTypes.get(upperKey);
+            if (declaredTypeRaw == null) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'] no tiene un tipo declarado en "
+                    + "PARAM_TYPES. Declara primero el tipo del placeholder antes de "
+                    + "agregarle restricciones de formato.");
+            }
+            String baseType = ParamTypes.parseDeclaration(declaredTypeRaw).baseType();
+            boolean numericType = ParamTypes.INTEGER_TYPES.contains(baseType)
+                    || ParamTypes.DECIMAL_TYPES.contains(baseType);
+            boolean textType = ParamTypes.STRING_TYPES.contains(baseType);
+
+            if (rule.hasNumericRules() && !numericType) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'] declara reglas numéricas "
+                    + "(onlyPositive/allowDecimals/maxDigits) pero el tipo declarado es "
+                    + baseType + ", no numérico.");
+            }
+            if (rule.hasTextRules() && !textType) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'] declara reglas de texto "
+                    + "(numericText/minLength/maxLength) pero el tipo declarado es "
+                    + baseType + ", no textual.");
+            }
+            if (rule.maxDigits() != null && rule.maxDigits() <= 0) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'].maxDigits debe ser mayor que cero.");
+            }
+            if (rule.minValue() != null && rule.maxValue() != null
+                    && rule.minValue().compareTo(rule.maxValue()) > 0) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'].minValue (" + rule.minValue()
+                    + ") no puede ser mayor que maxValue (" + rule.maxValue() + ").");
+            }
+            if (rule.minLength() != null && rule.minLength() < 0) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'].minLength no puede ser negativo.");
+            }
+            if (rule.maxLength() != null && rule.maxLength() <= 0) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'].maxLength debe ser mayor que cero.");
+            }
+            if (rule.minLength() != null && rule.maxLength() != null
+                    && rule.minLength() > rule.maxLength()) {
+                throw new IllegalArgumentException(
+                    "PARAM_CONSTRAINTS['" + key + "'].minLength (" + rule.minLength()
+                    + ") no puede ser mayor que maxLength (" + rule.maxLength() + ").");
+            }
+        }
+    }
+
+    /**
+     * Traduce {@code req.paramConstraints()} a las entidades hijas
+     * que {@link Query#replaceParamConstraints} va a persistir.
+     * Filas con las seis reglas en {@code null} se omiten — no
+     * aportan restricción alguna, así que no vale la pena guardar la
+     * fila.
+     */
+    private static java.util.List<QueryParamConstraint> buildParamConstraintEntities(
+            QueryRequest req, Query q) {
+        java.util.List<QueryParamConstraint> out = new java.util.ArrayList<>();
+        Map<String, ParamConstraint> constraints = req.paramConstraints();
+        if (constraints == null) return out;
+        for (Map.Entry<String, ParamConstraint> e : constraints.entrySet()) {
+            ParamConstraint r = e.getValue();
+            if (r == null || (!r.hasNumericRules() && !r.hasTextRules())) continue;
+            out.add(new QueryParamConstraint(q, e.getKey(),
+                    r.onlyPositive(), r.allowDecimals(), r.maxDigits(),
+                    r.minValue(), r.maxValue(),
+                    r.numericText(), r.minLength(), r.maxLength()));
+        }
+        return out;
     }
 
     /**
@@ -411,7 +787,7 @@ public class QueryAdminService {
     }
 
     /** Verbos admitidos. DELETE queda fuera a propósito — ver la entidad Query. */
-    private static final Set<String> HTTP_METHODS = Set.of("GET", "POST", "PUT");
+    private static final Set<String> HTTP_METHODS = Set.of("GET", "POST", "PUT", "PATCH");
 
     /**
      * Normaliza y valida el verbo. Null o vacío cae a {@code POST},
@@ -425,7 +801,7 @@ public class QueryAdminService {
         String m = raw.trim().toUpperCase(java.util.Locale.ROOT);
         if (!HTTP_METHODS.contains(m)) {
             throw new IllegalArgumentException(
-                    "Método HTTP no admitido: '" + raw + "'. Usa GET, POST o PUT. "
+                    "Método HTTP no admitido: '" + raw + "'. Usa GET, POST, PUT o PATCH. "
                     + "DELETE no se admite; para borrar, publica un "
                     + "procedimiento y llámalo con CALL.");
         }
@@ -453,10 +829,11 @@ public class QueryAdminService {
         }
         // Un GET no debe modificar nada. Es la mitad del contrato
         // que hace que un GET se pueda cachear y reintentar.
+        // PATCH sí admite DML (es la esencia del partial update).
         if ("GET".equals(method) && "DML".equals(mode)) {
             throw new IllegalArgumentException(
                     "Un GET no puede ejecutar INSERT ni UPDATE. Ata esta "
-                    + "consulta a POST o PUT.");
+                    + "consulta a POST, PUT o PATCH.");
         }
     }
 

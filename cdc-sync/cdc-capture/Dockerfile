@@ -31,7 +31,7 @@ COPY cdc-generator/pom.xml cdc-generator/
 # Warm the local Maven repo with the dependency graph. This layer is
 # invalidated only when one of the pom.xml files above changes — once
 # cached, a source-only edit doesn't re-download the world.
-RUN mvn -B -ntp -pl cdc-capture -am dependency:go-offline -q
+RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl cdc-capture -am dependency:go-offline -q
 
 # Copy sources LAST (most-frequently-changing layer). cdc-common has
 # to come first because cdc-capture depends on it; `mvn -am` then
@@ -44,7 +44,7 @@ COPY cdc-capture/src cdc-capture/src
 # the empty pre-repackage jar to `*.jar.original` and writes the
 # fat jar as `target/app.jar` (the pom pins `<finalName>app</finalName>`
 # so the COPY below resolves to a single file, not a glob).
-RUN mvn -B -ntp -pl cdc-capture -am clean package -DskipTests -q
+RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl cdc-capture -am clean package -DskipTests -q
 
 # ----- stage 2: minimal JRE runtime -----
 FROM eclipse-temurin:25-jre-jammy

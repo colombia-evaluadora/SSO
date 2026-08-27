@@ -56,10 +56,11 @@ class ContextEndToEndSyntheticTest {
     }
 
     @Test
-    void seven_audit_ctx_fields_propagate_envelope_to_audit_record() throws Exception {
+    void eight_audit_ctx_fields_propagate_envelope_to_audit_record() throws Exception {
         // ── 1. Simulated Debezium audit_ctx message body (from the trigger). ──
         Map<String, Object> rawContext = new LinkedHashMap<>();
         rawContext.put("app_user",   "alice.morales");
+        rawContext.put("app_user_id", "4242");
         rawContext.put("db_user",    "postgres");
         rawContext.put("sesion_id",  "S-2026-08-03-001");
         rawContext.put("familia",    "ADMIN");
@@ -105,8 +106,9 @@ class ContextEndToEndSyntheticTest {
                 event, /*seq*/ 0, /*lsn*/ 9002L, /*xid*/ 12345L,
                 null, "OK", /*latenciaMs*/ 5L, typedRowBuilder);
 
-        // ── 5. Verify all seven audit_ctx fields reach AuditRecord. ──
+        // ── 5. Verify all eight audit_ctx fields reach AuditRecord. ──
         assertThat(record.appUser()).isEqualTo("alice.morales");
+        assertThat(record.appUserId()).isEqualTo("4242");
         assertThat(record.dbUser()).isEqualTo("postgres");
         assertThat(record.sesionId()).isEqualTo("S-2026-08-03-001");
         assertThat(record.familia()).isEqualTo("ADMIN");
@@ -146,6 +148,7 @@ class ContextEndToEndSyntheticTest {
 
         // Empty strings, not null — AuditRecord.fromEvent guarantees this.
         assertThat(record.appUser()).isEqualTo("");
+        assertThat(record.appUserId()).isEqualTo("");
         assertThat(record.dbUser()).isEqualTo("");
         assertThat(record.sesionId()).isEqualTo("");
         assertThat(record.familia()).isEqualTo("");

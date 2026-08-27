@@ -60,3 +60,4 @@ api-gateway/src/main/resources/static/admin/
 skills-lock*
 .agents/
 .claude/
+.playwright-mcp/

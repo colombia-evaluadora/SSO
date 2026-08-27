@@ -3,6 +3,10 @@ package com.co.eurekatic.ssoadmin.dto;
 import com.co.eurekatic.common.entity.ExecutionMode;
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
+import com.co.eurekatic.common.query.ParamConstraint;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Read-side response shape for {@code GET /getQuery?uuid=...}
@@ -53,8 +57,53 @@ public record QueryDefinition(
         ExecutionMode executionMode,
         String outParamNames,
         /** V33 — verbo HTTP: GET, POST o PUT. Default POST. */
-        String httpMethod
+        String httpMethod,
+        /**
+         * V49 — author-declared JDBC/PG type per caller-controlled
+         * placeholder. Wire format: {@code {"PARAM.NOMBRE":"TEXT", ...}}.
+         * Empty map when the row has no caller-controlled placeholders or
+         * when the row is legacy (pre-V49 server doesn't carry it).
+         */
+        Map<String, String> paramTypes,
+        /**
+         * V70 — restricciones de formato opcionales por placeholder,
+         * adicionales al tipo/obligatoriedad de {@code paramTypes}.
+         * Wire format: {@code {"BODY.EDAD": {"onlyPositive": true, ...}}}.
+         * Vacío cuando la fila no tiene restricciones adicionales o el
+         * servidor es pre-V70.
+         */
+        Map<String, ParamConstraint> paramConstraints,
+        /**
+         * V110 — opt-in: {@code query-service} may cache this row's
+         * {@code GET} result in Redis when {@code true}. Default
+         * {@code false} for pre-V110 servers/tests.
+         */
+        boolean cacheable,
+        /**
+         * V110 — staleness window in seconds when {@link #cacheable}
+         * is {@code true}. Ignored otherwise.
+         */
+        int cacheTtlSeconds
 ) {
+    /**
+     * V110 back-compat (sin cacheable/cacheTtlSeconds). Conserva la
+     * forma de 16 argumentos; cacheable cae a false, que es el
+     * comportamiento previo a V110 (siempre golpea la base).
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           Long microserviceId,
+                           String pathTemplate, ExecutionMode executionMode,
+                           String outParamNames, String httpMethod,
+                           Map<String, String> paramTypes,
+                           Map<String, ParamConstraint> paramConstraints) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             pathTemplate, executionMode, outParamNames, httpMethod,
+             paramTypes, paramConstraints, false, 60);
+    }
+
     /**
      * V31 — back-compat constructor for callers that pre-date
      * V27 + V28 + V31 (i.e. the 10-arg shape). The new fields
@@ -67,7 +116,8 @@ public record QueryDefinition(
                            Long microserviceId) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
-             null, ExecutionMode.SELECT, null, null);
+             null, ExecutionMode.SELECT, null, null, new LinkedHashMap<>(),
+             new LinkedHashMap<>(), false, 60);
     }
 
     /**
@@ -81,7 +131,44 @@ public record QueryDefinition(
                            String pathTemplate, ExecutionMode executionMode) {
         this(idQuery, uuid, query, type, publicEnd, captcha,
              detail, action, style, microserviceId,
-             pathTemplate, executionMode, null, null);
+             pathTemplate, executionMode, null, null, new LinkedHashMap<>(),
+             new LinkedHashMap<>(), false, 60);
+    }
+
+    /**
+     * V33 back-compat (no V49 paramTypes). Conserva la forma de 14
+     * argumentos; el mapa cae a vacío para que el lado consumidor
+     * (query-service) caiga en su rama "legacy" — Spring auto-derive.
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           Long microserviceId,
+                           String pathTemplate, ExecutionMode executionMode,
+                           String outParamNames, String httpMethod) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             pathTemplate, executionMode, outParamNames, httpMethod,
+             new LinkedHashMap<>(), new LinkedHashMap<>(), false, 60);
+    }
+
+    /**
+     * V70 back-compat (sin paramConstraints). Conserva la forma de 15
+     * argumentos que los llamantes usaban antes de V70; el mapa de
+     * restricciones cae a vacío, que {@code ParamConstraintValidator}
+     * trata como "sin restricciones adicionales".
+     */
+    public QueryDefinition(Long idQuery, String uuid, String query,
+                           String type, boolean publicEnd, boolean captcha,
+                           String detail, String action, String style,
+                           Long microserviceId,
+                           String pathTemplate, ExecutionMode executionMode,
+                           String outParamNames, String httpMethod,
+                           Map<String, String> paramTypes) {
+        this(idQuery, uuid, query, type, publicEnd, captcha,
+             detail, action, style, microserviceId,
+             pathTemplate, executionMode, outParamNames, httpMethod,
+             paramTypes, new LinkedHashMap<>(), false, 60);
     }
 
     public static QueryDefinition fromEntity(Query q) {
@@ -100,6 +187,22 @@ public record QueryDefinition(
                 q.getPathTemplate(),
                 ExecutionMode.fromString(q.getExecutionMode()),
                 q.getOutParamNames(),
-                q.getHttpMethod());
+                q.getHttpMethod(),
+                q.getParamTypes(),
+                toConstraintMap(q),
+                q.isCacheable(),
+                q.getCacheTtlSeconds());
+    }
+
+    private static Map<String, ParamConstraint> toConstraintMap(Query q) {
+        Map<String, ParamConstraint> out = new LinkedHashMap<>();
+        for (var c : q.getParamConstraints()) {
+            out.put(c.getParamKey(), new ParamConstraint(
+                    c.getOnlyPositive(), c.getAllowDecimals(), c.getMaxDigits(),
+                    c.getMinValue(), c.getMaxValue(),
+                    c.getNumericText(), c.getMinLength(), c.getMaxLength()));
+        }
+        return out;
+
     }
 }

@@ -70,6 +70,6 @@ class AuditContextCacheTest {
 
     private static CdcEvent.Context ctx(String u, String d, String s, String f,
                                         String r, String e) {
-        return new CdcEvent.Context(u, d, s, f, r, e, Map.of());
+        return new CdcEvent.Context(u, null, d, s, f, r, null, null, null, null, null, e, Map.of());
     }
 }

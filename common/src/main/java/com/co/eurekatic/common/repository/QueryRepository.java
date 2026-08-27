@@ -33,7 +33,7 @@ public interface QueryRepository extends JpaRepository<Query, Long> {
      * without an N+1 follow-up query. The unique index on
      * {@code UUID} keeps this O(1).
      */
-    @EntityGraph(attributePaths = "roles")
+    @EntityGraph(attributePaths = {"roles", "paramConstraints"})
     @QueryHints(@jakarta.persistence.QueryHint(name = HINT_FETCH_SIZE, value = "1"))
     Optional<Query> findByUuid(String uuid);
 
@@ -45,7 +45,7 @@ public interface QueryRepository extends JpaRepository<Query, Long> {
      * supplied. The eager {@code roles} fetch keeps the
      * per-row authorization check inside the same transaction.
      */
-    @EntityGraph(attributePaths = "roles")
+    @EntityGraph(attributePaths = {"roles", "paramConstraints"})
     @QueryHints(@jakarta.persistence.QueryHint(name = HINT_FETCH_SIZE, value = "100"))
     List<Query> findAllByOrderByIdAsc();
 
@@ -56,7 +56,7 @@ public interface QueryRepository extends JpaRepository<Query, Long> {
      * {@code idx_query_microservice} index so it stays O(log n)
      * as the catalog grows.
      */
-    @EntityGraph(attributePaths = "roles")
+    @EntityGraph(attributePaths = {"roles", "paramConstraints"})
     @QueryHints(@jakarta.persistence.QueryHint(name = HINT_FETCH_SIZE, value = "100"))
     List<Query> findAllByMicroservice_IdOrderByIdAsc(Long microserviceId);
 
@@ -99,11 +99,11 @@ public interface QueryRepository extends JpaRepository<Query, Long> {
      * doesn't help here because the catalog doesn't enforce
      * that every query has a template).
      */
-    @EntityGraph(attributePaths = "roles")
+    @EntityGraph(attributePaths = {"roles", "paramConstraints"})
     @QueryHints(@jakarta.persistence.QueryHint(name = HINT_FETCH_SIZE, value = "100"))
     java.util.List<Query> findAllByPathTemplateIsNotNull();
 
-    @EntityGraph(attributePaths = "roles")
+    @EntityGraph(attributePaths = {"roles", "paramConstraints"})
     @QueryHints(@jakarta.persistence.QueryHint(name = HINT_FETCH_SIZE, value = "100"))
     java.util.List<Query> findAllByMicroservice_IdAndPathTemplateIsNotNull(Long microserviceId);
 }

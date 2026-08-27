@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.dao.DataAccessException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
@@ -16,8 +17,10 @@ import java.util.regex.Pattern;
 /**
  * Seeds the database with a default admin user on first startup so
  * the system is usable out of the box. The seed is idempotent — if
- * an admin user with the configured email already exists, the seeder
- * is a no-op.
+ * an admin user with the configured email already exists, the
+ * {@code public.users} half is a no-op; the academic identity half
+ * ({@link AdminAcademicIdentityBootstrap}) is still re-checked so a
+ * partially seeded admin is repaired on the next boot.
  *
  * <p>Since the V12 migration the {@code username} column is gone —
  * email IS the login identifier, so the seeder only needs the
@@ -49,6 +52,7 @@ public class DataInitializer implements CommandLineRunner {
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final PasswordEncoder passwordEncoder;
+    private final AdminAcademicIdentityBootstrap academicIdentityBootstrap;
     private final boolean enabled;
     private final String adminPassword;
     private final String adminEmail;
@@ -56,12 +60,14 @@ public class DataInitializer implements CommandLineRunner {
     public DataInitializer(UserRepository userRepository,
                            RoleRepository roleRepository,
                            PasswordEncoder passwordEncoder,
+                           AdminAcademicIdentityBootstrap academicIdentityBootstrap,
                            @Value("${sso.bootstrap.enabled:true}") boolean enabled,
                            @Value("${sso.bootstrap.admin-password:admin}") String adminPassword,
                            @Value("${sso.bootstrap.admin-email:admin@example.com}") String adminEmail) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.passwordEncoder = passwordEncoder;
+        this.academicIdentityBootstrap = academicIdentityBootstrap;
         this.enabled = enabled;
         this.adminPassword = adminPassword;
         this.adminEmail = adminEmail;
@@ -85,6 +91,7 @@ public class DataInitializer implements CommandLineRunner {
         }
         if (userRepository.existsByEmail(adminEmail)) {
             log.info("DataInitializer: user '{}' already exists — skipping admin seed", adminEmail);
+            bootstrapAcademicIdentity();
             return;
         }
 
@@ -103,6 +110,21 @@ public class DataInitializer implements CommandLineRunner {
         userRepository.save(admin);
 
         log.info("DataInitializer: created default admin user '{}' with roles [USER, ADMIN]", adminEmail);
+
+        bootstrapAcademicIdentity();
+    }
+
+    /**
+     * Un fallo aquí no debe tumbar el arranque: el admin puede
+     * autenticarse y usar el resto del sistema sin su mitad académica.
+     */
+    private void bootstrapAcademicIdentity() {
+        try {
+            academicIdentityBootstrap.bootstrapForSeedAdmin(adminEmail);
+        } catch (DataAccessException e) {
+            log.error("DataInitializer: falló el bootstrap de identidad académica de '{}' — "
+                    + "el admin puede autenticarse, pero /register/* responderá 403", adminEmail, e);
+        }
     }
 
     private Role ensureRole(String name, String description) {

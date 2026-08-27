@@ -96,6 +96,25 @@ public class ProvisionerProperties {
      *  + Eureka registration enough room. */
     private int readyTimeoutSeconds = 45;
 
+    /** Host of the shared {@code sso-redis} instance. Se inyecta al
+     *  contenedor de query-service spawneado como
+     *  {@code REDIS_HOST} — sin esto el contenedor cae al default
+     *  {@code localhost} de su propio application.yml, que dentro
+     *  del contenedor resuelve al propio contenedor, no al
+     *  {@code redis} de la red compose, y el {@code RedisCacheManager}
+     *  arranca contra un Redis que no existe. */
+    private String redisHost = "redis";
+
+    /** Puerto del {@code sso-redis} compartido. Se inyecta como
+     *  {@code REDIS_PORT}. */
+    private String redisPort = "6379";
+
+    /** Password del {@code sso-redis} compartido, si el operador
+     *  configuró uno. Se inyecta como {@code REDIS_PASSWORD}.
+     *  Vacío por defecto, igual que el resto de secretos opcionales
+     *  de esta clase. */
+    private String redisPassword = "";
+
     public String getImage() { return image; }
     public void setImage(String image) { this.image = image; }
     public String getNetwork() { return network; }
@@ -116,4 +135,10 @@ public class ProvisionerProperties {
     public void setReadyTimeoutSeconds(int readyTimeoutSeconds) {
         this.readyTimeoutSeconds = readyTimeoutSeconds;
     }
+    public String getRedisHost() { return redisHost; }
+    public void setRedisHost(String redisHost) { this.redisHost = redisHost; }
+    public String getRedisPort() { return redisPort; }
+    public void setRedisPort(String redisPort) { this.redisPort = redisPort; }
+    public String getRedisPassword() { return redisPassword; }
+    public void setRedisPassword(String redisPassword) { this.redisPassword = redisPassword; }
 }

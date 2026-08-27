@@ -2,11 +2,13 @@ package com.co.eurekatic.query.web.path;
 
 import com.co.eurekatic.common.query.ParamNamespace;
 import com.co.eurekatic.query.read.QueryService;
+import com.co.eurekatic.query.routing.CatalogResultCacheService;
 import com.co.eurekatic.query.routing.QueryPathRegistry;
 import com.co.eurekatic.query.web.QueryRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -17,6 +19,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * V27 — path-based query dispatcher.
@@ -51,6 +54,9 @@ import java.util.Map;
  *   <li>{@code :QUERY.X} — query string</li>
  *   <li>{@code :BODY.X.Y} — cuerpo JSON, aplanado con puntos:
  *       {@code {"filtros":{"zona":1}}} → {@code :BODY.FILTROS.ZONA}</li>
+ *   <li>{@code :BODY_RAW.X} — cuerpo JSON sin aplanar (V49-bis):
+ *       cada top-level del body se expone como sub-objeto completo
+ *       para que el autor lo pase como JSONB via cast.</li>
  *   <li>{@code :CONTEXT.X} — del JWT verificado</li>
  * </ul>
  * Ver {@link com.co.eurekatic.common.query.ParamNamespace}.
@@ -65,10 +71,13 @@ public class QueryPathController {
 
     private final QueryService service;
     private final QueryPathRegistry registry;
+    private final CatalogResultCacheService resultCache;
 
-    public QueryPathController(QueryService service, QueryPathRegistry registry) {
+    public QueryPathController(QueryService service, QueryPathRegistry registry,
+                               CatalogResultCacheService resultCache) {
         this.service = service;
         this.registry = registry;
+        this.resultCache = resultCache;
     }
 
     /**
@@ -104,6 +113,21 @@ public class QueryPathController {
         return dispatch(request, "PUT", queryParams, body);
     }
 
+    /**
+     * V50 — PATCH method. Idempotent semantics with partial body
+     * (RFC 5789). Like PUT, it carries a body and matches the
+     * same validation rules — PATCH on a DML row is allowed.
+     * Registered after PUT so Spring's handler mapping resolves
+     * the more specific path templates first.
+     */
+    @PatchMapping("/**")
+    public Map<String, Object> dispatchPatch(
+            jakarta.servlet.http.HttpServletRequest request,
+            @RequestParam Map<String, String> queryParams,
+            @RequestBody(required = false) Map<String, Object> body) {
+        return dispatch(request, "PATCH", queryParams, body);
+    }
+
     private Map<String, Object> dispatch(
             jakarta.servlet.http.HttpServletRequest request,
             String method,
@@ -133,6 +157,24 @@ public class QueryPathController {
                     "No query registered for path: " + fullPath);
         });
 
+        // V110 — opt-in cache, GET only. registry.match() already
+        // forces cacheable=false for any non-GET row (belt-and-
+        // braces — see QueryPathRegistry#refresh), so the
+        // "GET".equals(method) check here is the second, redundant
+        // guard: a mutating dispatch must NEVER be served from a
+        // stale cache entry, no matter what the catalog says.
+        boolean cacheable = "GET".equals(method) && match.cacheable();
+        String cacheKey = null;
+        if (cacheable) {
+            cacheKey = CatalogResultCacheService.keyFor(match.uuid(), fullPath, queryParams,
+                    org.springframework.security.core.context.SecurityContextHolder
+                            .getContext().getAuthentication());
+            Optional<Map<String, Object>> cached = resultCache.get(cacheKey);
+            if (cached.isPresent()) {
+                return cached.get();
+            }
+        }
+
         Map<String, Object> params =
                 buildParams(match.pathVars(), queryParams, body);
 
@@ -150,8 +192,13 @@ public class QueryPathController {
         // V31 — path-dispatch always uses the envelope
         // shape ({rows, outParams}) so callers can rely
         // on the same JSON shape regardless of mode.
-        return com.co.eurekatic.query.web.query.QueryResultEnvelope
+        Map<String, Object> result = com.co.eurekatic.query.web.query.QueryResultEnvelope
                 .withOutParams(service.execute(qr, false));
+
+        if (cacheable) {
+            resultCache.put(cacheKey, result, match.cacheTtlSeconds());
+        }
+        return result;
     }
 
     /**
@@ -185,7 +232,11 @@ public class QueryPathController {
         }
         ParamNamespace.putAll(params, ParamNamespace.QUERY, queryParams);
         if (body != null) {
+            // Aplanado: BODY.X.Y para acceder a sub-campos escalares.
             params.putAll(ParamNamespace.flatten(body, ParamNamespace.BODY));
+            // V49-bis — sin aplanar: BODY_RAW.X para sub-objetos completos
+            // que el autor quiere pasar como JSONB via cast(:BODY_RAW.X as jsonb).
+            ParamNamespace.putRaw(params, body);
         }
         return params;
     }

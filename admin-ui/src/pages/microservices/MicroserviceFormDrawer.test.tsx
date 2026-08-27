@@ -47,6 +47,8 @@ function mkMs(over: Partial<MicroserviceResponse> = {}): MicroserviceResponse {
     dbPassword: null,
     poolSize: null,
     instanceName: null,
+    fileStorageSchema: null,
+    fileStorageTable: null,
     ...over,
   };
 }

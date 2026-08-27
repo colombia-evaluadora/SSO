@@ -1,5 +1,6 @@
 package com.co.eurekatic.common.entity;
 
+import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -10,6 +11,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.JoinTable;
 import jakarta.persistence.ManyToMany;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -17,9 +19,16 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * Query — a parameterized SQL definition indexed by {@code uuid},
@@ -202,6 +211,142 @@ public class Query {
      */
     @Column(name = "OUT_PARAM_NAMES", length = 500)
     private String outParamNames;
+
+    /**
+     * Author-declared JDBC/PG type per caller-controlled placeholder.
+     * Shape: {@code {"PARAM.NOMBRE":"TEXT", "BODY.IDS":"BIGINT[]", ...}}.
+     * Strict at write time: every {@code :PARAM.*} / {@code :BODY.*}
+     * in the SQL must appear as a key. {@code :CONTEXT.*} and
+     * {@code :QUERY.{SIZE,OFFSET}} are system-bound and need no entry.
+     *
+     * <p>Marshalled to JSONB by Hibernate 7 ({@link SqlTypes#JSON}).
+     * {@link LinkedHashMap} preserves insertion order so the API
+     * responses stay deterministic when the UI diffs by key.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "PARAM_TYPES", nullable = false, columnDefinition = "jsonb")
+    private Map<String, String> paramTypes = new LinkedHashMap<>();
+
+    /**
+     * V70 — restricciones de formato opcionales por placeholder,
+     * adicionales al tipo/obligatoriedad de {@link #paramTypes}.
+     * Cada fila referencia esta query ({@code query_id} FK,
+     * {@code ON DELETE CASCADE} en BD; {@code cascade=ALL,
+     * orphanRemoval=true} aquí para que el lado Java se comporte
+     * igual). {@code query-service} las consume vía
+     * {@code QueryDefinition.paramConstraints()} para validar el
+     * body/params antes del bind (ver
+     * {@code com.co.eurekatic.common.query.ParamConstraintValidator}).
+     *
+     * <p>{@code QueryAdminService} reescribe el set completo en cada
+     * create/update — ver {@link #replaceParamConstraints(java.util.Collection)}.
+     */
+    @OneToMany(mappedBy = "query", cascade = CascadeType.ALL,
+            orphanRemoval = true, fetch = FetchType.LAZY)
+    private List<QueryParamConstraint> paramConstraints = new ArrayList<>();
+
+    /**
+     * Reemplaza el set completo de restricciones de esta query —
+     * misma intención que {@code setParamTypes} sobrescribiendo todo
+     * el mapa en cada guardado, pero hecho como un DIFF por
+     * {@code paramKey} en vez de {@code clear()} + re-add.
+     *
+     * <p><b>Por qué no {@code clear()} + re-add</b>: en un
+     * {@code @OneToMany(orphanRemoval=true)}, Hibernate encola las
+     * inserciones ANTES que los deletes de huérfanos dentro del mismo
+     * flush. Si el autor edita una query sin cambiar los placeholders
+     * (el caso común: editar la query, no tocar restricciones), el
+     * {@code clear()} marca las filas viejas como huérfanas y el
+     * re-add crea entidades NUEVAS con el mismo
+     * {@code (query_id, param_key)} — el INSERT de la fila nueva
+     * corre antes que el DELETE de la vieja y choca contra
+     * {@code uq_query_param_constraint}. El diff evita el choque de
+     * raíz: una key que sigue presente actualiza sus columnas EN LA
+     * MISMA fila administrada (sin delete+insert), y sólo las keys
+     * que de verdad desaparecen o aparecen generan un delete o un
+     * insert real.
+     */
+    public void replaceParamConstraints(java.util.Collection<QueryParamConstraint> next) {
+        java.util.Map<String, QueryParamConstraint> incoming = new java.util.LinkedHashMap<>();
+        if (next != null) {
+            for (QueryParamConstraint c : next) {
+                incoming.put(c.getParamKey(), c);
+            }
+        }
+
+        // 1) Quita del in-memory las keys que ya no vienen — orphanRemoval
+        //    encola su DELETE al flush.
+        this.paramConstraints.removeIf(existing -> !incoming.containsKey(existing.getParamKey()));
+
+        // 2) Para las que siguen, actualiza los valores EN LA fila
+        //    administrada existente — ni delete ni insert, sólo UPDATE.
+        for (QueryParamConstraint existing : this.paramConstraints) {
+            QueryParamConstraint updated = incoming.remove(existing.getParamKey());
+            if (updated != null) {
+                existing.setOnlyPositive(updated.getOnlyPositive());
+                existing.setAllowDecimals(updated.getAllowDecimals());
+                existing.setMaxDigits(updated.getMaxDigits());
+                existing.setMinValue(updated.getMinValue());
+                existing.setMaxValue(updated.getMaxValue());
+                existing.setNumericText(updated.getNumericText());
+                existing.setMinLength(updated.getMinLength());
+                existing.setMaxLength(updated.getMaxLength());
+            }
+        }
+
+        // 3) Lo que sobra en `incoming` son keys genuinamente nuevas —
+        //    sólo estas generan un INSERT real.
+        for (QueryParamConstraint fresh : incoming.values()) {
+            fresh.setQuery(this);
+            this.paramConstraints.add(fresh);
+        }
+    }
+
+    /**
+     * V110 — opt-in flag: when {@code true}, {@code query-service}
+     * may serve this row's {@code GET} result from Redis instead of
+     * re-running the SQL on every request. Default {@code false}
+     * preserves pre-V110 behaviour for every existing row.
+     *
+     * <p>Deliberately opt-in and not blanket: a {@code GET} row can
+     * carry {@code :CONTEXT.*} binds (userId/email/roles) and
+     * caller-supplied query/path/body params, so caching is only
+     * safe once the query author has actively decided the result is
+     * reusable across identical requests for a bounded window. See
+     * {@code query-service}'s {@code CatalogResultCacheService}.
+     */
+    @Column(name = "CACHEABLE", nullable = false)
+    private boolean cacheable = false;
+
+    /**
+     * V110 — staleness window in seconds when {@link #cacheable} is
+     * {@code true}. Ignored otherwise. Default 60s; the author picks
+     * a wider window for near-static catalogs and a narrower one for
+     * anything closer to live.
+     *
+     * <p><b>V66 — this is now an upper bound, not the typical
+     * staleness.</b> {@code query-service} invalidates every cached
+     * {@code GET} for its own instance as soon as a {@code PROCEDURE}
+     * / {@code DML} row (or the legacy {@code /write} endpoint)
+     * successfully mutates data — see {@code CatalogResultCacheService
+     * #invalidateAll}. In the normal case a GET issued right after a
+     * write already sees fresh data; {@code cacheTtlSeconds} only
+     * matters as a ceiling for the case Redis itself is unreachable
+     * at invalidation time (fail-open — the write still succeeds, the
+     * cache entry just outlives it by up to this many seconds
+     * instead of being cleared immediately).
+     *
+     * <p>The invalidation is instance-scoped and blunt on purpose:
+     * ANY write clears ALL of this instance's cached GETs, not just
+     * the ones the write actually affected — there's no catalog
+     * metadata linking a write row to the reads it touches. Pick a
+     * TTL as if that fine-grained mapping didn't exist; the
+     * invalidation is a bonus that makes the common case feel
+     * instant, not the mechanism you're meant to rely on for
+     * correctness.
+     */
+    @Column(name = "CACHE_TTL_SECONDS", nullable = false)
+    private int cacheTtlSeconds = 60;
 
     /**
      * Roles authorized to invoke this query through the catalog
