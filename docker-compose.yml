@@ -1624,9 +1624,7 @@ services:
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
     healthcheck:
       # bash y no sh: /dev/tcp es una funcion de bash, dash no la tiene.
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8087; printf 'GET /actuator/health HTTP/1.0
-
-' >&3; grep -q UP <&3"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8087; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 15s
       timeout: 5s
       retries: 10
