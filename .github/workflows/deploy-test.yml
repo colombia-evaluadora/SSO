@@ -44,6 +44,12 @@
 #                     En ambos casos, al final (todo el stack arriba, antes
 #                     del smoke check de api-gateway) corre `flyway migrate`
 #                     + `flyway validate`; si algo falla, repara y reaplica.
+#                     El repair además RE-EJECUTA el SQL de las migraciones
+#                     cuyo checksum cambió (repair solo realinea el historial,
+#                     no re-corre la migración): sin esto, editar un V<n> ya
+#                     aplicado —p.ej. reescribir el cuerpo de una función—
+#                     nunca llegaba al server. Todas las migraciones del repo
+#                     son idempotentes, así que re-aplicarlas es seguro.
 #
 # El gate es `workflow_run` sobre CI (no un push directo) para que
 # nunca se despliegue un commit cuyos tests fallaron. `workflow_dispatch`
@@ -719,14 +725,95 @@ jobs:
           # `flyway -outOfOrder=true migrate` EXPLÍCITO antes de
           # reintentar `compose up`.
           up_stack() { ./scripts/sso-stack.sh up -d --remove-orphans; }
+
+          # Lee un valor del .env del servidor sin `source` (los valores
+          # pueden traer espacios/comillas que romperían el shell).
+          _envval() { sed -n "s/^$1=//p" /opt/sso/.env 2>/dev/null | head -1; }
+
+          # Basename de las migraciones cuyo checksum en flyway_schema_history
+          # NO coincide con el archivo del repo. Se captura ANTES del repair:
+          # `flyway repair` realinea ese checksum pero NO vuelve a ejecutar la
+          # migración, así que un cambio hecho DENTRO de un V<n> ya aplicado
+          # (típico: el cuerpo de una función reescrito) se quedaría sin
+          # aplicar en el server. Prioriza el JSON de flyway; si el formato
+          # cambia en una versión futura, cae al parseo de texto.
+          changed_migration_files() {
+            local json files txt v
+            json="$(docker compose run --rm -T flyway validate -outputType=json 2>/dev/null || true)"
+            files="$(printf '%s' "$json" | jq -r '
+                      (.invalidMigrations // [])[]
+                      | select(.errorDetails.errorCode == "CHECKSUM_MISMATCH")
+                      | .filepath | sub("^.*/"; "")' 2>/dev/null | sort -u || true)"
+            if [ -z "$files" ]; then
+              # Fallback: parsear el texto de `flyway validate`.
+              txt="$(docker compose run --rm flyway validate 2>&1 || true)"
+              for v in $(printf '%s\n' "$txt" \
+                          | grep -iE 'checksum mismatch for migration version' \
+                          | grep -oE '[0-9]+(\.[0-9]+)*' | sort -u || true); do
+                ls -1 "/opt/sso/postgres/migrations/" 2>/dev/null \
+                  | grep -E "^V${v}__" | head -1 || true
+              done
+              return 0
+            fi
+            printf '%s\n' "$files" | sed '/^$/d' || true
+          }
+
+          # Re-aplica el SQL crudo de las migraciones cuyos basename se pasan
+          # como argumento, contra la MISMA base que migra flyway
+          # (FLYWAY_URL -> DB_URL -> el contenedor `postgres`/sso-postgres en
+          # este server). Todas las migraciones del repo son idempotentes
+          # (CREATE OR REPLACE / DROP ... IF EXISTS / ADD COLUMN IF NOT
+          # EXISTS), así que re-correr su SQL es seguro. Falla (return 1) si
+          # psql devuelve error — no se enmascara.
+          reapply_migrations() {
+            local pu pdb bn f rc=0
+            pu="$(_envval POSTGRES_USER)"; [ -n "$pu" ]  || pu="$(_envval DB_USER)"
+            pdb="$(_envval POSTGRES_DB)";  [ -n "$pdb" ] || pdb="$(_envval DB_NAME)"
+            if ! docker inspect -f '{{.State.Running}}' sso-postgres >/dev/null 2>&1; then
+              echo "::error::sso-postgres no está corriendo; no puedo re-aplicar: $*"
+              echo "         FLYWAY_URL apunta al contenedor 'postgres' (DB_URL=$(_envval DB_URL));"
+              echo "         re-aplica su SQL a mano (psql -f) y re-lanza el deploy."
+              return 1
+            fi
+            for bn in "$@"; do
+              f="/opt/sso/postgres/migrations/$bn"
+              if [ ! -f "$f" ]; then
+                echo "::warning::$bn no está en postgres/migrations/; se omite"
+                continue
+              fi
+              echo "  -> re-aplicando $bn"
+              if ! docker exec -i sso-postgres psql -U "$pu" -d "$pdb" -v ON_ERROR_STOP=1 -f - < "$f"; then
+                echo "::error::psql falló re-aplicando $bn"
+                rc=1
+              fi
+            done
+            return $rc
+          }
+
           repair_and_retry() {
+            # Captura la lista ANTES del repair (después ya no hay mismatch).
+            local CHANGED
+            CHANGED="$(changed_migration_files | tr '\n' ' ')"
+            echo "=== migraciones con checksum cambiado: ${CHANGED:-<ninguna>} ==="
             echo "=== intentando flyway repair ==="
             if docker compose run --rm flyway repair; then
               echo "=== flyway repair OK; migrando con -outOfOrder=true ==="
               if docker compose run --rm flyway -outOfOrder=true migrate; then
-                echo "=== flyway migrate (outOfOrder) OK; reintentando compose up ==="
+                echo "=== flyway migrate (outOfOrder) OK ==="
+                # DESPUÉS del migrate: así cualquier objeto nuevo del que
+                # dependa una migración editada (p.ej. una columna añadida en
+                # un V<n> nuevo) ya existe cuando se re-aplica su SQL.
+                if [ -n "${CHANGED// /}" ]; then
+                  echo "=== re-aplicando el SQL de las migraciones cambiadas (repair no las re-ejecuta) ==="
+                  if ! reapply_migrations $CHANGED; then
+                    echo "=== falló la re-aplicación de una migración cambiada ==="
+                    docker compose logs --no-color --tail=200 flyway || true
+                    return 1
+                  fi
+                fi
+                echo "=== reintentando compose up ==="
                 if up_stack; then
-                  echo "=== compose up exitoso tras repair + migrate outOfOrder ==="
+                  echo "=== compose up exitoso tras repair + migrate outOfOrder + re-aplicación ==="
                   return 0
                 fi
                 echo "=== compose up SIGUE fallando tras repair + migrate outOfOrder ==="
