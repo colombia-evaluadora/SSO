@@ -1,23 +1,32 @@
 -- ===========================================================================
--- V199 — fn_fun_filtros_permiso_actualizar: gestion (reemplazo completo por
--- funcionario) de los FILTROS que recortan permisos de un funcionario, es
--- decir de las filas de academico_test.TUSUARIO_ROL_PERMISO.
+-- V199 — filtros que recortan permisos de un funcionario (filas de
+-- academico_test.TUSUARIO_ROL_PERMISO): endpoint de escritura
+-- (fn_fun_filtros_permiso_actualizar) + endpoint de lectura
+-- (fn_fun_filtros_permiso_listar).
 --
 -- CU-86e2w4xdt — Permisos segun rol.
 --
 -- QUE HACE
---   Endpoint PUT /api/eval-col/funcionario/:ID/filtros-permiso (:ID =
---   PK_TFUNCIONARIO, igual que el hermano PUT /funcionario/:ID/permisos que
---   sirve fn_fun_permisos_actualizar de V51). Recibe, por cada rol del
---   funcionario, la lista de menus a recortar con su modo y REEMPLAZA POR
---   COMPLETO el set de filtros activos del funcionario:
---     * los (rol, menu, sede) que llegan en el body -> INSERT o REACTIVATE
---       (patron "buscar-y-decidir", NO ON CONFLICT: el esquema usa indices
---       parciales WHERE active = true — mismo criterio que V123).
---     * las filas TUSUARIO_ROL_PERMISO activas del funcionario que NO estan
---       en el nuevo set -> ACTIVE = FALSE.
---   filtros: [] (o menus: []) => limpia todos los filtros del funcionario.
---   MODIFIED_BY / MODIFIED_AT solo se tocan cuando hubo cambio real.
+--   1) PUT /api/eval-col/funcionario/:ID/filtros-permiso  (:ID =
+--      PK_TFUNCIONARIO, igual que el hermano PUT /funcionario/:ID/permisos
+--      que sirve fn_fun_permisos_actualizar de V51). Recibe, por cada rol
+--      del funcionario, la lista de menus a recortar con su modo y REEMPLAZA
+--      POR COMPLETO el set de filtros activos del funcionario:
+--        * los (rol, menu, sede) que llegan en el body -> INSERT o REACTIVATE
+--          (patron "buscar-y-decidir", NO ON CONFLICT: el esquema usa indices
+--          parciales WHERE active = true — mismo criterio que V123).
+--        * las filas TUSUARIO_ROL_PERMISO activas del funcionario que NO
+--          estan en el nuevo set -> ACTIVE = FALSE.
+--      filtros: [] (o menus: []) => limpia todos los filtros del funcionario.
+--      MODIFIED_BY / MODIFIED_AT solo se tocan cuando hubo cambio real.
+--
+--   2) GET /api/eval-col/funcionario/:ID/filtros-permiso — lee el estado
+--      actual: una fila por filtro ACTIVE del funcionario, ya resuelto a
+--      (rolId, rolNombre, menuId, menuNombre, fkTsede, sedeNombre, modo).
+--      Es el read-back necesario para que el front construya el payload del
+--      PUT (que es reemplazo completo). Mismo gate y mismo role_query que el
+--      PUT. `modo` se deriva de SOLO_LECTURA con la misma regla que V185:
+--      'SI' => 'SOLO_LECTURA', cualquier otro valor => 'BLOQUEO_TOTAL'.
 --
 -- POR QUE
 --   Hoy TUSUARIO_ROL_PERMISO solo se LEE (fn_usuario_permisos_menu de V185);
@@ -406,4 +415,170 @@ SELECT r.id_role, q.id_query
  WHERE m.serviceid    = 'eval-col'
    AND q.path_template = '/funcionario/:ID/filtros-permiso'
    AND q.http_method   = 'PUT'
+ON CONFLICT DO NOTHING;
+
+
+-- ===========================================================================
+-- fn_fun_filtros_permiso_listar — GET /funcionario/:ID/filtros-permiso.
+--   Read-back del estado actual de los filtros de un funcionario, resuelto a
+--   nombres, para que el front pueda construir el payload del PUT (reemplazo
+--   completo). Una fila por TUSUARIO_ROL_PERMISO ACTIVE del funcionario.
+--   `modo` se deriva de SOLO_LECTURA igual que en V185
+--   (IS DISTINCT FROM 'SI' => BLOQUEO_TOTAL).
+--   Mismo gate que fn_fun_filtros_permiso_actualizar (bloque "0. Gate" de
+--   fn_fun_permisos_actualizar de V51). LEFT JOIN a TSEDE para que una fila
+--   con alcance por ente (FK_ENTE, sembrada fuera de este endpoint) siga
+--   apareciendo con fk_tsede / sede_nombre en NULL en vez de desaparecer.
+-- ===========================================================================
+CREATE OR REPLACE FUNCTION academico_test.fn_fun_filtros_permiso_listar(
+    p_pk_usuario_solicitante bigint,
+    p_pk_funcionario         bigint
+)
+RETURNS TABLE(
+    rol_id      bigint,
+    rol_nombre  character varying,
+    menu_id     bigint,
+    menu_nombre character varying,
+    fk_tsede    bigint,
+    sede_nombre character varying,
+    modo        character varying
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_pk_usuario    BIGINT;
+    v_active_fun    BOOLEAN;
+    v_nombre_actual VARCHAR;
+    v_es_super      BOOLEAN;
+    v_visible       BOOLEAN;
+BEGIN
+    -- 1. Existencia y estado del TFUNCIONARIO -> PK_TUSUARIO.
+    SELECT f.ACTIVE, f.FK_TUSUARIO,
+           TRIM(COALESCE(u.PRIMER_NOMBRE,'') || ' ' || COALESCE(u.PRIMER_APELLIDO,''))
+      INTO v_active_fun, v_pk_usuario, v_nombre_actual
+      FROM academico_test.TFUNCIONARIO f
+      JOIN academico_test.TUSUARIO      u ON u.PK_TUSUARIO = f.FK_TUSUARIO
+     WHERE f.PK_TFUNCIONARIO = p_pk_funcionario;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se encontro el funcionario solicitado'
+            USING ERRCODE = 'P0002';
+    END IF;
+
+    -- 0. Gate -- copiado de fn_fun_permisos_actualizar (V51).
+    v_es_super := academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante);
+
+    IF NOT v_es_super THEN
+        WITH ee_accesibles AS (
+            SELECT e.PK_ESTABLECIMIENTO
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+            UNION
+            SELECT e.PK_ESTABLECIMIENTO
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+            UNION
+            SELECT DISTINCT s.FK_TESTABLECIMIENTO
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        ),
+        sedes_coordinador AS (
+            SELECT su.FK_TSEDE
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        )
+        SELECT EXISTS (
+            SELECT 1
+              FROM academico_test.TESTABLECIMIENTO e
+             WHERE e.ACTIVE = TRUE
+               AND e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
+               AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
+            UNION ALL
+            SELECT 1
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE su.FK_TUSUARIO = v_pk_usuario
+               AND su.ACTIVE      = TRUE
+               AND s.ACTIVE       = TRUE
+               AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
+               AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
+            UNION ALL
+            SELECT 1
+              FROM academico_test.TSEDE_USUARIO su
+             WHERE su.FK_TUSUARIO = v_pk_usuario
+               AND su.ACTIVE      = TRUE
+               -- alias explicito: la funcion tiene un OUT param fk_tsede que
+               -- haria ambiguo un `SELECT FK_TSEDE` a secas.
+               AND su.FK_TSEDE IN (SELECT sc.FK_TSEDE FROM sedes_coordinador sc)
+               AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
+        ) INTO v_visible;
+
+        IF NOT v_visible THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
+    END IF;
+
+    -- 2. Filas activas, resueltas a nombres.
+    RETURN QUERY
+    SELECT rm.FK_TROL                                        AS rol_id,
+           tr.NOMBRE                                         AS rol_nombre,
+           rm.FK_TMENU                                       AS menu_id,
+           tm.NOMBRE                                         AS menu_nombre,
+           p.FK_TSEDE                                        AS fk_tsede,
+           ts.NOMBRE                                         AS sede_nombre,
+           CASE WHEN p.SOLO_LECTURA IS DISTINCT FROM 'SI'
+                THEN 'BLOQUEO_TOTAL' ELSE 'SOLO_LECTURA' END::varchar AS modo
+      FROM academico_test.TUSUARIO_ROL_PERMISO p
+      JOIN academico_test.TROL_MENU rm ON rm.PK_TROL_MENU = p.FK_TROL_MENU
+      JOIN academico_test.TROL      tr ON tr.PK_TROL      = rm.FK_TROL
+      JOIN academico_test.TMENU     tm ON tm.PK_TMENU     = rm.FK_TMENU
+      LEFT JOIN academico_test.TSEDE ts ON ts.PK_TSEDE    = p.FK_TSEDE
+     WHERE p.FK_TUSUARIO = v_pk_usuario
+       AND p.ACTIVE      = TRUE
+     ORDER BY tr.NOMBRE, tm.NOMBRE, p.FK_TSEDE;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_fun_filtros_permiso_listar(BIGINT, BIGINT)
+    IS 'Read-back de los filtros que recortan permisos de un funcionario (filas academico_test.TUSUARIO_ROL_PERMISO ACTIVE). p_pk_funcionario = PK_TFUNCIONARIO. Una fila por filtro, resuelta a (rol_id, rol_nombre, menu_id, menu_nombre, fk_tsede, sede_nombre, modo). modo se deriva de SOLO_LECTURA con la regla de V185: ''SI'' => ''SOLO_LECTURA''; cualquier otro valor (NULL incluido) => ''BLOQUEO_TOTAL''. LEFT JOIN a TSEDE: una fila con alcance por ente (FK_ENTE, no la escribe este endpoint) aparece con fk_tsede/sede_nombre en NULL. Mismo gate que fn_fun_filtros_permiso_actualizar. ERRCODES: P0002 funcionario inexistente; 42501 gate. Sirve para que el front arme el payload del PUT (reemplazo completo).';
+
+-- Registro en public.query: GET /funcionario/:ID/filtros-permiso (eval-col).
+INSERT INTO public.query
+    (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
+SELECT
+    gen_random_uuid()::text,
+    'SELECT * FROM academico_test.fn_fun_filtros_permiso_listar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:PARAM.ID AS BIGINT)
+);',
+    'postgres', false, false,
+    m.id_microservice, '/funcionario/:ID/filtros-permiso', 'SELECT', 'GET',
+    '{"PARAM.ID": "BIGINT"}'::jsonb,
+    'V199 -- lee los filtros activos que recortan los permisos de un funcionario (TUSUARIO_ROL_PERMISO), resueltos a nombres: (rolId, rolNombre, menuId, menuNombre, fkTsede, sedeNombre, modo). Read-back para construir el payload del PUT /funcionario/:ID/filtros-permiso.'
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
+
+-- role_query: mismos roles que el PUT.
+INSERT INTO public.role_query (role_id, query_id)
+SELECT r.id_role, q.id_query
+  FROM public.query q
+  JOIN public.microservice m ON m.id_microservice = q.microservice_id
+  JOIN public.role r
+    ON r.name IN (
+        'CEVAL-SUPER_ADMINISTRADOR',
+        'SSO-ADMIN',
+        'CEVAL-RECTOR',
+        'CEVAL-AUXILIAR_ADMINISTRATIVO',
+        'CEVAL-JEFE_SISTEMA_ESTABLECIMIENTO'
+    )
+ WHERE m.serviceid    = 'eval-col'
+   AND q.path_template = '/funcionario/:ID/filtros-permiso'
+   AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
