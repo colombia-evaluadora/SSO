@@ -63,10 +63,10 @@ import java.util.stream.Collectors;
  *       activation landing page. This is the FIRST place a
  *       password ever enters the system for that account.</li>
  *   <li>{@link #forgotPassword} — issues a restore token and
- *       publishes a restore-password email event. Always returns
- *       silently even if the email is unknown, to avoid leaking
- *       which addresses are registered. The user types a new
- *       password at {@code POST /restorePassword}.</li>
+ *       publishes a restore-password email event. Un correo
+ *       desconocido responde 404 y no dispara ningun envio — ver
+ *       la nota sobre enumeracion de cuentas en ese metodo. The
+ *       user types a new password at {@code POST /restorePassword}.</li>
  *   <li>{@link #resendActivation} — only valid while
  *       {@link User#getStatus()} is PENDING_ACTIVATION; reissues
  *       the activation token and republishes the email (V13
@@ -383,19 +383,24 @@ public class UserAdminService {
     }
 
     /**
-     * Issues a restore-password email. Always returns
-     * successfully (even if the email is unknown) so the API
-     * doesn't leak which addresses are registered.
+     * Issues a restore-password email.
      *
      * <p><b>Devuelve el token en la respuesta</b> — ver la advertencia de
      * seguridad en {@link ForgotPasswordResponse}. Es un vector de apropiacion
      * de cuenta y se expone a pedido explicito del equipo.
      *
-     * <p>Para NO delatar que direcciones existen, un correo desconocido recibe
-     * igual un token con la misma forma y vida: se genera al vuelo y no se
-     * persiste, asi que no sirve para restablecer nada. Sin esto, la sola
-     * presencia del token en la respuesta convertiria este endpoint en un
-     * enumerador de cuentas.
+     * <p><b>Un correo desconocido responde 404</b>, tambien a pedido explicito
+     * del equipo: el front pide decirle al usuario que esa direccion no esta
+     * registrada en vez de mostrarle una confirmacion falsa. El costo conocido
+     * es que este endpoint queda como enumerador de cuentas — publico y sin
+     * autenticar, permite averiguar que direcciones existen pegandole correos.
+     * La version anterior devolvia siempre 200 con un token generado al vuelo
+     * (no persistido, inservible para restablecer nada) justamente para
+     * evitarlo. Si algun dia se quiere cerrar la fuga, hay que revertir este
+     * 404 Y dejar de devolver el token en el cuerpo.
+     *
+     * <p>Ningun correo sale para una direccion desconocida: el evento
+     * {@code password-reset} solo se publica despues de encontrar al usuario.
      */
     @Transactional
     public ForgotPasswordResponse forgotPassword(String email, String appName) {
@@ -404,7 +409,7 @@ public class UserAdminService {
                 .findFirst();
 
         if (encontrado.isEmpty()) {
-            return new ForgotPasswordResponse(UUID.randomUUID().toString(), RESTORE_TTL_SECONDS);
+            throw new NotFoundException("User", email);
         }
 
         User u = encontrado.get();
