@@ -160,3 +160,167 @@ BEGIN
     RETURN v_id_creado;
 END;
 $function$;
+
+-- =============================================================================
+-- fn_matricula_obtener_por_id -- GET granular de UNA TMATRICULA, con los
+-- nombres de catalogo resueltos y el contexto academico completo
+-- (grupo -> grado -> periodo -> sede/jornada/año lectivo), que es lo que
+-- el front necesita para reconstruir los selects encadenados del
+-- formulario sin pedir cada nivel por separado.
+--
+-- Gate: estricto (sede-especifico), a diferencia de los obtener_por_id de
+-- estudiante/acudiente -- aca SI se conoce la sede (via el grupo de la
+-- matricula), asi que no hay razon para relajarlo: ver el comentario de
+-- fn_estudiante_obtener_por_id (V160) sobre por que aquellos no pueden
+-- escalar por sede y este si.
+--
+-- 0 filas si el PK no existe / esta inactivo (no lanza excepcion) -- solo
+-- el gate y una matricula fuera de alcance producen error.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_obtener_por_id(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_tmatricula           BIGINT
+)
+RETURNS TABLE (
+    pk_tmatricula                 BIGINT,
+    fk_testudiante                BIGINT,
+    fk_tgrupo                     BIGINT,
+    grupo_nombre                  VARCHAR,
+    fk_tgrado                     BIGINT,
+    grado_nombre                  VARCHAR,
+    fk_tperiodo_academico         BIGINT,
+    periodo_nombre                VARCHAR,
+    fk_tsede                      BIGINT,
+    sede_nombre                   VARCHAR,
+    fk_testablecimiento           BIGINT,
+    fk_tlv_jornada                BIGINT,
+    jornada_nombre                VARCHAR,
+    fk_tano_lectivo               BIGINT,
+    ano_lectivo_nombre            VARCHAR,
+    fk_enfasis                    BIGINT,
+    enfasis_nombre                VARCHAR,
+    fk_tlv_estado_matricula       BIGINT,
+    estado_matricula_nombre       VARCHAR,
+    fk_tlv_situacion_academica    BIGINT,
+    situacion_academica_nombre    VARCHAR,
+    estudiante_nuevo              academico_test.bool_sn,
+    estudiante_repitente          academico_test.bool_sn,
+    promocion_anticipada          academico_test.bool_sn,
+    fk_tpadre                     BIGINT,
+    fk_tlv_acudiente_parentesco   BIGINT,
+    fk_tinscripcion               BIGINT,
+    fk_tprematricula              BIGINT,
+    fk_tmatricula_anterior        BIGINT,
+    created_at                    TIMESTAMP
+)
+LANGUAGE plpgsql
+STABLE
+AS $function$
+DECLARE
+    v_fk_establecimiento BIGINT;
+BEGIN
+    -- -----------------------------------------------------------------
+    -- 0. Resolver el EE de la matricula (para el gate). Si no resuelve,
+    --    la matricula no existe o esta inactiva -> 0 filas, sin error.
+    -- -----------------------------------------------------------------
+    SELECT s.FK_TESTABLECIMIENTO
+      INTO v_fk_establecimiento
+      FROM academico_test.TMATRICULA m
+      JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
+      JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa   ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s                 ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE m.PK_TMATRICULA = p_pk_tmatricula
+       AND m.ACTIVE        = TRUE
+       AND gr.ACTIVE       = TRUE
+       AND g.ACTIVE        = TRUE
+       AND pa.ACTIVE       = TRUE
+       AND s.ACTIVE        = TRUE;
+
+    IF v_fk_establecimiento IS NULL THEN
+        RETURN;
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 1. Gate de autorizacion COMPUESTO -- mismo patron de V163/V164/V165.
+    -- -----------------------------------------------------------------
+    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s
+            ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
+           AND s.ACTIVE              = TRUE
+           AND su.ACTIVE             = TRUE
+           AND su.FK_TROL            = 8
+           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    RETURN QUERY
+    SELECT
+        m.PK_TMATRICULA,
+        m.FK_TESTUDIANTE,
+        m.FK_TGRUPO, gr.NOMBRE,
+        gr.FK_TGRADO, g.NOMBRE,
+        g.FK_TPERIODO_ACADEMICO, pa.NOMBRE,
+        pa.FK_TSEDE, s.NOMBRE,
+        s.FK_TESTABLECIMIENTO,
+        pa.FK_TLV_JORNADA, jor.NOMBRE,
+        pa.FK_TANO_LECTIVO, al.NOMBRE,
+        m.FK_ENFASIS, enf.NOMBRE,
+        m.FK_TLV_ESTADO_MATRICULA, est.NOMBRE,
+        m.FK_TLV_SITUACION_ACADEMICA, sit.NOMBRE,
+        m.ESTUDIANTE_NUEVO,
+        m.ESTUDIANTE_REPITENTE,
+        m.PROMOCION_ANTICIPADA,
+        m.FK_TPADRE,
+        m.FK_TLV_ACUDIENTE_PARENTESCO,
+        m.FK_TINSCRIPCION,
+        m.FK_TPREMATRICULA,
+        m.FK_TMATRICULA_ANTERIOR,
+        m.CREATED_AT
+      FROM academico_test.TMATRICULA m
+      JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
+      JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa   ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s                 ON s.PK_TSEDE = pa.FK_TSEDE
+      JOIN academico_test.TANO_LECTIVO al         ON al.PK_ANO_LECTIVO = pa.FK_TANO_LECTIVO
+ LEFT JOIN academico_test.TLISTA_VALOR jor        ON jor.PK_LISTA_VALOR = pa.FK_TLV_JORNADA
+ LEFT JOIN academico_test.TENFASIS enf            ON enf.PK_TENFASIS = m.FK_ENFASIS
+ LEFT JOIN academico_test.TLISTA_VALOR est        ON est.PK_LISTA_VALOR = m.FK_TLV_ESTADO_MATRICULA
+ LEFT JOIN academico_test.TLISTA_VALOR sit        ON sit.PK_LISTA_VALOR = m.FK_TLV_SITUACION_ACADEMICA
+     WHERE m.PK_TMATRICULA = p_pk_tmatricula
+       AND m.ACTIVE        = TRUE
+     LIMIT 1;
+END;
+$function$;

@@ -222,3 +222,144 @@ BEGIN
     RETURN v_id_creado;
 END;
 $function$;
+
+-- =============================================================================
+-- fn_matricula_socioeconomico_obtener_por_matricula -- GET granular del
+-- detalle socioeconomico de UNA matricula. Se busca por FK_TMATRICULA (no
+-- por su propio PK): la relacion es 1-a-1 y el caller siempre parte de la
+-- matricula, nunca del PK del socioeconomico.
+--
+-- Gate: estricto (sede-especifico), mismo patron que
+-- fn_matricula_obtener_por_id (V163) -- resuelto un salto mas arriba, via
+-- la matricula recibida.
+--
+-- 0 filas si la matricula no tiene socioeconomico activo (no lanza
+-- excepcion) -- una matricula sin ese detalle es un estado posible, no un
+-- error.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_socioeconomico_obtener_por_matricula(
+    p_pk_usuario_solicitante  BIGINT,
+    p_fk_tmatricula           BIGINT
+)
+RETURNS TABLE (
+    pk_tmatricula_socioeconomico       BIGINT,
+    fk_tmatricula                      BIGINT,
+    proviene_sector_privado            academico_test.bool_sn,
+    proviene_otro_municipio            academico_test.bool_sn,
+    proviene_otro_municipio_cual       VARCHAR,
+    institucion_origen                 VARCHAR,
+    fk_tlv_tipo_institucion_origen     BIGINT,
+    tipo_institucion_origen_nombre     VARCHAR,
+    fk_tlv_condicion_promocion         BIGINT,
+    condicion_promocion_nombre         VARCHAR,
+    fk_tlv_victima_conflicto           BIGINT,
+    victima_conflicto_nombre           VARCHAR,
+    fk_tmunicipio_victima              BIGINT,
+    municipio_victima_nombre           VARCHAR,
+    seguridad_social_ars               VARCHAR,
+    seguridad_social_eps               VARCHAR,
+    estudiante_subsidiado              academico_test.bool_sn,
+    fk_tlv_fuente_recurso              BIGINT,
+    fuente_recurso_nombre              VARCHAR,
+    beneficiario_cabeza_familia        academico_test.bool_sn,
+    ben_hijo_cabeza_familia            academico_test.bool_sn,
+    beneficiario_veterano              academico_test.bool_sn,
+    beneficiario_heroe                 academico_test.bool_sn
+)
+LANGUAGE plpgsql
+STABLE
+AS $function$
+DECLARE
+    v_fk_establecimiento BIGINT;
+BEGIN
+    SELECT s.FK_TESTABLECIMIENTO
+      INTO v_fk_establecimiento
+      FROM academico_test.TMATRICULA m
+      JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
+      JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa   ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s                 ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE m.PK_TMATRICULA = p_fk_tmatricula
+       AND m.ACTIVE        = TRUE
+       AND gr.ACTIVE       = TRUE
+       AND g.ACTIVE        = TRUE
+       AND pa.ACTIVE       = TRUE
+       AND s.ACTIVE        = TRUE;
+
+    IF v_fk_establecimiento IS NULL THEN
+        RETURN;
+    END IF;
+
+    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s
+            ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
+           AND s.ACTIVE              = TRUE
+           AND su.ACTIVE             = TRUE
+           AND su.FK_TROL            = 8
+           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    RETURN QUERY
+    SELECT
+        se.PK_TMATRICULA_SOCIOECONOMICO,
+        se.FK_TMATRICULA,
+        se.PROVIENE_SECTOR_PRIVADO,
+        se.PROVIENE_OTRO_MUNICIPIO,
+        se.PROVIENE_OTRO_MUNICIPIO_CUAL,
+        se.INSTITUCION_ORIGEN,
+        se.FK_TLV_TIPO_INSTITUCION_ORIGEN, tio.NOMBRE,
+        se.FK_TLV_CONDICION_PROMOCION, cp.NOMBRE,
+        se.FK_TLV_VICTIMA_CONFLICTO, vc.NOMBRE,
+        se.FK_TMUNICIPIO_VICTIMA, mv.NOMBRE,
+        se.SEGURIDAD_SOCIAL_ARS,
+        se.SEGURIDAD_SOCIAL_EPS,
+        se.ESTUDIANTE_SUBSIDIADO,
+        se.FK_TLV_FUENTE_RECURSO, fr.NOMBRE,
+        se.BENEFICIARIO_CABEZA_FAMILIA,
+        se.BEN_HIJO_CABEZA_FAMILIA,
+        se.BENEFICIARIO_VETERANO,
+        se.BENEFICIARIO_HEROE
+      FROM academico_test.TMATRICULA_SOCIOECONOMICO se
+ LEFT JOIN academico_test.TLISTA_VALOR tio ON tio.PK_LISTA_VALOR = se.FK_TLV_TIPO_INSTITUCION_ORIGEN
+ LEFT JOIN academico_test.TLISTA_VALOR cp  ON cp.PK_LISTA_VALOR  = se.FK_TLV_CONDICION_PROMOCION
+ LEFT JOIN academico_test.TLISTA_VALOR vc  ON vc.PK_LISTA_VALOR  = se.FK_TLV_VICTIMA_CONFLICTO
+ LEFT JOIN academico_test.TMUNICIPIO mv    ON mv.PK_TMUNICIPIO   = se.FK_TMUNICIPIO_VICTIMA
+ LEFT JOIN academico_test.TLISTA_VALOR fr  ON fr.PK_LISTA_VALOR  = se.FK_TLV_FUENTE_RECURSO
+     WHERE se.FK_TMATRICULA = p_fk_tmatricula
+       AND se.ACTIVE        = TRUE
+     LIMIT 1;
+END;
+$function$;

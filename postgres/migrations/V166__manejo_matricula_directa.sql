@@ -363,3 +363,137 @@ BEGIN
         v_pk_matricula, v_pk_socioeconomico, COALESCE(v_archivos, '[]'::jsonb);
 END;
 $function$;
+
+-- =============================================================================
+-- fn_matricula_obtener_completa -- GET ORQUESTADOR: la contraparte de
+-- lectura de fn_matricula_directa_crear. Devuelve, en un solo JSONB, todo
+-- lo que el formulario de matricula necesita para reconstruirse:
+--
+--   {
+--     "matricula":      { ...contexto academico + campos de TMATRICULA... },
+--     "socioeconomico": { ... } | null,
+--     "estudiante":     { ...TUSUARIO + TESTUDIANTE... } | null,
+--     "acudientes":     [ { ...TUSUARIO + TPADRE..., "vinculo": {...} } ],
+--     "archivos":       [ { ...TMATRICULA_ARCHIVO + TARCHIVO... } ]
+--   }
+--
+-- Se apoya en las funciones granulares de cada modulo, cada una en su
+-- propio archivo: fn_matricula_obtener_por_id (V163),
+-- fn_matricula_socioeconomico_obtener_por_matricula (V164),
+-- fn_matricula_archivo_listar_por_matricula (V165),
+-- fn_estudiante_obtener_por_id (V160) y fn_padre_obtener_por_id (V161).
+-- Todas siguen siendo llamables por separado.
+--
+-- Gate: el estricto (sede-especifico) lo aplica fn_matricula_obtener_por_id
+-- en el primer paso; si no pasa, esta funcion aborta ahi con 42501 y no
+-- llega a leer nada mas. Las granulares de estudiante/acudiente usan el
+-- gate amplio (ver V160), que es un superconjunto del estricto -- quien
+-- pasa el primero pasa el segundo, asi que no hay 42501 sorpresa a mitad
+-- de camino.
+--
+-- Devuelve NULL si la matricula no existe, esta inactiva, o su cadena
+-- grupo/grado/periodo/sede tiene algun eslabon inactivo -- el caller lo
+-- traduce a 404. No lanza excepcion para ese caso (simetrico con las
+-- granulares, que devuelven 0 filas).
+--
+-- El binario de cada archivo NO viaja aca: la lista trae los pk_tarchivo
+-- para que el front los pida a file-service por separado.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_obtener_completa(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_tmatricula           BIGINT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+STABLE
+AS $function$
+DECLARE
+    v_matricula       JSONB;
+    v_socioeconomico  JSONB;
+    v_estudiante      JSONB;
+    v_acudientes      JSONB;
+    v_archivos        JSONB;
+    v_fk_testudiante  BIGINT;
+BEGIN
+    -- -----------------------------------------------------------------
+    -- 1. Matricula -- aplica el gate estricto y resuelve el contexto
+    --    academico. Si no devuelve fila, la matricula no existe o no
+    --    esta accesible: NULL y se corta aca.
+    -- -----------------------------------------------------------------
+    SELECT to_jsonb(m), m.fk_testudiante
+      INTO v_matricula, v_fk_testudiante
+      FROM academico_test.fn_matricula_obtener_por_id(
+               p_pk_usuario_solicitante, p_pk_tmatricula) AS m;
+
+    IF v_matricula IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2. Detalle socioeconomico (0..1).
+    -- -----------------------------------------------------------------
+    SELECT to_jsonb(se)
+      INTO v_socioeconomico
+      FROM academico_test.fn_matricula_socioeconomico_obtener_por_matricula(
+               p_pk_usuario_solicitante, p_pk_tmatricula) AS se;
+
+    -- -----------------------------------------------------------------
+    -- 3. Estudiante (TUSUARIO + TESTUDIANTE).
+    -- -----------------------------------------------------------------
+    SELECT to_jsonb(e)
+      INTO v_estudiante
+      FROM academico_test.fn_estudiante_obtener_por_id(
+               p_pk_usuario_solicitante, v_fk_testudiante) AS e;
+
+    -- -----------------------------------------------------------------
+    -- 4. Acudientes (0..N) -- se llega por TNUCLEO_FAMILIAR, no por
+    --    TMATRICULA.FK_TPADRE: ese campo existe en el DDL pero
+    --    fn_matricula_crear no lo llena (ver V163), y ademas un
+    --    estudiante puede tener varios acudientes. Cada uno trae sus
+    --    datos de persona mas el "vinculo" (parentesco y banderas del
+    --    nucleo familiar), que es informacion de la RELACION, no del
+    --    acudiente en si.
+    -- -----------------------------------------------------------------
+    SELECT jsonb_agg(
+               to_jsonb(pa) || jsonb_build_object(
+                   'vinculo', jsonb_build_object(
+                       'pkTnucleoFamiliar',        nf.PK_TNUCLEO_FAMILIAR,
+                       'fkTlvParentesco',          nf.FK_TLV_PARENTESCO,
+                       'parentescoNombre',         par.NOMBRE,
+                       'acudiente',                nf.ACUDIENTE,
+                       'asisteReuniones',          nf.ASISTE_REUNIONES,
+                       'asisteInformes',           nf.ASISTE_INFORMES,
+                       'fkTlvTipoEmpleo',          nf.FK_TLV_TIPO_EMPLEO,
+                       'tipoEmpleoNombre',         te.NOMBRE,
+                       'fkTlvFrecuenciaDomicilio', nf.FK_TLV_FRECUENCIA_DOMICILIO,
+                       'frecuenciaDomicilioNombre', fd.NOMBRE
+                   ))
+               ORDER BY nf.PK_TNUCLEO_FAMILIAR)
+      INTO v_acudientes
+      FROM academico_test.TNUCLEO_FAMILIAR nf
+      LEFT JOIN academico_test.TLISTA_VALOR par ON par.PK_LISTA_VALOR = nf.FK_TLV_PARENTESCO
+      LEFT JOIN academico_test.TLISTA_VALOR te  ON te.PK_LISTA_VALOR  = nf.FK_TLV_TIPO_EMPLEO
+      LEFT JOIN academico_test.TLISTA_VALOR fd  ON fd.PK_LISTA_VALOR  = nf.FK_TLV_FRECUENCIA_DOMICILIO
+      CROSS JOIN LATERAL academico_test.fn_padre_obtener_por_id(
+                     p_pk_usuario_solicitante, nf.FK_TPADRE) AS pa
+     WHERE nf.FK_TESTUDIANTE = v_fk_testudiante
+       AND nf.ACTIVE         = TRUE;
+
+    -- -----------------------------------------------------------------
+    -- 5. Archivos de soporte (0..N).
+    -- -----------------------------------------------------------------
+    SELECT jsonb_agg(to_jsonb(ar) ORDER BY ar.pk_tmatricula_archivo)
+      INTO v_archivos
+      FROM academico_test.fn_matricula_archivo_listar_por_matricula(
+               p_pk_usuario_solicitante, p_pk_tmatricula) AS ar;
+
+    RETURN jsonb_build_object(
+        'matricula',      v_matricula,
+        'socioeconomico', v_socioeconomico,
+        'estudiante',     v_estudiante,
+        'acudientes',     COALESCE(v_acudientes, '[]'::jsonb),
+        'archivos',       COALESCE(v_archivos,   '[]'::jsonb)
+    );
+END;
+$function$;

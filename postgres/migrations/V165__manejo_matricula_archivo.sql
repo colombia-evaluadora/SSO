@@ -284,3 +284,115 @@ BEGIN
     END IF;
 END;
 $function$;
+
+-- =============================================================================
+-- fn_matricula_archivo_listar_por_matricula -- GET granular: todos los
+-- archivos de soporte enlazados a UNA matricula, con el tipo de documento
+-- resuelto y los datos del TARCHIVO (nombre/peso/etiqueta) que el front
+-- necesita para listarlos. El binario en si NO viaja aca -- se pide
+-- aparte a file-service con el pk_tarchivo (GET /files/download/{id} o el
+-- flujo de view-token, ver docs/subida-archivos-a-queries.md).
+--
+-- Devuelve 0..N filas (a diferencia de los otros obtener_*, que son 0..1):
+-- "Otros documentos relevantes" es de cantidad variable.
+--
+-- Gate: estricto (sede-especifico), mismo patron que V163/V164.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_archivo_listar_por_matricula(
+    p_pk_usuario_solicitante  BIGINT,
+    p_fk_tmatricula           BIGINT
+)
+RETURNS TABLE (
+    pk_tmatricula_archivo   BIGINT,
+    fk_tarchivo             BIGINT,
+    archivo_nombre          VARCHAR,
+    archivo_etiqueta        VARCHAR,
+    archivo_peso            BIGINT,
+    fk_tlv_tipo_archivo     BIGINT,
+    tipo_archivo_valor      VARCHAR,
+    tipo_archivo_nombre     VARCHAR,
+    created_at              TIMESTAMP
+)
+LANGUAGE plpgsql
+STABLE
+AS $function$
+DECLARE
+    v_fk_establecimiento BIGINT;
+BEGIN
+    SELECT s.FK_TESTABLECIMIENTO
+      INTO v_fk_establecimiento
+      FROM academico_test.TMATRICULA m
+      JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
+      JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa   ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s                 ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE m.PK_TMATRICULA = p_fk_tmatricula
+       AND m.ACTIVE        = TRUE
+       AND gr.ACTIVE       = TRUE
+       AND g.ACTIVE        = TRUE
+       AND pa.ACTIVE       = TRUE
+       AND s.ACTIVE        = TRUE;
+
+    IF v_fk_establecimiento IS NULL THEN
+        RETURN;
+    END IF;
+
+    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s
+            ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
+           AND s.ACTIVE              = TRUE
+           AND su.ACTIVE             = TRUE
+           AND su.FK_TROL            = 8
+           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    RETURN QUERY
+    SELECT
+        ma.PK_TMATRICULA_ARCHIVO,
+        ma.FK_TARCHIVO,
+        a.NOMBRE,
+        a.ETIQUETA,
+        a.PESO,
+        ma.FK_TLV_TIPO_ARCHIVO, ta.VALOR, ta.NOMBRE,
+        ma.CREATED_AT
+      FROM academico_test.TMATRICULA_ARCHIVO ma
+      JOIN academico_test.TARCHIVO a       ON a.PK_TARCHIVO = ma.FK_TARCHIVO
+ LEFT JOIN academico_test.TLISTA_VALOR ta  ON ta.PK_LISTA_VALOR = ma.FK_TLV_TIPO_ARCHIVO
+     WHERE ma.FK_TMATRICULA = p_fk_tmatricula
+       AND ma.ACTIVE        = TRUE
+     ORDER BY ta.VALOR ASC, ma.PK_TMATRICULA_ARCHIVO ASC;
+END;
+$function$;
