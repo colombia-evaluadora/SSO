@@ -31,6 +31,14 @@ import reactor.core.publisher.Mono;
  *       here without a DB lookup. Empty when the token didn't carry
  *       the claim (legacy tokens); downstream consumers MUST tolerate
  *       an empty header and treat it as "anonymous-ish".</li>
+ *   <li>{@code X-Authenticated-Family-Id} — V-audit-ctx-4 (sesiones
+ *       reales), el UUID del refresh-token family ({@code fid}
+ *       claim). Lo leen los write-sites (query-service,
+ *       file-service, sso-admin) para mergear
+ *       {@code sesion_id}/{@code familia} dentro de
+ *       {@code app.contexto} y que lleguen como columnas
+ *       propias a {@code auditoria.audit_log}. Vacío cuando el
+ *       token no llevaba el claim (legacy pre-V-audit-ctx-4).</li>
  * </ul>
  *
  * <p>These headers are advisory only — the downstream service MUST
@@ -47,6 +55,7 @@ public class UserForwardingGlobalFilter implements GlobalFilter, Ordered {
     static final String HEADER_USER_ID = "X-Authenticated-User-Id";
     static final String HEADER_ROLES = "X-Authenticated-Roles";
     static final String HEADER_TOKEN_TYPE = "X-Authenticated-Token-Type";
+    static final String HEADER_FAMILY_ID = "X-Authenticated-Family-Id";
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
@@ -78,6 +87,17 @@ public class UserForwardingGlobalFilter implements GlobalFilter, Ordered {
                         mutator.header(HEADER_USER_ID, principal.userId().toString());
                     } else {
                         mutator.header(HEADER_USER_ID, "");
+                    }
+                    // V-audit-ctx-4 (sesiones reales): forward
+                    // familyId (vacío en tokens legacy).
+                    // Mismo contrato que userId -- "ausente" se
+                    // distingue de "presente pero vacío" sólo
+                    // porque sí lo emitimos siempre como string
+                    // vacío cuando no hay claim.
+                    if (principal.familyId() != null) {
+                        mutator.header(HEADER_FAMILY_ID, principal.familyId());
+                    } else {
+                        mutator.header(HEADER_FAMILY_ID, "");
                     }
                     return mutator.build();
                 })

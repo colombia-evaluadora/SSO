@@ -134,6 +134,48 @@ services:
       retries: 20
       start_period: 10s
 
+  # V91 -- GC diario de academico_test.tsesion_web. Sidecar con
+  # dcron + psql, fuera del cluster Postgres (no requiere
+  # pg_cron/shared_preload_libraries en la imagen de Postgres -- que
+  # la imagen de debezium no trae y no queremos cambiar). El cron
+  # corre a las 03:00 UTC y ejecuta scripts/tsesion-web-gc.sh, que
+  # es el ÚNICO lugar donde vive la regla de retención. Un cambio
+  # de threshold se hace vía TSESION_WEB_GC_THRESHOLD_DAYS en .env,
+  # sin recompilar la imagen.
+  tsesion-web-gc:
+    profiles: ["local-only"]
+    image: alpine:3.20
+    container_name: sso-tsesion-web-gc
+    restart: unless-stopped
+    # Alpine + dcron + postgresql16-client (la 16 matchea con la
+    # imagen de Postgres del cluster). No usamos la imagen de
+    # debezium/postgres para esto -- sería sobredimensionada
+    # (incluye wal2json, decoderbufs, etc.) y arrancaría un
+    # postmaster que no queremos.
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache postgresql16-client dcron bash \
+          && echo "0 3 * * * sh /scripts/tsesion-web-gc.sh 2>&1" | crontab - \
+          && crond -f -d 0 -L /dev/stdout
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      # Regla de retención (días). 40 = 30d refresh TTL + 10d
+      # margen. Modificable sin tocar la imagen.
+      TSESION_WEB_GC_THRESHOLD_DAYS: "${TSESION_WEB_GC_THRESHOLD_DAYS:-40}"
+    volumes:
+      - ./scripts/tsesion-web-gc.sh:/scripts/tsesion-web-gc.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Sin ports ni healthcheck -- es un job silencioso que se
+    # autovigila (cron logs a stdout).
+
   # ===========================================================================
   # flyway — one-shot schema migrator against Neon. Every Spring service
   # depends_on service_completed_successfully, so the schema is guaranteed
@@ -518,6 +560,10 @@ services:
       # the whole /internal/** surface 401s while the stack still
       # reports healthy.
       SSO_INTERNAL_TOKEN: ${SSO_INTERNAL_TOKEN}
+      # V-audit-revert — interfaz HTTP de ClickHouse, mismo host que
+      # CDC_CLICKHOUSE_URL usa cdc-worker. sso-admin solo lee de acá
+      # (ClickHouseAuditClient) para resolver el cambio a revertir.
+      CLICKHOUSE_URL: ${CDC_CLICKHOUSE_URL:-http://default:demopass@cdc-clickhouse:8123}
       # SMTP — in dev, point at the mailhog service.
       SMTP_HOST: mailhog
       SMTP_PORT: "1025"
@@ -721,6 +767,11 @@ services:
       SMTP_GMAIL_PASS: ${SMTP_GMAIL_PASS:-}
       SMTP_BREVO_USER: ${SMTP_BREVO_USER:-}
       SMTP_BREVO_PASS: ${SMTP_BREVO_PASS:-}
+      # ZeptoMail: el usuario es la cadena literal `emailapikey` para
+      # todas las cuentas, el token va en PASS. Sin estas dos, la fila
+      # smtp-zeptomail de provider_config se auto-desactiva.
+      SMTP_ZEPTOMAIL_USER: ${SMTP_ZEPTOMAIL_USER:-}
+      SMTP_ZEPTOMAIL_PASS: ${SMTP_ZEPTOMAIL_PASS:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAILJS_SERVICE_ID: ${EMAILJS_SERVICE_ID:-}
       EMAILJS_PUBLIC_KEY: ${EMAILJS_PUBLIC_KEY:-}
@@ -757,6 +808,17 @@ services:
   # QUERY_DS_URL).
   # ===========================================================================
   query-service-postgres:
+    # profiles: mismo criterio que hello-service (ver ese bloque más
+    # arriba) — es una instancia de REFERENCIA del patrón
+    # instance-mode documentado arriba (dos backends Postgres de
+    # ejemplo), no tráfico real: eval-col y las instancias que
+    # admin-ui aprovisiona vía el provisioner son las que sirven
+    # consultas de verdad. Nada en este archivo la depends_on.
+    # Gateada tras `diagnostics` para no prenderla siempre — mem_limit
+    # 384m + la de -analytics de abajo son ~768MB que no hacen falta
+    # si nadie está probando el patrón instance-mode. Sigue
+    # levantable a mano con `docker compose up -d query-service-postgres`.
+    profiles: ["diagnostics"]
     build:
       context: .
       dockerfile: query-service/Dockerfile
@@ -773,6 +835,8 @@ services:
         # /getQuery and /getWrite catalog endpoints on
         # every request, so it cannot serve traffic until
         # sso-admin is healthy.
+        condition: service_healthy
+      redis:
         condition: service_healthy
     # No host-side port mapping — the gateway is the
     # public ingress and it talks to the container over
@@ -818,6 +882,13 @@ services:
       # The path-registry fails closed without it (503) and the
       # instance can't resolve path-template routes.
       QUERY_CATALOG_INTERNAL_TOKEN: ${QUERY_CATALOG_INTERNAL_TOKEN}
+      # Shared sso-redis instance — see RedisCacheConfig in
+      # query-service. Same host/port/password as auth-center.
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      QUERY_CACHE_METADATA_TTL_SECONDS: "${QUERY_CACHE_METADATA_TTL_SECONDS:-600}"
+      QUERY_CACHE_CATALOG_ENABLED: "${QUERY_CACHE_CATALOG_ENABLED:-true}"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8084; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -830,6 +901,11 @@ services:
   # "SQLServer", "analytics-shard", etc., provisioned by
   # admin-ui when a new backing store is registered).
   query-service-postgres-analytics:
+    # profiles: misma instancia de REFERENCIA que
+    # query-service-postgres arriba (segundo backend de ejemplo), no
+    # tráfico real. Gateada tras `diagnostics` — ver comentario
+    # completo arriba.
+    profiles: ["diagnostics"]
     build:
       context: .
       dockerfile: query-service/Dockerfile
@@ -842,6 +918,8 @@ services:
       eurekaserver:
         condition: service_started
       sso-admin:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     environment:
       QUERY_DS_DIALECT: postgres
@@ -860,6 +938,13 @@ services:
       QUERY_CATALOG_BASE_URL: "http://sso-admin:8083"
       # V30 — see query-service-postgres above.
       QUERY_CATALOG_INTERNAL_TOKEN: ${QUERY_CATALOG_INTERNAL_TOKEN}
+      # Shared sso-redis instance — see RedisCacheConfig in
+      # query-service. Same host/port/password as auth-center.
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      QUERY_CACHE_METADATA_TTL_SECONDS: "${QUERY_CACHE_METADATA_TTL_SECONDS:-600}"
+      QUERY_CACHE_CATALOG_ENABLED: "${QUERY_CACHE_CATALOG_ENABLED:-true}"
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
       # Interruptor de telemetria: con el perfil de observabilidad
@@ -875,6 +960,46 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+
+  # V-audit-clickhouse — backend del microservicio `audit-clickhouse`
+  # (catalog microservice_id=7). El contenedor lo aprovisiona el
+  # sidecar `sso-provisioner` con el nombre canónico
+  # `query-service-audit-clickhouse` (que el gateway espera en
+  # Eureka via `eurekaServiceId(microservice)`); NO se declara acá
+  # para no competir con esa única fuente de verdad. La imagen que
+  # usa el provisioner es `${IMAGE_PREFIX}/query-service:${IMAGE_TAG}`
+  # (ver docker-compose.yml del provisioner), así que un cambio de
+  # código en query-service se propaga con
+  # `docker compose build query-service && docker tag <local> <ghcr>`.
+
+  # V-audit-clickhouse — backend del microservicio `audit-clickhouse`
+  # (catalog microservice_id=7). Sirve /audits/* contra ClickHouse.
+  # Mismo patrón instance-mode que query-service-postgres /
+  # V-audit-clickhouse — backend del microservicio `audit-clickhouse`
+  # (catalog microservice_id=7). El contenedor lo aprovisiona el
+  # sidecar `sso-provisioner` con el nombre canónico
+  # `query-service-audit-clickhouse` (que el gateway espera en
+  # Eureka via `eurekaServiceId(microservice)`); NO se declara acá
+  # para no competir con esa única fuente de verdad. La imagen que
+  # usa el provisioner es `${IMAGE_PREFIX}/query-service:${IMAGE_TAG}`
+  # (ver docker-compose.yml del provisioner), así que un cambio de
+  # código en query-service se propaga con
+  # `docker compose build query-service && docker tag <local> <ghcr>`.
+
+  # NOTA: NO se define aquí una instancia estática para el catálogo
+  # eval-col (se intentó — ver historial de este archivo — y se
+  # revirtió). eval-col ya corre como `query-service-eval-col`,
+  # creada dinámicamente por `provisioner` cuando sso-admin registra
+  # ese microservicio (ver bloque `provisioner` más abajo). Una
+  # segunda instancia estática con el mismo QUERY_INSTANCE_NAME
+  # registraba dos aplicaciones distintas bajo la misma identidad en
+  # Eureka — redundante en el mejor caso, inconsistente si una de las
+  # dos queda desactualizada. Cualquier instancia nueva de
+  # query-service se crea vía el flujo del provisioner, no a mano en
+  # este archivo — la excepción son las instancias de referencia
+  # (`query-service-postgres`, `-analytics`) que existen para
+  # documentar el patrón, no para servir tráfico real de un
+  # microservicio ya provisionado.
 
   # ===========================================================================
   # provisioner — Docker sidecar that sso-admin calls to spin up
@@ -942,6 +1067,16 @@ services:
       # Con RS256 el provisioner ya no maneja material de
       # firma: sólo reparte la mitad pública.
       DOCKER_JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      # Shared sso-redis instance, propagated to every spawned
+      # query-service container as REDIS_HOST/REDIS_PORT/
+      # REDIS_PASSWORD (see DockerSocket#buildEnv). Same
+      # DOCKER_-prefixed relaxed-binding pattern as
+      # DOCKER_JWT_PUBLIC_KEY above — ProvisionerProperties has no
+      # explicit application.yml entry for these either, Spring
+      # binds them straight off the env var name.
+      DOCKER_REDIS_HOST: "redis"
+      DOCKER_REDIS_PORT: "6379"
+      DOCKER_REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       # V30 — se propaga tal cual como QUERY_CATALOG_INTERNAL_TOKEN
       # a cada query-service que el provisioner crea (ver
       # DockerSocket#buildEnv). Los query-service estáticos lo
@@ -1350,11 +1485,16 @@ services:
   # de la autenticación.
   # ===========================================================================
   file-service:
+    build:
+      context: .
+      dockerfile: file-service/Dockerfile
     image: ${IMAGE_PREFIX:-eurekatic}/file-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-file-service
     restart: unless-stopped
     depends_on:
       eurekaserver:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     environment:
       EUREKA_URL: "http://eurekaserver:8761/eureka"
@@ -1362,6 +1502,11 @@ services:
       FILES_DS_USERNAME: "${FILES_DS_USERNAME:-neondb_owner}"
       FILES_DS_PASSWORD: "${FILES_DS_PASSWORD:-}"
       FILES_SCHEMA: "${FILES_SCHEMA:-academico_test}"
+      # V64 — código de sede antepuesto a la clave S3 de las filas
+      # nuevas, imitando el primer segmento que ya traen las filas
+      # históricas migradas (ACADEMICO_VALLEDUPAR/perfilUsuario/...).
+      # Vacío = sin prefijo. Ver TransformadorMultipart.claveDe.
+      FILES_SITE_CODE: "${FILES_SITE_CODE:-}"
       # Apunta al gateway, no a query-service directo: así la petición
       # reenviada pasa por las mismas reglas de autorización que
       # cualquier otra. Este servicio no es una puerta trasera.
@@ -1381,7 +1526,6 @@ services:
       S3_ACCESS_KEY: "${S3_ACCESS_KEY:-}"
       S3_SECRET_KEY: "${S3_SECRET_KEY:-}"
       S3_PATH_STYLE: "${S3_PATH_STYLE:-true}"
-      S3_PUBLIC_BASE_URL: "${S3_PUBLIC_BASE_URL:-}"
       # Sin límite, un cliente llena el disco: el servidor está al 85%.
       FILES_MAX_FILE_SIZE: "${FILES_MAX_FILE_SIZE:-25MB}"
       FILES_MAX_REQUEST_SIZE: "${FILES_MAX_REQUEST_SIZE:-30MB}"
@@ -1393,14 +1537,31 @@ services:
       # llegue con cookie de sesión válida, lo cual es seguro pero
       # bloquea el caso "el catálogo arma un enlace temporal".
       FILES_INTERNAL_TOKEN: "${FILES_INTERNAL_TOKEN:-}"
+      # Firma los tokens de un solo archivo de GET /files/view/{id} —
+      # ver ViewTokenService. Vacío = POST /files/view-token/{id}
+      # responde 503 en vez de acuñar tokens que nadie podría validar.
+      FILES_VIEW_TOKEN_SECRET: "${FILES_VIEW_TOKEN_SECRET:-}"
+      FILES_VIEW_TOKEN_TTL_SECONDS: "${FILES_VIEW_TOKEN_TTL_SECONDS:-300}"
+      # Shared sso-redis instance — see CachedFileBlobService.
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      FILES_CACHE_ENABLED: "${FILES_CACHE_ENABLED:-true}"
+      FILES_CACHE_TTL_SECONDS: "${FILES_CACHE_TTL_SECONDS:-300}"
+      FILES_CACHE_MAX_CACHEABLE_BYTES: "${FILES_CACHE_MAX_CACHEABLE_BYTES:-2097152}"
       # Clave PÚBLICA del par RS256. file-service verifica firmas en
       # GET /files/download/{id}; no emite tokens, así que no recibe
       # (ni debe recibir) la privada.
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      # Observability: push OTLP to Alloy
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      # Interruptor de telemetria: con el perfil de observabilidad
+      # apagado, Alloy no existe y sin esto los nueve servicios
+      # reintentarian contra un endpoint muerto. Nombres verificados
+      # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
     mem_limit: 512m
     healthcheck:
       # `bash`, no `sh`: /dev/tcp NO es un fichero, es una función del
@@ -1415,6 +1576,57 @@ services:
       # el día que alguien lo añada se quedaría esperando para
       # siempre a un servicio que está perfectamente vivo.
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8086; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  # Reportes (PDF / Excel) de los mismos listados de pantalla.
+  #
+  # No lleva base de datos ni credenciales propias: pide las filas al
+  # query-service reenviando el JWT del usuario, asi que un reporte
+  # nunca puede mostrar mas de lo que ese usuario ve en la tabla.
+  reporting-service:
+    build:
+      context: .
+      dockerfile: reporting-service/Dockerfile
+    image: ${IMAGE_PREFIX:-eurekatic}/reporting-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
+    container_name: sso-reporting-service
+    restart: unless-stopped
+    # PID 1 es el JVM crudo (sin tini/dumb-init), asi que no reapea hijos
+    # huerfanos. El healthcheck de abajo forkea bash+grep cada intervalo;
+    # si grep queda huerfano (carrera al cortar la sesion del exec antes
+    # de que bash lo reapee) se vuelve zombie para siempre bajo el PID 1.
+    # init:true pone tini como PID 1 para que los reapee. Sin esto, los
+    # zombies se acumulan durante dias hasta que el propio healthcheck
+    # empieza a exceder su timeout de 5s (namespace de PIDs inflado) y
+    # el contenedor queda marcado unhealthy aunque la app este sana.
+    init: true
+    # Jasper arma el documento entero en memoria antes de exportarlo.
+    # El Excel en cambio va por streaming (SXSSF) y casi no pesa.
+    mem_limit: 512m
+    mem_reservation: 320m
+    depends_on:
+      eurekaserver:
+        condition: service_started
+    environment:
+      EUREKA_URL: "http://eurekaserver:8761/eureka"
+      # Directo a la instancia del catalogo eval-col: es la que tiene
+      # registradas las filas query de reporte (V67).
+      REPORTING_QUERY_SERVICE_URL: "${REPORTING_QUERY_SERVICE_URL:-http://query-service-eval-col:8084}"
+      REPORTING_MAX_ROWS: "${REPORTING_MAX_ROWS:-50000}"
+      # Clave PUBLICA del par RS256: verifica firmas, no acuña tokens,
+      # asi que no recibe (ni debe recibir) la privada.
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+    healthcheck:
+      # bash y no sh: /dev/tcp es una funcion de bash, dash no la tiene.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8087; printf 'GET /actuator/health HTTP/1.0
+
+' >&3; grep -q UP <&3"]
       interval: 15s
       timeout: 5s
       retries: 10

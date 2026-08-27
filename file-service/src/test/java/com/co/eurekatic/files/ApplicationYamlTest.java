@@ -34,6 +34,8 @@ class ApplicationYamlTest {
     private static final List<String> CLAVES_REQUERIDAS = List.of(
             // ArchivoRepository
             "files.schema",
+            // TransformadorMultipart
+            "files.site-code",
             // ReenvioController
             "files.catalog-base-url",
             // DownloadController
@@ -45,7 +47,6 @@ class ApplicationYamlTest {
             "files.s3.access-key",
             "files.s3.secret-key",
             "files.s3.path-style",
-            "files.s3.public-base-url",
             // JwtProperties (@ConfigurationProperties prefix = sso.jwt)
             "sso.jwt.public-key",
             "sso.jwt.issuer",

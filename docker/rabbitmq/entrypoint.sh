@@ -14,7 +14,10 @@
 # The exchange/queue/binding names (cdc.events, cdc.worker, etc.) are
 # CDC-internal and stay literal.
 # ===========================================================================
-set -euo pipefail
+set -eu
+# Note: pipefail was dropped — rabbitmq's base image invokes the script
+# in a way that disables the bash extension, and our substitutions
+# are sequential anyway (no pipelines to mask failures in).
 
 TEMPLATE="/etc/rabbitmq/definitions.json.template"
 OUTPUT="/etc/rabbitmq/definitions.json"

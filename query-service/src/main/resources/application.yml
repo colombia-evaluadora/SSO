@@ -35,6 +35,37 @@ spring:
       - org.springframework.boot.jdbc.autoconfigure.JdbcTemplateAutoConfiguration
       - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
 
+  # V60 — preservación del diagnóstico al fallar el parseo del
+  # cuerpo. Sin esto Jackson 3 (transitivo de Boot 4) REDACTA
+  # el fragmento responsable en el log: el operador sólo ve
+  # el byte offset y un mensaje como "byte offset: #201", sin
+  # saber si fue una coma faltante, una cadena sin cerrar o un
+  # array como raíz. Activarlo imprime el snippet alrededor
+  # del offset, acotado a ~80 caracteres por Jackson.
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
+      fail-on-null-for-primitives: true
+      wrap-exceptions: true
+    parser:
+      include-source-in-location: true
+      max-string-length: 1048576
+      max-number-length: 1000
+
+  data:
+    redis:
+      # Same shared sso-redis instance as auth-center — wired from
+      # REDIS_HOST/REDIS_PORT/REDIS_PASSWORD via docker-compose (and,
+      # for provisioner-spawned instances, DockerSocket#buildEnv).
+      # Defaults are localhost so `mvn spring-boot:run` on the host
+      # works without the compose stack.
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      # Short timeout — a read endpoint should fall through to the
+      # DB/JDBC path fast when Redis is unreachable, not hang.
+      timeout: 2s
+
 eureka:
   client:
     service-url:
@@ -110,6 +141,19 @@ query:
     rate-limit:
       rps: ${QUERY_RATE_LIMIT_RPS:100}
       window: ${QUERY_RATE_LIMIT_WINDOW:1s}
+  # Redis-backed @Cacheable settings.
+  cache:
+    # TTL for "schema-metadata" (@Cacheable("tables") /
+    # @Cacheable("columns")) — GET /tables and GET /columns.
+    # Schema shape changes rarely, so this is intentionally long;
+    # an admin who just altered a table can bump this down or
+    # flush Redis manually if they need the picker to reflect it
+    # immediately.
+    metadata-ttl-seconds: ${QUERY_CACHE_METADATA_TTL_SECONDS:600}
+    # Master switch for catalog-opt-in caching of GET /** rows —
+    # see QueryPathController. Independent of the metadata caches
+    # above; turning this off does not disable /tables or /columns.
+    catalog-enabled: ${QUERY_CACHE_CATALOG_ENABLED:true}
 
 sso:
   jwt:
@@ -133,6 +177,14 @@ management:
   otlp:
     metrics:
       export:
+        # Default deshabilitado: si el perfil de observabilidad esta apagado
+        # (Alloy no existe) y algo arranca el jar sin pasar
+        # MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED explicitamente (docker-compose
+        # SI lo pasa siempre, pero un `docker run` a mano o un test no), el
+        # default de Spring Boot Actuator para esta propiedad es "true" ---
+        # sin este override el registry igual arranca e intenta pushear cada
+        # 10s contra un host que no resuelve.
+        enabled: ${MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED:false}
         url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
         step: 10s
   opentelemetry:
@@ -148,7 +200,13 @@ management:
       service.namespace: sso
       deployment.environment: ${DEPLOY_ENV:dev}
   tracing:
-    enabled: true
+    # Mismo motivo que arriba, y ademas conecta la variable real: el nombre
+    # historico en docker-compose.yml (MANAGEMENT_TRACING_EXPORT_ENABLED) no
+    # correspondia a ninguna propiedad real de Spring (no existe
+    # "management.tracing.export.enabled") -- la unica que existe es
+    # "management.tracing.enabled", hardcodeada en "true" hasta ahora, asi
+    # que el interruptor de docker-compose nunca apagaba tracing de verdad.
+    enabled: ${MANAGEMENT_TRACING_EXPORT_ENABLED:false}
     sampling:
       probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
 

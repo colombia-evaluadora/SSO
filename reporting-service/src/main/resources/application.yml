@@ -1,0 +1,313 @@
+server:
+  # 8087 — los ocupados: 8080 gateway, 8081 auth-center, 8082 hello,
+  # 8083 sso-admin, 8084 query-service, 8085 notification, 8086 file.
+  port: ${PORT:8087}
+  shutdown: graceful
+  error:
+    # Sin esto el `reason` de un ResponseStatusException NO viaja al cliente:
+    # el cuerpo sale con timestamp/status/error/path y nada mas, y diagnosticar
+    # un 400 obliga a entrar al servidor a leer logs. Lo que se propaga es
+    # deliberado (ver QueryServiceClient): en 4xx el mensaje del query-service,
+    # que ya viene saneado; en 5xx uno generico.
+    include-message: always
+
+spring:
+  application:
+    name: reporting-service
+  main:
+    banner-mode: off
+
+  # Este servicio no tiene base de datos: los datos llegan por HTTP
+  # desde el query-service. Sin estas exclusiones el autoconfig de Boot
+  # arma un DataSource fantasma y el arranque muere con "Failed to
+  # determine a suitable driver class". Son los mismos nombres (ya
+  # movidos a los modulos de Boot 4) que excluye query-service.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceTransactionManagerAutoConfiguration
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+
+  # Un reporte sin paginar viaja completo en una respuesta JSON desde el
+  # query-service. Los defaults de Jackson cortan cadenas largas mucho
+  # antes de eso.
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
+    parser:
+      max-string-length: 20971520
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka}
+    healthcheck:
+      enabled: false
+  instance:
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
+
+reporting:
+  # Directo al query-service del catalogo eval-col, no al gateway: ya
+  # estamos dentro de la red y dar la vuelta solo suma un salto.
+  query-service-base-url: ${REPORTING_QUERY_SERVICE_URL:http://query-service-eval-col:8084}
+
+  # Tope duro. V66 quito el LIMIT de las funciones, asi que este es el
+  # unico freno que queda entre un filtro mal puesto y un PDF de
+  # cientos de miles de filas.
+  max-rows: ${REPORTING_MAX_ROWS:50000}
+
+  # Un reporte completo tarda mucho mas que una pagina de 10 filas.
+  request-timeout: ${REPORTING_REQUEST_TIMEOUT:3m}
+
+  # ---------------------------------------------------------------
+  # Catalogo de reportes. `path` es el path_template de la fila
+  # public.query creada en V67 — la que llama a fn_X_listar con las
+  # paginas en NULL.
+  #
+  # `columns` fija QUE columnas salen y en que orden. Se declaran a
+  # proposito en vez de volcar todo lo que devuelve la funcion: las
+  # columnas fk_* y pk_* son llaves internas que no significan nada
+  # para quien lee el reporte. Ademas, el orden de las claves de un
+  # objeto JSON no esta garantizado, asi que sin esta lista el orden de
+  # las columnas podria cambiar entre ejecuciones.
+  #
+  # Agregar un reporte = una fila query (migracion) + una entrada aca.
+  # Si ademas se quiere diseno propio, un reportes/<clave>.jrxml.
+  # ---------------------------------------------------------------
+  reports:
+    funcionarios:
+      path: /establecimientos/funcionarios/reporte
+      title: Funcionarios
+      file-name: funcionarios
+      columns:
+        numero_documento: Documento
+        nombre_completo: Nombre completo
+        estado_label: Estado
+        jornada_nombre: Jornada
+        roles: Roles
+        sedes: Sedes
+
+    establecimientos:
+      path: /establecimientos/reporte
+      title: Establecimientos educativos
+      file-name: establecimientos
+      columns:
+        codigo: Codigo
+        nombre: Nombre
+        nit: NIT
+        departamento_nombre: Departamento
+        municipio_nombre: Municipio
+        estado_nombre: Estado
+
+    periodos-academicos:
+      path: /periodos-academicos/reporte
+      title: Periodos academicos
+      file-name: periodos-academicos
+      columns:
+        name: Periodo
+        school_year_name: Año
+        sede_name: Sede
+        jornada_name: Jornada
+        start_date: Inicio
+        end_date: Fin
+        enrollment_deadline: Limite matricula
+        status_name: Estado
+
+    periodos-evaluacion:
+      path: /periodo-evaluacion/reporte
+      title: Periodos de evaluacion
+      file-name: periodos-evaluacion
+      columns:
+        codigo: Codigo
+        nombre: Nombre
+        abreviacion: Abreviacion
+        start_date: Inicio
+        end_date: Fin
+        peso: Peso
+        estado_name: Estado
+        sede_name: Sede
+
+    plan-estudio:
+      path: /plan-estudio/reporte
+      title: Plan de estudio
+      file-name: plan-estudio
+      columns:
+        grado_name: Grado
+        asignatura: Asignatura
+        abreviacion: Abreviacion
+        especialidad_name: Especialidad
+        intensidad_horaria: Intensidad horaria
+        influencia_area: Influencia area
+        matricula_obligatoria: Matricula obligatoria
+        aprobacion_obligatoria: Aprobacion obligatoria
+        influye_desempeno: Influye desempeno
+
+    grados:
+      path: /grados/reporte
+      title: Grados y grupos
+      file-name: grados-grupos
+      columns:
+        grado_name: Grado
+        grado_codigo: Numero de grado
+        teaching_level_name: Nivel de ensenanza
+        grupo_name: Grupo
+        jornada_name: Jornada
+        director_name: Director de grupo
+        plan_estudio_name: Plan de estudio
+
+    areas:
+      path: /areas/reporte
+      title: Areas, asignaturas y especialidades
+      file-name: areas-asignaturas
+      columns:
+        area_general_name: Area general
+        area_nombre_interno: Nombre interno del area
+        area_abreviacion: Abreviacion del area
+        asignatura: Asignatura
+        asignatura_abreviacion: Abreviacion asignatura
+        especialidad_name: Especialidad
+        orden_reportes: Orden en reportes
+        color: Color
+
+    escalas:
+      path: /escalas/reporte
+      title: Escalas de valoracion
+      file-name: escalas-valoracion
+      columns:
+        teaching_level_name: Nivel de ensenanza
+        nombre: Nombre del desempeno
+        abreviacion: Abreviacion
+        nota_maxima: Nota maxima
+        nota_minima: Nota minima
+        nota_equivalente: Nota equivalente
+        tipo_name: Tipo de evaluacion
+        iconografia: Iconografia
+
+    asignaciones:
+      path: /asignaciones/reporte
+      title: Asignacion academica
+      file-name: asignacion-academica
+      columns:
+        docente_nombre: Nombre del docente
+        document_number: Documento
+        estado: Estado
+        asignatura: Asignatura
+        grado_name: Grado
+        grupo_name: Grupo
+        jornada_name: Jornada
+
+    sedes:
+      path: /establecimientos/sedes/reporte
+      title: Sedes educativas
+      file-name: sedes
+      columns:
+        codigo: Codigo
+        nombre: Nombre
+        consecutivo: Consecutivo
+        zona_nombre: Zona
+        direccion: Direccion
+        telefono: Telefono
+
+    areas:
+      # V135 — areas + asignaturas + enfasis del periodo. Ver
+      # fn_area_subject_reporte_listar en V135 (SQL: una fila por
+      # (area, asignatura, enfasis), LEFT JOIN para areas sin asignaturas).
+      path: /areas/reporte
+      title: Areas y asignaturas
+      file-name: areas
+      columns:
+        area_nombre_interno: Area
+        area_abreviacion: Codigo area
+        asignatura: Asignatura
+        asignatura_abreviacion: Codigo asignatura
+        especialidad_name: Especialidad
+        orden_reportes: Orden
+
+    escalas:
+      # V135 — reusa fn_escala_listar (V42/V97). Sin cambios funcionales
+      # respecto al listado: el reporte solo agrega page_size NULL.
+      path: /escalas/reporte
+      title: Escalas de valoracion
+      file-name: escalas
+      columns:
+        nombre: Escala
+        abreviacion: Codigo
+        tipo_name: Tipo
+        teaching_level_name: Nivel
+        nota_minima: Minima
+        nota_maxima: Maxima
+        nota_equivalente: Equivalente
+
+    plan-estudio:
+      # V135 — usa fn_plan_reporte_listar (V136 en origin/feature/CU-86e2427dp;
+      # merge manual al rebasear). Sin esa migracion aplicada, el reporte 500.
+      path: /plan-estudio/reporte
+      title: Plan de estudio
+      file-name: plan-estudio
+      columns:
+        grado_name: Grado
+        asignatura: Asignatura
+        abreviacion: Codigo
+        especialidad_name: Especialidad
+        intensidad_horaria: Intensidad
+        influencia_area: Influencia
+
+    grados:
+      # V135 — fn_grado_grupo_reporte_listar: una fila por (grado, grupo)
+      # con director, jornada y plan. LEFT JOIN contra TGRUPO, asi un grado
+      # sin grupos cargados aparece igual con los grupo_* en NULL.
+      path: /grados/reporte
+      title: Grados y grupos
+      file-name: grados
+      columns:
+        grado_name: Grado
+        grado_codigo: Codigo
+        teaching_level_name: Nivel
+        grupo_name: Grupo
+        jornada_name: Jornada
+        director_name: Director
+        plan_estudio_name: Plan
+
+    asignaciones:
+      # V135 — fn_asignacion_reporte_listar: una fila por asignacion
+      # docente-grado-grupo-asignatura-jornada. La firma toma 8 parametros
+      # (incluye ESTADO y FK_JORNADA) — ver V135 en detalle.
+      path: /asignaciones/reporte
+      title: Asignacion academica
+      file-name: asignaciones
+      columns:
+        docente_nombre: Docente
+        document_number: Documento
+        grado_name: Grado
+        grupo_name: Grupo
+        jornada_name: Jornada
+        asignatura: Asignatura
+        estado: Estado
+
+sso:
+  jwt:
+    # Solo la publica: este servicio verifica firmas, no emite tokens.
+    # Tiene que ser la pareja de la JWT_PRIVATE_KEY de auth-center.
+    public-key: ${JWT_PUBLIC_KEY}
+    issuer: sso-postgres
+    header-name: Authorization
+    token-prefix: "Bearer "
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  level:
+    com.co.eurekatic.reporting: ${REPORTING_LOG_LEVEL:INFO}
+    # Jasper habla mucho al compilar una plantilla; en INFO tapa el log
+    # util del propio servicio.
+    net.sf.jasperreports: WARN

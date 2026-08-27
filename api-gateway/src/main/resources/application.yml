@@ -158,6 +158,18 @@ spring:
               filters:
                 - StripPrefix=1
                 - AddResponseHeader=X-Source, api-gateway
+            # Auth-center register endpoints (V45+). StripPrefix=2 strips
+            # both /api AND /auth because auth-center's AuthController
+            # exposes them at /register/usuario and /register/funcionario
+            # (under @RequestMapping, no /auth prefix). Same path shape
+            # as api-auth-myapps.
+            - id: api-auth-register
+              uri: lb://auth-center
+              predicates:
+                - Path=/api/auth/register/**
+              filters:
+                - StripPrefix=2
+                - AddResponseHeader=X-Source, api-gateway
             - id: api-sso-admin
               uri: lb://sso-admin
               predicates:
@@ -276,6 +288,27 @@ spring:
               uri: lb://file-service
               predicates:
                 - Path=/api/files/**
+              filters:
+                - StripPrefix=1
+                - AddResponseHeader=X-Source, api-gateway
+            # ─── Reportes (PDF / Excel) ───
+            #
+            #   POST /api/reportes/{clave}  { format, filters, sorting }
+            #     └─ reporting-service pide las filas al query-service
+            #        reenviando ESTE mismo JWT, corre la funcion PL/pgSQL
+            #        sin paginar y devuelve el binario.
+            #
+            # StripPrefix=1 quita /api y deja /reportes/..., que es donde
+            # escucha el controlador — igual que file-service. NO se deja
+            # que lo genere la ruta dinamica del catalogo: esa calcula el
+            # strip contando segmentos (/api/reportes/** -> 2) y entregaria
+            # /{clave}, sin el /reportes que el controlador espera. Es la
+            # misma razon por la que las filas REST se rutean aqui y no
+            # desde public.microservice.
+            - id: api-reporting-service
+              uri: lb://reporting-service
+              predicates:
+                - Path=/api/reportes/**
               filters:
                 - StripPrefix=1
                 - AddResponseHeader=X-Source, api-gateway
@@ -445,6 +478,7 @@ springdoc:
         source: springdoc
         gateway-paths: ["/auth/**", "/api/auth/**", "/login", "/getApiToken",
                         "/getInfoUser", "/getUsersSSO", "/googleLogin", "/myApps",
+                        "/register/**", "/register/usuario", "/register/funcionario",
                         "/internal/cache/**"]
         tag-prefix: "auth-center"
         description: "Authentication issuer — login, token issuance, user lookup"
@@ -518,6 +552,12 @@ management:
     otlp:
       metrics:
         export:
+          # Default deshabilitado: sin esto, con el perfil de observabilidad
+          # apagado (Alloy no existe), cualquier arranque que no pase
+          # MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED explicitamente (docker-compose
+          # si lo pasa, un `docker run` a mano o un test no) reintenta cada
+          # 10s contra un host que no resuelve.
+          enabled: ${MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED:false}
           url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
           step: 10s
     opentelemetry:
@@ -535,7 +575,11 @@ management:
         service.namespace: sso
         deployment.environment: ${DEPLOY_ENV:dev}
     tracing:
-      enabled: true
+      # El interruptor historico de docker-compose (MANAGEMENT_TRACING_EXPORT_ENABLED)
+      # no correspondia a ninguna propiedad real ("management.tracing.export.enabled"
+      # no existe) -- la real es "management.tracing.enabled", hardcodeada en
+      # "true" hasta ahora, asi que docker-compose nunca la apagaba de verdad.
+      enabled: ${MANAGEMENT_TRACING_EXPORT_ENABLED:false}
       sampling:
         # 100% in dev so every request shows a trace. Lower to e.g. 0.1
         # in production to cap trace volume.

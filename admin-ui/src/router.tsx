@@ -16,6 +16,7 @@ import { RolesListPage } from "@/pages/roles/RolesListPage";
 import { UsersListPage } from "@/pages/users/UsersListPage";
 import { AppsListPage } from "@/pages/apps/AppsListPage";
 import { WritesListPage } from "@/pages/writes/WritesListPage";
+import { FileReferencesPage } from "@/pages/file-references/FileReferencesPage";
 
 /**
  * Router. Public routes: /admin/login, /admin/forgot-password
@@ -92,6 +93,7 @@ export const router = createBrowserRouter([
           { path: "routes", element: <RoutesListPage /> },
           { path: "apps", element: <AppsListPage /> },
           { path: "writes", element: <WritesListPage /> },
+          { path: "file-references", element: <FileReferencesPage /> },
         ],
       },
     ],

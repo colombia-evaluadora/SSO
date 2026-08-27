@@ -3,9 +3,12 @@ package com.co.eurekatic.ssoadmin.dto;
 import com.co.eurekatic.common.entity.ExecutionMode;
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
+import com.co.eurekatic.common.query.ParamConstraint;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -48,10 +51,35 @@ public record QueryResponse(
         ExecutionMode executionMode,
         String outParamNames,
         /** V33 — verbo HTTP: GET, POST o PUT. Default POST. */
-        String httpMethod
+        String httpMethod,
+        /**
+         * V49 — author-declared JDBC/PG type per caller-controlled
+         * placeholder. Shape: {@code {"PARAM.NOMBRE":"TEXT", ...}}.
+         * Empty map means the row is legacy or has no caller-controlled
+         * placeholders.
+         */
+        Map<String, String> paramTypes,
+        /**
+         * V70 — restricciones de formato opcionales por placeholder.
+         * Ver {@code Query#getParamConstraints()} y
+         * {@code ParamConstraint}. Empty map = sin restricciones
+         * adicionales.
+         */
+        Map<String, ParamConstraint> paramConstraints,
+        /** V110 — ver {@link com.co.eurekatic.common.entity.Query#isCacheable()}. */
+        boolean cacheable,
+        /** V110 — ver {@link com.co.eurekatic.common.entity.Query#getCacheTtlSeconds()}. */
+        int cacheTtlSeconds
 ) {
     public static QueryResponse fromEntity(Query q) {
         Microservice m = q.getMicroservice();
+        Map<String, ParamConstraint> constraints = new LinkedHashMap<>();
+        for (var c : q.getParamConstraints()) {
+            constraints.put(c.getParamKey(), new ParamConstraint(
+                    c.getOnlyPositive(), c.getAllowDecimals(), c.getMaxDigits(),
+                    c.getMinValue(), c.getMaxValue(),
+                    c.getNumericText(), c.getMinLength(), c.getMaxLength()));
+        }
         return new QueryResponse(
                 q.getId(),
                 q.getUuid(),
@@ -70,6 +98,10 @@ public record QueryResponse(
                 q.getPathTemplate(),
                 ExecutionMode.fromString(q.getExecutionMode()),
                 q.getOutParamNames(),
-                q.getHttpMethod());
+                q.getHttpMethod(),
+                q.getParamTypes(),
+                constraints,
+                q.isCacheable(),
+                q.getCacheTtlSeconds());
     }
 }

@@ -50,6 +50,8 @@ export function MicroserviceFormDrawer({
       dbPassword: "",
       poolSize: 10,
       instanceName: "",
+      fileStorageSchema: "",
+      fileStorageTable: "",
     }),
     [microservice],
   );

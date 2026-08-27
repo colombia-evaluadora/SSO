@@ -55,6 +55,14 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
+        <!-- Redis-backed @Cacheable — schema-metadata endpoints
+             (/tables, /columns) and opt-in catalog GET caching.
+             Same starter, same shared sso-redis instance, as
+             auth-center's RedisConfig. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
         <!-- Observability: pure-OTLP export via the single Boot 4 starter. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -96,6 +104,17 @@
             <groupId>com.microsoft.sqlserver</groupId>
             <artifactId>mssql-jdbc</artifactId>
             <version>12.10.0.jre11</version>
+        </dependency>
+        <!-- V-audit-clickhouse — cuarto dialecto, para instancias
+             que sirven auditoria.audit_log de solo lectura (ver
+             docs/auditoria-api-gap-analysis-clickhouse.md). Mismo
+             patrón que Oracle/SQL Server: declarado siempre, cada
+             contenedor decide qué dialecto usar vía QUERY_DS_DIALECT. -->
+        <dependency>
+            <groupId>com.clickhouse</groupId>
+            <artifactId>clickhouse-jdbc</artifactId>
+            <version>0.7.1</version>
+            <classifier>http</classifier>
         </dependency>
 
         <!-- V33 — Resilience4j: programmatic Bulkhead + RateLimiter.

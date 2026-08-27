@@ -3,6 +3,7 @@ package com.co.eurekatic.common.query;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * Los cuatro orígenes posibles de un parámetro y cómo se nombran.
@@ -25,8 +26,16 @@ public final class ParamNamespace {
     public static final String PARAM = "PARAM";
     /** Query string. Lo controla el llamante. */
     public static final String QUERY = "QUERY";
-    /** Cuerpo JSON. Lo controla el llamante. */
+    /** Cuerpo JSON aplanado con puntos. Lo controla el llamante. */
     public static final String BODY = "BODY";
+    /**
+     * V49-bis — Cuerpo JSON sin aplanar: cada clave top-level del body se
+     * expone con su valor completo (un sub-objeto Map o un array) bajo
+     * {@code BODY_RAW.NOMBRE}. Pensado para pasar sub-árboles completos
+     * como {@code JSONB} al SQL via {@code cast(:BODY_RAW.X as jsonb)},
+     * donde el aplanamiento con puntos no aplica.
+     */
+    public static final String BODY_RAW = "BODY_RAW";
     /** Derivado del JWT verificado. NO lo controla el llamante. */
     public static final String CONTEXT = "CONTEXT";
 
@@ -159,6 +168,174 @@ public final class ParamNamespace {
                 flattenInto(out, nestedMap, key);
             } else {
                 out.put(key, val);
+            }
+        }
+    }
+
+    /**
+     * V49-bis — version sin aplanar de {@link #flatten} para sub-objetos completos.
+     * Cada clave top-level del body se expone con su valor completo (Map, List o
+     * escalar) bajo {@code BODY_RAW.NOMBRE}, en MAYÚSCULA, sin recursión.
+     *
+     * <p>El autor del catálogo lo usa cuando quiere pasar un sub-árbol completo
+     * como {@code JSONB} via {@code cast(:BODY_RAW.X as jsonb)}, donde el
+     * aplanamiento con puntos pierde el shape del objeto.
+     *
+     * <p>Detección de colisión por mayúsculas: idéntica a {@link #putAll} y a
+     * {@code flattenInto} — la normalización a MAYÚSCULAS puede hacer que dos
+     * claves distintas sólo se diferencien por caja y terminen en la misma
+     * key. Igual que en los otros métodos, se rechaza en vez de elegir en
+     * silencio.
+     */
+    public static void putRaw(Map<String, Object> target,
+                              Map<String, ?> source) {
+        if (source == null || source.isEmpty()) return;
+        Map<String, String> originalByUpper = new LinkedHashMap<>();
+        for (Map.Entry<String, ?> e : source.entrySet()) {
+            String upper = normalizeName(e.getKey());
+            String previous = originalByUpper.putIfAbsent(upper, e.getKey());
+            if (previous != null) {
+                throw new IllegalArgumentException(
+                        "Las claves '" + previous + "' y '" + e.getKey()
+                        + "' del cuerpo sólo se diferencian por mayúsculas y "
+                        + "ambas resolverían a :" + BODY_RAW + "." + upper
+                        + ". Envía sólo una.");
+            }
+            target.put(BODY_RAW + "." + upper, e.getValue());
+        }
+    }
+
+    /**
+     * V60-bis — Prepara un body del cliente para que el binder JDBC y la
+     * validación contra {@code paramTypes} vean la misma identidad
+     * sin importar cómo se llamó la key en el JSON.
+     *
+     * <p>El catálogo siempre declara los placeholders en MAYÚSCULAS
+     * ({@code BODY.FECHA}, {@code QUERY.SIZE}). El cliente, en
+     * cambio, puede mandar cualquier caja ({@code fecha},
+     * {@code BODY.fecha}, {@code Body.Fecha}, …). Hasta ahora
+     * case-sensitivity era estricta y rompía silenciosamente —
+     * el binder pasaba el valor bajo una key que no estaba en
+     * {@code paramTypes}, ningún tipo se validaba, PG recibía un
+     * VARCHAR y el cast críptico era la primera señal del
+     * problema.
+     *
+     * <p>Esta función NO muta las keys del body — mantiene el
+     * shape literal del cliente (preservando así el matching
+     * case-sensitive de Spring JDBC sobre los placeholders del
+     * SQL). Devuelve un Map paralelo, indexado por la
+     * <b>representación canónica</b> ({@code MAYÚSCULAS +
+     * namespace prefix}), que es con la que se indexan las
+     * entradas en {@code paramTypes} y el {@code SqlRewriter}.
+     *
+     * <p>{@link com.co.eurekatic.common.query.ParamBinder} hace
+     * el lookup case-insensitive y namespace-aware contra
+     * {@code paramTypes}: si el cliente envió {@code "size"} y el
+     * catálogo declaró {@code "BODY.SIZE" - "BIGINT"}, el lookup
+     * sigue encontrando la entrada. El bind JDBC usa la key
+     * original (preservada en {@code values}) para matchear el
+     * placeholder del SQL — sea {@code :size} legacy o
+     * {@code :BODY.SIZE} moderno.
+     *
+     * <p>Una key con namespace prefix del cliente
+     * ({@code "BODY.fecha"}) se canonicaliza a {@code BODY.FECHA}.
+     * Una key con otro prefijo ({@code "QUERY.x"}) se conserva y
+     * además se publica su forma canónica para casos donde el
+     * catálogo sólo tuvo {@code "QUERY.X"}.
+     *
+     * <p>Si una key se envía dos veces en cajas distintas y
+     * ambas canonicarían al mismo nombre, se rechaza con
+     * {@link IllegalArgumentException} — la misma política que
+     * {@link #putAll} y {@link #flatten}.
+     */
+    public static Map<String, Object> indexCanonicalBody(Map<String, ?> body, String namespace) {
+        if (body == null || body.isEmpty()) return Map.of();
+        Map<String, Object> canonical = new LinkedHashMap<>();
+        indexCanonicalBodyInto(canonical, body, namespace, new LinkedHashMap<>());
+        return canonical;
+    }
+
+    /**
+     * Devuelve la key canónica ({@code BODY.X} en MAYÚSCULAS)
+     * que se usaría para indexar {@code paramTypes} / el
+     * SqlRewriter. Útil cuando el caller (p. ej. {@code QueryService})
+     * sólo necesita la transformación de una key suelta, sin
+     * recorrer un árbol.
+     *
+     * <p>Reglas:
+     * <ul>
+     *   <li>Si la key no tiene punto, antepone el namespace.
+     *       {@code "size"} + {@code BODY} → {@code "BODY.SIZE"}.</li>
+     *   <li>Si la key ya empieza con un namespace conocido
+     *       (cualquiera de {@link #PARAM}, {@link #BODY},
+     *       {@link #BODY_RAW}, {@link #QUERY}, {@link #CONTEXT}),
+     *       se conserva. {@code "BODY.size"} + {@code BODY} →
+     *       {@code "BODY.SIZE"}. {@code "QUERY.size"} + {@code BODY}
+     *       → {@code "QUERY.SIZE"} (sin prepender).</li>
+     *   <li>Si la key tiene puntos pero empieza con un
+     *       segmento desconocido, antepone el namespace.
+     *       {@code "x.y"} + {@code BODY} → {@code "BODY.X.Y"}.</li>
+     * </ul>
+     * La razón de la regla 2: el cliente sabe qué namespace
+     * quería (escribió "QUERY.x" cuando quería QUERY) y NO
+     * se debe pisar su intención sólo porque el caller
+     * pidió indexar en BODY.
+     */
+    public static String canonicalKeyFor(String rawKey, String namespace) {
+        if (rawKey == null || rawKey.isEmpty()) return rawKey;
+        if (rawKey.indexOf('.') < 0) {
+            return namespace + "." + normalizeName(rawKey);
+        }
+        String[] segs = rawKey.split("\\.");
+        String firstSeg = segs[0];
+        if (isKnownNamespace(firstSeg)) {
+            // Preserva el namespace del cliente — sólo
+            // uppercasar segmentos.
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < segs.length; i++) {
+                if (i > 0) sb.append('.');
+                sb.append(normalizeName(segs[i]));
+            }
+            return sb.toString();
+        }
+        // No es un namespace conocido — prepende el del caller.
+        StringBuilder sb = new StringBuilder(namespace);
+        for (String seg : segs) {
+            sb.append('.').append(normalizeName(seg));
+        }
+        return sb.toString();
+    }
+
+    private static boolean isKnownNamespace(String firstSeg) {
+        if (firstSeg == null || firstSeg.isEmpty()) return false;
+        String upper = firstSeg.toUpperCase(java.util.Locale.ROOT);
+        return PARAM.equals(upper) || BODY.equals(upper)
+                || BODY_RAW.equals(upper) || QUERY.equals(upper)
+                || CONTEXT.equals(upper);
+    }
+
+    private static void indexCanonicalBodyInto(Map<String, Object> canonical,
+                                                Map<String, ?> body,
+                                                String namespace,
+                                                Map<String, String> originalByUpper) {
+        for (Map.Entry<String, ?> e : body.entrySet()) {
+            String raw = e.getKey();
+            String full = canonicalKeyFor(raw, namespace);
+            String previous = originalByUpper.putIfAbsent(full, raw);
+            if (previous != null) {
+                throw new IllegalArgumentException(
+                        "Las claves '" + previous + "' y '" + raw
+                        + "' del cuerpo sólo se diferencian por mayúsculas "
+                        + "y ambas resolverían a :" + full
+                        + ". Envía sólo una.");
+            }
+            Object val = e.getValue();
+            if (val instanceof Map<?, ?> nested) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> nestedMap = (Map<String, Object>) nested;
+                indexCanonicalBodyInto(canonical, nestedMap, full, originalByUpper);
+            } else {
+                canonical.put(full, val);
             }
         }
     }

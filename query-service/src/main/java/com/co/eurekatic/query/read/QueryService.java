@@ -1,15 +1,20 @@
 package com.co.eurekatic.query.read;
 
 import com.co.eurekatic.common.security.AuthPrincipal;
+import com.co.eurekatic.common.query.ParamBinder;
 import com.co.eurekatic.common.query.ParamNamespace;
+import com.co.eurekatic.common.query.ParamTypes;
+import com.co.eurekatic.common.query.SqlRewriter;
 import com.co.eurekatic.query.catalog.CatalogClient;
 import com.co.eurekatic.query.catalog.QueryDefinition;
 import com.co.eurekatic.query.config.JdbcTemplateRegistry;
 import com.co.eurekatic.query.exception.PostgresErrorMapper;
 import com.co.eurekatic.query.observability.QueryMetrics;
 import com.co.eurekatic.query.resilience.QueryResilience;
+import com.co.eurekatic.query.routing.CatalogResultCacheService;
 import com.co.eurekatic.query.web.QueryRequest;
 import io.github.resilience4j.bulkhead.BulkheadFullException;
+import org.postgresql.util.PGobject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -19,6 +24,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.sql.SQLException;
@@ -26,6 +33,7 @@ import java.sql.SQLException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Read-path business logic. The flow:
@@ -62,13 +70,19 @@ public class QueryService {
     private final JdbcTemplateRegistry registry;
     private final QueryMetrics metrics;
     private final QueryResilience resilience;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final CatalogResultCacheService resultCache;
 
     public QueryService(CatalogClient catalog, JdbcTemplateRegistry registry,
-                         QueryMetrics metrics, QueryResilience resilience) {
+                         QueryMetrics metrics, QueryResilience resilience,
+                         com.fasterxml.jackson.databind.ObjectMapper objectMapper,
+                         CatalogResultCacheService resultCache) {
         this.catalog = catalog;
         this.registry = registry;
         this.metrics = metrics;
         this.resilience = resilience;
+        this.objectMapper = objectMapper;
+        this.resultCache = resultCache;
     }
 
     /**
@@ -102,10 +116,48 @@ public class QueryService {
         // slot is what we mutate. Confined to this thread, so no
         // synchronisation is needed.
         final String[] mode = { "SELECT" };
+        // V66 — the row's declared HTTP verb and path template,
+        // published alongside mode. httpMethod decides WHETHER a
+        // successful call just wrote data (see the invalidation call
+        // below for why HTTP verb, not execution mode, is the right
+        // signal); pathTemplate decides WHICH cached resource to
+        // clear (see CatalogResultCacheService#invalidateForResource).
+        final String[] httpMethod = { "GET" };
+        final String[] pathTemplate = { null };
         try {
-            QueryResult result = doExecute(req, publicOk, m -> mode[0] = m);
+            QueryResult result = doExecute(req, publicOk,
+                    (m, hm, pt) -> { mode[0] = m; httpMethod[0] = hm; pathTemplate[0] = pt; });
             metrics.recordExecution(mode[0], QueryMetrics.Outcome.SUCCESS,
                     System.nanoTime() - start);
+            // V66 — invalidate on HTTP verb, not execution mode. A
+            // catalog row can be executionMode=SELECT and still
+            // write: "SELECT ... FROM some_schema.fn_upsert_x(...)"
+            // parses as a read-only SELECT prefix (rejectIfMutating
+            // never fires) while the called function does an INSERT
+            // under the hood — this catalog has real rows shaped
+            // exactly like that (see fn_upsert_menu). Execution mode
+            // was the wrong signal to trust; the row's HTTP verb
+            // (what {@code QueryAdminService}/the admin-ui actually
+            // gate "does this row write" on — see V33's HTTP_METHOD
+            // column javadoc) is the one the catalog author already
+            // committed to meaning "this mutates". A GET row NEVER
+            // invalidates, even if the catalog author declared it
+            // PROCEDURE mode for a read-only stored procedure — that
+            // would otherwise defeat every OTHER cached GET on this
+            // instance on every single request.
+            //
+            // invalidateForResource scopes the wipe to this row's
+            // resource tag (its path template's first segment) so a
+            // write under /menus/** never evicts /roles/**'s cached
+            // GETs — see that method's javadoc for the null-path
+            // fallback (legacy rows with no pathTemplate).
+            //
+            // Invalidating AFTER metrics.recordExecution and BEFORE
+            // returning to the caller means no GET dispatched once
+            // this call returns can observe a stale cache entry.
+            if (!"GET".equalsIgnoreCase(httpMethod[0])) {
+                resultCache.invalidateForResource(pathTemplate[0]);
+            }
             return result;
         } catch (BulkheadFullException bfe) {
             // V33 — a slow query on this dialect has filled
@@ -126,14 +178,28 @@ public class QueryService {
     }
 
     /**
+     * Three-argument sink for {@link #doExecute} to publish what it
+     * resolved about the catalog row back to {@link #execute}. No
+     * built-in {@code java.util.function} interface takes three
+     * arguments, hence this tiny one instead of nesting {@code
+     * BiConsumer<String, Object[]>} or similar.
+     */
+    @FunctionalInterface
+    private interface ResolvedSink {
+        void accept(String mode, String httpMethod, String pathTemplate);
+    }
+
+    /**
      * The actual query pipeline. Wrapped by {@link #execute} for
      * metrics — keeps the happy-path code free of try/finally noise.
-     * Uses the {@code modeSink} consumer to publish the resolved
-     * execution mode back to the caller so the SUCCESS/FAILURE
-     * metric carries the right tag.
+     * Uses the {@code resolvedSink} callback to publish the resolved
+     * execution mode, the row's HTTP verb, and its path template
+     * back to the caller — mode for the SUCCESS/FAILURE metric tag,
+     * httpMethod + pathTemplate for the V66 write-invalidation
+     * decision (see {@link #execute}).
      */
     private QueryResult doExecute(QueryRequest req, boolean publicOk,
-                                 java.util.function.Consumer<String> modeSink) {
+                                 ResolvedSink resolvedSink) {
 
         Authentication auth = currentAuthentication();
         // Public path: forward whatever token we have (or
@@ -155,7 +221,14 @@ public class QueryService {
         String mode = def.executionMode() == null
                 ? "SELECT"
                 : def.executionMode().trim().toUpperCase();
-        modeSink.accept(mode);
+        // Null httpMethod (rows predating V33, or the legacy
+        // uuid-in-body flow) defaults to POST — same convention
+        // QueryPathRegistry#refresh already applies when building
+        // the path-dispatch table.
+        String httpMethod = def.httpMethod() == null || def.httpMethod().isBlank()
+                ? "POST"
+                : def.httpMethod().trim().toUpperCase();
+        resolvedSink.accept(mode, httpMethod, def.pathTemplate());
         if ("SELECT".equals(mode) || "FUNCTION".equals(mode)) {
             // SELECT and FUNCTION share the same prefix
             // (FUNCTION is called as "SELECT * FROM func()").
@@ -199,52 +272,123 @@ public class QueryService {
 
         NamedParameterJdbcTemplate jdbc = registry.resolve(def.type());
 
-        MapSqlParameterSource params = new MapSqlParameterSource(req.params());
+        // V49 — bind con tipos. Construimos el mapa final (parámetros
+        // del llamante + valores CONTEXT del JWT) y se lo pasamos a
+        // ParamBinder, que aplica sqlType explícito cuando
+        // def.paramTypes() lo declara y deja el resto al auto-derive
+        // de Spring. Una fila legacy sin paramTypes cae aquí y se
+        // comporta como antes del cambio.
+        //
+        // V60-bis — case-insensitive lookups: el cliente puede
+        // mandar las keys del body en cualquier caja. NO las
+        // mutamos aquí — Spring JDBC bindea
+        // case-sensitively contra los placeholders del SQL,
+        // así que cambiar la key rompería SQL legacy escrito
+        // con placeholders lowercase. En su lugar,
+        // {@code ParamBinder.buildStrict} hace lookup
+        // case-insensitive y namespace-aware contra
+        // paramTypes para encontrar el tipo declarado.
+        Map<String, Object> allParams = new LinkedHashMap<>(
+                req.params() == null ? Map.of() : req.params());
+        injectContextParams(allParams, auth);
 
-        // Inyección del contexto del llamante, sacada del JWT
-        // verificado (AuthPrincipal) y NO del cuerpo de la
-        // petición: el cliente no puede falsificar su userId
-        // porque la firma la controla auth-center.
+        // V49 (defence in depth) — si un placeholder caller-controlled
+        // (':PARAM.*' / ':BODY.*') llega al bind sin tipo declarado,
+        // ParamBinder cae al auto-derive de Spring, que bindea un String
+        // como VARCHAR. Eso rompe cualquier firma de función/SELECT que
+        // espere otro tipo — el síntoma exacto es
+        // "function xxx(character varying, bigint) does not exist",
+        // que es lo que el operador veía en producción porque las
+        // filas heredadas pre-V49 quedaron con paramTypes='{}' y la
+        // validación strict de sso-admin sólo dispara al guardar.
         //
-        // El autor del catálogo escribe SQL como
-        //   CALL get_x(:CONTEXT.USER_ID, :CONTEXT.EMAIL)
-        // y el procedimiento recibe la identidad verificada.
-        //
-        // El prefijo CONTEXT no es cosmético: es lo que distingue
-        // de un vistazo lo que controla el llamante (PARAM, QUERY,
-        // BODY) de lo que no. Antes estos valores se llamaban
-        // caller_* y vivían en el mismo mapa plano que el resto,
-        // así que leyendo una SQL no había forma de saber cuáles
-        // venían de fuera.
-        //
-        // Siguen siendo opcionales: los tokens anteriores a V29 no
-        // llevan claim uid, y el endpoint público no tiene
-        // principal. En ambos casos NO se añade el parámetro — el
-        // autor del procedimiento decide qué hacer con la ausencia
-        // (p. ej. "IF :CONTEXT.USER_ID IS NULL THEN RAISE
-        // EXCEPTION 'unauthenticated'").
-        if (auth != null && auth.getPrincipal() instanceof AuthPrincipal p) {
-            if (p.userId() != null) {
-                params.addValue(ParamNamespace.CONTEXT + ".USER_ID", p.userId());
+        // En lugar de ejecutar y devolver un 500 con PG críptico,
+        // rechazamos en runtime con un 400 que nombra los placeholders
+        // sin tipo y le dice al autor qué hacer. Mismo set curado que
+        // la validación al guardar; si la fila ya está bien guardada,
+        // esta lista viene vacía y el bind sigue como siempre.
+        if (def.paramTypes() != null) {
+            List<String> untypedCallerParams = allParams.keySet().stream()
+                    .filter(k -> {
+                        int dot = k.indexOf('.');
+                        if (dot <= 0) return false;
+                        String ns = k.substring(0, dot);
+                        return ParamNamespace.PARAM.equals(ns.toUpperCase(java.util.Locale.ROOT))
+                                || ParamNamespace.BODY.equals(ns.toUpperCase(java.util.Locale.ROOT));
+                    })
+                    // V60-bis — case-insensitive: el cliente
+                    // puede mandar la key en cualquier caja.
+                    // Buscamos primero literal y luego
+                    // canonical (MAYÚSCULAS + namespace
+                    // prefix).
+                    .filter(k -> !def.paramTypes().containsKey(k)
+                            && !def.paramTypes().containsKey(
+                                    com.co.eurekatic.common.query.ParamBinder.canonicalLookupKey(k)))
+                    .sorted()
+                    .toList();
+            if (!untypedCallerParams.isEmpty()) {
+                log.warn("uuid={} tiene placeholders caller-controlled sin tipo declarado: {} "
+                        + "(paramTypes={}). El autor debe editar la fila en el catálogo.",
+                        req.uuid(), untypedCallerParams, def.paramTypes());
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "El query " + req.uuid() + " tiene placeholders sin tipo declarado: "
+                        + untypedCallerParams
+                        + ". Edita la fila en el catálogo y asigna un tipo a cada uno "
+                        + "(en 'Tipos de parámetros', parte inferior del formulario).");
             }
-            if (p.email() != null) {
-                params.addValue(ParamNamespace.CONTEXT + ".EMAIL", p.email());
-            }
-            // Roles en dos formatos para que el autor elija el
-            // que le convenga:
-            //   :CONTEXT.ROLES        → "ADMIN,EVALUADOR"  (LIKE en PL/pgSQL)
-            //   :CONTEXT.ROLES_ARRAY  → "{ADMIN,EVALUADOR}" (text[] para ANY())
-            String rolesCsv = p.roles() == null || p.roles().isEmpty()
-                    ? ""
-                    : String.join(",", p.roles());
-            String rolesArray = "{"
-                    + (p.roles() == null || p.roles().isEmpty()
-                        ? ""
-                        : String.join(",", p.roles()))
-                    + "}";
-            params.addValue(ParamNamespace.CONTEXT + ".ROLES", rolesCsv);
-            params.addValue(ParamNamespace.CONTEXT + ".ROLES_ARRAY", rolesArray);
         }
+
+        // V70 — restricciones de formato adicionales (positivo, sin
+        // decimales, máximo de cifras, longitud de texto, sólo
+        // dígitos...). Se validan ANTES del bind, sobre los mismos
+        // allParams que ParamBinder va a usar, y ANTES del chequeo de
+        // tipo Java de ParamBinder (más abajo) porque esa validación
+        // rechaza en el primer error — ésta acumula todas las
+        // violaciones para devolverlas juntas.
+        if (def.paramConstraints() != null && !def.paramConstraints().isEmpty()) {
+            Map<String, String> violations = com.co.eurekatic.common.query.ParamConstraintValidator
+                    .validate(allParams, def.paramTypes(), def.paramConstraints());
+            if (!violations.isEmpty()) {
+                throw new com.co.eurekatic.query.exception.ParamConstraintViolationException(violations);
+            }
+        }
+
+        // bind con tipos. def.paramTypes() puede ser null en filas
+        // legacy — ParamBinder lo trata como mapa vacío y devuelve
+        // comportamiento idéntico al anterior a V49.
+        //
+        // V49-bis: el SQL se reescribe ANTES del bind para insertar
+        // `cast(:PH as TIPO)` por cada placeholder tipado. Eso elimina
+        // la dependencia del tipo JDBC — ParamBinder pasa texto puro
+        // y PG aplica el cast en su contexto (donde search_path sí
+        // resuelve academico_test.* para los DOMAIN types).
+        //
+        // V49 diagnostics — imprimo lo que ParamBinder va a ver.
+        // Si el bug del bind sigue siendo "todo se pasa como
+        // string" en runtime, este log muestra exactamente qué
+        // mapa llegó desde el catálogo. La pista es si
+        // def.paramTypes() viene vacío cuando la fila sí lo
+        // tiene persistido — eso aísla si el bug está aguas
+        // arriba (Jackson, JSONB) o aguas abajo (binder).
+        log.info("V49-bind uuid={} paramTypes={} allParamsKeys={}",
+                req.uuid(), def.paramTypes(), allParams.keySet());
+        String originalSql = def.query();
+        String rewrittenSql = SqlRewriter.rewrite(originalSql, def.paramTypes());
+        if (!originalSql.equals(rewrittenSql)) {
+            log.debug("V49-rewrite uuid={} rewrittenSql={}",
+                    req.uuid(), rewrittenSql);
+        }
+        // V60 — bind con validación de tipos. Atrapa los casos
+        // donde el cliente envía un String/Boolean donde el
+        // catálogo declara BIGINT, o un array mixto en un
+        // BIGINT[] — antes caían al cast PG con SQLSTATE 22P02
+        // y un mensaje críptico. Ahora el binder rechaza con
+        // 400 nombrando el placeholder y el tipo esperado.
+        // El Illega aquí como respuesta llamada cuando el
+        // bind actual se GeneralExceptionHandler lo mapea a 400
+        // con el envelope estándar.
+        MapSqlParameterSource params = ParamBinder.buildStrict(
+                allParams, def.paramTypes(), java.util.Map.of());
 
         // El SQL se ejecuta tal cual está en el catálogo.
         //
@@ -254,7 +398,24 @@ public class QueryService {
         // silencio para PROCEDURE. La paginación ahora la escribe
         // el autor con :QUERY.SIZE / :QUERY.OFFSET, lo que además
         // le da control del dialecto y del orden de las cláusulas.
-        String sql = def.query();
+        //
+        // V-audit-ctx-2 — la ÚNICA excepción: el wrap de contexto de
+        // auditoría (ver wrapWithAuditContext) SÍ se le añade por
+        // fuera del catálogo, nunca a través de él. Antes (V80) el
+        // wrap vivía como texto literal dentro de la fila
+        // `public.query.query` — el autor lo veía (y podía romperlo)
+        // en el editor SQL del catálogo, y una lista de id_query
+        // hardcodeada decidía a qué filas aplicaba, lista que había
+        // que regenerar a mano por ambiente. Ahora es automático:
+        // CUALQUIER query en modo SELECT/FUNCTION que invoque una
+        // función academico_test.fn_* (la convención de nombres que
+        // TODAS las funciones de escritura auditadas siguen) y cuyo
+        // verbo no sea GET lo recibe, sin que el catálogo sepa que
+        // existe — no hace falta curar una lista ni tocar SQL
+        // guardado cuando se agrega una función nueva.
+        String sql = isAuditWrappable(mode, def.httpMethod(), rewrittenSql)
+                ? wrapWithAuditContext(rewrittenSql)
+                : rewrittenSql;
 
         // V33 — wrap the JDBC execution in a per-dialect
         // bulkhead. tryAcquirePermission() returns false
@@ -293,7 +454,7 @@ public class QueryService {
                     // llamada", que es cierto — pero se leía
                     // reejecutando en vez de leyéndolo del
                     // CallableStatement que ya lo tenía.
-                    QueryResult result = executeCallable(jdbc, sql, params, outNames);
+                    QueryResult result = executeCallable(jdbc, sql, params, outNames, def.paramTypes());
                     log.debug("uuid={} devolvió {} filas + {} OUT params (mode={})",
                             req.uuid(), result.rows().size(),
                             result.outParams() == null ? 0 : result.outParams().size(), mode);
@@ -332,7 +493,7 @@ public class QueryService {
                                         List<Map<String, Object>> out = new java.util.ArrayList<>();
                                         int i = 0;
                                         while (rs.next()) {
-                                            out.add(mapRow(rs, i++));
+                                            out.add(mapRow(rs, i++, objectMapper));
                                         }
                                         return QueryResult.rowsOnly(out);
                                     }
@@ -362,7 +523,7 @@ public class QueryService {
 
                 // SELECT / FUNCTION / PROCEDURE-without-OUT path.
                 List<Map<String, Object>> rows = jdbc.query(sql, params,
-                        QueryService::mapRow);
+                        (rs, rn) -> mapRow(rs, rn, objectMapper));
 
                 log.debug("uuid={} returned {} rows (mode={})", req.uuid(), rows.size(), mode);
                 // Metrics are recorded by the wrapping execute()
@@ -398,15 +559,118 @@ public class QueryService {
      * the ResultSetMetaData — the legacy UI depends on it
      * for tabular rendering.
      */
-    private static Map<String, Object> mapRow(java.sql.ResultSet rs, int rn)
+    private static Map<String, Object> mapRow(java.sql.ResultSet rs, int rn,
+                                              com.fasterxml.jackson.databind.ObjectMapper objectMapper)
             throws java.sql.SQLException {
         java.sql.ResultSetMetaData md = rs.getMetaData();
         int cols = md.getColumnCount();
         Map<String, Object> row = new LinkedHashMap<>(cols);
         for (int i = 1; i <= cols; i++) {
-            row.put(md.getColumnLabel(i), rs.getObject(i));
+            row.put(md.getColumnLabel(i), normalizeColumnValue(rs.getObject(i), objectMapper));
         }
         return row;
+    }
+
+    /**
+     * Converts a raw {@code ResultSet.getObject(i)} value into
+     * something Jackson can serialize as the JSON shape callers
+     * actually expect. Without this, two PostgreSQL JDBC types
+     * leak the driver's internals into the response:
+     *
+     * <ul>
+     *   <li>{@link java.sql.Array} (any native array column, e.g.
+     *       {@code int8[]}) — Jackson has no built-in serializer
+     *       for it, so it fell back to reflecting over the
+     *       driver's {@code PgArray} bean properties, dumping the
+     *       whole JDBC {@code Connection} (URL, backend PID, the
+     *       full keyword list, …) into the response body. We
+     *       extract the actual element array via
+     *       {@link java.sql.Array#getArray()} and return it as a
+     *       {@link List} — a plain JSON array, exactly what a
+     *       column typed {@code int8[]} should produce.</li>
+     *   <li>{@link PGobject} ({@code json}/{@code jsonb} columns,
+     *       and any other PG type the driver doesn't map to a
+     *       plain Java type, e.g. {@code uuid} or a DOMAIN type)
+     *       — Jackson serialized the wrapper itself
+     *       ({@code {"type":"jsonb","value":"<the json as a
+     *       string>"}}), double-encoding the JSON instead of
+     *       nesting it. For {@code json}/{@code jsonb} we parse
+     *       the raw text into plain JDK types ({@link Map},
+     *       {@link List}, {@code String}, {@code Number},
+     *       {@code Boolean}) so it serializes as nested JSON.
+     *
+     *       <p>We deliberately deserialize to plain JDK
+     *       collections instead of a Jackson-specific tree type
+     *       ({@code JsonNode}) or a "write this verbatim" wrapper
+     *       ({@code RawValue}): Spring Boot 4 ships {@code
+     *       com.fasterxml.jackson.databind} (Jackson 2, what this
+     *       service's own code and the {@code ObjectMapper} bean
+     *       we're holding here are built against) ALONGSIDE
+     *       Jackson 3's {@code tools.jackson.databind} — which is
+     *       what the HTTP response converter that actually writes
+     *       the wire bytes uses by default. A Jackson-2
+     *       {@code JsonNode}/{@code RawValue} instance is a
+     *       foreign type to that Jackson-3 writer, which doesn't
+     *       recognize it and falls back to reflecting over its
+     *       bean-style getters ({@code isObject()}, {@code
+     *       getNodeType()}, …) instead of its content — same
+     *       failure mode as the original bug, just one level
+     *       removed. {@code Map}/{@code List}/{@code String}/
+     *       {@code Number}/{@code Boolean} are core JDK types
+     *       every JSON library — either Jackson generation, or
+     *       whatever replaces them — serializes correctly without
+     *       needing to recognize anything Jackson-specific. Any
+     *       other PGobject-backed type falls back to its plain
+     *       text value.</li>
+     * </ul>
+     *
+     * <p>Every other value (String, Long, Boolean, java.sql.Date,
+     * …) already has a working Jackson serializer and passes
+     * through unchanged.
+     */
+    static Object normalizeColumnValue(Object value,
+                                       com.fasterxml.jackson.databind.ObjectMapper objectMapper)
+            throws java.sql.SQLException {
+        if (value instanceof java.sql.Array array) {
+            try {
+                Object javaArray = array.getArray();
+                int len = java.lang.reflect.Array.getLength(javaArray);
+                List<Object> out = new java.util.ArrayList<>(len);
+                for (int i = 0; i < len; i++) {
+                    out.add(java.lang.reflect.Array.get(javaArray, i));
+                }
+                return out;
+            } finally {
+                // Releases the driver-side resources backing the
+                // array now that we've copied its elements out —
+                // JDBC best practice, not required for correctness
+                // here since the ResultSet itself is closed right
+                // after, but cheap and avoids relying on that.
+                array.free();
+            }
+        }
+        if (value instanceof PGobject pg) {
+            String raw = pg.getValue();
+            if (raw == null) return null;
+            String type = pg.getType();
+            if ("json".equals(type) || "jsonb".equals(type)) {
+                try {
+                    return objectMapper.readValue(raw, Object.class);
+                } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                    // Postgres already validated this as JSON when
+                    // it went into the column, so this shouldn't
+                    // happen — but a single malformed row isn't a
+                    // reason to 500 the whole query. Fall back to
+                    // the plain text; the client still gets the
+                    // data, just not parsed.
+                    log.warn("Column declared {} but its value didn't parse as JSON "
+                            + "({}); returning it as plain text.", type, e.getMessage());
+                    return raw;
+                }
+            }
+            return raw;
+        }
+        return value;
     }
 
     /**
@@ -430,7 +694,15 @@ public class QueryService {
     private QueryResult executeCallable(NamedParameterJdbcTemplate jdbc,
                                         String sql,
                                         MapSqlParameterSource params,
-                                        List<String> outNames) {
+                                        List<String> outNames,
+                                        Map<String, String> paramTypes) {
+        // V49 — Aplicamos el sqlType declarado por el autor también
+        // en el bind manual del CallableStatement. Si no hay tipo
+        // declarado (entrada no en paramTypes o paramTypes vacío),
+        // caemos al setObject(key, value) sin tipo — comportamiento
+        // idéntico al anterior a V49.
+        Map<String, Integer> sqlTypes = resolveCallableTypes(params, paramTypes);
+
         return jdbc.getJdbcTemplate().execute(
                 (java.sql.Connection con) -> {
                     try (java.sql.CallableStatement cs = con.prepareCall(sql)) {
@@ -438,7 +710,18 @@ public class QueryService {
                         // MapSqlParameterSource has no forEach —
                         // getValues() exposes the backing Map.
                         for (Map.Entry<String, Object> e : params.getValues().entrySet()) {
-                            cs.setObject(e.getKey(), e.getValue());
+                            Integer sqlType = sqlTypes.get(e.getKey());
+                            if (sqlType != null && sqlType.intValue() != java.sql.Types.ARRAY) {
+                                // Para tipos array usamos el setObject
+                                // sin tipo: ParamBinder ya envolvió el
+                                // valor en un AbstractSqlTypeValue que
+                                // sabe hacer createArrayOf contra la
+                                // Connection activa cuando se bindea
+                                // por la vía jdbc.update.
+                                cs.setObject(e.getKey(), e.getValue(), sqlType);
+                            } else {
+                                cs.setObject(e.getKey(), e.getValue());
+                            }
                         }
                         // Register OUT params. The PG driver
                         // accepts Types.OTHER for any type and
@@ -456,7 +739,7 @@ public class QueryService {
                             try (java.sql.ResultSet rs = cs.getResultSet()) {
                                 int i = 0;
                                 while (rs.next()) {
-                                    rows.add(mapRow(rs, i++));
+                                    rows.add(mapRow(rs, i++, objectMapper));
                                 }
                             }
                         }
@@ -482,6 +765,388 @@ public class QueryService {
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * V49 — Construye el mapa nombre → sqlType para los IN/INOUT
+     * del CallableStatement. Sólo las entradas que tienen tipo
+     * declarado en {@code paramTypes} aparecen; las demás devuelven
+     * null en la búsqueda y caen al setObject(key, value) sin tipo.
+     *
+     * <p>Los arrays se excluyen aquí — ParamBinder ya envolvió el
+     * valor en un {@code AbstractSqlTypeValue} que necesita la
+     * Connection activa, no un sqlType explícito. En el bind
+     * manual del CallableStatement los dejamos sin tipo y dejamos
+     * que el driver haga su mejor inferencia.
+     */
+    private static Map<String, Integer> resolveCallableTypes(
+            MapSqlParameterSource params, Map<String, String> paramTypes) {
+        Map<String, Integer> out = new java.util.HashMap<>();
+        if (paramTypes == null || paramTypes.isEmpty()) return out;
+        for (Map.Entry<String, Object> e : params.getValues().entrySet()) {
+            String declared = paramTypes.get(e.getKey());
+            if (declared == null) continue;
+            Integer jdbcType = ParamTypes.JDBC_TYPES.get(declared);
+            if (jdbcType == null) continue;
+            if (ParamTypes.ARRAY_TYPES.contains(declared)) continue; // ver javadoc
+            out.put(e.getKey(), jdbcType);
+        }
+        return out;
+    }
+
+    /**
+     * V49 (movido desde el cuerpo de doExecute) — inyecta los valores
+     * CONTEXT derivados del JWT verificado en el mapa de parámetros.
+     *
+     * <p>Estos valores NO son caller-controlled: el cliente no puede
+     * meter un {@code :CONTEXT.USER_ID} en su body para suplantar
+     * identidad, porque la firma la controla auth-center y el
+     * SecurityContextHolder se rellena desde el JWT parseado, no
+     * desde la petición.
+     *
+     * <p>El prefijo {@code CONTEXT.} no es cosmético — es lo que
+     * distingue de un vistazo lo que controla el llamante
+     * ({@code PARAM.*}, {@code QUERY.*}, {@code BODY.*}) de lo que
+     * no. Ver spec 2026-08-10.
+     *
+     * <p>Siguen siendo opcionales: los tokens anteriores a V29 no
+     * llevan claim uid, y el endpoint público no tiene principal.
+     * En ambos casos NO se añade el parámetro — el autor del
+     * procedimiento decide qué hacer con la ausencia (p. ej.
+     * "IF :CONTEXT.USER_ID IS NULL THEN RAISE EXCEPTION
+     * 'unauthenticated'").
+     *
+     * <p>Estos bindings no se pasan por {@link ParamBinder} con sqlType:
+     * su comportamiento actual (Spring auto-derive) es correcto y no
+     * entran en la validación estricta de la metadata. Si en el
+     * futuro hace falta tiparlos, {@code ParamBinder} los respeta
+     * igual que cualquier otra key.
+     */
+    private static void injectContextParams(Map<String, Object> target,
+                                            Authentication auth) {
+        // V-audit-ctx — REQUEST_ID/PATH van SIEMPRE, autenticado o no: son
+        // datos del transporte HTTP (de dónde vino el request), no de la
+        // identidad. Colocados antes del `return` temprano de abajo para
+        // que un query público también los tenga disponibles.
+        injectRequestParams(target);
+
+        if (auth == null || !(auth.getPrincipal() instanceof AuthPrincipal p)) {
+            return;
+        }
+        if (p.userId() != null) {
+            target.put(ParamNamespace.CONTEXT + ".USER_ID", p.userId());
+        }
+        if (p.email() != null) {
+            target.put(ParamNamespace.CONTEXT + ".EMAIL", p.email());
+        }
+        // V-audit-ctx-4 (sesiones reales): familyId llega como
+        // claim `fid` del JWT (V29-style: ausente en tokens legacy,
+        // se omite el placeholder). Un solo placeholder sirve para
+        // SESION_ID y FAMILIA -- en este sistema son sinónimos
+        // (family_id ES la sesion_id, ambos campos de
+        // auditoria.audit_log reciben el mismo valor vía
+        // AUDIT_CTX_CTE_HEADER abajo).
+        if (p.familyId() != null) {
+            target.put(ParamNamespace.CONTEXT + ".FAMILIA", p.familyId());
+            target.put(ParamNamespace.CONTEXT + ".SESION_ID", p.familyId());
+        }
+        // Roles en dos formatos para que el autor elija el
+        // que le convenga:
+        //   :CONTEXT.ROLES        → "ADMIN,EVALUADOR"  (LIKE en PL/pgSQL)
+        //   :CONTEXT.ROLES_ARRAY  → "{ADMIN,EVALUADOR}" (text[] para ANY())
+        String rolesCsv = p.roles() == null || p.roles().isEmpty()
+                ? "" : String.join(",", p.roles());
+        String rolesArray = "{"
+                + (p.roles() == null || p.roles().isEmpty()
+                    ? "" : String.join(",", p.roles()))
+                + "}";
+        target.put(ParamNamespace.CONTEXT + ".ROLES", rolesCsv);
+        target.put(ParamNamespace.CONTEXT + ".ROLES_ARRAY", rolesArray);
+    }
+
+    /**
+     * V-audit-ctx — :CONTEXT.REQUEST_ID, :CONTEXT.PATH y :CONTEXT.HTTP_METHOD,
+     * para que el catálogo pueda hacer {@code set_config('app.request_id', ...)}
+     * / {@code set_config('app.http_method', ...)} y fundir {@code path} en
+     * {@code app.contexto} en la misma sentencia que la escritura real (ver
+     * {@code fn_audit_ctx()}, {@code postgres/migrations/V26__context-emitter.sql}).
+     * {@code HTTP_METHOD} tiene su propia columna en ClickHouse (para
+     * filtrar/agrupar por verbo sin parsear un string) — por eso {@code PATH}
+     * es solo la URI, **sin** el método como prefijo; repetirlo en las dos
+     * partes sería redundante.
+     *
+     * <p>Mismo patrón que {@code AuditContextAspect} de la app de
+     * referencia (db-migrations/api): {@code X-Request-Id} si el
+     * cliente/gateway ya lo mandó, si no un UUID generado aquí — un
+     * request sin id de correlación es peor que uno con un id que
+     * nadie más va a reusar, porque igual permite agrupar las filas
+     * de auditoría de ESTA transacción.
+     *
+     * <p>No dependemos de que el llamado venga por un {@code
+     * @Controller} concreto — {@link RequestContextHolder} expone el
+     * {@code HttpServletRequest} del hilo actual sin necesidad de
+     * inyectarlo en cada firma de método intermedio. Si no hay
+     * request ligado al hilo (tests, llamadas internas), no se agrega
+     * nada — igual que el resto de los CONTEXT.* opcionales.
+     *
+     * <p>V-audit-ctx-2 agrega cuatro placeholders más, todos para
+     * auditoría de seguridad ("¿desde dónde y con qué se hizo este
+     * cambio?"), no de negocio:
+     * <ul>
+     *   <li>{@code :CONTEXT.CLIENT_IP} — {@code X-Client-Ip} (header
+     *       propio, seteado por {@code ClientIpGlobalFilter} en
+     *       api-gateway a partir de la conexión TCP real; DELIBERADAMENTE
+     *       no {@code X-Forwarded-For} — Spring Cloud Gateway 5 lo
+     *       descarta antes de reenviar la petición, confirmado
+     *       empíricamente). Fallback a {@code X-Forwarded-For} (por si
+     *       algo llama a query-service sin pasar por este gateway) y
+     *       finalmente a la IP de la conexión TCP directa.</li>
+     *   <li>{@code :CONTEXT.USER_AGENT} — el header tal cual.</li>
+     *   <li>{@code :CONTEXT.HEADERS} — JSON de una whitelist explícita
+     *       ({@link #HEADER_WHITELIST}). {@code Authorization}/{@code
+     *       Cookie} NUNCA se incluyen, ni siquiera redactados — son
+     *       credenciales de sesión, no contexto de auditoría, y no
+     *       tienen nada que hacer en ClickHouse en texto plano.</li>
+     *   <li>{@code :CONTEXT.REQUEST_BODY} — JSON de lo que el cliente
+     *       pidió escribir (snapshot de {@code target} ANTES de que
+     *       este método agregue sus propios {@code CONTEXT.*}), con
+     *       claves sensibles ({@link #SENSITIVE_KEY_PATTERN} — token,
+     *       secret, password) redactadas. Distinto de
+     *       {@code fila_new}/{@code fila_old} en ClickHouse, que son
+     *       el estado de la fila DESPUÉS de escribir — esto es lo que
+     *       el cliente pidió, útil cuando difiere (defaults, triggers).</li>
+     * </ul>
+     * Los cuatro viajan como GUCs de sesión igual que REQUEST_ID/PATH
+     * (ver {@link #wrapWithAuditContext}); HEADERS/REQUEST_BODY
+     * llegan ya serializados a JSON así que {@code fn_audit_ctx()} (V26)
+     * los castea con {@code ::json} en vez de truncarlos como TEXT.
+     */
+    private static void injectRequestParams(Map<String, Object> target) {
+        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes sra)) {
+            return;
+        }
+        var req = sra.getRequest();
+
+        // Snapshot ANTES de que este método agregue sus propios
+        // CONTEXT.* — así REQUEST_BODY solo refleja lo que trajo el
+        // caller (PARAM.*/BODY.*), no metadata derivada por nosotros.
+        Map<String, Object> redactedBody = redactSensitiveKeys(target);
+
+        String requestId = req.getHeader("X-Request-Id");
+        if (requestId == null || requestId.isBlank()) {
+            requestId = UUID.randomUUID().toString();
+        } else if (requestId.length() > 100) {
+            // El trigger trunca a 100 (ver fn_audit_ctx / LowCardinality en
+            // ClickHouse) — cortamos aquí para no mandar ruido de más.
+            requestId = requestId.substring(0, 100);
+        }
+        target.put(ParamNamespace.CONTEXT + ".REQUEST_ID", requestId);
+
+        // Solo la URI — el método va aparte en :CONTEXT.HTTP_METHOD (columna
+        // propia de ClickHouse), repetirlo aquí sería redundante.
+        target.put(ParamNamespace.CONTEXT + ".PATH", req.getRequestURI());
+        target.put(ParamNamespace.CONTEXT + ".HTTP_METHOD", req.getMethod());
+
+        // client_ip: X-Client-Ip (api-gateway's ClientIpGlobalFilter,
+        // authoritative) → X-Forwarded-For (unverified, only relevant
+        // when NOT behind this gateway) → conexión TCP directa.
+        String clientIp = req.getHeader("X-Client-Ip");
+        if (clientIp == null || clientIp.isBlank()) {
+            clientIp = req.getHeader("X-Forwarded-For");
+            if (clientIp != null && !clientIp.isBlank()) {
+                clientIp = clientIp.split(",")[0].trim();
+            }
+        }
+        if (clientIp == null || clientIp.isBlank()) {
+            clientIp = req.getRemoteAddr();
+        }
+        if (clientIp != null && !clientIp.isBlank()) {
+            target.put(ParamNamespace.CONTEXT + ".CLIENT_IP", clientIp);
+        }
+
+        String userAgent = req.getHeader("User-Agent");
+        if (userAgent != null && !userAgent.isBlank()) {
+            target.put(ParamNamespace.CONTEXT + ".USER_AGENT", userAgent);
+        }
+
+        Map<String, String> headers = new LinkedHashMap<>();
+        for (String name : HEADER_WHITELIST) {
+            String value = req.getHeader(name);
+            if (value != null && !value.isBlank()) {
+                headers.put(name.toLowerCase(java.util.Locale.ROOT), value);
+            }
+        }
+        if (!headers.isEmpty()) {
+            target.put(ParamNamespace.CONTEXT + ".HEADERS", toJson(headers));
+        }
+
+        if (!redactedBody.isEmpty()) {
+            target.put(ParamNamespace.CONTEXT + ".REQUEST_BODY", toJson(redactedBody));
+        }
+    }
+
+    /**
+     * V-audit-ctx-2 — el CTE que ANTES vivía como texto literal en
+     * {@code public.query.query} (ver el ya-eliminado
+     * {@code V80__wrap_write_queries_audit_context.sql}). {@code
+     * MATERIALIZED} fuerza a Postgres a computar el CTE (y por tanto
+     * ejecutar los {@code set_config}) ANTES de evaluar la subconsulta
+     * que llama a la función de escritura real — necesario porque
+     * query-service no abre una transacción explícita que abarque más
+     * de un statement (cada {@code jdbc.query()} es su propio
+     * top-level statement), así que un {@code set_config()} previo en
+     * un statement separado no sobreviviría hasta el {@code fn_*} real.
+     *
+     * <p>Los siete placeholders (:CONTEXT.REQUEST_ID, .HTTP_METHOD,
+     * .CLIENT_IP, .USER_AGENT, .HEADERS, .REQUEST_BODY, .PATH) ya están
+     * en {@code allParams} para TODA petición gracias a {@link
+     * #injectRequestParams} — el wrap es puro texto, no necesita el
+     * catálogo para nada.
+     *
+     * <p>V-audit-ctx-3 — {@code app.user_id}/{@code app.user_pk}: hasta
+     * ahora este wrap NUNCA los fijaba (confirmado al auditar este
+     * método) — {@code auditoria.audit_log.app_user}/{@code app_user_id}
+     * llegaban vacíos para TODA escritura de query-service, no solo las
+     * que no pasaban por {@code fn_audit_declarar}. {@code :CONTEXT.USER_ID}
+     * (línea ~759, {@code AuthPrincipal.userId()}) es {@code
+     * public.users.id_user} — un espacio de ID DISTINTO de {@code
+     * academico_test.TUSUARIO.PK_TUSUARIO}, el mismo puente que cada
+     * {@code fn_*} de escritura ya usa para {@code
+     * p_pk_usuario_solicitante} (ver p.ej. {@code fn_sed_crear} en
+     * V64). El CTE {@code _actor} resuelve ese puente UNA vez; {@code
+     * app.user_id} usa {@code academico_test.fn_resolver_actor} (V66)
+     * para el nombre legible, con el PK crudo como último recurso;
+     * {@code app.user_pk} lleva SIEMPRE el PK crudo, nunca pisado por
+     * la resolución de nombre — mismo contrato dual que V26/V66.
+     */
+    private static final String AUDIT_CTX_CTE_HEADER =
+            "WITH _actor AS MATERIALIZED (\n"
+          + "  SELECT public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT) AS pk_tusuario\n"
+          + "),\n"
+          + "_ctx AS MATERIALIZED (\n"
+          + "  SELECT set_config('app.request_id', :CONTEXT.REQUEST_ID, true) AS _rid,\n"
+          + "         set_config('app.http_method', :CONTEXT.HTTP_METHOD, true) AS _hm,\n"
+          + "         set_config('app.client_ip', :CONTEXT.CLIENT_IP, true) AS _ip,\n"
+          + "         set_config('app.user_agent', :CONTEXT.USER_AGENT, true) AS _ua,\n"
+          + "         set_config('app.headers', :CONTEXT.HEADERS, true) AS _hdrs,\n"
+          + "         set_config('app.request_body', :CONTEXT.REQUEST_BODY, true) AS _body,\n"
+          + "         set_config('app.user_id', COALESCE(academico_test.fn_resolver_actor((SELECT pk_tusuario FROM _actor)), (SELECT pk_tusuario FROM _actor)::text), true) AS _uid,\n"
+          + "         set_config('app.user_pk', (SELECT pk_tusuario FROM _actor)::text, true) AS _upk,\n"
+          // V-audit-ctx-4 (sesiones reales): MERGE (no OVERWRITE)
+          // con app.contexto preexistente -- el helper fn_audit_declarar
+          // (V66) ya respeta sesion_id/familia si están, pero esta capa
+          // (que corre para queries que NO llaman fn_audit_declarar)
+          // también tiene que respetarlos. COALESCE al '{}' para el caso
+          // de la primera escritura del request. familyId puede ser NULL
+          // (token legacy pre-V-audit-ctx-4) -- en ese caso
+          // jsonb_build_object devuelve NULL para esa clave, lo que en
+          // ClickHouse queda como string vacío y en Postgres como
+          // ausente; cualquiera de los dos es aceptable para la query de
+          // auditoría. La razón de usar || y NO jsonb_set() es la misma
+          // que en V66: precedence clara, sin ambigüedad con claves
+          // existentes.
+          + "         set_config('app.contexto', (COALESCE(NULLIF(current_setting('app.contexto', true), '')::jsonb, '{}'::jsonb) || jsonb_build_object('path', :CONTEXT.PATH, 'sesion_id', :CONTEXT.SESION_ID, 'familia', :CONTEXT.FAMILIA))::text, true) AS _c\n"
+          + ")\n"
+          + "SELECT _orig.* FROM _ctx, (";
+
+    private static final String AUDIT_CTX_CTE_FOOTER = ") AS _orig";
+
+    /**
+     * Detecta una llamada a {@code academico_test.fn_*} en el SQL —
+     * la convención de nombres que sigue TODA función de escritura que
+     * declara {@code fn_audit_declarar} (ver {@code
+     * postgres/migrations/V66__fn_audit_declarar.sql} y las funciones
+     * que lo adoptan). Puramente textual y case-insensitive: no
+     * requiere mantenimiento cuando se agrega un módulo nuevo (áreas,
+     * grados, etc.) — a diferencia del regex por-módulo que usaba el
+     * ya-eliminado {@code V80} para generar su lista de {@code
+     * id_query}.
+     */
+    private static final java.util.regex.Pattern ACADEMICO_TEST_FN_CALL =
+            java.util.regex.Pattern.compile("academico_test\\.fn_", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Gate para el wrap automático de contexto de auditoría:
+     * <ul>
+     *   <li>Solo SELECT/FUNCTION son envolvibles — el truco mete el
+     *       SQL original como subconsulta en un FROM, lo que exige
+     *       que sea una expresión que devuelve filas. Un {@code
+     *       INSERT}/{@code UPDATE} directo (modo DML) o un {@code
+     *       CALL} (modo PROCEDURE) no son sintácticamente válidos
+     *       ahí — igual que antes de este cambio, esos dos modos se
+     *       quedan sin auditoría automática de contexto.</li>
+     *   <li>El SQL debe llamar a {@code academico_test.fn_*}
+     *       ({@link #ACADEMICO_TEST_FN_CALL}) — sin esto, cualquier
+     *       {@code SELECT} de solo lectura con {@code http_method}
+     *       distinto de GET (una convención legado real: muchas filas
+     *       nunca declararon el verbo y cayeron al default histórico
+     *       POST aunque son lecturas puras) recibiría el wrap sin
+     *       necesitarlo, rompiendo contra datasources que no son
+     *       Postgres/academico_test y agregando trabajo inútil.</li>
+     *   <li>{@code httpMethod} nulo cuenta como escritura (POST es el
+     *       default histórico de una fila sin verbo declarado — ver
+     *       el javadoc de {@link QueryDefinition#httpMethod()}); esto
+     *       importa poco en la práctica porque toda función
+     *       academico_test.fn_* real ya viene con un verbo explícito,
+     *       pero mantiene el gate conservador (envolver de más es
+     *       inofensivo, no envolver una escritura real no lo es).</li>
+     * </ul>
+     */
+    static boolean isAuditWrappable(String mode, String httpMethod, String sql) {
+        boolean wrappableMode = "SELECT".equals(mode) || "FUNCTION".equals(mode);
+        boolean isWrite = !"GET".equalsIgnoreCase(httpMethod == null ? "POST" : httpMethod);
+        return wrappableMode && isWrite && ACADEMICO_TEST_FN_CALL.matcher(sql).find();
+    }
+
+    static String wrapWithAuditContext(String sql) {
+        String trimmed = sql.strip();
+        if (trimmed.endsWith(";")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        return AUDIT_CTX_CTE_HEADER + trimmed + AUDIT_CTX_CTE_FOOTER + ";";
+    }
+
+    /**
+     * Headers permitidos en {@code :CONTEXT.HEADERS}. Deliberadamente NO
+     * incluye {@code Authorization}/{@code Cookie} — ver el javadoc de
+     * {@link #injectRequestParams}. {@code X-Forwarded-For} tampoco está
+     * acá porque ya se captura aparte como {@code :CONTEXT.CLIENT_IP}.
+     */
+    private static final List<String> HEADER_WHITELIST =
+            List.of("User-Agent", "Accept-Language", "Referer");
+
+    /**
+     * Nombres de placeholder que nunca deben llegar a ClickHouse en texto
+     * plano dentro de {@code :CONTEXT.REQUEST_BODY}. Se compara contra el
+     * nombre "local" (después del namespace — {@code BODY.PASSWORD} →
+     * {@code PASSWORD}), case-insensitive.
+     */
+    private static final java.util.regex.Pattern SENSITIVE_KEY_PATTERN =
+            java.util.regex.Pattern.compile("(?i).*(TOKEN|SECRET|PASSWORD|CONTRASENA|CONTRASEÑA).*");
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper CONTEXT_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /** Copia {@code source} redactando los valores cuyas keys matchean {@link #SENSITIVE_KEY_PATTERN}. */
+    private static Map<String, Object> redactSensitiveKeys(Map<String, Object> source) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : source.entrySet()) {
+            String key = e.getKey();
+            int dot = key.indexOf('.');
+            String localName = dot >= 0 ? key.substring(dot + 1) : key;
+            copy.put(key, SENSITIVE_KEY_PATTERN.matcher(localName).matches()
+                    ? "[REDACTED]" : e.getValue());
+        }
+        return copy;
+    }
+
+    private static String toJson(Object value) {
+        try {
+            return CONTEXT_MAPPER.writeValueAsString(value);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            log.warn("No se pudo serializar un valor de CONTEXT.* a JSON: {}", e.getMessage());
+            return null;
+        }
     }
 
     /**

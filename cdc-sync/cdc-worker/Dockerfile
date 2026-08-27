@@ -31,7 +31,7 @@ COPY cdc-generator/pom.xml cdc-generator/
 # Warm the local Maven repo with the dependency graph. This layer is
 # invalidated only when one of the pom.xml files above changes — once
 # cached, a source-only edit doesn't re-download the world.
-RUN mvn -B -ntp -pl cdc-worker -am dependency:go-offline -q
+RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl cdc-worker -am dependency:go-offline -q
 
 # Copy sources LAST (most-frequently-changing layer). cdc-common has
 # to come first because cdc-worker depends on it; `mvn -am` then
@@ -48,7 +48,7 @@ COPY cdc-generator/src cdc-generator/src
 # Order matters: build the generator jar, fetch V22 into the build
 # stage, run the generator (which overwrites the stale committed
 # JSON), then package the fat jar so it bundles the fresh file.
-RUN mvn -B -ntp -pl cdc-generator -am clean package -DskipTests -q
+RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl cdc-generator -am clean package -DskipTests -q
 COPY --from=repo postgres/migrations/V22__academic-schema.sql /tmp/V22.sql
 RUN java -jar /workspace/cdc-generator/target/app.jar \
         --source /tmp/V22.sql \
@@ -58,7 +58,7 @@ RUN java -jar /workspace/cdc-generator/target/app.jar \
 # the empty pre-repackage jar to `*.jar.original` and writes the
 # fat jar as `target/app.jar` (the pom pins `<finalName>app</finalName>`
 # so the COPY below resolves to a single file, not a glob).
-RUN mvn -B -ntp -pl cdc-worker -am clean package -DskipTests -q
+RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl cdc-worker -am clean package -DskipTests -q
 
 # ----- stage 2: minimal JRE runtime -----
 FROM eclipse-temurin:25-jre-jammy

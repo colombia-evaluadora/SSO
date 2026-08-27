@@ -146,6 +146,210 @@ class ParamNamespaceTest {
         assertThat(ParamNamespace.PARAM).isEqualTo("PARAM");
         assertThat(ParamNamespace.QUERY).isEqualTo("QUERY");
         assertThat(ParamNamespace.BODY).isEqualTo("BODY");
+        assertThat(ParamNamespace.BODY_RAW).isEqualTo("BODY_RAW");
         assertThat(ParamNamespace.CONTEXT).isEqualTo("CONTEXT");
+    }
+
+    /* ====================== V49-bis — BODY_RAW namespace ====================== */
+
+    @Test
+    void putRawExposesTopLevelMapIntact() {
+        // Body: {filtro: {zona: 1, nivel: 'A'}}
+        Map<String, Object> filtro = new LinkedHashMap<>();
+        filtro.put("zona", 1);
+        filtro.put("nivel", "A");
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("filtro", filtro);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        ParamNamespace.putRaw(out, body);
+
+        // El valor completo del sub-objeto, sin aplanar.
+        assertThat(out).containsEntry("BODY_RAW.FILTRO", filtro);
+    }
+
+    @Test
+    void putRawUppercasesTopLevelKeys() {
+        Map<String, Object> filtro = Map.of("zona", 1);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("filtro", filtro);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        ParamNamespace.putRaw(out, body);
+
+        assertThat(out).containsKey("BODY_RAW.FILTRO");
+        assertThat(out.get("BODY_RAW.FILTRO")).isSameAs(filtro);
+    }
+
+    @Test
+    void putRawKeepsArraysIntactAsValues() {
+        // Body: {tags: ['a','b','c']}
+        Map<String, Object> body = Map.of("tags", java.util.List.of("a", "b", "c"));
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        ParamNamespace.putRaw(out, body);
+
+        assertThat(out).containsEntry("BODY_RAW.TAGS", java.util.List.of("a", "b", "c"));
+    }
+
+    @Test
+    void putRawRejectsKeysThatCollideByCase() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("filtro", Map.of("a", 1));
+        body.put("FILTRO", Map.of("b", 2));
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        assertThatThrownBy(() -> ParamNamespace.putRaw(out, body))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("FILTRO");
+    }
+
+    @Test
+    void putRawToleratesNullAndEmptySource() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        ParamNamespace.putRaw(out, null);
+        ParamNamespace.putRaw(out, Map.of());
+        assertThat(out).isEmpty();
+    }
+
+    @Test
+    void putRawAndFlattenCoexistOnSameBody() {
+        // El body produce entradas tanto en BODY.* (escalares aplanados) como
+        // en BODY_RAW.* (sub-objetos completos). No se pisan porque los
+        // namespaces son disjuntos.
+        Map<String, Object> filtro = new LinkedHashMap<>();
+        filtro.put("zona", 1);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("zona", 214);         // escalar top-level
+        body.put("filtro", filtro);    // sub-objeto
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        ParamNamespace.putAll(out, ParamNamespace.QUERY, null);
+        // Llamamos ambos — debe funcionar sin colisión.
+        out.putAll(ParamNamespace.flatten(body, ParamNamespace.BODY));
+        ParamNamespace.putRaw(out, body);
+
+        assertThat(out).containsEntry("BODY.ZONA", 214);
+        assertThat(out).containsEntry("BODY_RAW.FILTRO", filtro);
+    }
+
+    /**
+     * V60-bis — case-insensitive: indexa el body por su
+     * key canónica (MAYÚSCULAS + namespace prefix) sin
+     * mutar la key original del cliente. El caller recibe
+     * el map canónico para lookup en {@code paramTypes} o
+     * en {@code SqlRewriter}, mientras conserva el body
+     * original (sin mutación) para el bind JDBC.
+     */
+    @Test
+    void indexCanonicalBodyUppercasesPlainKeys() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("fecha", "2024-01-01");
+        body.put("ID", 42);
+        body.put("Estado", "ACTIVO");
+
+        Map<String, Object> canonical = ParamNamespace.indexCanonicalBody(body, ParamNamespace.BODY);
+
+        assertThat(canonical).containsEntry("BODY.FECHA", "2024-01-01");
+        assertThat(canonical).containsEntry("BODY.ID", 42);
+        assertThat(canonical).containsEntry("BODY.ESTADO", "ACTIVO");
+    }
+
+    @Test
+    void indexCanonicalBodyFlattensNestedObjects() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        Map<String, Object> filtros = new LinkedHashMap<>();
+        filtros.put("zona", 1);
+        filtros.put("regional", "BOG");
+        body.put("filtros", filtros);
+
+        Map<String, Object> canonical = ParamNamespace.indexCanonicalBody(body, ParamNamespace.BODY);
+
+        assertThat(canonical).containsEntry("BODY.FILTROS.ZONA", 1);
+        assertThat(canonical).containsEntry("BODY.FILTROS.REGIONAL", "BOG");
+    }
+
+    @Test
+    void indexCanonicalBodyKeepsArraysAsOneValue() {
+        java.util.List<Object> tags = java.util.List.of("a", "b");
+        Map<String, Object> body = Map.of("tags", tags);
+
+        Map<String, Object> canonical = ParamNamespace.indexCanonicalBody(body, ParamNamespace.BODY);
+
+        assertThat(canonical).containsEntry("BODY.TAGS", tags);
+    }
+
+    @Test
+    void indexCanonicalBodyRejectsCaseOnlyCollisions() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("estado", "a");
+        body.put("ESTADO", "b");
+
+        assertThatThrownBy(() -> ParamNamespace.indexCanonicalBody(body, ParamNamespace.BODY))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("ESTADO");
+    }
+
+    @Test
+    void indexCanonicalBodyPreservesProvidedNamespacePrefix() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("body.fecha", "2024-01-01");
+        body.put("BODY.id", 42);
+
+        Map<String, Object> canonical = ParamNamespace.indexCanonicalBody(body, ParamNamespace.BODY);
+
+        assertThat(canonical).containsEntry("BODY.FECHA", "2024-01-01");
+        assertThat(canonical).containsEntry("BODY.ID", 42);
+        assertThat(canonical).doesNotContainKey("BODY.BODY.FECHA");
+    }
+
+    @Test
+    void indexCanonicalBodyToleratesNullAndEmpty() {
+        assertThat(ParamNamespace.indexCanonicalBody(null, ParamNamespace.BODY)).isEmpty();
+        assertThat(ParamNamespace.indexCanonicalBody(Map.of(), ParamNamespace.BODY)).isEmpty();
+    }
+
+    @Test
+    void indexCanonicalBodyRejectsInvalidNameCharacters() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("page-size", 20);
+
+        assertThatThrownBy(() -> ParamNamespace.indexCanonicalBody(body, ParamNamespace.BODY))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("page-size");
+    }
+
+    /**
+     * El helper {@code canonicalKeyFor} produce la
+     * representación canónica de cualquier key suelta
+     * sin necesidad de un mapa de entrada. Lo consume
+     * {@code ParamBinder} para hacer lookups
+     * case-insensitive contra {@code paramTypes}.
+     */
+    @Test
+    void canonicalKeyForPlainKeyAddsPrefix() {
+        assertThat(ParamNamespace.canonicalKeyFor("fecha", ParamNamespace.BODY))
+                .isEqualTo("BODY.FECHA");
+    }
+
+    @Test
+    void canonicalKeyForAlreadyPrefixedKeyDoesNotDuplicatePrefix() {
+        // El cliente envió "BODY.fecha" — no se duplica.
+        assertThat(ParamNamespace.canonicalKeyFor("BODY.fecha", ParamNamespace.BODY))
+                .isEqualTo("BODY.FECHA");
+        assertThat(ParamNamespace.canonicalKeyFor("body.fecha", ParamNamespace.BODY))
+                .isEqualTo("BODY.FECHA");
+    }
+
+    @Test
+    void canonicalKeyForOtherNamespacePrefixedKeyPrepends() {
+        // "QUERY.size" no está en el namespace BODY — el
+        // canonical NO prepende, sólo uppercasar por
+        // segmento.
+        assertThat(ParamNamespace.canonicalKeyFor("QUERY.size", ParamNamespace.BODY))
+                .isEqualTo("QUERY.SIZE");
     }
 }

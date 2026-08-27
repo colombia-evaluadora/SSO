@@ -116,6 +116,8 @@ function mkMicroservice(
     dbPassword: null,
     poolSize: 10,
     instanceName: "postgres",
+    fileStorageSchema: null,
+    fileStorageTable: null,
     ...over,
   };
 }

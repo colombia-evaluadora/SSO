@@ -22,14 +22,34 @@ public record AuditRecord(
         long latenciaMs,
         boolean snapshot,
         String appUser,
+        String appUserId,      // V-audit-ctx-3 — PK crudo de TUSUARIO, texto hasta el borde de ClickHouse (ver ClickHouseAuditStage.toRow)
         String dbUser,
         String sesionId,
         String familia,        // extraído de contexto.familia (ruta path-of-least-resistance)
         String requestId,
+        String httpMethod,     // verbo HTTP del request que originó el cambio (PUT/POST/PATCH/...)
+        String clientIp,       // V-audit-ctx-2 — IP del cliente (X-Forwarded-For o conexión directa)
+        String userAgent,
+        Map<String, Object> headers,    // whitelist curada, va directo a un ClickHouse Map — no se serializa
+        String requestBodyJson,         // body/params del caller, redactado — serializado como contexto
         String etiqueta,
-        String contextoJson
+        String contextoJson,
+        // V-audit-revert — copia CRUDA de event.after()/event.before(),
+        // ANTES de que JsonTypedRowBuilder los proyecte a los slots
+        // tipados de filaNew/filaOld. Necesaria porque el algoritmo
+        // "primer slot gana" de JsonTypedRowBuilder puede colapsar dos
+        // columnas reales bajo el mismo nombre genérico (p.ej. "codigo"),
+        // perdiendo el nombre de columna real de la que perdió el slot —
+        // sin este raw no hay forma confiable de reconstruir un
+        // UPDATE/INSERT/DELETE de reversión.
+        String filaNewRawJson,
+        String filaOldRawJson
 ) {
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())
+            // ISO-8601, no timestamps numéricos — fila_new_raw/fila_old_raw
+            // deben quedar legibles para reconstruir SQL a mano si hace falta.
+            .disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     public static AuditRecord fromEvent(CdcEvent event, int seq, long lsn, long xid,
                                         String tablaOrigen, String estado,
@@ -70,27 +90,41 @@ public record AuditRecord(
                 latenciaMs,
                 event.isSnapshotEvent(),
                 event.context() != null ? event.context().appUser() : "",
+                event.context() != null ? event.context().appUserId() : "",
                 event.context() != null ? event.context().dbUser() : "",
                 event.context() != null ? event.context().sesionId() : "",
                 familia,
                 event.context() != null ? event.context().requestId() : "",
+                event.context() != null ? event.context().httpMethod() : "",
+                event.context() != null ? event.context().clientIp() : "",
+                event.context() != null ? event.context().userAgent() : "",
+                event.context() != null ? event.context().headers() : Map.of(),
+                serializeJson(event.context() == null ? null : event.context().requestBody()),
                 event.context() != null ? event.context().etiqueta() : "",
-                serializeContexto(event.context() == null ? null : event.context().contexto())
+                serializeJson(event.context() == null ? null : event.context().contexto()),
+                // Crudo — antes del builder, no después. filaNew/filaOld de
+                // arriba SÍ pasan por el builder (para los slots tipados);
+                // esto es event.after()/event.before() tal cual llegó de
+                // Debezium, columna real -> valor, sin colisiones de slot.
+                serializeJson(event.after()),
+                serializeJson(event.before())
         );
     }
 
     /**
-     * JSON-serialize the contexto map so ClickHouse stores valid JSON instead
+     * JSON-serialize a context map so ClickHouse stores valid JSON instead
      * of {@link Map#toString()}'s {@code key=value} debug format. Triggered
      * by the production data check that revealed contexto was previously
-     * emitted as Java Map debug notation.
+     * emitted as Java Map debug notation. Reused for both {@code contexto}
+     * and {@code request_body} — same "opaque JSON blob in a String column"
+     * shape, unlike {@code headers} which maps to a real ClickHouse Map.
      */
-    private static String serializeContexto(Map<String, Object> contexto) {
-        if (contexto == null || contexto.isEmpty()) return "";
+    private static String serializeJson(Map<String, Object> map) {
+        if (map == null || map.isEmpty()) return "";
         try {
-            return MAPPER.writeValueAsString(contexto);
+            return MAPPER.writeValueAsString(map);
         } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize contexto", e);
+            throw new IllegalStateException("Failed to serialize JSON context field", e);
         }
     }
 

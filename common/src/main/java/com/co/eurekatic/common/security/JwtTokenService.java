@@ -46,6 +46,17 @@ public class JwtTokenService {
     private static final String CLAIM_ROLES = "roles";
     private static final String CLAIM_TOKEN_TYPE = "typ";
     private static final String CLAIM_USER_ID = "uid";
+    /**
+     * V-audit-ctx-4 (sesiones reales) -- refresh-token family UUID
+     * (mismo que {@code RefreshTokenStore.mint()} emite). Permite
+     * que el api-gateway forwardee el header
+     * {@code X-Authenticated-Family-Id} a los write-sites sin un
+     * lookup a Redis, y que ellos fundean sesion_id/familia dentro
+     * de {@code app.contexto}. Vacío en tokens pre-V-audit-ctx-4
+     * -- los downstream lo toleran y caen al fallback "sesión
+     * desconocida" en auditoría.
+     */
+    private static final String CLAIM_FAMILY_ID = "fid";
 
     private final JwtProperties props;
     /**
@@ -180,10 +191,25 @@ public class JwtTokenService {
      * user's email (the login identifier since the V12 migration); the
      * {@code roles} claim carries the role names; the {@code uid} claim
      * carries the numeric {@code users.id_user} (since V29) so the
-     * downstream doesn't need a DB hit to know who the caller is.
+     * downstream doesn't need a DB hit to know who the caller is; the
+     * {@code fid} claim carries the refresh-token family UUID
+     * (V-audit-ctx-4) so audit writes can be attributed to the
+     * originating session without a Redis lookup.
      */
     public String issueAccessToken(String email, Long userId, Set<String> roles) {
-        return build(email, userId, roles, "access", props.accessTokenTtlSeconds());
+        return build(email, userId, null, roles, "access", props.accessTokenTtlSeconds());
+    }
+
+    /**
+     * V-audit-ctx-4 (sesiones reales) -- overload que además emite
+     * el claim {@code fid} con el UUID de la familia de refresh
+     * token recién minteada. {@code JsonLoginFilter} y
+     * {@code RefreshController} usan este overload; el resto del
+     * código puede seguir llamando al de 3 args y obtener un token
+     * sin {@code fid} (legacy-compatible).
+     */
+    public String issueAccessToken(String email, Long userId, String familyId, Set<String> roles) {
+        return build(email, userId, familyId, roles, "access", props.accessTokenTtlSeconds());
     }
 
     /**
@@ -192,7 +218,7 @@ public class JwtTokenService {
      * can distinguish them and apply different rate limits / cache TTLs.
      */
     public String issueApiToken(String email, Long userId, Set<String> roles) {
-        return build(email, userId, roles, "api", props.apiTokenTtlSeconds());
+        return build(email, userId, null, roles, "api", props.apiTokenTtlSeconds());
     }
 
     /**
@@ -210,8 +236,8 @@ public class JwtTokenService {
         return issueApiToken(email, null, roles);
     }
 
-    private String build(String email, Long userId, Set<String> roles,
-                         String tokenType, long ttlSeconds) {
+    private String build(String email, Long userId, String familyId,
+                         Set<String> roles, String tokenType, long ttlSeconds) {
         Instant now = Instant.now();
         var builder = Jwts.builder()
                 .subject(email)
@@ -229,6 +255,12 @@ public class JwtTokenService {
         // :caller_user_id into the JDBC params.
         if (userId != null) {
             builder.claim(CLAIM_USER_ID, userId);
+        }
+        // Misma regla que uid: omitir el claim cuando es null.
+        // Tokens pre-V-audit-ctx-4 (sin fid) parsean con
+        // familyId=null y los downstream lo toleran.
+        if (familyId != null) {
+            builder.claim(CLAIM_FAMILY_ID, familyId);
         }
 
         Key signingKey = signingKey();
@@ -320,8 +352,9 @@ public class JwtTokenService {
         }
 
         Long userId = extractUserId(claims);
+        String familyId = extractFamilyId(claims);
 
-        return new AuthPrincipal(claims.getSubject(), userId, roles, tokenType);
+        return new AuthPrincipal(claims.getSubject(), userId, roles, tokenType, familyId);
     }
 
     /**
@@ -352,5 +385,23 @@ public class JwtTokenService {
             }
         }
         throw new JwtException("uid claim has unexpected type: " + raw.getClass().getName());
+    }
+
+    /**
+     * V-audit-ctx-4 -- extrae el {@code fid} claim. A diferencia de
+     * {@code uid}, {@code fid} es solo un String opaco (UUID sin
+     * guiones, mismo formato que {@code RefreshTokenStore.mint()}
+     * emite) -- no se valida el formato porque el costo de
+     * rechazarlo por UUID malformado es mayor que el beneficio: el
+     * peor caso es que la fila de auditoría salga con un
+     * sesion_id raro, pero la fila sigue siendo consistente.
+     */
+    private static String extractFamilyId(Claims claims) {
+        Object raw = claims.get(CLAIM_FAMILY_ID);
+        if (raw == null) {
+            return null;
+        }
+        String s = raw.toString();
+        return s.isBlank() ? null : s;
     }
 }

@@ -56,4 +56,18 @@ public interface AppRepository extends JpaRepository<App, Long> {
      */
     @Query("SELECT DISTINCT a FROM App a JOIN a.roles r WHERE r.id IN :roleIds ORDER BY a.id ASC")
     List<App> findVisibleForRoles(@Param("roleIds") Collection<Long> roleIds);
+
+    /**
+     * V143 (role-scoping de queries por app) — apps a los que está
+     * atado un microservicio vía la M:N {@code app_microservice}
+     * ({@link App#getMicroservices()}) — la relación que el admin-ui
+     * de verdad usa hoy (pestaña "Microservices" del formulario de
+     * App, {@code AppService#bindMicroservice}), a diferencia del FK
+     * "primario" {@code Microservice#getApp()} ({@code id_app}) que
+     * hoy no expone ningún formulario y por tanto queda siempre null
+     * en la práctica. {@code QueryAdminService} combina ambas fuentes
+     * de todas formas — ver su javadoc.
+     */
+    @Query("SELECT DISTINCT a FROM App a JOIN a.microservices m WHERE m.id = :microserviceId")
+    List<App> findByMicroserviceId(@Param("microserviceId") Long microserviceId);
 }

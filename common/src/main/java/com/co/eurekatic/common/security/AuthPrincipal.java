@@ -20,11 +20,34 @@ import java.util.Set;
  *                  whether to skip the parameter or surface 401.
  * @param roles     the {@code roles} claim (already de-prefixed; e.g. {@code "USER"})
  * @param tokenType "access" or "api"
+ * @param familyId  the {@code fid} claim — the refresh-token family UUID
+ *                  ({@code RefreshTokenStore.mint()} output), stable
+ *                  across cada rotación de refresh. Embedded en el JWT
+ *                  para que el ciclo de vida de la sesión viaje sin un
+ *                  lookup extra a Redis. {@code null} para tokens minted
+ *                  antes de V-audit-ctx-4 — los llamantes lo toleran y
+ *                  caen al fallback "sesión desconocida" en auditoría.
+ *                  En este sistema familyId ES la sesion_id (la fila de
+ *                  {@code academico_test.tsesion_web} se indexa por él),
+ *                  por eso un solo campo sirve para los dos nombres —
+ *                  ver {@code docs/etiqueta-auditoria-cdc-analisis.md}
+ *                  §V-audit-ctx-4.
  */
-public record AuthPrincipal(String email, Long userId, Set<String> roles, String tokenType) {
+public record AuthPrincipal(
+        String email,
+        Long userId,
+        Set<String> roles,
+        String tokenType,
+        String familyId) {
 
+    /** Legacy 3-arg constructor (pre-V29, sin uid). familyId null. */
     public AuthPrincipal(String email, Set<String> roles, String tokenType) {
-        this(email, null, roles, tokenType);
+        this(email, null, roles, tokenType, null);
+    }
+
+    /** V29 4-arg constructor (con uid). familyId null (pre-V-audit-ctx-4). */
+    public AuthPrincipal(String email, Long userId, Set<String> roles, String tokenType) {
+        this(email, userId, roles, tokenType, null);
     }
 
     public boolean hasRole(String role) {

@@ -43,13 +43,31 @@ public record SessionCacheProperties(
         @NotBlank String keyPrefix,
         String invalidationSecret,
         boolean enabled,
-        @Min(10) long userByEmailTtlSeconds) {
+        @Min(10) long userByEmailTtlSeconds,
+        @Min(10) long myAppsTtlSeconds,
+        @Min(10) long usersSsoTtlSeconds) {
 
     /** One hour — matches {@code sso.jwt.access-token-ttl-seconds}. */
     public static final long DEFAULT_TTL_SECONDS = 3600L;
 
     /** Short TTL for the {@code user-by-email} @Cacheable profile lookup. */
     public static final long DEFAULT_USER_BY_EMAIL_TTL_SECONDS = 60L;
+
+    /**
+     * TTL for the {@code my-apps} @Cacheable lookup (post-login app
+     * launcher). Longer than {@code user-by-email} because
+     * {@code role_app} bindings change far less often than user
+     * attributes, and the value is keyed by role set, not by user.
+     */
+    public static final long DEFAULT_MY_APPS_TTL_SECONDS = 300L;
+
+    /**
+     * TTL for the {@code users-sso} @Cacheable lookup ({@code GET
+     * /getUsersSSO}). Kept short — same reasoning as
+     * {@code user-by-email} — because a just-registered user should
+     * appear in listings without a long wait.
+     */
+    public static final long DEFAULT_USERS_SSO_TTL_SECONDS = 60L;
 
     public static final String DEFAULT_KEY_PREFIX = "sso:session:user-roles";
 
@@ -59,6 +77,12 @@ public record SessionCacheProperties(
         }
         if (userByEmailTtlSeconds <= 0) {
             userByEmailTtlSeconds = DEFAULT_USER_BY_EMAIL_TTL_SECONDS;
+        }
+        if (myAppsTtlSeconds <= 0) {
+            myAppsTtlSeconds = DEFAULT_MY_APPS_TTL_SECONDS;
+        }
+        if (usersSsoTtlSeconds <= 0) {
+            usersSsoTtlSeconds = DEFAULT_USERS_SSO_TTL_SECONDS;
         }
         if (keyPrefix == null || keyPrefix.isBlank()) {
             keyPrefix = DEFAULT_KEY_PREFIX;

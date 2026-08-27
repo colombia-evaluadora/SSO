@@ -1,21 +1,27 @@
 package com.co.eurekatic.auth.web;
 
+import com.co.eurekatic.auth.security.CachedAppAccessService;
+import com.co.eurekatic.auth.security.CachedUserListService;
 import com.co.eurekatic.auth.security.CachedUserSummaryService;
 import com.co.eurekatic.auth.security.EffectiveRolesResolver;
+import com.co.eurekatic.auth.service.FuncionarioRegistrationService;
+import com.co.eurekatic.auth.web.dto.RegisterResponse;
+import com.co.eurekatic.auth.web.dto.RegisterUsuarioRequest;
 import com.co.eurekatic.common.dto.AuthDtos.AppSummary;
 import com.co.eurekatic.common.dto.AuthDtos.UserSummary;
-import com.co.eurekatic.common.entity.Role;
 import com.co.eurekatic.common.entity.User;
-import com.co.eurekatic.common.repository.AppRepository;
-import com.co.eurekatic.common.repository.RoleRepository;
 import com.co.eurekatic.common.repository.UserRepository;
 import com.co.eurekatic.common.security.AuthPrincipal;
 import com.co.eurekatic.common.security.JwtTokenService;
+import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -23,34 +29,37 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * REST endpoints exposed by auth-center. POST /login is NOT in this
  * controller — it's handled by {@link JsonLoginFilter} which sets
- * the response body directly. Everything here is a GET.
+ * the response body directly. This controller exposes the remaining GET and POST endpoints.
  */
 @RestController
 @RequestMapping
 public class AuthController {
 
     private final UserRepository userRepository;
-    private final RoleRepository roleRepository;
-    private final AppRepository appRepository;
     private final JwtTokenService jwt;
     private final EffectiveRolesResolver effectiveRoles;
     private final CachedUserSummaryService cachedUserSummary;
+    private final CachedAppAccessService cachedAppAccess;
+    private final CachedUserListService cachedUserList;
+    private final FuncionarioRegistrationService funcionarioRegistrationService;
 
-    public AuthController(UserRepository userRepository, RoleRepository roleRepository,
-                           AppRepository appRepository, JwtTokenService jwt,
+    public AuthController(UserRepository userRepository, JwtTokenService jwt,
                            EffectiveRolesResolver effectiveRoles,
-                           CachedUserSummaryService cachedUserSummary) {
+                           CachedUserSummaryService cachedUserSummary,
+                           CachedAppAccessService cachedAppAccess,
+                           CachedUserListService cachedUserList,
+                           FuncionarioRegistrationService funcionarioRegistrationService) {
         this.userRepository = userRepository;
-        this.roleRepository = roleRepository;
-        this.appRepository = appRepository;
         this.jwt = jwt;
         this.effectiveRoles = effectiveRoles;
         this.cachedUserSummary = cachedUserSummary;
+        this.cachedAppAccess = cachedAppAccess;
+        this.cachedUserList = cachedUserList;
+        this.funcionarioRegistrationService = funcionarioRegistrationService;
     }
 
     /**
@@ -120,6 +129,10 @@ public class AuthController {
      * JWT (rather than {@code User.getRoles()}) reflects exactly
      * the role set already governing {@code role_app}/{@code
      * role_route} elsewhere.
+     *
+     * <p>Served from {@code CachedAppAccessService} (Redis-backed
+     * {@code @Cacheable("my-apps")}, keyed by the caller's role
+     * set) — same rationale as {@link #getInfoUser}.
      */
     @GetMapping("/myApps")
     public ResponseEntity<List<AppSummary>> myApps(Authentication authentication) {
@@ -127,31 +140,41 @@ public class AuthController {
         if (roleNames.isEmpty()) {
             return ResponseEntity.ok(List.of());
         }
-        Set<Long> roleIds = roleRepository.findAll().stream()
-                .filter(r -> roleNames.contains(r.getName()))
-                .map(Role::getId)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        if (roleIds.isEmpty()) {
-            return ResponseEntity.ok(List.of());
-        }
-        List<AppSummary> out = appRepository.findVisibleForRoles(roleIds).stream()
-                .map(a -> new AppSummary(a.getId(), a.getName(), a.getDescription(), a.getLaunchUrl()))
-                .toList();
-        return ResponseEntity.ok(out);
+        String rolesKey = CachedAppAccessService.rolesCacheKey(roleNames);
+        return ResponseEntity.ok(cachedAppAccess.forRoles(rolesKey, roleNames));
     }
 
     /**
      * Lists the active users in the system. Permit-all in the MVP
      * because the legacy endpoint was also unauthenticated; in
      * production this should be gated to {@code ADMIN}.
+     *
+     * <p>Served from {@code CachedUserListService} (Redis-backed
+     * {@code @Cacheable("users-sso")}) with a short TTL — see
+     * {@code SessionCacheProperties#usersSsoTtlSeconds()}.
      */
     @GetMapping("/getUsersSSO")
     public ResponseEntity<List<UserSummary>> getUsersSSO() {
-        List<UserSummary> out = userRepository.findAll().stream()
-                .filter(User::isEnabled)
-                .map(this::toSummary)
-                .collect(Collectors.toList());
-        return ResponseEntity.ok(out);
+        return ResponseEntity.ok(cachedUserList.allEnabled());
+    }
+
+    @PostMapping("/register/usuario")
+    public ResponseEntity<RegisterResponse> registerUsuario(
+            @Valid @RequestBody RegisterUsuarioRequest req,
+            Authentication auth) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(funcionarioRegistrationService.registerUsuario(req, auth));
+    }
+
+    // V62 — mismo body que /register/usuario (RegisterUsuarioRequest):
+    // fkTmunicipioExpedicion dejó de ser parte del alta, se completa
+    // después vía fn_fun_actualizar.
+    @PostMapping("/register/funcionario")
+    public ResponseEntity<RegisterResponse> registerFuncionario(
+            @Valid @RequestBody RegisterUsuarioRequest req,
+            Authentication auth) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(funcionarioRegistrationService.registerFuncionario(req, auth));
     }
 
     /* ====================== helpers ====================== */
@@ -196,27 +219,4 @@ public class AuthController {
         return names;
     }
 
-    private Set<String> roleNames(User u) {
-        return u.getRoles().stream()
-                .map(Role::getName)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-    }
-
-    /**
-     * {@link UserSummary#roles()} intentionally still reflects only
-     * the user's DIRECT roles (via {@link #roleNames(User)}), not
-     * the group-effective set — this summary is a profile view, not
-     * a token-issuing path, so it's left as-is. The
-     * {@code username} slot was removed in the V12 migration; email
-     * IS the unique login identifier.
-     */
-    private UserSummary toSummary(User u) {
-        return new UserSummary(
-                u.getId(),
-                u.getEmail(),
-                u.getFullName(),
-                u.isEnabled(),
-                u.isLdap(),
-                roleNames(u));
-    }
 }

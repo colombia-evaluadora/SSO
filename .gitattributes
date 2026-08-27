@@ -1,0 +1,6 @@
+# Scripts que corren dentro de contenedores Linux (sh/bash) deben mantener
+# LF sin importar el checkout. Sin esto, un checkout en Windows con
+# core.autocrlf=true convierte el LF a CRLF y `sh` los rechaza con
+# "illegal option" en la primera línea con `set -eu` — exactamente lo que
+# rompió garage-init.sh (ver fix en el mismo commit).
+*.sh text eol=lf

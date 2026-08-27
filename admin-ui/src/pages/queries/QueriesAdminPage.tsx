@@ -6,6 +6,7 @@ import { Modal } from "@/components/ui/Modal";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { Table, type Column } from "@/components/ui/Table";
 import { useToast } from "@/components/ui/Toast";
+import { scanPlaceholders } from "@/lib/placeholderScanner";
 import {
   useAdminQueries,
   useBindQueryRole,
@@ -19,6 +20,7 @@ import {
 import { useExecuteQuery } from "@/hooks/useQueries";
 import { useMicroservices } from "@/hooks/useMicroservices";
 import type {
+  ParamConstraint,
   QueryAdminResponse,
   QueryExecutionResponse,
   QueryParamValue,
@@ -56,6 +58,46 @@ import type { QueryFormValues } from "@/schemas";
  *       surface.</li>
  * </ul>
  */
+/**
+ * V49 — Filtra el mapa {@code paramTypes} para quedarse sólo con
+ * los placeholders que efectivamente aparecen en el SQL final. El
+ * autor puede tener tipos "manuales" para placeholders que aún no
+ * ha escrito — preservarlos en el state local durante la edición
+ * es útil, pero no se envían al backend porque el servidor los
+ * rechazaría (no aparecen en el SQL).
+ */
+function filterParamTypesToSql(
+  paramTypes: Record<string, string>,
+  sql: string,
+): Record<string, string> {
+  const present = new Set(scanPlaceholders(sql));
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(paramTypes)) {
+    if (present.has(k)) out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * V81 — mismo filtrado que {@link filterParamTypesToSql}, aplicado a
+ * {@code paramConstraints}: una restricción sólo se envía si su
+ * placeholder sobrevivió el filtro de tipos (está en el SQL Y quedó
+ * tipado). El backend rechaza una restricción cuyo key no exista en
+ * {@code paramTypes} — filtrar acá evita ese 400 cuando el autor
+ * borró el placeholder del SQL pero la restricción manual seguía en
+ * el state local.
+ */
+function filterParamConstraintsToTypes(
+  paramConstraints: Record<string, ParamConstraint>,
+  filteredParamTypes: Record<string, string>,
+): Record<string, ParamConstraint> {
+  const out: Record<string, ParamConstraint> = {};
+  for (const [k, v] of Object.entries(paramConstraints)) {
+    if (filteredParamTypes[k]) out[k] = v;
+  }
+  return out;
+}
+
 export function QueriesAdminPage() {
   const queries = useAdminQueries();
   const services = useMicroservices();
@@ -72,16 +114,28 @@ export function QueriesAdminPage() {
     useState<QueryAdminResponse | null>(null);
   const [executing, setExecuting] = useState<QueryAdminResponse | null>(null);
   const [search, setSearch] = useState("");
+  // "" = todos los métodos. Sólo los verbos que el backend admite
+  // para una fila con path template (ver QueryAdminService
+  // .normalizeHttpMethod) — DELETE queda fuera a propósito, nunca
+  // aparece en los datos: para borrar se publica un procedimiento y
+  // se llama con CALL.
+  const [methodFilter, setMethodFilter] = useState<
+    "" | "GET" | "POST" | "PUT" | "PATCH"
+  >("");
 
   const filteredQueries = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return queries.data ?? [];
-    return (queries.data ?? []).filter(
-      (query) =>
+    return (queries.data ?? []).filter((query) => {
+      const matchesSearch =
+        q === "" ||
         query.uuid.toLowerCase().includes(q) ||
-        (query.type ?? "").toLowerCase().includes(q),
-    );
-  }, [queries.data, search]);
+        (query.type ?? "").toLowerCase().includes(q) ||
+        (query.pathTemplate ?? "").toLowerCase().includes(q);
+      const matchesMethod =
+        methodFilter === "" || (query.httpMethod ?? "POST") === methodFilter;
+      return matchesSearch && matchesMethod;
+    });
+  }, [queries.data, search, methodFilter]);
 
   async function handleSubmit(values: QueryFormValues & { id?: number }) {
     const body = {
@@ -105,6 +159,19 @@ export function QueriesAdminPage() {
 
       pathTemplate: values.pathTemplate ?? null,
       outParamNames: values.outParamNames ?? null,
+      // V49 — author-declared JDBC/PG type per caller-controlled
+      // placeholder. El backend rechaza el guardado si alguna
+      // :PARAM.* / :BODY.* del SQL no tiene entrada; mandamos el
+      // mapa tal cual, con el filtrado de "sólo placeholders que
+      // existen en el SQL" aplicado al armar el body.
+      paramTypes: filterParamTypesToSql(values.paramTypes ?? {}, values.query ?? ""),
+      // V81 — restricciones de formato opcionales por placeholder,
+      // filtradas para que sólo viajen las que quedaron con un
+      // placeholder tipado tras el filtro de arriba.
+      paramConstraints: filterParamConstraintsToTypes(
+        values.paramConstraints ?? {},
+        filterParamTypesToSql(values.paramTypes ?? {}, values.query ?? ""),
+      ),
     };
     if (values.id) {
       await updateQ.mutateAsync({ id: values.id, ...body });
@@ -134,8 +201,33 @@ export function QueriesAdminPage() {
     {
       key: "uuid",
       header: "UUID",
+      // El path-template (V27) + verbo HTTP (V33) es lo que se
+      // registra en el query-service. Mostrarlo al lado del uuid
+      // ahorra un click al admin: con un vistazo ve qué URL expone
+      // cada fila, sin abrir el drawer. Si la fila no tiene
+      // path-template (legacy, sólo invocable por uuid en el body)
+      // la línea secundaria se omite — no rellenamos con "—" para
+      // no sugerir que ese endpoint existe.
       render: (q) => (
-        <span className="font-mono text-xs text-slate-900">{q.uuid}</span>
+        <div className="flex flex-col gap-0.5">
+          <span
+            className="font-mono text-xs text-slate-900"
+            data-testid={`query-uuid-${q.id}`}
+          >
+            {q.uuid}
+          </span>
+          {q.pathTemplate ? (
+            <span
+              className="font-mono text-[10px] text-slate-500"
+              data-testid={`query-path-template-${q.id}`}
+            >
+              <span className="font-semibold text-emerald-700">
+                {q.httpMethod ?? "POST"}
+              </span>
+              {q.pathTemplate}
+            </span>
+          ) : null}
+        </div>
       ),
     },
     {
@@ -244,12 +336,29 @@ export function QueriesAdminPage() {
         </Button>
       </header>
 
-      <div className="mb-3">
-        <SearchInput
-          value={search}
-          onChange={setSearch}
-          placeholder="Buscar por UUID o tipo…"
-        />
+      <div className="mb-3 flex items-center gap-2">
+        <div className="flex-1">
+          <SearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Buscar por UUID, tipo o path…"
+          />
+        </div>
+        <select
+          value={methodFilter}
+          onChange={(e) =>
+            setMethodFilter(e.target.value as typeof methodFilter)
+          }
+          aria-label="Filtrar por método HTTP"
+          data-testid="method-filter"
+          className="rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+        >
+          <option value="">Todos los métodos</option>
+          <option value="GET">GET</option>
+          <option value="POST">POST</option>
+          <option value="PUT">PUT</option>
+          <option value="PATCH">PATCH</option>
+        </select>
       </div>
 
       <Table

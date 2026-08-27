@@ -5,6 +5,7 @@ import com.co.eurekatic.auth.security.EffectiveRolesResolver;
 import com.co.eurekatic.auth.security.RedisRefreshTokenStore;
 import com.co.eurekatic.auth.security.RefreshTokenProperties;
 import com.co.eurekatic.auth.security.SessionCacheProperties;
+import com.co.eurekatic.common.dto.AuthDtos.UserSummary;
 import com.co.eurekatic.common.security.RefreshTokenStore;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -17,6 +18,7 @@ import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
+import org.springframework.data.redis.serializer.Jackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
@@ -92,6 +94,35 @@ public class RedisConfig {
      * {@code user-by-email} is a short window (60s) because user
      * attributes change occasionally but each cached entry is small
      * and the data is mostly profile display, not authorization.
+     *
+     * <p><b>Why {@code user-by-email} gets its own typed serializer
+     * instead of the shared {@code defaults} one.</b>
+     * {@code GenericJackson2JsonRedisSerializer} deserializes
+     * {@code byte[] → Object} — with no target type to guide it, it
+     * can only reconstruct the original class (instead of a bare
+     * {@code LinkedHashMap}) by reading a {@code @class} property
+     * Jackson embeds during serialization. The obvious fix,
+     * activating {@code ObjectMapper.DefaultTyping.NON_FINAL} on a
+     * copy of the mapper, does NOT work here: for the ROOT value
+     * (as opposed to a field inside it), Jackson resolves the
+     * "declared type" from {@code value.getClass()} itself, which
+     * always equals the runtime type by definition — so NON_FINAL
+     * never sees a mismatch at the root and never writes {@code @class}
+     * there (nested fields with an abstract/interface declared type,
+     * like {@code Set<String> roles}, DO get one — that asymmetry is
+     * what made this confusing to diagnose). Net effect: every write
+     * produced JSON with no root type id, and every read failed —
+     * first observed as a stray {@code JsonParseException} against an
+     * old cache entry, then consistently as {@code ClassCastException:
+     * LinkedHashMap cannot be cast to UserSummary} once default typing
+     * was (wrongly) turned on for reads only.
+     *
+     * <p>The actual fix: {@code user-by-email} only ever holds
+     * {@link UserSummary}, so there is no polymorphism to resolve —
+     * {@link Jackson2JsonRedisSerializer} bound to that exact class
+     * serializes/deserializes without needing any type id at all.
+     * {@code defaults} keeps the generic, untyped serializer for any
+     * future cache added here; only this one cache overrides it.
      */
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory,
@@ -105,11 +136,34 @@ public class RedisConfig {
                         .fromSerializer(new StringRedisSerializer()))
                 .serializeValuesWith(RedisSerializationContext.SerializationPair
                         .fromSerializer(json));
+
+        Jackson2JsonRedisSerializer<UserSummary> userSummaryJson =
+                new Jackson2JsonRedisSerializer<>(objectMapper, UserSummary.class);
+        RedisCacheConfiguration userByEmailConfig = defaults
+                .entryTtl(Duration.ofSeconds(props.userByEmailTtlSeconds()))
+                .serializeValuesWith(RedisSerializationContext.SerializationPair
+                        .fromSerializer(userSummaryJson));
+
+        // "my-apps" (List<AppSummary>) and "users-sso" (List<UserSummary>)
+        // stay on `defaults` — the generic, untyped
+        // GenericJackson2JsonRedisSerializer — unlike "user-by-email"
+        // above. Both cache a List, which GenericJackson2JsonRedisSerializer
+        // round-trips fine on its own (it embeds the concrete list
+        // type in the JSON payload); "user-by-email" needed its own
+        // typed serializer for a different, narrower reason
+        // documented on this method's javadoc, not because
+        // GenericJackson2JsonRedisSerializer can't handle records.
+        RedisCacheConfiguration myAppsConfig =
+                defaults.entryTtl(Duration.ofSeconds(props.myAppsTtlSeconds()));
+        RedisCacheConfiguration usersSsoConfig =
+                defaults.entryTtl(Duration.ofSeconds(props.usersSsoTtlSeconds()));
+
         return RedisCacheManager.builder(connectionFactory)
                 .cacheDefaults(defaults)
                 .withInitialCacheConfigurations(Map.of(
-                        "user-by-email",
-                        defaults.entryTtl(Duration.ofSeconds(props.userByEmailTtlSeconds()))))
+                        "user-by-email", userByEmailConfig,
+                        "my-apps", myAppsConfig,
+                        "users-sso", usersSsoConfig))
                 .build();
     }
 }

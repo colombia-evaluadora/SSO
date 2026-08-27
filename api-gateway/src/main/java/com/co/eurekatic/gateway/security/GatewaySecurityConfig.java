@@ -136,12 +136,20 @@ public class GatewaySecurityConfig {
                         // path the SPA actually calls 401'd at the
                         // gateway before ever reaching sso-admin —
                         // found while testing the token-expiry flow.
+                        // `resetTokenStatus` entra por lo mismo: la pantalla
+                        // que pregunta si el enlace sigue vivo corre sin
+                        // sesión. Sin esta línea el gateway responde 401
+                        // antes de llegar a sso-admin, que es justo lo que
+                        // pasaba (y confundía, porque parecía falta de
+                        // permisos cuando el endpoint ni existía todavía).
                         .pathMatchers("/api/sso-admin/activateAccount",
                                 "/api/sso-admin/restorePassword",
                                 "/api/sso-admin/forgotPassword",
+                                "/api/sso-admin/resetTokenStatus",
                                 "/api/sso-admin/user/activateAccount",
                                 "/api/sso-admin/user/restorePassword",
-                                "/api/sso-admin/user/forgotPassword").permitAll()
+                                "/api/sso-admin/user/forgotPassword",
+                                "/api/sso-admin/user/resetTokenStatus").permitAll()
                         .pathMatchers("/auth/login").permitAll()
                         .pathMatchers("/api/auth/login").permitAll()
                         .pathMatchers("/api/auth/refresh", "/api/auth/logout").permitAll()
@@ -167,6 +175,38 @@ public class GatewaySecurityConfig {
                         //
                         // Cae en anyExchange().authenticated(), como
                         // /api/files/** (la subida) y todo lo demás.
+                        //
+                        // /api/files/view/** SÍ lleva permitAll — es el
+                        // caso "<img src>" resuelto de otra forma: el
+                        // front pide antes, autenticado, un token de un
+                        // solo archivo y vida corta a
+                        // POST /api/files/view-token/{id} (ese endpoint
+                        // NO es público, cae en anyExchange().authenticated()
+                        // igual que download), y lo pasa como
+                        // ?token=... en la URL de la imagen. Ese token —
+                        // no la ausencia de autenticación — es lo que
+                        // file-service valida en /files/view/{id} (ver
+                        // ViewTokenService); dejar pasar la petición
+                        // aquí sin JWT es correcto porque la
+                        // autorización real vive en el token, no en esta
+                        // capa. Sin este permitAll, un <img> sin
+                        // Authorization se queda en 401 antes de llegar
+                        // a file-service a validar el token.
+                        .pathMatchers("/api/files/view/**").permitAll()
+                        // /api/files/public/** — activos GLOBALES de la
+                        // interfaz (íconos de calificación), pensados
+                        // para un <img src> que vive indefinidamente en
+                        // un dato de catálogo (tlista_valor.valor), no
+                        // para un archivo por-usuario. A diferencia de
+                        // /api/files/view/**, no hay token que validar:
+                        // la única puerta es que la clasificación de la
+                        // clave esté en el allowlist que file-service
+                        // aplica él mismo (ver DownloadController#publico,
+                        // ParamTypes.PUBLIC_FILE_CLASSIFICATIONS) — así
+                        // que dejarlo pasar sin JWT aquí es correcto:
+                        // la autorización real es "¿esta clasificación
+                        // es pública?", no "¿quién sos?".
+                        .pathMatchers("/api/files/public/**").permitAll()
                         .pathMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info", "/actuator/prometheus").permitAll()
                         // OpenAPI aggregator — Swagger UI + merged doc + webjars.
@@ -218,7 +258,15 @@ public class GatewaySecurityConfig {
         cfg.setAllowedOrigins(props.allowedOrigins());
         cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         cfg.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With"));
-        cfg.setExposedHeaders(List.of("Authorization", "Set-Cookie"));
+        // Content-Disposition y X-Report-Rows los lee el front al descargar un
+        // reporte: de la primera saca el nombre del archivo y de la segunda
+        // cuantos registros salieron. Hoy no hace falta —el SPA usa /api
+        // relativo, o sea mismo origen, y CORS ni se aplica—, pero si alguna
+        // vez se sirve desde otro dominio el navegador las ocultaria y la
+        // descarga quedaria con un nombre generico y sin conteo, sin ningun
+        // error visible que lo explique.
+        cfg.setExposedHeaders(List.of(
+                "Authorization", "Set-Cookie", "Content-Disposition", "X-Report-Rows"));
         cfg.setAllowCredentials(true);
         cfg.setMaxAge(3600L);
 

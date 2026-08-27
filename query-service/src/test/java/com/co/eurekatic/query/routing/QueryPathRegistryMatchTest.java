@@ -2,6 +2,9 @@ package com.co.eurekatic.query.routing;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -99,5 +102,83 @@ class QueryPathRegistryMatchTest {
 
         assertThat(match).isPresent();
         assertThat(match.get()).containsEntry("NOMBRE", "X");
+    }
+
+    /**
+     * El bug real que motivó {@code matchAgainst}: con las dos filas
+     * insertadas en este orden (el {@code :ID} genérico primero,
+     * como en el catálogo real — id 58 antes que id 69), un match
+     * "primero que gane" resolvía SIEMPRE al {@code :ID} porque
+     * {@code eliminacion-masiva} es un valor de ruta tan válido como
+     * cualquier otro. {@code /grados/eliminacion-masiva} quedaba
+     * inalcanzable para cualquier cliente real, no sólo el harness.
+     */
+    @Test
+    void literalTemplateWinsOverShadowingWildcardRegardlessOfInsertionOrder() {
+        Map<QueryPathRegistry.RouteKey, QueryPathRegistry.RouteEntry> table = new LinkedHashMap<>();
+        table.put(new QueryPathRegistry.RouteKey("PUT", "/grados/:ID"), new QueryPathRegistry.RouteEntry("uuid-wildcard", false, 60));
+        table.put(new QueryPathRegistry.RouteKey("PUT", "/grados/eliminacion-masiva"), new QueryPathRegistry.RouteEntry("uuid-literal", false, 60));
+
+        var match = QueryPathRegistry.matchAgainst(table, "PUT", "/grados/eliminacion-masiva");
+
+        assertThat(match).isPresent();
+        assertThat(match.get().uuid()).isEqualTo("uuid-literal");
+    }
+
+    /** Mismo caso pero con la tabla en el orden contrario, para probar
+     *  que el resultado no depende del orden de inserción. */
+    @Test
+    void literalTemplateWinsOverShadowingWildcardEvenWhenInsertedFirst() {
+        Map<QueryPathRegistry.RouteKey, QueryPathRegistry.RouteEntry> table = new LinkedHashMap<>();
+        table.put(new QueryPathRegistry.RouteKey("PUT", "/establecimientos/sedes/bulk-delete"), new QueryPathRegistry.RouteEntry("uuid-literal", false, 60));
+        table.put(new QueryPathRegistry.RouteKey("PUT", "/establecimientos/sedes/:ID"), new QueryPathRegistry.RouteEntry("uuid-wildcard", false, 60));
+
+        var match = QueryPathRegistry.matchAgainst(table, "PUT", "/establecimientos/sedes/bulk-delete");
+
+        assertThat(match).isPresent();
+        assertThat(match.get().uuid()).isEqualTo("uuid-literal");
+    }
+
+    /** El :ID sigue resolviendo normalmente para valores que no
+     *  colisionan con ningún literal registrado. */
+    @Test
+    void wildcardStillMatchesRealIds() {
+        Map<QueryPathRegistry.RouteKey, QueryPathRegistry.RouteEntry> table = new LinkedHashMap<>();
+        table.put(new QueryPathRegistry.RouteKey("PUT", "/grados/:ID"), new QueryPathRegistry.RouteEntry("uuid-wildcard", false, 60));
+        table.put(new QueryPathRegistry.RouteKey("PUT", "/grados/eliminacion-masiva"), new QueryPathRegistry.RouteEntry("uuid-literal", false, 60));
+
+        var match = QueryPathRegistry.matchAgainst(table, "PUT", "/grados/1750");
+
+        assertThat(match).isPresent();
+        assertThat(match.get().uuid()).isEqualTo("uuid-wildcard");
+        assertThat(match.get().pathVars()).containsEntry("ID", "1750");
+    }
+
+    /** Ambigüedad real (misma especificidad, dos templates distintos
+     *  matchean la misma ruta): no hay forma correcta de desempatar,
+     *  así que se preserva el comportamiento histórico — gana el
+     *  primero en orden de inserción — en vez de fallar o elegir al
+     *  azar. */
+    @Test
+    void tiesFallBackToInsertionOrder() {
+        // Ambas plantillas matchean "/a/b/c" con exactamente 1
+        // variable extraída — empate genuino de especificidad.
+        Map<QueryPathRegistry.RouteKey, QueryPathRegistry.RouteEntry> table = new LinkedHashMap<>();
+        table.put(new QueryPathRegistry.RouteKey("GET", "/a/:X/c"), new QueryPathRegistry.RouteEntry("uuid-first", false, 60));
+        table.put(new QueryPathRegistry.RouteKey("GET", "/a/b/:Y"), new QueryPathRegistry.RouteEntry("uuid-second", false, 60));
+
+        var match = QueryPathRegistry.matchAgainst(table, "GET", "/a/b/c");
+
+        assertThat(match).isPresent();
+        assertThat(match.get().uuid()).isEqualTo("uuid-first");
+    }
+
+    @Test
+    void noMatchReturnsEmpty() {
+        Map<QueryPathRegistry.RouteKey, QueryPathRegistry.RouteEntry> table = new LinkedHashMap<>();
+        table.put(new QueryPathRegistry.RouteKey("GET", "/grados/:ID"), new QueryPathRegistry.RouteEntry("uuid-wildcard", false, 60));
+
+        assertThat(QueryPathRegistry.matchAgainst(table, "PUT", "/grados/1750")).isEmpty();
+        assertThat(QueryPathRegistry.matchAgainst(table, "GET", "/otra/cosa")).isEmpty();
     }
 }

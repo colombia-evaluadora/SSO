@@ -1,9 +1,12 @@
 package com.co.eurekatic.auth.config;
 
+import com.co.eurekatic.auth.security.AuthCenterAccessManager;
+import com.co.eurekatic.auth.security.AuthCenterEndpointAccessService;
 import com.co.eurekatic.auth.security.EffectiveRolesResolver;
 import com.co.eurekatic.auth.security.JsonAuthHandlers;
 import com.co.eurekatic.auth.security.JsonLoginFilter;
 import com.co.eurekatic.auth.security.JwtAuthenticationFilter;
+import com.co.eurekatic.auth.session.SessionTrackingService;
 import com.co.eurekatic.common.security.CorsProperties;
 import com.co.eurekatic.common.security.JwtTokenService;
 import com.co.eurekatic.common.security.RefreshTokenStore;
@@ -11,6 +14,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -65,6 +69,12 @@ import java.util.List;
 public class SecurityConfig {
 
     @Bean
+    public AuthCenterAccessManager authCenterAccessManager(
+            AuthCenterEndpointAccessService endpointAccess) {
+        return new AuthCenterAccessManager(endpointAccess);
+    }
+
+    @Bean
     public SecurityFilterChain securityFilterChain(
             HttpSecurity http,
             AuthenticationManager authenticationManager,
@@ -74,11 +84,13 @@ public class SecurityConfig {
             CorsProperties corsProperties,
             JsonAuthHandlers handlers,
             RefreshTokenStore refreshTokenStore,
-            EffectiveRolesResolver effectiveRolesResolver) throws Exception {
+            EffectiveRolesResolver effectiveRolesResolver,
+            AuthCenterAccessManager authCenterAccessManager,
+            SessionTrackingService sessionTracking) throws Exception {
 
         JsonLoginFilter loginFilter = new JsonLoginFilter(
                 authenticationManager, jwt, objectMapper, jwtProperties, refreshTokenStore,
-                effectiveRolesResolver);
+                effectiveRolesResolver, sessionTracking);
         JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(jwt, jwtProperties);
 
         return http
@@ -115,6 +127,13 @@ public class SecurityConfig {
                         // with the bare role name (no ROLE_ prefix), so
                         // hasAuthority("ADMIN") is the correct check.
                         .requestMatchers("/getUsersSSO").hasAuthority("ADMIN")
+                        // Registration endpoints — delegate to
+                        // AuthCenterAccessManager which checks
+                        // role_app binding + role_endpoint binding
+                        // (same model as sso-admin). No
+                        // hasAuthority("ADMIN") bypass.
+                        .requestMatchers(HttpMethod.POST, "/register/funcionario").access(authCenterAccessManager)
+                        .requestMatchers(HttpMethod.POST, "/register/usuario").access(authCenterAccessManager)
                         // /actuator/prometheus is read by the Grafana Alloy
                         // scraper over the internal docker network. Same
                         // rationale as /actuator/health: scrapers are

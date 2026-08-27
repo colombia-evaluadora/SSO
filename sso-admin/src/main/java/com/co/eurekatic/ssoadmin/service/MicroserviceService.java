@@ -194,6 +194,67 @@ public class MicroserviceService {
         }
     }
 
+    /**
+     * Recrea el contenedor de una fila {@code kind=QUERY}: borra
+     * el contenedor existente (si lo hay) y levanta uno nuevo con
+     * la MISMA spec persistida en la fila, a partir de la imagen
+     * que el provisioner tenga configurada AHORA.
+     *
+     * <p>Por qué hace falta un endpoint aparte de {@code restart}:
+     * {@code POST /container/restart} es {@code docker restart}
+     * sobre el MISMO contenedor — reutiliza el filesystem que ya
+     * tenía al crearse, así que aunque se reconstruya y se
+     * redespliegue la imagen {@code query-service} (mismo tag,
+     * contenido nuevo — el caso típico de {@code docker compose
+     * build && up -d} en un entorno de test), el contenedor sigue
+     * corriendo el código VIEJO hasta que alguien lo borre y lo
+     * vuelva a crear. Esta operación hace justo eso: {@code
+     * deprovision} + {@code provision} con el mismo spec, así que
+     * el contenedor que queda arriba corre la imagen actual.
+     *
+     * <p>No es best-effort como {@link #create}: quien llama a
+     * esto es un admin pidiendo explícitamente "recrea este
+     * contenedor ahora" — si falla, tiene que enterarse (el
+     * controller deja que {@link ProvisioningException} se
+     * propague al {@code GlobalExceptionHandler}, que la mapea al
+     * status HTTP correspondiente), no quedarse pensando que
+     * funcionó cuando el contenedor real puede haber quedado
+     * abajo a mitad del ciclo borrar+crear.
+     *
+     * @throws NotFoundException si la fila no existe.
+     * @throws IllegalArgumentException si la fila no es kind=QUERY.
+     * @throws ProvisioningException si el provisioner rechaza el
+     *         borrado o la creación, o si la instancia nueva no
+     *         aparece en Eureka a tiempo.
+     */
+    public void recreateContainer(Long id) {
+        Microservice m = repo.findById(id)
+                .orElseThrow(() -> new NotFoundException("Microservice", id));
+        if (!"QUERY".equals(m.getKind())) {
+            throw new IllegalArgumentException(
+                    "El microservicio " + id + " es kind=" + m.getKind()
+                            + "; sólo las filas kind=QUERY tienen contenedor que recrear");
+        }
+        String instanceId = m.getInstanceName() != null ? m.getInstanceName() : m.getDialect();
+        String fullName = "query-service-" + instanceId;
+
+        // deprovision es idempotente sobre un contenedor ausente
+        // (ver ContainerProvisioner#deprovision) — no hace falta
+        // comprobar el estado antes de borrar.
+        provisioner.deprovision(fullName);
+        log.info("recreateContainer: {} borrado, re-provisionando con la imagen actual", fullName);
+
+        provisioner.provision(new ProvisionSpec(
+                instanceId,
+                m.getDialect(),
+                m.getJdbcUrl(),
+                m.getDbUsername(),
+                m.getDbPassword(),
+                m.getPoolSize() != null ? m.getPoolSize() : 10));
+        readinessProbe.waitForInstance(fullName);
+        log.info("recreateContainer: {} re-provisionado y registrado en Eureka", fullName);
+    }
+
     @Transactional
     public MicroserviceResponse update(MicroserviceRequest req) {
         if (req.id() == null) {
@@ -273,6 +334,33 @@ public class MicroserviceService {
         // RouteService.resolveRouteApp: null clears, non-null
         // must resolve to an existing app.
         m.setApp(resolveMicroserviceApp(req.appId()));
+        // V143: override opcional de dónde file-service debe guardar
+        // la referencia de los archivos subidos por las queries de
+        // este query-service. La BD ya impone el CHECK "ambos o
+        // ninguno" (microservice_file_storage_ambos_o_ninguno), "sólo
+        // kind=QUERY" (microservice_file_storage_solo_query) y valida
+        // la forma de la tabla con fn_validar_tabla_archivo — esto
+        // adelanta ambos chequeos para un 400 legible en vez de una
+        // violación de constraint cruda. El kind "efectivo" cae al de
+        // la fila existente cuando el request no lo reenvía (update()
+        // no siempre lo trae).
+        String schema = blankToNull(req.fileStorageSchema());
+        String tabla = blankToNull(req.fileStorageTable());
+        if ((schema == null) != (tabla == null)) {
+            throw new IllegalArgumentException(
+                    "fileStorageSchema y fileStorageTable deben venir juntos (ambos o ninguno)");
+        }
+        String kindEfectivo = (req.kind() == null || req.kind().isBlank()) ? m.getKind() : req.kind();
+        if (schema != null && !"QUERY".equals(kindEfectivo)) {
+            throw new IllegalArgumentException(
+                    "fileStorageSchema/fileStorageTable sólo aplican a microservicios kind=QUERY");
+        }
+        m.setFileStorageSchema(schema);
+        m.setFileStorageTable(tabla);
+    }
+
+    private static String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s;
     }
 
     private App resolveMicroserviceApp(Long appId) {
