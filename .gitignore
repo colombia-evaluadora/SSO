@@ -61,11 +61,14 @@ skills-lock*
 .agents/
 .playwright-mcp/
 
-# .claude/ y .agents/ se ignoran completos, EXCEPTO las skills crudas
-# que queremos versionar (su fuente: SKILL.md + recursos).
+# .claude/ y .agents/ se ignoran completos, EXCEPTO:
+#   - los subagentes del repo (.claude/agents/)
+#   - un conjunto explícito de skills (su fuente: SKILL.md + recursos)
 .claude/*
+!.claude/agents/
 !.claude/skills/
 .claude/skills/*
+# Skills externas versionadas (ver skills-lock.json)
 !.claude/skills/flyway-migrations/
 !.claude/skills/plpgsql/
 !.claude/skills/postgresql/
@@ -74,5 +77,11 @@ skills-lock*
 !.claude/skills/java-springboot/
 !.claude/skills/spring-cloud-basics/
 !.claude/skills/docker-compose-orchestration/
+!.claude/skills/github-actions/
+!.claude/skills/reviewing-oracle-to-postgres-migration/
+# Skills propias del repo
+!.claude/skills/next-migration-number/
+!.claude/skills/server-status/
+!.claude/skills/new-query-endpoint/
 
 
