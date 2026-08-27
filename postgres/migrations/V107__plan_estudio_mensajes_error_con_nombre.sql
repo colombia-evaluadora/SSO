@@ -127,6 +127,17 @@ BEGIN
         END IF;
     END IF;
 
+    -- La etiqueta se declara aca, antes del pg_advisory_xact_lock e incluso del
+    -- posible INSERT INTO TPLAN (creacion del header la primera vez que un
+    -- grado recibe una asignatura) -- si se declarara despues de ese INSERT,
+    -- el trigger BEFORE STATEMENT de auditoria vería esa fila sin etiqueta.
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Asignación de %s al plan de estudio del grado %s', v_asignatura_nom, v_grado_nom),
+        academico_test.fn_periodo_establecimiento((
+            SELECT g.FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado))
+    );
+
     PERFORM pg_advisory_xact_lock(hashtext('plan:' || p_fk_grado::text));
     SELECT PK_TPLAN INTO v_plan_id FROM academico_test.TPLAN WHERE FK_TGRADO = p_fk_grado AND ACTIVE = TRUE;
     IF v_plan_id IS NULL THEN
@@ -255,6 +266,31 @@ BEGIN
             END IF;
         END IF;
     END IF;
+    -- v_grado_nom (y v_asignatura_nom si no vino en el patch) no estaban
+    -- resueltos en este punto -- se agrega este lookup solo para la etiqueta,
+    -- mismo patron que ya usa mas abajo el branch de "renglon no encontrado".
+    IF v_asignatura_nom IS NULL THEN
+        SELECT ta.NOMBRE INTO v_asignatura_nom
+          FROM academico_test.TASIGNATURA_PLAN ap
+          JOIN academico_test.TASIGNATURA ta ON ta.PK_TASIGNATURA = ap.FK_TASIGNATURA
+         WHERE ap.PK_TASIGNATURA_PLAN = p_pk;
+    END IF;
+    SELECT tg.NOMBRE INTO v_grado_nom
+      FROM academico_test.TASIGNATURA_PLAN ap
+      JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
+      JOIN academico_test.TGRADO tg ON tg.PK_TGRADO = pl.FK_TGRADO
+     WHERE ap.PK_TASIGNATURA_PLAN = p_pk;
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Actualización del plan de estudio: %s en %s', v_asignatura_nom, v_grado_nom),
+        academico_test.fn_periodo_establecimiento((
+            SELECT g.FK_TPERIODO_ACADEMICO FROM academico_test.TASIGNATURA_PLAN ap
+              JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
+              JOIN academico_test.TGRADO g ON g.PK_TGRADO = pl.FK_TGRADO
+             WHERE ap.PK_TASIGNATURA_PLAN = p_pk))
+    );
+
     -- formato/criterio se setean SIEMPRE (permiten volver a NULL = heredar).
     UPDATE academico_test.TASIGNATURA_PLAN SET
         FK_TASIGNATURA = COALESCE(p_fk_asignatura, FK_TASIGNATURA),
@@ -373,6 +409,13 @@ BEGIN
         RAISE EXCEPTION 'No se puede eliminar el plan del grado "%": hay asignaturas con asignaciones academicas (docentes) activas', v_grado_nom
             USING ERRCODE = '23503';
     END IF;
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Eliminación del plan de estudio completo del grado %s', v_grado_nom),
+        academico_test.fn_periodo_establecimiento((
+            SELECT g.FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado))
+    );
+
     -- Enlaces al criterio de evaluacion de los renglones del plan.
     UPDATE academico_test.TCRITERIO_EVALUACION_ASIGNATURA_PLAN
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
@@ -387,5 +430,139 @@ BEGIN
     UPDATE academico_test.TPLAN SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TPLAN = v_pk_plan AND ACTIVE = TRUE;
     RETURN v_pk_plan;
+END;
+$$;
+
+-- =============================================================================
+-- Consolidado: funciones de este modulo que siguieron cambiando despues de
+-- V107 (mensajes con nombre) hasta antes de V128 (donde retoma dev). Estas
+-- migraciones vivian en V114/V117/V119 de la rama feature, eliminadas por
+-- colision de numero de version con dev -- se pegan aca para no perder el
+-- trabajo.
+-- =============================================================================
+
+-- Consolidado desde V114 (fn_plan_asignatura_bulk_delete.sql): nueva
+-- capacidad, eliminar varios renglones del plan de estudio en un solo lote.
+-- Mismo patron que fn_periodo_bulk_delete: delega en fn_plan_eliminar por
+-- fila y captura la excepcion para un resultado parcial.
+CREATE OR REPLACE FUNCTION academico_test.fn_plan_asignatura_bulk_delete(
+    p_ids bigint[],
+    p_pk_usuario_solicitante bigint
+)
+RETURNS TABLE(id bigint, eliminado boolean, error_code text, error_mensaje text)
+LANGUAGE plpgsql AS $$
+DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
+BEGIN
+    IF p_ids IS NULL THEN RETURN; END IF;
+    FOREACH v_id IN ARRAY p_ids LOOP
+        BEGIN
+            PERFORM academico_test.fn_plan_eliminar(v_id, p_pk_usuario_solicitante);
+            id := v_id; eliminado := TRUE; error_code := NULL; error_mensaje := NULL;
+            RETURN NEXT;
+        EXCEPTION WHEN OTHERS THEN
+            GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
+            id := v_id; eliminado := FALSE; error_code := v_state; error_mensaje := v_msg;
+            RETURN NEXT;
+        END;
+    END LOOP;
+    RETURN;
+END;
+$$;
+
+-- Consolidado desde V119 (fn_plan_eliminar_bloquea_horario.sql, que ya
+-- incluye la cascada de V117 de desactivar el TPLAN cuando el renglon
+-- borrado era el ultimo activo): fn_plan_eliminar (borrado de UN renglon)
+-- ahora ademas bloquea si la asignatura tiene bloques de THORARIO activos en
+-- algun grupo del grado -- antes solo bloqueaba por docente asignado, una
+-- asignatura con horario armado pero sin docente se podia borrar del plan y
+-- dejaba el horario huerfano. Reemplaza la definicion de fn_plan_eliminar de
+-- mas arriba en este archivo.
+CREATE OR REPLACE FUNCTION academico_test.fn_plan_eliminar(p_pk bigint, p_pk_usuario_solicitante bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_asignatura_nom TEXT; v_grado_nom TEXT;
+    v_plan_id BIGINT;
+BEGIN
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
+        SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
+          FROM academico_test.TASIGNATURA_PLAN ap
+          JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
+          JOIN academico_test.TGRADO g ON g.PK_TGRADO = pl.FK_TGRADO
+         WHERE ap.PK_TASIGNATURA_PLAN = p_pk));
+    IF EXISTS (
+        SELECT 1
+          FROM academico_test.TASIGNATURA_PLAN ap
+          JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
+          JOIN academico_test.TGRUPO g ON g.FK_TGRADO = pl.FK_TGRADO AND g.ACTIVE = TRUE
+          JOIN academico_test.TDOCENTE_ASIGNATURA da ON da.FK_TGRUPO = g.PK_TGRUPO
+               AND da.FK_TASIGNATURA = ap.FK_TASIGNATURA AND da.ACTIVE = TRUE
+         WHERE ap.PK_TASIGNATURA_PLAN = p_pk AND ap.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No se puede eliminar: la asignatura tiene asignaciones academicas (docentes) en grupos del grado'
+            USING ERRCODE = '23503';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+          FROM academico_test.TASIGNATURA_PLAN ap
+          JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
+          JOIN academico_test.TGRUPO g ON g.FK_TGRADO = pl.FK_TGRADO AND g.ACTIVE = TRUE
+          JOIN academico_test.THORARIO h ON h.FK_TGRUPO = g.PK_TGRUPO
+               AND h.FK_TASIGNATURA = ap.FK_TASIGNATURA AND h.ACTIVE = TRUE
+         WHERE ap.PK_TASIGNATURA_PLAN = p_pk AND ap.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No se puede eliminar: la asignatura tiene bloques de horario configurados en grupos del grado'
+            USING ERRCODE = '23503';
+    END IF;
+    SELECT FK_TPLAN INTO v_plan_id FROM academico_test.TASIGNATURA_PLAN WHERE PK_TASIGNATURA_PLAN = p_pk;
+    -- v_asignatura_nom/v_grado_nom no estaban resueltos en este punto (solo se
+    -- calculan mas abajo si el UPDATE no afecta filas) -- se adelanta aca el
+    -- mismo lookup solo para la etiqueta, sin logica nueva.
+    SELECT ta.NOMBRE, tg.NOMBRE INTO v_asignatura_nom, v_grado_nom
+      FROM academico_test.TASIGNATURA_PLAN ap
+      JOIN academico_test.TASIGNATURA ta ON ta.PK_TASIGNATURA = ap.FK_TASIGNATURA
+      JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
+      JOIN academico_test.TGRADO tg ON tg.PK_TGRADO = pl.FK_TGRADO
+     WHERE ap.PK_TASIGNATURA_PLAN = p_pk;
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Eliminación de %s del plan de estudio de %s', v_asignatura_nom, v_grado_nom),
+        academico_test.fn_periodo_establecimiento((
+            SELECT g.FK_TPERIODO_ACADEMICO FROM academico_test.TASIGNATURA_PLAN ap
+              JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
+              JOIN academico_test.TGRADO g ON g.PK_TGRADO = pl.FK_TGRADO
+             WHERE ap.PK_TASIGNATURA_PLAN = p_pk))
+    );
+    UPDATE academico_test.TASIGNATURA_PLAN SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TASIGNATURA_PLAN = p_pk AND ACTIVE = TRUE;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n = 0 THEN
+        SELECT ta.NOMBRE, tg.NOMBRE INTO v_asignatura_nom, v_grado_nom
+          FROM academico_test.TASIGNATURA_PLAN ap
+          JOIN academico_test.TASIGNATURA ta ON ta.PK_TASIGNATURA = ap.FK_TASIGNATURA
+          JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
+          JOIN academico_test.TGRADO tg ON tg.PK_TGRADO = pl.FK_TGRADO
+         WHERE ap.PK_TASIGNATURA_PLAN = p_pk;
+        IF v_asignatura_nom IS NOT NULL THEN
+            RAISE EXCEPTION 'El renglon de plan para la asignatura "%" del grado "%" existe pero esta inactivo', v_asignatura_nom, v_grado_nom
+                USING ERRCODE = 'P0002';
+        ELSE
+            RAISE EXCEPTION 'No existe un renglon de plan activo con el identificador indicado' USING ERRCODE = 'P0002';
+        END IF;
+    END IF;
+    UPDATE academico_test.TCRITERIO_EVALUACION_ASIGNATURA_PLAN
+       SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TASIGNATURA_PLAN = p_pk AND ACTIVE = TRUE;
+    IF v_plan_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM academico_test.TASIGNATURA_PLAN
+         WHERE FK_TPLAN = v_plan_id AND ACTIVE = TRUE
+    ) THEN
+        UPDATE academico_test.TPLAN
+           SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE PK_TPLAN = v_plan_id AND ACTIVE = TRUE;
+    END IF;
+    RETURN p_pk;
 END;
 $$;

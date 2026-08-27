@@ -177,6 +177,34 @@ public class Microservice {
     @JoinColumn(name = "id_app")
     private App app;
 
+    /**
+     * V143 — override opcional: schema donde {@code file-service} debe
+     * guardar la referencia (pk) de los archivos subidos por CUALQUIER
+     * query servida por esta instancia de query-service, en vez del
+     * default del servicio ({@code academico_test.tarchivo}).
+     *
+     * <p>Vive acá y no en {@code Query} a propósito: el destino tiene
+     * que ver con la CONEXIÓN que este {@code kind=QUERY} ya declara
+     * ({@link #dialect}/{@link #jdbcUrl}/{@link #dbUsername}...), no
+     * con cada fila de query individual — se configura una sola vez al
+     * dar de alta el query-service y todas sus queries lo heredan.
+     * Sólo tiene sentido para {@code kind="QUERY"}; {@code
+     * MicroserviceService} lo exige así.
+     *
+     * <p>Va siempre junto con {@link #fileStorageTable} — ambos
+     * {@code null} o ambos con valor (CHECK
+     * {@code microservice_file_storage_ambos_o_ninguno} en V143).
+     * {@code fn_validar_tabla_archivo} (V143, trigger en esta tabla)
+     * exige además que la tabla declarada tenga el mismo formato de
+     * columnas que {@code academico_test.tarchivo}.
+     */
+    @Column(name = "FILE_STORAGE_SCHEMA")
+    private String fileStorageSchema;
+
+    /** Tabla del override anterior. Ver {@link #fileStorageSchema}. */
+    @Column(name = "FILE_STORAGE_TABLE")
+    private String fileStorageTable;
+
     /* ====================== equality ====================== */
 
     @Override

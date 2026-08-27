@@ -74,7 +74,8 @@ class MicroserviceServiceTest {
                 /*kind*/ "REST",
                 /*dialect*/ null, /*jdbcUrl*/ null, /*dbUsername*/ null,
                 /*dbPassword*/ null, /*poolSize*/ null, /*instanceName*/ null,
-                /*appId*/ null);
+                /*appId*/ null,
+                /*fileStorageSchema*/ null, /*fileStorageTable*/ null);
     }
 
     /** Builds a 14-arg QUERY request with valid JDBC metadata. */
@@ -94,7 +95,8 @@ class MicroserviceServiceTest {
                 /*dbPassword*/ "secret",
                 /*poolSize*/ 5,
                 /*instanceName*/ instanceName,
-                /*appId*/ null);
+                /*appId*/ null,
+                /*fileStorageSchema*/ null, /*fileStorageTable*/ null);
     }
 
     /* ====================== legacy (REST) CRUD ====================== */
@@ -155,7 +157,7 @@ class MicroserviceServiceTest {
         MicroserviceResponse resp = service.update(new MicroserviceRequest(
                 7L, "renamed", "new desc", "/new-req", "/new-path", "newhost", "9090",
                 "REST",
-                null, null, null, null, null, null, null));
+                null, null, null, null, null, null, null, null, null));
 
         assertThat(resp.serviceId()).isEqualTo("renamed");
         assertThat(resp.description()).isEqualTo("new desc");
@@ -237,7 +239,8 @@ class MicroserviceServiceTest {
         MicroserviceRequest req = new MicroserviceRequest(
                 null, "query-postgres", null, "/req", "/path", "host", "8080",
                 "QUERY", "postgres", "jdbc:postgresql://db:5432/x",
-                "user", "secret", 5, /*instanceName*/ null, /*appId*/ null);
+                "user", "secret", 5, /*instanceName*/ null, /*appId*/ null,
+                null, null);
 
         service.create(req);
 
@@ -256,7 +259,8 @@ class MicroserviceServiceTest {
         MicroserviceRequest req = new MicroserviceRequest(
                 null, "query-bad", null, "/req", "/path", "host", "8080",
                 "QUERY", "postgres", /*jdbcUrl*/ null,
-                "user", "secret", 5, "bad", /*appId*/ null);
+                "user", "secret", 5, "bad", /*appId*/ null,
+                null, null);
 
         assertThatThrownBy(() -> service.create(req))
                 .isInstanceOf(IllegalArgumentException.class)

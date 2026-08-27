@@ -23,6 +23,8 @@ import type {
   EndpointRequest,
   EndpointResponse,
   EndpointRoleChecked,
+  FileReferenceLocationRequest,
+  FileReferenceLocationResponse,
   GroupRequest,
   GroupResponse,
   GroupRoleChecked,
@@ -443,6 +445,23 @@ export const writesApi = {
     apiClient.post<void>(`/sso-admin/write/${id}/role/${roleId}`),
   unbindRole: (id: number, roleId: number) =>
     apiClient.delete<void>(`/sso-admin/write/${id}/role/${roleId}`),
+};
+
+/**
+ * V-file-reference-admin — CRUD puntual (get + upsert) de una fila
+ * de {@code public.file_reference_location}. Ver
+ * {@code FileReferenceLocationController} en sso-admin.
+ */
+export const fileReferencesApi = {
+  get: (pkTarchivo: number) =>
+    apiClient.get<FileReferenceLocationResponse>(
+      `/sso-admin/file-references/${pkTarchivo}`,
+    ),
+  upsert: (pkTarchivo: number, body: FileReferenceLocationRequest) =>
+    apiClient.put<FileReferenceLocationResponse>(
+      `/sso-admin/file-references/${pkTarchivo}`,
+      body,
+    ),
 };
 
 /**

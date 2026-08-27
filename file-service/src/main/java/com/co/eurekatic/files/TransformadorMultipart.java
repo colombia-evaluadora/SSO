@@ -114,6 +114,31 @@ public class TransformadorMultipart {
                                  Long idUser,
                                  Map<String, String> clasificaciones,
                                  Map<String, String> establecimientos) {
+        return transformar(campos, ficheros, usuario, idUser, clasificaciones, establecimientos, null, null);
+    }
+
+    /**
+     * V143 — igual que el overload de 6 argumentos, pero además recibe
+     * el override de destino de almacenamiento
+     * ({@code FileDestinationAccessService.Destino#fileStorageSchema}/
+     * {@code #fileStorageTable}) que {@code ReenvioController} ya
+     * resolvió contra el catálogo. Se propaga tal cual a
+     * {@link ArchivoRepository#reservar(String, long, String, Long,
+     * String, String, String)} — esta clase sigue sin saber qué es un
+     * schema o una tabla "correcta", sólo lo reenvía.
+     *
+     * @param fileStorageSchema override de schema, o {@code null} para
+     *                          el default del servicio.
+     * @param fileStorageTable  tabla del override anterior.
+     */
+    public Resultado transformar(Map<String, String> campos,
+                                 Map<String, List<MultipartFile>> ficheros,
+                                 String usuario,
+                                 Long idUser,
+                                 Map<String, String> clasificaciones,
+                                 Map<String, String> establecimientos,
+                                 String fileStorageSchema,
+                                 String fileStorageTable) {
         Map<String, Object> cuerpo = new LinkedHashMap<>();
         campos.forEach((campo, valor) -> putAnidado(cuerpo, campo, valor));
         // Ids ya reservados, para poder deshacerlos si algo falla a
@@ -139,7 +164,8 @@ public class TransformadorMultipart {
                     if (parte.isEmpty()) {
                         continue;
                     }
-                    ids.add(subirUna(parte, usuario, idUser, clasificacion, establecimiento, reservados, objetosSubidos));
+                    ids.add(subirUna(parte, usuario, idUser, clasificacion, establecimiento, reservados, objetosSubidos,
+                            fileStorageSchema, fileStorageTable));
                 }
                 if (ids.isEmpty()) {
                     continue;
@@ -230,7 +256,8 @@ public class TransformadorMultipart {
     }
 
     private long subirUna(MultipartFile parte, String usuario, Long idUser, String clasificacion, String establecimiento,
-                          List<Long> reservados, Map<Long, String> objetosSubidos) throws IOException {
+                          List<Long> reservados, Map<Long, String> objetosSubidos,
+                          String fileStorageSchema, String fileStorageTable) throws IOException {
         String nombre = nombreSeguro(parte.getOriginalFilename());
         long peso = parte.getSize();
 
@@ -239,9 +266,16 @@ public class TransformadorMultipart {
         //    clasificación (FILE:perfilUsuario), se guarda también en
         //    TARCHIVO.etiqueta — consistente con las filas históricas
         //    migradas, que siempre la traían.
-        long pk = clasificacion == null
-                ? archivos.reservar(nombre, peso, usuario, idUser)
-                : archivos.reservar(nombre, peso, usuario, idUser, clasificacion);
+        //
+        //    V143 — sin override de destino (el caso de siempre, los
+        //    dos tests-de-siempre lo cubren), se sigue llamando a los
+        //    overloads de 4/5 argumentos tal cual, sin tocar su
+        //    comportamiento. Con override, al de 7 argumentos.
+        long pk = fileStorageSchema == null && fileStorageTable == null
+                ? (clasificacion == null
+                        ? archivos.reservar(nombre, peso, usuario, idUser)
+                        : archivos.reservar(nombre, peso, usuario, idUser, clasificacion))
+                : archivos.reservar(nombre, peso, usuario, idUser, clasificacion, fileStorageSchema, fileStorageTable);
         reservados.add(pk);
 
         // 2. La clave incluye el pk, así que es única sin necesidad de

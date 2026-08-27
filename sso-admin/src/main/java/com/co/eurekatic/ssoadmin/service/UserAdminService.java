@@ -24,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,7 +37,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -62,10 +62,10 @@ import java.util.stream.Collectors;
  *       activation landing page. This is the FIRST place a
  *       password ever enters the system for that account.</li>
  *   <li>{@link #forgotPassword} — issues a restore token and
- *       publishes a restore-password email event. Always returns
- *       silently even if the email is unknown, to avoid leaking
- *       which addresses are registered. The user types a new
- *       password at {@code POST /restorePassword}.</li>
+ *       publishes a restore-password email event. Un correo
+ *       desconocido responde 404 y no dispara ningun envio — ver
+ *       la nota sobre enumeracion de cuentas en ese metodo. The
+ *       user types a new password at {@code POST /restorePassword}.</li>
  *   <li>{@link #resendActivation} — only valid while
  *       {@link User#getStatus()} is PENDING_ACTIVATION; reissues
  *       the activation token and republishes the email (V13
@@ -104,6 +104,17 @@ public class UserAdminService {
     private final NotificationEventPublisher events;
     private final SessionInvalidationClient sessionInvalidationClient;
     private final CacheManager cacheManager;
+    /**
+     * V151 — resincroniza {@code public.app_users} (el roster que
+     * muestra la pantalla de Apps) después de un bind/unbind de rol
+     * manual. El camino académico (TSEDE_USUARIO/TENTE_USUARIO/
+     * rector/secretaria) ya lo dispara desde
+     * {@code academico_test.fn_sincronizar_rol_publico}; éste es el
+     * mismo enganche del lado administrativo — sin él, un rol
+     * otorgado a mano (p.ej. PIGSE-ADMINISTRADOR, que no tiene fuente
+     * académica) nunca aparecía en el roster de su app.
+     */
+    private final JdbcTemplate jdbc;
 
     public UserAdminService(UserRepository userRepository,
                             RoleRepository roleRepository,
@@ -114,7 +125,8 @@ public class UserAdminService {
                             EmailProperties emailProps,
                             NotificationEventPublisher events,
                             SessionInvalidationClient sessionInvalidationClient,
-                            CacheManager cacheManager) {
+                            CacheManager cacheManager,
+                            JdbcTemplate jdbc) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.appRepository = appRepository;
@@ -125,6 +137,7 @@ public class UserAdminService {
         this.events = events;
         this.sessionInvalidationClient = sessionInvalidationClient;
         this.cacheManager = cacheManager;
+        this.jdbc = jdbc;
     }
 
     /**
@@ -369,19 +382,24 @@ public class UserAdminService {
     }
 
     /**
-     * Issues a restore-password email. Always returns
-     * successfully (even if the email is unknown) so the API
-     * doesn't leak which addresses are registered.
+     * Issues a restore-password email.
      *
      * <p><b>Devuelve el token en la respuesta</b> — ver la advertencia de
      * seguridad en {@link ForgotPasswordResponse}. Es un vector de apropiacion
      * de cuenta y se expone a pedido explicito del equipo.
      *
-     * <p>Para NO delatar que direcciones existen, un correo desconocido recibe
-     * igual un token con la misma forma y vida: se genera al vuelo y no se
-     * persiste, asi que no sirve para restablecer nada. Sin esto, la sola
-     * presencia del token en la respuesta convertiria este endpoint en un
-     * enumerador de cuentas.
+     * <p><b>Un correo desconocido responde 404</b>, tambien a pedido explicito
+     * del equipo: el front pide decirle al usuario que esa direccion no esta
+     * registrada en vez de mostrarle una confirmacion falsa. El costo conocido
+     * es que este endpoint queda como enumerador de cuentas — publico y sin
+     * autenticar, permite averiguar que direcciones existen pegandole correos.
+     * La version anterior devolvia siempre 200 con un token generado al vuelo
+     * (no persistido, inservible para restablecer nada) justamente para
+     * evitarlo. Si algun dia se quiere cerrar la fuga, hay que revertir este
+     * 404 Y dejar de devolver el token en el cuerpo.
+     *
+     * <p>Ningun correo sale para una direccion desconocida: el evento
+     * {@code password-reset} solo se publica despues de encontrar al usuario.
      */
     @Transactional
     public ForgotPasswordResponse forgotPassword(String email, String appName) {
@@ -390,7 +408,7 @@ public class UserAdminService {
                 .findFirst();
 
         if (encontrado.isEmpty()) {
-            return new ForgotPasswordResponse(UUID.randomUUID().toString(), RESTORE_TTL_SECONDS);
+            throw new NotFoundException("User", email);
         }
 
         User u = encontrado.get();
@@ -539,6 +557,9 @@ public class UserAdminService {
             // JWT that includes the new role.
             sessionInvalidationClient.invalidate(saved.getEmail());
             evictUserByEmailCache(saved.getEmail());
+            // V151 — el nuevo rol puede traer un role_app hacia un app
+            // que este usuario todavía no tenía en su roster.
+            syncAppUsers(saved.getId());
         }
     }
 
@@ -566,7 +587,26 @@ public class UserAdminService {
             // user's authorities. Drop it.
             sessionInvalidationClient.invalidate(saved.getEmail());
             evictUserByEmailCache(saved.getEmail());
+            // V151 — si ese era el último rol que le daba acceso a
+            // algún app, lo saca del roster.
+            syncAppUsers(saved.getId());
         }
+    }
+
+    /**
+     * {@code SELECT public.fn_sync_app_users(?)} SIGUE siendo un
+     * {@code SELECT} aunque la función devuelva {@code VOID} —
+     * Postgres igual entrega una fila de una columna (NULL). Un
+     * {@code jdbc.update(...)} contra eso lanza
+     * {@code "Se retornó un resultado cuando no se esperaba
+     * ninguno"} ({@link JdbcTemplate#update} espera rowcount, no un
+     * resultset) — hay que consultarlo con {@code query}, no
+     * ejecutarlo con {@code update}, igual que
+     * {@code EnteUsuarioAdminService} hace con las funciones que sí
+     * devuelven un valor.
+     */
+    private void syncAppUsers(Long userId) {
+        jdbc.query("SELECT public.fn_sync_app_users(?)", rs -> null, userId);
     }
 
     /**

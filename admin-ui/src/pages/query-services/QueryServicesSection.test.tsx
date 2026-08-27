@@ -50,6 +50,8 @@ function mkMs(over: Partial<MicroserviceResponse> = {}): MicroserviceResponse {
     dbPassword: null,
     poolSize: 10,
     instanceName: "oracle-dev",
+    fileStorageSchema: null,
+    fileStorageTable: null,
     ...over,
   };
 }
@@ -300,6 +302,140 @@ describe("QueryServicesSection", () => {
     // La sonda corre ANTES del save, no como botón opcional.
     const probeCall = findFetchCall(fetchSpy, "/microservice/testConnection");
     expect(probeCall).toBeDefined();
+  });
+
+  /**
+   * V143 — override opcional de destino de almacenamiento de
+   * archivos, configurado a nivel de instancia (no por query
+   * individual). Vive en el mismo drawer que dialect/jdbcUrl.
+   */
+  it("creates a QUERY service with the file-storage override filled in, forwarding both fields", async () => {
+    fetchSpy.mockResolvedValueOnce(jsonResponse([])); // empty list
+    const createdRow = mkMs({ id: 1, serviceId: "diag-svc", instanceName: "diag" });
+    fetchSpy.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes("/microservice/testConnection")
+          ? jsonResponse({ ok: true, message: "Conexión exitosa", latencyMs: 4, dialect: "postgres" })
+          : jsonResponse(createdRow),
+      ),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByTestId("new-query-service"));
+    await user.type(screen.getByLabelText(/Service ID/i), "diag-svc");
+    await user.type(screen.getByLabelText(/Request URI/i), "/api/diag/**");
+    await user.selectOptions(screen.getByLabelText(/Dialecto/i), "postgres");
+    await user.type(screen.getByLabelText(/JDBC URL/i), "jdbc:postgresql://x/y");
+    await user.type(screen.getByLabelText(/DB username/i), "u");
+    await user.type(screen.getByLabelText(/Instance name/i), "diag");
+    await user.type(
+      screen.getByLabelText(/Schema de almacenamiento de archivos/i),
+      "academico_test",
+    );
+    await user.type(
+      screen.getByLabelText(/Tabla de almacenamiento de archivos/i),
+      "tarchivo_perfil",
+    );
+
+    await user.click(screen.getByRole("button", { name: /Crear/i }));
+
+    await waitFor(() => {
+      const saveCall = fetchSpy.mock.calls.find(
+        ([url, init]) =>
+          typeof url === "string" &&
+          url.includes("/sso-admin/microservice/save") &&
+          (init as RequestInit | undefined)?.method === "POST",
+      );
+      expect(saveCall).toBeDefined();
+    });
+
+    const saveCall = fetchSpy.mock.calls.find(
+      ([url]) => typeof url === "string" && url.includes("/sso-admin/microservice/save"),
+    );
+    const body = JSON.parse((saveCall![1] as RequestInit).body as string);
+    expect(body.fileStorageSchema).toBe("academico_test");
+    expect(body.fileStorageTable).toBe("tarchivo_perfil");
+  });
+
+  it("leaves both file-storage fields null when the override is left blank", async () => {
+    fetchSpy.mockResolvedValueOnce(jsonResponse([])); // empty list
+    const createdRow = mkMs({ id: 1, serviceId: "diag-svc", instanceName: "diag" });
+    fetchSpy.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes("/microservice/testConnection")
+          ? jsonResponse({ ok: true, message: "Conexión exitosa", latencyMs: 4, dialect: "postgres" })
+          : jsonResponse(createdRow),
+      ),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByTestId("new-query-service"));
+    await user.type(screen.getByLabelText(/Service ID/i), "diag-svc");
+    await user.type(screen.getByLabelText(/Request URI/i), "/api/diag/**");
+    await user.selectOptions(screen.getByLabelText(/Dialecto/i), "postgres");
+    await user.type(screen.getByLabelText(/JDBC URL/i), "jdbc:postgresql://x/y");
+    await user.type(screen.getByLabelText(/DB username/i), "u");
+    await user.type(screen.getByLabelText(/Instance name/i), "diag");
+
+    await user.click(screen.getByRole("button", { name: /Crear/i }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.find(
+          ([url, init]) =>
+            typeof url === "string" &&
+            url.includes("/sso-admin/microservice/save") &&
+            (init as RequestInit | undefined)?.method === "POST",
+        ),
+      ).toBeDefined();
+    });
+
+    const saveCall = fetchSpy.mock.calls.find(
+      ([url]) => typeof url === "string" && url.includes("/sso-admin/microservice/save"),
+    );
+    const body = JSON.parse((saveCall![1] as RequestInit).body as string);
+    expect(body.fileStorageSchema).toBeNull();
+    expect(body.fileStorageTable).toBeNull();
+  });
+
+  it("rejects submitting when only one of the two file-storage fields is filled in", async () => {
+    fetchSpy.mockResolvedValueOnce(jsonResponse([])); // empty list
+    fetchSpy.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes("/microservice/testConnection")
+          ? jsonResponse({ ok: true, message: "Conexión exitosa", latencyMs: 4, dialect: "postgres" })
+          : jsonResponse(mkMs()),
+      ),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByTestId("new-query-service"));
+    await user.type(screen.getByLabelText(/Service ID/i), "diag-svc");
+    await user.type(screen.getByLabelText(/Request URI/i), "/api/diag/**");
+    await user.selectOptions(screen.getByLabelText(/Dialecto/i), "postgres");
+    await user.type(screen.getByLabelText(/JDBC URL/i), "jdbc:postgresql://x/y");
+    await user.type(screen.getByLabelText(/DB username/i), "u");
+    await user.type(screen.getByLabelText(/Instance name/i), "diag");
+    await user.type(
+      screen.getByLabelText(/Schema de almacenamiento de archivos/i),
+      "academico_test",
+    );
+    // La tabla se deja vacía a propósito.
+
+    await user.click(screen.getByRole("button", { name: /Crear/i }));
+
+    expect(
+      await screen.findByText(
+        /Completa los dos campos \(schema y tabla\) o deja ambos vacíos/i,
+      ),
+    ).toBeInTheDocument();
+    expect(findFetchCall(fetchSpy, "/microservice/save")).toBeUndefined();
   });
 
   it("does NOT create the query service when the connection probe fails", async () => {

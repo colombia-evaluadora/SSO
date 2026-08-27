@@ -427,6 +427,52 @@ class TransformadorMultipartTest {
         verify(almacen).subir(eq("ACADEMICO_VALLEDUPAR/120001003751/actividad/21.jpg"), any(), anyLong(), any());
     }
 
+    // ---------- V143: file_storage_schema/table (override de destino de archivo) ----------
+
+    /**
+     * Con override de destino (los dos últimos argumentos del overload
+     * de 8), {@code subirUna} llama al overload de 7 argumentos de
+     * {@code reservar} en vez de los de 4/5 — es lo que deja que
+     * {@code ArchivoRepository} escriba en otra tabla.
+     */
+    @Test
+    void conOverrideDeDestinoReservaConElOverloadDeSieteArgumentos() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar("foto.jpg", 1L, "admin@example.com", null, null, "eval_col", "tarchivo_evaluacion"))
+                .thenReturn(99L);
+        when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/x");
+
+        var resultado = new TransformadorMultipart(almacen, repo, null).transformar(
+                Map.of(),
+                Map.of("foto", List.of(fichero("foto", "foto.jpg", "X"))),
+                "admin@example.com", null, null, null,
+                "eval_col", "tarchivo_evaluacion");
+
+        assertThat(resultado.archivoIds()).containsExactly(99L);
+        verify(repo).reservar("foto.jpg", 1L, "admin@example.com", null, null, "eval_col", "tarchivo_evaluacion");
+        // Ninguno de los overloads sin override se llama para este campo.
+        verify(repo, never()).reservar(anyString(), anyLong(), anyString(), any());
+        verify(repo, never()).reservar(anyString(), anyLong(), anyString(), any(), anyString());
+    }
+
+    /** Sin override (el overload de 6 argumentos delega con null, null), sigue reservando con los overloads de siempre. */
+    @Test
+    void sinOverrideDeDestinoSigueUsandoLosOverloadsDeSiempre() throws Exception {
+        var almacen = mock(AlmacenObjetos.class);
+        var repo = mock(ArchivoRepository.class);
+        when(repo.reservar(anyString(), anyLong(), anyString(), any())).thenReturn(5L);
+        when(almacen.subir(anyString(), any(), anyLong(), any())).thenReturn("s3://b/x");
+
+        new TransformadorMultipart(almacen, repo, null).transformar(
+                Map.of(),
+                Map.of("foto", List.of(fichero("foto", "foto.jpg", "X"))),
+                "admin@example.com", null, null, null);
+
+        verify(repo).reservar("foto.jpg", 1L, "admin@example.com", null);
+        verify(repo, never()).reservar(anyString(), anyLong(), anyString(), any(), any(), anyString(), anyString());
+    }
+
     /** Un campo cuya clasificación no declaró campo de establecimiento
      *  no se ve afectado por el mapa (vacío para él). */
     @Test

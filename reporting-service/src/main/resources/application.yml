@@ -127,6 +127,76 @@ reporting:
         end_date: Fin
         peso: Peso
         estado_name: Estado
+        sede_name: Sede
+
+    plan-estudio:
+      path: /plan-estudio/reporte
+      title: Plan de estudio
+      file-name: plan-estudio
+      columns:
+        grado_name: Grado
+        asignatura: Asignatura
+        abreviacion: Abreviacion
+        especialidad_name: Especialidad
+        intensidad_horaria: Intensidad horaria
+        influencia_area: Influencia area
+        matricula_obligatoria: Matricula obligatoria
+        aprobacion_obligatoria: Aprobacion obligatoria
+        influye_desempeno: Influye desempeno
+
+    grados:
+      path: /grados/reporte
+      title: Grados y grupos
+      file-name: grados-grupos
+      columns:
+        grado_name: Grado
+        grado_codigo: Numero de grado
+        teaching_level_name: Nivel de ensenanza
+        grupo_name: Grupo
+        jornada_name: Jornada
+        director_name: Director de grupo
+        plan_estudio_name: Plan de estudio
+
+    areas:
+      path: /areas/reporte
+      title: Areas, asignaturas y especialidades
+      file-name: areas-asignaturas
+      columns:
+        area_general_name: Area general
+        area_nombre_interno: Nombre interno del area
+        area_abreviacion: Abreviacion del area
+        asignatura: Asignatura
+        asignatura_abreviacion: Abreviacion asignatura
+        especialidad_name: Especialidad
+        orden_reportes: Orden en reportes
+        color: Color
+
+    escalas:
+      path: /escalas/reporte
+      title: Escalas de valoracion
+      file-name: escalas-valoracion
+      columns:
+        teaching_level_name: Nivel de ensenanza
+        nombre: Nombre del desempeno
+        abreviacion: Abreviacion
+        nota_maxima: Nota maxima
+        nota_minima: Nota minima
+        nota_equivalente: Nota equivalente
+        tipo_name: Tipo de evaluacion
+        iconografia: Iconografia
+
+    asignaciones:
+      path: /asignaciones/reporte
+      title: Asignacion academica
+      file-name: asignacion-academica
+      columns:
+        docente_nombre: Nombre del docente
+        document_number: Documento
+        estado: Estado
+        asignatura: Asignatura
+        grado_name: Grado
+        grupo_name: Grupo
+        jornada_name: Jornada
 
     sedes:
       path: /establecimientos/sedes/reporte

@@ -92,7 +92,7 @@ class ReenvioControllerTest {
 
     /** Stub genérico para el mock de transformador: acepta cualquier clasificaciones/establecimientos. */
     private static void stubTransformar(TransformadorMultipart transformador) {
-        when(transformador.transformar(anyMap(), anyMap(), anyString(), any(), anyMap(), anyMap()))
+        when(transformador.transformar(anyMap(), anyMap(), anyString(), any(), anyMap(), anyMap(), any(), any()))
                 .thenReturn(new TransformadorMultipart.Resultado(Map.of(), List.of()));
     }
 
@@ -234,7 +234,7 @@ class ReenvioControllerTest {
                 argThat(m -> m.containsKey("foto")),
                 eq("admin@example.com"), any(),
                 anyMap(),
-                anyMap());
+                anyMap(), any(), any());
     }
 
     /**
@@ -269,7 +269,7 @@ class ReenvioControllerTest {
                 argThat(m -> m.containsKey("foto")),
                 eq("admin@example.com"), any(),
                 argThat(clasif -> "perfilUsuario".equals(clasif.get("foto"))),
-                anyMap());
+                anyMap(), any(), any());
     }
 
     /** Un campo declarado FILE! (obligatorio) que no llega es 400. */
@@ -321,7 +321,7 @@ class ReenvioControllerTest {
                 argThat(m -> m.containsKey("cualquier-nombre")),
                 eq("admin@example.com"), any(),
                 anyMap(),
-                anyMap());
+                anyMap(), any(), any());
     }
 
     /**
@@ -358,7 +358,7 @@ class ReenvioControllerTest {
                 argThat(m -> m.containsKey("nombre-con-guion")),
                 eq("admin@example.com"), any(),
                 anyMap(),
-                anyMap());
+                anyMap(), any(), any());
     }
 
     /**
@@ -432,7 +432,7 @@ class ReenvioControllerTest {
                 argThat(m -> m.containsKey("foto")),
                 eq("admin@example.com"), any(),
                 anyMap(),
-                argThat(est -> "120001003751".equals(est.get("foto"))));
+                argThat(est -> "120001003751".equals(est.get("foto"))), any(), any());
     }
 
     /**
@@ -533,7 +533,7 @@ class ReenvioControllerTest {
                 argThat(m -> m.containsKey("foto")),
                 eq("profesor@example.com"), any(),
                 anyMap(),
-                argThat(est -> "EE-SEED-01".equals(est.get("foto"))));
+                argThat(est -> "EE-SEED-01".equals(est.get("foto"))), any(), any());
     }
 
     /** Un campo presente pero en blanco se trata igual que ausente: también intenta derivarse. */
@@ -567,7 +567,67 @@ class ReenvioControllerTest {
         verify(acceso).establecimientoDelUsuario("profesor@example.com");
         verify(transformador).transformar(
                 anyMap(), anyMap(), eq("profesor@example.com"), any(), anyMap(),
-                argThat(est -> "EE-SEED-01".equals(est.get("foto"))));
+                argThat(est -> "EE-SEED-01".equals(est.get("foto"))), any(), any());
+    }
+
+    // ---------- V143: file_storage_schema/table (override de destino de archivo) ----------
+
+    /**
+     * El override de destino que trae {@code Destino} (declarado en
+     * {@code query.file_storage_schema}/{@code file_storage_table}) se
+     * propaga tal cual a {@code TransformadorMultipart.transformar} —
+     * es el último eslabón antes de {@code ArchivoRepository#reservar}.
+     */
+    @Test
+    void unDestinoConFileStorageLoPropagaATransformar() {
+        var jwt = mock(JwtTokenService.class);
+        var acceso = mock(FileDestinationAccessService.class);
+        var transformador = mock(TransformadorMultipart.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("admin@example.com", 1L, Set.of("ADMIN"), "access"));
+        when(acceso.puedeSubir("POST", "/files/eval-col/funcionario", Set.of("ADMIN"))).thenReturn(true);
+        when(acceso.resolverDestino("POST", "/eval-col/funcionario")).thenReturn(
+                FileDestinationAccessService.Destino.sinRestriccionDeCampos()
+                        .conFileStorage("eval_col", "tarchivo_evaluacion"));
+        stubTransformar(transformador);
+
+        var controller = controller(jwt, transformador, acceso);
+
+        try {
+            controller.post(peticionConArchivos("/files/eval-col/funcionario", "foto"), "Bearer jwt-bueno");
+        } catch (RuntimeException ignored) {
+            // Ver comentario de los tests del camino feliz de arriba.
+        }
+
+        verify(transformador).transformar(
+                anyMap(), anyMap(), eq("admin@example.com"), any(), anyMap(), anyMap(),
+                eq("eval_col"), eq("tarchivo_evaluacion"));
+    }
+
+    /** Sin override (el caso de siempre), ambos argumentos llegan null. */
+    @Test
+    void unDestinoSinFileStorageLlegaConSchemaYTablaNulos() {
+        var jwt = mock(JwtTokenService.class);
+        var acceso = mock(FileDestinationAccessService.class);
+        var transformador = mock(TransformadorMultipart.class);
+        when(jwt.parse("jwt-bueno")).thenReturn(
+                new AuthPrincipal("admin@example.com", 1L, Set.of("ADMIN"), "access"));
+        when(acceso.puedeSubir("POST", "/files/eval-col/funcionario", Set.of("ADMIN"))).thenReturn(true);
+        when(acceso.resolverDestino("POST", "/eval-col/funcionario")).thenReturn(
+                FileDestinationAccessService.Destino.sinRestriccionDeCampos());
+        stubTransformar(transformador);
+
+        var controller = controller(jwt, transformador, acceso);
+
+        try {
+            controller.post(peticionConArchivos("/files/eval-col/funcionario", "foto"), "Bearer jwt-bueno");
+        } catch (RuntimeException ignored) {
+            // Ver comentario de los tests del camino feliz de arriba.
+        }
+
+        verify(transformador).transformar(
+                anyMap(), anyMap(), eq("admin@example.com"), any(), anyMap(), anyMap(),
+                eq(null), eq(null));
     }
 
     /** Una clasificación sin tercer componente no dispara ninguna validación de establecimiento. */

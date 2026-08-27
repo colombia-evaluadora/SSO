@@ -163,6 +163,35 @@ export interface MicroserviceResponse {
   dbPassword: string | null;
   poolSize: number | null;
   instanceName: string | null;
+  /** V143 — override opcional de dónde file-service guarda la
+   *  referencia (pk) de los archivos subidos por las queries que
+   *  corren en este query-service. Null para filas REST y para
+   *  filas QUERY que usan el destino por defecto
+   *  (academico_test.tarchivo). Ambos o ninguno — el backend lo
+   *  valida igual que dialect/jdbcUrl/dbUsername para kind=QUERY. */
+  fileStorageSchema: string | null;
+  fileStorageTable: string | null;
+}
+
+// ====================== sso-admin / file-references ======================
+
+/**
+ * Mirrors {@code public.file_reference_location} (V143/V147) via
+ * {@code com.co.eurekatic.ssoadmin.dto.FileReferenceLocationResponse}
+ * -- dónde vive realmente un {@code pk_tarchivo} de cara a
+ * file-service. Ver {@code FileReferencesPage}.
+ */
+export interface FileReferenceLocationResponse {
+  pkTarchivo: number;
+  schemaName: string;
+  tableName: string;
+  urls3: string | null;
+  createdAt: string;
+}
+
+export interface FileReferenceLocationRequest {
+  schemaName: string;
+  tableName: string;
 }
 
 export interface MicroserviceRequest {
@@ -183,6 +212,9 @@ export interface MicroserviceRequest {
   dbPassword?: string | null;
   poolSize?: number | null;
   instanceName?: string | null;
+  /** V143 — ver el mismo par de campos en {@link MicroserviceResponse}. */
+  fileStorageSchema?: string | null;
+  fileStorageTable?: string | null;
 }
 
 /* ====================== testConnection probe ======================

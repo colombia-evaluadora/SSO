@@ -304,27 +304,23 @@ COMMENT ON FUNCTION academico_test.fn_usu_crear(
 
 
 -- ---------------------------------------------------------------------------
--- Relaja U_TFUNCIONARIO_2: antes UNIQUE(FK_TUSUARIO) (un TUSUARIO solo podia
--- tener UN TFUNCIONARIO en toda su vida), ahora UNIQUE(FK_TUSUARIO,
--- FK_ESTABLECIMIENTO) (un TUSUARIO puede tener un TFUNCIONARIO por cada EE
--- en el que trabaja). Necesario para que fn_fun_crear (mas abajo) pueda
--- reusar un TUSUARIO existente y crearle un TFUNCIONARIO nuevo sin violar
--- unicidad. FK_ESTABLECIMIENTO NULL (pendiente de enlazar) no colisiona
--- entre si: Postgres no aplica UNIQUE entre valores NULL.
+-- U_TFUNCIONARIO_2: NO se toca aqui.
+--
+-- Historia: este archivo llego a relajar el UNIQUE(FK_TUSUARIO) de V22 a
+-- UNIQUE(FK_TUSUARIO, FK_ESTABLECIMIENTO) para soportar "un TFUNCIONARIO por
+-- EE". Ese modelo se revirtio (ver REV5/REV6 en el header y en fn_fun_crear:
+-- TFUNCIONARIO volvio a ser una fila por persona y FK_ESTABLECIMIENTO quedo
+-- siempre NULL, sin proposito). Ademas la columna FK_ESTABLECIMIENTO no
+-- existe hasta V60, asi que un `flyway migrate` desde cero rompia aqui con
+-- 42703 (column "fk_establecimiento" does not exist).
+--
+-- El estado final de U_TFUNCIONARIO_2 lo fija V71:
+--   DROP CONSTRAINT IF EXISTS u_tfuncionario_2
+--   + CREATE UNIQUE INDEX u_tfuncionario_2 (fk_tusuario, fk_establecimiento)
+--     WHERE active = true
+-- fn_fun_crear no usa ON CONFLICT sobre este nombre (hace su chequeo de
+-- existencia explicito), asi que quitar el bloque no cambia comportamiento.
 -- ---------------------------------------------------------------------------
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM pg_constraint
-         WHERE conname = 'u_tfuncionario_2'
-           AND conrelid = 'academico_test.tfuncionario'::regclass
-    ) THEN
-        ALTER TABLE academico_test.TFUNCIONARIO DROP CONSTRAINT U_TFUNCIONARIO_2;
-    END IF;
-END $$;
-
-ALTER TABLE academico_test.TFUNCIONARIO
-    ADD CONSTRAINT U_TFUNCIONARIO_2 UNIQUE (FK_TUSUARIO, FK_ESTABLECIMIENTO);
 
 
 -- ---------------------------------------------------------------------------
@@ -732,7 +728,7 @@ BEGIN
          WHERE PK_TSEDE = p_fk_sede
            AND ACTIVE   = TRUE
     ) THEN
-        RAISE EXCEPTION 'TSEDE (%) no existe o no esta activa', p_fk_sede
+        RAISE EXCEPTION 'La sede indicada no existe o no esta activa'
             USING ERRCODE = '23503';
     END IF;
 
@@ -885,7 +881,7 @@ BEGIN
      WHERE PK_TSEDE_USUARIO = p_pk_sede_usuario;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'no existe TSEDE_USUARIO con PK %', p_pk_sede_usuario
+        RAISE EXCEPTION 'No se encontro el permiso solicitado'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -1025,7 +1021,7 @@ BEGIN
      WHERE PK_TSEDE_USUARIO = p_pk_sede_usuario;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'no existe TSEDE_USUARIO con PK %', p_pk_sede_usuario
+        RAISE EXCEPTION 'No se encontro el permiso solicitado'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -1095,21 +1091,12 @@ COMMENT ON FUNCTION academico_test.fn_sede_usuario_soft_delete(BIGINT, BIGINT)
 -- aunque el tipo no cambie, hace falta el DROP explicito.
 DROP FUNCTION IF EXISTS academico_test.fn_fun_enlazar_establecimiento(BIGINT, BIGINT, BIGINT);
 
-CREATE OR REPLACE FUNCTION academico_test.fn_fun_enlazar_establecimiento(
-    p_pk_usuario_solicitante  BIGINT,
-    p_pk_funcionario          BIGINT,  -- PK_TFUNCIONARIO devuelto por /register/funcionario (pkFuncionario)
-    p_fk_establecimiento      BIGINT
-)
-RETURNS BIGINT  -- PK_TFUNCIONARIO enlazado
-LANGUAGE plpgsql
+CREATE OR REPLACE FUNCTION academico_test.fn_fun_enlazar_establecimiento(p_pk_usuario_solicitante bigint, p_pk_funcionario bigint, p_fk_establecimiento bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_pk_funcionario      BIGINT;
-    -- REV2: si el caller no manda EE explicito (el select del front solo
-    -- aparece para super-admin), se intenta resolver el unico EE al que
-    -- esta ligado el SOLICITANTE (no el funcionario a enlazar) como
-    -- rector/secretaria/jefe de sistema -- ver fn_resolver_establecimiento_unico
-    -- (V50) y el mismo patron en fn_sed_crear (V52).
     v_fk_establecimiento  BIGINT := COALESCE(
         p_fk_establecimiento,
         academico_test.fn_resolver_establecimiento_unico(p_pk_usuario_solicitante)
@@ -1136,10 +1123,6 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    -- Gate compuesto (mismo patron que fn_sed_crear), validado contra el
-    -- EE ya resuelto:
-    --  (a) super-admin; (b) rector del EE; (c) secretaria del EE;
-    --  (d) jefe de sistema (rol 8) en alguna sede del EE.
     IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
         NULL;
     ELSIF EXISTS (
@@ -1164,6 +1147,19 @@ BEGIN
           JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
          WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
            AND s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8
+           AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    -- REV4 -- coordinador (rol 11) de AL MENOS UNA sede del EE destino
+    -- tambien puede enlazar (a diferencia de jefe de sistema, esto no le
+    -- da autoridad sobre el resto del establecimiento -- solo sobre esta
+    -- operacion puntual de enlazar, y solo si administra alguna sede ahi).
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
+           AND s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11
            AND su.FK_TUSUARIO = p_pk_usuario_solicitante
     ) THEN
         NULL;
@@ -1220,61 +1216,149 @@ COMMENT ON FUNCTION academico_test.fn_fun_enlazar_establecimiento(BIGINT, BIGINT
 --   Retorna: SETOF (accion, id, status) — uno por elemento procesado, para
 --   que el caller pueda reportar exito/error granular por fila.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_fun_permisos_actualizar(
-    p_pk_usuario_solicitante BIGINT,
-    p_pk_funcionario         BIGINT,
-    p_permisos               JSONB
-)
-RETURNS TABLE (
-    accion VARCHAR,
-    id     BIGINT,
-    status VARCHAR
-)
-LANGUAGE plpgsql
+CREATE OR REPLACE FUNCTION academico_test.fn_fun_permisos_actualizar(p_pk_usuario_solicitante bigint, p_pk_funcionario bigint, p_permisos jsonb)
+ RETURNS TABLE(accion character varying, id bigint, status character varying)
+ LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_pk_usuario BIGINT;
-    v_active_fun BOOLEAN;
-    v_perm       RECORD;
+    v_pk_usuario     BIGINT;
+    v_active_fun     BOOLEAN;
+    v_nombre_actual  VARCHAR;
+    v_es_super       BOOLEAN;
+    v_visible        BOOLEAN;
+    -- REV3 -- sedes donde el actor tiene autoridad PLENA (cualquier rol:
+    -- rector/secretaria/jefe de sistema de ese EE), y sedes donde el actor
+    -- es coordinador (autoridad LIMITADA: solo roles 9-14, nunca rector/
+    -- jefe de sistema). Se materializan una vez antes del loop para poder
+    -- validar cada operacion individual contra la sede que afecta.
+    v_sedes_plenas   BIGINT[];
+    v_sedes_coord    BIGINT[];
+    v_perm           RECORD;
+    v_fk_sede_op     BIGINT;
+    v_fk_rol_op      BIGINT;
 BEGIN
-    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        -- Fallback: rector o secretaria de CUALQUIER EE activo, via
-        -- TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA --
-        -- fn_puede_afectar_usuarios (-> fn_puede_afectar_sede ->
-        -- fn_puede_afectar_establecimiento) solo reconoce el rol via
-        -- TSEDE_USUARIO (FK_TROL 1-3/7-8/9): un rector/secretaria recien
-        -- asignado, sin ningun TSEDE_USUARIO todavia (caso normal antes de
-        -- que se decida si se liga a todas las sedes o no), quedaba sin
-        -- poder gestionar a sus propios funcionarios.
-        IF NOT EXISTS (
+    -- =====================================================================
+    -- 1. Validar existencia y estado del TFUNCIONARIO. Resolver PK_TUSUARIO
+    --    y un nombre legible para mensajes.
+    -- =====================================================================
+    SELECT f.ACTIVE, f.FK_TUSUARIO,
+           TRIM(COALESCE(u.PRIMER_NOMBRE,'') || ' ' || COALESCE(u.PRIMER_APELLIDO,''))
+      INTO v_active_fun, v_pk_usuario, v_nombre_actual
+      FROM academico_test.TFUNCIONARIO f
+      JOIN academico_test.TUSUARIO      u ON u.PK_TUSUARIO = f.FK_TUSUARIO
+     WHERE f.PK_TFUNCIONARIO = p_pk_funcionario;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se encontro el funcionario solicitado'
+            USING ERRCODE = 'P0002';
+    END IF;
+    IF v_active_fun = FALSE THEN
+        RAISE EXCEPTION 'El funcionario "%" esta inactivo; no se puede actualizar', v_nombre_actual
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- =====================================================================
+    -- 0. Gate de autorizacion -- REV3: "union de EE accesibles" +
+    --    coordinador de sede, mismo patron que fn_fun_actualizar/
+    --    fn_usu_empleado_buscar_por_pk/fn_fun_baja_establecimiento. Ya NO
+    --    usa fn_puede_afectar_usuarios como gate principal (ver REV3 de
+    --    fn_fun_actualizar para el detalle del hueco que cerraba).
+    -- =====================================================================
+    v_es_super := academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante);
+
+    IF NOT v_es_super THEN
+        WITH ee_accesibles AS (
+            SELECT e.PK_ESTABLECIMIENTO
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+            UNION
+            SELECT e.PK_ESTABLECIMIENTO
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+            UNION
+            SELECT DISTINCT s.FK_TESTABLECIMIENTO
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        ),
+        sedes_coordinador AS (
+            SELECT su.FK_TSEDE
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        )
+        SELECT EXISTS (
             SELECT 1
               FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f
-                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-        ) THEN
+             WHERE e.ACTIVE = TRUE
+               AND e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
+               AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
+            UNION ALL
+            SELECT 1
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE su.FK_TUSUARIO = v_pk_usuario
+               AND su.ACTIVE      = TRUE
+               AND s.ACTIVE       = TRUE
+               AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
+               AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
+            UNION ALL
+            SELECT 1
+              FROM academico_test.TSEDE_USUARIO su
+             WHERE su.FK_TUSUARIO = v_pk_usuario
+               AND su.ACTIVE      = TRUE
+               AND su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador)
+               AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
+        ) INTO v_visible;
+
+        IF NOT v_visible THEN
             RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
                 USING ERRCODE = '42501';
         END IF;
     END IF;
 
-    SELECT ACTIVE, FK_TUSUARIO
-      INTO v_active_fun, v_pk_usuario
-      FROM academico_test.TFUNCIONARIO
-     WHERE PK_TFUNCIONARIO = p_pk_funcionario;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'no existe TFUNCIONARIO con PK %', p_pk_funcionario
-            USING ERRCODE = 'P0002';
-    END IF;
-    IF v_active_fun = FALSE THEN
-        RAISE EXCEPTION 'TFUNCIONARIO % esta inactivo; no se puede actualizar', p_pk_funcionario
-            USING ERRCODE = '22023';
-    END IF;
-
     IF p_permisos IS NULL OR jsonb_typeof(p_permisos) <> 'array' THEN
         RAISE EXCEPTION 'p_permisos debe ser un JSON array'
             USING ERRCODE = '22023';
+    END IF;
+
+    -- REV3 -- materializa las sedes donde el actor tiene autoridad, para
+    -- validar cada operacion del array contra la sede que afecta (crear
+    -- en una sede que no administra, o eliminar un permiso de una sede
+    -- ajena, quedan bloqueados aunque haya pasado el gate general de
+    -- arriba -- ese gate solo confirma que puede VER/gestionar a este
+    -- funcionario en general, no que pueda tocar CUALQUIER sede suya).
+    IF NOT v_es_super THEN
+        SELECT ARRAY(
+            SELECT s.PK_TSEDE
+              FROM academico_test.TSEDE s
+             WHERE s.ACTIVE = TRUE
+               AND s.FK_TESTABLECIMIENTO IN (
+                   SELECT e.PK_ESTABLECIMIENTO
+                     FROM academico_test.TESTABLECIMIENTO e
+                     JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
+                    WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+                   UNION
+                   SELECT e.PK_ESTABLECIMIENTO
+                     FROM academico_test.TESTABLECIMIENTO e
+                     JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
+                    WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+                   UNION
+                   SELECT DISTINCT s2.FK_TESTABLECIMIENTO
+                     FROM academico_test.TSEDE_USUARIO su2
+                     JOIN academico_test.TSEDE s2 ON s2.PK_TSEDE = su2.FK_TSEDE
+                    WHERE s2.ACTIVE = TRUE AND su2.ACTIVE = TRUE AND su2.FK_TROL = 8 AND su2.FK_TUSUARIO = p_pk_usuario_solicitante
+               )
+        ) INTO v_sedes_plenas;
+
+        SELECT ARRAY(
+            SELECT su.FK_TSEDE
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        ) INTO v_sedes_coord;
     END IF;
 
     FOR v_perm IN
@@ -1301,6 +1385,15 @@ BEGIN
                 CONTINUE;
             END IF;
 
+            IF NOT v_es_super
+               AND NOT (v_perm.fk_sede = ANY(v_sedes_plenas))
+               AND NOT (v_perm.fk_sede = ANY(v_sedes_coord) AND v_perm.fk_rol >= 9 AND v_perm.fk_rol NOT IN (15, 16))
+            THEN
+                status := 'error:sin_permiso_en_sede';
+                RETURN NEXT;
+                CONTINUE;
+            END IF;
+
             id := academico_test.fn_sede_usuario_crear(
                 p_pk_usuario_solicitante,
                 v_perm.fk_sede,
@@ -1317,6 +1410,19 @@ BEGIN
         ELSIF v_perm.accion = 'eliminar' THEN
             IF v_perm.id IS NULL THEN
                 status := 'error:falta_id';
+                RETURN NEXT;
+                CONTINUE;
+            END IF;
+
+            SELECT FK_TSEDE, FK_TROL INTO v_fk_sede_op, v_fk_rol_op
+              FROM academico_test.TSEDE_USUARIO
+             WHERE PK_TSEDE_USUARIO = v_perm.id;
+
+            IF FOUND AND NOT v_es_super
+               AND NOT (v_fk_sede_op = ANY(v_sedes_plenas))
+               AND NOT (v_fk_sede_op = ANY(v_sedes_coord) AND v_fk_rol_op >= 9 AND v_fk_rol_op NOT IN (15, 16))
+            THEN
+                status := 'error:sin_permiso_en_sede';
                 RETURN NEXT;
                 CONTINUE;
             END IF;
@@ -1517,7 +1623,7 @@ BEGIN
      WHERE PK_TFUNCIONARIO = p_pk_funcionario;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'no existe TFUNCIONARIO con PK %', p_pk_funcionario
+        RAISE EXCEPTION 'No se encontro el funcionario solicitado'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -2754,85 +2860,46 @@ COMMENT ON FUNCTION academico_test.fn_usu_empleados_listar_paginado(
 --   front: id, name, dane, zone{id,code,name}, neighborhood, commune,
 --   address, phone).
 --
---   Gate de autorizacion: EXACTAMENTE el mismo que fn_usu_empleados_listar/
---   _contar (super-admin, o rector/secretaria del EE al que esta enlazado
---   el funcionario objetivo) — aplicado contra el EE concreto del PK
---   pedido, igual que fn_est_buscar_por_pk hace contra fn_est_listar.
+--   REV3 -- Gate de autorizacion: EXACTAMENTE el mismo patron "union de EE
+--   accesibles" que fn_usu_empleados_listar/_contar/fn_fun_baja_
+--   establecimiento (super-admin, o rector/secretaria/jefe de sistema de
+--   AL MENOS UN EE donde el funcionario objetivo sea alcanzable -- es su
+--   rector, su secretaria, o tiene un TSEDE_USUARIO activo en una sede de
+--   ese EE). Ya NO se basa en TFUNCIONARIO.FK_ESTABLECIMIENTO: esa columna
+--   quedo sin proposito, siempre NULL desde que TFUNCIONARIO paso a ser
+--   una fila por persona -- con el gate viejo, rector/secretaria NUNCA
+--   pasaban (v_fk_ee IS NOT NULL jamas se cumplia), asi que solo un
+--   super-admin podia ver el detalle de cualquier funcionario.
 --
 --   Retorna: SETOF (0 o 1 fila en la practica).
 --
 --   Excepciones:
 --     SQLSTATE '22023' — Parametros invalidos.
 --     SQLSTATE 'P0002' — No existe TFUNCIONARIO activo con ese PK.
---     SQLSTATE '42501' — Existe, pero el usuario no pasa el gate contra el
---                        EE de ese funcionario (o el funcionario esta
---                        pendiente de enlazar, FK_ESTABLECIMIENTO NULL,
---                        que solo un super-admin puede ver).
+--     SQLSTATE '42501' — Existe, pero el usuario no administra ningun EE
+--                        donde el funcionario objetivo sea alcanzable.
 -- ---------------------------------------------------------------------------
 -- REV2 cambia el RETURNS TABLE (agrega fk_tarchivo_foto) -- CREATE OR
 -- REPLACE no alcanza cuando cambia la firma de salida, hace falta DROP.
 DROP FUNCTION IF EXISTS academico_test.fn_usu_empleado_buscar_por_pk(BIGINT, BIGINT);
 
-CREATE OR REPLACE FUNCTION academico_test.fn_usu_empleado_buscar_por_pk(
-    p_pk_usuario_solicitante  BIGINT,
-    p_pk_funcionario          BIGINT
-)
-RETURNS TABLE (
-    pk_empleado                BIGINT,
-    -- TUSUARIO / persona
-    fk_tlv_tipo_documento      BIGINT,
-    tipo_documento_nombre      VARCHAR,
-    identificacion             VARCHAR,
-    primer_nombre              VARCHAR,
-    segundo_nombre             VARCHAR,
-    primer_apellido            VARCHAR,
-    segundo_apellido           VARCHAR,
-    fecha_nacimiento           DATE,
-    fk_tlv_genero              BIGINT,
-    genero_nombre              VARCHAR,
-    correo_electronico         VARCHAR,
-    telefono                   VARCHAR,
-    fk_estado                  VARCHAR,
-    estado_label                VARCHAR,
-    -- TFUNCIONARIO
-    fk_establecimiento         BIGINT,
-    fk_tlv_clase_funcionario   BIGINT,
-    clase_funcionario_nombre   VARCHAR,
-    fk_tlv_nivel_esenanza      BIGINT,
-    nivel_esenanza_nombre      VARCHAR,
-    fk_tlv_grado_escalafon     BIGINT,
-    grado_escalafon_nombre     VARCHAR,
-    fk_tlv_nivel_educativo     BIGINT,
-    nivel_educativo_nombre     VARCHAR,
-    fk_tlv_fuente_recurso      BIGINT,
-    fuente_recurso_nombre      VARCHAR,
-    fk_tlv_cargo               BIGINT,
-    cargo_nombre                VARCHAR,
-    fk_tlv_tipo_vinculacion    BIGINT,
-    tipo_vinculacion_nombre    VARCHAR,
-    direccion                  VARCHAR,
-    -- REV2: TUSUARIO.FK_TARCHIVO -- fn_fun_crear/fn_fun_actualizar ya
-    -- escriben aca la foto de perfil subida via file-service
-    -- (FILE:perfilUsuario, param_types de id_query=116/119 y del endpoint
-    -- POST /register/funcionario), pero este GET nunca la devolvia: el
-    -- front no tenia como pintarla de vuelta tras crear/editar un
-    -- funcionario (aunque la subida en si funcionara).
-    fk_tarchivo_foto           BIGINT,
-    -- Permisos (TSEDE_USUARIO activos), JSONB array de objetos:
-    --   { id, orden, role:{id,code,name}, campus:{id,name,dane,zone,neighborhood,commune,address,phone},
-    --     workSchedule:{id,code,name}, status }
-    -- `id` = PK_TSEDE_USUARIO: lo necesita el front para poder mandar
-    -- {accion:"eliminar", id} a fn_fun_permisos_actualizar sobre un permiso
-    -- ya existente, sin confundirlo con uno agregado en el mismo borrador.
-    permisos                    JSONB
-)
-LANGUAGE plpgsql
-STABLE
+CREATE OR REPLACE FUNCTION academico_test.fn_usu_empleado_buscar_por_pk(p_pk_usuario_solicitante bigint, p_pk_funcionario bigint)
+ RETURNS TABLE(pk_empleado bigint, fk_tlv_tipo_documento bigint, tipo_documento_nombre character varying, identificacion character varying, primer_nombre character varying, segundo_nombre character varying, primer_apellido character varying, segundo_apellido character varying, fecha_nacimiento date, fk_tlv_genero bigint, genero_nombre character varying, correo_electronico character varying, telefono character varying, fk_estado character varying, estado_label character varying, fk_establecimiento bigint, fk_tlv_clase_funcionario bigint, clase_funcionario_nombre character varying, fk_tlv_nivel_esenanza bigint, nivel_esenanza_nombre character varying, fk_tlv_grado_escalafon bigint, grado_escalafon_nombre character varying, fk_tlv_nivel_educativo bigint, nivel_educativo_nombre character varying, fk_tlv_fuente_recurso bigint, fuente_recurso_nombre character varying, fk_tlv_cargo bigint, cargo_nombre character varying, fk_tlv_tipo_vinculacion bigint, tipo_vinculacion_nombre character varying, direccion character varying, fk_tarchivo_foto bigint, permisos jsonb)
+ LANGUAGE plpgsql
+ STABLE
 AS $$
 DECLARE
-    v_pk_usuario   BIGINT;
-    v_fk_ee        BIGINT;
-    v_active       BOOLEAN;
+    v_pk_usuario        BIGINT;
+    v_active            BOOLEAN;
+    v_visible           BOOLEAN;
+    v_es_super          BOOLEAN;
+    -- REV4 -- todas las sedes donde el solicitante tiene autoridad (las de
+    -- sus EE accesibles, mas la suya propia si es coordinador). Se usa
+    -- para acotar el array `permisos`: antes, una vez que el gate dejaba
+    -- ver a un funcionario compartido entre EE (por UN permiso en un EE
+    -- accesible), se devolvian TODOS sus permisos, incluidos los de
+    -- sedes/EE totalmente ajenos al solicitante.
+    v_sedes_accesibles  BIGINT[];
 BEGIN
     IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
         RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
@@ -2843,37 +2910,92 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    SELECT f.FK_TUSUARIO, f.FK_ESTABLECIMIENTO, f.ACTIVE
-      INTO v_pk_usuario, v_fk_ee, v_active
+    SELECT f.FK_TUSUARIO, f.ACTIVE
+      INTO v_pk_usuario, v_active
       FROM academico_test.TFUNCIONARIO f
      WHERE f.PK_TFUNCIONARIO = p_pk_funcionario;
 
     IF NOT FOUND OR v_active = FALSE THEN
-        RAISE EXCEPTION 'No existe TFUNCIONARIO activo con PK_TFUNCIONARIO = %', p_pk_funcionario
+        RAISE EXCEPTION 'No se encontro un funcionario activo con ese identificador'
             USING ERRCODE = 'P0002';
     END IF;
 
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF v_fk_ee IS NOT NULL AND EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO frec
-          JOIN academico_test.TESTABLECIMIENTO e ON e.FK_TFUNCIONARIO_RECTOR = frec.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_ee
-           AND e.ACTIVE = TRUE AND frec.ACTIVE = TRUE AND frec.FK_TUSUARIO = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF v_fk_ee IS NOT NULL AND EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO fsec
-          JOIN academico_test.TESTABLECIMIENTO e ON e.FK_TFUNCIONARIO_SECRETARIA = fsec.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_ee
-           AND e.ACTIVE = TRUE AND fsec.ACTIVE = TRUE AND fsec.FK_TUSUARIO = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSE
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
+    -- REV2 -- gate por "union de EE accesibles" (mismo patron que
+    -- fn_usu_empleados_listar/fn_fun_baja_establecimiento), ya NO por
+    -- TFUNCIONARIO.FK_ESTABLECIMIENTO: esa columna quedo sin proposito,
+    -- siempre NULL desde que TFUNCIONARIO paso a ser una fila por persona
+    -- (antes esto dejaba a rector/secretaria SIEMPRE fuera del gate, ya
+    -- que v_fk_ee IS NOT NULL nunca se cumplia -- solo super-admin podia
+    -- ver el detalle de un funcionario).
+    v_es_super := academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante);
+
+    IF NOT v_es_super THEN
+        WITH ee_accesibles AS (
+            SELECT e.PK_ESTABLECIMIENTO
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+            UNION
+            SELECT e.PK_ESTABLECIMIENTO
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
+             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+            UNION
+            SELECT DISTINCT s.FK_TESTABLECIMIENTO
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        ),
+        -- REV3 -- coordinador (rol 11) de una sede puntual: alcance de
+        -- SEDE, no de establecimiento.
+        sedes_coordinador AS (
+            SELECT su.FK_TSEDE
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        )
+        SELECT
+            EXISTS (
+                SELECT 1
+                  FROM academico_test.TESTABLECIMIENTO e
+                 WHERE e.ACTIVE = TRUE
+                   AND e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
+                   AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
+                UNION ALL
+                SELECT 1
+                  FROM academico_test.TSEDE_USUARIO su
+                  JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+                 WHERE su.FK_TUSUARIO = v_pk_usuario
+                   AND su.ACTIVE      = TRUE
+                   AND s.ACTIVE       = TRUE
+                   AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
+                   AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
+                UNION ALL
+                -- REV3 -- coordinador: solo si el permiso del funcionario
+                -- objetivo esta en SU sede, y es "otro cargo" (excluye
+                -- ademas rector/jefe de sistema).
+                SELECT 1
+                  FROM academico_test.TSEDE_USUARIO su
+                 WHERE su.FK_TUSUARIO = v_pk_usuario
+                   AND su.ACTIVE      = TRUE
+                   AND su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador)
+                   AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
+            ),
+            -- REV4 -- union de todas las sedes con autoridad, para acotar
+            -- el array `permisos` mas abajo.
+            ARRAY(
+                SELECT s.PK_TSEDE
+                  FROM academico_test.TSEDE s
+                 WHERE s.ACTIVE = TRUE AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
+                UNION
+                SELECT FK_TSEDE FROM sedes_coordinador
+            )
+        INTO v_visible, v_sedes_accesibles;
+
+        IF NOT v_visible THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
     END IF;
 
     RETURN QUERY
@@ -2921,7 +3043,9 @@ BEGIN
                JOIN academico_test.TLISTA_VALOR  jor ON jor.PK_LISTA_VALOR = su.FK_TLV_JORNADA
           LEFT JOIN academico_test.TLISTA_VALOR  zn  ON zn.PK_LISTA_VALOR = s.FK_TLV_ZONA
               WHERE su.FK_TUSUARIO = u.PK_TUSUARIO
-                AND su.ACTIVE      = TRUE),
+                AND su.ACTIVE      = TRUE
+                AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
+                AND (v_es_super OR su.FK_TSEDE = ANY(v_sedes_accesibles))),
             '[]'::JSONB
         )
       FROM academico_test.TFUNCIONARIO f
@@ -2940,7 +3064,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_usu_empleado_buscar_por_pk(BIGINT, BIGINT)
-    IS 'Detalle completo de UN funcionario (TUSUARIO + TFUNCIONARIO + catalogos resueltos + permisos TSEDE_USUARIO activos como JSONB array con Campus completo por permiso, cada uno con su id=PK_TSEDE_USUARIO para poder sincronizar altas/bajas via fn_fun_permisos_actualizar). Gate: mismo patron que fn_usu_empleados_listar/_contar, aplicado contra el EE concreto del funcionario objetivo (super-admin, o rector/secretaria de ese EE puntual). P0002 si no existe o esta inactivo. 42501 si no pasa el gate (incluye el caso de un funcionario pendiente de enlazar, FK_ESTABLECIMIENTO NULL, que solo un super-admin puede consultar). No devuelve CONTRASENA (el front no debe ver el hash). REV2: agrega fk_tarchivo_foto (TUSUARIO.FK_TARCHIVO) -- fn_fun_crear/fn_fun_actualizar ya la escribian, este GET nunca la devolvia.';
+    IS 'Detalle completo de UN funcionario (TUSUARIO + TFUNCIONARIO + catalogos resueltos + permisos TSEDE_USUARIO activos como JSONB array con Campus completo por permiso, cada uno con su id=PK_TSEDE_USUARIO para poder sincronizar altas/bajas via fn_fun_permisos_actualizar). REV3: Gate por "union de EE accesibles" (mismo patron que fn_usu_empleados_listar/_contar/fn_fun_baja_establecimiento) -- super-admin, o rector/secretaria/jefe de sistema de AL MENOS UN EE donde el funcionario objetivo sea alcanzable (es su rector, su secretaria, o tiene un TSEDE_USUARIO activo en una sede de ese EE). Ya NO depende de TFUNCIONARIO.FK_ESTABLECIMIENTO (esa columna quedo sin proposito, siempre NULL desde que TFUNCIONARIO paso a ser una fila por persona -- con el gate viejo, rector/secretaria nunca pasaban, solo super-admin podia ver el detalle de cualquier funcionario). P0002 si no existe o esta inactivo. 42501 si no pasa el gate. No devuelve CONTRASENA (el front no debe ver el hash). REV2: agrega fk_tarchivo_foto (TUSUARIO.FK_TARCHIVO) -- fn_fun_crear/fn_fun_actualizar ya la escribian, este GET nunca la devolvia.';
 
 
 -- ===========================================================================
@@ -3041,23 +3165,36 @@ COMMENT ON FUNCTION academico_test.fn_usu_tiene_otros_vinculos(BIGINT)
 --  administra el solicitante (rector/secretaria/jefe de sistema), no contra
 --  "el EE" de un FK que ya no existe.
 --
---  Comportamiento por rol de quien la ejecuta:
---    (a) Super-admin -- baja INTEGRAL: limpia FK_TFUNCIONARIO_RECTOR/
---        SECRETARIA en TODOS los EE donde el funcionario aparezca,
---        desactiva TODOS sus TSEDE_USUARIO, desactiva el TFUNCIONARIO, y si
---        el TUSUARIO no cumple ningun otro rol en la plataforma
---        (fn_usu_tiene_otros_vinculos) lo desactiva tambien. El rector de
---        un EE activo SOLO se puede dar de baja por este camino.
+--  REV3 -- bloqueos previos, sin excepcion de rol (fail-fast: si alguno
+--  aplica, la baja NO procede, nada se toca):
+--    * Es rector de un EE activo -- YA NO existe el camino de escape para
+--      super-admin (antes SI podia, vaciando FK_TFUNCIONARIO_RECTOR y
+--      dejando al EE sin rector). Ahora bloquea siempre: hay que reasignar
+--      el rector desde el establecimiento antes de poder dar de baja.
+--    * Es secretaria de un EE activo -- mismo tratamiento que rector
+--      (antes no tenia ningun bloqueo: su FK simplemente se vaciaba).
+--    * Tiene responsabilidades academicas VIGENTES: lider de TGRUPO,
+--      TDOCENTE_ASIGNATURA, TUNIDAD, TTRASLADO_ESTUDIANTE o TPERIODO_PERMISO
+--      activos. Deliberadamente NO se incluyen tablas de registro historico
+--      (TACTA_GRADO, TEVALUACION_DOCENTE, TCOMPORTAMIENTO_CALIFICADO,
+--      TOBSERVADOR_ANOTACION, TFUNCIONARIO_ARCHIVO): son datos de algo que
+--      ya ocurrio, no trabajo pendiente, y bloquear por ellas volveria la
+--      baja practicamente inalcanzable para cualquier docente con
+--      historial.
+--
+--  Comportamiento por rol de quien la ejecuta (una vez superados los
+--  bloqueos de arriba):
+--    (a) Super-admin -- baja INTEGRAL: desactiva TODOS sus TSEDE_USUARIO,
+--        desactiva el TFUNCIONARIO, y si el TUSUARIO no cumple ningun otro
+--        rol en la plataforma (fn_usu_tiene_otros_vinculos) lo desactiva
+--        tambien.
 --    (b) Rector / secretaria / jefe de sistema -- baja PARCIAL: solo quita
---        los TSEDE_USUARIO del funcionario en sedes de SUS PROPIOS EE, y
---        limpia la FK de secretaria si aplica a esos EE puntuales. Si tras
---        eso el funcionario sigue teniendo permisos o rol de rector/
---        secretaria en OTRO EE (uno que este solicitante no administra), el
---        TFUNCIONARIO queda activo -- solo perdio esos permisos puntuales.
---        Si no le queda nada en ningun lado, se desactiva el TFUNCIONARIO
---        (y, con el mismo criterio de fn_usu_tiene_otros_vinculos, el
---        TUSUARIO). No puede tocar al rector de ningun EE (bloqueado,
---        22023) -- eso es exclusivo del camino super-admin.
+--        los TSEDE_USUARIO del funcionario en sedes de SUS PROPIOS EE. Si
+--        tras eso el funcionario sigue teniendo permisos en OTRO EE (uno
+--        que este solicitante no administra), el TFUNCIONARIO queda activo
+--        -- solo perdio esos permisos puntuales. Si no le queda nada en
+--        ningun lado, se desactiva el TFUNCIONARIO (y, con el mismo
+--        criterio de fn_usu_tiene_otros_vinculos, el TUSUARIO).
 --
 --  Gate (antes de decidir cual camino tomar): super-admin, o rector/
 --  secretaria/jefe de sistema de AL MENOS UN EE donde el funcionario
@@ -3067,27 +3204,28 @@ COMMENT ON FUNCTION academico_test.fn_usu_tiene_otros_vinculos(BIGINT)
 
 
 -- ---------------------------------------------------------------------------
--- fn_fun_baja_establecimiento (REV2)
+-- fn_fun_baja_establecimiento (REV3)
 --   Retorna: PK_TFUNCIONARIO dado de baja (parcial o integral, ver arriba).
 --   Excepciones:
---     SQLSTATE '22023' — Parametros invalidos, o el funcionario es rector
---                        de un EE activo y quien llama no es super-admin.
+--     SQLSTATE '22023' — Parametros invalidos, o el funcionario es rector/
+--                        secretaria de un EE activo, o tiene responsabilidades
+--                        academicas vigentes (ver REV3 arriba). Ninguno de
+--                        estos tres tiene excepcion por rol de quien llama.
 --     SQLSTATE 'P0002' — No existe TFUNCIONARIO activo con ese PK.
 --     SQLSTATE '42501' — El usuario no administra ningun EE donde el
 --                        funcionario objetivo sea alcanzable.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_fun_baja_establecimiento(
-    p_pk_usuario_solicitante BIGINT,
-    p_pk_funcionario         BIGINT
-)
-RETURNS BIGINT
-LANGUAGE plpgsql
+CREATE OR REPLACE FUNCTION academico_test.fn_fun_baja_establecimiento(p_pk_usuario_solicitante bigint, p_pk_funcionario bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_pk_usuario          BIGINT;
     v_active              BOOLEAN;
     v_es_super            BOOLEAN;
     v_es_rector           BOOLEAN;
+    v_es_secretaria       BOOLEAN;
+    v_tiene_vinculos_academicos BOOLEAN;
     v_visible             BOOLEAN;
     v_le_queda_algo       BOOLEAN;
     v_tusuario_desactivado BOOLEAN := FALSE;
@@ -3107,7 +3245,7 @@ BEGIN
      WHERE f.PK_TFUNCIONARIO = p_pk_funcionario;
 
     IF NOT FOUND OR v_active = FALSE THEN
-        RAISE EXCEPTION 'No existe TFUNCIONARIO activo con PK_TFUNCIONARIO = %', p_pk_funcionario
+        RAISE EXCEPTION 'No se encontro un funcionario activo con ese identificador'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -3123,11 +3261,8 @@ BEGIN
     -- "el unico EE" (ver V51 REV5/REV6).
     -- -----------------------------------------------------------------
     IF NOT v_es_super THEN
-        SELECT EXISTS (
-            SELECT 1
-              FROM academico_test.TESTABLECIMIENTO e
-             WHERE e.ACTIVE = TRUE
-               AND e.PK_ESTABLECIMIENTO IN (SELECT e.PK_ESTABLECIMIENTO
+        WITH ee_accesibles AS (
+            SELECT e.PK_ESTABLECIMIENTO
               FROM academico_test.TESTABLECIMIENTO e
               JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
              WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
@@ -3140,7 +3275,21 @@ BEGIN
             SELECT DISTINCT s.FK_TESTABLECIMIENTO
               FROM academico_test.TSEDE_USUARIO su
               JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante)
+             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        ),
+        -- REV4 -- coordinador (rol 11) de una sede puntual: alcance de
+        -- SEDE, no de establecimiento.
+        sedes_coordinador AS (
+            SELECT su.FK_TSEDE
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        )
+        SELECT EXISTS (
+            SELECT 1
+              FROM academico_test.TESTABLECIMIENTO e
+             WHERE e.ACTIVE = TRUE
+               AND e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
                AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
             UNION ALL
             SELECT 1
@@ -3149,20 +3298,18 @@ BEGIN
              WHERE su.FK_TUSUARIO = v_pk_usuario
                AND su.ACTIVE      = TRUE
                AND s.ACTIVE       = TRUE
-               AND s.FK_TESTABLECIMIENTO IN (SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
+               AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
+               AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
+            UNION ALL
+            -- REV4 -- coordinador: solo si el permiso del funcionario
+            -- objetivo esta en SU sede, y es "otro cargo" (excluye
+            -- ademas rector/jefe de sistema).
+            SELECT 1
               FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante)
+             WHERE su.FK_TUSUARIO = v_pk_usuario
+               AND su.ACTIVE      = TRUE
+               AND su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador)
+               AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
         ) INTO v_visible;
 
         IF NOT v_visible THEN
@@ -3172,41 +3319,71 @@ BEGIN
     END IF;
 
     -- -----------------------------------------------------------------
-    -- Bloqueo de rector: solo un super-admin puede dar de baja al rector
-    -- de un establecimiento desde esta funcion.
+    -- REV3 -- Bloqueos previos a cualquier cambio (fail-fast: si algo de
+    -- esto aplica, la baja NO procede -- ni se le quitan permisos, ni se
+    -- toca su FK de rector/secretaria, ni nada). Antes el bloqueo de
+    -- rector solo aplicaba a no-super-admin, y un super-admin SI podia
+    -- dar de baja al rector (lo que dejaba al establecimiento sin rector,
+    -- vaciando FK_TFUNCIONARIO_RECTOR). Decision de negocio: rector y
+    -- secretaria son relaciones demasiado importantes para vaciarlas
+    -- mediante una baja -- se deben reasignar explicitamente desde el
+    -- establecimiento primero, sin excepcion de rol.
     -- -----------------------------------------------------------------
     SELECT EXISTS (
         SELECT 1 FROM academico_test.TESTABLECIMIENTO e
          WHERE e.ACTIVE = TRUE AND e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario
     ) INTO v_es_rector;
 
-    IF v_es_rector AND NOT v_es_super THEN
-        RAISE EXCEPTION 'TFUNCIONARIO % es rector de un establecimiento activo; solo un super-admin puede darlo de baja desde aqui', p_pk_funcionario
+    IF v_es_rector THEN
+        RAISE EXCEPTION 'Este funcionario esta asignado como rector de un establecimiento activo; reasigne el rector antes de darlo de baja'
             USING ERRCODE = '22023',
-                  HINT    = 'Reasigne el rector desde el establecimiento, o pida a un super-admin que lo de de baja';
+                  HINT    = 'Reasigne el rector desde el establecimiento antes de continuar';
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1 FROM academico_test.TESTABLECIMIENTO e
+         WHERE e.ACTIVE = TRUE AND e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario
+    ) INTO v_es_secretaria;
+
+    IF v_es_secretaria THEN
+        RAISE EXCEPTION 'Este funcionario esta asignado como secretaria de un establecimiento activo; reasigne la secretaria antes de darlo de baja'
+            USING ERRCODE = '22023',
+                  HINT    = 'Reasigne la secretaria desde el establecimiento antes de continuar';
+    END IF;
+
+    -- REV3 -- Responsabilidades academicas vigentes: grupos que lidera,
+    -- asignaturas que dicta, unidades a cargo, traslados de estudiante en
+    -- curso, o permisos de periodo activos. No se incluyen tablas de
+    -- registro historico (actas de grado firmadas, evaluaciones pasadas,
+    -- comportamiento calificado, archivos adjuntos): esas son datos de
+    -- algo que ya ocurrio, no trabajo pendiente, y bloquear por ellas
+    -- volveria la baja practicamente inalcanzable para cualquier docente
+    -- con historial.
+    SELECT EXISTS (
+        SELECT 1 FROM academico_test.TGRUPO t WHERE t.FK_TFUNCIONARIO = p_pk_funcionario AND t.ACTIVE = TRUE
+        UNION ALL
+        SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA t WHERE t.FK_TFUNCIONARIO = p_pk_funcionario AND t.ACTIVE = TRUE
+        UNION ALL
+        SELECT 1 FROM academico_test.TUNIDAD t WHERE t.FK_TFUNCIONARIO = p_pk_funcionario AND t.ACTIVE = TRUE
+        UNION ALL
+        SELECT 1 FROM academico_test.TTRASLADO_ESTUDIANTE t WHERE t.FK_TFUNCIONARIO = p_pk_funcionario AND t.ACTIVE = TRUE
+        UNION ALL
+        SELECT 1 FROM academico_test.TPERIODO_PERMISO t WHERE t.FK_FUNCIONARIO = p_pk_funcionario AND t.ACTIVE = TRUE
+    ) INTO v_tiene_vinculos_academicos;
+
+    IF v_tiene_vinculos_academicos THEN
+        RAISE EXCEPTION 'Este funcionario tiene responsabilidades academicas activas (grupos, asignaturas u otros registros vigentes); debe desvincularlo de esos registros antes de darlo de baja'
+            USING ERRCODE = '22023';
     END IF;
 
     IF v_es_super THEN
         -- -------------------------------------------------------------
-        -- Camino super-admin: baja INTEGRAL. Limpia rector/secretaria en
-        -- TODOS los EE donde aparezca (puede ser mas de uno, ver V51
-        -- REV5/REV6: TFUNCIONARIO ya no es una fila por EE), desactiva
-        -- TODOS sus TSEDE_USUARIO, desactiva el TFUNCIONARIO, y si el
-        -- TUSUARIO no cumple ningun otro rol en la plataforma
-        -- (fn_usu_tiene_otros_vinculos) lo desactiva tambien.
+        -- Camino super-admin: baja INTEGRAL. Rector/secretaria ya se
+        -- descartaron arriba (bloquean, no se llega aca si aplica).
+        -- Desactiva TODOS sus TSEDE_USUARIO, desactiva el TFUNCIONARIO,
+        -- y si el TUSUARIO no cumple ningun otro rol en la plataforma
+        -- (fn_usu_tiene_otros_vinculos), lo desactiva tambien.
         -- -------------------------------------------------------------
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TFUNCIONARIO_RECTOR = NULL,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE ACTIVE = TRUE AND FK_TFUNCIONARIO_RECTOR = p_pk_funcionario;
-
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TFUNCIONARIO_SECRETARIA = NULL,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE ACTIVE = TRUE AND FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario;
-
         UPDATE academico_test.TSEDE_USUARIO
            SET ACTIVE = FALSE,
                MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
@@ -3229,16 +3406,16 @@ BEGIN
         END IF;
     ELSE
         -- -------------------------------------------------------------
-        -- Camino no-super-admin: solo quita lo que le corresponde a SUS
-        -- propios EE (rector/secretaria/jefe de sistema) -- los permisos
-        -- (TSEDE_USUARIO) del funcionario en sedes de esos EE, y si era
-        -- secretaria de alguno de esos EE puntuales, esa FK. Si despues
-        -- de eso el funcionario sigue ligado a permisos o a un rol de
-        -- rector/secretaria en OTRO establecimiento (uno que no administra
-        -- este solicitante), se deja el TFUNCIONARIO activo -- solo
-        -- perdio esos permisos puntuales. Si no le queda nada en ningun
-        -- lado, se desactiva el TFUNCIONARIO completo (y, si aplica, el
-        -- TUSUARIO -- mismo criterio que el camino super-admin).
+        -- Camino no-super-admin: rector/secretaria ya se descartaron
+        -- arriba. Solo quita lo que le corresponde a SUS propios EE
+        -- (rector/secretaria/jefe de sistema) -- los permisos
+        -- (TSEDE_USUARIO) del funcionario en sedes de esos EE. Si
+        -- despues de eso el funcionario sigue ligado a permisos en OTRO
+        -- establecimiento (uno que no administra este solicitante), se
+        -- deja el TFUNCIONARIO activo -- solo perdio esos permisos
+        -- puntuales. Si no le queda nada en ningun lado, se desactiva el
+        -- TFUNCIONARIO completo (y, si aplica, el TUSUARIO -- mismo
+        -- criterio que el camino super-admin).
         -- -------------------------------------------------------------
         UPDATE academico_test.TSEDE_USUARIO su
            SET ACTIVE = FALSE,
@@ -3248,49 +3425,38 @@ BEGIN
          WHERE s.PK_TSEDE = su.FK_TSEDE
            AND su.FK_TUSUARIO = v_pk_usuario
            AND su.ACTIVE      = TRUE
-           AND s.FK_TESTABLECIMIENTO IN (SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante);
-
-        UPDATE academico_test.TESTABLECIMIENTO
-           SET FK_TFUNCIONARIO_SECRETARIA = NULL,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE ACTIVE = TRUE
-           AND FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario
-           AND PK_ESTABLECIMIENTO IN (SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante);
+           AND (
+                s.FK_TESTABLECIMIENTO IN (SELECT e.PK_ESTABLECIMIENTO
+                   FROM academico_test.TESTABLECIMIENTO e
+                   JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
+                  WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+                 UNION
+                 SELECT e.PK_ESTABLECIMIENTO
+                   FROM academico_test.TESTABLECIMIENTO e
+                   JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
+                  WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+                 UNION
+                 SELECT DISTINCT s2.FK_TESTABLECIMIENTO
+                   FROM academico_test.TSEDE_USUARIO su2
+                   JOIN academico_test.TSEDE s2 ON s2.PK_TSEDE = su2.FK_TSEDE
+                  WHERE s2.ACTIVE = TRUE AND su2.ACTIVE = TRUE AND su2.FK_TROL = 8 AND su2.FK_TUSUARIO = p_pk_usuario_solicitante)
+                -- REV4 -- coordinador: solo su propia sede, y solo el
+                -- permiso puntual que se esta dando de baja si es "otro
+                -- cargo" (nunca rector/jefe de sistema).
+                OR (
+                    su.FK_TSEDE IN (
+                        SELECT su3.FK_TSEDE
+                          FROM academico_test.TSEDE_USUARIO su3
+                          JOIN academico_test.TSEDE s3 ON s3.PK_TSEDE = su3.FK_TSEDE
+                         WHERE s3.ACTIVE = TRUE AND su3.ACTIVE = TRUE AND su3.FK_TROL = 11 AND su3.FK_TUSUARIO = p_pk_usuario_solicitante
+                    )
+                    AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
+                )
+           );
 
         SELECT EXISTS (
             SELECT 1 FROM academico_test.TSEDE_USUARIO su
              WHERE su.FK_TUSUARIO = v_pk_usuario AND su.ACTIVE = TRUE
-            UNION ALL
-            SELECT 1 FROM academico_test.TESTABLECIMIENTO e
-             WHERE e.ACTIVE = TRUE
-               AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
         ) INTO v_le_queda_algo;
 
         IF NOT v_le_queda_algo THEN
@@ -3323,7 +3489,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_fun_baja_establecimiento(BIGINT, BIGINT)
-    IS 'REV2 (cambio de modelo, ver header V51 REV5/REV6): ya NO depende de TFUNCIONARIO.FK_ESTABLECIMIENTO (esa columna quedo sin proposito, siempre NULL). Gate: super-admin, o rector/secretaria/jefe de sistema de AL MENOS UN establecimiento donde el funcionario objetivo sea alcanzable (es su rector, su secretaria, o tiene un TSEDE_USUARIO activo en una sede de ese EE) -- union de EE accesibles, no ""el unico EE"". El rector de un EE activo SOLO puede darse de baja por un super-admin (22023 para cualquier otro). Comportamiento por rol: (a) super-admin -- baja INTEGRAL: limpia FK_TFUNCIONARIO_RECTOR/SECRETARIA en TODOS los EE donde aparezca, desactiva TODOS sus TSEDE_USUARIO, desactiva el TFUNCIONARIO, y si el TUSUARIO no tiene ningun otro vinculo activo en la plataforma (fn_usu_tiene_otros_vinculos -- no es tambien padre de familia, estudiante, etc.) lo desactiva tambien; (b) cualquier otro rol permitido -- baja PARCIAL: solo quita los TSEDE_USUARIO del funcionario en sedes de SUS PROPIOS EE, y limpia la FK de secretaria si aplica a esos EE puntuales; si tras eso el funcionario sigue teniendo permisos o rol de rector/secretaria en OTRO EE, el TFUNCIONARIO queda activo; si no le queda nada en ningun lado, se desactiva el TFUNCIONARIO (y, con el mismo criterio de fn_usu_tiene_otros_vinculos, el TUSUARIO). Sincroniza public.role_users al final (fn_sincronizar_rol_publico). p_pk_usuario_solicitante va al inicio (obligatorio).';
+    IS 'REV3 (cambio de modelo, ver header V51 REV5/REV6): ya NO depende de TFUNCIONARIO.FK_ESTABLECIMIENTO (esa columna quedo sin proposito, siempre NULL). Gate: super-admin, o rector/secretaria/jefe de sistema de AL MENOS UN establecimiento donde el funcionario objetivo sea alcanzable (es su rector, su secretaria, o tiene un TSEDE_USUARIO activo en una sede de ese EE) -- union de EE accesibles, no ""el unico EE"". Bloqueos previos (22023, sin excepcion por rol de quien llama, fail-fast -- nada se toca si aplican): (1) es rector de un EE activo, (2) es secretaria de un EE activo, (3) tiene responsabilidades academicas VIGENTES (TGRUPO como lider, TDOCENTE_ASIGNATURA, TUNIDAD, TTRASLADO_ESTUDIANTE o TPERIODO_PERMISO activos -- deliberadamente NO se incluyen tablas de registro historico como TACTA_GRADO/TEVALUACION_DOCENTE/TCOMPORTAMIENTO_CALIFICADO/TOBSERVADOR_ANOTACION/TFUNCIONARIO_ARCHIVO). Comportamiento por rol una vez superados los bloqueos: (a) super-admin -- baja INTEGRAL: desactiva TODOS sus TSEDE_USUARIO, desactiva el TFUNCIONARIO, y si el TUSUARIO no tiene ningun otro vinculo activo en la plataforma (fn_usu_tiene_otros_vinculos -- no es tambien padre de familia, estudiante, etc.) lo desactiva tambien; (b) cualquier otro rol permitido -- baja PARCIAL: solo quita los TSEDE_USUARIO del funcionario en sedes de SUS PROPIOS EE; si tras eso el funcionario sigue teniendo permisos en OTRO EE, el TFUNCIONARIO queda activo; si no le queda nada en ningun lado, se desactiva el TFUNCIONARIO (y, con el mismo criterio de fn_usu_tiene_otros_vinculos, el TUSUARIO). Sincroniza public.role_users al final (fn_sincronizar_rol_publico). p_pk_usuario_solicitante va al inicio (obligatorio).';
 
 
 -- ---------------------------------------------------------------------------
@@ -3346,15 +3512,9 @@ COMMENT ON FUNCTION academico_test.fn_fun_baja_establecimiento(BIGINT, BIGINT)
 --     'error:sin_permiso'    — no paso el gate contra el EE de ese PK puntual.
 --     'error:<mensaje>'      — cualquier otro fallo inesperado.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_fun_baja_establecimiento_bulk(
-    p_pk_usuario_solicitante  BIGINT,
-    p_pks                     BIGINT[]
-)
-RETURNS TABLE (
-    pk_funcionario BIGINT,
-    status         VARCHAR
-)
-LANGUAGE plpgsql
+CREATE OR REPLACE FUNCTION academico_test.fn_fun_baja_establecimiento_bulk(p_pk_usuario_solicitante bigint, p_pks bigint[])
+ RETURNS TABLE(pk_funcionario bigint, status character varying)
+ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_pk BIGINT;
@@ -3386,12 +3546,16 @@ BEGIN
                 RETURN NEXT;
             WHEN SQLSTATE '22023' THEN
                 pk_funcionario := v_pk;
-                -- Distingue el bloqueo de rector (unico 22023 real esperado
-                -- hoy en la practica, ver REV2 de fn_fun_baja_establecimiento)
-                -- de cualquier otro 22023 inesperado, inspeccionando el
-                -- mensaje ya que ambos comparten codigo.
-                IF SQLERRM LIKE '%es rector de un establecimiento%' THEN
+                -- Distingue los bloqueos esperados de fn_fun_baja_establecimiento
+                -- (rector, secretaria, vinculos academicos vigentes -- ver REV3)
+                -- de cualquier otro 22023 inesperado, inspeccionando el mensaje
+                -- ya que todos comparten codigo.
+                IF SQLERRM LIKE '%asignado como rector de un establecimiento%' THEN
                     status := 'omitido:rector';
+                ELSIF SQLERRM LIKE '%asignado como secretaria de un establecimiento%' THEN
+                    status := 'omitido:secretaria';
+                ELSIF SQLERRM LIKE '%responsabilidades academicas activas%' THEN
+                    status := 'omitido:vinculos_academicos';
                 ELSE
                     status := 'error:parametros_invalidos';
                 END IF;
@@ -3406,7 +3570,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_fun_baja_establecimiento_bulk(BIGINT, BIGINT[])
-    IS 'REV2: variante bulk de fn_fun_baja_establecimiento (ver su comentario para el comportamiento por rol -- baja integral para super-admin, parcial para el resto). Recibe un BIGINT[] de PK_TFUNCIONARIO (deduplicado) y aplica la misma baja a cada uno, EN SAVEPOINTS INDEPENDIENTES (bloque BEGIN/EXCEPTION por PK): un PK que falle NO aborta el resto del lote. Caso explicito: si el rector de un EE activo viene en el lote y quien llama no es super-admin, se omite (status=''omitido:rector'') pero el resto del lote se procesa igual. Retorna SETOF (pk_funcionario, status) con un registro por PK. status en {''eliminado'', ''omitido:rector'', ''error:no_encontrado'', ''error:sin_permiso'', ''error:parametros_invalidos'', ''error:<mensaje>''}. p_pk_usuario_solicitante va al inicio (obligatorio).';
+    IS 'REV3: variante bulk de fn_fun_baja_establecimiento (ver su comentario para el comportamiento por rol y los bloqueos previos -- rector, secretaria, vinculos academicos vigentes). Recibe un BIGINT[] de PK_TFUNCIONARIO (deduplicado) y aplica la misma baja a cada uno, EN SAVEPOINTS INDEPENDIENTES (bloque BEGIN/EXCEPTION por PK): un PK que falle NO aborta el resto del lote. Casos explicitos: si alguno de los tres bloqueos aplica, se omite (status=''omitido:rector''/''omitido:secretaria''/''omitido:vinculos_academicos'' segun corresponda) pero el resto del lote se procesa igual. Retorna SETOF (pk_funcionario, status) con un registro por PK. status en {''eliminado'', ''omitido:rector'', ''omitido:secretaria'', ''omitido:vinculos_academicos'', ''error:no_encontrado'', ''error:sin_permiso'', ''error:parametros_invalidos'', ''error:<mensaje>''}. p_pk_usuario_solicitante va al inicio (obligatorio).';
 
 
 -- ---------------------------------------------------------------------------
@@ -3472,7 +3636,7 @@ BEGIN
      WHERE PK_TFUNCIONARIO = p_pk_funcionario;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'No existe TFUNCIONARIO con PK_TFUNCIONARIO = %', p_pk_funcionario
+        RAISE EXCEPTION 'No se encontro el funcionario solicitado'
             USING ERRCODE = 'P0002';
     END IF;
 
@@ -3486,7 +3650,7 @@ BEGIN
          WHERE e.ACTIVE = TRUE
            AND p_pk_funcionario IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
     ) THEN
-        RAISE EXCEPTION 'TFUNCIONARIO % ya esta asignado como rector/secretaria de un establecimiento -- no es un pendiente cancelable', p_pk_funcionario
+        RAISE EXCEPTION 'Este funcionario ya esta asignado como rector/secretaria de un establecimiento -- no es un pendiente cancelable'
             USING ERRCODE = '22023',
                   HINT    = 'Un funcionario ya asignado se reemplaza reasignando el rol del EE, o se da de baja con fn_fun_baja_establecimiento';
     END IF;
@@ -3497,7 +3661,7 @@ BEGIN
          WHERE su.FK_TUSUARIO = v_fk_usuario
            AND su.ACTIVE      = TRUE
     ) THEN
-        RAISE EXCEPTION 'TFUNCIONARIO % ya tiene permisos asignados (TSEDE_USUARIO) -- no es un pendiente cancelable', p_pk_funcionario
+        RAISE EXCEPTION 'Este funcionario ya tiene permisos asignados -- no es un pendiente cancelable'
             USING ERRCODE = '22023',
                   HINT    = 'Usa fn_fun_permisos_actualizar (accion eliminar) para dar de baja los permisos de un funcionario real';
     END IF;

@@ -1,5 +1,6 @@
 package com.co.eurekatic.ssoadmin.service;
 
+import com.co.eurekatic.common.entity.App;
 import com.co.eurekatic.common.entity.Microservice;
 import com.co.eurekatic.common.entity.Query;
 import com.co.eurekatic.common.entity.QueryParamConstraint;
@@ -9,6 +10,7 @@ import com.co.eurekatic.common.query.ParamNamespace;
 import com.co.eurekatic.common.query.ParamTypes;
 import com.co.eurekatic.common.query.PathTemplateSyntax;
 import com.co.eurekatic.common.query.PlaceholderScanner;
+import com.co.eurekatic.common.repository.AppRepository;
 import com.co.eurekatic.common.repository.MicroserviceRepository;
 import com.co.eurekatic.common.repository.QueryRepository;
 import com.co.eurekatic.common.repository.RoleRepository;
@@ -64,15 +66,18 @@ public class QueryAdminService {
     private final QueryRepository queryRepo;
     private final RoleRepository roleRepo;
     private final MicroserviceRepository microserviceRepo;
+    private final AppRepository appRepo;
     private final PathRegistryNotifier pathRegistryNotifier;
 
     public QueryAdminService(QueryRepository queryRepo,
                              RoleRepository roleRepo,
                              MicroserviceRepository microserviceRepo,
+                             AppRepository appRepo,
                              PathRegistryNotifier pathRegistryNotifier) {
         this.queryRepo = queryRepo;
         this.roleRepo = roleRepo;
         this.microserviceRepo = microserviceRepo;
+        this.appRepo = appRepo;
         this.pathRegistryNotifier = pathRegistryNotifier;
     }
 
@@ -162,6 +167,16 @@ public class QueryAdminService {
                 .orElseThrow(() -> new NotFoundException("Query", queryId));
         Role r = roleRepo.findById(roleId)
                 .orElseThrow(() -> new NotFoundException("Role", roleId));
+        // El bind directo por API (no sólo el desplegable filtrado del
+        // admin-ui) es el camino que de verdad importa asegurar — un
+        // POST /query/{id}/role/{roleId} a mano se saltaba el filtro
+        // de la UI y podía atar cualquier rol a cualquier query,
+        // aunque fueran de apps distintas.
+        Set<Role> permitidos = rolesPermitidosPara(q);
+        if (permitidos != null && !permitidos.contains(r)) {
+            throw new IllegalArgumentException(
+                    "El rol '" + r.getName() + "' no pertenece al app del microservicio de esta query");
+        }
         q.addRole(r);
     }
 
@@ -172,6 +187,58 @@ public class QueryAdminService {
         Role r = roleRepo.findById(roleId)
                 .orElseThrow(() -> new NotFoundException("Role", roleId));
         q.removeRole(r);
+    }
+
+    /**
+     * Roles elegibles para atar a {@code q} vía {@link #bindRole} —
+     * la unión de los roles de TODOS los apps a los que está atado el
+     * microservicio de la query, contando las DOS relaciones que
+     * existen entre {@code Microservice} y {@code App}:
+     *
+     * <ul>
+     *   <li>{@code app_microservice} (M:N) — la que el admin-ui usa de
+     *       verdad hoy: pestaña "Microservices" del formulario de App
+     *       ({@code AppService#bindMicroservice}). Se consulta con
+     *       {@link AppRepository#findByMicroserviceId}, no navegando
+     *       {@code Microservice} (no tiene el lado inverso mapeado —
+     *       igual que {@code Endpoint#getMicroservices()} tampoco lo
+     *       expone en la entidad opuesta).</li>
+     *   <li>{@code Microservice#getApp()} (FK {@code id_app}, "app
+     *       primario") — ningún formulario del admin-ui lo expone hoy
+     *       ({@code MicroserviceRequest#appId} sólo se puede setear
+     *       por API directa), pero se sigue contando por si alguna
+     *       fila lo trae poblado (importación, API directa).</li>
+     * </ul>
+     *
+     * <p>{@code null} = "sin restricción": el microservicio no está
+     * atado a NINGÚN app por ninguna de las dos vías (el caso
+     * legado/"global"). Se mantiene permisivo ahí a propósito — no hay
+     * app contra el cual filtrar, y exigir uno rompería queries
+     * globales que ya funcionan hoy.
+     *
+     * <p>Si SÍ hay al menos un app atado pero ninguno tiene roles
+     * (`role_app` vacío), el resultado es un {@link Set} vacío
+     * (no {@code null}) — eso bloquea todo bind, correctamente: hay
+     * un app contra el cual filtrar, simplemente no autoriza a nadie
+     * todavía.
+     */
+    private Set<Role> rolesPermitidosPara(Query q) {
+        Microservice m = q.getMicroservice();
+        if (m == null) {
+            return null;
+        }
+        List<App> apps = new java.util.ArrayList<>(appRepo.findByMicroserviceId(m.getId()));
+        if (m.getApp() != null && !apps.contains(m.getApp())) {
+            apps.add(m.getApp());
+        }
+        if (apps.isEmpty()) {
+            return null;
+        }
+        Set<Role> roles = new LinkedHashSet<>();
+        for (App app : apps) {
+            roles.addAll(app.getRoles());
+        }
+        return roles;
     }
 
     /**
@@ -191,6 +258,14 @@ public class QueryAdminService {
      */
     public record RoleChecked(Long roleId, String name, boolean checked) {}
 
+    /**
+     * Lista de candidatos a mostrar en el desplegable de binding —
+     * ver {@link #rolesPermitidosPara} para el filtro. Ya no es
+     * {@code roleRepo.findAll()} sin más: mostrar un rol que
+     * {@link #bindRole} va a rechazar de todas formas era el bug
+     * concreto que motivó este cambio (cualquier rol se podía atar a
+     * cualquier query, sin importar el app del query-service).
+     */
     @Transactional(readOnly = true)
     public List<RoleChecked> getRolesForQueryChecked(Long queryId) {
         Query q = queryRepo.findById(queryId)
@@ -198,7 +273,10 @@ public class QueryAdminService {
         Set<Long> bound = q.getRoles().stream()
                 .map(Role::getId)
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-        return roleRepo.findAll().stream()
+        Set<Role> permitidos = rolesPermitidosPara(q);
+        var candidatos = permitidos == null ? roleRepo.findAll() : List.copyOf(permitidos);
+        return candidatos.stream()
+                .sorted(java.util.Comparator.comparing(Role::getName))
                 .map(r -> new RoleChecked(r.getId(), r.getName(), bound.contains(r.getId())))
                 .toList();
     }

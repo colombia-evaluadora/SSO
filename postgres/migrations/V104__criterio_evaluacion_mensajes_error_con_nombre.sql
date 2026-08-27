@@ -61,11 +61,19 @@ DECLARE
     v_max_recovery_pct NUMERIC;
     v_tmp_nombre VARCHAR;
     v_tmp_nombre2 VARCHAR;
+    v_establecimiento_id BIGINT;
+    v_periodo_nombre VARCHAR;
 BEGIN
+    v_establecimiento_id := academico_test.fn_periodo_establecimiento(p_pk_periodo);
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante,
-        academico_test.fn_periodo_establecimiento(p_pk_periodo)
+        v_establecimiento_id
     );
+    -- No habia una variable que resolviera el nombre del periodo sin
+    -- condicion (v_tmp_nombre2 solo se llena en la rama de error de escala);
+    -- se agrega para la etiqueta de auditoria.
+    SELECT NOMBRE INTO v_periodo_nombre FROM academico_test.TPERIODO_ACADEMICO
+     WHERE PK_TPERIODO_ACADEMICO = p_pk_periodo;
 
     IF p_set_grading_scale AND p_grading_scale IS NOT NULL THEN
         SELECT tv.FK_TESCALA
@@ -246,6 +254,10 @@ BEGIN
         END IF;
     END IF;
 
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización del criterio de evaluación del periodo %s', v_periodo_nombre),
+        v_establecimiento_id);
+
     UPDATE academico_test.TCRITERIO_EVALUACION
        SET
            FK_TLV_FORMATO_CALIFICACION = COALESCE(p_grading_format, FK_TLV_FORMATO_CALIFICACION),
@@ -307,9 +319,16 @@ DECLARE
     v_escala_actual BIGINT;
     v_fmt_nombre TEXT; v_max NUMERIC;
     v_tmp_nombre VARCHAR; v_tmp_nombre2 VARCHAR;
+    v_establecimiento_id BIGINT;
+    v_periodo_nombre VARCHAR;
 BEGIN
+    v_establecimiento_id := academico_test.fn_periodo_establecimiento(p_pk_periodo);
     PERFORM academico_test.fn_periodo_gate_escritura(
-        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_pk_periodo));
+        p_pk_usuario_solicitante, v_establecimiento_id);
+    -- No habia una variable que resolviera el nombre del periodo sin
+    -- condicion; se agrega para la etiqueta de auditoria.
+    SELECT NOMBRE INTO v_periodo_nombre FROM academico_test.TPERIODO_ACADEMICO
+     WHERE PK_TPERIODO_ACADEMICO = p_pk_periodo;
     SELECT lv.NOMBRE INTO v_fmt_nombre
       FROM academico_test.TLISTA_VALOR lv
      WHERE lv.PK_LISTA_VALOR = COALESCE(p_grading_format, (
@@ -346,6 +365,10 @@ BEGIN
     SELECT FK_TESCALA INTO v_escala_actual
       FROM academico_test.TCRITERIO_EVALUACION
      WHERE PK_TCRITERIO_EVALUACION = p_pk_periodo AND ACTIVE = TRUE;
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización del criterio de evaluación del periodo %s', v_periodo_nombre),
+        v_establecimiento_id);
+
     UPDATE academico_test.TCRITERIO_EVALUACION SET
         FK_TLV_FORMATO_CALIFICACION = COALESCE(p_grading_format, FK_TLV_FORMATO_CALIFICACION),
         FK_TESCALA                  = CASE WHEN p_set_grading_scale THEN p_grading_scale ELSE FK_TESCALA END,
@@ -401,9 +424,16 @@ DECLARE
     v_escala_actual BIGINT;
     v_grading_scale BIGINT;
     v_tmp_nombre VARCHAR; v_tmp_nombre2 VARCHAR;
+    v_establecimiento_id BIGINT;
+    v_periodo_nombre VARCHAR;
 BEGIN
+    v_establecimiento_id := academico_test.fn_periodo_establecimiento(p_pk_periodo);
     PERFORM academico_test.fn_periodo_gate_escritura(
-        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_pk_periodo));
+        p_pk_usuario_solicitante, v_establecimiento_id);
+    -- No habia una variable que resolviera el nombre del periodo sin
+    -- condicion; se agrega para la etiqueta de auditoria.
+    SELECT NOMBRE INTO v_periodo_nombre FROM academico_test.TPERIODO_ACADEMICO
+     WHERE PK_TPERIODO_ACADEMICO = p_pk_periodo;
 
     IF p_set_grading_scale AND p_pk_tescala_valoracion IS NOT NULL THEN
         SELECT FK_ESCALA INTO v_grading_scale
@@ -448,6 +478,10 @@ BEGIN
     SELECT FK_TESCALA INTO v_escala_actual
       FROM academico_test.TCRITERIO_EVALUACION
      WHERE PK_TCRITERIO_EVALUACION = p_pk_periodo AND ACTIVE = TRUE;
+
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización del criterio de evaluación del periodo %s', v_periodo_nombre),
+        v_establecimiento_id);
 
     UPDATE academico_test.TCRITERIO_EVALUACION SET
         FK_TLV_FORMATO_CALIFICACION = COALESCE(p_grading_format, FK_TLV_FORMATO_CALIFICACION),

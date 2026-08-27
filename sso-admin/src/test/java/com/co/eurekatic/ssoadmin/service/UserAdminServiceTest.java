@@ -60,6 +60,7 @@ class UserAdminServiceTest {
     @Mock NotificationEventPublisher events;
     @Mock SessionInvalidationClient sessionInvalidationClient;
     @Mock CacheManager cacheManager;
+    @Mock org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     UserAdminService service;
 
@@ -86,7 +87,7 @@ class UserAdminServiceTest {
                 "restore-password-account.html");
         service = new UserAdminService(userRepository, roleRepository,
                 appRepository, passwordEncoder, tokenService, emailService,
-                emailProps, events, sessionInvalidationClient, cacheManager);
+                emailProps, events, sessionInvalidationClient, cacheManager, jdbc);
     }
 
     /* ====================== createAccount ====================== */
@@ -315,20 +316,20 @@ class UserAdminServiceTest {
     /* ====================== forgotPassword ====================== */
 
     @Test
-    void forgotPasswordIsNoOpWhenEmailUnknown() {
+    void forgotPasswordFailsWhenEmailUnknown() {
         when(userRepository.findAll()).thenReturn(List.of());
 
-        // Should NOT throw — legacy would have failed noisily.
-        var res = service.forgotPassword("nobody@example.com", null);
+        // 404 a pedido del equipo: el front le dice al usuario que esa
+        // dirección no está registrada en vez de mostrar una confirmación
+        // falsa. Deja el endpoint como enumerador de cuentas — ver la nota en
+        // UserAdminService#forgotPassword.
+        assertThatThrownBy(() -> service.forgotPassword("nobody@example.com", null))
+                .isInstanceOf(NotFoundException.class);
 
+        // Lo que no cambia: a un correo desconocido no le sale ningún correo
+        // ni se le emite token.
         verify(emailService, never()).sendRestorePasswordEmail(any(), anyString());
         verify(tokenService, never()).issueRestoreToken(any());
-        // La respuesta trae token igual, con la misma forma que la del caso
-        // conocido: si un correo inexistente se distinguiera por venir sin
-        // token, el endpoint serviría para enumerar cuentas. Ese token es
-        // descartable — no se persiste, así que no restablece nada.
-        assertThat(res.token()).isNotBlank();
-        assertThat(res.expiresIn()).isPositive();
         verify(userRepository, never()).save(any());
     }
 

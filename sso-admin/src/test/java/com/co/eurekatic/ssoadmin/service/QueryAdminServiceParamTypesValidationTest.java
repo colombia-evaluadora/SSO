@@ -50,8 +50,9 @@ class QueryAdminServiceParamTypesValidationTest {
         com.co.eurekatic.common.repository.QueryRepository queryRepo = mock(com.co.eurekatic.common.repository.QueryRepository.class);
         com.co.eurekatic.common.repository.RoleRepository roleRepo = mock(com.co.eurekatic.common.repository.RoleRepository.class);
         com.co.eurekatic.common.repository.MicroserviceRepository microserviceRepo = mock(com.co.eurekatic.common.repository.MicroserviceRepository.class);
+        com.co.eurekatic.common.repository.AppRepository appRepo = mock(com.co.eurekatic.common.repository.AppRepository.class);
         PathRegistryNotifier notifier = mock(PathRegistryNotifier.class);
-        return new QueryAdminService(queryRepo, roleRepo, microserviceRepo, notifier);
+        return new QueryAdminService(queryRepo, roleRepo, microserviceRepo, appRepo, notifier);
     }
 
     /**

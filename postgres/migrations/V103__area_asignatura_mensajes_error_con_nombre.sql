@@ -68,9 +68,11 @@ AS $function$
 DECLARE
     v_id BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_nombre_aa VARCHAR(130);
+    v_establecimiento_id BIGINT;
 BEGIN
+    v_establecimiento_id := academico_test.fn_periodo_establecimiento(p_fk_periodo);
     PERFORM academico_test.fn_periodo_gate_escritura(
-        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_fk_periodo));
+        p_pk_usuario_solicitante, v_establecimiento_id);
     IF p_fk_periodo IS NULL OR p_fk_area_asignatura IS NULL
        OR NULLIF(TRIM(p_nombre_interno),'') IS NULL OR NULLIF(TRIM(p_abreviacion),'') IS NULL THEN
         RAISE EXCEPTION 'Faltan campos obligatorios del area' USING ERRCODE = '22023';
@@ -103,6 +105,8 @@ BEGIN
         RAISE EXCEPTION 'Ya existe un area con el codigo % en este periodo academico',
             p_abreviacion USING ERRCODE = '23505';
     END IF;
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Creación del área %s', p_nombre_interno), v_establecimiento_id);
     INSERT INTO academico_test.TAREA
         (CODIGO, NOMBRE, FK_TPERIODO_ACADEMICO, FK_TAREA_ASIGNATURA, ORDEN_REPORTE, CREATED_BY)
     VALUES (p_abreviacion, p_nombre_interno, p_fk_periodo,
@@ -122,10 +126,11 @@ DECLARE
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_nombre_pk VARCHAR(130);
     v_nombre_aa VARCHAR(130);
+    v_establecimiento_id BIGINT;
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TAREA a WHERE a.PK_TAREA = p_pk));
+    SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO) INTO v_establecimiento_id
+      FROM academico_test.TAREA a WHERE a.PK_TAREA = p_pk;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     SELECT * INTO r FROM academico_test.TAREA WHERE PK_TAREA = p_pk AND ACTIVE = TRUE;
     IF NOT FOUND THEN
         SELECT NOMBRE INTO v_nombre_pk FROM academico_test.TAREA WHERE PK_TAREA = p_pk;
@@ -171,6 +176,8 @@ BEGIN
         RAISE EXCEPTION 'Ya existe un area con el codigo % en este periodo academico', v_abrev
             USING ERRCODE = '23505';
     END IF;
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización del área %s', v_nombre), v_establecimiento_id);
     UPDATE academico_test.TAREA SET
         FK_TAREA_ASIGNATURA = COALESCE(p_fk_area_asignatura, FK_TAREA_ASIGNATURA),
         NOMBRE = v_nombre,
@@ -280,6 +287,8 @@ BEGIN
         RAISE EXCEPTION 'Ya existe una asignatura con la abreviacion % en esta area', p_abreviacion
             USING ERRCODE = '23505';
     END IF;
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Creación de la asignatura %s', p_nombre_interno), v_est);
     INSERT INTO academico_test.TASIGNATURA
         (CODIGO, NOMBRE, FK_TAREA, FK_TAREA_ASIGNATURA, FK_TENFASIS, COLOR, ORDEN_REPORTE, CREATED_BY)
     VALUES (p_abreviacion, p_nombre_interno, p_fk_area, p_fk_area_asignatura, p_fk_enfasis,
@@ -299,11 +308,12 @@ DECLARE
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_nombre_pk VARCHAR(130);
     v_nombre_aa VARCHAR(130);
+    v_establecimiento_id BIGINT;
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TASIGNATURA s JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
-         WHERE s.PK_TASIGNATURA = p_pk));
+    SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO) INTO v_establecimiento_id
+      FROM academico_test.TASIGNATURA s JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
+     WHERE s.PK_TASIGNATURA = p_pk;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
     SELECT * INTO r FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_pk AND ACTIVE = TRUE;
     IF NOT FOUND THEN
         SELECT NOMBRE INTO v_nombre_pk FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_pk;
@@ -365,6 +375,8 @@ BEGIN
         RAISE EXCEPTION 'Ya existe una asignatura con la abreviacion % en esta area', v_codigo
             USING ERRCODE = '23505';
     END IF;
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización de la asignatura %s', v_nombre), v_establecimiento_id);
     UPDATE academico_test.TASIGNATURA SET
         FK_TAREA_ASIGNATURA = COALESCE(p_fk_area_asignatura, FK_TAREA_ASIGNATURA),
         NOMBRE = v_nombre,
@@ -608,6 +620,8 @@ BEGIN
         RAISE EXCEPTION 'Ya existe un enfasis con el codigo % en este establecimiento', v_codigo
             USING ERRCODE = '23505';
     END IF;
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización del énfasis %s', v_nombre), r.FK_TESTABLECIMIENTO);
     UPDATE academico_test.TENFASIS SET
         NOMBRE = v_nombre,
         CODIGO = v_codigo,
@@ -668,6 +682,9 @@ BEGIN
             p_nombre
             USING ERRCODE = '23505';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización del énfasis %s', p_nombre), r.FK_TESTABLECIMIENTO);
 
     UPDATE academico_test.TENFASIS
     SET
@@ -779,6 +796,8 @@ BEGIN
         RAISE EXCEPTION 'No se puede eliminar el enfasis %: existen asignaturas asociadas', v_nombre
             USING ERRCODE = '23503';
     END IF;
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación del énfasis %s', v_nombre), v_est);
     UPDATE academico_test.TENFASIS SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TENFASIS = p_pk AND ACTIVE = TRUE;
     GET DIAGNOSTICS v_n = ROW_COUNT;
@@ -788,3 +807,434 @@ BEGIN
     RETURN p_pk;
 END;
 $function$;
+
+-- ===========================================================================
+-- Consolidacion (autocontencion): funciones del modulo area/asignatura que
+-- cambiaron entre su creacion (V40) y V99 y que este archivo aun no incluia.
+-- No son fixes de mensajes de error -- se agregan tal cual quedaron vigentes
+-- justo antes de V100, para que este archivo sea la unica fuente de verdad
+-- del modulo hasta ese punto.
+--
+--   fn_enfasis_resolver         -> tomada de V64 (fix_enfasis_resolver_otro_
+--                                   constant): corrige c_especialidad_otro de
+--                                   7 ("Agropecuario", valor equivocado) a 2
+--                                   (consistente con los datos reales). No
+--                                   tiene RAISE con ID (solo crea), asi que
+--                                   no aplica la regla de mensajes -- se
+--                                   agrega solo para dejar el fix de V64
+--                                   consolidado en el modulo.
+--
+--   fn_especialidad_enfasis_listar -> tomada de V76 (fix_especialidad_
+--                                   enfasis_listar_oculta_espejos): excluye
+--                                   los TENFASIS "espejo" (mismo nombre que
+--                                   la TESPECIALIDAD a la que apuntan,
+--                                   creados por fn_enfasis_desde_seleccion)
+--                                   del listado del selector. Funcion SQL sin
+--                                   RAISE, se agrega igual por completitud.
+--
+--   fn_subject_listar           -> el shape de su RETURNS TABLE cambio dos
+--                                   veces despues de V40: V78 (2026-08-14)
+--                                   agrego la columna enfasis_nombre (8
+--                                   columnas); V91__fn_subject_listar_orden_
+--                                   alfabetico_desempate (mtime 2026-08-17,
+--                                   POSTERIOR a V78 pese a compartir numero
+--                                   de version con otro archivo V91 no
+--                                   relacionado) volvio a la forma de 7
+--                                   columnas de V40 (SIN enfasis_nombre) y
+--                                   agrego el desempate ORDER BY ... , NOMBRE.
+--                                   Es una regresion real, no un error de nuestra
+--                                   parte: V112 (fn_subject_listar_devuelve_
+--                                   enfasis_nombre, posterior a V100) tuvo que
+--                                   volver a agregar enfasis_nombre, lo que
+--                                   confirma que esa columna ya no estaba
+--                                   presente justo antes de V100. Por lo tanto
+--                                   la version vigente para este archivo es la
+--                                   de V91 (7 columnas + desempate), no la de
+--                                   V78. Se antepone un DROP FUNCTION porque el
+--                                   shape de RETURNS TABLE cambia respecto de
+--                                   lo que V78 dejaria aplicado.
+-- ===========================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_enfasis_resolver(
+    p_fk_establecimiento BIGINT,
+    p_nombre VARCHAR,
+    p_codigo VARCHAR DEFAULT NULL,
+    p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
+RETURNS BIGINT LANGUAGE plpgsql AS $function$
+DECLARE
+    v_id BIGINT;
+    v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    -- Especialidad "Otro" para enfasis creados al vuelo. Ver comentario de
+    -- migracion V64: 2 es el valor consistente con los datos existentes,
+    -- no el PK real de la fila "Otro" (4) ni el valor previo (7,
+    -- "Agropecuario").
+    c_especialidad_otro CONSTANT BIGINT := 2;
+BEGIN
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, p_fk_establecimiento);
+    SELECT PK_TENFASIS INTO v_id FROM academico_test.TENFASIS
+     WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento AND ACTIVE = TRUE
+       AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(p_nombre));
+    IF v_id IS NULL THEN
+        INSERT INTO academico_test.TENFASIS (CODIGO, NOMBRE, FK_TESPECIALIDAD, FK_TESTABLECIMIENTO, CREATED_BY)
+        VALUES (COALESCE(p_codigo, LEFT(p_nombre, 30)), p_nombre, c_especialidad_otro, p_fk_establecimiento, v_audit)
+        RETURNING PK_TENFASIS INTO v_id;
+    END IF;
+    RETURN v_id;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_especialidad_enfasis_listar(
+    p_fk_establecimiento BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
+RETURNS TABLE (id BIGINT, nombre VARCHAR, codigo VARCHAR, origen TEXT)
+LANGUAGE sql STABLE AS $$
+    SELECT e.PK_ESPECIALIDAD, e.NOMBRE, e.CODIGO, 'ESPECIALIDAD'
+      FROM academico_test.TESPECIALIDAD e
+     WHERE e.ACTIVE = TRUE
+    UNION ALL
+    SELECT en.PK_TENFASIS, en.NOMBRE, en.CODIGO, 'ENFASIS'
+      FROM academico_test.TENFASIS en
+     WHERE en.ACTIVE = TRUE AND en.FK_TESTABLECIMIENTO = p_fk_establecimiento
+       AND NOT EXISTS (
+           SELECT 1 FROM academico_test.TESPECIALIDAD esp
+            WHERE esp.PK_ESPECIALIDAD = en.FK_TESPECIALIDAD
+              AND UPPER(TRIM(esp.NOMBRE)) = UPPER(TRIM(en.NOMBRE))
+       )
+     ORDER BY 4, 2;
+$$;
+
+DROP FUNCTION IF EXISTS academico_test.fn_subject_listar(BIGINT, BIGINT);
+
+CREATE OR REPLACE FUNCTION academico_test.fn_subject_listar(
+    p_fk_area BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
+RETURNS TABLE (id BIGINT, abreviacion VARCHAR, nombre_interno VARCHAR,
+               asignatura_general_id BIGINT, enfasis_id BIGINT, color VARCHAR, orden_reportes NUMERIC)
+LANGUAGE sql STABLE AS $$
+    SELECT s.PK_TASIGNATURA, s.CODIGO, s.NOMBRE, s.FK_TAREA_ASIGNATURA, s.FK_TENFASIS,
+           s.COLOR, s.ORDEN_REPORTE
+      FROM academico_test.TASIGNATURA s
+     WHERE s.FK_TAREA = p_fk_area AND s.ACTIVE = TRUE
+     ORDER BY s.ORDEN_REPORTE, s.NOMBRE;
+$$;
+
+-- =============================================================================
+-- Consolidado: funciones de este modulo que siguieron cambiando despues de
+-- V103 (mensajes con nombre) hasta antes de V128 (donde retoma dev). Estas
+-- migraciones vivian en V110-V122 de la rama feature, eliminadas por
+-- colision de numero de version con dev -- se pegan aca para no perder el
+-- trabajo. Cada CREATE OR REPLACE de abajo es la version MAS RECIENTE de la
+-- funcion: al correr este archivo de arriba a abajo, esta es la que queda
+-- vigente (pisa cualquier definicion anterior de la misma funcion en este
+-- mismo archivo, incluida la de fn_subject_listar justo arriba).
+-- =============================================================================
+
+-- Consolidado desde V118 (fn_subject_guardar_bulk_bloquea_huerfanas_con_dependencias.sql,
+-- que ya incluye el fix de V111 de matchear por PK antes que por nombre):
+-- fn_subject_guardar_bulk ahora corre los 4 chequeos de dependencia (docente,
+-- horario, plan de estudio, calificaciones) antes de dar de baja cada
+-- asignatura "huerfana" que ya no viene en el payload -- antes se desactivaba
+-- con un UPDATE masivo sin ningun chequeo, y como el front nunca llama a
+-- fn_subject_soft_delete individual, el bloqueo que V116 le agrego a esa
+-- funcion nunca se ejecutaba desde el flujo real.
+CREATE OR REPLACE FUNCTION academico_test.fn_subject_guardar_bulk(p_fk_area bigint, p_asignaturas jsonb, p_pk_usuario_solicitante bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_est BIGINT; v_periodo BIGINT; v_count INT := 0; it jsonb;
+    v_id BIGINT; v_pk_hint BIGINT; v_nombre VARCHAR(130); v_codigo VARCHAR(30);
+    v_aa BIGINT; v_enf BIGINT; v_esp BIGINT; v_color VARCHAR(10); v_orden NUMERIC;
+    v_enf_name TEXT;
+    v_nombre_area VARCHAR(130);
+    v_nombre_aa VARCHAR(130);
+    v_orphan_id BIGINT; v_orphan_nombre VARCHAR(130);
+BEGIN
+    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+    -- Se agrega a.NOMBRE a este SELECT ya existente (sin agregar una consulta
+    -- nueva) para tener el nombre del area disponible sin condicion, para la
+    -- etiqueta de auditoria.
+    SELECT a.FK_TPERIODO_ACADEMICO, s.FK_TESTABLECIMIENTO, a.NOMBRE INTO v_periodo, v_est, v_nombre_area
+      FROM academico_test.TAREA a
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = a.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE a.PK_TAREA = p_fk_area AND a.ACTIVE = TRUE;
+    IF v_est IS NULL THEN
+        SELECT NOMBRE INTO v_nombre_area FROM academico_test.TAREA WHERE PK_TAREA = p_fk_area;
+        IF v_nombre_area IS NOT NULL THEN
+            RAISE EXCEPTION 'El area % existe pero esta inactiva', v_nombre_area USING ERRCODE = '23503';
+        ELSE
+            RAISE EXCEPTION 'El area seleccionada no existe' USING ERRCODE = '23503';
+        END IF;
+    END IF;
+    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_est) THEN
+        RAISE EXCEPTION 'El usuario no puede gestionar datos academicos de este establecimiento'
+            USING ERRCODE = '42501';
+    END IF;
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Configuración masiva de asignaturas del área %s', v_nombre_area), v_est);
+
+    FOR v_orphan_id, v_orphan_nombre IN
+        SELECT PK_TASIGNATURA, NOMBRE FROM academico_test.TASIGNATURA
+         WHERE FK_TAREA = p_fk_area AND ACTIVE = TRUE
+           AND PK_TASIGNATURA NOT IN (
+               SELECT NULLIF(e->>'id','')::bigint
+                 FROM jsonb_array_elements(COALESCE(p_asignaturas, '[]'::jsonb)) e
+                WHERE NULLIF(e->>'id','') IS NOT NULL
+           )
+           AND UPPER(TRIM(NOMBRE)) NOT IN (
+               SELECT UPPER(TRIM(e->>'nombreInterno'))
+                 FROM jsonb_array_elements(COALESCE(p_asignaturas, '[]'::jsonb)) e
+                WHERE NULLIF(TRIM(e->>'nombreInterno'),'') IS NOT NULL
+           )
+    LOOP
+        IF EXISTS (
+            SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+             WHERE da.FK_TASIGNATURA = v_orphan_id AND da.ACTIVE = TRUE
+        ) THEN
+            RAISE EXCEPTION 'No se puede quitar la asignatura %: existen asignaciones docente asociadas', v_orphan_nombre
+                USING ERRCODE = '23503';
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM academico_test.THORARIO h
+             WHERE h.FK_TASIGNATURA = v_orphan_id AND h.ACTIVE = TRUE
+        ) THEN
+            RAISE EXCEPTION 'No se puede quitar la asignatura %: existen horarios asociados', v_orphan_nombre
+                USING ERRCODE = '23503';
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM academico_test.TASIGNATURA_PLAN ap
+             WHERE ap.FK_TASIGNATURA = v_orphan_id AND ap.ACTIVE = TRUE
+        ) THEN
+            RAISE EXCEPTION 'No se puede quitar la asignatura %: esta asociada a un plan de estudio', v_orphan_nombre
+                USING ERRCODE = '23503';
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM academico_test.TASIGNATURA_NOTA an
+             WHERE an.FK_TASIGNATURA = v_orphan_id AND an.ACTIVE = TRUE
+        ) THEN
+            RAISE EXCEPTION 'No se puede quitar la asignatura %: existen calificaciones registradas', v_orphan_nombre
+                USING ERRCODE = '23503';
+        END IF;
+
+        UPDATE academico_test.TASIGNATURA
+           SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE PK_TASIGNATURA = v_orphan_id;
+    END LOOP;
+
+    FOR it IN SELECT * FROM jsonb_array_elements(COALESCE(p_asignaturas, '[]'::jsonb))
+    LOOP
+        v_pk_hint  := NULLIF(it->>'id','')::bigint;
+        v_nombre   := it->>'nombreInterno';
+        v_codigo   := it->>'abreviacion';
+        v_color    := NULLIF(it->>'color','');
+        v_orden    := COALESCE(NULLIF(it->>'ordenReportes','')::NUMERIC, 0);
+        v_enf_name := NULLIF(TRIM(it->>'especialidad'),'');
+
+        IF NULLIF(TRIM(v_nombre),'') IS NULL OR NULLIF(TRIM(v_codigo),'') IS NULL THEN
+            RAISE EXCEPTION 'Faltan campos obligatorios de la asignatura' USING ERRCODE = '22023';
+        END IF;
+        IF v_color IS NOT NULL AND v_color !~ '^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$' THEN
+            RAISE EXCEPTION 'El color (%) debe ser un HEX valido, p.ej. #FFAA00', v_color USING ERRCODE = '22023';
+        END IF;
+        v_aa := NULLIF(TRIM(it->>'asignaturaGeneral'),'')::bigint;
+        IF v_aa IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TAREA_ASIGNATURA
+             WHERE PK_TAREA_ASIGNATURA = v_aa AND ACTIVE = TRUE
+        ) THEN
+            SELECT NOMBRE INTO v_nombre_aa FROM academico_test.TAREA_ASIGNATURA
+             WHERE PK_TAREA_ASIGNATURA = v_aa;
+            IF v_nombre_aa IS NOT NULL THEN
+                RAISE EXCEPTION 'La asignatura general % ya existe pero esta inactiva', v_nombre_aa USING ERRCODE = '23503';
+            ELSE
+                RAISE EXCEPTION 'La asignatura general seleccionada no existe' USING ERRCODE = '23503';
+            END IF;
+        END IF;
+        v_enf := NULL;
+        IF v_enf_name IS NOT NULL THEN
+            SELECT PK_ESPECIALIDAD INTO v_esp FROM academico_test.TESPECIALIDAD
+             WHERE ACTIVE = TRUE AND UPPER(TRIM(NOMBRE)) = UPPER(v_enf_name) LIMIT 1;
+            IF v_esp IS NOT NULL THEN
+                v_enf := academico_test.fn_enfasis_desde_seleccion(v_periodo, v_esp, v_audit);
+            ELSE
+                v_enf := academico_test.fn_enfasis_resolver(v_est, v_enf_name, NULL, p_pk_usuario_solicitante);
+            END IF;
+        END IF;
+
+        v_id := NULL;
+        IF v_pk_hint IS NOT NULL THEN
+            SELECT PK_TASIGNATURA INTO v_id FROM academico_test.TASIGNATURA
+             WHERE PK_TASIGNATURA = v_pk_hint AND FK_TAREA = p_fk_area AND ACTIVE = TRUE;
+        END IF;
+        IF v_id IS NULL THEN
+            SELECT PK_TASIGNATURA INTO v_id FROM academico_test.TASIGNATURA
+             WHERE FK_TAREA = p_fk_area AND ACTIVE = TRUE
+               AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(v_nombre)) LIMIT 1;
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM academico_test.TASIGNATURA s
+             WHERE s.FK_TAREA = p_fk_area AND s.ACTIVE = TRUE
+               AND s.PK_TASIGNATURA <> COALESCE(v_id, -1)
+               AND UPPER(TRIM(s.CODIGO)) = UPPER(TRIM(v_codigo))
+        ) THEN
+            RAISE EXCEPTION 'Ya existe una asignatura con la abreviacion % en esta area', v_codigo USING ERRCODE = '23505';
+        END IF;
+
+        IF v_id IS NULL THEN
+            INSERT INTO academico_test.TASIGNATURA
+                (CODIGO, NOMBRE, FK_TAREA, FK_TAREA_ASIGNATURA, FK_TENFASIS, COLOR, ORDEN_REPORTE, CREATED_BY)
+            VALUES (v_codigo, v_nombre, p_fk_area, v_aa, v_enf, v_color, v_orden, v_audit);
+        ELSE
+            UPDATE academico_test.TASIGNATURA SET
+                CODIGO = v_codigo,
+                NOMBRE = v_nombre,
+                FK_TAREA_ASIGNATURA = v_aa,
+                FK_TENFASIS = v_enf,
+                COLOR = v_color,
+                ORDEN_REPORTE = v_orden,
+                MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+             WHERE PK_TASIGNATURA = v_id;
+        END IF;
+        v_count := v_count + 1;
+    END LOOP;
+    RETURN v_count;
+END;
+$$;
+
+-- Consolidado desde V112 (fn_subject_listar_devuelve_enfasis_nombre.sql):
+-- agrega enfasis_nombre resuelto al RETURNS TABLE (antes el front esperaba
+-- este campo pero la funcion nunca lo devolvio -- especialidad quedaba
+-- siempre undefined al editar una asignatura). Reemplaza la definicion de
+-- fn_subject_listar de mas arriba en este archivo.
+DROP FUNCTION IF EXISTS academico_test.fn_subject_listar(bigint, bigint);
+CREATE OR REPLACE FUNCTION academico_test.fn_subject_listar(p_fk_area bigint, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
+ RETURNS TABLE(id bigint, abreviacion character varying, nombre_interno character varying, asignatura_general_id bigint, enfasis_id bigint, enfasis_nombre character varying, color character varying, orden_reportes numeric)
+ LANGUAGE sql
+ STABLE
+AS $$
+    SELECT s.PK_TASIGNATURA, s.CODIGO, s.NOMBRE, s.FK_TAREA_ASIGNATURA, s.FK_TENFASIS,
+           e.NOMBRE, s.COLOR, s.ORDEN_REPORTE
+      FROM academico_test.TASIGNATURA s
+      LEFT JOIN academico_test.TENFASIS e ON e.PK_TENFASIS = s.FK_TENFASIS AND e.ACTIVE = TRUE
+     WHERE s.FK_TAREA = p_fk_area AND s.ACTIVE = TRUE
+     ORDER BY s.ORDEN_REPORTE, s.NOMBRE;
+$$;
+
+-- Consolidado desde V116 (fn_subject_soft_delete_bloquea_plan_estudio.sql):
+-- agrega bloqueo si la asignatura esta en un plan de estudio activo (antes
+-- se podia borrar una asignatura que un grado ya tenia en su plan, dejando
+-- el renglon del plan huerfano).
+CREATE OR REPLACE FUNCTION academico_test.fn_subject_soft_delete(p_pk bigint, p_pk_usuario_solicitante bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_nombre VARCHAR(130);
+    v_establecimiento_id BIGINT;
+BEGIN
+    SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO) INTO v_establecimiento_id
+      FROM academico_test.TASIGNATURA s JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
+     WHERE s.PK_TASIGNATURA = p_pk;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
+    SELECT NOMBRE INTO v_nombre FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_pk;
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+         WHERE da.FK_TASIGNATURA = p_pk AND da.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No se puede eliminar la asignatura %: existen asignaciones docente asociadas', COALESCE(v_nombre, p_pk::text)
+            USING ERRCODE = '23503';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM academico_test.THORARIO h
+         WHERE h.FK_TASIGNATURA = p_pk AND h.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No se puede eliminar la asignatura %: existen horarios asociados', COALESCE(v_nombre, p_pk::text)
+            USING ERRCODE = '23503';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TASIGNATURA_PLAN ap
+         WHERE ap.FK_TASIGNATURA = p_pk AND ap.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No se puede eliminar la asignatura %: esta asociada a un plan de estudio', COALESCE(v_nombre, p_pk::text)
+            USING ERRCODE = '23503';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TASIGNATURA_NOTA an
+         WHERE an.FK_TASIGNATURA = p_pk AND an.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No se puede eliminar la asignatura %: existen calificaciones registradas', COALESCE(v_nombre, p_pk::text)
+            USING ERRCODE = '23503';
+    END IF;
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación de la asignatura %s', COALESCE(v_nombre, p_pk::text)), v_establecimiento_id);
+    UPDATE academico_test.TASIGNATURA SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TASIGNATURA = p_pk AND ACTIVE = TRUE;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n = 0 THEN
+        IF v_nombre IS NOT NULL THEN
+            RAISE EXCEPTION 'La asignatura % existe pero esta inactiva', v_nombre USING ERRCODE = 'P0002';
+        ELSE
+            RAISE EXCEPTION 'No existe una asignatura activa con el PK indicado' USING ERRCODE = 'P0002';
+        END IF;
+    END IF;
+    RETURN p_pk;
+END;
+$$;
+
+-- Consolidado desde V122 (fn_area_soft_delete_bloquea_notas_y_promocion.sql):
+-- agrega dos bloqueos -- calificaciones ya registradas a nivel area
+-- (TAREA_NOTA) y el area marcada como "obligatoria" en un criterio de
+-- promocion (TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA.FK_TAREA).
+CREATE OR REPLACE FUNCTION academico_test.fn_area_soft_delete(p_pk bigint, p_pk_usuario_solicitante bigint)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_nombre VARCHAR(130);
+    v_establecimiento_id BIGINT;
+BEGIN
+    SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO) INTO v_establecimiento_id
+      FROM academico_test.TAREA a WHERE a.PK_TAREA = p_pk;
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
+    SELECT NOMBRE INTO v_nombre FROM academico_test.TAREA WHERE PK_TAREA = p_pk;
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TASIGNATURA WHERE FK_TAREA = p_pk AND ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No se puede eliminar el area %: tiene asignaturas asociadas', COALESCE(v_nombre, p_pk::text)
+            USING ERRCODE = '23503';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TAREA_NOTA tn WHERE tn.FK_TAREA = p_pk AND tn.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No se puede eliminar el area %: existen calificaciones registradas', COALESCE(v_nombre, p_pk::text)
+            USING ERRCODE = '23503';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA cpo
+         WHERE cpo.FK_TAREA = p_pk AND cpo.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'No se puede eliminar el area %: esta marcada como obligatoria en un criterio de promocion', COALESCE(v_nombre, p_pk::text)
+            USING ERRCODE = '23503';
+    END IF;
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación del área %s', COALESCE(v_nombre, p_pk::text)), v_establecimiento_id);
+    UPDATE academico_test.TAREA SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TAREA = p_pk AND ACTIVE = TRUE;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n = 0 THEN
+        IF v_nombre IS NOT NULL THEN
+            RAISE EXCEPTION 'El area % existe pero esta inactiva', v_nombre USING ERRCODE = 'P0002';
+        ELSE
+            RAISE EXCEPTION 'No existe un area activa con el PK indicado' USING ERRCODE = 'P0002';
+        END IF;
+    END IF;
+    RETURN p_pk;
+END;
+$$;

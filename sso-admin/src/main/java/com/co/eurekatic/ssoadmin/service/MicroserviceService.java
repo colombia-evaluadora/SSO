@@ -334,6 +334,33 @@ public class MicroserviceService {
         // RouteService.resolveRouteApp: null clears, non-null
         // must resolve to an existing app.
         m.setApp(resolveMicroserviceApp(req.appId()));
+        // V143: override opcional de dónde file-service debe guardar
+        // la referencia de los archivos subidos por las queries de
+        // este query-service. La BD ya impone el CHECK "ambos o
+        // ninguno" (microservice_file_storage_ambos_o_ninguno), "sólo
+        // kind=QUERY" (microservice_file_storage_solo_query) y valida
+        // la forma de la tabla con fn_validar_tabla_archivo — esto
+        // adelanta ambos chequeos para un 400 legible en vez de una
+        // violación de constraint cruda. El kind "efectivo" cae al de
+        // la fila existente cuando el request no lo reenvía (update()
+        // no siempre lo trae).
+        String schema = blankToNull(req.fileStorageSchema());
+        String tabla = blankToNull(req.fileStorageTable());
+        if ((schema == null) != (tabla == null)) {
+            throw new IllegalArgumentException(
+                    "fileStorageSchema y fileStorageTable deben venir juntos (ambos o ninguno)");
+        }
+        String kindEfectivo = (req.kind() == null || req.kind().isBlank()) ? m.getKind() : req.kind();
+        if (schema != null && !"QUERY".equals(kindEfectivo)) {
+            throw new IllegalArgumentException(
+                    "fileStorageSchema/fileStorageTable sólo aplican a microservicios kind=QUERY");
+        }
+        m.setFileStorageSchema(schema);
+        m.setFileStorageTable(tabla);
+    }
+
+    private static String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s;
     }
 
     private App resolveMicroserviceApp(Long appId) {

@@ -317,7 +317,7 @@ public class FileDestinationAccessService {
         }
 
         List<FilaQuery> filas = jdbc.query("""
-                SELECT q.path_template, q.param_types
+                SELECT q.path_template, q.param_types, m.file_storage_schema, m.file_storage_table
                   FROM public.query q
                   JOIN public.microservice m ON m.id_microservice = q.microservice_id
                  WHERE m.serviceid = :servicio
@@ -327,12 +327,14 @@ public class FileDestinationAccessService {
                 new MapSqlParameterSource()
                         .addValue("servicio", servicio)
                         .addValue("metodo", metodo.toUpperCase(Locale.ROOT)),
-                (rs, n) -> new FilaQuery(rs.getString("path_template"), rs.getString("param_types")));
+                (rs, n) -> new FilaQuery(rs.getString("path_template"), rs.getString("param_types"),
+                        rs.getString("file_storage_schema"), rs.getString("file_storage_table")));
 
         return filas.stream()
                 .filter(f -> matchTemplate(f.pathTemplate(), resto))
                 .findFirst()
-                .map(f -> destinoDe(f.paramTypesJson()))
+                .map(f -> destinoDe(f.paramTypesJson())
+                        .conFileStorage(f.fileStorageSchema(), f.fileStorageTable()))
                 .orElse(Destino.NO_REGISTRADO);
     }
 
@@ -421,7 +423,16 @@ public class FileDestinationAccessService {
         }
     }
 
-    private record FilaQuery(String pathTemplate, String paramTypesJson) {}
+    /**
+     * V143 — {@code fileStorageSchema}/{@code fileStorageTable} vienen
+     * de {@code microservice}, no de {@code query}: el destino de
+     * archivos es una propiedad de la CONEXIÓN del query-service (igual
+     * que {@code dialect}/{@code jdbcUrl}), no de cada fila de query
+     * individual — todas las queries de un mismo microservicio lo
+     * heredan.
+     */
+    private record FilaQuery(String pathTemplate, String paramTypesJson,
+                             String fileStorageSchema, String fileStorageTable) {}
 
     /**
      * Resultado de {@link #resolverDestino}.
@@ -472,31 +483,59 @@ public class FileDestinationAccessService {
      *                           {@code ReenvioController} sigue usando
      *                           la ruta que el cliente pidió, tal cual
      *                           hacía antes de V68.
+     * @param fileStorageSchema  (V143) override de
+     *                           {@code microservice.file_storage_schema}
+     *                           — en qué schema debe guardar
+     *                           {@code ArchivoRepository} la referencia
+     *                           de los archivos subidos por ESTA ruta.
+     *                           {@code null} = el default del servicio
+     *                           ({@code files.schema}). Sólo lo trae un
+     *                           destino {@code query} cuyo microservicio
+     *                           (la conexión del query-service) lo
+     *                           declaró; un {@code endpoint} siempre da
+     *                           {@code null} acá — sigue usando el
+     *                           default.
+     * @param fileStorageTable   tabla del override anterior — viene
+     *                           siempre junto con {@code fileStorageSchema}
+     *                           (ambos {@code null} o ambos con valor,
+     *                           exigido por el CHECK de {@code query}).
      */
     public record Destino(boolean registrado, boolean restringeCampos,
                           Set<String> campos, Set<String> camposObligatorios,
                           Map<String, String> clasificaciones,
                           Map<String, String> camposEstablecimiento,
-                          String rutaExterna) {
+                          String rutaExterna, String fileStorageSchema, String fileStorageTable) {
 
         public static final Destino NO_REGISTRADO =
-                new Destino(false, false, Set.of(), Set.of(), Map.of(), Map.of(), null);
+                new Destino(false, false, Set.of(), Set.of(), Map.of(), Map.of(), null, null, null);
 
         static Destino sinRestriccionDeCampos() {
-            return new Destino(true, false, Set.of(), Set.of(), Map.of(), Map.of(), null);
+            return new Destino(true, false, Set.of(), Set.of(), Map.of(), Map.of(), null, null, null);
         }
 
         static Destino conCamposDeArchivo(Set<String> campos, Set<String> obligatorios,
                                           Map<String, String> clasificaciones,
                                           Map<String, String> camposEstablecimiento) {
             return new Destino(true, true, Set.copyOf(campos), Set.copyOf(obligatorios),
-                    Map.copyOf(clasificaciones), Map.copyOf(camposEstablecimiento), null);
+                    Map.copyOf(clasificaciones), Map.copyOf(camposEstablecimiento), null, null, null);
         }
 
         /** V68 — copia este {@code Destino} con {@link #rutaExterna} fijado. */
         Destino conRutaExterna(String rutaExterna) {
             return new Destino(registrado, restringeCampos, campos, camposObligatorios,
-                    clasificaciones, camposEstablecimiento, rutaExterna);
+                    clasificaciones, camposEstablecimiento, rutaExterna, fileStorageSchema, fileStorageTable);
+        }
+
+        /**
+         * V143 — copia este {@code Destino} con el override de
+         * schema/tabla de almacenamiento de archivos fijado. Ambos
+         * parámetros pueden venir {@code null} (columna sin declarar en
+         * el catálogo) — el resultado sigue siendo "sin override", igual
+         * que antes de que existiera esta columna.
+         */
+        Destino conFileStorage(String fileStorageSchema, String fileStorageTable) {
+            return new Destino(registrado, restringeCampos, campos, camposObligatorios,
+                    clasificaciones, camposEstablecimiento, rutaExterna, fileStorageSchema, fileStorageTable);
         }
     }
 }

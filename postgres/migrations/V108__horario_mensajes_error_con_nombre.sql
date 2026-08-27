@@ -28,6 +28,25 @@
 --     (reglas 2/6: validacion sin ID / rango numerico).
 --
 -- Firmas, DEFAULTs, ERRCODEs y logica de negocio se preservan intactos.
+--
+-- Consolidacion adicional para autocontener el modulo: V81__fix_schedule.sql
+-- (anterior a este archivo y a V99) reescribio por completo fn_horario_guardar
+-- -- paso de un modelo "borra todo el grado e inserta de nuevo" a un diff real
+-- (pasos 6/7/8 mas abajo: desactivar celdas eliminadas, desactivar versiones
+-- anteriores de celdas modificadas, insertar solo lo nuevo/modificado) -- y
+-- agrego un indice unico parcial de respaldo (uq_horario_activo_por_celda)
+-- para blindar la garantia "una sola asignatura por grupo+dia+bloque activo"
+-- a nivel de base de datos, no solo por la logica de la funcion. El cuerpo de
+-- fn_horario_guardar de abajo YA es el de V81 (el diff real), asi que no se
+-- vuelve a reescribir; lo unico que faltaba consolidar aqui es el indice, que
+-- no tiene RAISE EXCEPTION propio pero es parte inseparable de ese mismo fix.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_horario_activo_por_celda
+ON academico_test.THORARIO (
+    FK_TGRUPO,
+    FK_TLV_DIA_SEMANA,
+    NUMERO_BLOQUE
+)
+WHERE ACTIVE = TRUE;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_horario_guardar(
     p_fk_grado bigint,
@@ -101,6 +120,13 @@ BEGIN
 
     PERFORM pg_advisory_xact_lock(
         hashtext('horario:' || p_fk_grado::TEXT)
+    );
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        format('Configuración del horario del grado %s', v_nombre_grado),
+        academico_test.fn_periodo_establecimiento((
+            SELECT g.FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado))
     );
 
 

@@ -312,8 +312,18 @@ BEGIN
               FROM academico_test.TSEDE_USUARIO su
               JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
              WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        ),
+        -- REV7 -- coordinador (rol 11) de una sede puntual: alcance de SEDE,
+        -- no de establecimiento (ver funcionarios_ee mas abajo).
+        sedes_coordinador AS (
+            SELECT su.FK_TSEDE
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
         )
         SELECT 1 FROM ee_accesibles
+        UNION ALL
+        SELECT 1 FROM sedes_coordinador
     ) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
@@ -336,6 +346,29 @@ BEGIN
               JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
              WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
     ),
+    -- REV7 -- coordinador (rol 11) de una sede puntual: alcance de SEDE, no
+    -- de establecimiento (ver funcionarios_ee mas abajo).
+    sedes_coordinador AS (
+        SELECT su.FK_TSEDE
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+    ),
+    -- REV8 -- todas las sedes donde el solicitante tiene alguna autoridad
+    -- (las de sus EE accesibles, mas la suya propia si es coordinador).
+    -- Se usa para acotar roles_agg/sedes_agg/estados_agg/jornada: antes,
+    -- una vez que un funcionario compartido entre EE quedaba visible (por
+    -- UN permiso en un EE accesible), se mostraban TODOS sus permisos,
+    -- incluidos los de sedes/EE totalmente ajenos al solicitante. Ahora
+    -- cada agregado solo trae lo que cae dentro de esta sede-alcance
+    -- (super-admin no se filtra, ve todo).
+    sedes_accesibles AS (
+        SELECT s.PK_TSEDE
+          FROM academico_test.TSEDE s
+         WHERE s.ACTIVE = TRUE AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
+        UNION
+        SELECT FK_TSEDE FROM sedes_coordinador
+    ),
     funcionarios_ee AS (
         SELECT e.FK_TFUNCIONARIO_RECTOR AS pk_tfuncionario
           FROM academico_test.TESTABLECIMIENTO e
@@ -352,6 +385,17 @@ BEGIN
           JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f3.FK_TUSUARIO AND su.ACTIVE = TRUE
           JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
          WHERE s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles) AND f3.ACTIVE = TRUE
+           AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
+        -- REV7 -- coordinador: SOLO funcionarios con permiso activo en SU
+        -- propia sede (no todo el EE), y solo "otros cargos": excluye
+        -- ademas rector(7)/jefe de sistema(8) -- el coordinador no tiene
+        -- esa autoridad, aunque tecnicamente compartiera sede con alguno.
+        UNION
+        SELECT f4.PK_TFUNCIONARIO
+          FROM academico_test.TFUNCIONARIO f4
+          JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f4.FK_TUSUARIO AND su.ACTIVE = TRUE
+         WHERE su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador) AND f4.ACTIVE = TRUE
+           AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
     ),
     base AS (
         -- Funcionarios activos cuyo TUSUARIO matchea search/estado y que
@@ -384,26 +428,41 @@ BEGIN
                             OR r.NOMBRE ILIKE '%' || p_search || '%')
                   )
            )
+           -- REV9 -- filtra por el estado del PERMISO (TSEDE_USUARIO.TLV_ESTADO),
+           -- no por el estado de la cuenta (TUSUARIO.ESTADO): son dos campos
+           -- distintos, y el front (badges de la tabla, estados_agg) siempre
+           -- mostro el primero. Filtrar por el segundo dejaba el filtro sin
+           -- relacion con lo que se ve en pantalla. "Al menos un permiso con
+           -- ese estado" -- mismo criterio que estados_agg (puede mostrar
+           -- "Activo, Suspendido" a la vez si los permisos estan mezclados).
            AND (p_statuses IS NULL OR CARDINALITY(p_statuses) = 0
-                OR u.ESTADO = ANY(
-                    SELECT CASE
-                             WHEN x = 'ACTIVE'    THEN 'A'
-                             WHEN x = 'SUSPENDED' THEN 'I'
-                           END
-                      FROM unnest(p_statuses) AS x
-                     WHERE x IN ('ACTIVE','SUSPENDED')
+                OR EXISTS (
+                    SELECT 1 FROM academico_test.TSEDE_USUARIO su6
+                     WHERE su6.FK_TUSUARIO = u.PK_TUSUARIO
+                       AND su6.ACTIVE      = TRUE
+                       AND su6.FK_TROL >= 7 AND su6.FK_TROL NOT IN (15, 16)
+                       AND su6.TLV_ESTADO = ANY(
+                           SELECT CASE
+                                    WHEN x = 'ACTIVE'    THEN 'ACTIVO'
+                                    WHEN x = 'SUSPENDED' THEN 'INACTIVO'
+                                  END
+                             FROM unnest(p_statuses) AS x
+                            WHERE x IN ('ACTIVE','SUSPENDED')
+                       )
                 ))
            AND (p_campus_id IS NULL OR EXISTS (
                 SELECT 1 FROM academico_test.TSEDE_USUARIO su3
                  WHERE su3.FK_TUSUARIO = u.PK_TUSUARIO
                    AND su3.ACTIVE      = TRUE
                    AND su3.FK_TSEDE    = p_campus_id
+                   AND su3.FK_TROL >= 7 AND su3.FK_TROL NOT IN (15, 16)
            ))
            AND (p_roles IS NULL OR CARDINALITY(p_roles) = 0 OR EXISTS (
                 SELECT 1 FROM academico_test.TSEDE_USUARIO su4
                  WHERE su4.FK_TUSUARIO = u.PK_TUSUARIO
                    AND su4.ACTIVE      = TRUE
                    AND su4.FK_TROL     IN (SELECT t.PK_TROL FROM academico_test.TROL t WHERE t.CODIGO = ANY(p_roles))
+                   AND su4.FK_TROL >= 7 AND su4.FK_TROL NOT IN (15, 16)
            ))
            AND (p_work_schedules IS NULL OR CARDINALITY(p_work_schedules) = 0 OR EXISTS (
                 SELECT 1 FROM academico_test.TSEDE_USUARIO su5
@@ -411,6 +470,7 @@ BEGIN
                    AND su5.ACTIVE         = TRUE
                    AND su5.FK_TLV_JORNADA IN (SELECT lv.PK_LISTA_VALOR FROM academico_test.TLISTA_VALOR lv
                         WHERE lv.CATEGORIA = 'JORNADA' AND lv.VALOR = ANY(p_work_schedules))
+                   AND su5.FK_TROL >= 7 AND su5.FK_TROL NOT IN (15, 16)
            ))
     )
     -- sedes_agg/estados_agg/jornada: FIX V112, reaplicado sobre esta firma.
@@ -460,17 +520,21 @@ BEGIN
                         JOIN academico_test.TROL          r ON r.PK_TROL = su_r.FK_TROL
                        WHERE su_r.FK_TUSUARIO = b.PK_TUSUARIO
                          AND su_r.ACTIVE      = TRUE
+                         AND su_r.FK_TROL >= 7 AND su_r.FK_TROL NOT IN (15, 16)
+                         AND (v_es_super OR su_r.FK_TSEDE IN (SELECT PK_TSEDE FROM sedes_accesibles))
                       UNION
                       SELECT jsonb_build_object('id', 7, 'nombre', 'Rector')
                        WHERE EXISTS (
                            SELECT 1 FROM academico_test.TESTABLECIMIENTO e
                             WHERE e.FK_TFUNCIONARIO_RECTOR = b.PK_TFUNCIONARIO AND e.ACTIVE = TRUE
+                              AND (v_es_super OR e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles))
                        )
                       UNION
                       SELECT jsonb_build_object('id', 17, 'nombre', 'Secretaria')
                        WHERE EXISTS (
                            SELECT 1 FROM academico_test.TESTABLECIMIENTO e
                             WHERE e.FK_TFUNCIONARIO_SECRETARIA = b.PK_TFUNCIONARIO AND e.ACTIVE = TRUE
+                              AND (v_es_super OR e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles))
                        )
                   ) roles_union),
                '[]'::jsonb
@@ -480,13 +544,17 @@ BEGIN
                                   ORDER BY jsonb_build_object('id', s.PK_TSEDE, 'nombre', s.NOMBRE))
                   FROM academico_test.TSEDE_USUARIO su_s
                   JOIN academico_test.TSEDE         s ON s.PK_TSEDE = su_s.FK_TSEDE
-                 WHERE su_s.FK_TUSUARIO = b.PK_TUSUARIO AND su_s.ACTIVE = TRUE),
+                 WHERE su_s.FK_TUSUARIO = b.PK_TUSUARIO AND su_s.ACTIVE = TRUE
+                   AND su_s.FK_TROL >= 7 AND su_s.FK_TROL NOT IN (15, 16)
+                   AND (v_es_super OR su_s.FK_TSEDE IN (SELECT PK_TSEDE FROM sedes_accesibles))),
                '[]'::jsonb
            )                             AS sedes_agg,
            COALESCE(
                (SELECT jsonb_agg(DISTINCT su_e.TLV_ESTADO ORDER BY su_e.TLV_ESTADO)
                   FROM academico_test.TSEDE_USUARIO su_e
-                 WHERE su_e.FK_TUSUARIO = b.PK_TUSUARIO AND su_e.ACTIVE = TRUE),
+                 WHERE su_e.FK_TUSUARIO = b.PK_TUSUARIO AND su_e.ACTIVE = TRUE
+                   AND su_e.FK_TROL >= 7 AND su_e.FK_TROL NOT IN (15, 16)
+                   AND (v_es_super OR su_e.FK_TSEDE IN (SELECT PK_TSEDE FROM sedes_accesibles))),
                '[]'::jsonb
            )                             AS estados_agg
       FROM base b
@@ -495,6 +563,8 @@ BEGIN
               FROM academico_test.TSEDE_USUARIO su
               JOIN academico_test.TLISTA_VALOR  tlv ON tlv.PK_LISTA_VALOR = su.FK_TLV_JORNADA
              WHERE su.FK_TUSUARIO = b.PK_TUSUARIO AND su.ACTIVE = TRUE
+               AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
+               AND (v_es_super OR su.FK_TSEDE IN (SELECT PK_TSEDE FROM sedes_accesibles))
              ORDER BY su.PREDETERMINADO DESC, su.ORDEN ASC, su.PK_TSEDE_USUARIO ASC
              LIMIT 1
       ) jp ON TRUE
@@ -557,8 +627,17 @@ BEGIN
               FROM academico_test.TSEDE_USUARIO su
               JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
              WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        ),
+        -- REV3 -- coordinador (rol 11) de una sede puntual.
+        sedes_coordinador AS (
+            SELECT su.FK_TSEDE
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
         )
         SELECT 1 FROM ee_accesibles
+        UNION ALL
+        SELECT 1 FROM sedes_coordinador
     ) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
@@ -586,25 +665,33 @@ BEGIN
                   )
            )
            AND (p_statuses IS NULL OR CARDINALITY(p_statuses) = 0
-                OR u.ESTADO = ANY(
-                    SELECT CASE
-                             WHEN x = 'ACTIVE'    THEN 'A'
-                             WHEN x = 'SUSPENDED' THEN 'I'
-                           END
-                      FROM unnest(p_statuses) AS x
-                     WHERE x IN ('ACTIVE','SUSPENDED')
+                OR EXISTS (
+                    SELECT 1 FROM academico_test.TSEDE_USUARIO su6
+                     WHERE su6.FK_TUSUARIO = u.PK_TUSUARIO
+                       AND su6.ACTIVE      = TRUE
+                       AND su6.FK_TROL >= 7 AND su6.FK_TROL NOT IN (15, 16)
+                       AND su6.TLV_ESTADO = ANY(
+                           SELECT CASE
+                                    WHEN x = 'ACTIVE'    THEN 'ACTIVO'
+                                    WHEN x = 'SUSPENDED' THEN 'INACTIVO'
+                                  END
+                             FROM unnest(p_statuses) AS x
+                            WHERE x IN ('ACTIVE','SUSPENDED')
+                       )
                 ))
            AND (p_campus_id IS NULL OR EXISTS (
                 SELECT 1 FROM academico_test.TSEDE_USUARIO su3
                  WHERE su3.FK_TUSUARIO = u.PK_TUSUARIO
                    AND su3.ACTIVE      = TRUE
                    AND su3.FK_TSEDE    = p_campus_id
+                   AND su3.FK_TROL >= 7 AND su3.FK_TROL NOT IN (15, 16)
            ))
            AND (p_roles IS NULL OR CARDINALITY(p_roles) = 0 OR EXISTS (
                 SELECT 1 FROM academico_test.TSEDE_USUARIO su4
                  WHERE su4.FK_TUSUARIO = u.PK_TUSUARIO
                    AND su4.ACTIVE      = TRUE
                    AND su4.FK_TROL     IN (SELECT t.PK_TROL FROM academico_test.TROL t WHERE t.CODIGO = ANY(p_roles))
+                   AND su4.FK_TROL >= 7 AND su4.FK_TROL NOT IN (15, 16)
            ))
            AND (p_work_schedules IS NULL OR CARDINALITY(p_work_schedules) = 0 OR EXISTS (
                 SELECT 1 FROM academico_test.TSEDE_USUARIO su5
@@ -612,6 +699,7 @@ BEGIN
                    AND su5.ACTIVE         = TRUE
                    AND su5.FK_TLV_JORNADA IN (SELECT lv.PK_LISTA_VALOR FROM academico_test.TLISTA_VALOR lv
                         WHERE lv.CATEGORIA = 'JORNADA' AND lv.VALOR = ANY(p_work_schedules))
+                   AND su5.FK_TROL >= 7 AND su5.FK_TROL NOT IN (15, 16)
            ));
         RETURN v_total;
     END IF;
@@ -632,6 +720,13 @@ BEGIN
               JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
              WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
     ),
+    -- REV3 -- coordinador (rol 11) de una sede puntual.
+    sedes_coordinador AS (
+        SELECT su.FK_TSEDE
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+    ),
     funcionarios_ee AS (
         SELECT e.FK_TFUNCIONARIO_RECTOR AS pk_tfuncionario
           FROM academico_test.TESTABLECIMIENTO e
@@ -648,6 +743,13 @@ BEGIN
           JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f3.FK_TUSUARIO AND su.ACTIVE = TRUE
           JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
          WHERE s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles) AND f3.ACTIVE = TRUE
+           AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
+        UNION
+        SELECT f4.PK_TFUNCIONARIO
+          FROM academico_test.TFUNCIONARIO f4
+          JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f4.FK_TUSUARIO AND su.ACTIVE = TRUE
+         WHERE su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador) AND f4.ACTIVE = TRUE
+           AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
     )
     SELECT COUNT(DISTINCT f.PK_TFUNCIONARIO)
       INTO v_total
@@ -671,25 +773,33 @@ BEGIN
               )
        )
        AND (p_statuses IS NULL OR CARDINALITY(p_statuses) = 0
-            OR u.ESTADO = ANY(
-                SELECT CASE
-                         WHEN x = 'ACTIVE'    THEN 'A'
-                         WHEN x = 'SUSPENDED' THEN 'I'
-                       END
-                  FROM unnest(p_statuses) AS x
-                 WHERE x IN ('ACTIVE','SUSPENDED')
+            OR EXISTS (
+                SELECT 1 FROM academico_test.TSEDE_USUARIO su6
+                 WHERE su6.FK_TUSUARIO = u.PK_TUSUARIO
+                   AND su6.ACTIVE      = TRUE
+                   AND su6.FK_TROL >= 7 AND su6.FK_TROL NOT IN (15, 16)
+                   AND su6.TLV_ESTADO = ANY(
+                       SELECT CASE
+                                WHEN x = 'ACTIVE'    THEN 'ACTIVO'
+                                WHEN x = 'SUSPENDED' THEN 'INACTIVO'
+                              END
+                         FROM unnest(p_statuses) AS x
+                        WHERE x IN ('ACTIVE','SUSPENDED')
+                   )
             ))
        AND (p_campus_id IS NULL OR EXISTS (
             SELECT 1 FROM academico_test.TSEDE_USUARIO su3
              WHERE su3.FK_TUSUARIO = u.PK_TUSUARIO
                AND su3.ACTIVE      = TRUE
                AND su3.FK_TSEDE    = p_campus_id
+               AND su3.FK_TROL >= 7 AND su3.FK_TROL NOT IN (15, 16)
        ))
        AND (p_roles IS NULL OR CARDINALITY(p_roles) = 0 OR EXISTS (
             SELECT 1 FROM academico_test.TSEDE_USUARIO su4
              WHERE su4.FK_TUSUARIO = u.PK_TUSUARIO
                AND su4.ACTIVE      = TRUE
                AND su4.FK_TROL     IN (SELECT t.PK_TROL FROM academico_test.TROL t WHERE t.CODIGO = ANY(p_roles))
+               AND su4.FK_TROL >= 7 AND su4.FK_TROL NOT IN (15, 16)
        ))
        AND (p_work_schedules IS NULL OR CARDINALITY(p_work_schedules) = 0 OR EXISTS (
             SELECT 1 FROM academico_test.TSEDE_USUARIO su5
@@ -697,6 +807,7 @@ BEGIN
                AND su5.ACTIVE         = TRUE
                AND su5.FK_TLV_JORNADA IN (SELECT lv.PK_LISTA_VALOR FROM academico_test.TLISTA_VALOR lv
                         WHERE lv.CATEGORIA = 'JORNADA' AND lv.VALOR = ANY(p_work_schedules))
+               AND su5.FK_TROL >= 7 AND su5.FK_TROL NOT IN (15, 16)
        ));
 
     RETURN v_total;
