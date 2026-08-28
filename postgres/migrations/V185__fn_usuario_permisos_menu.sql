@@ -24,15 +24,13 @@
 --         (crear/editar/eliminar = FALSE, ver = TRUE).
 --       - SOLO_LECTURA NULL / distinto de 'SI'  -> los 4 permisos (crear,
 --         editar, eliminar, ver) en TRUE — comportamiento historico.
---   * TUSUARIO_ROL_PERMISO (ACTIVE=TRUE) — los BLOQUEOS del usuario sobre
---     un TROL_MENU puntual (no hay columnas CREAR/EDITAR/ELIMINAR/VER en
---     esta tabla, solo SOLO_LECTURA):
---       - SOLO_LECTURA = 'SI'  -> bloquea crear/editar/eliminar, deja VER.
---       - SOLO_LECTURA <> 'SI' (incluye NULL/'NO') -> bloqueo total, los 4
---         permisos quedan en FALSE para ese TROL_MENU.
---     Si coexisten un bloqueo total y uno de solo-lectura sobre el MISMO
---     TROL_MENU (filas distintas, p.ej. una por sede y otra por ente), gana
---     el bloqueo total (mas restrictivo) para ese TROL_MENU puntual.
+--   * TUSUARIO_ROL_PERMISO (ACTIVE=TRUE) — el RECORTE del usuario sobre un
+--     TROL_MENU puntual. CU-86e2w4xdt: el recorte SIEMPRE es "solo lectura"
+--     -- cualquier fila activa quita crear/editar/eliminar y DEJA ver. Un
+--     recorte NUNCA puede quitar el VER de un menu que el rol concede (no
+--     puede ocultar el menu, solo volverlo de solo lectura). El valor de la
+--     columna SOLO_LECTURA ('SI'/'NO'/NULL) ya no cambia el resultado; se
+--     conserva por compatibilidad de esquema.
 --
 -- Un mismo TMENU puede llegar via varios roles del usuario (varios
 -- TROL_MENU distintos apuntando al mismo PK_TMENU). El bloqueo es por
@@ -93,27 +91,22 @@ AS $$
             ON m.PK_TMENU = rm.FK_TMENU AND m.ACTIVE = TRUE
     ),
     bloqueos AS (
-        -- Bloqueos activos del usuario, agregados por TROL_MENU. Si hay
-        -- alguna fila de bloqueo total (SOLO_LECTURA distinto de 'SI'),
-        -- gana sobre un bloqueo de solo-lectura del mismo TROL_MENU.
-        SELECT p.FK_TROL_MENU,
-               bool_or(p.SOLO_LECTURA IS DISTINCT FROM 'SI') AS bloqueo_total,
-               bool_or(p.SOLO_LECTURA = 'SI')                AS bloqueo_solo_lectura
+        -- Recorte del usuario por TROL_MENU. CU-86e2w4xdt: el recorte SIEMPRE
+        -- es "solo lectura" -- basta con que exista una fila activa para ese
+        -- TROL_MENU. No importa el valor de SOLO_LECTURA.
+        SELECT DISTINCT p.FK_TROL_MENU
           FROM academico_test.TUSUARIO_ROL_PERMISO p
          WHERE p.FK_TUSUARIO = p_pk_tusuario
            AND p.ACTIVE = TRUE
-         GROUP BY p.FK_TROL_MENU
     ),
     permisos_por_combo AS (
-        -- Permisos resultantes por CADA combinacion (rol, menu) concedida,
-        -- antes de colapsar por PK_TMENU: base del rol (rm.SOLO_LECTURA)
-        -- menos el recorte del usuario. 'ver' solo se pierde con bloqueo
-        -- total (un menu concedido siempre es al menos visible).
+        -- Permisos por CADA combinacion (rol, menu) concedida, antes de
+        -- colapsar por PK_TMENU: base del rol (rm.SOLO_LECTURA) menos el
+        -- recorte del usuario. El recorte solo baja crear/editar/eliminar;
+        -- VER se conserva SIEMPRE en un menu concedido.
         SELECT mr.PK_TMENU, mr.CODIGO, mr.NOMBRE, mr.URL,
-               mr.base_puede_editar_like
-                    AND NOT (COALESCE(b.bloqueo_total, FALSE)
-                             OR COALESCE(b.bloqueo_solo_lectura, FALSE)) AS puede_editar_like,
-               NOT COALESCE(b.bloqueo_total, FALSE)                      AS puede_ver_combo
+               mr.base_puede_editar_like AND (b.FK_TROL_MENU IS NULL) AS puede_editar_like,
+               TRUE                                                   AS puede_ver_combo
           FROM menus_del_rol mr
           LEFT JOIN bloqueos b ON b.FK_TROL_MENU = mr.PK_TROL_MENU
     )
@@ -131,7 +124,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_usuario_permisos_menu(BIGINT)
-    IS 'Permisos de menu efectivos de un usuario (dado solo su PK_TUSUARIO): una fila por TMENU activo concedido por alguno de sus roles activos en TSEDE_USUARIO, con su codigo/nombre/path (TMENU.URL) y 4 flags (puede_crear, puede_editar, puede_eliminar, puede_ver). La CONCESION base por combinacion (rol, menu) sale de TROL_MENU.SOLO_LECTURA (V99): ''SI'' => solo ver (crear/editar/eliminar = FALSE, ver = TRUE); NULL o cualquier otro valor => los 4 permisos. TUSUARIO_ROL_PERMISO (ACTIVE=TRUE) recorta esa base por combinacion (rol, menu) puntual: SOLO_LECTURA=''SI'' bloquea crear/editar/eliminar y deja solo ver; cualquier otro bloqueo activo (SOLO_LECTURA NULL o distinto de ''SI'') bloquea los 4. Si el mismo TMENU llega via mas de un rol del usuario, se agregan con OR (el rol menos restrictivo gana para ese menu). No filtra por FK_TSEDE/FK_ENTE de TUSUARIO_ROL_PERMISO -- aplica cualquier bloqueo activo del usuario sobre ese TROL_MENU, sin importar su alcance, porque la funcion no recibe sede/establecimiento como parametro.';
+    IS 'Permisos de menu efectivos de un usuario (dado solo su PK_TUSUARIO): una fila por TMENU activo concedido por alguno de sus roles activos en TSEDE_USUARIO, con su codigo/nombre/path (TMENU.URL) y 4 flags (puede_crear, puede_editar, puede_eliminar, puede_ver). La CONCESION base por combinacion (rol, menu) sale de TROL_MENU.SOLO_LECTURA (V99): ''SI'' => solo ver (crear/editar/eliminar = FALSE, ver = TRUE); NULL o cualquier otro valor => los 4 permisos. TUSUARIO_ROL_PERMISO (ACTIVE=TRUE) recorta esa base por combinacion (rol, menu): CU-86e2w4xdt -> el recorte SIEMPRE es solo lectura, cualquier fila activa baja crear/editar/eliminar y DEJA ver; nunca quita el VER de un menu concedido (no puede ocultar el menu). El valor de la columna SOLO_LECTURA ya no altera el resultado. Si el mismo TMENU llega via mas de un rol, se agregan con OR (el rol menos restrictivo gana). No filtra por FK_TSEDE/FK_ENTE de TUSUARIO_ROL_PERMISO -- aplica cualquier recorte activo sobre ese TROL_MENU, sin importar su alcance, porque la funcion no recibe sede/establecimiento como parametro.';
 
 -- ---------------------------------------------------------------------------
 -- Registro en `query` (motor SSO / query-service): GET
