@@ -37,9 +37,11 @@
 --      año lectivo (fn_matricula_validar_estudiante_disponible).
 --   7. Crear/reusar el TPADRE y su TNUCLEO_FAMILIAR (fn_padre_crear ya es
 --      idempotente por usuario internamente).
---   8. Crear la TMATRICULA (fn_matricula_crear).
---   9. Crear el TMATRICULA_SOCIOECONOMICO asociado (fn_matricula_socioeconomico_crear).
---  10. Enlazar los archivos de soporte (fn_matricula_archivo_crear_lote).
+--   8. Vincular a estudiante y acudiente con la SEDE en TSEDE_USUARIO
+--      (roles 15 y 16), para que tengan acceso efectivo al sistema.
+--   9. Crear la TMATRICULA (fn_matricula_crear).
+--  10. Crear el TMATRICULA_SOCIOECONOMICO asociado (fn_matricula_socioeconomico_crear).
+--  11. Enlazar los archivos de soporte (fn_matricula_archivo_crear_lote).
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION academico_test.fn_matricula_directa_crear(
@@ -133,6 +135,9 @@ DECLARE
     v_pk_matricula            BIGINT;
     v_pk_socioeconomico       BIGINT;
     v_archivos                JSONB;
+    -- Roles de TROL para el vinculo a la sede (paso 8).
+    c_fk_trol_estudiante  CONSTANT BIGINT := 15;
+    c_fk_trol_acudiente   CONSTANT BIGINT := 16;
 BEGIN
     -- -----------------------------------------------------------------
     -- 1. Gate temprano -- mismo patron de fn_sed_crear/V160-V165,
@@ -297,7 +302,56 @@ BEGIN
       );
 
     -- -----------------------------------------------------------------
-    -- 8. Crear la TMATRICULA. FK_TLV_ESTADO_MATRICULA se resuelve aca
+    -- 8. Permisos de acceso: estudiante y acudiente quedan vinculados a
+    --    la SEDE en TSEDE_USUARIO, con su rol (15 = Estudiante,
+    --    16 = Acudiente) y la jornada del periodo resuelto -- mismo
+    --    layout que las 73.460 / 54.080 filas que ya existen para esos
+    --    roles (ORDEN=0, TLV_ESTADO='ACTIVO', PREDETERMINADO=0).
+    --
+    --    INSERT directo y no fn_sede_usuario_crear a proposito: el gate
+    --    de esa funcion exige fn_puede_afectar_usuarios (roles 1-3/7-8/9
+    --    via TSEDE_USUARIO) o coordinador, y su rama de coordinador
+    --    EXCLUYE explicitamente los roles 15/16 -- no fue pensada para
+    --    este caso. Un rector/secretaria asignado solo por FK
+    --    (TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR, sin TSEDE_USUARIO
+    --    propio todavia -- el caso que documenta el fallback de
+    --    fn_usu_crear) pasa el gate estricto del paso 1 de esta funcion
+    --    pero NO el de fn_sede_usuario_crear: delegar ahi haria fallar
+    --    con 42501 un alta legitima, despues de haber creado ya
+    --    estudiante, acudiente y nucleo familiar. La autorizacion sobre
+    --    esta sede ya quedo validada en el paso 1.
+    --
+    --    Idempotente por el indice unico uk_tsede_usuario_1
+    --    (fk_tsede, fk_trol, fk_tusuario, fk_tlv_jornada) WHERE active:
+    --    si la persona ya tenia ese permiso (p.ej. un acudiente que ya
+    --    era acudiente de otro hijo en la misma sede y jornada, o una
+    --    rematricula), no se duplica.
+    -- -----------------------------------------------------------------
+    INSERT INTO academico_test.TSEDE_USUARIO (
+        FK_TSEDE, FK_TROL, FK_TUSUARIO, FK_TLV_JORNADA,
+        ORDEN, TLV_ESTADO, PREDETERMINADO,
+        CREATED_BY, CREATED_AT, ACTIVE
+    )
+    SELECT p_fk_sede, v.rol, v.usuario, p_fk_tlv_jornada,
+           0, 'ACTIVO', 0,
+           p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
+      FROM (VALUES
+                (c_fk_trol_estudiante, p_pk_usuario_estudiante),
+                (c_fk_trol_acudiente,  p_pk_usuario_padre)
+           ) AS v(rol, usuario)
+     WHERE v.usuario IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+             FROM academico_test.TSEDE_USUARIO su
+            WHERE su.FK_TSEDE        = p_fk_sede
+              AND su.FK_TROL         = v.rol
+              AND su.FK_TUSUARIO     = v.usuario
+              AND su.FK_TLV_JORNADA  = p_fk_tlv_jornada
+              AND su.ACTIVE          = TRUE
+       );
+
+    -- -----------------------------------------------------------------
+    -- 9. Crear la TMATRICULA. FK_TLV_ESTADO_MATRICULA se resuelve aca
     --    (no lo elige el formulario): VALOR='1' ("Cursando") en
     --    CATEGORIA='ESTADO_MATRICULA' -- por VALOR, no PK hardcodeado.
     -- -----------------------------------------------------------------
@@ -315,7 +369,7 @@ BEGIN
     );
 
     -- -----------------------------------------------------------------
-    -- 9. Crear el TMATRICULA_SOCIOECONOMICO asociado -- se crea siempre
+    -- 10. Crear el TMATRICULA_SOCIOECONOMICO asociado -- se crea siempre
     --    (fila 1-a-1), aunque llegue todo NULL: es el perfil
     --    socioeconomico de ESA matricula, no un dato opcional aparte.
     -- -----------------------------------------------------------------
@@ -341,7 +395,7 @@ BEGIN
     );
 
     -- -----------------------------------------------------------------
-    -- 10. Enlazar los archivos de soporte.
+    -- 11. Enlazar los archivos de soporte.
     -- -----------------------------------------------------------------
     SELECT jsonb_agg(jsonb_build_object(
                'pkTmatriculaArchivo', lote.pk_tmatricula_archivo,
