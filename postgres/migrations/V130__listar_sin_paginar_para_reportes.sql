@@ -74,58 +74,13 @@ DECLARE
     END;
     v_page_index INT := GREATEST(COALESCE(p_page_index, 0), 0);
 BEGIN
-    -- Gate de autorizacion: super-admin ve todo; cualquier otro solo
-    -- ve EE de los que es rector O secretaria (FK_TFUNCIONARIO_RECTOR /
-    -- FK_TFUNCIONARIO_SECRETARIA -> TFUNCIONARIO activo cuyo FK_TUSUARIO =
-    -- p_pk_usuario_solicitante). Mismo patron "ee_accesibles" (rector UNION
-    -- secretaria) que fn_sed_listar (V52).
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        RETURN QUERY
-        SELECT e.PK_ESTABLECIMIENTO, e.CODIGO, e.NOMBRE, e.NIT,
-               d.PK_DEPARTAMENTO, d.NOMBRE,
-               m.PK_TMUNICIPIO, m.NOMBRE,
-               e.FK_TLV_ESTADO_ESTABLECIMIENTO, tlv.NOMBRE
-          FROM academico_test.TESTABLECIMIENTO e
-          JOIN academico_test.TMUNICIPIO    m ON m.PK_TMUNICIPIO    = e.FK_TMUNICIPIO
-          JOIN academico_test.TDEPARTAMENTO d ON d.PK_DEPARTAMENTO  = m.PK_TDEPARTAMENTO
-     LEFT JOIN academico_test.TLISTA_VALOR  tlv ON tlv.PK_LISTA_VALOR = e.FK_TLV_ESTADO_ESTABLECIMIENTO
-         WHERE e.ACTIVE = TRUE
-           AND (NULLIF(TRIM(p_search), '') IS NULL
-                OR e.NOMBRE ILIKE '%' || p_search || '%'
-                OR e.CODIGO ILIKE '%' || p_search || '%'
-                OR d.NOMBRE ILIKE '%' || p_search || '%'
-                OR m.NOMBRE ILIKE '%' || p_search || '%')
-           AND (p_departamentos IS NULL OR CARDINALITY(p_departamentos) = 0
-                OR d.PK_DEPARTAMENTO = ANY(p_departamentos))
-           AND (p_municipios IS NULL OR CARDINALITY(p_municipios) = 0
-                OR m.PK_TMUNICIPIO = ANY(p_municipios))
-           AND (p_estados IS NULL OR CARDINALITY(p_estados) = 0
-                OR e.FK_TLV_ESTADO_ESTABLECIMIENTO = ANY(p_estados))
-         ORDER BY
-            CASE WHEN p_sort_campo = 'name'         AND NOT p_sort_desc THEN e.NOMBRE   END ASC,
-            CASE WHEN p_sort_campo = 'name'         AND     p_sort_desc THEN e.NOMBRE   END DESC,
-            CASE WHEN p_sort_campo = 'dane'         AND NOT p_sort_desc THEN e.CODIGO   END ASC,
-            CASE WHEN p_sort_campo = 'dane'         AND     p_sort_desc THEN e.CODIGO   END DESC,
-            CASE WHEN p_sort_campo = 'department'   AND NOT p_sort_desc THEN d.NOMBRE   END ASC,
-            CASE WHEN p_sort_campo = 'department'   AND     p_sort_desc THEN d.NOMBRE   END DESC,
-            CASE WHEN p_sort_campo = 'municipality' AND NOT p_sort_desc THEN m.NOMBRE   END ASC,
-            CASE WHEN p_sort_campo = 'municipality' AND     p_sort_desc THEN m.NOMBRE   END DESC,
-            CASE WHEN p_sort_campo = 'status'       AND NOT p_sort_desc THEN tlv.NOMBRE END ASC,
-            CASE WHEN p_sort_campo = 'status'       AND     p_sort_desc THEN tlv.NOMBRE END DESC,
-            e.NOMBRE ASC,
-            e.PK_ESTABLECIMIENTO ASC
-         LIMIT v_page_size
-        OFFSET v_page_index * COALESCE(v_page_size, 0);
-        RETURN;
-    END IF;
-
-    -- Camino no-super-admin (CU-86e2w4xdt): capability 'VER' sobre el menu
-    -- ESTABLECIMIENTO (la concede el super admin via TROL_MENU, se puede
-    -- degradar a solo lectura o recortar por usuario con TUSUARIO_ROL_PERMISO)
-    -- + scope de LECTURA por categoria de rol: nivel 2 -> sus EE; nivel 3
-    -- (coordinador) -> el EE de sus sedes. Reemplaza el filtro fijo
-    -- rector/secretaria por puntero.
-    IF NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario_solicitante, 'ESTABLECIMIENTO', 'VER') THEN
+    -- Gate UNICO (CU-86e2w4xdt): capability 'VER' sobre el menu ESTABLECIMIENTO
+    -- + scope de lectura (el JOIN fn_usuario_ee_lectura de abajo). El
+    -- SUPER_ADMIN (categoria de rol nivel 0) no pasa por la capability;
+    -- fn_usuario_ee_lectura ya le devuelve todo (nivel 0-1). No hay
+    -- ningun otro gate en esta funcion.
+    IF academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante) <> 0
+       AND NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario_solicitante, 'ESTABLECIMIENTO', 'VER') THEN
         RAISE EXCEPTION 'El usuario no tiene permiso para ver en el modulo ESTABLECIMIENTO'
             USING ERRCODE = '42501';
     END IF;
@@ -242,45 +197,13 @@ DECLARE
     END;
     v_page_index INT := GREATEST(COALESCE(p_page_index, 0), 0);
 BEGIN
-    -- -----------------------------------------------------------------
-    -- Camino (a) super-admin: ve todas las sedes activas (mismo query
-    -- legacy, sin filtro por EE).
-    -- -----------------------------------------------------------------
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        RETURN QUERY
-        SELECT s.PK_TSEDE, s.CODIGO, s.NOMBRE, s.CONSECUTIVO,
-               s.FK_TLV_ZONA, tlv.NOMBRE,
-               s.DIRECCION, s.TELEFONO
-          FROM academico_test.TSEDE s
-     LEFT JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = s.FK_TLV_ZONA
-         WHERE s.ACTIVE = TRUE
-           AND (NULLIF(TRIM(p_search), '') IS NULL
-                OR s.NOMBRE ILIKE '%' || p_search || '%'
-                OR s.CODIGO ILIKE '%' || p_search || '%')
-           AND (p_zones IS NULL OR CARDINALITY(p_zones) = 0
-                OR s.FK_TLV_ZONA = ANY(p_zones))
-         ORDER BY
-            CASE WHEN p_sort_campo = 'name'   AND NOT p_sort_desc THEN s.NOMBRE END ASC,
-            CASE WHEN p_sort_campo = 'name'   AND     p_sort_desc THEN s.NOMBRE END DESC,
-            CASE WHEN p_sort_campo = 'dane'   AND NOT p_sort_desc THEN s.CODIGO END ASC,
-            CASE WHEN p_sort_campo = 'dane'   AND     p_sort_desc THEN s.CODIGO END DESC,
-            CASE WHEN p_sort_campo = 'zone'   AND NOT p_sort_desc THEN tlv.NOMBRE END ASC,
-            CASE WHEN p_sort_campo = 'zone'   AND     p_sort_desc THEN tlv.NOMBRE END DESC,
-            s.NOMBRE ASC,
-            s.PK_TSEDE ASC
-         LIMIT v_page_size
-        OFFSET v_page_index * COALESCE(v_page_size, 0);
-        RETURN;
-    END IF;
-
-    -- -----------------------------------------------------------------
-    -- Camino no-super-admin (CU-86e2w4xdt): capability 'VER' sobre el menu
-    -- SEDES_EDUCATIVAS + scope de LECTURA por categoria de rol
-    -- (fn_usuario_ee_lectura: nivel 2 -> sus EE; nivel 3 coordinador -> el
-    -- EE de sus sedes). Reemplaza el filtro fijo rector/secretaria/jefe de
-    -- sistema por puntero.
-    -- -----------------------------------------------------------------
-    IF NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario_solicitante, 'SEDES_EDUCATIVAS', 'VER') THEN
+    -- Gate UNICO (CU-86e2w4xdt): capability 'VER' sobre el menu SEDES_EDUCATIVAS
+    -- + scope de lectura (el JOIN fn_usuario_sedes_lectura de abajo). El
+    -- SUPER_ADMIN (categoria de rol nivel 0) no pasa por la capability;
+    -- fn_usuario_sedes_lectura ya le devuelve todo (nivel 0-1). No hay
+    -- ningun otro gate en esta funcion.
+    IF academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante) <> 0
+       AND NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario_solicitante, 'SEDES_EDUCATIVAS', 'VER') THEN
         RAISE EXCEPTION 'El usuario no tiene permiso para ver en el modulo SEDES_EDUCATIVAS'
             USING ERRCODE = '42501';
     END IF;
