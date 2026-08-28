@@ -266,6 +266,95 @@ COMMENT ON FUNCTION academico_test.fn_usuario_sedes_jornadas_accesibles(BIGINT)
     IS 'Pares (sede, jornada) que alcanza un usuario cuyo rol es de categoria ADMINISTRATIVOS_SEDES (nivel 3): SELECT DISTINCT FK_TSEDE, FK_TLV_JORNADA de sus TSEDE_USUARIO ACTIVE sobre sedes ACTIVE. El alcance es por PAR: un usuario de la jornada Mañana de la sede X NO alcanza la jornada Tarde de esa misma sede. Reemplaza a fn_periodo_usuario_sedes (V37), que devolvia solo la sede (dejaba escapar las demas jornadas) y solo para el rol 11 literal.';
 
 -- ---------------------------------------------------------------------------
+-- 4bis) fn_usuario_ee_lectura — scope de LECTURA de las secciones
+--       Establecimiento / Sedes. Mas amplio que fn_usuario_ee_accesibles
+--       (que es el scope de ESCRITURA, solo niveles 0-2): aqui el nivel 3
+--       (ADMINISTRATIVOS_SEDES / coordinador) SI ve -en solo lectura- el EE
+--       al que pertenece(n) su(s) sede(s), aunque no pueda editarlo.
+--         nivel 0 (SUPER_ADMIN)        -> todos los EE activos
+--         nivel 1 (TERRITORIALES)      -> todos los EE activos
+--         nivel 2 (ESTABLECIMIENTO)    -> fn_usuario_ee_accesibles
+--         nivel 3 (SEDES)              -> EE de las sedes de fn_usuario_sedes_jornadas_accesibles
+--         nivel 4 / sin categoria      -> ninguno (fail-closed)
+--       La CAPABILITY (si puede o no VER la seccion) se comprueba aparte con
+--       fn_usuario_puede_en_menu; esta funcion solo resuelve QUE EE alcanza.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_ee_lectura(
+    p_pk_tusuario  BIGINT
+)
+RETURNS TABLE (establecimiento_id BIGINT)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_nivel INT := COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_tusuario), 99);
+BEGIN
+    IF v_nivel <= 1 THEN
+        RETURN QUERY
+        SELECT e.PK_ESTABLECIMIENTO
+          FROM academico_test.TESTABLECIMIENTO e
+         WHERE e.ACTIVE = TRUE;
+    ELSIF v_nivel = 2 THEN
+        RETURN QUERY
+        SELECT ee.establecimiento_id
+          FROM academico_test.fn_usuario_ee_accesibles(p_pk_tusuario) ee;
+    ELSIF v_nivel = 3 THEN
+        RETURN QUERY
+        SELECT DISTINCT s.FK_TESTABLECIMIENTO
+          FROM academico_test.TSEDE s
+          JOIN academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_tusuario) sj
+            ON sj.sede_id = s.PK_TSEDE
+         WHERE s.ACTIVE = TRUE
+           AND s.FK_TESTABLECIMIENTO IS NOT NULL;
+    END IF;
+    -- nivel 4 / sin categoria: no devuelve filas.
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_usuario_ee_lectura(BIGINT)
+    IS 'EE que un usuario alcanza EN LECTURA para las secciones Establecimiento / Sedes: niveles 0-1 -> todos; nivel 2 -> fn_usuario_ee_accesibles; nivel 3 (coordinador) -> el EE de sus sedes (fn_usuario_sedes_jornadas_accesibles), que NO esta en el scope de escritura. La capability se valida por separado con fn_usuario_puede_en_menu(u, ''ESTABLECIMIENTO''/''SEDES_EDUCATIVAS'', ''VER'').';
+
+-- ---------------------------------------------------------------------------
+-- 4ter) fn_usuario_sedes_lectura — scope de LECTURA a nivel de SEDE para el
+--       listado de Sedes. Igual que fn_usuario_ee_lectura pero devolviendo
+--       PK_TSEDE, y para el nivel 3 se queda SOLO en las sedes propias del
+--       coordinador (no todas las del EE):
+--         nivel 0-1  -> todas las sedes activas
+--         nivel 2    -> sedes de los EE de fn_usuario_ee_accesibles
+--         nivel 3    -> SOLO sus sedes (fn_usuario_sedes_jornadas_accesibles)
+--         nivel 4 /  -> ninguna
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_sedes_lectura(
+    p_pk_tusuario  BIGINT
+)
+RETURNS TABLE (sede_id BIGINT)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_nivel INT := COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_tusuario), 99);
+BEGIN
+    IF v_nivel <= 1 THEN
+        RETURN QUERY SELECT s.PK_TSEDE FROM academico_test.TSEDE s WHERE s.ACTIVE = TRUE;
+    ELSIF v_nivel = 2 THEN
+        RETURN QUERY
+        SELECT s.PK_TSEDE
+          FROM academico_test.TSEDE s
+          JOIN academico_test.fn_usuario_ee_accesibles(p_pk_tusuario) ee
+            ON ee.establecimiento_id = s.FK_TESTABLECIMIENTO
+         WHERE s.ACTIVE = TRUE;
+    ELSIF v_nivel = 3 THEN
+        RETURN QUERY
+        SELECT DISTINCT sj.sede_id
+          FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_tusuario) sj;
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_usuario_sedes_lectura(BIGINT)
+    IS 'Sedes que un usuario alcanza EN LECTURA para el listado de Sedes. Niveles 0-1 -> todas; nivel 2 -> las de sus EE (fn_usuario_ee_accesibles); nivel 3 (coordinador) -> SOLO sus propias sedes (fn_usuario_sedes_jornadas_accesibles), no todas las del EE. La capability se valida aparte con fn_usuario_puede_en_menu(u, ''SEDES_EDUCATIVAS'', ''VER'').';
+
+-- ---------------------------------------------------------------------------
 -- 5) fn_usuario_puede_en_menu — capability.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_usuario_puede_en_menu(
