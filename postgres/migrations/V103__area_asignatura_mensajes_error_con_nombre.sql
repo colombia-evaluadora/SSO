@@ -1,3 +1,12 @@
+-- NOTA (2026-08, CU-86e2w4xdt): este archivo se re-ejecuta a proposito junto
+-- con V40 cuando cambia el checksum de V40 (paso de re-aplicacion de
+-- deploy-test.yml). V40 recrea academico_test.fn_subject_listar en su forma
+-- intermedia (7 columnas); esta migracion la vuelve a dejar en su forma final
+-- (8 columnas, con enfasis_nombre). El orden V40 -> V103 lo garantiza el
+-- `sort -V` del paso de re-aplicacion. Sin este comentario el checksum de
+-- V103 no cambiaria y la re-aplicacion no lo incluiria, dejando
+-- fn_subject_listar degradada.
+--
 -- Modulo area/asignatura: varios RAISE EXCEPTION exponian PKs crudos de
 -- entidades que ya existen (conflicto de negocio o "no existe/inactiva" sobre
 -- una FK pasada por el caller). Se agrega resolucion de nombre igual que en
@@ -70,9 +79,14 @@ DECLARE
     v_nombre_aa VARCHAR(130);
     v_establecimiento_id BIGINT;
 BEGIN
+    -- CU-86e2w4xdt: pasa (sede, jornada) del periodo para que un rol de
+    -- nivel sede+jornada (coordinador/docente) con el menu concedido pueda
+    -- actuar DENTRO de su (sede, jornada). Sin ellos era fallo seguro (deny).
     v_establecimiento_id := academico_test.fn_periodo_establecimiento(p_fk_periodo);
     PERFORM academico_test.fn_periodo_gate_escritura(
-        p_pk_usuario_solicitante, v_establecimiento_id);
+        p_pk_usuario_solicitante, v_establecimiento_id,
+        academico_test.fn_periodo_sede(p_fk_periodo),
+        academico_test.fn_periodo_jornada(p_fk_periodo), 'CREAR');
     IF p_fk_periodo IS NULL OR p_fk_area_asignatura IS NULL
        OR NULLIF(TRIM(p_nombre_interno),'') IS NULL OR NULLIF(TRIM(p_abreviacion),'') IS NULL THEN
         RAISE EXCEPTION 'Faltan campos obligatorios del area' USING ERRCODE = '22023';
@@ -127,10 +141,17 @@ DECLARE
     v_nombre_pk VARCHAR(130);
     v_nombre_aa VARCHAR(130);
     v_establecimiento_id BIGINT;
+    v_periodo_id BIGINT;
 BEGIN
-    SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO) INTO v_establecimiento_id
+    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo del area.
+    SELECT a.FK_TPERIODO_ACADEMICO,
+           academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
+      INTO v_periodo_id, v_establecimiento_id
       FROM academico_test.TAREA a WHERE a.PK_TAREA = p_pk;
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, v_establecimiento_id,
+        academico_test.fn_periodo_sede(v_periodo_id),
+        academico_test.fn_periodo_jornada(v_periodo_id), 'EDITAR');
     SELECT * INTO r FROM academico_test.TAREA WHERE PK_TAREA = p_pk AND ACTIVE = TRUE;
     IF NOT FOUND THEN
         SELECT NOMBRE INTO v_nombre_pk FROM academico_test.TAREA WHERE PK_TAREA = p_pk;
@@ -231,9 +252,14 @@ DECLARE
     v_nombre_area VARCHAR(130);
     v_nombre_aa VARCHAR(130);
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
-        SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
-          FROM academico_test.TAREA a WHERE a.PK_TAREA = p_fk_area));
+    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo del area.
+    SELECT a.FK_TPERIODO_ACADEMICO INTO v_periodo
+      FROM academico_test.TAREA a WHERE a.PK_TAREA = p_fk_area;
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante,
+        academico_test.fn_periodo_establecimiento(v_periodo),
+        academico_test.fn_periodo_sede(v_periodo),
+        academico_test.fn_periodo_jornada(v_periodo), 'CREAR');
     IF p_fk_area IS NULL OR NULLIF(TRIM(p_nombre_interno),'') IS NULL
        OR NULLIF(TRIM(p_abreviacion),'') IS NULL THEN
         RAISE EXCEPTION 'Faltan campos obligatorios de la asignatura' USING ERRCODE = '22023';
@@ -310,10 +336,16 @@ DECLARE
     v_nombre_aa VARCHAR(130);
     v_establecimiento_id BIGINT;
 BEGIN
-    SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO) INTO v_establecimiento_id
+    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo de la asignatura.
+    SELECT a.FK_TPERIODO_ACADEMICO,
+           academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
+      INTO v_periodo, v_establecimiento_id
       FROM academico_test.TASIGNATURA s JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
      WHERE s.PK_TASIGNATURA = p_pk;
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, v_establecimiento_id,
+        academico_test.fn_periodo_sede(v_periodo),
+        academico_test.fn_periodo_jornada(v_periodo), 'EDITAR');
     SELECT * INTO r FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_pk AND ACTIVE = TRUE;
     IF NOT FOUND THEN
         SELECT NOMBRE INTO v_nombre_pk FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_pk;
@@ -1137,11 +1169,18 @@ DECLARE
     v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_nombre VARCHAR(130);
     v_establecimiento_id BIGINT;
+    v_periodo_id BIGINT;
 BEGIN
-    SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO) INTO v_establecimiento_id
+    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo de la asignatura.
+    SELECT a.FK_TPERIODO_ACADEMICO,
+           academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
+      INTO v_periodo_id, v_establecimiento_id
       FROM academico_test.TASIGNATURA s JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
      WHERE s.PK_TASIGNATURA = p_pk;
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, v_establecimiento_id,
+        academico_test.fn_periodo_sede(v_periodo_id),
+        academico_test.fn_periodo_jornada(v_periodo_id), 'ELIMINAR');
     SELECT NOMBRE INTO v_nombre FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_pk;
     IF EXISTS (
         SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
@@ -1199,10 +1238,17 @@ DECLARE
     v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_nombre VARCHAR(130);
     v_establecimiento_id BIGINT;
+    v_periodo_id BIGINT;
 BEGIN
-    SELECT academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO) INTO v_establecimiento_id
+    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo del area.
+    SELECT a.FK_TPERIODO_ACADEMICO,
+           academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
+      INTO v_periodo_id, v_establecimiento_id
       FROM academico_test.TAREA a WHERE a.PK_TAREA = p_pk;
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, v_establecimiento_id);
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, v_establecimiento_id,
+        academico_test.fn_periodo_sede(v_periodo_id),
+        academico_test.fn_periodo_jornada(v_periodo_id), 'ELIMINAR');
     SELECT NOMBRE INTO v_nombre FROM academico_test.TAREA WHERE PK_TAREA = p_pk;
     IF EXISTS (
         SELECT 1 FROM academico_test.TASIGNATURA WHERE FK_TAREA = p_pk AND ACTIVE = TRUE

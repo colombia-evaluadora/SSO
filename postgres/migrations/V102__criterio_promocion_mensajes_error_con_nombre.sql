@@ -31,11 +31,10 @@ DECLARE
     v_nombre_asig VARCHAR(130); v_nombre_area VARCHAR(130);
     v_nombre_grado VARCHAR(130); v_establecimiento_id BIGINT;
 BEGIN
-    -- Alcance por rol (como V37): gate grueso + gate fino por establecimiento.
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast + scope por (EE, sede,
+    -- jornada) del periodo academico. Wrapper sobre fn_assert_permiso_seccion (V29).
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, NULL, NULL, NULL, 'EDITAR');
     IF p_fk_periodo IS NULL THEN
         RAISE EXCEPTION 'El periodo academico es obligatorio' USING ERRCODE = '22023';
     END IF;
@@ -43,10 +42,10 @@ BEGIN
       FROM academico_test.TPERIODO_ACADEMICO pa
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
      WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo;
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_establecimiento_id) THEN
-        RAISE EXCEPTION 'El usuario no puede gestionar criterios de promocion de este establecimiento'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, v_establecimiento_id,
+        academico_test.fn_periodo_sede(p_fk_periodo),
+        academico_test.fn_periodo_jornada(p_fk_periodo), 'EDITAR');
     -- Ningun valor numerico puede ser negativo.
     IF p_cantidad_nivelar < 0 OR p_desempenho_min_general < 0 OR p_desempenho_minimo < 0
        OR p_max_asig_promedio < 0 OR p_minimo_inasistencias < 0 OR p_max_asig_nivelar_prom < 0 THEN
