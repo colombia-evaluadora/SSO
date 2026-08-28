@@ -324,3 +324,121 @@ BEGIN
      LIMIT 1;
 END;
 $function$;
+
+-- =============================================================================
+-- fn_matricula_soft_delete -- baja logica de la TMATRICULA en si.
+--
+-- ABORTA si queda viva cualquier entidad que dependa de ella y no se elimine
+-- en cascada (fn_matricula_dependencias_bloqueantes, V162): calificaciones,
+-- comportamiento, asistencia, actas, diplomas, traslados, etc. El mensaje
+-- nombra la dependencia concreta y cuantas filas hay, para que quien lo reciba
+-- sepa que tiene que borrar antes.
+--
+-- NO desactiva el detalle socioeconomico ni los enlaces de archivo: esos son
+-- la cascada libre y los desactiva el orquestador (V166) ANTES de llamar aca,
+-- con sus propias funciones (V164/V165). Aca solo se toca TMATRICULA, para que
+-- esta funcion siga siendo granular y reutilizable desde otro flujo de baja.
+--
+-- Gate estricto sede-especifico, el mismo de fn_matricula_obtener_por_id.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_soft_delete(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_tmatricula           BIGINT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_fk_establecimiento BIGINT;
+    v_dependencia        TEXT;
+BEGIN
+    -- -----------------------------------------------------------------
+    -- 0. Resolver el EE de la matricula (para el gate). Si no resuelve,
+    --    la matricula no existe o esta inactiva.
+    -- -----------------------------------------------------------------
+    SELECT s.FK_TESTABLECIMIENTO
+      INTO v_fk_establecimiento
+      FROM academico_test.TMATRICULA m
+      JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
+      JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa   ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s                 ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE m.PK_TMATRICULA = p_pk_tmatricula
+       AND m.ACTIVE        = TRUE
+       AND gr.ACTIVE       = TRUE
+       AND g.ACTIVE        = TRUE
+       AND pa.ACTIVE       = TRUE
+       AND s.ACTIVE        = TRUE;
+
+    IF v_fk_establecimiento IS NULL THEN
+        RAISE EXCEPTION 'No se encontro una matricula activa con ese identificador'
+            USING ERRCODE = '22023',
+                  HINT    = 'p_pk_tmatricula debe apuntar a un TMATRICULA activo, con grupo/grado/periodo/sede activos';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 1. Gate de autorizacion COMPUESTO -- mismo patron del resto del modulo.
+    -- -----------------------------------------------------------------
+    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s
+            ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
+           AND s.ACTIVE              = TRUE
+           AND su.ACTIVE             = TRUE
+           AND su.FK_TROL            = 8
+           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2. Dependencias bloqueantes: si hay alguna, se aborta nombrandola.
+    -- -----------------------------------------------------------------
+    v_dependencia := academico_test.fn_matricula_dependencias_bloqueantes(p_pk_tmatricula);
+
+    IF v_dependencia IS NOT NULL THEN
+        RAISE EXCEPTION 'No se puede eliminar la matricula: tiene % asociada(s)', v_dependencia
+            USING ERRCODE = '23503',
+                  HINT    = 'Elimine primero esa informacion y vuelva a intentarlo';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 3. Baja logica.
+    -- -----------------------------------------------------------------
+    UPDATE academico_test.TMATRICULA
+       SET ACTIVE      = FALSE,
+           MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+           MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TMATRICULA = p_pk_tmatricula;
+END;
+$function$;

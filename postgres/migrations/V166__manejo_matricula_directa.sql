@@ -551,3 +551,308 @@ BEGIN
     );
 END;
 $function$;
+
+-- =============================================================================
+-- fn_matricula_directa_eliminar -- ORQUESTADOR de baja, contraparte de
+-- fn_matricula_directa_crear. Da de baja (logica, como todo el sistema) una
+-- matricula y arrastra lo que corresponda de estudiante y acudiente.
+--
+-- Orden y politica de cada paso:
+--
+--   1. Gate estricto sede-especifico (el mismo del alta), resuelto contra la
+--      sede de la matricula.
+--   2. DEPENDENCIAS BLOQUEANTES: si de la matricula cuelga cualquier cosa que
+--      no sea cascada libre -- calificaciones, comportamiento, asistencia,
+--      actas, diplomas, promociones, retiros, traslados, convenios, carnet,
+--      videos, asignaturas matriculadas, u otra matricula que la referencie
+--      como antecedente -- se ABORTA nombrando la dependencia. No se borra
+--      nada en cascada por conveniencia: el usuario tiene que eliminarlas
+--      primero. Lo valida fn_matricula_soft_delete (V163) en el paso 5, pero
+--      se consulta aca ANTES de tocar nada para que la cascada libre no se
+--      desactive en una operacion que va a abortar igual.
+--   3. Cascada libre: TMATRICULA_SOCIOECONOMICO (V164).
+--   4. Cascada libre: TMATRICULA_ARCHIVO (V165) -- el enlace, no el binario.
+--   5. La TMATRICULA (V163).
+--   6. El estudiante (V160): retira siempre sus permisos de rol 15 en esa
+--      sede; da de baja el TESTUDIANTE y sus vinculos de nucleo familiar solo
+--      si no le queda nada colgando (observador incluido); y el TUSUARIO solo
+--      si no cumple ningun otro papel.
+--   7. Cada acudiente vinculado (V161): retira sus permisos de rol 16 en esa
+--      sede; da de baja el TPADRE solo si dejo de ser acudiente de todos; y el
+--      TUSUARIO bajo la misma condicion que el estudiante. Si sigue siendo
+--      acudiente de otro estudiante, su vinculo con ESE otro no se toca.
+--
+-- Del 3 al 7 nada aborta: lo que no se pudo dar de baja se reporta en el
+-- resultado con su motivo. Solo el gate, una matricula inexistente y las
+-- dependencias bloqueantes producen error.
+--
+-- Atomica de punta a punta, como el alta: una sola funcion, sin bloque
+-- EXCEPTION, invocada como una sola sentencia.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_directa_eliminar(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_tmatricula           BIGINT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_fk_sede             BIGINT;
+    v_fk_establecimiento  BIGINT;
+    v_fk_testudiante  BIGINT;
+    v_dependencia     TEXT;
+    v_socio           INTEGER;
+    v_archivos        INTEGER;
+    v_est             RECORD;
+    v_pad             RECORD;
+    v_acudientes      JSONB := '[]'::jsonb;
+    v_pk_tpadre       BIGINT;
+BEGIN
+    -- -----------------------------------------------------------------
+    -- 1. Resolver sede y estudiante. El gate lo aplica en detalle
+    --    fn_matricula_soft_delete; aca solo se necesita ubicar la
+    --    matricula para saber contra que sede trabajar despues.
+    -- -----------------------------------------------------------------
+    SELECT pa.FK_TSEDE, m.FK_TESTUDIANTE
+      INTO v_fk_sede, v_fk_testudiante
+      FROM academico_test.TMATRICULA m
+      JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
+      JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa   ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s                 ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE m.PK_TMATRICULA = p_pk_tmatricula
+       AND m.ACTIVE        = TRUE
+       AND gr.ACTIVE       = TRUE
+       AND g.ACTIVE        = TRUE
+       AND pa.ACTIVE       = TRUE
+       AND s.ACTIVE        = TRUE;
+
+    IF v_fk_sede IS NULL THEN
+        RAISE EXCEPTION 'No se encontro una matricula activa con ese identificador'
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 1b. Gate TEMPRANO, contra la sede de la matricula.
+    --     fn_matricula_soft_delete (paso 5) aplica este mismo gate -- es su
+    --     garantia si se la llama suelta -- pero adelantarlo evita que los
+    --     pasos 3 y 4 desactiven la cascada libre antes de saber si el
+    --     usuario podia siquiera tocar esta matricula. La transaccion lo
+    --     revertiria igual, pero no tiene sentido hacer el trabajo.
+    -- -----------------------------------------------------------------
+    SELECT s.FK_TESTABLECIMIENTO INTO v_fk_establecimiento
+      FROM academico_test.TSEDE s WHERE s.PK_TSEDE = v_fk_sede;
+
+    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s
+            ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
+           AND s.ACTIVE              = TRUE
+           AND su.ACTIVE             = TRUE
+           AND su.FK_TROL            = 8
+           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2. Chequeo temprano de dependencias bloqueantes. fn_matricula_soft_delete
+    --    lo repite (es su propia garantia si se la llama suelta), pero
+    --    adelantarlo evita desactivar la cascada libre de los pasos 3 y 4
+    --    en una operacion que va a abortar de todas formas.
+    -- -----------------------------------------------------------------
+    v_dependencia := academico_test.fn_matricula_dependencias_bloqueantes(p_pk_tmatricula);
+
+    IF v_dependencia IS NOT NULL THEN
+        RAISE EXCEPTION 'No se puede eliminar la matricula: tiene % asociada(s)', v_dependencia
+            USING ERRCODE = '23503',
+                  HINT    = 'Elimine primero esa informacion y vuelva a intentarlo';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 3-4. Cascada libre.
+    -- -----------------------------------------------------------------
+    v_socio    := academico_test.fn_matricula_socioeconomico_soft_delete(
+                      p_pk_usuario_solicitante, p_pk_tmatricula);
+    v_archivos := academico_test.fn_matricula_archivo_soft_delete(
+                      p_pk_usuario_solicitante, p_pk_tmatricula);
+
+    -- -----------------------------------------------------------------
+    -- 5. La matricula (aplica el gate estricto y revalida dependencias).
+    -- -----------------------------------------------------------------
+    PERFORM academico_test.fn_matricula_soft_delete(
+                p_pk_usuario_solicitante, p_pk_tmatricula);
+
+    -- -----------------------------------------------------------------
+    -- 6. Acudientes ANTES que el estudiante: fn_estudiante_soft_delete
+    --    desactiva los vinculos de nucleo familiar de este estudiante, y
+    --    fn_padre_soft_delete necesita leerlos para saber a quien tenia
+    --    a cargo. Se recorren los que estaban vinculados a este
+    --    estudiante; cada uno decide por su cuenta si se conserva.
+    -- -----------------------------------------------------------------
+    FOR v_pk_tpadre IN
+        SELECT DISTINCT nf.FK_TPADRE
+          FROM academico_test.TNUCLEO_FAMILIAR nf
+          JOIN academico_test.TPADRE p ON p.PK_TPADRE = nf.FK_TPADRE
+         WHERE nf.FK_TESTUDIANTE = v_fk_testudiante
+           AND nf.ACTIVE         = TRUE
+           AND p.ACTIVE          = TRUE
+         ORDER BY nf.FK_TPADRE
+    LOOP
+        -- El vinculo con ESTE estudiante se desactiva aca, para que el
+        -- conteo de fn_padre_soft_delete refleje solo a los demas.
+        UPDATE academico_test.TNUCLEO_FAMILIAR
+           SET ACTIVE      = FALSE,
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+               MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_TESTUDIANTE = v_fk_testudiante
+           AND FK_TPADRE      = v_pk_tpadre
+           AND ACTIVE         = TRUE;
+
+        SELECT * INTO v_pad
+          FROM academico_test.fn_padre_soft_delete(
+                   p_pk_usuario_solicitante, v_pk_tpadre, v_fk_sede);
+
+        v_acudientes := v_acudientes || jsonb_build_array(jsonb_build_object(
+            'pkTpadre',           v_pk_tpadre,
+            'permisosRetirados',  v_pad.permisos_retirados,
+            'padreEliminado',     v_pad.padre_eliminado,
+            'usuarioEliminado',   v_pad.usuario_eliminado,
+            'motivoConservacion', v_pad.motivo_conservacion));
+    END LOOP;
+
+    -- -----------------------------------------------------------------
+    -- 7. El estudiante.
+    -- -----------------------------------------------------------------
+    SELECT * INTO v_est
+      FROM academico_test.fn_estudiante_soft_delete(
+               p_pk_usuario_solicitante, v_fk_testudiante, v_fk_sede, p_pk_tmatricula);
+
+    RETURN jsonb_build_object(
+        'pkTmatricula',            p_pk_tmatricula,
+        'socioeconomicoEliminado', v_socio,
+        'archivosEliminados',      v_archivos,
+        'estudiante', jsonb_build_object(
+            'pkTestudiante',       v_fk_testudiante,
+            'permisosRetirados',   v_est.permisos_retirados,
+            'estudianteEliminado', v_est.estudiante_eliminado,
+            'usuarioEliminado',    v_est.usuario_eliminado,
+            'motivoConservacion',  v_est.motivo_conservacion),
+        'acudientes', v_acudientes
+    );
+END;
+$function$;
+
+-- =============================================================================
+-- fn_matricula_directa_eliminar_bulk -- baja de varias matriculas en una sola
+-- llamada. Mismo patron que fn_sed_soft_delete_bulk /
+-- fn_fun_baja_establecimiento_bulk: cada PK corre en su propio bloque
+-- BEGIN/EXCEPTION (savepoint implicito), asi que un fallo en una NO aborta
+-- las demas ni deshace lo ya dado de baja.
+--
+-- Devuelve una fila por PK recibido, con:
+--   status  -- 'eliminado' o 'error:<motivo>'
+--   detalle -- el JSONB de fn_matricula_directa_eliminar cuando salio bien
+--              (que estudiante/acudiente se conservaron y por que), o el
+--              mensaje exacto cuando fallo. Para 'error:dependencias' ese
+--              mensaje es el que nombra la dependencia que bloqueo, que es
+--              justo lo que el usuario necesita leer para saber que borrar
+--              primero.
+--
+-- Los PK se deduplican y se ordenan: repetir uno en la lista no lo procesa
+-- dos veces (el segundo intento daria 'error:no_encontrado', que seria ruido).
+--
+-- OJO con la atomicidad: a diferencia del alta y de la baja individual, esta
+-- funcion NO es todo-o-nada por diseño -- eso es exactamente lo que se pide
+-- ("se borran las que se puedan asi otras hayan fallado"). Cada matricula si
+-- es atomica en si misma.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_directa_eliminar_bulk(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pks                     BIGINT[]
+)
+RETURNS TABLE (
+    pk_tmatricula  BIGINT,
+    status         VARCHAR,
+    detalle        JSONB
+)
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_pk  BIGINT;
+    v_res JSONB;
+BEGIN
+    IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
+        RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
+            USING ERRCODE = '22023';
+    END IF;
+    IF p_pks IS NULL OR CARDINALITY(p_pks) = 0 THEN
+        RAISE EXCEPTION 'p_pks es obligatorio y debe contener al menos un PK_TMATRICULA'
+            USING ERRCODE = '22023';
+    END IF;
+
+    FOR v_pk IN SELECT DISTINCT x FROM unnest(p_pks) AS x ORDER BY x
+    LOOP
+        BEGIN
+            v_res := academico_test.fn_matricula_directa_eliminar(
+                         p_pk_usuario_solicitante, v_pk);
+            pk_tmatricula := v_pk;
+            status        := 'eliminado';
+            detalle       := v_res;
+            RETURN NEXT;
+        EXCEPTION
+            WHEN SQLSTATE '22023' THEN
+                pk_tmatricula := v_pk;
+                status        := 'error:no_encontrado';
+                detalle       := jsonb_build_object('mensaje', SQLERRM);
+                RETURN NEXT;
+            WHEN SQLSTATE '42501' THEN
+                pk_tmatricula := v_pk;
+                status        := 'error:sin_permiso';
+                detalle       := jsonb_build_object('mensaje', SQLERRM);
+                RETURN NEXT;
+            WHEN SQLSTATE '23503' THEN
+                pk_tmatricula := v_pk;
+                status        := 'error:dependencias';
+                detalle       := jsonb_build_object('mensaje', SQLERRM);
+                RETURN NEXT;
+            WHEN OTHERS THEN
+                pk_tmatricula := v_pk;
+                status        := 'error:' || SQLSTATE;
+                detalle       := jsonb_build_object('mensaje', SQLERRM);
+                RETURN NEXT;
+        END;
+    END LOOP;
+END;
+$function$;
