@@ -42,6 +42,23 @@
 --   (rector/secretaria), sincronizando tanto al TUSUARIO que GANA el
 --   rol como al que lo pierde cuando el rector/secretaria cambia.
 --
+-- NOTA (2026-08, CU-86e2w4xdt — Permisos segun rol): las 4 funciones que
+-- este archivo redefine (fn_sede_usuario_crear, fn_sede_usuario_soft_delete,
+-- fn_est_crear, fn_est_actualizar) son la definicion VIGENTE de cada una
+-- (las de V51/V53 quedaron obsoletas), asi que su gate de autorizacion se
+-- migro AQUI, in-place. Cada bloque de gate hardcodeado
+-- (fn_puede_afectar_usuarios / fn_puede_afectar_establecimiento + "rol 11 de
+-- la sede" + "es el rector del EE") se sustituye por una sola llamada a
+-- academico_test.fn_assert_permiso_seccion (V29): capability configurable
+-- por menu (TROL_MENU + TUSUARIO_ROL_PERMISO, administrada por el super
+-- admin) + scope estructural por categoria de rol (todos los EE / sus EE /
+-- su par sede+jornada). fn_sede_usuario_crear lleva ademas
+-- fn_assert_rango_rol_otorgable: nadie otorga un rol de categoria igual o
+-- superior a la suya. Motivo: sacar la autorizacion de listas fijas de
+-- FK_TROL quemadas en el cuerpo de cada funcion. Nada mas del cuerpo cambia
+-- (validaciones, ERRCODEs, la sincronizacion a public.role_users y la sede
+-- por defecto siguen igual). Ver docs/gate-permisos-por-menu-analysis.md.
+--
 -- Backfill al final: sincroniza todo TUSUARIO con una TSEDE_USUARIO
 -- activa hoy, o que sea rector/secretaria de un EE activo hoy, para
 -- que el fix no dependa de que alguien vuelva a tocar esos datos para
@@ -174,30 +191,22 @@ DECLARE
     v_pk_sede_usuario  BIGINT;
 BEGIN
     -- ---------------------------------------------------------------------
-    -- 0. Gate de autorizacion: roles con permiso de usuarios (fn_puede_
-    --    afectar_usuarios), O coordinador (rol 11) de la sede puntual
-    --    p_fk_sede, y solo si el rol que esta asignando es "otro cargo"
-    --    (9-14, nunca rector/jefe de sistema) -- REV2. El caller de mas
-    --    arriba (fn_fun_permisos_actualizar) ya valida esto mismo antes de
-    --    llegar aca, pero esta funcion tiene su propio gate porque otros
-    --    callers (fn_est_crear, fn_sed_crear) la invocan directo.
+    -- 0. Gate de autorizacion (CU-86e2w4xdt): capability por el menu
+    --    FUNCIONARIOS (accion EDITAR, configurable via TROL_MENU /
+    --    TUSUARIO_ROL_PERMISO) + scope sobre la SEDE objetivo -- que es el
+    --    objeto real de esta funcion: su EE para los niveles 1/2, o el par
+    --    (sede, jornada) para el nivel 3 (coordinador y demas roles de
+    --    sede). Sustituye al gate hardcodeado anterior (fn_puede_afectar_
+    --    usuarios, es decir roles 1-3/7/8/9, O "rol 11 de esta sede y solo
+    --    para roles 9-14"). El caller de mas arriba
+    --    (fn_fun_permisos_actualizar) ya valida lo suyo, pero esta funcion
+    --    conserva gate propio porque otros callers (fn_est_crear,
+    --    fn_sed_crear) la invocan directo.
     -- ---------------------------------------------------------------------
-    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante)
-       AND NOT (
-           p_fk_rol >= 9 AND p_fk_rol NOT IN (15, 16)
-           AND EXISTS (
-               SELECT 1
-                 FROM academico_test.TSEDE_USUARIO su
-                 JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-                WHERE s.PK_TSEDE = p_fk_sede
-                  AND s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11
-                  AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-           )
-       )
-    THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'FUNCIONARIOS', 'EDITAR',
+        NULL, p_fk_sede, p_fk_tlv_jornada
+    );
 
     -- ---------------------------------------------------------------------
     -- 1. Validaciones de obligatoriedad.
@@ -244,6 +253,14 @@ BEGIN
         RAISE EXCEPTION 'TROL (%) no existe o no esta activo', p_fk_rol
             USING ERRCODE = '23503';
     END IF;
+
+    -- Capa 3 (CU-86e2w4xdt): no se puede OTORGAR un rol de categoria igual
+    -- o superior a la propia (V29). Va aqui, despues de validar que el rol
+    -- existe y esta activo, para que un p_fk_rol invalido siga devolviendo
+    -- su 23502/23503 de siempre y no un 42501 enganoso.
+    PERFORM academico_test.fn_assert_rango_rol_otorgable(
+        p_pk_usuario_solicitante, p_fk_rol
+    );
 
     IF NOT EXISTS (
         SELECT 1 FROM academico_test.TUSUARIO
@@ -336,18 +353,24 @@ DECLARE
     v_pk_tusuario  BIGINT;
     v_fk_sede      BIGINT;
     v_fk_rol       BIGINT;
+    -- CU-86e2w4xdt -- la jornada de la fila que se da de baja: el scope de
+    -- los roles de categoria ADMINISTRATIVOS_SEDES (nivel 3) es el PAR
+    -- (sede, jornada), no la sede sola.
+    v_fk_jornada   BIGINT;
 BEGIN
     -- ---------------------------------------------------------------------
     -- 1. Validacion de existencia primero -- el gate (paso 0 mas abajo)
-    --    necesita saber la sede/rol de este permiso puntual para decidir
-    --    si un coordinador puede tocarlo. (Idempotente: si ya esta
+    --    necesita saber la sede/jornada de este permiso puntual para poder
+    --    evaluar el scope del solicitante. (Idempotente: si ya esta
     --    inactivo, retornamos el PK sin error, sin pasar por el gate --
     --    ver mas abajo.)
+    --    Columnas con alias de tabla a proposito (bug real de V199: un OUT
+    --    param choco con un SELECT sin alias).
     -- ---------------------------------------------------------------------
-    SELECT ACTIVE, FK_TUSUARIO, FK_TSEDE, FK_TROL
-      INTO v_active, v_pk_tusuario, v_fk_sede, v_fk_rol
-      FROM academico_test.TSEDE_USUARIO
-     WHERE PK_TSEDE_USUARIO = p_pk_sede_usuario;
+    SELECT su.ACTIVE, su.FK_TUSUARIO, su.FK_TSEDE, su.FK_TROL, su.FK_TLV_JORNADA
+      INTO v_active, v_pk_tusuario, v_fk_sede, v_fk_rol, v_fk_jornada
+      FROM academico_test.TSEDE_USUARIO su
+     WHERE su.PK_TSEDE_USUARIO = p_pk_sede_usuario;
 
     IF NOT FOUND THEN
         RAISE EXCEPTION 'No se encontro el permiso solicitado'
@@ -355,28 +378,17 @@ BEGIN
     END IF;
 
     -- ---------------------------------------------------------------------
-    -- 0. Gate de autorizacion: roles con permiso de usuarios, O
-    --    coordinador (rol 11) de la sede de ESTE permiso puntual, y solo
-    --    si el permiso que se esta quitando es de "otro cargo" (9-14,
-    --    nunca rector/jefe de sistema) -- REV2, mismo criterio que
-    --    fn_sede_usuario_crear.
+    -- 0. Gate de autorizacion (CU-86e2w4xdt): capability EDITAR sobre el
+    --    menu FUNCIONARIOS + scope sobre la sede/jornada de ESTE permiso
+    --    puntual (V29). Sustituye al gate hardcodeado anterior
+    --    (fn_puede_afectar_usuarios O "rol 11 de esta sede, y solo para
+    --    roles 9-14"): quien alcanza la sede ahora sale de la categoria del
+    --    rol, no de una lista de FK_TROL.
     -- ---------------------------------------------------------------------
-    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante)
-       AND NOT (
-           v_fk_rol >= 9 AND v_fk_rol NOT IN (15, 16)
-           AND EXISTS (
-               SELECT 1
-                 FROM academico_test.TSEDE_USUARIO su
-                 JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-                WHERE s.PK_TSEDE = v_fk_sede
-                  AND s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11
-                  AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-           )
-       )
-    THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'FUNCIONARIOS', 'EDITAR',
+        NULL, v_fk_sede, v_fk_jornada
+    );
 
     IF v_active = FALSE THEN
         -- ya estaba inactivo: idempotente, no error. Ya se sincronizo la
@@ -429,7 +441,13 @@ DECLARE
     v_perm_result            RECORD;
 BEGIN
     -- -----------------------------------------------------------------
-    -- 0. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
+    -- 0. Gate de autorizacion (CU-86e2w4xdt): capability CREAR sobre el
+    --    menu ESTABLECIMIENTO (V29). SIN objeto: crear un EE no tiene un EE
+    --    previo sobre el que evaluar scope, asi que la capability basta --
+    --    igual que antes, cuando bastaba con fn_puede_afectar_
+    --    establecimiento. La diferencia es que ahora quien puede crear lo
+    --    configura el super admin por TROL_MENU en vez de ser la lista fija
+    --    de roles 1-3.
     --    p_pk_usuario_solicitante es obligatorio por firma (sin DEFAULT).
     -- -----------------------------------------------------------------
     IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
@@ -437,10 +455,9 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'ESTABLECIMIENTO', 'CREAR'
+    );
 
     -- -----------------------------------------------------------------
     -- 1. Validaciones de obligatoriedad (DDL NOT NULL + NIT funcional)
@@ -764,8 +781,9 @@ AS $function$
 DECLARE
     v_estado_actual  BOOLEAN;
     v_nombre_actual  VARCHAR;
-    v_fk_rector     BIGINT;
-    v_es_rector     BOOLEAN := FALSE;
+    -- (v_fk_rector / v_es_rector eliminadas en CU-86e2w4xdt: el gate ya no
+    --  resuelve "es el rector de este EE" inline; lo hace V29 via
+    --  fn_usuario_ee_accesibles.)
     -- V70 — rector/secretaria PREVIOS, capturados antes del UPDATE para
     -- poder sincronizar tambien a quien pierde el rol si cambia.
     v_old_rector      BIGINT;
@@ -797,36 +815,19 @@ BEGIN
     END IF;
 
     -- -----------------------------------------------------------------
-    -- 1. Gate de autorizacion compuesto:
-    --    (a) super-admin (rol 1-3) => puede modificar cualquier EE, o
-    --    (b) el usuario es el rector activo del EE que se quiere modificar
-    --        (TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR -> TFUNCIONARIO activo
-    --         cuyo FK_TUSUARIO coincide con p_pk_usuario_solicitante).
-    --    Cualquier otro caso => 42501.
+    -- 1. Gate de autorizacion (CU-86e2w4xdt): capability EDITAR sobre el
+    --    menu ESTABLECIMIENTO + scope sobre el EE objetivo (V29). Una sola
+    --    llamada sustituye al gate compuesto anterior
+    --    (fn_puede_afectar_establecimiento -- roles 1-3 -- O "es el rector
+    --    activo de ESTE EE" resuelto inline): el caso del rector lo cubre
+    --    ahora fn_usuario_ee_accesibles, que ademas incluye a la secretaria
+    --    por puntero y a los roles de categoria ESTABLECIMIENTO por
+    --    TSEDE_USUARIO. Capability y scope fallan con 42501 y mensajes
+    --    distintos.
     -- -----------------------------------------------------------------
-    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        -- No es super-admin: probamos si es rector del EE objetivo.
-        SELECT e.FK_TFUNCIONARIO_RECTOR
-          INTO v_fk_rector
-          FROM academico_test.TESTABLECIMIENTO e
-         WHERE e.PK_ESTABLECIMIENTO = p_pk_establecimiento
-           AND e.ACTIVE             = TRUE;
-
-        IF v_fk_rector IS NOT NULL THEN
-            SELECT EXISTS (
-                SELECT 1
-                  FROM academico_test.TFUNCIONARIO f
-                 WHERE f.PK_TFUNCIONARIO = v_fk_rector
-                   AND f.FK_TUSUARIO     = p_pk_usuario_solicitante
-                   AND f.ACTIVE          = TRUE
-            ) INTO v_es_rector;
-        END IF;
-
-        IF NOT v_es_rector THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
-    END IF;
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'ESTABLECIMIENTO', 'EDITAR', p_pk_establecimiento
+    );
 
     -- -----------------------------------------------------------------
     -- 1. Validaciones de existencia y estado (activo). De paso
@@ -1379,6 +1380,48 @@ BEGIN
 END;
 $function$
 ;
+
+-- ---------------------------------------------------------------------------
+-- COMMENT ON FUNCTION de las 4 funciones redefinidas arriba, documentando el
+-- gate nuevo (CU-86e2w4xdt). Se aplican por OID en vez de escribir a mano las
+-- listas de tipos (fn_est_crear/fn_est_actualizar tienen 33 y 35 parametros;
+-- copiarlas seria una fuente de errores y habria que tocarlas cada vez que
+-- cambie una firma). El nombre es unico dentro del esquema, asi que el LOOP
+-- comenta como mucho una funcion por nombre. Idempotente: reasignar el mismo
+-- comentario es un no-op.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE
+    v_sig  TEXT;
+    r      RECORD;
+BEGIN
+    FOR r IN
+        SELECT * FROM (VALUES
+            ('fn_sede_usuario_crear',
+             'Crea una fila TSEDE_USUARIO (rol de un funcionario en una sede/jornada) y sincroniza public.role_users via fn_sincronizar_rol_publico para que el rol llegue al JWT sin esperar al siguiente login. GATE (CU-86e2w4xdt, helpers de V29): (1) PERFORM fn_assert_permiso_seccion(solicitante, ''FUNCIONARIOS'', ''EDITAR'', NULL, p_fk_sede, p_fk_tlv_jornada) -- bypass del SUPER_ADMIN, capability configurable por TROL_MENU/TUSUARIO_ROL_PERMISO y scope sobre la sede objetivo (todos los EE para el nivel territorial, fn_usuario_ee_accesibles para el nivel establecimiento, el par (sede, jornada) para el nivel sedes); (2) PERFORM fn_assert_rango_rol_otorgable(solicitante, p_fk_rol) tras validar el rol -- nadie otorga un rol de categoria igual o superior a la propia (p.ej. un Rector puede otorgar Coordinador, pero no Rector ni un rol territorial). Sustituye al gate anterior por lista fija (fn_puede_afectar_usuarios O rol 11 de la sede limitado a roles 9-14). El resto del cuerpo (obligatorios 23502, FKs 23503, unicidad 23505) no cambia.'),
+            ('fn_sede_usuario_soft_delete',
+             'Baja logica (ACTIVE=FALSE) de una fila TSEDE_USUARIO y resincronizacion de public.role_users via fn_sincronizar_rol_publico (full-resync: si al usuario le queda otra sede con el mismo rol, conserva el CEVAL-<codigo>). Idempotente: si la fila ya estaba inactiva devuelve el PK sin error. GATE (CU-86e2w4xdt): PERFORM fn_assert_permiso_seccion(solicitante, ''FUNCIONARIOS'', ''EDITAR'', NULL, FK_TSEDE, FK_TLV_JORNADA de la fila objetivo, leidas antes de darla de baja) -- capability por menu + scope por sede/jornada de V29, en lugar del gate anterior por lista fija de FK_TROL. La existencia se valida ANTES del gate (P0002) porque el gate necesita la sede/jornada de la fila.'),
+            ('fn_est_crear',
+             'Crea un TESTABLECIMIENTO (mas su sede por defecto y los permisos de rector/secretaria en ella) y sincroniza public.role_users de rector y secretaria. GATE (CU-86e2w4xdt): PERFORM fn_assert_permiso_seccion(solicitante, ''ESTABLECIMIENTO'', ''CREAR'') -- SIN objeto: crear un EE no tiene un EE previo sobre el que evaluar scope, asi que basta la capability del menu ESTABLECIMIENTO (configurable por el super admin via TROL_MENU/TUSUARIO_ROL_PERMISO), con bypass para el SUPER_ADMIN. Reemplaza a fn_puede_afectar_establecimiento (lista fija de roles 1-3). Se conserva la validacion 22023 de p_pk_usuario_solicitante obligatorio y > 0, que corre antes del gate.'),
+            ('fn_est_actualizar',
+             'Actualizacion parcial (PATCH) de un TESTABLECIMIENTO activo, incluyendo el mantenimiento de los permisos por defecto de rector/secretaria en las sedes del EE y la sincronizacion de public.role_users de quien gana y de quien pierde el cargo. GATE (CU-86e2w4xdt): PERFORM fn_assert_permiso_seccion(solicitante, ''ESTABLECIMIENTO'', ''EDITAR'', p_pk_establecimiento) -- una sola llamada que sustituye al gate compuesto anterior (fn_puede_afectar_establecimiento, roles 1-3, O "es el rector activo de ESTE EE" resuelto inline): el caso del rector queda cubierto por fn_usuario_ee_accesibles (V29), que ademas incluye a la secretaria por puntero y a los roles de categoria ADMINISTRATIVOS_ESTABLECIMIENTO por TSEDE_USUARIO. Capability y scope lanzan 42501 con mensajes distintos. El resto del cuerpo (P0002 si no existe, 22023 si esta inactivo, validaciones de valor y unicidad) no cambia.')
+        ) AS t(proname, descripcion)
+    LOOP
+        SELECT p.oid::REGPROCEDURE::TEXT
+          INTO v_sig
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'academico_test'
+           AND p.proname = r.proname
+         LIMIT 1;
+
+        IF v_sig IS NOT NULL THEN
+            EXECUTE format('COMMENT ON FUNCTION %s IS %L', v_sig, r.descripcion);
+        END IF;
+    END LOOP;
+END;
+$$;
+
 
 -- Backfill: todo TUSUARIO con una TSEDE_USUARIO activa hoy, o que sea
 -- rector/secretaria de un EE activo hoy, queda sincronizado sin
