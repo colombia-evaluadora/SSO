@@ -1,4 +1,16 @@
 -- ===========================================================================
+-- CU-86e2w4xdt (Permisos segun rol) — EDICION IN-PLACE.
+--   fn_periodo_bulk_delete pasa a autorizar por el menu PERIODOS_ACADEMICOS
+--   (fn_assert_permiso_seccion, V29) en vez de por fn_periodo_usuario_puede_
+--   gestionar (lista fija FK_TROL IN (1,2,3,7,8,9)).
+--   El resto de funciones de escritura definidas aqui (fn_periodo_crear /
+--   _actualizar / _soft_delete, fn_descanso_agregar / _eliminar) estan
+--   REDEFINIDAS en V100, que es donde se migro su gate: sus cuerpos de este
+--   archivo quedan sobreescritos al final de la cadena y se dejaron intactos
+--   a proposito. Los helpers de LECTURA (fn_periodo_usuario_puede_ver /
+--   _global / _establecimientos / _sedes) NO se tocan: los usan ~24 listados
+--   y reportes fuera de alcance.
+-- ===========================================================================
 -- V37 — Modulo de Periodo Academico (academico_test).
 --
 -- Funciones:
@@ -93,29 +105,21 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
         );
 $$;
 
--- ESCRITURA: los mismos roles (1,2,3 globales; 7,8,9 por establecimiento).
--- Gate grueso: ¿tiene algun rol de gestion?
-CREATE OR REPLACE FUNCTION academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario BIGINT)
-RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (
-        SELECT 1 FROM academico_test.TSEDE_USUARIO
-         WHERE FK_TUSUARIO = p_pk_usuario AND ACTIVE = TRUE
-           AND FK_TROL IN (1, 2, 3, 7, 8, 9)
-    );
-$$;
-
--- Gate fino: ¿puede escribir sobre este establecimiento? Global si; los de
--- establecimiento solo si es el suyo.
-CREATE OR REPLACE FUNCTION academico_test.fn_periodo_usuario_puede_escribir(
-    p_pk_usuario BIGINT, p_fk_establecimiento BIGINT
-)
-RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
-    SELECT academico_test.fn_periodo_usuario_global(p_pk_usuario)
-        OR p_fk_establecimiento IN (
-            SELECT establecimiento_id
-              FROM academico_test.fn_periodo_usuario_establecimientos(p_pk_usuario)
-        );
-$$;
+-- ESCRITURA -- CU-86e2w4xdt (2026-08): fn_periodo_usuario_puede_gestionar y
+-- fn_periodo_usuario_puede_escribir se ELIMINARON. Autorizaban la escritura
+-- academica por lista fija de FK_TROL (1,2,3,7,8,9); ahora esa ruta pasa por
+-- fn_periodo_gate_escritura -> fn_assert_permiso_seccion (V29): capability
+-- configurable por menu + scope por categoria de rol. Las definiciones
+-- vigentes de fn_periodo_crear / _actualizar / _soft_delete / _bulk_delete,
+-- fn_periodo_eval_* , fn_descanso_* , fn_criterio_prom_guardar y
+-- fn_subject_guardar_bulk ya no las llaman (viven en V100/V101/V102/V193 y en
+-- este archivo). El DROP formal esta en V211. Las versiones OBSOLETAS de este
+-- mismo archivo (redefinidas mas adelante) todavia las nombran en su cuerpo,
+-- pero son plpgsql y nunca se ejecutan.
+--
+-- fn_periodo_usuario_global / _establecimientos / _sedes / _puede_ver SE
+-- CONSERVAN: los usa ~24 listados/reportes que estan fuera del alcance de
+-- este cambio.
 
 -- ---------------------------------------------------------------------------
 -- fn_periodo_crear
@@ -959,10 +963,11 @@ RETURNS TABLE (id BIGINT, eliminado BOOLEAN, error_code TEXT, error_mensaje TEXT
 LANGUAGE plpgsql AS $$
 DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
 BEGIN
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- CU-86e2w4xdt: capability por el menu PERIODOS_ACADEMICOS. Sin objeto:
+    -- el scope (EE / sede+jornada) de cada id lo aplica, dentro del bucle,
+    -- fn_periodo_soft_delete, que si resuelve el periodo concreto.
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PERIODOS_ACADEMICOS', 'ELIMINAR');
     IF p_ids IS NULL THEN RETURN; END IF;
     FOREACH v_id IN ARRAY p_ids LOOP
         BEGIN
