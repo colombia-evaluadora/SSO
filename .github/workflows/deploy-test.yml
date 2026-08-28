@@ -740,16 +740,21 @@ jobs:
           changed_migration_files() {
             local json files txt v
             json="$(docker compose run --rm -T flyway validate -outputType=json 2>/dev/null || true)"
+            # `sort -V`: orden por VERSION, no lexico. Importa cuando dos
+            # migraciones editadas redefinen el mismo objeto (p.ej. V40 y V103
+            # ambas crean fn_subject_listar): hay que re-aplicarlas en el
+            # mismo orden que Flyway las aplico, o la ultima gana la version
+            # equivocada.
             files="$(printf '%s' "$json" | jq -r '
                       (.invalidMigrations // [])[]
                       | select(.errorDetails.errorCode == "CHECKSUM_MISMATCH")
-                      | .filepath | sub("^.*/"; "")' 2>/dev/null | sort -u || true)"
+                      | .filepath | sub("^.*/"; "")' 2>/dev/null | sort -V -u || true)"
             if [ -z "$files" ]; then
               # Fallback: parsear el texto de `flyway validate`.
               txt="$(docker compose run --rm flyway validate 2>&1 || true)"
               for v in $(printf '%s\n' "$txt" \
                           | grep -iE 'checksum mismatch for migration version' \
-                          | grep -oE '[0-9]+(\.[0-9]+)*' | sort -u || true); do
+                          | grep -oE '[0-9]+(\.[0-9]+)*' | sort -V -u || true); do
                 ls -1 "/opt/sso/postgres/migrations/" 2>/dev/null \
                   | grep -E "^V${v}__" | head -1 || true
               done
