@@ -76,10 +76,12 @@ BEGIN
         IF NULLIF(TRIM(v_nombre),'') IS NULL OR NULLIF(TRIM(v_codigo),'') IS NULL THEN
             RAISE EXCEPTION 'Faltan campos obligatorios de la asignatura' USING ERRCODE = '22023';
         END IF;
-        IF v_color IS NOT NULL AND v_color !~ '^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$' THEN
-            RAISE EXCEPTION 'El color (%) debe ser un HEX valido, p.ej. #FFAA00', v_color USING ERRCODE = '22023';
+        IF v_color IS NOT NULL AND v_color !~ '^#?([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$' THEN
+            RAISE EXCEPTION 'El color (%) debe ser un HEX valido, p.ej. FFAA00', v_color USING ERRCODE = '22023';
         END IF;
-        -- Area general: el front manda el id (fk_area_asignatura), no el nombre.
+        IF v_color IS NOT NULL THEN
+            v_color := LTRIM(v_color, '#');
+        END IF;
         v_aa := NULLIF(TRIM(it->>'asignaturaGeneral'),'')::bigint;
         IF v_aa IS NOT NULL AND NOT EXISTS (
             SELECT 1 FROM academico_test.TAREA_ASIGNATURA

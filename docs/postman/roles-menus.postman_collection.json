@@ -1,0 +1,231 @@
+{
+  "info": {
+    "_postman_id": "d3f4a1c8-7b62-4e19-9a05-2c8e6f04b7d1",
+    "name": "SSO — menús por rol (query-service eval-col)",
+    "description": "Asignación de **menús a un rol académico** desde el panel de administración, servida por el query-service `eval-col` a través del gateway.\n\n| Método | Ruta | Función Postgres |\n| --- | --- | --- |\n| `GET` | `/api/eval-col/roles/:roleId/menus` | consulta directa sobre `academico_test.trol_menu` |\n| `PUT` | `/api/eval-col/roles/:roleId/menus` | `academico_test.fn_associate_menus_to_rol` |\n\n**Quién puede usarlos** — el usuario del JWT debe tener el rol `CEVAL-SUPER_ADMINISTRADOR` (lo valida `academico_test.fn_assert_superadmin`; además la fila `role_query` solo admite ese rol). Cualquier otro caller recibe `403`.\n\n---\n\n## Cambio de contrato del `PUT` (V123 + V198)\n\nHasta V122 el body era una lista de ids:\n\n```json\n{ \"menuIds\": [12, 34, 56] }\n```\n\nDesde **V123** `fn_associate_menus_to_rol` recibe `p_menus JSONB` y el catálogo (**V198**) pasa `CAST(:BODY_RAW.MENUS AS JSONB)`. El body ahora es:\n\n```json\n{\n  \"menus\": [\n    { \"id\": 12, \"soloLectura\": true },\n    { \"id\": 34 },\n    { \"id\": 56, \"soloLectura\": false }\n  ]\n}\n```\n\n- `id` — obligatorio en cada elemento (pk del `TMENU`).\n- `soloLectura` — opcional. `true` ⇒ el rol concede ese menú **solo para ver**: se persiste `trol_menu.SOLO_LECTURA = 'SI'`, y `fn_usuario_permisos_menu` devuelve `puede_crear/editar/eliminar = false`, `puede_ver = true` para los usuarios de ese rol. Ausente / `false` ⇒ concesión completa (los 4 permisos).\n- Se puede **promover** (`null → 'SI'`) o **degradar** (`'SI' → null`) el modo en cada `PUT`.\n\nEl `PUT` es **reemplazo completo**: los menús activos del rol que no vengan en `menus` se desactivan (`active = false`). El array puede venir vacío (\"vaciar el menú del rol\"). Si un submenú está en la lista, su menú padre también debe estarlo (invariante de jerarquía).\n\n**Respuesta** — el query-service envuelve el resultado como `{ \"rows\": [ { \"status\": \"success\", \"message\": \"Menus del rol actualizados\" } ] }`. `status` es `error` si algún menú no se pudo asociar.\n\n**Códigos de error**\n\n| SQLSTATE | HTTP | Caso |\n| --- | --- | --- |\n| — | `401` | sin token / token inválido |\n| — | `403` | rol distinto de `CEVAL-SUPER_ADMINISTRADOR` (`role_query`) |\n| `42501` | `403` | el usuario no tiene el rol `CEVAL-SUPER_ADMINISTRADOR` (`fn_assert_superadmin`) |\n| `P0002` | `404` | `roleId` no existe o el rol no está activo |\n| `22023` | `400` | `menus` no es un array JSON, array vacío en modo incremental, elemento sin `id`, o jerarquía rota (submenú sin su padre) |\n\n**404 previo al restart** — tras aplicar V198, la fila del catálogo cambia; el contenedor `query-service` que sirve `eval-col` cachea el catálogo, así que el `PUT` puede responder con el contrato viejo (o `500`) hasta que ese contenedor se reinicie.\n\n---\n\n**Antes de empezar**\n\n1. Elige el entorno **SSO — test** e introduce `password` (usuario `email`, que debe ser super-administrador).\n2. Ajusta la variable de colección `roleId` al pk del rol académico que quieras editar, y `menuPadre` / `menuHijo` a un par padre→submenú válido del catálogo (los ves con `GET /api/eval-col/menus`).\n\nEl **login es automático**: un script de colección pide el token antes de cada petición y lo reutiliza hasta que caduca (1 h). La petición *Login* solo sirve para ver la respuesta.\n\nLa carpeta *Rechazos esperados* comprueba que lo que debe fallar, falla. Un 2xx ahí es un bug.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Login automático antes de CADA petición: si el token vivo ya",
+          "// está en la variable de colección, no hace nada.",
+          "const rutaLogin = '/api/auth/login';",
+          "if (pm.request.url.getPath().endsWith(rutaLogin)) { return; }",
+          "",
+          "// Los rechazos de credencial llevan su Authorization escrito en la",
+          "// propia petición y no usan {{token}}: refrescarlo no los afecta.",
+          "function caducado(jwt) {",
+          "    try {",
+          "        const carga = JSON.parse(atob(jwt.split('.')[1]));",
+          "        return !carga.exp || (carga.exp - 30) * 1000 < Date.now();",
+          "    } catch (e) { return true; }",
+          "}",
+          "",
+          "const actual = pm.collectionVariables.get('token');",
+          "if (actual && !caducado(actual)) { return; }",
+          "",
+          "const clave = pm.environment.get('password');",
+          "if (!clave) { throw new Error('Falta `password` en el entorno «SSO — test».'); }",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + rutaLogin,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "        email: pm.environment.get('email'),",
+          "        password: clave",
+          "    }) }",
+          "}, (err, res) => {",
+          "    if (err) { throw new Error('No se pudo contactar con el gateway: ' + err); }",
+          "    if (res.code !== 200) { throw new Error('Login rechazado (' + res.code + '). Revisa `email` y `password`.'); }",
+          "    pm.collectionVariables.set('token', res.json().token);",
+          "    console.log('token renovado automáticamente');",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "token", "value": "" },
+    { "key": "roleId", "value": "17" },
+    { "key": "menuPadre", "value": "1" },
+    { "key": "menuHijo", "value": "5" }
+  ],
+  "item": [
+    {
+      "name": "0 — Login (ver la respuesta)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const token = pm.response.json().token;",
+              "pm.test('devuelve token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+              "pm.collectionVariables.set('token', token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "login"]
+        }
+      }
+    },
+    {
+      "name": "1 — GET menús del rol",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const rows = pm.response.json().rows;",
+              "pm.test('rows es array', () => pm.expect(rows).to.be.an('array'));",
+              "// cada fila expone al menos { id }",
+              "if (rows.length) pm.test('fila con id', () => pm.expect(rows[0]).to.have.property('id'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/roles/{{roleId}}/menus",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "roles", "{{roleId}}", "menus"]
+        },
+        "description": "Ids de los `TMENU` activos asignados al rol, en el orden guardado (`trol_menu.orden_rol`). No devuelve el flag `soloLectura` — para verlo por menú usa la pantalla que consume `fn_list_menu_possibilities_for_rol`."
+      }
+    },
+    {
+      "name": "2 — PUT menús del rol (contrato JSONB)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const row = pm.response.json().rows[0];",
+              "pm.test('status success', () => pm.expect(row.status).to.eql('success'));",
+              "pm.test('message', () => pm.expect(row.message).to.eql('Menus del rol actualizados'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"menus\": [\n    { \"id\": {{menuPadre}} },\n    { \"id\": {{menuHijo}}, \"soloLectura\": true }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/roles/{{roleId}}/menus",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "roles", "{{roleId}}", "menus"]
+        },
+        "description": "Reemplazo completo de los menús del rol. `menuPadre` se concede completo; `menuHijo` en **solo lectura** (`trol_menu.SOLO_LECTURA = 'SI'`). Cualquier otro menú que el rol tuviera activo se desactiva.\n\nPara **degradar** `menuHijo` a concesión completa, repite el `PUT` con `{ \"id\": {{menuHijo}}, \"soloLectura\": false }` (o sin la clave).\n\nPara **vaciar** el menú del rol: `{ \"menus\": [] }`."
+      }
+    },
+    {
+      "name": "Rechazos esperados",
+      "item": [
+        {
+          "name": "PUT sin token → 401",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('401', () => pm.response.to.have.status(401));"] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"menus\": [ { \"id\": {{menuPadre}} } ]\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/roles/{{roleId}}/menus",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "roles", "{{roleId}}", "menus"]
+            }
+          }
+        },
+        {
+          "name": "PUT rol inexistente → 404",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('404', () => pm.response.to.have.status(404));"] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"menus\": [ { \"id\": {{menuPadre}} } ]\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/roles/99999999/menus",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "roles", "99999999", "menus"]
+            }
+          }
+        },
+        {
+          "name": "PUT submenú sin su padre → 400",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('400', () => pm.response.to.have.status(400));"] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"menus\": [ { \"id\": {{menuHijo}}, \"soloLectura\": true } ]\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/roles/{{roleId}}/menus",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "roles", "{{roleId}}", "menus"]
+            },
+            "description": "`menuHijo` es submenú de `menuPadre`; enviarlo sin el padre viola la invariante de jerarquía → `22023` → 400."
+          }
+        },
+        {
+          "name": "PUT menus no-array → 400",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('400', () => pm.response.to.have.status(400));"] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"menus\": null\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/roles/{{roleId}}/menus",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "roles", "{{roleId}}", "menus"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
