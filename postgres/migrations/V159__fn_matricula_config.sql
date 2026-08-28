@@ -130,12 +130,18 @@ UPDATE TMATRICULA_CAMPO
         'Grado',
         'Grupo',
         'Estado de la matricula',
+        'Tipo de documento del estudiante',
         'Documento estudiante',
         'Nombre del estudiante',
         'Primer apellido del estudiante',
         'Genero del estudiante',
         'Fecha de nacimiento',
-        'Parentesco'
+        'Parentesco',
+        'Nombre del acudiente',
+        'Primer apellido del acudiente',
+        'Tipo de documento del acudiente',
+        'Documento del acudiente',
+        'Email acudiente'
    )
    AND EDITABLE <> 'N';
 
@@ -216,10 +222,10 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- CU-86e2w4xdt: capability 'CREAR' sobre el menu MATRICULA; scope a
+    -- nivel establecimiento (la config es una por EE, sin sede/jornada).
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'MATRICULA', 'CREAR', p_fk_establecimiento);
 
     IF p_fk_establecimiento IS NULL OR p_fk_establecimiento <= 0 THEN
         RAISE EXCEPTION 'p_fk_establecimiento es obligatorio y debe ser > 0'
@@ -295,10 +301,10 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- CU-86e2w4xdt: capability 'EDITAR' sobre el menu MATRICULA; scope a
+    -- nivel establecimiento (la config es una por EE, sin sede/jornada).
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'MATRICULA', 'EDITAR', p_fk_establecimiento);
 
     IF p_fk_establecimiento IS NULL OR p_fk_establecimiento <= 0 THEN
         RAISE EXCEPTION 'p_fk_establecimiento es obligatorio y debe ser > 0'
