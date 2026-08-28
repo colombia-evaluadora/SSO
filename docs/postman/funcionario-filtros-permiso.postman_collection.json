@@ -1,0 +1,331 @@
+{
+  "info": {
+    "_postman_id": "a7c1e6d2-4f83-4b1a-9e5c-2d9f7a0b3c14",
+    "name": "SSO — filtros de permiso por funcionario (query-service eval-col)",
+    "description": "Gestión de los **filtros que recortan los permisos de un funcionario** = filas de `academico_test.TUSUARIO_ROL_PERMISO`, servida por el query-service `eval-col` a través del gateway.\n\n| Método | Ruta | Función Postgres |\n| --- | --- | --- |\n| `GET` | `/api/eval-col/funcionario/:ID/filtros-permiso` | `academico_test.fn_fun_filtros_permiso_listar` (V199) |\n| `PUT` | `/api/eval-col/funcionario/:ID/filtros-permiso` | `academico_test.fn_fun_filtros_permiso_actualizar` (V199) |\n\n`:ID` = `PK_TFUNCIONARIO` (igual que el hermano `PUT /api/eval-col/funcionario/:ID/permisos`, que sirve `fn_fun_permisos_actualizar`).\n\n---\n\n## `GET` — estado actual (read-back para el `PUT`)\n\nEl `PUT` es **reemplazo completo**, así que el front necesita saber qué filtros existen hoy antes de editar. El `GET` devuelve una fila por filtro `ACTIVE` del funcionario, ya resuelto a nombres:\n\n```json\n{ \"rows\": [\n  { \"rol_id\": 17, \"rol_nombre\": \"Docente\", \"menu_id\": 5, \"menu_nombre\": \"Calificaciones\", \"fk_tsede\": 42, \"sede_nombre\": \"Sede Principal\", \"modo\": \"SOLO_LECTURA\" },\n  { \"rol_id\": 17, \"rol_nombre\": \"Docente\", \"menu_id\": 8, \"menu_nombre\": \"Reportes\",        \"fk_tsede\": 42, \"sede_nombre\": \"Sede Principal\", \"modo\": \"BLOQUEO_TOTAL\" }\n] }\n```\n\n- `modo` se deriva de `TUSUARIO_ROL_PERMISO.SOLO_LECTURA` con la regla de V185: `'SI'` → `SOLO_LECTURA`; cualquier otro valor (`NULL` incluido) → `BLOQUEO_TOTAL`.\n- `fk_tsede` / `sede_nombre` pueden venir `null` si la fila tiene alcance por ente territorial (`FK_ENTE`) — el `PUT` de este endpoint nunca las crea así, pero pueden existir de una carga previa.\n- Sin filtros → `{ \"rows\": [] }`.\n- Mismo `role_query` y mismo gate fino que el `PUT`. Errores: `401`, `403` (rol / gate), `404` (`P0002` `PK_TFUNCIONARIO` inexistente).\n\nPara reconstruir el body del `PUT`: agrupar las filas del `GET` por `rol_id` → `{ rolId, menus: [{ menuId, modo }] }`.\n\n---\n\n## `PUT` — Qué hace\n\n**Reemplazo completo por funcionario.** El body trae, por cada rol del funcionario, la lista de menús a recortar con su modo. La función:\n\n1. Resuelve `FK_TROL_MENU` desde `(rolId, menuId)` contra `TROL_MENU` activo.\n2. **Deriva el alcance** (`FK_TSEDE`) del `TSEDE_USUARIO` activo del funcionario para ese rol: `PREDETERMINADO = 1` si existe, si no el de menor `ORDEN`. `FK_ENTE` siempre `NULL` (el endpoint no cubre roles asignados por ente territorial — por eso su `role_query` excluye esos roles).\n3. Aplica el modo (ver más abajo).\n4. **Desactiva** (`ACTIVE = FALSE`) toda fila `TUSUARIO_ROL_PERMISO` activa del funcionario que no quede en el nuevo set. `MODIFIED_BY` / `MODIFIED_AT` solo se tocan si hubo cambio real.\n\n`filtros: []` (o `menus: []` en un rol) ⇒ limpia esos filtros.\n\n---\n\n## Contrato del body\n\n```json\n{\n  \"filtros\": [\n    { \"rolId\": 17, \"menus\": [\n        { \"menuId\": 5, \"modo\": \"SOLO_LECTURA\" },\n        { \"menuId\": 8, \"modo\": \"BLOQUEO_TOTAL\" }\n    ] }\n  ]\n}\n```\n\n- `rolId` — obligatorio por elemento (pk del `TROL`).\n- `menus` — array (puede venir vacío). Cada elemento:\n  - `menuId` — obligatorio (pk del `TMENU`).\n  - `modo` — obligatorio, uno de `SOLO_LECTURA` | `BLOQUEO_TOTAL`. Se compara `UPPER(TRIM(...))` — **case-insensitive** y sin espacios.\n\n### Semántica de `modo` (persistencia en `TUSUARIO_ROL_PERMISO.SOLO_LECTURA`, VARCHAR(5))\n\n| `modo` | `SOLO_LECTURA` guardado | Efecto en `fn_usuario_permisos_menu` (V185) |\n| --- | --- | --- |\n| `SOLO_LECTURA` | `'SI'` | `puede_ver = true`; `puede_crear` / `puede_editar` / `puede_eliminar` = `false` |\n| `BLOQUEO_TOTAL` | `'NO'` | los 4 permisos en `false` (V185 trata cualquier valor `IS DISTINCT FROM 'SI'` como bloqueo total) |\n\n---\n\n## Respuesta 200\n\nEl query-service envuelve el `RETURNS TABLE` como `{ \"rows\": [ ... ] }`. Una fila por `(rol, menu)` procesado más una por cada fila desactivada:\n\n```json\n{ \"rows\": [\n  { \"rol_id\": 17, \"menu_id\": 5, \"pk_tusuario_rol_permiso\": 3,    \"status\": \"inserted\" },\n  { \"rol_id\": 17, \"menu_id\": 8, \"pk_tusuario_rol_permiso\": 1,    \"status\": \"reactivated\" },\n  { \"rol_id\": 20, \"menu_id\": 7, \"pk_tusuario_rol_permiso\": null, \"status\": \"menu_no_concedido\" },\n  { \"rol_id\": 77, \"menu_id\": 9, \"pk_tusuario_rol_permiso\": null, \"status\": \"rol_no_asignado\" },\n  { \"rol_id\": 20, \"menu_id\": 6, \"pk_tusuario_rol_permiso\": 2,    \"status\": \"deactivated\" }\n] }\n```\n\n| `status` | Significado |\n| --- | --- |\n| `inserted` | fila nueva |\n| `reactivated` | fila soft-deleted que se reactiva (se re-escribe `SOLO_LECTURA` según el `modo`) |\n| `actualizado` | fila activa cuyo `modo` cambió (`SI` ⇄ `NO`) |\n| `sin_cambio` | fila activa idéntica — no se toca |\n| `deactivated` | fila activa que no vino en el nuevo set → `ACTIVE = FALSE` |\n| `menu_no_concedido` | no hay `TROL_MENU` activo para `(rolId, menuId)` — no se toca nada, no aborta |\n| `rol_no_asignado` | el funcionario no tiene `TSEDE_USUARIO` activo para ese `rolId` — no se toca nada, no aborta |\n\n---\n\n## Autorización\n\n- **`role_query`** (ancho): `CEVAL-SUPER_ADMINISTRADOR`, `SSO-ADMIN`, `CEVAL-RECTOR`, `CEVAL-AUXILIAR_ADMINISTRATIVO`, `CEVAL-JEFE_SISTEMA_ESTABLECIMIENTO`. Cualquier otro rol → `403`.\n- **Gate fino en la función** (copiado 1:1 de `fn_fun_permisos_actualizar`, V51): super-admin (`fn_puede_afectar_establecimiento`) **o** rector / secretaria / jefe de sistema de al menos un EE donde el funcionario objetivo sea alcanzable, **o** coordinador de sede (roles 9-14). Si no pasa → `42501` → `403`.\n\n### Códigos de error\n\n| SQLSTATE | HTTP | Caso |\n| --- | --- | --- |\n| — | `401` | sin token / token inválido |\n| — | `403` | rol fuera de `role_query` |\n| `42501` | `403` | el caller no pasa el gate fino de la función |\n| `P0002` | `404` | `PK_TFUNCIONARIO` inexistente |\n| `22023` | `400` | funcionario inactivo · `filtros` no es array · elemento sin `rolId` · menú sin `menuId` · `modo` inválido |\n\n---\n\n## 404 previo al restart del contenedor\n\nV199 da de alta una fila nueva en `public.query`. El gateway enruta `api/eval-col/...` contra el contenedor `query-service-eval-col`, que **cachea el catálogo al arrancar**. Hasta que ese contenedor se reinicie, `PUT /api/eval-col/funcionario/:ID/filtros-permiso` responde **404**. La carpeta *Rechazos esperados* incluye ese caso.\n\n---\n\n**Antes de empezar**\n\n1. Elige el entorno **SSO — test** e introduce `password` (usuario `email`, que debe tener uno de los roles de `role_query`).\n2. Ajusta las variables de colección `funcionarioId`, `rolId`, `menuSoloLectura`, `menuBloqueo` a datos válidos de tu entorno.\n\nEl **login es automático**: un script de colección pide el token antes de cada petición y lo reutiliza hasta que caduca (1 h).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Login automático antes de CADA petición: si el token vivo ya",
+          "// está en la variable de colección, no hace nada.",
+          "const rutaLogin = '/api/auth/login';",
+          "if (pm.request.url.getPath().endsWith(rutaLogin)) { return; }",
+          "",
+          "// Los rechazos de credencial llevan su Authorization escrito en la",
+          "// propia petición y no usan {{token}}: refrescarlo no los afecta.",
+          "function caducado(jwt) {",
+          "    try {",
+          "        const carga = JSON.parse(atob(jwt.split('.')[1]));",
+          "        return !carga.exp || (carga.exp - 30) * 1000 < Date.now();",
+          "    } catch (e) { return true; }",
+          "}",
+          "",
+          "const actual = pm.collectionVariables.get('token');",
+          "if (actual && !caducado(actual)) { return; }",
+          "",
+          "const clave = pm.environment.get('password');",
+          "if (!clave) { throw new Error('Falta `password` en el entorno «SSO — test».'); }",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + rutaLogin,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "        email: pm.environment.get('email'),",
+          "        password: clave",
+          "    }) }",
+          "}, (err, res) => {",
+          "    if (err) { throw new Error('No se pudo contactar con el gateway: ' + err); }",
+          "    if (res.code !== 200) { throw new Error('Login rechazado (' + res.code + '). Revisa `email` y `password`.'); }",
+          "    pm.collectionVariables.set('token', res.json().token);",
+          "    console.log('token renovado automáticamente');",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "token", "value": "" },
+    { "key": "funcionarioId", "value": "7001" },
+    { "key": "rolId", "value": "17" },
+    { "key": "rolSecundario", "value": "20" },
+    { "key": "menuSoloLectura", "value": "5" },
+    { "key": "menuBloqueo", "value": "8" }
+  ],
+  "item": [
+    {
+      "name": "0 — Login (ver la respuesta)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const token = pm.response.json().token;",
+              "pm.test('devuelve token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+              "pm.collectionVariables.set('token', token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "login"]
+        }
+      }
+    },
+    {
+      "name": "1 — GET filtros del funcionario (estado actual)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const rows = pm.response.json().rows;",
+              "pm.test('rows es array', () => pm.expect(rows).to.be.an('array'));",
+              "const modos = new Set(['SOLO_LECTURA','BLOQUEO_TOTAL']);",
+              "pm.test('cada fila trae rol/menu/modo', () => rows.forEach(r => {",
+              "  pm.expect(r).to.have.all.keys('rol_id','rol_nombre','menu_id','menu_nombre','fk_tsede','sede_nombre','modo');",
+              "  pm.expect(modos.has(r.modo), r.modo).to.be.true;",
+              "}));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/funcionario/{{funcionarioId}}/filtros-permiso",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "funcionario", "{{funcionarioId}}", "filtros-permiso"],
+          "variable": [
+            { "key": "ID", "value": "{{funcionarioId}}", "description": "PK_TFUNCIONARIO" }
+          ]
+        },
+        "description": "Read-back de los filtros `ACTIVE` del funcionario, resueltos a `(rol_id, rol_nombre, menu_id, menu_nombre, fk_tsede, sede_nombre, modo)`. Es el estado de partida para armar el body del `PUT` (reemplazo completo): agrupar por `rol_id`.\n\n`modo`: `SOLO_LECTURA` (SOLO_LECTURA='SI') o `BLOQUEO_TOTAL` (cualquier otro valor). `fk_tsede`/`sede_nombre` = `null` si la fila tiene alcance por ente. Sin filtros → `rows: []`."
+      }
+    },
+    {
+      "name": "2 — PUT filtros: reemplazo completo (2 roles, modos mezclados)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const rows = pm.response.json().rows;",
+              "pm.test('rows es array', () => pm.expect(rows).to.be.an('array'));",
+              "const estados = new Set(['inserted','reactivated','actualizado','sin_cambio','deactivated','menu_no_concedido','rol_no_asignado']);",
+              "pm.test('status conocido en cada fila', () => rows.forEach(r => pm.expect(estados.has(r.status), r.status).to.be.true));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"filtros\": [\n    { \"rolId\": {{rolId}}, \"menus\": [\n        { \"menuId\": {{menuSoloLectura}}, \"modo\": \"SOLO_LECTURA\" },\n        { \"menuId\": {{menuBloqueo}}, \"modo\": \"BLOQUEO_TOTAL\" }\n    ] },\n    { \"rolId\": {{rolSecundario}}, \"menus\": [] }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/funcionario/{{funcionarioId}}/filtros-permiso",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "funcionario", "{{funcionarioId}}", "filtros-permiso"],
+          "variable": [
+            { "key": "ID", "value": "{{funcionarioId}}", "description": "PK_TFUNCIONARIO" }
+          ]
+        },
+        "description": "Deja para `rolId` el menú `{{menuSoloLectura}}` en solo lectura (`SOLO_LECTURA = 'SI'`) y el menú `{{menuBloqueo}}` en bloqueo total (`SOLO_LECTURA = 'NO'`). `rolSecundario` con `menus: []` limpia cualquier filtro que tuviera ese rol. Cualquier otra fila `TUSUARIO_ROL_PERMISO` activa del funcionario que no venga aquí → `deactivated`.\n\nEl `FK_TSEDE` de cada fila lo deriva la función del `TSEDE_USUARIO` activo del funcionario para ese rol (`PREDETERMINADO = 1`, si no menor `ORDEN`)."
+      }
+    },
+    {
+      "name": "3 — PUT filtros: quitar un menú (queda deactivated)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const rows = pm.response.json().rows;",
+              "pm.test('el menú de bloqueo quedó deactivated', () => {",
+              "  const r = rows.find(x => String(x.menu_id) === pm.collectionVariables.get('menuBloqueo'));",
+              "  pm.expect(r && r.status).to.eql('deactivated');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"filtros\": [\n    { \"rolId\": {{rolId}}, \"menus\": [\n        { \"menuId\": {{menuSoloLectura}}, \"modo\": \"SOLO_LECTURA\" }\n    ] }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/funcionario/{{funcionarioId}}/filtros-permiso",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "funcionario", "{{funcionarioId}}", "filtros-permiso"]
+        },
+        "description": "Repite el `PUT` sin `menuBloqueo`: esa fila pasa a `ACTIVE = FALSE` (`status = deactivated`) mientras `menuSoloLectura` queda `sin_cambio`."
+      }
+    },
+    {
+      "name": "4 — PUT filtros: [] limpia todos los filtros del funcionario",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const rows = pm.response.json().rows;",
+              "pm.test('todo lo que devuelve es deactivated (o vacío)', () => rows.forEach(r => pm.expect(r.status).to.eql('deactivated')));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": { "mode": "raw", "raw": "{\n  \"filtros\": []\n}" },
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/funcionario/{{funcionarioId}}/filtros-permiso",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "funcionario", "{{funcionarioId}}", "filtros-permiso"]
+        },
+        "description": "`filtros: []` desactiva TODAS las filas `TUSUARIO_ROL_PERMISO` activas del funcionario. Idempotente: repetirlo devuelve `rows: []`."
+      }
+    },
+    {
+      "name": "Rechazos esperados",
+      "item": [
+        {
+          "name": "PUT sin token → 401",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('401', () => pm.response.to.have.status(401));"] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"filtros\": []\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/funcionario/{{funcionarioId}}/filtros-permiso",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "funcionario", "{{funcionarioId}}", "filtros-permiso"]
+            }
+          }
+        },
+        {
+          "name": "PUT funcionario inexistente → 404",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('404', () => pm.response.to.have.status(404));"] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"filtros\": []\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/funcionario/99999999/filtros-permiso",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "funcionario", "99999999", "filtros-permiso"]
+            },
+            "description": "`PK_TFUNCIONARIO` inexistente → `P0002` → 404.\n\n**Nota:** antes de reiniciar el contenedor `query-service-eval-col` esta misma ruta (con cualquier `:ID`) responde 404 porque la fila `public.query` de V199 aún no está en el catálogo cacheado — no por `P0002`."
+          }
+        },
+        {
+          "name": "PUT filtros no-array → 400",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('400', () => pm.response.to.have.status(400));"] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"filtros\": {}\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/funcionario/{{funcionarioId}}/filtros-permiso",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "funcionario", "{{funcionarioId}}", "filtros-permiso"]
+            },
+            "description": "`filtros` no es un array JSON → `22023` → 400."
+          }
+        },
+        {
+          "name": "PUT menú sin menuId → 400",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('400', () => pm.response.to.have.status(400));"] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"filtros\": [\n    { \"rolId\": {{rolId}}, \"menus\": [ { \"modo\": \"SOLO_LECTURA\" } ] }\n  ]\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/funcionario/{{funcionarioId}}/filtros-permiso",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "funcionario", "{{funcionarioId}}", "filtros-permiso"]
+            },
+            "description": "Elemento de `menus` sin `menuId` → `22023` → 400. Mismo código para un elemento sin `rolId` o con `modo` fuera de `{SOLO_LECTURA, BLOQUEO_TOTAL}`."
+          }
+        },
+        {
+          "name": "PUT modo inválido → 400",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('400', () => pm.response.to.have.status(400));"] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"filtros\": [\n    { \"rolId\": {{rolId}}, \"menus\": [ { \"menuId\": {{menuSoloLectura}}, \"modo\": \"SOLO_ESCRITURA\" } ] }\n  ]\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/funcionario/{{funcionarioId}}/filtros-permiso",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "funcionario", "{{funcionarioId}}", "filtros-permiso"]
+            },
+            "description": "`modo` fuera de `{SOLO_LECTURA, BLOQUEO_TOTAL}` → `22023` → 400. La comparación es `UPPER(TRIM(...))`, así que `\" solo_lectura \"` sí sería válido."
+          }
+        }
+      ]
+    }
+  ]
+}
