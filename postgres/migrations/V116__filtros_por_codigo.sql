@@ -107,22 +107,11 @@ BEGIN
         RETURN;
     END IF;
 
-    -- Camino no-super-admin: filtrar por rector UNION secretaria.
-    IF NOT EXISTS (
-        WITH ee_accesibles AS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-        )
-        SELECT 1 FROM ee_accesibles
-    ) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+    -- Camino no-super-admin (CU-86e2w4xdt): capability 'VER' sobre el menu
+    -- ESTABLECIMIENTO + scope de LECTURA por categoria de rol
+    -- (fn_usuario_ee_lectura: nivel 3 coordinador -> el EE de sus sedes).
+    IF NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario_solicitante, 'ESTABLECIMIENTO', 'VER') THEN
+        RAISE EXCEPTION 'El usuario no tiene permiso para ver en el modulo ESTABLECIMIENTO'
             USING ERRCODE = '42501';
     END IF;
 
@@ -132,17 +121,8 @@ BEGIN
            m.PK_TMUNICIPIO, m.NOMBRE,
            e.FK_TLV_ESTADO_ESTABLECIMIENTO, tlv.NOMBRE
       FROM academico_test.TESTABLECIMIENTO e
-      JOIN (
-          SELECT e2.PK_ESTABLECIMIENTO
-            FROM academico_test.TESTABLECIMIENTO e2
-            JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e2.FK_TFUNCIONARIO_RECTOR
-           WHERE e2.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-          UNION
-          SELECT e2.PK_ESTABLECIMIENTO
-            FROM academico_test.TESTABLECIMIENTO e2
-            JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e2.FK_TFUNCIONARIO_SECRETARIA
-           WHERE e2.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-      ) ee ON ee.PK_ESTABLECIMIENTO = e.PK_ESTABLECIMIENTO
+      JOIN academico_test.fn_usuario_ee_lectura(p_pk_usuario_solicitante) ee
+        ON ee.establecimiento_id = e.PK_ESTABLECIMIENTO
       JOIN academico_test.TMUNICIPIO    m ON m.PK_TMUNICIPIO    = e.FK_TMUNICIPIO
       JOIN academico_test.TDEPARTAMENTO d ON d.PK_DEPARTAMENTO  = m.PK_TDEPARTAMENTO
  LEFT JOIN academico_test.TLISTA_VALOR  tlv ON tlv.PK_LISTA_VALOR = e.FK_TLV_ESTADO_ESTABLECIMIENTO
@@ -192,21 +172,16 @@ BEGIN
     -- p_pk_usuario_solicitante). Mismo patron "ee_accesibles" (rector UNION
     -- secretaria) que fn_sed_contar (V52).
     IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        WITH ee_accesibles AS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-        )
+        -- CU-86e2w4xdt: capability 'VER' menu ESTABLECIMIENTO + scope de lectura.
+        IF NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario_solicitante, 'ESTABLECIMIENTO', 'VER') THEN
+            RAISE EXCEPTION 'El usuario no tiene permiso para ver en el modulo ESTABLECIMIENTO'
+                USING ERRCODE = '42501';
+        END IF;
         SELECT COUNT(*)
           INTO v_total
           FROM academico_test.TESTABLECIMIENTO e
-          JOIN ee_accesibles ee ON ee.PK_ESTABLECIMIENTO = e.PK_ESTABLECIMIENTO
+          JOIN academico_test.fn_usuario_ee_lectura(p_pk_usuario_solicitante) ee
+            ON ee.establecimiento_id = e.PK_ESTABLECIMIENTO
           JOIN academico_test.TMUNICIPIO    m ON m.PK_TMUNICIPIO    = e.FK_TMUNICIPIO
           JOIN academico_test.TDEPARTAMENTO d ON d.PK_DEPARTAMENTO  = m.PK_TDEPARTAMENTO
          WHERE e.ACTIVE = TRUE
@@ -222,22 +197,6 @@ BEGIN
            AND (p_estados IS NULL OR CARDINALITY(p_estados) = 0
                 OR e.FK_TLV_ESTADO_ESTABLECIMIENTO IN (SELECT lv.PK_LISTA_VALOR FROM academico_test.TLISTA_VALOR lv
                         WHERE lv.CATEGORIA = 'ESTADO_ESTABLECIMIENTO' AND lv.VALOR = ANY(p_estados)));
-
-        IF v_total = 0 AND NOT EXISTS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-        ) THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
-
         RETURN v_total;
     END IF;
 
@@ -863,33 +822,10 @@ BEGIN
     -- Camino no-super-admin: filtra por EE accesibles (rector/secretaria/
     -- jefe de sistema). Si el conjunto de EE accesibles es vacio => 42501.
     -- -----------------------------------------------------------------
-    IF NOT EXISTS (
-        WITH ee_accesibles AS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE      = TRUE
-               AND f.ACTIVE      = TRUE
-               AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE      = TRUE
-               AND f.ACTIVE      = TRUE
-               AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE       = TRUE
-               AND su.ACTIVE      = TRUE
-               AND su.FK_TROL     = 8
-               AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        )
-        SELECT 1 FROM ee_accesibles
-    ) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+    -- CU-86e2w4xdt: capability 'VER' menu SEDES_EDUCATIVAS + scope de lectura
+    -- por categoria de rol (nivel 3 coordinador -> SOLO sus propias sedes).
+    IF NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario_solicitante, 'SEDES_EDUCATIVAS', 'VER') THEN
+        RAISE EXCEPTION 'El usuario no tiene permiso para ver en el modulo SEDES_EDUCATIVAS'
             USING ERRCODE = '42501';
     END IF;
 
@@ -898,30 +834,8 @@ BEGIN
            s.FK_TLV_ZONA, tlv.NOMBRE,
            s.DIRECCION, s.TELEFONO
       FROM academico_test.TSEDE s
-      JOIN (
-          -- Misma CTE ee_accesibles que arriba, materializada inline.
-          SELECT e.PK_ESTABLECIMIENTO
-            FROM academico_test.TESTABLECIMIENTO e
-            JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-           WHERE e.ACTIVE      = TRUE
-             AND f.ACTIVE      = TRUE
-             AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-          UNION
-          SELECT e.PK_ESTABLECIMIENTO
-            FROM academico_test.TESTABLECIMIENTO e
-            JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-           WHERE e.ACTIVE      = TRUE
-             AND f.ACTIVE      = TRUE
-             AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-          UNION
-          SELECT DISTINCT s2.FK_TESTABLECIMIENTO
-            FROM academico_test.TSEDE_USUARIO su
-            JOIN academico_test.TSEDE s2 ON s2.PK_TSEDE = su.FK_TSEDE
-           WHERE s2.ACTIVE      = TRUE
-             AND su.ACTIVE      = TRUE
-             AND su.FK_TROL     = 8
-             AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-      ) ee ON ee.PK_ESTABLECIMIENTO = s.FK_TESTABLECIMIENTO
+      JOIN academico_test.fn_usuario_sedes_lectura(p_pk_usuario_solicitante) sl
+        ON sl.sede_id = s.PK_TSEDE
  LEFT JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = s.FK_TLV_ZONA
      WHERE s.ACTIVE = TRUE
        AND (NULLIF(TRIM(p_search), '') IS NULL
@@ -981,34 +895,18 @@ BEGIN
         RETURN v_total;
     END IF;
 
-    -- Camino no-super-admin: filtra por EE accesibles.
-    WITH ee_accesibles AS (
-        SELECT e.PK_ESTABLECIMIENTO
-          FROM academico_test.TESTABLECIMIENTO e
-          JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-         WHERE e.ACTIVE      = TRUE
-           AND f.ACTIVE      = TRUE
-           AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-        UNION
-        SELECT e.PK_ESTABLECIMIENTO
-          FROM academico_test.TESTABLECIMIENTO e
-          JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-         WHERE e.ACTIVE      = TRUE
-           AND f.ACTIVE      = TRUE
-           AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-        UNION
-        SELECT DISTINCT s.FK_TESTABLECIMIENTO
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-         WHERE s.ACTIVE       = TRUE
-           AND su.ACTIVE      = TRUE
-           AND su.FK_TROL     = 8
-           AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-    )
+    -- CU-86e2w4xdt: capability 'VER' menu SEDES_EDUCATIVAS + scope de lectura
+    -- (nivel 3 coordinador -> SOLO sus propias sedes).
+    IF NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario_solicitante, 'SEDES_EDUCATIVAS', 'VER') THEN
+        RAISE EXCEPTION 'El usuario no tiene permiso para ver en el modulo SEDES_EDUCATIVAS'
+            USING ERRCODE = '42501';
+    END IF;
+
     SELECT COUNT(*)
       INTO v_total
       FROM academico_test.TSEDE s
-      JOIN ee_accesibles ee ON ee.PK_ESTABLECIMIENTO = s.FK_TESTABLECIMIENTO
+      JOIN academico_test.fn_usuario_sedes_lectura(p_pk_usuario_solicitante) sl
+        ON sl.sede_id = s.PK_TSEDE
  LEFT JOIN academico_test.TLISTA_VALOR tlv ON tlv.PK_LISTA_VALOR = s.FK_TLV_ZONA
      WHERE s.ACTIVE = TRUE
        AND (NULLIF(TRIM(p_search), '') IS NULL
@@ -1017,43 +915,6 @@ BEGIN
        AND (p_zones IS NULL OR CARDINALITY(p_zones) = 0
             OR s.FK_TLV_ZONA IN (SELECT lv.PK_LISTA_VALOR FROM academico_test.TLISTA_VALOR lv
                         WHERE lv.CATEGORIA = 'ZONA' AND lv.VALOR = ANY(p_zones)));
-
-    -- Si ademas el conjunto de EE accesibles era vacio => 42501.
-    -- (Si v_total > 0 seguro habia EE accesibles, no chequeamos doble.)
-    -- BUG (42P01 "relation ee_accesibles does not exist"): la CTE de
-    -- arriba solo vive dentro de la sentencia WITH...SELECT INTO v_total,
-    -- que termina en su propio ';' -- este IF es una sentencia NUEVA donde
-    -- ee_accesibles ya no existe. Se repite la CTE, autocontenida, igual
-    -- que ya hace fn_sed_listar en su segundo uso.
-    IF v_total = 0 AND NOT EXISTS (
-        WITH ee_accesibles AS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE      = TRUE
-               AND f.ACTIVE      = TRUE
-               AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE      = TRUE
-               AND f.ACTIVE      = TRUE
-               AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE       = TRUE
-               AND su.ACTIVE      = TRUE
-               AND su.FK_TROL     = 8
-               AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        )
-        SELECT 1 FROM ee_accesibles
-    ) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
 
     RETURN v_total;
 END;
