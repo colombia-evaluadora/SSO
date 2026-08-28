@@ -1,0 +1,659 @@
+{
+  "info": {
+    "_postman_id": "b7e3c1a2-4d5f-4a6b-9c8d-matricula-directa",
+    "name": "SSO - matricula directa (crear y consultar)",
+    "description": {
+      "content": "Alta y consulta de **matricula directa** - `fn_matricula_directa_crear` / `fn_matricula_obtener_completa`.\n\n## Nombres de los campos\n\nLos nombres del body **no** siguen la convencion camelCase-ingles del resto del\ncatalogo. Salen de `TMATRICULA_CAMPO.NOMBRE` (el catalogo que alimenta\n`GET /matricula/configuracion`, donde cada establecimiento marca que campos son\nrequeridos/visibles), normalizados asi:\n\n- se quitan las tildes\n- todo caracter no alfanumerico pasa a `_` (`Caracter / Especialidad / Enfasis` -> `CARACTER_ESPECIALIDAD_ENFASIS`)\n\nEs deliberado: asi el front usa **el mismo identificador** que ya viene en la\nconfiguracion de campos, sin una tabla de traduccion en el medio.\n\nEl motor uppercasea las claves, asi que da igual la caja con la que se manden.\n\n## Origen de cada campo\n\nCada campo del form-data lo declara en su descripcion:\n\n| Marca | Que significa | Cuantos |\n|---|---|---|\n| `[catalogo #N]` | Tiene fila N en `TMATRICULA_CAMPO`: el front puede leer su `requerido`/`visible` de la configuracion. | 39 |\n| `[formulario, SIN fila en el catalogo]` | Esta en el formulario, pero el catalogo no tiene esa seccion. Son los 5 archivos de soporte. | 5 |\n| `[NI formulario NI catalogo - columna del DDL]` | No lo pide el formulario ni existe en el catalogo: es una columna real de `TMATRICULA`/`TPADRE`/`TNUCLEO_FAMILIAR` que se expone como parametro **opcional** para no perder capacidad. Hoy el front no tiene de donde sacar su valor. | 10 |\n| `[tecnico - no es un campo del formulario]` | Los dos `PK_USUARIO_*`, que salen de `/register/usuario`. | 2 |\n\nSolo los `[catalogo #N]` se pueden gobernar desde\n`GET /matricula/configuracion`. Para los demas, esa configuracion no dice nada.\n\n## Que NO va en este endpoint\n\nLos datos de identidad de las personas (nombres, apellidos, documento, fecha de\nnacimiento, genero, telefono, email) **no** viajan aca: van a\n`POST /register/usuario`, que crea el `TUSUARIO` y devuelve el `pkTusuario`\nque este endpoint recibe ya resuelto en `PK_USUARIO_ESTUDIANTE` /\n`PK_USUARIO_ACUDIENTE`.\n\nTampoco viajan `GRADO` (se deriva del grupo), `ESTADO_DE_LA_MATRICULA` (la\nfuncion lo resuelve como \"Cursando\") ni los `..._DEPARTAMENTO`, que no existen\ncomo columna - `TUSUARIO` solo guarda el municipio.\n\nLa lista completa esta en `docs/postman/matricula-campos.md`.\n\n## Orden de uso\n\n1. **Login** -> token\n2. **Registrar usuario (estudiante)** -> guarda `pkTusuario`\n3. **Registrar usuario (acudiente)** -> guarda `pkTusuario`\n4. **Crear matricula** (con archivos, via file-service) o la variante JSON sin archivos\n5. **Consultar matricula por ID**",
+      "type": "text/markdown"
+    },
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0 - Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "description": {
+          "content": "Guarda el `token` de la respuesta en la variable de entorno `token`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (d.token) { pm.environment.set(\"token\", d.token); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 - Registrar usuario (estudiante)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/register/usuario",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "register",
+            "usuario"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"email\": \"laura.martinez.demo@gmail.com\",\n  \"fullName\": \"Laura Martinez\",\n  \"password\": \"Demo.2026Segura\",\n  \"identificacion\": \"1099887766\",\n  \"primerNombre\": \"Laura\",\n  \"primerApellido\": \"Martinez\",\n  \"fechaNacimiento\": \"2014-03-18\",\n  \"fkTlvTipoDocumento\": 51883,\n  \"fkTlvGenero\": 129,\n  \"telefono\": \"3105157141\",\n  \"correoElectronico\": \"laura.martinez.demo@gmail.com\"\n}"
+        },
+        "description": {
+          "content": "Crea el `TUSUARIO` del estudiante.\n\nLa respuesta trae **dos ids distintos** - usa `pkTusuario`, NO `idUser`:\n\n```json\n{ \"idUser\": 89, \"pkTusuario\": 197114, \"pkFuncionario\": null, \"email\": \"...\" }\n```\n\nSe distinguen por la escala: `idUser` va por decenas, `pkTusuario` por cientos\nde miles. Mandar el equivocado produce\n*\"No se encontro un usuario activo con ese identificador\"*.\n\n**Nota**: el DTO valida `email` con `@Email` y ese campo es el que termina en\n`TUSUARIO.CUENTA`, asi que hoy no se puede darle al estudiante una cuenta del\ntipo `TI-1099887766` por este endpoint.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (d.pkTusuario) { pm.environment.set(\"pkUsuarioEstudiante\", d.pkTusuario); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - Registrar usuario (acudiente)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/register/usuario",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "register",
+            "usuario"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"email\": \"carmen.rojas.demo@gmail.com\",\n  \"fullName\": \"Carmen Rojas\",\n  \"password\": \"Demo.2026Segura\",\n  \"identificacion\": \"52147896\",\n  \"primerNombre\": \"Carmen\",\n  \"primerApellido\": \"Rojas\",\n  \"fechaNacimiento\": \"1985-09-02\",\n  \"fkTlvTipoDocumento\": 51860,\n  \"fkTlvGenero\": 129,\n  \"telefono\": \"3186060850\",\n  \"correoElectronico\": \"carmen.rojas.demo@gmail.com\"\n}"
+        },
+        "description": {
+          "content": "Igual que el anterior. Guarda `pkTusuario` en `pkUsuarioAcudiente`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (d.pkTusuario) { pm.environment.set(\"pkUsuarioAcudiente\", d.pkTusuario); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 - Crear matricula CON archivos (multipart, via file-service)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/files/eval-col/cobertura-academica/matricula",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "eval-col",
+            "cobertura-academica",
+            "matricula"
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "SEDE",
+              "value": "1373",
+              "type": "text",
+              "description": "[catalogo #1] PK_TSEDE. Junto con JORNADA resuelve el periodo academico vigente. (BIGINT)"
+            },
+            {
+              "key": "JORNADA",
+              "value": "51900",
+              "type": "text",
+              "description": "[catalogo #2] TLISTA_VALOR de la jornada del periodo. (BIGINT)"
+            },
+            {
+              "key": "GRUPO",
+              "value": "11357",
+              "type": "text",
+              "description": "[catalogo #4] PK_TGRUPO. El grado se deriva de aca, por eso GRADO no viaja. (BIGINT)"
+            },
+            {
+              "key": "CARACTER_ESPECIALIDAD_ENFASIS",
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "[catalogo #6] PK_TENFASIS. (BIGINT, sin valor en el ejemplo)"
+            },
+            {
+              "key": "PK_USUARIO_ESTUDIANTE",
+              "value": "197114",
+              "type": "text",
+              "description": "[tecnico - no es un campo del formulario] pkTusuario devuelto por POST /register/usuario. OJO: NO es idUser. (BIGINT)"
+            },
+            {
+              "key": "ETNIA_RESGUARDO",
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "[catalogo #19] PK_RESGUARDO (TESTUDIANTE). (BIGINT, sin valor en el ejemplo)"
+            },
+            {
+              "key": "CONDICIONES_ESPECIALES_DEL_ESTUDIANTE",
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "[catalogo #38] PK_DISCAPACIDAD (TESTUDIANTE). (BIGINT, sin valor en el ejemplo)"
+            },
+            {
+              "key": "TALENTO_DEL_ESTUDIANTE",
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "[catalogo #39] TLISTA_VALOR (TESTUDIANTE). (BIGINT, sin valor en el ejemplo)"
+            },
+            {
+              "key": "LUGAR_EXPEDICION_DOCUMENTO_ESTUDIANTE_MUNICIPIO",
+              "value": "404",
+              "type": "text",
+              "description": "[catalogo #14] PK_TMUNICIPIO. El \"... DEPARTAMENTO\" no viaja: no existe esa columna. (BIGINT)"
+            },
+            {
+              "key": "LUGAR_DE_NACIMIENTO_MUNICIPIO",
+              "value": "404",
+              "type": "text",
+              "description": "[catalogo #17] PK_TMUNICIPIO. (BIGINT)"
+            },
+            {
+              "key": "LUGAR_DE_RESIDENCIA_MUNICIPIO_ESTUDIANTE",
+              "value": "404",
+              "type": "text",
+              "description": "[catalogo #22] PK_TMUNICIPIO. (BIGINT)"
+            },
+            {
+              "key": "DIRECCION_DEL_ESTUDIANTE",
+              "value": "MZ 13 CS 7",
+              "type": "text",
+              "description": "[catalogo #20] (VARCHAR)"
+            },
+            {
+              "key": "ESTRATO_SOCIO_ECONOMICO_DEL_ESTUDIANTE",
+              "value": "120",
+              "type": "text",
+              "description": "[catalogo #34] TLISTA_VALOR categoria ESTRATO. (BIGINT)"
+            },
+            {
+              "key": "SISBEN",
+              "value": "189",
+              "type": "text",
+              "description": "[catalogo #35] TLISTA_VALOR categoria SISBEN. (BIGINT)"
+            },
+            {
+              "key": "SITUACION_DEL_ANO_ANTERIOR",
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "[catalogo #25] TLISTA_VALOR -> TMATRICULA. (BIGINT, sin valor en el ejemplo)"
+            },
+            {
+              "key": "ESTUDIANTE_NUEVO",
+              "value": "S",
+              "type": "text",
+              "description": "[NI formulario NI catalogo - columna del DDL] 'S' o 'N'. Columna NOT NULL de TMATRICULA; el formulario no la pide. (VARCHAR)"
+            },
+            {
+              "key": "CONDICION_DEL_ESTUDIANTE_FIN_DEL_ANO_ANTERIOR",
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "[catalogo #26] TLISTA_VALOR -> TMATRICULA_SOCIOECONOMICO. (BIGINT, sin valor en el ejemplo)"
+            },
+            {
+              "key": "NOMBRE_DE_LA_INSTITUCION_ANTERIOR",
+              "value": "I.E. San Jose",
+              "type": "text",
+              "description": "[catalogo #27] Texto libre. (VARCHAR)"
+            },
+            {
+              "key": "INSTITUCION_BIENESTAR_DE_ORIGEN",
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "[catalogo #28] TLISTA_VALOR del tipo de institucion de origen. (BIGINT, sin valor en el ejemplo)"
+            },
+            {
+              "key": "PROVIENE_DE_SECTOR_PRIVADO",
+              "value": "N",
+              "type": "text",
+              "description": "[catalogo #29] 'S' o 'N'. (VARCHAR)"
+            },
+            {
+              "key": "PROVIENE_DE_OTRO_MUNICIPIO",
+              "value": "S",
+              "type": "text",
+              "description": "[catalogo #30] 'S' o 'N'. (VARCHAR)"
+            },
+            {
+              "key": "CUAL",
+              "value": "Bosconia",
+              "type": "text",
+              "description": "[catalogo #31] Cual municipio, si el anterior es S. (VARCHAR)"
+            },
+            {
+              "key": "POBLACION_VICTIMA_CONFLICTO",
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "[catalogo #32] TLISTA_VALOR. (BIGINT, sin valor en el ejemplo)"
+            },
+            {
+              "key": "ULTIMO_MUNICIPIO_EXPULSOR",
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "[catalogo #33] PK_TMUNICIPIO. (BIGINT, sin valor en el ejemplo)"
+            },
+            {
+              "key": "EPS",
+              "value": "SALUD TOTAL",
+              "type": "text",
+              "description": "[catalogo #36] Texto libre. (VARCHAR)"
+            },
+            {
+              "key": "ARS",
+              "value": "Nueva EPS",
+              "type": "text",
+              "description": "[catalogo #37] Texto libre. (VARCHAR)"
+            },
+            {
+              "key": "SUBSIDIADO",
+              "value": "N",
+              "type": "text",
+              "description": "[catalogo #40] 'S' o 'N'. (VARCHAR)"
+            },
+            {
+              "key": "FUENTE_DE_RECURSOS",
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "[catalogo #41] TLISTA_VALOR. (BIGINT, sin valor en el ejemplo)"
+            },
+            {
+              "key": "ALUMNOS_MADRE_CABEZA_DE_FAMILIA",
+              "value": "N",
+              "type": "text",
+              "description": "[catalogo #42] 'S' o 'N'. (VARCHAR)"
+            },
+            {
+              "key": "HIJOS_DE_MADRE_CABEZA_DE_FAMILIA",
+              "value": "S",
+              "type": "text",
+              "description": "[catalogo #43] 'S' o 'N'. (VARCHAR)"
+            },
+            {
+              "key": "VETERANOS_DE_LA_FUERZA_PUBLICA",
+              "value": "N",
+              "type": "text",
+              "description": "[catalogo #44] 'S' o 'N'. (VARCHAR)"
+            },
+            {
+              "key": "HEROES_DE_LA_NACION",
+              "value": "N",
+              "type": "text",
+              "description": "[catalogo #45] 'S' o 'N'. (VARCHAR)"
+            },
+            {
+              "key": "PK_USUARIO_ACUDIENTE",
+              "value": "197113",
+              "type": "text",
+              "description": "[tecnico - no es un campo del formulario] pkTusuario del acudiente (POST /register/usuario). (BIGINT)"
+            },
+            {
+              "key": "PARENTESCO",
+              "value": "701",
+              "type": "text",
+              "description": "[catalogo #46] TLISTA_VALOR categoria PARENTESCO. Obligatorio. (BIGINT)"
+            },
+            {
+              "key": "LUGAR_EXPEDICION_DOCUMENTO_ACUDIENTE_MUNICIPIO",
+              "value": "404",
+              "type": "text",
+              "description": "[catalogo #54] PK_TMUNICIPIO. (BIGINT)"
+            },
+            {
+              "key": "LUGAR_DE_RESIDENCIA_MUNICIPIO_ACUDIENTE",
+              "value": "404",
+              "type": "text",
+              "description": "[catalogo #64] PK_TMUNICIPIO. (BIGINT)"
+            },
+            {
+              "key": "DIRECCION_DE_ACUDIENTE",
+              "value": "MZ 13 CS 7",
+              "type": "text",
+              "description": "[catalogo #62] (VARCHAR)"
+            },
+            {
+              "key": "ZONA_ACUDIENTE",
+              "value": "214",
+              "type": "text",
+              "description": "[NI formulario NI catalogo - columna del DDL] TPADRE.FK_TLV_ZONA (categoria ZONA). El formulario no lo pide. (BIGINT)"
+            },
+            {
+              "key": "NIVEL_EDUCATIVO_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "[NI formulario NI catalogo - columna del DDL] TPADRE.FK_TLV_NIVEL_EDUCATIVO. El formulario no lo pide. (BIGINT, sin valor en el ejemplo)"
+            },
+            {
+              "key": "ESTADO_CIVIL_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "[NI formulario NI catalogo - columna del DDL] TPADRE.FK_TLV_ESTADO_CIVIL. El formulario no lo pide. (BIGINT, sin valor en el ejemplo)"
+            },
+            {
+              "key": "OCUPACION_ACUDIENTE",
+              "value": "Docente",
+              "type": "text",
+              "description": "[NI formulario NI catalogo - columna del DDL] TPADRE.OCUPACION. El formulario pide PROFESION, no ocupacion. (VARCHAR)"
+            },
+            {
+              "key": "ACUDIENTE",
+              "value": "S",
+              "type": "text",
+              "description": "[NI formulario NI catalogo - columna del DDL] TNUCLEO_FAMILIAR.ACUDIENTE, 'S' o 'N'. El formulario no lo pide. (VARCHAR)"
+            },
+            {
+              "key": "ASISTE_REUNIONES",
+              "value": "S",
+              "type": "text",
+              "description": "[NI formulario NI catalogo - columna del DDL] TNUCLEO_FAMILIAR.ASISTE_REUNIONES, 'S' o 'N'. El formulario no lo pide. (VARCHAR)"
+            },
+            {
+              "key": "ASISTE_INFORMES",
+              "value": "S",
+              "type": "text",
+              "description": "[NI formulario NI catalogo - columna del DDL] TNUCLEO_FAMILIAR.ASISTE_INFORMES, 'S' o 'N'. El formulario no lo pide. (VARCHAR)"
+            },
+            {
+              "key": "TIPO_EMPLEO_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "[NI formulario NI catalogo - columna del DDL] TNUCLEO_FAMILIAR.FK_TLV_TIPO_EMPLEO. El formulario no lo pide. (BIGINT, sin valor en el ejemplo)"
+            },
+            {
+              "key": "FRECUENCIA_DOMICILIO_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "[NI formulario NI catalogo - columna del DDL] TNUCLEO_FAMILIAR.FK_TLV_FRECUENCIA_DOMICILIO. El formulario no lo pide. (BIGINT, sin valor en el ejemplo)"
+            },
+            {
+              "key": "PROFESION_ACUDIENTE",
+              "value": "Contadora",
+              "type": "text",
+              "description": "[catalogo #57] TPADRE.PROFESION. (VARCHAR)"
+            },
+            {
+              "key": "NOMBRE_DE_LA_ENTIDAD_ACUDIENTE",
+              "value": "Alcaldia Municipal",
+              "type": "text",
+              "description": "[catalogo #58] TPADRE.ENTIDAD. (VARCHAR)"
+            },
+            {
+              "key": "DIRECCION_DE_LA_ENTIDAD_ACUDIENTE",
+              "value": "Carrera 5 # 10-20",
+              "type": "text",
+              "description": "[catalogo #59] (VARCHAR)"
+            },
+            {
+              "key": "TELEFONO_DE_LA_ENTIDAD_ACUDIENTE",
+              "value": "6015551234",
+              "type": "text",
+              "description": "[catalogo #60] (VARCHAR)"
+            },
+            {
+              "key": "CARGO_ENTIDAD_ACUDIENTE",
+              "value": "Analista",
+              "type": "text",
+              "description": "[catalogo #61] (VARCHAR)"
+            },
+            {
+              "key": "DOCUMENTO_DE_IDENTIDAD_DEL_ESTUDIANTE",
+              "type": "file",
+              "src": [],
+              "description": "[formulario, SIN fila en el catalogo] OBLIGATORIO. El catalogo no tiene la seccion de documentos de soporte; el nombre sale del formulario, con la misma convencion."
+            },
+            {
+              "key": "CERTIFICADO_DE_ESTUDIOS_DEL_ANO_ANTERIOR",
+              "type": "file",
+              "src": [],
+              "description": "[formulario, SIN fila en el catalogo] OBLIGATORIO. El catalogo no tiene la seccion de documentos de soporte; el nombre sale del formulario, con la misma convencion."
+            },
+            {
+              "key": "CERTIFICADO_MEDICO_DEL_ESTUDIANTE",
+              "type": "file",
+              "src": [],
+              "description": "[formulario, SIN fila en el catalogo] Opcional. El catalogo no tiene la seccion de documentos de soporte; el nombre sale del formulario, con la misma convencion."
+            },
+            {
+              "key": "FOTO_DEL_ESTUDIANTE",
+              "type": "file",
+              "src": [],
+              "description": "[formulario, SIN fila en el catalogo] Opcional. El catalogo no tiene la seccion de documentos de soporte; el nombre sale del formulario, con la misma convencion."
+            },
+            {
+              "key": "OTROS_DOCUMENTOS_RELEVANTES",
+              "type": "file",
+              "src": [],
+              "description": "[formulario, SIN fila en el catalogo] Opcional, 0..N: repite la misma key por cada archivo. El catalogo no tiene la seccion de documentos de soporte; el nombre sale del formulario, con la misma convencion."
+            }
+          ]
+        },
+        "description": {
+          "content": "**Este es el camino real.** Va a `/api/files/...` (file-service), que sube cada\nbinario a S3 con la etiqueta `matricula`, lo reemplaza por su `pk_tarchivo` y\nreenvia el JSON al query-service.\n\nNo pongas `Content-Type` a mano: Postman arma el `boundary`.\n\n`DOCUMENTO_DE_IDENTIDAD_DEL_ESTUDIANTE` y\n`CERTIFICADO_DE_ESTUDIOS_DEL_ANO_ANTERIOR` son **obligatorios** - sin ellos la\nfuncion falla con `23502`.\n\n`OTROS_DOCUMENTOS_RELEVANTES` admite varios archivos: repite la misma key.\n\nLos nombres de los campos de archivo se validan contra `param_types`: cualquier\nbinario con otro nombre se rechaza con 400 antes de tocar S3.\n\n### Origen de cada campo\n\nCada campo trae su marca de origen en la descripcion - ver la descripcion de la\ncoleccion para la tabla completa. Resumen: 39 vienen del catalogo,\n5 del formulario sin fila en el catalogo, 10 no estan en\nninguno de los dos (columnas del DDL, opcionales) y 2 son tecnicos.\n\n### Respuesta\n\n```json\n{\n  \"pk_testudiante\": 188732,\n  \"pk_tpadre\": 70027,\n  \"pk_tnucleo_familiar\": 76065,\n  \"pk_tmatricula\": 222701,\n  \"pk_tmatricula_socioeconomico\": 222701,\n  \"archivos_creados\": [\n    { \"pkTmatriculaArchivo\": 34, \"fkTlvTipoArchivo\": 830 },\n    { \"pkTmatriculaArchivo\": 35, \"fkTlvTipoArchivo\": 51968 }\n  ]\n}\n```\n\nTodo el alta es **atomica**: si algo falla en cualquier paso, no queda nada a medias.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "4 - Crear matricula SIN archivos (JSON) - falla esperada 23502",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/cobertura-academica/matricula",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "cobertura-academica",
+            "matricula"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"SEDE\": 1373,\n  \"JORNADA\": 51900,\n  \"GRUPO\": 11357,\n  \"CARACTER_ESPECIALIDAD_ENFASIS\": null,\n  \"PK_USUARIO_ESTUDIANTE\": \"{{pkUsuarioEstudiante}}\",\n  \"ETNIA_RESGUARDO\": null,\n  \"CONDICIONES_ESPECIALES_DEL_ESTUDIANTE\": null,\n  \"TALENTO_DEL_ESTUDIANTE\": null,\n  \"LUGAR_EXPEDICION_DOCUMENTO_ESTUDIANTE_MUNICIPIO\": 404,\n  \"LUGAR_DE_NACIMIENTO_MUNICIPIO\": 404,\n  \"LUGAR_DE_RESIDENCIA_MUNICIPIO_ESTUDIANTE\": 404,\n  \"DIRECCION_DEL_ESTUDIANTE\": \"MZ 13 CS 7\",\n  \"ESTRATO_SOCIO_ECONOMICO_DEL_ESTUDIANTE\": 120,\n  \"SISBEN\": 189,\n  \"SITUACION_DEL_ANO_ANTERIOR\": null,\n  \"ESTUDIANTE_NUEVO\": \"S\",\n  \"CONDICION_DEL_ESTUDIANTE_FIN_DEL_ANO_ANTERIOR\": null,\n  \"NOMBRE_DE_LA_INSTITUCION_ANTERIOR\": \"I.E. San Jose\",\n  \"INSTITUCION_BIENESTAR_DE_ORIGEN\": null,\n  \"PROVIENE_DE_SECTOR_PRIVADO\": \"N\",\n  \"PROVIENE_DE_OTRO_MUNICIPIO\": \"S\",\n  \"CUAL\": \"Bosconia\",\n  \"POBLACION_VICTIMA_CONFLICTO\": null,\n  \"ULTIMO_MUNICIPIO_EXPULSOR\": null,\n  \"EPS\": \"SALUD TOTAL\",\n  \"ARS\": \"Nueva EPS\",\n  \"SUBSIDIADO\": \"N\",\n  \"FUENTE_DE_RECURSOS\": null,\n  \"ALUMNOS_MADRE_CABEZA_DE_FAMILIA\": \"N\",\n  \"HIJOS_DE_MADRE_CABEZA_DE_FAMILIA\": \"S\",\n  \"VETERANOS_DE_LA_FUERZA_PUBLICA\": \"N\",\n  \"HEROES_DE_LA_NACION\": \"N\",\n  \"PK_USUARIO_ACUDIENTE\": \"{{pkUsuarioAcudiente}}\",\n  \"PARENTESCO\": 701,\n  \"LUGAR_EXPEDICION_DOCUMENTO_ACUDIENTE_MUNICIPIO\": 404,\n  \"LUGAR_DE_RESIDENCIA_MUNICIPIO_ACUDIENTE\": 404,\n  \"DIRECCION_DE_ACUDIENTE\": \"MZ 13 CS 7\",\n  \"ZONA_ACUDIENTE\": 214,\n  \"NIVEL_EDUCATIVO_ACUDIENTE\": null,\n  \"ESTADO_CIVIL_ACUDIENTE\": null,\n  \"OCUPACION_ACUDIENTE\": \"Docente\",\n  \"ACUDIENTE\": \"S\",\n  \"ASISTE_REUNIONES\": \"S\",\n  \"ASISTE_INFORMES\": \"S\",\n  \"TIPO_EMPLEO_ACUDIENTE\": null,\n  \"FRECUENCIA_DOMICILIO_ACUDIENTE\": null,\n  \"PROFESION_ACUDIENTE\": \"Contadora\",\n  \"NOMBRE_DE_LA_ENTIDAD_ACUDIENTE\": \"Alcaldia Municipal\",\n  \"DIRECCION_DE_LA_ENTIDAD_ACUDIENTE\": \"Carrera 5 # 10-20\",\n  \"TELEFONO_DE_LA_ENTIDAD_ACUDIENTE\": \"6015551234\",\n  \"CARGO_ENTIDAD_ACUDIENTE\": \"Analista\"\n}"
+        },
+        "description": {
+          "content": "Mismo body, JSON puro, directo al query-service (sin file-service).\n\n**Devuelve `23502 - El documento de identidad del estudiante es obligatorio`**, y\neso es lo correcto: los dos documentos son obligatorios por diseno. Sirve para\nverificar que todo lo demas paso (gate, periodo, cupo, duplicados, estudiante,\nacudiente) - el error aparece en el ultimo paso.\n\nPara crear de verdad, usa la peticion 3.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "5 - Consultar matricula por ID",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/cobertura-academica/matricula/{{pkMatricula}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "cobertura-academica",
+            "matricula",
+            "{{pkMatricula}}"
+          ]
+        },
+        "description": {
+          "content": "Devuelve una fila con una sola columna `matricula`, un JSON con\n`matricula` / `socioeconomico` / `estudiante` / `acudientes[]` / `archivos[]`.\n\nLos binarios no viajan: con cada `fk_tarchivo` se los pide a file-service\n(`GET /api/files/download/{id}`).\n\n`null` si la matricula no existe o algun eslabon de su cadena\ngrupo/grado/periodo/sede esta inactivo. `42501` si el usuario no tiene alcance\nsobre la sede de esa matricula.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "6 - Configuracion de campos del establecimiento",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/matricula/configuracion",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "matricula",
+            "configuracion"
+          ]
+        },
+        "description": {
+          "content": "De aca salen los nombres de los campos marcados `[catalogo #N]`. Devuelve las\nsecciones con sus campos y, por cada uno, `requerido` / `visible` / `editable`.\n\nEl `nombre` de cada campo, normalizado (tildes fuera, no-alfanumerico -> `_`,\nmayusculas), es exactamente la clave que espera el body del create.\n\n**Ojo**: esta configuracion cubre 64 campos del formulario completo, pero\nsolo 39 de ellos viajan a este endpoint - el resto va a\n`/register/usuario` o no tiene destino (ver la descripcion de la coleccion).",
+          "type": "text/markdown"
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://172.233.184.248:8080"
+    },
+    {
+      "key": "pkMatricula",
+      "value": "222682"
+    }
+  ]
+}

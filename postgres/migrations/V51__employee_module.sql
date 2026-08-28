@@ -3791,6 +3791,11 @@ COMMENT ON FUNCTION academico_test.fn_fun_activo_por_usuario(BIGINT)
 --   ademas un GET completo por PK (fn_usu_empleado_buscar_por_pk) que si
 --   trae la foto y pisa todo el estado.
 -- ---------------------------------------------------------------------------
+-- REV3: agrega columnas al RETURNS TABLE (pk_testudiante_activo,
+-- pk_tpadre_activo) -- Postgres no permite CREATE OR REPLACE cuando cambia
+-- la lista de columnas de salida, hace falta el DROP explicito primero.
+DROP FUNCTION IF EXISTS academico_test.fn_usu_autocompletar_por_documento(BIGINT, VARCHAR);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_usu_autocompletar_por_documento(
     p_fk_tlv_tipo_documento BIGINT,
     p_identificacion        VARCHAR
@@ -3808,7 +3813,9 @@ RETURNS TABLE (
     telefono               VARCHAR,
     correo_electronico     VARCHAR,
     fk_tarchivo_foto       BIGINT,
-    pk_tfuncionario_activo BIGINT
+    pk_tfuncionario_activo BIGINT,
+    pk_testudiante_activo  BIGINT,
+    pk_tpadre_activo       BIGINT
 )
 LANGUAGE sql
 STABLE
@@ -3827,7 +3834,19 @@ AS $$
           WHERE f.FK_TUSUARIO = u.PK_TUSUARIO
             AND f.ACTIVE = TRUE
           ORDER BY f.PK_TFUNCIONARIO
-          LIMIT 1) AS pk_tfuncionario_activo
+          LIMIT 1) AS pk_tfuncionario_activo,
+        (SELECT e.PK_TESTUDIANTE
+           FROM academico_test.TESTUDIANTE e
+          WHERE e.FK_TUSUARIO = u.PK_TUSUARIO
+            AND e.ACTIVE = TRUE
+          ORDER BY e.PK_TESTUDIANTE
+          LIMIT 1) AS pk_testudiante_activo,
+        (SELECT p.PK_TPADRE
+           FROM academico_test.TPADRE p
+          WHERE p.FK_TUSUARIO = u.PK_TUSUARIO
+            AND p.ACTIVE = TRUE
+          ORDER BY p.PK_TPADRE
+          LIMIT 1) AS pk_tpadre_activo
       FROM academico_test.TUSUARIO u
  LEFT JOIN academico_test.TLISTA_VALOR gen ON gen.PK_LISTA_VALOR = u.FK_TLV_GENERO
      WHERE u.FK_TLV_TIPO_DOCUMENTO = p_fk_tlv_tipo_documento
@@ -3837,7 +3856,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_usu_autocompletar_por_documento(BIGINT, VARCHAR)
-    IS 'REV2: agrega fk_tarchivo_foto (TUSUARIO.FK_TARCHIVO) -- faltaba, el autocompletado nunca traia la foto de perfil de la persona encontrada (bug real: en alta de establecimiento el campo de foto quedaba vacio o con la foto de un match anterior al cambiar de documento; en el dialogo de funcionario el gap quedaba tapado porque ahi se hace ademas un GET completo por PK cuando ya hay TFUNCIONARIO). Autocompletado del form de persona (rector/secretaria de establecimiento, alta de funcionario): busca un TUSUARIO por (tipo de documento, identificacion) y en la MISMA consulta resuelve si ya tiene un TFUNCIONARIO activo (pk_tfuncionario_activo, a lo sumo uno con el modelo actual -- ver fn_fun_activo_por_usuario). Reemplaza el par fn_usu_buscar_por_documento + fn_fun_activo_por_usuario que usaba el front para este caso puntual. Trae genero_nombre (JOIN TLISTA_VALOR) para poder armar un CatalogItem completo en el front, igual que fn_usu_empleado_buscar_por_pk. NO requiere gate: solo lectura (STABLE). NULL row si no hay match.';
+    IS 'REV3: agrega pk_testudiante_activo y pk_tpadre_activo (TESTUDIANTE/TPADRE activos ligados a FK_TUSUARIO, a lo sumo uno cada uno con el modelo actual) -- mismo patron que pk_tfuncionario_activo, para que el form de matricula (estudiante/acudiente) pueda autocompletar y saber si ya existe un TESTUDIANTE/TPADRE que reutilizar en vez de crear uno nuevo. REV2: agrega fk_tarchivo_foto (TUSUARIO.FK_TARCHIVO) -- faltaba, el autocompletado nunca traia la foto de perfil de la persona encontrada (bug real: en alta de establecimiento el campo de foto quedaba vacio o con la foto de un match anterior al cambiar de documento; en el dialogo de funcionario el gap quedaba tapado porque ahi se hace ademas un GET completo por PK cuando ya hay TFUNCIONARIO). Autocompletado del form de persona (rector/secretaria de establecimiento, alta de funcionario, matricula): busca un TUSUARIO por (tipo de documento, identificacion) y en la MISMA consulta resuelve si ya tiene un TFUNCIONARIO/TESTUDIANTE/TPADRE activo. Reemplaza el par fn_usu_buscar_por_documento + fn_fun_activo_por_usuario que usaba el front para este caso puntual. Trae genero_nombre (JOIN TLISTA_VALOR) para poder armar un CatalogItem completo en el front, igual que fn_usu_empleado_buscar_por_pk. NO requiere gate: solo lectura (STABLE). NULL row si no hay match.';
 
 -- Registro en `query` (motor SSO): GET /usuarios/autocompletar-por-documento
 -- (id_query=150 en el ambiente de prueba -- el id real depende del entorno).
