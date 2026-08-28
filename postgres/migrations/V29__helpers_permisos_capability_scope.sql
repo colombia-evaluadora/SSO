@@ -654,6 +654,7 @@ BEGIN
                )
             UNION ALL
             -- tiene un TSEDE_USUARIO activo en una sede de un EE accesible
+            -- (nivel 2 + punteros).
             SELECT 1
               FROM academico_test.TFUNCIONARIO f
               JOIN academico_test.TSEDE_USUARIO su
@@ -665,6 +666,25 @@ BEGIN
                    SELECT 1
                      FROM academico_test.fn_usuario_ee_accesibles(p_pk_tusuario) ee
                     WHERE ee.establecimiento_id = s.FK_TESTABLECIMIENTO
+               )
+            UNION ALL
+            -- (nivel 3, ADMINISTRATIVOS_SEDES) tiene un TSEDE_USUARIO activo
+            -- en una SEDE del scope del solicitante. Dinamico: si el super
+            -- admin le da la capability de FUNCIONARIOS a un rol de esa
+            -- categoria (coordinador, docente, jefe de area, ...), alcanza a
+            -- los funcionarios de sus sedes. fn_usuario_sedes_jornadas_
+            -- accesibles solo devuelve filas para nivel 3, asi que esta rama
+            -- no aplica a los demas niveles. El rango (capa 3, abajo) sigue
+            -- protegiendo a los funcionarios de su misma categoria o superior.
+            SELECT 1
+              FROM academico_test.TFUNCIONARIO f
+              JOIN academico_test.TSEDE_USUARIO su
+                ON su.FK_TUSUARIO = f.FK_TUSUARIO AND su.ACTIVE = TRUE
+             WHERE f.PK_TFUNCIONARIO = p_pk_funcionario_objetivo
+               AND EXISTS (
+                   SELECT 1
+                     FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_tusuario) sj
+                    WHERE sj.sede_id = su.FK_TSEDE
                )
         ) THEN
             SELECT TRIM(COALESCE(u.PRIMER_NOMBRE, '') || ' ' || COALESCE(u.PRIMER_APELLIDO, ''))
@@ -685,4 +705,4 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_assert_permiso_funcionario(BIGINT, VARCHAR, BIGINT)
-    IS 'Assertion de autorizacion del modulo FUNCIONARIOS: combina las 3 capas. (1) capability -- delega en fn_assert_permiso_seccion(u, ''FUNCIONARIOS'', accion) sin objeto, lo que tambien resuelve el bypass del SUPER_ADMIN (nivel 0). (2) scope -- si p_pk_funcionario_objetivo no es NULL y el solicitante no es de nivel 1 (territorial, alcanza a cualquiera), el funcionario objetivo debe ser rector/secretaria de un EE de fn_usuario_ee_accesibles(u) o tener un TSEDE_USUARIO ACTIVE en una sede ACTIVE de uno de esos EE; si no, 42501 nombrando al funcionario. (3) rango -- PERFORM fn_assert_rango_rol(u, objetivo): no se alcanza a funcionarios de categoria igual o superior. p_pk_funcionario_objetivo NULL (p.ej. ''CREAR'') solo exige capability: el EE se valida al vincular. Los tres 42501 llevan mensajes distintos.';
+    IS 'Assertion de autorizacion del modulo FUNCIONARIOS: combina las 3 capas. (1) capability -- delega en fn_assert_permiso_seccion(u, ''FUNCIONARIOS'', accion) sin objeto, lo que tambien resuelve el bypass del SUPER_ADMIN (nivel 0). (2) scope -- si p_pk_funcionario_objetivo no es NULL y el solicitante no es de nivel 1 (territorial, alcanza a cualquiera), el funcionario objetivo debe: ser rector/secretaria de un EE de fn_usuario_ee_accesibles(u), O tener un TSEDE_USUARIO ACTIVE en una sede ACTIVE de uno de esos EE (nivel 2 + punteros), O -- para un solicitante de categoria ADMINISTRATIVOS_SEDES (nivel 3) -- tener un TSEDE_USUARIO ACTIVE en una SEDE de fn_usuario_sedes_jornadas_accesibles(u); si nada aplica, 42501 nombrando al funcionario. Es dinamico: basta con que el super admin conceda la capability de FUNCIONARIOS a un rol de nivel 3 para que ese rol alcance a los funcionarios de sus sedes. (3) rango -- PERFORM fn_assert_rango_rol(u, objetivo): no se alcanza a funcionarios de categoria igual o superior (esto sigue protegiendo a los pares del nivel 3 entre si). p_pk_funcionario_objetivo NULL (p.ej. ''CREAR'') solo exige capability: el EE se valida al vincular. Los tres 42501 llevan mensajes distintos.';
