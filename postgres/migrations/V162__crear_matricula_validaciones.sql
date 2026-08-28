@@ -40,18 +40,51 @@ BEGIN
     --    solicitante no puede ver el periodo, se trata igual que si no
     --    existiera (no se filtra informacion de existencia a quien no
     --    tiene alcance).
+    --
+    --    REV -- fallback para rector/secretaria asignados SOLO por FK
+    --    (TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA, sin
+    --    TSEDE_USUARIO propio todavia). fn_periodo_usuario_puede_ver
+    --    resuelve el alcance unicamente por TSEDE_USUARIO, asi que a esa
+    --    persona le devolvia FALSE y esta funcion concluia "no existe el
+    --    periodo" -- un mensaje ademas enganoso, porque el periodo si
+    --    existe. El gate de fn_matricula_directa_crear SI acepta esa
+    --    asignacion por FK, con lo cual el alta pasaba el gate y moria
+    --    aca.
+    --
+    --    El fallback vive en NUESTRA funcion a proposito: no se toca
+    --    fn_periodo_usuario_puede_ver ni el resto del modulo de periodos,
+    --    que es de otro dueño y alimenta sus propias pantallas.
+    --
+    --    En la practica los permisos de rector/secretaria se crean solos
+    --    al crear la sede (ver fn_sed_crear paso 6), asi que este camino
+    --    deberia ser raro; queda como red de seguridad para el intervalo
+    --    entre asignar el cargo y tener el permiso.
     -- -----------------------------------------------------------------
     SELECT pa.PK_TPERIODO_ACADEMICO, pa.FECHA_LIMITE_MATRICULA
       INTO v_pk_periodo, v_fecha_limite
       FROM academico_test.TPERIODO_ACADEMICO pa
       JOIN academico_test.TANO_LECTIVO al
         ON al.PK_ANO_LECTIVO = pa.FK_TANO_LECTIVO
+      JOIN academico_test.TSEDE s
+        ON s.PK_TSEDE = pa.FK_TSEDE
      WHERE pa.FK_TSEDE        = p_fk_sede
        AND pa.FK_TLV_JORNADA  = p_fk_tlv_jornada
        AND al.NOMBRE          = v_ano_actual
        AND pa.ACTIVE          = TRUE
        AND al.ACTIVE          = TRUE
-       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, pa.PK_TPERIODO_ACADEMICO)
+       AND (
+             academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, pa.PK_TPERIODO_ACADEMICO)
+             OR EXISTS (
+                 SELECT 1
+                   FROM academico_test.TESTABLECIMIENTO e
+                   JOIN academico_test.TFUNCIONARIO f
+                     ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+                  WHERE e.PK_ESTABLECIMIENTO = s.FK_TESTABLECIMIENTO
+                    AND e.ACTIVE      = TRUE
+                    AND f.ACTIVE      = TRUE
+                    AND f.FK_TUSUARIO = p_pk_usuario
+             )
+           )
      LIMIT 1;
 
     IF v_pk_periodo IS NULL THEN
