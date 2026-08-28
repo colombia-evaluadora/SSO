@@ -75,11 +75,25 @@ COMMENT ON FUNCTION academico_test.fn_puede_afectar_establecimiento(BIGINT)
 
 
 -- ---------------------------------------------------------------------------
--- fn_puede_afectar_sede
---   TRUE si el usuario pasa el gate de establecimiento OR tiene rol 7 u 8.
---   Cubre: V52 (TSEDE).
+-- fn_puede_afectar_sede -- ELIMINADA (CU-86e2w4xdt).
+--   Su unico caller era fn_puede_afectar_usuarios (abajo), donde su logica
+--   quedo inlineada como `fn_puede_afectar_establecimiento OR rol IN (7,8,9)`.
+--   Los modulos de sede (V52) migraron su gate a fn_assert_permiso_seccion
+--   (V29), asi que ya no la usan. El DROP formal esta en V211.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_puede_afectar_sede(
+
+
+-- ---------------------------------------------------------------------------
+-- fn_puede_afectar_usuarios
+--   TRUE si el usuario pasa el gate de establecimiento (roles 1-3) o tiene
+--   rol 7, 8 o 9 en alguna TSEDE_USUARIO activa.
+--   Cubre: V51 (fn_usu_crear) y V150 (PIGSE fn_ente_usuario_*).
+--   NOTA: el rol 9 es exclusivo de usuarios; no implica permiso sobre sede
+--   ni establecimiento.
+--   CU-86e2w4xdt: se inlinea la logica de fn_puede_afectar_sede (era su
+--   unico caller) para poder eliminar esa funcion -- ver V211.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_puede_afectar_usuarios(
     p_pk_usuario BIGINT
 )
 RETURNS BOOLEAN
@@ -93,38 +107,7 @@ AS $$
                       SELECT 1
                         FROM academico_test.TSEDE_USUARIO
                        WHERE FK_TUSUARIO = p_pk_usuario
-                         AND FK_TROL     IN (7, 8)
-                         AND ACTIVE       = TRUE
-                  )
-           END;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_puede_afectar_sede(BIGINT)
-    IS 'Reusable: retorna TRUE si el usuario puede afectar establecimiento (roles 1-3) o si tiene rol 7 u 8 en al menos una TSEDE_USUARIO activa. Gate de autorizacion del modulo de sede (V52). Tambien cubre implicitamente todas las acciones de usuarios (los roles 7 y 8 pueden afectar usuarios). Si p_pk_usuario es NULL retorna FALSE. Definida en V50 (utilities).';
-
-
--- ---------------------------------------------------------------------------
--- fn_puede_afectar_usuarios
---   TRUE si el usuario pasa el gate de sede OR tiene rol 9.
---   Cubre: V51 (TUSUARIO, TFUNCIONARIO).
---   NOTA: el rol 9 es exclusivo de usuarios; no implica permiso sobre
---   sede ni establecimiento.
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_puede_afectar_usuarios(
-    p_pk_usuario BIGINT
-)
-RETURNS BOOLEAN
-LANGUAGE sql
-STABLE
-AS $$
-    SELECT CASE
-             WHEN p_pk_usuario IS NULL THEN FALSE
-             ELSE academico_test.fn_puede_afectar_sede(p_pk_usuario)
-                  OR EXISTS (
-                      SELECT 1
-                        FROM academico_test.TSEDE_USUARIO
-                       WHERE FK_TUSUARIO = p_pk_usuario
-                         AND FK_TROL     = 9
+                         AND FK_TROL     IN (7, 8, 9)
                          AND ACTIVE       = TRUE
                   )
            END;
