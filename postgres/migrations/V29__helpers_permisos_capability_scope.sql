@@ -466,6 +466,39 @@ BEGIN
             RETURN;
         END IF;
 
+        -- 2.d Secciones SIN jornada (ESTABLECIMIENTO / SEDES_EDUCATIVAS): un
+        --     establecimiento o una sede no tienen jornada, asi que a un rol
+        --     de nivel 3 (ADMINISTRATIVOS_SEDES) NO se le puede exigir la
+        --     jornada de 2.c. Si el super admin le concedio la capability
+        --     (paso 1 ya paso), su scope de escritura para ESTAS DOS
+        --     secciones es:
+        --       (i)  con SEDE objetivo concreta (editar / eliminar una sede)
+        --            -> SOLO sus propias sedes (no las hermanas del EE).
+        --       (ii) sin sede objetivo (editar el EE, o crear una sede)
+        --            -> el EE al que pertenece(n) su(s) sede(s).
+        --     Para PERIODOS / MATRICULA / cascada academica 2.d NO aplica --
+        --     ahi la jornada SI distingue y manda 2.c.
+        IF v_nivel = 3
+           AND UPPER(TRIM(COALESCE(p_codigo_menu, ''))) IN ('ESTABLECIMIENTO', 'SEDES_EDUCATIVAS') THEN
+            IF p_fk_tsede IS NOT NULL THEN
+                IF EXISTS (
+                    SELECT 1 FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_tusuario) sj
+                     WHERE sj.sede_id = p_fk_tsede
+                ) THEN
+                    RETURN;
+                END IF;
+            ELSIF v_ee IS NOT NULL THEN
+                IF EXISTS (
+                    SELECT 1
+                      FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_tusuario) sj
+                      JOIN academico_test.TSEDE s ON s.PK_TSEDE = sj.sede_id
+                     WHERE s.FK_TESTABLECIMIENTO = v_ee
+                ) THEN
+                    RETURN;
+                END IF;
+            END IF;
+        END IF;
+
         RAISE EXCEPTION 'El usuario no tiene alcance sobre el establecimiento, sede o jornada objetivo'
             USING ERRCODE = '42501';
     END IF;
@@ -476,7 +509,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_assert_permiso_seccion(BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT)
-    IS 'Assertion de autorizacion para las funciones CRUD de establecimiento / sedes / funcionarios / periodos academicos: PERFORM al inicio del cuerpo. Orden: (0) bypass si fn_usuario_categoria_rol_nivel = 0 (SUPER_ADMIN); (1) capability -- fn_usuario_puede_en_menu(u, menu, accion) debe ser TRUE, si no 42501 nombrando accion y modulo; (2) scope, SOLO si p_fk_establecimiento o p_fk_tsede no son NULL: nivel 1 (territorial) alcanza todos los EE; si no, el EE objetivo (p_fk_establecimiento, o el FK_TESTABLECIMIENTO de p_fk_tsede) debe estar en fn_usuario_ee_accesibles; si no, el par (p_fk_tsede, p_fk_tlv_jornada) debe estar en fn_usuario_sedes_jornadas_accesibles; si nada aplica, 42501 con un mensaje DISTINTO al de capability. Si todos los p_fk_* son NULL (accion sin objeto, p.ej. crear un EE) la capability basta. NO valida existencia ni estado de los objetos (eso lo hace el caller); si p_fk_tsede no resuelve a un EE, el paso por establecimiento se salta y solo el par sede+jornada puede autorizar. Es de solo lectura: llamarla N veces es equivalente a llamarla una.';
+    IS 'Assertion de autorizacion para las funciones CRUD de establecimiento / sedes / funcionarios / periodos academicos: PERFORM al inicio del cuerpo. Orden: (0) bypass si fn_usuario_categoria_rol_nivel = 0 (SUPER_ADMIN); (1) capability -- fn_usuario_puede_en_menu(u, menu, accion) debe ser TRUE, si no 42501 nombrando accion y modulo; (2) scope, SOLO si p_fk_establecimiento o p_fk_tsede no son NULL: (2.a) nivel 1 (territorial) alcanza todos los EE; (2.b) el EE objetivo (p_fk_establecimiento, o el FK_TESTABLECIMIENTO de p_fk_tsede) debe estar en fn_usuario_ee_accesibles; (2.c) el par (p_fk_tsede, p_fk_tlv_jornada) debe estar en fn_usuario_sedes_jornadas_accesibles; (2.d) SOLO para los menus ESTABLECIMIENTO y SEDES_EDUCATIVAS -- que no tienen jornada -- un rol nivel 3 (ADMINISTRATIVOS_SEDES) con la capability concedida alcanza su(s) sede(s) propia(s) (p_fk_tsede en fn_usuario_sedes_jornadas_accesibles) y el EE al que pertenecen, SIN exigir jornada; para PERIODOS/MATRICULA/cascada academica 2.d NO aplica y manda 2.c. Si nada aplica, 42501 con un mensaje DISTINTO al de capability. Si todos los p_fk_* son NULL (accion sin objeto, p.ej. crear un EE) la capability basta. NO valida existencia ni estado de los objetos (eso lo hace el caller). Es de solo lectura: llamarla N veces es equivalente a llamarla una.';
 
 -- ---------------------------------------------------------------------------
 -- 7) fn_assert_rango_rol — no ver ni afectar a iguales o superiores.
