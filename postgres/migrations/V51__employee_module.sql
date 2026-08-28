@@ -1257,11 +1257,39 @@ BEGIN
 
     -- =====================================================================
     -- 0. Gate de autorizacion (CU-86e2w4xdt) -- ver nota del header.
-    --    Una sola llamada reemplaza el bloque "union de EE accesibles" +
-    --    coordinador de sede que estaba copiado inline aqui.
+    --    Reemplaza el bloque "union de EE accesibles" + coordinador de sede
+    --    que estaba copiado inline aqui.
+    --
+    --    Si el funcionario YA tiene roles / es rector-secretaria por puntero,
+    --    gate completo: capability 'EDITAR' sobre FUNCIONARIOS + scope sobre
+    --    el objetivo + rango. Si es un funcionario RECIEN CREADO (sin ningun
+    --    TSEDE_USUARIO activo ni puntero) no hay scope que evaluar sobre el
+    --    objetivo -- la primera asignacion de rol quedaria bloqueada por un
+    --    chicken-and-egg (el gate exige que el objetivo sea alcanzable, y
+    --    solo es alcanzable cuando ya tiene un rol). En ese caso solo se
+    --    exige la capability: el scope de CADA rol nuevo lo valida el bloque
+    --    v_sedes_plenas / v_sedes_coord de abajo, y el rango cada
+    --    fn_assert_rango_rol_otorgable. Mismo criterio que
+    --    fn_fun_enlazar_establecimiento con un TFUNCIONARIO pendiente.
     -- =====================================================================
-    PERFORM academico_test.fn_assert_permiso_funcionario(
-        p_pk_usuario_solicitante, 'EDITAR', p_pk_funcionario);
+    IF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TSEDE_USUARIO su
+            ON su.FK_TUSUARIO = f.FK_TUSUARIO AND su.ACTIVE = TRUE
+         WHERE f.PK_TFUNCIONARIO = p_pk_funcionario
+    ) OR EXISTS (
+        SELECT 1 FROM academico_test.TESTABLECIMIENTO e
+         WHERE e.ACTIVE = TRUE
+           AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario
+                OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
+    ) THEN
+        PERFORM academico_test.fn_assert_permiso_funcionario(
+            p_pk_usuario_solicitante, 'EDITAR', p_pk_funcionario);
+    ELSE
+        PERFORM academico_test.fn_assert_permiso_seccion(
+            p_pk_usuario_solicitante, 'FUNCIONARIOS', 'EDITAR');
+    END IF;
 
     -- v_es_super sigue siendo necesario mas abajo: distingue "sin
     -- restriccion de sede" del resto para la validacion POR OPERACION del
