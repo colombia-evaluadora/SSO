@@ -6,7 +6,24 @@
 -- con funciones del esquema `academico_test` y prefijo comun `fn_est_`.
 -- Patrones reutilizados de V26 (contexto auditor) y de V22 (idempotencia
 -- con DO $$ ... IF NOT EXISTS ... $$).
+-- NOTA (2026-08, CU-86e2w4xdt — Permisos segun rol):
+--   El gate de fn_est_soft_delete YA NO usa fn_puede_afectar_establecimiento
+--   (allowlist fija de roles 1-3). Pasa al modelo capability+scope de V29:
+--   una sola llamada a fn_assert_permiso_seccion(u, 'ESTABLECIMIENTO',
+--   'ELIMINAR', p_pk_establecimiento), que resuelve el bypass del
+--   SUPER_ADMIN, la capability configurable por menu (TROL_MENU +
+--   TUSUARIO_ROL_PERMISO) y el scope territorial/por EE. Motivo: el permiso
+--   de cada seccion tiene que ser administrable por el super admin desde la
+--   pantalla de roles/menus, no estar quemado en el cuerpo de la funcion.
+--   fn_est_soft_delete_bulk NO lleva gate propio: delega por fila en
+--   fn_est_soft_delete y hereda el suyo (sigue mapeando 42501 a
+--   'error:sin_permiso'). fn_est_crear / fn_est_actualizar tambien migran,
+--   pero su definicion VIGENTE esta en V111 (esta de V53 quedo obsoleta,
+--   una posterior la redefine), asi que el cambio de esas dos vive alli.
+--   Ver docs/gate-permisos-por-menu-analysis.md.
+--
 -- Dependencias:
+--   * V29 (helpers de permisos): fn_assert_permiso_seccion.
 --   * V50 (utilities): consume fn_puede_afectar_establecimiento desde alli.
 --   * V52 (campus):    fn_est_soft_delete delega en fn_sed_soft_delete
 --                       para la cascade de sedes (TSEDE, TSEDE_USUARIO,
@@ -1165,8 +1182,9 @@ COMMENT ON FUNCTION academico_test.fn_est_listar_paginado(
 --   Retorna: BIGINT con el PK_ESTABLECIMIENTO dado de baja.
 --
 --   Excepciones:
---     SQLSTATE '42501' — El usuario no es super-admin (gate via
---                        fn_puede_afectar_establecimiento, definida en V50).
+--     SQLSTATE '42501' — El usuario no tiene la capability ELIMINAR en el
+--                        menu ESTABLECIMIENTO, o no alcanza el EE objetivo
+--                        (gate via fn_assert_permiso_seccion, V29).
 --     SQLSTATE 'P0002' — No existe el TESTABLECIMIENTO con ese PK.
 --     SQLSTATE '22023' — El TESTABLECIMIENTO ya estaba inactivo.
 --     SQLSTATE 'P0002'/'22023'/'42501' propagados desde fn_sed_soft_delete
@@ -1187,12 +1205,16 @@ DECLARE
     v_pk_sede       BIGINT;
 BEGIN
     -- -----------------------------------------------------------------
-    -- 0. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
+    -- 0. Gate de autorizacion (CU-86e2w4xdt): capability por el menu
+    --    ESTABLECIMIENTO + scope sobre el EE objetivo. Ver V29.
+    --    ENDURECIMIENTO: antes solo se validaba capability global
+    --    (fn_puede_afectar_establecimiento -> roles 1-3, sin mirar de que
+    --    EE se trataba); ahora un usuario de nivel 2 solo puede dar de
+    --    baja los EE que alcanza (fn_usuario_ee_accesibles).
     -- -----------------------------------------------------------------
-    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'ESTABLECIMIENTO', 'ELIMINAR', p_pk_establecimiento
+    );
 
     -- -----------------------------------------------------------------
     -- 1. Validaciones previas
@@ -1254,7 +1276,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_est_soft_delete(BIGINT, BIGINT)
-    IS 'Baja logica en cascada: marca ACTIVE=FALSE en TESTABLECIMIENTO y delega en academico_test.fn_sed_soft_delete (V52) para cada sede activa del EE. fn_sed_soft_delete se encarga a su vez de TSEDE, TSEDE_USUARIO y TSEDE_NIVEL (cuyo detalle vive en V52). Todo en una sola transaccion: si la delegation falla para cualquier sede, todo el borrado se revierte. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento, definida en V50). p_pk_usuario_solicitante va primero en la firma (obligatorio, mismo patron que V52). Retorna PK_ESTABLECIMIENTO dado de baja.';
+    IS 'Baja logica en cascada: marca ACTIVE=FALSE en TESTABLECIMIENTO y delega en academico_test.fn_sed_soft_delete (V52) para cada sede activa del EE. fn_sed_soft_delete se encarga a su vez de TSEDE, TSEDE_USUARIO y TSEDE_NIVEL (cuyo detalle vive en V52). Todo en una sola transaccion: si la delegation falla para cualquier sede, todo el borrado se revierte. GATE (CU-86e2w4xdt): PERFORM fn_assert_permiso_seccion(solicitante, ''ESTABLECIMIENTO'', ''ELIMINAR'', p_pk_establecimiento) (V29) -- bypass del SUPER_ADMIN (nivel 0), capability ELIMINAR sobre el menu ESTABLECIMIENTO segun TROL_MENU/TUSUARIO_ROL_PERMISO, y scope sobre el EE objetivo (nivel 1 territorial alcanza todos; nivel 2 solo los de fn_usuario_ee_accesibles). Sustituye a fn_puede_afectar_establecimiento (rol 1/2/3 fijo) y ENDURECE el comportamiento: antes no se validaba SOBRE QUE EE se actuaba. Ambos fallos siguen siendo 42501, con mensajes distintos para capability y para scope. p_pk_usuario_solicitante va primero en la firma (obligatorio, mismo patron que V52). Retorna PK_ESTABLECIMIENTO dado de baja.';
 
 
 -- ---------------------------------------------------------------------------
