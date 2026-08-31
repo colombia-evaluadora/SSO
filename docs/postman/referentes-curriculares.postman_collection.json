@@ -1,0 +1,406 @@
+{
+  "info": {
+    "_postman_id": "b7e3c1a2-4d5f-4a6b-9c8d-refcurricular1",
+    "name": "SSO - Referentes Curriculares (CRUD)",
+    "description": {
+      "content": "CRUD de **Referentes Curriculares** (DBA, Propositos e Imprescindibles, etc.) y su arbol de enunciados/evidencias -- V213 (funciones PL/pgSQL) + V214 (endpoints `public.query`).\n\n## Autorizacion\n\nDos capas:\n\n1. **Gateway (`role_query`)**: HOY solo el rol `CEVAL-SUPER_ADMINISTRADOR` tiene fila `role_query` para estos 13 endpoints. Cualquier otro rol recibe `403` del gateway antes de llegar a la base de datos.\n2. **Gate de negocio (`fn_assert_permiso_seccion`)**: dentro de cada funcion PL/pgSQL. Con el `role_query` actual, en la practica solo `SUPER_ADMIN` (nivel 0 de `CATEGORIA_ROL`) pasa este segundo gate tambien -- es el bypass de nivel 0. Si el super admin le concede el menu `REFERENTES_CURRICULARES` a otro rol (fuera del alcance de esta migracion, se hace desde la plataforma), ese rol necesitaria ADEMAS una fila `role_query` nueva para poder invocar el endpoint.\n\n## Reglas de negocio a tener en cuenta al probar\n\n- **Enunciados antes que evidencias**: `POST .../enunciados` con `ENUNCIADO_PADRE` exige que ese enunciado YA exista y este activo -- si no, `P0002`.\n- **Un solo nivel de anidamiento**: el padre de una evidencia debe ser el un enunciado de nivel 1 (sin padre); anidar una evidencia sobre otra evidencia da `22023`.\n- **Area del enunciado siempre opcional**: `AREA_ID` ausente/NULL = el enunciado aplica a TODAS las areas del referente, tenga o no areas asociadas. Si se manda, debe ser una de las areas ACTIVAS de ESE referente (`23503` si no).\n- **Una evidencia nunca elige area propia** (hereda la del enunciado padre): mandar `AREA_ID` en una evidencia da `22023`.\n- **`BODY.AREAS_IDS` en crear/editar referente**: ausente/`null` en editar = no tocar las areas actuales; `[]` = vaciarlas (\"aplica a todas\"); un array con PKs = reemplazo completo del set -- bloqueado (`23503`) si intenta quitar un area que todavia tiene enunciados vivos amarrados.\n- **`ESTADO` ('A'/'I') vs borrado logico**: `ESTADO` es el toggle Activo/Inactivo que edita el usuario (se puede crear un referente ya inactivo); el borrado real (soft delete, este CRUD) es aparte -- los endpoints `.../eliminar` (PATCH, no DELETE: `ck_query_http_method` no admite DELETE).\n\n## Selects reusados (sin endpoint nuevo)\n\n- **Enfoque pedagogico** / **Tipo de evaluacion**: `GET {{baseUrl}}/api/eval-col/select/ENFOQUE_PEDAGOGICO` y `GET {{baseUrl}}/api/eval-col/select/TIPO_EVALUACION` (catalogo generico existente sobre `TLISTA_VALOR`, categorias seedeadas en V212).\n\n## Errores comunes\n\n| Codigo | Causa |\n|---|---|\n| `404` (antes de reiniciar) | La fila `query` es nueva -- `query-service-eval-col` necesita reiniciarse para tomarla (ver nota en README de deploy). |\n| `403` | Rol sin fila `role_query`, o gate interno (`fn_assert_permiso_seccion`) rechazado -- solo SUPER_ADMIN por ahora. |\n| `422` / `400` | Validacion de negocio (`22023`), FK inexistente (`23503`), duplicado (`23505`) o no encontrado (`P0002`) -- ver el mapeo de `PostgresErrorMapper`. |\n\n## Orden de uso sugerido\n\n1. Login\n2. Catalogos (niveles / areas) -- para tener PKs validos a mano\n3. Crear referente -> guarda `pkReferenteCurricular`\n4. Areas del referente / Detalle / Listado\n5. Crear enunciado -> guarda `pkReferenteEnunciado`\n6. Crear evidencia (usa `pkReferenteEnunciado` como `ENUNCIADO_PADRE`)\n7. Listar enunciados / evidencias\n8. Actualizar / Eliminar (enunciado, luego referente)",
+      "type": "text/markdown"
+    },
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0 - Login",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "login"]
+        },
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "description": {
+          "content": "Guarda el `token` de la respuesta en la variable de entorno `token`. Usar un usuario con rol `CEVAL-SUPER_ADMINISTRADOR` -- cualquier otro recibe 403 en TODO lo demas de esta coleccion.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (d.token) { pm.environment.set(\"token\", d.token); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 - Catalogo: Niveles de ensenanza",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/catalogos/niveles-ensenanza",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "catalogos", "niveles-ensenanza"]
+        },
+        "description": {
+          "content": "`fn_nivel_ensenanza_listar` (V43), reusada tal cual, nunca antes expuesta como query. Devuelve `[{ id, codigo, nombre }]` -- `id` alimenta `BODY.NIVEL_EDUCATIVO` al crear/editar un referente. Sin restricciones de rol propias mas alla de `role_query` (solo SUPER_ADMIN por ahora, ver descripcion de la coleccion).",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (Array.isArray(d) && d[0]) { pm.environment.set(\"pkNivelEnsenanza\", d[0].id); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - Catalogo: Areas / asignaturas",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/catalogos/areas-asignaturas",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "catalogos", "areas-asignaturas"]
+        },
+        "description": {
+          "content": "`fn_area_asignatura_listar` (V40), reusada tal cual, nunca antes expuesta como query. Devuelve `[{ id, nombre, especialidad_id }]` -- `id` alimenta `BODY.AREAS_IDS` (array) al crear/editar un referente, y `BODY.AREA_ID` (uno solo) al crear un enunciado.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (Array.isArray(d) && d[0]) { pm.environment.set(\"pkTareaAsignatura\", d[0].id); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 - Crear referente curricular",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "referentes-curriculares"]
+        },
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"NOMBRE\": \"DBA - Primaria\",\n  \"DESCRIPCION\": \"Derechos Basicos de Aprendizaje para educacion basica primaria.\",\n  \"NIVEL_EDUCATIVO\": {{pkNivelEnsenanza}},\n  \"ENFOQUE_PEDAGOGICO\": 0,\n  \"TIPO_EVALUACION\": 0,\n  \"INSTRUMENTO\": \"Unidad tematica\",\n  \"INSTRUMENTO_INFO\": \"Incluye planes de area, rubricas, informes de logro.\",\n  \"NORMATIVIDAD\": \"Decreto 1290 de 2009.\\nLey 115 de 1994 (Art. 77).\\nDecreto 1411 de 2022.\",\n  \"ANIO_DESDE\": 2023,\n  \"ANIO_HASTA\": null,\n  \"NIVEL_1_ETIQUETA\": \"Enunciado\",\n  \"NIVEL_2_ETIQUETA\": \"Evidencia\",\n  \"ESTADO\": \"A\",\n  \"AREAS_IDS\": [{{pkTareaAsignatura}}]\n}"
+        },
+        "description": {
+          "content": "`fn_refcurr_crear`. Campos obligatorios: `NOMBRE` (<=150), `DESCRIPCION` (<=400), `NIVEL_EDUCATIVO` (BIGINT, PK de `/catalogos/niveles-ensenanza`), `ENFOQUE_PEDAGOGICO` / `TIPO_EVALUACION` (BIGINT, PK de `GET /select/ENFOQUE_PEDAGOGICO` y `/select/TIPO_EVALUACION`), `INSTRUMENTO` (<=400), `NORMATIVIDAD` (<=400), `ANIO_DESDE` (INTEGER). Opcionales: `NIVEL_1_ETIQUETA`/`NIVEL_2_ETIQUETA` (default 'Enunciado'/'Evidencia' -- texto libre, sin regla especial para Preescolar), `INSTRUMENTO_INFO` (<=400), `ANIO_HASTA` (INTEGER, debe ser >= ANIO_DESDE), `ESTADO` ('A'/'I', default 'A' -- se puede crear inactivo), `AREAS_IDS` (BIGINT[], ausente/vacio = aplica a todas las areas).\n\n**Errores**: `22023` obligatorio faltante / vigencia invertida / estado invalido; `23503` FK inexistente o inactiva (nivel, enfoque, tipo evaluacion, alguna area); `23505` nombre duplicado entre activos; `403` gate.\n\nGuarda `id` de la respuesta en `pkReferenteCurricular`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "const pk = d.pkReferenteCurricularCreado ?? d.id;",
+              "if (pk) { pm.environment.set(\"pkReferenteCurricular\", pk); }"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 - creado",
+          "originalRequest": { "method": "POST", "url": "{{baseUrl}}/api/eval-col/referentes-curriculares" },
+          "status": "OK",
+          "code": 200,
+          "body": "{ \"pkReferenteCurricularCreado\": 1 }"
+        },
+        {
+          "name": "422 - nombre obligatorio faltante",
+          "originalRequest": { "method": "POST", "url": "{{baseUrl}}/api/eval-col/referentes-curriculares" },
+          "status": "Unprocessable Entity",
+          "code": 422,
+          "body": "{ \"error\": \"Nombre del referente es obligatorio\", \"sqlState\": \"22023\" }"
+        },
+        {
+          "name": "404 - antes del restart de query-service-eval-col",
+          "originalRequest": { "method": "POST", "url": "{{baseUrl}}/api/eval-col/referentes-curriculares" },
+          "status": "Not Found",
+          "code": 404,
+          "body": "{ \"error\": \"No route found\" }"
+        }
+      ]
+    },
+    {
+      "name": "4 - Listar referentes (paginado)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/query",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "referentes-curriculares", "query"]
+        },
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"FILTERS\": {\n    \"SEARCH\": \"DBA\",\n    \"NIVEL_EDUCATIVO\": null,\n    \"ENFOQUE_PEDAGOGICO\": null,\n    \"TIPO_EVALUACION\": null,\n    \"ESTADO\": null\n  },\n  \"SORTING\": { \"ID\": \"nombre\", \"DESC\": false },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 20\n}"
+        },
+        "description": {
+          "content": "`fn_refcurr_listar`. Todos los campos de `FILTERS` son opcionales (null = sin ese filtro). `SORTING.ID` in (`nombre`|`nivel_educativo`|`instrumento`|`estado`). `PAGEINDEX` (0-based) x `PAGESIZE` -> `p_offset`/`p_limite`. La respuesta trae `total_count` (mismo valor repetido en cada fila) para `pageCount`.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "5 - Detalle de un referente",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}"]
+        },
+        "description": {
+          "content": "`fn_refcurr_buscar_por_pk`. Pestaña \"Información general\" del detalle -- nombres de nivel/enfoque/tipo ya resueltos. 0 filas (cuerpo vacio) si el `:ID` no existe: el front lo trata como 404.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "6 - Areas del referente",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/areas",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}", "areas"]
+        },
+        "description": {
+          "content": "`fn_refcurr_areas_listar`. Alimenta el select \"Areas o dimensiones\" de la pestaña Enunciado. Lista vacia = el referente aplica a todas las areas (no hay de donde elegir un `AREA_ID` en sus enunciados).",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (Array.isArray(d) && d[0]) { pm.environment.set(\"pkReferenteCurricularArea\", d[0].pk_referente_curricular_area); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7 - Actualizar referente (PATCH parcial)",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}"]
+        },
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"DESCRIPCION\": \"Descripcion actualizada.\",\n  \"ESTADO\": \"A\"\n}"
+        },
+        "description": {
+          "content": "`fn_refcurr_actualizar`. Cualquier campo ausente/null preserva su valor actual (PATCH real, no PUT). `AREAS_IDS`: ausente = no tocar; `[]` = vaciar (vuelve a \"aplica a todas\"); array con PKs = reemplazo completo -- `23503` si intenta quitar un area con enunciados vivos amarrados.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "8 - Crear enunciado (nivel 1)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/enunciados",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}", "enunciados"]
+        },
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"TEXTO\": \"Fortalecer la comunicacion oral y la escucha activa en diferentes contextos.\",\n  \"AREA_ID\": null,\n  \"ESTADO\": \"A\"\n}"
+        },
+        "description": {
+          "content": "`fn_refenunc_crear`, sin `ENUNCIADO_PADRE` -> nivel 1 (enunciado). `TEXTO` obligatorio (<=400). `AREA_ID` SIEMPRE opcional (null = aplica a todas las areas del referente); si se manda, debe ser un `pk_referente_curricular_area` (no el `pk_tarea_asignatura`) de ESTE referente -- usar el id devuelto por el paso 6.\n\n**Errores**: `22023` texto vacio / estado invalido; `23503` `AREA_ID` no pertenece a este referente o esta inactiva; `P0002` referente inexistente; `403` gate.\n\nGuarda `id` en `pkReferenteEnunciado`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "const pk = d.pkReferenteEnunciadoCreado ?? d.id;",
+              "if (pk) { pm.environment.set(\"pkReferenteEnunciado\", pk); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "9 - Crear evidencia (nivel 2, de un enunciado)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/enunciados",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}", "enunciados"]
+        },
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"TEXTO\": \"Expresa ideas con claridad en diferentes situaciones.\",\n  \"ENUNCIADO_PADRE\": {{pkReferenteEnunciado}},\n  \"ESTADO\": \"A\"\n}"
+        },
+        "description": {
+          "content": "`fn_refenunc_crear`, con `ENUNCIADO_PADRE` = PK de un enunciado YA EXISTENTE y activo -> nivel 2 (evidencia). El padre debe existir ANTES de crear su evidencia (no hay forma de crear una evidencia huerfana). No se puede anidar una evidencia sobre otra evidencia. NO manda `AREA_ID`: una evidencia hereda el area de su enunciado padre; si se manda, `22023`.\n\n**Errores**: `P0002` `ENUNCIADO_PADRE` no existe; `22023` padre inactivo, de otro referente, ya es una evidencia (nivel 2), o se mando `AREA_ID`.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "10 - Listar enunciados de un referente",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/enunciados?area=",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}", "enunciados"],
+          "query": [
+            { "key": "area", "value": "", "description": "Opcional -- pk_referente_curricular_area para filtrar (ver paso 6). Vacio = todos los enunciados del referente." }
+          ]
+        },
+        "description": {
+          "content": "`fn_refenunc_listar`. Solo nivel 1 (enunciados); cada fila trae `total_evidencias`. Panel izquierdo de la pestaña Enunciado.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "11 - Listar evidencias de un enunciado",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/enunciados/{{pkReferenteEnunciado}}/evidencias",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "referentes-curriculares", "enunciados", "{{pkReferenteEnunciado}}", "evidencias"]
+        },
+        "description": {
+          "content": "`fn_refenunc_evidencias_listar`. Tabla \"Evidencias del enunciado\" (columna `#` = `numero`, 1-based). `P0002` si `:ID` no existe o no es un enunciado de nivel 1 (p.ej. si se pasa el PK de una evidencia por error).",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "12 - Actualizar enunciado/evidencia (PATCH parcial)",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/enunciados/{{pkReferenteEnunciado}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "referentes-curriculares", "enunciados", "{{pkReferenteEnunciado}}"]
+        },
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"TEXTO\": \"Fortalecer la comunicacion oral y la escucha activa.\",\n  \"AREA_ID\": null,\n  \"LIMPIAR_AREA\": true\n}"
+        },
+        "description": {
+          "content": "`fn_refenunc_actualizar`. `FK_PADRE` y el referente son inmutables (borrar y crear de nuevo si hace falta moverlo). `AREA_ID`/`LIMPIAR_AREA` solo aplican a un enunciado (nivel 1) -- en una evidencia dan `22023`. `LIMPIAR_AREA: true` vuelve el area a NULL (aplica a todas); si se manda junto con `AREA_ID`, `LIMPIAR_AREA` gana.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "13 - Eliminar enunciado/evidencia (soft delete)",
+      "request": {
+        "method": "PATCH",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/enunciados/{{pkReferenteEnunciado}}/eliminar",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "referentes-curriculares", "enunciados", "{{pkReferenteEnunciado}}", "eliminar"]
+        },
+        "description": {
+          "content": "`fn_refenunc_eliminar`. PATCH, no DELETE (`ck_query_http_method` no admite DELETE). Si `:ID` es un enunciado (nivel 1), da de baja en cascada sus evidencias activas.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "14 - Eliminar referente (soft delete en cascada)",
+      "request": {
+        "method": "PATCH",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/eliminar",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}", "eliminar"]
+        },
+        "description": {
+          "content": "`fn_refcurr_eliminar`. PATCH, no DELETE. Cascada: evidencias -> enunciados -> areas -> referente. `22023` si ya estaba inactivo.",
+          "type": "text/markdown"
+        }
+      }
+    }
+  ]
+}
