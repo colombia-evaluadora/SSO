@@ -760,3 +760,105 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_criterio_agregar(BIGINT, BIGINT, VARCHAR, JSONB, VARCHAR, VARCHAR, VARCHAR)
     IS 'Agrega un criterio (TCRITERIO_UNIDAD) a la rubrica de la unidad (TRUBRICA_UNIDAD, get-or-create) con un indicador (TNIVEL_CRITERIO_UNIDAD) por cada valoracion de la escala definida en TCRITERIO_EVALUACION.FK_TESCALA del periodo academico de la unidad. p_niveles JSONB = [{fkTescalaValoracion, indicador, recomendacion?, tarea?}]; se exige exactamente una entrada por valoracion activa de la escala (sin faltantes/sobrantes/duplicados). Gate EDITAR sobre PLANEADOR. Retorna PK_TCRITERIO_UNIDAD.';
+
+-- ===========================================================================
+-- fn_unidad_actividades_listar — actividades vinculadas a una unidad y su
+-- peso dentro de la unidad (pestaña "Actividades" del detalle de unidad:
+-- ACTIVIDAD / TIPO / INSTRUMENTO / GRUPO / (%)).
+-- ===========================================================================
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_actividades_listar(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tunidad               BIGINT,
+    p_search                   VARCHAR   DEFAULT NULL,
+    p_fk_tgrupo                BIGINT    DEFAULT NULL,
+    p_incluir_inactivas        BOOLEAN   DEFAULT FALSE,
+    p_orden_por                VARCHAR   DEFAULT 'actividad',
+    p_orden_asc                BOOLEAN   DEFAULT TRUE,
+    p_limite                   INT       DEFAULT 50,
+    p_offset                   INT       DEFAULT 0
+)
+RETURNS TABLE (
+    pk_tactividad                   BIGINT,
+    titulo                          VARCHAR,
+    fk_tlv_tipo_actividad           BIGINT,
+    tipo_actividad                  VARCHAR,
+    fk_tlv_instrumento_evaluacion   BIGINT,
+    instrumento_evaluacion          VARCHAR,
+    fk_tgrupo                       BIGINT,
+    grupo                           VARCHAR,
+    fk_tlv_jerarquia                BIGINT,
+    jerarquia                       VARCHAR,
+    influencia                      NUMERIC,
+    es_evaluativa                   VARCHAR,
+    fecha_inicio                    DATE,
+    fecha_cierre                    DATE,
+    active                          BOOLEAN,
+    total_count                     BIGINT
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    );
+
+    IF NOT EXISTS (SELECT 1 FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_pk_tunidad) THEN
+        RAISE EXCEPTION 'No se encontro la unidad tematica solicitada' USING ERRCODE = 'P0002';
+    END IF;
+
+    RETURN QUERY
+    SELECT a.PK_TACTIVIDAD,
+           a.TITULO,
+           a.FK_TLV_TIPO_ACTIVIDAD,
+           lvt.NOMBRE,
+           a.FK_TLV_INSTRUMENTO_EVALUACION,
+           lvi.NOMBRE,
+           a.FK_TGRUPO,
+           g.NOMBRE,
+           a.FK_TLV_JERARQUIA,
+           lvj.NOMBRE,
+           a.INFLUENCIA,
+           a.ES_EVALUATIVA::VARCHAR,
+           a.FECHA_INICIO,
+           a.FECHA_CIERRE,
+           a.ACTIVE,
+           COUNT(*) OVER()
+      FROM academico_test.TACTIVIDAD a
+      LEFT JOIN academico_test.TLISTA_VALOR lvt ON lvt.PK_LISTA_VALOR = a.FK_TLV_TIPO_ACTIVIDAD
+      LEFT JOIN academico_test.TLISTA_VALOR lvi ON lvi.PK_LISTA_VALOR = a.FK_TLV_INSTRUMENTO_EVALUACION
+      LEFT JOIN academico_test.TLISTA_VALOR lvj ON lvj.PK_LISTA_VALOR = a.FK_TLV_JERARQUIA
+      LEFT JOIN academico_test.TGRUPO g         ON g.PK_TGRUPO = a.FK_TGRUPO
+     WHERE a.FK_TUNIDAD = p_pk_tunidad
+       AND (p_incluir_inactivas OR a.ACTIVE = TRUE)
+       AND (p_search IS NULL OR a.TITULO ILIKE '%' || p_search || '%')
+       AND (p_fk_tgrupo IS NULL OR a.FK_TGRUPO = p_fk_tgrupo)
+     ORDER BY
+       CASE WHEN p_orden_asc THEN
+           CASE LOWER(TRIM(COALESCE(p_orden_por, 'actividad')))
+               WHEN 'actividad'   THEN a.TITULO
+               WHEN 'tipo'         THEN lvt.NOMBRE
+               WHEN 'instrumento'  THEN lvi.NOMBRE
+               WHEN 'grupo'        THEN g.NOMBRE
+               ELSE a.TITULO
+           END
+       END ASC,
+       CASE WHEN p_orden_asc AND LOWER(TRIM(COALESCE(p_orden_por, 'actividad'))) = 'porcentaje'
+            THEN a.INFLUENCIA END ASC,
+       CASE WHEN NOT p_orden_asc THEN
+           CASE LOWER(TRIM(COALESCE(p_orden_por, 'actividad')))
+               WHEN 'actividad'   THEN a.TITULO
+               WHEN 'tipo'         THEN lvt.NOMBRE
+               WHEN 'instrumento'  THEN lvi.NOMBRE
+               WHEN 'grupo'        THEN g.NOMBRE
+               ELSE a.TITULO
+           END
+       END DESC,
+       CASE WHEN NOT p_orden_asc AND LOWER(TRIM(COALESCE(p_orden_por, 'actividad'))) = 'porcentaje'
+            THEN a.INFLUENCIA END DESC
+     LIMIT GREATEST(p_limite, 1)
+    OFFSET GREATEST(p_offset, 0);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_unidad_actividades_listar(BIGINT, BIGINT, VARCHAR, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT)
+    IS 'Lista las actividades (TACTIVIDAD) vinculadas a una unidad y su peso (INFLUENCIA) dentro de ella -- pestaña "Actividades" del detalle de unidad. Devuelve titulo, tipo de actividad, instrumento de evaluacion, grupo y jerarquia resueltos, fechas y ES_EVALUATIVA. Filtros: search sobre TITULO, grupo, incluir_inactivas. Orden: actividad|tipo|instrumento|grupo|porcentaje. total_count via COUNT(*) OVER(). Gate VER sobre PLANEADOR.';
