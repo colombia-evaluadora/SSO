@@ -90,7 +90,7 @@ SELECT
     p_nivel_2_etiqueta             => CAST(:BODY.NIVEL_2_ETIQUETA AS VARCHAR),
     p_instrumento_info_adicional  => CAST(:BODY.INSTRUMENTO_INFO AS VARCHAR),
     p_anio_vigencia_hasta          => CAST(:BODY.ANIO_HASTA AS INTEGER),
-    p_estado                       => CAST(:BODY.ESTADO AS VARCHAR),
+    p_estado                       => COALESCE(CAST(:BODY.ESTADO AS VARCHAR), 'A'),
     p_fk_tarea_asignatura_ids      => CAST(:BODY.AREAS_IDS AS BIGINT[])
 ) AS pk_referente_curricular_creado$q$,
     'postgres', false, false, m.id_microservice,
@@ -300,7 +300,7 @@ SELECT
     p_texto                         => CAST(:BODY.TEXTO AS VARCHAR),
     p_fk_padre                      => CAST(:BODY.ENUNCIADO_PADRE AS BIGINT),
     p_fk_referente_curricular_area  => CAST(:BODY.AREA_ID AS BIGINT),
-    p_estado                        => CAST(:BODY.ESTADO AS VARCHAR)
+    p_estado                        => COALESCE(CAST(:BODY.ESTADO AS VARCHAR), 'A')
 ) AS pk_referente_enunciado_creado$q$,
     'postgres', false, false, m.id_microservice,
     '/referentes-curriculares/:ID/enunciados', 'SELECT', 'POST',
