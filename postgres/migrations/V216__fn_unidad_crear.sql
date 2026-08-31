@@ -237,6 +237,8 @@ RETURNS TABLE (
     descripcion                 VARCHAR,
     fk_tasignatura              BIGINT,
     asignatura                  VARCHAR,
+    fk_tarea                    BIGINT,
+    area                        VARCHAR,
     fk_tgrado                   BIGINT,
     grado                       VARCHAR,
     fk_tperiodo_evaluacion      BIGINT,
@@ -268,6 +270,8 @@ BEGIN
            u.DESCRIPCION,
            u.FK_TASIGNATURA,
            asig.NOMBRE,
+           asig.FK_TAREA,
+           ar.NOMBRE,
            u.FK_TGRADO,
            gr.NOMBRE,
            u.FK_TPERIODO_EVALUACION,
@@ -287,6 +291,7 @@ BEGIN
            COUNT(*) OVER()
       FROM academico_test.TUNIDAD u
       JOIN academico_test.TASIGNATURA asig       ON asig.PK_TASIGNATURA = u.FK_TASIGNATURA
+      LEFT JOIN academico_test.TAREA ar          ON ar.PK_TAREA = asig.FK_TAREA
       JOIN academico_test.TGRADO gr              ON gr.PK_TGRADO = u.FK_TGRADO
       JOIN academico_test.TPERIODO_EVALUACION pe ON pe.PK_TPERIODO_EVALUACION = u.FK_TPERIODO_EVALUACION
       LEFT JOIN academico_test.TFUNCIONARIO fu   ON fu.PK_TFUNCIONARIO = u.FK_TFUNCIONARIO
@@ -324,7 +329,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT)
-    IS 'Pagina de TUNIDAD con filtros (search sobre NOMBRE/DESCRIPCION, asignatura, grado, periodo de evaluacion, docente) y orden (nombre|asignatura|grado|periodo). Devuelve nombres resueltos, forma de calculo, referente curricular, conteos de actividades/objetivos/contenidos activos y las fechas DERIVADAS de la unidad (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas). total_count via COUNT(*) OVER(). Gate VER. p_incluir_inactivos=FALSE por defecto.';
+    IS 'Pagina de TUNIDAD con filtros (search sobre NOMBRE/DESCRIPCION, asignatura, grado, periodo de evaluacion, docente) y orden (nombre|asignatura|grado|periodo). Devuelve nombres resueltos (asignatura, area via TASIGNATURA.FK_TAREA->TAREA -- la etiqueta "Comunicativa/Cognitiva/..." de las tarjetas), forma de calculo, referente curricular, conteos de actividades/objetivos/contenidos activos y las fechas DERIVADAS de la unidad (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas). total_count via COUNT(*) OVER(). Gate VER. p_incluir_inactivos=FALSE por defecto.';
 
 -- ===========================================================================
 -- fn_unidad_actualizar — PATCH parcial (cada parametro NULL preserva).
@@ -862,3 +867,154 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_actividades_listar(BIGINT, BIGINT, VARCHAR, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT)
     IS 'Lista las actividades (TACTIVIDAD) vinculadas a una unidad y su peso (INFLUENCIA) dentro de ella -- pestaña "Actividades" del detalle de unidad. Devuelve titulo, tipo de actividad, instrumento de evaluacion, grupo y jerarquia resueltos, fechas y ES_EVALUATIVA. Filtros: search sobre TITULO, grupo, incluir_inactivas. Orden: actividad|tipo|instrumento|grupo|porcentaje. total_count via COUNT(*) OVER(). Gate VER sobre PLANEADOR.';
+
+-- ===========================================================================
+-- fn_unidad_buscar_por_pk — detalle de la unidad (pestaña "Informacion
+-- general": Descripcion + Objetivos + Contenidos + metodo de calculo +
+-- Grado + Asignatura + Inicio/Fin derivados + referente curricular).
+-- Objetivos y contenidos se devuelven como arreglos JSONB ordenados
+-- (mismo patron de agregacion que otros detalles del back).
+-- ===========================================================================
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_buscar_por_pk(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tunidad               BIGINT
+)
+RETURNS TABLE (
+    pk_tunidad                  BIGINT,
+    nombre                      VARCHAR,
+    descripcion                 VARCHAR,
+    fk_tasignatura              BIGINT,
+    asignatura                  VARCHAR,
+    fk_tarea                    BIGINT,
+    area                        VARCHAR,
+    fk_tgrado                   BIGINT,
+    grado                       VARCHAR,
+    fk_tperiodo_evaluacion      BIGINT,
+    periodo_evaluacion          VARCHAR,
+    fk_tfuncionario             BIGINT,
+    docente                     VARCHAR,
+    fk_tlv_calculo_definitiva   BIGINT,
+    calculo_definitiva          VARCHAR,
+    fk_referente_curricular     BIGINT,
+    referente_curricular        VARCHAR,
+    total_actividades           BIGINT,
+    fecha_inicio                DATE,
+    fecha_fin                   DATE,
+    objetivos                   JSONB,
+    contenidos                  JSONB,
+    active                      BOOLEAN
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    );
+
+    RETURN QUERY
+    SELECT u.PK_TUNIDAD,
+           u.NOMBRE,
+           u.DESCRIPCION,
+           u.FK_TASIGNATURA,
+           asig.NOMBRE,
+           asig.FK_TAREA,
+           ar.NOMBRE,
+           u.FK_TGRADO,
+           gr.NOMBRE,
+           u.FK_TPERIODO_EVALUACION,
+           pe.NOMBRE,
+           u.FK_TFUNCIONARIO,
+           NULLIF(TRIM(CONCAT_WS(' ', us.PRIMER_NOMBRE, us.SEGUNDO_NOMBRE, us.PRIMER_APELLIDO, us.SEGUNDO_APELLIDO)), '')::VARCHAR,
+           u.FK_TLV_CALCULO_DEFINITIVA,
+           lvc.NOMBRE,
+           u.FK_REFERENTE_CURRICULAR,
+           rc.NOMBRE,
+           (SELECT COUNT(*) FROM academico_test.TACTIVIDAD a WHERE a.FK_TUNIDAD = u.PK_TUNIDAD AND a.ACTIVE = TRUE),
+           (SELECT MIN(a.FECHA_INICIO) FROM academico_test.TACTIVIDAD a WHERE a.FK_TUNIDAD = u.PK_TUNIDAD AND a.ACTIVE = TRUE),
+           (SELECT MAX(a.FECHA_CIERRE) FROM academico_test.TACTIVIDAD a WHERE a.FK_TUNIDAD = u.PK_TUNIDAD AND a.ACTIVE = TRUE),
+           COALESCE((
+               SELECT jsonb_agg(jsonb_build_object('pk', o.PK_TUNIDAD_OBJETIVO, 'orden', o.ORDEN, 'descripcion', o.DESCRIPCION)
+                                ORDER BY o.ORDEN)
+                 FROM academico_test.TUNIDAD_OBJETIVO o
+                WHERE o.FK_TUNIDAD = u.PK_TUNIDAD AND o.ACTIVE = TRUE
+           ), '[]'::jsonb),
+           COALESCE((
+               SELECT jsonb_agg(jsonb_build_object('pk', c.PK_TUNIDAD_CONTENIDO, 'orden', c.ORDEN, 'descripcion', c.DESCRIPCION)
+                                ORDER BY c.ORDEN)
+                 FROM academico_test.TUNIDAD_CONTENIDO c
+                WHERE c.FK_TUNIDAD = u.PK_TUNIDAD AND c.ACTIVE = TRUE
+           ), '[]'::jsonb),
+           u.ACTIVE
+      FROM academico_test.TUNIDAD u
+      JOIN academico_test.TASIGNATURA asig       ON asig.PK_TASIGNATURA = u.FK_TASIGNATURA
+      LEFT JOIN academico_test.TAREA ar          ON ar.PK_TAREA = asig.FK_TAREA
+      JOIN academico_test.TGRADO gr              ON gr.PK_TGRADO = u.FK_TGRADO
+      JOIN academico_test.TPERIODO_EVALUACION pe ON pe.PK_TPERIODO_EVALUACION = u.FK_TPERIODO_EVALUACION
+      LEFT JOIN academico_test.TFUNCIONARIO fu   ON fu.PK_TFUNCIONARIO = u.FK_TFUNCIONARIO
+      LEFT JOIN academico_test.TUSUARIO us       ON us.PK_TUSUARIO = fu.FK_TUSUARIO
+      LEFT JOIN academico_test.TLISTA_VALOR lvc  ON lvc.PK_LISTA_VALOR = u.FK_TLV_CALCULO_DEFINITIVA
+      LEFT JOIN academico_test.TREFERENTE_CURRICULAR rc ON rc.PK_REFERENTE_CURRICULAR = u.FK_REFERENTE_CURRICULAR
+     WHERE u.PK_TUNIDAD = p_pk_tunidad;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_unidad_buscar_por_pk(BIGINT, BIGINT)
+    IS 'Detalle de una TUNIDAD (pestaña "Informacion general"): escalares + nombres resueltos (asignatura, area, grado, periodo, docente, forma de calculo, referente curricular), total de actividades activas, Inicio/Fin DERIVADOS (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas) y los arreglos JSONB ordenados objetivos [{pk,orden,descripcion}] y contenidos [{pk,orden,descripcion}]. SETOF 0 o 1 fila (incluye inactivas). Gate VER.';
+
+-- ===========================================================================
+-- fn_unidad_objetivos_listar / fn_unidad_contenidos_listar — listas planas
+-- para el editor de la unidad ("Nueva unidad" -> Objetivos / Contenidos).
+-- ===========================================================================
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_objetivos_listar(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tunidad               BIGINT
+)
+RETURNS TABLE (
+    pk_tunidad_objetivo   BIGINT,
+    orden                 NUMERIC,
+    descripcion           VARCHAR
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    );
+
+    RETURN QUERY
+    SELECT o.PK_TUNIDAD_OBJETIVO, o.ORDEN, o.DESCRIPCION
+      FROM academico_test.TUNIDAD_OBJETIVO o
+     WHERE o.FK_TUNIDAD = p_pk_tunidad AND o.ACTIVE = TRUE
+     ORDER BY o.ORDEN;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_unidad_objetivos_listar(BIGINT, BIGINT)
+    IS 'Objetivos ACTIVE de una unidad (TUNIDAD_OBJETIVO), ordenados por ORDEN. Gate VER sobre PLANEADOR.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_contenidos_listar(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tunidad               BIGINT
+)
+RETURNS TABLE (
+    pk_tunidad_contenido   BIGINT,
+    orden                  NUMERIC,
+    descripcion            VARCHAR
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    );
+
+    RETURN QUERY
+    SELECT c.PK_TUNIDAD_CONTENIDO, c.ORDEN, c.DESCRIPCION
+      FROM academico_test.TUNIDAD_CONTENIDO c
+     WHERE c.FK_TUNIDAD = p_pk_tunidad AND c.ACTIVE = TRUE
+     ORDER BY c.ORDEN;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_unidad_contenidos_listar(BIGINT, BIGINT)
+    IS 'Contenidos/componentes ACTIVE de una unidad (TUNIDAD_CONTENIDO), ordenados por ORDEN. Gate VER sobre PLANEADOR.';
