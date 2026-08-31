@@ -566,3 +566,197 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_eliminar(BIGINT, BIGINT)
     IS 'Soft delete (ACTIVE=FALSE) de una TUNIDAD (gate ELIMINAR), en cascada: niveles -> criterios -> rubrica de la unidad, objetivos, contenidos y la unidad. Se BLOQUEA (23503) si la unidad todavia tiene actividades activas (TACTIVIDAD): el caller debe eliminarlas primero. Retorna PK_TUNIDAD.';
+
+-- ===========================================================================
+-- fn_unidad_criterio_agregar — agrega un criterio a la rubrica de la unidad
+-- con un indicador (descriptor) por cada valoracion de la ESCALA definida
+-- en los criterios de evaluacion del periodo academico de la unidad.
+--
+-- Resolucion de la escala (modal "Agregar criterio", niveles Bajo/Basico/
+-- Alto/Superior -- en realidad los que traiga la escala):
+--   TUNIDAD.FK_TPERIODO_EVALUACION
+--     -> TPERIODO_EVALUACION.FK_TPERIODO_ACADEMICO
+--     -> TCRITERIO_EVALUACION (PK = ese periodo academico, 1:1)
+--     -> FK_TESCALA -> TESCALA -> TESCALA_VALORACION (una fila por
+--        valoracion: Bajo/Basico/Alto/Superior..., con ORDEN y limites).
+--
+-- El caller manda un indicador por valoracion via p_niveles JSONB
+-- (mismo patron JSONB de V113/V198):
+--   [ { "fkTescalaValoracion": <PK_TESCALA_VALORACION>,
+--       "indicador": "texto del nivel",           -- obligatorio
+--       "recomendacion": "texto opcional",
+--       "tarea": "texto opcional" }, ... ]
+-- Se exige exactamente una entrada por cada valoracion ACTIVA de la escala
+-- (ni faltantes ni sobrantes ni duplicadas) -- respeta el UNIQUE
+-- (FK_TCRITERIO_UNIDAD, FK_TESCALA_VALORACION) de V22 y el "*" de todos los
+-- niveles del modal.
+--
+-- La rubrica de la unidad (TRUBRICA_UNIDAD, 1:1) se crea al vuelo la
+-- primera vez (get-or-create; reactiva una inactiva si la hubiera).
+-- ===========================================================================
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_criterio_agregar(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tunidad               BIGINT,
+    p_descripcion              VARCHAR(4000),
+    p_niveles                  JSONB,
+    p_publico                  VARCHAR(1) DEFAULT 'S',
+    p_codigo                   VARCHAR(6) DEFAULT NULL,
+    p_descriptor_prom          VARCHAR(1) DEFAULT 'N'
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_unidad_active   BOOLEAN;
+    v_fk_periodo_eval BIGINT;
+    v_fk_tescala      BIGINT;
+    v_pk_rubrica      BIGINT;
+    v_pk_criterio     BIGINT;
+    v_orden           NUMERIC(4);
+    v_valoraciones    BIGINT;
+    v_payload_total   BIGINT;
+    v_payload_unicos  BIGINT;
+BEGIN
+    -- 0. Gate: capability EDITAR sobre PLANEADOR (se edita la unidad).
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    );
+
+    -- 1. Unidad existe y esta activa.
+    SELECT ACTIVE, FK_TPERIODO_EVALUACION
+      INTO v_unidad_active, v_fk_periodo_eval
+      FROM academico_test.TUNIDAD
+     WHERE PK_TUNIDAD = p_pk_tunidad;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se encontro la unidad tematica solicitada' USING ERRCODE = 'P0002';
+    END IF;
+    IF v_unidad_active = FALSE THEN
+        RAISE EXCEPTION 'La unidad esta inactiva; no se le pueden agregar criterios' USING ERRCODE = '22023';
+    END IF;
+
+    -- 2. Datos del criterio.
+    IF NULLIF(TRIM(p_descripcion), '') IS NULL THEN
+        RAISE EXCEPTION 'El texto del criterio es obligatorio' USING ERRCODE = '22023';
+    END IF;
+    IF UPPER(TRIM(COALESCE(p_publico, ''))) NOT IN ('S', 'N') THEN
+        RAISE EXCEPTION 'PUBLICO invalido: % (use ''S'' o ''N'')', p_publico USING ERRCODE = '22023';
+    END IF;
+    IF p_descriptor_prom IS NOT NULL AND UPPER(TRIM(p_descriptor_prom)) NOT IN ('S', 'N') THEN
+        RAISE EXCEPTION 'DESCRIPTOR_PROM invalido: % (use ''S'' o ''N'')', p_descriptor_prom USING ERRCODE = '22023';
+    END IF;
+
+    -- 3. Escala definida en los criterios de evaluacion del periodo academico.
+    SELECT ce.FK_TESCALA
+      INTO v_fk_tescala
+      FROM academico_test.TPERIODO_EVALUACION pe
+      JOIN academico_test.TCRITERIO_EVALUACION ce
+        ON ce.PK_TCRITERIO_EVALUACION = pe.FK_TPERIODO_ACADEMICO
+       AND ce.ACTIVE = TRUE
+     WHERE pe.PK_TPERIODO_EVALUACION = v_fk_periodo_eval;
+
+    IF v_fk_tescala IS NULL THEN
+        RAISE EXCEPTION 'El periodo academico de la unidad no tiene una escala definida en sus criterios de evaluacion'
+            USING ERRCODE = '22023',
+                  HINT = 'Configure TCRITERIO_EVALUACION.FK_TESCALA para ese periodo academico antes de crear criterios de unidad';
+    END IF;
+
+    SELECT COUNT(*) INTO v_valoraciones
+      FROM academico_test.TESCALA_VALORACION
+     WHERE FK_TESCALA = v_fk_tescala AND ACTIVE = TRUE;
+    IF v_valoraciones = 0 THEN
+        RAISE EXCEPTION 'La escala (%) no tiene valoraciones activas', v_fk_tescala USING ERRCODE = '22023';
+    END IF;
+
+    -- 4. Validacion del payload de niveles.
+    IF p_niveles IS NULL OR jsonb_typeof(p_niveles) <> 'array' OR jsonb_array_length(p_niveles) = 0 THEN
+        RAISE EXCEPTION 'p_niveles debe ser un arreglo JSON no vacio con un indicador por valoracion de la escala'
+            USING ERRCODE = '22023';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements(p_niveles) e
+         WHERE NULLIF(TRIM(e->>'indicador'), '') IS NULL
+    ) THEN
+        RAISE EXCEPTION 'Cada nivel del criterio requiere un indicador no vacio' USING ERRCODE = '22023';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements(p_niveles) e
+         WHERE (e->>'fkTescalaValoracion') IS NULL
+            OR NOT EXISTS (
+                SELECT 1 FROM academico_test.TESCALA_VALORACION ev
+                 WHERE ev.PK_TESCALA_VALORACION = (e->>'fkTescalaValoracion')::BIGINT
+                   AND ev.FK_TESCALA = v_fk_tescala
+                   AND ev.ACTIVE = TRUE
+            )
+    ) THEN
+        RAISE EXCEPTION 'Un nivel referencia una valoracion (fkTescalaValoracion) que no pertenece a la escala de evaluacion de la unidad'
+            USING ERRCODE = '23503';
+    END IF;
+
+    SELECT COUNT(*), COUNT(DISTINCT (e->>'fkTescalaValoracion')::BIGINT)
+      INTO v_payload_total, v_payload_unicos
+      FROM jsonb_array_elements(p_niveles) e;
+
+    IF v_payload_total <> v_payload_unicos THEN
+        RAISE EXCEPTION 'El payload de niveles tiene valoraciones repetidas' USING ERRCODE = '22023';
+    END IF;
+    IF v_payload_unicos <> v_valoraciones THEN
+        RAISE EXCEPTION 'Debe enviar exactamente un indicador por cada valoracion activa de la escala (esperados: %, recibidos: %)',
+            v_valoraciones, v_payload_unicos
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- 5. Get-or-create de la rubrica de la unidad (1:1).
+    SELECT PK_TRUBRICA_UNIDAD INTO v_pk_rubrica
+      FROM academico_test.TRUBRICA_UNIDAD
+     WHERE FK_TUNIDAD = p_pk_tunidad AND ACTIVE = TRUE;
+
+    IF NOT FOUND THEN
+        UPDATE academico_test.TRUBRICA_UNIDAD
+           SET ACTIVE = TRUE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_TUNIDAD = p_pk_tunidad
+        RETURNING PK_TRUBRICA_UNIDAD INTO v_pk_rubrica;
+
+        IF v_pk_rubrica IS NULL THEN
+            INSERT INTO academico_test.TRUBRICA_UNIDAD (FK_TUNIDAD, CREATED_BY, CREATED_AT, ACTIVE)
+            VALUES (p_pk_tunidad, p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE)
+            RETURNING PK_TRUBRICA_UNIDAD INTO v_pk_rubrica;
+        END IF;
+    END IF;
+
+    -- 6. Siguiente ORDEN dentro de la rubrica (UNIQUE FK_TRUBRICA_UNIDAD, ORDEN).
+    SELECT COALESCE(MAX(ORDEN), 0) + 1 INTO v_orden
+      FROM academico_test.TCRITERIO_UNIDAD
+     WHERE FK_TRUBRICA_UNIDAD = v_pk_rubrica;
+
+    -- 7. Criterio.
+    INSERT INTO academico_test.TCRITERIO_UNIDAD (
+        FK_TRUBRICA_UNIDAD, ORDEN, DESCRIPCION, PUBLICO, CODIGO, DESCRIPTOR_PROM,
+        CREATED_BY, CREATED_AT, ACTIVE
+    ) VALUES (
+        v_pk_rubrica, v_orden, TRIM(p_descripcion), UPPER(TRIM(p_publico)),
+        NULLIF(TRIM(p_codigo), ''), COALESCE(UPPER(TRIM(p_descriptor_prom)), 'N'),
+        p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
+    )
+    RETURNING PK_TCRITERIO_UNIDAD INTO v_pk_criterio;
+
+    -- 8. Un nivel por valoracion de la escala.
+    INSERT INTO academico_test.TNIVEL_CRITERIO_UNIDAD (
+        FK_TCRITERIO_UNIDAD, INDICADOR, RECOMENDACION, TAREA, FK_TESCALA_VALORACION,
+        CREATED_BY, CREATED_AT, ACTIVE
+    )
+    SELECT v_pk_criterio,
+           TRIM(e->>'indicador'),
+           NULLIF(TRIM(e->>'recomendacion'), ''),
+           NULLIF(TRIM(e->>'tarea'), ''),
+           (e->>'fkTescalaValoracion')::BIGINT,
+           p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
+      FROM jsonb_array_elements(p_niveles) e;
+
+    RETURN v_pk_criterio;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_unidad_criterio_agregar(BIGINT, BIGINT, VARCHAR, JSONB, VARCHAR, VARCHAR, VARCHAR)
+    IS 'Agrega un criterio (TCRITERIO_UNIDAD) a la rubrica de la unidad (TRUBRICA_UNIDAD, get-or-create) con un indicador (TNIVEL_CRITERIO_UNIDAD) por cada valoracion de la escala definida en TCRITERIO_EVALUACION.FK_TESCALA del periodo academico de la unidad. p_niveles JSONB = [{fkTescalaValoracion, indicador, recomendacion?, tarea?}]; se exige exactamente una entrada por valoracion activa de la escala (sin faltantes/sobrantes/duplicados). Gate EDITAR sobre PLANEADOR. Retorna PK_TCRITERIO_UNIDAD.';
