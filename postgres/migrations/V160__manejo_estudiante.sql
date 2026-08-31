@@ -322,3 +322,157 @@ BEGIN
      LIMIT 1;
 END;
 $function$;
+
+-- =============================================================================
+-- fn_estudiante_soft_delete -- baja del estudiante tras eliminarse su
+-- matricula. Resuelve por su cuenta hasta donde se puede llegar:
+--
+--   1. Siempre: retira los permisos de sede del rol Estudiante (15) en la sede
+--      de la matricula que se elimino.
+--   2. Si al estudiante no le queda nada colgando
+--      (fn_estudiante_dependencias_bloqueantes, V162: observador, otras
+--      matriculas, prematriculas, inscripciones, reservas, traslados), da de
+--      baja el TESTUDIANTE y sus vinculos de TNUCLEO_FAMILIAR. Si le queda
+--      algo, el TESTUDIANTE se conserva -- y eso NO es un error: la matricula
+--      ya se elimino, lo unico que no procede es borrar la persona.
+--   3. Si ademas el TUSUARIO no tiene ningun otro papel
+--      (fn_usuario_otros_usos, V162), lo desactiva por completo, incluida su
+--      cuenta de login en public.users.
+--
+-- No lanza excepcion por "no se pudo borrar del todo": devuelve que se hizo,
+-- para que el orquestador lo reporte. Solo el gate y una entrada invalida
+-- producen error.
+--
+-- Sin gate propio: la llama fn_matricula_directa_eliminar (V166), que ya
+-- valido el gate estricto contra la sede de la matricula. El estudiante en si
+-- no tiene sede propia contra la cual escalar un gate.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_estudiante_soft_delete(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_testudiante          BIGINT,
+    p_fk_sede                 BIGINT,
+    p_excluir_tmatricula      BIGINT DEFAULT NULL
+)
+RETURNS TABLE (
+    permisos_retirados    INTEGER,
+    estudiante_eliminado  BOOLEAN,
+    usuario_eliminado     BOOLEAN,
+    motivo_conservacion   TEXT
+)
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_fk_usuario   BIGINT;
+    v_permisos     INTEGER := 0;
+    v_est_borrado  BOOLEAN := FALSE;
+    v_usu_borrado  BOOLEAN := FALSE;
+    v_motivo       TEXT;
+    v_otros_usos   TEXT;
+    v_cuenta       VARCHAR;
+    v_matriculas_sede BIGINT;
+    c_fk_trol_estudiante CONSTANT BIGINT := 15;
+BEGIN
+    SELECT e.FK_TUSUARIO INTO v_fk_usuario
+      FROM academico_test.TESTUDIANTE e
+     WHERE e.PK_TESTUDIANTE = p_pk_testudiante
+       AND e.ACTIVE         = TRUE;
+
+    IF v_fk_usuario IS NULL THEN
+        RAISE EXCEPTION 'No se encontro un estudiante activo con ese identificador'
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 1. Retirar los permisos de rol Estudiante en la sede de la matricula,
+    --    PERO solo si no le queda otra matricula activa en ESA MISMA sede
+    --    (p.ej. de otro año lectivo). El permiso de TSEDE_USUARIO es por
+    --    (sede, rol, usuario, jornada), no por matricula: hay UNA sola fila
+    --    aunque la persona tenga varias matriculas ahi.
+    --
+    --    UPDATE directo y no fn_sede_usuario_soft_delete por el mismo
+    --    motivo que en el alta (V166, paso 8): el gate de esa funcion
+    --    rechazaria a un rector/secretaria asignado solo por FK.
+    -- -----------------------------------------------------------------
+    SELECT COUNT(*) INTO v_matriculas_sede
+      FROM academico_test.TMATRICULA m
+      JOIN academico_test.TGRUPO gr ON gr.PK_TGRUPO = m.FK_TGRUPO
+      JOIN academico_test.TGRADO g  ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+     WHERE m.FK_TESTUDIANTE = p_pk_testudiante
+       AND m.ACTIVE         = TRUE
+       AND pa.FK_TSEDE      = p_fk_sede
+       AND m.PK_TMATRICULA IS DISTINCT FROM p_excluir_tmatricula;
+
+    IF v_matriculas_sede = 0 THEN
+        UPDATE academico_test.TSEDE_USUARIO
+           SET ACTIVE      = FALSE,
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+               MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_TUSUARIO = v_fk_usuario
+           AND FK_TROL     = c_fk_trol_estudiante
+           AND FK_TSEDE    = p_fk_sede
+           AND ACTIVE      = TRUE;
+        GET DIAGNOSTICS v_permisos = ROW_COUNT;
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2. Dar de baja al TESTUDIANTE solo si no le queda nada colgando.
+    -- -----------------------------------------------------------------
+    v_motivo := academico_test.fn_estudiante_dependencias_bloqueantes(
+                    p_pk_testudiante, p_excluir_tmatricula);
+
+    IF v_motivo IS NULL THEN
+        -- Los vinculos de nucleo familiar de ESTE estudiante se van con el.
+        -- Al acudiente no le pasa nada por esto: sus vinculos con OTROS
+        -- estudiantes quedan intactos (el WHERE es por FK_TESTUDIANTE).
+        UPDATE academico_test.TNUCLEO_FAMILIAR
+           SET ACTIVE      = FALSE,
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+               MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_TESTUDIANTE = p_pk_testudiante
+           AND ACTIVE         = TRUE;
+
+        UPDATE academico_test.TESTUDIANTE
+           SET ACTIVE      = FALSE,
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+               MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE PK_TESTUDIANTE = p_pk_testudiante;
+        v_est_borrado := TRUE;
+
+        -- -------------------------------------------------------------
+        -- 3. Y el TUSUARIO, si no cumple ningun otro papel.
+        -- -------------------------------------------------------------
+        v_otros_usos := academico_test.fn_usuario_otros_usos(
+                            v_fk_usuario, p_pk_testudiante, NULL);
+
+        IF v_otros_usos IS NULL THEN
+            UPDATE academico_test.TUSUARIO
+               SET ACTIVE      = FALSE,
+                   ESTADO      = 'I',
+                   MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+                   MODIFIED_AT = CURRENT_TIMESTAMP
+             WHERE PK_TUSUARIO = v_fk_usuario
+            RETURNING CUENTA INTO v_cuenta;
+            v_usu_borrado := TRUE;
+
+            -- La cuenta de login del SSO. Se enlaza por email = CUENTA (ver
+            -- public.fn_get_academico_usuario_id, que hace el camino inverso).
+            -- Puede no existir: hay TUSUARIO migrados que nunca tuvieron
+            -- login, asi que no se exige que exista la fila.
+            IF v_cuenta IS NOT NULL THEN
+                UPDATE public.users
+                   SET active  = FALSE,
+                       enabled = FALSE
+                 WHERE UPPER(email) = UPPER(v_cuenta);
+            END IF;
+        ELSE
+            v_motivo := 'usuario conservado: ' || v_otros_usos;
+        END IF;
+    ELSE
+        v_motivo := 'estudiante conservado: ' || v_motivo;
+    END IF;
+
+    RETURN QUERY SELECT v_permisos, v_est_borrado, v_usu_borrado, v_motivo;
+END;
+$function$;

@@ -40,18 +40,51 @@ BEGIN
     --    solicitante no puede ver el periodo, se trata igual que si no
     --    existiera (no se filtra informacion de existencia a quien no
     --    tiene alcance).
+    --
+    --    REV -- fallback para rector/secretaria asignados SOLO por FK
+    --    (TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA, sin
+    --    TSEDE_USUARIO propio todavia). fn_periodo_usuario_puede_ver
+    --    resuelve el alcance unicamente por TSEDE_USUARIO, asi que a esa
+    --    persona le devolvia FALSE y esta funcion concluia "no existe el
+    --    periodo" -- un mensaje ademas enganoso, porque el periodo si
+    --    existe. El gate de fn_matricula_directa_crear SI acepta esa
+    --    asignacion por FK, con lo cual el alta pasaba el gate y moria
+    --    aca.
+    --
+    --    El fallback vive en NUESTRA funcion a proposito: no se toca
+    --    fn_periodo_usuario_puede_ver ni el resto del modulo de periodos,
+    --    que es de otro dueño y alimenta sus propias pantallas.
+    --
+    --    En la practica los permisos de rector/secretaria se crean solos
+    --    al crear la sede (ver fn_sed_crear paso 6), asi que este camino
+    --    deberia ser raro; queda como red de seguridad para el intervalo
+    --    entre asignar el cargo y tener el permiso.
     -- -----------------------------------------------------------------
     SELECT pa.PK_TPERIODO_ACADEMICO, pa.FECHA_LIMITE_MATRICULA
       INTO v_pk_periodo, v_fecha_limite
       FROM academico_test.TPERIODO_ACADEMICO pa
       JOIN academico_test.TANO_LECTIVO al
         ON al.PK_ANO_LECTIVO = pa.FK_TANO_LECTIVO
+      JOIN academico_test.TSEDE s
+        ON s.PK_TSEDE = pa.FK_TSEDE
      WHERE pa.FK_TSEDE        = p_fk_sede
        AND pa.FK_TLV_JORNADA  = p_fk_tlv_jornada
        AND al.NOMBRE          = v_ano_actual
        AND pa.ACTIVE          = TRUE
        AND al.ACTIVE          = TRUE
-       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, pa.PK_TPERIODO_ACADEMICO)
+       AND (
+             academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, pa.PK_TPERIODO_ACADEMICO)
+             OR EXISTS (
+                 SELECT 1
+                   FROM academico_test.TESTABLECIMIENTO e
+                   JOIN academico_test.TFUNCIONARIO f
+                     ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+                  WHERE e.PK_ESTABLECIMIENTO = s.FK_TESTABLECIMIENTO
+                    AND e.ACTIVE      = TRUE
+                    AND f.ACTIVE      = TRUE
+                    AND f.FK_TUSUARIO = p_pk_usuario
+             )
+           )
      LIMIT 1;
 
     IF v_pk_periodo IS NULL THEN
@@ -170,5 +203,195 @@ BEGIN
             USING ERRCODE = '22023',
                   HINT    = 'No hay cupos disponibles en este grupo';
     END IF;
+END;
+$function$;
+
+-- =============================================================================
+-- VALIDACIONES DE BAJA
+-- -----------------------------------------------------------------------------
+-- Las tres funciones de abajo NO lanzan excepcion: devuelven el NOMBRE de la
+-- primera dependencia encontrada (o NULL si no hay ninguna). Quien decide que
+-- hacer con esa respuesta es el caller:
+--   - fn_matricula_dependencias_bloqueantes  -> si devuelve algo, se ABORTA la
+--     baja con un mensaje que nombra la dependencia.
+--   - fn_estudiante_dependencias_bloqueantes -> si devuelve algo, NO se aborta:
+--     simplemente el estudiante no se da de baja (la matricula si).
+--   - fn_usuario_otros_usos                  -> si devuelve algo, el TUSUARIO se
+--     conserva y solo se le quitan los permisos de sede del rol que
+--     corresponda.
+-- Devolver texto en vez de lanzar deja la politica en el orquestador, que es
+-- donde cambia segun el caso, y permite reusar la misma consulta para un
+-- futuro "puedo borrar esto?" del front sin provocar un error.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- fn_matricula_dependencias_bloqueantes -- toda entidad viva que cuelgue de la
+-- matricula y que NO se elimine en cascada con ella.
+--
+-- Se cae del listado a proposito (unica cascada libre, ver V166):
+--   TMATRICULA_SOCIOECONOMICO y TMATRICULA_ARCHIVO.
+--
+-- Incluye la auto-referencia TMATRICULA.FK_TMATRICULA_ANTERIOR: si una
+-- matricula posterior apunta a esta como su antecedente, borrarla dejaria esa
+-- cadena rota.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_dependencias_bloqueantes(
+    p_fk_tmatricula BIGINT
+)
+RETURNS TEXT
+LANGUAGE plpgsql
+STABLE
+AS $function$
+DECLARE
+    v_tabla   TEXT;
+    v_columna TEXT;
+    v_nombre  TEXT;
+    v_n       BIGINT;
+BEGIN
+    -- Nombres en minuscula a proposito: format('%I') cita el identificador
+    -- preservando la caja, y las tablas reales estan en minuscula --
+    -- 'TASIGNATURA_NOTA' generaria "TASIGNATURA_NOTA", que no existe.
+    FOR v_tabla, v_columna, v_nombre IN
+        SELECT * FROM (VALUES
+            ('tasignatura_nota',              'fk_tmatricula',          'calificaciones de asignatura'),
+            ('tasignatura_definitiva',        'fk_tmatricula',          'definitivas de asignatura'),
+            ('tarea_nota',                    'fk_tmatricula',          'calificaciones de tareas'),
+            ('tarea_definitiva',              'fk_tmatricula',          'definitivas de tareas'),
+            ('tunidad_nota',                  'fk_tmatricula',          'calificaciones por unidad'),
+            ('tactividad_estudiante',         'fk_tmatricula',          'actividades del estudiante'),
+            ('trecomendaciones_calificacion', 'fk_tmatricula',          'recomendaciones de calificacion'),
+            ('tcomportamiento_calificado',    'fk_tmatricula',          'registros de comportamiento'),
+            ('tasistencia',                   'fk_tmatricula',          'registros de asistencia'),
+            ('tmatricula_asignatura',         'fk_tmatricula',          'asignaturas matriculadas'),
+            ('tmatricula_promocion',          'fk_tmatricula',          'registros de promocion'),
+            ('tacta_grado_detalle',           'fk_tmatricula',          'actas de grado'),
+            ('tdiploma_detalle',              'fk_tmatricula',          'diplomas'),
+            ('tretiro_matricula',             'fk_tmatricula',          'retiros de matricula'),
+            ('ttraslado_matricula',           'fk_tmatricula',          'traslados de matricula'),
+            ('tsede_convenio_matricula',      'fk_tmatricula',          'convenios de sede'),
+            ('tlog_carnet',                   'fk_tmatricula',          'registros de carnet'),
+            ('tvideo_usuarios',               'fk_tmatricula',          'videos del estudiante'),
+            ('tmatricula',                    'fk_tmatricula_anterior', 'otra matricula que la referencia como antecedente')
+        ) AS t(tabla, columna, nombre)
+    LOOP
+        EXECUTE format(
+            'SELECT COUNT(*) FROM academico_test.%I WHERE %I = $1 AND ACTIVE = TRUE',
+            v_tabla, v_columna)
+        INTO v_n USING p_fk_tmatricula;
+
+        IF v_n > 0 THEN
+            RETURN v_nombre || ' (' || v_n || ')';
+        END IF;
+    END LOOP;
+
+    RETURN NULL;
+END;
+$function$;
+
+-- -----------------------------------------------------------------------------
+-- fn_estudiante_dependencias_bloqueantes -- lo que impide dar de baja al
+-- TESTUDIANTE una vez borrada la matricula. Incluye el observador, que cuelga
+-- del estudiante y no de la matricula.
+--
+-- p_excluir_tmatricula deja fuera la matricula que se esta borrando en esta
+-- misma operacion: cuando se llama, esa fila ya esta inactiva, pero el
+-- parametro mantiene la funcion utilizable desde otros contextos.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_estudiante_dependencias_bloqueantes(
+    p_fk_testudiante      BIGINT,
+    p_excluir_tmatricula  BIGINT DEFAULT NULL
+)
+RETURNS TEXT
+LANGUAGE plpgsql
+STABLE
+AS $function$
+DECLARE
+    v_n BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO v_n FROM academico_test.TOBSERVADOR
+     WHERE FK_TESTUDIANTE = p_fk_testudiante AND ACTIVE = TRUE;
+    IF v_n > 0 THEN RETURN 'observador del estudiante (' || v_n || ')'; END IF;
+
+    SELECT COUNT(*) INTO v_n FROM academico_test.TMATRICULA
+     WHERE FK_TESTUDIANTE = p_fk_testudiante AND ACTIVE = TRUE
+       AND PK_TMATRICULA IS DISTINCT FROM p_excluir_tmatricula;
+    IF v_n > 0 THEN RETURN 'otras matriculas activas (' || v_n || ')'; END IF;
+
+    SELECT COUNT(*) INTO v_n FROM academico_test.TPREMATRICULA
+     WHERE FK_TESTUDIANTE = p_fk_testudiante AND ACTIVE = TRUE;
+    IF v_n > 0 THEN RETURN 'prematriculas (' || v_n || ')'; END IF;
+
+    SELECT COUNT(*) INTO v_n FROM academico_test.TINSCRIPCION
+     WHERE FK_TESTUDIANTE = p_fk_testudiante AND ACTIVE = TRUE;
+    IF v_n > 0 THEN RETURN 'inscripciones (' || v_n || ')'; END IF;
+
+    SELECT COUNT(*) INTO v_n FROM academico_test.TRESERVA_CUPO
+     WHERE FK_TESTUDIANTE = p_fk_testudiante AND ACTIVE = TRUE;
+    IF v_n > 0 THEN RETURN 'reservas de cupo (' || v_n || ')'; END IF;
+
+    SELECT COUNT(*) INTO v_n FROM academico_test.TTRASLADO_ESTUDIANTE
+     WHERE FK_TESTUDIANTE = p_fk_testudiante AND ACTIVE = TRUE;
+    IF v_n > 0 THEN RETURN 'traslados de estudiante (' || v_n || ')'; END IF;
+
+    RETURN NULL;
+END;
+$function$;
+
+-- -----------------------------------------------------------------------------
+-- fn_usuario_otros_usos -- que mas hace este TUSUARIO en el sistema, aparte del
+-- estudiante y/o el acudiente que se estan dando de baja en esta operacion.
+--
+-- Si devuelve NULL, la persona no tiene ningun otro papel y su TUSUARIO se
+-- puede desactivar por completo. Si devuelve algo, el usuario se conserva y
+-- solo se le retiran los permisos de sede del rol correspondiente.
+--
+-- Los TSEDE_USUARIO NO se miran aca: los permisos del rol que se esta dando de
+-- baja se retiran ANTES de llamar a esta funcion, y cualquier permiso que quede
+-- vivo despues (otro rol, otra sede) se detecta como "permisos de sede
+-- vigentes".
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_otros_usos(
+    p_pk_usuario          BIGINT,
+    p_excluir_testudiante BIGINT DEFAULT NULL,
+    p_excluir_tpadre      BIGINT DEFAULT NULL
+)
+RETURNS TEXT
+LANGUAGE plpgsql
+STABLE
+AS $function$
+DECLARE
+    v_n BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO v_n FROM academico_test.TFUNCIONARIO
+     WHERE FK_TUSUARIO = p_pk_usuario AND ACTIVE = TRUE;
+    IF v_n > 0 THEN RETURN 'es funcionario'; END IF;
+
+    SELECT COUNT(*) INTO v_n FROM academico_test.TESTUDIANTE
+     WHERE FK_TUSUARIO = p_pk_usuario AND ACTIVE = TRUE
+       AND PK_TESTUDIANTE IS DISTINCT FROM p_excluir_testudiante;
+    IF v_n > 0 THEN RETURN 'es estudiante en otro registro'; END IF;
+
+    SELECT COUNT(*) INTO v_n FROM academico_test.TPADRE
+     WHERE FK_TUSUARIO = p_pk_usuario AND ACTIVE = TRUE
+       AND PK_TPADRE IS DISTINCT FROM p_excluir_tpadre;
+    IF v_n > 0 THEN RETURN 'es acudiente en otro registro'; END IF;
+
+    SELECT COUNT(*) INTO v_n FROM academico_test.TSEDE_USUARIO
+     WHERE FK_TUSUARIO = p_pk_usuario AND ACTIVE = TRUE;
+    IF v_n > 0 THEN RETURN 'tiene permisos de sede vigentes (' || v_n || ')'; END IF;
+
+    SELECT COUNT(*) INTO v_n FROM academico_test.TENTE_USUARIO
+     WHERE FK_TUSUARIO = p_pk_usuario AND ACTIVE = TRUE;
+    IF v_n > 0 THEN RETURN 'esta vinculado a un ente territorial'; END IF;
+
+    SELECT COUNT(*) INTO v_n FROM academico_test.TINSCRIPCION
+     WHERE FK_TUSUARIO = p_pk_usuario AND ACTIVE = TRUE;
+    IF v_n > 0 THEN RETURN 'figura en inscripciones'; END IF;
+
+    SELECT COUNT(*) INTO v_n FROM academico_test.TRESERVA_CUPO
+     WHERE FK_TUSUARIO = p_pk_usuario AND ACTIVE = TRUE;
+    IF v_n > 0 THEN RETURN 'figura en reservas de cupo'; END IF;
+
+    RETURN NULL;
 END;
 $function$;

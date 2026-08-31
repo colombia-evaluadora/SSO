@@ -1289,28 +1289,33 @@ BEGIN
               JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
              WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
         )
-        SELECT EXISTS (
-            SELECT 1
-              FROM academico_test.TESTABLECIMIENTO e
-             WHERE e.ACTIVE = TRUE
-               AND e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-               AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
-            UNION ALL
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE su.FK_TUSUARIO = v_pk_usuario
-               AND su.ACTIVE      = TRUE
-               AND s.ACTIVE       = TRUE
-               AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-               AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
-            UNION ALL
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-             WHERE su.FK_TUSUARIO = v_pk_usuario
-               AND su.ACTIVE      = TRUE
-               AND su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador)
-               AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
+        -- REV5 -- el gate de entrada deja de exigir que el funcionario
+        -- OBJETIVO sea alcanzable (que ya tenga un TSEDE_USUARIO en un EE
+        -- accesible, o sea rector/secretaria) y pasa a preguntar solo si el
+        -- SOLICITANTE tiene un rol que lo habilite a gestionar permisos.
+        --
+        -- Motivo: un funcionario recien creado por fn_fun_crear no tiene
+        -- ningun permiso ni es rector/secretaria de nada -- por definicion no
+        -- era "alcanzable", asi que la PRIMERA asignacion de rol quedaba
+        -- bloqueada con 42501. Un chicken-and-egg: para poder darle su primer
+        -- permiso hacia falta que ya tuviera uno.
+        --
+        -- No se pierde ninguna proteccion. Lo que evita que alguien toque
+        -- sedes ajenas no es este gate sino la validacion POR OPERACION de
+        -- mas abajo, que corre en cada elemento de p_permisos y compara su
+        -- fk_sede contra v_sedes_plenas / v_sedes_coord (y devuelve
+        -- 'error:sin_permiso_en_sede' sin ejecutar nada). Esa validacion es
+        -- independiente de los permisos que el objetivo ya tenga, asi que
+        -- sigue intacta. Y el ocultamiento de permisos ajenos al LISTAR vive
+        -- en fn_usu_empleado_buscar_por_pk (v_sedes_accesibles), no aca --
+        -- esta funcion no lista, solo modifica.
+        --
+        -- Mismo criterio que fn_fun_crear y que fn_usu_empleado_buscar_por_pk
+        -- (REV5): quien puede crear al funcionario puede darle su primer rol.
+        SELECT (
+            academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante)
+            OR EXISTS (SELECT 1 FROM ee_accesibles)
+            OR EXISTS (SELECT 1 FROM sedes_coordinador)
         ) INTO v_visible;
 
         IF NOT v_visible THEN
@@ -2955,31 +2960,30 @@ BEGIN
              WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
         )
         SELECT
-            EXISTS (
-                SELECT 1
-                  FROM academico_test.TESTABLECIMIENTO e
-                 WHERE e.ACTIVE = TRUE
-                   AND e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-                   AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
-                UNION ALL
-                SELECT 1
-                  FROM academico_test.TSEDE_USUARIO su
-                  JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-                 WHERE su.FK_TUSUARIO = v_pk_usuario
-                   AND su.ACTIVE      = TRUE
-                   AND s.ACTIVE       = TRUE
-                   AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-                   AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
-                UNION ALL
-                -- REV3 -- coordinador: solo si el permiso del funcionario
-                -- objetivo esta en SU sede, y es "otro cargo" (excluye
-                -- ademas rector/jefe de sistema).
-                SELECT 1
-                  FROM academico_test.TSEDE_USUARIO su
-                 WHERE su.FK_TUSUARIO = v_pk_usuario
-                   AND su.ACTIVE      = TRUE
-                   AND su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador)
-                   AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
+            -- REV5 -- el gate deja de preguntar "¿este funcionario esta a mi
+            -- alcance?" y pasa a preguntar "¿tengo un rol que me habilite a
+            -- consultar funcionarios?". La ficha de una persona (datos de
+            -- TUSUARIO + info complementaria de TFUNCIONARIO) no es
+            -- informacion sede-especifica: lo que SI lo es son sus permisos,
+            -- y esos ya van acotados por v_sedes_accesibles en el array
+            -- `permisos` de mas abajo (REV4). Quien no comparte sede con la
+            -- persona la ve con `permisos: []`.
+            --
+            -- Lo que este gate protegia de verdad -- que alguien pudiera dar
+            -- o quitar permisos de sedes ajenas -- se valida donde
+            -- corresponde: fn_fun_permisos_actualizar comprueba sede por
+            -- sede cada operacion, y fn_sede_usuario_crear /
+            -- fn_sede_usuario_soft_delete tienen ademas su propio gate. El
+            -- gate estricto aca no aportaba a eso y si rompia un flujo real:
+            -- el autocompletado por documento del alta de funcionario
+            -- (findPersonByDocument) encuentra a la persona sin gate alguno,
+            -- llena el formulario, y acto seguido el front dispara este GET
+            -- por PK -- que reventaba con 42501 cuando la persona ya era
+            -- funcionario en otro establecimiento, dejando el alta a medias.
+            (
+                academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante)
+                OR EXISTS (SELECT 1 FROM ee_accesibles)
+                OR EXISTS (SELECT 1 FROM sedes_coordinador)
             ),
             -- REV4 -- union de todas las sedes con autoridad, para acotar
             -- el array `permisos` mas abajo.

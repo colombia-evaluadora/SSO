@@ -365,3 +365,144 @@ BEGIN
      LIMIT 1;
 END;
 $function$;
+
+-- =============================================================================
+-- fn_padre_soft_delete -- misma logica que fn_estudiante_soft_delete (V160),
+-- aplicada al acudiente:
+--
+--   1. Siempre: retira sus permisos de rol Acudiente (16) en la sede de la
+--      matricula eliminada.
+--   2. Si ya no es acudiente de NINGUN estudiante activo, da de baja el TPADRE.
+--   3. Si ademas su TUSUARIO no cumple ningun otro papel, lo desactiva por
+--      completo, incluida su cuenta de login en public.users.
+--
+-- Punto clave del requerimiento: si el acudiente figura en el nucleo familiar
+-- de OTRO estudiante -- como padre, madre, tio o cualquier parentesco -- esa
+-- relacion NO se toca y el TPADRE se conserva. Los vinculos con el estudiante
+-- que se elimino ya los desactivo fn_estudiante_soft_delete (por
+-- FK_TESTUDIANTE), asi que al llegar aca solo quedan vivos los de otros
+-- estudiantes: por eso basta con contarlos.
+--
+-- Sin gate propio, mismo criterio que V160: lo valida el orquestador (V166).
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_padre_soft_delete(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_tpadre               BIGINT,
+    p_fk_sede                 BIGINT
+)
+RETURNS TABLE (
+    permisos_retirados   INTEGER,
+    padre_eliminado      BOOLEAN,
+    usuario_eliminado    BOOLEAN,
+    motivo_conservacion  TEXT
+)
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_fk_usuario   BIGINT;
+    v_permisos     INTEGER := 0;
+    v_pad_borrado  BOOLEAN := FALSE;
+    v_usu_borrado  BOOLEAN := FALSE;
+    v_motivo       TEXT;
+    v_otros_usos   TEXT;
+    v_vinculos     BIGINT;
+    v_cuenta       VARCHAR;
+    c_fk_trol_acudiente CONSTANT BIGINT := 16;
+BEGIN
+    SELECT p.FK_TUSUARIO INTO v_fk_usuario
+      FROM academico_test.TPADRE p
+     WHERE p.PK_TPADRE = p_pk_tpadre
+       AND p.ACTIVE    = TRUE;
+
+    IF v_fk_usuario IS NULL THEN
+        RAISE EXCEPTION 'No se encontro un acudiente activo con ese identificador'
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 1. Retirar los permisos de rol Acudiente en la sede de la matricula,
+    --    PERO solo si no le queda ningun otro estudiante a cargo con
+    --    matricula activa en ESA MISMA sede.
+    --
+    --    El permiso de TSEDE_USUARIO es por (sede, rol, usuario, jornada),
+    --    no por estudiante: un acudiente con dos hijos en la misma sede
+    --    tiene UNA sola fila. Retirarla al borrar la matricula del primero
+    --    lo dejaria sin acceso al segundo, que sigue matriculado ahi.
+    -- -----------------------------------------------------------------
+    SELECT COUNT(*) INTO v_vinculos
+      FROM academico_test.TNUCLEO_FAMILIAR nf
+      JOIN academico_test.TESTUDIANTE e   ON e.PK_TESTUDIANTE = nf.FK_TESTUDIANTE
+      JOIN academico_test.TMATRICULA m    ON m.FK_TESTUDIANTE = e.PK_TESTUDIANTE
+      JOIN academico_test.TGRUPO gr       ON gr.PK_TGRUPO = m.FK_TGRUPO
+      JOIN academico_test.TGRADO g        ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+     WHERE nf.FK_TPADRE = p_pk_tpadre
+       AND nf.ACTIVE    = TRUE
+       AND e.ACTIVE     = TRUE
+       AND m.ACTIVE     = TRUE
+       AND pa.FK_TSEDE  = p_fk_sede;
+
+    IF v_vinculos = 0 THEN
+        UPDATE academico_test.TSEDE_USUARIO
+           SET ACTIVE      = FALSE,
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+               MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_TUSUARIO = v_fk_usuario
+           AND FK_TROL     = c_fk_trol_acudiente
+           AND FK_TSEDE    = p_fk_sede
+           AND ACTIVE      = TRUE;
+        GET DIAGNOSTICS v_permisos = ROW_COUNT;
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2. Dar de baja el TPADRE solo si ya no es acudiente de nadie.
+    -- -----------------------------------------------------------------
+    SELECT COUNT(*) INTO v_vinculos
+      FROM academico_test.TNUCLEO_FAMILIAR nf
+      JOIN academico_test.TESTUDIANTE e ON e.PK_TESTUDIANTE = nf.FK_TESTUDIANTE
+     WHERE nf.FK_TPADRE = p_pk_tpadre
+       AND nf.ACTIVE    = TRUE
+       AND e.ACTIVE     = TRUE;
+
+    IF v_vinculos = 0 THEN
+        UPDATE academico_test.TPADRE
+           SET ACTIVE      = FALSE,
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+               MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE PK_TPADRE = p_pk_tpadre;
+        v_pad_borrado := TRUE;
+
+        -- -------------------------------------------------------------
+        -- 3. Y el TUSUARIO, si no cumple ningun otro papel.
+        -- -------------------------------------------------------------
+        v_otros_usos := academico_test.fn_usuario_otros_usos(
+                            v_fk_usuario, NULL, p_pk_tpadre);
+
+        IF v_otros_usos IS NULL THEN
+            UPDATE academico_test.TUSUARIO
+               SET ACTIVE      = FALSE,
+                   ESTADO      = 'I',
+                   MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+                   MODIFIED_AT = CURRENT_TIMESTAMP
+             WHERE PK_TUSUARIO = v_fk_usuario
+            RETURNING CUENTA INTO v_cuenta;
+            v_usu_borrado := TRUE;
+
+            IF v_cuenta IS NOT NULL THEN
+                UPDATE public.users
+                   SET active  = FALSE,
+                       enabled = FALSE
+                 WHERE UPPER(email) = UPPER(v_cuenta);
+            END IF;
+        ELSE
+            v_motivo := 'usuario conservado: ' || v_otros_usos;
+        END IF;
+    ELSE
+        v_motivo := 'acudiente conservado: sigue vinculado a ' || v_vinculos
+                    || ' estudiante(s) activo(s)';
+    END IF;
+
+    RETURN QUERY SELECT v_permisos, v_pad_borrado, v_usu_borrado, v_motivo;
+END;
+$function$;
