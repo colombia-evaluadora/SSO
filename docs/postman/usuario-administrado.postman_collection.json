@@ -1,0 +1,211 @@
+{
+  "info": {
+    "_postman_id": "c9f2a7d1-8b3e-4c05-9a1f-usuario-administrado",
+    "name": "SSO - usuario administrado (sin login)",
+    "description": {
+      "content": "Alta de un **usuario administrado** (sin correo / sin contrasena de acceso) para estudiantes de **preescolar / primaria** - `academico_test.fn_usuario_administrado_crear` (V30), expuesta como `POST /cobertura-academica/usuario-administrado` en el `query` de `eval-col` (V219).\n\n## Ruta\n\n`POST {{baseUrl}}/api/eval-col/cobertura-academica/usuario-administrado` (body JSON, sin archivos).\n\n> La fila nueva en `public.query` responde **404** por el gateway hasta reiniciar el contenedor `query-service-eval-col`. Ver el request *\"404 - antes de reiniciar query-service\"*.\n\n## Autorizacion (\"seccion de matricula\")\n\nNo hay restriccion en `role_query`. El control lo hace el gate de la propia funcion: `fn_puede_afectar_usuarios` (roles 1-3 / 7-8 / 9: super-admin, jefe de sistema, aux. administrativo) **o** rector/secretaria de un EE activo. Es el conjunto de roles que opera matricula en el modelo actual de `dev`. Un usuario sin ninguno de esos roles recibe **403 / ERRCODE 42501**.\n\n## Nombres de los campos\n\nSalen de `TMATRICULA_CAMPO.NOMBRE` (catalogo de `GET /matricula/configuracion`) normalizados igual que en `matricula-directa`: sin tildes, todo no-alfanumerico a `_`, mayusculas. El motor uppercasea las claves, asi que la caja da igual.\n\n| Campo | Tipo | Obligatorio | Notas |\n|---|---|---|---|\n| `TIPO_DE_DOCUMENTO_DEL_ESTUDIANTE` | BIGINT | si | `PK_LISTA_VALOR` del tipo de documento (activo). Su `VALOR` (p.ej. `TI`) forma el prefijo de `TUSUARIO.CUENTA`. |\n| `DOCUMENTO_ESTUDIANTE` | VARCHAR | si | Numero de documento. `CUENTA = <VALOR tipo doc><documento>` (p.ej. `TI1122334455`). |\n| `GRADO` | BIGINT | si | `PK_TGRADO` activo. **No se guarda** en `TUSUARIO`: solo valida que su `CODIGO` numerico este en `-3..5` (Parvulo..Quinto). Fuera de rango -> 4xx. |\n| `NOMBRE_DEL_ESTUDIANTE` | VARCHAR | si | Primer nombre. |\n| `PRIMER_APELLIDO_DEL_ESTUDIANTE` | VARCHAR | si | |\n| `GENERO_DEL_ESTUDIANTE` | BIGINT | si | `PK_LISTA_VALOR` del genero (activo). |\n| `SEGUNDO_NOMBRE_DEL_ESTUDIANTE` | VARCHAR | no | |\n| `SEGUNDO_APELLIDO_DEL_ESTUDIANTE` | VARCHAR | no | |\n| `FECHA_DE_NACIMIENTO` | VARCHAR (`YYYY-MM-DD`) -> DATE | no | `TUSUARIO.FECHA_NACIMIENTO` es nullable desde V218. |\n\n## Respuesta\n\n`200` con el `PK_TUSUARIO` creado (`pk_tusuario`). Ese id se pasa luego a `fn_estudiante_crear` (`p_pk_usuario`).\n\n## Errores esperados\n\n| Situacion | ERRCODE | HTTP |\n|---|---|---|\n| Falta un obligatorio (documento, grado, nombre, apellido, genero, tipo doc) | 23502 | 400 |\n| Tipo de documento / genero inexistente o inactivo | 23503 | 400 |\n| Grado inexistente/inactivo, o su CODIGO fuera de `-3..5` | 23503 / 22023 | 400 |\n| `CUENTA` o `(tipo_doc, documento)` ya usados por un TUSUARIO activo | 23505 | 409 |\n| Solicitante sin rol de matricula | 42501 | 403 |\n| Fila query aun no recargada por el contenedor | - | 404 |\n",
+      "type": "text/markdown"
+    },
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "tipoDocumentoPk", "value": "51883", "type": "string" },
+    { "key": "generoPk", "value": "129", "type": "string" },
+    { "key": "gradoPreescolarPrimariaPk", "value": "990501", "type": "string" },
+    { "key": "gradoFueraDeRangoPk", "value": "990701", "type": "string" },
+    { "key": "documentoEjemplo", "value": "1122334455", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "0 - Login (guarda token)",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "api", "auth", "login" ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "description": {
+          "content": "Guarda el `token` de la respuesta en la variable de entorno `token`. El solicitante debe tener rol de matricula (super-admin / jefe de sistema / aux. administrativo, o rector/secretaria de un EE).",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (d.token) { pm.environment.set(\"token\", d.token); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 - Crear usuario administrado (todos los campos)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/cobertura-academica/usuario-administrado",
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "api", "eval-col", "cobertura-academica", "usuario-administrado" ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"TIPO_DE_DOCUMENTO_DEL_ESTUDIANTE\": {{tipoDocumentoPk}},\n  \"DOCUMENTO_ESTUDIANTE\": \"{{documentoEjemplo}}\",\n  \"GRADO\": {{gradoPreescolarPrimariaPk}},\n  \"NOMBRE_DEL_ESTUDIANTE\": \"Juan\",\n  \"SEGUNDO_NOMBRE_DEL_ESTUDIANTE\": \"David\",\n  \"PRIMER_APELLIDO_DEL_ESTUDIANTE\": \"Perez\",\n  \"SEGUNDO_APELLIDO_DEL_ESTUDIANTE\": \"Gomez\",\n  \"GENERO_DEL_ESTUDIANTE\": {{generoPk}},\n  \"FECHA_DE_NACIMIENTO\": \"2018-05-01\"\n}"
+        },
+        "description": {
+          "content": "Alta completa. Respuesta `200`:\n\n```json\n{ \"pk_tusuario\": 197233 }\n```\n\n`CUENTA` queda como `<VALOR del tipo de documento><DOCUMENTO_ESTUDIANTE>` (p.ej. `TI1122334455`), `CONTRASENA` es un centinela no utilizable y `ESTADO = 'A'`. Guarda `pk_tusuario` para `fn_estudiante_crear`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.code === 200);",
+              "const d = pm.response.json();",
+              "const pk = Array.isArray(d) ? (d[0] && (d[0].pk_tusuario ?? d[0].fn_usuario_administrado_crear)) : (d.pk_tusuario ?? d.fn_usuario_administrado_crear);",
+              "if (pk) { pm.environment.set(\"pkUsuarioAdministrado\", pk); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - Crear usuario administrado (solo obligatorios)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/cobertura-academica/usuario-administrado",
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "api", "eval-col", "cobertura-academica", "usuario-administrado" ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"TIPO_DE_DOCUMENTO_DEL_ESTUDIANTE\": {{tipoDocumentoPk}},\n  \"DOCUMENTO_ESTUDIANTE\": \"1122334466\",\n  \"GRADO\": {{gradoPreescolarPrimariaPk}},\n  \"NOMBRE_DEL_ESTUDIANTE\": \"Ana\",\n  \"PRIMER_APELLIDO_DEL_ESTUDIANTE\": \"Diaz\",\n  \"GENERO_DEL_ESTUDIANTE\": {{generoPk}}\n}"
+        },
+        "description": {
+          "content": "Sin segundos nombres/apellidos ni `FECHA_DE_NACIMIENTO` (nullable desde V218). Debe responder `200`.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "3 - 4xx grado fuera de preescolar/primaria",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/cobertura-academica/usuario-administrado",
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "api", "eval-col", "cobertura-academica", "usuario-administrado" ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"TIPO_DE_DOCUMENTO_DEL_ESTUDIANTE\": {{tipoDocumentoPk}},\n  \"DOCUMENTO_ESTUDIANTE\": \"1122334477\",\n  \"GRADO\": {{gradoFueraDeRangoPk}},\n  \"NOMBRE_DEL_ESTUDIANTE\": \"Pedro\",\n  \"PRIMER_APELLIDO_DEL_ESTUDIANTE\": \"Ruiz\",\n  \"GENERO_DEL_ESTUDIANTE\": {{generoPk}}\n}"
+        },
+        "description": {
+          "content": "`{{gradoFueraDeRangoPk}}` apunta a un `TGRADO` con `CODIGO` > 5 (p.ej. Sexto). Respuesta `400`, ERRCODE `22023`: *\"el grado (codigo N) no pertenece a preescolar ni a primaria...\"*.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "4 - 4xx falta el documento (obligatorio)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/cobertura-academica/usuario-administrado",
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "api", "eval-col", "cobertura-academica", "usuario-administrado" ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"TIPO_DE_DOCUMENTO_DEL_ESTUDIANTE\": {{tipoDocumentoPk}},\n  \"GRADO\": {{gradoPreescolarPrimariaPk}},\n  \"NOMBRE_DEL_ESTUDIANTE\": \"Sin\",\n  \"PRIMER_APELLIDO_DEL_ESTUDIANTE\": \"Documento\",\n  \"GENERO_DEL_ESTUDIANTE\": {{generoPk}}\n}"
+        },
+        "description": {
+          "content": "Sin `DOCUMENTO_ESTUDIANTE`. Respuesta `400`, ERRCODE `23502`: *\"identificacion es obligatoria\"*.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "5 - 409 documento ya registrado",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/cobertura-academica/usuario-administrado",
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "api", "eval-col", "cobertura-academica", "usuario-administrado" ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"TIPO_DE_DOCUMENTO_DEL_ESTUDIANTE\": {{tipoDocumentoPk}},\n  \"DOCUMENTO_ESTUDIANTE\": \"{{documentoEjemplo}}\",\n  \"GRADO\": {{gradoPreescolarPrimariaPk}},\n  \"NOMBRE_DEL_ESTUDIANTE\": \"Juan\",\n  \"PRIMER_APELLIDO_DEL_ESTUDIANTE\": \"Perez\",\n  \"GENERO_DEL_ESTUDIANTE\": {{generoPk}}\n}"
+        },
+        "description": {
+          "content": "Repite el documento del request 1. Respuesta `409`, ERRCODE `23505`: *\"cuenta (...) ya esta registrada\"* o *\"ya existe un usuario activo con tipo_documento=..., identificacion=...\"*.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "404 - antes de reiniciar query-service",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/cobertura-academica/usuario-administrado",
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "api", "eval-col", "cobertura-academica", "usuario-administrado" ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"TIPO_DE_DOCUMENTO_DEL_ESTUDIANTE\": {{tipoDocumentoPk}},\n  \"DOCUMENTO_ESTUDIANTE\": \"1\",\n  \"GRADO\": {{gradoPreescolarPrimariaPk}},\n  \"NOMBRE_DEL_ESTUDIANTE\": \"x\",\n  \"PRIMER_APELLIDO_DEL_ESTUDIANTE\": \"x\",\n  \"GENERO_DEL_ESTUDIANTE\": {{generoPk}}\n}"
+        },
+        "description": {
+          "content": "Inmediatamente despues de aplicar V219, el gateway aun no conoce la ruta y responde **404**. Se resuelve con `docker compose restart query-service-eval-col` (o recreando el contenedor `sso-query-service-eval-col`, que es provisionado dinamicamente).",
+          "type": "text/markdown"
+        }
+      }
+    }
+  ]
+}
