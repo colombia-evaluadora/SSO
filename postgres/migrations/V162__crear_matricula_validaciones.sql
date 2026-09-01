@@ -5,10 +5,27 @@
 -- pasado.
 --
 -- Contexto: TPERIODO_ACADEMICO combina sede + año lectivo + jornada +
--- fechas en un solo registro; su NOMBRE se arma a partir de esos mismos
--- campos, lo que garantiza -- a nivel de negocio -- que no puede haber dos
--- periodos activos solapados para la misma (sede, jornada, año). Por eso
--- esta funcion puede asumir "0 o 1" resultado sin necesidad de desambiguar.
+-- fechas en un solo registro.
+--
+-- REV -- se penso originalmente que el NOMBRE del periodo, armado a partir
+-- de esos mismos campos, garantizaba "0 o 1" resultado por (sede, jornada,
+-- año) y que por eso no hacia falta desambiguar. Los datos lo desmienten:
+-- la sede 1373 / jornada 51900 tiene dos periodos activos de 2026 ("2026" y
+-- "2026A"). Con un LIMIT 1 sin ORDER BY el resultado era NO DETERMINISTA
+-- -- la misma llamada devolvia un periodo distinto entre ejecuciones y el
+-- alta de matricula fallaba de forma intermitente con "El grupo indicado no
+-- pertenece al periodo academico resuelto". Ahora hay dos salidas de esa
+-- ambiguedad:
+--
+--   * p_fk_tgrupo (opcional): cuando el llamador YA eligio un grupo -- el
+--     caso de fn_matricula_directa_crear -- el grupo determina el periodo
+--     sin ambiguedad, y esta funcion se limita a verificar que ese periodo
+--     sea el de la sede/jornada/año pedidos, que sea visible para el
+--     solicitante y que la inscripcion ya haya cerrado.
+--   * sin p_fk_tgrupo (el caso del front, que todavia no tiene grupo porque
+--     justamente lo esta por listar): orden determinista -- gana el periodo
+--     con la FECHA_LIMITE_MATRICULA mas reciente y, a igualdad, el PK mas
+--     alto; es decir, el ultimo configurado.
 --
 -- Uso previsto (formulario "Agregar estudiante"): tras elegir sede y
 -- jornada (ver fn_jornadas_activas_por_sede), el front resuelve el
@@ -17,10 +34,16 @@
 -- periodo.
 -- =============================================================================
 
+-- CREATE OR REPLACE no puede agregar un parametro: dejaria viva la version
+-- de 3 argumentos y una llamada con 3 quedaria ambigua entre ambas. Se
+-- elimina la firma anterior explicitamente.
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_resolver_matricula(BIGINT, BIGINT, BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_resolver_matricula(
     p_fk_sede         BIGINT,
     p_fk_tlv_jornada  BIGINT,
-    p_pk_usuario      BIGINT DEFAULT NULL
+    p_pk_usuario      BIGINT DEFAULT NULL,
+    p_fk_tgrupo       BIGINT DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -85,7 +108,33 @@ BEGIN
                     AND f.FK_TUSUARIO = p_pk_usuario
              )
            )
+       -- Desambiguacion por grupo: si el llamador ya eligio un grupo, el
+       -- periodo buscado es el del grupo y no hay nada que elegir.
+       AND (
+             p_fk_tgrupo IS NULL
+             OR pa.PK_TPERIODO_ACADEMICO = (
+                    SELECT g.FK_TPERIODO_ACADEMICO
+                      FROM academico_test.TGRUPO gr
+                      JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+                     WHERE gr.PK_TGRUPO = p_fk_tgrupo
+                       AND gr.ACTIVE    = TRUE
+                       AND g.ACTIVE     = TRUE
+                )
+           )
+     -- Desempate determinista para el caso sin grupo: el ultimo periodo
+     -- configurado para esa sede/jornada/año.
+     ORDER BY pa.FECHA_LIMITE_MATRICULA DESC, pa.PK_TPERIODO_ACADEMICO DESC
      LIMIT 1;
+
+    IF v_pk_periodo IS NULL AND p_fk_tgrupo IS NOT NULL THEN
+        -- Con grupo dado, "no hay periodo" significa en realidad que el
+        -- grupo cuelga de otro periodo (otra sede, otra jornada, otro año)
+        -- o que su grado/grupo esta inactivo. Mensaje propio para no
+        -- confundirlo con una sede sin periodo configurado.
+        RAISE EXCEPTION 'El grupo indicado no pertenece al periodo academico vigente de la sede y jornada dadas'
+            USING ERRCODE = '22023',
+                  HINT    = 'p_fk_tgrupo debe pertenecer (via TGRADO) a un periodo activo de p_fk_sede/p_fk_tlv_jornada en el año en curso';
+    END IF;
 
     IF v_pk_periodo IS NULL THEN
         RAISE EXCEPTION 'No existe un periodo academico activo para la sede indicada, esa jornada y el año actual (%)',

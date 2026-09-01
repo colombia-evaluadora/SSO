@@ -25,10 +25,10 @@
 -- Orden de ejecucion (cada paso puede abortar todo -- una sola funcion,
 -- una sola transaccion, atomico de punta a punta):
 --   1. Gate temprano (falla rapido, antes de tocar nada).
---   2. Resolver el periodo academico vigente + validar que el periodo de
---      inscripcion ya cerro (fn_periodo_resolver_matricula).
---   3. Verificar que el grupo elegido pertenece a ESE periodo (evita
---      mezclar sede/jornada del paso 2 con un grupo de otro periodo).
+--   2. Identificar el periodo academico del que cuelga el grupo elegido.
+--   3. Validar ese periodo contra (sede, jornada, año actual), el alcance
+--      del solicitante y el cierre del periodo de inscripcion
+--      (fn_periodo_resolver_matricula, al que se le pasa el grupo).
 --   4. Validar cupo disponible en el grupo (fn_matricula_validar_cupo).
 --   5. Resolver o crear el TESTUDIANTE (reusa si el usuario ya tiene uno
 --      activo -- p.ej. si el autocompletado por documento ya lo
@@ -200,19 +200,16 @@ BEGIN
     END IF;
 
     -- -----------------------------------------------------------------
-    -- 2. Resolver el periodo academico vigente + validar que ya cerro el
-    --    periodo de inscripcion (matricula directa va DESPUES de ese
-    --    cierre -- ver V162).
-    -- -----------------------------------------------------------------
-    v_pk_periodo := academico_test.fn_periodo_resolver_matricula(
-        p_fk_sede := p_fk_sede,
-        p_fk_tlv_jornada := p_fk_tlv_jornada,
-        p_pk_usuario := p_pk_usuario_solicitante
-    );
-
-    -- -----------------------------------------------------------------
-    -- 3. El grupo elegido debe pertenecer a ESE periodo -- evita mezclar
-    --    la sede/jornada del paso 2 con un grupo de otro periodo/sede.
+    -- 2. Identificar el periodo academico del que cuelga el grupo elegido.
+    --
+    --    REV -- este paso iba DESPUES de resolver el periodo por
+    --    (sede, jornada) y se limitaba a comparar. No alcanzaba: una misma
+    --    sede/jornada puede tener mas de un periodo activo en el año en
+    --    curso (ver V162), con lo cual el "periodo resuelto" no era
+    --    determinista y el alta fallaba de forma intermitente aunque el
+    --    grupo fuera correcto. Ahora el grupo -- que el usuario ya eligio
+    --    explicitamente -- es lo que fija el periodo, y el resolver pasa a
+    --    VALIDAR ese periodo en vez de adivinarlo.
     -- -----------------------------------------------------------------
     SELECT g.FK_TPERIODO_ACADEMICO
       INTO v_fk_periodo_del_grupo
@@ -222,7 +219,29 @@ BEGIN
        AND gr.ACTIVE     = TRUE
        AND g.ACTIVE      = TRUE;
 
-    IF v_fk_periodo_del_grupo IS NULL OR v_fk_periodo_del_grupo <> v_pk_periodo THEN
+    IF v_fk_periodo_del_grupo IS NULL THEN
+        RAISE EXCEPTION 'No se encontro un grupo activo con ese identificador'
+            USING ERRCODE = '23503',
+                  HINT    = 'p_fk_tgrupo debe apuntar a un TGRUPO activo con TGRADO activo';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 3. Ese periodo debe ser un periodo vigente de (sede, jornada, año
+    --    actual), visible para el solicitante, y con el periodo de
+    --    inscripcion ya cerrado -- la matricula directa va DESPUES de ese
+    --    cierre (ver V162). Las tres cosas las hace el resolver; se le
+    --    pasa el grupo para que no tenga que desambiguar.
+    -- -----------------------------------------------------------------
+    v_pk_periodo := academico_test.fn_periodo_resolver_matricula(
+        p_fk_sede := p_fk_sede,
+        p_fk_tlv_jornada := p_fk_tlv_jornada,
+        p_pk_usuario := p_pk_usuario_solicitante,
+        p_fk_tgrupo := p_fk_tgrupo
+    );
+
+    -- Asercion defensiva: con p_fk_tgrupo el resolver solo puede devolver
+    -- el periodo del grupo o levantar excepcion.
+    IF v_fk_periodo_del_grupo <> v_pk_periodo THEN
         RAISE EXCEPTION 'El grupo indicado no pertenece al periodo academico resuelto para la sede y jornada dadas'
             USING ERRCODE = '22023',
                   HINT    = 'p_fk_tgrupo debe pertenecer (via TGRADO) al periodo vigente de p_fk_sede/p_fk_tlv_jornada';
@@ -326,6 +345,21 @@ BEGIN
     --    si la persona ya tenia ese permiso (p.ej. un acudiente que ya
     --    era acudiente de otro hijo en la misma sede y jornada, o una
     --    rematricula), no se duplica.
+    --
+    --    REV -- TSEDE_USUARIO tiene un SEGUNDO indice unico parcial que
+    --    esta version no contemplaba:
+    --
+    --      uk_tsede_usuario_2 (fk_tsede, fk_trol, fk_tusuario, orden)
+    --
+    --    Con ORDEN fijo en 0, una persona que ya tenia un permiso en
+    --    esta sede y rol pero en OTRA JORNADA pasa el primer indice (la
+    --    jornada cambia) y viola el segundo (misma terna, ORDEN=0 otra
+    --    vez). El caso salio a la luz en V175 al promover a un grupo de
+    --    otra jornada; aca es mucho menos alcanzable -- lo tapa la
+    --    validacion de "una matricula activa por año lectivo" -- pero es
+    --    la misma falla, asi que se cierra igual: ORDEN pasa a ser el
+    --    siguiente disponible para esa terna. Mismo calculo que
+    --    fn_matricula_mover_lote.
     -- -----------------------------------------------------------------
     INSERT INTO academico_test.TSEDE_USUARIO (
         FK_TSEDE, FK_TROL, FK_TUSUARIO, FK_TLV_JORNADA,
@@ -333,7 +367,13 @@ BEGIN
         CREATED_BY, CREATED_AT, ACTIVE
     )
     SELECT p_fk_sede, v.rol, v.usuario, p_fk_tlv_jornada,
-           0, 'ACTIVO', 0,
+           COALESCE((SELECT MAX(su2.ORDEN) + 1
+                       FROM academico_test.TSEDE_USUARIO su2
+                      WHERE su2.FK_TSEDE    = p_fk_sede
+                        AND su2.FK_TROL     = v.rol
+                        AND su2.FK_TUSUARIO = v.usuario
+                        AND su2.ACTIVE      = TRUE), 0),
+           'ACTIVO', 0,
            p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
       FROM (VALUES
                 (c_fk_trol_estudiante, p_pk_usuario_estudiante),
@@ -854,5 +894,559 @@ BEGIN
                 RETURN NEXT;
         END;
     END LOOP;
+END;
+$function$;
+
+-- =============================================================================
+-- fn_matricula_retirar -- retiro de una matricula: cambio de estado
+-- "Cursando" -> "Retirado", mas el registro del retiro en
+-- TRETIRO_MATRICULA (fecha, hora y usuario responsable).
+--
+-- NO es una baja: la fila y toda su informacion historica (socioeconomico,
+-- archivos, vinculos del nucleo familiar, permisos de sede) quedan intactos.
+-- De TMATRICULA solo cambia FK_TLV_ESTADO_MATRICULA.
+--
+-- Unica transicion permitida: Cursando -> Retirado. Si la matricula esta en
+-- cualquier otro estado (Aprobado, Retirado ya, Trasladado, Graduado...) se
+-- aborta nombrando el estado actual, para que el caller sepa por que.
+--
+-- Los dos estados se resuelven por VALOR contra TLISTA_VALOR
+-- (CATEGORIA='ESTADO_MATRICULA', '1'=Cursando, '4'=Retirado) y no por PK
+-- hardcodeado -- mismo criterio que fn_matricula_directa_crear.
+--
+-- ---------------------------------------------------------------------------
+-- GATE: igual al del resto del modulo PERO SIN LA RAMA DE SUPER-ADMIN
+-- ---------------------------------------------------------------------------
+-- A diferencia de crear/eliminar/consultar, aca NO se acepta a alguien solo
+-- por ser super-admin (fn_puede_afectar_establecimiento). El retiro es una
+-- decision administrativa del establecimiento sobre sus propios estudiantes,
+-- y se pidio explicitamente que un super-admin no pueda ejecutarla para
+-- evitar conflictos en el manejo de los datos de cada institucion.
+--
+-- Quedan entonces tres caminos, todos con vinculo REAL con la sede de la
+-- matricula: rector del EE (por FK), secretaria del EE (por FK), o jefe de
+-- sistema (rol 8) en alguna sede del EE. Un super-admin que ADEMAS sea
+-- rector/secretaria/jefe de sistema de ese EE si pasa -- entra por su vinculo
+-- con la institucion, no por su condicion de super-admin.
+--
+-- NOTA: esto lo deja inconsistente a proposito con las funciones ya
+-- existentes del modulo, donde el super-admin si tiene acceso. Cuando el
+-- validador de permisos dinamico este listo, esta funcion y las demas se
+-- adaptan a el y se unifica el criterio.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_retirar(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_tmatricula           BIGINT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_fk_establecimiento  BIGINT;
+    v_estado_actual       BIGINT;
+    v_estado_actual_nom   VARCHAR;
+    v_pk_cursando         BIGINT;
+    v_pk_retirado         BIGINT;
+    v_pk_retiro           BIGINT;
+    v_fecha_retiro        DATE;
+    v_hora_retiro         TIMESTAMP;
+BEGIN
+    -- -----------------------------------------------------------------
+    -- 1. Ubicar la matricula y su EE.
+    -- -----------------------------------------------------------------
+    SELECT s.FK_TESTABLECIMIENTO, m.FK_TLV_ESTADO_MATRICULA
+      INTO v_fk_establecimiento, v_estado_actual
+      FROM academico_test.TMATRICULA m
+      JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
+      JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa   ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s                 ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE m.PK_TMATRICULA = p_pk_tmatricula
+       AND m.ACTIVE        = TRUE
+       AND gr.ACTIVE       = TRUE
+       AND g.ACTIVE        = TRUE
+       AND pa.ACTIVE       = TRUE
+       AND s.ACTIVE        = TRUE;
+
+    IF v_fk_establecimiento IS NULL THEN
+        RAISE EXCEPTION 'No se encontro una matricula activa con ese identificador'
+            USING ERRCODE = '22023',
+                  HINT    = 'p_pk_tmatricula debe apuntar a un TMATRICULA activo, con grupo/grado/periodo/sede activos';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2. Gate -- SIN rama de super-admin (ver cabecera).
+    -- -----------------------------------------------------------------
+    IF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s
+            ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
+           AND s.ACTIVE              = TRUE
+           AND su.ACTIVE             = TRUE
+           AND su.FK_TROL            = 8
+           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para retirar esta matricula'
+            USING ERRCODE = '42501',
+                  HINT    = 'El retiro solo puede hacerlo el rector, la secretaria o el jefe de sistema del establecimiento de la matricula';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 3. Resolver los dos estados por VALOR.
+    -- -----------------------------------------------------------------
+    SELECT PK_LISTA_VALOR INTO v_pk_cursando
+      FROM academico_test.TLISTA_VALOR
+     WHERE CATEGORIA = 'ESTADO_MATRICULA' AND VALOR = '1' AND ACTIVE = TRUE;
+    SELECT PK_LISTA_VALOR INTO v_pk_retirado
+      FROM academico_test.TLISTA_VALOR
+     WHERE CATEGORIA = 'ESTADO_MATRICULA' AND VALOR = '4' AND ACTIVE = TRUE;
+
+    IF v_pk_cursando IS NULL OR v_pk_retirado IS NULL THEN
+        RAISE EXCEPTION 'El catalogo ESTADO_MATRICULA no tiene los estados requeridos (VALOR 1=Cursando, 4=Retirado)'
+            USING ERRCODE = '23503';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 4. Solo se puede retirar lo que esta Cursando.
+    -- -----------------------------------------------------------------
+    IF v_estado_actual IS DISTINCT FROM v_pk_cursando THEN
+        SELECT NOMBRE INTO v_estado_actual_nom
+          FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = v_estado_actual;
+
+        RAISE EXCEPTION 'Solo se puede retirar una matricula en estado "Cursando"; esta figura como "%"',
+            COALESCE(v_estado_actual_nom, 'sin estado')
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 5. Cambio de estado. Nada mas se toca: la matricula sigue ACTIVE y
+    --    conserva socioeconomico, archivos, nucleo familiar y permisos.
+    -- -----------------------------------------------------------------
+    UPDATE academico_test.TMATRICULA
+       SET FK_TLV_ESTADO_MATRICULA = v_pk_retirado,
+           MODIFIED_BY             = p_pk_usuario_solicitante::VARCHAR,
+           MODIFIED_AT             = CURRENT_TIMESTAMP
+     WHERE PK_TMATRICULA = p_pk_tmatricula;
+
+    -- -----------------------------------------------------------------
+    -- 6. Registro del retiro en TRETIRO_MATRICULA -- fecha, hora y usuario
+    --    responsable.
+    --
+    --    OJO con la hora: FECHA_RETIRO es DATE, o sea SOLO el dia, sin
+    --    hora. La hora exacta queda en CREATED_AT (timestamp), que es de
+    --    donde hay que leerla si el negocio la necesita. El usuario
+    --    responsable va en CREATED_BY, igual que en el resto del modulo.
+    --
+    --    MOTIVO_RETIRO y FK_TLV_TIPO_MOTIVO_RETIRO quedan en NULL: por
+    --    ahora no se captura el motivo (ambas columnas son nullable).
+    --    FECHA_REINTEGRO tambien -- esa la llenaria el reingreso.
+    --
+    --    El PK es IDENTITY, asi que no se pasa explicito.
+    -- -----------------------------------------------------------------
+    INSERT INTO academico_test.TRETIRO_MATRICULA (
+        FK_TMATRICULA, FECHA_RETIRO,
+        CREATED_BY, CREATED_AT, ACTIVE
+    ) VALUES (
+        p_pk_tmatricula, CURRENT_DATE,
+        p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
+    )
+    RETURNING PK_TRETIRO_MATRICULA, FECHA_RETIRO, CREATED_AT
+         INTO v_pk_retiro, v_fecha_retiro, v_hora_retiro;
+
+    RETURN jsonb_build_object(
+        'pkTmatricula',  p_pk_tmatricula,
+        'estadoAnterior', jsonb_build_object('id', v_pk_cursando, 'nombre', 'Cursando'),
+        'estadoNuevo',    jsonb_build_object('id', v_pk_retirado, 'nombre', 'Retirado'),
+        'retiro', jsonb_build_object(
+            'pkTretiroMatricula', v_pk_retiro,
+            'fecha',              v_fecha_retiro,
+            'hora',               v_hora_retiro,
+            'responsable',        p_pk_usuario_solicitante)
+    );
+END;
+$function$;
+
+-- =============================================================================
+-- fn_matricula_reingresar -- reingreso de una matricula retirada: cambio de
+-- estado "Retirado" -> "Cursando", y cierre del registro de retiro
+-- correspondiente (TRETIRO_MATRICULA.FECHA_REINTEGRO).
+--
+-- Contraparte exacta de fn_matricula_retirar: mismo gate, misma logica de
+-- transicion unica, mismos catalogos resueltos por VALOR. La unica transicion
+-- permitida es Retirado -> Cursando; cualquier otro estado aborta nombrando
+-- el actual.
+--
+-- No hay tabla propia de reingreso: se cierra el retiro llenando su
+-- FECHA_REINTEGRO. Se actualiza el registro ACTIVO MAS RECIENTE que aun no
+-- tenga FECHA_REINTEGRO -- no deberia haber mas de uno abierto a la vez, pero
+-- si los hubiera se cierra el ultimo, que es el que corresponde al estado
+-- actual de la matricula.
+--
+-- IMPORTANTE -- puede no haber ningun registro que cerrar, y eso NO es error:
+-- las 3.542 matriculas que ya estaban en "Retirado" antes de que existiera
+-- fn_matricula_retirar no tienen fila en TRETIRO_MATRICULA (la tabla estaba
+-- vacia). Para esas, el reingreso hace el cambio de estado igual y lo informa
+-- en el resultado con retiroCerrado = null.
+--
+-- GATE: identico a fn_matricula_retirar -- SIN rama de super-admin. Solo
+-- rector, secretaria o jefe de sistema del establecimiento de la matricula.
+-- Un super-admin que ademas tenga alguno de esos cargos en ese EE si pasa,
+-- por su vinculo con la institucion.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_reingresar(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_tmatricula           BIGINT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_fk_establecimiento  BIGINT;
+    v_estado_actual       BIGINT;
+    v_estado_actual_nom   VARCHAR;
+    v_pk_cursando         BIGINT;
+    v_pk_retirado         BIGINT;
+    v_pk_retiro           BIGINT;
+    v_fecha_reintegro     DATE;
+BEGIN
+    -- -----------------------------------------------------------------
+    -- 1. Ubicar la matricula y su EE.
+    -- -----------------------------------------------------------------
+    SELECT s.FK_TESTABLECIMIENTO, m.FK_TLV_ESTADO_MATRICULA
+      INTO v_fk_establecimiento, v_estado_actual
+      FROM academico_test.TMATRICULA m
+      JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
+      JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa   ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s                 ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE m.PK_TMATRICULA = p_pk_tmatricula
+       AND m.ACTIVE        = TRUE
+       AND gr.ACTIVE       = TRUE
+       AND g.ACTIVE        = TRUE
+       AND pa.ACTIVE       = TRUE
+       AND s.ACTIVE        = TRUE;
+
+    IF v_fk_establecimiento IS NULL THEN
+        RAISE EXCEPTION 'No se encontro una matricula activa con ese identificador'
+            USING ERRCODE = '22023',
+                  HINT    = 'p_pk_tmatricula debe apuntar a un TMATRICULA activo, con grupo/grado/periodo/sede activos';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2. Gate -- SIN rama de super-admin (ver cabecera).
+    -- -----------------------------------------------------------------
+    IF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s
+            ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
+           AND s.ACTIVE              = TRUE
+           AND su.ACTIVE             = TRUE
+           AND su.FK_TROL            = 8
+           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para reingresar esta matricula'
+            USING ERRCODE = '42501',
+                  HINT    = 'El reingreso solo puede hacerlo el rector, la secretaria o el jefe de sistema del establecimiento de la matricula';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 3. Resolver los dos estados por VALOR.
+    -- -----------------------------------------------------------------
+    SELECT PK_LISTA_VALOR INTO v_pk_cursando
+      FROM academico_test.TLISTA_VALOR
+     WHERE CATEGORIA = 'ESTADO_MATRICULA' AND VALOR = '1' AND ACTIVE = TRUE;
+    SELECT PK_LISTA_VALOR INTO v_pk_retirado
+      FROM academico_test.TLISTA_VALOR
+     WHERE CATEGORIA = 'ESTADO_MATRICULA' AND VALOR = '4' AND ACTIVE = TRUE;
+
+    IF v_pk_cursando IS NULL OR v_pk_retirado IS NULL THEN
+        RAISE EXCEPTION 'El catalogo ESTADO_MATRICULA no tiene los estados requeridos (VALOR 1=Cursando, 4=Retirado)'
+            USING ERRCODE = '23503';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 4. Solo se puede reingresar lo que esta Retirado.
+    -- -----------------------------------------------------------------
+    IF v_estado_actual IS DISTINCT FROM v_pk_retirado THEN
+        SELECT NOMBRE INTO v_estado_actual_nom
+          FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = v_estado_actual;
+
+        RAISE EXCEPTION 'Solo se puede reingresar una matricula en estado "Retirado"; esta figura como "%"',
+            COALESCE(v_estado_actual_nom, 'sin estado')
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 5. Cambio de estado.
+    -- -----------------------------------------------------------------
+    UPDATE academico_test.TMATRICULA
+       SET FK_TLV_ESTADO_MATRICULA = v_pk_cursando,
+           MODIFIED_BY             = p_pk_usuario_solicitante::VARCHAR,
+           MODIFIED_AT             = CURRENT_TIMESTAMP
+     WHERE PK_TMATRICULA = p_pk_tmatricula;
+
+    -- -----------------------------------------------------------------
+    -- 6. Cerrar el retiro abierto mas reciente, si lo hay.
+    --    ORDER BY CREATED_AT DESC + PK como desempate: dos retiros del
+    --    mismo instante (poco probable, pero el timestamp no es unico)
+    --    se resuelven por el PK, que si lo es.
+    -- -----------------------------------------------------------------
+    SELECT PK_TRETIRO_MATRICULA
+      INTO v_pk_retiro
+      FROM academico_test.TRETIRO_MATRICULA
+     WHERE FK_TMATRICULA    = p_pk_tmatricula
+       AND ACTIVE           = TRUE
+       AND FECHA_REINTEGRO IS NULL
+     ORDER BY CREATED_AT DESC, PK_TRETIRO_MATRICULA DESC
+     LIMIT 1;
+
+    IF v_pk_retiro IS NOT NULL THEN
+        UPDATE academico_test.TRETIRO_MATRICULA
+           SET FECHA_REINTEGRO = CURRENT_DATE,
+               MODIFIED_BY     = p_pk_usuario_solicitante::VARCHAR,
+               MODIFIED_AT     = CURRENT_TIMESTAMP
+         WHERE PK_TRETIRO_MATRICULA = v_pk_retiro
+        RETURNING FECHA_REINTEGRO INTO v_fecha_reintegro;
+    END IF;
+
+    RETURN jsonb_build_object(
+        'pkTmatricula',   p_pk_tmatricula,
+        'estadoAnterior', jsonb_build_object('id', v_pk_retirado, 'nombre', 'Retirado'),
+        'estadoNuevo',    jsonb_build_object('id', v_pk_cursando, 'nombre', 'Cursando'),
+        'retiroCerrado',  CASE WHEN v_pk_retiro IS NULL THEN NULL
+                               ELSE jsonb_build_object(
+                                   'pkTretiroMatricula', v_pk_retiro,
+                                   'fechaReintegro',     v_fecha_reintegro,
+                                   'responsable',        p_pk_usuario_solicitante)
+                          END
+    );
+END;
+$function$;
+
+-- =============================================================================
+-- fn_matricula_reactivar -- reactivacion de una matricula CERRADA por fin de
+-- ciclo, para corregir o completar informacion academica antes del cierre
+-- definitivo. Cambia el estado a "Cursando".
+--
+-- Se diferencia del reingreso (fn_matricula_reingresar) SOLO en los estados
+-- de origen: el reingreso atiende "Retirado" (el estudiante se fue), esta
+-- atiende los estados de cierre academico. Ninguna de las dos toca
+-- TRETIRO_MATRICULA aca -- reactivar no cierra ningun retiro porque no hubo
+-- retiro que cerrar.
+--
+-- ESTADOS DE ORIGEN PERMITIDOS (resueltos por VALOR, no por PK):
+--     '2'  Aprobado
+--     '3'  Reprobado
+--     '13' Promovido   -- creado en V174
+--     '14' Reubicado   -- creado en V174
+--
+-- REV -- la primera version usaba '6' "Promovido Anticipadamente" como
+-- sustituto de "Promovido", porque "Promovido" y "Reubicado" no existian en
+-- el catalogo (se busco en ESTADO_MATRICULA y en TODO TLISTA_VALOR). V174
+-- creo ambos como estados propios y la nueva app NO usa el anticipado, asi
+-- que '6' SALE de la lista: las 6 matriculas heredadas que hoy lo tienen no
+-- se pueden reactivar por esta via. Si el negocio pide cubrirlas, se suma
+-- '6' al array de abajo y no hace falta tocar nada mas.
+--
+-- Quedan FUERA los demas estados heredados: "Retirado" (4, tiene su propio
+-- endpoint de reingreso), "Graduado" (5), "Promovido Anticipadamente" (6),
+-- "Trasladado" (7), "Sin definir" (9), "Desertor" (10), "Esperando
+-- Aprobacion" (11) y "Rechazado" (12). El negocio todavia esta definiendo
+-- cuales de esos conserva la nueva version; ninguno se desactivo. A medida
+-- que se confirmen, entrar aca es agregar su VALOR al array.
+--
+-- Sin restriccion temporal: se puede reactivar una matricula de cualquier
+-- año lectivo, incluso cerrado. Asi se pidio explicitamente.
+--
+-- GATE: identico a retirar/reingresar -- SIN rama de super-admin.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_reactivar(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_tmatricula           BIGINT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_fk_establecimiento  BIGINT;
+    v_estado_actual       BIGINT;
+    v_estado_actual_nom   VARCHAR;
+    v_pk_cursando         BIGINT;
+    v_reactivables        BIGINT[];
+    v_permitidos_nom      TEXT;
+    -- Estados de cierre desde los que SI se puede volver a Cursando:
+    -- Aprobado, Reprobado, Promovido, Reubicado (ver cabecera).
+    c_valores_reactivables CONSTANT VARCHAR[] := ARRAY['2', '3', '13', '14'];
+BEGIN
+    -- -----------------------------------------------------------------
+    -- 1. Ubicar la matricula y su EE.
+    -- -----------------------------------------------------------------
+    SELECT s.FK_TESTABLECIMIENTO, m.FK_TLV_ESTADO_MATRICULA
+      INTO v_fk_establecimiento, v_estado_actual
+      FROM academico_test.TMATRICULA m
+      JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
+      JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa   ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s                 ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE m.PK_TMATRICULA = p_pk_tmatricula
+       AND m.ACTIVE        = TRUE
+       AND gr.ACTIVE       = TRUE
+       AND g.ACTIVE        = TRUE
+       AND pa.ACTIVE       = TRUE
+       AND s.ACTIVE        = TRUE;
+
+    IF v_fk_establecimiento IS NULL THEN
+        RAISE EXCEPTION 'No se encontro una matricula activa con ese identificador'
+            USING ERRCODE = '22023',
+                  HINT    = 'p_pk_tmatricula debe apuntar a un TMATRICULA activo, con grupo/grado/periodo/sede activos';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2. Gate -- SIN rama de super-admin (ver cabecera).
+    -- -----------------------------------------------------------------
+    IF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TESTABLECIMIENTO e
+            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
+         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
+           AND e.ACTIVE             = TRUE
+           AND f.ACTIVE             = TRUE
+           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s
+            ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
+           AND s.ACTIVE              = TRUE
+           AND su.ACTIVE             = TRUE
+           AND su.FK_TROL            = 8
+           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
+    ) THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para reactivar esta matricula'
+            USING ERRCODE = '42501',
+                  HINT    = 'La reactivacion solo puede hacerla el rector, la secretaria o el jefe de sistema del establecimiento de la matricula';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 3. Resolver el estado destino y los de origen permitidos, por VALOR.
+    -- -----------------------------------------------------------------
+    SELECT PK_LISTA_VALOR INTO v_pk_cursando
+      FROM academico_test.TLISTA_VALOR
+     WHERE CATEGORIA = 'ESTADO_MATRICULA' AND VALOR = '1' AND ACTIVE = TRUE;
+
+    SELECT ARRAY_AGG(PK_LISTA_VALOR), STRING_AGG(NOMBRE, ', ' ORDER BY VALOR::INT)
+      INTO v_reactivables, v_permitidos_nom
+      FROM academico_test.TLISTA_VALOR
+     WHERE CATEGORIA = 'ESTADO_MATRICULA'
+       AND VALOR = ANY(c_valores_reactivables)
+       AND ACTIVE = TRUE;
+
+    IF v_pk_cursando IS NULL OR v_reactivables IS NULL OR CARDINALITY(v_reactivables) = 0 THEN
+        RAISE EXCEPTION 'El catalogo ESTADO_MATRICULA no tiene los estados requeridos para reactivar'
+            USING ERRCODE = '23503';
+    END IF;
+
+    -- Nombre del estado actual: se resuelve SIEMPRE, no solo en el camino
+    -- de error -- tambien se devuelve en el resultado como estadoAnterior.
+    SELECT NOMBRE INTO v_estado_actual_nom
+      FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = v_estado_actual;
+
+    -- -----------------------------------------------------------------
+    -- 4. El estado actual debe ser uno de los reactivables.
+    -- -----------------------------------------------------------------
+    IF NOT (v_estado_actual = ANY(v_reactivables)) THEN
+        RAISE EXCEPTION 'Solo se puede reactivar una matricula en estado %; esta figura como "%"',
+            v_permitidos_nom, COALESCE(v_estado_actual_nom, 'sin estado')
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 5. Cambio de estado. Igual que retirar/reingresar, la matricula
+    --    conserva todo lo demas intacto.
+    -- -----------------------------------------------------------------
+    UPDATE academico_test.TMATRICULA
+       SET FK_TLV_ESTADO_MATRICULA = v_pk_cursando,
+           MODIFIED_BY             = p_pk_usuario_solicitante::VARCHAR,
+           MODIFIED_AT             = CURRENT_TIMESTAMP
+     WHERE PK_TMATRICULA = p_pk_tmatricula;
+
+    RETURN jsonb_build_object(
+        'pkTmatricula',   p_pk_tmatricula,
+        'estadoAnterior', jsonb_build_object('id', v_estado_actual, 'nombre', v_estado_actual_nom),
+        'estadoNuevo',    jsonb_build_object('id', v_pk_cursando,   'nombre', 'Cursando'),
+        'responsable',    p_pk_usuario_solicitante
+    );
 END;
 $function$;
