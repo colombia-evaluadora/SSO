@@ -522,6 +522,7 @@ RETURNS TABLE (
     descripcion                VARCHAR,
     nivel_educativo            VARCHAR,
     instrumento                VARCHAR,
+    instrumento_info_adicional VARCHAR,
     enfoque_pedagogico         VARCHAR,
     tipo_evaluacion            VARCHAR,
     estado                     VARCHAR,
@@ -543,6 +544,7 @@ BEGIN
            rc.DESCRIPCION,
            ne.NOMBRE,
            rc.INSTRUMENTO,
+           rc.INSTRUMENTO_INFO_ADICIONAL,
            lve.NOMBRE,
            lvt.NOMBRE,
            rc.ESTADO::VARCHAR,
@@ -585,7 +587,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_refcurr_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BOOLEAN, VARCHAR, BOOLEAN, INT, INT)
-    IS 'Pagina de TREFERENTE_CURRICULAR con filtros (search sobre NOMBRE/DESCRIPCION, nivel educativo, enfoque, tipo de evaluacion, estado) y orden (nombre|nivel_educativo|instrumento|estado). total_count via COUNT(*) OVER() para totalCount/pageCount. Gate VER (capability, sin scope: catalogo global). p_incluir_inactivos=FALSE por defecto (solo ACTIVE=TRUE).';
+    IS 'Pagina de TREFERENTE_CURRICULAR con filtros (search sobre NOMBRE/DESCRIPCION, nivel educativo, enfoque, tipo de evaluacion, estado) y orden (nombre|nivel_educativo|instrumento|estado). Devuelve instrumento + instrumento_info_adicional (texto complementario del instrumento). total_count via COUNT(*) OVER() para totalCount/pageCount. Gate VER (capability, sin scope: catalogo global). p_incluir_inactivos=FALSE por defecto (solo ACTIVE=TRUE).';
 
 -- ===========================================================================
 -- fn_refcurr_buscar_por_pk — detalle (pestaña "Información general").
