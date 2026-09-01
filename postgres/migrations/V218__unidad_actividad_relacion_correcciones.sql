@@ -19,9 +19,12 @@
 -- Depende de (se aplica antes por orden de version de Flyway):
 --   * V22 — TUNIDAD, TACTIVIDAD, TASIGNATURA, TUSUARIO.
 --
--- Estilo: DDL idempotente (IF [NOT] EXISTS / DROP ... IF EXISTS), sin
--- prefijo de esquema (search_path), igual que V22.
+-- Estilo: DDL idempotente (IF [NOT] EXISTS / DROP ... IF EXISTS). El
+-- search_path se fija aqui (cada migracion corre en su propia transaccion,
+-- el SET de V22 no persiste).
 -- ===========================================================================
+
+SET search_path TO academico_test, public;
 
 -- ---------------------------------------------------------------------------
 -- 1. TACTIVIDAD.FK_TASIGNATURA

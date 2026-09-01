@@ -45,6 +45,8 @@
 -- (api/eval-col/...) hasta reiniciar el contenedor query-service-eval-col.
 -- =============================================================================
 
+SET search_path TO public;
+
 INSERT INTO public.query (
     uuid, query, type, public_end, captcha, microservice_id,
     path_template, execution_mode, http_method, param_types, detail
