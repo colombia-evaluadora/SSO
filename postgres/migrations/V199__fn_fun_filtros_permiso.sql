@@ -135,63 +135,14 @@ BEGIN
     END IF;
 
     -- =====================================================================
-    -- 0. Gate de autorizacion -- copiado de fn_fun_permisos_actualizar
-    --    (V51): "union de EE accesibles" + coordinador de sede.
+    -- 0. Gate de autorizacion (CU-86e2w4xdt) -- una sola llamada reemplaza
+    --    el bloque "union de EE accesibles" + coordinador de sede que
+    --    estaba copiado inline: bypass super-admin + capability 'EDITAR'
+    --    sobre el menu FUNCIONARIOS (TROL_MENU menos TUSUARIO_ROL_PERMISO)
+    --    + scope sobre el funcionario objetivo + rango de rol.
     -- =====================================================================
-    v_es_super := academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante);
-
-    IF NOT v_es_super THEN
-        WITH ee_accesibles AS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        ),
-        sedes_coordinador AS (
-            SELECT su.FK_TSEDE
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        )
-        SELECT EXISTS (
-            SELECT 1
-              FROM academico_test.TESTABLECIMIENTO e
-             WHERE e.ACTIVE = TRUE
-               AND e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-               AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
-            UNION ALL
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE su.FK_TUSUARIO = v_pk_usuario
-               AND su.ACTIVE      = TRUE
-               AND s.ACTIVE       = TRUE
-               AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-               AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
-            UNION ALL
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-             WHERE su.FK_TUSUARIO = v_pk_usuario
-               AND su.ACTIVE      = TRUE
-               AND su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador)
-               AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
-        ) INTO v_visible;
-
-        IF NOT v_visible THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
-    END IF;
+    PERFORM academico_test.fn_assert_permiso_funcionario(
+        p_pk_usuario_solicitante, 'EDITAR', p_pk_funcionario);
 
     -- =====================================================================
     -- 2. Validacion estructural de p_filtros.
@@ -466,63 +417,11 @@ BEGIN
             USING ERRCODE = 'P0002';
     END IF;
 
-    -- 0. Gate -- copiado de fn_fun_permisos_actualizar (V51).
-    v_es_super := academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante);
-
-    IF NOT v_es_super THEN
-        WITH ee_accesibles AS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        ),
-        sedes_coordinador AS (
-            SELECT su.FK_TSEDE
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        )
-        SELECT EXISTS (
-            SELECT 1
-              FROM academico_test.TESTABLECIMIENTO e
-             WHERE e.ACTIVE = TRUE
-               AND e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-               AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
-            UNION ALL
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE su.FK_TUSUARIO = v_pk_usuario
-               AND su.ACTIVE      = TRUE
-               AND s.ACTIVE       = TRUE
-               AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-               AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
-            UNION ALL
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-             WHERE su.FK_TUSUARIO = v_pk_usuario
-               AND su.ACTIVE      = TRUE
-               -- alias explicito: la funcion tiene un OUT param fk_tsede que
-               -- haria ambiguo un `SELECT FK_TSEDE` a secas.
-               AND su.FK_TSEDE IN (SELECT sc.FK_TSEDE FROM sedes_coordinador sc)
-               AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
-        ) INTO v_visible;
-
-        IF NOT v_visible THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
-    END IF;
+    -- 0. Gate (CU-86e2w4xdt): capability 'VER' sobre el menu FUNCIONARIOS +
+    --    scope sobre el funcionario objetivo + rango de rol. Una sola llamada
+    --    reemplaza el bloque "union de EE accesibles" copiado inline.
+    PERFORM academico_test.fn_assert_permiso_funcionario(
+        p_pk_usuario_solicitante, 'VER', p_pk_funcionario);
 
     -- 2. Filas activas, resueltas a nombres.
     RETURN QUERY

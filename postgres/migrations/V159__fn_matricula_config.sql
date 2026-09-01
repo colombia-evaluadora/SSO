@@ -47,7 +47,8 @@
 --      de permisos. Crea (o reutiliza) la config del EE y siembra un
 --      TMATRICULA_VALOR por cada campo activo copiando *_DEFECTO. Idempotente.
 --   4. fn_matricula_config_crear(usuario, fk_est): API con gate
---      (fn_puede_afectar_establecimiento). Falla 23505 si el EE ya tiene
+--      (capability CREAR sobre el menu MATRICULA, fn_assert_permiso_seccion
+--      de V29). Falla 23505 si el EE ya tiene
 --      config. Delega en el motor interno.
 --   5. fn_matricula_config_actualizar(usuario, fk_est, valores JSONB): con
 --      gate. Upsert de REQUERIDO/VISIBLE por campo. Autocrea la config si
@@ -130,12 +131,18 @@ UPDATE TMATRICULA_CAMPO
         'Grado',
         'Grupo',
         'Estado de la matricula',
+        'Tipo de documento del estudiante',
         'Documento estudiante',
         'Nombre del estudiante',
         'Primer apellido del estudiante',
         'Genero del estudiante',
         'Fecha de nacimiento',
-        'Parentesco'
+        'Parentesco',
+        'Nombre del acudiente',
+        'Primer apellido del acudiente',
+        'Tipo de documento del acudiente',
+        'Documento del acudiente',
+        'Email acudiente'
    )
    AND EDITABLE <> 'N';
 
@@ -216,10 +223,10 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- CU-86e2w4xdt: capability 'CREAR' sobre el menu MATRICULA; scope a
+    -- nivel establecimiento (la config es una por EE, sin sede/jornada).
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'MATRICULA', 'CREAR', p_fk_establecimiento);
 
     IF p_fk_establecimiento IS NULL OR p_fk_establecimiento <= 0 THEN
         RAISE EXCEPTION 'p_fk_establecimiento es obligatorio y debe ser > 0'
@@ -258,7 +265,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_matricula_config_crear(BIGINT, BIGINT) IS
-    'Crea la configuracion de matricula de un establecimiento. Requiere p_pk_usuario_solicitante con permiso de establecimiento (fn_puede_afectar_establecimiento). Falla 23505 si el EE ya tiene config (una por EE, U_TMATRICULA_CONFIG_1) -- en ese caso usar fn_matricula_config_actualizar. Delega el trabajo real en fn_matricula_config_crear_interno. Retorna PK_MATRICULA_CONFIG.';
+    'Crea la configuracion de matricula de un establecimiento. Requiere capability ''CREAR'' sobre el menu MATRICULA (fn_assert_permiso_seccion, V29; el super admin la configura via TROL_MENU/TUSUARIO_ROL_PERMISO), scope a nivel establecimiento. Falla 23505 si el EE ya tiene config (una por EE, U_TMATRICULA_CONFIG_1) -- en ese caso usar fn_matricula_config_actualizar. Delega el trabajo real en fn_matricula_config_crear_interno. Retorna PK_MATRICULA_CONFIG.';
 
 -- ---------------------------------------------------------------------------
 -- 5) fn_matricula_config_actualizar -- upsert de REQUERIDO/VISIBLE por campo.
@@ -295,10 +302,10 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- CU-86e2w4xdt: capability 'EDITAR' sobre el menu MATRICULA; scope a
+    -- nivel establecimiento (la config es una por EE, sin sede/jornada).
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'MATRICULA', 'EDITAR', p_fk_establecimiento);
 
     IF p_fk_establecimiento IS NULL OR p_fk_establecimiento <= 0 THEN
         RAISE EXCEPTION 'p_fk_establecimiento es obligatorio y debe ser > 0'
@@ -380,7 +387,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_matricula_config_actualizar(BIGINT, BIGINT, JSONB) IS
-    'Actualiza REQUERIDO/VISIBLE de campos en la configuracion de matricula de un establecimiento. Requiere permiso de establecimiento (fn_puede_afectar_establecimiento). p_valores: arreglo JSON de { fk_campo, requerido?, visible? } (S/N); si falta requerido o visible en un elemento, esa columna no se toca. Upsert por U_TMATRICULA_VALOR_1 (config, campo). Los campos EDITABLE=''N'' quedan siempre en S/S por el trigger trg_matricula_valor_no_editable. Autocrea la config si no existiera (invariante: una por EE). Retorna PK_MATRICULA_CONFIG.';
+    'Actualiza REQUERIDO/VISIBLE de campos en la configuracion de matricula de un establecimiento. Requiere capability ''EDITAR'' sobre el menu MATRICULA (fn_assert_permiso_seccion, V29), scope a nivel establecimiento. p_valores: arreglo JSON de { fk_campo, requerido?, visible? } (S/N); si falta requerido o visible en un elemento, esa columna no se toca. Upsert por U_TMATRICULA_VALOR_1 (config, campo). Los campos EDITABLE=''N'' quedan siempre en S/S por el trigger trg_matricula_valor_no_editable. Autocrea la config si no existiera (invariante: una por EE). Retorna PK_MATRICULA_CONFIG.';
 
 -- ---------------------------------------------------------------------------
 -- 6) Candado de campos no editables.

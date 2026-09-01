@@ -9,13 +9,27 @@
 SET search_path TO academico_test, public;
 
 -- ---------------------------------------------------------------------------
--- Helpers de alcance por rol reutilizables (usados por V40-V46). Se apoyan en
--- los helpers definidos en V37 (fn_periodo_usuario_puede_gestionar / _escribir).
+-- Helpers de alcance por rol reutilizables (usados por V40-V46 y por V100/
+-- V101/V102/V193).
 --   fn_periodo_establecimiento(periodo) -> establecimiento dueño del periodo.
---   fn_periodo_gate_escritura(usuario, establecimiento) -> gate grueso (algun
---     rol de gestion) + fino (el establecimiento debe estar en su alcance).
---     Si el establecimiento llega NULL (entidad inexistente) solo aplica el
---     grueso y deja que cada funcion lance su propio error de existencia.
+--   fn_periodo_sede(periodo)            -> TPERIODO_ACADEMICO.FK_TSEDE.
+--   fn_periodo_jornada(periodo)         -> TPERIODO_ACADEMICO.FK_TLV_JORNADA.
+--   fn_periodo_gate_escritura(usuario, establecimiento [, sede, jornada, accion])
+--     -> gate de ESCRITURA de toda la cascada academica.
+--
+-- CU-86e2w4xdt (2026-08): fn_periodo_gate_escritura deja de autorizar por
+--   listas fijas de FK_TROL (fn_periodo_usuario_puede_gestionar / _escribir)
+--   y pasa a ser un wrapper de UNA LINEA sobre fn_assert_permiso_seccion
+--   (V29), menu 'PERIODOS_ACADEMICOS': capability configurable por el super
+--   admin via TROL_MENU/TUSUARIO_ROL_PERMISO + scope por categoria de rol
+--   (nivel 1 territorial = todos los EE; nivel 2 = fn_usuario_ee_accesibles;
+--   nivel 3 = par (sede, jornada) en fn_usuario_sedes_jornadas_accesibles) +
+--   bypass del SUPER_ADMIN. La firma posicional vieja (usuario, EE) se
+--   conserva: sede/jornada/accion se anaden AL FINAL con DEFAULT, asi que
+--   los ~45 call sites de 2 argumentos de V40/V103/V104..V109 siguen
+--   compilando sin tocarlos (FALLO SEGURO: sin sede+jornada, un usuario de
+--   nivel 3 no satisface el scope y se le DENIEGA). Ver
+--   docs/gate-permisos-por-menu-analysis.md.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_establecimiento(p_fk_periodo BIGINT)
 RETURNS BIGINT LANGUAGE sql STABLE AS $$
@@ -25,22 +39,172 @@ RETURNS BIGINT LANGUAGE sql STABLE AS $$
      WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo;
 $$;
 
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_sede(p_fk_periodo BIGINT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT pa.FK_TSEDE
+      FROM academico_test.TPERIODO_ACADEMICO pa
+     WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_jornada(p_fk_periodo BIGINT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT pa.FK_TLV_JORNADA
+      FROM academico_test.TPERIODO_ACADEMICO pa
+     WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_periodo_sede(BIGINT)
+    IS 'FK_TSEDE del periodo academico (NULL si no existe). Para pasar el par (sede, jornada) a fn_periodo_gate_escritura, que es lo que el scope de nivel 3 (ADMINISTRATIVOS_SEDES) necesita.';
+COMMENT ON FUNCTION academico_test.fn_periodo_jornada(BIGINT)
+    IS 'FK_TLV_JORNADA del periodo academico (NULL si no existe). Todo lo que cuelga de un periodo hereda su jornada.';
+
+-- El DROP de la firma vieja (BIGINT, BIGINT) es obligatorio: pasa de 2 a 5
+-- parametros; sin el, la variante vieja sobreviviria y toda llamada de 2
+-- argumentos quedaria ambigua (42725 "function is not unique").
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_gate_escritura(BIGINT, BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_gate_escritura(
-    p_pk_usuario BIGINT, p_fk_establecimiento BIGINT
+    p_pk_usuario          BIGINT,
+    p_fk_establecimiento  BIGINT,
+    p_fk_tsede            BIGINT  DEFAULT NULL,
+    p_fk_tlv_jornada      BIGINT  DEFAULT NULL,
+    p_accion              VARCHAR DEFAULT 'EDITAR'
 )
-RETURNS VOID LANGUAGE plpgsql AS $$
+RETURNS VOID LANGUAGE plpgsql STABLE AS $$
 BEGIN
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
-    IF p_fk_establecimiento IS NOT NULL
-       AND NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario, p_fk_establecimiento) THEN
-        RAISE EXCEPTION 'El usuario no puede gestionar datos academicos de este establecimiento'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario, 'PERIODOS_ACADEMICOS', p_accion,
+        p_fk_establecimiento, p_fk_tsede, p_fk_tlv_jornada);
 END;
 $$;
+
+COMMENT ON FUNCTION academico_test.fn_periodo_gate_escritura(BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR)
+    IS 'Gate de ESCRITURA de la cascada academica (areas, asignaturas, enfasis, criterios, escalas, grados, grupos, planes, horarios, asignaciones) y de periodos / periodos de evaluacion / descansos. Wrapper de una linea sobre fn_assert_permiso_seccion (V29), menu ''PERIODOS_ACADEMICOS''. CAPABILITY: TROL_MENU concede / TUSUARIO_ROL_PERMISO recorta. SCOPE: nivel 1 territorial = todos los EE; nivel 2 = fn_usuario_ee_accesibles; nivel 3 = par (sede, jornada) en fn_usuario_sedes_jornadas_accesibles. BYPASS: SUPER_ADMIN. Ya NO usa fn_periodo_usuario_puede_gestionar / _puede_escribir ni listas de FK_TROL. Firma posicional vieja (usuario, EE) conservada; p_fk_tsede/p_fk_tlv_jornada/p_accion al final con DEFAULT. FALLO SEGURO: sin sede+jornada un usuario de nivel 3 no satisface el scope y se le deniega. Con los tres NULL solo se exige capability (bulk_delete).';
+
+-- ---------------------------------------------------------------------------
+-- Helpers de alcance de MATRICULA (CU-86e2w4xdt). La matricula cuelga de un
+-- grupo (TMATRICULA.FK_TGRUPO -> TGRUPO.FK_TGRADO -> TGRADO.FK_TPERIODO_ACADEMICO),
+-- y de ahi hereda sede+jornada+EE igual que las areas/asignaturas del periodo.
+-- Se colocan aqui (V40) para que el modulo de matricula (V159-V168, V200),
+-- muy posterior, los tenga disponibles. Referencian solo tablas de V22
+-- (TMATRICULA/TGRUPO/TGRADO), asi que son LANGUAGE sql sin problema.
+--   fn_grupo_periodo(grupo)         -> periodo academico del grupo.
+--   fn_grupo_jornada(grupo)         -> TGRUPO.FK_TLV_JORNADA (la del grupo, no
+--                                      la del periodo: es la autoritativa para
+--                                      esa matricula, ver u_tgrupo_1).
+--   fn_grupo_establecimiento(grupo) -> EE dueño (grupo -> grado -> periodo -> sede).
+--   fn_matricula_grupo(matricula)   -> TMATRICULA.FK_TGRUPO.
+--   fn_matricula_gate_escritura(usuario, grupo [, accion]) -> gate de la
+--     seccion Matricula: wrapper de una linea sobre fn_assert_permiso_seccion
+--     (V29), menu 'MATRICULA'. Mismo modelo capability + scope que
+--     fn_periodo_gate_escritura. Con p_fk_tgrupo NULL solo exige capability.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_grupo_periodo(p_fk_tgrupo BIGINT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT g.FK_TPERIODO_ACADEMICO
+      FROM academico_test.TGRUPO gr
+      JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+     WHERE gr.PK_TGRUPO = p_fk_tgrupo;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_grupo_jornada(p_fk_tgrupo BIGINT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT gr.FK_TLV_JORNADA
+      FROM academico_test.TGRUPO gr
+     WHERE gr.PK_TGRUPO = p_fk_tgrupo;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_grupo_establecimiento(p_fk_tgrupo BIGINT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT academico_test.fn_periodo_establecimiento(academico_test.fn_grupo_periodo(p_fk_tgrupo));
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_grupo(p_fk_tmatricula BIGINT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT m.FK_TGRUPO
+      FROM academico_test.TMATRICULA m
+     WHERE m.PK_TMATRICULA = p_fk_tmatricula;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_grupo_jornada(BIGINT)
+    IS 'FK_TLV_JORNADA del grupo (NULL si no existe). Es la jornada autoritativa de toda matricula de ese grupo (u_tgrupo_1 = fk_tgrado, fk_tlv_jornada, nombre).';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_gate_escritura(
+    p_pk_usuario  BIGINT,
+    p_fk_tgrupo   BIGINT,
+    p_accion      VARCHAR DEFAULT 'EDITAR'
+)
+RETURNS VOID LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario, 'MATRICULA', p_accion,
+        academico_test.fn_grupo_establecimiento(p_fk_tgrupo),
+        academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(p_fk_tgrupo)),
+        academico_test.fn_grupo_jornada(p_fk_tgrupo));
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_matricula_gate_escritura(BIGINT, BIGINT, VARCHAR)
+    IS 'Gate de ESCRITURA de la seccion Matricula (estudiante/acudiente al ligarlos, matricula, socioeconomico, archivos, matricula directa). Wrapper de una linea sobre fn_assert_permiso_seccion (V29), menu ''MATRICULA''. Mismo modelo que fn_periodo_gate_escritura: CAPABILITY dinamica (TROL_MENU concede / TUSUARIO_ROL_PERMISO recorta) + SCOPE por categoria de rol (nivel 1 territorial = todos los EE; nivel 2 = fn_usuario_ee_accesibles; nivel 3 = par (sede, jornada) del grupo en fn_usuario_sedes_jornadas_accesibles) + BYPASS del SUPER_ADMIN. El scope se resuelve por el grupo: TMATRICULA -> TGRUPO -> TGRADO -> TPERIODO_ACADEMICO. Con p_fk_tgrupo NULL las tres coordenadas quedan NULL y solo se exige capability (altas de persona sin sede todavia).';
+
+-- fn_matricula_puede_ver: version BOOLEAN del gate, para el WHERE del LISTADO
+-- de matricula (fn_matricula_listar, V200) -- reemplaza a
+-- fn_periodo_usuario_puede_ver. Misma decision de capability + scope que
+-- fn_matricula_gate_escritura pero SIN lanzar: devuelve TRUE/FALSE por fila.
+-- Reusa los mismos helpers de V29 (fn_usuario_categoria_rol_nivel,
+-- fn_usuario_puede_en_menu, fn_usuario_ee_accesibles,
+-- fn_usuario_sedes_jornadas_accesibles) que consume fn_assert_permiso_seccion;
+-- no captura excepciones (evita una subtransaccion por fila en el listado).
+--   p_pk_usuario NULL  -> TRUE (llamada interna sin scoping).
+--   categoria nivel 0  -> TRUE (SUPER_ADMIN, bypass; no se le exige capability).
+--   sin capability VER  -> FALSE.
+--   nivel 1 territorial -> TRUE (todos los EE).
+--   nivel 2            -> EE del grupo en fn_usuario_ee_accesibles.
+--   nivel 3            -> par (sede, jornada) del grupo en fn_usuario_sedes_jornadas_accesibles.
+--   nivel 4 / sin categoria -> FALSE (fail-closed).
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_puede_ver(
+    p_pk_usuario  BIGINT,
+    p_fk_tgrupo   BIGINT
+)
+RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_nivel INT;
+BEGIN
+    IF p_pk_usuario IS NULL THEN
+        RETURN TRUE;
+    END IF;
+
+    v_nivel := COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario), 99);
+
+    IF v_nivel = 0 THEN
+        RETURN TRUE;
+    END IF;
+
+    IF NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario, 'MATRICULA', 'VER') THEN
+        RETURN FALSE;
+    END IF;
+
+    IF v_nivel = 1 THEN
+        RETURN TRUE;
+    ELSIF v_nivel = 2 THEN
+        RETURN academico_test.fn_grupo_establecimiento(p_fk_tgrupo) IN (
+                   SELECT establecimiento_id
+                     FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario));
+    ELSIF v_nivel = 3 THEN
+        RETURN (
+                   academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(p_fk_tgrupo)),
+                   academico_test.fn_grupo_jornada(p_fk_tgrupo)
+               ) IN (
+                   SELECT sede_id, jornada_id
+                     FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario));
+    END IF;
+
+    RETURN FALSE;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_matricula_puede_ver(BIGINT, BIGINT)
+    IS 'Version BOOLEAN de fn_matricula_gate_escritura para el WHERE de fn_matricula_listar (V200): capability ''VER'' sobre el menu MATRICULA + scope por categoria de rol, resuelto por el grupo. p_pk_usuario NULL o SUPER_ADMIN => TRUE. Reemplaza a fn_periodo_usuario_puede_ver en el listado de matricula. No lanza (no subtransaccion por fila).';
 
 -- ----- AREA (TAREA) --------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_area_crear(BIGINT, BIGINT, VARCHAR, VARCHAR, VARCHAR, NUMERIC, BIGINT);
@@ -599,7 +763,12 @@ BEGIN
 END;
 $$;
 
+-- La 2-arg tambien se dropea: V103 la redefine con una columna extra en el
+-- RETURNS TABLE, y sin este DROP re-ejecutar V40 (paso de re-aplicacion de
+-- deploy-test.yml al cambiar el checksum de este archivo) fallaba con
+-- "cannot change return type of existing function". CU-86e2w4xdt.
 DROP FUNCTION IF EXISTS academico_test.fn_subject_listar(BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_subject_listar(BIGINT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_subject_listar(
     p_fk_area BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
 )

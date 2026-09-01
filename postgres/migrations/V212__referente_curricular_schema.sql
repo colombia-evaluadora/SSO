@@ -1,0 +1,267 @@
+-- ===========================================================================
+-- V212 — Referente Curricular: esquema base (CU-86e311xqh — G. Academico
+-- Back Referente Curricular).
+--
+-- Contexto: la pantalla "Referentes curriculares" permite al Ente
+-- Territorial/Establecimiento administrar catalogos como DBA, Propositos e
+-- Imprescindibles, etc. (ver figma) — cada referente se conecta a:
+--
+--   * TNIVEL_ENSENANZA (nivel educativo: Preescolar/Basica primaria/
+--     Basica secundaria/Media) -- catalogo ya existente, no se duplica.
+--   * TAREA_ASIGNATURA (areas o dimensiones), N:N, opcional -- "se puede
+--     dejar vacio (aplica para todas)" (nota del figma).
+--   * TUNIDAD (unidad pedagogica ya existente) -- la FK va en TUNIDAD
+--     hacia TREFERENTE_CURRICULAR (no al reves): el referente es el
+--     catalogo general, la unidad es la instancia concreta que
+--     opcionalmente se acoge a el (nota del figma: "instrumento: nombre
+--     de la unidad tematica").
+--   * Selects de siempre resueltos contra TLISTA_VALOR por CATEGORIA
+--     (ENFOQUE_PEDAGOGICO: Evaluativo/Formativo; TIPO_EVALUACION:
+--     Cualitativa/Cuantitativa/Cuantitativa y cualitativa).
+--   * Un arbol de enunciados/evidencias propio del referente: el figma
+--     rotula los dos niveles con nombres libres por referente ("Nivel 1"/
+--     "Nivel 2" en el modal -- p.ej. Enunciado/Evidencia para DBA,
+--     Proposito/Imprescindible para preescolar), y un enunciado tiene
+--     muchas evidencias (1 nivel de anidamiento, no arbitrario). Se modela
+--     como UNA sola tabla auto-referenciada (TREFERENTE_ENUNCIADO) via
+--     FK_PADRE, tal como pidio el usuario, en vez de dos tablas separadas
+--     enunciado/evidencia -- evita duplicar columnas y deja la puerta
+--     abierta a mas niveles si el negocio los pide despues.
+--
+-- Tablas nuevas:
+--   1) TREFERENTE_CURRICULAR       -- catalogo (nombre, descripcion, nivel
+--                                      educativo, enfoque, tipo evaluacion,
+--                                      instrumento, normatividad, vigencia).
+--   2) TREFERENTE_CURRICULAR_AREA  -- N:N referente <-> TAREA_ASIGNATURA.
+--   3) TREFERENTE_ENUNCIADO        -- enunciados/evidencias auto-referenciados.
+-- Tabla existente alterada:
+--   4) TUNIDAD                     -- gana FK_REFERENTE_CURRICULAR (opcional).
+--
+-- Nomenclatura/estilo: sigue V22 (mayusculas, PK_/FK_ BIGINT IDENTITY,
+-- columnas de auditoria CREATED_BY/CREATED_AT/MODIFIED_BY/MODIFIED_AT +
+-- ACTIVE, indice parcial IDX_..._ACTIVE WHERE ACTIVE = true) y V120
+-- (seed de TLISTA_VALOR via INSERT ... WHERE NOT EXISTS sobre la UNIQUE
+-- (CATEGORIA, VALOR), idempotente).
+--
+-- Vigencia: la tabla del figma muestra "Activo Desde 2023" / "Inactivo
+-- Desde 2021 Hasta 2022" -- rango de anios de vigencia, independiente del
+-- estado. Se agregan ANIO_VIGENCIA_DESDE (obligatorio, se llena aun
+-- creando en estado inactivo -- "se puede crear inactivo" en la nota del
+-- figma) y ANIO_VIGENCIA_HASTA (nullable -- vigente hasta hoy).
+--
+-- ACTIVE vs ESTADO: ACTIVE (BOOLEAN) es el borrado logico de siempre --
+-- lo pone la aplicacion, no lo edita el usuario final, y nunca deberia
+-- volver a FALSE->TRUE desde un formulario. El toggle "Estado * Inactivo/
+-- Activo" que se ve en los modales de Agregar referente/enunciado/
+-- evidencias (y el badge ESTADO de la tabla-listado) es un dato de
+-- NEGOCIO que el usuario si edita libremente -- mismo patron que
+-- TENTE.ESTADO/TROL.ESTADO en V22 (domain estado_ai, 'A'/'I'). Se agrega
+-- ESTADO estado_ai en TREFERENTE_CURRICULAR y TREFERENTE_ENUNCIADO (las
+-- dos tablas cuyos modales muestran el toggle); TREFERENTE_CURRICULAR_AREA
+-- es una tabla puente sin ese toggle en el figma, solo lleva ACTIVE.
+--
+-- Fuera de alcance en esta migracion: funciones PL/pgSQL de CRUD/listado
+-- (fn_referente_curricular_*) y las rutas de query-service -- se agregan en
+-- una migracion posterior una vez cerrado el contrato de API.
+-- ===========================================================================
+
+SET search_path TO academico_test, public;
+
+-- ---------------------------------------------------------------------------
+-- 1) Seed de TLISTA_VALOR: ENFOQUE_PEDAGOGICO y TIPO_EVALUACION
+-- ---------------------------------------------------------------------------
+INSERT INTO academico_test.tlista_valor (categoria, nombre, valor, created_by)
+SELECT v.categoria, v.nombre, v.valor, 'V212_seed'
+  FROM (VALUES
+    ('ENFOQUE_PEDAGOGICO'::VARCHAR, 'Evaluativo'::VARCHAR,                    'EVALUATIVO'::VARCHAR),
+    ('ENFOQUE_PEDAGOGICO'::VARCHAR, 'Formativo'::VARCHAR,                     'FORMATIVO'::VARCHAR),
+    ('TIPO_EVALUACION'::VARCHAR,    'Cualitativa'::VARCHAR,                   'CUALITATIVA'::VARCHAR),
+    ('TIPO_EVALUACION'::VARCHAR,    'Cuantitativa'::VARCHAR,                  'CUANTITATIVA'::VARCHAR),
+    ('TIPO_EVALUACION'::VARCHAR,    'Cuantitativa y cualitativa'::VARCHAR,    'CUANTITATIVA_CUALITATIVA'::VARCHAR)
+  ) AS v(categoria, nombre, valor)
+ WHERE NOT EXISTS (
+   SELECT 1 FROM academico_test.tlista_valor lv
+    WHERE lv.categoria = v.categoria AND lv.valor = v.valor
+ );
+
+-- ---------------------------------------------------------------------------
+-- 2) Tabla: TREFERENTE_CURRICULAR
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS TREFERENTE_CURRICULAR (
+  PK_REFERENTE_CURRICULAR BIGINT GENERATED BY DEFAULT AS IDENTITY NOT NULL,
+  NOMBRE VARCHAR(150) NOT NULL,
+  DESCRIPCION VARCHAR(400) NOT NULL,
+  FK_TNIVEL_ENSENANZA BIGINT NOT NULL,
+  FK_TLV_ENFOQUE_PEDAGOGICO BIGINT NOT NULL,
+  FK_TLV_TIPO_EVALUACION BIGINT NOT NULL,
+  NIVEL_1_ETIQUETA VARCHAR(60) NOT NULL DEFAULT 'Enunciado',
+  NIVEL_2_ETIQUETA VARCHAR(60) NOT NULL DEFAULT 'Evidencia',
+  INSTRUMENTO VARCHAR(400) NOT NULL,
+  INSTRUMENTO_INFO_ADICIONAL VARCHAR(400),
+  NORMATIVIDAD VARCHAR(400) NOT NULL,
+  ANIO_VIGENCIA_DESDE INTEGER NOT NULL,
+  ANIO_VIGENCIA_HASTA INTEGER,
+  ESTADO estado_ai DEFAULT 'A' NOT NULL,
+  CREATED_BY VARCHAR(120) NOT NULL,
+  CREATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  MODIFIED_BY VARCHAR(120),
+  MODIFIED_AT TIMESTAMP,
+  ACTIVE BOOLEAN DEFAULT TRUE NOT NULL,
+  CONSTRAINT PK_TREFERENTE_CURRICULAR PRIMARY KEY (PK_REFERENTE_CURRICULAR),
+  CONSTRAINT FK_TREFERENTE_CURRICULAR_NIVEL FOREIGN KEY (FK_TNIVEL_ENSENANZA)
+    REFERENCES TNIVEL_ENSENANZA (PK_NIVEL_ENSENANZA),
+  CONSTRAINT FK_TREFERENTE_CURRICULAR_ENFOQUE FOREIGN KEY (FK_TLV_ENFOQUE_PEDAGOGICO)
+    REFERENCES TLISTA_VALOR (PK_LISTA_VALOR),
+  CONSTRAINT FK_TREFERENTE_CURRICULAR_TIPO_EVAL FOREIGN KEY (FK_TLV_TIPO_EVALUACION)
+    REFERENCES TLISTA_VALOR (PK_LISTA_VALOR),
+  CONSTRAINT CHK_TREFERENTE_CURRICULAR_VIGENCIA
+    CHECK (ANIO_VIGENCIA_HASTA IS NULL OR ANIO_VIGENCIA_HASTA >= ANIO_VIGENCIA_DESDE)
+);
+
+--  Indices
+CREATE INDEX IF NOT EXISTS IDX_TREFERENTE_CURRICULAR_NIVEL ON TREFERENTE_CURRICULAR (FK_TNIVEL_ENSENANZA);
+CREATE INDEX IF NOT EXISTS IDX_TREFERENTE_CURRICULAR_ENFOQUE ON TREFERENTE_CURRICULAR (FK_TLV_ENFOQUE_PEDAGOGICO);
+CREATE INDEX IF NOT EXISTS IDX_TREFERENTE_CURRICULAR_TIPO_EVAL ON TREFERENTE_CURRICULAR (FK_TLV_TIPO_EVALUACION);
+CREATE INDEX IF NOT EXISTS IDX_TREFERENTE_CURRICULAR_ACTIVE ON TREFERENTE_CURRICULAR (PK_REFERENTE_CURRICULAR) WHERE ACTIVE = true;
+
+--  Comentarios de columna
+COMMENT ON COLUMN TREFERENTE_CURRICULAR.PK_REFERENTE_CURRICULAR IS 'Llave primaria de la tabla';
+COMMENT ON COLUMN TREFERENTE_CURRICULAR.FK_TNIVEL_ENSENANZA IS 'Llave foranea a tabla TNIVEL_ENSENANZA (nivel educativo)';
+COMMENT ON COLUMN TREFERENTE_CURRICULAR.FK_TLV_ENFOQUE_PEDAGOGICO IS 'Llave foranea a TLISTA_VALOR, CATEGORIA=ENFOQUE_PEDAGOGICO';
+COMMENT ON COLUMN TREFERENTE_CURRICULAR.FK_TLV_TIPO_EVALUACION IS 'Llave foranea a TLISTA_VALOR, CATEGORIA=TIPO_EVALUACION';
+COMMENT ON COLUMN TREFERENTE_CURRICULAR.NIVEL_1_ETIQUETA IS 'Rotulo del nivel 1 del arbol de TREFERENTE_ENUNCIADO para este referente (p.ej. Enunciado, Proposito)';
+COMMENT ON COLUMN TREFERENTE_CURRICULAR.NIVEL_2_ETIQUETA IS 'Rotulo del nivel 2 del arbol de TREFERENTE_ENUNCIADO para este referente (p.ej. Evidencia, Imprescindible)';
+COMMENT ON COLUMN TREFERENTE_CURRICULAR.INSTRUMENTO IS 'Nombre del instrumento asociado (p.ej. Unidad tematica, Proyecto pedagogico)';
+COMMENT ON COLUMN TREFERENTE_CURRICULAR.ANIO_VIGENCIA_DESDE IS 'Anio desde el cual el referente esta/estuvo vigente';
+COMMENT ON COLUMN TREFERENTE_CURRICULAR.ANIO_VIGENCIA_HASTA IS 'Anio hasta el cual estuvo vigente; NULL si sigue vigente';
+COMMENT ON COLUMN TREFERENTE_CURRICULAR.ESTADO IS 'Estado de negocio editable por el usuario (Activo/Inactivo, toggle del formulario); distinto de ACTIVE, que es el borrado logico';
+
+--  Comentarios de tabla
+COMMENT ON TABLE TREFERENTE_CURRICULAR IS 'Catalogo de referentes curriculares (DBA, Propositos e Imprescindibles, etc.)';
+
+-- ---------------------------------------------------------------------------
+-- 3) Tabla: TREFERENTE_CURRICULAR_AREA (N:N con TAREA_ASIGNATURA)
+--
+-- Sin filas para un referente = aplica para todas las areas/dimensiones
+-- (nota del figma "se puede dejar vacio (aplica para todas)") -- se
+-- resuelve en la capa de consulta, no en el esquema.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS TREFERENTE_CURRICULAR_AREA (
+  PK_REFERENTE_CURRICULAR_AREA BIGINT GENERATED BY DEFAULT AS IDENTITY NOT NULL,
+  FK_REFERENTE_CURRICULAR BIGINT NOT NULL,
+  FK_TAREA_ASIGNATURA BIGINT NOT NULL,
+  CREATED_BY VARCHAR(120) NOT NULL,
+  CREATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  MODIFIED_BY VARCHAR(120),
+  MODIFIED_AT TIMESTAMP,
+  ACTIVE BOOLEAN DEFAULT TRUE NOT NULL,
+  CONSTRAINT PK_TREFERENTE_CURRICULAR_AREA PRIMARY KEY (PK_REFERENTE_CURRICULAR_AREA),
+  CONSTRAINT FK_TREFCURR_AREA_REFERENTE FOREIGN KEY (FK_REFERENTE_CURRICULAR)
+    REFERENCES TREFERENTE_CURRICULAR (PK_REFERENTE_CURRICULAR),
+  CONSTRAINT FK_TREFCURR_AREA_TAREA_ASIGNATURA FOREIGN KEY (FK_TAREA_ASIGNATURA)
+    REFERENCES TAREA_ASIGNATURA (PK_TAREA_ASIGNATURA)
+);
+
+--  Indices
+CREATE INDEX IF NOT EXISTS IDX_TREFCURR_AREA_REFERENTE ON TREFERENTE_CURRICULAR_AREA (FK_REFERENTE_CURRICULAR);
+CREATE INDEX IF NOT EXISTS IDX_TREFCURR_AREA_TAREA_ASIGNATURA ON TREFERENTE_CURRICULAR_AREA (FK_TAREA_ASIGNATURA);
+CREATE INDEX IF NOT EXISTS IDX_TREFCURR_AREA_ACTIVE ON TREFERENTE_CURRICULAR_AREA (PK_REFERENTE_CURRICULAR_AREA) WHERE ACTIVE = true;
+
+-- Unicidad solo entre filas vivas (patron V65): un mismo par referente/area
+-- puede reinsertarse tras un borrado logico sin chocar con la fila inactiva.
+CREATE UNIQUE INDEX IF NOT EXISTS U_TREFERENTE_CURRICULAR_AREA_1
+  ON TREFERENTE_CURRICULAR_AREA (FK_REFERENTE_CURRICULAR, FK_TAREA_ASIGNATURA)
+  WHERE ACTIVE = true;
+
+--  Comentarios de columna
+COMMENT ON COLUMN TREFERENTE_CURRICULAR_AREA.PK_REFERENTE_CURRICULAR_AREA IS 'Llave primaria de la tabla';
+COMMENT ON COLUMN TREFERENTE_CURRICULAR_AREA.FK_REFERENTE_CURRICULAR IS 'Llave foranea a tabla TREFERENTE_CURRICULAR';
+COMMENT ON COLUMN TREFERENTE_CURRICULAR_AREA.FK_TAREA_ASIGNATURA IS 'Llave foranea a tabla TAREA_ASIGNATURA (area o dimension)';
+
+--  Comentarios de tabla
+COMMENT ON TABLE TREFERENTE_CURRICULAR_AREA IS 'Relacion N:N entre TREFERENTE_CURRICULAR y TAREA_ASIGNATURA (areas/dimensiones); sin filas = aplica a todas';
+
+-- ---------------------------------------------------------------------------
+-- 4) Tabla: TREFERENTE_ENUNCIADO (enunciados y evidencias, auto-referenciada)
+--
+-- FK_PADRE NULL      -> nivel 1 (rotulado por TREFERENTE_CURRICULAR.NIVEL_1_ETIQUETA,
+--                       p.ej. Enunciado/Proposito).
+-- FK_PADRE NOT NULL  -> nivel 2, hijo de un nivel 1 (rotulado por
+--                       NIVEL_2_ETIQUETA, p.ej. Evidencia/Imprescindible).
+--
+-- FK_REFERENTE_CURRICULAR se repite en cada fila (aun en las de nivel 2)
+-- para poder filtrar/indexar por referente sin recursividad.
+--
+-- FK_REFERENTE_CURRICULAR_AREA amarra un enunciado (nivel 1) a UNA de las
+-- areas/dimensiones elegidas para el referente (ver figma "Detalle del
+-- referente" -> pestaña Enunciado: el select "Areas o dimensiones" filtra
+-- que enunciados se listan) -- nullable porque un referente puede no tener
+-- areas asociadas (TREFERENTE_CURRICULAR_AREA vacia = "aplica para
+-- todas", ver nota en esa tabla), caso en el que el enunciado no queda
+-- amarrado a ninguna area en particular. Solo aplica a nivel 1: una
+-- evidencia (FK_PADRE NOT NULL) hereda el area de su enunciado padre, no
+-- se vuelve a elegir -- CHK_TREFENUNC_AREA_SOLO_NIVEL1 lo impone.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS TREFERENTE_ENUNCIADO (
+  PK_REFERENTE_ENUNCIADO BIGINT GENERATED BY DEFAULT AS IDENTITY NOT NULL,
+  FK_REFERENTE_CURRICULAR BIGINT NOT NULL,
+  FK_REFERENTE_CURRICULAR_AREA BIGINT,
+  FK_PADRE BIGINT,
+  TEXTO VARCHAR(400) NOT NULL,
+  ESTADO estado_ai DEFAULT 'A' NOT NULL,
+  CREATED_BY VARCHAR(120) NOT NULL,
+  CREATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  MODIFIED_BY VARCHAR(120),
+  MODIFIED_AT TIMESTAMP,
+  ACTIVE BOOLEAN DEFAULT TRUE NOT NULL,
+  CONSTRAINT PK_TREFERENTE_ENUNCIADO PRIMARY KEY (PK_REFERENTE_ENUNCIADO),
+  CONSTRAINT FK_TREFENUNC_REFERENTE FOREIGN KEY (FK_REFERENTE_CURRICULAR)
+    REFERENCES TREFERENTE_CURRICULAR (PK_REFERENTE_CURRICULAR),
+  CONSTRAINT FK_TREFENUNC_REFERENTE_AREA FOREIGN KEY (FK_REFERENTE_CURRICULAR_AREA)
+    REFERENCES TREFERENTE_CURRICULAR_AREA (PK_REFERENTE_CURRICULAR_AREA),
+  CONSTRAINT FK_TREFENUNC_PADRE FOREIGN KEY (FK_PADRE)
+    REFERENCES TREFERENTE_ENUNCIADO (PK_REFERENTE_ENUNCIADO),
+  CONSTRAINT CHK_TREFENUNC_AREA_SOLO_NIVEL1
+    CHECK (FK_PADRE IS NULL OR FK_REFERENTE_CURRICULAR_AREA IS NULL)
+);
+
+--  Indices
+CREATE INDEX IF NOT EXISTS IDX_TREFENUNC_REFERENTE ON TREFERENTE_ENUNCIADO (FK_REFERENTE_CURRICULAR);
+CREATE INDEX IF NOT EXISTS IDX_TREFENUNC_REFERENTE_AREA ON TREFERENTE_ENUNCIADO (FK_REFERENTE_CURRICULAR_AREA);
+CREATE INDEX IF NOT EXISTS IDX_TREFENUNC_PADRE ON TREFERENTE_ENUNCIADO (FK_PADRE);
+CREATE INDEX IF NOT EXISTS IDX_TREFENUNC_ACTIVE ON TREFERENTE_ENUNCIADO (PK_REFERENTE_ENUNCIADO) WHERE ACTIVE = true;
+
+--  Comentarios de columna
+COMMENT ON COLUMN TREFERENTE_ENUNCIADO.PK_REFERENTE_ENUNCIADO IS 'Llave primaria de la tabla';
+COMMENT ON COLUMN TREFERENTE_ENUNCIADO.FK_REFERENTE_CURRICULAR IS 'Llave foranea a tabla TREFERENTE_CURRICULAR';
+COMMENT ON COLUMN TREFERENTE_ENUNCIADO.FK_REFERENTE_CURRICULAR_AREA IS 'Llave foranea a TREFERENTE_CURRICULAR_AREA: area/dimension a la que queda amarrado el enunciado (solo nivel 1; NULL si el referente no tiene areas o la evidencia hereda la del padre)';
+COMMENT ON COLUMN TREFERENTE_ENUNCIADO.FK_PADRE IS 'Llave foranea a esta misma tabla; NULL = nivel 1 (enunciado), NOT NULL = nivel 2 (evidencia) hijo de ese enunciado';
+COMMENT ON COLUMN TREFERENTE_ENUNCIADO.TEXTO IS 'Texto del enunciado o evidencia';
+COMMENT ON COLUMN TREFERENTE_ENUNCIADO.ESTADO IS 'Estado de negocio editable por el usuario (Activo/Inactivo, toggle del formulario); distinto de ACTIVE, que es el borrado logico';
+
+--  Comentarios de tabla
+COMMENT ON TABLE TREFERENTE_ENUNCIADO IS 'Enunciados y evidencias de un referente curricular; auto-referenciada via FK_PADRE (1 enunciado -> muchas evidencias)';
+
+-- ---------------------------------------------------------------------------
+-- 5) TUNIDAD gana FK_REFERENTE_CURRICULAR (opcional)
+--
+-- La FK va en TUNIDAD, no al reves: TREFERENTE_CURRICULAR es el catalogo
+-- general (DBA, Propositos e Imprescindibles...) y una unidad pedagogica
+-- concreta (TUNIDAD: instancia por asignatura/grado/periodo/docente) es la
+-- que, opcionalmente, se acoge a un referente -- muchas unidades pueden
+-- referenciar el mismo referente. Nullable porque TUNIDAD ya existe con
+-- filas sin referente y porque no toda unidad tiene por que acogerse a uno.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE TUNIDAD ADD COLUMN IF NOT EXISTS FK_REFERENTE_CURRICULAR BIGINT;
+
+ALTER TABLE TUNIDAD DROP CONSTRAINT IF EXISTS FK_TUNIDAD_REFERENTE_CURRICULAR;
+ALTER TABLE TUNIDAD ADD CONSTRAINT FK_TUNIDAD_REFERENTE_CURRICULAR FOREIGN KEY (FK_REFERENTE_CURRICULAR)
+  REFERENCES TREFERENTE_CURRICULAR (PK_REFERENTE_CURRICULAR);
+
+CREATE INDEX IF NOT EXISTS IDX_TUNIDAD_REFERENTE_CURRICULAR ON TUNIDAD (FK_REFERENTE_CURRICULAR);
+
+COMMENT ON COLUMN TUNIDAD.FK_REFERENTE_CURRICULAR IS 'Llave foranea a tabla TREFERENTE_CURRICULAR; NULL si la unidad no se acoge a ningun referente curricular';

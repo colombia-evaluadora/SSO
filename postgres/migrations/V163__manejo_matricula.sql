@@ -61,49 +61,15 @@ BEGIN
     END IF;
 
     -- -----------------------------------------------------------------
-    -- 1. Gate de autorizacion COMPUESTO -- mismo patron de fn_sed_crear /
-    --    fn_estudiante_crear / fn_padre_crear.
+    -- 1. Gate de autorizacion (CU-86e2w4xdt): capability 'CREAR' sobre el
+    --    menu MATRICULA + scope (EE / sede / jornada) del grupo. Una sola
+    --    llamada reemplaza el bloque "fn_puede_afectar_establecimiento +
+    --    rector/secretaria por puntero + jefe de sistema (rol 8)" copiado
+    --    inline. Ahora un rol nivel 3 (coordinador) con el menu concedido
+    --    matricula dentro de SU (sede, jornada); 42501 fuera.
     -- -----------------------------------------------------------------
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e
-            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE             = TRUE
-           AND f.ACTIVE             = TRUE
-           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e
-            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE             = TRUE
-           AND f.ACTIVE             = TRUE
-           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TSEDE s
-            ON s.PK_TSEDE = su.FK_TSEDE
-         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
-           AND s.ACTIVE              = TRUE
-           AND su.ACTIVE             = TRUE
-           AND su.FK_TROL            = 8
-           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSE
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_matricula_gate_escritura(
+        p_pk_usuario_solicitante, p_fk_tgrupo, 'CREAR');
 
     -- -----------------------------------------------------------------
     -- 2. Validaciones de obligatoriedad (los NOT NULL del DDL).
@@ -243,48 +209,15 @@ BEGIN
     END IF;
 
     -- -----------------------------------------------------------------
-    -- 1. Gate de autorizacion COMPUESTO -- mismo patron de V163/V164/V165.
+    -- 1. Gate de autorizacion (CU-86e2w4xdt): capability 'VER' sobre el
+    --    menu MATRICULA + scope (EE / sede / jornada) del grupo de la
+    --    matricula. Gate estricto (sede-especifico): aca SI se conoce la
+    --    sede via el grupo, a diferencia de los obtener_por_id de
+    --    estudiante/acudiente.
     -- -----------------------------------------------------------------
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e
-            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE             = TRUE
-           AND f.ACTIVE             = TRUE
-           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e
-            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE             = TRUE
-           AND f.ACTIVE             = TRUE
-           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TSEDE s
-            ON s.PK_TSEDE = su.FK_TSEDE
-         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
-           AND s.ACTIVE              = TRUE
-           AND su.ACTIVE             = TRUE
-           AND su.FK_TROL            = 8
-           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSE
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_matricula_gate_escritura(
+        p_pk_usuario_solicitante,
+        academico_test.fn_matricula_grupo(p_pk_tmatricula), 'VER');
 
     RETURN QUERY
     SELECT

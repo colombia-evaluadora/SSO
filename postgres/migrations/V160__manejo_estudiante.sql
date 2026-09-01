@@ -69,46 +69,8 @@ BEGIN
     --    (c) Secretaria / Aux.Adm del EE de la sede.
     --    (d) Jefe de sistema (rol 8) en alguna sede del EE.
     -- -----------------------------------------------------------------
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e
-            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE             = TRUE
-           AND f.ACTIVE             = TRUE
-           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e
-            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE             = TRUE
-           AND f.ACTIVE             = TRUE
-           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TSEDE s
-            ON s.PK_TSEDE = su.FK_TSEDE
-         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
-           AND s.ACTIVE              = TRUE
-           AND su.ACTIVE             = TRUE
-           AND su.FK_TROL            = 8
-           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSE
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'MATRICULA', 'CREAR', v_fk_establecimiento);
 
     -- -----------------------------------------------------------------
     -- 2. Verificar que el TUSUARIO recibido existe y esta activo.
@@ -276,20 +238,8 @@ LANGUAGE plpgsql
 STABLE
 AS $function$
 BEGIN
-    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        -- Fallback: rector o secretaria de CUALQUIER EE activo -- mismo
-        -- motivo que el fallback de fn_usu_crear/fn_fun_crear.
-        IF NOT EXISTS (
-            SELECT 1
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f
-                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-        ) THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
-    END IF;
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'MATRICULA', 'VER', NULL);
 
     RETURN QUERY
     SELECT

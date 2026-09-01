@@ -11,6 +11,16 @@
 --  (el super-admin usa fn_matricula_config_actualizar de V159, con el EE
 --   explicito -- no entra aqui.)
 --
+--  CU-86e2w4xdt -- Permisos segun rol: fn_matricula_config_ee_solicitante
+--  sigue resolviendo QUE establecimiento administra el usuario, pero
+--  fn_matricula_config_obtener / _editar_campo aplican ademas
+--  fn_assert_permiso_seccion(usuario, 'MATRICULA', 'VER'|'EDITAR', ee):
+--  la capability es dinamica y la define el super admin por rol (TROL_MENU)
+--  y por usuario (TUSUARIO_ROL_PERMISO, solo recorta) -- ver
+--  docs/gate-permisos-por-menu-analysis.md. Un usuario de la triada al que
+--  el super admin le haya quitado el menu MATRICULA (o degradado a solo
+--  lectura) recibe 42501 aunque siga siendo rector/secretaria/jefe.
+--
 --   1. fn_matricula_config_ee_solicitante(usuario) -> BIGINT
 --        Helper interno: resuelve el EE del solicitante por esos 3 roles.
 --        42501 si no tiene ninguno; 22023 si administra 2+ (ambiguo).
@@ -102,6 +112,15 @@ DECLARE
     v_result    JSONB;
 BEGIN
     v_fk_est    := academico_test.fn_matricula_config_ee_solicitante(p_pk_usuario_solicitante);
+
+    -- Autorizacion (CU-86e2w4xdt): capability 'VER' sobre el menu MATRICULA
+    -- + scope a nivel establecimiento. fn_matricula_config_ee_solicitante
+    -- resuelve QUE EE administra el usuario (rector/secretaria/jefe de
+    -- sistema); este assert aplica ademas la config granular del super admin
+    -- (TROL_MENU concede / TUSUARIO_ROL_PERMISO recorta) y valida el scope.
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'MATRICULA', 'VER', v_fk_est);
+
     -- get-or-create: el trigger de V159 garantiza que exista, esto es defensivo.
     v_pk_config := academico_test.fn_matricula_config_crear_interno(
                        v_fk_est, p_pk_usuario_solicitante::VARCHAR);
@@ -155,6 +174,11 @@ DECLARE
     v_actor      VARCHAR := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
     v_fk_est := academico_test.fn_matricula_config_ee_solicitante(p_pk_usuario_solicitante);
+
+    -- Autorizacion (CU-86e2w4xdt): capability 'EDITAR' sobre el menu
+    -- MATRICULA + scope a nivel establecimiento (ver fn_matricula_config_obtener).
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'MATRICULA', 'EDITAR', v_fk_est);
 
     IF p_fk_campo IS NULL OR p_fk_campo <= 0 THEN
         RAISE EXCEPTION 'p_fk_campo es obligatorio y debe ser > 0'
