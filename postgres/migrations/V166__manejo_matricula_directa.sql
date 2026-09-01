@@ -158,9 +158,7 @@ BEGIN
             USING ERRCODE = '22023', HINT = 'p_fk_sede debe apuntar a una TSEDE activa';
     END IF;
 
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
+    IF EXISTS (
         SELECT 1
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TESTABLECIMIENTO e
@@ -648,6 +646,11 @@ DECLARE
     v_pad             RECORD;
     v_acudientes      JSONB := '[]'::jsonb;
     v_pk_tpadre       BIGINT;
+    v_pk_anterior     BIGINT;
+    v_anterior        JSONB := 'null'::jsonb;
+    v_pk_cursando     BIGINT;
+    v_estado_ant      BIGINT;
+    v_estado_ant_nom  VARCHAR;
 BEGIN
     -- -----------------------------------------------------------------
     -- 1. Resolver sede y estudiante. El gate lo aplica en detalle
@@ -684,9 +687,7 @@ BEGIN
     SELECT s.FK_TESTABLECIMIENTO INTO v_fk_establecimiento
       FROM academico_test.TSEDE s WHERE s.PK_TSEDE = v_fk_sede;
 
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
+    IF EXISTS (
         SELECT 1
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TESTABLECIMIENTO e
@@ -798,8 +799,74 @@ BEGIN
       FROM academico_test.fn_estudiante_soft_delete(
                p_pk_usuario_solicitante, v_fk_testudiante, v_fk_sede, p_pk_tmatricula);
 
+    -- -----------------------------------------------------------------
+    -- 8. Deshacer el encadenado: si esta matricula nacio de una promocion
+    --    o una reubicacion, la matricula ANTERIOR quedo marcada como
+    --    "Promovido" o "Reubicado" precisamente porque esta la sucedia.
+    --    Al borrar la sucesora, esa marca deja de ser cierta y el
+    --    estudiante quedaria sin ninguna matricula vigente, con su
+    --    historial colgado de una matricula en un estado terminal falso.
+    --    Se la devuelve a "Cursando".
+    --
+    --    Dos condiciones para hacerlo:
+    --      * el estado anterior debe ser Promovido ('13') o Reubicado
+    --        ('14') -- son los unicos que esta funcion pudo haber puesto.
+    --        Si quedo en Retirado, Aprobado o cualquier otro, ese estado
+    --        lo puso otra accion y no se pisa.
+    --      * el periodo academico de esa matricula anterior debe seguir en
+    --        curso. Revivir a "Cursando" una matricula de un año ya
+    --        cerrado seria reabrir un periodo por la puerta de atras --
+    --        mismo criterio que fn_matricula_validar_periodo_vigente
+    --        aplica al resto de las acciones.
+    --
+    --    Se lee FK_TMATRICULA_ANTERIOR de la fila recien dada de baja: el
+    --    soft delete solo apago ACTIVE, la fila y sus columnas siguen ahi.
+    -- -----------------------------------------------------------------
+    SELECT m.FK_TMATRICULA_ANTERIOR INTO v_pk_anterior
+      FROM academico_test.TMATRICULA m
+     WHERE m.PK_TMATRICULA = p_pk_tmatricula;
+
+    IF v_pk_anterior IS NOT NULL THEN
+        SELECT PK_LISTA_VALOR INTO v_pk_cursando
+          FROM academico_test.TLISTA_VALOR
+         WHERE CATEGORIA = 'ESTADO_MATRICULA' AND VALOR = '1' AND ACTIVE = TRUE;
+
+        SELECT m.FK_TLV_ESTADO_MATRICULA, lv.NOMBRE
+          INTO v_estado_ant, v_estado_ant_nom
+          FROM academico_test.TMATRICULA m
+          JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
+          JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
+          JOIN academico_test.TPERIODO_ACADEMICO pa  ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+          LEFT JOIN academico_test.TLISTA_VALOR lv   ON lv.PK_LISTA_VALOR = m.FK_TLV_ESTADO_MATRICULA
+         WHERE m.PK_TMATRICULA = v_pk_anterior
+           AND m.ACTIVE        = TRUE
+           AND pa.ACTIVE       = TRUE
+           AND pa.FECHA_FIN   >= CURRENT_DATE
+           AND lv.VALOR        IN ('13', '14');
+
+        IF v_estado_ant IS NOT NULL AND v_pk_cursando IS NOT NULL THEN
+            UPDATE academico_test.TMATRICULA
+               SET FK_TLV_ESTADO_MATRICULA = v_pk_cursando,
+                   MODIFIED_BY             = p_pk_usuario_solicitante::VARCHAR,
+                   MODIFIED_AT             = CURRENT_TIMESTAMP
+             WHERE PK_TMATRICULA = v_pk_anterior;
+
+            v_anterior := jsonb_build_object(
+                'pkTmatricula',   v_pk_anterior,
+                'reactivada',     TRUE,
+                'estadoAnterior', jsonb_build_object('id', v_estado_ant, 'nombre', v_estado_ant_nom),
+                'estadoNuevo',    jsonb_build_object('id', v_pk_cursando, 'nombre', 'Cursando'));
+        ELSE
+            v_anterior := jsonb_build_object(
+                'pkTmatricula', v_pk_anterior,
+                'reactivada',   FALSE,
+                'motivo',       'no esta activa, su periodo academico ya termino, o su estado no es Promovido/Reubicado');
+        END IF;
+    END IF;
+
     RETURN jsonb_build_object(
         'pkTmatricula',            p_pk_tmatricula,
+        'matriculaAnterior',       v_anterior,
         'socioeconomicoEliminado', v_socio,
         'archivosEliminados',      v_archivos,
         'estudiante', jsonb_build_object(
@@ -974,6 +1041,16 @@ BEGIN
             USING ERRCODE = '22023',
                   HINT    = 'p_pk_tmatricula debe apuntar a un TMATRICULA activo, con grupo/grado/periodo/sede activos';
     END IF;
+
+    -- -----------------------------------------------------------------
+    -- 1b. El periodo academico de la matricula no puede haber terminado.
+    --     Se valida ANTES del gate: es la condicion mas barata y no
+    --     depende de quien pregunte.
+    -- -----------------------------------------------------------------
+    PERFORM academico_test.fn_matricula_validar_periodo_vigente(
+        p_pk_tmatricula := p_pk_tmatricula,
+        p_accion        := 'retirar'
+    );
 
     -- -----------------------------------------------------------------
     -- 2. Gate -- SIN rama de super-admin (ver cabecera).
@@ -1159,6 +1236,16 @@ BEGIN
             USING ERRCODE = '22023',
                   HINT    = 'p_pk_tmatricula debe apuntar a un TMATRICULA activo, con grupo/grado/periodo/sede activos';
     END IF;
+
+    -- -----------------------------------------------------------------
+    -- 1b. El periodo academico de la matricula no puede haber terminado.
+    --     Se valida ANTES del gate: es la condicion mas barata y no
+    --     depende de quien pregunte.
+    -- -----------------------------------------------------------------
+    PERFORM academico_test.fn_matricula_validar_periodo_vigente(
+        p_pk_tmatricula := p_pk_tmatricula,
+        p_accion        := 'reingresar'
+    );
 
     -- -----------------------------------------------------------------
     -- 2. Gate -- SIN rama de super-admin (ver cabecera).
@@ -1355,6 +1442,16 @@ BEGIN
             USING ERRCODE = '22023',
                   HINT    = 'p_pk_tmatricula debe apuntar a un TMATRICULA activo, con grupo/grado/periodo/sede activos';
     END IF;
+
+    -- -----------------------------------------------------------------
+    -- 1b. El periodo academico de la matricula no puede haber terminado.
+    --     Se valida ANTES del gate: es la condicion mas barata y no
+    --     depende de quien pregunte.
+    -- -----------------------------------------------------------------
+    PERFORM academico_test.fn_matricula_validar_periodo_vigente(
+        p_pk_tmatricula := p_pk_tmatricula,
+        p_accion        := 'reactivar'
+    );
 
     -- -----------------------------------------------------------------
     -- 2. Gate -- SIN rama de super-admin (ver cabecera).

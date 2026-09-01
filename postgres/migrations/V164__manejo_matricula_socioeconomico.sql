@@ -76,9 +76,7 @@ BEGIN
     -- -----------------------------------------------------------------
     -- 1. Gate de autorizacion COMPUESTO -- mismo patron de V163.
     -- -----------------------------------------------------------------
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
+    IF EXISTS (
         SELECT 1
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TESTABLECIMIENTO e
@@ -291,9 +289,7 @@ BEGIN
         RETURN;
     END IF;
 
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
+    IF EXISTS (
         SELECT 1
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TESTABLECIMIENTO e

@@ -64,9 +64,7 @@ BEGIN
     -- 1. Gate de autorizacion COMPUESTO -- mismo patron de fn_sed_crear /
     --    fn_estudiante_crear / fn_padre_crear.
     -- -----------------------------------------------------------------
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
+    IF EXISTS (
         SELECT 1
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TESTABLECIMIENTO e
@@ -245,9 +243,7 @@ BEGIN
     -- -----------------------------------------------------------------
     -- 1. Gate de autorizacion COMPUESTO -- mismo patron de V163/V164/V165.
     -- -----------------------------------------------------------------
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
+    IF EXISTS (
         SELECT 1
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TESTABLECIMIENTO e
@@ -380,9 +376,7 @@ BEGIN
     -- -----------------------------------------------------------------
     -- 1. Gate de autorizacion COMPUESTO -- mismo patron del resto del modulo.
     -- -----------------------------------------------------------------
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
+    IF EXISTS (
         SELECT 1
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TESTABLECIMIENTO e

@@ -69,9 +69,7 @@ BEGIN
     --    (c) Secretaria / Aux.Adm del EE de la sede.
     --    (d) Jefe de sistema (rol 8) en alguna sede del EE.
     -- -----------------------------------------------------------------
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
+    IF EXISTS (
         SELECT 1
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TESTABLECIMIENTO e
@@ -232,14 +230,15 @@ $function$;
 -- Gate: a diferencia de fn_estudiante_crear, esta funcion se dispara justo
 -- despues de escribir el documento (autocompletado), momento en el que
 -- todavia no necesariamente se eligio una sede -- no hay contra que
--- escalar el gate por EE/sede. Por eso NO recibe p_fk_sede y usa el mismo
--- gate amplio (sin scoping a un EE concreto) que fn_usu_crear: super-admin
--- / jefe-de-sistema / aux.administrativo (fn_puede_afectar_usuarios) o
--- rector/secretaria de CUALQUIER EE activo (fallback por FK, para el caso
--- recien asignado sin TSEDE_USUARIO todavia). Es la info general (datos
--- de TUSUARIO/TESTUDIANTE) la que no amerita ese rigor -- lo que si es
--- sede-especifico (crear el vinculo, la matricula) ya lo valida su propia
--- funcion con el gate estricto.
+-- escalar el gate por EE/sede. Por eso NO recibe p_fk_sede y usa un gate
+-- AMPLIO (sin scoping a un EE concreto): rector o secretaria de CUALQUIER
+-- EE activo por FK -- que cubre tambien al recien asignado, sin
+-- TSEDE_USUARIO todavia -- o jefe de sistema de cualquier sede activa. Es
+-- la info general (datos de TUSUARIO/TESTUDIANTE) la que no amerita mas
+-- rigor; lo que si es sede-especifico (crear el vinculo, la matricula) ya
+-- lo valida su propia funcion con el gate estricto.
+--
+-- Amplio en ALCANCE, no en roles: el super-admin no entra (ver REV abajo).
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION academico_test.fn_estudiante_obtener_por_id(
@@ -276,19 +275,37 @@ LANGUAGE plpgsql
 STABLE
 AS $function$
 BEGIN
-    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        -- Fallback: rector o secretaria de CUALQUIER EE activo -- mismo
-        -- motivo que el fallback de fn_usu_crear/fn_fun_crear.
-        IF NOT EXISTS (
+    -- REV -- este gate era "fn_puede_afectar_usuarios(...) O rector/secretaria
+    -- por FK". fn_puede_afectar_usuarios resuelve a los roles 1-3 (super-admin),
+    -- 7 (rector por TSEDE_USUARIO) y 9 (auxiliar administrativo), con lo cual
+    -- dejaba entrar al super-admin y al auxiliar, y dejaba FUERA al jefe de
+    -- sistema (rol 8). Ahora son los tres roles administrativos y solo esos.
+    --
+    -- Se conserva el alcance AMPLIO -- cualquier EE, cualquier sede, sin
+    -- scoping -- porque esta funcion se dispara en el autocompletado, apenas
+    -- se escribe el documento, cuando todavia no se eligio la sede contra la
+    -- cual escalar. Lo que si es sede-especifico (crear el vinculo, la
+    -- matricula) lo valida su propia funcion con el gate estricto.
+    IF NOT (
+        -- Rector o secretaria de cualquier EE activo (asignacion por FK).
+        EXISTS (
             SELECT 1
               FROM academico_test.TESTABLECIMIENTO e
               JOIN academico_test.TFUNCIONARIO f
                 ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
              WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-        ) THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
+        )
+        -- Jefe de sistema (rol 8) en cualquier sede activa.
+        OR EXISTS (
+            SELECT 1
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE su.ACTIVE = TRUE AND s.ACTIVE = TRUE
+               AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        )
+    ) THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
     END IF;
 
     RETURN QUERY

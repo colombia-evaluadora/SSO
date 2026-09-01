@@ -72,9 +72,7 @@ BEGIN
     -- 1. Gate de autorizacion COMPUESTO -- mismo patron de fn_sed_crear /
     --    fn_estudiante_crear.
     -- -----------------------------------------------------------------
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
+    IF EXISTS (
         SELECT 1
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TESTABLECIMIENTO e
@@ -318,17 +316,37 @@ LANGUAGE plpgsql
 STABLE
 AS $function$
 BEGIN
-    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        IF NOT EXISTS (
+    -- REV -- este gate era "fn_puede_afectar_usuarios(...) O rector/secretaria
+    -- por FK". fn_puede_afectar_usuarios resuelve a los roles 1-3 (super-admin),
+    -- 7 (rector por TSEDE_USUARIO) y 9 (auxiliar administrativo), con lo cual
+    -- dejaba entrar al super-admin y al auxiliar, y dejaba FUERA al jefe de
+    -- sistema (rol 8). Ahora son los tres roles administrativos y solo esos.
+    --
+    -- Se conserva el alcance AMPLIO -- cualquier EE, cualquier sede, sin
+    -- scoping -- porque esta funcion se dispara en el autocompletado, apenas
+    -- se escribe el documento, cuando todavia no se eligio la sede contra la
+    -- cual escalar. Lo que si es sede-especifico (crear el vinculo, la
+    -- matricula) lo valida su propia funcion con el gate estricto.
+    IF NOT (
+        -- Rector o secretaria de cualquier EE activo (asignacion por FK).
+        EXISTS (
             SELECT 1
               FROM academico_test.TESTABLECIMIENTO e
               JOIN academico_test.TFUNCIONARIO f
                 ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
              WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-        ) THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
+        )
+        -- Jefe de sistema (rol 8) en cualquier sede activa.
+        OR EXISTS (
+            SELECT 1
+              FROM academico_test.TSEDE_USUARIO su
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+             WHERE su.ACTIVE = TRUE AND s.ACTIVE = TRUE
+               AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        )
+    ) THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
     END IF;
 
     RETURN QUERY

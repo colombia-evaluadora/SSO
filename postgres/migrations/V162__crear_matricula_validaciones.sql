@@ -444,3 +444,61 @@ BEGIN
     RETURN NULL;
 END;
 $function$;
+
+
+-- =============================================================================
+-- fn_matricula_validar_periodo_vigente -- ninguna accion sobre una matricula
+-- puede ejecutarse una vez que TERMINO el periodo academico al que pertenece.
+--
+-- El corte es TPERIODO_ACADEMICO.FECHA_FIN: mientras CURRENT_DATE no la pase,
+-- el periodo sigue abierto y la matricula se puede retirar, reingresar,
+-- reactivar, promover o reubicar. Despues, no -- el año quedo cerrado y sus
+-- matriculas son historia.
+--
+-- No se usa ACTIVE del periodo para esto: en los datos, 349 de los 361
+-- periodos activos ya tienen FECHA_FIN pasada, asi que ACTIVE marca "el
+-- registro sigue vigente", no "el periodo esta en curso". Son cosas distintas
+-- y solo la fecha responde la pregunta.
+--
+-- REV -- fn_matricula_reactivar nacio SIN restriccion temporal ("se puede
+-- reactivar una matricula de cualquier año lectivo, incluso cerrado"), que era
+-- lo pedido entonces. El negocio lo reviso y confirmo lo contrario: la regla
+-- aplica a todas las acciones por igual, reactivar incluida.
+--
+-- p_accion entra solo en el mensaje, para que el error diga que se intentaba
+-- hacer en vez de un generico.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_validar_periodo_vigente(
+    p_pk_tmatricula BIGINT,
+    p_accion        VARCHAR DEFAULT 'modificar'
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $function$
+DECLARE
+    v_fecha_fin      DATE;
+    v_periodo_nombre VARCHAR;
+BEGIN
+    SELECT pa.FECHA_FIN, pa.NOMBRE
+      INTO v_fecha_fin, v_periodo_nombre
+      FROM academico_test.TMATRICULA m
+      JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
+      JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa  ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+     WHERE m.PK_TMATRICULA = p_pk_tmatricula;
+
+    IF v_fecha_fin IS NULL THEN
+        RAISE EXCEPTION 'No se pudo resolver el periodo academico de la matricula %', p_pk_tmatricula
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF v_fecha_fin < CURRENT_DATE THEN
+        RAISE EXCEPTION 'No se puede % la matricula %: su periodo academico (%) termino el %',
+            p_accion, p_pk_tmatricula, COALESCE(v_periodo_nombre, 'sin nombre'), v_fecha_fin
+            USING ERRCODE = '22023',
+                  HINT    = 'Las acciones sobre una matricula solo se permiten mientras su periodo academico siga en curso';
+    END IF;
+END;
+$function$;

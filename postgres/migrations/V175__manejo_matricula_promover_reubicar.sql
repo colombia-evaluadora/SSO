@@ -8,11 +8,19 @@
 --
 --                     | promover                  | reubicar
 --   ------------------+---------------------------+--------------------------
---   estados de origen | Cursando, Aprobado        | Cursando, Aprobado,
---   permitidos        |                           | Reprobado
+--   estado de origen  | Cursando                  | Cursando
 --   estado que queda  | Promovido ('13')          | Reubicado ('14')
 --   en la vieja       |                           |
 --   sede destino      | DEBE ser la misma         | DEBE ser distinta
+--
+-- REV -- la primera version admitia Aprobado en promover, y Aprobado y
+-- Reprobado en reubicar. El negocio lo confirmo al reves: ambas salen
+-- UNICAMENTE de Cursando. Una matricula ya cerrada academicamente se
+-- reactiva primero (PUT /:ID/reactivar) y despues se mueve.
+--
+-- Ninguna de las dos puede ejecutarse si el periodo academico de la matricula
+-- -- o el del grupo destino -- ya termino (ver
+-- fn_matricula_validar_periodo_vigente en V162).
 --
 -- Mecanica comun, por cada matricula del lote:
 --   1. Se crea una matricula NUEVA en el grupo destino, en "Cursando",
@@ -304,6 +312,8 @@ DECLARE
     v_jornada_destino     BIGINT;
     v_periodo_destino     BIGINT;
     v_capacidad           NUMERIC;
+    v_fin_destino         DATE;
+    v_periodo_destino_nom VARCHAR;
     v_ocupados            BIGINT;
     v_estados_origen      BIGINT[];
     v_estados_origen_nom  TEXT;
@@ -338,9 +348,9 @@ BEGIN
     --    por eso no hace falta recibir la sede por separado.
     -- -----------------------------------------------------------------
     SELECT gr.FK_TLV_JORNADA, g.FK_TPERIODO_ACADEMICO, pa.FK_TSEDE,
-           s.FK_TESTABLECIMIENTO, gr.CAPACIDAD
+           s.FK_TESTABLECIMIENTO, gr.CAPACIDAD, pa.FECHA_FIN, pa.NOMBRE
       INTO v_jornada_destino, v_periodo_destino, v_sede_destino,
-           v_ee_destino, v_capacidad
+           v_ee_destino, v_capacidad, v_fin_destino, v_periodo_destino_nom
       FROM academico_test.TGRUPO gr
       JOIN academico_test.TGRADO g              ON g.PK_TGRADO = gr.FK_TGRADO
       JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
@@ -355,6 +365,18 @@ BEGIN
         RAISE EXCEPTION 'No se encontro un grupo destino activo con ese identificador'
             USING ERRCODE = '23503',
                   HINT    = 'p_fk_tgrupo_destino debe apuntar a un TGRUPO activo, con grado/periodo/sede activos';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2b. El periodo del grupo DESTINO tampoco puede haber terminado: no
+    --     tiene sentido mover a nadie a un curso que ya cerro. El periodo
+    --     de cada matricula de origen se valida en el paso 6.
+    -- -----------------------------------------------------------------
+    IF v_fin_destino < CURRENT_DATE THEN
+        RAISE EXCEPTION 'No se puede % hacia el grupo %: su periodo academico (%) termino el %',
+            p_accion, p_fk_tgrupo_destino, COALESCE(v_periodo_destino_nom, 'sin nombre'), v_fin_destino
+            USING ERRCODE = '22023',
+                  HINT    = 'Elija un grupo de un periodo academico en curso';
     END IF;
 
     -- -----------------------------------------------------------------
@@ -439,6 +461,12 @@ BEGIN
                 USING ERRCODE = '23503',
                       HINT    = 'Todas las matriculas del lote deben estar activas, con grupo/grado/periodo/sede activos';
         END IF;
+
+        -- El periodo de la matricula de origen debe seguir en curso.
+        PERFORM academico_test.fn_matricula_validar_periodo_vigente(
+            p_pk_tmatricula := v_fila.pk,
+            p_accion        := p_accion
+        );
 
         IF NOT (v_fila.estado = ANY(v_estados_origen)) THEN
             RAISE EXCEPTION 'La matricula % esta en estado "%" y solo se puede % desde: %',
@@ -622,12 +650,11 @@ $function$;
 -- fn_matricula_promover_lote -- promocion ordinaria de un lote de matriculas al
 -- grupo destino, DENTRO DE LA MISMA SEDE.
 --
--- Origen: Cursando ('1') o Aprobado ('2') -- asi se pidio, para poder promover
--- al cierre del año, cuando el flujo academico ya dejo las matriculas en
--- Aprobado, sin tener que reactivarlas en masa antes.
---
--- Una matricula Reprobada NO se promueve. Si el caso es legitimo (el estado
--- estaba mal), se reactiva primero con PUT /:ID/reactivar y se corrige.
+-- Origen: UNICAMENTE Cursando ('1'). Una matricula ya cerrada
+-- academicamente -- Aprobado, Reprobado, Promovido, Reubicado -- no se
+-- promueve directamente: se reactiva primero (PUT /:ID/reactivar), que la
+-- devuelve a Cursando, y recien entonces se promueve. Dos pasos explicitos en
+-- vez de uno que mezcla "corregir el estado" con "mover de grupo".
 --
 -- La vieja queda en Promovido ('13').
 -- =============================================================================
@@ -645,7 +672,7 @@ BEGIN
         p_pk_usuario_solicitante := p_pk_usuario_solicitante,
         p_pk_tmatriculas         := p_pk_tmatriculas,
         p_fk_tgrupo_destino      := p_fk_tgrupo_destino,
-        p_valores_origen         := ARRAY['1', '2'],
+        p_valores_origen         := ARRAY['1'],
         p_valor_destino          := '13',
         p_misma_sede             := TRUE,
         p_accion                 := 'promover'
@@ -658,10 +685,10 @@ $function$;
 -- fn_matricula_reubicar_lote -- reubicacion de un lote de matriculas a un grupo
 -- de OTRA SEDE.
 --
--- Origen: Cursando ('1'), Aprobado ('2') o Reprobado ('3') -- mas amplio que
--- promover porque una reubicacion es un movimiento administrativo (cambio de
--- sede) y no una consecuencia del resultado academico: un estudiante que
--- reprobo tambien puede tener que cambiar de sede.
+-- Origen: UNICAMENTE Cursando ('1'), igual que promover. Se penso en admitir
+-- tambien Aprobado y Reprobado, con el argumento de que una reubicacion es un
+-- movimiento administrativo y no una consecuencia del resultado academico; el
+-- negocio lo descarto. Una matricula cerrada se reactiva primero.
 --
 -- La vieja queda en Reubicado ('14').
 --
@@ -683,7 +710,7 @@ BEGIN
         p_pk_usuario_solicitante := p_pk_usuario_solicitante,
         p_pk_tmatriculas         := p_pk_tmatriculas,
         p_fk_tgrupo_destino      := p_fk_tgrupo_destino,
-        p_valores_origen         := ARRAY['1', '2', '3'],
+        p_valores_origen         := ARRAY['1'],
         p_valor_destino          := '14',
         p_misma_sede             := FALSE,
         p_accion                 := 'reubicar'
