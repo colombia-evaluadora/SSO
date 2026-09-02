@@ -36,15 +36,24 @@
 --                              Sumatoria, Nota Directa)
 --
 --   NO EXISTIAN — se seedean aqui (bloque 1). V22 creo las columnas
---   FK_TLV_MODALIDAD / _INSTRUMENTO_EVALUACION / _TIPO_EVIDENCIA /
---   _METODO_VALORACION en TACTIVIDAD, FK_TLV_TIPO_RECURSO en
---   TACTIVIDAD_MATERIAL y FK_TLV_TIPO_ADAPTACION / _FORMATO_ADAPTACION /
---   _APLICA_A en TACTIVIDAD_ADAPTACION, pero nunca seedeo sus catalogos:
---   sin esto los selects de la pantalla salen vacios y no se puede crear
---   ninguna actividad con instrumento/modalidad/adaptaciones.
+--   FK_TLV_MODALIDAD / _INSTRUMENTO_EVALUACION / _TIPO_EVIDENCIA en
+--   TACTIVIDAD, FK_TLV_TIPO_RECURSO en TACTIVIDAD_MATERIAL y
+--   FK_TLV_TIPO_ADAPTACION / _FORMATO_ADAPTACION / _APLICA_A en
+--   TACTIVIDAD_ADAPTACION, pero nunca seedeo sus catalogos: sin esto los
+--   selects de la pantalla salen vacios y no se puede crear ninguna
+--   actividad con instrumento/modalidad/adaptaciones.
 --     MODALIDAD, INSTRUMENTO_EVALUACION, TIPO_EVIDENCIA,
---     METODO_VALORACION, TIPO_RECURSO, TIPO_ADAPTACION,
---     FORMATO_ADAPTACION, APLICA_A
+--     TIPO_RECURSO, TIPO_ADAPTACION, FORMATO_ADAPTACION, APLICA_A
+--
+--   NO se seedea METODO_VALORACION: V22 creo
+--   TACTIVIDAD.FK_TLV_METODO_VALORACION pero NINGUN campo del formulario
+--   "Nueva actividad" (secciones Identificacion / Programacion / Evaluacion
+--   / Adaptaciones / Seguimiento del figma) le corresponde — la seccion
+--   Evaluacion solo tiene ¿Es evaluativa? (ES_EVALUATIVA), Instrumento
+--   (FK_TLV_INSTRUMENTO_EVALUACION) y Ponderacion (PONDERACION). La columna
+--   queda como parametro OPCIONAL de fn_actividad_crear/_actualizar por si
+--   otro flujo la usa; cuando el negocio defina su lista se agrega el seed
+--   y el campo en la UI.
 --
 --   Procedencia de los valores seedeados:
 --     * INSTRUMENTO_EVALUACION, TIPO_ADAPTACION, FORMATO_ADAPTACION:
@@ -57,9 +66,6 @@
 --       (bloque Seguimiento); el resto (Enlace / Texto / Otro) es una lista
 --       MINIMA propuesta, alineada con las banderas REQUIERE_ARCHIVO /
 --       REQUIERE_TEXTO de V22. PENDIENTE de confirmar con negocio.
---     * METODO_VALORACION: PROPUESTO (Heteroevaluacion / Autoevaluacion /
---       Coevaluacion) — no hay figma ni comentario de V22 con la lista.
---       PENDIENTE de confirmar con negocio.
 --     * APLICA_A: derivado del requisito "la adaptacion aplica a ciertos
 --       estudiantes de ese grupo" -> TODO_EL_GRUPO / ESTUDIANTES_SELECCIONADOS.
 --   Cambiar cualquiera de estas listas es un seed nuevo: el codigo solo
@@ -132,9 +138,6 @@ SELECT v.categoria, v.nombre, v.valor, 'V224_seed'
     ('INSTRUMENTO_EVALUACION',          'Lista de cotejo',                    'LISTA_COTEJO'),
     ('INSTRUMENTO_EVALUACION',          'Escala de valoración',               'ESCALA_VALORACION'),
     ('INSTRUMENTO_EVALUACION',          'Otro (personalizado)',               'OTRO'),
-    ('METODO_VALORACION',               'Heteroevaluación',                   'HETEROEVALUACION'),
-    ('METODO_VALORACION',               'Autoevaluación',                     'AUTOEVALUACION'),
-    ('METODO_VALORACION',               'Coevaluación',                       'COEVALUACION'),
     -- Seguimiento
     ('TIPO_EVIDENCIA',                  'Archivo',                            'ARCHIVO'),
     ('TIPO_EVIDENCIA',                  'Enlace',                             'ENLACE'),
@@ -820,7 +823,7 @@ BEGIN
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_modalidad,               'MODALIDAD',                'FK_TLV_MODALIDAD');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_instrumento_evaluacion,  'INSTRUMENTO_EVALUACION',   'FK_TLV_INSTRUMENTO_EVALUACION');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_evidencia,          'TIPO_EVIDENCIA',           'FK_TLV_TIPO_EVIDENCIA');
-    PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_metodo_valoracion,       'METODO_VALORACION',        'FK_TLV_METODO_VALORACION');
+    PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_metodo_valoracion,       'METODO_VALORACION',        'FK_TLV_METODO_VALORACION'); -- sin seed: solo valida existencia+ACTIVE
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_calculo,            'TIPO_CALCULO',             'FK_TLV_TIPO_CALCULO');
 
     -- 5. Unicidad (TITULO, unidad, grupo, jerarquia) entre activas —
@@ -984,7 +987,7 @@ BEGIN
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_modalidad,               'MODALIDAD',              'FK_TLV_MODALIDAD');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_instrumento_evaluacion,  'INSTRUMENTO_EVALUACION', 'FK_TLV_INSTRUMENTO_EVALUACION');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_evidencia,          'TIPO_EVIDENCIA',         'FK_TLV_TIPO_EVIDENCIA');
-    PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_metodo_valoracion,       'METODO_VALORACION',      'FK_TLV_METODO_VALORACION');
+    PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_metodo_valoracion,       'METODO_VALORACION',      'FK_TLV_METODO_VALORACION'); -- sin seed: solo valida existencia+ACTIVE
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_calculo,            'TIPO_CALCULO',           'FK_TLV_TIPO_CALCULO');
 
     IF EXISTS (
