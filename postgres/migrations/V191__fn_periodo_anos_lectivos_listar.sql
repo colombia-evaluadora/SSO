@@ -50,7 +50,6 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 DROP FUNCTION IF EXISTS academico_test.fn_periodo_jornadas_listar(BIGINT);
-DROP FUNCTION IF EXISTS academico_test. (BIGINT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_jornadas_listar(
     p_pk_usuario BIGINT DEFAULT NULL,
     p_fk_sede BIGINT DEFAULT NULL
