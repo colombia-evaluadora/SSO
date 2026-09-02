@@ -26,7 +26,9 @@
 -- caller NUNCA los manda (si no, cualquiera se haria pasar por otro usuario
 -- y saltaria el scope por rol de V220).
 --
--- Endpoints registrados (5):
+-- Endpoints registrados (6):
+--   GET    /asistencias/sesion/estudiantes  fn_asistencia_estudiantes_sesion
+--          padron de la pantalla "Asistencia manual" (alumnos + estado actual)
 --   POST   /asistencias/registrar     fn_asistencia_registrar_bulk
 --          "Asistencia manual" (BODY.REGISTROS) y "Marcar todo como Asistio"
 --          (BODY.MARCAR_TODOS = 1, sin REGISTROS).
@@ -188,6 +190,40 @@ ON CONFLICT (uuid) DO UPDATE
        detail = EXCLUDED.detail;
 
 -- ---------------------------------------------------------------------------
+-- 3b. PADRON de una sesion (pantalla "Asistencia manual", GET query-string)
+--     Todas las matriculas activas del grupo con su estado actual para esa
+--     (asignatura, fecha, bloque); NULL = falta tomarlo. Cada fila repite la
+--     cabecera de la sesion (hora_inicio/hora_fin, fk_tperiodo_evaluacion).
+-- ---------------------------------------------------------------------------
+INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
+                          path_template, execution_mode, http_method, param_types, detail)
+SELECT
+    'asis-sesion-estudiantes',
+    $q$SELECT * FROM academico_test.fn_asistencia_estudiantes_sesion(
+    p_pk_usuario     => public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    p_fk_tgrupo      => CAST(:QUERY.GRUPO AS BIGINT),
+    p_fk_tasignatura => CAST(:QUERY.ASIGNATURA AS BIGINT),
+    p_fecha          => CAST(:QUERY.FECHA AS DATE),
+    p_bloque         => CAST(:QUERY.BLOQUE AS NUMERIC)
+);$q$,
+    'postgres', false, false, m.id_microservice,
+    '/asistencias/sesion/estudiantes', 'SELECT', 'GET',
+    '{
+       "QUERY.GRUPO":      "BIGINT",
+       "QUERY.ASIGNATURA": "BIGINT",
+       "QUERY.FECHA":      "VARCHAR",
+       "QUERY.BLOQUE":     "NUMERIC"
+     }'::jsonb,
+    'V221 -- padron de la pantalla "Asistencia manual": una fila por matricula activa del grupo, con el estado ACTUAL del alumno (pk_tasistencia / tipo_asistencia_valor / observacion / soporte) o NULL si falta tomarlo. Repite en cada fila la cabecera de la sesion: hora_inicio/hora_fin (THORARIO por dia de semana de la fecha) y fk_tperiodo_evaluacion. total_estudiantes y registrados son ventanas sobre el padron.'
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (uuid) DO UPDATE
+   SET query = EXCLUDED.query, param_types = EXCLUDED.param_types,
+       path_template = EXCLUDED.path_template, http_method = EXCLUDED.http_method,
+       execution_mode = EXCLUDED.execution_mode, microservice_id = EXCLUDED.microservice_id,
+       detail = EXCLUDED.detail;
+
+-- ---------------------------------------------------------------------------
 -- 4. CALENDARIO mensual por sede (GET con query-string)
 -- ---------------------------------------------------------------------------
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
@@ -265,7 +301,7 @@ SELECT r.id_role, q.id_query
  CROSS JOIN public.role r
  WHERE r.name = 'CEVAL-SUPER_ADMINISTRADOR'
    AND q.uuid IN ('asis-registrar', 'asis-editar', 'asis-seguimiento',
-                  'asis-calendario', 'asis-resumen-horas')
+                  'asis-sesion-estudiantes', 'asis-calendario', 'asis-resumen-horas')
    AND NOT EXISTS (
        SELECT 1 FROM public.role_query rq
         WHERE rq.query_id = q.id_query AND rq.role_id = r.id_role
@@ -306,6 +342,9 @@ SELECT q.id_query, c.param_key, c.only_positive, c.allow_decimals, c.max_digits,
     ('asis-editar',       'BODY.TIPO_ASISTENCIA',         TRUE,  FALSE, 1,      NULL,   NULL,   NULL,   1::numeric,  6::numeric),
     ('asis-editar',       'BODY.SOPORTE_ARCHIVO',         TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-editar',       'BODY.OBSERVACION',             NULL,  NULL,  NULL,   FALSE,  NULL,   4000,   NULL,   NULL),
+    ('asis-sesion-estudiantes', 'QUERY.GRUPO',            TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
+    ('asis-sesion-estudiantes', 'QUERY.ASIGNATURA',       TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
+    ('asis-sesion-estudiantes', 'QUERY.BLOQUE',           NULL,  FALSE, 2,      NULL,   NULL,   NULL,   0::numeric,  30::numeric),
     ('asis-seguimiento',  'BODY.FILTERS.GRUPO',           TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-seguimiento',  'BODY.FILTERS.ASIGNATURA',      TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-seguimiento',  'BODY.FILTERS.TIPO_ASISTENCIA', TRUE,  FALSE, 1,      NULL,   NULL,   NULL,   1::numeric,  6::numeric),

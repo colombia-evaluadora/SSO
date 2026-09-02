@@ -3,7 +3,7 @@
     "_postman_id": "c9f4d2b7-1a6e-4c83-b5d0-asistencias001",
     "name": "SSO - Asistencias (CU-86e32gvpp)",
     "description": {
-      "content": "Modulo de **Asistencias** - V220 (funciones PL/pgSQL sobre `academico_test.TASISTENCIA` de V22) + V221 (endpoints en `public.query`).\n\n## Autorizacion - dos capas\n\n1. **Gateway (`public.role_query`)**: HOY solo el rol `CEVAL-SUPER_ADMINISTRADOR` esta asociado a estas 5 queries. Cualquier otro rol recibe **403** antes de tocar la base.\n2. **Gate de negocio (V220)**: `fn_asistencia_gate_escritura` / `fn_asistencia_puede_ver` sobre el menu **`ASISTENCIA`**, con el modelo de 3 capas de PR #100:\n   - *capability*: `TROL_MENU` concede / `TUSUARIO_ROL_PERMISO` recorta (acciones CREAR / EDITAR / VER),\n   - *scope* por categoria de rol: nivel 0 SUPER_ADMIN (bypass), 1 territorial (todos los EE), 2 su(s) establecimiento(s), 3 el par exacto (sede, jornada) del grupo, 4 nada,\n   - se resuelve **por el grupo** de la matricula. Violarlo devuelve **403** (`SQLSTATE 42501`).\n\nPara habilitar docentes/rectores **no hace falta migracion**: basta concederles el menu `ASISTENCIA` desde *Configuracion de roles y menus* (`PUT /roles/:ID/menus`) - el gate lee `TROL_MENU` en caliente. Lo unico que si requiere migracion es sumarles la fila en `role_query`.\n\n> **Nota de despliegue**: los helpers de permisos (V29/V40/V113/V185) viven en `feature/CU-86e2w4xdt-Permisos-segun-Rol` (PR #100), aun sin mergear. V220 aplica igual sobre `dev` porque son funciones plpgsql (resuelven nombres en ejecucion), pero **los endpoints solo responden correctamente una vez mergeado PR #100**.\n\n## Catalogo de estados (`TLISTA_VALOR`, `CATEGORIA = 'TIPO_ASISTENCIA'`)\n\n| VALOR | Nombre | Clasificacion |\n|---|---|---|\n| 1 | Asistio | presente, a tiempo |\n| 2 | NO Asistio | **ausente** |\n| 3 | NO Asistio trajo justificacion | **ausente** (justificado) |\n| 5 | Llego tarde | presente, tarde |\n| 6 | Llego tarde trajo justificacion | presente, tarde (justificado) |\n\nSe resuelve siempre por `(CATEGORIA, VALOR)`: los `pk_lista_valor` **no** son estables entre ambientes. El valor `4` no existe.\n\n## Modelo de \"sesion\"\n\nUna sesion es `(grupo, asignatura, FECHA, BLOQUE)`. `BLOQUE` casa con `THORARIO.NUMERO_BLOQUE`; de ahi salen la **franja horaria** y el **calendario de sesiones programadas** (proyectando `THORARIO` sobre las fechas reales del mes: `TLISTA_VALOR DIA_SEMANA.VALOR = EXTRACT(DOW) + 1`).\n\n`FK_TPERIODO_EVALUACION` **no se envia**: lo resuelve el backend por el rango de fechas del periodo del grupo.\n\n## 404 antes del reinicio\n\nLas filas nuevas de `public.query` quedan cacheadas por el contenedor `query-service-eval-col`. Hasta reiniciarlo, **los 5 endpoints responden 404** por el gateway aunque la migracion este aplicada.\n\n## Errores esperados\n\n| HTTP | Cuando |\n|---|---|\n| 400 `PARAM_CONSTRAINT_VIOLATION` | `query_param_constraint` (V221): `PAGESIZE` fuera de 1..200, `MES` fuera de 1..12, `TIPO_ASISTENCIA` fuera de 1..6, ids no positivos, `SEARCH` > 100 chars, `OBSERVACION` > 4000 |\n| 400 / 422 | reglas de la funcion: sin `REGISTROS` ni `MARCAR_TODOS`, sin periodo de evaluacion que cubra la fecha, `tipoAsistencia` = 4 |\n| 403 | rol sin la query (`role_query`) o sin capability/scope sobre el grupo |\n| 404 | `query-service-eval-col` sin reiniciar, o `PATCH /asistencias/:ID` con un id inexistente |\n",
+      "content": "Modulo de **Asistencias** - V220 (funciones PL/pgSQL sobre `academico_test.TASISTENCIA` de V22) + V221 (endpoints en `public.query`).\n\n## Autorizacion - dos capas\n\n1. **Gateway (`public.role_query`)**: HOY solo el rol `CEVAL-SUPER_ADMINISTRADOR` esta asociado a estas 6 queries. Cualquier otro rol recibe **403** antes de tocar la base.\n2. **Gate de negocio (V220)**: `fn_asistencia_gate_escritura` / `fn_asistencia_puede_ver` sobre el menu **`ASISTENCIA`**, con el modelo de 3 capas de PR #100:\n   - *capability*: `TROL_MENU` concede / `TUSUARIO_ROL_PERMISO` recorta (acciones CREAR / EDITAR / VER),\n   - *scope* por categoria de rol: nivel 0 SUPER_ADMIN (bypass), 1 territorial (todos los EE), 2 su(s) establecimiento(s), 3 el par exacto (sede, jornada) del grupo, 4 nada,\n   - se resuelve **por el grupo** de la matricula. Violarlo devuelve **403** (`SQLSTATE 42501`).\n\nPara habilitar docentes/rectores **no hace falta migracion**: basta concederles el menu `ASISTENCIA` desde *Configuracion de roles y menus* (`PUT /roles/:ID/menus`) - el gate lee `TROL_MENU` en caliente. Lo unico que si requiere migracion es sumarles la fila en `role_query`.\n\n> **Nota de despliegue**: los helpers de permisos (V29/V40/V113/V185) viven en `feature/CU-86e2w4xdt-Permisos-segun-Rol` (PR #100), aun sin mergear. V220 aplica igual sobre `dev` porque son funciones plpgsql (resuelven nombres en ejecucion), pero **los de escritura y los que resuelven scope solo responden correctamente una vez mergeado PR #100**.\n\n## Catalogo de estados (`TLISTA_VALOR`, `CATEGORIA = 'TIPO_ASISTENCIA'`)\n\n| VALOR | Nombre | Clasificacion |\n|---|---|---|\n| 1 | Asistio | presente, a tiempo |\n| 2 | NO Asistio | **ausente** |\n| 3 | NO Asistio trajo justificacion | **ausente** (justificado) |\n| 5 | Llego tarde | presente, tarde |\n| 6 | Llego tarde trajo justificacion | presente, tarde (justificado) |\n\nSe resuelve siempre por `(CATEGORIA, VALOR)`: los `pk_lista_valor` **no** son estables entre ambientes. El valor `4` no existe.\n\n## Modelo de \"sesion\"\n\nUna sesion es `(grupo, asignatura, FECHA, BLOQUE)`. `BLOQUE` casa con `THORARIO.NUMERO_BLOQUE`; de ahi salen la **franja horaria** y el **calendario de sesiones programadas** (proyectando `THORARIO` sobre las fechas reales del mes: `TLISTA_VALOR DIA_SEMANA.VALOR = EXTRACT(DOW) + 1`).\n\n`FK_TPERIODO_EVALUACION` **no se envia**: lo resuelve el backend por el rango de fechas del periodo del grupo.\n\n## 404 antes del reinicio\n\nLas filas nuevas de `public.query` quedan cacheadas por el contenedor `query-service-eval-col`. Hasta reiniciarlo, **los 6 endpoints responden 404** por el gateway aunque la migracion este aplicada.\n\n## Errores esperados\n\n| HTTP | Cuando |\n|---|---|\n| 400 `PARAM_CONSTRAINT_VIOLATION` | `query_param_constraint` (V221): `PAGESIZE` fuera de 1..200, `MES` fuera de 1..12, `TIPO_ASISTENCIA` fuera de 1..6, ids no positivos, `SEARCH` > 100 chars, `OBSERVACION` > 4000 |\n| 400 / 422 | reglas de la funcion: sin `REGISTROS` ni `MARCAR_TODOS`, sin periodo de evaluacion que cubra la fecha, `tipoAsistencia` = 4 |\n| 403 | rol sin la query (`role_query`) o sin capability/scope sobre el grupo |\n| 404 | `query-service-eval-col` sin reiniciar, o `PATCH /asistencias/:ID` con un id inexistente |\n",
       "type": "text/markdown"
     },
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -58,7 +58,76 @@
       ]
     },
     {
-      "name": "1 - Calendario del mes (pantalla Asistencia)",
+      "name": "1 - Padron de la sesion (pantalla \"Asistencia manual\")",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/sesion/estudiantes?GRUPO={{grupoId}}&ASIGNATURA={{asignaturaId}}&FECHA=2026-02-16&BLOQUE=1",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "sesion",
+            "estudiantes"
+          ],
+          "query": [
+            {
+              "key": "GRUPO",
+              "value": "{{grupoId}}"
+            },
+            {
+              "key": "ASIGNATURA",
+              "value": "{{asignaturaId}}"
+            },
+            {
+              "key": "FECHA",
+              "value": "2026-02-16"
+            },
+            {
+              "key": "BLOQUE",
+              "value": "1"
+            }
+          ]
+        },
+        "description": {
+          "content": "Lista **todos** los estudiantes activos del grupo para una sesion `(GRUPO, ASIGNATURA, FECHA, BLOQUE)` — es la grilla de la pantalla **\"Asistencia manual\"** del mock.\n\nCada fila trae el **estado actual** del alumno para esa sesion:\n\n- si ya se le tomo asistencia -> `pk_tasistencia`, `tipo_asistencia_valor` (1/2/3/5/6), `tipo_asistencia`, `observacion`, `fk_soporte_archivo`, `soporte_nombre`;\n- si **falta** tomarla -> todos esos campos en `null` (\"Seleccionar\" en el mock).\n\nCada fila **repite la cabecera de la sesion** para no hacer una segunda llamada: `hora_inicio` / `hora_fin` (de `THORARIO` por dia de semana de la `FECHA`; `null` si ese bloque no tiene horario cargado) y `fk_tperiodo_evaluacion` (resuelto por el rango de fechas del periodo del grupo). `total_estudiantes` y `registrados` son el conteo del padron y de cuantos ya tienen registro.\n\nOrden: apellidos, nombres. **Params**: `GRUPO`, `ASIGNATURA`, `FECHA` obligatorios; `BLOQUE` opcional (default: sin bloque). Sale **antes** de `POST /asistencias/registrar`: se pide el padron, el docente marca, y se envia el `registrar` con el arreglo `REGISTROS`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test(\"padron con cabecera de sesion\", () => {",
+              "  if (!r.length) return;",
+              "  pm.expect(r[0]).to.have.property(\"estudiante\");",
+              "  pm.expect(r[0]).to.have.property(\"tipo_asistencia_valor\");",
+              "  pm.expect(r[0]).to.have.property(\"fk_tperiodo_evaluacion\");",
+              "  pm.expect(r[0]).to.have.property(\"total_estudiantes\"); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - Calendario del mes (pantalla Asistencia)",
       "request": {
         "method": "GET",
         "header": [
@@ -130,7 +199,7 @@
       ]
     },
     {
-      "name": "2 - Resumen de horas (tarjetas del encabezado)",
+      "name": "3 - Resumen de horas (tarjetas del encabezado)",
       "request": {
         "method": "GET",
         "header": [
@@ -193,7 +262,7 @@
       ]
     },
     {
-      "name": "3 - Marcar todo el grupo como Asistio",
+      "name": "4 - Marcar todo el grupo como Asistio",
       "request": {
         "method": "POST",
         "header": [
@@ -245,7 +314,7 @@
       ]
     },
     {
-      "name": "4 - Asistencia manual (estado por estudiante)",
+      "name": "5 - Asistencia manual (estado por estudiante)",
       "request": {
         "method": "POST",
         "header": [
@@ -297,7 +366,7 @@
       ]
     },
     {
-      "name": "5 - Seguimiento (listado paginado)",
+      "name": "6 - Seguimiento (listado paginado)",
       "request": {
         "method": "POST",
         "header": [
@@ -354,7 +423,7 @@
       ]
     },
     {
-      "name": "6 - Seguimiento filtrado por 'No asistio'",
+      "name": "7 - Seguimiento filtrado por 'No asistio'",
       "request": {
         "method": "POST",
         "header": [
@@ -406,7 +475,7 @@
       ]
     },
     {
-      "name": "7 - Editar un registro (PATCH parcial)",
+      "name": "8 - Editar un registro (PATCH parcial)",
       "request": {
         "method": "PATCH",
         "header": [
@@ -458,7 +527,7 @@
       ]
     },
     {
-      "name": "8 - [400] PAGESIZE fuera de rango",
+      "name": "9 - [400] PAGESIZE fuera de rango",
       "request": {
         "method": "POST",
         "header": [
@@ -510,7 +579,7 @@
       ]
     },
     {
-      "name": "9 - [400] TIPO_ASISTENCIA fuera del catalogo",
+      "name": "10 - [400] TIPO_ASISTENCIA fuera del catalogo",
       "request": {
         "method": "PATCH",
         "header": [
@@ -562,7 +631,7 @@
       ]
     },
     {
-      "name": "10 - [400] ni REGISTROS ni MARCAR_TODOS",
+      "name": "11 - [400] ni REGISTROS ni MARCAR_TODOS",
       "request": {
         "method": "POST",
         "header": [
@@ -614,7 +683,7 @@
       ]
     },
     {
-      "name": "11 - [404] antes de reiniciar query-service",
+      "name": "12 - [404] antes de reiniciar query-service",
       "request": {
         "method": "GET",
         "header": [

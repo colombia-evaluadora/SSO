@@ -24,6 +24,10 @@
 --   Ese mapeo es lo que permite (a) unir THORARIO a una FECHA concreta sin
 --   duplicar, y (b) proyectar el horario sobre el mes para saber que
 --   sesiones estan PENDIENTES o RETRASADAS.
+--   La comparacion va como TEXTO -- dia.VALOR = (EXTRACT(DOW..)+1)::TEXT --
+--   y NO casteando dia.VALOR::INT: el planner puede aplicar el cast antes
+--   del filtro CATEGORIA='DIA_SEMANA' y reventar contra un VALOR no numerico
+--   de otra categoria (p.ej. CATEGORIA='PLAN', VALOR='PREESCOLAR').
 --
 --   *** POR QUE EL JOIN A THORARIO ES LATERAL Y NO UN LEFT JOIN PLANO ***
 --   (FK_TGRUPO, FK_TASIGNATURA, NUMERO_BLOQUE) NO es unico en THORARIO: el
@@ -108,6 +112,7 @@
 --   5. VISTA v_asistencia_detalle  (cadena de joins + clasificacion, un solo
 --      sitio; la consumen las 3 funciones de lectura)
 --   6. fn_asistencia_registrar_bulk, fn_asistencia_editar,
+--      fn_asistencia_estudiantes_sesion (padron para "Asistencia manual"),
 --      fn_asistencia_listar_seguimiento, fn_asistencia_calendario,
 --      fn_asistencia_resumen_horas
 --
@@ -348,13 +353,21 @@ SELECT
     ROUND(COALESCE(EXTRACT(EPOCH FROM (h.HORA_FIN - h.HORA_INICIO)) / 3600.0, 0)::NUMERIC, 2)
                                               AS horas,
     a.FK_TLV_TIPO_ASISTENCIA                  AS fk_tlv_tipo_asistencia,
-    lv.VALOR::INT                             AS tipo_valor,
+    -- El estado se compara SIEMPRE como TEXTO contra el dominio fijo de
+    -- TIPO_ASISTENCIA ('1','2','3','5','6'). No se hace lv.VALOR::INT: el
+    -- planner puede evaluar ese cast sobre filas de TLISTA_VALOR de otra
+    -- categoria (p.ej. CATEGORIA='PLAN', VALOR='PREESCOLAR') antes de que el
+    -- join por PK las descarte, y revienta con 22P02. El CASE cubre el
+    -- dominio real; cualquier otro valor -> NULL (fila ignorada por las
+    -- 4 banderas, que quedan FALSE).
+    CASE lv.VALOR WHEN '1' THEN 1 WHEN '2' THEN 2 WHEN '3' THEN 3
+                  WHEN '5' THEN 5 WHEN '6' THEN 6 END  AS tipo_valor,
     lv.NOMBRE                                 AS tipo_nombre,
     -- Clasificacion en un solo sitio (evita repetir los literales).
-    (lv.VALOR::INT IN (1,5,6))                AS es_presente,
-    (lv.VALOR::INT IN (5,6))                  AS es_tarde,
-    (lv.VALOR::INT IN (2,3))                  AS es_ausente,
-    (lv.VALOR::INT IN (3,6))                  AS es_justificado,
+    (lv.VALOR IN ('1','5','6'))               AS es_presente,
+    (lv.VALOR IN ('5','6'))                   AS es_tarde,
+    (lv.VALOR IN ('2','3'))                   AS es_ausente,
+    (lv.VALOR IN ('3','6'))                   AS es_justificado,
     a.OBSERVACION                             AS observacion,
     a.FK_SOPORTE_ARCHIVO                      AS fk_soporte_archivo,
     (a.FK_SOPORTE_ARCHIVO IS NOT NULL)        AS tiene_soporte,
@@ -387,7 +400,7 @@ SELECT
         JOIN academico_test.TLISTA_VALOR dia
           ON dia.PK_LISTA_VALOR = th.FK_TLV_DIA_SEMANA
          AND dia.CATEGORIA = 'DIA_SEMANA'
-         AND dia.VALOR::INT = EXTRACT(DOW FROM a.FECHA)::INT + 1
+         AND dia.VALOR = (EXTRACT(DOW FROM a.FECHA)::INT + 1)::TEXT
        WHERE th.FK_TGRUPO      = m.FK_TGRUPO
          AND th.FK_TASIGNATURA = a.FK_TASIGNATURA
          AND th.NUMERO_BLOQUE  = a.BLOQUE
@@ -628,6 +641,136 @@ COMMENT ON FUNCTION academico_test.fn_asistencia_editar(
 -- ===========================================================================
 
 -- ---------------------------------------------------------------------------
+-- fn_asistencia_estudiantes_sesion — PADRON de una sesion, pantalla
+-- "Asistencia manual".
+--
+--   Devuelve TODAS las matriculas activas del grupo (una fila por alumno),
+--   con su estado ACTUAL para ese (asignatura, fecha, bloque) si ya existe
+--   registro, o NULL si aun no se ha tomado ("Seleccionar" en el mock).
+--
+--   No puede salir de v_asistencia_detalle: esa vista es FROM TASISTENCIA
+--   (inner join), asi que solo tiene filas de alumnos YA registrados. El
+--   padron arranca de TMATRICULA y hace LEFT JOIN a los registros de la
+--   sesion.
+--
+--   La cabecera de la sesion (fecha ya la da el caller; hora_inicio/fin de
+--   THORARIO por dia de semana, y el periodo de evaluacion) se repite en
+--   cada fila para que el front pinte "16 FEBRERO (7:00 - 10:00)" sin una
+--   segunda llamada. Las pestanas de asignatura del mock (Matematicas /
+--   Geometria) las arma el front con el horario del grupo; aqui la
+--   asignatura llega ya elegida.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_estudiantes_sesion(
+    p_pk_usuario     BIGINT,
+    p_fk_tgrupo      BIGINT,
+    p_fk_tasignatura BIGINT,
+    p_fecha          DATE,
+    p_bloque         NUMERIC DEFAULT NULL
+)
+RETURNS TABLE (
+    fk_tmatricula          BIGINT,
+    fk_testudiante         BIGINT,
+    estudiante             TEXT,
+    documento              VARCHAR,
+    -- estado ACTUAL del alumno en la sesion (NULL = sin registrar)
+    pk_tasistencia         BIGINT,
+    tipo_asistencia_valor  INTEGER,
+    tipo_asistencia        VARCHAR,
+    observacion            VARCHAR,
+    fk_soporte_archivo     BIGINT,
+    soporte_nombre         VARCHAR,
+    -- cabecera de la sesion, repetida en cada fila
+    fk_tperiodo_evaluacion BIGINT,
+    hora_inicio            TIMESTAMP,
+    hora_fin               TIMESTAMP,
+    total_estudiantes      BIGINT,
+    registrados            BIGINT
+)
+LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    -- Gate de LECTURA sobre el grupo (capability 'VER' + scope por categoria
+    -- de rol). p_pk_usuario NULL o SUPER_ADMIN => pasa.
+    IF NOT academico_test.fn_asistencia_puede_ver(p_pk_usuario, p_fk_tgrupo) THEN
+        RAISE EXCEPTION 'El usuario no puede ver la asistencia del grupo %', p_fk_tgrupo
+            USING ERRCODE = '42501';
+    END IF;
+
+    IF p_fk_tgrupo IS NULL OR p_fk_tasignatura IS NULL OR p_fecha IS NULL THEN
+        RAISE EXCEPTION 'grupo, asignatura y fecha son obligatorios' USING ERRCODE = '23502';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM academico_test.TGRUPO
+                    WHERE PK_TGRUPO = p_fk_tgrupo AND ACTIVE = TRUE) THEN
+        RAISE EXCEPTION 'grupo (%) no existe o no esta activo', p_fk_tgrupo USING ERRCODE = '23503';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA
+                    WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
+        RAISE EXCEPTION 'asignatura (%) no existe o no esta activa', p_fk_tasignatura USING ERRCODE = '23503';
+    END IF;
+
+    RETURN QUERY
+    WITH horario AS (
+        -- Franja horaria de la sesion: mismo patron que la vista (LATERAL por
+        -- dia de semana), pero keyed off p_fecha/p_bloque, no de un registro.
+        SELECT th.HORA_INICIO, th.HORA_FIN
+          FROM academico_test.THORARIO th
+          JOIN academico_test.TLISTA_VALOR dia
+            ON dia.PK_LISTA_VALOR = th.FK_TLV_DIA_SEMANA
+           AND dia.CATEGORIA = 'DIA_SEMANA'
+           AND dia.VALOR = (EXTRACT(DOW FROM p_fecha)::INT + 1)::TEXT
+         WHERE th.FK_TGRUPO      = p_fk_tgrupo
+           AND th.FK_TASIGNATURA = p_fk_tasignatura
+           AND th.NUMERO_BLOQUE  = p_bloque
+           AND th.ACTIVE = TRUE
+         LIMIT 1
+    ),
+    registros AS (
+        -- Lo ya registrado para ESTA sesion (0 o 1 fila por matricula: el
+        -- indice unico parcial UQ_TASISTENCIA_SESION lo garantiza). Se reusa
+        -- v_asistencia_detalle -- aqui SI aplica: la vista ya resuelve el
+        -- estado y sus banderas, y este set es "el alumno que ya tiene
+        -- registro", que es exactamente lo que la vista contiene.
+        SELECT d.fk_tmatricula, d.pk_tasistencia, d.tipo_valor, d.tipo_nombre,
+               d.observacion, d.fk_soporte_archivo, d.soporte_nombre
+          FROM academico_test.v_asistencia_detalle d
+         WHERE d.fk_tasignatura = p_fk_tasignatura
+           AND d.fecha = p_fecha
+           AND COALESCE(d.bloque, 0) = COALESCE(p_bloque, 0)
+    )
+    SELECT
+        m.PK_TMATRICULA,
+        es.PK_TESTUDIANTE,
+        NULLIF(TRIM(regexp_replace(
+            concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE,
+                           u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO),
+            '\s+', ' ', 'g')), ''),
+        u.IDENTIFICACION,
+        r.PK_TASISTENCIA,
+        r.tipo_valor,
+        r.tipo_nombre,
+        r.OBSERVACION,
+        r.FK_SOPORTE_ARCHIVO,
+        r.soporte_nombre,
+        academico_test.fn_asistencia_periodo_eval(p_fk_tgrupo, p_fecha),
+        (SELECT h.HORA_INICIO FROM horario h),
+        (SELECT h.HORA_FIN    FROM horario h),
+        count(*)            OVER ()::BIGINT,
+        count(r.PK_TASISTENCIA) OVER ()::BIGINT
+      FROM academico_test.TMATRICULA  m
+      JOIN academico_test.TESTUDIANTE es ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
+      JOIN academico_test.TUSUARIO    u  ON u.PK_TUSUARIO = es.FK_TUSUARIO
+ LEFT JOIN registros r ON r.FK_TMATRICULA = m.PK_TMATRICULA
+     WHERE m.FK_TGRUPO = p_fk_tgrupo AND m.ACTIVE = TRUE
+     ORDER BY u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO, u.PRIMER_NOMBRE,
+              u.SEGUNDO_NOMBRE, m.PK_TMATRICULA;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_estudiantes_sesion(
+    BIGINT, BIGINT, BIGINT, DATE, NUMERIC
+) IS 'Padron de una sesion para la pantalla "Asistencia manual": una fila por matricula activa del grupo, con el estado ACTUAL del alumno para ese (asignatura, fecha, bloque) si ya hay registro (pk_tasistencia / tipo / observacion / soporte) o NULL si falta tomarlo ("Seleccionar"). Arranca de TMATRICULA con LEFT JOIN a los registros -- v_asistencia_detalle no sirve porque es inner sobre TASISTENCIA. Repite en cada fila la cabecera de la sesion: fk_tperiodo_evaluacion (fn_asistencia_periodo_eval) y hora_inicio/hora_fin de THORARIO por dia de semana de la fecha. total_estudiantes y registrados son ventanas sobre el padron completo. Gate: fn_asistencia_puede_ver(usuario, grupo). Orden: apellidos, nombres.';
+
+
+-- ---------------------------------------------------------------------------
 -- fn_asistencia_listar_seguimiento — pantalla "Seguimiento".
 --   total_estudiantes / ausentes / total_count son ventanas sobre el set
 --   filtrado COMPLETO (independientes de la pagina).
@@ -795,7 +938,7 @@ BEGIN
           FROM generate_series(v_ini, v_fin - 1, INTERVAL '1 day') dd
           JOIN academico_test.TLISTA_VALOR dia
             ON dia.CATEGORIA = 'DIA_SEMANA'
-           AND dia.VALOR::INT = EXTRACT(DOW FROM dd)::INT + 1
+           AND dia.VALOR = (EXTRACT(DOW FROM dd)::INT + 1)::TEXT
           JOIN academico_test.THORARIO th
             ON th.FK_TLV_DIA_SEMANA = dia.PK_LISTA_VALOR
            AND th.ACTIVE = TRUE
