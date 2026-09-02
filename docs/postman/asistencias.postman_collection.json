@@ -175,6 +175,16 @@
               "disabled": true
             },
             {
+              "key": "MIAS",
+              "value": "true",
+              "disabled": true
+            },
+            {
+              "key": "FUNCIONARIO",
+              "value": "{{funcionarioId}}",
+              "disabled": true
+            },
+            {
               "key": "HOY",
               "value": "2026-02-20",
               "disabled": true
@@ -182,7 +192,7 @@
           ]
         },
         "description": {
-          "content": "Sesiones del mes para una sede. Devuelve **todas** las sesiones: las **programadas** en `THORARIO` proyectadas sobre las fechas reales, y ademas las **registradas** que no correspondan a ningun bloque programado (asistencia manual suelta).\n\n`estado_sesion` es lo que pinta el punto de la celda - informa si la asistencia **se tomo**, no como asistieron los alumnos:\n\n| valor | mock | significado |\n|---|---|---|\n| `REGISTRADA` | verde, \"Asistencia pasada\" | hay registro |\n| `RETRASADA` | rojo, \"No registrada en la fecha\" | fecha <= hoy y sin registro |\n| `PENDIENTE` | azul, \"Aun no corresponde tomarla\" | fecha futura sin registro |\n\nCada fila trae ademas `total_estudiantes`, `a_tiempo`, `tarde`, `ausentes` y `horas`.\n\n**Params**: `SEDE` (obligatorio), `ANIO` (2000..2100), `MES` (1..12); `GRUPO` y `ASIGNATURA` opcionales. `HOY` es solo para simular otra fecha en pruebas - en produccion se omite.",
+          "content": "Sesiones del mes para una sede. Devuelve **todas** las sesiones: las **programadas** en `THORARIO` proyectadas sobre las fechas reales, y ademas las **registradas** que no correspondan a ningun bloque programado (asistencia manual suelta).\n\n`estado_sesion` es lo que pinta el punto de la celda - informa si la asistencia **se tomo**, no como asistieron los alumnos:\n\n| valor | mock | significado |\n|---|---|---|\n| `REGISTRADA` | verde, \"Asistencia pasada\" | hay registro |\n| `RETRASADA` | rojo, \"No registrada en la fecha\" | fecha <= hoy y sin registro |\n| `PENDIENTE` | azul, \"Aun no corresponde tomarla\" | fecha futura sin registro |\n\nCada fila trae ademas `total_estudiantes`, `a_tiempo`, `tarde`, `ausentes` y `horas`.\n\n**Params**: `SEDE` (obligatorio), `ANIO` (2000..2100), `MES` (1..12); `GRUPO` y `ASIGNATURA` opcionales. `HOY` es solo para simular otra fecha en pruebas - en produccion se omite.\n\n**Vista \"mis clases\" (docente)**: `MIAS=true` -> los puntos quedan **solo** en las asignaturas ASIGNADAS al docente del token (`tdocente_asignatura`). Si el usuario no es funcionario, devuelve vacio. Alternativa para un admin: `FUNCIONARIO=<pk_tfuncionario>` filtra por un docente concreto.\n\n> Sin `GRUPO` ni filtro de docente, una consulta a nivel de **toda la sede** puede devolver miles de sesiones (todo el horario x el mes) — el front debe pasar `GRUPO` o `MIAS`.",
           "type": "text/markdown"
         }
       },
@@ -241,11 +251,21 @@
               "key": "ASIGNATURA",
               "value": "{{asignaturaId}}",
               "disabled": true
+            },
+            {
+              "key": "MIAS",
+              "value": "true",
+              "disabled": true
+            },
+            {
+              "key": "FUNCIONARIO",
+              "value": "{{funcionarioId}}",
+              "disabled": true
             }
           ]
         },
         "description": {
-          "content": "Tarjetas de \"Total de horas\" y \"Horas efectivas\" del encabezado.\n\n- `horas_semana` / `horas_mes` / `horas_anio`: suma de la duracion de las sesiones **registradas** (la franja sale de `THORARIO` por bloque).\n- `horas_efectivas_mes`: cada sesion ponderada por la fraccion de alumnos presentes (asistio + tarde). Ej.: 7 de 8 presentes en una sesion de 3 h -> 2.63 h.\n- `registradas_mes` / `retrasadas_mes` / `pendientes_mes`: los 3 contadores del encabezado, delegados en el calendario para que la definicion de esos estados viva en un solo sitio.\n\n`FECHA` selecciona el mes/semana/anio de referencia (por defecto hoy).",
+          "content": "Tarjetas de \"Total de horas\" y \"Horas efectivas\" del encabezado.\n\n**Dos familias de horas:**\n- `horas_semana` / `horas_mes` / `horas_anio`: **DICTADAS** = suma de la duracion de las sesiones **registradas** (franja de `THORARIO`).\n- `horas_programadas_semana` / `horas_programadas_mes`: **PROGRAMADAS** = todo lo que el horario dice que toca dictar en ese rango, se haya tomado o no.\n- El widget del mock **\"Dictadas 16 h / 20 h · Faltan 4 h\"** = `horas_semana` (16) vs `horas_programadas_semana` (20); `faltan = programadas - dictadas`.\n\n- `horas_efectivas_mes`: cada sesion ponderada por la fraccion de alumnos presentes (asistio + tarde). Ej.: 7 de 8 presentes en una sesion de 3 h -> 2.63 h.\n- `registradas_mes` / `retrasadas_mes` / `pendientes_mes`: los 3 contadores del encabezado (\"96 clases registradas de 120\" = registradas / (registradas+retrasadas+pendientes)).\n\n`FECHA` selecciona el mes/semana/anio de referencia (por defecto hoy). `MIAS=true` / `FUNCIONARIO=<id>` acotan todo a las asignaturas asignadas a ese docente (igual que el calendario).",
           "type": "text/markdown"
         }
       },
@@ -761,6 +781,11 @@
     },
     {
       "key": "archivoId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "funcionarioId",
       "value": "1",
       "type": "string"
     }

@@ -35,7 +35,11 @@
 --   PATCH  /asistencias/:ID           fn_asistencia_editar
 --   POST   /asistencias/query         fn_asistencia_listar_seguimiento (paginado)
 --   GET    /asistencias/calendario    fn_asistencia_calendario
+--          QUERY.MIAS=true (o QUERY.FUNCIONARIO=<id>) -> solo las asignaturas
+--          asignadas a ese docente (TDOCENTE_ASIGNATURA); vista "mis clases".
 --   GET    /asistencias/resumen-horas fn_asistencia_resumen_horas
+--          horas DICTADAS vs PROGRAMADAS del horario (widget "16h / 20h");
+--          acepta el mismo QUERY.MIAS / QUERY.FUNCIONARIO.
 --
 -- BODY.REGISTROS es un ARREGLO JSON, asi que se enlaza con :BODY_RAW.* y se
 -- declara en param_types por partida doble (BODY.REGISTROS y
@@ -231,13 +235,24 @@ INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_i
 SELECT
     'asis-calendario',
     $q$SELECT * FROM academico_test.fn_asistencia_calendario(
-    p_pk_usuario     => public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
-    p_fk_tsede       => CAST(:QUERY.SEDE AS BIGINT),
-    p_anio           => CAST(:QUERY.ANIO AS INTEGER),
-    p_mes            => CAST(:QUERY.MES AS INTEGER),
-    p_fk_tgrupo      => CAST(:QUERY.GRUPO AS BIGINT),
-    p_fk_tasignatura => CAST(:QUERY.ASIGNATURA AS BIGINT),
-    p_fecha_hoy      => COALESCE(CAST(:QUERY.HOY AS DATE), CURRENT_DATE)
+    p_pk_usuario      => public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    p_fk_tsede        => CAST(:QUERY.SEDE AS BIGINT),
+    p_anio            => CAST(:QUERY.ANIO AS INTEGER),
+    p_mes             => CAST(:QUERY.MES AS INTEGER),
+    p_fk_tgrupo       => CAST(:QUERY.GRUPO AS BIGINT),
+    p_fk_tasignatura  => CAST(:QUERY.ASIGNATURA AS BIGINT),
+    p_fecha_hoy       => COALESCE(CAST(:QUERY.HOY AS DATE), CURRENT_DATE),
+    -- "mis clases": QUERY.MIAS=true -> se resuelve el docente desde el token
+    -- (si el usuario no es funcionario -> -1, no matchea nada -> calendario
+    -- vacio). Alternativa: QUERY.FUNCIONARIO explicito (admin filtrando por
+    -- un docente). NULL en ambos -> todas las asignaturas del scope.
+    p_fk_tfuncionario => CASE
+        WHEN COALESCE(CAST(:QUERY.MIAS AS BOOLEAN), FALSE)
+        THEN COALESCE((SELECT f.PK_TFUNCIONARIO FROM academico_test.TFUNCIONARIO f
+                        WHERE f.FK_TUSUARIO = public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT)
+                          AND f.ACTIVE = TRUE), -1)
+        ELSE CAST(:QUERY.FUNCIONARIO AS BIGINT)
+    END
 );$q$,
     'postgres', false, false, m.id_microservice,
     '/asistencias/calendario', 'SELECT', 'GET',
@@ -247,9 +262,11 @@ SELECT
        "QUERY.MES":        "INTEGER",
        "QUERY.GRUPO":      "BIGINT",
        "QUERY.ASIGNATURA": "BIGINT",
-       "QUERY.HOY":        "VARCHAR"
+       "QUERY.HOY":        "VARCHAR",
+       "QUERY.MIAS":       "BOOLEAN",
+       "QUERY.FUNCIONARIO":"BIGINT"
      }'::jsonb,
-    'V221 -- pantalla Asistencia: sesiones del mes por sede. Incluye las PROGRAMADAS en THORARIO proyectadas sobre las fechas reales y las REGISTRADAS sin bloque programado. estado_sesion = REGISTRADA | RETRASADA (fecha pasada sin registro) | PENDIENTE (fecha futura). QUERY.HOY es opcional y solo sirve para pruebas/simulacion; por defecto CURRENT_DATE.'
+    'V221 -- pantalla Asistencia: sesiones del mes por sede. Incluye las PROGRAMADAS en THORARIO proyectadas sobre las fechas reales y las REGISTRADAS sin bloque programado. estado_sesion = REGISTRADA | RETRASADA (fecha pasada sin registro) | PENDIENTE (fecha futura). QUERY.MIAS=true acota a las asignaturas asignadas al docente del token (vista "mis clases"); QUERY.FUNCIONARIO filtra por un docente concreto. QUERY.HOY es opcional (pruebas), por defecto CURRENT_DATE.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (uuid) DO UPDATE
@@ -266,11 +283,21 @@ INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_i
 SELECT
     'asis-resumen-horas',
     $q$SELECT * FROM academico_test.fn_asistencia_resumen_horas(
-    p_pk_usuario     => public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
-    p_fk_tsede       => CAST(:QUERY.SEDE AS BIGINT),
-    p_fecha_ref      => COALESCE(CAST(:QUERY.FECHA AS DATE), CURRENT_DATE),
-    p_fk_tgrupo      => CAST(:QUERY.GRUPO AS BIGINT),
-    p_fk_tasignatura => CAST(:QUERY.ASIGNATURA AS BIGINT)
+    p_pk_usuario      => public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    p_fk_tsede        => CAST(:QUERY.SEDE AS BIGINT),
+    p_fecha_ref       => COALESCE(CAST(:QUERY.FECHA AS DATE), CURRENT_DATE),
+    p_fk_tgrupo       => CAST(:QUERY.GRUPO AS BIGINT),
+    p_fk_tasignatura  => CAST(:QUERY.ASIGNATURA AS BIGINT),
+    -- Igual que /asistencias/calendario: QUERY.MIAS=true -> docente del token
+    -- (no funcionario -> -1 -> todo en cero); QUERY.FUNCIONARIO -> docente
+    -- concreto; NULL -> todo el scope.
+    p_fk_tfuncionario => CASE
+        WHEN COALESCE(CAST(:QUERY.MIAS AS BOOLEAN), FALSE)
+        THEN COALESCE((SELECT f.PK_TFUNCIONARIO FROM academico_test.TFUNCIONARIO f
+                        WHERE f.FK_TUSUARIO = public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT)
+                          AND f.ACTIVE = TRUE), -1)
+        ELSE CAST(:QUERY.FUNCIONARIO AS BIGINT)
+    END
 );$q$,
     'postgres', false, false, m.id_microservice,
     '/asistencias/resumen-horas', 'SELECT', 'GET',
@@ -278,9 +305,11 @@ SELECT
        "QUERY.SEDE":       "BIGINT",
        "QUERY.FECHA":      "VARCHAR",
        "QUERY.GRUPO":      "BIGINT",
-       "QUERY.ASIGNATURA": "BIGINT"
+       "QUERY.ASIGNATURA": "BIGINT",
+       "QUERY.MIAS":       "BOOLEAN",
+       "QUERY.FUNCIONARIO":"BIGINT"
      }'::jsonb,
-    'V221 -- tarjetas del encabezado de Asistencia: horas semanal/mensual/anual y horas efectivas del mes de QUERY.FECHA (por defecto hoy), mas los conteos del mes y los 3 estados de sesion (registradas / retrasadas / pendientes).'
+    'V221 -- tarjetas del encabezado de Asistencia. Horas DICTADAS (horas_semana/mes/anio) vs PROGRAMADAS del horario (horas_programadas_semana/mes) -> el widget "16 h / 20 h - faltan 4 h" es horas_semana vs horas_programadas_semana. Mas horas_efectivas_mes, conteos del mes y los 3 estados (registradas/retrasadas/pendientes). QUERY.MIAS=true acota a las asignaturas del docente del token; QUERY.FUNCIONARIO por un docente concreto.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (uuid) DO UPDATE
@@ -356,9 +385,11 @@ SELECT q.id_query, c.param_key, c.only_positive, c.allow_decimals, c.max_digits,
     ('asis-calendario',   'QUERY.MES',                    TRUE,  FALSE, 2,      NULL,   NULL,   NULL,   1::numeric,  12::numeric),
     ('asis-calendario',   'QUERY.GRUPO',                  TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-calendario',   'QUERY.ASIGNATURA',             TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
+    ('asis-calendario',   'QUERY.FUNCIONARIO',            TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-resumen-horas','QUERY.SEDE',                   TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-resumen-horas','QUERY.GRUPO',                  TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
-    ('asis-resumen-horas','QUERY.ASIGNATURA',             TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL)
+    ('asis-resumen-horas','QUERY.ASIGNATURA',             TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
+    ('asis-resumen-horas','QUERY.FUNCIONARIO',            TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL)
   ) AS c(uuid, param_key, only_positive, allow_decimals, max_digits,
          numeric_text, min_length, max_length, min_value, max_value)
   JOIN public.query q ON q.uuid = c.uuid

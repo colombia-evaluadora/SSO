@@ -111,15 +111,22 @@
 --   4. fn_asistencia_periodo_eval / fn_asistencia_tipo_pk      (resolucion)
 --   5. VISTA v_asistencia_detalle  (cadena de joins + clasificacion, un solo
 --      sitio; la consumen las 3 funciones de lectura)
---   6. fn_asistencia_registrar_bulk, fn_asistencia_editar,
+--   6. fn_asistencia_sesiones_programadas (proyeccion del horario sobre
+--      fechas reales, compartida por calendario y resumen)
+--   7. fn_asistencia_registrar_bulk, fn_asistencia_editar,
 --      fn_asistencia_estudiantes_sesion (padron para "Asistencia manual"),
 --      fn_asistencia_listar_seguimiento, fn_asistencia_calendario,
 --      fn_asistencia_resumen_horas
+--      El calendario y el resumen aceptan p_fk_tfuncionario: cuando llega,
+--      los puntos / las horas se acotan a las asignaturas ASIGNADAS a ese
+--      docente en TDOCENTE_ASIGNATURA (vista "mis clases").
 --
 -- Depende de:
 --   * EN ESTA RAMA (dev): V22 — TASISTENCIA, TMATRICULA, TGRUPO, TGRADO,
 --     TPERIODO_ACADEMICO, TPERIODO_EVALUACION, TSEDE, TASIGNATURA, THORARIO,
---     TARCHIVO, TLISTA_VALOR, TUSUARIO, TESTUDIANTE, TMENU, TROL, TROL_MENU.
+--     TDOCENTE_ASIGNATURA (asignacion academica docente<->grupo<->asignatura,
+--     para el filtro "mis clases"), TARCHIVO, TLISTA_VALOR, TUSUARIO,
+--     TESTUDIANTE, TFUNCIONARIO, TMENU, TROL, TROL_MENU.
 --   * EN RAMAS SIN MERGEAR (resueltas en ejecucion, ver arriba): V29, V40,
 --     V113, V185 de PR #100.
 -- Numeracion: V220 es el primer hueco libre por encima de V219; revisadas
@@ -142,8 +149,13 @@ DROP FUNCTION IF EXISTS academico_test.fn_asistencia_registrar_bulk(
     BIGINT, BIGINT, BIGINT, DATE, TIMESTAMP, TIMESTAMP, NUMERIC, BIGINT, JSONB, NUMERIC);
 DROP FUNCTION IF EXISTS academico_test.fn_asistencia_listar_seguimiento(
     DATE, DATE, BIGINT, BIGINT, NUMERIC, TEXT, INT, INT, TEXT, TEXT);
+-- fn_asistencia_calendario / fn_asistencia_resumen_horas ganaron el parametro
+-- p_fk_tfuncionario (filtro "mis asignaturas asignadas"); y resumen_horas
+-- ademas dos columnas de horas programadas -> cambia la firma / el RETURNS.
 DROP FUNCTION IF EXISTS academico_test.fn_asistencia_calendario(
     BIGINT, BIGINT, INTEGER, INTEGER, BIGINT, BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_asistencia_calendario(
+    BIGINT, BIGINT, INTEGER, INTEGER, BIGINT, BIGINT, DATE);
 DROP FUNCTION IF EXISTS academico_test.fn_asistencia_resumen_horas(
     BIGINT, BIGINT, DATE, BIGINT, BIGINT);
 
@@ -881,12 +893,89 @@ COMMENT ON FUNCTION academico_test.fn_asistencia_listar_seguimiento(
 
 
 -- ---------------------------------------------------------------------------
+-- fn_asistencia_sesiones_programadas — proyeccion del HORARIO sobre fechas
+-- reales. UN solo sitio con "que sesiones toca dictar en [desde, hasta]"
+-- (generate_series de dias x THORARIO por DIA_SEMANA). La consumen el
+-- calendario y el resumen de horas.
+--
+--   p_fk_tfuncionario NO NULL  ->  solo las (grupo, asignatura) que ESE
+--   docente tiene asignadas en TDOCENTE_ASIGNATURA (la "asignatura
+--   asignada"): es lo que convierte el calendario en "mis clases".
+--   THORARIO no tiene docente; la asignacion vive en TDOCENTE_ASIGNATURA
+--   (fk_tfuncionario, fk_tgrupo, fk_tasignatura, fk_tperiodo_academico) --
+--   el grupo determina el periodo academico, asi que basta el trio.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_sesiones_programadas(
+    p_pk_usuario      BIGINT,
+    p_fk_tsede        BIGINT,
+    p_fecha_desde     DATE,
+    p_fecha_hasta     DATE,     -- INCLUSIVO
+    p_fk_tgrupo       BIGINT DEFAULT NULL,
+    p_fk_tasignatura  BIGINT DEFAULT NULL,
+    p_fk_tfuncionario BIGINT DEFAULT NULL
+)
+RETURNS TABLE (
+    fecha          DATE,
+    fk_tgrupo      BIGINT,
+    grupo          VARCHAR,
+    fk_tasignatura BIGINT,
+    asignatura     VARCHAR,
+    bloque         NUMERIC,
+    hora_inicio    TIMESTAMP,
+    hora_fin       TIMESTAMP,
+    horas          NUMERIC
+)
+LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN QUERY
+    SELECT dd::date,
+           th.FK_TGRUPO,      gr.NOMBRE,
+           th.FK_TASIGNATURA, asig.NOMBRE,
+           th.NUMERO_BLOQUE,
+           th.HORA_INICIO,    th.HORA_FIN,
+           ROUND(COALESCE(EXTRACT(EPOCH FROM (th.HORA_FIN - th.HORA_INICIO)) / 3600.0, 0)::NUMERIC, 2)
+      FROM generate_series(p_fecha_desde, p_fecha_hasta, INTERVAL '1 day') dd
+      JOIN academico_test.TLISTA_VALOR dia
+        ON dia.CATEGORIA = 'DIA_SEMANA'
+       AND dia.VALOR = (EXTRACT(DOW FROM dd)::INT + 1)::TEXT
+      JOIN academico_test.THORARIO th
+        ON th.FK_TLV_DIA_SEMANA = dia.PK_LISTA_VALOR
+       AND th.ACTIVE = TRUE
+      JOIN academico_test.TGRUPO gr             ON gr.PK_TGRUPO = th.FK_TGRUPO
+      JOIN academico_test.TGRADO g              ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TASIGNATURA asig      ON asig.PK_TASIGNATURA = th.FK_TASIGNATURA
+     WHERE pa.FK_TSEDE = p_fk_tsede
+       AND (p_fk_tgrupo      IS NULL OR th.FK_TGRUPO = p_fk_tgrupo)
+       AND (p_fk_tasignatura IS NULL OR th.FK_TASIGNATURA = p_fk_tasignatura)
+       AND (p_fk_tfuncionario IS NULL OR EXISTS (
+               SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+                WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario
+                  AND da.FK_TGRUPO       = th.FK_TGRUPO
+                  AND da.FK_TASIGNATURA  = th.FK_TASIGNATURA
+                  AND da.ACTIVE = TRUE))
+       AND academico_test.fn_asistencia_puede_ver(p_pk_usuario, th.FK_TGRUPO)
+     GROUP BY dd::date, th.FK_TGRUPO, gr.NOMBRE, th.FK_TASIGNATURA, asig.NOMBRE,
+              th.NUMERO_BLOQUE, th.HORA_INICIO, th.HORA_FIN;  -- colapsa bloques duplicados
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_sesiones_programadas(
+    BIGINT, BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT
+) IS 'Proyeccion del horario (THORARIO) sobre las fechas reales de [p_fecha_desde, p_fecha_hasta] (INCLUSIVO): una fila por sesion que TOCA dictar (grupo, asignatura, bloque, fecha) con su duracion en horas. Scope por sede + fn_asistencia_puede_ver. Si p_fk_tfuncionario no es NULL, solo las (grupo, asignatura) asignadas a ese docente en TDOCENTE_ASIGNATURA. La usan fn_asistencia_calendario (rama "programadas") y fn_asistencia_resumen_horas (horas programadas de la semana / del mes).';
+
+
+-- ---------------------------------------------------------------------------
 -- fn_asistencia_calendario — pantalla "Asistencia" (calendario mensual).
 --
 --   Devuelve TODAS las sesiones del mes: las PROGRAMADAS en THORARIO
---   (proyectadas sobre las fechas reales del mes por dia de semana) y
---   ademas las registradas que no correspondan a ningun bloque programado
---   (asistencia manual suelta) -> FULL OUTER JOIN.
+--   (fn_asistencia_sesiones_programadas) y ademas las registradas que no
+--   correspondan a ningun bloque programado (asistencia manual suelta) ->
+--   FULL OUTER JOIN.
+--
+--   p_fk_tfuncionario: si no es NULL, el calendario queda acotado a las
+--   asignaturas ASIGNADAS a ese docente (los puntos = "sus" clases). El
+--   endpoint lo resuelve desde el token cuando el front pide "mis clases".
 --
 --   estado_sesion:
 --     'REGISTRADA' hay registro                       (verde  / "Asistencia pasada")
@@ -894,13 +983,14 @@ COMMENT ON FUNCTION academico_test.fn_asistencia_listar_seguimiento(
 --     'PENDIENTE'  fecha  > p_fecha_hoy y sin registro (azul   / "Aun no corresponde tomarla")
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_calendario(
-    p_pk_usuario     BIGINT,
-    p_fk_tsede       BIGINT,
-    p_anio           INTEGER,
-    p_mes            INTEGER,
-    p_fk_tgrupo      BIGINT DEFAULT NULL,
-    p_fk_tasignatura BIGINT DEFAULT NULL,
-    p_fecha_hoy      DATE   DEFAULT CURRENT_DATE
+    p_pk_usuario      BIGINT,
+    p_fk_tsede        BIGINT,
+    p_anio            INTEGER,
+    p_mes             INTEGER,
+    p_fk_tgrupo       BIGINT DEFAULT NULL,
+    p_fk_tasignatura  BIGINT DEFAULT NULL,
+    p_fecha_hoy       DATE   DEFAULT CURRENT_DATE,
+    p_fk_tfuncionario BIGINT DEFAULT NULL
 )
 RETURNS TABLE (
     fecha             DATE,
@@ -924,33 +1014,13 @@ DECLARE
     v_fin DATE := (make_date(p_anio, p_mes, 1) + INTERVAL '1 month')::date;  -- exclusivo
 BEGIN
     RETURN QUERY
-    -- (a) Sesiones PROGRAMADAS: cada dia del mes x los bloques de THORARIO
-    --     cuyo DIA_SEMANA coincide (VALOR = DOW + 1).
+    -- (a) Sesiones PROGRAMADAS del mes (helper compartido).
     WITH programadas AS (
-        SELECT dd::date            AS fecha,
-               th.FK_TGRUPO        AS fk_tgrupo,
-               gr.NOMBRE           AS grupo,
-               th.FK_TASIGNATURA   AS fk_tasignatura,
-               asig.NOMBRE         AS asignatura,
-               th.NUMERO_BLOQUE    AS bloque,
-               th.HORA_INICIO      AS hora_inicio,
-               th.HORA_FIN         AS hora_fin
-          FROM generate_series(v_ini, v_fin - 1, INTERVAL '1 day') dd
-          JOIN academico_test.TLISTA_VALOR dia
-            ON dia.CATEGORIA = 'DIA_SEMANA'
-           AND dia.VALOR = (EXTRACT(DOW FROM dd)::INT + 1)::TEXT
-          JOIN academico_test.THORARIO th
-            ON th.FK_TLV_DIA_SEMANA = dia.PK_LISTA_VALOR
-           AND th.ACTIVE = TRUE
-          JOIN academico_test.TGRUPO gr             ON gr.PK_TGRUPO = th.FK_TGRUPO
-          JOIN academico_test.TGRADO g              ON g.PK_TGRADO = gr.FK_TGRADO
-          JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
-          JOIN academico_test.TASIGNATURA asig      ON asig.PK_TASIGNATURA = th.FK_TASIGNATURA
-         WHERE pa.FK_TSEDE = p_fk_tsede
-           AND (p_fk_tgrupo      IS NULL OR th.FK_TGRUPO = p_fk_tgrupo)
-           AND (p_fk_tasignatura IS NULL OR th.FK_TASIGNATURA = p_fk_tasignatura)
-           AND academico_test.fn_asistencia_puede_ver(p_pk_usuario, th.FK_TGRUPO)
-         GROUP BY 1,2,3,4,5,6,7,8      -- colapsa bloques duplicados en THORARIO
+        SELECT sp.fecha, sp.fk_tgrupo, sp.grupo, sp.fk_tasignatura, sp.asignatura,
+               sp.bloque, sp.hora_inicio, sp.hora_fin
+          FROM academico_test.fn_asistencia_sesiones_programadas(
+                   p_pk_usuario, p_fk_tsede, v_ini, v_fin - 1,
+                   p_fk_tgrupo, p_fk_tasignatura, p_fk_tfuncionario) sp
     ),
     -- (b) Sesiones REGISTRADAS del mes, ya agregadas por sesion.
     registradas AS (
@@ -967,6 +1037,12 @@ BEGIN
            AND d.fk_tsede = p_fk_tsede
            AND (p_fk_tgrupo      IS NULL OR d.fk_tgrupo = p_fk_tgrupo)
            AND (p_fk_tasignatura IS NULL OR d.fk_tasignatura = p_fk_tasignatura)
+           AND (p_fk_tfuncionario IS NULL OR EXISTS (
+                   SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+                    WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario
+                      AND da.FK_TGRUPO       = d.fk_tgrupo
+                      AND da.FK_TASIGNATURA  = d.fk_tasignatura
+                      AND da.ACTIVE = TRUE))
            AND academico_test.fn_asistencia_puede_ver(p_pk_usuario, d.fk_tgrupo)
          GROUP BY d.fecha, d.fk_tgrupo, d.grupo, d.fk_tasignatura, d.asignatura, d.bloque
     )
@@ -1000,8 +1076,8 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_calendario(
-    BIGINT, BIGINT, INTEGER, INTEGER, BIGINT, BIGINT, DATE
-) IS 'Pantalla Asistencia (calendario mensual por sede). Devuelve una fila por SESION del mes: las PROGRAMADAS en THORARIO proyectadas sobre las fechas reales (TLISTA_VALOR DIA_SEMANA.VALOR = EXTRACT(DOW)+1) en FULL OUTER JOIN con las REGISTRADAS, de modo que tambien aparecen las tomas manuales sin bloque programado. estado_sesion = REGISTRADA (hay registro) | RETRASADA (fecha <= p_fecha_hoy sin registro) | PENDIENTE (fecha futura sin registro) -- son los 3 contadores del encabezado. Rango de fechas sargable (>= inicio AND < inicio + 1 mes), no EXTRACT sobre la columna. Alcance por rol via fn_asistencia_puede_ver.';
+    BIGINT, BIGINT, INTEGER, INTEGER, BIGINT, BIGINT, DATE, BIGINT
+) IS 'Pantalla Asistencia (calendario mensual por sede). Una fila por SESION del mes: las PROGRAMADAS (fn_asistencia_sesiones_programadas) en FULL OUTER JOIN con las REGISTRADAS, de modo que tambien aparecen las tomas manuales sin bloque programado. estado_sesion = REGISTRADA (hay registro) | RETRASADA (fecha <= p_fecha_hoy sin registro) | PENDIENTE (fecha futura sin registro) -- los 3 contadores del encabezado. p_fk_tfuncionario no NULL acota a las asignaturas asignadas a ese docente en TDOCENTE_ASIGNATURA (vista "mis clases"). Rango de fechas sargable. Alcance por rol via fn_asistencia_puede_ver.';
 
 
 -- ---------------------------------------------------------------------------
@@ -1009,29 +1085,42 @@ COMMENT ON FUNCTION academico_test.fn_asistencia_calendario(
 --   Los limites de semana / mes / anio se calculan UNA vez en variables y se
 --   comparan por rango (sargable), en vez de repetir EXTRACT(MONTH FROM ...)
 --   en cada agregado.
+--
+--   Dos familias de horas:
+--     horas_semana / horas_mes / horas_anio       = DICTADAS (registradas)
+--     horas_programadas_semana / _mes             = del HORARIO (toque o no)
+--   El widget "Dictadas 16 h / 20 h - Faltan 4 h" del mock sale de
+--   horas_semana (16) vs horas_programadas_semana (20); "faltan" = 20 - 16.
+--
 --   "Horas efectivas" = horas de cada sesion ponderadas por la fraccion de
 --   estudiantes presentes (asistio + tarde).
+--
+--   p_fk_tfuncionario no NULL -> todo se acota a las asignaturas ASIGNADAS a
+--   ese docente (mismo criterio que fn_asistencia_calendario).
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_resumen_horas(
     p_pk_usuario      BIGINT,
     p_fk_tsede        BIGINT,
     p_fecha_ref       DATE   DEFAULT CURRENT_DATE,
     p_fk_tgrupo       BIGINT DEFAULT NULL,
-    p_fk_tasignatura  BIGINT DEFAULT NULL
+    p_fk_tasignatura  BIGINT DEFAULT NULL,
+    p_fk_tfuncionario BIGINT DEFAULT NULL
 )
 RETURNS TABLE (
-    horas_semana        NUMERIC,
-    horas_mes           NUMERIC,
-    horas_anio          NUMERIC,
-    horas_efectivas_mes NUMERIC,
-    sesiones_mes        BIGINT,
-    registros_mes       BIGINT,
-    a_tiempo_mes        BIGINT,
-    tarde_mes           BIGINT,
-    ausentes_mes        BIGINT,
-    registradas_mes     BIGINT,
-    retrasadas_mes      BIGINT,
-    pendientes_mes      BIGINT
+    horas_semana             NUMERIC,   -- dictadas (registradas)
+    horas_mes                NUMERIC,
+    horas_anio               NUMERIC,
+    horas_programadas_semana NUMERIC,   -- del horario (THORARIO)
+    horas_programadas_mes    NUMERIC,
+    horas_efectivas_mes      NUMERIC,
+    sesiones_mes             BIGINT,
+    registros_mes            BIGINT,
+    a_tiempo_mes             BIGINT,
+    tarde_mes                BIGINT,
+    ausentes_mes             BIGINT,
+    registradas_mes          BIGINT,
+    retrasadas_mes           BIGINT,
+    pendientes_mes           BIGINT
 )
 LANGUAGE plpgsql STABLE AS $$
 DECLARE
@@ -1057,24 +1146,48 @@ BEGIN
            AND d.fk_tsede = p_fk_tsede
            AND (p_fk_tgrupo      IS NULL OR d.fk_tgrupo = p_fk_tgrupo)
            AND (p_fk_tasignatura IS NULL OR d.fk_tasignatura = p_fk_tasignatura)
+           AND (p_fk_tfuncionario IS NULL OR EXISTS (
+                   SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+                    WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario
+                      AND da.FK_TGRUPO       = d.fk_tgrupo
+                      AND da.FK_TASIGNATURA  = d.fk_tasignatura
+                      AND da.ACTIVE = TRUE))
            AND academico_test.fn_asistencia_puede_ver(p_pk_usuario, d.fk_tgrupo)
          GROUP BY d.fecha, d.fk_tgrupo, d.fk_tasignatura, d.bloque
+    ),
+    -- Horas PROGRAMADAS: proyeccion del horario sobre [semana U mes] (una
+    -- sola llamada; la semana puede desbordar el mes en su primer/ultimo
+    -- tramo, por eso el rango cubre ambos).
+    programadas AS (
+        SELECT sp.fecha, sp.horas
+          FROM academico_test.fn_asistencia_sesiones_programadas(
+                   p_pk_usuario, p_fk_tsede,
+                   LEAST(v_sem_ini, v_mes_ini),
+                   GREATEST(v_sem_fin, v_mes_fin) - 1,
+                   p_fk_tgrupo, p_fk_tasignatura, p_fk_tfuncionario) sp
     ),
     -- Estado de las sesiones del MES (reusa el calendario: una sola
     -- definicion de REGISTRADA / RETRASADA / PENDIENTE en todo el modulo).
     estados AS (
         SELECT c.estado_sesion, COUNT(*) AS n
           FROM academico_test.fn_asistencia_calendario(
-                   p_pk_usuario, p_fk_tsede,
-                   EXTRACT(YEAR  FROM p_fecha_ref)::INT,
-                   EXTRACT(MONTH FROM p_fecha_ref)::INT,
-                   p_fk_tgrupo, p_fk_tasignatura) c
+                   p_pk_usuario      => p_pk_usuario,
+                   p_fk_tsede        => p_fk_tsede,
+                   p_anio            => EXTRACT(YEAR  FROM p_fecha_ref)::INT,
+                   p_mes             => EXTRACT(MONTH FROM p_fecha_ref)::INT,
+                   p_fk_tgrupo       => p_fk_tgrupo,
+                   p_fk_tasignatura  => p_fk_tasignatura,
+                   p_fk_tfuncionario => p_fk_tfuncionario) c
          GROUP BY c.estado_sesion
     )
     SELECT
         ROUND(COALESCE(SUM(s.horas_sesion) FILTER (WHERE s.fecha >= v_sem_ini AND s.fecha < v_sem_fin), 0), 2),
         ROUND(COALESCE(SUM(s.horas_sesion) FILTER (WHERE s.fecha >= v_mes_ini AND s.fecha < v_mes_fin), 0), 2),
         ROUND(COALESCE(SUM(s.horas_sesion), 0), 2),
+        (SELECT ROUND(COALESCE(SUM(pr.horas) FILTER (WHERE pr.fecha >= v_sem_ini AND pr.fecha < v_sem_fin), 0), 2)
+           FROM programadas pr),
+        (SELECT ROUND(COALESCE(SUM(pr.horas) FILTER (WHERE pr.fecha >= v_mes_ini AND pr.fecha < v_mes_fin), 0), 2)
+           FROM programadas pr),
         ROUND(COALESCE(SUM(s.horas_sesion * s.n_presentes::NUMERIC / NULLIF(s.n_total, 0))
                        FILTER (WHERE s.fecha >= v_mes_ini AND s.fecha < v_mes_fin), 0), 2),
         COUNT(*)          FILTER (WHERE s.fecha >= v_mes_ini AND s.fecha < v_mes_fin)::BIGINT,
@@ -1090,5 +1203,5 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_resumen_horas(
-    BIGINT, BIGINT, DATE, BIGINT, BIGINT
-) IS 'Tarjetas del encabezado de la pantalla Asistencia: horas de la semana / mes / anio de p_fecha_ref (duracion de cada sesion registrada segun THORARIO), horas efectivas del mes (ponderadas por la fraccion de presentes), conteos de registros del mes, y los 3 contadores de estado (registradas / retrasadas / pendientes) delegados en fn_asistencia_calendario para que la definicion de esos estados viva en un solo sitio. Los limites de semana/mes/anio se calculan una vez y se comparan por rango (sargable), no con EXTRACT sobre la columna. Alcance por rol via fn_asistencia_puede_ver.';
+    BIGINT, BIGINT, DATE, BIGINT, BIGINT, BIGINT
+) IS 'Tarjetas del encabezado de la pantalla Asistencia. Horas DICTADAS (registradas) de semana/mes/anio + horas PROGRAMADAS del horario de semana/mes (fn_asistencia_sesiones_programadas) -> el widget "16 h / 20 h - faltan 4 h" es horas_semana vs horas_programadas_semana. horas_efectivas_mes ponderadas por fraccion de presentes. Conteos de registros del mes y los 3 contadores de estado (registradas/retrasadas/pendientes) delegados en fn_asistencia_calendario. p_fk_tfuncionario no NULL acota todo a las asignaturas asignadas a ese docente. Limites sargables. Alcance por rol via fn_asistencia_puede_ver.';
