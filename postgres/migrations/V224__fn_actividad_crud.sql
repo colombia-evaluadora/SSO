@@ -49,13 +49,29 @@
 --   Procedencia de los valores seedeados:
 --     * INSTRUMENTO_EVALUACION, TIPO_ADAPTACION, FORMATO_ADAPTACION:
 --       EXACTOS del figma (capturas de "Nueva actividad").
---     * MODALIDAD, TIPO_RECURSO: de los comentarios de V22.
+--     * MODALIDAD ("Mixta" confirmada en el figma de detalle): comentario
+--       de V22 (Presencial / Virtual / Mixta).
+--     * TIPO_RECURSO: etiquetas del figma del bloque "Materiales de apoyo"
+--       ("Recurso 1 - Fuente" -> Tipo / URL / Sitio web).
+--     * TIPO_EVIDENCIA: del figma solo se confirma el valor "Archivo"
+--       (bloque Seguimiento); el resto (Enlace / Texto / Otro) es una lista
+--       MINIMA propuesta, alineada con las banderas REQUIERE_ARCHIVO /
+--       REQUIERE_TEXTO de V22. PENDIENTE de confirmar con negocio.
+--     * METODO_VALORACION: PROPUESTO (Heteroevaluacion / Autoevaluacion /
+--       Coevaluacion) — no hay figma ni comentario de V22 con la lista.
+--       PENDIENTE de confirmar con negocio.
 --     * APLICA_A: derivado del requisito "la adaptacion aplica a ciertos
 --       estudiantes de ese grupo" -> TODO_EL_GRUPO / ESTUDIANTES_SELECCIONADOS.
---     * TIPO_EVIDENCIA y METODO_VALORACION: PROPUESTOS — no hay figma ni
---       comentario de V22 con la lista. Si el negocio define otra, se
---       ajusta con un seed nuevo; el codigo no depende de valores puntuales
---       (solo de la CATEGORIA), asi que cambiarlos no rompe nada.
+--   Cambiar cualquiera de estas listas es un seed nuevo: el codigo solo
+--   depende de la CATEGORIA (y, en adaptaciones, de los VALOR ARCHIVO /
+--   ENLACE / BIBLIOTECA y ESTUDIANTES_SELECCIONADOS), nunca de los PK.
+--
+--   NO se puede reutilizar ningun catalogo existente en su lugar
+--   (verificado en el servidor): TIPO_FUENTE son placeholders "Tipo 1/2/3",
+--   TIPO_ARCHIVO son documentos de matricula/funcionario, y
+--   TIPO_DISCAPACIDAD es el atributo del estudiante
+--   (TESTUDIANTE.FK_TDISCAPACIDAD -> TDISCAPACIDAD), otro eje distinto del
+--   tipo de adaptacion de una actividad.
 --
 -- -------------------------------------------------------------------------
 -- ESTADO DE LA ACTIVIDAD (derivado, no es columna)
@@ -120,15 +136,14 @@ SELECT v.categoria, v.nombre, v.valor, 'V224_seed'
     ('METODO_VALORACION',               'Autoevaluación',                     'AUTOEVALUACION'),
     ('METODO_VALORACION',               'Coevaluación',                       'COEVALUACION'),
     -- Seguimiento
-    ('TIPO_EVIDENCIA',                  'Documento escrito',                  'DOCUMENTO_ESCRITO'),
-    ('TIPO_EVIDENCIA',                  'Presentación',                       'PRESENTACION'),
-    ('TIPO_EVIDENCIA',                  'Producto físico',                    'PRODUCTO_FISICO'),
-    ('TIPO_EVIDENCIA',                  'Video o audio',                      'VIDEO_AUDIO'),
-    ('TIPO_EVIDENCIA',                  'Fotografía',                         'FOTOGRAFIA'),
+    ('TIPO_EVIDENCIA',                  'Archivo',                            'ARCHIVO'),
+    ('TIPO_EVIDENCIA',                  'Enlace',                             'ENLACE'),
+    ('TIPO_EVIDENCIA',                  'Texto',                              'TEXTO'),
     ('TIPO_EVIDENCIA',                  'Otro',                               'OTRO'),
-    -- Materiales de apoyo (TACTIVIDAD_MATERIAL: URL XOR ARCHIVO)
-    ('TIPO_RECURSO',                    'Enlace (URL)',                       'URL'),
-    ('TIPO_RECURSO',                    'Archivo adjunto',                    'ARCHIVO'),
+    -- Materiales de apoyo (TACTIVIDAD_MATERIAL: URL XOR ARCHIVO).
+    -- Etiquetas del figma ("Recurso 1 - Fuente" -> Tipo / URL / Sitio web).
+    ('TIPO_RECURSO',                    'URL / Sitio web',                    'URL'),
+    ('TIPO_RECURSO',                    'Archivo',                            'ARCHIVO'),
     -- Adaptaciones curriculares (TACTIVIDAD_ADAPTACION) — valores exactos
     -- del figma "¿Que tipo de adaptacion requiere esta actividad?".
     ('TIPO_ADAPTACION',                 'Discapacidad visual',                             'DISCAPACIDAD_VISUAL'),
