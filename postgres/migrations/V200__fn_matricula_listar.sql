@@ -11,8 +11,8 @@
 --   TMATRICULA -> TGRUPO -> TGRADO -> TPERIODO_ACADEMICO -> TSEDE -> TESTABLECIMIENTO
 --   TGRUPO.FK_TLV_JORNADA -> TLISTA_VALOR            (shift, string libre)
 --   TMATRICULA.FK_TLV_ESTADO_MATRICULA -> TLISTA_VALOR (status)
---   TMATRICULA.FK_TPADRE -> TPADRE -> TUSUARIO        (guardian, nombre)
---   TMATRICULA.FK_TLV_ACUDIENTE_PARENTESCO -> TLISTA_VALOR (guardian, parentesco)
+--   TESTUDIANTE -> TNUCLEO_FAMILIAR -> TPADRE -> TUSUARIO (guardian, nombre)
+--   TNUCLEO_FAMILIAR.FK_TLV_PARENTESCO -> TLISTA_VALOR (guardian, parentesco)
 --
 -- Alcance/seguridad: se reusa academico_test.fn_periodo_usuario_puede_ver
 -- (V37) sobre el periodo academico del grado de cada matricula — mismo
@@ -61,6 +61,22 @@
 --     las dos con valor no nulo cuenta como "tiene calificaciones". No se
 --     pudo probar contra datos reales: TMATRICULA/TASIGNATURA_NOTA/
 --     TASIGNATURA_DEFINITIVA estan en 0 filas en el ambiente consultado.
+--
+--  6. guardian (corregido tras probar contra datos reales, 2026-08-31):
+--     TMATRICULA.FK_TPADRE / TMATRICULA.FK_TLV_ACUDIENTE_PARENTESCO estan
+--     SIEMPRE null en los datos migrados -- el vinculo real esta en
+--     TNUCLEO_FAMILIAR (tabla muchos-a-muchos ESTUDIANTE<->PADRE, con
+--     FK_TLV_PARENTESCO propia), confirmado con el equipo de back. Un mismo
+--     TESTUDIANTE puede tener varias filas en TNUCLEO_FAMILIAR (padre, madre,
+--     etc.); se prioriza la marcada ACUDIENTE = 'S', y si ninguna lo esta
+--     (visto en datos reales: existe al menos una fila con ACUDIENTE NULL
+--     que el detalle igual muestra como acudiente) se toma cualquiera como
+--     fallback en vez de dejar el campo vacio. Solo 33.040 de 76.821
+--     matriculas activas tienen alguna fila en TNUCLEO_FAMILIAR -- el resto
+--     legitimamente no tiene acudiente registrado, `guardian` sale NULL.
+--     Nombre del acudiente: solo primer nombre + primer apellido (no los 4
+--     campos), por consistencia con como ya se muestra el nombre del
+--     estudiante en este mismo listado.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -142,9 +158,8 @@ BEGIN
                 NULLIF(g.CODIGO,'')::INT AS grade_num,
                 gr.NOMBRE AS grupo,
                 m.CREATED_AT::DATE AS enrollment_date,
-                NULLIF(TRIM(regexp_replace(
-                    concat_ws(' ', pu.PRIMER_NOMBRE, pu.SEGUNDO_NOMBRE, pu.PRIMER_APELLIDO, pu.SEGUNDO_APELLIDO),
-                    '\s+', ' ', 'g')), '')
+                -- Solo primer nombre + primer apellido -- ver nota 6 del header.
+                NULLIF(TRIM(concat_ws(' ', pu.PRIMER_NOMBRE, pu.PRIMER_APELLIDO)), '')
                     || COALESCE(' (' || par.NOMBRE || ')', '') AS guardian_name,
                 -- Slug directo del catalogo real -- ver nota 3 del header
                 -- (el front se adapta a estos valores, sin mapeo a un enum
@@ -173,9 +188,21 @@ BEGIN
               JOIN academico_test.TESTABLECIMIENTO est ON est.PK_ESTABLECIMIENTO = sd.FK_TESTABLECIMIENTO
               JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
               JOIN academico_test.TLISTA_VALOR est_m ON est_m.PK_LISTA_VALOR = m.FK_TLV_ESTADO_MATRICULA
-         LEFT JOIN academico_test.TPADRE p        ON p.PK_TPADRE = m.FK_TPADRE
+         -- Acudiente real via TNUCLEO_FAMILIAR (muchos-a-muchos ESTUDIANTE<->
+         -- PADRE) -- ver nota 6 del header, NO via TMATRICULA.FK_TPADRE (esa
+         -- columna esta siempre null en los datos reales). Prioriza
+         -- ACUDIENTE='S'; si ninguna fila lo tiene marcado, cae a cualquiera
+         -- (fila mas antigua) en vez de dejar el campo vacio.
+         LEFT JOIN LATERAL (
+                SELECT nf.FK_TPADRE, nf.FK_TLV_PARENTESCO
+                  FROM academico_test.TNUCLEO_FAMILIAR nf
+                 WHERE nf.FK_TESTUDIANTE = m.FK_TESTUDIANTE AND nf.ACTIVE = TRUE
+                 ORDER BY (nf.ACUDIENTE = 'S') DESC NULLS LAST, nf.PK_TNUCLEO_FAMILIAR
+                 LIMIT 1
+         ) nf ON TRUE
+         LEFT JOIN academico_test.TPADRE p        ON p.PK_TPADRE = nf.FK_TPADRE
          LEFT JOIN academico_test.TUSUARIO pu     ON pu.PK_TUSUARIO = p.FK_TUSUARIO
-         LEFT JOIN academico_test.TLISTA_VALOR par ON par.PK_LISTA_VALOR = m.FK_TLV_ACUDIENTE_PARENTESCO
+         LEFT JOIN academico_test.TLISTA_VALOR par ON par.PK_LISTA_VALOR = nf.FK_TLV_PARENTESCO
              WHERE m.ACTIVE = TRUE
                AND academico_test.fn_periodo_usuario_puede_ver($9, pa.PK_TPERIODO_ACADEMICO)
                AND ($1 IS NULL OR (

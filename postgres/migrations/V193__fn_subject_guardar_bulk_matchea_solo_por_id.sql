@@ -1,23 +1,3 @@
--- fn_subject_guardar_bulk: el upsert por item matcheaba por NOMBRE dentro
--- del area cuando el item no traia `id`. Eso rompe altas nuevas con nombre
--- repetido en el mismo payload: el SELECT de match corre contra la tabla
--- real dentro del mismo loop, asi que ve el INSERT del item anterior y lo
--- confunde con "ya existe, hacer UPDATE" -- dos altas nuevas con el mismo
--- nombre (p.ej. misma asignatura para dos especialidades distintas, con
--- abreviacion/especialidad distintas) terminan colapsando en una sola fila,
--- pisando silenciosamente los datos de la primera con los de la segunda.
---
--- El nombre de una asignatura NO es unico (solo la abreviacion lo es, y eso
--- ya se valida aparte mas abajo en la funcion) -- no deberia usarse como
--- llave de matching. Desde V111 el front ya manda el PK real (`id`) de cada
--- asignatura que esta editando; los items sin `id` son siempre altas nuevas.
---
--- Fix: el match ahora usa exclusivamente el `id` que trae el item (si
--- existe y pertenece al area). Si no trae `id`, o el `id` no matchea una
--- fila activa del area, se trata como alta nueva (INSERT), sin fallback por
--- nombre. Sin cambios de firma, ERRCODEs, ni logica de reemplazo de
--- huerfanas (ni el bloqueo por dependencias agregado en V118).
-
 CREATE OR REPLACE FUNCTION academico_test.fn_subject_guardar_bulk(p_fk_area bigint, p_asignaturas jsonb, p_pk_usuario_solicitante bigint)
  RETURNS integer
  LANGUAGE plpgsql
@@ -55,14 +35,12 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
-    -- Reemplazo: baja logica de las asignaturas del area que NO vienen en el set.
-    UPDATE academico_test.TASIGNATURA
+    UPDATE academico_test.TASIGNATURA t
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE FK_TAREA = p_fk_area AND ACTIVE = TRUE
-       AND UPPER(TRIM(NOMBRE)) NOT IN (
-           SELECT UPPER(TRIM(e->>'nombreInterno'))
-             FROM jsonb_array_elements(COALESCE(p_asignaturas, '[]'::jsonb)) e
-            WHERE NULLIF(TRIM(e->>'nombreInterno'),'') IS NOT NULL
+     WHERE t.FK_TAREA = p_fk_area AND t.ACTIVE = TRUE
+       AND NOT EXISTS (
+           SELECT 1 FROM jsonb_array_elements(COALESCE(p_asignaturas, '[]'::jsonb)) e
+            WHERE NULLIF(TRIM(e->>'id'), '')::bigint = t.PK_TASIGNATURA
        );
 
     FOR it IN SELECT * FROM jsonb_array_elements(COALESCE(p_asignaturas, '[]'::jsonb))
