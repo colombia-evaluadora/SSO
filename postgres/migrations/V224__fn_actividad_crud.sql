@@ -3,21 +3,34 @@
 -- (CU-86e311xxp — G. Academico Back Planeador educativo).
 --
 -- Modulos de este archivo:
---   (1) Seed de TLISTA_VALOR         — los 8 catalogos que la pantalla
---                                       "Nueva actividad" usa y que NO
---                                       existen en el servidor.
+--   (1) Seed de TLISTA_VALOR         — los 10 catalogos que las pantallas
+--                                       "Nueva actividad" / recuperacion
+--                                       usan y que NO existen en el servidor.
 --   (2) Indices de soporte           — todo el filtrado del listado y del
 --                                       tablero entra por indice.
 --   (3) Helpers reutilizables        — fn_actividad_lv_assert,
 --                                       fn_actividad_estado,
 --                                       fn_actividad_material_reemplazar,
 --                                       fn_actividad_adaptacion_reemplazar,
---                                       fn_actividad_estudiantes_asignar.
+--                                       fn_actividad_estudiantes_asignar,
+--                                       fn_actividad_recuperacion_configurar.
 --   (4) Escritura                    — fn_actividad_crear / _actualizar.
 --   (5) Lectura optimizada           — fn_actividad_listar,
 --                                       fn_actividad_buscar_por_pk,
 --                                       fn_actividad_resumen_estados,
 --                                       fn_actividad_calendario.
+--
+-- ASIGNACION DE ESTUDIANTES: fn_actividad_crear NO vincula a nadie por
+-- defecto. p_asignar_todo_el_grupo=TRUE toma todas las matriculas ACTIVE
+-- del FK_TGRUPO; p_fk_tmatriculas fija estudiantes especificos (1 o mas,
+-- validados contra el grupo). El pivote es TACTIVIDAD_ESTUDIANTE (N:M).
+--
+-- RECUPERACION: si p_recuperacion (objeto) viene en crear/actualizar, la
+-- actividad queda con ES_RECUPERACION='S' y se crea su fila 1:1 en
+-- TACTIVIDAD_RECUPERACION (V22) via fn_actividad_recuperacion_configurar
+-- (destino ACTIVIDAD|NOTA_FINAL, aplicacion COMPUTAR|REEMPLAZAR, calculo
+-- PROMEDIADO|PONDERADO). NO se tocan las notas/definitivas: eso es del
+-- motor de calificacion, fuera de este archivo.
 --
 -- -------------------------------------------------------------------------
 -- CATALOGOS: verificado contra el servidor de test (172.233.184.248,
@@ -138,6 +151,14 @@ SELECT v.categoria, v.nombre, v.valor, 'V224_seed'
     ('INSTRUMENTO_EVALUACION',          'Lista de cotejo',                    'LISTA_COTEJO'),
     ('INSTRUMENTO_EVALUACION',          'Escala de valoración',               'ESCALA_VALORACION'),
     ('INSTRUMENTO_EVALUACION',          'Otro (personalizado)',               'OTRO'),
+    -- Recuperacion (TACTIVIDAD_RECUPERACION, cuando ES_RECUPERACION='S').
+    -- Valores de los comentarios de V22.
+    ('DESTINO_RECUPERACION',            'Recuperar una actividad',            'ACTIVIDAD'),
+    ('DESTINO_RECUPERACION',            'Recuperar la nota final',            'NOTA_FINAL'),
+    ('TIPO_APLICACION_RECUPERACION',    'Computar con la nota anterior',      'COMPUTAR'),
+    ('TIPO_APLICACION_RECUPERACION',    'Reemplazar la nota anterior',        'REEMPLAZAR'),
+    ('TIPO_CALCULO_RECUPERACION',       'Promediado',                         'PROMEDIADO'),
+    ('TIPO_CALCULO_RECUPERACION',       'Ponderado',                          'PONDERADO'),
     -- Seguimiento
     ('TIPO_EVIDENCIA',                  'Archivo',                            'ARCHIVO'),
     ('TIPO_EVIDENCIA',                  'Enlace',                             'ENLACE'),
@@ -713,7 +734,143 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_estudiantes_asignar(BIGINT, BIGINT, BIGINT[], BOOLEAN)
-    IS 'Reemplazo completo del pivote TACTIVIDAD_ESTUDIANTE de una actividad. p_fk_tmatriculas NULL + p_todo_el_grupo=TRUE asigna todas las matriculas ACTIVE del FK_TGRUPO de la actividad; un array la fija a ese set exacto (valida existencia/estado/grupo, 23503). Reactiva filas previamente desactivadas en vez de duplicar. Ambos NULL/FALSE = no toca nada. Retorna el total de asignados activos. V224.';
+    IS 'Reemplazo completo del pivote TACTIVIDAD_ESTUDIANTE de una actividad. p_fk_tmatriculas NULL + p_todo_el_grupo=TRUE asigna todas las matriculas ACTIVE del FK_TGRUPO de la actividad; un array la fija a ese set exacto (valida existencia/estado/grupo, 23503). Reactiva filas previamente desactivadas en vez de duplicar. Ambos NULL/FALSE = no toca nada (fn_actividad_crear NO asigna estudiantes por defecto). Retorna el total de asignados activos. V224.';
+
+-- ---------------------------------------------------------------------------
+-- fn_actividad_recuperacion_configurar — 1:1 TACTIVIDAD_RECUPERACION.
+--
+-- Una actividad de recuperacion (TACTIVIDAD.ES_RECUPERACION = 'S') SIEMPRE
+-- lleva su fila en TACTIVIDAD_RECUPERACION (V22) con la config del destino
+-- y la forma de calculo. Esta funcion es el punto unico que la crea /
+-- actualiza / desactiva.
+--
+-- p_config JSONB (NULL = la actividad NO es de recuperacion):
+--   {
+--     "destino":              <pk_lv DESTINO_RECUPERACION>,   -- ACTIVIDAD | NOTA_FINAL
+--     "fkActividadRecuperar": <pk_tactividad>,                -- oblig. si destino=ACTIVIDAD; NULL si NOTA_FINAL
+--     "tipoAplicacion":       <pk_lv TIPO_APLICACION_RECUPERACION>,  -- COMPUTAR | REEMPLAZAR
+--     "tipoCalculo":          <pk_lv TIPO_CALCULO_RECUPERACION>,     -- PROMEDIADO | PONDERADO
+--     "valorPonderacion":     <numeric 0..100>                -- oblig. si tipoCalculo=PONDERADO; NULL si PROMEDIADO
+--   }
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_recuperacion_configurar(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad            BIGINT,
+    p_config                   JSONB
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_act_active   BOOLEAN;
+    v_destino_val  VARCHAR;
+    v_calculo_val  VARCHAR;
+    v_fk_recuperar BIGINT;
+    v_valor_pond   NUMERIC(5,2);
+    v_pk           BIGINT;
+BEGIN
+    SELECT ACTIVE INTO v_act_active
+      FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se encontro la actividad solicitada' USING ERRCODE = 'P0002';
+    END IF;
+
+    -- ----- Sin config: la actividad deja de ser (o nunca fue) de recuperacion.
+    IF p_config IS NULL THEN
+        UPDATE academico_test.TACTIVIDAD_RECUPERACION
+           SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
+        UPDATE academico_test.TACTIVIDAD
+           SET ES_RECUPERACION = 'N', MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE PK_TACTIVIDAD = p_pk_tactividad AND ES_RECUPERACION <> 'N';
+        RETURN NULL;
+    END IF;
+
+    IF jsonb_typeof(p_config) <> 'object' THEN
+        RAISE EXCEPTION 'p_config (recuperacion) debe ser un objeto JSON' USING ERRCODE = '22023';
+    END IF;
+
+    -- ----- Catalogos.
+    IF (p_config->>'destino') IS NULL OR (p_config->>'tipoAplicacion') IS NULL
+       OR (p_config->>'tipoCalculo') IS NULL THEN
+        RAISE EXCEPTION 'La recuperacion requiere destino, tipoAplicacion y tipoCalculo' USING ERRCODE = '22023';
+    END IF;
+    PERFORM academico_test.fn_actividad_lv_assert((p_config->>'destino')::BIGINT,        'DESTINO_RECUPERACION',         'destino');
+    PERFORM academico_test.fn_actividad_lv_assert((p_config->>'tipoAplicacion')::BIGINT, 'TIPO_APLICACION_RECUPERACION', 'tipoAplicacion');
+    PERFORM academico_test.fn_actividad_lv_assert((p_config->>'tipoCalculo')::BIGINT,    'TIPO_CALCULO_RECUPERACION',    'tipoCalculo');
+
+    SELECT VALOR INTO v_destino_val FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = (p_config->>'destino')::BIGINT;
+    SELECT VALOR INTO v_calculo_val FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = (p_config->>'tipoCalculo')::BIGINT;
+
+    -- ----- Destino: ACTIVIDAD exige la actividad origen; NOTA_FINAL la prohibe.
+    v_fk_recuperar := (p_config->>'fkActividadRecuperar')::BIGINT;
+    IF v_destino_val = 'ACTIVIDAD' THEN
+        IF v_fk_recuperar IS NULL THEN
+            RAISE EXCEPTION 'destino = ACTIVIDAD exige fkActividadRecuperar' USING ERRCODE = '22023';
+        END IF;
+        IF v_fk_recuperar = p_pk_tactividad THEN
+            RAISE EXCEPTION 'Una actividad no puede recuperarse a si misma' USING ERRCODE = '22023';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD
+                        WHERE PK_TACTIVIDAD = v_fk_recuperar AND ACTIVE = TRUE) THEN
+            RAISE EXCEPTION 'fkActividadRecuperar (%) no existe o no esta activa', v_fk_recuperar USING ERRCODE = '23503';
+        END IF;
+    ELSE  -- NOTA_FINAL
+        IF v_fk_recuperar IS NOT NULL THEN
+            RAISE EXCEPTION 'destino = NOTA_FINAL no admite fkActividadRecuperar' USING ERRCODE = '22023';
+        END IF;
+    END IF;
+
+    -- ----- Calculo: PONDERADO exige el peso; PROMEDIADO lo prohibe.
+    v_valor_pond := (p_config->>'valorPonderacion')::NUMERIC;
+    IF v_calculo_val = 'PONDERADO' THEN
+        IF v_valor_pond IS NULL OR v_valor_pond < 0 OR v_valor_pond > 100 THEN
+            RAISE EXCEPTION 'tipoCalculo = PONDERADO exige valorPonderacion entre 0 y 100' USING ERRCODE = '22023';
+        END IF;
+    ELSIF v_valor_pond IS NOT NULL THEN
+        RAISE EXCEPTION 'valorPonderacion solo aplica con tipoCalculo = PONDERADO' USING ERRCODE = '22023';
+    END IF;
+
+    -- ----- Marca la actividad como de recuperacion.
+    UPDATE academico_test.TACTIVIDAD
+       SET ES_RECUPERACION = 'S', MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TACTIVIDAD = p_pk_tactividad AND ES_RECUPERACION <> 'S';
+
+    -- ----- Upsert 1:1 (UNIQUE FK_TACTIVIDAD, patron get-or-create/reactivar).
+    SELECT PK_TACTIVIDAD_RECUPERACION INTO v_pk
+      FROM academico_test.TACTIVIDAD_RECUPERACION
+     WHERE FK_TACTIVIDAD = p_pk_tactividad;
+
+    IF v_pk IS NULL THEN
+        INSERT INTO academico_test.TACTIVIDAD_RECUPERACION (
+            FK_TACTIVIDAD, FK_TLV_DESTINO_RECUPERACION, FK_TACTIVIDAD_RECUPERAR,
+            FK_TLV_TIPO_APLICACION_RECUPERACION, FK_TLV_TIPO_CALCULO_RECUPERACION,
+            VALOR_PONDERACION_RECUPERACION, CREATED_BY, CREATED_AT, ACTIVE
+        ) VALUES (
+            p_pk_tactividad, (p_config->>'destino')::BIGINT, v_fk_recuperar,
+            (p_config->>'tipoAplicacion')::BIGINT, (p_config->>'tipoCalculo')::BIGINT,
+            v_valor_pond, p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
+        )
+        RETURNING PK_TACTIVIDAD_RECUPERACION INTO v_pk;
+    ELSE
+        UPDATE academico_test.TACTIVIDAD_RECUPERACION
+           SET FK_TLV_DESTINO_RECUPERACION           = (p_config->>'destino')::BIGINT,
+               FK_TACTIVIDAD_RECUPERAR               = v_fk_recuperar,
+               FK_TLV_TIPO_APLICACION_RECUPERACION   = (p_config->>'tipoAplicacion')::BIGINT,
+               FK_TLV_TIPO_CALCULO_RECUPERACION      = (p_config->>'tipoCalculo')::BIGINT,
+               VALOR_PONDERACION_RECUPERACION        = v_valor_pond,
+               ACTIVE                                = TRUE,
+               MODIFIED_BY                           = p_pk_usuario_solicitante::VARCHAR,
+               MODIFIED_AT                           = CURRENT_TIMESTAMP
+         WHERE PK_TACTIVIDAD_RECUPERACION = v_pk;
+    END IF;
+
+    RETURN v_pk;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_recuperacion_configurar(BIGINT, BIGINT, JSONB)
+    IS 'Punto unico para la config 1:1 de recuperacion (TACTIVIDAD_RECUPERACION). p_config NULL = la actividad NO es de recuperacion (desactiva la fila y pone ES_RECUPERACION=''N''). Con objeto {destino, fkActividadRecuperar?, tipoAplicacion, tipoCalculo, valorPonderacion?}: valida los 3 catalogos (DESTINO_RECUPERACION / TIPO_APLICACION_RECUPERACION / TIPO_CALCULO_RECUPERACION), exige fkActividadRecuperar sii destino=ACTIVIDAD (y != la propia actividad, activa), exige valorPonderacion 0..100 sii tipoCalculo=PONDERADO, marca ES_RECUPERACION=''S'' y hace upsert de la fila. Llamada por fn_actividad_crear/_actualizar. Retorna PK_TACTIVIDAD_RECUPERACION (o NULL). V224.';
 
 -- ===========================================================================
 -- (4) ESCRITURA
@@ -754,7 +911,10 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_crear(
     p_materiales                        JSONB         DEFAULT NULL,
     p_adaptaciones                      JSONB         DEFAULT NULL,
     p_fk_tmatriculas                    BIGINT[]      DEFAULT NULL,
-    p_asignar_todo_el_grupo             BOOLEAN       DEFAULT FALSE
+    p_asignar_todo_el_grupo             BOOLEAN       DEFAULT FALSE,
+    -- NULL = actividad normal. Objeto = actividad de recuperacion:
+    -- {destino, fkActividadRecuperar?, tipoAplicacion, tipoCalculo, valorPonderacion?}
+    p_recuperacion                      JSONB         DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -815,6 +975,11 @@ BEGIN
         RAISE EXCEPTION 'La ponderacion solo aplica cuando la actividad se vincula a una unidad'
             USING ERRCODE = '22023';
     END IF;
+    -- Una actividad de recuperacion recupera una NOTA: tiene que ser evaluativa.
+    IF p_recuperacion IS NOT NULL AND UPPER(TRIM(COALESCE(p_es_evaluativa, 'S'))) = 'N' THEN
+        RAISE EXCEPTION 'Una actividad de recuperacion debe ser evaluativa (p_es_evaluativa = ''S'')'
+            USING ERRCODE = '22023';
+    END IF;
 
     -- 4. Catalogos (helper unico). Nombres de categoria verificados contra
     --    el servidor de test: la jerarquia es TIPO_JERARQUIA_ACTIVIDAD.
@@ -851,7 +1016,7 @@ BEGIN
         INFLUENCIA, NOTA_MAXIMA,
         FECHA_INICIO, FECHA_CIERRE, DURACION_ESTIMADA, SEMANA_CRONOGRAMA,
         FK_TLV_MODALIDAD, MATERIAL_REQUERIDO,
-        ES_EVALUATIVA, FK_TLV_INSTRUMENTO_EVALUACION, DESCRIPCION_INSTRUMENTO,
+        ES_EVALUATIVA, ES_RECUPERACION, FK_TLV_INSTRUMENTO_EVALUACION, DESCRIPCION_INSTRUMENTO,
         FK_TLV_TIPO_EVIDENCIA, FK_TLV_METODO_VALORACION,
         REQUIERE_ARCHIVO, REQUIERE_TEXTO,
         GENERA_EVIDENCIAS, REQUIERE_VALIDACION_COORDINADOR, OBSERVACIONES_DOCENTE,
@@ -863,7 +1028,9 @@ BEGIN
         p_influencia, p_nota_maxima,
         p_fecha_inicio, p_fecha_cierre, p_duracion_estimada, NULLIF(TRIM(p_semana_cronograma), ''),
         p_fk_tlv_modalidad, NULLIF(TRIM(p_material_requerido), ''),
-        UPPER(TRIM(COALESCE(p_es_evaluativa, 'S'))), p_fk_tlv_instrumento_evaluacion,
+        UPPER(TRIM(COALESCE(p_es_evaluativa, 'S'))),
+        CASE WHEN p_recuperacion IS NOT NULL THEN 'S' ELSE 'N' END,
+        p_fk_tlv_instrumento_evaluacion,
         NULLIF(TRIM(p_descripcion_instrumento), ''),
         p_fk_tlv_tipo_evidencia, p_fk_tlv_metodo_valoracion,
         UPPER(TRIM(COALESCE(p_requiere_archivo, 'N'))), UPPER(TRIM(COALESCE(p_requiere_texto, 'N'))),
@@ -884,13 +1051,16 @@ BEGIN
                 p_pk_usuario_solicitante, v_id_creado, p_materiales);
     PERFORM academico_test.fn_actividad_adaptacion_reemplazar(
                 p_pk_usuario_solicitante, v_id_creado, p_adaptaciones);
+    -- Config 1:1 de recuperacion (crea TACTIVIDAD_RECUPERACION si p_recuperacion no es NULL).
+    PERFORM academico_test.fn_actividad_recuperacion_configurar(
+                p_pk_usuario_solicitante, v_id_creado, p_recuperacion);
 
     RETURN v_id_creado;
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN)
-    IS 'Crea una actividad del Planeador (gate CREAR sobre PLANEADOR): inserta TACTIVIDAD (identificacion, programacion, evaluacion y seguimiento) y opcionalmente la vincula a una unidad con su PONDERACION (%) — la regla "la suma por (unidad, grupo) no pasa de 100" la impone el trigger de V223, no se re-implementa. Delega materiales de apoyo, adaptaciones curriculares y asignacion de estudiantes en fn_actividad_material_reemplazar / fn_actividad_adaptacion_reemplazar / fn_actividad_estudiantes_asignar. Valida catalogos con fn_actividad_lv_assert y unicidad (titulo, unidad, grupo, jerarquia) entre activas con IS NOT DISTINCT FROM (U_TACTIVIDAD_1 no cubre los NULL). Retorna PK_TACTIVIDAD. V224.';
+COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB)
+    IS 'Crea una actividad del Planeador (gate CREAR sobre PLANEADOR): inserta TACTIVIDAD (identificacion, programacion, evaluacion y seguimiento) y opcionalmente la vincula a una unidad con su PONDERACION (%) — la regla "la suma por (unidad, grupo) no pasa de 100" la impone el trigger de V223. NO asigna estudiantes por defecto: p_asignar_todo_el_grupo=TRUE los toma del FK_TGRUPO, o p_fk_tmatriculas fija estudiantes especificos (1 o mas). p_recuperacion (objeto) marca la actividad como de recuperacion y crea su fila TACTIVIDAD_RECUPERACION via fn_actividad_recuperacion_configurar. Delega materiales / adaptaciones / estudiantes en sus helpers. Valida catalogos con fn_actividad_lv_assert y unicidad (titulo, unidad, grupo, jerarquia) entre activas con IS NOT DISTINCT FROM. Retorna PK_TACTIVIDAD. V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_actualizar — PATCH parcial.
@@ -929,7 +1099,11 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_actualizar(
     p_materiales                        JSONB         DEFAULT NULL,
     p_adaptaciones                      JSONB         DEFAULT NULL,
     p_fk_tmatriculas                    BIGINT[]      DEFAULT NULL,
-    p_asignar_todo_el_grupo             BOOLEAN       DEFAULT FALSE
+    p_asignar_todo_el_grupo             BOOLEAN       DEFAULT FALSE,
+    -- NULL = no tocar la recuperacion. Objeto = configurarla. Para QUITARLA
+    -- (volver la actividad a normal) usar p_quitar_recuperacion = TRUE.
+    p_recuperacion                      JSONB         DEFAULT NULL,
+    p_quitar_recuperacion               BOOLEAN       DEFAULT FALSE
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -961,6 +1135,13 @@ BEGIN
     IF p_desvincular_unidad AND (p_fk_tunidad IS NOT NULL OR p_ponderacion IS NOT NULL) THEN
         RAISE EXCEPTION 'p_desvincular_unidad es excluyente con p_fk_tunidad / p_ponderacion'
             USING ERRCODE = '22023';
+    END IF;
+    IF p_quitar_recuperacion AND p_recuperacion IS NOT NULL THEN
+        RAISE EXCEPTION 'p_quitar_recuperacion es excluyente con p_recuperacion' USING ERRCODE = '22023';
+    END IF;
+    IF p_recuperacion IS NOT NULL
+       AND UPPER(TRIM(COALESCE(p_es_evaluativa, v_actual.ES_EVALUATIVA::VARCHAR))) = 'N' THEN
+        RAISE EXCEPTION 'Una actividad de recuperacion debe ser evaluativa' USING ERRCODE = '22023';
     END IF;
 
     -- Valores resultantes para coherencia/unicidad.
@@ -1056,12 +1237,21 @@ BEGIN
     PERFORM academico_test.fn_actividad_adaptacion_reemplazar(
                 p_pk_usuario_solicitante, p_pk_tactividad, p_adaptaciones);
 
+    -- Recuperacion: solo si el caller la toco (objeto = configurar; flag = quitar).
+    IF p_quitar_recuperacion THEN
+        PERFORM academico_test.fn_actividad_recuperacion_configurar(
+                    p_pk_usuario_solicitante, p_pk_tactividad, NULL);
+    ELSIF p_recuperacion IS NOT NULL THEN
+        PERFORM academico_test.fn_actividad_recuperacion_configurar(
+                    p_pk_usuario_solicitante, p_pk_tactividad, p_recuperacion);
+    END IF;
+
     RETURN p_pk_tactividad;
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN)
-    IS 'PATCH parcial de una actividad (gate EDITAR sobre PLANEADOR): cada parametro NULL preserva el valor actual. Unidad/ponderacion se delegan en fn_unidad_actividad_vincular / _ponderacion_set / _desvincular (V223) para que la regla del 100% viva en un solo sitio; p_desvincular_unidad=TRUE es excluyente con p_fk_tunidad/p_ponderacion. p_materiales / p_adaptaciones / p_fk_tmatriculas NULL = no tocar, array = reemplazo completo. Revalida fechas, catalogos y unicidad (titulo, unidad, grupo, jerarquia). Retorna PK_TACTIVIDAD. V224.';
+COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN)
+    IS 'PATCH parcial de una actividad (gate EDITAR sobre PLANEADOR): cada parametro NULL preserva el valor actual. Unidad/ponderacion se delegan en fn_unidad_actividad_vincular / _ponderacion_set / _desvincular (V223) para que la regla del 100% viva en un solo sitio; p_desvincular_unidad=TRUE es excluyente con p_fk_tunidad/p_ponderacion. Recuperacion: p_recuperacion (objeto) la configura via fn_actividad_recuperacion_configurar, p_quitar_recuperacion=TRUE la elimina (vuelve la actividad a normal); son excluyentes y NULL/FALSE no la tocan. p_materiales / p_adaptaciones / p_fk_tmatriculas NULL = no tocar, array = reemplazo completo. Revalida fechas, catalogos y unicidad (titulo, unidad, grupo, jerarquia). Retorna PK_TACTIVIDAD. V224.';
 
 -- ===========================================================================
 -- (5) LECTURA OPTIMIZADA
@@ -1303,6 +1493,7 @@ RETURNS TABLE (
     estudiantes_evaluados           BIGINT,
     materiales                      JSONB,
     adaptaciones                    JSONB,
+    recuperacion                    JSONB,
     active                          BOOLEAN
 )
 LANGUAGE plpgsql
@@ -1378,6 +1569,24 @@ BEGIN
                  LEFT JOIN academico_test.TLISTA_VALOR lap ON lap.PK_LISTA_VALOR = ad.FK_TLV_APLICA_A
                 WHERE ad.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND ad.ACTIVE = TRUE
            ), '[]'::jsonb),
+           -- Config de recuperacion (NULL si la actividad no es de recuperacion).
+           (SELECT jsonb_build_object(
+                       'pk',                    r.PK_TACTIVIDAD_RECUPERACION,
+                       'destino',               r.FK_TLV_DESTINO_RECUPERACION,
+                       'destinoNombre',         ldr.NOMBRE,
+                       'fkActividadRecuperar',  r.FK_TACTIVIDAD_RECUPERAR,
+                       'actividadRecuperarTitulo', ar.TITULO,
+                       'tipoAplicacion',        r.FK_TLV_TIPO_APLICACION_RECUPERACION,
+                       'tipoAplicacionNombre',  lap2.NOMBRE,
+                       'tipoCalculo',           r.FK_TLV_TIPO_CALCULO_RECUPERACION,
+                       'tipoCalculoNombre',     ltc.NOMBRE,
+                       'valorPonderacion',      r.VALOR_PONDERACION_RECUPERACION)
+              FROM academico_test.TACTIVIDAD_RECUPERACION r
+              LEFT JOIN academico_test.TLISTA_VALOR ldr  ON ldr.PK_LISTA_VALOR = r.FK_TLV_DESTINO_RECUPERACION
+              LEFT JOIN academico_test.TLISTA_VALOR lap2 ON lap2.PK_LISTA_VALOR = r.FK_TLV_TIPO_APLICACION_RECUPERACION
+              LEFT JOIN academico_test.TLISTA_VALOR ltc  ON ltc.PK_LISTA_VALOR = r.FK_TLV_TIPO_CALCULO_RECUPERACION
+              LEFT JOIN academico_test.TACTIVIDAD ar     ON ar.PK_TACTIVIDAD = r.FK_TACTIVIDAD_RECUPERAR
+             WHERE r.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND r.ACTIVE = TRUE),
            a.ACTIVE
       FROM academico_test.TACTIVIDAD a
       JOIN academico_test.TASIGNATURA asig      ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
@@ -1403,7 +1612,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_buscar_por_pk(BIGINT, BIGINT, INT)
-    IS 'Detalle completo de una actividad (gate VER): todos los campos de TACTIVIDAD con los nombres de catalogo resueltos, el estado derivado (fn_actividad_estado), el progreso de evaluacion (asignados/evaluados en un solo LATERAL), los materiales de apoyo y las adaptaciones curriculares como JSONB. SETOF 0 o 1 fila (incluye inactivas). V224.';
+    IS 'Detalle completo de una actividad (gate VER): todos los campos de TACTIVIDAD con los nombres de catalogo resueltos, el estado derivado (fn_actividad_estado), el progreso de evaluacion (asignados/evaluados en un solo LATERAL), los materiales de apoyo y las adaptaciones curriculares como JSONB, y la config de recuperacion (columna "recuperacion": objeto con destino/tipoAplicacion/tipoCalculo/valorPonderacion + nombres resueltos, o NULL si no es de recuperacion). SETOF 0 o 1 fila (incluye inactivas). V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_resumen_estados — las tarjetas del Planeador en UNA pasada.
