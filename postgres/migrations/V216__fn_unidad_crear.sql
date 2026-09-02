@@ -1007,3 +1007,94 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_contenidos_listar(BIGINT, BIGINT)
     IS 'Contenidos/componentes ACTIVE de una unidad (TUNIDAD_CONTENIDO), ordenados por ORDEN. Gate VER sobre PLANEADOR.';
+
+-- ===========================================================================
+-- fn_unidad_etiqueta_por_grado — nombre con el que se muestra la "unidad".
+--
+-- El rotulo NO es fijo ("Unidad tematica"): lo define el referente
+-- curricular vigente para el nivel educativo del grado. En
+-- TREFERENTE_CURRICULAR (V212, rama CU-86e311xqh) el campo INSTRUMENTO es
+-- justamente "el nombre con el que se visualizara la unidad" para ese
+-- nivel (p.ej. "Unidad tematica", "Proyecto pedagogico", "Relatos
+-- pedagogicos...").
+--
+-- Resolucion:
+--   TGRADO.FK_TNIVEL_ENSENANZA
+--     -> TREFERENTE_CURRICULAR rc  (mismo nivel educativo, ACTIVE, ESTADO='A'
+--        y vigente por anio: ANIO_VIGENCIA_DESDE <= anio actual y
+--        ANIO_VIGENCIA_HASTA NULL o >= anio actual)
+--     -> rc.INSTRUMENTO
+--
+-- p_fk_tasignatura (opcional) desempata cuando hay varios referentes para
+-- el nivel: se prefiere el que aplica a la asignatura (via
+-- TREFERENTE_CURRICULAR_AREA -> TAREA_ASIGNATURA; sin filas = aplica a
+-- todas, mismo criterio que V213). Si aun asi quedan varios, gana el de
+-- vigencia mas reciente. Si no hay ninguno, cae a 'Unidad tematica'.
+-- ===========================================================================
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_etiqueta_por_grado(
+    p_pk_usuario_solicitante   BIGINT,
+    p_fk_tgrado                BIGINT,
+    p_fk_tasignatura           BIGINT DEFAULT NULL
+)
+RETURNS VARCHAR
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_fk_nivel     BIGINT;
+    v_anio         INT := EXTRACT(YEAR FROM CURRENT_DATE)::INT;
+    v_etiqueta     VARCHAR;
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    );
+
+    SELECT g.FK_TNIVEL_ENSENANZA
+      INTO v_fk_nivel
+      FROM academico_test.TGRADO g
+     WHERE g.PK_TGRADO = p_fk_tgrado AND g.ACTIVE = TRUE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'FK_TGRADO (%) no existe o no esta activo', p_fk_tgrado USING ERRCODE = '23503';
+    END IF;
+
+    SELECT rc.INSTRUMENTO
+      INTO v_etiqueta
+      FROM academico_test.TREFERENTE_CURRICULAR rc
+     WHERE rc.FK_TNIVEL_ENSENANZA = v_fk_nivel
+       AND rc.ACTIVE = TRUE
+       AND rc.ESTADO = 'A'
+       AND rc.ANIO_VIGENCIA_DESDE <= v_anio
+       AND (rc.ANIO_VIGENCIA_HASTA IS NULL OR rc.ANIO_VIGENCIA_HASTA >= v_anio)
+       AND (
+             p_fk_tasignatura IS NULL
+             OR NOT EXISTS (
+                 SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_AREA a
+                  WHERE a.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR AND a.ACTIVE = TRUE
+             )
+             OR EXISTS (
+                 SELECT 1
+                   FROM academico_test.TREFERENTE_CURRICULAR_AREA a
+                   JOIN academico_test.TASIGNATURA s ON s.FK_TAREA_ASIGNATURA = a.FK_TAREA_ASIGNATURA
+                  WHERE a.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
+                    AND a.ACTIVE = TRUE
+                    AND s.PK_TASIGNATURA = p_fk_tasignatura
+             )
+           )
+     ORDER BY
+       -- primero los que aplican explicitamente a la asignatura pedida
+       (CASE WHEN p_fk_tasignatura IS NOT NULL AND EXISTS (
+                 SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_AREA a
+                   JOIN academico_test.TASIGNATURA s ON s.FK_TAREA_ASIGNATURA = a.FK_TAREA_ASIGNATURA
+                  WHERE a.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
+                    AND a.ACTIVE = TRUE AND s.PK_TASIGNATURA = p_fk_tasignatura
+             ) THEN 0 ELSE 1 END),
+       rc.ANIO_VIGENCIA_DESDE DESC,
+       rc.PK_REFERENTE_CURRICULAR DESC
+     LIMIT 1;
+
+    RETURN COALESCE(NULLIF(TRIM(v_etiqueta), ''), 'Unidad tematica');
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_unidad_etiqueta_por_grado(BIGINT, BIGINT, BIGINT)
+    IS 'Devuelve UNICAMENTE el nombre con el que se muestra la "unidad" para un grado dado: TREFERENTE_CURRICULAR.INSTRUMENTO del referente curricular vigente (ACTIVE, ESTADO=''A'', vigente por anio) del nivel educativo del grado (TGRADO.FK_TNIVEL_ENSENANZA). p_fk_tasignatura (opcional) desempata por area (TREFERENTE_CURRICULAR_AREA; sin areas = aplica a todas). Si hay varios, gana el de vigencia mas reciente; si no hay ninguno, retorna ''Unidad tematica''. Gate VER sobre PLANEADOR. Depende de V212 (rama CU-86e311xqh).';
