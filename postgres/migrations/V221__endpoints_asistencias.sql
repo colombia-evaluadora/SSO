@@ -91,15 +91,15 @@ SELECT
     'postgres', false, false, m.id_microservice,
     '/asistencias/registrar', 'SELECT', 'POST',
     '{
-       "BODY.GRUPO":         "BIGINT",
-       "BODY.ASIGNATURA":    "BIGINT",
-       "BODY.FECHA":         "VARCHAR",
+       "BODY.GRUPO":         "BIGINT!",
+       "BODY.ASIGNATURA":    "BIGINT!",
+       "BODY.FECHA":         "VARCHAR!",
        "BODY.BLOQUE":        "NUMERIC",
        "BODY.REGISTROS":     "JSONB",
        "BODY_RAW.REGISTROS": "JSONB",
        "BODY.MARCAR_TODOS":  "NUMERIC"
      }'::jsonb,
-    'V221 -- registra/actualiza la asistencia de un grupo en una sesion (FECHA + BLOQUE). REGISTROS = [{fkMatricula,tipoAsistencia,observacion,fkArchivo}]. Si REGISTROS viene vacio y MARCAR_TODOS trae un valor de TIPO_ASISTENCIA (1=Asistio), lo aplica a todo el grupo. Upsert idempotente por (matricula, asignatura, fecha, bloque).'
+    'V221 -- registra/actualiza la asistencia de un grupo en una sesion (FECHA + BLOQUE). REGISTROS = [{fkMatricula,tipoAsistencia,observacion,fkArchivo}]. Si REGISTROS viene vacio y MARCAR_TODOS trae un valor de TIPO_ASISTENCIA (1=Asistio), lo aplica a todo el grupo. Upsert idempotente por (matricula, asignatura, fecha, bloque). RECHAZA (22023) si el TPERIODO_ACADEMICO del grupo esta Cerrado.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (uuid) DO UPDATE
@@ -136,7 +136,7 @@ SELECT
        "BODY.LIMPIAR_ARCHIVO":      "BOOLEAN",
        "BODY.LIMPIAR_OBSERVACION":  "BOOLEAN"
      }'::jsonb,
-    'V221 -- edita un registro de asistencia (estado, observacion, soporte). Campos ausentes = no se tocan; LIMPIAR_ARCHIVO / LIMPIAR_OBSERVACION = true los pone en NULL. TIPO_ASISTENCIA es el VALOR del catalogo (1,2,3,5,6).'
+    'V221 -- edita un registro de asistencia (estado, observacion, soporte). Campos ausentes = no se tocan; LIMPIAR_ARCHIVO / LIMPIAR_OBSERVACION = true los pone en NULL. TIPO_ASISTENCIA es el VALOR del catalogo (1,2,3,5,6). RECHAZA (22023) si el TPERIODO_ACADEMICO del grupo del registro esta Cerrado.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (uuid) DO UPDATE
@@ -213,9 +213,9 @@ SELECT
     'postgres', false, false, m.id_microservice,
     '/asistencias/sesion/estudiantes', 'SELECT', 'GET',
     '{
-       "QUERY.GRUPO":      "BIGINT",
-       "QUERY.ASIGNATURA": "BIGINT",
-       "QUERY.FECHA":      "VARCHAR",
+       "QUERY.GRUPO":      "BIGINT!",
+       "QUERY.ASIGNATURA": "BIGINT!",
+       "QUERY.FECHA":      "VARCHAR!",
        "QUERY.BLOQUE":     "NUMERIC"
      }'::jsonb,
     'V221 -- padron de la pantalla "Asistencia manual": una fila por matricula activa del grupo, con el estado ACTUAL del alumno (pk_tasistencia / tipo_asistencia_valor / observacion / soporte) o NULL si falta tomarlo. Repite en cada fila la cabecera de la sesion: hora_inicio/hora_fin (THORARIO por dia de semana de la fecha) y fk_tperiodo_evaluacion. total_estudiantes y registrados son ventanas sobre el padron.'
@@ -257,9 +257,9 @@ SELECT
     'postgres', false, false, m.id_microservice,
     '/asistencias/calendario', 'SELECT', 'GET',
     '{
-       "QUERY.SEDE":       "BIGINT",
-       "QUERY.ANIO":       "INTEGER",
-       "QUERY.MES":        "INTEGER",
+       "QUERY.SEDE":       "BIGINT!",
+       "QUERY.ANIO":       "INTEGER!",
+       "QUERY.MES":        "INTEGER!",
        "QUERY.GRUPO":      "BIGINT",
        "QUERY.ASIGNATURA": "BIGINT",
        "QUERY.HOY":        "VARCHAR",
@@ -302,7 +302,7 @@ SELECT
     'postgres', false, false, m.id_microservice,
     '/asistencias/resumen-horas', 'SELECT', 'GET',
     '{
-       "QUERY.SEDE":       "BIGINT",
+       "QUERY.SEDE":       "BIGINT!",
        "QUERY.FECHA":      "VARCHAR",
        "QUERY.GRUPO":      "BIGINT",
        "QUERY.ASIGNATURA": "BIGINT",

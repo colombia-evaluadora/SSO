@@ -108,7 +108,10 @@
 --      y IDX_THORARIO_LOOKUP.
 --   2. Menu 'ASISTENCIA' (TMENU) + concesion al SUPER_ADMINISTRADOR.
 --   3. fn_asistencia_gate_escritura / fn_asistencia_puede_ver  (autorizacion)
---   4. fn_asistencia_periodo_eval / fn_asistencia_tipo_pk      (resolucion)
+--   4. fn_asistencia_periodo_eval / fn_asistencia_periodo_estado /
+--      fn_asistencia_tipo_pk                                     (resolucion)
+--      fn_asistencia_periodo_estado -> registrar_bulk y editar RECHAZAN si el
+--      TPERIODO_ACADEMICO del grupo esta 'Cerrado' (ESTADOPERIODO='C').
 --   5. VISTA v_asistencia_detalle  (cadena de joins + clasificacion, un solo
 --      sitio; la consumen las 3 funciones de lectura)
 --   6. fn_asistencia_sesiones_programadas (proyeccion del horario sobre
@@ -317,6 +320,33 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_asistencia_periodo_eval(BIGINT, DATE)
     IS 'PK_TPERIODO_EVALUACION de una sesion: periodo de evaluacion activo del periodo academico del grado del grupo cuyo rango [FECHA_INICIO,FECHA_FIN] contiene la fecha. NULL si no hay.';
 
+-- Estado del PERIODO ACADEMICO del grupo (TPERIODO_ACADEMICO.FK_TLV_ESTADO ->
+-- TLISTA_VALOR CATEGORIA='ESTADOPERIODO': Abierto 'A', Cerrado 'C',
+-- Nivelaciones 'N', Inscripciones 'I', Promociones 'P'). Se usa para BLOQUEAR
+-- crear/editar asistencia cuando el periodo esta Cerrado.
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_periodo_estado(
+    p_fk_tgrupo BIGINT
+)
+RETURNS TABLE (
+    fk_tperiodo_academico BIGINT,
+    estado_valor          VARCHAR,
+    estado_nombre         VARCHAR
+)
+LANGUAGE sql STABLE AS $$
+    SELECT pa.PK_TPERIODO_ACADEMICO,
+           lv.VALOR::VARCHAR,
+           lv.NOMBRE::VARCHAR
+      FROM academico_test.TGRUPO gr
+      JOIN academico_test.TGRADO g              ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+ LEFT JOIN academico_test.TLISTA_VALOR lv       ON lv.PK_LISTA_VALOR = pa.FK_TLV_ESTADO
+                                              AND lv.CATEGORIA = 'ESTADOPERIODO'
+     WHERE gr.PK_TGRUPO = p_fk_tgrupo AND gr.ACTIVE = TRUE;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_periodo_estado(BIGINT)
+    IS 'Periodo academico del grupo y su estado ESTADOPERIODO (VALOR/NOMBRE). estado_valor = ''C'' -> Cerrado: fn_asistencia_registrar_bulk y fn_asistencia_editar rechazan la escritura. NULL en estado_* si el periodo no tiene estado clasificado (se trata como no-cerrado).';
+
 -- PK del TLISTA_VALOR de un TIPO_ASISTENCIA a partir de su VALOR numerico.
 -- Centraliza la resolucion que antes estaba repetida en 3 sitios.
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_tipo_pk(
@@ -453,6 +483,7 @@ DECLARE
     v_fk_periodo BIGINT;
     v_entrada    JSONB;
     v_invalido   TEXT;
+    v_estado     RECORD;
 BEGIN
     -- 0. Obligatorios de forma (antes del gate: no filtran informacion).
     IF p_fk_tgrupo IS NULL OR p_fk_tasignatura IS NULL OR p_fecha IS NULL THEN
@@ -476,6 +507,18 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA
                     WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
         RAISE EXCEPTION 'asignatura (%) no existe o no esta activa', p_fk_tasignatura USING ERRCODE = '23503';
+    END IF;
+
+    -- 2b. Periodo academico CERRADO -> no se registra asistencia. Se comprueba
+    --     por VALOR (no por pk: varia por ambiente). Otros estados
+    --     (Nivelaciones / Inscripciones / Promociones / sin estado) se
+    --     permiten; solo 'C' (Cerrado) bloquea.
+    SELECT * INTO v_estado FROM academico_test.fn_asistencia_periodo_estado(p_fk_tgrupo);
+    IF v_estado.estado_valor = 'C' THEN
+        RAISE EXCEPTION 'el periodo academico del grupo % esta %; no se puede registrar asistencia',
+            p_fk_tgrupo, COALESCE(v_estado.estado_nombre, 'Cerrado')
+            USING ERRCODE = '22023',
+                  HINT = 'Reabrir el periodo academico para permitir cambios de asistencia.';
     END IF;
 
     -- 3. Periodo de evaluacion (NOT NULL en TASISTENCIA): se resuelve.
@@ -596,6 +639,7 @@ LANGUAGE plpgsql VOLATILE AS $$
 DECLARE
     v_fk_tgrupo   BIGINT;
     v_fk_tlv_tipo BIGINT;
+    v_estado      RECORD;
 BEGIN
     -- 1. El registro existe (y de paso da el grupo con el que se autoriza).
     SELECT m.FK_TGRUPO INTO v_fk_tgrupo
@@ -610,6 +654,15 @@ BEGIN
     -- 2. Gate de capability + scope sobre el grupo del registro.
     PERFORM academico_test.fn_asistencia_gate_escritura(
         p_pk_usuario_solicitante, v_fk_tgrupo, 'EDITAR');
+
+    -- 2b. Periodo academico CERRADO -> no se edita (igual que registrar_bulk).
+    SELECT * INTO v_estado FROM academico_test.fn_asistencia_periodo_estado(v_fk_tgrupo);
+    IF v_estado.estado_valor = 'C' THEN
+        RAISE EXCEPTION 'el periodo academico del grupo % esta %; no se puede editar la asistencia',
+            v_fk_tgrupo, COALESCE(v_estado.estado_nombre, 'Cerrado')
+            USING ERRCODE = '22023',
+                  HINT = 'Reabrir el periodo academico para permitir cambios de asistencia.';
+    END IF;
 
     -- 3. Validacion de los campos que llegan.
     IF p_tipo_asistencia_valor IS NOT NULL THEN
@@ -1013,6 +1066,15 @@ DECLARE
     v_ini DATE := make_date(p_anio, p_mes, 1);
     v_fin DATE := (make_date(p_anio, p_mes, 1) + INTERVAL '1 month')::date;  -- exclusivo
 BEGIN
+    -- sede, anio y mes son obligatorios: sin ellos el calendario no tiene
+    -- ventana. (El endpoint tambien los marca requeridos con "!" en param_types.)
+    IF p_fk_tsede IS NULL OR p_anio IS NULL OR p_mes IS NULL THEN
+        RAISE EXCEPTION 'sede, anio y mes son obligatorios para el calendario' USING ERRCODE = '22023';
+    END IF;
+    IF p_mes NOT BETWEEN 1 AND 12 THEN
+        RAISE EXCEPTION 'mes invalido: % (1..12)', p_mes USING ERRCODE = '22023';
+    END IF;
+
     RETURN QUERY
     -- (a) Sesiones PROGRAMADAS del mes (helper compartido).
     WITH programadas AS (
