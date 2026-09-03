@@ -48,19 +48,16 @@
 --                      en modo Sumatoria: la calcula el sistema, no el
 --                      usuario, y un 100.01 por redondeo no debe bloquear.
 --
---      OJO — INCERTIDUMBRE DOCUMENTADA: el catalogo CALCULO_DEFINITIVA NO se
---      seedea en ninguna migracion versionada de este repo (viene del dump
---      base del servidor; tampoco existe en el Postgres local de pruebas),
---      asi que no se pudo verificar el VALOR exacto de sus filas. Lo que SI
---      esta confirmado (comentario de V73, rama CU-86e30a25v) son los NOMBRE
---      en espanol: "Promediar Actividades o descriptores", "Ponderar
---      Actividades o Descriptores", "Sumatoria de Actividades". Por eso
---      fn_unidad_calculo_definitiva_modo resuelve el modo por
---      NOMBRE ILIKE 'Promed%' / 'Ponder%' / 'Sumat%' y NO por VALOR.
---      Decision de bajo riesgo pero NO verificada contra el servidor real:
---      confirmar los VALOR/NOMBRE antes de desplegar y, si los VALOR
---      resultan estables, cambiar la resolucion a VALOR (un solo punto:
---      esa funcion).
+--      INCERTIDUMBRE RESUELTA (2026-09-03, verificado por SSH contra
+--      172.233.184.248, sso_db): el catalogo CALCULO_DEFINITIVA sigue sin
+--      estar seedeado en ninguna migracion versionada de este repo (viene
+--      del dump base del servidor), pero sus VALOR ya estan confirmados:
+--          pk_lista_valor | nombre                                | valor
+--          496            | Promediar Actividades o descriptores  | '1'
+--          497            | Ponderar Actividades o Descriptores   | '2'
+--          498            | Sumatoria de Actividades              | '3'
+--      fn_unidad_calculo_definitiva_modo resuelve el modo por VALOR (nunca
+--      por PK), como manda la convencion del repo.
 --
 -- Depende de (orden de version de Flyway):
 --   * V22  — TACTIVIDAD (incl. NOTA_MAXIMA), TUNIDAD, TGRUPO, TLISTA_VALOR.
@@ -132,13 +129,17 @@ COMMENT ON FUNCTION academico_test.fn_unidad_ponderacion_asignada(BIGINT, BIGINT
 --     NULL si la unidad no existe, no tiene metodo elegido, o el valor del
 --     catalogo no se reconoce.
 --
---     Se resuelve por NOMBRE ILIKE y NO por VALOR — ver la INCERTIDUMBRE
---     DOCUMENTADA de la cabecera: el catalogo CALCULO_DEFINITIVA no esta en
---     ninguna migracion del repo (viene del dump base) y solo los NOMBRE en
---     espanol estan confirmados ("Promediar Actividades o descriptores",
---     "Ponderar Actividades o Descriptores", "Sumatoria de Actividades").
---     Si mas adelante se confirman los VALOR, este es el UNICO sitio a
---     cambiar.
+--     INCERTIDUMBRE RESUELTA: se confirmo por SSH contra el servidor real
+--     (172.233.184.248, sso_db) el 2026-09-03. El catalogo CALCULO_DEFINITIVA
+--     sigue sin estar en ninguna migracion del repo (viene del dump base),
+--     pero sus VALOR son estables y ya no son texto descriptivo, son codigos
+--     numericos de texto:
+--         pk_lista_valor | nombre                                | valor
+--         496            | Promediar Actividades o descriptores  | '1'
+--         497            | Ponderar Actividades o Descriptores   | '2'
+--         498            | Sumatoria de Actividades              | '3'
+--     Se resuelve por VALOR (nunca por PK), como manda la convencion del
+--     repo -- ya NO por NOMBRE ILIKE.
 --
 --     No filtra por lv.ACTIVE: si un ambiente desactivara la fila del
 --     catalogo, la unidad seguiria teniendo su metodo elegido y perder el
@@ -151,10 +152,10 @@ RETURNS VARCHAR
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT CASE
-               WHEN lv.NOMBRE ILIKE 'Ponder%' THEN 'PONDERAR'
-               WHEN lv.NOMBRE ILIKE 'Promed%' THEN 'PROMEDIAR'
-               WHEN lv.NOMBRE ILIKE 'Sumat%'  THEN 'SUMATORIA'
+    SELECT CASE lv.VALOR
+               WHEN '2' THEN 'PONDERAR'
+               WHEN '1' THEN 'PROMEDIAR'
+               WHEN '3' THEN 'SUMATORIA'
                ELSE NULL
            END::VARCHAR
       FROM academico_test.TUNIDAD u
@@ -163,7 +164,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_calculo_definitiva_modo(BIGINT)
-    IS 'Modo canonico de calculo de la definitiva de una unidad a partir de TUNIDAD.FK_TLV_CALCULO_DEFINITIVA (V73, TLISTA_VALOR CATEGORIA=CALCULO_DEFINITIVA): ''PONDERAR'' | ''PROMEDIAR'' | ''SUMATORIA'', o NULL si la unidad no existe, no tiene metodo elegido o el valor no se reconoce. Punto UNICO de esa resolucion (trigger del 100%, fn_unidad_actividad_vincular/_ponderacion_set/_desvincular, fn_actividad_crear/_actualizar/_eliminar de V224 y el bloque "ponderacion" de fn_actividad_campos_disponibles de V137). Se resuelve por NOMBRE ILIKE ''Ponder%''/''Promed%''/''Sumat%'' y NO por VALOR: ese catalogo NO esta seedeado en ninguna migracion del repo (viene del dump base del servidor) y solo los NOMBRE estan confirmados (comentario de V73) -- decision documentada, a confirmar contra el servidor real antes de desplegar. V223.';
+    IS 'Modo canonico de calculo de la definitiva de una unidad a partir de TUNIDAD.FK_TLV_CALCULO_DEFINITIVA (V73, TLISTA_VALOR CATEGORIA=CALCULO_DEFINITIVA): ''PONDERAR'' | ''PROMEDIAR'' | ''SUMATORIA'', o NULL si la unidad no existe, no tiene metodo elegido o el valor no se reconoce. Punto UNICO de esa resolucion (trigger del 100%, fn_unidad_actividad_vincular/_ponderacion_set/_desvincular, fn_actividad_crear/_actualizar/_eliminar de V224 y el bloque "ponderacion" de fn_actividad_campos_disponibles de V137). Se resuelve por VALOR (confirmado por SSH contra 172.233.184.248 el 2026-09-03: VALOR=''1''->Promediar, ''2''->Ponderar, ''3''->Sumatoria), nunca por PK. V223.';
 
 -- ---------------------------------------------------------------------------
 -- 2.c fn_unidad_ponderacion_recalcular_sumatoria — autocalculo del % en las
