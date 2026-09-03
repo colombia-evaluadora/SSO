@@ -1045,6 +1045,15 @@ COMMENT ON FUNCTION academico_test.fn_actividad_recuperacion_configurar(BIGINT, 
 -- args) -- se antepone el DROP FUNCTION IF EXISTS de esa firma, mismo
 -- patron que V100/V106/V109/V113.
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB);
+-- p_es_evaluativa/p_requiere_archivo/p_requiere_texto/p_genera_evidencias/
+-- p_requiere_validacion_coordinador pasan de VARCHAR(1) a
+-- academico_test.bool_sn (mismo dominio ya usado por la columna, y
+-- convencion ya establecida en el repo -- V37/V39/V53/V100/V111/V159/V180 --
+-- para tipar parametros S/N, en vez de VARCHAR(1) + validacion manual
+-- NOT IN ('S','N')): otro cambio de tipo de parametro, mismo criterio de
+-- DROP FUNCTION IF EXISTS de la firma inmediatamente anterior (35 args, con
+-- VARCHAR en esas 5 posiciones).
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BIGINT[], BIGINT[]);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_crear(
     p_pk_usuario_solicitante            BIGINT,
     p_titulo                            VARCHAR(250),
@@ -1061,7 +1070,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_crear(
     p_semana_cronograma                 VARCHAR(50)   DEFAULT NULL,
     p_fk_tlv_modalidad                  BIGINT        DEFAULT NULL,
     p_material_requerido                VARCHAR(4000) DEFAULT NULL,
-    p_es_evaluativa                     VARCHAR(1)    DEFAULT 'S',
+    p_es_evaluativa                     academico_test.bool_sn DEFAULT 'S',
     p_fk_tlv_instrumento_evaluacion     BIGINT        DEFAULT NULL,
     p_descripcion_instrumento           VARCHAR(4000) DEFAULT NULL,
     p_fk_tlv_tipo_evidencia             BIGINT        DEFAULT NULL,
@@ -1069,10 +1078,10 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_crear(
     p_fk_tlv_tipo_calculo               BIGINT        DEFAULT NULL,
     p_influencia                        NUMERIC       DEFAULT NULL,
     p_nota_maxima                       NUMERIC       DEFAULT NULL,
-    p_requiere_archivo                  VARCHAR(1)    DEFAULT 'N',
-    p_requiere_texto                    VARCHAR(1)    DEFAULT 'N',
-    p_genera_evidencias                 VARCHAR(1)    DEFAULT 'N',
-    p_requiere_validacion_coordinador   VARCHAR(1)    DEFAULT 'N',
+    p_requiere_archivo                  academico_test.bool_sn DEFAULT 'N',
+    p_requiere_texto                    academico_test.bool_sn DEFAULT 'N',
+    p_genera_evidencias                 academico_test.bool_sn DEFAULT 'N',
+    p_requiere_validacion_coordinador   academico_test.bool_sn DEFAULT 'N',
     p_observaciones_docente             VARCHAR(4000) DEFAULT NULL,
     p_materiales                        JSONB         DEFAULT NULL,
     p_adaptaciones                      JSONB         DEFAULT NULL,
@@ -1125,13 +1134,8 @@ BEGIN
         RAISE EXCEPTION 'La fecha de cierre (%) no puede ser anterior a la de inicio (%)',
             p_fecha_cierre, p_fecha_inicio USING ERRCODE = '22023';
     END IF;
-    IF UPPER(TRIM(COALESCE(p_es_evaluativa,'S'))) NOT IN ('S','N')
-       OR UPPER(TRIM(COALESCE(p_requiere_archivo,'N'))) NOT IN ('S','N')
-       OR UPPER(TRIM(COALESCE(p_requiere_texto,'N'))) NOT IN ('S','N')
-       OR UPPER(TRIM(COALESCE(p_genera_evidencias,'N'))) NOT IN ('S','N')
-       OR UPPER(TRIM(COALESCE(p_requiere_validacion_coordinador,'N'))) NOT IN ('S','N') THEN
-        RAISE EXCEPTION 'Las banderas S/N solo aceptan ''S'' o ''N''' USING ERRCODE = '22023';
-    END IF;
+    -- Las banderas S/N ya son academico_test.bool_sn: el dominio (CHECK IN
+    -- ('S','N')) las valida al vuelo, no hace falta un chequeo manual aqui.
 
     -- 3. FKs propias.
     IF NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA
@@ -1155,7 +1159,7 @@ BEGIN
     END IF;
     -- Condicion dinamica "actividad -> ponderacion" (V137, bloque
     -- 'ponderacion'), gate (a): sin evaluacion no hay peso que repartir.
-    IF p_ponderacion IS NOT NULL AND UPPER(TRIM(COALESCE(p_es_evaluativa, 'S'))) = 'N' THEN
+    IF p_ponderacion IS NOT NULL AND COALESCE(p_es_evaluativa, 'S') = 'N' THEN
         RAISE EXCEPTION 'La ponderacion no aplica: la actividad no es evaluativa (p_es_evaluativa = ''N'')'
             USING ERRCODE = '22023';
     END IF;
@@ -1173,7 +1177,7 @@ BEGIN
         END IF;
     END IF;
     -- Una actividad de recuperacion recupera una NOTA: tiene que ser evaluativa.
-    IF p_recuperacion IS NOT NULL AND UPPER(TRIM(COALESCE(p_es_evaluativa, 'S'))) = 'N' THEN
+    IF p_recuperacion IS NOT NULL AND COALESCE(p_es_evaluativa, 'S') = 'N' THEN
         RAISE EXCEPTION 'Una actividad de recuperacion debe ser evaluativa (p_es_evaluativa = ''S'')'
             USING ERRCODE = '22023';
     END IF;
@@ -1243,14 +1247,14 @@ BEGIN
         p_influencia, p_nota_maxima,
         p_fecha_inicio, p_fecha_cierre, p_duracion_estimada, NULLIF(TRIM(p_semana_cronograma), ''),
         p_fk_tlv_modalidad, NULLIF(TRIM(p_material_requerido), ''),
-        UPPER(TRIM(COALESCE(p_es_evaluativa, 'S'))),
+        COALESCE(p_es_evaluativa, 'S'),
         CASE WHEN p_recuperacion IS NOT NULL THEN 'S' ELSE 'N' END,
         p_fk_tlv_instrumento_evaluacion,
         NULLIF(TRIM(p_descripcion_instrumento), ''),
         p_fk_tlv_tipo_evidencia, p_fk_tlv_metodo_valoracion,
-        UPPER(TRIM(COALESCE(p_requiere_archivo, 'N'))), UPPER(TRIM(COALESCE(p_requiere_texto, 'N'))),
-        UPPER(TRIM(COALESCE(p_genera_evidencias, 'N'))),
-        UPPER(TRIM(COALESCE(p_requiere_validacion_coordinador, 'N'))),
+        COALESCE(p_requiere_archivo, 'N'), COALESCE(p_requiere_texto, 'N'),
+        COALESCE(p_genera_evidencias, 'N'),
+        COALESCE(p_requiere_validacion_coordinador, 'N'),
         NULLIF(TRIM(p_observaciones_docente), ''),
         p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
     )
@@ -1302,12 +1306,17 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BIGINT[], BIGINT[])
+COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BIGINT[], BIGINT[])
     IS 'Crea una actividad del Planeador (gate CREAR sobre PLANEADOR): inserta TACTIVIDAD (identificacion, programacion, evaluacion y seguimiento) y opcionalmente la vincula a una unidad con su PONDERACION (%) — la regla "la suma por (unidad, grupo) no pasa de 100" la impone el trigger de V223. NO asigna estudiantes por defecto: p_asignar_todo_el_grupo=TRUE los toma del FK_TGRUPO, o p_fk_tmatriculas fija estudiantes especificos (1 o mas). p_recuperacion (objeto) marca la actividad como de recuperacion y crea su fila TACTIVIDAD_RECUPERACION via fn_actividad_recuperacion_configurar. p_evidencias (PKs de TREFERENTE_ENUNCIADO nivel 2) y p_criterios (PKs de TCRITERIO_UNIDAD) relacionan la actividad, via fn_actividad_evidencia_relacionar / fn_actividad_criterio_relacionar (V136), con evidencias de enunciados ya vinculados a la unidad y con criterios de la rubrica de esa misma unidad — ambos exigen FK_TUNIDAD y abortan el CREATE si la actividad no tiene unidad o alguna PK no cumple la regla de negocio. Delega materiales / adaptaciones / estudiantes en sus helpers. Valida catalogos con fn_actividad_lv_assert y unicidad (titulo, unidad, grupo, jerarquia) entre activas con IS NOT DISTINCT FROM. p_fk_tlv_instrumento_evaluacion solo se acepta si la actividad se vincula a una unidad (p_fk_tunidad) cuyo referente curricular es EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V137); en otro caso lanza 22023. PONDERACION (condicion dinamica "actividad -> ponderacion" de V137): se rechaza (22023) si la actividad no es evaluativa (p_es_evaluativa=''N''), si no se vincula a una unidad, si la unidad PROMEDIA (no aplica) o si la unidad calcula por SUMATORIA -- ahi el docente envia p_nota_maxima (puntaje) y el % lo autocalcula fn_unidad_ponderacion_recalcular_sumatoria (V223), invocada tras el INSERT para repartir el bucket (unidad, grupo) completo. Retorna PK_TACTIVIDAD. V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_actualizar — PATCH parcial.
+--
+-- Mismo cambio de tipo que en fn_actividad_crear (VARCHAR(1) ->
+-- academico_test.bool_sn en las 5 banderas S/N): DROP FUNCTION IF EXISTS de
+-- la firma anterior antes del CREATE OR REPLACE.
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_actualizar(
     p_pk_usuario_solicitante            BIGINT,
     p_pk_tactividad                     BIGINT,
@@ -1325,7 +1334,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_actualizar(
     p_semana_cronograma                 VARCHAR(50)   DEFAULT NULL,
     p_fk_tlv_modalidad                  BIGINT        DEFAULT NULL,
     p_material_requerido                VARCHAR(4000) DEFAULT NULL,
-    p_es_evaluativa                     VARCHAR(1)    DEFAULT NULL,
+    p_es_evaluativa                     academico_test.bool_sn DEFAULT NULL,
     p_fk_tlv_instrumento_evaluacion     BIGINT        DEFAULT NULL,
     p_descripcion_instrumento           VARCHAR(4000) DEFAULT NULL,
     p_fk_tlv_tipo_evidencia             BIGINT        DEFAULT NULL,
@@ -1333,10 +1342,10 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_actualizar(
     p_fk_tlv_tipo_calculo               BIGINT        DEFAULT NULL,
     p_influencia                        NUMERIC       DEFAULT NULL,
     p_nota_maxima                       NUMERIC       DEFAULT NULL,
-    p_requiere_archivo                  VARCHAR(1)    DEFAULT NULL,
-    p_requiere_texto                    VARCHAR(1)    DEFAULT NULL,
-    p_genera_evidencias                 VARCHAR(1)    DEFAULT NULL,
-    p_requiere_validacion_coordinador   VARCHAR(1)    DEFAULT NULL,
+    p_requiere_archivo                  academico_test.bool_sn DEFAULT NULL,
+    p_requiere_texto                    academico_test.bool_sn DEFAULT NULL,
+    p_genera_evidencias                 academico_test.bool_sn DEFAULT NULL,
+    p_requiere_validacion_coordinador   academico_test.bool_sn DEFAULT NULL,
     p_observaciones_docente             VARCHAR(4000) DEFAULT NULL,
     -- NULL = no tocar; array (incl. vacio) = reemplazo completo
     p_materiales                        JSONB         DEFAULT NULL,
@@ -1359,7 +1368,7 @@ DECLARE
     v_cierre      DATE;
     v_fk_tunidad  BIGINT;
     v_instrumento BIGINT;
-    v_evaluativa  VARCHAR(1);
+    v_evaluativa  academico_test.bool_sn;
     v_modo_calc   VARCHAR;
 BEGIN
     SELECT * INTO v_actual
@@ -1387,7 +1396,7 @@ BEGIN
         RAISE EXCEPTION 'p_quitar_recuperacion es excluyente con p_recuperacion' USING ERRCODE = '22023';
     END IF;
     IF p_recuperacion IS NOT NULL
-       AND UPPER(TRIM(COALESCE(p_es_evaluativa, v_actual.ES_EVALUATIVA::VARCHAR))) = 'N' THEN
+       AND COALESCE(p_es_evaluativa, v_actual.ES_EVALUATIVA) = 'N' THEN
         RAISE EXCEPTION 'Una actividad de recuperacion debe ser evaluativa' USING ERRCODE = '22023';
     END IF;
 
@@ -1403,7 +1412,7 @@ BEGIN
     v_instrumento := COALESCE(p_fk_tlv_instrumento_evaluacion, v_actual.FK_TLV_INSTRUMENTO_EVALUACION);
     -- ES_EVALUATIVA resultante (nueva o heredada), mismo criterio de "valor
     -- resultante" que v_fk_tunidad / v_instrumento.
-    v_evaluativa  := UPPER(TRIM(COALESCE(p_es_evaluativa, v_actual.ES_EVALUATIVA::VARCHAR, 'S')));
+    v_evaluativa  := COALESCE(p_es_evaluativa, v_actual.ES_EVALUATIVA, 'S');
 
     -- Condicion dinamica "actividad -> ponderacion" (V137). Gate (a): sin
     -- evaluacion no hay peso. Gate (b): el metodo de calculo de la unidad
@@ -1493,7 +1502,7 @@ BEGIN
            FK_TLV_MODALIDAD                = COALESCE(p_fk_tlv_modalidad, FK_TLV_MODALIDAD),
            MATERIAL_REQUERIDO              = CASE WHEN p_material_requerido IS NULL THEN MATERIAL_REQUERIDO
                                                   ELSE NULLIF(TRIM(p_material_requerido), '') END,
-           ES_EVALUATIVA                   = COALESCE(UPPER(TRIM(p_es_evaluativa)), ES_EVALUATIVA),
+           ES_EVALUATIVA                   = COALESCE(p_es_evaluativa, ES_EVALUATIVA),
            FK_TLV_INSTRUMENTO_EVALUACION   = COALESCE(p_fk_tlv_instrumento_evaluacion, FK_TLV_INSTRUMENTO_EVALUACION),
            DESCRIPCION_INSTRUMENTO         = CASE WHEN p_descripcion_instrumento IS NULL THEN DESCRIPCION_INSTRUMENTO
                                                   ELSE NULLIF(TRIM(p_descripcion_instrumento), '') END,
@@ -1502,10 +1511,10 @@ BEGIN
            FK_TLV_TIPO_CALCULO             = COALESCE(p_fk_tlv_tipo_calculo, FK_TLV_TIPO_CALCULO),
            INFLUENCIA                      = COALESCE(p_influencia, INFLUENCIA),
            NOTA_MAXIMA                     = COALESCE(p_nota_maxima, NOTA_MAXIMA),
-           REQUIERE_ARCHIVO                = COALESCE(UPPER(TRIM(p_requiere_archivo)), REQUIERE_ARCHIVO),
-           REQUIERE_TEXTO                  = COALESCE(UPPER(TRIM(p_requiere_texto)), REQUIERE_TEXTO),
-           GENERA_EVIDENCIAS               = COALESCE(UPPER(TRIM(p_genera_evidencias)), GENERA_EVIDENCIAS),
-           REQUIERE_VALIDACION_COORDINADOR = COALESCE(UPPER(TRIM(p_requiere_validacion_coordinador)), REQUIERE_VALIDACION_COORDINADOR),
+           REQUIERE_ARCHIVO                = COALESCE(p_requiere_archivo, REQUIERE_ARCHIVO),
+           REQUIERE_TEXTO                  = COALESCE(p_requiere_texto, REQUIERE_TEXTO),
+           GENERA_EVIDENCIAS               = COALESCE(p_genera_evidencias, GENERA_EVIDENCIAS),
+           REQUIERE_VALIDACION_COORDINADOR = COALESCE(p_requiere_validacion_coordinador, REQUIERE_VALIDACION_COORDINADOR),
            OBSERVACIONES_DOCENTE           = CASE WHEN p_observaciones_docente IS NULL THEN OBSERVACIONES_DOCENTE
                                                   ELSE NULLIF(TRIM(p_observaciones_docente), '') END,
            MODIFIED_BY                     = p_pk_usuario_solicitante::VARCHAR,
@@ -1559,7 +1568,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN)
+COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN)
     IS 'PATCH parcial de una actividad (gate EDITAR sobre PLANEADOR): cada parametro NULL preserva el valor actual. Unidad/ponderacion se delegan en fn_unidad_actividad_vincular / _ponderacion_set / _desvincular (V223) para que la regla del 100% viva en un solo sitio; p_desvincular_unidad=TRUE es excluyente con p_fk_tunidad/p_ponderacion. Recuperacion: p_recuperacion (objeto) la configura via fn_actividad_recuperacion_configurar, p_quitar_recuperacion=TRUE la elimina (vuelve la actividad a normal); son excluyentes y NULL/FALSE no la tocan. p_materiales / p_adaptaciones / p_fk_tmatriculas NULL = no tocar, array = reemplazo completo. Revalida fechas, catalogos y unicidad (titulo, unidad, grupo, jerarquia). El FK_TLV_INSTRUMENTO_EVALUACION resultante (nuevo o heredado) solo se admite si la unidad resultante (nueva, heredada, o NULL si p_desvincular_unidad) tiene referente curricular EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V137); en otro caso lanza 22023. PONDERACION (condicion dinamica "actividad -> ponderacion" de V137, evaluada contra los valores RESULTANTES): se rechaza p_ponderacion (22023) si la actividad queda NO evaluativa (ES_EVALUATIVA resultante = ''N''), si la unidad resultante PROMEDIA, o si calcula por SUMATORIA -- ahi el docente envia p_nota_maxima y el % lo autocalcula fn_unidad_ponderacion_recalcular_sumatoria (V223), que se invoca SIEMPRE al final sobre el bucket resultante (y sobre el de origen si cambio la unidad o el grupo), porque editar el puntaje de una actividad cambia el % de todas las de su (unidad, grupo). Retorna PK_TACTIVIDAD. V224.';
 
 -- ---------------------------------------------------------------------------
