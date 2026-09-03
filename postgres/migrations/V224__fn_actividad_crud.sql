@@ -11,7 +11,9 @@
 --   (3) Helpers reutilizables        — fn_actividad_lv_assert,
 --                                       fn_actividad_estado,
 --                                       fn_actividad_material_reemplazar,
---                                       fn_actividad_adaptacion_reemplazar,
+--                                       fn_actividad_materiales_reutilizables_listar
+--                                       (picker de reuso de archivos entre
+--                                       actividades), fn_actividad_adaptacion_reemplazar,
 --                                       fn_actividad_estudiantes_asignar,
 --                                       fn_actividad_recuperacion_configurar.
 --   (4) Escritura                    — fn_actividad_crear / _actualizar /
@@ -94,11 +96,22 @@
 --     * MODALIDAD ("Mixta" confirmada en el figma de detalle): comentario
 --       de V22 (Presencial / Virtual / Mixta).
 --     * TIPO_RECURSO: etiquetas del figma del bloque "Materiales de apoyo"
---       ("Recurso 1 - Fuente" -> Tipo / URL / Sitio web).
---     * TIPO_EVIDENCIA: del figma solo se confirma el valor "Archivo"
---       (bloque Seguimiento); el resto (Enlace / Texto / Otro) es una lista
---       MINIMA propuesta, alineada con las banderas REQUIERE_ARCHIVO /
---       REQUIERE_TEXTO de V22. PENDIENTE de confirmar con negocio.
+--       ("Recurso 1 - Fuente" -> Tipo / URL / Sitio web / Archivo en PC).
+--       Gana un tercer valor REPOSITORIO ("Unidad virtual / repositorio",
+--       confirmado en el figma de "Recursos agregados"): material que NO se
+--       sube de nuevo sino que se REFERENCIA desde otra actividad via
+--       fn_actividad_materiales_reutilizables_listar -- mismo FK_TARCHIVO,
+--       otra fila TACTIVIDAD_MATERIAL. Estructuralmente ARCHIVO y
+--       REPOSITORIO son identicos (ambos usan FK_TARCHIVO, el CHECK
+--       CK_TACTIVIDAD_MATERIAL_RECURSO no distingue); REPOSITORIO es
+--       puramente la etiqueta que el front necesita para pintar el badge
+--       correcto y el subtitulo "Desde actividad: ...".
+--     * TIPO_EVIDENCIA: CONFIRMADO con el figma del bloque "Seguimiento"
+--       (dropdown "Tipo de evidencia"): Archivo / Enlace / Imagen / Video /
+--       Observacion. Reemplaza la lista MINIMA anterior (Archivo / Enlace /
+--       Texto / Otro), que quedo con dos valores incorrectos (TEXTO, OTRO) y
+--       dos faltantes (IMAGEN, VIDEO) -- ver el DEACTIVATE de esos dos abajo,
+--       en el mismo bloque de seed.
 --     * APLICA_A: derivado del requisito "la adaptacion aplica a ciertos
 --       estudiantes de ese grupo" -> TODO_EL_GRUPO / ESTUDIANTES_SELECCIONADOS.
 --   Cambiar cualquiera de estas listas es un seed nuevo: el codigo solo
@@ -179,15 +192,18 @@ SELECT v.categoria, v.nombre, v.valor, 'V224_seed'
     ('TIPO_APLICACION_RECUPERACION',    'Reemplazar la nota anterior',        'REEMPLAZAR'),
     ('TIPO_CALCULO_RECUPERACION',       'Promediado',                         'PROMEDIADO'),
     ('TIPO_CALCULO_RECUPERACION',       'Ponderado',                          'PONDERADO'),
-    -- Seguimiento
+    -- Seguimiento (figma "Tipo de evidencia", confirmado)
     ('TIPO_EVIDENCIA',                  'Archivo',                            'ARCHIVO'),
     ('TIPO_EVIDENCIA',                  'Enlace',                             'ENLACE'),
-    ('TIPO_EVIDENCIA',                  'Texto',                              'TEXTO'),
-    ('TIPO_EVIDENCIA',                  'Otro',                               'OTRO'),
-    -- Materiales de apoyo (TACTIVIDAD_MATERIAL: URL XOR ARCHIVO).
-    -- Etiquetas del figma ("Recurso 1 - Fuente" -> Tipo / URL / Sitio web).
+    ('TIPO_EVIDENCIA',                  'Imagen',                             'IMAGEN'),
+    ('TIPO_EVIDENCIA',                  'Video',                              'VIDEO'),
+    ('TIPO_EVIDENCIA',                  'Observación',                        'OBSERVACION'),
+    -- Materiales de apoyo (TACTIVIDAD_MATERIAL: URL XOR ARCHIVO, sin
+    -- distincion estructural entre ARCHIVO y REPOSITORIO -- ver nota arriba).
+    -- Etiquetas del figma ("Recurso 1 - Fuente" -> Tipo).
     ('TIPO_RECURSO',                    'URL / Sitio web',                    'URL'),
-    ('TIPO_RECURSO',                    'Archivo',                            'ARCHIVO'),
+    ('TIPO_RECURSO',                    'Archivo en PC',                      'ARCHIVO'),
+    ('TIPO_RECURSO',                    'Unidad virtual / repositorio',       'REPOSITORIO'),
     -- Adaptaciones curriculares (TACTIVIDAD_ADAPTACION) — valores exactos
     -- del figma "¿Que tipo de adaptacion requiere esta actividad?".
     ('TIPO_ADAPTACION',                 'Discapacidad visual',                             'DISCAPACIDAD_VISUAL'),
@@ -214,6 +230,17 @@ SELECT v.categoria, v.nombre, v.valor, 'V224_seed'
      SELECT 1 FROM academico_test.tlista_valor lv
       WHERE lv.categoria = v.categoria AND lv.valor = v.valor
  );
+
+-- Correccion del seed anterior de TIPO_EVIDENCIA (ver nota arriba): TEXTO y
+-- OTRO no aparecen en el figma confirmado y se reemplazan por IMAGEN/VIDEO/
+-- OBSERVACION. Se desactivan en vez de borrarlas (UPDATE, no DELETE) por si
+-- algun ambiente ya las tuviera referenciadas desde una corrida anterior de
+-- este mismo archivo -- soft delete, mismo criterio que el resto del repo.
+UPDATE academico_test.tlista_valor
+   SET ACTIVE = FALSE, MODIFIED_BY = 'V224_seed_fix', MODIFIED_AT = CURRENT_TIMESTAMP
+ WHERE CATEGORIA = 'TIPO_EVIDENCIA'
+   AND VALOR IN ('TEXTO', 'OTRO')
+   AND ACTIVE = TRUE;
 
 -- ===========================================================================
 -- (2) TACTIVIDAD_ADAPTACION_ESTUDIANTE — a que estudiantes del grupo aplica
@@ -488,7 +515,93 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_material_reemplazar(BIGINT, BIGINT, JSONB)
-    IS 'Reemplazo completo de los materiales de apoyo de una actividad (TACTIVIDAD_MATERIAL): desactiva los ACTIVE y re-inserta los del array con ORDEN por posicion. p_materiales NULL = no tocar; array vacio = dejarla sin materiales. Cada elemento {tipoRecurso, url|fkTarchivo, descripcion?} debe traer exactamente uno de url/fkTarchivo (CHECK de V22). Helper de fn_actividad_crear/_actualizar. Retorna cuantos quedaron. V224.';
+    IS 'Reemplazo completo de los materiales de apoyo de una actividad (TACTIVIDAD_MATERIAL): desactiva los ACTIVE y re-inserta los del array con ORDEN por posicion. p_materiales NULL = no tocar; array vacio = dejarla sin materiales. Cada elemento {tipoRecurso, url|fkTarchivo, descripcion?} debe traer exactamente uno de url/fkTarchivo (CHECK de V22). Para REUTILIZAR un archivo ya usado en otra actividad, se pasa el mismo fkTarchivo (obtenido de fn_actividad_materiales_reutilizables_listar) con tipoRecurso=REPOSITORIO -- no hay restriccion que lo impida, un TARCHIVO puede estar referenciado por N filas TACTIVIDAD_MATERIAL de distintas actividades. Helper de fn_actividad_crear/_actualizar. Retorna cuantos quedaron. V224.';
+
+-- ---------------------------------------------------------------------------
+-- fn_actividad_materiales_reutilizables_listar — picker de "Materiales de
+-- apoyo" para referenciar un archivo YA subido en OTRA actividad (badge
+-- "Unidad virtual / repositorio" del figma, subtitulo "Desde actividad: ...").
+--
+-- Lista materiales de tipo ARCHIVO o REPOSITORIO (con FK_TARCHIVO, no URL)
+-- de actividades ACTIVAS distintas a p_pk_tactividad (si se pasa, para no
+-- ofrecer los materiales de la propia actividad que se esta editando).
+-- Filtra opcionalmente por asignatura y/o docente autor de la actividad de
+-- origen. Si el mismo TARCHIVO quedo referenciado por varias actividades
+-- (ya reutilizado antes), se muestra una fila por CADA actividad de origen
+-- (no se colapsa): cada una es una fuente valida distinta para el subtitulo
+-- "Desde actividad: ...".
+--
+-- Sin patron CTE-base de paginacion pesada: el universo tipico (materiales
+-- con archivo de las actividades del docente/asignatura) es acotado: se usa
+-- LIMIT/OFFSET simple sobre el filtro ya indexado por FK_TASIGNATURA
+-- (IDX_TACTIVIDAD_26, V218) y FK_TFUNCIONARIO (via TUNIDAD, no directo en
+-- TACTIVIDAD -- ver JOIN).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_materiales_reutilizables_listar(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad            BIGINT  DEFAULT NULL,
+    p_fk_tasignatura           BIGINT  DEFAULT NULL,
+    p_fk_tfuncionario          BIGINT  DEFAULT NULL,
+    p_search                   VARCHAR DEFAULT NULL,
+    p_pagina                   INT     DEFAULT 1,
+    p_tamano_pagina            INT     DEFAULT 20
+)
+RETURNS TABLE (
+    fk_tarchivo             BIGINT,
+    nombre_archivo          VARCHAR,
+    peso                    BIGINT,
+    pk_tactividad_origen    BIGINT,
+    titulo_actividad_origen VARCHAR,
+    fk_tlv_tipo_recurso     BIGINT,
+    tipo_recurso            VARCHAR,
+    descripcion             VARCHAR,
+    total_count             BIGINT
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_limite INT;
+    v_offset INT;
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    );
+
+    v_limite := GREATEST(COALESCE(p_tamano_pagina, 20), 1);
+    v_offset := (GREATEST(COALESCE(p_pagina, 1), 1) - 1) * v_limite;
+
+    RETURN QUERY
+    SELECT t.PK_TARCHIVO,
+           t.NOMBRE,
+           t.PESO,
+           a.PK_TACTIVIDAD,
+           a.TITULO,
+           m.FK_TLV_TIPO_RECURSO,
+           lv.NOMBRE,
+           m.DESCRIPCION,
+           COUNT(*) OVER()
+      FROM academico_test.TACTIVIDAD_MATERIAL m
+      JOIN academico_test.TACTIVIDAD a  ON a.PK_TACTIVIDAD = m.FK_TACTIVIDAD AND a.ACTIVE = TRUE
+      JOIN academico_test.TARCHIVO t    ON t.PK_TARCHIVO = m.FK_TARCHIVO AND t.ACTIVE = TRUE
+      LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = m.FK_TLV_TIPO_RECURSO
+      LEFT JOIN academico_test.TUNIDAD u ON u.PK_TUNIDAD = a.FK_TUNIDAD
+     WHERE m.ACTIVE = TRUE
+       AND m.FK_TARCHIVO IS NOT NULL
+       AND (p_pk_tactividad IS NULL OR a.PK_TACTIVIDAD <> p_pk_tactividad)
+       AND (p_fk_tasignatura  IS NULL OR a.FK_TASIGNATURA = p_fk_tasignatura)
+       AND (p_fk_tfuncionario IS NULL OR u.FK_TFUNCIONARIO = p_fk_tfuncionario)
+       AND (p_search IS NULL OR TRIM(p_search) = ''
+            OR t.NOMBRE ILIKE '%' || TRIM(p_search) || '%'
+            OR a.TITULO ILIKE '%' || TRIM(p_search) || '%')
+     ORDER BY t.NOMBRE, a.TITULO
+     LIMIT v_limite
+    OFFSET v_offset;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_materiales_reutilizables_listar(BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, INT, INT)
+    IS 'Picker de reutilizacion de materiales de apoyo: materiales con archivo (FK_TARCHIVO, tipoRecurso ARCHIVO o REPOSITORIO) de OTRAS actividades activas, para referenciar el mismo TARCHIVO en la actividad que se esta editando/creando (badge "Unidad virtual / repositorio" del figma, "Desde actividad: <titulo>"). p_pk_tactividad (opcional) excluye los materiales de esa misma actividad; p_fk_tasignatura y p_fk_tfuncionario (via la unidad de la actividad de origen) filtran el universo; p_search busca por nombre de archivo o titulo de la actividad de origen. Si un TARCHIVO ya fue reutilizado antes, aparece una fila por cada actividad de origen distinta (no se colapsa). Gate VER sobre PLANEADOR. total_count via COUNT(*) OVER(). V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_adaptacion_reemplazar — adaptaciones curriculares.
