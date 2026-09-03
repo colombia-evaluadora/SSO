@@ -14,9 +14,10 @@
 --               y FK_TACTIVIDAD_ESCALA_NIVEL en TACTIVIDAD_ESCALA_EVALUACION
 --               (ver nota "Tablas de captura" abajo).
 --   (2) Helper — fn_actividad_nota_get_or_create (get-or-create de la fila
---               TACTIVIDAD_NOTA por FK_TACTIVIDAD_ESTUDIANTE).
+--               TACTIVIDAD_NOTA por FK_TACTIVIDAD_ESTUDIANTE) y
+--               fn_actividad_nota_asistencia_assert (gate de asistencia).
 --   (3) Calculo por instrumento — fn_actividad_nota_calificar_rubrica,
---               _cotejo, _escala, _otro.
+--               _cotejo, _escala, _otro (todas con p_fecha DATE).
 --   (4) Fachada — fn_actividad_nota_calificar (despacha segun el
 --               instrumento de la actividad) y fn_actividad_nota_obtener
 --               (lectura).
@@ -75,21 +76,53 @@
 -- retorna el % crudo — homologarlo a la escala visual del periodo es
 -- responsabilidad de la capa de lectura/reporte existente.
 --
--- ASISTENCIA — fuera de alcance. La regla de negocio de "no calificar sin
--- asistencia registrada" depende de TASISTENCIA, que vive en la rama
--- feature/CU-86e32gvpp-G-Academ-Back-Asistencias (no mergeada aqui;
--- confirmado con git ls-tree). No se agrega ningun JOIN/referencia a esa
--- tabla; no se bloquea la calificacion por este motivo todavia. Mismo
--- criterio que V137 con "adaptacion curricular"/"seguimiento".
+-- ASISTENCIA — gate implementado: no se puede calificar sin asistencia
+-- registrada ese dia, ni si esa asistencia es una inasistencia injustificada.
+-- TASISTENCIA YA EXISTE en V22 de ESTA rama (no es dependencia cross-branch:
+-- PK_TASISTENCIA, FECHA, FK_TLV_TIPO_ASISTENCIA, FK_TASIGNATURA,
+-- FK_TPERIODO_EVALUACION, FK_TMATRICULA, OBSERVACION, FK_SOPORTE_ARCHIVO,
+-- BLOQUE, ACTIVE), asi que fn_actividad_nota_asistencia_assert (abajo) hace
+-- el JOIN/lookup directo contra ella sin problema.
+--
+-- *** DEPENDENCIA CROSS-BRANCH (deliberada) — mismo criterio que V220 ***
+-- Lo que SI vive en otra rama sin mergear
+-- (feature/CU-86e32gvpp-G-Academ-Back-Asistencias, V220__sistema_asistencias.sql)
+-- es el helper de mas alto nivel que se reutiliza aqui:
+--     academico_test.fn_asistencia_tipo_pk(p_valor NUMERIC) RETURNS BIGINT
+-- que resuelve el PK_LISTA_VALOR de TLISTA_VALOR CATEGORIA='TIPO_ASISTENCIA'
+-- por su VALOR (los pk_lista_valor NO son estables entre ambientes, por eso
+-- esa rama centraliza la resolucion por VALOR en vez de hardcodear pks).
+-- Valores relevantes: 1=Asistio, 2=NO Asistio (injustificada, la que
+-- BLOQUEA), 3=NO Asistio justificada (NO bloquea), 5=Llego tarde,
+-- 6=Llego tarde justificada.
+--
+-- fn_actividad_nota_asistencia_assert es LANGUAGE plpgsql: PostgreSQL NO
+-- valida en CREATE FUNCTION los nombres que el cuerpo referencia -- los
+-- resuelve en tiempo de EJECUCION -- asi que este archivo APLICA limpio hoy
+-- (fn_asistencia_tipo_pk todavia no existe en esta rama) y el gate empieza a
+-- operar en cuanto se mergee esa otra rama. Hasta entonces, cualquier
+-- llamada real a fn_actividad_nota_calificar_rubrica/_cotejo/_escala/_otro
+-- fallara en tiempo de ejecucion con "function ... does not exist" (42883)
+-- en vez de silenciarse -- se prefiere fallar cerrado a dejar el gate inerte
+-- en silencio.
+--
+-- p_fecha DATE (nuevo parametro, DEFAULT CURRENT_DATE, en las 4 funciones de
+-- calculo y en la fachada): el "dia de clase" que se esta calificando. Por
+-- defecto hoy, pero el llamador puede calificar retroactivo pasando una
+-- fecha pasada -- el gate de asistencia se evalua contra esa fecha, no
+-- contra CURRENT_DATE a secas.
 --
 -- -------------------------------------------------------------------------
 -- Depende de (orden de version de Flyway):
 --   * V22  — TACTIVIDAD_ESTUDIANTE, TACTIVIDAD_NOTA, TACTIVIDAD_RUBRICA_*,
---            TACTIVIDAD_COTEJO_*, TACTIVIDAD_ESCALA_*.
+--            TACTIVIDAD_COTEJO_*, TACTIVIDAD_ESCALA_*, TASISTENCIA.
 --   * V224 — fn_actividad_lv_assert, menu 'PLANEADOR'; V29/V185 —
 --            fn_assert_permiso_seccion.
 --   * V226 — fn_actividad_instrumento_assert, TIPO_ESCALA, ETIQUETA en
 --            niveles.
+--   * EN RAMA SIN MERGEAR (resuelta en ejecucion, ver seccion ASISTENCIA
+--     arriba) — fn_asistencia_tipo_pk de
+--     feature/CU-86e32gvpp-G-Academ-Back-Asistencias V220.
 --
 -- Estilo: V226 (gate, 22023/23503/P0002, JSONB entrada/salida, fachada por
 -- instrumento) y V224 (get-or-create 1:1 tipo fn_actividad_recuperacion_
@@ -170,6 +203,56 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_get_or_create(BIGINT, BIGINT)
     IS 'Get-or-create de la fila TACTIVIDAD_NOTA (UK_TACTIVIDAD_NOTA_1 es 1:1 por FK_TACTIVIDAD_ESTUDIANTE): la crea con CALIFICABLE=''S'' si no existe, o la reactiva si estaba inactiva. Valida que la asignacion actividad-estudiante exista y este activa. Helper de fn_actividad_nota_calificar_*. V227.';
 
+-- ---------------------------------------------------------------------------
+-- fn_actividad_nota_asistencia_assert — gate de asistencia (ver cabecera,
+-- seccion ASISTENCIA, para la dependencia cross-branch de fn_asistencia_tipo_pk).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_asistencia_assert(
+    p_pk_tactividad_estudiante BIGINT,
+    p_fecha                    DATE
+)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_pk_matricula  BIGINT;
+    v_pk_asignatura BIGINT;
+    v_fk_tipo       BIGINT;
+BEGIN
+    SELECT ae.FK_TMATRICULA, a.FK_TASIGNATURA
+      INTO v_pk_matricula, v_pk_asignatura
+      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+      JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = ae.FK_TACTIVIDAD
+     WHERE ae.PK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND ae.ACTIVE = TRUE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se encontro la asignacion actividad-estudiante solicitada' USING ERRCODE = 'P0002';
+    END IF;
+
+    SELECT s.FK_TLV_TIPO_ASISTENCIA INTO v_fk_tipo
+      FROM academico_test.TASISTENCIA s
+     WHERE s.FK_TMATRICULA = v_pk_matricula
+       AND s.FK_TASIGNATURA = v_pk_asignatura
+       AND s.FECHA = p_fecha
+       AND s.ACTIVE = TRUE
+     LIMIT 1;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se puede calificar: no hay asistencia registrada para esta asignatura el %', p_fecha
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- VALOR=2 (NO Asistio, injustificada) bloquea; VALOR=3 (justificada) no.
+    IF v_fk_tipo = academico_test.fn_asistencia_tipo_pk(2) THEN
+        RAISE EXCEPTION 'No se puede calificar: el estudiante tiene una inasistencia injustificada registrada el %', p_fecha
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_asistencia_assert(BIGINT, DATE)
+    IS 'Gate de asistencia: exige que exista un registro ACTIVO en TASISTENCIA para (matricula del estudiante via TACTIVIDAD_ESTUDIANTE, asignatura de la actividad via TACTIVIDAD.FK_TASIGNATURA, FECHA=p_fecha) -- 22023 si no hay ninguno. Si lo hay pero su FK_TLV_TIPO_ASISTENCIA resuelve (via academico_test.fn_asistencia_tipo_pk, dependencia cross-branch de feature/CU-86e32gvpp, ver cabecera) a VALOR=2 (NO Asistio, injustificada), tambien lanza 22023 -- VALOR=3 (justificada) SI permite calificar. Helper de fn_actividad_nota_calificar_*. V227.';
+
 -- ===========================================================================
 -- (3) CALCULO POR INSTRUMENTO
 -- ===========================================================================
@@ -186,10 +269,13 @@ COMMENT ON FUNCTION academico_test.fn_actividad_nota_get_or_create(BIGINT, BIGIN
 -- ¿se excluyen del promedio?), y esa regla no esta confirmada. Se prefiere
 -- exigir el set completo y fallar con mensaje claro antes que adivinar.
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar_rubrica(BIGINT, BIGINT, JSONB);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_calificar_rubrica(
     p_pk_usuario_solicitante    BIGINT,
     p_pk_tactividad_estudiante  BIGINT,
-    p_niveles                   JSONB
+    p_niveles                   JSONB,
+    p_fecha                     DATE DEFAULT CURRENT_DATE
 )
 RETURNS NUMERIC
 LANGUAGE plpgsql
@@ -217,6 +303,7 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'No se encontro la asignacion actividad-estudiante solicitada' USING ERRCODE = 'P0002';
     END IF;
+    PERFORM academico_test.fn_actividad_nota_asistencia_assert(p_pk_tactividad_estudiante, p_fecha);
     PERFORM academico_test.fn_actividad_instrumento_assert(v_pk_tactividad, 'RUBRICA');
 
     IF p_niveles IS NULL OR jsonb_typeof(p_niveles) <> 'array' OR jsonb_array_length(p_niveles) = 0 THEN
@@ -322,8 +409,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_rubrica(BIGINT, BIGINT, JSONB)
-    IS 'Califica a un estudiante con la rubrica de su actividad: p_niveles = [{pkCriterio, pkNivel}], UNO por cada criterio ACTIVO de la actividad (se exige el set completo; no hay regla de negocio confirmada para rubricas parciales). Por criterio: % = ponderacion del nivel elegido / MAX(ponderacion de los niveles de ese criterio) * 100. Nota final = promedio simple de esos %. Reemplazo completo de TACTIVIDAD_RUBRICA_EVALUACION para ese estudiante y upsert de TACTIVIDAD_NOTA.CALIFICACION (guardado como porcentaje 0-100, ver cabecera). Gate EDITAR sobre PLANEADOR. V227.';
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_rubrica(BIGINT, BIGINT, JSONB, DATE)
+    IS 'Califica a un estudiante con la rubrica de su actividad: p_niveles = [{pkCriterio, pkNivel}], UNO por cada criterio ACTIVO de la actividad (se exige el set completo; no hay regla de negocio confirmada para rubricas parciales). p_fecha (DEFAULT CURRENT_DATE) es el dia de clase que se califica: se exige asistencia registrada y no injustificada para esa fecha (fn_actividad_nota_asistencia_assert). Por criterio: % = ponderacion del nivel elegido / MAX(ponderacion de los niveles de ese criterio) * 100. Nota final = promedio simple de esos %. Reemplazo completo de TACTIVIDAD_RUBRICA_EVALUACION para ese estudiante y upsert de TACTIVIDAD_NOTA.CALIFICACION (guardado como porcentaje 0-100, ver cabecera). Gate EDITAR sobre PLANEADOR. V227.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_nota_calificar_cotejo
@@ -337,10 +424,13 @@ COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_rubrica(BIGINT, B
 -- -- exactamente lo que ya explica el COMMENT de V226 sobre PONDERACION
 -- ("todos los items sin peso cuentan igual").
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar_cotejo(BIGINT, BIGINT, BIGINT[]);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_calificar_cotejo(
     p_pk_usuario_solicitante    BIGINT,
     p_pk_tactividad_estudiante  BIGINT,
-    p_items_marcados            BIGINT[]
+    p_items_marcados            BIGINT[],
+    p_fecha                     DATE DEFAULT CURRENT_DATE
 )
 RETURNS NUMERIC
 LANGUAGE plpgsql
@@ -363,6 +453,7 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'No se encontro la asignacion actividad-estudiante solicitada' USING ERRCODE = 'P0002';
     END IF;
+    PERFORM academico_test.fn_actividad_nota_asistencia_assert(p_pk_tactividad_estudiante, p_fecha);
     PERFORM academico_test.fn_actividad_instrumento_assert(v_pk_tactividad, 'LISTA_COTEJO');
 
     SELECT COUNT(*) INTO v_total_items
@@ -434,8 +525,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_cotejo(BIGINT, BIGINT, BIGINT[])
-    IS 'Califica a un estudiante con la lista de cotejo de su actividad: p_items_marcados = PKs de TACTIVIDAD_COTEJO_ITEM cumplidos (puede ser vacio/NULL = nada cumplido). % = SUM(ponderacion de los items marcados) / SUM(ponderacion de TODOS los items) * 100, tratando los items SIN ponderacion (V226, columna opcional) como peso 1 tanto en el numerador (si estan marcados) como en el denominador. Reemplazo completo de TACTIVIDAD_COTEJO_EVALUACION (1 fila por item, CUMPLIDO S/N explicito) y upsert de TACTIVIDAD_NOTA.CALIFICACION (porcentaje 0-100). Gate EDITAR sobre PLANEADOR. V227.';
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_cotejo(BIGINT, BIGINT, BIGINT[], DATE)
+    IS 'Califica a un estudiante con la lista de cotejo de su actividad: p_items_marcados = PKs de TACTIVIDAD_COTEJO_ITEM cumplidos (puede ser vacio/NULL = nada cumplido). p_fecha (DEFAULT CURRENT_DATE) es el dia de clase que se califica: se exige asistencia registrada y no injustificada para esa fecha (fn_actividad_nota_asistencia_assert). % = SUM(ponderacion de los items marcados) / SUM(ponderacion de TODOS los items) * 100, tratando los items SIN ponderacion (V226, columna opcional) como peso 1 tanto en el numerador (si estan marcados) como en el denominador. Reemplazo completo de TACTIVIDAD_COTEJO_EVALUACION (1 fila por item, CUMPLIDO S/N explicito) y upsert de TACTIVIDAD_NOTA.CALIFICACION (porcentaje 0-100). Gate EDITAR sobre PLANEADOR. V227.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_nota_calificar_escala
@@ -443,11 +534,14 @@ COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_cotejo(BIGINT, BI
 -- Exactamente uno de p_pk_nivel (CUALITATIVA) / p_valor_numerico (NUMERICA)
 -- segun FK_TLV_TIPO_ESCALA de la escala de la actividad.
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar_escala(BIGINT, BIGINT, BIGINT, NUMERIC);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_calificar_escala(
     p_pk_usuario_solicitante    BIGINT,
     p_pk_tactividad_estudiante  BIGINT,
     p_pk_nivel                  BIGINT  DEFAULT NULL,
-    p_valor_numerico             NUMERIC DEFAULT NULL
+    p_valor_numerico             NUMERIC DEFAULT NULL,
+    p_fecha                      DATE    DEFAULT CURRENT_DATE
 )
 RETURNS NUMERIC
 LANGUAGE plpgsql
@@ -477,6 +571,7 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'No se encontro la asignacion actividad-estudiante solicitada' USING ERRCODE = 'P0002';
     END IF;
+    PERFORM academico_test.fn_actividad_nota_asistencia_assert(p_pk_tactividad_estudiante, p_fecha);
     PERFORM academico_test.fn_actividad_instrumento_assert(v_pk_tactividad, 'ESCALA_VALORACION');
 
     SELECT e.PK_TACTIVIDAD_ESCALA, lv.VALOR, e.VALOR_MIN, e.VALOR_MAX
@@ -571,16 +666,19 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_escala(BIGINT, BIGINT, BIGINT, NUMERIC)
-    IS 'Califica a un estudiante con la escala de valoracion de su actividad. Exactamente uno de p_pk_nivel (CUALITATIVA: % = ponderacion del nivel / MAX ponderacion de la escala * 100) o p_valor_numerico (NUMERICA, dentro de [VALOR_MIN,VALOR_MAX]: % = (valor - min)/(max - min) * 100). Upsert de TACTIVIDAD_ESCALA_EVALUACION (1:1 por estudiante, UN_TAC_ESCALA_EVAL_1) y de TACTIVIDAD_NOTA.CALIFICACION (porcentaje 0-100). Gate EDITAR sobre PLANEADOR. V227.';
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_escala(BIGINT, BIGINT, BIGINT, NUMERIC, DATE)
+    IS 'Califica a un estudiante con la escala de valoracion de su actividad. Exactamente uno de p_pk_nivel (CUALITATIVA: % = ponderacion del nivel / MAX ponderacion de la escala * 100) o p_valor_numerico (NUMERICA, dentro de [VALOR_MIN,VALOR_MAX]: % = (valor - min)/(max - min) * 100). p_fecha (DEFAULT CURRENT_DATE) es el dia de clase que se califica: se exige asistencia registrada y no injustificada para esa fecha (fn_actividad_nota_asistencia_assert). Upsert de TACTIVIDAD_ESCALA_EVALUACION (1:1 por estudiante, UN_TAC_ESCALA_EVAL_1) y de TACTIVIDAD_NOTA.CALIFICACION (porcentaje 0-100). Gate EDITAR sobre PLANEADOR. V227.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_nota_calificar_otro — sin calculo automatico.
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar_otro(BIGINT, BIGINT, NUMERIC);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_calificar_otro(
     p_pk_usuario_solicitante    BIGINT,
     p_pk_tactividad_estudiante  BIGINT,
-    p_porcentaje                 NUMERIC
+    p_porcentaje                 NUMERIC,
+    p_fecha                      DATE DEFAULT CURRENT_DATE
 )
 RETURNS NUMERIC
 LANGUAGE plpgsql
@@ -599,6 +697,7 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'No se encontro la asignacion actividad-estudiante solicitada' USING ERRCODE = 'P0002';
     END IF;
+    PERFORM academico_test.fn_actividad_nota_asistencia_assert(p_pk_tactividad_estudiante, p_fecha);
     PERFORM academico_test.fn_actividad_instrumento_assert(v_pk_tactividad, 'OTRO');
 
     IF p_porcentaje IS NULL OR p_porcentaje < 0 OR p_porcentaje > 100 THEN
@@ -616,16 +715,19 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_otro(BIGINT, BIGINT, NUMERIC)
-    IS 'Instrumento OTRO (sin estructura, V226): NO hay calculo automatico. Guarda directo el % (0-100) que manda el llamador en TACTIVIDAD_NOTA.CALIFICACION; el calculo/criterio es responsabilidad del cliente (DESCRIPCION_INSTRUMENTO). Gate EDITAR sobre PLANEADOR. V227.';
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_otro(BIGINT, BIGINT, NUMERIC, DATE)
+    IS 'Instrumento OTRO (sin estructura, V226): NO hay calculo automatico. p_fecha (DEFAULT CURRENT_DATE) es el dia de clase que se califica: se exige asistencia registrada y no injustificada para esa fecha (fn_actividad_nota_asistencia_assert). Guarda directo el % (0-100) que manda el llamador en TACTIVIDAD_NOTA.CALIFICACION; el calculo/criterio es responsabilidad del cliente (DESCRIPCION_INSTRUMENTO). Gate EDITAR sobre PLANEADOR. V227.';
 
 -- ===========================================================================
 -- (4) FACHADA — despacha segun el instrumento de la actividad + lectura.
 -- ===========================================================================
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar(BIGINT, BIGINT, JSONB);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_calificar(
     p_pk_usuario_solicitante    BIGINT,
     p_pk_tactividad_estudiante  BIGINT,
-    p_calificacion               JSONB
+    p_calificacion               JSONB,
+    p_fecha                      DATE DEFAULT CURRENT_DATE
 )
 RETURNS NUMERIC
 LANGUAGE plpgsql
@@ -654,19 +756,20 @@ BEGIN
     CASE v_valor
         WHEN 'RUBRICA' THEN
             v_pct := academico_test.fn_actividad_nota_calificar_rubrica(
-                         p_pk_usuario_solicitante, p_pk_tactividad_estudiante, p_calificacion->'niveles');
+                         p_pk_usuario_solicitante, p_pk_tactividad_estudiante, p_calificacion->'niveles', p_fecha);
         WHEN 'LISTA_COTEJO' THEN
             v_pct := academico_test.fn_actividad_nota_calificar_cotejo(
                          p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
-                         ARRAY(SELECT jsonb_array_elements_text(COALESCE(p_calificacion->'itemsMarcados', '[]'::jsonb))::BIGINT));
+                         ARRAY(SELECT jsonb_array_elements_text(COALESCE(p_calificacion->'itemsMarcados', '[]'::jsonb))::BIGINT),
+                         p_fecha);
         WHEN 'ESCALA_VALORACION' THEN
             v_pct := academico_test.fn_actividad_nota_calificar_escala(
                          p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
-                         (p_calificacion->>'pkNivel')::BIGINT, (p_calificacion->>'valorNumerico')::NUMERIC);
+                         (p_calificacion->>'pkNivel')::BIGINT, (p_calificacion->>'valorNumerico')::NUMERIC, p_fecha);
         WHEN 'OTRO' THEN
             v_pct := academico_test.fn_actividad_nota_calificar_otro(
                          p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
-                         (p_calificacion->>'porcentaje')::NUMERIC);
+                         (p_calificacion->>'porcentaje')::NUMERIC, p_fecha);
         ELSE
             RAISE EXCEPTION 'La actividad no tiene un instrumento de evaluacion valido para calificar (%)',
                 COALESCE(v_valor, 'sin instrumento') USING ERRCODE = '22023';
@@ -676,8 +779,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar(BIGINT, BIGINT, JSONB)
-    IS 'Fachada: lee el instrumento de la actividad (via TACTIVIDAD_ESTUDIANTE.FK_TACTIVIDAD) y despacha a fn_actividad_nota_calificar_rubrica ({niveles:[{pkCriterio,pkNivel}]}), _cotejo ({itemsMarcados:[pk,...]}), _escala ({pkNivel} o {valorNumerico}) u _otro ({porcentaje}). Calcula (salvo OTRO) y guarda el % (0-100) en TACTIVIDAD_NOTA.CALIFICACION. Gate EDITAR sobre PLANEADOR (via las funciones destino). V227.';
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar(BIGINT, BIGINT, JSONB, DATE)
+    IS 'Fachada: lee el instrumento de la actividad (via TACTIVIDAD_ESTUDIANTE.FK_TACTIVIDAD) y despacha a fn_actividad_nota_calificar_rubrica ({niveles:[{pkCriterio,pkNivel}]}), _cotejo ({itemsMarcados:[pk,...]}), _escala ({pkNivel} o {valorNumerico}) u _otro ({porcentaje}), pasando p_fecha (DEFAULT CURRENT_DATE, el dia de clase que se califica; el gate de asistencia se aplica contra ella, ver cabecera). Calcula (salvo OTRO) y guarda el % (0-100) en TACTIVIDAD_NOTA.CALIFICACION. Gate EDITAR sobre PLANEADOR (via las funciones destino). V227.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_nota_obtener — lectura de la nota + detalle de captura.

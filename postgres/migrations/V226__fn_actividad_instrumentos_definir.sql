@@ -281,6 +281,13 @@ BEGIN
             RAISE EXCEPTION 'El criterio "%" tiene dos niveles con la misma ponderacion', v_crit->>'nombre'
                 USING ERRCODE = '22023';
         END IF;
+        -- Al menos un nivel con ponderacion > 0: si el MAX fuera 0, V227
+        -- (fn_actividad_nota_calificar_rubrica, NULLIF(MAX(ponderacion),0))
+        -- calcularia un % indefinido (NULL) sin importar el nivel elegido.
+        IF (SELECT MAX((n->>'ponderacion')::NUMERIC) FROM jsonb_array_elements(v_niveles) n) = 0 THEN
+            RAISE EXCEPTION 'El criterio "%" tiene todos sus niveles en ponderacion 0: al menos uno debe ser mayor a 0 para poder calcular un porcentaje al calificar', v_crit->>'nombre'
+                USING ERRCODE = '22023';
+        END IF;
 
         INSERT INTO academico_test.TACTIVIDAD_RUBRICA_CRITERIO (
             FK_TACTIVIDAD, ORDEN, NOMBRE, DESCRIPCION, CREATED_BY, CREATED_AT, ACTIVE
@@ -308,7 +315,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_rubrica_definir(BIGINT, BIGINT, JSONB)
-    IS 'Define (reemplazo completo) la rubrica de una actividad: TACTIVIDAD_RUBRICA_CRITERIO + TACTIVIDAD_RUBRICA_NIVEL. p_criterios = [{nombre, descripcion?, niveles:[{etiqueta?, descripcion, ponderacion}]}] con ORDEN por posicion. La PONDERACION del nivel es OBLIGATORIA (0..100) y no se puede repetir dentro de un mismo criterio (UN_TAC_RUBRICA_NIVEL_1); el criterio NO lleva peso propio. Exige que el instrumento de la actividad sea RUBRICA y desactiva los otros instrumentos. Gate EDITAR sobre PLANEADOR. Retorna cuantos criterios quedaron. V226.';
+    IS 'Define (reemplazo completo) la rubrica de una actividad: TACTIVIDAD_RUBRICA_CRITERIO + TACTIVIDAD_RUBRICA_NIVEL. p_criterios = [{nombre, descripcion?, niveles:[{etiqueta?, descripcion, ponderacion}]}] con ORDEN por posicion. La PONDERACION del nivel es OBLIGATORIA (0..100) y no se puede repetir dentro de un mismo criterio (UN_TAC_RUBRICA_NIVEL_1); ademas el MAX de las ponderaciones de cada criterio debe ser > 0 (si no, el % al calificar en V227 quedaria indefinido). El criterio NO lleva peso propio. Exige que el instrumento de la actividad sea RUBRICA y desactiva los otros instrumentos. Gate EDITAR sobre PLANEADOR. Retorna cuantos criterios quedaron. V226.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_cotejo_definir — reemplazo completo de la lista de cotejo.
@@ -352,6 +359,14 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'La ponderacion de un item de cotejo debe estar entre 0 y 100' USING ERRCODE = '22023';
     END IF;
+    -- SUM(COALESCE(ponderacion, 1)) > 0: solo se rompe si TODOS los items
+    -- tienen ponderacion EXPLICITA en 0 (sin ningun NULL, que aporta peso 1).
+    -- Si no, V227 (fn_actividad_nota_calificar_cotejo) calcularia un %
+    -- indefinido (division por 0/NULLIF).
+    IF (SELECT SUM(COALESCE((e->>'ponderacion')::NUMERIC, 1)) FROM jsonb_array_elements(p_items) e) = 0 THEN
+        RAISE EXCEPTION 'Todos los items de la lista de cotejo tienen ponderacion explicita en 0: al menos uno debe quedar sin ponderacion o con ponderacion mayor a 0 para poder calcular un porcentaje al calificar'
+            USING ERRCODE = '22023';
+    END IF;
 
     PERFORM academico_test.fn_actividad_instrumento_reset(p_pk_usuario_solicitante, p_pk_tactividad, NULL);
 
@@ -372,7 +387,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_cotejo_definir(BIGINT, BIGINT, JSONB)
-    IS 'Define (reemplazo completo) la lista de cotejo de una actividad: TACTIVIDAD_COTEJO_ITEM. p_items = [{descripcion, ponderacion?}] con ORDEN por posicion. La PONDERACION es OPCIONAL (0..100): NULL = el item no pondera; se permite mezclar items con y sin peso y NO se exige que sumen 100. Exige que el instrumento de la actividad sea LISTA_COTEJO y desactiva los otros instrumentos. Gate EDITAR sobre PLANEADOR. Retorna cuantos items quedaron. V226.';
+    IS 'Define (reemplazo completo) la lista de cotejo de una actividad: TACTIVIDAD_COTEJO_ITEM. p_items = [{descripcion, ponderacion?}] con ORDEN por posicion. La PONDERACION es OPCIONAL (0..100): NULL = el item no pondera (peso 1 en el calculo de V227); se permite mezclar items con y sin peso y NO se exige que sumen 100. Se exige SUM(COALESCE(ponderacion,1)) > 0, es decir se rechaza solo si TODOS los items traen ponderacion explicita en 0 (sin ningun NULL que aporte peso 1), pues dejaria el % al calificar indefinido. Exige que el instrumento de la actividad sea LISTA_COTEJO y desactiva los otros instrumentos. Gate EDITAR sobre PLANEADOR. Retorna cuantos items quedaron. V226.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_escala_definir — reemplazo completo de la escala (1:1).
@@ -463,6 +478,14 @@ BEGIN
            <> (SELECT COUNT(DISTINCT (n->>'ponderacion')::NUMERIC) FROM jsonb_array_elements(v_niveles) n) THEN
             RAISE EXCEPTION 'Hay dos niveles de la escala con la misma ponderacion' USING ERRCODE = '22023';
         END IF;
+        -- Al menos un nivel con ponderacion > 0 (misma razon que en rubrica):
+        -- si el MAX fuera 0, V227 (fn_actividad_nota_calificar_escala, rama
+        -- CUALITATIVA) calcularia un % indefinido. La rama NUMERICA ya esta
+        -- a salvo porque exige valorMin < valorMax.
+        IF (SELECT MAX((n->>'ponderacion')::NUMERIC) FROM jsonb_array_elements(v_niveles) n) = 0 THEN
+            RAISE EXCEPTION 'Todos los niveles de la escala tienen ponderacion 0: al menos uno debe ser mayor a 0 para poder calcular un porcentaje al calificar'
+                USING ERRCODE = '22023';
+        END IF;
     END IF;
 
     -- Limpia los otros instrumentos (la escala se hace upsert, no delete:
@@ -522,7 +545,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_escala_definir(BIGINT, BIGINT, JSONB)
-    IS 'Define (reemplazo completo) la escala de valoracion de una actividad: TACTIVIDAD_ESCALA (1:1, upsert porque UN_TAC_ESCALA_1 no filtra por ACTIVE) + TACTIVIDAD_ESCALA_NIVEL. p_config = {tipoEscala, criteriosGenerales?, interpretacionRangos?, valorMin/valorMax (solo NUMERICA), niveles (solo CUALITATIVA)}. NUMERICA exige valorMin<valorMax y prohibe niveles; CUALITATIVA exige >=1 nivel con descripcion y PONDERACION OBLIGATORIA (0..100, sin repetir — UN_TAC_ESCALA_NIVEL_1) y prohibe valorMin/valorMax. Exige que el instrumento de la actividad sea ESCALA_VALORACION y desactiva los otros. Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD_ESCALA. V226.';
+    IS 'Define (reemplazo completo) la escala de valoracion de una actividad: TACTIVIDAD_ESCALA (1:1, upsert porque UN_TAC_ESCALA_1 no filtra por ACTIVE) + TACTIVIDAD_ESCALA_NIVEL. p_config = {tipoEscala, criteriosGenerales?, interpretacionRangos?, valorMin/valorMax (solo NUMERICA), niveles (solo CUALITATIVA)}. NUMERICA exige valorMin<valorMax y prohibe niveles; CUALITATIVA exige >=1 nivel con descripcion y PONDERACION OBLIGATORIA (0..100, sin repetir — UN_TAC_ESCALA_NIVEL_1, y con MAX > 0 para que el % al calificar en V227 no quede indefinido) y prohibe valorMin/valorMax. Exige que el instrumento de la actividad sea ESCALA_VALORACION y desactiva los otros. Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD_ESCALA. V226.';
 
 -- ===========================================================================
 -- (5) FACHADA — despacha segun el instrumento de la actividad + lectura.
