@@ -86,6 +86,10 @@ SELECT t.pk_trol, m.pk_tmenu, 1, TRUE, 'V216_seed'
 -- ===========================================================================
 -- fn_unidad_crear
 -- ===========================================================================
+-- Gana p_enunciados (BIGINT[]) al final: cambia el numero de parametros, asi
+-- que CREATE OR REPLACE no reemplaza la firma vieja (10 args) -- se antepone
+-- el DROP FUNCTION IF EXISTS de esa firma, mismo patron que V100/V106/V109/V113.
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[]);
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_crear(
     p_pk_usuario_solicitante        BIGINT,
     p_nombre                        VARCHAR(250),
@@ -98,7 +102,14 @@ CREATE OR REPLACE FUNCTION academico_test.fn_unidad_crear(
     -- Uno por elemento; el ORDEN se toma de la posicion en el array.
     -- Elementos NULL o en blanco se ignoran.
     p_objetivos                     VARCHAR[]     DEFAULT NULL,
-    p_contenidos                    VARCHAR[]     DEFAULT NULL
+    p_contenidos                    VARCHAR[]     DEFAULT NULL,
+    -- PK_REFERENTE_ENUNCIADO (nivel 1, TREFERENTE_ENUNCIADO) del referente
+    -- curricular (p_fk_referente_curricular) que aplican a esta unidad.
+    -- Solo tiene sentido si se pasa p_fk_referente_curricular; cada uno se
+    -- relaciona via fn_unidad_enunciado_relacionar (V136), que ya valida
+    -- que el enunciado sea nivel 1 y comparta el nivel de ensenanza de la
+    -- unidad (a traves del grado) -- no se duplica esa validacion aqui.
+    p_enunciados                    BIGINT[]      DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -209,12 +220,24 @@ BEGIN
          WHERE NULLIF(TRIM(c.txt), '') IS NOT NULL;
     END IF;
 
+    -- 7. Enunciados del referente curricular que aplican a la unidad
+    --    (opcional; TUNIDAD_ENUNCIADO, V136). Delega la validacion completa
+    --    (nivel 1, mismo nivel de ensenanza) en fn_unidad_enunciado_relacionar
+    --    -- si algun PK no cumple, la funcion revienta y aborta el CREATE
+    --    completo (misma transaccion).
+    IF p_enunciados IS NOT NULL THEN
+        PERFORM academico_test.fn_unidad_enunciado_relacionar(
+                    p_pk_usuario_solicitante, v_id_creado, e)
+          FROM unnest(p_enunciados) AS e
+         WHERE e IS NOT NULL;
+    END IF;
+
     RETURN v_id_creado;
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_unidad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[])
-    IS 'Crea una unidad tematica del Planeador (gate CREAR sobre PLANEADOR): inserta TUNIDAD (identificacion nombre/asignatura/grado/autor + DESCRIPCION + FK_TLV_CALCULO_DEFINITIVA [forma de calculo de la nota, catalogo CALCULO_DEFINITIVA, OBLIGATORIA, V73] + FK_REFERENTE_CURRICULAR [referente al que se acoge, opcional, V212]) y, si se pasan, sus objetivos (TUNIDAD_OBJETIVO) y contenidos/componentes (TUNIDAD_CONTENIDO) con ORDEN por posicion del array, ignorando los vacios. La unidad ya no depende de un periodo de evaluacion (V218). Valida existencia/estado de todas las FKs y unicidad (nombre, asignatura, grado) entre unidades activas. Retorna PK_TUNIDAD.';
+COMMENT ON FUNCTION academico_test.fn_unidad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[], BIGINT[])
+    IS 'Crea una unidad tematica del Planeador (gate CREAR sobre PLANEADOR): inserta TUNIDAD (identificacion nombre/asignatura/grado/autor + DESCRIPCION + FK_TLV_CALCULO_DEFINITIVA [forma de calculo de la nota, catalogo CALCULO_DEFINITIVA, OBLIGATORIA, V73] + FK_REFERENTE_CURRICULAR [referente al que se acoge, opcional, V212]) y, si se pasan, sus objetivos (TUNIDAD_OBJETIVO), contenidos/componentes (TUNIDAD_CONTENIDO) con ORDEN por posicion del array, ignorando los vacios, y los enunciados del referente que aplican (p_enunciados, PKs de TREFERENTE_ENUNCIADO nivel 1, via fn_unidad_enunciado_relacionar V136 -- valida nivel 1 y mismo nivel de ensenanza que la unidad, aborta el CREATE si alguno no cumple). La unidad ya no depende de un periodo de evaluacion (V218). Valida existencia/estado de todas las FKs y unicidad (nombre, asignatura, grado) entre unidades activas. Retorna PK_TUNIDAD.';
 
 -- ===========================================================================
 -- fn_unidad_listar — pagina con filtros/orden (pantalla "Unidad tematica").

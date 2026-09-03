@@ -879,6 +879,11 @@ COMMENT ON FUNCTION academico_test.fn_actividad_recuperacion_configurar(BIGINT, 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_crear
 -- ---------------------------------------------------------------------------
+-- Gana p_evidencias / p_criterios (BIGINT[]) al final: cambia el numero de
+-- parametros, asi que CREATE OR REPLACE no reemplaza la firma vieja (33
+-- args) -- se antepone el DROP FUNCTION IF EXISTS de esa firma, mismo
+-- patron que V100/V106/V109/V113.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_crear(
     p_pk_usuario_solicitante            BIGINT,
     p_titulo                            VARCHAR(250),
@@ -914,7 +919,19 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_crear(
     p_asignar_todo_el_grupo             BOOLEAN       DEFAULT FALSE,
     -- NULL = actividad normal. Objeto = actividad de recuperacion:
     -- {destino, fkActividadRecuperar?, tipoAplicacion, tipoCalculo, valorPonderacion?}
-    p_recuperacion                      JSONB         DEFAULT NULL
+    p_recuperacion                      JSONB         DEFAULT NULL,
+    -- PK_REFERENTE_ENUNCIADO (nivel 2 / evidencia) que esta actividad
+    -- sustenta. Solo tiene sentido si la actividad tiene unidad (p_fk_tunidad)
+    -- y cada evidencia cuelga de un enunciado ya relacionado con esa unidad
+    -- (TUNIDAD_ENUNCIADO) -- fn_actividad_evidencia_relacionar (V136) valida
+    -- todo eso, aborta el CREATE si alguna no cumple.
+    p_evidencias                        BIGINT[]      DEFAULT NULL,
+    -- PK_TCRITERIO_UNIDAD de la rubrica de la unidad que esta actividad
+    -- evalua. Solo tiene sentido si la actividad tiene unidad; cada criterio
+    -- debe pertenecer a la rubrica de ESA unidad --
+    -- fn_actividad_criterio_relacionar (V136) lo valida, aborta el CREATE
+    -- si alguno no cumple.
+    p_criterios                         BIGINT[]      DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -1073,12 +1090,34 @@ BEGIN
     PERFORM academico_test.fn_actividad_recuperacion_configurar(
                 p_pk_usuario_solicitante, v_id_creado, p_recuperacion);
 
+    -- 8. Evidencias de enunciado (opcional; TACTIVIDAD_EVIDENCIA, V136).
+    --    fn_actividad_evidencia_relacionar exige FK_TUNIDAD y que el
+    --    enunciado padre de cada evidencia ya este en TUNIDAD_ENUNCIADO
+    --    para esa misma unidad -- revienta y aborta el CREATE si no.
+    IF p_evidencias IS NOT NULL THEN
+        PERFORM academico_test.fn_actividad_evidencia_relacionar(
+                    p_pk_usuario_solicitante, v_id_creado, ev)
+          FROM unnest(p_evidencias) AS ev
+         WHERE ev IS NOT NULL;
+    END IF;
+
+    -- 9. Criterios de la rubrica de la unidad (opcional;
+    --    TACTIVIDAD_CRITERIO_UNIDAD, V136). fn_actividad_criterio_relacionar
+    --    exige FK_TUNIDAD y que cada criterio pertenezca a la rubrica de
+    --    esa misma unidad -- revienta y aborta el CREATE si no.
+    IF p_criterios IS NOT NULL THEN
+        PERFORM academico_test.fn_actividad_criterio_relacionar(
+                    p_pk_usuario_solicitante, v_id_creado, cr)
+          FROM unnest(p_criterios) AS cr
+         WHERE cr IS NOT NULL;
+    END IF;
+
     RETURN v_id_creado;
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB)
-    IS 'Crea una actividad del Planeador (gate CREAR sobre PLANEADOR): inserta TACTIVIDAD (identificacion, programacion, evaluacion y seguimiento) y opcionalmente la vincula a una unidad con su PONDERACION (%) — la regla "la suma por (unidad, grupo) no pasa de 100" la impone el trigger de V223. NO asigna estudiantes por defecto: p_asignar_todo_el_grupo=TRUE los toma del FK_TGRUPO, o p_fk_tmatriculas fija estudiantes especificos (1 o mas). p_recuperacion (objeto) marca la actividad como de recuperacion y crea su fila TACTIVIDAD_RECUPERACION via fn_actividad_recuperacion_configurar. Delega materiales / adaptaciones / estudiantes en sus helpers. Valida catalogos con fn_actividad_lv_assert y unicidad (titulo, unidad, grupo, jerarquia) entre activas con IS NOT DISTINCT FROM. p_fk_tlv_instrumento_evaluacion solo se acepta si la actividad se vincula a una unidad (p_fk_tunidad) cuyo referente curricular es EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V137); en otro caso lanza 22023. Retorna PK_TACTIVIDAD. V224.';
+COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BIGINT[], BIGINT[])
+    IS 'Crea una actividad del Planeador (gate CREAR sobre PLANEADOR): inserta TACTIVIDAD (identificacion, programacion, evaluacion y seguimiento) y opcionalmente la vincula a una unidad con su PONDERACION (%) — la regla "la suma por (unidad, grupo) no pasa de 100" la impone el trigger de V223. NO asigna estudiantes por defecto: p_asignar_todo_el_grupo=TRUE los toma del FK_TGRUPO, o p_fk_tmatriculas fija estudiantes especificos (1 o mas). p_recuperacion (objeto) marca la actividad como de recuperacion y crea su fila TACTIVIDAD_RECUPERACION via fn_actividad_recuperacion_configurar. p_evidencias (PKs de TREFERENTE_ENUNCIADO nivel 2) y p_criterios (PKs de TCRITERIO_UNIDAD) relacionan la actividad, via fn_actividad_evidencia_relacionar / fn_actividad_criterio_relacionar (V136), con evidencias de enunciados ya vinculados a la unidad y con criterios de la rubrica de esa misma unidad — ambos exigen FK_TUNIDAD y abortan el CREATE si la actividad no tiene unidad o alguna PK no cumple la regla de negocio. Delega materiales / adaptaciones / estudiantes en sus helpers. Valida catalogos con fn_actividad_lv_assert y unicidad (titulo, unidad, grupo, jerarquia) entre activas con IS NOT DISTINCT FROM. p_fk_tlv_instrumento_evaluacion solo se acepta si la actividad se vincula a una unidad (p_fk_tunidad) cuyo referente curricular es EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V137); en otro caso lanza 22023. Retorna PK_TACTIVIDAD. V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_actualizar — PATCH parcial.
