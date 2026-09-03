@@ -894,6 +894,7 @@ RETURNS TABLE (
     fecha_fin                   DATE,
     objetivos                   JSONB,
     contenidos                  JSONB,
+    campos_disponibles          JSONB,
     active                      BOOLEAN
 )
 LANGUAGE plpgsql
@@ -934,6 +935,9 @@ BEGIN
                  FROM academico_test.TUNIDAD_CONTENIDO c
                 WHERE c.FK_TUNIDAD = u.PK_TUNIDAD AND c.ACTIVE = TRUE
            ), '[]'::jsonb),
+           -- Dependencia dinamica "referente -> rubrica" (V137), calculada
+           -- solo para esta fila (detalle), no en un listado.
+           academico_test.fn_unidad_campos_disponibles(p_pk_usuario_solicitante, u.PK_TUNIDAD),
            u.ACTIVE
       FROM academico_test.TUNIDAD u
       JOIN academico_test.TASIGNATURA asig       ON asig.PK_TASIGNATURA = u.FK_TASIGNATURA
@@ -948,7 +952,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_buscar_por_pk(BIGINT, BIGINT)
-    IS 'Detalle de una TUNIDAD (pestaña "Informacion general"): escalares + nombres resueltos (asignatura, area, grado, docente, forma de calculo, referente curricular), total de actividades activas, Inicio/Fin DERIVADOS (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas) y los arreglos JSONB ordenados objetivos [{pk,orden,descripcion}] y contenidos [{pk,orden,descripcion}]. La unidad ya no depende de un periodo de evaluacion (V218). SETOF 0 o 1 fila (incluye inactivas). Gate VER.';
+    IS 'Detalle de una TUNIDAD (pestaña "Informacion general"): escalares + nombres resueltos (asignatura, area, grado, docente, forma de calculo, referente curricular), total de actividades activas, Inicio/Fin DERIVADOS (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas) y los arreglos JSONB ordenados objetivos [{pk,orden,descripcion}] y contenidos [{pk,orden,descripcion}]. campos_disponibles = fn_unidad_campos_disponibles (dependencia dinamica referente->rubrica, V137), calculado solo para esta fila (detalle), no en fn_unidad_listar. La unidad ya no depende de un periodo de evaluacion (V218). SETOF 0 o 1 fila (incluye inactivas). Gate VER.';
 
 -- ===========================================================================
 -- fn_unidad_objetivos_listar / fn_unidad_contenidos_listar — listas planas

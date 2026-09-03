@@ -991,6 +991,24 @@ BEGIN
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_metodo_valoracion,       'METODO_VALORACION',        'FK_TLV_METODO_VALORACION'); -- sin seed: solo valida existencia+ACTIVE
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_calculo,            'TIPO_CALCULO',             'FK_TLV_TIPO_CALCULO');
 
+    -- 4.b Sub-rama "evaluacion" (instrumento de evaluacion, condicion
+    --     dinamica "actividad -> evaluacion" de V137): solo aplica si la
+    --     actividad se vincula a una unidad cuyo referente curricular es
+    --     EVALUATIVO. Se resuelve aqui con fn_unidad_referente_evaluativo
+    --     (toma pk_tunidad, disponible antes del INSERT) en vez de
+    --     fn_actividad_instrumentos_permitidos (V137), que exige un
+    --     pk_tactividad que todavia no existe en este punto (se crea en el
+    --     paso 6, mas abajo).
+    IF p_fk_tlv_instrumento_evaluacion IS NOT NULL THEN
+        IF p_fk_tunidad IS NULL THEN
+            RAISE EXCEPTION 'El instrumento de evaluacion (FK_TLV_INSTRUMENTO_EVALUACION) no aplica: la actividad no esta vinculada a una unidad'
+                USING ERRCODE = '22023';
+        ELSIF NOT academico_test.fn_unidad_referente_evaluativo(p_fk_tunidad) THEN
+            RAISE EXCEPTION 'El instrumento de evaluacion (FK_TLV_INSTRUMENTO_EVALUACION) no aplica: el referente curricular de la unidad no es EVALUATIVO'
+                USING ERRCODE = '22023';
+        END IF;
+    END IF;
+
     -- 5. Unicidad (TITULO, unidad, grupo, jerarquia) entre activas —
     --    backstop de U_TACTIVIDAD_1 (V22), que con FK_TUNIDAD/FK_TGRUPO
     --    NULL no garantiza nada (NULL nunca colisiona en un UNIQUE).
@@ -1060,7 +1078,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB)
-    IS 'Crea una actividad del Planeador (gate CREAR sobre PLANEADOR): inserta TACTIVIDAD (identificacion, programacion, evaluacion y seguimiento) y opcionalmente la vincula a una unidad con su PONDERACION (%) — la regla "la suma por (unidad, grupo) no pasa de 100" la impone el trigger de V223. NO asigna estudiantes por defecto: p_asignar_todo_el_grupo=TRUE los toma del FK_TGRUPO, o p_fk_tmatriculas fija estudiantes especificos (1 o mas). p_recuperacion (objeto) marca la actividad como de recuperacion y crea su fila TACTIVIDAD_RECUPERACION via fn_actividad_recuperacion_configurar. Delega materiales / adaptaciones / estudiantes en sus helpers. Valida catalogos con fn_actividad_lv_assert y unicidad (titulo, unidad, grupo, jerarquia) entre activas con IS NOT DISTINCT FROM. Retorna PK_TACTIVIDAD. V224.';
+    IS 'Crea una actividad del Planeador (gate CREAR sobre PLANEADOR): inserta TACTIVIDAD (identificacion, programacion, evaluacion y seguimiento) y opcionalmente la vincula a una unidad con su PONDERACION (%) — la regla "la suma por (unidad, grupo) no pasa de 100" la impone el trigger de V223. NO asigna estudiantes por defecto: p_asignar_todo_el_grupo=TRUE los toma del FK_TGRUPO, o p_fk_tmatriculas fija estudiantes especificos (1 o mas). p_recuperacion (objeto) marca la actividad como de recuperacion y crea su fila TACTIVIDAD_RECUPERACION via fn_actividad_recuperacion_configurar. Delega materiales / adaptaciones / estudiantes en sus helpers. Valida catalogos con fn_actividad_lv_assert y unicidad (titulo, unidad, grupo, jerarquia) entre activas con IS NOT DISTINCT FROM. p_fk_tlv_instrumento_evaluacion solo se acepta si la actividad se vincula a una unidad (p_fk_tunidad) cuyo referente curricular es EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V137); en otro caso lanza 22023. Retorna PK_TACTIVIDAD. V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_actualizar — PATCH parcial.
@@ -1109,11 +1127,13 @@ RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_actual    academico_test.TACTIVIDAD%ROWTYPE;
-    v_titulo    VARCHAR(250);
-    v_grupo     BIGINT;
-    v_inicio    DATE;
-    v_cierre    DATE;
+    v_actual      academico_test.TACTIVIDAD%ROWTYPE;
+    v_titulo      VARCHAR(250);
+    v_grupo       BIGINT;
+    v_inicio      DATE;
+    v_cierre      DATE;
+    v_fk_tunidad  BIGINT;
+    v_instrumento BIGINT;
 BEGIN
     SELECT * INTO v_actual
       FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
@@ -1149,6 +1169,11 @@ BEGIN
     v_grupo  := COALESCE(p_fk_tgrupo, v_actual.FK_TGRUPO);
     v_inicio := COALESCE(p_fecha_inicio, v_actual.FECHA_INICIO);
     v_cierre := COALESCE(p_fecha_cierre, v_actual.FECHA_CIERRE);
+    -- Unidad resultante tras aplicar p_desvincular_unidad / p_fk_tunidad,
+    -- necesaria para validar la sub-rama de evaluacion mas abajo.
+    v_fk_tunidad  := CASE WHEN p_desvincular_unidad THEN NULL
+                          ELSE COALESCE(p_fk_tunidad, v_actual.FK_TUNIDAD) END;
+    v_instrumento := COALESCE(p_fk_tlv_instrumento_evaluacion, v_actual.FK_TLV_INSTRUMENTO_EVALUACION);
 
     IF v_inicio IS NOT NULL AND v_cierre IS NOT NULL AND v_cierre < v_inicio THEN
         RAISE EXCEPTION 'La fecha de cierre (%) no puede ser anterior a la de inicio (%)',
@@ -1170,6 +1195,22 @@ BEGIN
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_evidencia,          'TIPO_EVIDENCIA',         'FK_TLV_TIPO_EVIDENCIA');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_metodo_valoracion,       'METODO_VALORACION',      'FK_TLV_METODO_VALORACION'); -- sin seed: solo valida existencia+ACTIVE
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_calculo,            'TIPO_CALCULO',           'FK_TLV_TIPO_CALCULO');
+
+    -- Sub-rama "evaluacion" (instrumento de evaluacion, condicion dinamica
+    -- "actividad -> evaluacion" de V137): solo aplica si, tras el PATCH, la
+    -- actividad queda vinculada a una unidad con referente EVALUATIVO. Se
+    -- valida contra v_fk_tunidad / v_instrumento (valores resultantes, no
+    -- solo los parametros entrantes) para cubrir tanto "fijar instrumento
+    -- ahora" como "desvincular la unidad dejando un instrumento heredado".
+    IF v_instrumento IS NOT NULL THEN
+        IF v_fk_tunidad IS NULL THEN
+            RAISE EXCEPTION 'El instrumento de evaluacion (FK_TLV_INSTRUMENTO_EVALUACION) no aplica: la actividad no queda vinculada a una unidad'
+                USING ERRCODE = '22023';
+        ELSIF NOT academico_test.fn_unidad_referente_evaluativo(v_fk_tunidad) THEN
+            RAISE EXCEPTION 'El instrumento de evaluacion (FK_TLV_INSTRUMENTO_EVALUACION) no aplica: el referente curricular de la unidad no es EVALUATIVO'
+                USING ERRCODE = '22023';
+        END IF;
+    END IF;
 
     IF EXISTS (
         SELECT 1 FROM academico_test.TACTIVIDAD
@@ -1251,7 +1292,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN)
-    IS 'PATCH parcial de una actividad (gate EDITAR sobre PLANEADOR): cada parametro NULL preserva el valor actual. Unidad/ponderacion se delegan en fn_unidad_actividad_vincular / _ponderacion_set / _desvincular (V223) para que la regla del 100% viva en un solo sitio; p_desvincular_unidad=TRUE es excluyente con p_fk_tunidad/p_ponderacion. Recuperacion: p_recuperacion (objeto) la configura via fn_actividad_recuperacion_configurar, p_quitar_recuperacion=TRUE la elimina (vuelve la actividad a normal); son excluyentes y NULL/FALSE no la tocan. p_materiales / p_adaptaciones / p_fk_tmatriculas NULL = no tocar, array = reemplazo completo. Revalida fechas, catalogos y unicidad (titulo, unidad, grupo, jerarquia). Retorna PK_TACTIVIDAD. V224.';
+    IS 'PATCH parcial de una actividad (gate EDITAR sobre PLANEADOR): cada parametro NULL preserva el valor actual. Unidad/ponderacion se delegan en fn_unidad_actividad_vincular / _ponderacion_set / _desvincular (V223) para que la regla del 100% viva en un solo sitio; p_desvincular_unidad=TRUE es excluyente con p_fk_tunidad/p_ponderacion. Recuperacion: p_recuperacion (objeto) la configura via fn_actividad_recuperacion_configurar, p_quitar_recuperacion=TRUE la elimina (vuelve la actividad a normal); son excluyentes y NULL/FALSE no la tocan. p_materiales / p_adaptaciones / p_fk_tmatriculas NULL = no tocar, array = reemplazo completo. Revalida fechas, catalogos y unicidad (titulo, unidad, grupo, jerarquia). El FK_TLV_INSTRUMENTO_EVALUACION resultante (nuevo o heredado) solo se admite si la unidad resultante (nueva, heredada, o NULL si p_desvincular_unidad) tiene referente curricular EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V137); en otro caso lanza 22023. Retorna PK_TACTIVIDAD. V224.';
 
 -- ===========================================================================
 -- (5) LECTURA OPTIMIZADA
@@ -1494,6 +1535,8 @@ RETURNS TABLE (
     materiales                      JSONB,
     adaptaciones                    JSONB,
     recuperacion                    JSONB,
+    campos_disponibles              JSONB,
+    unidad_configuracion            JSONB,
     active                          BOOLEAN
 )
 LANGUAGE plpgsql
@@ -1587,6 +1630,11 @@ BEGIN
               LEFT JOIN academico_test.TLISTA_VALOR ltc  ON ltc.PK_LISTA_VALOR = r.FK_TLV_TIPO_CALCULO_RECUPERACION
               LEFT JOIN academico_test.TACTIVIDAD ar     ON ar.PK_TACTIVIDAD = r.FK_TACTIVIDAD_RECUPERAR
              WHERE r.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND r.ACTIVE = TRUE),
+           -- Dependencias dinamicas del formulario (V137): calculadas solo
+           -- para esta fila (0 o 1), no en fn_actividad_listar -- ver nota
+           -- de estilo en la cabecera de esa funcion.
+           academico_test.fn_actividad_campos_disponibles(p_pk_usuario_solicitante, a.PK_TACTIVIDAD),
+           academico_test.fn_actividad_unidad_configuracion(p_pk_usuario_solicitante, a.PK_TACTIVIDAD),
            a.ACTIVE
       FROM academico_test.TACTIVIDAD a
       JOIN academico_test.TASIGNATURA asig      ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
@@ -1612,7 +1660,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_buscar_por_pk(BIGINT, BIGINT, INT)
-    IS 'Detalle completo de una actividad (gate VER): todos los campos de TACTIVIDAD con los nombres de catalogo resueltos, el estado derivado (fn_actividad_estado), el progreso de evaluacion (asignados/evaluados en un solo LATERAL), los materiales de apoyo y las adaptaciones curriculares como JSONB, y la config de recuperacion (columna "recuperacion": objeto con destino/tipoAplicacion/tipoCalculo/valorPonderacion + nombres resueltos, o NULL si no es de recuperacion). SETOF 0 o 1 fila (incluye inactivas). V224.';
+    IS 'Detalle completo de una actividad (gate VER): todos los campos de TACTIVIDAD con los nombres de catalogo resueltos, el estado derivado (fn_actividad_estado), el progreso de evaluacion (asignados/evaluados en un solo LATERAL), los materiales de apoyo y las adaptaciones curriculares como JSONB, y la config de recuperacion (columna "recuperacion": objeto con destino/tipoAplicacion/tipoCalculo/valorPonderacion + nombres resueltos, o NULL si no es de recuperacion). campos_disponibles = fn_actividad_campos_disponibles (dependencias dinamicas actividad->criterio / actividad->evaluacion, V137); unidad_configuracion = fn_actividad_unidad_configuracion (snapshot de la unidad relacionada, o {tieneUnidad:false}, V137) -- ambas calculadas solo para esta fila (detalle), no en fn_actividad_listar. SETOF 0 o 1 fila (incluye inactivas). V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_resumen_estados — las tarjetas del Planeador en UNA pasada.
