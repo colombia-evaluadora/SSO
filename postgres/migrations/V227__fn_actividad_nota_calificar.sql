@@ -20,17 +20,28 @@
 --               repetian el mismo SELECT ... IF NOT FOUND),
 --               fn_actividad_nota_get_or_create (get-or-create de la fila
 --               TACTIVIDAD_NOTA por FK_TACTIVIDAD_ESTUDIANTE),
---               fn_actividad_nota_asistencia_assert (gate de asistencia) y
+--               fn_actividad_nota_asistencia_assert (gate de asistencia),
 --               fn_actividad_nota_rubrica_recalcular (nota final de rubrica
 --               a partir de lo YA capturado; unica definicion del calculo,
---               usada por la version individual y por la bulk).
+--               usada por la version individual y por la bulk) y
+--               fn_actividad_nota_cotejo_recalcular (equivalente para lista
+--               de cotejo: % = SUM(peso de los items CUMPLIDO='S') /
+--               SUM(peso de TODOS los items activos) * 100; tambien unica
+--               definicion, compartida por _cotejo y _cotejo_bulk).
 --   (3) Calculo por instrumento — fn_actividad_nota_calificar_rubrica,
 --               _rubrica_bulk (un criterio + un nivel aplicado a N
 --               estudiantes, el flujo real de la pantalla de calificacion),
---               _cotejo, _escala, _otro (todas con p_fecha DATE).
---   (4) Fachada — fn_actividad_nota_calificar (despacha segun el
---               instrumento de la actividad) y fn_actividad_nota_obtener
---               (lectura).
+--               _cotejo, _cotejo_bulk (un item marcado S/N para N
+--               estudiantes), _escala, _escala_bulk (un nivel de escala
+--               CUALITATIVA para N estudiantes; la NUMERICA no admite bulk),
+--               _otro (todas con p_fecha DATE).
+--   (4) Fachada y lectura — fn_actividad_nota_calificar (despacha segun el
+--               instrumento de la actividad), fn_actividad_nota_obtener
+--               (detalle de UN estudiante) y
+--               fn_actividad_estudiantes_calificaciones_listar (la tabla
+--               completa de la pantalla "Calificaciones: <actividad>":
+--               todos los estudiantes con nombre + asistencia del dia +
+--               nota).
 --
 -- -------------------------------------------------------------------------
 -- TABLAS DE CAPTURA — se REUTILIZAN, no se crean nuevas.
@@ -367,6 +378,67 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_rubrica_recalcular(BIGINT)
     IS 'Nota final (porcentaje 0-100) de la rubrica de un estudiante a partir de lo YA capturado en TACTIVIDAD_RUBRICA_EVALUACION: por criterio % = PONDERACION capturada / MAX(PONDERACION de los niveles ACTIVE de ese criterio) * 100, y el resultado es el promedio simple de esos %. Retorna NULL cuando la rubrica todavia no esta completa (menos criterios capturados activos que criterios ACTIVE de la actividad) o cuando la actividad no tiene criterios -- NULL significa "aun no hay nota definitiva", no es un error. NO escribe: el llamador decide si guarda el valor en TACTIVIDAD_NOTA. Unica definicion del calculo, compartida por fn_actividad_nota_calificar_rubrica y fn_actividad_nota_calificar_rubrica_bulk. V227.';
 
+-- ---------------------------------------------------------------------------
+-- fn_actividad_nota_cotejo_recalcular — nota final de lista de cotejo a
+-- partir de lo YA capturado en TACTIVIDAD_COTEJO_EVALUACION.
+--
+-- Mismo criterio que se hizo con fn_actividad_nota_rubrica_recalcular: unica
+-- definicion de la formula, compartida por la version individual
+-- (fn_actividad_nota_calificar_cotejo) y la bulk (_cotejo_bulk).
+--
+--   % = SUM(peso de los items con CUMPLIDO='S') / SUM(peso de TODOS los
+--       items ACTIVE de la actividad) * 100
+--
+-- con "peso" = COALESCE(PONDERACION, 1) (items sin ponderacion cuentan como
+-- peso 1, ver comentario de fn_actividad_nota_calificar_cotejo).
+--
+-- DIFERENCIA CLAVE CON RUBRICA: aqui NO existe el concepto de "incompleto".
+-- Un item sin fila de captura (o con fila inactiva) cuenta como NO cumplido
+-- por diseño — es exactamente lo que ya hacia la version individual, que
+-- sumaba en el denominador TODOS los items activos y en el numerador solo
+-- los marcados. Por eso esta funcion NUNCA retorna NULL por "faltan items":
+-- siempre hay un % valido. Solo retorna NULL si la actividad no tiene items
+-- activos (denominador 0), caso que la version individual ademas rechaza
+-- explicitamente antes de llegar aqui.
+--
+-- NO escribe: el llamador decide si guarda el valor en TACTIVIDAD_NOTA
+-- (STABLE, igual que la de rubrica).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_cotejo_recalcular(
+    p_pk_tactividad_estudiante BIGINT
+)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_pk_tactividad BIGINT;
+    v_suma_total    NUMERIC(10,2);
+    v_suma_cumplida NUMERIC(10,2);
+BEGIN
+    v_pk_tactividad := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
+
+    SELECT SUM(COALESCE(i.PONDERACION, 1)),
+           SUM(CASE WHEN ce.CUMPLIDO = 'S' THEN COALESCE(i.PONDERACION, 1) ELSE 0 END)
+      INTO v_suma_total, v_suma_cumplida
+      FROM academico_test.TACTIVIDAD_COTEJO_ITEM i
+      LEFT JOIN academico_test.TACTIVIDAD_COTEJO_EVALUACION ce
+             ON ce.FK_TACTIVIDAD_COTEJO_ITEM = i.PK_TACTIVIDAD_COTEJO_ITEM
+            AND ce.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante
+            AND ce.ACTIVE = TRUE
+     WHERE i.FK_TACTIVIDAD = v_pk_tactividad AND i.ACTIVE = TRUE;
+
+    IF COALESCE(v_suma_total, 0) = 0 THEN
+        RETURN NULL;
+    END IF;
+
+    RETURN ROUND(COALESCE(v_suma_cumplida, 0) / v_suma_total * 100, 2);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_cotejo_recalcular(BIGINT)
+    IS 'Nota final (porcentaje 0-100) de la lista de cotejo de un estudiante a partir de lo YA capturado en TACTIVIDAD_COTEJO_EVALUACION: % = SUM(peso de los items con CUMPLIDO=''S'') / SUM(peso de TODOS los items ACTIVE de la actividad) * 100, con peso = COALESCE(PONDERACION, 1) (items sin ponderacion cuentan como peso 1). A diferencia de fn_actividad_nota_rubrica_recalcular NO existe el concepto de "captura incompleta": un item sin fila de evaluacion (o con fila inactiva) cuenta como NO cumplido por diseño, asi que siempre hay un % valido; solo retorna NULL si la actividad no tiene items activos (denominador 0). NO escribe: el llamador decide si guarda el valor en TACTIVIDAD_NOTA. Unica definicion del calculo, compartida por fn_actividad_nota_calificar_cotejo y fn_actividad_nota_calificar_cotejo_bulk. V227.';
+
 -- ===========================================================================
 -- (3) CALCULO POR INSTRUMENTO
 -- ===========================================================================
@@ -699,8 +771,6 @@ DECLARE
     v_pk_tactividad BIGINT;
     v_pk_nota       BIGINT;
     v_total_items   INT;
-    v_suma_total    NUMERIC(10,2);
-    v_suma_marcada  NUMERIC(10,2);
     v_pct_final     NUMERIC(5,2);
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
@@ -759,17 +829,13 @@ BEGIN
               AND ce.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante
        );
 
-    -- Items sin PONDERACION cuentan como peso 1 (ver comentario de la funcion).
-    SELECT SUM(COALESCE(i.PONDERACION, 1)) INTO v_suma_total
-      FROM academico_test.TACTIVIDAD_COTEJO_ITEM i
-     WHERE i.FK_TACTIVIDAD = v_pk_tactividad AND i.ACTIVE = TRUE;
-
-    SELECT SUM(COALESCE(i.PONDERACION, 1)) INTO v_suma_marcada
-      FROM academico_test.TACTIVIDAD_COTEJO_ITEM i
-     WHERE i.FK_TACTIVIDAD = v_pk_tactividad AND i.ACTIVE = TRUE
-       AND i.PK_TACTIVIDAD_COTEJO_ITEM = ANY (COALESCE(p_items_marcados, ARRAY[]::BIGINT[]));
-
-    v_pct_final := ROUND(COALESCE(v_suma_marcada, 0) / NULLIF(v_suma_total, 0) * 100, 2);
+    -- Nota final: unica definicion del calculo, compartida con la version
+    -- bulk (ver fn_actividad_nota_cotejo_recalcular). Se lee de lo que se
+    -- acaba de escribir en TACTIVIDAD_COTEJO_EVALUACION (1 fila por item con
+    -- CUMPLIDO S/N explicito), no del arreglo de entrada: mismo resultado y
+    -- una sola formula. Aqui nunca puede volver NULL: mas arriba se rechazo
+    -- la actividad sin items activos.
+    v_pct_final := academico_test.fn_actividad_nota_cotejo_recalcular(p_pk_tactividad_estudiante);
 
     UPDATE academico_test.TACTIVIDAD_NOTA
        SET CALIFICACION = v_pct_final, CALIFICABLE = 'S',
@@ -781,7 +847,145 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_cotejo(BIGINT, BIGINT, BIGINT[], DATE)
-    IS 'Califica a un estudiante con la lista de cotejo de su actividad: p_items_marcados = PKs de TACTIVIDAD_COTEJO_ITEM cumplidos (puede ser vacio/NULL = nada cumplido). p_fecha (DEFAULT CURRENT_DATE) es el dia de clase que se califica: se exige asistencia registrada y no injustificada para esa fecha (fn_actividad_nota_asistencia_assert). % = SUM(ponderacion de los items marcados) / SUM(ponderacion de TODOS los items) * 100, tratando los items SIN ponderacion (V226, columna opcional) como peso 1 tanto en el numerador (si estan marcados) como en el denominador. Reemplazo completo de TACTIVIDAD_COTEJO_EVALUACION (1 fila por item, CUMPLIDO S/N explicito) y upsert de TACTIVIDAD_NOTA.CALIFICACION (porcentaje 0-100). Gate EDITAR sobre PLANEADOR. V227.';
+    IS 'Califica a un estudiante con la lista de cotejo de su actividad: p_items_marcados = PKs de TACTIVIDAD_COTEJO_ITEM cumplidos (puede ser vacio/NULL = nada cumplido). p_fecha (DEFAULT CURRENT_DATE) es el dia de clase que se califica: se exige asistencia registrada y no injustificada para esa fecha (fn_actividad_nota_asistencia_assert). Hace reemplazo completo de TACTIVIDAD_COTEJO_EVALUACION (1 fila por item ACTIVE de la actividad, CUMPLIDO S/N explicito) y luego calcula el % con fn_actividad_nota_cotejo_recalcular (unica definicion de la formula, compartida con fn_actividad_nota_calificar_cotejo_bulk): % = SUM(peso de los items cumplidos) / SUM(peso de TODOS los items) * 100, tratando los items SIN ponderacion (V226, columna opcional) como peso 1 tanto en el numerador como en el denominador. Guarda el resultado en TACTIVIDAD_NOTA.CALIFICACION (porcentaje 0-100). Gate EDITAR sobre PLANEADOR. V227.';
+
+-- ---------------------------------------------------------------------------
+-- fn_actividad_nota_calificar_cotejo_bulk — UN item marcado como cumplido /
+-- no cumplido para VARIOS estudiantes de una vez.
+--
+-- Mismo espiritu que fn_actividad_nota_calificar_rubrica_bulk (el docente
+-- recorre la lista item por item y marca a los estudiantes que lo cumplen),
+-- con dos diferencias respecto a la rubrica:
+--
+--   * Se toca UNA sola fila de TACTIVIDAD_COTEJO_EVALUACION por estudiante
+--     (la de ESE item). Lo ya capturado en los otros items NO se toca — a
+--     diferencia de fn_actividad_nota_calificar_cotejo, que hace reemplazo
+--     completo de todos los items.
+--
+--   * SIEMPRE recalcula y guarda TACTIVIDAD_NOTA.CALIFICACION en la misma
+--     pasada (no hay "calificacion_actualizada = FALSE" como en rubrica):
+--     el cotejo NO exige tener todos los items cubiertos, porque un item sin
+--     fila de captura ya cuenta como NO cumplido por el diseño existente de
+--     la version individual (denominador = TODOS los items activos). Asi que
+--     tras marcar un solo item ya hay un % valido y definitivo-hasta-ahora.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_calificar_cotejo_bulk(
+    p_pk_usuario_solicitante    BIGINT,
+    p_pk_tactividad             BIGINT,
+    p_pk_item                   BIGINT,
+    p_cumplido                  CHAR(1),
+    p_pk_tactividad_estudiante  BIGINT[],
+    p_fecha                     DATE DEFAULT CURRENT_DATE
+)
+RETURNS TABLE (
+    pk_tactividad_estudiante  BIGINT,
+    items_totales             INT,
+    items_cumplidos           INT,
+    calificacion              NUMERIC
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_total_items       INT;
+    v_pk_est            BIGINT;
+    v_pk_nota           BIGINT;
+    v_pk_eval_existente BIGINT;
+    v_pct               NUMERIC(5,2);
+    v_cumplidos         INT;
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    );
+
+    IF p_pk_tactividad_estudiante IS NULL
+       OR COALESCE(array_length(p_pk_tactividad_estudiante, 1), 0) = 0 THEN
+        RAISE EXCEPTION 'p_pk_tactividad_estudiante debe traer al menos un estudiante' USING ERRCODE = '22023';
+    END IF;
+
+    IF p_cumplido IS NULL OR p_cumplido NOT IN ('S', 'N') THEN
+        RAISE EXCEPTION 'p_cumplido debe ser ''S'' (cumplido) o ''N'' (no cumplido)' USING ERRCODE = '22023';
+    END IF;
+
+    PERFORM academico_test.fn_actividad_instrumento_assert(p_pk_tactividad, 'LISTA_COTEJO');
+
+    -- El item pertenece a la lista de cotejo de ESTA actividad (misma
+    -- validacion que hace la version individual sobre p_items_marcados).
+    IF NOT EXISTS (
+        SELECT 1 FROM academico_test.TACTIVIDAD_COTEJO_ITEM
+         WHERE PK_TACTIVIDAD_COTEJO_ITEM = p_pk_item
+           AND FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'El item % no pertenece a la lista de cotejo de esta actividad', p_pk_item
+            USING ERRCODE = '22023';
+    END IF;
+
+    SELECT COUNT(*) INTO v_total_items
+      FROM academico_test.TACTIVIDAD_COTEJO_ITEM
+     WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
+
+    FOREACH v_pk_est IN ARRAY p_pk_tactividad_estudiante LOOP
+        IF academico_test.fn_actividad_estudiante_actividad(v_pk_est) <> p_pk_tactividad THEN
+            RAISE EXCEPTION 'La asignacion actividad-estudiante % no pertenece a la actividad %', v_pk_est, p_pk_tactividad
+                USING ERRCODE = '22023';
+        END IF;
+
+        PERFORM academico_test.fn_actividad_nota_asistencia_assert(v_pk_est, p_fecha);
+
+        v_pk_nota := academico_test.fn_actividad_nota_get_or_create(p_pk_usuario_solicitante, v_pk_est);
+
+        -- Upsert manual de la UNICA fila (item, estudiante): UN_TAC_COTEJO_EVAL_1
+        -- es DEFERRABLE INITIALLY DEFERRED y no sirve como arbitro de ON CONFLICT.
+        SELECT PK_TACTIVIDAD_COTEJO_EVAL INTO v_pk_eval_existente
+          FROM academico_test.TACTIVIDAD_COTEJO_EVALUACION
+         WHERE FK_TACTIVIDAD_COTEJO_ITEM = p_pk_item
+           AND FK_TACTIVIDAD_ESTUDIANTE = v_pk_est;
+
+        IF v_pk_eval_existente IS NULL THEN
+            INSERT INTO academico_test.TACTIVIDAD_COTEJO_EVALUACION (
+                FK_TACTIVIDAD_COTEJO_ITEM, FK_TACTIVIDAD_ESTUDIANTE, CUMPLIDO,
+                CREATED_BY, CREATED_AT, ACTIVE
+            ) VALUES (
+                p_pk_item, v_pk_est, p_cumplido,
+                p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
+            );
+        ELSE
+            UPDATE academico_test.TACTIVIDAD_COTEJO_EVALUACION
+               SET CUMPLIDO    = p_cumplido,
+                   ACTIVE      = TRUE,
+                   MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+                   MODIFIED_AT = CURRENT_TIMESTAMP
+             WHERE PK_TACTIVIDAD_COTEJO_EVAL = v_pk_eval_existente;
+        END IF;
+
+        SELECT COUNT(*) INTO v_cumplidos
+          FROM academico_test.TACTIVIDAD_COTEJO_EVALUACION ce
+          JOIN academico_test.TACTIVIDAD_COTEJO_ITEM i
+            ON i.PK_TACTIVIDAD_COTEJO_ITEM = ce.FK_TACTIVIDAD_COTEJO_ITEM
+         WHERE ce.FK_TACTIVIDAD_ESTUDIANTE = v_pk_est
+           AND ce.ACTIVE = TRUE AND ce.CUMPLIDO = 'S'
+           AND i.FK_TACTIVIDAD = p_pk_tactividad
+           AND i.ACTIVE = TRUE;
+
+        -- Siempre hay % valido (ver comentario de la funcion): se guarda en
+        -- la misma pasada, sin esperar a que se cubran los demas items.
+        v_pct := academico_test.fn_actividad_nota_cotejo_recalcular(v_pk_est);
+
+        UPDATE academico_test.TACTIVIDAD_NOTA
+           SET CALIFICACION = v_pct, CALIFICABLE = 'S',
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
+
+        pk_tactividad_estudiante := v_pk_est;
+        items_totales            := v_total_items;
+        items_cumplidos          := v_cumplidos;
+        calificacion             := v_pct;
+        RETURN NEXT;
+    END LOOP;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_cotejo_bulk(BIGINT, BIGINT, BIGINT, CHAR, BIGINT[], DATE)
+    IS 'Calificacion BULK por lista de cotejo: marca UN item como cumplido (p_cumplido=''S'') o no cumplido (''N'') para VARIOS estudiantes de la misma actividad (el flujo real de la pantalla: el docente recorre la lista item por item). Valida gate EDITAR sobre PLANEADOR, que la actividad tenga instrumento LISTA_COTEJO (fn_actividad_instrumento_assert), que el item pertenezca a esa lista, que cada TACTIVIDAD_ESTUDIANTE pertenezca a ESA actividad y este activo (fn_actividad_estudiante_actividad) y la asistencia de cada uno para p_fecha (fn_actividad_nota_asistencia_assert). Hace upsert de UNA sola fila de TACTIVIDAD_COTEJO_EVALUACION por estudiante (la de ese item): NO toca los demas items ya capturados -- a diferencia de fn_actividad_nota_calificar_cotejo, que hace reemplazo completo. A diferencia de fn_actividad_nota_calificar_rubrica_bulk, SIEMPRE recalcula (fn_actividad_nota_cotejo_recalcular) y guarda TACTIVIDAD_NOTA.CALIFICACION en la misma pasada, porque el cotejo NO exige cubrir todos los items: un item sin fila de captura ya cuenta como NO cumplido por diseño. Devuelve una fila por estudiante {pk_tactividad_estudiante, items_totales, items_cumplidos, calificacion}. V227.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_nota_calificar_escala
@@ -918,6 +1122,103 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_escala(BIGINT, BIGINT, BIGINT, NUMERIC, DATE)
     IS 'Califica a un estudiante con la escala de valoracion de su actividad. Exactamente uno de p_pk_nivel (CUALITATIVA: % = ponderacion del nivel / MAX ponderacion de la escala * 100) o p_valor_numerico (NUMERICA, dentro de [VALOR_MIN,VALOR_MAX]: % = (valor - min)/(max - min) * 100). p_fecha (DEFAULT CURRENT_DATE) es el dia de clase que se califica: se exige asistencia registrada y no injustificada para esa fecha (fn_actividad_nota_asistencia_assert). Upsert de TACTIVIDAD_ESCALA_EVALUACION (1:1 por estudiante, UN_TAC_ESCALA_EVAL_1) y de TACTIVIDAD_NOTA.CALIFICACION (porcentaje 0-100). Gate EDITAR sobre PLANEADOR. V227.';
+
+-- ---------------------------------------------------------------------------
+-- fn_actividad_nota_calificar_escala_bulk — UN nivel de la escala
+-- CUALITATIVA aplicado a VARIOS estudiantes de una vez.
+--
+-- Mismo espiritu que _rubrica_bulk / _cotejo_bulk, pero la escala es 1:1 por
+-- estudiante (UN_TAC_ESCALA_EVAL_1): no existe el concepto de "faltan otros
+-- niveles/items", asi que SIEMPRE se recalcula y se guarda la nota en la
+-- misma pasada.
+--
+-- SOLO CUALITATIVA: si la escala de la actividad es NUMERICA se rechaza —
+-- un valor numerico es por definicion individual por estudiante, no hay
+-- "nivel" comun que aplicar en bloque.
+--
+-- DECISION DE DISEÑO (reutilizacion): en vez de duplicar el calculo
+-- (% = ponderacion del nivel / MAX ponderacion de la escala * 100) y el
+-- upsert de TACTIVIDAD_ESCALA_EVALUACION, esta funcion DELEGA por estudiante
+-- en fn_actividad_nota_calificar_escala (la individual), que ya hace gate,
+-- asistencia, instrumento assert, validacion del nivel contra la escala de
+-- la actividad, upsert y escritura de TACTIVIDAD_NOTA. No se extrajo un
+-- helper "_escala_recalcular" separado como en rubrica/cotejo porque ahi el
+-- helper existe para poder leer una captura PARCIAL ya guardada (varias
+-- filas por estudiante); en escala la captura es una sola fila y el % se
+-- deriva por completo de los parametros de entrada, asi que no hay formula
+-- que compartir con nadie mas: llamar a la individual ya es el unico punto.
+-- Se pagan N llamadas (una por estudiante) a cambio de cero duplicacion de
+-- reglas — el universo es el grupo de una actividad, no un catalogo.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_calificar_escala_bulk(
+    p_pk_usuario_solicitante    BIGINT,
+    p_pk_tactividad             BIGINT,
+    p_pk_nivel                  BIGINT,
+    p_pk_tactividad_estudiante  BIGINT[],
+    p_fecha                     DATE DEFAULT CURRENT_DATE
+)
+RETURNS TABLE (
+    pk_tactividad_estudiante  BIGINT,
+    calificacion              NUMERIC
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_tipo_val VARCHAR;
+    v_pk_est   BIGINT;
+    v_pct      NUMERIC(5,2);
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    );
+
+    IF p_pk_tactividad_estudiante IS NULL
+       OR COALESCE(array_length(p_pk_tactividad_estudiante, 1), 0) = 0 THEN
+        RAISE EXCEPTION 'p_pk_tactividad_estudiante debe traer al menos un estudiante' USING ERRCODE = '22023';
+    END IF;
+
+    IF p_pk_nivel IS NULL THEN
+        RAISE EXCEPTION 'p_pk_nivel es obligatorio: la calificacion bulk aplica UN nivel de la escala a varios estudiantes'
+            USING ERRCODE = '22023';
+    END IF;
+
+    PERFORM academico_test.fn_actividad_instrumento_assert(p_pk_tactividad, 'ESCALA_VALORACION');
+
+    SELECT lv.VALOR INTO v_tipo_val
+      FROM academico_test.TACTIVIDAD_ESCALA e
+      JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = e.FK_TLV_TIPO_ESCALA
+     WHERE e.FK_TACTIVIDAD = p_pk_tactividad AND e.ACTIVE = TRUE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'La actividad no tiene una escala de valoracion definida (use fn_actividad_escala_definir primero)'
+            USING ERRCODE = '22023';
+    END IF;
+
+    IF v_tipo_val <> 'CUALITATIVA' THEN
+        RAISE EXCEPTION 'la escala NUMERICA no admite calificacion bulk por nivel — cada estudiante requiere su propio valor numerico, use fn_actividad_nota_calificar_escala individual'
+            USING ERRCODE = '22023';
+    END IF;
+
+    FOREACH v_pk_est IN ARRAY p_pk_tactividad_estudiante LOOP
+        IF academico_test.fn_actividad_estudiante_actividad(v_pk_est) <> p_pk_tactividad THEN
+            RAISE EXCEPTION 'La asignacion actividad-estudiante % no pertenece a la actividad %', v_pk_est, p_pk_tactividad
+                USING ERRCODE = '22023';
+        END IF;
+
+        -- Delegacion (ver DECISION DE DISEÑO arriba): la individual valida
+        -- asistencia, el nivel contra la escala, hace el upsert y escribe la
+        -- nota. Aqui no se recalcula nada por cuenta propia.
+        v_pct := academico_test.fn_actividad_nota_calificar_escala(
+                     p_pk_usuario_solicitante, v_pk_est, p_pk_nivel, NULL, p_fecha);
+
+        pk_tactividad_estudiante := v_pk_est;
+        calificacion             := v_pct;
+        RETURN NEXT;
+    END LOOP;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_escala_bulk(BIGINT, BIGINT, BIGINT, BIGINT[], DATE)
+    IS 'Calificacion BULK por escala de valoracion CUALITATIVA: aplica UN nivel a VARIOS estudiantes de la misma actividad. Si la escala de la actividad es NUMERICA rechaza con 22023 ("la escala NUMERICA no admite calificacion bulk por nivel..."): un valor numerico es por definicion individual por estudiante. Valida gate EDITAR sobre PLANEADOR, instrumento ESCALA_VALORACION (fn_actividad_instrumento_assert) y que cada TACTIVIDAD_ESTUDIANTE pertenezca a ESA actividad (fn_actividad_estudiante_actividad); luego DELEGA por estudiante en fn_actividad_nota_calificar_escala, que ya valida la asistencia de p_fecha, comprueba el nivel contra la escala, hace el upsert de TACTIVIDAD_ESCALA_EVALUACION (1:1) y guarda el % en TACTIVIDAD_NOTA. No se extrajo un helper de recalculo (como si se hizo en rubrica/cotejo) porque la escala guarda UNA sola fila por estudiante y el % se deriva por completo de los parametros de entrada: no hay captura parcial que releer ni formula que compartir. Al ser 1:1, SIEMPRE recalcula y guarda la nota en la misma pasada. Devuelve una fila por estudiante {pk_tactividad_estudiante, calificacion}. V227.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_nota_calificar_otro — sin calculo automatico.
@@ -1106,4 +1407,126 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_obtener(BIGINT, BIGINT)
-    IS 'Lee la nota de un estudiante para una actividad: instrumento aplicado, CALIFICACION (porcentaje 0-100, SIN homologar a la escala visual del periodo/asignatura — eso es responsabilidad de la capa de lectura/reporte existente, ver cabecera de V227), CALIFICABLE, OBSERVACION y el detalle de captura segun el instrumento (RUBRICA: [{pkCriterio,pkNivel,ponderacion}]; LISTA_COTEJO: [{pkItem,cumplido}]; ESCALA_VALORACION: {pkNivel,valor,ponderacion}; OTRO/sin captura estructurada: NULL). Gate VER sobre PLANEADOR. V227.';
+    IS 'Lee la nota de un estudiante para una actividad: instrumento aplicado, CALIFICACION (porcentaje 0-100, SIN homologar a la escala visual del periodo/asignatura — eso es responsabilidad de la capa de lectura/reporte existente, ver cabecera de V227), CALIFICABLE, OBSERVACION y el detalle de captura segun el instrumento (RUBRICA: [{pkCriterio,pkNivel,ponderacion}]; LISTA_COTEJO: [{pkItem,cumplido}]; ESCALA_VALORACION: {pkNivel,valor,ponderacion}; OTRO/sin captura estructurada: NULL). Gate VER sobre PLANEADOR. Es el DETALLE de UN estudiante; para la tabla completa de la pantalla use fn_actividad_estudiantes_calificaciones_listar. V227.';
+
+-- ---------------------------------------------------------------------------
+-- fn_actividad_estudiantes_calificaciones_listar — la tabla de la pantalla
+-- "Calificaciones: <actividad>": una fila por estudiante asignado, con
+-- NOMBRES + ASISTENCIA del dia + NOTA.
+--
+-- Relacion con fn_actividad_nota_obtener: aquella es el DETALLE de UN
+-- estudiante (incluye el detalle de captura completo del instrumento, para
+-- el modal/panel de calificacion individual); esta es el LISTADO de la
+-- pantalla, que necesita a TODOS los estudiantes y ademas la asistencia del
+-- dia — dato que la de detalle no trae. No se fusionan a proposito: el
+-- detalle de captura por instrumento en un listado seria N subconsultas por
+-- fila para informacion que la tabla no pinta.
+--
+-- ASISTENCIA: mismo lookup que fn_actividad_nota_asistencia_assert
+-- (matricula del estudiante via TACTIVIDAD_ESTUDIANTE.FK_TMATRICULA,
+-- asignatura via TACTIVIDAD.FK_TASIGNATURA, FECHA = p_fecha) pero de SOLO
+-- LECTURA: si no hay registro NO lanza excepcion, las columnas de asistencia
+-- vienen NULL ("sin registrar", que es como la pantalla lo pinta). El NOMBRE
+-- del tipo sale de TLISTA_VALOR.NOMBRE, resuelto por JOIN directo — aqui no
+-- hace falta fn_asistencia_tipo_pk (la dependencia cross-branch descrita en
+-- la cabecera) porque no se compara contra ningun VALOR concreto, solo se
+-- muestra lo que haya. Se devuelven ademas los datos CRUDOS
+-- (fk_tlv_tipo_asistencia, observacion, fk_soporte_archivo) para que el
+-- cliente arme el texto "Justificada..." y el icono de adjunto: la
+-- redaccion exacta de la UI no se replica aqui.
+--
+-- Sin paginacion: el universo ya esta acotado a los estudiantes de UNA
+-- actividad (normalmente un grupo). p_search filtra por nombre con ILIKE
+-- simple por el mismo motivo (no amerita un indice trgm nuevo).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_estudiantes_calificaciones_listar(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_tactividad           BIGINT,
+    p_fecha                   DATE    DEFAULT CURRENT_DATE,
+    p_search                  VARCHAR DEFAULT NULL
+)
+RETURNS TABLE (
+    pk_tactividad_estudiante  BIGINT,
+    pk_tmatricula             BIGINT,
+    nombre_estudiante         VARCHAR,
+    instrumento               VARCHAR,
+    fecha                     DATE,
+    pk_tasistencia            BIGINT,
+    fk_tlv_tipo_asistencia    BIGINT,
+    tipo_asistencia           VARCHAR,
+    asistencia_observacion    VARCHAR,
+    fk_soporte_archivo        BIGINT,
+    calificacion              NUMERIC,
+    calificable               CHAR(1),
+    nota_observacion          VARCHAR
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_pk_asignatura BIGINT;
+    v_instrumento   VARCHAR;
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    );
+
+    SELECT a.FK_TASIGNATURA, lv.VALOR
+      INTO v_pk_asignatura, v_instrumento
+      FROM academico_test.TACTIVIDAD a
+      LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_INSTRUMENTO_EVALUACION
+     WHERE a.PK_TACTIVIDAD = p_pk_tactividad AND a.ACTIVE = TRUE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se encontro la actividad solicitada' USING ERRCODE = 'P0002';
+    END IF;
+
+    RETURN QUERY
+    WITH base AS (
+        SELECT ae.PK_TACTIVIDAD_ESTUDIANTE,
+               ae.FK_TMATRICULA,
+               NULLIF(TRIM(CONCAT_WS(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE,
+                                          u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO)), '')::VARCHAR AS nombre
+          FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+          JOIN academico_test.TMATRICULA m   ON m.PK_TMATRICULA = ae.FK_TMATRICULA
+          JOIN academico_test.TESTUDIANTE es ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
+          JOIN academico_test.TUSUARIO u     ON u.PK_TUSUARIO = es.FK_TUSUARIO
+         WHERE ae.FK_TACTIVIDAD = p_pk_tactividad
+           AND ae.ACTIVE = TRUE
+    )
+    SELECT b.PK_TACTIVIDAD_ESTUDIANTE,
+           b.FK_TMATRICULA,
+           b.nombre,
+           v_instrumento,
+           p_fecha,
+           s.PK_TASISTENCIA,
+           s.FK_TLV_TIPO_ASISTENCIA,
+           lva.NOMBRE::VARCHAR,
+           s.OBSERVACION,
+           s.FK_SOPORTE_ARCHIVO,
+           n.CALIFICACION,
+           n.CALIFICABLE,
+           n.OBSERVACION
+      FROM base b
+      LEFT JOIN LATERAL (
+          SELECT s2.PK_TASISTENCIA, s2.FK_TLV_TIPO_ASISTENCIA, s2.OBSERVACION, s2.FK_SOPORTE_ARCHIVO
+            FROM academico_test.TASISTENCIA s2
+           WHERE s2.FK_TMATRICULA  = b.FK_TMATRICULA
+             AND s2.FK_TASIGNATURA = v_pk_asignatura
+             AND s2.FECHA          = p_fecha
+             AND s2.ACTIVE = TRUE
+           ORDER BY s2.PK_TASISTENCIA DESC
+           LIMIT 1
+      ) s ON TRUE
+      LEFT JOIN academico_test.TLISTA_VALOR lva ON lva.PK_LISTA_VALOR = s.FK_TLV_TIPO_ASISTENCIA
+      LEFT JOIN academico_test.TACTIVIDAD_NOTA n
+             ON n.FK_TACTIVIDAD_ESTUDIANTE = b.PK_TACTIVIDAD_ESTUDIANTE AND n.ACTIVE = TRUE
+     WHERE p_search IS NULL
+        OR TRIM(p_search) = ''
+        OR b.nombre ILIKE '%' || TRIM(p_search) || '%'
+     ORDER BY b.nombre, b.PK_TACTIVIDAD_ESTUDIANTE;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_estudiantes_calificaciones_listar(BIGINT, BIGINT, DATE, VARCHAR)
+    IS 'Lectura que alimenta la TABLA de la pantalla "Calificaciones: <actividad>": una fila por cada TACTIVIDAD_ESTUDIANTE ACTIVO de la actividad con (a) el nombre completo del estudiante (TACTIVIDAD_ESTUDIANTE -> TMATRICULA -> TESTUDIANTE -> TUSUARIO), (b) la asistencia de p_fecha (DEFAULT CURRENT_DATE) buscada igual que fn_actividad_nota_asistencia_assert (matricula + TACTIVIDAD.FK_TASIGNATURA + FECHA) pero de SOLO LECTURA: si no hay registro NO lanza excepcion y pk_tasistencia/fk_tlv_tipo_asistencia/tipo_asistencia/asistencia_observacion/fk_soporte_archivo vienen NULL ("sin registrar"); se devuelven los datos crudos para que el cliente arme el texto "Justificada..." y el icono de adjunto, (c) la nota de TACTIVIDAD_NOTA (LEFT JOIN: puede no existir todavia) y (d) el instrumento de la actividad repetido por fila, para evitarle al cliente una segunda consulta. p_search filtra por nombre con ILIKE simple; sin paginacion (el universo ya esta acotado a una actividad). Ordena por nombre. Distinta de fn_actividad_nota_obtener, que es el DETALLE de UN estudiante e incluye el detalle de captura completo del instrumento. Gate VER sobre PLANEADOR. V227.';
