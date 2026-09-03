@@ -508,15 +508,13 @@ COMMENT ON FUNCTION academico_test.fn_actividad_material_reemplazar(BIGINT, BIGI
 -- (TACTIVIDAD_ESTUDIANTE): por eso fn_actividad_crear/_actualizar llaman
 -- PRIMERO a fn_actividad_estudiantes_asignar y despues a esta.
 --
--- CONDICION DINAMICA "adaptaciones -> evaluacion" (diagrama del Planeador):
--- las adaptaciones curriculares cuelgan de la sub-rama "evaluacion" de la
--- actividad, que solo existe si el referente de su unidad es EVALUATIVO
--- (misma condicion que ya valida el instrumento en fn_actividad_crear/
--- _actualizar via fn_unidad_referente_evaluativo, V137). Se rechaza (22023)
--- intentar agregar/editar adaptaciones (array no vacio) en una actividad sin
--- unidad o cuya unidad no tenga referente EVALUATIVO. p_adaptaciones = []
--- (vaciar la lista) SI se permite siempre, para poder limpiar adaptaciones
--- que quedaron de un estado anterior.
+-- CONDICION DINAMICA "adaptaciones -> evaluacion" — NO APLICA. Se evaluo
+-- exigir que la actividad tenga unidad con referente EVALUATIVO (misma
+-- condicion del instrumento), pero el negocio confirmo que una actividad SIN
+-- unidad SI puede tener adaptaciones curriculares: la adaptacion (accesos,
+-- material alternativo, formato modificado) es independiente de si la
+-- actividad se evalua formalmente o no. No se agrega ningun gate contra
+-- FK_TUNIDAD/referente aqui.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_adaptacion_reemplazar(
     p_pk_usuario_solicitante   BIGINT,
@@ -533,29 +531,12 @@ DECLARE
     v_aplica_val  VARCHAR;
     v_usa         VARCHAR(1);
     v_insertadas  INT := 0;
-    v_fk_tunidad  BIGINT;
 BEGIN
     IF p_adaptaciones IS NULL THEN
         RETURN 0;                          -- NULL = no tocar la lista
     END IF;
     IF jsonb_typeof(p_adaptaciones) <> 'array' THEN
         RAISE EXCEPTION 'p_adaptaciones debe ser un arreglo JSON' USING ERRCODE = '22023';
-    END IF;
-
-    -- Condicion dinamica "adaptaciones -> evaluacion": solo se valida cuando
-    -- se intenta AGREGAR adaptaciones (array no vacio); vaciar la lista
-    -- siempre esta permitido.
-    IF jsonb_array_length(p_adaptaciones) > 0 THEN
-        SELECT FK_TUNIDAD INTO v_fk_tunidad
-          FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
-
-        IF v_fk_tunidad IS NULL THEN
-            RAISE EXCEPTION 'Las adaptaciones no aplican: la actividad no esta vinculada a una unidad'
-                USING ERRCODE = '22023';
-        ELSIF NOT academico_test.fn_unidad_referente_evaluativo(v_fk_tunidad) THEN
-            RAISE EXCEPTION 'Las adaptaciones no aplican: el referente curricular de la unidad no es EVALUATIVO'
-                USING ERRCODE = '22023';
-        END IF;
     END IF;
 
     -- Soft delete de las actuales (el pivote de estudiantes cae con ellas).
@@ -690,7 +671,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_adaptacion_reemplazar(BIGINT, BIGINT, JSONB)
-    IS 'Reemplazo completo de las adaptaciones curriculares de una actividad (TACTIVIDAD_ADAPTACION + TACTIVIDAD_ADAPTACION_ESTUDIANTE). p_adaptaciones NULL = no tocar; array vacio = dejarla sin adaptaciones (siempre permitido). Agregar adaptaciones (array no vacio) exige que la actividad tenga unidad y que el referente curricular de esa unidad sea EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "adaptaciones -> evaluacion" del diagrama del Planeador, V137); en otro caso lanza 22023. Elemento {tipoAdaptacion, descripcion(<=500), usaVersionModificada(S/N), formatoAdaptacion?, fkTarchivo?, url?, aplicaA?, estudiantes?[]}. Reglas del figma: con usaVersionModificada=''S'' el formato es obligatorio y ARCHIVO/BIBLIOTECA exigen fkTarchivo mientras ENLACE exige url; con ''N'' no se admite formato. aplicaA=ESTUDIANTES_SELECCIONADOS exige la lista de matriculas, que deben estar YA asignadas a la actividad (por eso se llama despues de fn_actividad_estudiantes_asignar); con TODO_EL_GRUPO la lista debe venir vacia. Retorna cuantas adaptaciones quedaron. V224.';
+    IS 'Reemplazo completo de las adaptaciones curriculares de una actividad (TACTIVIDAD_ADAPTACION + TACTIVIDAD_ADAPTACION_ESTUDIANTE). p_adaptaciones NULL = no tocar; array vacio = dejarla sin adaptaciones. Sin gate contra unidad/referente: una actividad SIN unidad SI puede tener adaptaciones (confirmado con negocio -- la adaptacion es independiente de si la actividad se evalua formalmente). Elemento {tipoAdaptacion, descripcion(<=500), usaVersionModificada(S/N), formatoAdaptacion?, fkTarchivo?, url?, aplicaA?, estudiantes?[]}. Reglas del figma: con usaVersionModificada=''S'' el formato es obligatorio y ARCHIVO/BIBLIOTECA exigen fkTarchivo mientras ENLACE exige url; con ''N'' no se admite formato. aplicaA=ESTUDIANTES_SELECCIONADOS exige la lista de matriculas, que deben estar YA asignadas a la actividad (por eso se llama despues de fn_actividad_estudiantes_asignar); con TODO_EL_GRUPO la lista debe venir vacia. Retorna cuantas adaptaciones quedaron. V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_estudiantes_asignar — pivote TACTIVIDAD_ESTUDIANTE.
