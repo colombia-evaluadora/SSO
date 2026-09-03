@@ -1363,11 +1363,19 @@ COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCH
 --     unidad (V136);
 --   * y por ultimo la propia TACTIVIDAD.
 --
--- BLOQUEO (23503) — unico caso que NO se cascadea: si otra actividad de
--- recuperacion ACTIVA apunta a esta como su
--- TACTIVIDAD_RECUPERACION.FK_TACTIVIDAD_RECUPERAR, borrarla dejaria esa otra
--- actividad recuperando una nota inexistente. Se exige resolverla primero,
--- mismo espiritu que el bloqueo de fn_unidad_eliminar.
+-- BLOQUEOS (23503) — dos casos que NO se cascadean:
+--   * la actividad tiene NOTAS registradas (TACTIVIDAD_NOTA.CALIFICACION
+--     IS NOT NULL para alguno de sus estudiantes): borrar una actividad ya
+--     calificada perderia informacion de evaluacion real, a diferencia de
+--     una TACTIVIDAD_NOTA "vacia" (fila creada por
+--     fn_actividad_nota_get_or_create pero sin CALIFICACION todavia, p.ej.
+--     una rubrica bulk a medio cubrir) que si se puede arrastrar sin perder
+--     nada. El caller debe reactivar/anular las notas antes (no existe hoy
+--     una funcion para eso; se documenta como pendiente).
+--   * otra actividad de recuperacion ACTIVA apunta a esta como su
+--     TACTIVIDAD_RECUPERACION.FK_TACTIVIDAD_RECUPERAR, borrarla dejaria esa
+--     otra actividad recuperando una nota inexistente. Se exige resolverla
+--     primero, mismo espiritu que el bloqueo de fn_unidad_eliminar.
 --
 -- Las tablas de V136 (TACTIVIDAD_EVIDENCIA / TACTIVIDAD_CRITERIO_UNIDAD) y
 -- las de captura se referencian por nombre dentro de un cuerpo plpgsql: se
@@ -1400,6 +1408,23 @@ BEGIN
 
     IF v_active = FALSE THEN
         RAISE EXCEPTION 'La actividad "%" ya se encuentra inactiva', v_titulo USING ERRCODE = '22023';
+    END IF;
+
+    -- Bloqueo: la actividad tiene notas registradas (CALIFICACION no nula
+    -- para alguno de sus estudiantes). Una TACTIVIDAD_NOTA "vacia" (sin
+    -- CALIFICACION) SI se puede arrastrar, no cuenta aqui.
+    IF EXISTS (
+        SELECT 1
+          FROM academico_test.TACTIVIDAD_NOTA n
+          JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae ON ae.PK_TACTIVIDAD_ESTUDIANTE = n.FK_TACTIVIDAD_ESTUDIANTE
+         WHERE ae.FK_TACTIVIDAD = p_pk_tactividad
+           AND ae.ACTIVE = TRUE
+           AND n.ACTIVE = TRUE
+           AND n.CALIFICACION IS NOT NULL
+    ) THEN
+        RAISE EXCEPTION 'La actividad "%" tiene notas registradas; no se puede eliminar', v_titulo
+            USING ERRCODE = '23503',
+                  HINT = 'Anule o corrija las calificaciones de los estudiantes antes de eliminar la actividad';
     END IF;
 
     -- Bloqueo: actividades de recuperacion activas que recuperan a esta.
@@ -1522,7 +1547,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_eliminar(BIGINT, BIGINT)
-    IS 'Soft delete (ACTIVE=FALSE) de una TACTIVIDAD (gate ELIMINAR sobre PLANEADOR), en cascada sobre TODOS sus satelites activos -- ninguno tiene sentido sin su actividad: capturas de calificacion (TACTIVIDAD_RUBRICA/COTEJO/ESCALA_EVALUACION), TACTIVIDAD_NOTA, TACTIVIDAD_SOPORTE, TACTIVIDAD_ADAPTACION_ESTUDIANTE, TACTIVIDAD_ESTUDIANTE, la definicion del instrumento de V226 (niveles->criterios de rubrica, items de cotejo, niveles->escala), materiales, adaptaciones, la fila 1:1 de recuperacion, y las relaciones de V136 (TACTIVIDAD_EVIDENCIA, TACTIVIDAD_CRITERIO_UNIDAD). Ademas suelta la actividad de su unidad (FK_TUNIDAD y PONDERACION a NULL) para liberar cupo en la regla del 100% por (unidad, grupo) de V223. Se BLOQUEA (23503) si otra actividad de recuperacion ACTIVA la referencia como TACTIVIDAD_RECUPERACION.FK_TACTIVIDAD_RECUPERAR. 22023 si ya estaba inactiva, P0002 si no existe. Retorna PK_TACTIVIDAD. V224.';
+    IS 'Soft delete (ACTIVE=FALSE) de una TACTIVIDAD (gate ELIMINAR sobre PLANEADOR), en cascada sobre TODOS sus satelites activos -- ninguno tiene sentido sin su actividad: capturas de calificacion (TACTIVIDAD_RUBRICA/COTEJO/ESCALA_EVALUACION), TACTIVIDAD_NOTA, TACTIVIDAD_SOPORTE, TACTIVIDAD_ADAPTACION_ESTUDIANTE, TACTIVIDAD_ESTUDIANTE, la definicion del instrumento de V226 (niveles->criterios de rubrica, items de cotejo, niveles->escala), materiales, adaptaciones, la fila 1:1 de recuperacion, y las relaciones de V136 (TACTIVIDAD_EVIDENCIA, TACTIVIDAD_CRITERIO_UNIDAD). Ademas suelta la actividad de su unidad (FK_TUNIDAD y PONDERACION a NULL) para liberar cupo en la regla del 100% por (unidad, grupo) de V223. Se BLOQUEA (23503) si la actividad tiene notas registradas (TACTIVIDAD_NOTA.CALIFICACION IS NOT NULL para alguno de sus estudiantes activos -- una nota "vacia" sin CALIFICACION si se arrastra) o si otra actividad de recuperacion ACTIVA la referencia como TACTIVIDAD_RECUPERACION.FK_TACTIVIDAD_RECUPERAR. 22023 si ya estaba inactiva, P0002 si no existe. Retorna PK_TACTIVIDAD. V224.';
 
 -- ===========================================================================
 -- (5) LECTURA OPTIMIZADA
