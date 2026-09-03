@@ -28,9 +28,43 @@
 --      que el modal "Vincular actividad" pinte "Disponible para asignar: X%"
 --      por fila/grupo, y fn_actividad_disponibles_listar — el listado de
 --      actividades candidatas de ese modal.
+--   7. PONDERACION DINAMICA SEGUN EL METODO DE CALCULO DE LA UNIDAD
+--      (TUNIDAD.FK_TLV_CALCULO_DEFINITIVA, V73, catalogo TLISTA_VALOR
+--      CATEGORIA='CALCULO_DEFINITIVA'):
+--        * Ponderar  — comportamiento original: el docente escribe el % a
+--                      mano y sigue aplicando la regla del 100% (puntos 3-5).
+--        * Promediar — PONDERACION NO aplica: se rechaza (22023) cualquier
+--                      intento de fijarla; queda NULL.
+--        * Sumatoria — el docente NO escribe %, escribe un PUNTAJE en la
+--                      columna ya existente TACTIVIDAD.NOTA_MAXIMA (V22). El
+--                      % lo AUTOCALCULA el sistema para TODAS las actividades
+--                      activas de esa (unidad, grupo):
+--                        PONDERACION = NOTA_MAXIMA / SUM(NOTA_MAXIMA) * 100
+--                      via fn_unidad_ponderacion_recalcular_sumatoria, que
+--                      llaman fn_actividad_crear/_actualizar/_eliminar (V224)
+--                      y las funciones de vinculacion de este archivo. Por
+--                      construccion la suma da 100 exacto (salvo el redondeo
+--                      a NUMERIC(5,2)), asi que el trigger del 100% se SALTA
+--                      en modo Sumatoria: la calcula el sistema, no el
+--                      usuario, y un 100.01 por redondeo no debe bloquear.
+--
+--      OJO — INCERTIDUMBRE DOCUMENTADA: el catalogo CALCULO_DEFINITIVA NO se
+--      seedea en ninguna migracion versionada de este repo (viene del dump
+--      base del servidor; tampoco existe en el Postgres local de pruebas),
+--      asi que no se pudo verificar el VALOR exacto de sus filas. Lo que SI
+--      esta confirmado (comentario de V73, rama CU-86e30a25v) son los NOMBRE
+--      en espanol: "Promediar Actividades o descriptores", "Ponderar
+--      Actividades o Descriptores", "Sumatoria de Actividades". Por eso
+--      fn_unidad_calculo_definitiva_modo resuelve el modo por
+--      NOMBRE ILIKE 'Promed%' / 'Ponder%' / 'Sumat%' y NO por VALOR.
+--      Decision de bajo riesgo pero NO verificada contra el servidor real:
+--      confirmar los VALOR/NOMBRE antes de desplegar y, si los VALOR
+--      resultan estables, cambiar la resolucion a VALOR (un solo punto:
+--      esa funcion).
 --
 -- Depende de (orden de version de Flyway):
---   * V22  — TACTIVIDAD, TUNIDAD, TGRUPO.
+--   * V22  — TACTIVIDAD (incl. NOTA_MAXIMA), TUNIDAD, TGRUPO, TLISTA_VALOR.
+--   * V73  — TUNIDAD.FK_TLV_CALCULO_DEFINITIVA (rama CU-86e30a25v).
 --   * V218 — TACTIVIDAD.FK_TUNIDAD nullable, TACTIVIDAD.FK_TASIGNATURA.
 --   * V216 — menu 'PLANEADOR' + fn_assert_permiso_seccion.
 --
@@ -92,6 +126,116 @@ COMMENT ON FUNCTION academico_test.fn_unidad_ponderacion_asignada(BIGINT, BIGINT
     IS 'Suma de PONDERACION de las actividades ACTIVE (y con PONDERACION no nula) de una (FK_TUNIDAD, FK_TGRUPO); grupo NULL es su propio bucket (IS NOT DISTINCT FROM). p_excluir_tactividad (opcional) deja fuera una actividad concreta, para validar un INSERT/UPDATE sin contar la fila que se esta tocando. Definicion UNICA usada por el trigger tr_tactividad_ponderacion_unidad, fn_unidad_actividad_vincular, fn_unidad_actividad_ponderacion_set y fn_unidad_ponderacion_disponible. Retorna 0 (nunca NULL) si no hay nada asignado. V223.';
 
 -- ---------------------------------------------------------------------------
+-- 2.b fn_unidad_calculo_definitiva_modo — punto UNICO de resolucion del
+--     metodo de calculo de una unidad (TUNIDAD.FK_TLV_CALCULO_DEFINITIVA,
+--     V73) a un modo canonico: 'PONDERAR' | 'PROMEDIAR' | 'SUMATORIA', o
+--     NULL si la unidad no existe, no tiene metodo elegido, o el valor del
+--     catalogo no se reconoce.
+--
+--     Se resuelve por NOMBRE ILIKE y NO por VALOR — ver la INCERTIDUMBRE
+--     DOCUMENTADA de la cabecera: el catalogo CALCULO_DEFINITIVA no esta en
+--     ninguna migracion del repo (viene del dump base) y solo los NOMBRE en
+--     espanol estan confirmados ("Promediar Actividades o descriptores",
+--     "Ponderar Actividades o Descriptores", "Sumatoria de Actividades").
+--     Si mas adelante se confirman los VALOR, este es el UNICO sitio a
+--     cambiar.
+--
+--     No filtra por lv.ACTIVE: si un ambiente desactivara la fila del
+--     catalogo, la unidad seguiria teniendo su metodo elegido y perder el
+--     modo cambiaria silenciosamente el comportamiento de la ponderacion.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_calculo_definitiva_modo(
+    p_pk_tunidad   BIGINT
+)
+RETURNS VARCHAR
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT CASE
+               WHEN lv.NOMBRE ILIKE 'Ponder%' THEN 'PONDERAR'
+               WHEN lv.NOMBRE ILIKE 'Promed%' THEN 'PROMEDIAR'
+               WHEN lv.NOMBRE ILIKE 'Sumat%'  THEN 'SUMATORIA'
+               ELSE NULL
+           END::VARCHAR
+      FROM academico_test.TUNIDAD u
+      JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = u.FK_TLV_CALCULO_DEFINITIVA
+     WHERE u.PK_TUNIDAD = p_pk_tunidad;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_unidad_calculo_definitiva_modo(BIGINT)
+    IS 'Modo canonico de calculo de la definitiva de una unidad a partir de TUNIDAD.FK_TLV_CALCULO_DEFINITIVA (V73, TLISTA_VALOR CATEGORIA=CALCULO_DEFINITIVA): ''PONDERAR'' | ''PROMEDIAR'' | ''SUMATORIA'', o NULL si la unidad no existe, no tiene metodo elegido o el valor no se reconoce. Punto UNICO de esa resolucion (trigger del 100%, fn_unidad_actividad_vincular/_ponderacion_set/_desvincular, fn_actividad_crear/_actualizar/_eliminar de V224 y el bloque "ponderacion" de fn_actividad_campos_disponibles de V137). Se resuelve por NOMBRE ILIKE ''Ponder%''/''Promed%''/''Sumat%'' y NO por VALOR: ese catalogo NO esta seedeado en ninguna migracion del repo (viene del dump base del servidor) y solo los NOMBRE estan confirmados (comentario de V73) -- decision documentada, a confirmar contra el servidor real antes de desplegar. V223.';
+
+-- ---------------------------------------------------------------------------
+-- 2.c fn_unidad_ponderacion_recalcular_sumatoria — autocalculo del % en las
+--     unidades que calculan por SUMATORIA.
+--
+--     En modo Sumatoria el docente captura un PUNTAJE por actividad
+--     (TACTIVIDAD.NOTA_MAXIMA, columna ya existente de V22) y el peso (%) es
+--     derivado: NOTA_MAXIMA / SUM(NOTA_MAXIMA de la (unidad, grupo)) * 100,
+--     sobre TODAS las actividades ACTIVE de ese bucket. Como es un reparto
+--     proporcional sobre el total, la suma da exactamente 100 (salvo el
+--     redondeo a NUMERIC(5,2)) -- por eso el trigger del 100% se salta en
+--     este modo (ver punto 3).
+--
+--     Se llama tras CADA cambio que altere el bucket (crear / editar /
+--     eliminar / vincular / desvincular actividad), igual de dinamico que la
+--     regla del 100% del modo Ponderar.
+--
+--     Si el total de puntajes es 0 o NULL (ninguna actividad tiene
+--     NOTA_MAXIMA todavia) el % queda NULL en todas: no hay reparto posible
+--     y NULL es "sin ponderacion" en el resto del modulo, no 0.
+--
+--     NO gatea permisos: es un recalculo interno derivado, siempre invocado
+--     desde una funcion que ya valido EDITAR sobre PLANEADOR.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_ponderacion_recalcular_sumatoria(
+    p_pk_tunidad   BIGINT,
+    p_fk_tgrupo    BIGINT
+)
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_total      NUMERIC;
+    v_afectadas  INT := 0;
+BEGIN
+    IF p_pk_tunidad IS NULL THEN
+        RETURN 0;
+    END IF;
+    IF academico_test.fn_unidad_calculo_definitiva_modo(p_pk_tunidad) IS DISTINCT FROM 'SUMATORIA' THEN
+        RETURN 0;                      -- la unidad no calcula por sumatoria
+    END IF;
+
+    SELECT SUM(COALESCE(a.NOTA_MAXIMA, 0))
+      INTO v_total
+      FROM academico_test.TACTIVIDAD a
+     WHERE a.FK_TUNIDAD = p_pk_tunidad
+       AND a.FK_TGRUPO IS NOT DISTINCT FROM p_fk_tgrupo
+       AND a.ACTIVE = TRUE;
+
+    UPDATE academico_test.TACTIVIDAD a
+       SET PONDERACION = CASE
+                             WHEN COALESCE(v_total, 0) = 0 THEN NULL
+                             ELSE ROUND(COALESCE(a.NOTA_MAXIMA, 0) * 100 / v_total, 2)
+                         END,
+           MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE a.FK_TUNIDAD = p_pk_tunidad
+       AND a.FK_TGRUPO IS NOT DISTINCT FROM p_fk_tgrupo
+       AND a.ACTIVE = TRUE
+       AND a.PONDERACION IS DISTINCT FROM CASE
+                             WHEN COALESCE(v_total, 0) = 0 THEN NULL
+                             ELSE ROUND(COALESCE(a.NOTA_MAXIMA, 0) * 100 / v_total, 2)
+                         END;
+
+    GET DIAGNOSTICS v_afectadas = ROW_COUNT;
+    RETURN v_afectadas;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_unidad_ponderacion_recalcular_sumatoria(BIGINT, BIGINT)
+    IS 'Recalcula la PONDERACION (%) de TODAS las actividades ACTIVE de una (FK_TUNIDAD, FK_TGRUPO) cuando la unidad calcula por SUMATORIA (fn_unidad_calculo_definitiva_modo = SUMATORIA; en cualquier otro modo es un no-op que retorna 0): PONDERACION = NOTA_MAXIMA / SUM(NOTA_MAXIMA del bucket) * 100, redondeado a 2 decimales. Si el total de puntajes es 0/NULL deja PONDERACION en NULL en todas. Grupo NULL es su propio bucket (IS NOT DISTINCT FROM), igual que el resto del modulo. Solo escribe las filas cuyo valor cambia (IS DISTINCT FROM) y retorna cuantas actualizo. La llaman fn_unidad_actividad_vincular/_desvincular/_ponderacion_set y fn_actividad_crear/_actualizar/_eliminar (V224) tras cada cambio del bucket. No gatea permisos: es un derivado interno, siempre invocado desde una funcion que ya valido EDITAR sobre PLANEADOR. V223.';
+
+-- ---------------------------------------------------------------------------
 -- 3. Regla del 100% por (unidad, grupo) — trigger
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_tactividad_ponderacion_unidad_check()
@@ -104,6 +248,16 @@ BEGIN
     IF NEW.ACTIVE IS DISTINCT FROM TRUE
        OR NEW.FK_TUNIDAD IS NULL
        OR NEW.PONDERACION IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    -- Modo SUMATORIA: la PONDERACION no la escribe el usuario, la calcula
+    -- fn_unidad_ponderacion_recalcular_sumatoria como reparto proporcional
+    -- de NOTA_MAXIMA sobre el total del bucket -- matematicamente suma 100
+    -- exacto, asi que la regla nunca podria fallar salvo por el redondeo a
+    -- NUMERIC(5,2) (que si podria dar 100.01 y bloquear un recalculo
+    -- legitimo). Se salta explicitamente.
+    IF academico_test.fn_unidad_calculo_definitiva_modo(NEW.FK_TUNIDAD) = 'SUMATORIA' THEN
         RETURN NEW;
     END IF;
 
@@ -122,7 +276,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_tactividad_ponderacion_unidad_check()
-    IS 'Trigger BEFORE INSERT/UPDATE de TACTIVIDAD: impide que la suma de PONDERACION de las actividades ACTIVE de un mismo (FK_TUNIDAD, FK_TGRUPO) pase de 100. Grupo NULL es su propio bucket (IS NOT DISTINCT FROM).';
+    IS 'Trigger BEFORE INSERT/UPDATE de TACTIVIDAD: impide que la suma de PONDERACION de las actividades ACTIVE de un mismo (FK_TUNIDAD, FK_TGRUPO) pase de 100. Grupo NULL es su propio bucket (IS NOT DISTINCT FROM). Se SALTA cuando la unidad calcula por SUMATORIA (fn_unidad_calculo_definitiva_modo): ahi el % lo autocalcula el sistema como reparto proporcional de NOTA_MAXIMA (suma 100 por construccion) y el redondeo a NUMERIC(5,2) podria bloquear un recalculo legitimo.';
 
 DROP TRIGGER IF EXISTS tr_tactividad_ponderacion_unidad ON TACTIVIDAD;
 CREATE TRIGGER tr_tactividad_ponderacion_unidad
@@ -149,14 +303,16 @@ AS $$
 DECLARE
     v_act_active     BOOLEAN;
     v_fk_grupo       BIGINT;
+    v_unidad_previa  BIGINT;
     v_unidad_active  BOOLEAN;
+    v_modo           VARCHAR;
     v_suma           NUMERIC(9,2);
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
     );
 
-    SELECT ACTIVE, FK_TGRUPO INTO v_act_active, v_fk_grupo
+    SELECT ACTIVE, FK_TGRUPO, FK_TUNIDAD INTO v_act_active, v_fk_grupo, v_unidad_previa
       FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'No se encontro la actividad solicitada' USING ERRCODE = 'P0002';
@@ -178,7 +334,20 @@ BEGIN
         RAISE EXCEPTION 'La ponderacion (%) debe estar entre 0 y 100', p_ponderacion USING ERRCODE = '22023';
     END IF;
 
-    -- Chequeo previo del 100% (error claro antes del trigger).
+    -- El metodo de calculo de la unidad manda si el % se captura a mano
+    -- (Ponderar), no aplica (Promediar) o lo calcula el sistema (Sumatoria).
+    v_modo := academico_test.fn_unidad_calculo_definitiva_modo(p_pk_tunidad);
+    IF p_ponderacion IS NOT NULL AND v_modo = 'PROMEDIAR' THEN
+        RAISE EXCEPTION 'La ponderacion no aplica: la unidad (%) promedia sus actividades', p_pk_tunidad
+            USING ERRCODE = '22023';
+    END IF;
+    IF p_ponderacion IS NOT NULL AND v_modo = 'SUMATORIA' THEN
+        RAISE EXCEPTION 'La ponderacion de la unidad (%) se autocalcula: es una unidad de Sumatoria, capture el puntaje de la actividad (NOTA_MAXIMA) en vez del porcentaje', p_pk_tunidad
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- Chequeo previo del 100% (error claro antes del trigger). En modo
+    -- Sumatoria/Promediar no se llega aqui (p_ponderacion ya fue rechazada).
     IF p_ponderacion IS NOT NULL THEN
         v_suma := academico_test.fn_unidad_ponderacion_asignada(
                       p_pk_tunidad, v_fk_grupo, p_pk_tactividad);
@@ -192,17 +361,28 @@ BEGIN
 
     UPDATE academico_test.TACTIVIDAD
        SET FK_TUNIDAD   = p_pk_tunidad,
-           PONDERACION  = COALESCE(p_ponderacion, PONDERACION),
+           -- En Promediar el % no aplica y en Sumatoria lo recalcula el
+           -- sistema justo abajo: en ambos casos se limpia el valor heredado
+           -- para no dejar un peso viejo del modo Ponderar.
+           PONDERACION  = CASE WHEN v_modo IN ('PROMEDIAR', 'SUMATORIA') THEN NULL
+                               ELSE COALESCE(p_ponderacion, PONDERACION) END,
            MODIFIED_BY  = p_pk_usuario_solicitante::VARCHAR,
            MODIFIED_AT  = CURRENT_TIMESTAMP
      WHERE PK_TACTIVIDAD = p_pk_tactividad;
+
+    -- Sumatoria: reparto proporcional de NOTA_MAXIMA en el bucket destino y,
+    -- si la actividad venia de otra unidad, tambien en el de origen.
+    PERFORM academico_test.fn_unidad_ponderacion_recalcular_sumatoria(p_pk_tunidad, v_fk_grupo);
+    IF v_unidad_previa IS NOT NULL AND v_unidad_previa <> p_pk_tunidad THEN
+        PERFORM academico_test.fn_unidad_ponderacion_recalcular_sumatoria(v_unidad_previa, v_fk_grupo);
+    END IF;
 
     RETURN p_pk_tactividad;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_actividad_vincular(BIGINT, BIGINT, BIGINT, NUMERIC)
-    IS 'Vincula una actividad a una unidad (TACTIVIDAD.FK_TUNIDAD) y fija su PONDERACION (%) dentro de ella. p_ponderacion NULL = no cambiar el peso actual. Valida 0..100 y que la suma por (unidad, grupo de la actividad) no pase de 100 (mismo criterio que el trigger). Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD.';
+    IS 'Vincula una actividad a una unidad (TACTIVIDAD.FK_TUNIDAD) y fija su PONDERACION (%) dentro de ella. p_ponderacion NULL = no cambiar el peso actual. Valida 0..100 y que la suma por (unidad, grupo de la actividad) no pase de 100 (mismo criterio que el trigger). El metodo de calculo de la unidad (fn_unidad_calculo_definitiva_modo, V73) manda: con Promediar se RECHAZA p_ponderacion (22023, no aplica) y con Sumatoria tambien (el % se autocalcula a partir de NOTA_MAXIMA); en ambos casos la PONDERACION heredada se limpia y, en Sumatoria, se recalcula el bucket destino (y el de origen si la actividad venia de otra unidad) con fn_unidad_ponderacion_recalcular_sumatoria. Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD.';
 
 -- ---------------------------------------------------------------------------
 -- fn_unidad_actividad_desvincular — quita la unidad y su ponderacion.
@@ -215,13 +395,15 @@ RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_act_active BOOLEAN;
+    v_act_active     BOOLEAN;
+    v_unidad_previa  BIGINT;
+    v_fk_grupo       BIGINT;
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
     );
 
-    SELECT ACTIVE INTO v_act_active
+    SELECT ACTIVE, FK_TUNIDAD, FK_TGRUPO INTO v_act_active, v_unidad_previa, v_fk_grupo
       FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'No se encontro la actividad solicitada' USING ERRCODE = 'P0002';
@@ -234,12 +416,16 @@ BEGIN
            MODIFIED_AT  = CURRENT_TIMESTAMP
      WHERE PK_TACTIVIDAD = p_pk_tactividad;
 
+    -- Si la unidad de origen calcula por Sumatoria, el reparto proporcional
+    -- de las que quedan cambia al salir esta actividad del bucket.
+    PERFORM academico_test.fn_unidad_ponderacion_recalcular_sumatoria(v_unidad_previa, v_fk_grupo);
+
     RETURN p_pk_tactividad;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_actividad_desvincular(BIGINT, BIGINT)
-    IS 'Quita la vinculacion de una actividad con su unidad: FK_TUNIDAD = NULL y PONDERACION = NULL. Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD.';
+    IS 'Quita la vinculacion de una actividad con su unidad: FK_TUNIDAD = NULL y PONDERACION = NULL. Si la unidad de origen calculaba por SUMATORIA, recalcula el % de las actividades que quedan en ese (unidad, grupo) con fn_unidad_ponderacion_recalcular_sumatoria. Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD.';
 
 -- ---------------------------------------------------------------------------
 -- fn_unidad_actividad_ponderacion_set — edicion inline de la columna (%).
@@ -256,6 +442,7 @@ DECLARE
     v_act_active  BOOLEAN;
     v_fk_unidad   BIGINT;
     v_fk_grupo    BIGINT;
+    v_modo        VARCHAR;
     v_suma        NUMERIC(9,2);
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
@@ -275,6 +462,17 @@ BEGIN
     END IF;
     IF p_ponderacion IS NULL OR p_ponderacion < 0 OR p_ponderacion > 100 THEN
         RAISE EXCEPTION 'La ponderacion (%) debe estar entre 0 y 100', p_ponderacion USING ERRCODE = '22023';
+    END IF;
+
+    -- Solo las unidades que PONDERAN admiten un % capturado a mano.
+    v_modo := academico_test.fn_unidad_calculo_definitiva_modo(v_fk_unidad);
+    IF v_modo = 'PROMEDIAR' THEN
+        RAISE EXCEPTION 'La ponderacion no aplica: la unidad (%) promedia sus actividades', v_fk_unidad
+            USING ERRCODE = '22023';
+    END IF;
+    IF v_modo = 'SUMATORIA' THEN
+        RAISE EXCEPTION 'La ponderacion de la unidad (%) se autocalcula: es una unidad de Sumatoria, actualice el puntaje de la actividad (NOTA_MAXIMA) con fn_actividad_actualizar en vez del porcentaje', v_fk_unidad
+            USING ERRCODE = '22023';
     END IF;
 
     v_suma := academico_test.fn_unidad_ponderacion_asignada(
@@ -297,7 +495,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_actividad_ponderacion_set(BIGINT, BIGINT, NUMERIC)
-    IS 'Fija la PONDERACION (%) de una actividad ya vinculada a una unidad (edicion inline de la columna (%)). Valida 0..100 y la regla del 100% por (unidad, grupo) via fn_unidad_ponderacion_asignada. Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD.';
+    IS 'Fija la PONDERACION (%) de una actividad ya vinculada a una unidad (edicion inline de la columna (%)). Valida 0..100 y la regla del 100% por (unidad, grupo) via fn_unidad_ponderacion_asignada. Solo se admite en unidades que PONDERAN: se rechaza con 22023 si la unidad promedia (el % no aplica) o si calcula por sumatoria (el % se autocalcula a partir de NOTA_MAXIMA, fn_unidad_ponderacion_recalcular_sumatoria). Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD.';
 
 -- ===========================================================================
 -- 5. Lectura para el modal "Vincular actividad".

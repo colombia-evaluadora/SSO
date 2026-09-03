@@ -143,6 +143,23 @@
 --   * trigger tr_tactividad_ponderacion_unidad (V223) — en
 --     fn_actividad_crear el INSERT lleva FK_TUNIDAD/PONDERACION directo y
 --     el trigger valida el 100%; no se re-implementa la suma en ningun lado.
+--   * fn_unidad_calculo_definitiva_modo + fn_unidad_ponderacion_recalcular_sumatoria
+--     (V223) — la regla dinamica de la ponderacion segun el metodo de
+--     calculo de la unidad (V73) vive alli; aqui solo se RECHAZA la
+--     ponderacion manual cuando no aplica y se dispara el recalculo del
+--     bucket (unidad, grupo) tras crear / actualizar / eliminar.
+--
+-- PONDERACION DE LA ACTIVIDAD (condicion dinamica de V137, bloque
+-- 'ponderacion'), dos gates encadenados en crear/actualizar:
+--   (a) ES_EVALUATIVA = 'N' -> la ponderacion NO aplica (22023 si viene).
+--   (b) metodo de calculo de la unidad (TUNIDAD.FK_TLV_CALCULO_DEFINITIVA,
+--       V73): Ponderar -> el docente escribe el %; Promediar -> no aplica
+--       (22023); Sumatoria -> el docente escribe el PUNTAJE en la columna ya
+--       existente NOTA_MAXIMA (no se crea columna nueva) y el % lo
+--       autocalcula el sistema para todo el bucket.
+-- En _actualizar los dos gates se evaluan contra los valores RESULTANTES
+-- (ES_EVALUATIVA y unidad tras aplicar el PATCH), igual que ya hacian
+-- v_fk_tunidad / v_instrumento para la sub-rama de evaluacion.
 --
 -- Depende de (orden de version de Flyway):
 --   * V22  — TACTIVIDAD, TACTIVIDAD_MATERIAL, TACTIVIDAD_ADAPTACION,
@@ -150,7 +167,10 @@
 --            TASIGNATURA, TAREA, TLISTA_VALOR, TARCHIVO.
 --   * V112 — extension pg_trgm (se re-asegura aqui, idempotente).
 --   * V218 — TACTIVIDAD.FK_TASIGNATURA (NOT NULL), FK_TUNIDAD nullable.
---   * V223 — TACTIVIDAD.PONDERACION + trigger del 100% + fn_unidad_actividad_*.
+--   * V73  — TUNIDAD.FK_TLV_CALCULO_DEFINITIVA (rama CU-86e30a25v).
+--   * V223 — TACTIVIDAD.PONDERACION + trigger del 100% + fn_unidad_actividad_*
+--            + fn_unidad_calculo_definitiva_modo + fn_unidad_ponderacion_recalcular_sumatoria.
+--   * V137 — fn_unidad_referente_evaluativo (sub-rama de evaluacion).
 --   * V216 — menu 'PLANEADOR'; V29/V185/V213 — fn_assert_permiso_seccion.
 --
 -- Nota de rendimiento (honesta): los filtros del listado entran por indice
@@ -1133,6 +1153,25 @@ BEGIN
         RAISE EXCEPTION 'La ponderacion solo aplica cuando la actividad se vincula a una unidad'
             USING ERRCODE = '22023';
     END IF;
+    -- Condicion dinamica "actividad -> ponderacion" (V137, bloque
+    -- 'ponderacion'), gate (a): sin evaluacion no hay peso que repartir.
+    IF p_ponderacion IS NOT NULL AND UPPER(TRIM(COALESCE(p_es_evaluativa, 'S'))) = 'N' THEN
+        RAISE EXCEPTION 'La ponderacion no aplica: la actividad no es evaluativa (p_es_evaluativa = ''N'')'
+            USING ERRCODE = '22023';
+    END IF;
+    -- Gate (b): el metodo de calculo de la unidad (V73) decide si el % se
+    -- captura a mano (Ponderar), no aplica (Promediar) o lo autocalcula el
+    -- sistema a partir de NOTA_MAXIMA (Sumatoria). fn_unidad_calculo_definitiva_modo
+    -- y el recalculo viven en V223, punto unico de la regla.
+    IF p_ponderacion IS NOT NULL AND p_fk_tunidad IS NOT NULL THEN
+        IF academico_test.fn_unidad_calculo_definitiva_modo(p_fk_tunidad) = 'PROMEDIAR' THEN
+            RAISE EXCEPTION 'La ponderacion no aplica: la unidad (%) promedia sus actividades', p_fk_tunidad
+                USING ERRCODE = '22023';
+        ELSIF academico_test.fn_unidad_calculo_definitiva_modo(p_fk_tunidad) = 'SUMATORIA' THEN
+            RAISE EXCEPTION 'La ponderacion de la unidad (%) se autocalcula: es una unidad de Sumatoria, envie el puntaje de la actividad (p_nota_maxima) en vez del porcentaje', p_fk_tunidad
+                USING ERRCODE = '22023';
+        END IF;
+    END IF;
     -- Una actividad de recuperacion recupera una NOTA: tiene que ser evaluativa.
     IF p_recuperacion IS NOT NULL AND UPPER(TRIM(COALESCE(p_es_evaluativa, 'S'))) = 'N' THEN
         RAISE EXCEPTION 'Una actividad de recuperacion debe ser evaluativa (p_es_evaluativa = ''S'')'
@@ -1217,6 +1256,12 @@ BEGIN
     )
     RETURNING PK_TACTIVIDAD INTO v_id_creado;
 
+    -- 6.b Unidad de SUMATORIA: el % de TODAS las actividades del bucket
+    --     (unidad, grupo) se reparte proporcionalmente segun NOTA_MAXIMA, asi
+    --     que entrar una actividad nueva obliga a recalcular el bucket
+    --     completo. No-op si la unidad no es de sumatoria (o no hay unidad).
+    PERFORM academico_test.fn_unidad_ponderacion_recalcular_sumatoria(p_fk_tunidad, p_fk_tgrupo);
+
     -- 7. Satelites (helpers reutilizables). ORDEN IMPORTA: los estudiantes
     --    van primero porque las adaptaciones con
     --    aplicaA = ESTUDIANTES_SELECCIONADOS apuntan a filas de
@@ -1258,7 +1303,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BIGINT[], BIGINT[])
-    IS 'Crea una actividad del Planeador (gate CREAR sobre PLANEADOR): inserta TACTIVIDAD (identificacion, programacion, evaluacion y seguimiento) y opcionalmente la vincula a una unidad con su PONDERACION (%) — la regla "la suma por (unidad, grupo) no pasa de 100" la impone el trigger de V223. NO asigna estudiantes por defecto: p_asignar_todo_el_grupo=TRUE los toma del FK_TGRUPO, o p_fk_tmatriculas fija estudiantes especificos (1 o mas). p_recuperacion (objeto) marca la actividad como de recuperacion y crea su fila TACTIVIDAD_RECUPERACION via fn_actividad_recuperacion_configurar. p_evidencias (PKs de TREFERENTE_ENUNCIADO nivel 2) y p_criterios (PKs de TCRITERIO_UNIDAD) relacionan la actividad, via fn_actividad_evidencia_relacionar / fn_actividad_criterio_relacionar (V136), con evidencias de enunciados ya vinculados a la unidad y con criterios de la rubrica de esa misma unidad — ambos exigen FK_TUNIDAD y abortan el CREATE si la actividad no tiene unidad o alguna PK no cumple la regla de negocio. Delega materiales / adaptaciones / estudiantes en sus helpers. Valida catalogos con fn_actividad_lv_assert y unicidad (titulo, unidad, grupo, jerarquia) entre activas con IS NOT DISTINCT FROM. p_fk_tlv_instrumento_evaluacion solo se acepta si la actividad se vincula a una unidad (p_fk_tunidad) cuyo referente curricular es EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V137); en otro caso lanza 22023. Retorna PK_TACTIVIDAD. V224.';
+    IS 'Crea una actividad del Planeador (gate CREAR sobre PLANEADOR): inserta TACTIVIDAD (identificacion, programacion, evaluacion y seguimiento) y opcionalmente la vincula a una unidad con su PONDERACION (%) — la regla "la suma por (unidad, grupo) no pasa de 100" la impone el trigger de V223. NO asigna estudiantes por defecto: p_asignar_todo_el_grupo=TRUE los toma del FK_TGRUPO, o p_fk_tmatriculas fija estudiantes especificos (1 o mas). p_recuperacion (objeto) marca la actividad como de recuperacion y crea su fila TACTIVIDAD_RECUPERACION via fn_actividad_recuperacion_configurar. p_evidencias (PKs de TREFERENTE_ENUNCIADO nivel 2) y p_criterios (PKs de TCRITERIO_UNIDAD) relacionan la actividad, via fn_actividad_evidencia_relacionar / fn_actividad_criterio_relacionar (V136), con evidencias de enunciados ya vinculados a la unidad y con criterios de la rubrica de esa misma unidad — ambos exigen FK_TUNIDAD y abortan el CREATE si la actividad no tiene unidad o alguna PK no cumple la regla de negocio. Delega materiales / adaptaciones / estudiantes en sus helpers. Valida catalogos con fn_actividad_lv_assert y unicidad (titulo, unidad, grupo, jerarquia) entre activas con IS NOT DISTINCT FROM. p_fk_tlv_instrumento_evaluacion solo se acepta si la actividad se vincula a una unidad (p_fk_tunidad) cuyo referente curricular es EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V137); en otro caso lanza 22023. PONDERACION (condicion dinamica "actividad -> ponderacion" de V137): se rechaza (22023) si la actividad no es evaluativa (p_es_evaluativa=''N''), si no se vincula a una unidad, si la unidad PROMEDIA (no aplica) o si la unidad calcula por SUMATORIA -- ahi el docente envia p_nota_maxima (puntaje) y el % lo autocalcula fn_unidad_ponderacion_recalcular_sumatoria (V223), invocada tras el INSERT para repartir el bucket (unidad, grupo) completo. Retorna PK_TACTIVIDAD. V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_actualizar — PATCH parcial.
@@ -1314,6 +1359,8 @@ DECLARE
     v_cierre      DATE;
     v_fk_tunidad  BIGINT;
     v_instrumento BIGINT;
+    v_evaluativa  VARCHAR(1);
+    v_modo_calc   VARCHAR;
 BEGIN
     SELECT * INTO v_actual
       FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
@@ -1354,6 +1401,28 @@ BEGIN
     v_fk_tunidad  := CASE WHEN p_desvincular_unidad THEN NULL
                           ELSE COALESCE(p_fk_tunidad, v_actual.FK_TUNIDAD) END;
     v_instrumento := COALESCE(p_fk_tlv_instrumento_evaluacion, v_actual.FK_TLV_INSTRUMENTO_EVALUACION);
+    -- ES_EVALUATIVA resultante (nueva o heredada), mismo criterio de "valor
+    -- resultante" que v_fk_tunidad / v_instrumento.
+    v_evaluativa  := UPPER(TRIM(COALESCE(p_es_evaluativa, v_actual.ES_EVALUATIVA::VARCHAR, 'S')));
+
+    -- Condicion dinamica "actividad -> ponderacion" (V137). Gate (a): sin
+    -- evaluacion no hay peso. Gate (b): el metodo de calculo de la unidad
+    -- resultante decide si el % se captura a mano (Ponderar), no aplica
+    -- (Promediar) o lo autocalcula el sistema desde NOTA_MAXIMA (Sumatoria).
+    IF p_ponderacion IS NOT NULL AND v_evaluativa = 'N' THEN
+        RAISE EXCEPTION 'La ponderacion no aplica: la actividad "%" no es evaluativa', v_titulo
+            USING ERRCODE = '22023';
+    END IF;
+    v_modo_calc := CASE WHEN v_fk_tunidad IS NULL THEN NULL
+                        ELSE academico_test.fn_unidad_calculo_definitiva_modo(v_fk_tunidad) END;
+    IF p_ponderacion IS NOT NULL AND v_modo_calc = 'PROMEDIAR' THEN
+        RAISE EXCEPTION 'La ponderacion no aplica: la unidad (%) promedia sus actividades', v_fk_tunidad
+            USING ERRCODE = '22023';
+    END IF;
+    IF p_ponderacion IS NOT NULL AND v_modo_calc = 'SUMATORIA' THEN
+        RAISE EXCEPTION 'La ponderacion de la unidad (%) se autocalcula: es una unidad de Sumatoria, envie el puntaje de la actividad (p_nota_maxima) en vez del porcentaje', v_fk_tunidad
+            USING ERRCODE = '22023';
+    END IF;
 
     IF v_inicio IS NOT NULL AND v_cierre IS NOT NULL AND v_cierre < v_inicio THEN
         RAISE EXCEPTION 'La fecha de cierre (%) no puede ser anterior a la de inicio (%)',
@@ -1455,6 +1524,20 @@ BEGIN
                     p_pk_usuario_solicitante, p_pk_tactividad, p_ponderacion);
     END IF;
 
+    -- Sumatoria: el reparto proporcional depende de NOTA_MAXIMA y del
+    -- conjunto de actividades del bucket, asi que se recalcula SIEMPRE (no
+    -- solo cuando se toco la unidad): editar el puntaje de una actividad
+    -- cambia el % de TODAS las de su (unidad, grupo). Se recalcula tambien el
+    -- bucket de origen si la unidad o el grupo cambiaron. No-op fuera de
+    -- Sumatoria.
+    PERFORM academico_test.fn_unidad_ponderacion_recalcular_sumatoria(v_fk_tunidad, v_grupo);
+    IF v_actual.FK_TUNIDAD IS NOT NULL
+       AND (v_actual.FK_TUNIDAD IS DISTINCT FROM v_fk_tunidad
+            OR v_actual.FK_TGRUPO IS DISTINCT FROM v_grupo) THEN
+        PERFORM academico_test.fn_unidad_ponderacion_recalcular_sumatoria(
+                    v_actual.FK_TUNIDAD, v_actual.FK_TGRUPO);
+    END IF;
+
     -- ORDEN IMPORTA: estudiantes antes que adaptaciones (ver fn_actividad_crear).
     PERFORM academico_test.fn_actividad_estudiantes_asignar(
                 p_pk_usuario_solicitante, p_pk_tactividad, p_fk_tmatriculas, p_asignar_todo_el_grupo);
@@ -1477,7 +1560,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN)
-    IS 'PATCH parcial de una actividad (gate EDITAR sobre PLANEADOR): cada parametro NULL preserva el valor actual. Unidad/ponderacion se delegan en fn_unidad_actividad_vincular / _ponderacion_set / _desvincular (V223) para que la regla del 100% viva en un solo sitio; p_desvincular_unidad=TRUE es excluyente con p_fk_tunidad/p_ponderacion. Recuperacion: p_recuperacion (objeto) la configura via fn_actividad_recuperacion_configurar, p_quitar_recuperacion=TRUE la elimina (vuelve la actividad a normal); son excluyentes y NULL/FALSE no la tocan. p_materiales / p_adaptaciones / p_fk_tmatriculas NULL = no tocar, array = reemplazo completo. Revalida fechas, catalogos y unicidad (titulo, unidad, grupo, jerarquia). El FK_TLV_INSTRUMENTO_EVALUACION resultante (nuevo o heredado) solo se admite si la unidad resultante (nueva, heredada, o NULL si p_desvincular_unidad) tiene referente curricular EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V137); en otro caso lanza 22023. Retorna PK_TACTIVIDAD. V224.';
+    IS 'PATCH parcial de una actividad (gate EDITAR sobre PLANEADOR): cada parametro NULL preserva el valor actual. Unidad/ponderacion se delegan en fn_unidad_actividad_vincular / _ponderacion_set / _desvincular (V223) para que la regla del 100% viva en un solo sitio; p_desvincular_unidad=TRUE es excluyente con p_fk_tunidad/p_ponderacion. Recuperacion: p_recuperacion (objeto) la configura via fn_actividad_recuperacion_configurar, p_quitar_recuperacion=TRUE la elimina (vuelve la actividad a normal); son excluyentes y NULL/FALSE no la tocan. p_materiales / p_adaptaciones / p_fk_tmatriculas NULL = no tocar, array = reemplazo completo. Revalida fechas, catalogos y unicidad (titulo, unidad, grupo, jerarquia). El FK_TLV_INSTRUMENTO_EVALUACION resultante (nuevo o heredado) solo se admite si la unidad resultante (nueva, heredada, o NULL si p_desvincular_unidad) tiene referente curricular EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V137); en otro caso lanza 22023. PONDERACION (condicion dinamica "actividad -> ponderacion" de V137, evaluada contra los valores RESULTANTES): se rechaza p_ponderacion (22023) si la actividad queda NO evaluativa (ES_EVALUATIVA resultante = ''N''), si la unidad resultante PROMEDIA, o si calcula por SUMATORIA -- ahi el docente envia p_nota_maxima y el % lo autocalcula fn_unidad_ponderacion_recalcular_sumatoria (V223), que se invoca SIEMPRE al final sobre el bucket resultante (y sobre el de origen si cambio la unidad o el grupo), porque editar el puntaje de una actividad cambia el % de todas las de su (unidad, grupo). Retorna PK_TACTIVIDAD. V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_eliminar — soft delete en cascada.
@@ -1534,8 +1617,11 @@ DECLARE
     v_titulo       VARCHAR;
     v_dependientes BIGINT := 0;
     v_estudiantes  BIGINT := 0;
+    v_fk_tunidad   BIGINT;
+    v_fk_tgrupo    BIGINT;
 BEGIN
-    SELECT ACTIVE, TITULO INTO v_active, v_titulo
+    SELECT ACTIVE, TITULO, FK_TUNIDAD, FK_TGRUPO
+      INTO v_active, v_titulo, v_fk_tunidad, v_fk_tgrupo
       FROM academico_test.TACTIVIDAD
      WHERE PK_TACTIVIDAD = p_pk_tactividad;
     IF NOT FOUND THEN
@@ -1679,6 +1765,12 @@ BEGIN
            MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TACTIVIDAD = p_pk_tactividad;
 
+    -- 6. Si la unidad de la que salio calcula por SUMATORIA, el reparto
+    --    proporcional de las actividades que quedan cambia (una menos en el
+    --    denominador). Se usa la unidad/grupo capturados ANTES del paso 5,
+    --    que ya puso FK_TUNIDAD en NULL. No-op fuera de Sumatoria.
+    PERFORM academico_test.fn_unidad_ponderacion_recalcular_sumatoria(v_fk_tunidad, v_fk_tgrupo);
+
     RAISE NOTICE 'Soft delete TACTIVIDAD=% (autor: %): estudiantes_asignados=%',
         p_pk_tactividad, p_pk_usuario_solicitante, v_estudiantes;
 
@@ -1687,7 +1779,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_eliminar(BIGINT, BIGINT)
-    IS 'Soft delete (ACTIVE=FALSE) de una TACTIVIDAD (gate ELIMINAR sobre PLANEADOR), en cascada sobre TODOS sus satelites activos -- ninguno tiene sentido sin su actividad: capturas de calificacion (TACTIVIDAD_RUBRICA/COTEJO/ESCALA_EVALUACION), TACTIVIDAD_NOTA, TACTIVIDAD_SOPORTE, TACTIVIDAD_ADAPTACION_ESTUDIANTE, TACTIVIDAD_ESTUDIANTE, la definicion del instrumento de V226 (niveles->criterios de rubrica, items de cotejo, niveles->escala), materiales, adaptaciones, la fila 1:1 de recuperacion, y las relaciones de V136 (TACTIVIDAD_EVIDENCIA, TACTIVIDAD_CRITERIO_UNIDAD). Ademas suelta la actividad de su unidad (FK_TUNIDAD y PONDERACION a NULL) para liberar cupo en la regla del 100% por (unidad, grupo) de V223. Se BLOQUEA (23503) si la actividad tiene notas registradas (TACTIVIDAD_NOTA.CALIFICACION IS NOT NULL para alguno de sus estudiantes activos -- una nota "vacia" sin CALIFICACION si se arrastra) o si otra actividad de recuperacion ACTIVA la referencia como TACTIVIDAD_RECUPERACION.FK_TACTIVIDAD_RECUPERAR. 22023 si ya estaba inactiva, P0002 si no existe. Retorna PK_TACTIVIDAD. V224.';
+    IS 'Soft delete (ACTIVE=FALSE) de una TACTIVIDAD (gate ELIMINAR sobre PLANEADOR), en cascada sobre TODOS sus satelites activos -- ninguno tiene sentido sin su actividad: capturas de calificacion (TACTIVIDAD_RUBRICA/COTEJO/ESCALA_EVALUACION), TACTIVIDAD_NOTA, TACTIVIDAD_SOPORTE, TACTIVIDAD_ADAPTACION_ESTUDIANTE, TACTIVIDAD_ESTUDIANTE, la definicion del instrumento de V226 (niveles->criterios de rubrica, items de cotejo, niveles->escala), materiales, adaptaciones, la fila 1:1 de recuperacion, y las relaciones de V136 (TACTIVIDAD_EVIDENCIA, TACTIVIDAD_CRITERIO_UNIDAD). Ademas suelta la actividad de su unidad (FK_TUNIDAD y PONDERACION a NULL) para liberar cupo en la regla del 100% por (unidad, grupo) de V223, y si esa unidad calculaba por SUMATORIA recalcula el % de las actividades que quedan en el bucket (fn_unidad_ponderacion_recalcular_sumatoria, V223). Se BLOQUEA (23503) si la actividad tiene notas registradas (TACTIVIDAD_NOTA.CALIFICACION IS NOT NULL para alguno de sus estudiantes activos -- una nota "vacia" sin CALIFICACION si se arrastra) o si otra actividad de recuperacion ACTIVA la referencia como TACTIVIDAD_RECUPERACION.FK_TACTIVIDAD_RECUPERAR. 22023 si ya estaba inactiva, P0002 si no existe. Retorna PK_TACTIVIDAD. V224.';
 
 -- ===========================================================================
 -- (5) LECTURA OPTIMIZADA

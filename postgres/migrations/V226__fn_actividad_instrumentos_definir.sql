@@ -51,6 +51,20 @@
 -- DESCRIPCION = descriptor. Nullable para no romper filas existentes.
 --
 -- -------------------------------------------------------------------------
+-- -------------------------------------------------------------------------
+-- COHERENCIA CON EL TIPO DE EVALUACION DEL REFERENTE ("listado dado por el
+-- referente", V137): definir un instrumento NO puede permitir lo que
+-- fn_actividad_instrumentos_permitidos ya prohibio para esa actividad.
+--   * fn_actividad_rubrica_definir / _cotejo_definir: 22023 si el referente
+--     de la unidad de la actividad es de TIPO_EVALUACION CUANTITATIVA (solo
+--     admite escala de valoracion numerica). Se reusa el mapeo unico
+--     fn_instrumento_permitido_por_tipo_evaluacion (V137).
+--   * fn_actividad_escala_definir: la restriccion no es sobre el instrumento
+--     sino sobre COMO se configura -- 22023 si se define una escala NUMERICA
+--     bajo un referente CUALITATIVA, o una escala CUALITATIVA bajo un
+--     referente CUANTITATIVA. Con CUANTITATIVA_CUALITATIVA o sin
+--     unidad/referente/tipo no se restringe.
+--
 -- Un instrumento por actividad: TACTIVIDAD.FK_TLV_INSTRUMENTO_EVALUACION es
 -- una sola FK, asi que definir uno desactiva los otros dos
 -- (fn_actividad_instrumento_reset). Cada fn_*_definir exige ademas que el
@@ -62,6 +76,10 @@
 --            TACTIVIDAD_ESCALA/_NIVEL, TLISTA_VALOR.
 --   * V224 — seed INSTRUMENTO_EVALUACION, fn_actividad_lv_assert, menu
 --            'PLANEADOR'; V29/V185 — fn_assert_permiso_seccion.
+--   * V137 — fn_actividad_referente_tipo_evaluacion +
+--            fn_instrumento_permitido_por_tipo_evaluacion (mapeo unico del
+--            "listado dado por el referente").
+--   * V212 — TREFERENTE_CURRICULAR.FK_TLV_TIPO_EVALUACION.
 --
 -- Estilo: V213/V216/V224 (gate, 22023/23503/23505/P0002, reemplazo completo
 -- con soft delete, JSONB de entrada/salida, COMMENT ON FUNCTION) y
@@ -229,11 +247,21 @@ DECLARE
     v_pos         INT := 0;
     v_pk_criterio BIGINT;
     v_niveles     JSONB;
+    v_tipo_eval   VARCHAR;
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
     );
     PERFORM academico_test.fn_actividad_instrumento_assert(p_pk_tactividad, 'RUBRICA');
+
+    -- Consistencia con el "listado dado por el referente" (V137): definir no
+    -- puede permitir lo que fn_actividad_instrumentos_permitidos ya prohibio.
+    -- Un referente CUANTITATIVA solo admite ESCALA_VALORACION (numerica).
+    v_tipo_eval := academico_test.fn_actividad_referente_tipo_evaluacion(p_pk_tactividad);
+    IF NOT academico_test.fn_instrumento_permitido_por_tipo_evaluacion('RUBRICA', v_tipo_eval) THEN
+        RAISE EXCEPTION 'La rubrica no aplica: el referente curricular de la unidad de la actividad es de tipo de evaluacion % y solo admite escala de valoracion numerica', v_tipo_eval
+            USING ERRCODE = '22023';
+    END IF;
 
     IF p_criterios IS NULL OR jsonb_typeof(p_criterios) <> 'array'
        OR jsonb_array_length(p_criterios) = 0 THEN
@@ -315,7 +343,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_rubrica_definir(BIGINT, BIGINT, JSONB)
-    IS 'Define (reemplazo completo) la rubrica de una actividad: TACTIVIDAD_RUBRICA_CRITERIO + TACTIVIDAD_RUBRICA_NIVEL. p_criterios = [{nombre, descripcion?, niveles:[{etiqueta?, descripcion, ponderacion}]}] con ORDEN por posicion. La PONDERACION del nivel es OBLIGATORIA (0..100) y no se puede repetir dentro de un mismo criterio (UN_TAC_RUBRICA_NIVEL_1); ademas el MAX de las ponderaciones de cada criterio debe ser > 0 (si no, el % al calificar en V227 quedaria indefinido). El criterio NO lleva peso propio. Exige que el instrumento de la actividad sea RUBRICA y desactiva los otros instrumentos. Gate EDITAR sobre PLANEADOR. Retorna cuantos criterios quedaron. V226.';
+    IS 'Define (reemplazo completo) la rubrica de una actividad: TACTIVIDAD_RUBRICA_CRITERIO + TACTIVIDAD_RUBRICA_NIVEL. p_criterios = [{nombre, descripcion?, niveles:[{etiqueta?, descripcion, ponderacion}]}] con ORDEN por posicion. La PONDERACION del nivel es OBLIGATORIA (0..100) y no se puede repetir dentro de un mismo criterio (UN_TAC_RUBRICA_NIVEL_1); ademas el MAX de las ponderaciones de cada criterio debe ser > 0 (si no, el % al calificar en V227 quedaria indefinido). El criterio NO lleva peso propio. Exige que el instrumento de la actividad sea RUBRICA y desactiva los otros instrumentos. Ademas RECHAZA (22023) definir la rubrica cuando el referente curricular de la unidad de la actividad es de TIPO_EVALUACION CUANTITATIVA (que solo admite escala de valoracion numerica): mismo mapeo unico -- fn_instrumento_permitido_por_tipo_evaluacion (V137) -- que usa fn_actividad_instrumentos_permitidos, para que definir no permita lo que el listado ya prohibio. Gate EDITAR sobre PLANEADOR. Retorna cuantos criterios quedaron. V226.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_cotejo_definir — reemplazo completo de la lista de cotejo.
@@ -333,11 +361,20 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_insertados INT := 0;
+    v_tipo_eval  VARCHAR;
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
     );
     PERFORM academico_test.fn_actividad_instrumento_assert(p_pk_tactividad, 'LISTA_COTEJO');
+
+    -- Misma consistencia que en la rubrica: un referente CUANTITATIVA solo
+    -- admite escala de valoracion numerica (mapeo unico de V137).
+    v_tipo_eval := academico_test.fn_actividad_referente_tipo_evaluacion(p_pk_tactividad);
+    IF NOT academico_test.fn_instrumento_permitido_por_tipo_evaluacion('LISTA_COTEJO', v_tipo_eval) THEN
+        RAISE EXCEPTION 'La lista de cotejo no aplica: el referente curricular de la unidad de la actividad es de tipo de evaluacion % y solo admite escala de valoracion numerica', v_tipo_eval
+            USING ERRCODE = '22023';
+    END IF;
 
     IF p_items IS NULL OR jsonb_typeof(p_items) <> 'array'
        OR jsonb_array_length(p_items) = 0 THEN
@@ -387,7 +424,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_cotejo_definir(BIGINT, BIGINT, JSONB)
-    IS 'Define (reemplazo completo) la lista de cotejo de una actividad: TACTIVIDAD_COTEJO_ITEM. p_items = [{descripcion, ponderacion?}] con ORDEN por posicion. La PONDERACION es OPCIONAL (0..100): NULL = el item no pondera (peso 1 en el calculo de V227); se permite mezclar items con y sin peso y NO se exige que sumen 100. Se exige SUM(COALESCE(ponderacion,1)) > 0, es decir se rechaza solo si TODOS los items traen ponderacion explicita en 0 (sin ningun NULL que aporte peso 1), pues dejaria el % al calificar indefinido. Exige que el instrumento de la actividad sea LISTA_COTEJO y desactiva los otros instrumentos. Gate EDITAR sobre PLANEADOR. Retorna cuantos items quedaron. V226.';
+    IS 'Define (reemplazo completo) la lista de cotejo de una actividad: TACTIVIDAD_COTEJO_ITEM. p_items = [{descripcion, ponderacion?}] con ORDEN por posicion. La PONDERACION es OPCIONAL (0..100): NULL = el item no pondera (peso 1 en el calculo de V227); se permite mezclar items con y sin peso y NO se exige que sumen 100. Se exige SUM(COALESCE(ponderacion,1)) > 0, es decir se rechaza solo si TODOS los items traen ponderacion explicita en 0 (sin ningun NULL que aporte peso 1), pues dejaria el % al calificar indefinido. Exige que el instrumento de la actividad sea LISTA_COTEJO y desactiva los otros instrumentos. Ademas RECHAZA (22023) definirla cuando el referente curricular de la unidad de la actividad es de TIPO_EVALUACION CUANTITATIVA (que solo admite escala de valoracion numerica), via fn_instrumento_permitido_por_tipo_evaluacion (V137). Gate EDITAR sobre PLANEADOR. Retorna cuantos items quedaron. V226.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_escala_definir — reemplazo completo de la escala (1:1).
@@ -416,6 +453,7 @@ DECLARE
     v_min       NUMERIC;
     v_max       NUMERIC;
     v_pk_escala BIGINT;
+    v_tipo_eval VARCHAR;
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
@@ -432,6 +470,28 @@ BEGIN
 
     SELECT VALOR INTO v_tipo_val FROM academico_test.TLISTA_VALOR
      WHERE PK_LISTA_VALOR = (p_config->>'tipoEscala')::BIGINT;
+
+    -- Consistencia con el "listado dado por el referente" (V137): el TIPO de
+    -- la escala debe encajar con el TIPO_EVALUACION del referente de la
+    -- unidad de la actividad. A diferencia de rubrica/cotejo aqui NO se usa
+    -- fn_instrumento_permitido_por_tipo_evaluacion, porque la restriccion no
+    -- es sobre el instrumento sino sobre COMO se configura:
+    --   * referente CUALITATIVA  -> escala NUMERICA prohibida.
+    --   * referente CUANTITATIVA -> escala CUALITATIVA prohibida (ese tipo de
+    --     evaluacion solo admite la escala numerica).
+    --   * CUANTITATIVA_CUALITATIVA, o sin unidad/referente/tipo -> sin
+    --     restriccion.
+    v_tipo_eval := academico_test.fn_actividad_referente_tipo_evaluacion(p_pk_tactividad);
+    IF v_tipo_val = 'NUMERICA' AND v_tipo_eval = 'CUALITATIVA' THEN
+        RAISE EXCEPTION 'No se puede definir una escala NUMERICA: el referente curricular de la unidad de la actividad es de tipo de evaluacion CUALITATIVA'
+            USING ERRCODE = '22023',
+                  HINT = 'Use una escala CUALITATIVA, o una rubrica / lista de cotejo';
+    END IF;
+    IF v_tipo_val = 'CUALITATIVA' AND v_tipo_eval = 'CUANTITATIVA' THEN
+        RAISE EXCEPTION 'No se puede definir una escala CUALITATIVA: el referente curricular de la unidad de la actividad es de tipo de evaluacion CUANTITATIVA'
+            USING ERRCODE = '22023',
+                  HINT = 'Use una escala NUMERICA (valorMin / valorMax)';
+    END IF;
 
     v_niveles := p_config->'niveles';
     v_min     := (p_config->>'valorMin')::NUMERIC;
@@ -545,7 +605,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_escala_definir(BIGINT, BIGINT, JSONB)
-    IS 'Define (reemplazo completo) la escala de valoracion de una actividad: TACTIVIDAD_ESCALA (1:1, upsert porque UN_TAC_ESCALA_1 no filtra por ACTIVE) + TACTIVIDAD_ESCALA_NIVEL. p_config = {tipoEscala, criteriosGenerales?, interpretacionRangos?, valorMin/valorMax (solo NUMERICA), niveles (solo CUALITATIVA)}. NUMERICA exige valorMin<valorMax y prohibe niveles; CUALITATIVA exige >=1 nivel con descripcion y PONDERACION OBLIGATORIA (0..100, sin repetir — UN_TAC_ESCALA_NIVEL_1, y con MAX > 0 para que el % al calificar en V227 no quede indefinido) y prohibe valorMin/valorMax. Exige que el instrumento de la actividad sea ESCALA_VALORACION y desactiva los otros. Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD_ESCALA. V226.';
+    IS 'Define (reemplazo completo) la escala de valoracion de una actividad: TACTIVIDAD_ESCALA (1:1, upsert porque UN_TAC_ESCALA_1 no filtra por ACTIVE) + TACTIVIDAD_ESCALA_NIVEL. p_config = {tipoEscala, criteriosGenerales?, interpretacionRangos?, valorMin/valorMax (solo NUMERICA), niveles (solo CUALITATIVA)}. NUMERICA exige valorMin<valorMax y prohibe niveles; CUALITATIVA exige >=1 nivel con descripcion y PONDERACION OBLIGATORIA (0..100, sin repetir — UN_TAC_ESCALA_NIVEL_1, y con MAX > 0 para que el % al calificar en V227 no quede indefinido) y prohibe valorMin/valorMax. Exige que el instrumento de la actividad sea ESCALA_VALORACION y desactiva los otros. Coherencia con el TIPO_EVALUACION del referente de la unidad (fn_actividad_referente_tipo_evaluacion, V137): con referente CUALITATIVA se RECHAZA (22023) una escala NUMERICA, y con referente CUANTITATIVA se rechaza una escala CUALITATIVA; con CUANTITATIVA_CUALITATIVA, o sin unidad/referente/tipo, no se restringe. Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD_ESCALA. V226.';
 
 -- ===========================================================================
 -- (5) FACHADA — despacha segun el instrumento de la actividad + lectura.
