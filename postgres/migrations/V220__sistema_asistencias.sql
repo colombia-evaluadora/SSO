@@ -40,18 +40,30 @@
 --   ademas es robusto si quedara algun duplicado residual.
 --
 -- ---------------------------------------------------------------------------
--- AUTORIZACION — helpers de capability + scope (rama CU-86e2w4xdt / PR #100)
+-- AUTORIZACION — se REUSA tal cual el gate/scope/capability de la rama
+-- feature/CU-86e2w4xdt-Permisos-segun-Rol (PR #100). NO hay scope ni gate
+-- nuevo aqui.
 -- ---------------------------------------------------------------------------
---   Se reusan los helpers de V29 a traves de dos envoltorios propios, con el
---   MISMO patron que la seccion Matricula (V40 fn_matricula_gate_escritura /
---   fn_matricula_puede_ver):
---       fn_asistencia_gate_escritura(usuario, grupo, accion)  -> lanza 42501
---       fn_asistencia_puede_ver(usuario, grupo)               -> BOOLEAN
---   sobre el menu 'ASISTENCIA' que se siembra mas abajo. Modelo de 3 capas:
---   CAPABILITY (TROL_MENU concede / TUSUARIO_ROL_PERMISO recorta) + SCOPE por
---   categoria de rol (nivel 1 territorial = todos los EE; nivel 2 =
---   fn_usuario_ee_accesibles; nivel 3 = par (sede, jornada) del grupo) +
---   BYPASS del SUPER_ADMIN. Nunca se hardcodean pk_trol.
+--   Toda la logica vive en los helpers de esa rama:
+--     * fn_assert_permiso_seccion (V29)  -> gate de ESCRITURA (lanza 42501/403)
+--     * fn_usuario_categoria_rol_nivel, fn_usuario_puede_en_menu,
+--       fn_usuario_ee_accesibles, fn_usuario_sedes_jornadas_accesibles (V29)
+--     * fn_grupo_establecimiento, fn_grupo_periodo, fn_grupo_jornada,
+--       fn_periodo_sede (V40)  -> resuelven el scope por el grupo
+--
+--   Las secciones ya existentes de PR #100 (Matricula, Periodos) exponen un
+--   par de adaptadores por seccion: uno que lanza para el punto de escritura
+--   y uno BOOLEAN para el WHERE de los listados (fn_matricula_gate_escritura /
+--   fn_matricula_puede_ver, V40). Asistencia sigue EXACTAMENTE ese patron:
+--       fn_asistencia_gate_escritura(usuario, grupo, accion)
+--         == fn_matricula_gate_escritura con menu 'ASISTENCIAS'
+--       fn_asistencia_puede_ver(usuario, grupo)
+--         == fn_matricula_puede_ver, copia 1:1, unico cambio: menu 'ASISTENCIAS'
+--   Son adaptadores de seccion (cambian el CODIGO de menu), no reimplementan
+--   capability ni scope. Modelo de 3 capas heredado: CAPABILITY (TROL_MENU
+--   concede / TUSUARIO_ROL_PERMISO recorta) + SCOPE por categoria de rol
+--   (0 bypass / 1 todos los EE / 2 fn_usuario_ee_accesibles / 3 par
+--   (sede,jornada) / 4 nada) + BYPASS del SUPER_ADMIN. Nunca pk_trol literal.
 --
 --   *** DEPENDENCIA CROSS-BRANCH (deliberada) ***
 --   Esta rama sale de `dev` y contiene UNICAMENTE V220 + V221; no arrastra
@@ -65,8 +77,8 @@
 --       fn_grupo_jornada, fn_periodo_sede, y los gates de Matricula
 --       (fn_matricula_gate_escritura / fn_matricula_puede_ver) que aqui se
 --       replican en su version de Asistencia.
---     * V113 (misma rama) — menus logicos por CODIGO, incluido el grupo
---       padre 'COBERTURA_EDUCATIVA' del que cuelga 'ASISTENCIA'.
+--     * V113 (misma rama) — menus logicos por CODIGO. El menu 'ASISTENCIAS'
+--       en si viene del dump base, no de una migracion.
 --     * V185 (misma rama) — fn_usuario_permisos_menu (capability efectiva).
 --
 --   Como TODOS los envoltorios de abajo son LANGUAGE plpgsql, PostgreSQL no
@@ -106,7 +118,7 @@
 -- ---------------------------------------------------------------------------
 --   1. Indices  UQ_TASISTENCIA_SESION (unico parcial) + IDX_TASISTENCIA_9/10
 --      y IDX_THORARIO_LOOKUP.
---   2. Menu 'ASISTENCIA' (TMENU) + concesion al SUPER_ADMINISTRADOR.
+--   2. (sin objeto) usa el menu existente 'ASISTENCIAS' -- NO crea menu.
 --   3. fn_asistencia_gate_escritura / fn_asistencia_puede_ver  (autorizacion)
 --   4. fn_asistencia_periodo_eval / fn_asistencia_periodo_estado /
 --      fn_asistencia_tipo_pk                                     (resolucion)
@@ -189,44 +201,33 @@ CREATE INDEX IF NOT EXISTS IDX_THORARIO_LOOKUP
 
 
 -- ===========================================================================
--- 2. MENU 'ASISTENCIA' (capability)
---    Mismo patron que V113: alta idempotente por CODIGO, colgado del grupo
---    'COBERTURA_EDUCATIVA', y concesion al SUPER_ADMINISTRADOR resuelta por
---    TROL.CODIGO (nunca por pk literal: varia por ambiente).
---    El resto de roles los administra el super admin desde la pantalla de
---    "Configuracion de roles y menus" (PUT /roles/:ID/menus).
+-- 2. MENU DE CAPABILITY: 'ASISTENCIAS'  (NO se crea aqui)
+--    El menu que usa el front y al que estan cableados los roles es
+--    academico_test.tmenu CODIGO='ASISTENCIAS' (plural, url '/app/asistencia',
+--    bajo el grupo GESTION_ACADEMICA). Viene del dump base y ya lo tienen
+--    concedido DOCENTE / RECTOR / SUPER_ADMINISTRADOR (trol_menu ACTIVE).
+--    Los gates de mas abajo consultan ese codigo. Ampliar a otros roles
+--    (coordinador, jefe sistema EE, aux administrativo, jefe area en solo
+--    lectura...) es un cambio de DATOS desde "Configuracion de roles y menus"
+--    (PUT /roles/:ID/menus), no una migracion.
+--
+--    NOTA: versiones anteriores de V220 CREABAN un menu paralelo 'ASISTENCIA'
+--    (singular) colgado de COBERTURA_EDUCATIVA. Era un error -- nadie salvo
+--    SUPER_ADMIN lo tenia, asi que los docentes veian el calendario vacio.
+--    Ese seed se elimino; si el ambiente ya lo tiene, se puede desactivar
+--    sin efecto (los gates ya no lo miran).
 -- ===========================================================================
-INSERT INTO academico_test.tmenu (codigo, nombre, url, visible, estado, fk_tmenu, orden, created_by)
-SELECT 'ASISTENCIA', 'Asistencia', '/cobertura-educativa/asistencia', 'S', 'A',
-       padre.pk_tmenu, 4::NUMERIC, 'V220_seed'
-  FROM academico_test.tmenu padre
- WHERE padre.codigo = 'COBERTURA_EDUCATIVA'
-   AND padre.active = TRUE
-   AND padre.fk_tmenu IS NULL
-   AND NOT EXISTS (
-       SELECT 1 FROM academico_test.tmenu m
-        WHERE m.codigo = 'ASISTENCIA' AND m.active = TRUE
-   );
-
-INSERT INTO academico_test.trol_menu (fk_trol, fk_tmenu, created_by)
-SELECT r.pk_trol, m.pk_tmenu, 'V220_seed'
-  FROM academico_test.trol r
-  JOIN academico_test.tmenu m ON m.codigo = 'ASISTENCIA' AND m.active = TRUE
- WHERE r.codigo = 'SUPER_ADMINISTRADOR'
-   AND r.active = TRUE
-   AND NOT EXISTS (
-       SELECT 1 FROM academico_test.trol_menu rm
-        WHERE rm.fk_trol = r.pk_trol AND rm.fk_tmenu = m.pk_tmenu
-   );
 
 
 -- ===========================================================================
 -- 3. AUTORIZACION — envoltorios sobre los helpers de V29/V40
 -- ===========================================================================
 
--- Gate de ESCRITURA. Wrapper de una linea sobre fn_assert_permiso_seccion,
--- calcado de fn_matricula_gate_escritura (V40): el scope se resuelve por el
--- grupo (TGRUPO -> TGRADO -> TPERIODO_ACADEMICO -> TSEDE + jornada).
+-- Gate de ESCRITURA. Adaptador de seccion == fn_matricula_gate_escritura
+-- (V40, PR #100) con el CODIGO de menu cambiado a 'ASISTENCIAS'. NO agrega
+-- logica: delega 1:1 en fn_assert_permiso_seccion (V29). El scope se resuelve
+-- por el grupo (TGRUPO -> TGRADO -> TPERIODO_ACADEMICO -> TSEDE + jornada) con
+-- los resolvers de V40.
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_gate_escritura(
     p_pk_usuario  BIGINT,
     p_fk_tgrupo   BIGINT,
@@ -235,7 +236,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_gate_escritura(
 RETURNS VOID LANGUAGE plpgsql STABLE AS $$
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario, 'ASISTENCIA', p_accion,
+        p_pk_usuario, 'ASISTENCIAS', p_accion,
         academico_test.fn_grupo_establecimiento(p_fk_tgrupo),
         academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(p_fk_tgrupo)),
         academico_test.fn_grupo_jornada(p_fk_tgrupo));
@@ -243,10 +244,11 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_gate_escritura(BIGINT, BIGINT, VARCHAR)
-    IS 'Gate de ESCRITURA de la seccion Asistencia. Wrapper sobre fn_assert_permiso_seccion (V29) con el menu ''ASISTENCIA''; identico en forma a fn_matricula_gate_escritura (V40). CAPABILITY dinamica (TROL_MENU concede / TUSUARIO_ROL_PERMISO recorta) + SCOPE por categoria de rol resuelto por el grupo + BYPASS del SUPER_ADMIN. Lanza 42501 (-> HTTP 403). Depende de PR #100 (cross-branch); resuelve nombres en ejecucion por ser plpgsql.';
+    IS 'Adaptador de seccion de PR #100: == fn_matricula_gate_escritura (V40) con el menu ''ASISTENCIAS''. Delega 1:1 en fn_assert_permiso_seccion (V29) -- CAPABILITY (TROL_MENU concede / TUSUARIO_ROL_PERMISO recorta) + SCOPE por categoria de rol resuelto por el grupo + BYPASS del SUPER_ADMIN. Lanza 42501 (-> HTTP 403). No hay scope/gate nuevo aqui.';
 
--- Version BOOLEAN para el WHERE de los LISTADOS: no lanza, asi que no abre
--- una subtransaccion por fila. Calcada de fn_matricula_puede_ver (V40).
+-- Version BOOLEAN para el WHERE de los LISTADOS (fn_assert_permiso_seccion
+-- lanza y abriria una subtransaccion por fila). COPIA 1:1 de
+-- fn_matricula_puede_ver (V40, PR #100): unico cambio, menu 'ASISTENCIAS'.
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_puede_ver(
     p_pk_usuario  BIGINT,
     p_fk_tgrupo   BIGINT
@@ -266,7 +268,7 @@ BEGIN
         RETURN TRUE;
     END IF;
 
-    IF NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario, 'ASISTENCIA', 'VER') THEN
+    IF NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario, 'ASISTENCIAS', 'VER') THEN
         RETURN FALSE;
     END IF;
 
@@ -290,7 +292,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_puede_ver(BIGINT, BIGINT)
-    IS 'Version BOOLEAN de fn_asistencia_gate_escritura para el WHERE de los listados de asistencia: capability ''VER'' sobre el menu ''ASISTENCIA'' + scope por categoria de rol, resuelto por el grupo. p_pk_usuario NULL o SUPER_ADMIN => TRUE; nivel 4 o sin categoria => FALSE. No lanza (evita una subtransaccion por fila).';
+    IS 'COPIA 1:1 de fn_matricula_puede_ver (V40, PR #100) con el menu ''ASISTENCIAS''. BOOLEAN para el WHERE de los listados: capability ''VER'' + scope por categoria de rol (0/1 => todo, 2 => fn_usuario_ee_accesibles, 3 => par (sede,jornada), 4/sin categoria => FALSE). p_pk_usuario NULL => TRUE (llamada interna ya autorizada). No reimplementa nada: usa los helpers de V29/V40.';
 
 
 -- ===========================================================================
@@ -490,7 +492,7 @@ BEGIN
         RAISE EXCEPTION 'grupo, asignatura y fecha son obligatorios' USING ERRCODE = '23502';
     END IF;
 
-    -- 1. Gate de capability + scope (menu ASISTENCIA, accion CREAR).
+    -- 1. Gate de capability + scope (menu ASISTENCIAS, accion CREAR).
     PERFORM academico_test.fn_asistencia_gate_escritura(
         p_pk_usuario_solicitante, p_fk_tgrupo, 'CREAR');
 

@@ -6,7 +6,7 @@
 -- Sin fila en `query` -> 404 por el gateway (api/eval-col/...). Sin fila en
 -- `role_query` -> 403 a cualquier caller. Ninguna de las dos cosas sustituye
 -- el gate real (academico_test.fn_asistencia_gate_escritura /
--- fn_asistencia_puede_ver, V220, sobre el menu 'ASISTENCIA'): esa es la
+-- fn_asistencia_puede_ver, V220, sobre el menu 'ASISTENCIAS'): esa es la
 -- autoridad de negocio; esto es solo el catalogo HTTP.
 --
 -- microservice_id: 'eval-col', resuelto por serviceid (no id literal: varia
@@ -50,10 +50,10 @@
 -- y se castean a DATE en el SQL — mismo patron que FECHA_DE_NACIMIENTO en
 -- V219 y LICENSEDATE en V64.
 --
--- role_query: SOLO 'CEVAL-SUPER_ADMINISTRADOR' (public.role), porque hoy es
--- el unico rol con el TMENU 'ASISTENCIA' concedido (V220 lo siembra solo
--- para el). Ampliarlo a docentes/rectores es un cambio de DATOS desde la
--- pantalla "Configuracion de roles y menus" (PUT /roles/:ID/menus), no una
+-- role_query: CEVAL-SUPER_ADMINISTRADOR + los roles con el menu 'ASISTENCIAS'
+-- concedido (DOCENTE y RECTOR salen del dump base). Ver bloque 6. Ampliar
+-- a mas roles: concederles 'ASISTENCIAS' desde la pantalla de roles y
+-- re-aplicar esta migracion (o un INSERT en role_query). Mismo criterio
 -- migracion nueva: el gate de V220 lee TROL_MENU en caliente. Mismo criterio
 -- que V214.
 --
@@ -320,20 +320,39 @@ ON CONFLICT (uuid) DO UPDATE
 
 
 -- ---------------------------------------------------------------------------
--- 6. role_query — SOLO CEVAL-SUPER_ADMINISTRADOR en las 5 filas de arriba.
---    (El control fino por rol lo hace el menu 'ASISTENCIA' via TROL_MENU.)
+-- 6. role_query — capa del GATEWAY para los 6 endpoints.
+--
+--    Se otorga a CEVAL-SUPER_ADMINISTRADOR MAS a todo rol academico que ya
+--    tenga concedido el menu 'ASISTENCIAS' (academico_test.trol_menu ACTIVE)
+--    -- del dump base eso incluye DOCENTE y RECTOR. El mapeo rol academico ->
+--    public.role es 'CEVAL-' || trol.codigo (p.ej. DOCENTE -> CEVAL-DOCENTE).
+--    Asi el catalogo HTTP queda sincronizado con la capability real: cuando
+--    el super admin concede 'ASISTENCIAS' a un rol nuevo desde la pantalla de
+--    roles, basta re-aplicar esta migracion (o un INSERT manual) para abrirle
+--    tambien el gateway. El control FINO (capability + scope + periodo
+--    cerrado) sigue en V220.
 -- ---------------------------------------------------------------------------
 INSERT INTO public.role_query (role_id, query_id)
-SELECT r.id_role, q.id_query
+SELECT pr.id_role, q.id_query
   FROM public.query q
   JOIN public.microservice m ON m.id_microservice = q.microservice_id AND m.serviceid = 'eval-col'
- CROSS JOIN public.role r
- WHERE r.name = 'CEVAL-SUPER_ADMINISTRADOR'
-   AND q.uuid IN ('asis-registrar', 'asis-editar', 'asis-seguimiento',
+ CROSS JOIN LATERAL (
+       -- super admin siempre + los roles con el menu ASISTENCIAS concedido
+       SELECT 'CEVAL-SUPER_ADMINISTRADOR'::text AS rname
+       UNION
+       SELECT 'CEVAL-' || tr.codigo
+         FROM academico_test.trol_menu rm
+         JOIN academico_test.tmenu tm ON tm.pk_tmenu = rm.fk_tmenu
+          AND tm.codigo = 'ASISTENCIAS' AND tm.active = TRUE
+         JOIN academico_test.trol tr  ON tr.pk_trol = rm.fk_trol AND tr.active = TRUE
+        WHERE rm.active = TRUE
+ ) src
+  JOIN public.role pr ON pr.name = src.rname
+ WHERE q.uuid IN ('asis-registrar', 'asis-editar', 'asis-seguimiento',
                   'asis-sesion-estudiantes', 'asis-calendario', 'asis-resumen-horas')
    AND NOT EXISTS (
        SELECT 1 FROM public.role_query rq
-        WHERE rq.query_id = q.id_query AND rq.role_id = r.id_role
+        WHERE rq.query_id = q.id_query AND rq.role_id = pr.id_role
    );
 
 
