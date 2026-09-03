@@ -239,8 +239,36 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_unidad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[], BIGINT[])
     IS 'Crea una unidad tematica del Planeador (gate CREAR sobre PLANEADOR): inserta TUNIDAD (identificacion nombre/asignatura/grado/autor + DESCRIPCION + FK_TLV_CALCULO_DEFINITIVA [forma de calculo de la nota, catalogo CALCULO_DEFINITIVA, OBLIGATORIA, V73] + FK_REFERENTE_CURRICULAR [referente al que se acoge, opcional, V212]) y, si se pasan, sus objetivos (TUNIDAD_OBJETIVO), contenidos/componentes (TUNIDAD_CONTENIDO) con ORDEN por posicion del array, ignorando los vacios, y los enunciados del referente que aplican (p_enunciados, PKs de TREFERENTE_ENUNCIADO nivel 1, via fn_unidad_enunciado_relacionar V136 -- valida nivel 1 y mismo nivel de ensenanza que la unidad, aborta el CREATE si alguno no cumple). La unidad ya no depende de un periodo de evaluacion (V218). Valida existencia/estado de todas las FKs y unicidad (nombre, asignatura, grado) entre unidades activas. Retorna PK_TUNIDAD.';
 
+-- ---------------------------------------------------------------------------
+-- Indice de busqueda libre del listado de unidades.
+--
+-- Mismo patron que idx_tactividad_busqueda_trgm (V224) / la leccion de V112:
+-- el texto de la expresion indexada debe coincidir CARACTER A CARACTER con
+-- el del WHERE de fn_unidad_listar para que el planner pueda usar el GIN
+-- trigram (por eso el predicado de p_search es un unico ILIKE sobre
+-- COALESCE(NOMBRE,'') || ' ' || COALESCE(DESCRIPCION,''), no dos ILIKE con
+-- OR). CREATE EXTENSION IF NOT EXISTS es seguro de repetir (V112/V224 ya la
+-- crean; V216 se aplica antes que V224).
+-- ---------------------------------------------------------------------------
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE INDEX IF NOT EXISTS idx_tunidad_busqueda_trgm
+    ON academico_test.TUNIDAD
+ USING gin ((COALESCE(NOMBRE,'') || ' ' || COALESCE(DESCRIPCION,'')) gin_trgm_ops);
+
+COMMENT ON INDEX academico_test.idx_tunidad_busqueda_trgm
+    IS 'GIN trigram sobre NOMBRE+DESCRIPCION concatenados para que p_search (ILIKE %texto%) de fn_unidad_listar no haga Seq Scan. El texto de la expresion debe coincidir exacto con el del WHERE de esa funcion. V216.';
+
 -- ===========================================================================
 -- fn_unidad_listar — pagina con filtros/orden (pantalla "Unidad tematica").
+--
+-- Optimizacion (mismo patron CTE-base de fn_actividad_listar, V224): el CTE
+-- "base" resuelve filtro + orden + LIMIT/OFFSET tocando SOLO TUNIDAD (mas el
+-- join a TASIGNATURA/TGRADO que exige el ORDER BY por nombre de asignatura o
+-- grado) y calcula total_count con COUNT(*) OVER(). Los joins de catalogo y
+-- los conteos/fechas derivadas se aplican DESPUES, contra las <= p_limite
+-- filas de la pagina -- antes se evaluaban 5 subconsultas correlacionadas
+-- por CADA fila del universo, ANTES del LIMIT.
 -- ===========================================================================
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_listar(
     p_pk_usuario_solicitante      BIGINT,
@@ -279,13 +307,49 @@ RETURNS TABLE (
     total_count                 BIGINT
 )
 LANGUAGE plpgsql
+STABLE
 AS $$
+DECLARE
+    v_key VARCHAR;
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
     );
 
+    -- Whitelist del criterio de orden (evita ramas muertas en el ORDER BY),
+    -- mismo patron que fn_actividad_listar (V224).
+    v_key := LOWER(TRIM(COALESCE(p_orden_por, 'nombre')));
+    IF v_key NOT IN ('nombre', 'asignatura', 'grado') THEN
+        v_key := 'nombre';
+    END IF;
+
     RETURN QUERY
+    WITH base AS (
+        SELECT u.PK_TUNIDAD AS pk,
+               COUNT(*) OVER() AS total
+          FROM academico_test.TUNIDAD u
+          JOIN academico_test.TASIGNATURA basig ON basig.PK_TASIGNATURA = u.FK_TASIGNATURA
+          JOIN academico_test.TGRADO bgr        ON bgr.PK_TGRADO = u.FK_TGRADO
+         WHERE (p_incluir_inactivos OR u.ACTIVE = TRUE)
+           -- Texto libre: la expresion debe ser IDENTICA a la de
+           -- idx_tunidad_busqueda_trgm para que el planner la use.
+           AND (p_search IS NULL OR
+                (COALESCE(u.NOMBRE,'') || ' ' || COALESCE(u.DESCRIPCION,''))
+                    ILIKE '%' || p_search || '%')
+           AND (p_fk_tasignatura  IS NULL OR u.FK_TASIGNATURA = p_fk_tasignatura)
+           AND (p_fk_tgrado       IS NULL OR u.FK_TGRADO = p_fk_tgrado)
+           AND (p_fk_tfuncionario IS NULL OR u.FK_TFUNCIONARIO = p_fk_tfuncionario)
+         ORDER BY
+           CASE WHEN     p_orden_asc AND v_key = 'nombre'     THEN u.NOMBRE     END ASC  NULLS LAST,
+           CASE WHEN NOT p_orden_asc AND v_key = 'nombre'     THEN u.NOMBRE     END DESC NULLS LAST,
+           CASE WHEN     p_orden_asc AND v_key = 'asignatura' THEN basig.NOMBRE END ASC  NULLS LAST,
+           CASE WHEN NOT p_orden_asc AND v_key = 'asignatura' THEN basig.NOMBRE END DESC NULLS LAST,
+           CASE WHEN     p_orden_asc AND v_key = 'grado'      THEN bgr.NOMBRE   END ASC  NULLS LAST,
+           CASE WHEN NOT p_orden_asc AND v_key = 'grado'      THEN bgr.NOMBRE   END DESC NULLS LAST,
+           u.PK_TUNIDAD
+         LIMIT GREATEST(p_limite, 1)
+        OFFSET GREATEST(p_offset, 0)
+    )
     SELECT u.PK_TUNIDAD,
            u.NOMBRE,
            u.DESCRIPCION,
@@ -301,14 +365,15 @@ BEGIN
            lvc.NOMBRE,
            u.FK_REFERENTE_CURRICULAR,
            rc.NOMBRE,
-           (SELECT COUNT(*) FROM academico_test.TACTIVIDAD a       WHERE a.FK_TUNIDAD = u.PK_TUNIDAD AND a.ACTIVE = TRUE),
+           agg.total_actividades,
            (SELECT COUNT(*) FROM academico_test.TUNIDAD_OBJETIVO o  WHERE o.FK_TUNIDAD = u.PK_TUNIDAD AND o.ACTIVE = TRUE),
            (SELECT COUNT(*) FROM academico_test.TUNIDAD_CONTENIDO c WHERE c.FK_TUNIDAD = u.PK_TUNIDAD AND c.ACTIVE = TRUE),
-           (SELECT MIN(a.FECHA_INICIO) FROM academico_test.TACTIVIDAD a WHERE a.FK_TUNIDAD = u.PK_TUNIDAD AND a.ACTIVE = TRUE),
-           (SELECT MAX(a.FECHA_CIERRE) FROM academico_test.TACTIVIDAD a WHERE a.FK_TUNIDAD = u.PK_TUNIDAD AND a.ACTIVE = TRUE),
+           agg.fecha_inicio,
+           agg.fecha_fin,
            u.ACTIVE,
-           COUNT(*) OVER()
-      FROM academico_test.TUNIDAD u
+           b.total
+      FROM base b
+      JOIN academico_test.TUNIDAD u              ON u.PK_TUNIDAD = b.pk
       JOIN academico_test.TASIGNATURA asig       ON asig.PK_TASIGNATURA = u.FK_TASIGNATURA
       LEFT JOIN academico_test.TAREA ar          ON ar.PK_TAREA = asig.FK_TAREA
       JOIN academico_test.TGRADO gr              ON gr.PK_TGRADO = u.FK_TGRADO
@@ -316,35 +381,28 @@ BEGIN
       LEFT JOIN academico_test.TUSUARIO us       ON us.PK_TUSUARIO = fu.FK_TUSUARIO
       LEFT JOIN academico_test.TLISTA_VALOR lvc  ON lvc.PK_LISTA_VALOR = u.FK_TLV_CALCULO_DEFINITIVA
       LEFT JOIN academico_test.TREFERENTE_CURRICULAR rc ON rc.PK_REFERENTE_CURRICULAR = u.FK_REFERENTE_CURRICULAR
-     WHERE (p_incluir_inactivos OR u.ACTIVE = TRUE)
-       AND (p_search IS NULL OR u.NOMBRE ILIKE '%' || p_search || '%' OR u.DESCRIPCION ILIKE '%' || p_search || '%')
-       AND (p_fk_tasignatura IS NULL OR u.FK_TASIGNATURA = p_fk_tasignatura)
-       AND (p_fk_tgrado IS NULL OR u.FK_TGRADO = p_fk_tgrado)
-       AND (p_fk_tfuncionario IS NULL OR u.FK_TFUNCIONARIO = p_fk_tfuncionario)
+      -- Un solo LATERAL sobre TACTIVIDAD: conteo + fechas derivadas en la
+      -- misma pasada (antes eran 3 subconsultas correlacionadas distintas).
+      LEFT JOIN LATERAL (
+          SELECT COUNT(*)::BIGINT      AS total_actividades,
+                 MIN(a.FECHA_INICIO)   AS fecha_inicio,
+                 MAX(a.FECHA_CIERRE)   AS fecha_fin
+            FROM academico_test.TACTIVIDAD a
+           WHERE a.FK_TUNIDAD = u.PK_TUNIDAD AND a.ACTIVE = TRUE
+      ) agg ON TRUE
      ORDER BY
-       CASE WHEN p_orden_asc THEN
-           CASE LOWER(TRIM(COALESCE(p_orden_por, 'nombre')))
-               WHEN 'nombre'     THEN u.NOMBRE
-               WHEN 'asignatura' THEN asig.NOMBRE
-               WHEN 'grado'      THEN gr.NOMBRE
-               ELSE u.NOMBRE
-           END
-       END ASC,
-       CASE WHEN NOT p_orden_asc THEN
-           CASE LOWER(TRIM(COALESCE(p_orden_por, 'nombre')))
-               WHEN 'nombre'     THEN u.NOMBRE
-               WHEN 'asignatura' THEN asig.NOMBRE
-               WHEN 'grado'      THEN gr.NOMBRE
-               ELSE u.NOMBRE
-           END
-       END DESC
-     LIMIT GREATEST(p_limite, 1)
-    OFFSET GREATEST(p_offset, 0);
+       CASE WHEN     p_orden_asc AND v_key = 'nombre'     THEN u.NOMBRE    END ASC  NULLS LAST,
+       CASE WHEN NOT p_orden_asc AND v_key = 'nombre'     THEN u.NOMBRE    END DESC NULLS LAST,
+       CASE WHEN     p_orden_asc AND v_key = 'asignatura' THEN asig.NOMBRE END ASC  NULLS LAST,
+       CASE WHEN NOT p_orden_asc AND v_key = 'asignatura' THEN asig.NOMBRE END DESC NULLS LAST,
+       CASE WHEN     p_orden_asc AND v_key = 'grado'      THEN gr.NOMBRE   END ASC  NULLS LAST,
+       CASE WHEN NOT p_orden_asc AND v_key = 'grado'      THEN gr.NOMBRE   END DESC NULLS LAST,
+       u.PK_TUNIDAD;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT)
-    IS 'Pagina de TUNIDAD con filtros (search sobre NOMBRE/DESCRIPCION, asignatura, grado, docente) y orden (nombre|asignatura|grado). Devuelve nombres resueltos (asignatura, area via TASIGNATURA.FK_TAREA->TAREA -- la etiqueta "Comunicativa/Cognitiva/..." de las tarjetas), forma de calculo, referente curricular, conteos de actividades/objetivos/contenidos activos y las fechas DERIVADAS de la unidad (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas). La unidad ya no depende de un periodo de evaluacion (V218). total_count via COUNT(*) OVER(). Gate VER. p_incluir_inactivos=FALSE por defecto.';
+    IS 'Pagina de TUNIDAD con filtros (search, asignatura, grado, docente) y orden (whitelist nombre|asignatura|grado; cualquier otro valor cae a nombre). p_search hace UN solo ILIKE sobre COALESCE(NOMBRE,'''')||'' ''||COALESCE(DESCRIPCION,''''), expresion identica a la de idx_tunidad_busqueda_trgm para que el GIN trigram se use (no dos ILIKE con OR). Optimizacion: un CTE base pagina tocando solo TUNIDAD+TASIGNATURA+TGRADO y los joins de catalogo, los conteos y el LATERAL de fechas derivadas corren unicamente contra las filas de la pagina (patron de fn_actividad_listar, V224). Devuelve nombres resueltos (asignatura, area via TASIGNATURA.FK_TAREA->TAREA -- la etiqueta "Comunicativa/Cognitiva/..." de las tarjetas), forma de calculo, referente curricular, conteos de actividades/objetivos/contenidos activos y las fechas DERIVADAS de la unidad (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas). La unidad ya no depende de un periodo de evaluacion (V218). total_count via COUNT(*) OVER(). Gate VER. p_incluir_inactivos=FALSE por defecto.';
 
 -- ===========================================================================
 -- fn_unidad_actualizar — PATCH parcial (cada parametro NULL preserva).
@@ -523,12 +581,19 @@ BEGIN
     -- Bloqueo: no se elimina una unidad que todavia tiene actividades activas
     -- vinculadas (TACTIVIDAD.FK_TUNIDAD es opcional desde V218, pero si hay
     -- actividades apuntando a esta unidad hay que soltarlas/eliminarlas antes).
+    --
+    -- El bloqueo se MANTIENE a proposito: borrar la unidad NO debe arrastrar
+    -- en cascada las actividades sin que el usuario lo pida explicitamente
+    -- (una actividad puede seguir viva desvinculada). Ya no es un callejon
+    -- sin salida: fn_unidad_actividad_desvincular (V223) suelta la actividad
+    -- y fn_actividad_eliminar (V224) la borra logicamente.
     SELECT COUNT(*) INTO v_actividades
       FROM academico_test.TACTIVIDAD
      WHERE FK_TUNIDAD = p_pk_tunidad AND ACTIVE = TRUE;
     IF v_actividades > 0 THEN
         RAISE EXCEPTION 'La unidad "%" tiene % actividad(es) activa(s) vinculada(s); desvinculelas o eliminelas antes de eliminar la unidad', v_nombre, v_actividades
-            USING ERRCODE = '23503';
+            USING ERRCODE = '23503',
+                  HINT = 'Use fn_unidad_actividad_desvincular (V223) para soltar cada actividad, o fn_actividad_eliminar (V224) para borrarla logicamente, y reintente';
     END IF;
 
     -- 1. Niveles de criterio de la rubrica de la unidad.
@@ -579,7 +644,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_eliminar(BIGINT, BIGINT)
-    IS 'Soft delete (ACTIVE=FALSE) de una TUNIDAD (gate ELIMINAR), en cascada: niveles -> criterios -> rubrica de la unidad, objetivos, contenidos y la unidad. Se BLOQUEA (23503) si la unidad todavia tiene actividades activas vinculadas (TACTIVIDAD.FK_TUNIDAD): el caller debe desvincularlas o eliminarlas primero. Retorna PK_TUNIDAD.';
+    IS 'Soft delete (ACTIVE=FALSE) de una TUNIDAD (gate ELIMINAR), en cascada: niveles -> criterios -> rubrica de la unidad, objetivos, contenidos y la unidad. Se BLOQUEA (23503) si la unidad todavia tiene actividades activas vinculadas (TACTIVIDAD.FK_TUNIDAD): NO se borran actividades en cascada desde la unidad sin que el usuario lo pida explicitamente. El HINT del error indica la salida: fn_unidad_actividad_desvincular (V223) para soltar cada actividad o fn_actividad_eliminar (V224) para borrarla logicamente. Retorna PK_TUNIDAD.';
 
 -- ===========================================================================
 -- fn_unidad_criterio_agregar — agrega un criterio a la rubrica de la unidad
@@ -724,23 +789,18 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    -- 5. Get-or-create de la rubrica de la unidad (1:1).
-    SELECT PK_TRUBRICA_UNIDAD INTO v_pk_rubrica
-      FROM academico_test.TRUBRICA_UNIDAD
-     WHERE FK_TUNIDAD = p_pk_tunidad AND ACTIVE = TRUE;
-
-    IF NOT FOUND THEN
-        UPDATE academico_test.TRUBRICA_UNIDAD
-           SET ACTIVE = TRUE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE FK_TUNIDAD = p_pk_tunidad
-        RETURNING PK_TRUBRICA_UNIDAD INTO v_pk_rubrica;
-
-        IF v_pk_rubrica IS NULL THEN
-            INSERT INTO academico_test.TRUBRICA_UNIDAD (FK_TUNIDAD, CREATED_BY, CREATED_AT, ACTIVE)
-            VALUES (p_pk_tunidad, p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE)
-            RETURNING PK_TRUBRICA_UNIDAD INTO v_pk_rubrica;
-        END IF;
-    END IF;
+    -- 5. Get-or-create de la rubrica de la unidad (1:1) — se DELEGA en
+    --    fn_unidad_rubrica_asegurar en vez de repetir el INSERT/SELECT aqui.
+    --
+    --    DEPENDENCIA INTRA-RAMA: esa funcion se define en V222, que Flyway
+    --    aplica DESPUES de este archivo. No importa: el cuerpo de una
+    --    funcion plpgsql NO se resuelve en CREATE FUNCTION sino en tiempo de
+    --    EJECUCION, asi que V216 aplica limpio y para cuando alguien llame a
+    --    fn_unidad_criterio_agregar el historial completo (incluida V222) ya
+    --    corrio. Mismo criterio ya usado entre V216/V222/V223/V224 y
+    --    documentado en la cabecera de V227.
+    v_pk_rubrica := academico_test.fn_unidad_rubrica_asegurar(
+                        p_pk_usuario_solicitante, p_pk_tunidad);
 
     -- 6. Siguiente ORDEN dentro de la rubrica (UNIQUE FK_TRUBRICA_UNIDAD, ORDEN).
     SELECT COALESCE(MAX(ORDEN), 0) + 1 INTO v_orden
@@ -776,13 +836,26 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_criterio_agregar(BIGINT, BIGINT, VARCHAR, JSONB, VARCHAR, VARCHAR, VARCHAR)
-    IS 'Agrega un criterio (TCRITERIO_UNIDAD) a la rubrica de la unidad (TRUBRICA_UNIDAD, get-or-create) con un indicador (TNIVEL_CRITERIO_UNIDAD) por cada valoracion de la escala definida en TCRITERIO_EVALUACION.FK_TESCALA del periodo academico del GRADO de la unidad (TGRADO.FK_TPERIODO_ACADEMICO -- la unidad ya no tiene FK_TPERIODO_EVALUACION, V218). p_niveles JSONB = [{fkTescalaValoracion, indicador, recomendacion?, tarea?}]; se exige exactamente una entrada por valoracion activa de la escala (sin faltantes/sobrantes/duplicados). Gate EDITAR sobre PLANEADOR. Retorna PK_TCRITERIO_UNIDAD.';
+    IS 'Agrega un criterio (TCRITERIO_UNIDAD) a la rubrica de la unidad (TRUBRICA_UNIDAD, get-or-create delegado en fn_unidad_rubrica_asegurar de V222 -- dependencia intra-rama resuelta en ejecucion, ver nota en el cuerpo) con un indicador (TNIVEL_CRITERIO_UNIDAD) por cada valoracion de la escala definida en TCRITERIO_EVALUACION.FK_TESCALA del periodo academico del GRADO de la unidad (TGRADO.FK_TPERIODO_ACADEMICO -- la unidad ya no tiene FK_TPERIODO_EVALUACION, V218). p_niveles JSONB = [{fkTescalaValoracion, indicador, recomendacion?, tarea?}]; se exige exactamente una entrada por valoracion activa de la escala (sin faltantes/sobrantes/duplicados). Gate EDITAR sobre PLANEADOR. Retorna PK_TCRITERIO_UNIDAD.';
 
 -- ===========================================================================
 -- fn_unidad_actividades_listar — actividades vinculadas a una unidad y su
 -- peso dentro de la unidad (pestaña "Actividades" del detalle de unidad:
 -- ACTIVIDAD / TIPO / INSTRUMENTO / GRUPO / (%)).
+--
+-- La columna "(%)" de esa pestaña es PONDERACION (TACTIVIDAD.PONDERACION,
+-- V223) -- el peso que el docente edita inline con
+-- fn_unidad_actividad_ponderacion_set. INFLUENCIA (V22) es OTRA cosa (peso
+-- para el promedio ponderado de TUNIDAD_NOTA) y se sigue devolviendo para no
+-- romper el contrato de columnas ya publicado, pero NO es el "(%)" de la
+-- pantalla ni el criterio de orden 'porcentaje'.
+--
+-- Gana la columna PONDERACION en el RETURNS TABLE: cambia el tipo de
+-- retorno, asi que CREATE OR REPLACE no basta -- se antepone el
+-- DROP FUNCTION IF EXISTS de la firma anterior (mismo patron que V216
+-- fn_unidad_crear / V224 fn_actividad_crear).
 -- ===========================================================================
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_actividades_listar(BIGINT, BIGINT, VARCHAR, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT);
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_actividades_listar(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tunidad               BIGINT,
@@ -807,6 +880,7 @@ RETURNS TABLE (
     grupo                           VARCHAR,
     fk_tlv_jerarquia                BIGINT,
     jerarquia                       VARCHAR,
+    ponderacion                     NUMERIC,
     influencia                      NUMERIC,
     es_evaluativa                   VARCHAR,
     fecha_inicio                    DATE,
@@ -838,6 +912,7 @@ BEGIN
            g.NOMBRE,
            a.FK_TLV_JERARQUIA,
            lvj.NOMBRE,
+           a.PONDERACION,
            a.INFLUENCIA,
            a.ES_EVALUATIVA::VARCHAR,
            a.FECHA_INICIO,
@@ -865,7 +940,7 @@ BEGIN
            END
        END ASC,
        CASE WHEN p_orden_asc AND LOWER(TRIM(COALESCE(p_orden_por, 'actividad'))) = 'porcentaje'
-            THEN a.INFLUENCIA END ASC,
+            THEN a.PONDERACION END ASC,
        CASE WHEN NOT p_orden_asc THEN
            CASE LOWER(TRIM(COALESCE(p_orden_por, 'actividad')))
                WHEN 'actividad'   THEN a.TITULO
@@ -876,14 +951,14 @@ BEGIN
            END
        END DESC,
        CASE WHEN NOT p_orden_asc AND LOWER(TRIM(COALESCE(p_orden_por, 'actividad'))) = 'porcentaje'
-            THEN a.INFLUENCIA END DESC
+            THEN a.PONDERACION END DESC
      LIMIT GREATEST(p_limite, 1)
     OFFSET GREATEST(p_offset, 0);
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_actividades_listar(BIGINT, BIGINT, VARCHAR, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT)
-    IS 'Lista las actividades (TACTIVIDAD) vinculadas a una unidad (FK_TUNIDAD, opcional desde V218) y su peso (INFLUENCIA) dentro de ella -- pestaña "Actividades" del detalle de unidad. Devuelve titulo, asignatura (TACTIVIDAD.FK_TASIGNATURA, propia de la actividad desde V218), tipo de actividad, instrumento de evaluacion, grupo y jerarquia resueltos, fechas y ES_EVALUATIVA. Filtros: search sobre TITULO, grupo, incluir_inactivas. Orden: actividad|tipo|instrumento|grupo|porcentaje. total_count via COUNT(*) OVER(). Gate VER sobre PLANEADOR.';
+    IS 'Lista las actividades (TACTIVIDAD) vinculadas a una unidad (FK_TUNIDAD, opcional desde V218) y su peso dentro de ella -- pestaña "Actividades" del detalle de unidad. La columna "(%)" de la pantalla es PONDERACION (TACTIVIDAD.PONDERACION, V223: lo que edita el docente con fn_unidad_actividad_ponderacion_set y lo que valida la regla del 100% por unidad+grupo); INFLUENCIA (V22, peso para el promedio ponderado de TUNIDAD_NOTA) se sigue devolviendo por compatibilidad pero NO es ese "(%)". El criterio de orden ''porcentaje'' ordena por PONDERACION. Devuelve tambien titulo, asignatura (TACTIVIDAD.FK_TASIGNATURA, propia de la actividad desde V218), tipo de actividad, instrumento de evaluacion, grupo y jerarquia resueltos, fechas y ES_EVALUATIVA. Filtros: search sobre TITULO, grupo, incluir_inactivas. Orden: actividad|tipo|instrumento|grupo|porcentaje. total_count via COUNT(*) OVER(). Gate VER sobre PLANEADOR.';
 
 -- ===========================================================================
 -- fn_unidad_buscar_por_pk — detalle de la unidad (pestaña "Informacion

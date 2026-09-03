@@ -14,7 +14,8 @@
 --                                       fn_actividad_adaptacion_reemplazar,
 --                                       fn_actividad_estudiantes_asignar,
 --                                       fn_actividad_recuperacion_configurar.
---   (4) Escritura                    — fn_actividad_crear / _actualizar.
+--   (4) Escritura                    — fn_actividad_crear / _actualizar /
+--                                       _eliminar (soft delete en cascada).
 --   (5) Lectura optimizada           — fn_actividad_listar,
 --                                       fn_actividad_buscar_por_pk,
 --                                       fn_actividad_resumen_estados,
@@ -1251,10 +1252,15 @@ BEGIN
         END IF;
     END IF;
 
+    -- Unicidad contra la unidad RESULTANTE (v_fk_tunidad, ya calculada
+    -- arriba y usada tambien para la sub-rama de evaluacion), NO contra
+    -- v_actual.FK_TUNIDAD: con la unidad vieja, mover una actividad de
+    -- unidad comparaba contra el bucket equivocado y podia lanzar un 23505
+    -- falso (o dejar pasar un duplicado real en la unidad destino).
     IF EXISTS (
         SELECT 1 FROM academico_test.TACTIVIDAD
          WHERE UPPER(TRIM(TITULO)) = UPPER(TRIM(v_titulo))
-           AND FK_TUNIDAD       IS NOT DISTINCT FROM v_actual.FK_TUNIDAD
+           AND FK_TUNIDAD       IS NOT DISTINCT FROM v_fk_tunidad
            AND FK_TGRUPO        IS NOT DISTINCT FROM v_grupo
            AND FK_TLV_JERARQUIA = v_actual.FK_TLV_JERARQUIA
            AND ACTIVE = TRUE
@@ -1332,6 +1338,191 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN)
     IS 'PATCH parcial de una actividad (gate EDITAR sobre PLANEADOR): cada parametro NULL preserva el valor actual. Unidad/ponderacion se delegan en fn_unidad_actividad_vincular / _ponderacion_set / _desvincular (V223) para que la regla del 100% viva en un solo sitio; p_desvincular_unidad=TRUE es excluyente con p_fk_tunidad/p_ponderacion. Recuperacion: p_recuperacion (objeto) la configura via fn_actividad_recuperacion_configurar, p_quitar_recuperacion=TRUE la elimina (vuelve la actividad a normal); son excluyentes y NULL/FALSE no la tocan. p_materiales / p_adaptaciones / p_fk_tmatriculas NULL = no tocar, array = reemplazo completo. Revalida fechas, catalogos y unicidad (titulo, unidad, grupo, jerarquia). El FK_TLV_INSTRUMENTO_EVALUACION resultante (nuevo o heredado) solo se admite si la unidad resultante (nueva, heredada, o NULL si p_desvincular_unidad) tiene referente curricular EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V137); en otro caso lanza 22023. Retorna PK_TACTIVIDAD. V224.';
+
+-- ---------------------------------------------------------------------------
+-- fn_actividad_eliminar — soft delete en cascada.
+--
+-- DECISION DE CASCADA (documentada): se arrastran TODOS los satelites
+-- activos de la actividad, no se dejan huerfanos-mudos. Criterio: ninguno de
+-- ellos tiene sentido ni pantalla propia sin su actividad (a diferencia de
+-- TACTIVIDAD respecto a TUNIDAD, que SI sigue viva desvinculada -- por eso
+-- fn_unidad_eliminar bloquea en vez de cascadear). Es el mismo criterio de
+-- fn_unidad_eliminar (V216) con sus objetivos/contenidos/rubrica y de
+-- fn_unidad_enunciado_quitar (V136), que arrastra las TACTIVIDAD_EVIDENCIA
+-- que dependian del enunciado que se quita.
+--
+-- Se desactivan, en orden hijo -> padre:
+--   * capturas de calificacion por estudiante (TACTIVIDAD_RUBRICA_EVALUACION,
+--     TACTIVIDAD_COTEJO_EVALUACION, TACTIVIDAD_ESCALA_EVALUACION),
+--     TACTIVIDAD_NOTA y TACTIVIDAD_SOPORTE — todos cuelgan de
+--     TACTIVIDAD_ESTUDIANTE;
+--   * el pivote TACTIVIDAD_ADAPTACION_ESTUDIANTE y luego TACTIVIDAD_ESTUDIANTE;
+--   * la definicion del instrumento (V226): niveles -> criterios de rubrica,
+--     items de cotejo, niveles -> escala;
+--   * materiales, adaptaciones, recuperacion (1:1), evidencias y criterios de
+--     unidad (V136);
+--   * y por ultimo la propia TACTIVIDAD.
+--
+-- BLOQUEO (23503) — unico caso que NO se cascadea: si otra actividad de
+-- recuperacion ACTIVA apunta a esta como su
+-- TACTIVIDAD_RECUPERACION.FK_TACTIVIDAD_RECUPERAR, borrarla dejaria esa otra
+-- actividad recuperando una nota inexistente. Se exige resolverla primero,
+-- mismo espiritu que el bloqueo de fn_unidad_eliminar.
+--
+-- Las tablas de V136 (TACTIVIDAD_EVIDENCIA / TACTIVIDAD_CRITERIO_UNIDAD) y
+-- las de captura se referencian por nombre dentro de un cuerpo plpgsql: se
+-- resuelven en EJECUCION, asi que el orden de aplicacion de las migraciones
+-- no importa aqui (mismo criterio documentado en V227).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_eliminar(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad            BIGINT
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_active       BOOLEAN;
+    v_titulo       VARCHAR;
+    v_dependientes BIGINT := 0;
+    v_estudiantes  BIGINT := 0;
+BEGIN
+    SELECT ACTIVE, TITULO INTO v_active, v_titulo
+      FROM academico_test.TACTIVIDAD
+     WHERE PK_TACTIVIDAD = p_pk_tactividad;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se encontro la actividad solicitada' USING ERRCODE = 'P0002';
+    END IF;
+
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'ELIMINAR'
+    );
+
+    IF v_active = FALSE THEN
+        RAISE EXCEPTION 'La actividad "%" ya se encuentra inactiva', v_titulo USING ERRCODE = '22023';
+    END IF;
+
+    -- Bloqueo: actividades de recuperacion activas que recuperan a esta.
+    SELECT COUNT(*) INTO v_dependientes
+      FROM academico_test.TACTIVIDAD_RECUPERACION r
+      JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = r.FK_TACTIVIDAD
+     WHERE r.FK_TACTIVIDAD_RECUPERAR = p_pk_tactividad
+       AND r.ACTIVE = TRUE AND a.ACTIVE = TRUE;
+    IF v_dependientes > 0 THEN
+        RAISE EXCEPTION 'La actividad "%" es recuperada por % actividad(es) de recuperacion activa(s); no se puede eliminar', v_titulo, v_dependientes
+            USING ERRCODE = '23503',
+                  HINT = 'Reconfigure o elimine esas actividades de recuperacion (fn_actividad_actualizar con p_quitar_recuperacion, o fn_actividad_eliminar) y reintente';
+    END IF;
+
+    -- 1. Capturas de calificacion por estudiante (V22/V226/V227).
+    UPDATE academico_test.TACTIVIDAD_RUBRICA_EVALUACION re
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+     WHERE re.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
+       AND ae.FK_TACTIVIDAD = p_pk_tactividad AND re.ACTIVE = TRUE;
+
+    UPDATE academico_test.TACTIVIDAD_COTEJO_EVALUACION ce
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+     WHERE ce.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
+       AND ae.FK_TACTIVIDAD = p_pk_tactividad AND ce.ACTIVE = TRUE;
+
+    UPDATE academico_test.TACTIVIDAD_ESCALA_EVALUACION ee
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+     WHERE ee.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
+       AND ae.FK_TACTIVIDAD = p_pk_tactividad AND ee.ACTIVE = TRUE;
+
+    UPDATE academico_test.TACTIVIDAD_NOTA n
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+     WHERE n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
+       AND ae.FK_TACTIVIDAD = p_pk_tactividad AND n.ACTIVE = TRUE;
+
+    UPDATE academico_test.TACTIVIDAD_SOPORTE s
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+     WHERE s.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
+       AND ae.FK_TACTIVIDAD = p_pk_tactividad AND s.ACTIVE = TRUE;
+
+    -- 2. Pivote de adaptacion por estudiante y luego los estudiantes.
+    UPDATE academico_test.TACTIVIDAD_ADAPTACION_ESTUDIANTE ade
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+     WHERE ade.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
+       AND ae.FK_TACTIVIDAD = p_pk_tactividad AND ade.ACTIVE = TRUE;
+
+    UPDATE academico_test.TACTIVIDAD_ESTUDIANTE
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
+    GET DIAGNOSTICS v_estudiantes = ROW_COUNT;
+
+    -- 3. Definicion del instrumento (V226): hijos antes que padres.
+    UPDATE academico_test.TACTIVIDAD_RUBRICA_NIVEL rn
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+      FROM academico_test.TACTIVIDAD_RUBRICA_CRITERIO rc
+     WHERE rn.FK_TACTIVIDAD_RUBRICA_CRITERIO = rc.PK_TACTIVIDAD_RUBRICA_CRITERIO
+       AND rc.FK_TACTIVIDAD = p_pk_tactividad AND rn.ACTIVE = TRUE;
+
+    UPDATE academico_test.TACTIVIDAD_RUBRICA_CRITERIO
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
+
+    UPDATE academico_test.TACTIVIDAD_COTEJO_ITEM
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
+
+    UPDATE academico_test.TACTIVIDAD_ESCALA_NIVEL en
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+      FROM academico_test.TACTIVIDAD_ESCALA e
+     WHERE en.FK_TACTIVIDAD_ESCALA = e.PK_TACTIVIDAD_ESCALA
+       AND e.FK_TACTIVIDAD = p_pk_tactividad AND en.ACTIVE = TRUE;
+
+    UPDATE academico_test.TACTIVIDAD_ESCALA
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
+
+    -- 4. Satelites directos de la actividad.
+    UPDATE academico_test.TACTIVIDAD_MATERIAL
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
+
+    UPDATE academico_test.TACTIVIDAD_ADAPTACION
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
+
+    UPDATE academico_test.TACTIVIDAD_RECUPERACION
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
+
+    UPDATE academico_test.TACTIVIDAD_EVIDENCIA
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
+
+    UPDATE academico_test.TACTIVIDAD_CRITERIO_UNIDAD
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
+
+    -- 5. La actividad. Se suelta tambien de la unidad (FK_TUNIDAD /
+    --    PONDERACION a NULL) para que su peso deje de ocupar cupo en la
+    --    regla del 100% por (unidad, grupo) del trigger de V223.
+    UPDATE academico_test.TACTIVIDAD
+       SET ACTIVE      = FALSE,
+           FK_TUNIDAD  = NULL,
+           PONDERACION = NULL,
+           MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+           MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TACTIVIDAD = p_pk_tactividad;
+
+    RAISE NOTICE 'Soft delete TACTIVIDAD=% (autor: %): estudiantes_asignados=%',
+        p_pk_tactividad, p_pk_usuario_solicitante, v_estudiantes;
+
+    RETURN p_pk_tactividad;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_eliminar(BIGINT, BIGINT)
+    IS 'Soft delete (ACTIVE=FALSE) de una TACTIVIDAD (gate ELIMINAR sobre PLANEADOR), en cascada sobre TODOS sus satelites activos -- ninguno tiene sentido sin su actividad: capturas de calificacion (TACTIVIDAD_RUBRICA/COTEJO/ESCALA_EVALUACION), TACTIVIDAD_NOTA, TACTIVIDAD_SOPORTE, TACTIVIDAD_ADAPTACION_ESTUDIANTE, TACTIVIDAD_ESTUDIANTE, la definicion del instrumento de V226 (niveles->criterios de rubrica, items de cotejo, niveles->escala), materiales, adaptaciones, la fila 1:1 de recuperacion, y las relaciones de V136 (TACTIVIDAD_EVIDENCIA, TACTIVIDAD_CRITERIO_UNIDAD). Ademas suelta la actividad de su unidad (FK_TUNIDAD y PONDERACION a NULL) para liberar cupo en la regla del 100% por (unidad, grupo) de V223. Se BLOQUEA (23503) si otra actividad de recuperacion ACTIVA la referencia como TACTIVIDAD_RECUPERACION.FK_TACTIVIDAD_RECUPERAR. 22023 si ya estaba inactiva, P0002 si no existe. Retorna PK_TACTIVIDAD. V224.';
 
 -- ===========================================================================
 -- (5) LECTURA OPTIMIZADA
@@ -1427,11 +1618,35 @@ BEGIN
            -- Ventana de fechas: solapamiento con [desde, hasta].
            AND (p_fecha_desde IS NULL OR COALESCE(a.FECHA_CIERRE, a.FECHA_INICIO) >= p_fecha_desde)
            AND (p_fecha_hasta IS NULL OR COALESCE(a.FECHA_INICIO, a.FECHA_CIERRE) <= p_fecha_hasta)
-           -- Texto libre: la expresion debe ser IDENTICA a la de
-           -- idx_tactividad_busqueda_trgm para que el planner la use.
-           AND (p_search IS NULL OR
-                (COALESCE(a.TITULO,'') || ' ' || COALESCE(a.DESCRIPCION,''))
-                    ILIKE '%' || p_search || '%')
+           -- Buscador unico "nombre, nivel educativo o instrumento".
+           --
+           -- Rama 1 (TITULO+DESCRIPCION): la expresion es IDENTICA a la de
+           -- idx_tactividad_busqueda_trgm para que el planner pueda usarlo.
+           --
+           -- Ramas 2 y 3 (nivel de ensenanza via la unidad -> grado ->
+           -- TNIVEL_ENSENANZA, e instrumento via TLISTA_VALOR.NOMBRE): NO
+           -- estan cubiertas por ese indice -- son un post-filtro por EXISTS
+           -- sobre catalogos pequeños, que solo se evalua cuando p_search
+           -- viene informado y siempre dentro de este mismo CTE base, ya
+           -- acotado por los demas filtros (asignatura / grupo / unidad /
+           -- tipo / instrumento / ventana de fechas) y por la paginacion.
+           -- Honestidad de rendimiento: al ser un OR, esta rama impide el
+           -- Bitmap Index Scan puro del trigram; ver COMMENT ON FUNCTION.
+           AND (p_search IS NULL
+                OR (COALESCE(a.TITULO,'') || ' ' || COALESCE(a.DESCRIPCION,''))
+                       ILIKE '%' || p_search || '%'
+                OR EXISTS (
+                       SELECT 1
+                         FROM academico_test.TUNIDAD u2
+                         JOIN academico_test.TGRADO g2            ON g2.PK_TGRADO = u2.FK_TGRADO
+                         JOIN academico_test.TNIVEL_ENSENANZA ne2 ON ne2.PK_NIVEL_ENSENANZA = g2.FK_TNIVEL_ENSENANZA
+                        WHERE u2.PK_TUNIDAD = a.FK_TUNIDAD
+                          AND ne2.NOMBRE ILIKE '%' || p_search || '%')
+                OR EXISTS (
+                       SELECT 1
+                         FROM academico_test.TLISTA_VALOR lvs
+                        WHERE lvs.PK_LISTA_VALOR = a.FK_TLV_INSTRUMENTO_EVALUACION
+                          AND lvs.NOMBRE ILIKE '%' || p_search || '%'))
            AND (p_estados IS NULL OR academico_test.fn_actividad_estado(
                     a.FECHA_INICIO, a.FECHA_CIERRE, a.FECHA_CALIFICADO, v_hoy, p_dias_gracia
                 ) = ANY(p_estados))
@@ -1516,7 +1731,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT)
-    IS 'Pagina de actividades del Planeador (gate VER). Filtros indexados: asignatura, grupo, unidad, tipo, instrumento, ventana de fechas y texto libre (la expresion ILIKE es identica a la de idx_tactividad_busqueda_trgm para que el GIN trigram se use). p_estados filtra por el estado DERIVADO (fn_actividad_estado) con p_dias_gracia (default 2). Orden (whitelist): fecha_inicio|fecha_cierre|fecha_creacion|titulo|ponderacion, cualquier otro valor cae a fecha_inicio. Devuelve nombres resueltos (asignatura, area, unidad, grupo, tipo, instrumento), el estado derivado y el progreso de evaluacion (asignados/evaluados/%). Optimizacion: el CTE base pagina tocando solo TACTIVIDAD y los joins + el LATERAL de progreso corren unicamente contra las filas de la pagina. total_count via COUNT(*) OVER(). V224.';
+    IS 'Pagina de actividades del Planeador (gate VER). Filtros indexados: asignatura, grupo, unidad, tipo, instrumento y ventana de fechas. p_search es el buscador unico "nombre, nivel educativo o instrumento": matchea (a) TITULO+DESCRIPCION con la expresion identica a la de idx_tactividad_busqueda_trgm, (b) el NOMBRE del nivel de ensenanza de la actividad (via FK_TUNIDAD -> TUNIDAD.FK_TGRADO -> TGRADO.FK_TNIVEL_ENSENANZA -> TNIVEL_ENSENANZA; solo aplica si la actividad tiene unidad) y (c) el NOMBRE del instrumento (TLISTA_VALOR de FK_TLV_INSTRUMENTO_EVALUACION). HONESTIDAD DE RENDIMIENTO: solo (a) puede entrar por el indice trigram; (b) y (c) son un post-filtro por EXISTS NO indexado sobre catalogos pequeños que, al ir en OR, impide el Bitmap Index Scan puro del trigram cuando p_search viene informado -- se evalua dentro del mismo CTE base ya acotado por los demas filtros y por LIMIT/OFFSET, nunca sobre un seq scan del universo sin filtrar. p_estados filtra por el estado DERIVADO (fn_actividad_estado) con p_dias_gracia (default 2). Orden (whitelist): fecha_inicio|fecha_cierre|fecha_creacion|titulo|ponderacion, cualquier otro valor cae a fecha_inicio. Devuelve nombres resueltos (asignatura, area, unidad, grupo, tipo, instrumento), el estado derivado y el progreso de evaluacion (asignados/evaluados/%). Optimizacion: el CTE base pagina tocando solo TACTIVIDAD y los joins + el LATERAL de progreso corren unicamente contra las filas de la pagina. total_count via COUNT(*) OVER(). V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_buscar_por_pk — detalle completo (una fila).
