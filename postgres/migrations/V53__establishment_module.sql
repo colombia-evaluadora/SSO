@@ -607,23 +607,34 @@ BEGIN
     --    (a) super-admin => ok;
     --    (b) rector del EE objetivo => ok;
     --    (c) cualquier otro => 42501.
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-         WHERE f.PK_TFUNCIONARIO = (
-                   SELECT e2.FK_TFUNCIONARIO_RECTOR
-                     FROM academico_test.TESTABLECIMIENTO e2
-                    WHERE e2.PK_ESTABLECIMIENTO = p_pk_establecimiento
-               )
-           AND f.ACTIVE          = TRUE
-           AND f.FK_TUSUARIO     = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSE
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
+    IF academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante) <> 0 THEN
+        -- REV -- gate por el modelo dinamico (CU-86e2zenhr): capability 'VER'
+        -- sobre el menu ESTABLECIMIENTO + el objeto tiene que caer dentro del
+        -- scope de LECTURA del usuario. Reemplaza la cadena de ELSIF que
+        -- enumeraba rector / secretaria / rol 8 a mano.
+        --
+        -- El SUPER_ADMIN (nivel 0) no entra a este bloque: fn_usuario_ee_lectura
+        -- ya le devuelve todo. Es una consulta, no una escritura, asi que aca no
+        -- aplica la exclusion del super-admin que tiene el modulo de matricula.
+        --
+        -- Ensancha a proposito: el gate viejo de esta funcion solo aceptaba
+        -- super-admin y RECTOR -- ni secretaria ni jefe de sistema, aunque ambos
+        -- si podian ver el establecimiento en el listado. Quien lo ve en la
+        -- lista ahora tambien puede abrirlo.
+        IF NOT academico_test.fn_usuario_puede_en_menu(
+                   p_pk_usuario_solicitante, 'ESTABLECIMIENTO', 'VER') THEN
+            RAISE EXCEPTION 'El usuario no tiene permiso para ver en el modulo ESTABLECIMIENTO'
+                USING ERRCODE = '42501';
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.fn_usuario_ee_lectura(p_pk_usuario_solicitante) el
+             WHERE el.establecimiento_id = p_pk_establecimiento
+        ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
     END IF;
 
     -- 4. Retorno de la fila completa (todos los campos del DDL).
@@ -959,59 +970,35 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 BEGIN
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        RETURN QUERY
-        SELECT e.PK_ESTABLECIMIENTO, e.NOMBRE
-          FROM academico_test.TESTABLECIMIENTO e
-         WHERE e.ACTIVE = TRUE
-         ORDER BY e.NOMBRE ASC, e.PK_ESTABLECIMIENTO ASC;
-        RETURN;
-    END IF;
-
-    IF NOT EXISTS (
-        WITH ee_accesibles AS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8
-               AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        )
-        SELECT 1 FROM ee_accesibles
-    ) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+    -- REV -- gate UNICO por el modelo dinamico (CU-86e2zenhr, sigue el patron
+    -- que CU-86e2w4xdt aplico a fn_est_listar): capability 'VER' sobre el menu
+    -- ESTABLECIMIENTO + scope de lectura resuelto por el JOIN de abajo.
+    --
+    -- Antes eran dos gates cosidos a mano: un fast-path para
+    -- fn_puede_afectar_establecimiento (roles 1-3) y, para el resto, un EXISTS
+    -- sobre un CTE de EE accesibles que se repetia otra vez, casi igual, en el
+    -- RETURN QUERY. Esa duplicacion es justo lo que hacia que agregar un rol
+    -- obligara a tocar codigo en dos lugares.
+    --
+    -- El SUPER_ADMIN (nivel 0) no pasa por la capability: fn_usuario_ee_lectura
+    -- ya le devuelve todos los establecimientos. Es una CONSULTA de opciones,
+    -- asi que aca no aplica la exclusion del super-admin que si tiene el modulo
+    -- de matricula -- esa es sobre ESCRITURA de datos academicos.
+    --
+    -- Gana ademas el nivel 3 (coordinador y companiia), que antes quedaba fuera
+    -- del gate y no podia ni ver el establecimiento de su propia sede en el
+    -- select: fn_usuario_ee_lectura le devuelve el EE de sus sedes.
+    IF academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante) <> 0
+       AND NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario_solicitante, 'ESTABLECIMIENTO', 'VER') THEN
+        RAISE EXCEPTION 'El usuario no tiene permiso para ver en el modulo ESTABLECIMIENTO'
             USING ERRCODE = '42501';
     END IF;
 
     RETURN QUERY
-    SELECT DISTINCT e.PK_ESTABLECIMIENTO, e.NOMBRE
+    SELECT e.PK_ESTABLECIMIENTO, e.NOMBRE
       FROM academico_test.TESTABLECIMIENTO e
-      JOIN (
-          SELECT e2.PK_ESTABLECIMIENTO
-            FROM academico_test.TESTABLECIMIENTO e2
-            JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e2.FK_TFUNCIONARIO_RECTOR
-           WHERE e2.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-          UNION
-          SELECT e2.PK_ESTABLECIMIENTO
-            FROM academico_test.TESTABLECIMIENTO e2
-            JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e2.FK_TFUNCIONARIO_SECRETARIA
-           WHERE e2.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-          UNION
-          SELECT DISTINCT s.FK_TESTABLECIMIENTO
-            FROM academico_test.TSEDE_USUARIO su
-            JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-           WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8
-             AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-      ) ee ON ee.PK_ESTABLECIMIENTO = e.PK_ESTABLECIMIENTO
+      JOIN academico_test.fn_usuario_ee_lectura(p_pk_usuario_solicitante) el
+        ON el.establecimiento_id = e.PK_ESTABLECIMIENTO
      WHERE e.ACTIVE = TRUE
      ORDER BY e.NOMBRE ASC, e.PK_ESTABLECIMIENTO ASC;
 END;

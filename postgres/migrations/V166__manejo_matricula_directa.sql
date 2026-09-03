@@ -687,41 +687,8 @@ BEGIN
     SELECT s.FK_TESTABLECIMIENTO INTO v_fk_establecimiento
       FROM academico_test.TSEDE s WHERE s.PK_TSEDE = v_fk_sede;
 
-    IF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e
-            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE             = TRUE
-           AND f.ACTIVE             = TRUE
-           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e
-            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE             = TRUE
-           AND f.ACTIVE             = TRUE
-           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TSEDE s
-            ON s.PK_TSEDE = su.FK_TSEDE
-         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
-           AND s.ACTIVE              = TRUE
-           AND su.ACTIVE             = TRUE
-           AND su.FK_TROL            = 8
-           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSE
+    IF NOT academico_test.fn_matricula_puede_cambiar_estado(
+               p_pk_usuario_solicitante, v_fk_establecimiento, 'ELIMINAR') THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
@@ -1053,43 +1020,13 @@ BEGIN
     );
 
     -- -----------------------------------------------------------------
-    -- 2. Gate -- SIN rama de super-admin (ver cabecera).
+    -- 2. Gate. Delega en fn_matricula_puede_cambiar_estado, que desde V233
+    --    resuelve el permiso por el modelo dinamico (capability del menu
+    --    MATRICULA + alcance por establecimiento) en vez de una lista fija
+    --    de roles. El super-admin sigue excluido: la funcion lo rechaza.
     -- -----------------------------------------------------------------
-    IF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e
-            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE             = TRUE
-           AND f.ACTIVE             = TRUE
-           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e
-            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE             = TRUE
-           AND f.ACTIVE             = TRUE
-           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TSEDE s
-            ON s.PK_TSEDE = su.FK_TSEDE
-         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
-           AND s.ACTIVE              = TRUE
-           AND su.ACTIVE             = TRUE
-           AND su.FK_TROL            = 8
-           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSE
+    IF NOT academico_test.fn_matricula_puede_cambiar_estado(
+               p_pk_usuario_solicitante, v_fk_establecimiento, 'EDITAR') THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para retirar esta matricula'
             USING ERRCODE = '42501',
                   HINT    = 'El retiro solo puede hacerlo el rector, la secretaria o el jefe de sistema del establecimiento de la matricula';
@@ -1248,43 +1185,13 @@ BEGIN
     );
 
     -- -----------------------------------------------------------------
-    -- 2. Gate -- SIN rama de super-admin (ver cabecera).
+    -- 2. Gate. Delega en fn_matricula_puede_cambiar_estado, que desde V233
+    --    resuelve el permiso por el modelo dinamico (capability del menu
+    --    MATRICULA + alcance por establecimiento) en vez de una lista fija
+    --    de roles. El super-admin sigue excluido: la funcion lo rechaza.
     -- -----------------------------------------------------------------
-    IF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e
-            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE             = TRUE
-           AND f.ACTIVE             = TRUE
-           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e
-            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE             = TRUE
-           AND f.ACTIVE             = TRUE
-           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TSEDE s
-            ON s.PK_TSEDE = su.FK_TSEDE
-         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
-           AND s.ACTIVE              = TRUE
-           AND su.ACTIVE             = TRUE
-           AND su.FK_TROL            = 8
-           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSE
+    IF NOT academico_test.fn_matricula_puede_cambiar_estado(
+               p_pk_usuario_solicitante, v_fk_establecimiento, 'EDITAR') THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para reingresar esta matricula'
             USING ERRCODE = '42501',
                   HINT    = 'El reingreso solo puede hacerlo el rector, la secretaria o el jefe de sistema del establecimiento de la matricula';
@@ -1454,43 +1361,13 @@ BEGIN
     );
 
     -- -----------------------------------------------------------------
-    -- 2. Gate -- SIN rama de super-admin (ver cabecera).
+    -- 2. Gate. Delega en fn_matricula_puede_cambiar_estado, que desde V233
+    --    resuelve el permiso por el modelo dinamico (capability del menu
+    --    MATRICULA + alcance por establecimiento) en vez de una lista fija
+    --    de roles. El super-admin sigue excluido: la funcion lo rechaza.
     -- -----------------------------------------------------------------
-    IF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e
-            ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE             = TRUE
-           AND f.ACTIVE             = TRUE
-           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e
-            ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE             = TRUE
-           AND f.ACTIVE             = TRUE
-           AND f.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TSEDE s
-            ON s.PK_TSEDE = su.FK_TSEDE
-         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
-           AND s.ACTIVE              = TRUE
-           AND su.ACTIVE             = TRUE
-           AND su.FK_TROL            = 8
-           AND su.FK_TUSUARIO        = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSE
+    IF NOT academico_test.fn_matricula_puede_cambiar_estado(
+               p_pk_usuario_solicitante, v_fk_establecimiento, 'EDITAR') THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para reactivar esta matricula'
             USING ERRCODE = '42501',
                   HINT    = 'La reactivacion solo puede hacerla el rector, la secretaria o el jefe de sistema del establecimiento de la matricula';

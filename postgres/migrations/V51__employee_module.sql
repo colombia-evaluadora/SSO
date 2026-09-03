@@ -2897,6 +2897,7 @@ DECLARE
     v_pk_usuario        BIGINT;
     v_active            BOOLEAN;
     v_visible           BOOLEAN;
+    v_nivel             INT;
     v_es_super          BOOLEAN;
     -- REV4 -- todas las sedes donde el solicitante tiene autoridad (las de
     -- sus EE accesibles, mas la suya propia si es coordinador). Se usa
@@ -2932,32 +2933,53 @@ BEGIN
     -- (antes esto dejaba a rector/secretaria SIEMPRE fuera del gate, ya
     -- que v_fk_ee IS NOT NULL nunca se cumplia -- solo super-admin podia
     -- ver el detalle de un funcionario).
-    v_es_super := academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante);
+    -- REV7 -- gate por el modelo dinamico de permisos (CU-86e2zenhr).
+    -- La CAPABILITY (menu FUNCIONARIOS, accion VER) sustituye a
+    -- fn_puede_afectar_usuarios, que era la lista fija de roles 1,2,3,7,8,9.
+    -- Es la que responde la pregunta de la REV5 --"¿tengo un rol que me
+    -- habilite a consultar funcionarios?"-- y ahora se administra desde la
+    -- pantalla de roles del super-admin, sin tocar SQL.
+    --
+    -- Se mantiene la REV5 a proposito: este gate NO pregunta si el
+    -- funcionario objetivo esta a mi alcance. Por eso no se usa aca
+    -- fn_assert_permiso_funcionario, que si lo hace (y ademas aplica rango):
+    -- reintroduciria el fallo que la REV5 arreglo -- el autocompletado por
+    -- documento del alta (findPersonByDocument) reventando con 42501 cuando
+    -- la persona ya era funcionario en otro establecimiento. El alcance
+    -- sigue acotando lo que si es sede-especifico: el array `permisos`,
+    -- via v_sedes_accesibles (REV4).
+    v_nivel    := academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante);
+    v_es_super := v_nivel IS NOT NULL AND v_nivel <= 1;   -- nivel 0 y 1: sin recorte
+
+    IF v_nivel IS NULL THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    IF v_nivel <> 0
+       AND NOT academico_test.fn_usuario_puede_en_menu(
+                   p_pk_usuario_solicitante, 'FUNCIONARIOS', 'VER') THEN
+        RAISE EXCEPTION 'El usuario no tiene permiso para ver en el modulo FUNCIONARIOS'
+            USING ERRCODE = '42501';
+    END IF;
 
     IF NOT v_es_super THEN
         WITH ee_accesibles AS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+            -- REV7 -- alcance de ESTABLECIMIENTO por el modelo dinamico. Da
+            -- filas para nivel 2 (rector, jefe de sistema, auxiliar) y vacio
+            -- para nivel 3, que se acota por sede en sedes_coordinador.
+            SELECT DISTINCT ee.establecimiento_id AS PK_ESTABLECIMIENTO
+              FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario_solicitante) ee
         ),
         -- REV3 -- coordinador (rol 11) de una sede puntual: alcance de
         -- SEDE, no de establecimiento.
         sedes_coordinador AS (
-            SELECT su.FK_TSEDE
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+            -- REV7 -- alcance de SEDE por el modelo dinamico. Sustituye al
+            -- "rol 11 en TSEDE_USUARIO" fijo: ahora vale para cualquier rol
+            -- de nivel 3 (coordinador, psico-orientador, jefe de area,
+            -- director de grupo, docente) con el menu FUNCIONARIOS concedido.
+            SELECT DISTINCT sj.sede_id AS FK_TSEDE
+              FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario_solicitante) sj
         )
         SELECT
             -- REV5 -- el gate deja de preguntar "¿este funcionario esta a mi
@@ -2980,9 +3002,11 @@ BEGIN
             -- llena el formulario, y acto seguido el front dispara este GET
             -- por PK -- que reventaba con 42501 cuando la persona ya era
             -- funcionario en otro establecimiento, dejando el alta a medias.
+            -- REV7 -- ya no entra fn_puede_afectar_usuarios (lista fija de
+            -- roles 1,2,3,7,8,9): esa pregunta la responde la capability
+            -- comprobada arriba. Aqui solo queda el ALCANCE.
             (
-                academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante)
-                OR EXISTS (SELECT 1 FROM ee_accesibles)
+                EXISTS (SELECT 1 FROM ee_accesibles)
                 OR EXISTS (SELECT 1 FROM sedes_coordinador)
             ),
             -- REV4 -- union de todas las sedes con autoridad, para acotar

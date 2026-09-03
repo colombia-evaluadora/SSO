@@ -18,15 +18,26 @@ grupo y cambiar de estado.
 | `PUT` | `/cobertura-academica/matricula/:ID/retirar` | 245 | Cursando → Retirado |
 | `PUT` | `/cobertura-academica/matricula/:ID/reingresar` | 248 | Retirado → Cursando |
 | `PUT` | `/cobertura-academica/matricula/:ID/reactivar` | 252 | Estado cerrado → Cursando |
-| `PUT` | `/cobertura-academica/matricula/promover` | 263 | **Promoción en lote** |
-| `PUT` | `/cobertura-academica/matricula/reubicar` | 264 | **Reubicación en lote** |
-| `PUT` | `/cobertura-academica/matricula/corregir` | 298 | **Corrección en lote** |
+| `POST` | `/cobertura-academica/matricula/promover` | 263 | **Promoción en lote** |
+| `POST` | `/cobertura-academica/matricula/reubicar` | 264 | **Reubicación en lote** |
+| `POST` | `/cobertura-academica/matricula/corregir` | 298 | **Corrección en lote** |
 | `PATCH` | `/usuarios/:ID` | 295 | **Datos de la persona** |
 
 `PATCH` para editar (convención del sistema: establecimientos 87, sedes 90,
-funcionarios 119, referentes 232). `PUT` para las acciones, porque el catálogo
-sólo admite GET/POST/PUT/PATCH y `DELETE` está prohibido por
-`ck_query_http_method`.
+funcionarios 119, referentes 232). `PUT` para las acciones sobre **una**
+matrícula (retirar, reingresar, reactivar, baja), porque el catálogo sólo admite
+GET/POST/PUT/PATCH y `DELETE` está prohibido por `ck_query_http_method`.
+
+**`POST` para las acciones de lote** (promover, reubicar, corregir,
+bulk-delete). Dos razones: promover y reubicar **crean** matrículas nuevas, y
+sobre todo el **file-service no procesa multipart en `PUT`** — en todo el
+catálogo, los endpoints con campos `FILE` son `POST` o `PATCH`, sin una sola
+excepción. Declarar el soporte en un `PUT` daba:
+
+> El campo 'SOPORTE' no está declarado como archivo para esta ruta.
+
+corregir también es `POST` aunque no lleve archivo: son tres acciones hermanas
+de la misma pantalla y tenerlas en verbos distintos sólo complica al front.
 
 ---
 
@@ -54,16 +65,17 @@ aceptara menos, dejaría de ser una alternativa.
 ### Cuerpo
 
 ```jsonc
-// promover y reubicar -- multipart, porque el soporte es un archivo
+// promover y reubicar -- multipart, porque el soporte es un archivo.
+// OJO: las claves van en UPPER_SNAKE, no en camelCase (ver mas abajo).
 {
-  "ids": [1001, 1002, 1003],
-  "grupoDestino": 11402,
-  "motivo": "Promoción de fin de año",
-  "soporte": <archivo>          // FILE:matricula, obligatorio
+  "IDS": [1001, 1002, 1003],
+  "GRUPO_DESTINO": 11402,
+  "MOTIVO": "Promoción de fin de año",
+  "SOPORTE": <archivo>          // FILE:matricula, obligatorio
 }
 
 // corregir -- JSON normal
-{ "ids": [1001], "grupoDestino": 11402 }
+{ "IDS": [1001], "GRUPO_DESTINO": 11402 }
 ```
 
 El soporte llega como multipart: el file-service lo sube a S3 y sustituye el
@@ -71,6 +83,10 @@ binario por el `PK_TARCHIVO` antes de ejecutar la query. Es el mismo mecanismo
 de los documentos del alta.
 
 ### Respuesta
+
+Las claves de la **respuesta** sí van en `camelCase` — las arma
+`jsonb_build_object` en la función. Sólo las del **cuerpo de la petición** van en
+`UPPER_SNAKE`.
 
 ```jsonc
 {
@@ -96,6 +112,132 @@ de los documentos del alta.
 ```
 
 ---
+
+## Las claves del cuerpo van en `UPPER_SNAKE`
+
+El motor de queries busca cada placeholder por su **nombre exacto**, tal como está
+declarado en `param_types` del catálogo. **No convierte `camelCase` a
+`snake_case`**: sólo pasa a mayúsculas lo que recibe.
+
+```jsonc
+// correcto
+{ "ALUMNOS_MADRE_CABEZA_DE_FAMILIA": "S", "ACTUALIZAR_MATRICULA": true }
+
+// incorrecto -- el motor busca BODY.ALUMNOSMADRECABEZADEFAMILIA y no lo encuentra
+{ "alumnosMadreCabezaDeFamilia": "S", "actualizarMatricula": true }
+```
+
+Mandar `camelCase` produce este error, que es **engañoso**:
+
+> El query q-mtb2d9k4-cobmatedi1 tiene placeholders sin tipo declarado:
+> [BODY.ACTUALIZARMATRICULA, BODY.ALUMNOSMADRECABEZADEFAMILIA, ...].
+> Edita la fila en el catálogo y asigna un tipo a cada uno.
+
+**No hay nada que arreglar en el catálogo.** Esos nombres salen de las claves que
+envió el cliente, no del texto de la query. Dos señales para reconocerlo:
+
+- los nombres aparecen **sin guiones bajos**, que es justo lo que queda al pasar
+  `camelCase` a mayúsculas sin insertar separadores;
+- la lista puede incluir campos que la query **no menciona** (por ejemplo
+  `GENERODELACUDIENTE`), lo que sería imposible si viniera del catálogo.
+
+Para verificarlo sin adivinar, comparar los placeholders del texto contra las
+claves declaradas:
+
+```sql
+SELECT jsonb_object_keys(param_types) FROM public.query
+ WHERE uuid = 'q-mtb2d9k4-cobmatedi1';
+```
+
+Es la misma convención del POST de alta (215). La colección
+`docs/postman/matricula-editar-movimientos.postman_collection.json` trae los
+cinco requests con las claves ya escritas, generada desde el catálogo.
+
+### Listas: `IDS` depende del transporte
+
+**En JSON** (`corregir`, `bulk-delete`) la lista va como array y el tipo es
+`BIGINT[]`, que es la convención de los veinte endpoints de lista del catálogo:
+
+```sql
+CAST(:BODY.IDS AS BIGINT[])        "BODY.IDS": "BIGINT[]"
+```
+```jsonc
+{ "IDS": [1001, 1002, 1003], "GRUPO_DESTINO": 11402 }
+```
+
+**En multipart** (`promover`, `reubicar`, que llevan el soporte) **no existen
+los tipos: todo llega como cadena.** Y `CAST(texto AS BIGINT[])` sólo acepta la
+sintaxis de array de Postgres:
+
+| valor de `IDS` | `CAST AS BIGINT[]` |
+|---|---|
+| `{1001}` | ✓ |
+| `[1001]` — lo que serializa un array de JS | **error 22P02** *malformed array literal* |
+| `1001` | **error 22P02** |
+
+Por eso esos dos declaran `"BODY.IDS": "TEXT"` y parsean el valor a mano.
+**Aceptan cualquiera de estas formas**, así que el cliente no tiene que
+adivinar:
+
+```
+[1001,1002]     {1001,1002}     1001,1002     1001     [1001, 1002]
+```
+
+En el campo del formulario se manda simplemente `[1001,1002]`. La asimetría con
+los de JSON no es arbitraria: multipart no tiene tipos y JSON sí. Y pasar los de
+JSON a `TEXT` sería peor — el motor tendría que serializar el array, y si lo
+aplanara quedaría sólo el primer elemento, perdiendo el resto en silencio.
+
+**Cuidado con `BODY_RAW`.** El motor valida la clave entrante contra
+`BODY.<NOMBRE>`; `BODY_RAW.<NOMBRE>` sólo sirve para que el *texto de la query*
+reciba el JSON sin aplanar. Declarar únicamente `BODY_RAW.X` deja la clave
+entrante sin tipo y el motor aborta antes de ejecutar:
+
+> El query q-mtb2d9k4-cobmatcor1 tiene placeholders sin tipo declarado: [BODY.IDS].
+
+Los seis endpoints del catálogo que usan `BODY_RAW` y funcionan declaran
+**las dos claves** (`/areas/:ID/asignaturas`, `/escalas`, `/horarios`,
+`/menus/order`, `/roles/:ROLEID/menus`, `/asistencias/registrar`). Regla
+práctica:
+
+| el campo es… | cómo se declara |
+|---|---|
+| lista de números | sólo `BODY.X` con `BIGINT[]` |
+| lista de objetos, u objeto | `BODY.X` **y** `BODY_RAW.X`, ambos `JSONB` |
+
+`OTROS_DOCUMENTOS_RELEVANTES` es del segundo caso —lleva
+`{pkTmatriculaArchivo, fkTarchivo}`— así que conserva las dos declaraciones.
+
+### Multipart cuando hay archivos
+
+| endpoint | ruta | modo |
+|---|---|---|
+| `PATCH` matrícula (294) | `/api/files/eval-col/...` | formdata (4 archivos) |
+| `PATCH` usuarios (295) | `/api/files/eval-col/...` | formdata (foto) |
+| `POST` promover (263) | `/api/files/eval-col/...` | formdata (soporte) |
+| `POST` reubicar (264) | `/api/files/eval-col/...` | formdata (soporte) |
+| `POST` corregir (298) | `/api/eval-col/...` | JSON |
+
+**El método importa: los archivos sólo funcionan en `POST` y `PATCH`.** Y la
+clasificación se declara **sin sufijo** — `FILE:matricula`, no
+`FILE:matricula!`. La obligatoriedad del soporte y del motivo la valida la
+función con un `22023`, que es donde no se puede saltar.
+
+Los que llevan campos `FILE:` pasan por el file-service, que sube el archivo a
+S3 y sustituye el binario por el `PK_TARCHIVO` antes de ejecutar la query.
+
+### Campos que el editar de matrícula NO recibe
+
+`TMATRICULA_CAMPO` tiene 65 campos activos, pero algunos no pertenecen a la
+matrícula sino a la **persona**, y van por `PATCH /usuarios/:ID`:
+
+| campo del formulario | dónde vive | endpoint |
+|---|---|---|
+| Género del estudiante / del acudiente | `TUSUARIO.FK_TLV_GENERO` | `PATCH /usuarios/:ID`, clave `GENERO` |
+| Nombres, apellidos, documento, fecha de nacimiento | `TUSUARIO` | `PATCH /usuarios/:ID` |
+
+Ambos géneros están además marcados `EDITABLE = 'N'` en `TMATRICULA_CAMPO`, así
+que en principio no deberían llegar al editar.
 
 ## Orden de las llamadas
 
@@ -178,13 +320,13 @@ El cuerpo lleva banderas que dicen qué se guarda:
 
 ```jsonc
 {
-  "actualizarMatricula": true,
-  "actualizarEstudiante": true,
-  "actualizarAcudiente": false,
-  "actualizarSocioeconomico": true,
-  "pkTpadre": 70157,              // obligatorio si actualizarAcudiente
-  "tocarDocumentoDeIdentidad": true,
-  "documentoDeIdentidadDelEstudiante": <archivo>   // null => borrado lógico
+  "ACTUALIZAR_MATRICULA": true,
+  "ACTUALIZAR_ESTUDIANTE": true,
+  "ACTUALIZAR_ACUDIENTE": false,
+  "ACTUALIZAR_SOCIOECONOMICO": true,
+  "PK_TPADRE": 70157,             // obligatorio si ACTUALIZAR_ACUDIENTE
+  "TOCAR_DOCUMENTO_DE_IDENTIDAD": true,
+  "DOCUMENTO_DE_IDENTIDAD_DEL_ESTUDIANTE": <archivo>   // null => borrado lógico
 }
 ```
 
@@ -229,7 +371,7 @@ Para "Otros documentos relevantes", que admiten N, se opera por
 `pkTmatriculaArchivo` en vez de por tipo:
 
 ```jsonc
-"otrosDocumentosRelevantes": [
+"OTROS_DOCUMENTOS_RELEVANTES": [
   { "pkTmatriculaArchivo": 12, "fkTarchivo": null },  // borrar ese
   { "fkTarchivo": 987 }                               // agregar uno
 ]

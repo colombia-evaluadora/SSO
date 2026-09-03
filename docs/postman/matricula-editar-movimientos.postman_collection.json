@@ -1,0 +1,761 @@
+{
+  "info": {
+    "_postman_id": "mtb2d9k4-matricula-editar",
+    "name": "Matricula -- editar y movimientos",
+    "description": "Endpoints de edicion y de movimiento de grupo del modulo de matricula.\n\n## LAS CLAVES DEL BODY VAN EN UPPER_SNAKE\n\nEl motor de queries busca cada placeholder por su nombre EXACTO, tal como\nesta declarado en `param_types` del catalogo. No convierte camelCase a\nsnake_case: solo pasa a mayusculas lo que recibe.\n\nMandar `alumnosMadreCabezaDeFamilia` produce `BODY.ALUMNOSMADRECABEZADEFAMILIA`\ny el motor responde \"placeholders sin tipo declarado\", porque lo declarado es\n`BODY.ALUMNOS_MADRE_CABEZA_DE_FAMILIA`. Los nombres de esa lista de error salen\nde las claves que envio el cliente, NO del catalogo.\n\n    correcto    \"ALUMNOS_MADRE_CABEZA_DE_FAMILIA\": \"S\"\n    incorrecto  \"alumnosMadreCabezaDeFamilia\": \"S\"\n\nEs la misma convencion del POST de alta (id 215).\n\n## Multipart cuando hay archivos\n\nLos requests con campos `FILE:` van por `/api/files/eval-col/...` en formdata:\nel file-service sube el archivo a S3 y sustituye el binario por el PK_TARCHIVO\nantes de ejecutar la query. Los que no tienen archivos van por\n`/api/eval-col/...` en JSON.\n\n## Banderas del PATCH de matricula\n\nACTUALIZAR_* elige que secciones se guardan; TOCAR_* que documentos se\nreemplazan o se borran. Sin ellas en true, esa parte del cuerpo se ignora.\nNULL no borra: no toca el campo.\n\nDetalle completo en docs/matricula-movimientos.md",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://api.example.com"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "pkTmatricula",
+      "value": ""
+    },
+    {
+      "key": "grupoDestino",
+      "value": ""
+    },
+    {
+      "key": "pkTusuario",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "[294] PATCH /cobertura-academica/matricula/:ID",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "ARS",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "EPS",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "CUAL",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "SISBEN",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "PK_TPADRE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "PARENTESCO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "SUBSIDIADO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "TOCAR_FOTO",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "VIVE_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ZONA_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "ASISTE_INFORMES",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ETNIA_RESGUARDO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "ASISTE_REUNIONES",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ESTUDIANTE_NUEVO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "FECHA_DE_INGRESO",
+              "value": "2026-01-15",
+              "type": "text",
+              "description": "DATE"
+            },
+            {
+              "key": "EDICION_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "GEOREFERENCIACION",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "FUENTE_DE_RECURSOS",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "FOTO_DEL_ESTUDIANTE",
+              "type": "file",
+              "src": [],
+              "description": "FILE:matricula -- adjunte el archivo"
+            },
+            {
+              "key": "HEROES_DE_LA_NACION",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "OCUPACION_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "PROFESION_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ACTUALIZAR_ACUDIENTE",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "ACTUALIZAR_MATRICULA",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "ESTUDIANTE_REPITENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ACTUALIZAR_ESTUDIANTE",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "TIPO_EMPLEO_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "DIRECCION_DE_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ESTADO_CIVIL_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "TALENTO_DEL_ESTUDIANTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "CARGO_ENTIDAD_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ESTADO_CIVIL_ESTUDIANTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "CONVIVE_CON_EL_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "DIRECCION_DEL_ESTUDIANTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "TOCAR_CERTIFICADO_MEDICO",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "ACTUALIZAR_SOCIOECONOMICO",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "NIVEL_EDUCATIVO_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "ULTIMO_MUNICIPIO_EXPULSOR",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "PROVIENE_DE_OTRO_MUNICIPIO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "PROVIENE_DE_SECTOR_PRIVADO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "SITUACION_DEL_ANO_ANTERIOR",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "OTROS_DOCUMENTOS_RELEVANTES",
+              "value": "[]",
+              "type": "text",
+              "description": "JSONB"
+            },
+            {
+              "key": "POBLACION_VICTIMA_CONFLICTO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "TOCAR_DOCUMENTO_DE_IDENTIDAD",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "CARACTER_ESPECIALIDAD_ENFASIS",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "LUGAR_DE_NACIMIENTO_MUNICIPIO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "TOCAR_CERTIFICADO_DE_ESTUDIOS",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "FRECUENCIA_DOMICILIO_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "NOMBRE_DE_LA_ENTIDAD_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "VETERANOS_DE_LA_FUERZA_PUBLICA",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ALUMNOS_MADRE_CABEZA_DE_FAMILIA",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "INSTITUCION_BIENESTAR_DE_ORIGEN",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "OTROS_DOCUMENTOS_RELEVANTES",
+              "value": "[]",
+              "type": "text",
+              "description": "JSONB"
+            },
+            {
+              "key": "HIJOS_DE_MADRE_CABEZA_DE_FAMILIA",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "TELEFONO_DE_LA_ENTIDAD_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "CERTIFICADO_MEDICO_DEL_ESTUDIANTE",
+              "type": "file",
+              "src": [],
+              "description": "FILE:matricula -- adjunte el archivo"
+            },
+            {
+              "key": "DIRECCION_DE_LA_ENTIDAD_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "NOMBRE_DE_LA_INSTITUCION_ANTERIOR",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "CONDICIONES_ESPECIALES_DEL_ESTUDIANTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "DOCUMENTO_DE_IDENTIDAD_DEL_ESTUDIANTE",
+              "type": "file",
+              "src": [],
+              "description": "FILE:matricula -- adjunte el archivo"
+            },
+            {
+              "key": "ESTRATO_SOCIO_ECONOMICO_DEL_ESTUDIANTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "LUGAR_DE_RESIDENCIA_MUNICIPIO_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "CERTIFICADO_DE_ESTUDIOS_DEL_ANO_ANTERIOR",
+              "type": "file",
+              "src": [],
+              "description": "FILE:matricula -- adjunte el archivo"
+            },
+            {
+              "key": "LUGAR_DE_RESIDENCIA_MUNICIPIO_ESTUDIANTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "CONDICION_DEL_ESTUDIANTE_FIN_DEL_ANO_ANTERIOR",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "LUGAR_EXPEDICION_DOCUMENTO_ACUDIENTE_MUNICIPIO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "LUGAR_EXPEDICION_DOCUMENTO_ESTUDIANTE_MUNICIPIO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/files/eval-col/cobertura-academica/matricula/{{pkTmatricula}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "eval-col",
+            "cobertura-academica",
+            "matricula",
+            "{{pkTmatricula}}"
+          ]
+        },
+        "description": "V179 -- edicion de la ficha de matricula en una sola transaccion. Las banderas ACTUALIZAR_* eligen que secciones se guardan y las TOCAR_* que documentos se reemplazan o se borran logicamente. NULL no borra: no toca el campo. No cambia grupo ni estado (para eso estan promover/reubicar/corregir) ni los datos de identidad de la persona (PATCH /usuarios/:ID). Solo rector/secretaria/jefe de sistema; el super-admin NO puede ejecutarlo"
+      },
+      "response": []
+    },
+    {
+      "name": "[298] POST /cobertura-academica/matricula/corregir",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"IDS\": null,\n  \"GRUPO_DESTINO\": null\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/cobertura-academica/matricula/corregir",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "cobertura-academica",
+            "matricula",
+            "corregir"
+          ]
+        },
+        "description": "V179 -- correccion en lote del grupo de una matricula mal capturada. Mueve la matricula EXISTENTE al grupo destino (cualquier grupo, grado o sede que promover o reubicar aceptarian): NO crea matricula nueva, NO cambia el estado y NO pide motivo ni soporte. Origen: solo Cursando. Todo o nada. Solo rector/secretaria/jefe de sistema"
+      },
+      "response": []
+    },
+    {
+      "name": "[263] POST /cobertura-academica/matricula/promover",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "IDS",
+              "value": "[{{pkTmatricula}}]",
+              "type": "text",
+              "description": "TEXT -- lista en texto. Acepta [1,2], {1,2} o 1,2"
+            },
+            {
+              "key": "MOTIVO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "SOPORTE",
+              "type": "file",
+              "src": [],
+              "description": "FILE:matricula -- adjunte el archivo"
+            },
+            {
+              "key": "GRUPO_DESTINO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/files/eval-col/cobertura-academica/matricula/promover",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "eval-col",
+            "cobertura-academica",
+            "matricula",
+            "promover"
+          ]
+        },
+        "description": "V179 -- promocion en lote hacia un grupo de grado superior de la MISMA sede. Crea una matricula nueva en Cursando por cada una (copiando socioeconomico y documentos, encadenada por FK_TMATRICULA_ANTERIOR) y deja la anterior en Promovido. Motivo y soporte OBLIGATORIOS; quedan en TMATRICULA_PROMOCION. Origen: solo Cursando. Todo o nada. Solo rector/secretaria/jefe de sistema"
+      },
+      "response": []
+    },
+    {
+      "name": "[264] POST /cobertura-academica/matricula/reubicar",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "IDS",
+              "value": "[{{pkTmatricula}}]",
+              "type": "text",
+              "description": "TEXT -- lista en texto. Acepta [1,2], {1,2} o 1,2"
+            },
+            {
+              "key": "MOTIVO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "SOPORTE",
+              "type": "file",
+              "src": [],
+              "description": "FILE:matricula -- adjunte el archivo"
+            },
+            {
+              "key": "GRUPO_DESTINO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/files/eval-col/cobertura-academica/matricula/reubicar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "eval-col",
+            "cobertura-academica",
+            "matricula",
+            "reubicar"
+          ]
+        },
+        "description": "V179 -- reubicacion en lote hacia un grupo de OTRA sede, o de un grado INFERIOR de la misma sede. Crea una matricula nueva en Cursando por cada una y deja la anterior en Reubicado. Motivo y soporte OBLIGATORIOS; quedan en TTRASLADO_ESTUDIANTE. Origen: solo Cursando. Todo o nada. Se exige permiso sobre el establecimiento de origen y el de destino"
+      },
+      "response": []
+    },
+    {
+      "name": "[295] PATCH /usuarios/:ID",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "FOTO",
+              "type": "file",
+              "src": [],
+              "description": "FILE:usuario -- adjunte el archivo"
+            },
+            {
+              "key": "BARRIO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "COMUNA",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "GENERO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "TELEFONO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "LOCALIDAD",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "PRIMER_NOMBRE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "SEGUNDO_NOMBRE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "TIPO_DE_SANGRE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "PRIMER_APELLIDO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "SEGUNDO_APELLIDO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "TIPO_DE_DOCUMENTO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "CORREO_ELECTRONICO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ZONA_DE_RESIDENCIA",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "FECHA_DE_NACIMIENTO",
+              "value": "2026-01-15",
+              "type": "text",
+              "description": "DATE"
+            },
+            {
+              "key": "NUMERO_DE_DOCUMENTO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "LUGAR_DE_NACIMIENTO_MUNICIPIO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/files/eval-col/usuarios/{{pkTusuario}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "eval-col",
+            "usuarios",
+            "{{pkTusuario}}"
+          ]
+        },
+        "description": "V179 -- edita los datos de identidad y contacto de una persona (TUSUARIO): nombres, documento, fecha de nacimiento, genero, telefono, correo, foto y zona de residencia. NO toca cuenta ni contrasena. Se llama en cadena con el PATCH de matricula cuando se editan los dos a la vez. Permiso: rector/secretaria/jefe de sistema de un establecimiento al que la persona pertenezca"
+      },
+      "response": []
+    }
+  ]
+}
