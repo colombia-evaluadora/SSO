@@ -702,6 +702,34 @@ $function$;
 -- ambas cosas llegan igual.
 -- =============================================================================
 
+-- -----------------------------------------------------------------------------
+-- REV -- Se suelta la firma anterior antes de recrear la funcion.
+--
+-- p_pk_usuario_acudiente es un parametro NUEVO, asi que la firma cambia y
+-- CREATE OR REPLACE no reemplazaria: crearia una SEGUNDA funcion con el mismo
+-- nombre y distinto numero de argumentos. Esa fue exactamente la trampa de
+-- fn_usu_empleados_listar (ver V238), donde dos sobrecargas convivieron y la
+-- que no estaba en el camino de nadie se fue quedando atras.
+--
+-- Se sueltan por nombre y no por firma literal: son 70 parametros y
+-- enumerarlos seria fragil.
+-- -----------------------------------------------------------------------------
+DO $do$
+DECLARE
+    v_sig TEXT;
+BEGIN
+    FOR v_sig IN
+        SELECT p.oid::REGPROCEDURE::TEXT
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'academico_test'
+           AND p.proname = 'fn_matricula_directa_actualizar'
+    LOOP
+        EXECUTE 'DROP FUNCTION ' || v_sig;
+    END LOOP;
+END
+$do$;
+
 CREATE OR REPLACE FUNCTION academico_test.fn_matricula_directa_actualizar(
     p_pk_usuario_solicitante  BIGINT,
     p_pk_tmatricula           BIGINT,
@@ -737,6 +765,12 @@ CREATE OR REPLACE FUNCTION academico_test.fn_matricula_directa_actualizar(
 
     -- TPADRE + TNUCLEO_FAMILIAR + subset TUSUARIO del acudiente
     p_pk_tpadre                      BIGINT  DEFAULT NULL,
+    -- REV -- Quien debe quedar como acudiente DE ESTA MATRICULA, por su
+    -- PK_TUSUARIO. Se manda siempre: si coincide con el que la matricula ya
+    -- tiene, no hay sustitucion; si es otra persona, se sustituye. El front
+    -- resuelve la persona antes con el endpoint de alta de usuario, que la
+    -- devuelve si ya existe en vez de duplicarla.
+    p_pk_usuario_acudiente           BIGINT  DEFAULT NULL,
     p_fk_tlv_parentesco              BIGINT  DEFAULT NULL,
     p_fk_tlv_zona                    BIGINT  DEFAULT NULL,
     p_fk_tlv_nivel_educativo         BIGINT  DEFAULT NULL,
@@ -796,12 +830,21 @@ DECLARE
     v_socio              BIGINT;
     v_archivos           JSONB := 'null'::JSONB;
     v_padre_ok           BOOLEAN := FALSE;
+    v_fk_jornada         BIGINT;
+    v_pk_tpadre_actual   BIGINT;
+    v_pk_tpadre_nuevo    BIGINT;
+    v_pk_tpadre_editar   BIGINT;
+    v_acudiente_accion   TEXT    := 'sin cambio';
+    v_permisos_retirados INTEGER := 0;
+    c_fk_trol_acudiente  CONSTANT BIGINT := 16;
 BEGIN
     -- -----------------------------------------------------------------
     -- 1. Ubicar la matricula: sede, EE y estudiante.
     -- -----------------------------------------------------------------
-    SELECT pa.FK_TSEDE, s.FK_TESTABLECIMIENTO, m.FK_TESTUDIANTE
-      INTO v_fk_sede, v_fk_establecimiento, v_fk_testudiante
+    SELECT pa.FK_TSEDE, s.FK_TESTABLECIMIENTO, m.FK_TESTUDIANTE,
+           gr.FK_TLV_JORNADA, m.FK_TPADRE
+      INTO v_fk_sede, v_fk_establecimiento, v_fk_testudiante,
+           v_fk_jornada, v_pk_tpadre_actual
       FROM academico_test.TMATRICULA m
       JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
       JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
@@ -878,20 +921,174 @@ BEGIN
     END IF;
 
     -- -----------------------------------------------------------------
-    -- 6. Acudiente. Debe llegar identificado y estar realmente vinculado
-    --    a ESTE estudiante -- si no, se estaria editando al acudiente de
-    --    otra familia desde esta ficha.
+    -- 6.a REV -- Sustituir el acudiente de la matricula por otra persona.
+    --
+    --    El vinculo matricula <-> acudiente es TMATRICULA.FK_TPADRE: el
+    --    estudiante puede tener varios acudientes en TNUCLEO_FAMILIAR --que
+    --    es la relacion familiar, con sus datos-- y la matricula señala a
+    --    uno. Sustituir es repuntar ese campo.
+    --
+    --    Al que SALE no se le borra nada: sigue en el nucleo familiar del
+    --    estudiante, porque el vinculo familiar es real y sigue existiendo,
+    --    y conserva su TPADRE y su TUSUARIO. Lo unico que pierde es el
+    --    permiso de acceso en esa sede, y solo si no le queda ningun otro
+    --    estudiante con matricula activa alli -- mismo criterio que usa
+    --    fn_padre_soft_delete en su paso 1.
+    --
+    --    Los campos del formulario alimentan aqui la CREACION de los
+    --    registros del nuevo acudiente, no la edicion de los del anterior.
     -- -----------------------------------------------------------------
-    IF p_actualizar_acudiente THEN
-        IF p_pk_tpadre IS NULL THEN
+    IF p_pk_usuario_acudiente IS NOT NULL THEN
+        SELECT pd.PK_TPADRE INTO v_pk_tpadre_nuevo
+          FROM academico_test.TPADRE pd
+         WHERE pd.FK_TUSUARIO = p_pk_usuario_acudiente
+           AND pd.ACTIVE      = TRUE
+         ORDER BY pd.PK_TPADRE
+         LIMIT 1;
+
+        IF v_pk_tpadre_nuevo IS NOT NULL
+           AND v_pk_tpadre_nuevo IS NOT DISTINCT FROM v_pk_tpadre_actual THEN
+            -- Es la misma persona: no hay nada que sustituir.
+            v_acudiente_accion := 'sin cambio';
+        ELSE
+            IF COALESCE(p_fk_tlv_parentesco, p_fk_tlv_acudiente_parentesco) IS NULL THEN
+                RAISE EXCEPTION 'Para cambiar el acudiente hay que indicar el parentesco del nuevo'
+                    USING ERRCODE = '23502',
+                          HINT    = 'TNUCLEO_FAMILIAR.FK_TLV_PARENTESCO es obligatorio y no se puede deducir';
+            END IF;
+
+            -- Crea o reusa el TPADRE de esa persona y su vinculo con el
+            -- estudiante: fn_padre_crear ya es idempotente por (padre,
+            -- estudiante), asi que si la relacion familiar ya existia se
+            -- aprovecha en vez de duplicarla.
+            SELECT o_pk_tpadre INTO v_pk_tpadre_nuevo
+              FROM academico_test.fn_padre_crear(
+                  p_pk_usuario_solicitante      := p_pk_usuario_solicitante,
+                  p_fk_sede                     := v_fk_sede,
+                  p_pk_usuario                  := p_pk_usuario_acudiente,
+                  p_pk_testudiante              := v_fk_testudiante,
+                  p_fk_tlv_parentesco           := COALESCE(p_fk_tlv_parentesco,
+                                                            p_fk_tlv_acudiente_parentesco),
+                  p_fk_tmunicipio_documento     := p_fk_tmunicipio_documento_padre,
+                  p_fk_tmunicipio_residencia    := p_fk_tmunicipio_residencia_padre,
+                  p_direccion_residencia        := p_direccion_residencia_padre,
+                  p_fk_tlv_zona                 := p_fk_tlv_zona,
+                  p_fk_tlv_nivel_educativo      := p_fk_tlv_nivel_educativo,
+                  p_fk_tlv_estado_civil         := p_fk_tlv_estado_civil_padre,
+                  p_ocupacion                   := p_ocupacion,
+                  p_profesion                   := p_profesion,
+                  p_entidad                     := p_entidad,
+                  p_direccion_entidad           := p_direccion_entidad,
+                  p_telefono_entidad            := p_telefono_entidad,
+                  p_cargo_entidad               := p_cargo_entidad,
+                  p_acudiente                   := COALESCE(p_acudiente, 'S'),
+                  p_asiste_reuniones            := p_asiste_reuniones,
+                  p_asiste_informes             := p_asiste_informes,
+                  p_fk_tlv_tipo_empleo          := p_fk_tlv_tipo_empleo,
+                  p_fk_tlv_frecuencia_domicilio := p_fk_tlv_frecuencia_domicilio);
+
+            -- La matricula pasa a señalar al nuevo.
+            UPDATE academico_test.TMATRICULA
+               SET FK_TPADRE                   = v_pk_tpadre_nuevo,
+                   FK_TLV_ACUDIENTE_PARENTESCO = COALESCE(p_fk_tlv_acudiente_parentesco,
+                                                          p_fk_tlv_parentesco,
+                                                          FK_TLV_ACUDIENTE_PARENTESCO),
+                   MODIFIED_BY                 = p_pk_usuario_solicitante::VARCHAR,
+                   MODIFIED_AT                 = CURRENT_TIMESTAMP
+             WHERE PK_TMATRICULA = p_pk_tmatricula;
+
+            -- Permiso de acudiente en la sede. El ORDEN se calcula igual que
+            -- en el alta: uk_tsede_usuario_2 es (sede, rol, usuario, orden),
+            -- asi que fijarlo en 0 revienta si la persona ya tiene un
+            -- permiso de ese rol en la sede en otra jornada.
+            INSERT INTO academico_test.TSEDE_USUARIO (
+                FK_TSEDE, FK_TROL, FK_TUSUARIO, FK_TLV_JORNADA,
+                ORDEN, TLV_ESTADO, PREDETERMINADO, CREATED_BY, CREATED_AT, ACTIVE)
+            SELECT v_fk_sede, c_fk_trol_acudiente, p_pk_usuario_acudiente, v_fk_jornada,
+                   COALESCE((SELECT MAX(su2.ORDEN) + 1
+                               FROM academico_test.TSEDE_USUARIO su2
+                              WHERE su2.FK_TSEDE    = v_fk_sede
+                                AND su2.FK_TROL     = c_fk_trol_acudiente
+                                AND su2.FK_TUSUARIO = p_pk_usuario_acudiente
+                                AND su2.ACTIVE      = TRUE), 0),
+                   'ACTIVO', 0,
+                   p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
+             WHERE NOT EXISTS (
+                   SELECT 1 FROM academico_test.TSEDE_USUARIO su
+                    WHERE su.FK_TSEDE       = v_fk_sede
+                      AND su.FK_TROL        = c_fk_trol_acudiente
+                      AND su.FK_TUSUARIO    = p_pk_usuario_acudiente
+                      AND su.FK_TLV_JORNADA = v_fk_jornada
+                      AND su.ACTIVE         = TRUE);
+
+            -- Al que sale: se le retira el permiso de acudiente en ESTA sede
+            -- solo si ya no le queda ningun estudiante con matricula activa
+            -- aqui. Su TPADRE, su TUSUARIO y su fila de nucleo familiar
+            -- quedan intactos.
+            IF v_pk_tpadre_actual IS NOT NULL
+               AND v_pk_tpadre_actual <> v_pk_tpadre_nuevo THEN
+                UPDATE academico_test.TSEDE_USUARIO su
+                   SET ACTIVE      = FALSE,
+                       MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+                       MODIFIED_AT = CURRENT_TIMESTAMP
+                  FROM academico_test.TPADRE pv
+                 WHERE pv.PK_TPADRE    = v_pk_tpadre_actual
+                   AND su.FK_TUSUARIO  = pv.FK_TUSUARIO
+                   AND su.FK_TROL      = c_fk_trol_acudiente
+                   AND su.FK_TSEDE     = v_fk_sede
+                   AND su.ACTIVE       = TRUE
+                   -- El criterio es "¿sigue siendo el ACUDIENTE de alguna
+                   -- matricula activa en esta sede?", es decir por
+                   -- TMATRICULA.FK_TPADRE -- no por TNUCLEO_FAMILIAR.
+                   --
+                   -- Aqui esta la diferencia con fn_padre_soft_delete, que si
+                   -- mira el nucleo familiar: esa funcion deshace la relacion
+                   -- entera, asi que el vinculo familiar es la base correcta.
+                   -- En una sustitucion el vinculo familiar SOBREVIVE a
+                   -- proposito, asi que preguntarle a el daria siempre "si le
+                   -- queda un estudiante aqui" --justo el que acabamos de
+                   -- quitarle-- y nunca se retiraria el permiso.
+                   --
+                   -- El UPDATE de FK_TPADRE de mas arriba ya corrio, asi que
+                   -- esta matricula ya no lo señala y no se cuenta sola.
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM academico_test.TMATRICULA m2
+                         JOIN academico_test.TGRUPO gr2 ON gr2.PK_TGRUPO = m2.FK_TGRUPO
+                         JOIN academico_test.TGRADO g2  ON g2.PK_TGRADO = gr2.FK_TGRADO
+                         JOIN academico_test.TPERIODO_ACADEMICO pa2
+                           ON pa2.PK_TPERIODO_ACADEMICO = g2.FK_TPERIODO_ACADEMICO
+                        WHERE m2.FK_TPADRE = v_pk_tpadre_actual
+                          AND m2.ACTIVE    = TRUE
+                          AND pa2.FK_TSEDE = v_fk_sede);
+                GET DIAGNOSTICS v_permisos_retirados = ROW_COUNT;
+            END IF;
+
+            v_acudiente_accion := 'sustituido';
+            v_padre_ok         := TRUE;
+        END IF;
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 6.b Editar en sitio los datos del acudiente que ya esta. Debe estar
+    --     realmente vinculado a ESTE estudiante -- si no, se estaria
+    --     editando al acudiente de otra familia desde esta ficha.
+    --
+    --     Si acabo de haber sustitucion no se ejecuta: fn_padre_crear ya
+    --     escribio los datos del nuevo, y los del anterior no se tocan.
+    -- -----------------------------------------------------------------
+    IF p_actualizar_acudiente AND v_acudiente_accion <> 'sustituido' THEN
+        v_pk_tpadre_editar := COALESCE(p_pk_tpadre, v_pk_tpadre_nuevo, v_pk_tpadre_actual);
+
+        IF v_pk_tpadre_editar IS NULL THEN
             RAISE EXCEPTION 'Se pidio actualizar el acudiente pero no se indico cual'
                 USING ERRCODE = '22023',
-                      HINT    = 'Envie p_pk_tpadre: el estudiante puede tener varios acudientes';
+                      HINT    = 'Envie PK_USUARIO_ACUDIENTE o p_pk_tpadre: el estudiante puede tener varios acudientes';
         END IF;
 
         IF NOT EXISTS (
             SELECT 1 FROM academico_test.TNUCLEO_FAMILIAR nf
-             WHERE nf.FK_TPADRE      = p_pk_tpadre
+             WHERE nf.FK_TPADRE      = v_pk_tpadre_editar
                AND nf.FK_TESTUDIANTE = v_fk_testudiante
                AND nf.ACTIVE         = TRUE
         ) THEN
@@ -901,7 +1098,7 @@ BEGIN
 
         PERFORM academico_test.fn_padre_actualizar(
             p_pk_usuario_solicitante      := p_pk_usuario_solicitante,
-            p_pk_tpadre                   := p_pk_tpadre,
+            p_pk_tpadre                   := v_pk_tpadre_editar,
             p_fk_sede                     := v_fk_sede,
             p_pk_testudiante              := v_fk_testudiante,
             p_fk_tlv_parentesco           := p_fk_tlv_parentesco,
@@ -924,7 +1121,8 @@ BEGIN
             p_fk_tmunicipio_residencia    := p_fk_tmunicipio_residencia_padre,
             p_direccion_residencia        := p_direccion_residencia_padre
         );
-        v_padre_ok := TRUE;
+        v_padre_ok         := TRUE;
+        v_acudiente_accion := 'datos actualizados';
     END IF;
 
     -- -----------------------------------------------------------------
@@ -977,7 +1175,13 @@ BEGIN
     RETURN jsonb_build_object(
         'pkTmatricula',   p_pk_tmatricula,
         'pkTestudiante',  v_fk_testudiante,
-        'pkTpadre',       CASE WHEN v_padre_ok THEN p_pk_tpadre END,
+        -- El acudiente que queda en la matricula, venga de sustitucion, de
+        -- edicion o de no haberse tocado.
+        'pkTpadre',       COALESCE(v_pk_tpadre_nuevo, v_pk_tpadre_editar, v_pk_tpadre_actual),
+        'acudiente',      jsonb_build_object(
+                              'accion',                      v_acudiente_accion,
+                              'pkTpadreAnterior',            v_pk_tpadre_actual,
+                              'permisosRetiradosAlAnterior', v_permisos_retirados),
         'actualizado',    jsonb_build_object(
                               'matricula',      p_actualizar_matricula,
                               'estudiante',     p_actualizar_estudiante,

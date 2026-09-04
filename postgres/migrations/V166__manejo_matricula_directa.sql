@@ -409,6 +409,43 @@ BEGIN
     );
 
     -- -----------------------------------------------------------------
+    -- 9.b REV -- Dejar apuntada en la matricula CUAL de los acudientes del
+    --      estudiante es el de ESTA matricula.
+    --
+    --      TMATRICULA.FK_TPADRE es el vinculo matricula <-> acudiente: un
+    --      estudiante puede tener varios acudientes en TNUCLEO_FAMILIAR
+    --      --que es la relacion familiar, con sus datos-- y la matricula
+    --      señala a uno. Medido en los datos heredados: de las 32.070
+    --      matriculas activas que lo tienen relleno, 31.293 coinciden con
+    --      una fila ACTIVA de TNUCLEO_FAMILIAR del mismo par, y en los
+    --      estudiantes con 2 o 3 vinculos apunta a uno de ellos.
+    --
+    --      El alta no lo llenaba, asi que toda matricula creada por la app
+    --      quedaba con el puntero vacio y la lectura tenia que adivinar
+    --      (ver V239). Se rellena aqui y no en fn_matricula_crear porque
+    --      esa funcion es de otro modulo y no recibe el acudiente.
+    --
+    --      FK_TLV_ACUDIENTE_PARENTESCO acompaña al puntero: es el
+    --      parentesco del acudiente DE LA MATRICULA, el mismo que se
+    --      guardo en el nucleo familiar.
+    -- -----------------------------------------------------------------
+    IF v_pk_tpadre IS NOT NULL THEN
+        -- El alias "mm" no es cosmetico: esta funcion es
+        -- RETURNS TABLE(... pk_tmatricula ...), asi que dentro del cuerpo
+        -- pk_tmatricula es una VARIABLE de salida y una referencia sin
+        -- calificar a la columna homonima falla en ejecucion con 42702
+        -- ("column reference is ambiguous"). Compila igual: el error solo
+        -- aparece al ejecutar la sentencia.
+        UPDATE academico_test.TMATRICULA mm
+           SET FK_TPADRE                   = v_pk_tpadre,
+               FK_TLV_ACUDIENTE_PARENTESCO = COALESCE(p_fk_tlv_parentesco,
+                                                      mm.FK_TLV_ACUDIENTE_PARENTESCO),
+               MODIFIED_BY                 = p_pk_usuario_solicitante::VARCHAR,
+               MODIFIED_AT                 = CURRENT_TIMESTAMP
+         WHERE mm.PK_TMATRICULA = v_pk_matricula;
+    END IF;
+
+    -- -----------------------------------------------------------------
     -- 10. Crear el TMATRICULA_SOCIOECONOMICO asociado -- se crea siempre
     --    (fila 1-a-1), aunque llegue todo NULL: es el perfil
     --    socioeconomico de ESA matricula, no un dato opcional aparte.

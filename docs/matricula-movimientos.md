@@ -23,6 +23,17 @@ grupo y cambiar de estado.
 | `POST` | `/cobertura-academica/matricula/corregir` | 298 | **Corrección en lote** |
 | `PATCH` | `/usuarios/:ID` | 295 | **Datos de la persona** |
 
+Y uno que **no está en el catálogo**, porque vive en auth-center:
+
+| Método | Ruta | Qué hace |
+|---|---|---|
+| `POST` | `/register/usuario` | Da de alta una persona, **o la devuelve si ya existe** |
+
+Se usa para resolver al acudiente antes de sustituirlo en una matrícula: el
+front pide la persona por sus datos y recibe su `PK_TUSUARIO`, sin tener que
+comprobar antes si estaba registrada. Comparte `fn_usu_crear` con
+`POST /register/funcionario`.
+
 `PATCH` para editar (convención del sistema: establecimientos 87, sedes 90,
 funcionarios 119, referentes 232). `PUT` para las acciones sobre **una**
 matrícula (retirar, reingresar, reactivar, baja), porque el catálogo sólo admite
@@ -331,7 +342,9 @@ El cuerpo lleva banderas que dicen qué se guarda:
   "ACTUALIZAR_ESTUDIANTE": true,
   "ACTUALIZAR_ACUDIENTE": false,
   "ACTUALIZAR_SOCIOECONOMICO": true,
-  "PK_TPADRE": 70157,             // obligatorio si ACTUALIZAR_ACUDIENTE
+  "PK_USUARIO_ACUDIENTE": 166663,  // quién debe quedar como acudiente — mándalo siempre
+  "PARENTESCO": 703,               // obligatorio si el acudiente cambia
+  "PK_TPADRE": 70157,              // opcional: cuál editar si el estudiante tiene varios
   "TOCAR_DOCUMENTO_DE_IDENTIDAD": true,
   "DOCUMENTO_DE_IDENTIDAD_DEL_ESTUDIANTE": <archivo>   // null => borrado lógico
 }
@@ -340,6 +353,82 @@ El cuerpo lleva banderas que dicen qué se guarda:
 Sin las banderas no se podría distinguir "esta sección no se envió" de "no
 cambió nada", que es justo lo que permite editar una parte del formulario sin
 mandar el resto.
+
+El acudiente es la excepción: no lo decide una bandera sino una **key**, porque
+hay tres cosas que pueden pasarle y una bandera sólo distingue dos. Ver la
+sección siguiente.
+
+### El acudiente: sustituirlo o editarlo
+
+**Cómo se conecta.** `TMATRICULA.FK_TPADRE` es el vínculo matrícula ↔ acudiente.
+Un estudiante puede tener varios acudientes en `TNUCLEO_FAMILIAR` —que es la
+**relación familiar**, con sus datos— y **cada matrícula señala a uno**.
+Sustituir el acudiente es repuntar ese campo; el núcleo familiar del anterior
+sobrevive, porque el vínculo familiar sigue siendo real.
+
+Medido sobre los datos: de las matrículas activas, **32.070** tienen
+`FK_TPADRE` relleno y **31.293** coinciden con una fila `ACTIVE` de
+`TNUCLEO_FAMILIAR` del mismo par (padre, estudiante). En estudiantes con dos o
+tres vínculos, apunta a uno de ellos. No es una columna muerta: es el
+discriminador.
+
+**Los tres casos**, y los distingue `PK_USUARIO_ACUDIENTE` — el `PK_TUSUARIO` de
+quien debe quedar como acudiente de esa matrícula. Mándala **siempre**:
+
+| Qué mandas | Qué pasa | `acudiente.accion` |
+|---|---|---|
+| la misma key, `ACTUALIZAR_ACUDIENTE: false` | nada | `sin cambio` |
+| la misma key, `ACTUALIZAR_ACUDIENTE: true` + campos | se editan sus datos en sitio | `datos actualizados` |
+| **otra** key + `PARENTESCO` | se sustituye | `sustituido` |
+| no la mandas | el acudiente no se toca | `sin cambio` |
+
+Para sustituir, el front resuelve primero la persona con
+`POST /register/usuario` (auth-center, fuera del catálogo), que **la devuelve si
+ya existe** en vez de duplicarla —un docente, un padre con otro hijo
+matriculado—, y manda esa key.
+
+**`PARENTESCO` es obligatorio al sustituir.** `TNUCLEO_FAMILIAR.FK_TLV_PARENTESCO`
+es `NOT NULL` y no se puede deducir: si entra un acudiente nuevo hay que decir
+qué relación tiene con el alumno. Si falta, la respuesta es `23502`.
+
+Los demás campos del acudiente cambian de papel según el caso: al **sustituir**
+alimentan la **creación** de los registros del nuevo; al **editar**, la
+actualización del que ya está. Nunca modifican los datos del anterior.
+
+**Qué le pasa al que sale.** Nada, salvo el acceso:
+
+- **Sigue en el núcleo familiar** del estudiante. La fila queda `ACTIVE`.
+- Conserva su `TPADRE` y su `TUSUARIO`.
+- Pierde el permiso de acudiente **en esa sede**, y sólo si ya no es acudiente
+  de ninguna otra matrícula activa allí.
+
+Ese último criterio va por `TMATRICULA.FK_TPADRE`, no por `TNUCLEO_FAMILIAR`, y
+ahí está la diferencia con `fn_padre_soft_delete`, que sí mira el núcleo: esa
+función deshace la relación entera, así que el vínculo familiar es la base
+correcta. En una sustitución el vínculo **sobrevive a propósito**, así que
+preguntarle a él daría siempre "aún le queda un estudiante aquí" —justo el que
+acabamos de quitarle— y el permiso nunca se retiraría. Es un error que estuvo
+escrito y que sólo salió al probar la rama.
+
+**La respuesta** dice qué pasó, sin que el front tenga que inferirlo:
+
+```jsonc
+{
+  "pkTpadre": 2991,
+  "acudiente": {
+    "accion": "sustituido",
+    "pkTpadreAnterior": 65124,
+    "permisosRetiradosAlAnterior": 1
+  },
+  "actualizado": { "acudiente": true }
+}
+```
+
+**En la lectura.** El `GET` sigue devolviendo **todos** los acudientes del
+estudiante con su vínculo —la lista no se filtra— y marca cuál es el de la
+matrícula. Cuando `FK_TPADRE` apunta a alguien sin fila de núcleo (hay 777 así
+en los datos heredados) se muestra a esa persona con el parentesco vacío, en vez
+de sustituirla por otra: es más honesto que mentir sobre quién es.
 
 ### NULL no borra
 
@@ -388,6 +477,13 @@ Para "Otros documentos relevantes", que admiten N, se opera por
 
 ## Deuda conocida
 
+- **`fn_matricula_listar` divergió del repo.** La que corría en el servidor no
+  era la de V200: había una revisión aplicada a mano que nunca se escribió al
+  archivo, y traía un comentario dando por muerta la columna `FK_TPADRE` —de ahí
+  el bug de los 2.037 acudientes equivocados—. La corrección va en **V239**
+  partiendo de la versión **viva**, para no perder ese trabajo ni subirlo al
+  repo sin que su autor lo revise. Cuando escriba V200, V239 sigue siendo la
+  última palabra por número de versión. Pendiente: que lo haga.
 - **`TMATRICULA_PROMOCION` tiene ocho `justificacion_*` heredados en `NOT NULL`**
   que pertenecen al formulario de promoción *anticipada*, no a este flujo. Se
   llenan con cadena vacía para poder insertar; el motivo real va en

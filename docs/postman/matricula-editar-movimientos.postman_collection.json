@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "mtb2d9k4-matricula-editar",
     "name": "Matricula -- editar y movimientos",
-    "description": "Endpoints de edicion y de movimiento de grupo del modulo de matricula.\n\n## LAS CLAVES DEL BODY VAN EN UPPER_SNAKE\n\nEl motor de queries busca cada placeholder por su nombre EXACTO, tal como\nesta declarado en `param_types` del catalogo. No convierte camelCase a\nsnake_case: solo pasa a mayusculas lo que recibe.\n\nMandar `alumnosMadreCabezaDeFamilia` produce `BODY.ALUMNOSMADRECABEZADEFAMILIA`\ny el motor responde \"placeholders sin tipo declarado\", porque lo declarado es\n`BODY.ALUMNOS_MADRE_CABEZA_DE_FAMILIA`. Los nombres de esa lista de error salen\nde las claves que envio el cliente, NO del catalogo.\n\n    correcto    \"ALUMNOS_MADRE_CABEZA_DE_FAMILIA\": \"S\"\n    incorrecto  \"alumnosMadreCabezaDeFamilia\": \"S\"\n\nEs la misma convencion del POST de alta (id 215).\n\n## Multipart cuando hay archivos\n\nLos requests con campos `FILE:` van por `/api/files/eval-col/...` en formdata:\nel file-service sube el archivo a S3 y sustituye el binario por el PK_TARCHIVO\nantes de ejecutar la query. Los que no tienen archivos van por\n`/api/eval-col/...` en JSON.\n\n## Banderas del PATCH de matricula\n\nACTUALIZAR_* elige que secciones se guardan; TOCAR_* que documentos se\nreemplazan o se borran. Sin ellas en true, esa parte del cuerpo se ignora.\nNULL no borra: no toca el campo.\n\nDetalle completo en docs/matricula-movimientos.md",
+    "description": "Endpoints de edicion y de movimiento de grupo del modulo de matricula.\n\n## LAS CLAVES DEL BODY VAN EN UPPER_SNAKE\n\nEl motor de queries busca cada placeholder por su nombre EXACTO, tal como\nesta declarado en `param_types` del catalogo. No convierte camelCase a\nsnake_case: solo pasa a mayusculas lo que recibe.\n\nMandar `alumnosMadreCabezaDeFamilia` produce `BODY.ALUMNOSMADRECABEZADEFAMILIA`\ny el motor responde \"placeholders sin tipo declarado\", porque lo declarado es\n`BODY.ALUMNOS_MADRE_CABEZA_DE_FAMILIA`. Los nombres de esa lista de error salen\nde las claves que envio el cliente, NO del catalogo.\n\n    correcto    \"ALUMNOS_MADRE_CABEZA_DE_FAMILIA\": \"S\"\n    incorrecto  \"alumnosMadreCabezaDeFamilia\": \"S\"\n\nEs la misma convencion del POST de alta (id 215).\n\n## Multipart cuando hay archivos\n\nLos requests con campos `FILE:` van por `/api/files/eval-col/...` en formdata:\nel file-service sube el archivo a S3 y sustituye el binario por el PK_TARCHIVO\nantes de ejecutar la query. Los que no tienen archivos van por\n`/api/eval-col/...` en JSON.\n\n## Banderas del PATCH de matricula\n\nACTUALIZAR_* elige que secciones se guardan; TOCAR_* que documentos se\nreemplazan o se borran. Sin ellas en true, esa parte del cuerpo se ignora.\nNULL no borra: no toca el campo.\n\nDetalle completo en docs/matricula-movimientos.md\n\nEL ACUDIENTE DE UNA MATRICULA -- como se conecta\n\n  TMATRICULA.FK_TPADRE es el vinculo matricula <-> acudiente: un estudiante puede tener\n  varios acudientes en TNUCLEO_FAMILIAR --que es la relacion familiar, con sus datos-- y\n  cada matricula señala a UNO. Sustituir el acudiente es repuntar ese campo; el nucleo\n  familiar del anterior sobrevive.\n\n  Medido en los datos: de las matriculas activas, 32.070 tienen FK_TPADRE relleno y 31.293\n  de ellas coinciden con una fila ACTIVA de TNUCLEO_FAMILIAR del mismo par. En estudiantes\n  con 2 o 3 vinculos, apunta a uno de ellos.\n\n  Hasta V239 la lectura ignoraba esa columna y elegia por un desempate que no desempataba\n  (ACUDIENTE = 'S' esta en 18.262 de 18.268 filas activas): 2.037 matriculas activas\n  mostraban un acudiente equivocado. Y hasta V166 el alta no rellenaba el puntero, asi que\n  toda matricula creada por la app quedaba sin el.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -72,16 +72,22 @@
               "description": "TEXT"
             },
             {
+              "key": "PK_USUARIO_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT -- PK_TUSUARIO de quien debe quedar como acudiente DE ESTA MATRICULA. Mandalo SIEMPRE. Si coincide con el que la matricula ya tiene, no hay sustitucion. Si es otra persona, se sustituye y PARENTESCO pasa a ser obligatorio. Si no lo mandas, el acudiente no se toca. La persona se resuelve antes con POST /register/usuario, que la devuelve si ya existe en vez de duplicarla."
+            },
+            {
               "key": "PK_TPADRE",
               "value": "",
               "type": "text",
-              "description": "BIGINT"
+              "description": "BIGINT Ya no es obligatorio con ACTUALIZAR_ACUDIENTE: si no viene, se edita el acudiente que la matricula señala hoy. Sirve para elegir a uno concreto cuando el estudiante tiene varios."
             },
             {
               "key": "PARENTESCO",
               "value": "",
               "type": "text",
-              "description": "BIGINT"
+              "description": "BIGINT OBLIGATORIO cuando PK_USUARIO_ACUDIENTE trae una persona distinta: TNUCLEO_FAMILIAR.FK_TLV_PARENTESCO es NOT NULL y no se puede deducir. Si falta, la respuesta es 23502."
             },
             {
               "key": "SUBSIDIADO",
@@ -183,7 +189,7 @@
               "key": "ACTUALIZAR_ACUDIENTE",
               "value": "false",
               "type": "text",
-              "description": "BOOLEAN"
+              "description": "BOOLEAN Solo aplica a EDITAR los datos del acudiente que ya esta. En una sustitucion se ignora: los campos del formulario alimentan la creacion de los registros del nuevo."
             },
             {
               "key": "ACTUALIZAR_MATRICULA",
@@ -360,12 +366,6 @@
               "description": "BIGINT"
             },
             {
-              "key": "OTROS_DOCUMENTOS_RELEVANTES",
-              "value": "[]",
-              "type": "text",
-              "description": "JSONB"
-            },
-            {
               "key": "HIJOS_DE_MADRE_CABEZA_DE_FAMILIA",
               "value": "",
               "type": "text",
@@ -465,7 +465,7 @@
             "{{pkTmatricula}}"
           ]
         },
-        "description": "V179 -- edicion de la ficha de matricula en una sola transaccion. Las banderas ACTUALIZAR_* eligen que secciones se guardan y las TOCAR_* que documentos se reemplazan o se borran logicamente. NULL no borra: no toca el campo. No cambia grupo ni estado (para eso estan promover/reubicar/corregir) ni los datos de identidad de la persona (PATCH /usuarios/:ID). Solo rector/secretaria/jefe de sistema; el super-admin NO puede ejecutarlo"
+        "description": "V179 + V177/V240 -- edicion de la ficha de matricula en una sola transaccion.\n\nLas banderas ACTUALIZAR_* eligen que secciones se guardan y las TOCAR_* que documentos se reemplazan o se borran logicamente. NULL no borra: no toca el campo. No cambia grupo ni estado (para eso estan promover/reubicar/corregir) ni los datos de identidad de la persona (PATCH /usuarios/:ID). Solo rector/secretaria/jefe de sistema; el super-admin NO puede ejecutarlo.\n\nEL ACUDIENTE -- tres casos, y los distingue PK_USUARIO_ACUDIENTE\n\n  1) No tocarlo\n     PK_USUARIO_ACUDIENTE = la misma key que ya tiene, ACTUALIZAR_ACUDIENTE = false.\n     (O no mandes la key: da igual.)\n     -> acudiente.accion = \"sin cambio\"\n\n  2) Editar sus datos\n     PK_USUARIO_ACUDIENTE = la misma key, ACTUALIZAR_ACUDIENTE = true, mas los campos\n     del formulario. La identidad y el contacto van aparte, por PATCH /usuarios/:ID.\n     -> acudiente.accion = \"datos actualizados\"\n\n  3) Sustituirlo por otra persona\n     Resuelve primero la persona con POST /register/usuario (te la devuelve si ya existe).\n     Manda su key en PK_USUARIO_ACUDIENTE y PARENTESCO, que es obligatorio. Los demas\n     campos del acudiente se usan para CREAR sus registros, no para modificar los de nadie.\n     -> acudiente.accion = \"sustituido\"\n\n     Que hace: crea o reusa el TPADRE de esa persona y su fila de nucleo familiar con el\n     parentesco indicado, repunta TMATRICULA.FK_TPADRE, y le concede el permiso de\n     acudiente en la sede.\n\n     Al que SALE no se le borra nada: sigue en el nucleo familiar del estudiante --el\n     vinculo familiar es real y sigue existiendo-- y conserva su TPADRE y su TUSUARIO. Lo\n     unico que pierde es el permiso de acceso en ESA sede, y solo si ya no es acudiente de\n     ninguna otra matricula activa alli.\n\nRESPUESTA\n\n  {\n    \"pkTpadre\": 2991,\n    \"acudiente\": {\n      \"accion\": \"sustituido\",              // \"sin cambio\" | \"datos actualizados\" | \"sustituido\"\n      \"pkTpadreAnterior\": 65124,\n      \"permisosRetiradosAlAnterior\": 1\n    },\n    \"actualizado\": { \"acudiente\": true, ... }\n  }\n\n  acudiente.accion dice sin ambiguedad que paso, asi que sirve para el mensaje al usuario\n  sin tener que inferirlo."
       },
       "response": []
     },
@@ -490,7 +490,21 @@
             "raw": {
               "language": "json"
             }
-          }
+          },
+          "formdata": [
+            {
+              "key": "IDS",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT[]"
+            },
+            {
+              "key": "GRUPO_DESTINO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            }
+          ]
         },
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/cobertura-academica/matricula/corregir",
@@ -505,7 +519,7 @@
             "corregir"
           ]
         },
-        "description": "V179 -- correccion en lote del grupo de una matricula mal capturada. Mueve la matricula EXISTENTE al grupo destino (cualquier grupo, grado o sede que promover o reubicar aceptarian): NO crea matricula nueva, NO cambia el estado y NO pide motivo ni soporte. Origen: solo Cursando. Todo o nada. Solo rector/secretaria/jefe de sistema"
+        "description": "V178/V230 -- correccion de grupo en lote. Mueve las matriculas al grupo indicado SIN crear ninguna nueva y SIN cambiar de estado: es el arreglo de un error de digitacion, no un movimiento academico.\n\nPor eso NO pide motivo ni soporte, a diferencia de promover y reubicar. Es POST aunque no lleve archivo: son tres acciones hermanas de la misma pantalla y tenerlas en verbos distintos solo complica al front.\n\n  IDS            lista de PK_TMATRICULA. En multipart va como texto:\n                 \"1,2,3\" o \"{1,2,3}\" -- no \"[1,2]\", que revienta con 22P02.\n  GRUPO_DESTINO  PK_TGRUPO al que se mueven.\n\nSolo desde estado Cursando, el periodo del grupo destino no puede haber terminado, y el lote es todo o nada."
       },
       "response": []
     },
