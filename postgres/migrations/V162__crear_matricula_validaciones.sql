@@ -236,7 +236,8 @@ BEGIN
        AND ACTIVE    = TRUE;
 
     IF v_capacidad IS NULL THEN
-        RAISE EXCEPTION 'No se encontro un grupo activo con ese identificador'
+        RAISE EXCEPTION 'No se encontro un grupo activo con el identificador %',
+            p_fk_grupo
             USING ERRCODE = '23503', HINT = 'p_fk_grupo debe apuntar a un TGRUPO activo';
     END IF;
 

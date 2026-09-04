@@ -105,7 +105,8 @@ BEGIN
      WHERE s.PK_TSEDE = p_fk_sede AND s.ACTIVE = TRUE;
 
     IF v_fk_establecimiento IS NULL THEN
-        RAISE EXCEPTION 'No se encontro una sede activa con ese identificador'
+        RAISE EXCEPTION 'No se encontro una sede activa con el identificador %',
+            p_fk_sede
             USING ERRCODE = '22023', HINT = 'p_fk_sede debe apuntar a una TSEDE activa';
     END IF;
 
@@ -125,7 +126,8 @@ BEGIN
      WHERE e.PK_TESTUDIANTE = p_pk_testudiante AND e.ACTIVE = TRUE;
 
     IF v_fk_tusuario IS NULL THEN
-        RAISE EXCEPTION 'No se encontro un estudiante activo con ese identificador'
+        RAISE EXCEPTION 'No se encontro un estudiante activo con el identificador %',
+            p_pk_testudiante
             USING ERRCODE = '23503';
     END IF;
 
@@ -213,7 +215,8 @@ BEGIN
      WHERE s.PK_TSEDE = p_fk_sede AND s.ACTIVE = TRUE;
 
     IF v_fk_establecimiento IS NULL THEN
-        RAISE EXCEPTION 'No se encontro una sede activa con ese identificador'
+        RAISE EXCEPTION 'No se encontro una sede activa con el identificador %',
+            p_fk_sede
             USING ERRCODE = '22023';
     END IF;
 
@@ -227,7 +230,8 @@ BEGIN
      WHERE p.PK_TPADRE = p_pk_tpadre AND p.ACTIVE = TRUE;
 
     IF v_fk_tusuario IS NULL THEN
-        RAISE EXCEPTION 'No se encontro un acudiente activo con ese identificador'
+        RAISE EXCEPTION 'No se encontro un acudiente activo con el identificador %',
+            p_pk_tpadre
             USING ERRCODE = '23503';
     END IF;
 
@@ -430,7 +434,8 @@ BEGIN
      WHERE m.PK_TMATRICULA = p_fk_tmatricula AND m.ACTIVE = TRUE;
 
     IF v_fk_establecimiento IS NULL THEN
-        RAISE EXCEPTION 'No se encontro una matricula activa con ese identificador'
+        RAISE EXCEPTION 'No se encontro una matricula activa con el identificador %',
+            p_fk_tmatricula
             USING ERRCODE = '22023';
     END IF;
 
@@ -645,7 +650,8 @@ BEGIN
      WHERE m.PK_TMATRICULA = p_pk_tmatricula AND m.ACTIVE = TRUE;
 
     IF v_fk_establecimiento IS NULL THEN
-        RAISE EXCEPTION 'No se encontro una matricula activa con ese identificador'
+        RAISE EXCEPTION 'No se encontro una matricula activa con el identificador %',
+            p_pk_tmatricula
             USING ERRCODE = '22023';
     END IF;
 
@@ -806,7 +812,8 @@ BEGIN
        AND pa.ACTIVE = TRUE AND s.ACTIVE = TRUE;
 
     IF v_fk_establecimiento IS NULL THEN
-        RAISE EXCEPTION 'No se encontro una matricula activa con ese identificador'
+        RAISE EXCEPTION 'No se encontro una matricula activa con el identificador %',
+            p_pk_tmatricula
             USING ERRCODE = '22023',
                   HINT    = 'p_pk_tmatricula debe apuntar a un TMATRICULA activo, con grupo/grado/periodo/sede activos';
     END IF;

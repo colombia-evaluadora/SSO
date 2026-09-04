@@ -268,12 +268,19 @@ En corrección da igual el orden: no hay copia, la fila es la misma.
 ### Período académico
 
 Los tres movimientos usan la misma regla: el período del grupo destino **no
-puede haber terminado**, y **no puede haber empezado antes** que el de la
-matrícula. Pueden apuntar al mismo período —bajar de grado a mitad de año— o a
-uno posterior, que es el caso normal de la promoción de fin de año.
+puede haber terminado**. Puede ser el mismo período de la matrícula —bajar de
+grado a mitad de año—, uno posterior —la promoción de fin de año, el caso
+normal— o incluso uno que empezó antes.
 
 Consecuencia práctica: **el período del año siguiente tiene que existir antes de
 poder promover.**
+
+> Hubo además una comparación de fechas de inicio, que exigía que el período
+> destino no hubiera empezado antes que el de la matrícula. Se quitó: en la
+> práctica es normal que dos períodos vigentes arranquen con días o semanas de
+> diferencia, y esa comparación rebotaba movimientos legítimos por un desfase
+> de calendario que no dice nada del año lectivo. Con que ninguno de los dos
+> períodos haya terminado alcanza.
 
 Ninguna acción del módulo funciona si el período de la matrícula ya terminó
 (`fn_matricula_validar_periodo_vigente`). El corte es `FECHA_FIN`, no `ACTIVE`:

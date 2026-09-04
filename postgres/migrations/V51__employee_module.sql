@@ -125,29 +125,69 @@ VOLATILE
 AS $$
 DECLARE
     v_pk_usuario  BIGINT;
+    v_nivel       INT;
 BEGIN
     -- ---------------------------------------------------------------------
-    -- 0. Gate de autorizacion: solo roles con permiso de usuarios (1-3, 7-8, 9).
+    -- 0. Gate de autorizacion -- REV: modelo dinamico (CU-86e2zenhr).
+    --
+    -- Antes: fn_puede_afectar_usuarios, que era la lista fija de roles
+    -- 1-3, 7-8, 9. Ahora, tres piezas:
+    --
+    --   1. CAPABILITY -- el rol tiene concedido el menu FUNCIONARIOS. Se
+    --      administra desde la pantalla de roles, sin tocar SQL.
+    --
+    --   2. NIVEL <= 2 -- dar de alta a un funcionario es un acto de
+    --      establecimiento o superior. No es politica nueva: la lista fija
+    --      que se retira (1-3, 7-8, 9) es EXACTAMENTE el conjunto de
+    --      niveles 0, 1 y 2, asi que esto es la misma regla dicha de forma
+    --      estructural, via CATEGORIA_ROL, en vez de enumerando roles.
+    --      Hace falta explicitarlo porque la capability es BINARIA: no
+    --      distingue ver de crear (TROL_MENU no tiene columnas por accion,
+    --      y fn_usuario_puede_en_menu devuelve lo mismo para VER, CREAR,
+    --      EDITAR y ELIMINAR). Sin este recorte, el coordinador -- que
+    --      recibio FUNCIONARIOS en V237 para poder LISTAR -- se llevaria
+    --      de regalo el alta, que hoy no tiene.
+    --
+    --   3. El FALLBACK de rector/secretaria, que se conserva tal cual --
+    --      ver el comentario de abajo. Sin el, los 7 rectores y
+    --      secretarias que hoy no tienen ningun TSEDE_USUARIO (medido)
+    --      quedarian con nivel NULL, sin capability, y perderian el alta.
+    --
+    -- El super-admin (nivel 0) entra por el bypass: aca no aplica la
+    -- exclusion que si tiene el modulo de matricula.
     -- ---------------------------------------------------------------------
-    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        -- Fallback: rector o secretaria de CUALQUIER EE activo, via
-        -- TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA --
-        -- fn_puede_afectar_usuarios (-> fn_puede_afectar_sede ->
-        -- fn_puede_afectar_establecimiento) solo reconoce el rol via
-        -- TSEDE_USUARIO (FK_TROL 1-3/7-8/9): un rector/secretaria recien
-        -- asignado, sin ningun TSEDE_USUARIO todavia (caso normal antes de
-        -- que se decida si se liga a todas las sedes o no), quedaba sin
-        -- poder gestionar a sus propios funcionarios.
-        IF NOT EXISTS (
-            SELECT 1
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f
-                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-        ) THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
+    v_nivel := academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante);
+    IF v_nivel IS DISTINCT FROM 0
+       AND NOT (
+            (
+                -- 1 + 2: capability, y solo desde nivel de establecimiento
+                -- o superior. COALESCE porque un solicitante sin ningun rol
+                -- da nivel NULL, y NULL <= 2 no es FALSE.
+                COALESCE(v_nivel <= 2, FALSE)
+                AND academico_test.fn_usuario_puede_en_menu(
+                        p_pk_usuario_solicitante, 'FUNCIONARIOS', 'CREAR')
+            )
+            OR
+            (
+                -- 3: rector o secretaria de CUALQUIER EE activo, via
+                -- TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA. El
+                -- modelo dinamico resuelve el nivel por TSEDE_USUARIO, asi
+                -- que un rector/secretaria recien asignado -- sin ningun
+                -- TSEDE_USUARIO todavia, caso normal antes de decidir si se
+                -- liga a todas las sedes -- quedaria sin poder gestionar a
+                -- sus propios funcionarios. Son 7 personas reales hoy.
+                EXISTS (
+                    SELECT 1
+                      FROM academico_test.TESTABLECIMIENTO e
+                      JOIN academico_test.TFUNCIONARIO f
+                        ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+                     WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE
+                       AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+                )
+            )
+       ) THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
     END IF;
 
     -- ---------------------------------------------------------------------

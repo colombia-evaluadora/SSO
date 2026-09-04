@@ -154,7 +154,8 @@ BEGIN
        AND s.ACTIVE   = TRUE;
 
     IF v_fk_establecimiento IS NULL THEN
-        RAISE EXCEPTION 'No se encontro una sede activa con ese identificador'
+        RAISE EXCEPTION 'No se encontro una sede activa con el identificador %',
+            p_fk_sede
             USING ERRCODE = '22023', HINT = 'p_fk_sede debe apuntar a una TSEDE activa';
     END IF;
 
@@ -218,7 +219,8 @@ BEGIN
        AND g.ACTIVE      = TRUE;
 
     IF v_fk_periodo_del_grupo IS NULL THEN
-        RAISE EXCEPTION 'No se encontro un grupo activo con ese identificador'
+        RAISE EXCEPTION 'No se encontro un grupo activo con el identificador %',
+            p_fk_tgrupo
             USING ERRCODE = '23503',
                   HINT    = 'p_fk_tgrupo debe apuntar a un TGRUPO activo con TGRADO activo';
     END IF;
@@ -672,7 +674,8 @@ BEGIN
        AND s.ACTIVE        = TRUE;
 
     IF v_fk_sede IS NULL THEN
-        RAISE EXCEPTION 'No se encontro una matricula activa con ese identificador'
+        RAISE EXCEPTION 'No se encontro una matricula activa con el identificador %',
+            p_pk_tmatricula
             USING ERRCODE = '22023';
     END IF;
 
@@ -980,6 +983,9 @@ DECLARE
     v_fk_establecimiento  BIGINT;
     v_estado_actual       BIGINT;
     v_estado_actual_nom   VARCHAR;
+    -- De quien es la matricula, para los mensajes de error: el identificador
+    -- a secas no le dice nada a quien opera la pantalla.
+    v_estudiante_nom      TEXT;
     v_pk_cursando         BIGINT;
     v_pk_retirado         BIGINT;
     v_pk_retiro           BIGINT;
@@ -989,13 +995,22 @@ BEGIN
     -- -----------------------------------------------------------------
     -- 1. Ubicar la matricula y su EE.
     -- -----------------------------------------------------------------
-    SELECT s.FK_TESTABLECIMIENTO, m.FK_TLV_ESTADO_MATRICULA
-      INTO v_fk_establecimiento, v_estado_actual
+    SELECT s.FK_TESTABLECIMIENTO, m.FK_TLV_ESTADO_MATRICULA,
+           COALESCE(
+               NULLIF(TRIM(CONCAT_WS(' ', us.PRIMER_NOMBRE, us.SEGUNDO_NOMBRE,
+                                          us.PRIMER_APELLIDO, us.SEGUNDO_APELLIDO)), ''),
+               'estudiante sin nombre')
+           || ' (documento '
+           || COALESCE(NULLIF(TRIM(us.IDENTIFICACION), ''), 'sin dato')
+           || ', matricula ' || m.PK_TMATRICULA || ')'
+      INTO v_fk_establecimiento, v_estado_actual, v_estudiante_nom
       FROM academico_test.TMATRICULA m
       JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
       JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
       JOIN academico_test.TPERIODO_ACADEMICO pa   ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
       JOIN academico_test.TSEDE s                 ON s.PK_TSEDE = pa.FK_TSEDE
+      LEFT JOIN academico_test.TESTUDIANTE es     ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
+      LEFT JOIN academico_test.TUSUARIO    us     ON us.PK_TUSUARIO = es.FK_TUSUARIO
      WHERE m.PK_TMATRICULA = p_pk_tmatricula
        AND m.ACTIVE        = TRUE
        AND gr.ACTIVE       = TRUE
@@ -1004,7 +1019,8 @@ BEGIN
        AND s.ACTIVE        = TRUE;
 
     IF v_fk_establecimiento IS NULL THEN
-        RAISE EXCEPTION 'No se encontro una matricula activa con ese identificador'
+        RAISE EXCEPTION 'No se encontro una matricula activa con el identificador %',
+            p_pk_tmatricula
             USING ERRCODE = '22023',
                   HINT    = 'p_pk_tmatricula debe apuntar a un TMATRICULA activo, con grupo/grado/periodo/sede activos';
     END IF;
@@ -1054,8 +1070,8 @@ BEGIN
         SELECT NOMBRE INTO v_estado_actual_nom
           FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = v_estado_actual;
 
-        RAISE EXCEPTION 'Solo se puede retirar una matricula en estado "Cursando"; esta figura como "%"',
-            COALESCE(v_estado_actual_nom, 'sin estado')
+        RAISE EXCEPTION 'Solo se puede retirar una matricula en estado "Cursando"; la de % figura como "%"',
+            v_estudiante_nom, COALESCE(v_estado_actual_nom, 'sin estado')
             USING ERRCODE = '22023';
     END IF;
 
@@ -1146,6 +1162,9 @@ DECLARE
     v_fk_establecimiento  BIGINT;
     v_estado_actual       BIGINT;
     v_estado_actual_nom   VARCHAR;
+    -- De quien es la matricula, para los mensajes de error: el identificador
+    -- a secas no le dice nada a quien opera la pantalla.
+    v_estudiante_nom      TEXT;
     v_pk_cursando         BIGINT;
     v_pk_retirado         BIGINT;
     v_pk_retiro           BIGINT;
@@ -1154,13 +1173,22 @@ BEGIN
     -- -----------------------------------------------------------------
     -- 1. Ubicar la matricula y su EE.
     -- -----------------------------------------------------------------
-    SELECT s.FK_TESTABLECIMIENTO, m.FK_TLV_ESTADO_MATRICULA
-      INTO v_fk_establecimiento, v_estado_actual
+    SELECT s.FK_TESTABLECIMIENTO, m.FK_TLV_ESTADO_MATRICULA,
+           COALESCE(
+               NULLIF(TRIM(CONCAT_WS(' ', us.PRIMER_NOMBRE, us.SEGUNDO_NOMBRE,
+                                          us.PRIMER_APELLIDO, us.SEGUNDO_APELLIDO)), ''),
+               'estudiante sin nombre')
+           || ' (documento '
+           || COALESCE(NULLIF(TRIM(us.IDENTIFICACION), ''), 'sin dato')
+           || ', matricula ' || m.PK_TMATRICULA || ')'
+      INTO v_fk_establecimiento, v_estado_actual, v_estudiante_nom
       FROM academico_test.TMATRICULA m
       JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
       JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
       JOIN academico_test.TPERIODO_ACADEMICO pa   ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
       JOIN academico_test.TSEDE s                 ON s.PK_TSEDE = pa.FK_TSEDE
+      LEFT JOIN academico_test.TESTUDIANTE es     ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
+      LEFT JOIN academico_test.TUSUARIO    us     ON us.PK_TUSUARIO = es.FK_TUSUARIO
      WHERE m.PK_TMATRICULA = p_pk_tmatricula
        AND m.ACTIVE        = TRUE
        AND gr.ACTIVE       = TRUE
@@ -1169,7 +1197,8 @@ BEGIN
        AND s.ACTIVE        = TRUE;
 
     IF v_fk_establecimiento IS NULL THEN
-        RAISE EXCEPTION 'No se encontro una matricula activa con ese identificador'
+        RAISE EXCEPTION 'No se encontro una matricula activa con el identificador %',
+            p_pk_tmatricula
             USING ERRCODE = '22023',
                   HINT    = 'p_pk_tmatricula debe apuntar a un TMATRICULA activo, con grupo/grado/periodo/sede activos';
     END IF;
@@ -1219,8 +1248,8 @@ BEGIN
         SELECT NOMBRE INTO v_estado_actual_nom
           FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = v_estado_actual;
 
-        RAISE EXCEPTION 'Solo se puede reingresar una matricula en estado "Retirado"; esta figura como "%"',
-            COALESCE(v_estado_actual_nom, 'sin estado')
+        RAISE EXCEPTION 'Solo se puede reingresar una matricula en estado "Retirado"; la de % figura como "%"',
+            v_estudiante_nom, COALESCE(v_estado_actual_nom, 'sin estado')
             USING ERRCODE = '22023';
     END IF;
 
@@ -1320,6 +1349,9 @@ DECLARE
     v_fk_establecimiento  BIGINT;
     v_estado_actual       BIGINT;
     v_estado_actual_nom   VARCHAR;
+    -- De quien es la matricula, para los mensajes de error: el identificador
+    -- a secas no le dice nada a quien opera la pantalla.
+    v_estudiante_nom      TEXT;
     v_pk_cursando         BIGINT;
     v_reactivables        BIGINT[];
     v_permitidos_nom      TEXT;
@@ -1330,13 +1362,22 @@ BEGIN
     -- -----------------------------------------------------------------
     -- 1. Ubicar la matricula y su EE.
     -- -----------------------------------------------------------------
-    SELECT s.FK_TESTABLECIMIENTO, m.FK_TLV_ESTADO_MATRICULA
-      INTO v_fk_establecimiento, v_estado_actual
+    SELECT s.FK_TESTABLECIMIENTO, m.FK_TLV_ESTADO_MATRICULA,
+           COALESCE(
+               NULLIF(TRIM(CONCAT_WS(' ', us.PRIMER_NOMBRE, us.SEGUNDO_NOMBRE,
+                                          us.PRIMER_APELLIDO, us.SEGUNDO_APELLIDO)), ''),
+               'estudiante sin nombre')
+           || ' (documento '
+           || COALESCE(NULLIF(TRIM(us.IDENTIFICACION), ''), 'sin dato')
+           || ', matricula ' || m.PK_TMATRICULA || ')'
+      INTO v_fk_establecimiento, v_estado_actual, v_estudiante_nom
       FROM academico_test.TMATRICULA m
       JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = m.FK_TGRUPO
       JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
       JOIN academico_test.TPERIODO_ACADEMICO pa   ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
       JOIN academico_test.TSEDE s                 ON s.PK_TSEDE = pa.FK_TSEDE
+      LEFT JOIN academico_test.TESTUDIANTE es     ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
+      LEFT JOIN academico_test.TUSUARIO    us     ON us.PK_TUSUARIO = es.FK_TUSUARIO
      WHERE m.PK_TMATRICULA = p_pk_tmatricula
        AND m.ACTIVE        = TRUE
        AND gr.ACTIVE       = TRUE
@@ -1345,7 +1386,8 @@ BEGIN
        AND s.ACTIVE        = TRUE;
 
     IF v_fk_establecimiento IS NULL THEN
-        RAISE EXCEPTION 'No se encontro una matricula activa con ese identificador'
+        RAISE EXCEPTION 'No se encontro una matricula activa con el identificador %',
+            p_pk_tmatricula
             USING ERRCODE = '22023',
                   HINT    = 'p_pk_tmatricula debe apuntar a un TMATRICULA activo, con grupo/grado/periodo/sede activos';
     END IF;
@@ -1401,8 +1443,8 @@ BEGIN
     -- 4. El estado actual debe ser uno de los reactivables.
     -- -----------------------------------------------------------------
     IF NOT (v_estado_actual = ANY(v_reactivables)) THEN
-        RAISE EXCEPTION 'Solo se puede reactivar una matricula en estado %; esta figura como "%"',
-            v_permitidos_nom, COALESCE(v_estado_actual_nom, 'sin estado')
+        RAISE EXCEPTION 'La matricula de % solo se puede reactivar desde los estados %; figura como "%"',
+            v_estudiante_nom, v_permitidos_nom, COALESCE(v_estado_actual_nom, 'sin estado')
             USING ERRCODE = '22023';
     END IF;
 

@@ -135,8 +135,10 @@ DECLARE
     v_capacidad           NUMERIC;
     v_ocupados            BIGINT;
     v_fin_destino         DATE;
-    v_inicio_destino      DATE;
     v_periodo_dest_nom    VARCHAR;
+    -- Etiqueta legible del grupo destino, para los mensajes de error: el
+    -- identificador a secas no le dice nada a quien opera la pantalla.
+    v_destino_nom         TEXT;
     v_estados_origen      BIGINT[];
     v_estados_origen_nom  TEXT;
     v_pk_destino_estado   BIGINT;
@@ -195,11 +197,11 @@ BEGIN
     -- 3. Grupo destino y todo su contexto academico.
     -- -----------------------------------------------------------------
     SELECT gr.FK_TLV_JORNADA, g.FK_TPERIODO_ACADEMICO, pa.FK_TSEDE,
-           s.FK_TESTABLECIMIENTO, gr.CAPACIDAD, pa.FECHA_FIN, pa.FECHA_INICIO,
+           s.FK_TESTABLECIMIENTO, gr.CAPACIDAD, pa.FECHA_FIN,
            pa.NOMBRE, g.PK_TGRADO, g.NOMBRE, gr.NOMBRE,
            CASE WHEN g.CODIGO ~ '^-?[0-9]+$' THEN g.CODIGO::INTEGER END
       INTO v_jornada_destino, v_periodo_destino, v_sede_destino,
-           v_ee_destino, v_capacidad, v_fin_destino, v_inicio_destino,
+           v_ee_destino, v_capacidad, v_fin_destino,
            v_periodo_dest_nom, v_grado_destino, v_nom_grado_destino,
            v_nom_grupo_destino, v_cod_destino
       FROM academico_test.TGRUPO gr
@@ -210,14 +212,19 @@ BEGIN
        AND gr.ACTIVE = TRUE AND g.ACTIVE = TRUE AND pa.ACTIVE = TRUE AND s.ACTIVE = TRUE;
 
     IF v_ee_destino IS NULL THEN
-        RAISE EXCEPTION 'No se encontro un grupo destino activo con ese identificador'
+        RAISE EXCEPTION 'No se encontro un grupo destino activo con el identificador %',
+            p_fk_tgrupo_destino
             USING ERRCODE = '23503',
                   HINT    = 'p_fk_tgrupo_destino debe apuntar a un TGRUPO activo, con grado/periodo/sede activos';
     END IF;
 
+    v_destino_nom := COALESCE(NULLIF(TRIM(v_nom_grupo_destino), ''), 'sin nombre')
+                     || ' de ' || COALESCE(NULLIF(TRIM(v_nom_grado_destino), ''), 'grado sin nombre')
+                     || ' (grupo ' || p_fk_tgrupo_destino || ')';
+
     IF v_fin_destino < CURRENT_DATE THEN
         RAISE EXCEPTION 'No se puede % hacia el grupo %: su periodo academico (%) termino el %',
-            p_modo, p_fk_tgrupo_destino, COALESCE(v_periodo_dest_nom, 'sin nombre'), v_fin_destino
+            p_modo, v_destino_nom, COALESCE(v_periodo_dest_nom, 'sin nombre'), v_fin_destino
             USING ERRCODE = '22023',
                   HINT    = 'Elija un grupo de un periodo academico en curso';
     END IF;
@@ -284,8 +291,8 @@ BEGIN
        AND (v_crea OR NOT (PK_TMATRICULA = ANY(v_ids)));
 
     IF v_ocupados + v_total > v_capacidad THEN
-        RAISE EXCEPTION 'El grupo destino no tiene cupo para las % matriculas del lote (capacidad %, ocupados %, disponibles %)',
-            v_total, v_capacidad, v_ocupados, GREATEST(v_capacidad - v_ocupados, 0)
+        RAISE EXCEPTION 'El grupo destino % no tiene cupo suficiente: el lote pide % y quedan % disponibles (capacidad %, ocupados %)',
+            v_destino_nom, v_total, GREATEST(v_capacidad - v_ocupados, 0), v_capacidad, v_ocupados
             USING ERRCODE = '23505',
                   HINT    = 'Elija un grupo con cupo suficiente o divida el lote';
     END IF;
@@ -303,12 +310,24 @@ BEGIN
                pa.FK_TSEDE               AS sede,
                s.FK_TESTABLECIMIENTO     AS ee,
                pa.NOMBRE                 AS periodo_origen_nom,
-               pa.FECHA_INICIO           AS inicio_origen,
                g.PK_TGRADO               AS grado_origen,
-               CASE WHEN g.CODIGO ~ '^-?[0-9]+$' THEN g.CODIGO::INTEGER END AS cod_origen
+               g.NOMBRE                  AS grado_origen_nom,
+               CASE WHEN g.CODIGO ~ '^-?[0-9]+$' THEN g.CODIGO::INTEGER END AS cod_origen,
+               -- Como se nombra la matricula en los mensajes de error. La PK
+               -- se conserva al final, que es lo que sirve para soporte, pero
+               -- lo primero que se lee es de quien se esta hablando.
+               COALESCE(
+                   NULLIF(TRIM(CONCAT_WS(' ', us.PRIMER_NOMBRE, us.SEGUNDO_NOMBRE,
+                                              us.PRIMER_APELLIDO, us.SEGUNDO_APELLIDO)), ''),
+                   'estudiante sin nombre')
+               || ' (documento '
+               || COALESCE(NULLIF(TRIM(us.IDENTIFICACION), ''), 'sin dato')
+               || ', matricula ' || id.x || ')'                       AS etiqueta
           FROM UNNEST(v_ids) AS id(x)
           LEFT JOIN academico_test.TMATRICULA m ON m.PK_TMATRICULA = id.x AND m.ACTIVE = TRUE
           LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = m.FK_TLV_ESTADO_MATRICULA
+          LEFT JOIN academico_test.TESTUDIANTE es        ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
+          LEFT JOIN academico_test.TUSUARIO    us        ON us.PK_TUSUARIO = es.FK_TUSUARIO
           LEFT JOIN academico_test.TGRUPO gr             ON gr.PK_TGRUPO = m.FK_TGRUPO AND gr.ACTIVE = TRUE
           LEFT JOIN academico_test.TGRADO g              ON g.PK_TGRADO = gr.FK_TGRADO AND g.ACTIVE = TRUE
           LEFT JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO AND pa.ACTIVE = TRUE
@@ -325,35 +344,27 @@ BEGIN
             p_pk_tmatricula := v_fila.pk, p_accion := p_modo);
 
         IF NOT (v_fila.estado = ANY(v_estados_origen)) THEN
-            RAISE EXCEPTION 'La matricula % esta en estado "%" y solo se puede % desde: %',
-                v_fila.pk, COALESCE(v_fila.estado_nom, 'sin estado'), p_modo, v_estados_origen_nom
+            RAISE EXCEPTION 'La matricula de % esta en estado "%" y solo se puede % desde: %',
+                v_fila.etiqueta, COALESCE(v_fila.estado_nom, 'sin estado'), p_modo, v_estados_origen_nom
                 USING ERRCODE = '22023';
         END IF;
 
         IF NOT academico_test.fn_matricula_puede_cambiar_estado(p_pk_usuario_solicitante, v_fila.ee) THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario sobre el establecimiento de la matricula %',
-                v_fila.pk
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario sobre el establecimiento de la matricula de %',
+                v_fila.etiqueta
                 USING ERRCODE = '42501';
         END IF;
 
         IF v_fila.grupo_origen = p_fk_tgrupo_destino THEN
-            RAISE EXCEPTION 'La matricula % ya esta en el grupo destino', v_fila.pk
+            RAISE EXCEPTION 'La matricula de % ya esta en el grupo destino %',
+                v_fila.etiqueta, v_destino_nom
                 USING ERRCODE = '22023';
-        END IF;
-
-        -- El periodo destino puede ser el mismo o uno posterior, nunca uno
-        -- que empezo antes. Que no haya terminado ya se valido en el paso 3.
-        IF v_inicio_destino < v_fila.inicio_origen THEN
-            RAISE EXCEPTION 'No se puede % la matricula % hacia el periodo academico "%": empezo antes que el suyo ("%")',
-                p_modo, v_fila.pk, COALESCE(v_periodo_dest_nom, 'sin nombre'),
-                COALESCE(v_fila.periodo_origen_nom, 'sin nombre')
-                USING ERRCODE = '22023',
-                      HINT    = 'El periodo destino debe ser el mismo o uno posterior';
         END IF;
 
         -- ---- lo que distingue a los tres modos ----
         IF p_modo = 'promover' AND v_fila.sede <> v_sede_destino THEN
-            RAISE EXCEPTION 'La matricula % es de otra sede -- promover mantiene al estudiante en su sede', v_fila.pk
+            RAISE EXCEPTION 'La matricula de % es de otra sede -- promover mantiene al estudiante en su sede',
+                v_fila.etiqueta
                 USING ERRCODE = '22023',
                       HINT    = 'Para mover un estudiante a otra sede use reubicar';
         END IF;
@@ -366,8 +377,10 @@ BEGIN
                AND v_fila.cod_origen BETWEEN c_min_escalera AND c_max_escalera
                AND v_cod_destino    BETWEEN c_min_escalera AND c_max_escalera
                AND v_cod_destino >= v_fila.cod_origen THEN
-                RAISE EXCEPTION 'La matricula % seguiria en la misma sede sin bajar de grado: eso es una correccion, no una reubicacion',
-                    v_fila.pk
+                RAISE EXCEPTION 'La matricula de % seguiria en la misma sede sin bajar de grado (de "%" a "%"): eso es una correccion, no una reubicacion',
+                    v_fila.etiqueta,
+                    COALESCE(NULLIF(TRIM(v_fila.grado_origen_nom), ''), 'grado sin nombre'),
+                    COALESCE(NULLIF(TRIM(v_nom_grado_destino), ''), 'grado sin nombre')
                     USING ERRCODE = '22023',
                           HINT    = 'Dentro de la misma sede, reubicar solo aplica hacia un grado inferior; para cualquier otro cambio use corregir';
             END IF;
@@ -377,7 +390,8 @@ BEGIN
             SELECT 1 FROM academico_test.TMATRICULA d
              WHERE d.FK_TMATRICULA_ANTERIOR = v_fila.pk AND d.ACTIVE = TRUE
         ) THEN
-            RAISE EXCEPTION 'La matricula % ya tiene una matricula posterior encadenada', v_fila.pk
+            RAISE EXCEPTION 'La matricula de % ya tiene una matricula posterior encadenada',
+                v_fila.etiqueta
                 USING ERRCODE = '23505',
                       HINT    = 'Esa matricula ya fue promovida o reubicada';
         END IF;
@@ -399,8 +413,8 @@ BEGIN
                AND g2.FK_TPERIODO_ACADEMICO = v_periodo_destino
                AND NOT (m2.PK_TMATRICULA = ANY(v_ids))
         ) THEN
-            RAISE EXCEPTION 'El estudiante de la matricula % ya tiene una matricula activa en el periodo academico destino',
-                v_fila.pk
+            RAISE EXCEPTION 'El estudiante % ya tiene una matricula activa en el periodo academico destino',
+                v_fila.etiqueta
                 USING ERRCODE = '23505';
         END IF;
     END LOOP;

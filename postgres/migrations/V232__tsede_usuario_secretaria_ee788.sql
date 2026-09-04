@@ -89,6 +89,12 @@ SELECT s.PK_TSEDE,
        'ACTIVO', 0,
        'V232_seed', CURRENT_TIMESTAMP, TRUE
   FROM academico_test.TESTABLECIMIENTO e
+  -- Guarda igual que en V231/V235-V237: en una base recien creada TROL esta
+  -- vacia y el literal 9 de FK_TROL reventaria contra la clave ajena. Aqui el
+  -- filtro por establecimiento 788 ya deja la insercion en 0 filas, pero la
+  -- guarda lo hace explicito en vez de depender de ese detalle.
+  JOIN academico_test.TROL r
+    ON r.PK_TROL = 9
   JOIN academico_test.TFUNCIONARIO f
     ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
   JOIN academico_test.TSEDE s

@@ -51,12 +51,71 @@
 -- o mayor -- nunca menor. Y una vez migrados, el super-admin puede cambiarlo
 -- desde la pantalla de roles (PUT /roles/:ROLEID/menus, 132) sin tocar codigo.
 --
--- Idempotente: no inserta si la fila ya existe.
+-- Idempotente: reactiva la fila apagada si existe, inserta si no hay ninguna.
 -- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- Reactivacion: la pantalla de roles puede haber apagado estas filas
+-- -----------------------------------------------------------------------------
+-- La pantalla de roles del super-admin guarda el CONJUNTO completo de casillas
+-- de un rol, asi que lo que se siembre por SQL y no quede marcado alli se
+-- apaga en el siguiente guardado. Paso en el servidor con el rol 14 y SEDES_EDUCATIVAS (ver V236).
+--
+-- Un INSERT a secas no lo arregla: u_trol_menu_1 es un indice unico PARCIAL
+-- --(fk_trol, fk_tmenu) WHERE active = true-- asi que una fila inactiva no lo
+-- estorba y se crearia un duplicado en vez de recuperar el permiso. De ahi
+-- este UPDATE previo, acotado a una sola fila por par para no violar el indice
+-- si hubiera varias apagadas.
+UPDATE academico_test.TROL_MENU
+   SET ACTIVE = TRUE
+ WHERE PK_TROL_MENU IN (
+       SELECT MAX(rm.PK_TROL_MENU)
+         FROM academico_test.TROL_MENU rm
+         JOIN academico_test.TMENU m
+           ON m.PK_TMENU = rm.FK_TMENU
+          AND m.ACTIVE   = TRUE
+         JOIN (VALUES
+                   (8::BIGINT, 'MATRICULA'),
+                   (9::BIGINT, 'MATRICULA')
+              ) AS v(rol, codigo_menu)
+           ON v.rol = rm.FK_TROL
+          AND v.codigo_menu = m.CODIGO
+        WHERE rm.ACTIVE = FALSE
+          AND NOT EXISTS (
+              SELECT 1 FROM academico_test.TROL_MENU rm2
+               WHERE rm2.FK_TROL  = rm.FK_TROL
+                 AND rm2.FK_TMENU = rm.FK_TMENU
+                 AND rm2.ACTIVE   = TRUE
+          )
+        GROUP BY rm.FK_TROL, rm.FK_TMENU
+   );
+
+-- -----------------------------------------------------------------------------
+-- Por que la siembra resuelve el rol contra TROL en vez de usar el numero
+-- -----------------------------------------------------------------------------
+-- Las filas de TROL no las crea ninguna migracion: V59 solo define la funcion
+-- de alta de roles, y los roles concretos se dan de alta por la aplicacion. En
+-- una base recien creada TROL esta vacia, asi que insertar TROL_MENU con el
+-- numero de rol a pelo revienta contra fk_trol_menu_1:
+--
+--   ERROR: insert or update on table "trol_menu" violates foreign key
+--          constraint "fk_trol_menu_1"
+--   Detail: Key (fk_trol)=(8) is not present in table "trol".
+--
+-- Eso es exactamente lo que rompio el job flyway-migrations del CI, que aplica
+-- el historial completo sobre un Postgres limpio. En el servidor no se noto
+-- porque los roles ya existian.
+--
+-- El JOIN contra TROL hace que la siembra no aporte filas cuando el rol no
+-- existe todavia, en vez de abortar la migracion. Es el mismo criterio que ya
+-- se usaba para el menu, que se resuelve por CODIGO y no por PK.
+-- -----------------------------------------------------------------------------
 
 INSERT INTO academico_test.TROL_MENU (FK_TROL, FK_TMENU, CREATED_BY, CREATED_AT, ACTIVE)
 SELECT v.rol, m.PK_TMENU, 'V231_seed', CURRENT_TIMESTAMP, TRUE
   FROM (VALUES (8::BIGINT), (9::BIGINT)) AS v(rol)
+  JOIN academico_test.TROL r
+    ON r.PK_TROL = v.rol
   CROSS JOIN academico_test.TMENU m
  WHERE m.CODIGO = 'MATRICULA'
    AND m.ACTIVE = TRUE

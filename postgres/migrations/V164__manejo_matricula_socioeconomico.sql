@@ -69,7 +69,8 @@ BEGIN
        AND s.ACTIVE        = TRUE;
 
     IF v_fk_establecimiento IS NULL THEN
-        RAISE EXCEPTION 'No se encontro una matricula activa con ese identificador'
+        RAISE EXCEPTION 'No se encontro una matricula activa con el identificador %',
+            p_fk_tmatricula
             USING ERRCODE = '22023', HINT = 'p_fk_tmatricula debe apuntar a un TMATRICULA activo, con grupo/grado/periodo/sede activos';
     END IF;
 

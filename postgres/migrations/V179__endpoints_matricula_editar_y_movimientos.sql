@@ -80,6 +80,7 @@ DECLARE
     v_tipo_nuevo   BIGINT;
     v_ident_nueva  VARCHAR;
     v_tiene_sede   BOOLEAN;
+    v_nivel        INT;
 BEGIN
     -- -----------------------------------------------------------------
     -- 1. La persona debe existir y estar activa.
@@ -90,14 +91,29 @@ BEGIN
      WHERE PK_TUSUARIO = p_pk_tusuario AND ACTIVE = TRUE;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'No se encontro un usuario activo con ese identificador'
+        RAISE EXCEPTION 'No se encontro un usuario activo con el identificador %',
+            p_pk_tusuario
             USING ERRCODE = '23503';
     END IF;
 
     -- -----------------------------------------------------------------
-    -- 2. Gate. Primero por los establecimientos de la persona; si no
-    --    tiene ninguno, por el gate administrativo amplio.
+    -- 2. Gate -- REV: modelo dinamico (CU-86e2zenhr).
+    --
+    -- Antes esto colgaba de fn_matricula_puede_cambiar_estado, que es el
+    -- gate de MATRICULA. Era un error mio y tenia una consecuencia visible:
+    -- ese gate excluye al super-admin a proposito (decision de negocio del
+    -- modulo de matricula), asi que el super-admin NO podia editar los
+    -- datos de una persona. Medido antes del cambio: denegado para el
+    -- super-admin, para el jefe de sistema del ente territorial y para un
+    -- rector sin TSEDE_USUARIO. Editar una persona pertenece a
+    -- FUNCIONARIOS, no a MATRICULA, y aqui no aplica esa exclusion.
+    --
+    -- Se mantiene la forma en dos ramas: si la persona tiene sedes, el
+    -- alcance se comprueba contra ellas; si no tiene ninguna, gate amplio
+    -- con el mismo criterio que el autocompletado del alta.
     -- -----------------------------------------------------------------
+    v_nivel := academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante);
+
     SELECT EXISTS (
         SELECT 1 FROM academico_test.TSEDE_USUARIO su
           JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
@@ -105,37 +121,68 @@ BEGIN
     ) INTO v_tiene_sede;
 
     IF v_tiene_sede THEN
-        IF NOT EXISTS (
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE su.FK_TUSUARIO = p_pk_tusuario AND su.ACTIVE = TRUE AND s.ACTIVE = TRUE
-               AND academico_test.fn_matricula_puede_cambiar_estado(
-                       p_pk_usuario_solicitante, s.FK_TESTABLECIMIENTO)
-        ) THEN
+        IF v_nivel IS DISTINCT FROM 0
+           AND NOT (
+                (
+                    academico_test.fn_usuario_puede_en_menu(
+                        p_pk_usuario_solicitante, 'FUNCIONARIOS', 'EDITAR')
+                    AND (
+                        -- Los territoriales (nivel 0 y 1) alcanzan a
+                        -- cualquiera; el resto, solo a las personas de un
+                        -- establecimiento que tengan a su alcance.
+                        COALESCE(v_nivel <= 1, FALSE)
+                        OR EXISTS (
+                            SELECT 1
+                              FROM academico_test.TSEDE_USUARIO su
+                              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+                              JOIN academico_test.fn_usuario_ee_accesibles(p_pk_usuario_solicitante) ee
+                                ON ee.establecimiento_id = s.FK_TESTABLECIMIENTO
+                             WHERE su.FK_TUSUARIO = p_pk_tusuario
+                               AND su.ACTIVE = TRUE AND s.ACTIVE = TRUE
+                        )
+                    )
+                )
+                OR
+                (
+                    -- Fallback de rector/secretaria, igual que en el alta:
+                    -- sin TSEDE_USUARIO el nivel sale NULL.
+                    EXISTS (
+                        SELECT 1
+                          FROM academico_test.TESTABLECIMIENTO e
+                          JOIN academico_test.TFUNCIONARIO f
+                            ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+                          JOIN academico_test.TSEDE s2
+                            ON s2.FK_TESTABLECIMIENTO = e.PK_ESTABLECIMIENTO AND s2.ACTIVE = TRUE
+                          JOIN academico_test.TSEDE_USUARIO su2
+                            ON su2.FK_TSEDE = s2.PK_TSEDE AND su2.ACTIVE = TRUE
+                         WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE
+                           AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+                           AND su2.FK_TUSUARIO = p_pk_tusuario
+                    )
+                )
+           ) THEN
             RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para editar los datos de esta persona'
                 USING ERRCODE = '42501',
-                      HINT    = 'Solo el rector, la secretaria o el jefe de sistema de un establecimiento al que la persona pertenezca';
+                      HINT    = 'Hace falta permiso en el modulo FUNCIONARIOS y alcance sobre un establecimiento al que la persona pertenezca';
         END IF;
     ELSE
-        -- Sin vinculos: gate amplio, mismo criterio que el autocompletado.
-        IF NOT (
-            EXISTS (
-                SELECT 1
-                  FROM academico_test.TESTABLECIMIENTO e
-                  JOIN academico_test.TFUNCIONARIO f
-                    ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
-                 WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE
-                   AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            )
-            OR EXISTS (
-                SELECT 1
-                  FROM academico_test.TSEDE_USUARIO su
-                  JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-                 WHERE su.ACTIVE = TRUE AND s.ACTIVE = TRUE
-                   AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-            )
-        ) THEN
+        -- Sin vinculos: gate amplio, mismo criterio que el alta.
+        IF v_nivel IS DISTINCT FROM 0
+           AND NOT (
+                (
+                    COALESCE(v_nivel <= 2, FALSE)
+                    AND academico_test.fn_usuario_puede_en_menu(
+                            p_pk_usuario_solicitante, 'FUNCIONARIOS', 'EDITAR')
+                )
+                OR EXISTS (
+                    SELECT 1
+                      FROM academico_test.TESTABLECIMIENTO e
+                      JOIN academico_test.TFUNCIONARIO f
+                        ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+                     WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE
+                       AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+                )
+           ) THEN
             RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para editar los datos de esta persona'
                 USING ERRCODE = '42501';
         END IF;
