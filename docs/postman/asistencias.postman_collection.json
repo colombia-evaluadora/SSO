@@ -1,0 +1,1126 @@
+{
+  "info": {
+    "_postman_id": "c9f4d2b7-1a6e-4c83-b5d0-asistencias001",
+    "name": "SSO - Asistencias (CU-86e32gvpp)",
+    "description": {
+      "content": "Modulo de **Asistencias** - V220 (funciones PL/pgSQL sobre `academico_test.TASISTENCIA` de V22) + V221 (endpoints en `public.query`).\n\n## Autorizacion - dos capas\n\n1. **Gateway (`public.role_query`)**: asociado a `CEVAL-SUPER_ADMINISTRADOR` **y a todo rol academico que tenga concedido el menu `ASISTENCIAS`** (del dump: DOCENTE, RECTOR; sembrados: COORDINADOR, DIRECTOR_GRUPO, AUX. ADMINISTRATIVO, JEFE SISTEMA EE + JEFE_AREA / PSICO_ORIENTADOR en solo lectura). Un rol sin la query recibe **403** antes de tocar la base.\n2. **Gate de negocio (V220)**: `fn_asistencia_gate_escritura` / `fn_asistencia_puede_ver` sobre el menu **`ASISTENCIAS`** (el real del sistema, no un menu propio), con el modelo de 3 capas de PR #100:\n   - *capability*: `TROL_MENU` concede / `TUSUARIO_ROL_PERMISO` recorta (acciones CREAR / EDITAR / VER),\n   - *scope* por categoria de rol: nivel 0 SUPER_ADMIN (bypass), 1 territorial (todos los EE), 2 su(s) establecimiento(s), 3 el par exacto (sede, jornada) del grupo, 4 nada,\n   - se resuelve **por el grupo** de la matricula. Violarlo devuelve **403** (`SQLSTATE 42501`).\n\nPara habilitar docentes/rectores **no hace falta migracion**: basta concederles el menu `ASISTENCIA` desde *Configuracion de roles y menus* (`PUT /roles/:ID/menus`) - el gate lee `TROL_MENU` en caliente. Lo unico que si requiere migracion es sumarles la fila en `role_query`.\n\n> **Nota de despliegue**: los helpers de permisos (V29/V40/V113/V185) viven en `feature/CU-86e2w4xdt-Permisos-segun-Rol` (PR #100), aun sin mergear. V220 aplica igual sobre `dev` porque son funciones plpgsql (resuelven nombres en ejecucion), pero **los de escritura y los que resuelven scope solo responden correctamente una vez mergeado PR #100**.\n\n## Catalogo de estados (`TLISTA_VALOR`, `CATEGORIA = 'TIPO_ASISTENCIA'`)\n\n| VALOR | Nombre | Clasificacion |\n|---|---|---|\n| 1 | Asistio | presente, a tiempo |\n| 2 | NO Asistio | **ausente** |\n| 3 | NO Asistio trajo justificacion | **ausente** (justificado) |\n| 5 | Llego tarde | presente, tarde |\n| 6 | Llego tarde trajo justificacion | presente, tarde (justificado) |\n\nSe resuelve siempre por `(CATEGORIA, VALOR)`: los `pk_lista_valor` **no** son estables entre ambientes. El valor `4` no existe.\n\n## Cargar el soporte de un estudiante — SIEMPRE en 2 pasos\n\n`POST /asistencias/registrar` es JSON puro: **no** recibe archivos directamente. Para adjuntar la justificacion de un estudiante (foto, PDF, etc.) el orden es:\n\n1. **Subir el archivo primero** — `POST /file-service/files/eval-col/tmp-icono-simbolo` (multipart, un archivo por llamada). `file-service` sube el binario a S3, reserva la fila en `TARCHIVO` y devuelve `{\"pk_tarchivo\": <id>}`. Uno **por estudiante** que traiga soporte — ver peticiones 1 y 2.\n2. **Registrar la asistencia** referenciando esos ids ya conocidos — `REGISTROS[i].fkArchivo = <pk_tarchivo>` en el `POST /asistencias/registrar` normal (peticion 3).\n\n`v_asistencia_detalle.fk_soporte_archivo` valida que ese `TARCHIVO` este `ACTIVE` y que su `FK_TSEDE` sea `NULL` (generico) o el de la sede del grupo — un archivo de otra sede se **rechaza** aunque exista y este activo (ver peticion 15).\n\n`tmp-icono-simbolo` es un endpoint **generico** (`SELECT :BODY.ICONO::bigint AS pk_tarchivo`, sin efectos de negocio) — solo reserva el archivo y devuelve su id, igual que usaria cualquier otro endpoint `FILE:` del catalogo (matricula, establecimiento...). Se documenta aqui porque **hoy no existe** un endpoint `FILE:asistencia` dedicado.\n\n> **Por que no en un solo POST multipart a `/asistencias/registrar`:** se intento y quedo descartado. `file-service` transforma un campo repetido en un **arreglo** de ids, pero el validador de `query-service` para un campo declarado `FILE` (escalar) rechaza ese arreglo -- y `FILE[]` (multiples archivos en un solo campo) **no esta implementado todavia** (`ParamTypes.java`, comentario explicito: *\"No hay FILE[] todavia... se anade cuando haga falta\"*). Con 1 solo archivo tampoco funciona: `file-service` manda un escalar suelto y el validador JSONB de `BODY_RAW` lo rechaza (solo acepta objeto/array/string). Cerrar esto de raiz requiere un cambio en el modulo `common` (compartido por `query-service` y `file-service`), fuera del alcance de esta migracion -- de ahi el flujo en 2 pasos.\n\n## Modelo de \"sesion\"\n\nUna sesion es `(grupo, asignatura, FECHA, BLOQUE)`. `BLOQUE` casa con `THORARIO.NUMERO_BLOQUE`; de ahi salen la **franja horaria** y el **calendario de sesiones programadas** (proyectando `THORARIO` sobre las fechas reales del mes: `TLISTA_VALOR DIA_SEMANA.VALOR = EXTRACT(DOW) + 1`).\n\n`FK_TPERIODO_EVALUACION` **no se envia**: lo resuelve el backend por el rango de fechas del periodo del grupo.\n\n## 404 antes del reinicio\n\nLas filas nuevas de `public.query` quedan cacheadas por el contenedor `query-service-eval-col`. Hasta reiniciarlo, **los 6 endpoints responden 404** por el gateway aunque la migracion este aplicada.\n\n## Errores esperados\n\n| HTTP | Cuando |\n|---|---|\n| 400 `PARAM_CONSTRAINT_VIOLATION` | `query_param_constraint` (V221): `PAGESIZE` fuera de 1..200, `MES` fuera de 1..12, `TIPO_ASISTENCIA` fuera de 1..6, ids no positivos, `SEARCH` > 100 chars, `OBSERVACION` > 4000 |\n| 400 / 422 | reglas de la funcion: sin `REGISTROS` ni `MARCAR_TODOS`, sin periodo de evaluacion que cubra la fecha, `tipoAsistencia` = 4, **`TPERIODO_ACADEMICO` del grupo Cerrado** (registrar / editar) |\n| 400 (gateway) | falta un parametro requerido: `SEDE`/`ANIO`/`MES` en calendario, `SEDE` en resumen-horas, `GRUPO`/`ASIGNATURA`/`FECHA` en padron y en registrar |\n| 403 | rol sin la query (`role_query`) o sin capability/scope sobre el grupo |\n| 404 | `query-service-eval-col` sin reiniciar, o `PATCH /asistencias/:ID` con un id inexistente |\n",
+      "type": "text/markdown"
+    },
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0 - Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "description": {
+          "content": "Guarda el `token` en la variable de entorno. Usar un usuario con rol `CEVAL-SUPER_ADMINISTRADOR`: cualquier otro recibe 403 en el resto de la coleccion.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (d.token) { pm.environment.set(\"token\", d.token); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 - Subir el soporte del estudiante A",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/file-service/files/eval-col/tmp-icono-simbolo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "file-service",
+            "files",
+            "eval-col",
+            "tmp-icono-simbolo"
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "ICONO",
+              "type": "file",
+              "src": []
+            }
+          ]
+        },
+        "description": {
+          "content": "**Paso 1 de 2** para adjuntar una justificacion: sube el archivo ANTES de registrar la asistencia.\n\n`POST /file-service/files/eval-col/tmp-icono-simbolo` — nota el prefijo `/file-service/files/...`, **no** `/api/eval-col/...`: ese primer segmento es el nombre del microservicio en Eureka, y es quien intercepta el multipart (`ReenvioController`), sube el binario a S3 y **reserva la fila en `TARCHIVO`** — recien ahi reenvia como JSON al catalogo de `query-service`.\n\n`tmp-icono-simbolo` es un endpoint generico (`SELECT :BODY.ICONO::bigint AS pk_tarchivo`) sin efectos de negocio -- solo entrega el id. El campo del formulario se llama `ICONO` porque asi quedo declarado (`FILE:graficaSimbolo`) en `public.query`; el nombre no importa para el resultado.\n\n**Adjunta cualquier archivo real** (imagen, PDF, texto) en el campo `ICONO` antes de correr esta peticion -- Postman no puede traer uno de fabrica. El test captura la respuesta `{\"pk_tarchivo\": N}` y la guarda en `archivoEstudianteAId`, que usa la peticion 3.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "const fila = (d.rows && d.rows[0]) || d;",
+              "pm.test(\"200 con pk_tarchivo\", () => {",
+              "  pm.response.to.have.status(200);",
+              "  pm.expect(fila.pk_tarchivo).to.be.a(\"number\");",
+              "});",
+              "if (fila.pk_tarchivo) { pm.environment.set(\"archivoEstudianteAId\", fila.pk_tarchivo); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - Subir el soporte del estudiante B",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/file-service/files/eval-col/tmp-icono-simbolo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "file-service",
+            "files",
+            "eval-col",
+            "tmp-icono-simbolo"
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "ICONO",
+              "type": "file",
+              "src": []
+            }
+          ]
+        },
+        "description": {
+          "content": "**Paso 1 de 2**, mismo mecanismo que la peticion 1 -- un archivo distinto para un segundo estudiante.\n\nCada estudiante con justificacion necesita SU PROPIA subida (una llamada = un archivo = un `pk_tarchivo`); no hay forma de subir varios en una sola peticion contra este endpoint (ver la nota \"2 pasos\" en la descripcion de la coleccion).\n\nGuarda el id resultante en `archivoEstudianteBId`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "const fila = (d.rows && d.rows[0]) || d;",
+              "pm.test(\"200 con pk_tarchivo\", () => {",
+              "  pm.response.to.have.status(200);",
+              "  pm.expect(fila.pk_tarchivo).to.be.a(\"number\");",
+              "});",
+              "if (fila.pk_tarchivo) { pm.environment.set(\"archivoEstudianteBId\", fila.pk_tarchivo); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 - Registrar asistencia con los soportes ya subidos",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/registrar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "registrar"
+          ]
+        },
+        "description": {
+          "content": "**Paso 2 de 2**: el `POST /asistencias/registrar` de siempre (JSON puro, **no** multipart), referenciando en `REGISTROS[i].fkArchivo` los ids que devolvieron las peticiones 1 y 2.\n\nNo hay nada especial en esta llamada -- es exactamente `fn_asistencia_registrar_bulk` con `fkArchivo` numerico, igual que si esos ids vinieran de un archivo subido hace una semana. La funcion valida que cada uno sea un `TARCHIVO` `ACTIVE` con `FK_TSEDE` `NULL` o igual a la sede del grupo (peticion 15 prueba el rechazo con un archivo de otra sede).\n\nCorre en orden 1 -> 2 -> 3 (esta peticion depende de las variables que dejan las dos anteriores).",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"GRUPO\": \"{{grupoId}}\",\n  \"ASIGNATURA\": \"{{asignaturaId}}\",\n  \"FECHA\": \"2026-02-16\",\n  \"BLOQUE\": 1,\n  \"REGISTROS\": [\n    {\n      \"fkMatricula\": \"{{matriculaId}}\",\n      \"tipoAsistencia\": 5,\n      \"observacion\": \"Justificada con soporte medico.\",\n      \"fkArchivo\": \"{{archivoEstudianteAId}}\"\n    },\n    {\n      \"fkMatricula\": \"{{matriculaId2}}\",\n      \"tipoAsistencia\": 2,\n      \"observacion\": \"Partido de futbol\",\n      \"fkArchivo\": \"{{archivoEstudianteBId}}\"\n    }\n  ]\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 - Padron de la sesion (pantalla \"Asistencia manual\")",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/sesion/estudiantes?GRUPO={{grupoId}}&ASIGNATURA={{asignaturaId}}&FECHA=2026-02-16&BLOQUE=1",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "sesion",
+            "estudiantes"
+          ],
+          "query": [
+            {
+              "key": "GRUPO",
+              "value": "{{grupoId}}"
+            },
+            {
+              "key": "ASIGNATURA",
+              "value": "{{asignaturaId}}"
+            },
+            {
+              "key": "FECHA",
+              "value": "2026-02-16"
+            },
+            {
+              "key": "BLOQUE",
+              "value": "1"
+            }
+          ]
+        },
+        "description": {
+          "content": "Lista **todos** los estudiantes activos del grupo para una sesion `(GRUPO, ASIGNATURA, FECHA, BLOQUE)` — es la grilla de la pantalla **\"Asistencia manual\"** del mock.\n\nCada fila trae el **estado actual** del alumno para esa sesion:\n\n- si ya se le tomo asistencia -> `pk_tasistencia`, `tipo_asistencia_valor` (1/2/3/5/6), `tipo_asistencia`, `observacion`, `fk_soporte_archivo`, `soporte_nombre`;\n- si **falta** tomarla -> todos esos campos en `null` (\"Seleccionar\" en el mock).\n\nCada fila **repite la cabecera de la sesion** para no hacer una segunda llamada: `hora_inicio` / `hora_fin` (de `THORARIO` por dia de semana de la `FECHA`; si el bloque no trae horas propias, se estima con la jornada del periodo academico de la sede -- ya no sale `null`) y `fk_tperiodo_evaluacion` (resuelto por el rango de fechas del periodo del grupo). `total_estudiantes` y `registrados` son el conteo del padron y de cuantos ya tienen registro.\n\nOrden: apellidos, nombres. **Params**: `GRUPO`, `ASIGNATURA`, `FECHA` obligatorios; `BLOQUE` opcional (default: sin bloque). Sale **antes** de `POST /asistencias/registrar`: se pide el padron, el docente marca, y se envia el `registrar` con el arreglo `REGISTROS`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test(\"padron con cabecera de sesion\", () => {",
+              "  if (!r.length) return;",
+              "  pm.expect(r[0]).to.have.property(\"estudiante\");",
+              "  pm.expect(r[0]).to.have.property(\"tipo_asistencia_valor\");",
+              "  pm.expect(r[0]).to.have.property(\"fk_tperiodo_evaluacion\");",
+              "  pm.expect(r[0]).to.have.property(\"total_estudiantes\"); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4b - Pestanas de asignaturas del dia (\"Asistencia manual\")",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/sesion/asignaturas?GRUPO={{grupoId}}&FECHA=2026-02-16",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "sesion",
+            "asignaturas"
+          ],
+          "query": [
+            {
+              "key": "GRUPO",
+              "value": "{{grupoId}}"
+            },
+            {
+              "key": "FECHA",
+              "value": "2026-02-16"
+            }
+          ]
+        },
+        "description": {
+          "content": "Arma las **pestanas por asignatura** de \"Asistencia manual\" (mock: \"Matematicas\" / \"Geometria\"): las `(asignatura, bloque, hora_inicio, hora_fin)` que `THORARIO` tiene programadas para **ese GRUPO** en el **dia de semana** de `FECHA`.\n\nSe consulta **antes** de `4 - Padron de la sesion`: primero se listan las pestanas del dia, el usuario elige una, y con `(GRUPO, ASIGNATURA, FECHA, BLOQUE)` se pide el padron de esa pestana.\n\n`QUERY.MIAS=true` acota a las asignaturas asignadas al docente del token (\"mis clases\"); `QUERY.FUNCIONARIO=<id>` filtra por un docente concreto (uso administrativo); sin ninguno de los dos, todas las asignaturas programadas ese dia para el grupo. Franja horaria con la misma reserva de jornada que el resto del modulo (nunca `null` si el periodo academico tiene jornada configurada).",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test(\"pestanas con franja resuelta\", () => {",
+              "  if (!r.length) return;",
+              "  pm.expect(r[0]).to.have.property(\"asignatura\");",
+              "  pm.expect(r[0]).to.have.property(\"hora_inicio\");",
+              "  pm.expect(r[0].hora_inicio).to.not.be.null; });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 - Calendario del mes (pantalla Asistencia)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/calendario?SEDE={{sedeId}}&ANIO=2026&MES=2",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "calendario"
+          ],
+          "query": [
+            {
+              "key": "SEDE",
+              "value": "{{sedeId}}"
+            },
+            {
+              "key": "ANIO",
+              "value": "2026"
+            },
+            {
+              "key": "MES",
+              "value": "2"
+            },
+            {
+              "key": "GRUPO",
+              "value": "{{grupoId}}",
+              "disabled": true
+            },
+            {
+              "key": "ASIGNATURA",
+              "value": "{{asignaturaId}}",
+              "disabled": true
+            },
+            {
+              "key": "MIAS",
+              "value": "true",
+              "disabled": true
+            },
+            {
+              "key": "FUNCIONARIO",
+              "value": "{{funcionarioId}}",
+              "disabled": true
+            },
+            {
+              "key": "HOY",
+              "value": "2026-02-20",
+              "disabled": true
+            }
+          ]
+        },
+        "description": {
+          "content": "Sesiones del mes para una sede. Devuelve **todas** las sesiones: las **programadas** en `THORARIO` proyectadas sobre las fechas reales, y ademas las **registradas** que no correspondan a ningun bloque programado (asistencia manual suelta).\n\n`estado_sesion` es lo que pinta el punto de la celda - informa si la asistencia **se tomo**, no como asistieron los alumnos:\n\n| valor | mock | significado |\n|---|---|---|\n| `REGISTRADA` | verde, \"Asistencia pasada\" | hay registro |\n| `RETRASADA` | rojo, \"No registrada en la fecha\" | fecha <= hoy y sin registro |\n| `PENDIENTE` | azul, \"Aun no corresponde tomarla\" | fecha futura sin registro |\n\nCada fila trae ademas `total_estudiantes`, `a_tiempo`, `tarde`, `ausentes` y `horas`.\n\n**Params**: `SEDE` (obligatorio), `ANIO` (2000..2100), `MES` (1..12); `GRUPO` y `ASIGNATURA` opcionales. `HOY` es solo para simular otra fecha en pruebas - en produccion se omite.\n\n**Vista \"mis clases\" (docente)**: `MIAS=true` -> los puntos quedan **solo** en las asignaturas ASIGNADAS al docente del token (`tdocente_asignatura`). Si el usuario no es funcionario, devuelve vacio. Alternativa para un admin: `FUNCIONARIO=<pk_tfuncionario>` filtra por un docente concreto.\n\n> Sin `GRUPO` ni filtro de docente, una consulta a nivel de **toda la sede** puede devolver miles de sesiones (todo el horario x el mes) — el front debe pasar `GRUPO` o `MIAS`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6 - Resumen de horas (tarjetas del encabezado)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/resumen-horas?SEDE={{sedeId}}&FECHA=2026-02-16",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "resumen-horas"
+          ],
+          "query": [
+            {
+              "key": "SEDE",
+              "value": "{{sedeId}}"
+            },
+            {
+              "key": "FECHA",
+              "value": "2026-02-16"
+            },
+            {
+              "key": "GRUPO",
+              "value": "{{grupoId}}",
+              "disabled": true
+            },
+            {
+              "key": "ASIGNATURA",
+              "value": "{{asignaturaId}}",
+              "disabled": true
+            },
+            {
+              "key": "MIAS",
+              "value": "true",
+              "disabled": true
+            },
+            {
+              "key": "FUNCIONARIO",
+              "value": "{{funcionarioId}}",
+              "disabled": true
+            }
+          ]
+        },
+        "description": {
+          "content": "Tarjetas de \"Total de horas\" y \"Horas efectivas\" del encabezado.\n\n**Dos familias de horas:**\n- `horas_semana` / `horas_mes` / `horas_anio`: **DICTADAS** = suma de la duracion de las sesiones **registradas** (franja de `THORARIO`).\n- `horas_programadas_semana` / `horas_programadas_mes`: **PROGRAMADAS** = todo lo que el horario dice que toca dictar en ese rango, se haya tomado o no.\n- El widget del mock **\"Dictadas 16 h / 20 h · Faltan 4 h\"** = `horas_semana` (16) vs `horas_programadas_semana` (20); `faltan = programadas - dictadas`.\n\n- `horas_efectivas_mes`: cada sesion ponderada por la fraccion de alumnos presentes (asistio + tarde). Ej.: 7 de 8 presentes en una sesion de 3 h -> 2.63 h.\n- `registradas_mes` / `retrasadas_mes` / `pendientes_mes`: los 3 contadores del encabezado (\"96 clases registradas de 120\" = registradas / (registradas+retrasadas+pendientes)).\n\n`FECHA` selecciona el mes/semana/anio de referencia (por defecto hoy). `MIAS=true` / `FUNCIONARIO=<id>` acotan todo a las asignaturas asignadas a ese docente (igual que el calendario).",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7 - Marcar todo el grupo como Asistio",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/registrar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "registrar"
+          ]
+        },
+        "description": {
+          "content": "Boton **\"Marcar todo como Asistio\"** del popover del calendario.\n\nCon `REGISTROS` ausente (o `[]`) y `MARCAR_TODOS` con un valor del catalogo, aplica ese estado a **todas las matriculas activas del grupo**.\n\nEs un **upsert idempotente** por `(matricula, asignatura, fecha, bloque)` sobre el indice unico parcial `UQ_TASISTENCIA_SESION`: volver a llamarlo no duplica, actualiza. Devuelve `registros_afectados`.\n\n`FK_TPERIODO_EVALUACION` lo resuelve el backend; si no hay un periodo de evaluacion activo que cubra `FECHA`, responde error de validacion.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"GRUPO\": \"{{grupoId}}\",\n  \"ASIGNATURA\": \"{{asignaturaId}}\",\n  \"FECHA\": \"2026-02-16\",\n  \"BLOQUE\": 1,\n  \"MARCAR_TODOS\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8 - Asistencia manual (estado por estudiante)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/registrar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "registrar"
+          ]
+        },
+        "description": {
+          "content": "Pantalla **\"Asistencia manual\"**: un estado, una observacion y un soporte por estudiante.\n\n`REGISTROS` es un arreglo JSON; cada elemento:\n\n| campo | tipo | obligatorio |\n|---|---|---|\n| `fkMatricula` | BIGINT | si |\n| `tipoAsistencia` | 1,2,3,5,6 | si (o se hereda de `MARCAR_TODOS`) |\n| `observacion` | texto <= 4000 | no |\n| `fkArchivo` | BIGINT (`TARCHIVO` activo) | no |\n\nSe valida **todo el arreglo antes de escribir nada** y se lanza con el primer motivo concreto (matricula que no es del grupo, `tipoAsistencia` invalido, archivo inexistente...), asi que la llamada es todo-o-nada.\n\nEnviado sobre la misma sesion que la peticion anterior, **actualiza** esas filas en vez de duplicarlas.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"GRUPO\": \"{{grupoId}}\",\n  \"ASIGNATURA\": \"{{asignaturaId}}\",\n  \"FECHA\": \"2026-02-16\",\n  \"BLOQUE\": 1,\n  \"REGISTROS\": [\n    {\n      \"fkMatricula\": \"{{matriculaId}}\",\n      \"tipoAsistencia\": 5,\n      \"observacion\": \"Justificada con soporte medico.\",\n      \"fkArchivo\": \"{{archivoId}}\"\n    },\n    {\n      \"fkMatricula\": \"{{matriculaId2}}\",\n      \"tipoAsistencia\": 2,\n      \"observacion\": \"Partido de futbol\"\n    }\n  ]\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "9 - Seguimiento (listado paginado)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/query",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "query"
+          ]
+        },
+        "description": {
+          "content": "Pantalla **\"Seguimiento\"**. Filtros: rango de fecha, grupo, asignatura, tipo de asistencia, y busqueda libre sobre estudiante / documento / grupo / asignatura / estado.\n\nCada fila trae ademas tres agregados que son **ventanas sobre el set filtrado completo** (no de la pagina):\n\n- `total_estudiantes` - estudiantes **distintos** (\"Total estudiantes: 28\"),\n- `ausentes` - estudiantes **distintos** con estado 2 o 3 (\"Ausentes: 5\"). El porcentaje del mock es `ausentes / total_estudiantes`,\n- `total_count` - filas totales, para el `pageCount`.\n\n> Cuentan estudiantes distintos, no registros: en un rango de varios dias un mismo alumno ausente 3 veces cuenta **1**.\n\n`SORTING.ID`: `estudiante` | `documento` | `fecha` | `tipo` | `grupo` | `asignatura`. `PAGESIZE` esta acotado a **1..200**.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FILTERS\": {\n    \"FECHA_DESDE\": \"2026-02-01\",\n    \"FECHA_HASTA\": \"2026-02-28\",\n    \"GRUPO\": \"{{grupoId}}\",\n    \"ASIGNATURA\": \"{{asignaturaId}}\",\n    \"TIPO_ASISTENCIA\": null,\n    \"SEARCH\": null\n  },\n  \"SORTING\": {\n    \"ID\": \"fecha\",\n    \"DESC\": true\n  },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 10\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "if (r.length) { pm.test(\"trae agregados\", () => {",
+              "  pm.expect(r[0]).to.have.property(\"total_count\");",
+              "  pm.expect(r[0]).to.have.property(\"total_estudiantes\");",
+              "  pm.expect(r[0]).to.have.property(\"ausentes\"); }); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 - Seguimiento filtrado por 'No asistio'",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/query",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "query"
+          ]
+        },
+        "description": {
+          "content": "Mismo endpoint con el selector **\"Tipo de asistencia\"** puesto en *No asistio* (`TIPO_ASISTENCIA = 2`).\n\nOjo: filtrar por un tipo tambien recorta los agregados, porque son ventanas sobre el **set ya filtrado**. Para las tarjetas \"Total estudiantes / Ausentes\" del mock, pedir la lista **sin** `TIPO_ASISTENCIA`.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FILTERS\": {\n    \"FECHA_DESDE\": \"2026-02-01\",\n    \"FECHA_HASTA\": \"2026-02-28\",\n    \"GRUPO\": \"{{grupoId}}\",\n    \"TIPO_ASISTENCIA\": 2\n  },\n  \"SORTING\": {\n    \"ID\": \"estudiante\",\n    \"DESC\": false\n  },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 10\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 - Editar un registro (PATCH parcial)",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/:ID",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            ":ID"
+          ]
+        },
+        "description": {
+          "content": "Edita **un** registro. Los campos ausentes **no se tocan**; para borrar hay que pedirlo explicito con los flags:\n\n- `LIMPIAR_OBSERVACION: true` -> `OBSERVACION = NULL`\n- `LIMPIAR_ARCHIVO: true` -> quita el soporte (\"Sin soporte\")\n\nEl grupo del registro se resuelve primero y con el se autoriza (`fn_asistencia_gate_escritura(..., 'EDITAR')`), asi que un usuario de nivel 3 solo puede editar registros de su par (sede, jornada).\n\nSustituir `:ID` por el `pk_tasistencia` que devuelve el listado.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"TIPO_ASISTENCIA\": 1,\n  \"OBSERVACION\": \"Corregido: si asistio\",\n  \"LIMPIAR_ARCHIVO\": true\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 - [400] PAGESIZE fuera de rango",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/query",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "query"
+          ]
+        },
+        "description": {
+          "content": "Comprueba `query_param_constraint` (V221): `BODY.PAGESIZE` esta acotado a **1..200**.\n\n`query-service` responde **400 `PARAM_CONSTRAINT_VIOLATION`** *antes* de enlazar y llegar a Postgres. Sirve para verificar que las restricciones se cargaron con la migracion.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FILTERS\": {},\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 5000\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"400\", () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "13 - [400] TIPO_ASISTENCIA fuera del catalogo",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/:ID",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            ":ID"
+          ]
+        },
+        "description": {
+          "content": "`BODY.TIPO_ASISTENCIA` esta acotado a **1..6** por `query_param_constraint`, asi que un `9` se rechaza con **400** en el gateway.\n\nUn `4` si pasa la restriccion (esta en el rango) pero **no existe** en el catalogo: en ese caso el rechazo lo hace la funcion, con el mensaje `tipoAsistencia 4 invalido (validos: 1,2,3,5,6)`.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"TIPO_ASISTENCIA\": 9\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"400\", () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "14 - [400] ni REGISTROS ni MARCAR_TODOS",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/registrar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "registrar"
+          ]
+        },
+        "description": {
+          "content": "Regla de la funcion (no del gateway): hay que enviar **`REGISTROS`** con al menos un elemento **o** **`MARCAR_TODOS`**. Sin ninguno de los dos no hay nada que registrar y `fn_asistencia_registrar_bulk` lanza `22023`.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"GRUPO\": \"{{grupoId}}\",\n  \"ASIGNATURA\": \"{{asignaturaId}}\",\n  \"FECHA\": \"2026-02-16\",\n  \"BLOQUE\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"4xx\", () => pm.expect(pm.response.code).to.be.within(400, 499));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "15 - [400] periodo academico Cerrado",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/registrar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "registrar"
+          ]
+        },
+        "description": {
+          "content": "**No se puede crear ni editar asistencia de un grupo cuyo `TPERIODO_ACADEMICO` esta en estado `Cerrado`** (`TLISTA_VALOR` categoria `ESTADOPERIODO`, `VALOR='C'`).\n\n`fn_asistencia_registrar_bulk` y `fn_asistencia_editar` resuelven el estado del periodo por el grupo (`fn_asistencia_periodo_estado`) y lanzan **`22023`** -> HTTP **400** con `\"el periodo academico del grupo N esta Cerrado; no se puede registrar asistencia\"`.\n\nOtros estados (`Abierto`, `Nivelaciones`, `Inscripciones`, `Promociones`, o sin estado) **si** permiten escribir; solo `Cerrado` bloquea.\n\nPara probarlo, apuntar `grupoId` a un grupo de un periodo cerrado (la mayoria de los anios anteriores lo estan).",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"GRUPO\": \"{{grupoCerradoId}}\",\n  \"ASIGNATURA\": \"{{asignaturaId}}\",\n  \"FECHA\": \"2015-02-16\",\n  \"BLOQUE\": 1,\n  \"MARCAR_TODOS\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"400 periodo cerrado\", () => pm.response.to.have.status(400));",
+              "pm.test(\"mensaje claro\", () => pm.expect(pm.response.text()).to.include(\"Cerrado\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "16 - [400] calendario sin ANIO (parametro requerido)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/calendario?SEDE={{sedeId}}&MES=2",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "calendario"
+          ],
+          "query": [
+            {
+              "key": "SEDE",
+              "value": "{{sedeId}}"
+            },
+            {
+              "key": "MES",
+              "value": "2"
+            }
+          ]
+        },
+        "description": {
+          "content": "`QUERY.SEDE`, `QUERY.ANIO` y `QUERY.MES` estan marcados como **requeridos** (`\"INTEGER!\"` en `param_types`). Omitir cualquiera -> el gateway responde **400** antes de llegar a la funcion: `\"El parametro 'QUERY.ANIO' es obligatorio...\"`.\n\nLo mismo aplica a `SEDE` en `/asistencias/resumen-horas` y a `GRUPO`/`ASIGNATURA`/`FECHA` en `/asistencias/sesion/estudiantes` y en `/asistencias/registrar`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"400\", () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "17 - [404] antes de reiniciar query-service",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/resumen-horas?SEDE={{sedeId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "resumen-horas"
+          ],
+          "query": [
+            {
+              "key": "SEDE",
+              "value": "{{sedeId}}"
+            }
+          ]
+        },
+        "description": {
+          "content": "Si `V221` esta aplicada pero **no** se ha reiniciado `query-service-eval-col`, el gateway devuelve **404** en los 5 endpoints: el catalogo `public.query` esta cacheado en el contenedor.\n\n```bash\ndocker compose restart query-service-eval-col\n# o, si fue provisionado dinamicamente:\ndocker restart sso-query-service-eval-col\n```\n\nTras el reinicio esta misma peticion debe responder 200.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"404 solo si no se reinicio el contenedor\", () => {",
+              "  pm.expect([200, 404]).to.include(pm.response.code); });"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "sedeId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "grupoId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "asignaturaId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "matriculaId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "matriculaId2",
+      "value": "2",
+      "type": "string"
+    },
+    {
+      "key": "archivoId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "funcionarioId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "grupoCerradoId",
+      "value": "1",
+      "type": "string"
+    }
+  ]
+}
