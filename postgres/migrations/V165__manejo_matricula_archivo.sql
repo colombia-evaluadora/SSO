@@ -73,16 +73,15 @@ BEGIN
        AND s.ACTIVE        = TRUE;
 
     IF v_fk_establecimiento IS NULL THEN
-        RAISE EXCEPTION 'No se encontro una matricula activa con ese identificador'
+        RAISE EXCEPTION 'No se encontro una matricula activa con el identificador %',
+            p_fk_tmatricula
             USING ERRCODE = '22023', HINT = 'p_fk_tmatricula debe apuntar a un TMATRICULA activo, con grupo/grado/periodo/sede activos';
     END IF;
 
     -- -----------------------------------------------------------------
     -- 1. Gate de autorizacion COMPUESTO -- mismo patron de V163/V164.
     -- -----------------------------------------------------------------
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
+    IF EXISTS (
         SELECT 1
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TESTABLECIMIENTO e
@@ -338,9 +337,7 @@ BEGIN
         RETURN;
     END IF;
 
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
+    IF EXISTS (
         SELECT 1
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TESTABLECIMIENTO e
@@ -394,5 +391,44 @@ BEGIN
      WHERE ma.FK_TMATRICULA = p_fk_tmatricula
        AND ma.ACTIVE        = TRUE
      ORDER BY ta.VALOR ASC, ma.PK_TMATRICULA_ARCHIVO ASC;
+END;
+$function$;
+
+-- =============================================================================
+-- fn_matricula_archivo_soft_delete -- baja logica de TODOS los enlaces de
+-- archivo de una matricula. La otra cascada libre junto con
+-- TMATRICULA_SOCIOECONOMICO (V164).
+--
+-- Desactiva el ENLACE (TMATRICULA_ARCHIVO), no el TARCHIVO: los bytes siguen
+-- en S3 y su fila sigue viva. Es deliberado -- un TARCHIVO puede estar
+-- referenciado desde otro lado, y borrarlo aca dejaria esa otra referencia
+-- apuntando a un objeto inalcanzable. La limpieza de binarios huerfanos es
+-- responsabilidad de file-service, no de esta funcion.
+--
+-- Sin gate propio, mismo criterio que V164: la llama
+-- fn_matricula_directa_eliminar (V166) despues de validar el gate.
+--
+-- Devuelve cuantos enlaces desactivo.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_archivo_soft_delete(
+    p_pk_usuario_solicitante  BIGINT,
+    p_fk_tmatricula           BIGINT
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_n INTEGER;
+BEGIN
+    UPDATE academico_test.TMATRICULA_ARCHIVO
+       SET ACTIVE      = FALSE,
+           MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+           MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TMATRICULA = p_fk_tmatricula
+       AND ACTIVE        = TRUE;
+
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    RETURN v_n;
 END;
 $function$;

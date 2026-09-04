@@ -282,77 +282,66 @@ DECLARE
         ELSE LEAST(CASE WHEN p_page_size > 0 THEN p_page_size ELSE 10 END, 100)
     END;
     v_page_index INT := GREATEST(COALESCE(p_page_index, 0), 0);
-    v_es_super   BOOLEAN := academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante);
+    v_nivel   INT     := academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante);
+    v_es_super   BOOLEAN := v_nivel IS NOT NULL AND v_nivel <= 1;   -- nivel 0 y 1: sin recorte
 BEGIN
     IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
         RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
             USING ERRCODE = '22023';
     END IF;
 
-    -- REV6 (V51 REV5, cambio de modelo -- ver header de este archivo): ya
-    -- no se resuelve UN EE via fn_resolver_establecimiento_unico (fallaba
-    -- con NULL si el solicitante administra 2+ EE a la vez, algo que antes
-    -- era raro y ahora es comun por como TFUNCIONARIO reusa TUSUARIO). Se
-    -- pasa al mismo patron "union de EE accesibles" que ya usa
-    -- fn_sed_listar/_contar: rector, secretaria, o jefe de sistema (rol 8
-    -- via TSEDE_USUARIO) de CUALQUIERA de sus EE, no de "el unico".
-    IF NOT v_es_super AND NOT EXISTS (
-        WITH ee_accesibles AS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        ),
-        -- REV7 -- coordinador (rol 11) de una sede puntual: alcance de SEDE,
-        -- no de establecimiento (ver funcionarios_ee mas abajo).
-        sedes_coordinador AS (
-            SELECT su.FK_TSEDE
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        )
-        SELECT 1 FROM ee_accesibles
-        UNION ALL
-        SELECT 1 FROM sedes_coordinador
-    ) THEN
+    -- REV7 -- gate por el modelo dinamico de permisos (CU-86e2zenhr).
+    -- Antes: una cadena fija que enumeraba rector / secretaria / rol 8 /
+    -- rol 11 a mano. Ahora, dos capas separadas:
+    --
+    --   1. CAPABILITY -- el rol tiene concedido el menu FUNCIONARIOS con
+    --      accion VER (TROL_MENU, menos lo que restrinja
+    --      TUSUARIO_ROL_PERMISO). Se administra desde la pantalla de roles
+    --      del super-admin, sin tocar SQL. El nivel 0 la salta.
+    --
+    --   2. ALCANCE -- hay que tener algun ambito: EE accesibles (nivel 2:
+    --      rector, jefe de sistema, auxiliar) o sedes+jornadas accesibles
+    --      (nivel 3: coordinador, docente, ...). Los niveles 0 y 1
+    --      --super-admin y entes territoriales-- no se recortan (v_es_super).
+    --
+    -- Es una CONSULTA, no una escritura: aca no aplica la exclusion del
+    -- super-admin que si tiene el modulo de matricula.
+    IF v_nivel IS NULL THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    IF v_nivel <> 0
+       AND NOT academico_test.fn_usuario_puede_en_menu(
+                   p_pk_usuario_solicitante, 'FUNCIONARIOS', 'VER') THEN
+        RAISE EXCEPTION 'El usuario no tiene permiso para ver en el modulo FUNCIONARIOS'
+            USING ERRCODE = '42501';
+    END IF;
+
+    IF NOT v_es_super
+       AND NOT EXISTS (SELECT 1 FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario_solicitante))
+       AND NOT EXISTS (SELECT 1 FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario_solicitante)) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
 
     RETURN QUERY
     WITH ee_accesibles AS (
-        SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        -- REV7 -- alcance de ESTABLECIMIENTO por el modelo dinamico. Da filas
+        -- para nivel 2 (rector, jefe de sistema, auxiliar) y vacio para
+        -- nivel 3, que se acota por sede en sedes_coordinador.
+        SELECT DISTINCT ee.establecimiento_id AS PK_ESTABLECIMIENTO
+          FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario_solicitante) ee
     ),
     -- REV7 -- coordinador (rol 11) de una sede puntual: alcance de SEDE, no
     -- de establecimiento (ver funcionarios_ee mas abajo).
     sedes_coordinador AS (
-        SELECT su.FK_TSEDE
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-         WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        -- REV7 -- alcance de SEDE por el modelo dinamico. Sustituye al
+        -- "rol 11 en TSEDE_USUARIO" fijo: ahora vale para cualquier rol de
+        -- nivel 3 (coordinador, psico-orientador, jefe de area, director de
+        -- grupo, docente) que tenga concedido el menu FUNCIONARIOS.
+        SELECT DISTINCT sj.sede_id AS FK_TSEDE
+          FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario_solicitante) sj
     ),
     -- REV8 -- todas las sedes donde el solicitante tiene alguna autoridad
     -- (las de sus EE accesibles, mas la suya propia si es coordinador).
@@ -597,48 +586,45 @@ CREATE OR REPLACE FUNCTION academico_test.fn_usu_empleados_contar(p_pk_usuario_s
 AS $function$
 DECLARE
     v_total BIGINT;
-    v_es_super BOOLEAN := academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante);
+    v_nivel INT     := academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante);
+    v_es_super BOOLEAN := v_nivel IS NOT NULL AND v_nivel <= 1;   -- nivel 0 y 1: sin recorte
 BEGIN
     IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
         RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
             USING ERRCODE = '22023';
     END IF;
 
-    -- REV6 (V51 REV5, cambio de modelo -- ver header de este archivo): ya
-    -- no se resuelve UN EE via fn_resolver_establecimiento_unico (fallaba
-    -- con NULL si el solicitante administra 2+ EE a la vez, algo que antes
-    -- era raro y ahora es comun por como TFUNCIONARIO reusa TUSUARIO). Se
-    -- pasa al mismo patron "union de EE accesibles" que ya usa
-    -- fn_sed_listar/_contar: rector, secretaria, o jefe de sistema (rol 8
-    -- via TSEDE_USUARIO) de CUALQUIERA de sus EE, no de "el unico".
-    IF NOT v_es_super AND NOT EXISTS (
-        WITH ee_accesibles AS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        ),
-        -- REV3 -- coordinador (rol 11) de una sede puntual.
-        sedes_coordinador AS (
-            SELECT su.FK_TSEDE
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        )
-        SELECT 1 FROM ee_accesibles
-        UNION ALL
-        SELECT 1 FROM sedes_coordinador
-    ) THEN
+    -- REV7 -- gate por el modelo dinamico de permisos (CU-86e2zenhr).
+    -- Antes: una cadena fija que enumeraba rector / secretaria / rol 8 /
+    -- rol 11 a mano. Ahora, dos capas separadas:
+    --
+    --   1. CAPABILITY -- el rol tiene concedido el menu FUNCIONARIOS con
+    --      accion VER (TROL_MENU, menos lo que restrinja
+    --      TUSUARIO_ROL_PERMISO). Se administra desde la pantalla de roles
+    --      del super-admin, sin tocar SQL. El nivel 0 la salta.
+    --
+    --   2. ALCANCE -- hay que tener algun ambito: EE accesibles (nivel 2:
+    --      rector, jefe de sistema, auxiliar) o sedes+jornadas accesibles
+    --      (nivel 3: coordinador, docente, ...). Los niveles 0 y 1
+    --      --super-admin y entes territoriales-- no se recortan (v_es_super).
+    --
+    -- Es una CONSULTA, no una escritura: aca no aplica la exclusion del
+    -- super-admin que si tiene el modulo de matricula.
+    IF v_nivel IS NULL THEN
+        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+            USING ERRCODE = '42501';
+    END IF;
+
+    IF v_nivel <> 0
+       AND NOT academico_test.fn_usuario_puede_en_menu(
+                   p_pk_usuario_solicitante, 'FUNCIONARIOS', 'VER') THEN
+        RAISE EXCEPTION 'El usuario no tiene permiso para ver en el modulo FUNCIONARIOS'
+            USING ERRCODE = '42501';
+    END IF;
+
+    IF NOT v_es_super
+       AND NOT EXISTS (SELECT 1 FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario_solicitante))
+       AND NOT EXISTS (SELECT 1 FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario_solicitante)) THEN
         RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
             USING ERRCODE = '42501';
     END IF;
@@ -705,27 +691,20 @@ BEGIN
     END IF;
 
     WITH ee_accesibles AS (
-        SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        -- REV7 -- alcance de ESTABLECIMIENTO por el modelo dinamico. Da filas
+        -- para nivel 2 (rector, jefe de sistema, auxiliar) y vacio para
+        -- nivel 3, que se acota por sede en sedes_coordinador.
+        SELECT DISTINCT ee.establecimiento_id AS PK_ESTABLECIMIENTO
+          FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario_solicitante) ee
     ),
     -- REV3 -- coordinador (rol 11) de una sede puntual.
     sedes_coordinador AS (
-        SELECT su.FK_TSEDE
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-         WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+        -- REV7 -- alcance de SEDE por el modelo dinamico. Sustituye al
+        -- "rol 11 en TSEDE_USUARIO" fijo: ahora vale para cualquier rol de
+        -- nivel 3 (coordinador, psico-orientador, jefe de area, director de
+        -- grupo, docente) que tenga concedido el menu FUNCIONARIOS.
+        SELECT DISTINCT sj.sede_id AS FK_TSEDE
+          FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario_solicitante) sj
     ),
     funcionarios_ee AS (
         SELECT e.FK_TFUNCIONARIO_RECTOR AS pk_tfuncionario
