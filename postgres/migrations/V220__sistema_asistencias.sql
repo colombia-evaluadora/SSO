@@ -121,17 +121,21 @@
 --   2. (sin objeto) usa el menu existente 'ASISTENCIAS' -- NO crea menu.
 --   3. fn_asistencia_gate_escritura / fn_asistencia_puede_ver  (autorizacion)
 --   4. fn_asistencia_periodo_eval / fn_asistencia_periodo_estado /
---      fn_asistencia_tipo_pk                                     (resolucion)
+--      fn_asistencia_tipo_pk / fn_asistencia_horas_bloque /
+--      fn_asistencia_franja_bloque                                (resolucion)
 --      fn_asistencia_periodo_estado -> registrar_bulk y editar RECHAZAN si el
 --      TPERIODO_ACADEMICO del grupo esta 'Cerrado' (ESTADOPERIODO='C').
+--      fn_asistencia_franja_bloque -> HORA_INICIO/HORA_FIN de un bloque con
+--      reserva de jornada cuando THORARIO no las trae (~52% de las filas).
 --   5. VISTA v_asistencia_detalle  (cadena de joins + clasificacion, un solo
 --      sitio; la consumen las 3 funciones de lectura)
 --   6. fn_asistencia_sesiones_programadas (proyeccion del horario sobre
 --      fechas reales, compartida por calendario y resumen)
 --   7. fn_asistencia_registrar_bulk, fn_asistencia_editar,
 --      fn_asistencia_estudiantes_sesion (padron para "Asistencia manual"),
---      fn_asistencia_listar_seguimiento, fn_asistencia_calendario,
---      fn_asistencia_resumen_horas
+--      fn_asistencia_asignaturas_sesion (pestanas por asignatura del dia,
+--      "Asistencia manual"), fn_asistencia_listar_seguimiento,
+--      fn_asistencia_calendario, fn_asistencia_resumen_horas
 --      El calendario y el resumen aceptan p_fk_tfuncionario: cuando llega,
 --      los puntos / las horas se acotan a las asignaturas ASIGNADAS a ese
 --      docente en TDOCENTE_ASIGNATURA (vista "mis clases").
@@ -409,6 +413,36 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_asistencia_horas_bloque(TIMESTAMP, TIMESTAMP, TIME, TIME, BIGINT)
     IS 'Duracion en horas de un bloque de THORARIO. Si trae HORA_INICIO/HORA_FIN propias, la duracion real. Si no (comun: ~52% de THORARIO no las tiene), se estima como la jornada del TPERIODO_ACADEMICO (HORA_INICIO/HORA_FIN, ambas TIME) dividida por BLOQUES_POR_DEFECTO. Sin ninguna de las dos, 0. La usan v_asistencia_detalle y fn_asistencia_sesiones_programadas -- unico sitio con esta regla.';
 
+-- Franja horaria PUNTUAL (reloj) de un bloque, con la misma reserva que
+-- fn_asistencia_horas_bloque pero para HORA_INICIO/HORA_FIN en vez de la
+-- duracion agregada -- es lo que pinta la cabecera "16 FEBRERO (7:00-10:00)"
+-- de "Asistencia manual" y la celda "Bloque 2 (8:30-10:00)" de Seguimiento.
+--
+--   Antes: esas dos pantallas leian th.HORA_INICIO/HORA_FIN tal cual: en un
+--   bloque sin horas propias (~52% de THORARIO) llegaban en NULL y el front
+--   no tenia como pintar la franja, aunque la sesion SI existiera.
+--
+--   Reserva: si el bloque no trae horas, se usa la jornada del
+--   TPERIODO_ACADEMICO (HORA_INICIO/HORA_FIN, ambas TIME) puesta sobre la
+--   FECHA de la sesion -- una aproximacion (asume que el bloque cae dentro de
+--   la jornada completa, no la divide como si hace fn_asistencia_horas_bloque
+--   con BLOQUES_POR_DEFECTO), pero muestra una franja en vez de nada.
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_franja_bloque(
+    p_fecha          DATE,
+    p_hora_inicio    TIMESTAMP,
+    p_hora_fin       TIMESTAMP,
+    p_jornada_inicio TIME,
+    p_jornada_fin    TIME
+)
+RETURNS TABLE (hora_inicio TIMESTAMP, hora_fin TIMESTAMP)
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT COALESCE(p_hora_inicio, p_fecha + p_jornada_inicio),
+           COALESCE(p_hora_fin,    p_fecha + p_jornada_fin);
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_franja_bloque(DATE, TIMESTAMP, TIMESTAMP, TIME, TIME)
+    IS 'Franja horaria (reloj) de un bloque de THORARIO para la FECHA de la sesion. Si el bloque trae HORA_INICIO/HORA_FIN propias, esas. Si no, la jornada del TPERIODO_ACADEMICO (HORA_INICIO/HORA_FIN, TIME) puesta sobre la fecha -- misma reserva que fn_asistencia_horas_bloque pero para el reloj puntual, no la duracion agregada. La usan v_asistencia_detalle, fn_asistencia_estudiantes_sesion, fn_asistencia_sesiones_programadas y fn_asistencia_asignaturas_sesion -- unico sitio con esta regla.';
+
 
 -- ===========================================================================
 -- 5. VISTA v_asistencia_detalle
@@ -442,8 +476,12 @@ SELECT
     a.FK_TPERIODO_EVALUACION                  AS fk_tperiodo_evaluacion,
     a.FECHA                                   AS fecha,
     a.BLOQUE                                  AS bloque,
-    h.HORA_INICIO                             AS hora_inicio,
-    h.HORA_FIN                                AS hora_fin,
+    -- Franja horaria: real si THORARIO la trae, si no la jornada del periodo
+    -- academico puesta sobre la FECHA (fn_asistencia_franja_bloque) -- antes
+    -- salia NULL cuando el bloque no tenia horas propias y el front no podia
+    -- pintar "16 FEBRERO (7:00-10:00)" ni "Bloque 2 (8:30-10:00)".
+    franja.hora_inicio                        AS hora_inicio,
+    franja.hora_fin                            AS hora_fin,
     -- Duracion de la sesion en horas: real si THORARIO la trae, si no
     -- estimada por la jornada del periodo academico (fn_asistencia_horas_bloque).
     academico_test.fn_asistencia_horas_bloque(
@@ -506,6 +544,8 @@ SELECT
          AND th.ACTIVE = TRUE
        LIMIT 1
   ) h ON TRUE
+  CROSS JOIN LATERAL academico_test.fn_asistencia_franja_bloque(
+      a.FECHA, h.HORA_INICIO, h.HORA_FIN, pa.HORA_INICIO, pa.HORA_FIN) franja
  WHERE a.ACTIVE = TRUE;
 
 COMMENT ON VIEW academico_test.v_asistencia_detalle
@@ -849,16 +889,23 @@ BEGIN
     WITH horario AS (
         -- Franja horaria de la sesion: mismo patron que la vista (LATERAL por
         -- dia de semana), pero keyed off p_fecha/p_bloque, no de un registro.
-        SELECT th.HORA_INICIO, th.HORA_FIN
-          FROM academico_test.THORARIO th
+        -- Con reserva de jornada (fn_asistencia_franja_bloque) cuando el
+        -- bloque no trae HORA_INICIO/HORA_FIN propias -- antes esta cabecera
+        -- ("16 FEBRERO (7:00-10:00)") salia en NULL para esos casos.
+        SELECT franja.hora_inicio AS HORA_INICIO, franja.hora_fin AS HORA_FIN
+          FROM academico_test.TGRUPO gr
+          JOIN academico_test.TGRADO g              ON g.PK_TGRADO = gr.FK_TGRADO
+          JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+          JOIN academico_test.THORARIO th ON th.FK_TGRUPO = gr.PK_TGRUPO AND th.ACTIVE = TRUE
           JOIN academico_test.TLISTA_VALOR dia
             ON dia.PK_LISTA_VALOR = th.FK_TLV_DIA_SEMANA
            AND dia.CATEGORIA = 'DIA_SEMANA'
            AND dia.VALOR = (EXTRACT(DOW FROM p_fecha)::INT + 1)::TEXT
-         WHERE th.FK_TGRUPO      = p_fk_tgrupo
+          CROSS JOIN LATERAL academico_test.fn_asistencia_franja_bloque(
+              p_fecha, th.HORA_INICIO, th.HORA_FIN, pa.HORA_INICIO, pa.HORA_FIN) franja
+         WHERE gr.PK_TGRUPO      = p_fk_tgrupo AND gr.ACTIVE = TRUE
            AND th.FK_TASIGNATURA = p_fk_tasignatura
            AND th.NUMERO_BLOQUE  = p_bloque
-           AND th.ACTIVE = TRUE
          LIMIT 1
     ),
     registros AS (
@@ -906,6 +953,79 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_asistencia_estudiantes_sesion(
     BIGINT, BIGINT, BIGINT, DATE, NUMERIC
 ) IS 'Padron de una sesion para la pantalla "Asistencia manual": una fila por matricula activa del grupo, con el estado ACTUAL del alumno para ese (asignatura, fecha, bloque) si ya hay registro (pk_tasistencia / tipo / observacion / soporte) o NULL si falta tomarlo ("Seleccionar"). Arranca de TMATRICULA con LEFT JOIN a los registros -- v_asistencia_detalle no sirve porque es inner sobre TASISTENCIA. Repite en cada fila la cabecera de la sesion: fk_tperiodo_evaluacion (fn_asistencia_periodo_eval) y hora_inicio/hora_fin de THORARIO por dia de semana de la fecha. total_estudiantes y registrados son ventanas sobre el padron completo. Gate: fn_asistencia_puede_ver(usuario, grupo). Orden: apellidos, nombres.';
+
+
+-- ---------------------------------------------------------------------------
+-- fn_asistencia_asignaturas_sesion — pestanas por asignatura de
+-- "Asistencia manual" (mock: "Matematicas" / "Geometria").
+--
+--   Antes no habia una funcion pensada para esto: era derivable filtrando
+--   fn_asistencia_calendario a un solo dia, pero esa funcion exige SEDE +
+--   ANIO + MES y trae columnas de conteo que esta pantalla no necesita. Esta
+--   responde directo "que asignaturas tiene programadas ESTE grupo en ESTE
+--   dia" a partir de THORARIO por dia de semana -- igual que hace el resto
+--   del modulo, sin agregar una tabla ni una columna nueva.
+--
+--   p_fk_tfuncionario: mismo criterio que el calendario/resumen -- si no es
+--   NULL, solo las asignaturas ASIGNADAS a ese docente (TDOCENTE_ASIGNATURA).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_asignaturas_sesion(
+    p_pk_usuario      BIGINT,
+    p_fk_tgrupo       BIGINT,
+    p_fecha           DATE,
+    p_fk_tfuncionario BIGINT DEFAULT NULL
+)
+RETURNS TABLE (
+    fk_tasignatura BIGINT,
+    asignatura     VARCHAR,
+    bloque         NUMERIC,
+    hora_inicio    TIMESTAMP,
+    hora_fin       TIMESTAMP
+)
+LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    -- Gate de LECTURA sobre el grupo -- mismo criterio que
+    -- fn_asistencia_estudiantes_sesion.
+    IF NOT academico_test.fn_asistencia_puede_ver(p_pk_usuario, p_fk_tgrupo) THEN
+        RAISE EXCEPTION 'El usuario no puede ver la asistencia del grupo %', p_fk_tgrupo
+            USING ERRCODE = '42501';
+    END IF;
+    IF p_fk_tgrupo IS NULL OR p_fecha IS NULL THEN
+        RAISE EXCEPTION 'grupo y fecha son obligatorios' USING ERRCODE = '23502';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM academico_test.TGRUPO
+                    WHERE PK_TGRUPO = p_fk_tgrupo AND ACTIVE = TRUE) THEN
+        RAISE EXCEPTION 'grupo (%) no existe o no esta activo', p_fk_tgrupo USING ERRCODE = '23503';
+    END IF;
+
+    RETURN QUERY
+    SELECT DISTINCT th.FK_TASIGNATURA, asig.NOMBRE, th.NUMERO_BLOQUE,
+           franja.hora_inicio, franja.hora_fin
+      FROM academico_test.TGRUPO gr
+      JOIN academico_test.TGRADO g              ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.THORARIO th ON th.FK_TGRUPO = gr.PK_TGRUPO AND th.ACTIVE = TRUE
+      JOIN academico_test.TLISTA_VALOR dia
+        ON dia.PK_LISTA_VALOR = th.FK_TLV_DIA_SEMANA
+       AND dia.CATEGORIA = 'DIA_SEMANA'
+       AND dia.VALOR = (EXTRACT(DOW FROM p_fecha)::INT + 1)::TEXT
+      JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = th.FK_TASIGNATURA
+      CROSS JOIN LATERAL academico_test.fn_asistencia_franja_bloque(
+          p_fecha, th.HORA_INICIO, th.HORA_FIN, pa.HORA_INICIO, pa.HORA_FIN) franja
+     WHERE gr.PK_TGRUPO = p_fk_tgrupo AND gr.ACTIVE = TRUE
+       AND (p_fk_tfuncionario IS NULL OR EXISTS (
+               SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+                WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario
+                  AND da.FK_TGRUPO       = th.FK_TGRUPO
+                  AND da.FK_TASIGNATURA  = th.FK_TASIGNATURA
+                  AND da.ACTIVE = TRUE))
+     ORDER BY th.NUMERO_BLOQUE, asig.NOMBRE;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_asignaturas_sesion(
+    BIGINT, BIGINT, DATE, BIGINT
+) IS 'Pestanas por asignatura de "Asistencia manual": las (asignatura, bloque, franja) que THORARIO tiene programadas para ESE grupo en el DIA DE SEMANA de p_fecha. Franja con reserva de jornada (fn_asistencia_franja_bloque). p_fk_tfuncionario no NULL acota a las asignaturas asignadas a ese docente en TDOCENTE_ASIGNATURA (mismo criterio que el calendario/resumen). Gate: fn_asistencia_puede_ver(usuario, grupo). DISTINCT porque el mismo (asignatura,bloque) puede repetirse en THORARIO por combinaciones de otras columnas (p.ej. subgrupos) que aqui no se filtran.';
 
 
 -- ---------------------------------------------------------------------------
@@ -1066,7 +1186,10 @@ BEGIN
            gr.FK_TLV_JORNADA, jor.NOMBRE,      jor.VALOR,
            th.FK_TASIGNATURA, asig.NOMBRE,
            th.NUMERO_BLOQUE,
-           th.HORA_INICIO,    th.HORA_FIN,
+           -- Franja horaria con reserva de jornada (fn_asistencia_franja_bloque):
+           -- antes salia NULL cuando el bloque no traia horas propias, y el
+           -- calendario no podia pintar la franja de una sesion PROGRAMADA.
+           franja.hora_inicio, franja.hora_fin,
            academico_test.fn_asistencia_horas_bloque(
                th.HORA_INICIO, th.HORA_FIN, pa.HORA_INICIO, pa.HORA_FIN, pa.BLOQUES_POR_DEFECTO)
       FROM generate_series(p_fecha_desde, p_fecha_hasta, INTERVAL '1 day') dd
@@ -1082,6 +1205,8 @@ BEGIN
       JOIN academico_test.TASIGNATURA asig      ON asig.PK_TASIGNATURA = th.FK_TASIGNATURA
       LEFT JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
                                                 AND jor.CATEGORIA = 'JORNADA'
+      CROSS JOIN LATERAL academico_test.fn_asistencia_franja_bloque(
+          dd::date, th.HORA_INICIO, th.HORA_FIN, pa.HORA_INICIO, pa.HORA_FIN) franja
      WHERE pa.FK_TSEDE = p_fk_tsede
        AND (p_fk_tgrupo      IS NULL OR th.FK_TGRUPO = p_fk_tgrupo)
        AND (p_fk_tasignatura IS NULL OR th.FK_TASIGNATURA = p_fk_tasignatura)
@@ -1095,13 +1220,14 @@ BEGIN
      GROUP BY dd::date, th.FK_TGRUPO, gr.NOMBRE, g.PK_TGRADO, g.NOMBRE, g.CODIGO,
               gr.FK_TLV_JORNADA, jor.NOMBRE, jor.VALOR, th.FK_TASIGNATURA, asig.NOMBRE,
               th.NUMERO_BLOQUE, th.HORA_INICIO, th.HORA_FIN,
+              franja.hora_inicio, franja.hora_fin,
               pa.HORA_INICIO, pa.HORA_FIN, pa.BLOQUES_POR_DEFECTO;  -- colapsa bloques duplicados
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_sesiones_programadas(
     BIGINT, BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT
-) IS 'Proyeccion del horario (THORARIO) sobre las fechas reales de [p_fecha_desde, p_fecha_hasta] (INCLUSIVO): una fila por sesion que TOCA dictar (grupo, asignatura, bloque, fecha) con su duracion en horas, e incluye grado (fk_tgrado/grado/grado_valor -- CODIGO de TGRADO) y jornada (fk_tlv_jornada/jornada/jornada_valor -- NOMBRE/VALOR de TLISTA_VALOR CATEGORIA=''JORNADA'') del grupo. Scope por sede + fn_asistencia_puede_ver. Si p_fk_tfuncionario no es NULL, solo las (grupo, asignatura) asignadas a ese docente en TDOCENTE_ASIGNATURA. La usan fn_asistencia_calendario (rama "programadas") y fn_asistencia_resumen_horas (horas programadas de la semana / del mes).';
+) IS 'Proyeccion del horario (THORARIO) sobre las fechas reales de [p_fecha_desde, p_fecha_hasta] (INCLUSIVO): una fila por sesion que TOCA dictar (grupo, asignatura, bloque, fecha) con su franja horaria (fn_asistencia_franja_bloque, con reserva de jornada) y duracion en horas, e incluye grado (fk_tgrado/grado/grado_valor -- CODIGO de TGRADO) y jornada (fk_tlv_jornada/jornada/jornada_valor -- NOMBRE/VALOR de TLISTA_VALOR CATEGORIA=''JORNADA'') del grupo. Scope por sede + fn_asistencia_puede_ver. Si p_fk_tfuncionario no es NULL, solo las (grupo, asignatura) asignadas a ese docente en TDOCENTE_ASIGNATURA. La usan fn_asistencia_calendario (rama "programadas") y fn_asistencia_resumen_horas (horas programadas de la semana / del mes).';
 
 
 -- ---------------------------------------------------------------------------

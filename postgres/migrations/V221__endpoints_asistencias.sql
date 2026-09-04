@@ -26,9 +26,12 @@
 -- caller NUNCA los manda (si no, cualquiera se haria pasar por otro usuario
 -- y saltaria el scope por rol de V220).
 --
--- Endpoints registrados (6):
+-- Endpoints registrados (7):
 --   GET    /asistencias/sesion/estudiantes  fn_asistencia_estudiantes_sesion
 --          padron de la pantalla "Asistencia manual" (alumnos + estado actual)
+--   GET    /asistencias/sesion/asignaturas  fn_asistencia_asignaturas_sesion
+--          pestanas por asignatura del dia ("Matematicas"/"Geometria") para
+--          esa pantalla -- que asignaturas tiene programadas el grupo ese dia.
 --   POST   /asistencias/registrar     fn_asistencia_registrar_bulk
 --          "Asistencia manual" (BODY.REGISTROS) y "Marcar todo como Asistio"
 --          (BODY.MARCAR_TODOS = 1, sin REGISTROS).
@@ -228,6 +231,48 @@ ON CONFLICT (uuid) DO UPDATE
        detail = EXCLUDED.detail;
 
 -- ---------------------------------------------------------------------------
+-- 3c. PESTANAS por asignatura del dia (pantalla "Asistencia manual")
+--     Que asignaturas tiene programadas ESTE grupo en el DIA DE SEMANA de
+--     FECHA -- arma los tabs "Matematicas" / "Geometria" del mock sin que el
+--     front tenga que filtrar el calendario mensual a un solo dia.
+-- ---------------------------------------------------------------------------
+INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
+                          path_template, execution_mode, http_method, param_types, detail)
+SELECT
+    'asis-sesion-asignaturas',
+    $q$SELECT * FROM academico_test.fn_asistencia_asignaturas_sesion(
+    p_pk_usuario      => public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    p_fk_tgrupo       => CAST(:QUERY.GRUPO AS BIGINT),
+    p_fecha           => CAST(:QUERY.FECHA AS DATE),
+    -- Igual que /asistencias/calendario: QUERY.MIAS=true -> docente del
+    -- token (no funcionario -> -1 -> sin pestanas); QUERY.FUNCIONARIO ->
+    -- docente concreto; NULL -> todas las asignaturas del grupo ese dia.
+    p_fk_tfuncionario => CASE
+        WHEN COALESCE(CAST(:QUERY.MIAS AS BOOLEAN), FALSE)
+        THEN COALESCE((SELECT f.PK_TFUNCIONARIO FROM academico_test.TFUNCIONARIO f
+                        WHERE f.FK_TUSUARIO = public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT)
+                          AND f.ACTIVE = TRUE), -1)
+        ELSE CAST(:QUERY.FUNCIONARIO AS BIGINT)
+    END
+);$q$,
+    'postgres', false, false, m.id_microservice,
+    '/asistencias/sesion/asignaturas', 'SELECT', 'GET',
+    '{
+       "QUERY.GRUPO":      "BIGINT!",
+       "QUERY.FECHA":      "VARCHAR!",
+       "QUERY.MIAS":       "BOOLEAN",
+       "QUERY.FUNCIONARIO":"BIGINT"
+     }'::jsonb,
+    'V221 -- pestanas por asignatura de "Asistencia manual": las (asignatura, bloque, hora_inicio, hora_fin) que THORARIO tiene programadas para ese GRUPO en el dia de semana de FECHA. QUERY.MIAS=true acota a las asignaturas asignadas al docente del token (vista "mis clases"); QUERY.FUNCIONARIO filtra por un docente concreto.'
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (uuid) DO UPDATE
+   SET query = EXCLUDED.query, param_types = EXCLUDED.param_types,
+       path_template = EXCLUDED.path_template, http_method = EXCLUDED.http_method,
+       execution_mode = EXCLUDED.execution_mode, microservice_id = EXCLUDED.microservice_id,
+       detail = EXCLUDED.detail;
+
+-- ---------------------------------------------------------------------------
 -- 4. CALENDARIO mensual por sede (GET con query-string)
 -- ---------------------------------------------------------------------------
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
@@ -349,7 +394,8 @@ SELECT pr.id_role, q.id_query
  ) src
   JOIN public.role pr ON pr.name = src.rname
  WHERE q.uuid IN ('asis-registrar', 'asis-editar', 'asis-seguimiento',
-                  'asis-sesion-estudiantes', 'asis-calendario', 'asis-resumen-horas')
+                  'asis-sesion-estudiantes', 'asis-sesion-asignaturas',
+                  'asis-calendario', 'asis-resumen-horas')
    AND NOT EXISTS (
        SELECT 1 FROM public.role_query rq
         WHERE rq.query_id = q.id_query AND rq.role_id = pr.id_role
@@ -393,6 +439,8 @@ SELECT q.id_query, c.param_key, c.only_positive, c.allow_decimals, c.max_digits,
     ('asis-sesion-estudiantes', 'QUERY.GRUPO',            TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-sesion-estudiantes', 'QUERY.ASIGNATURA',       TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-sesion-estudiantes', 'QUERY.BLOQUE',           NULL,  FALSE, 2,      NULL,   NULL,   NULL,   0::numeric,  30::numeric),
+    ('asis-sesion-asignaturas', 'QUERY.GRUPO',            TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
+    ('asis-sesion-asignaturas', 'QUERY.FUNCIONARIO',      TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-seguimiento',  'BODY.FILTERS.GRUPO',           TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-seguimiento',  'BODY.FILTERS.ASIGNATURA',      TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-seguimiento',  'BODY.FILTERS.TIPO_ASISTENCIA', TRUE,  FALSE, 1,      NULL,   NULL,   NULL,   1::numeric,  6::numeric),
