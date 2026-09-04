@@ -171,6 +171,14 @@ DROP FUNCTION IF EXISTS academico_test.fn_asistencia_calendario(
     BIGINT, BIGINT, INTEGER, INTEGER, BIGINT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_asistencia_calendario(
     BIGINT, BIGINT, INTEGER, INTEGER, BIGINT, BIGINT, DATE);
+-- fn_asistencia_calendario / fn_asistencia_sesiones_programadas ganaron
+-- grado (fk_tgrado/grado) y jornada (fk_tlv_jornada/jornada) en el RETURNS
+-- TABLE -- mismos parametros, cambia solo la salida, y CREATE OR REPLACE no
+-- puede tocar columnas de un RETURNS TABLE existente.
+DROP FUNCTION IF EXISTS academico_test.fn_asistencia_calendario(
+    BIGINT, BIGINT, INTEGER, INTEGER, BIGINT, BIGINT, DATE, BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_asistencia_sesiones_programadas(
+    BIGINT, BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_asistencia_resumen_horas(
     BIGINT, BIGINT, DATE, BIGINT, BIGINT);
 
@@ -376,6 +384,11 @@ COMMENT ON FUNCTION academico_test.fn_asistencia_tipo_pk(NUMERIC)
 --    clasificacion del estado. Las 3 funciones de lectura la consumen, en vez
 --    de repetir 30 lineas de joins y los literales IN (1)/(2,3)/(5,6).
 -- ===========================================================================
+-- v_asistencia_detalle gano columnas (grado_valor, jornada_valor) insertadas
+-- ENTRE columnas existentes: CREATE OR REPLACE VIEW solo permite anexar
+-- columnas al final, no reordenar/insertar. Se dropea antes para que
+-- reaplicar el archivo sea idempotente.
+DROP VIEW IF EXISTS academico_test.v_asistencia_detalle;
 CREATE OR REPLACE VIEW academico_test.v_asistencia_detalle AS
 SELECT
     a.PK_TASISTENCIA                          AS pk_tasistencia,
@@ -383,7 +396,11 @@ SELECT
     m.FK_TGRUPO                               AS fk_tgrupo,
     gr.NOMBRE                                 AS grupo,
     gr.FK_TLV_JORNADA                         AS fk_tlv_jornada,
+    jor.NOMBRE                                AS jornada,
+    jor.VALOR                                 AS jornada_valor,
     g.PK_TGRADO                               AS fk_tgrado,
+    g.NOMBRE                                  AS grado,
+    g.CODIGO                                  AS grado_valor,
     pa.PK_TPERIODO_ACADEMICO                  AS fk_tperiodo_academico,
     pa.FK_TSEDE                               AS fk_tsede,
     a.FK_TASIGNATURA                          AS fk_tasignatura,
@@ -434,6 +451,8 @@ SELECT
                                        ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
   JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
   JOIN academico_test.TLISTA_VALOR lv  ON lv.PK_LISTA_VALOR = a.FK_TLV_TIPO_ASISTENCIA
+  LEFT JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
+                                            AND jor.CATEGORIA = 'JORNADA'
   LEFT JOIN academico_test.TARCHIVO arch ON arch.PK_TARCHIVO = a.FK_SOPORTE_ARCHIVO
   -- Franja horaria: LATERAL + LIMIT 1 y match por DIA DE SEMANA de la FECHA.
   -- Ver "POR QUE EL JOIN A THORARIO ES LATERAL" en la cabecera: sin el dia,
@@ -454,7 +473,7 @@ SELECT
  WHERE a.ACTIVE = TRUE;
 
 COMMENT ON VIEW academico_test.v_asistencia_detalle
-    IS 'Detalle plano de TASISTENCIA (solo ACTIVE) con la cadena de joins ya resuelta: estudiante (nombre/documento), grupo, grado, periodo academico, sede, jornada, asignatura, soporte, y la franja horaria + duracion tomadas de THORARIO por (grupo, asignatura, bloque, DIA DE SEMANA de la fecha) via LEFT JOIN LATERAL LIMIT 1 -- el join sin el dia duplica filas porque el mismo bloque se repite por dia. Expone la clasificacion del estado como banderas (es_presente / es_tarde / es_ausente / es_justificado) para no repetir los literales 1/2,3/5,6. La consumen fn_asistencia_listar_seguimiento, fn_asistencia_calendario y fn_asistencia_resumen_horas.';
+    IS 'Detalle plano de TASISTENCIA (solo ACTIVE) con la cadena de joins ya resuelta: estudiante (nombre/documento), grupo, grado (fk_tgrado/grado/grado_valor -- CODIGO de TGRADO), periodo academico, sede, jornada (fk_tlv_jornada/jornada/jornada_valor -- NOMBRE/VALOR de TLISTA_VALOR CATEGORIA=''JORNADA''), asignatura, soporte, y la franja horaria + duracion tomadas de THORARIO por (grupo, asignatura, bloque, DIA DE SEMANA de la fecha) via LEFT JOIN LATERAL LIMIT 1 -- el join sin el dia duplica filas porque el mismo bloque se repite por dia. Expone la clasificacion del estado como banderas (es_presente / es_tarde / es_ausente / es_justificado) para no repetir los literales 1/2,3/5,6. La consumen fn_asistencia_listar_seguimiento, fn_asistencia_calendario y fn_asistencia_resumen_horas.';
 
 
 -- ===========================================================================
@@ -973,6 +992,12 @@ RETURNS TABLE (
     fecha          DATE,
     fk_tgrupo      BIGINT,
     grupo          VARCHAR,
+    fk_tgrado      BIGINT,
+    grado          VARCHAR,
+    grado_valor    VARCHAR,
+    fk_tlv_jornada BIGINT,
+    jornada        VARCHAR,
+    jornada_valor  VARCHAR,
     fk_tasignatura BIGINT,
     asignatura     VARCHAR,
     bloque         NUMERIC,
@@ -985,6 +1010,8 @@ BEGIN
     RETURN QUERY
     SELECT dd::date,
            th.FK_TGRUPO,      gr.NOMBRE,
+           g.PK_TGRADO,       g.NOMBRE,        g.CODIGO,
+           gr.FK_TLV_JORNADA, jor.NOMBRE,      jor.VALOR,
            th.FK_TASIGNATURA, asig.NOMBRE,
            th.NUMERO_BLOQUE,
            th.HORA_INICIO,    th.HORA_FIN,
@@ -1000,6 +1027,8 @@ BEGIN
       JOIN academico_test.TGRADO g              ON g.PK_TGRADO = gr.FK_TGRADO
       JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
       JOIN academico_test.TASIGNATURA asig      ON asig.PK_TASIGNATURA = th.FK_TASIGNATURA
+      LEFT JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
+                                                AND jor.CATEGORIA = 'JORNADA'
      WHERE pa.FK_TSEDE = p_fk_tsede
        AND (p_fk_tgrupo      IS NULL OR th.FK_TGRUPO = p_fk_tgrupo)
        AND (p_fk_tasignatura IS NULL OR th.FK_TASIGNATURA = p_fk_tasignatura)
@@ -1010,14 +1039,15 @@ BEGIN
                   AND da.FK_TASIGNATURA  = th.FK_TASIGNATURA
                   AND da.ACTIVE = TRUE))
        AND academico_test.fn_asistencia_puede_ver(p_pk_usuario, th.FK_TGRUPO)
-     GROUP BY dd::date, th.FK_TGRUPO, gr.NOMBRE, th.FK_TASIGNATURA, asig.NOMBRE,
+     GROUP BY dd::date, th.FK_TGRUPO, gr.NOMBRE, g.PK_TGRADO, g.NOMBRE, g.CODIGO,
+              gr.FK_TLV_JORNADA, jor.NOMBRE, jor.VALOR, th.FK_TASIGNATURA, asig.NOMBRE,
               th.NUMERO_BLOQUE, th.HORA_INICIO, th.HORA_FIN;  -- colapsa bloques duplicados
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_sesiones_programadas(
     BIGINT, BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT
-) IS 'Proyeccion del horario (THORARIO) sobre las fechas reales de [p_fecha_desde, p_fecha_hasta] (INCLUSIVO): una fila por sesion que TOCA dictar (grupo, asignatura, bloque, fecha) con su duracion en horas. Scope por sede + fn_asistencia_puede_ver. Si p_fk_tfuncionario no es NULL, solo las (grupo, asignatura) asignadas a ese docente en TDOCENTE_ASIGNATURA. La usan fn_asistencia_calendario (rama "programadas") y fn_asistencia_resumen_horas (horas programadas de la semana / del mes).';
+) IS 'Proyeccion del horario (THORARIO) sobre las fechas reales de [p_fecha_desde, p_fecha_hasta] (INCLUSIVO): una fila por sesion que TOCA dictar (grupo, asignatura, bloque, fecha) con su duracion en horas, e incluye grado (fk_tgrado/grado/grado_valor -- CODIGO de TGRADO) y jornada (fk_tlv_jornada/jornada/jornada_valor -- NOMBRE/VALOR de TLISTA_VALOR CATEGORIA=''JORNADA'') del grupo. Scope por sede + fn_asistencia_puede_ver. Si p_fk_tfuncionario no es NULL, solo las (grupo, asignatura) asignadas a ese docente en TDOCENTE_ASIGNATURA. La usan fn_asistencia_calendario (rama "programadas") y fn_asistencia_resumen_horas (horas programadas de la semana / del mes).';
 
 
 -- ---------------------------------------------------------------------------
@@ -1051,6 +1081,12 @@ RETURNS TABLE (
     fecha             DATE,
     fk_tgrupo         BIGINT,
     grupo             VARCHAR,
+    fk_tgrado         BIGINT,
+    grado             VARCHAR,
+    grado_valor       VARCHAR,
+    fk_tlv_jornada    BIGINT,
+    jornada           VARCHAR,
+    jornada_valor     VARCHAR,
     fk_tasignatura    BIGINT,
     asignatura        VARCHAR,
     bloque            NUMERIC,
@@ -1080,7 +1116,8 @@ BEGIN
     RETURN QUERY
     -- (a) Sesiones PROGRAMADAS del mes (helper compartido).
     WITH programadas AS (
-        SELECT sp.fecha, sp.fk_tgrupo, sp.grupo, sp.fk_tasignatura, sp.asignatura,
+        SELECT sp.fecha, sp.fk_tgrupo, sp.grupo, sp.fk_tgrado, sp.grado, sp.grado_valor,
+               sp.fk_tlv_jornada, sp.jornada, sp.jornada_valor, sp.fk_tasignatura, sp.asignatura,
                sp.bloque, sp.hora_inicio, sp.hora_fin
           FROM academico_test.fn_asistencia_sesiones_programadas(
                    p_pk_usuario, p_fk_tsede, v_ini, v_fin - 1,
@@ -1088,7 +1125,8 @@ BEGIN
     ),
     -- (b) Sesiones REGISTRADAS del mes, ya agregadas por sesion.
     registradas AS (
-        SELECT d.fecha, d.fk_tgrupo, d.grupo, d.fk_tasignatura, d.asignatura,
+        SELECT d.fecha, d.fk_tgrupo, d.grupo, d.fk_tgrado, d.grado, d.grado_valor,
+               d.fk_tlv_jornada, d.jornada, d.jornada_valor, d.fk_tasignatura, d.asignatura,
                d.bloque,
                MIN(d.hora_inicio)                            AS hora_inicio,
                MIN(d.hora_fin)                               AS hora_fin,
@@ -1108,12 +1146,19 @@ BEGIN
                       AND da.FK_TASIGNATURA  = d.fk_tasignatura
                       AND da.ACTIVE = TRUE))
            AND academico_test.fn_asistencia_puede_ver(p_pk_usuario, d.fk_tgrupo)
-         GROUP BY d.fecha, d.fk_tgrupo, d.grupo, d.fk_tasignatura, d.asignatura, d.bloque
+         GROUP BY d.fecha, d.fk_tgrupo, d.grupo, d.fk_tgrado, d.grado, d.grado_valor,
+                  d.fk_tlv_jornada, d.jornada, d.jornada_valor, d.fk_tasignatura, d.asignatura, d.bloque
     )
     SELECT
         COALESCE(p.fecha, r.fecha),
         COALESCE(p.fk_tgrupo, r.fk_tgrupo),
         COALESCE(p.grupo, r.grupo),
+        COALESCE(p.fk_tgrado, r.fk_tgrado),
+        COALESCE(p.grado, r.grado),
+        COALESCE(p.grado_valor, r.grado_valor),
+        COALESCE(p.fk_tlv_jornada, r.fk_tlv_jornada),
+        COALESCE(p.jornada, r.jornada),
+        COALESCE(p.jornada_valor, r.jornada_valor),
         COALESCE(p.fk_tasignatura, r.fk_tasignatura),
         COALESCE(p.asignatura, r.asignatura),
         COALESCE(p.bloque, r.bloque),
@@ -1135,13 +1180,13 @@ BEGIN
        AND r.fk_tgrupo      = p.fk_tgrupo
        AND r.fk_tasignatura = p.fk_tasignatura
        AND COALESCE(r.bloque, -1) = COALESCE(p.bloque, -1)
-     ORDER BY 1, 3, 5, 6;
+     ORDER BY 1, 3, 11, 12;  -- fecha, grupo, asignatura, bloque
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_calendario(
     BIGINT, BIGINT, INTEGER, INTEGER, BIGINT, BIGINT, DATE, BIGINT
-) IS 'Pantalla Asistencia (calendario mensual por sede). Una fila por SESION del mes: las PROGRAMADAS (fn_asistencia_sesiones_programadas) en FULL OUTER JOIN con las REGISTRADAS, de modo que tambien aparecen las tomas manuales sin bloque programado. estado_sesion = REGISTRADA (hay registro) | RETRASADA (fecha <= p_fecha_hoy sin registro) | PENDIENTE (fecha futura sin registro) -- los 3 contadores del encabezado. p_fk_tfuncionario no NULL acota a las asignaturas asignadas a ese docente en TDOCENTE_ASIGNATURA (vista "mis clases"). Rango de fechas sargable. Alcance por rol via fn_asistencia_puede_ver.';
+) IS 'Pantalla Asistencia (calendario mensual por sede). Una fila por SESION del mes: las PROGRAMADAS (fn_asistencia_sesiones_programadas) en FULL OUTER JOIN con las REGISTRADAS, de modo que tambien aparecen las tomas manuales sin bloque programado. Incluye grado (fk_tgrado/grado/grado_valor -- CODIGO de TGRADO) y jornada (fk_tlv_jornada/jornada/jornada_valor -- NOMBRE/VALOR de TLISTA_VALOR CATEGORIA=''JORNADA'') del grupo de cada sesion. estado_sesion = REGISTRADA (hay registro) | RETRASADA (fecha <= p_fecha_hoy sin registro) | PENDIENTE (fecha futura sin registro) -- los 3 contadores del encabezado. p_fk_tfuncionario no NULL acota a las asignaturas asignadas a ese docente en TDOCENTE_ASIGNATURA (vista "mis clases"). Rango de fechas sargable. Alcance por rol via fn_asistencia_puede_ver.';
 
 
 -- ---------------------------------------------------------------------------
