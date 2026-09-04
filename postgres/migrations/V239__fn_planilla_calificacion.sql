@@ -238,6 +238,54 @@
 -- en TMATRICULA/TGRUPO, o vigencia en TPLAN), el cambio es de UNA funcion:
 -- fn_asignatura_plan_vigente.
 --
+-- -------------------------------------------------------------------------
+-- RESOLUCION DEL TCRITERIO_EVALUACION DE UNA (ASIGNATURA, GRADO) — el piso y
+-- el tope institucionales de la nota.
+--
+-- Misma familia de helpers que la anterior (parten del mismo TASIGNATURA_PLAN
+-- ya resuelto), pero para OTRA configuracion: los criterios de evaluacion del
+-- periodo, TCRITERIO_EVALUACION (V22 + V62), que traen entre otros
+--   * PORCENTAJE_INICIAL_CALIF        — "Nota inicial para las calificaciones"
+--                                       (el PISO de cualquier calificacion);
+--   * PORCENTAJE_MAXIMO_RECUPERACION  — "Nota maxima de recuperacion"
+--                                       (el TOPE de una recuperacion).
+--
+-- LOS DOS VALORES YA ESTAN GUARDADOS COMO PORCENTAJE 0-100 en la tabla — no
+-- hace falta ninguna conversion de escala aqui. Confirmado leyendo la funcion
+-- real fn_criterio_eval_obtener en el servidor: esa pantalla convierte a la
+-- escala del FORMATO_CALIFICACION solo para MOSTRAR, el valor crudo de la
+-- columna es %. Es la misma convencion de TACTIVIDAD_NOTA.CALIFICACION (V227)
+-- y la que ya documenta V62.
+--
+-- CADENA DE RESOLUCION (partiendo de asignatura + grado):
+--   TASIGNATURA_PLAN (via fn_asignatura_plan_vigente_por_grado, con su
+--   limitacion de grado multi-plan ya documentada arriba)
+--     -> TCRITERIO_EVALUACION_ASIGNATURA_PLAN (ACTIVE), que liga
+--        FK_TASIGNATURA_PLAN con FK_TCRITERIO_EVALUACION
+--     -> TCRITERIO_EVALUACION (su PK es a la vez FK a TPERIODO_ACADEMICO: la
+--        configuracion es 1:1 con el periodo).
+--
+-- DESEMPATE — cardinalidad real vs. lo que el esquema permite. Confirmado
+-- contra el servidor: la relacion es 1:1 de hecho (0 de 9684 TASIGNATURA_PLAN
+-- tienen mas de una fila ACTIVE en TCRITERIO_EVALUACION_ASIGNATURA_PLAN). Pero
+-- el esquema NO lo impide: el CHECK CHK_TCE_ASIG_PLAN_INHERIT contempla
+-- explicitamente dos clases de fila, la "por defecto" (POR_DEFECTO='S',
+-- FK_TGRADO IS NULL) y el override por grado (POR_DEFECTO='N', FK_TGRADO NOT
+-- NULL), y nada prohibe que coexistan para la misma asignatura_plan. Por eso
+-- el helper resuelve con PRIORIDAD EXPLICITA: gana la fila cuyo FK_TGRADO es
+-- exactamente el grado pedido y, si no hay, la fila por defecto (FK_TGRADO
+-- NULL). Si aun asi hubiera varias en el mismo escalon (imposible hoy, no
+-- imposible manana), se toma la mas reciente por CREATED_AT, con la PK como
+-- desempate determinista. No se lee POR_DEFECTO para decidir: FK_TGRADO ya
+-- dice lo mismo y el CHECK garantiza que ambas columnas son consistentes.
+--
+-- Quien consume esto es V227 (fn_actividad_nota_ajustar_por_criterio), al
+-- momento de guardar una calificacion. Los helpers viven AQUI, junto al resto
+-- de la familia TASIGNATURA_PLAN, para no partir esa resolucion en dos
+-- archivos; V227 los invoca en tiempo de ejecucion (ver la subseccion
+-- "PISO Y TOPE" de la cabecera de V227 para el detalle de por que eso es
+-- correcto pese a que V227 aplica ANTES que V239).
+--
 -- TODO EXPLICITO — la FLECHA verde/roja de "DEFINIT PROY." (sube/baja) NO se
 -- implementa. Requiere una linea base contra la cual comparar (la definitiva
 -- del corte anterior). La unica candidata del esquema es
@@ -646,6 +694,87 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_asignatura_plan_vigente(BIGINT, BIGINT)
     IS 'Resuelve la fila de TASIGNATURA_PLAN (V22) que configura el calculo de la definitiva de una asignatura para los estudiantes de un grupo: grupo -> grado -> TPLAN ACTIVE del grado -> TASIGNATURA_PLAN ACTIVE de esa asignatura. NULL si no hay ninguna. LIMITACION CONOCIDA: el esquema no vincula una matricula/grupo a un plan concreto (no hay FK, ni vigencia ni marca de "principal" en TPLAN) y todo el repo (V44 fn_plan_*, V45, V46, V186) asume UN solo TPLAN activo por grado, cosa que en el servidor real no siempre se cumple (59 grados con mas de uno). Se toma el plan activo MAS RECIENTE (CREATED_AT DESC, PK_TPLAN DESC como desempate determinista); en un grado multi-plan puede elegir el equivocado. La consulta y el desempate NO viven aqui: esta funcion solo resuelve grupo -> grado y DELEGA en fn_asignatura_plan_vigente_por_grado (el otro punto de entrada, el CRUD de unidades de V216, parte del grado porque TUNIDAD no tiene grupo). Punto UNICO de esa resolucion: cuando el negocio defina el vinculo real, se cambia solo alli. V239.';
+
+-- ---------------------------------------------------------------------------
+-- fn_asignatura_criterio_evaluacion_vigente — el TCRITERIO_EVALUACION que
+-- aplica a una (asignatura, grado). Ver la seccion "RESOLUCION DEL
+-- TCRITERIO_EVALUACION DE UNA (ASIGNATURA, GRADO)" de la cabecera para la
+-- cadena completa y para el desempate.
+--
+-- Punto UNICO de esa resolucion (hoy la consume V227 al calificar). Retorna
+-- NULL si se rompe cualquier eslabon de la cadena: sin plan resuelto, sin
+-- fila en TCRITERIO_EVALUACION_ASIGNATURA_PLAN, o con todas inactivas. NULL
+-- NO es un error: significa "este colegio no configuro criterios para esta
+-- asignatura en este grado", y el llamador simplemente no aplica nada.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_criterio_evaluacion_vigente(
+    p_fk_tasignatura  BIGINT,
+    p_fk_tgrado       BIGINT
+)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT cep.FK_TCRITERIO_EVALUACION
+      FROM academico_test.TCRITERIO_EVALUACION_ASIGNATURA_PLAN cep
+     WHERE cep.FK_TASIGNATURA_PLAN =
+               academico_test.fn_asignatura_plan_vigente_por_grado(
+                   p_fk_tgrado, p_fk_tasignatura)
+       AND cep.ACTIVE = TRUE
+       -- El override del grado pedido, o la fila "por defecto" institucional.
+       -- Cualquier otro grado no aplica aqui.
+       AND (cep.FK_TGRADO = p_fk_tgrado OR cep.FK_TGRADO IS NULL)
+     -- Prioridad: override por grado exacto ANTES que la fila por defecto.
+     -- FALSE ordena antes que TRUE, asi que "FK_TGRADO IS NULL" pone el
+     -- default al final. Los dos criterios siguientes son solo desempate
+     -- determinista dentro del mismo escalon (hoy imposible; ver cabecera).
+     ORDER BY (cep.FK_TGRADO IS NULL),
+              cep.CREATED_AT DESC,
+              cep.PK_TCRITERIO_EVALUACION_ASIGNATURA_PLAN DESC
+     LIMIT 1;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asignatura_criterio_evaluacion_vigente(BIGINT, BIGINT)
+    IS 'Resuelve el PK_TCRITERIO_EVALUACION (V22, 1:1 con TPERIODO_ACADEMICO) que configura los criterios de evaluacion aplicables a una (asignatura, grado): grado+asignatura -> TASIGNATURA_PLAN (fn_asignatura_plan_vigente_por_grado, con su limitacion documentada de grados multi-plan) -> TCRITERIO_EVALUACION_ASIGNATURA_PLAN ACTIVE -> TCRITERIO_EVALUACION. Da PRIORIDAD a la fila de override cuyo FK_TGRADO es exactamente el grado pedido sobre la fila "por defecto" institucional (FK_TGRADO IS NULL, POR_DEFECTO=''S''); dentro del mismo escalon desempata por CREATED_AT DESC y PK DESC. En el servidor real la cardinalidad es 1:1 de hecho (0 de 9684 TASIGNATURA_PLAN con mas de una fila activa), pero el esquema SI permite que coexistan la fila por defecto y un override por grado (CHK_TCE_ASIG_PLAN_INHERIT), por eso el desempate es explicito y no un LIMIT 1 arbitrario. Retorna NULL si se rompe cualquier eslabon de la cadena -- NULL no es error, significa "sin criterios configurados". Punto UNICO de esta resolucion; la consume V227 (fn_actividad_nota_ajustar_por_criterio) para el piso y el tope de las calificaciones. V239.';
+
+-- ---------------------------------------------------------------------------
+-- fn_criterio_evaluacion_porcentaje_inicial / _porcentaje_maximo_recuperacion
+-- — los dos valores concretos que el motor de calificacion necesita.
+--
+-- SIN CONVERSION DE ESCALA: las dos columnas YA estan guardadas como
+-- porcentaje 0-100 (ver cabecera). Son accesores nombrados y no lecturas
+-- inline en el llamador para que el dia que el negocio cambie la convencion
+-- de alguna de las dos haya UN solo sitio que tocar.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_criterio_evaluacion_porcentaje_inicial(
+    p_pk_tcriterio_evaluacion  BIGINT
+)
+RETURNS NUMERIC
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT ce.PORCENTAJE_INICIAL_CALIF::NUMERIC
+      FROM academico_test.TCRITERIO_EVALUACION ce
+     WHERE ce.PK_TCRITERIO_EVALUACION = p_pk_tcriterio_evaluacion;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_criterio_evaluacion_porcentaje_inicial(BIGINT)
+    IS 'TCRITERIO_EVALUACION.PORCENTAJE_INICIAL_CALIF (V22) de una fila de criterios de evaluacion: la "Nota inicial para las calificaciones", es decir el PISO institucional por debajo del cual no baja ninguna calificacion. Ya viene como PORCENTAJE 0-100 en la tabla (misma convencion que TACTIVIDAD_NOTA.CALIFICACION; fn_criterio_eval_obtener convierte a la escala del FORMATO_CALIFICACION solo para MOSTRAR en su pantalla), asi que este accesor NO hace ninguna conversion. NULL si no existe la fila o el campo esta vacio -- NULL significa "sin piso configurado", no es error. Lo consume V227 (fn_actividad_nota_ajustar_por_criterio). V239.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_criterio_evaluacion_porcentaje_maximo_recuperacion(
+    p_pk_tcriterio_evaluacion  BIGINT
+)
+RETURNS NUMERIC
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT ce.PORCENTAJE_MAXIMO_RECUPERACION::NUMERIC
+      FROM academico_test.TCRITERIO_EVALUACION ce
+     WHERE ce.PK_TCRITERIO_EVALUACION = p_pk_tcriterio_evaluacion;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_criterio_evaluacion_porcentaje_maximo_recuperacion(BIGINT)
+    IS 'TCRITERIO_EVALUACION.PORCENTAJE_MAXIMO_RECUPERACION (columna agregada por V62) de una fila de criterios de evaluacion: la "Nota maxima de recuperacion", es decir el TOPE que no puede superar la calificacion de una actividad de recuperacion (TACTIVIDAD.ES_RECUPERACION=''S''). Ya viene como PORCENTAJE 0-100 en la tabla, igual que PORCENTAJE_INICIAL_CALIF: este accesor NO hace ninguna conversion de escala. NULL si no existe la fila o el campo esta vacio -- NULL significa "sin tope configurado", no es error. Lo consume V227 (fn_actividad_nota_ajustar_por_criterio). V239.';
 
 -- ---------------------------------------------------------------------------
 -- fn_asignatura_plan_elemento_calculo — QUE se combina para dar la definitiva

@@ -134,7 +134,78 @@
 -- contra CURRENT_DATE a secas.
 --
 -- -------------------------------------------------------------------------
+-- PISO Y TOPE INSTITUCIONALES — TCRITERIO_EVALUACION aplicado al calificar.
+--
+-- El colegio configura, por periodo academico (TCRITERIO_EVALUACION, V22 +
+-- V62, 1:1 con TPERIODO_ACADEMICO), dos limites que hasta ahora este motor
+-- ignoraba por completo:
+--   * PORCENTAJE_INICIAL_CALIF       — "Nota inicial para las calificaciones":
+--     el PISO. Aplica a CUALQUIER actividad, no solo a las recuperaciones: es
+--     la nota minima que puede registrar un estudiante.
+--   * PORCENTAJE_MAXIMO_RECUPERACION — "Nota maxima de recuperacion": el TOPE,
+--     y este SI aplica solo a las actividades con ES_RECUPERACION='S'
+--     (V22/V224).
+-- Los dos estan guardados en la tabla YA como porcentaje 0-100, la misma
+-- convencion de TACTIVIDAD_NOTA.CALIFICACION que documenta la seccion "REGLA
+-- DE PORCENTAJE" de arriba: no hay ninguna conversion de escala que hacer.
+--
+-- DE DONDE SALE. La resolucion (asignatura + grado -> TASIGNATURA_PLAN ->
+-- TCRITERIO_EVALUACION_ASIGNATURA_PLAN -> TCRITERIO_EVALUACION) NO se
+-- reimplementa aqui: vive en V239, junto al resto de la familia
+-- TASIGNATURA_PLAN, en fn_asignatura_criterio_evaluacion_vigente +
+-- fn_criterio_evaluacion_porcentaje_inicial +
+-- fn_criterio_evaluacion_porcentaje_maximo_recuperacion (alli esta
+-- documentado el desempate override-por-grado vs. fila por defecto).
+--
+-- V239 aplica DESPUES que este archivo. No es un problema, y es exactamente
+-- el mismo mecanismo ya documentado arriba para fn_asistencia_tipo_pk: el
+-- helper que las invoca (fn_actividad_nota_ajustar_por_criterio) es LANGUAGE
+-- plpgsql, y PostgreSQL resuelve los nombres del cuerpo en tiempo de
+-- EJECUCION, no en CREATE FUNCTION. Este archivo aplica limpio hoy y el
+-- ajuste empieza a operar en cuanto V239 corre, en la misma migracion.
+--
+-- QUE SE CONECTA. Un unico helper, fn_actividad_nota_ajustar_por_criterio,
+-- invocado en los CUATRO puntos por los que se llega a escribir
+-- TACTIVIDAD_NOTA.CALIFICACION:
+--   * fn_actividad_nota_rubrica_recalcular  (individual + bulk pasan por aqui)
+--   * fn_actividad_nota_cotejo_recalcular   (individual + bulk pasan por aqui)
+--   * fn_actividad_nota_calificar_escala    (el bulk delega en ella)
+--   * fn_actividad_nota_calificar_otro      (valor directo del llamador)
+-- Ajustar dentro de los dos _recalcular en vez de en sus cuatro llamadores es
+-- lo que garantiza que la nota que se GUARDA y la que se DEVUELVE sean la
+-- misma, y que ningun camino futuro se salte el limite.
+--
+-- ORDEN: TOPE primero, PISO despues. El tope acota hasta donde puede LLEGAR
+-- una recuperacion (su razon de ser: que recuperar no valga lo mismo que
+-- haberlo hecho bien la primera vez); el piso garantiza el minimo
+-- institucional, y debe poder levantar tambien una recuperacion ya topada
+-- -- por eso va al final. Al reves, un piso alto seguido de un tope bajo
+-- dejaria la nota en el tope y el minimo institucional no se cumpliria.
+-- CASO LIMITE piso > tope: con este orden gana el piso. Es una
+-- INCONSISTENCIA DE CONFIGURACION del colegio (pedir a la vez "nunca menos de
+-- X" y "nunca mas de Y < X"), no un caso de negocio: no se intenta resolver
+-- ni se lanza error -- el motor de notas no es el sitio para validar la
+-- configuracion del periodo, y fallar al calificar por eso dejaria al docente
+-- bloqueado sin poder arreglarlo.
+--
+-- CASO LIMITE actividad sin grado resoluble: el grado sale de
+-- TUNIDAD.FK_TGRADO (via TACTIVIDAD.FK_TUNIDAD) y, si la actividad no tiene
+-- unidad, de TGRUPO.FK_TGRADO (via TACTIVIDAD.FK_TGRUPO) --
+-- fn_actividad_grado_resolver. Desde V218 las dos FK son nullable, asi que
+-- una actividad puede no tener NI unidad NI grupo. En ese caso no hay con que
+-- resolver el TASIGNATURA_PLAN y, por tanto, tampoco el TCRITERIO_EVALUACION:
+-- el piso y el tope simplemente NO se aplican y la nota se guarda tal cual.
+-- No es un error -- es una actividad para la que el colegio no tiene (todavia)
+-- un contexto academico con el cual limitarla. Lo mismo aplica si el grado se
+-- resuelve pero no hay TCRITERIO_EVALUACION configurado.
+--
+-- -------------------------------------------------------------------------
 -- Depende de (orden de version de Flyway):
+--   * V239 (MISMA rama, aplica DESPUES; resuelto en ejecucion, ver seccion
+--     "PISO Y TOPE" arriba) — fn_asignatura_criterio_evaluacion_vigente,
+--     fn_criterio_evaluacion_porcentaje_inicial,
+--     fn_criterio_evaluacion_porcentaje_maximo_recuperacion.
+--   * V62  — TCRITERIO_EVALUACION.PORCENTAJE_MAXIMO_RECUPERACION.
 --   * V22  — TACTIVIDAD_ESTUDIANTE, TACTIVIDAD_NOTA, TACTIVIDAD_RUBRICA_*,
 --            TACTIVIDAD_COTEJO_*, TACTIVIDAD_ESCALA_*, TASISTENCIA.
 --   * V224 — fn_actividad_lv_assert, menu 'PLANEADOR'; V29/V185 —
@@ -312,6 +383,132 @@ COMMENT ON FUNCTION academico_test.fn_actividad_nota_asistencia_assert(BIGINT, D
     IS 'Gate de asistencia: exige que exista un registro ACTIVO en TASISTENCIA para (matricula del estudiante via TACTIVIDAD_ESTUDIANTE, asignatura de la actividad via TACTIVIDAD.FK_TASIGNATURA, FECHA=p_fecha) -- 22023 si no hay ninguno. Si lo hay pero su FK_TLV_TIPO_ASISTENCIA resuelve (via academico_test.fn_asistencia_tipo_pk, dependencia cross-branch de feature/CU-86e32gvpp, ver cabecera) a VALOR=2 (NO Asistio, injustificada), tambien lanza 22023 -- VALOR=3 (justificada) SI permite calificar. Helper de fn_actividad_nota_calificar_*. V227.';
 
 -- ---------------------------------------------------------------------------
+-- fn_actividad_grado_resolver — el GRADO al que pertenece una actividad.
+--
+-- TACTIVIDAD no tiene FK_TGRADO propia. Se resuelve por prioridad:
+--   1) TUNIDAD.FK_TGRADO, via TACTIVIDAD.FK_TUNIDAD. Es la fuente PREFERIDA:
+--      la unidad es la que define el contexto academico (asignatura + grado)
+--      en el que se planeo la actividad; el grupo es solo a quien se le
+--      aplico.
+--   2) TGRUPO.FK_TGRADO, via TACTIVIDAD.FK_TGRUPO, si no hay unidad.
+--   3) NULL si no tiene ninguna de las dos (posible desde V218: las dos FK
+--      son nullable). Ver el caso limite en la seccion "PISO Y TOPE" de la
+--      cabecera: no es un error, simplemente no hay grado.
+--
+-- No exige ACTIVE en la unidad/grupo: se esta resolviendo el CONTEXTO
+-- historico de una actividad ya creada, y desactivar una unidad no debe
+-- cambiar en silencio los limites con los que se califica (mismo criterio que
+-- V223/V239 aplican al no filtrar por ACTIVE las filas de catalogo que
+-- alimentan un calculo de nota).
+--
+-- No gatea permisos: helper interno, siempre invocado desde una funcion que
+-- ya valido EDITAR sobre PLANEADOR.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_grado_resolver(
+    p_pk_tactividad BIGINT
+)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(u.FK_TGRADO, g.FK_TGRADO)
+      FROM academico_test.TACTIVIDAD a
+      LEFT JOIN academico_test.TUNIDAD u ON u.PK_TUNIDAD = a.FK_TUNIDAD
+      LEFT JOIN academico_test.TGRUPO  g ON g.PK_TGRUPO  = a.FK_TGRUPO
+     WHERE a.PK_TACTIVIDAD = p_pk_tactividad;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_grado_resolver(BIGINT)
+    IS 'Grado al que pertenece una actividad. TACTIVIDAD no tiene FK_TGRADO propia, asi que se resuelve por prioridad: (1) TUNIDAD.FK_TGRADO via TACTIVIDAD.FK_TUNIDAD -- fuente preferida, la unidad es la que define el contexto academico (asignatura+grado) en el que se planeo la actividad; (2) si no tiene unidad, TGRUPO.FK_TGRADO via TACTIVIDAD.FK_TGRUPO; (3) NULL si no tiene ninguna de las dos, caso posible desde V218 (ambas FK nullable) y que NO es un error. No exige ACTIVE en unidad/grupo: se resuelve el contexto historico de una actividad ya creada y desactivar una unidad no debe cambiar en silencio con que limites se califica. Helper interno (no gatea permisos), usado por fn_actividad_nota_ajustar_por_criterio. V227.';
+
+-- ---------------------------------------------------------------------------
+-- fn_actividad_nota_ajustar_por_criterio — aplica el TOPE de recuperacion y
+-- el PISO institucional a una calificacion antes de guardarla.
+--
+-- Es el punto UNICO de esa regla. Ver la seccion "PISO Y TOPE
+-- INSTITUCIONALES" de la cabecera para el detalle de por que el orden es
+-- tope-luego-piso, que pasa en el caso raro piso > tope, y por que las
+-- funciones de V239 que invoca se resuelven en tiempo de ejecucion.
+--
+-- Contrato: NUNCA falla por falta de configuracion. Cualquier eslabon que no
+-- resuelva (actividad sin grado, sin TASIGNATURA_PLAN, sin
+-- TCRITERIO_EVALUACION, o con los porcentajes en NULL) deja p_valor intacto.
+-- p_valor NULL entra y sale NULL: es "todavia no hay nota" (el caso de la
+-- rubrica incompleta), no un cero que haya que levantar al piso.
+--
+-- Los limites se aplican SOBRE el valor ya redondeado a 2 decimales por el
+-- llamador, y no se vuelve a redondear: piso y tope son porcentajes 0-100 de
+-- la configuracion del colegio, asi que LEAST/GREATEST solo puede devolver o
+-- el valor que ya tenia 2 decimales, o un limite con la escala de su columna
+-- (NUMERIC(3) el piso, NUMERIC(5,2) el tope) -- en ningun caso se introducen
+-- mas decimales de los que ya habia.
+--
+-- No gatea permisos: helper interno (mismo criterio que
+-- fn_actividad_estudiante_actividad y los helpers de V223/V239).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_ajustar_por_criterio(
+    p_pk_tactividad BIGINT,
+    p_valor         NUMERIC
+)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_fk_tgrado        BIGINT;
+    v_fk_tasignatura   BIGINT;
+    v_es_recuperacion  CHAR(1);
+    v_pk_criterio      BIGINT;
+    v_piso             NUMERIC;
+    v_tope             NUMERIC;
+    v_valor            NUMERIC := p_valor;
+BEGIN
+    IF v_valor IS NULL THEN
+        RETURN NULL;                       -- "aun no hay nota": nada que acotar
+    END IF;
+
+    SELECT a.FK_TASIGNATURA, a.ES_RECUPERACION
+      INTO v_fk_tasignatura, v_es_recuperacion
+      FROM academico_test.TACTIVIDAD a
+     WHERE a.PK_TACTIVIDAD = p_pk_tactividad;
+
+    v_fk_tgrado := academico_test.fn_actividad_grado_resolver(p_pk_tactividad);
+
+    -- Sin grado (actividad sin unidad NI grupo, posible desde V218) o sin
+    -- asignatura no hay con que resolver el criterio: se guarda tal cual.
+    IF v_fk_tgrado IS NULL OR v_fk_tasignatura IS NULL THEN
+        RETURN v_valor;
+    END IF;
+
+    v_pk_criterio := academico_test.fn_asignatura_criterio_evaluacion_vigente(
+                         v_fk_tasignatura, v_fk_tgrado);
+    IF v_pk_criterio IS NULL THEN
+        RETURN v_valor;                    -- sin criterios configurados
+    END IF;
+
+    -- 1) TOPE, solo para actividades de recuperacion.
+    IF v_es_recuperacion = 'S' THEN
+        v_tope := academico_test.fn_criterio_evaluacion_porcentaje_maximo_recuperacion(v_pk_criterio);
+        IF v_tope IS NOT NULL THEN
+            v_valor := LEAST(v_valor, v_tope);
+        END IF;
+    END IF;
+
+    -- 2) PISO, para CUALQUIER actividad (incluida una recuperacion ya topada:
+    --    por eso va despues; ver la cabecera).
+    v_piso := academico_test.fn_criterio_evaluacion_porcentaje_inicial(v_pk_criterio);
+    IF v_piso IS NOT NULL THEN
+        v_valor := GREATEST(v_valor, v_piso);
+    END IF;
+
+    RETURN v_valor;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_ajustar_por_criterio(BIGINT, NUMERIC)
+    IS 'Punto UNICO donde se aplican a una calificacion los dos limites que el colegio configura en TCRITERIO_EVALUACION (V22 + V62), ambos ya guardados como porcentaje 0-100 (sin conversion de escala): el TOPE (PORCENTAJE_MAXIMO_RECUPERACION, "Nota maxima de recuperacion") y el PISO (PORCENTAJE_INICIAL_CALIF, "Nota inicial para las calificaciones"). Resuelve el grado de la actividad con fn_actividad_grado_resolver (unidad primero, grupo despues) y el criterio con fn_asignatura_criterio_evaluacion_vigente (V239). ORDEN: primero LEAST(valor, tope) y SOLO si TACTIVIDAD.ES_RECUPERACION=''S'' -- el tope acota hasta donde puede llegar una recuperacion --, y despues GREATEST(valor, piso) para CUALQUIER actividad -- el minimo institucional debe poder levantar tambien una recuperacion ya topada, por eso va al final. Si el colegio configura piso > tope (inconsistencia de configuracion, no un caso de negocio) gana el piso; no se valida ni se lanza error, calificar no es el sitio para bloquear al docente por eso. NUNCA falla por falta de configuracion: si la actividad no tiene grado resoluble (sin unidad NI grupo, posible desde V218), no hay TASIGNATURA_PLAN, no hay TCRITERIO_EVALUACION o los porcentajes son NULL, devuelve el valor intacto. p_valor NULL entra y sale NULL ("aun no hay nota", caso de la rubrica incompleta): no se levanta al piso. No redondea: piso y tope no pueden aportar mas decimales de los que ya traia el valor. Helper interno, no gatea permisos. Lo invocan fn_actividad_nota_rubrica_recalcular, fn_actividad_nota_cotejo_recalcular, fn_actividad_nota_calificar_escala y fn_actividad_nota_calificar_otro -- los cuatro unicos caminos por los que se escribe TACTIVIDAD_NOTA.CALIFICACION. V227.';
+
+-- ---------------------------------------------------------------------------
 -- fn_actividad_nota_rubrica_recalcular — nota final de rubrica a partir de
 -- lo YA capturado en TACTIVIDAD_RUBRICA_EVALUACION para ese estudiante.
 --
@@ -371,12 +568,18 @@ BEGIN
         RETURN NULL;                       -- rubrica incompleta: sin nota definitiva
     END IF;
 
-    RETURN ROUND(v_pct, 2);
+    -- Piso/tope institucionales SOBRE el valor ya redondeado a 2 decimales
+    -- (ver seccion "PISO Y TOPE" de la cabecera): el ajuste no puede aportar
+    -- mas decimales, y aplicarlo aqui -- y no en los llamadores -- garantiza
+    -- que la nota que se guarda y la que se devuelve sean la misma en las dos
+    -- rutas (individual y bulk).
+    RETURN academico_test.fn_actividad_nota_ajustar_por_criterio(
+               v_pk_tactividad, ROUND(v_pct, 2));
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_rubrica_recalcular(BIGINT)
-    IS 'Nota final (porcentaje 0-100) de la rubrica de un estudiante a partir de lo YA capturado en TACTIVIDAD_RUBRICA_EVALUACION: por criterio % = PONDERACION capturada / MAX(PONDERACION de los niveles ACTIVE de ese criterio) * 100, y el resultado es el promedio simple de esos %. Retorna NULL cuando la rubrica todavia no esta completa (menos criterios capturados activos que criterios ACTIVE de la actividad) o cuando la actividad no tiene criterios -- NULL significa "aun no hay nota definitiva", no es un error. NO escribe: el llamador decide si guarda el valor en TACTIVIDAD_NOTA. Unica definicion del calculo, compartida por fn_actividad_nota_calificar_rubrica y fn_actividad_nota_calificar_rubrica_bulk. V227.';
+    IS 'Nota final (porcentaje 0-100) de la rubrica de un estudiante a partir de lo YA capturado en TACTIVIDAD_RUBRICA_EVALUACION: por criterio % = PONDERACION capturada / MAX(PONDERACION de los niveles ACTIVE de ese criterio) * 100, y el resultado es el promedio simple de esos %. Retorna NULL cuando la rubrica todavia no esta completa (menos criterios capturados activos que criterios ACTIVE de la actividad) o cuando la actividad no tiene criterios -- NULL significa "aun no hay nota definitiva", no es un error. Antes de retornar aplica el piso/tope institucional con fn_actividad_nota_ajustar_por_criterio (TCRITERIO_EVALUACION: tope de recuperacion si ES_RECUPERACION=''S'', luego piso PORCENTAJE_INICIAL_CALIF), sobre el valor ya redondeado a 2 decimales -- los limites son porcentajes de configuracion, no aportan mas decimales. El ajuste vive aqui y no en los llamadores para que individual y bulk guarden y devuelvan exactamente el mismo numero. NO escribe: el llamador decide si guarda el valor en TACTIVIDAD_NOTA. Unica definicion del calculo, compartida por fn_actividad_nota_calificar_rubrica y fn_actividad_nota_calificar_rubrica_bulk. V227.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_nota_cotejo_recalcular — nota final de lista de cotejo a
@@ -432,12 +635,17 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    RETURN ROUND(COALESCE(v_suma_cumplida, 0) / v_suma_total * 100, 2);
+    -- Piso/tope institucionales, mismo criterio que en rubrica: sobre el valor
+    -- ya redondeado y dentro del recalculo, para que individual y bulk lo
+    -- apliquen por igual (ver seccion "PISO Y TOPE" de la cabecera).
+    RETURN academico_test.fn_actividad_nota_ajustar_por_criterio(
+               v_pk_tactividad,
+               ROUND(COALESCE(v_suma_cumplida, 0) / v_suma_total * 100, 2));
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_cotejo_recalcular(BIGINT)
-    IS 'Nota final (porcentaje 0-100) de la lista de cotejo de un estudiante a partir de lo YA capturado en TACTIVIDAD_COTEJO_EVALUACION: % = SUM(peso de los items con CUMPLIDO=''S'') / SUM(peso de TODOS los items ACTIVE de la actividad) * 100, con peso = COALESCE(PONDERACION, 1) (items sin ponderacion cuentan como peso 1). A diferencia de fn_actividad_nota_rubrica_recalcular NO existe el concepto de "captura incompleta": un item sin fila de evaluacion (o con fila inactiva) cuenta como NO cumplido por diseño, asi que siempre hay un % valido; solo retorna NULL si la actividad no tiene items activos (denominador 0). NO escribe: el llamador decide si guarda el valor en TACTIVIDAD_NOTA. Unica definicion del calculo, compartida por fn_actividad_nota_calificar_cotejo y fn_actividad_nota_calificar_cotejo_bulk. V227.';
+    IS 'Nota final (porcentaje 0-100) de la lista de cotejo de un estudiante a partir de lo YA capturado en TACTIVIDAD_COTEJO_EVALUACION: % = SUM(peso de los items con CUMPLIDO=''S'') / SUM(peso de TODOS los items ACTIVE de la actividad) * 100, con peso = COALESCE(PONDERACION, 1) (items sin ponderacion cuentan como peso 1). A diferencia de fn_actividad_nota_rubrica_recalcular NO existe el concepto de "captura incompleta": un item sin fila de evaluacion (o con fila inactiva) cuenta como NO cumplido por diseño, asi que siempre hay un % valido; solo retorna NULL si la actividad no tiene items activos (denominador 0). Antes de retornar aplica el piso/tope institucional con fn_actividad_nota_ajustar_por_criterio (TCRITERIO_EVALUACION: tope de recuperacion si ES_RECUPERACION=''S'', luego piso PORCENTAJE_INICIAL_CALIF) sobre el valor ya redondeado a 2 decimales; igual que en rubrica, el ajuste vive dentro del recalculo para que la version individual y la bulk lo apliquen por igual. NO escribe: el llamador decide si guarda el valor en TACTIVIDAD_NOTA. Unica definicion del calculo, compartida por fn_actividad_nota_calificar_cotejo y fn_actividad_nota_calificar_cotejo_bulk. V227.';
 
 -- ===========================================================================
 -- (3) CALCULO POR INSTRUMENTO
@@ -1086,6 +1294,15 @@ BEGIN
         v_pond_final  := NULL;
     END IF;
 
+    -- Piso/tope institucionales (ver seccion "PISO Y TOPE" de la cabecera).
+    -- Se ajusta SOLO v_pct_final: TACTIVIDAD_ESCALA_EVALUACION sigue guardando
+    -- la seleccion CRUDA del docente (el nivel elegido / el numero digitado),
+    -- que es un hecho y no debe reescribirse; lo que el limite institucional
+    -- acota es la NOTA derivada. Un solo punto sirve para individual y bulk:
+    -- fn_actividad_nota_calificar_escala_bulk delega aqui.
+    v_pct_final := academico_test.fn_actividad_nota_ajustar_por_criterio(
+                       v_pk_tactividad, v_pct_final);
+
     -- Upsert manual (UN_TAC_ESCALA_EVAL_1 es DEFERRABLE INITIALLY DEFERRED,
     -- no sirve como arbitro de ON CONFLICT; mismo motivo que en rubrica/cotejo).
     SELECT PK_TACTIVIDAD_ESCALA_EVAL INTO v_pk_eval_existente
@@ -1121,7 +1338,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_escala(BIGINT, BIGINT, BIGINT, NUMERIC, DATE)
-    IS 'Califica a un estudiante con la escala de valoracion de su actividad. Exactamente uno de p_pk_nivel (CUALITATIVA: % = ponderacion del nivel / MAX ponderacion de la escala * 100) o p_valor_numerico (NUMERICA, dentro de [VALOR_MIN,VALOR_MAX]: % = (valor - min)/(max - min) * 100). p_fecha (DEFAULT CURRENT_DATE) es el dia de clase que se califica: se exige asistencia registrada y no injustificada para esa fecha (fn_actividad_nota_asistencia_assert). Upsert de TACTIVIDAD_ESCALA_EVALUACION (1:1 por estudiante, UN_TAC_ESCALA_EVAL_1) y de TACTIVIDAD_NOTA.CALIFICACION (porcentaje 0-100). Gate EDITAR sobre PLANEADOR. V227.';
+    IS 'Califica a un estudiante con la escala de valoracion de su actividad. Exactamente uno de p_pk_nivel (CUALITATIVA: % = ponderacion del nivel / MAX ponderacion de la escala * 100) o p_valor_numerico (NUMERICA, dentro de [VALOR_MIN,VALOR_MAX]: % = (valor - min)/(max - min) * 100). p_fecha (DEFAULT CURRENT_DATE) es el dia de clase que se califica: se exige asistencia registrada y no injustificada para esa fecha (fn_actividad_nota_asistencia_assert). Al % calculado se le aplica el piso/tope institucional con fn_actividad_nota_ajustar_por_criterio (TCRITERIO_EVALUACION: tope de recuperacion si ES_RECUPERACION=''S'', luego piso PORCENTAJE_INICIAL_CALIF); se ajusta SOLO la nota derivada, no la seleccion cruda del docente, que se sigue guardando tal cual en TACTIVIDAD_ESCALA_EVALUACION. Un solo punto de ajuste sirve para individual y bulk, porque fn_actividad_nota_calificar_escala_bulk delega en esta funcion. Upsert de TACTIVIDAD_ESCALA_EVALUACION (1:1 por estudiante, UN_TAC_ESCALA_EVAL_1) y de TACTIVIDAD_NOTA.CALIFICACION (porcentaje 0-100). Gate EDITAR sobre PLANEADOR. V227.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_nota_calificar_escala_bulk — UN nivel de la escala
@@ -1237,6 +1454,7 @@ AS $$
 DECLARE
     v_pk_tactividad BIGINT;
     v_pk_nota       BIGINT;
+    v_pct_final     NUMERIC(5,2);
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
@@ -1252,17 +1470,23 @@ BEGIN
 
     v_pk_nota := academico_test.fn_actividad_nota_get_or_create(p_pk_usuario_solicitante, p_pk_tactividad_estudiante);
 
+    -- El valor viene directo del llamador, pero pasa por el MISMO piso/tope
+    -- institucional que los instrumentos con calculo propio: el limite es de
+    -- la nota, no del instrumento (ver seccion "PISO Y TOPE" de la cabecera).
+    v_pct_final := academico_test.fn_actividad_nota_ajustar_por_criterio(
+                       v_pk_tactividad, ROUND(p_porcentaje, 2));
+
     UPDATE academico_test.TACTIVIDAD_NOTA
-       SET CALIFICACION = ROUND(p_porcentaje, 2), CALIFICABLE = 'S',
+       SET CALIFICACION = v_pct_final, CALIFICABLE = 'S',
            MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
 
-    RETURN ROUND(p_porcentaje, 2);
+    RETURN v_pct_final;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_otro(BIGINT, BIGINT, NUMERIC, DATE)
-    IS 'Instrumento OTRO (sin estructura, V226): NO hay calculo automatico. p_fecha (DEFAULT CURRENT_DATE) es el dia de clase que se califica: se exige asistencia registrada y no injustificada para esa fecha (fn_actividad_nota_asistencia_assert). Guarda directo el % (0-100) que manda el llamador en TACTIVIDAD_NOTA.CALIFICACION; el calculo/criterio es responsabilidad del cliente (DESCRIPCION_INSTRUMENTO). Gate EDITAR sobre PLANEADOR. V227.';
+    IS 'Instrumento OTRO (sin estructura, V226): NO hay calculo automatico. p_fecha (DEFAULT CURRENT_DATE) es el dia de clase que se califica: se exige asistencia registrada y no injustificada para esa fecha (fn_actividad_nota_asistencia_assert). Guarda el % (0-100) que manda el llamador en TACTIVIDAD_NOTA.CALIFICACION; el calculo/criterio es responsabilidad del cliente (DESCRIPCION_INSTRUMENTO), pero el valor NO se guarda crudo: pasa por el MISMO piso/tope institucional que los demas instrumentos (fn_actividad_nota_ajustar_por_criterio -- tope de recuperacion si ES_RECUPERACION=''S'', luego piso PORCENTAJE_INICIAL_CALIF), porque el limite es de la nota y no del instrumento. El valor retornado es el ya ajustado. Gate EDITAR sobre PLANEADOR. V227.';
 
 -- ===========================================================================
 -- (4) FACHADA — despacha segun el instrumento de la actividad + lectura.
