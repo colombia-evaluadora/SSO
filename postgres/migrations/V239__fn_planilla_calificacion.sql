@@ -34,7 +34,11 @@
 --       las columnas de la planilla", con su orden estable. La usan las dos
 --       funciones publicas, para que el header y las celdas no puedan
 --       desalinearse nunca.
---   (3) fn_planilla_definitiva_proyectada — la columna "DEFINIT PROY.".
+--   (3) fn_asignatura_plan_vigente / fn_asignatura_plan_elemento_calculo /
+--       fn_asignatura_plan_calculo_definitiva_modo — la configuracion del
+--       motor de calculo de la definitiva (TASIGNATURA_PLAN), resuelta a
+--       modos canonicos, y fn_planilla_definitiva_proyectada, la columna
+--       "DEFINIT PROY." que la aplica.
 --   (4) fn_planilla_columnas_listar — el HEADER (una fila por actividad, con
 --       su unidad resuelta).
 --   (5) fn_planilla_calificaciones_listar — el CUERPO (una fila por
@@ -95,60 +99,122 @@
 -- no aplica.
 --
 -- -------------------------------------------------------------------------
--- DEFINITIVA PROYECTADA — HIPOTESIS DE TRABAJO, NO REGLA CONFIRMADA.
+-- DEFINITIVA PROYECTADA — REGLA DEL MOTOR LEGACY (confirmada), con UNA
+-- excepcion documentada.
 --
--- Se revisaron V22 (COMMENTs de TUNIDAD_NOTA e INFLUENCIA), V216, V222,
--- V223, V224, V226 y V227 buscando una formula ya definida: NO EXISTE
--- ninguna. TUNIDAD_NOTA (V22) esta declarada como "promedio ponderado de
--- TACTIVIDAD_NOTA por TACTIVIDAD.INFLUENCIA" pero NINGUNA funcion fn_* del
--- repo la escribe ni la lee — no hay consolidacion de nota de unidad
--- implementada, y ese COMMENT contradice a V223, que dejo PONDERACION (no
--- INFLUENCIA) como el peso real que edita el docente y que valida la regla
--- del 100% por (unidad, grupo).
+-- La primera version de esta migracion calculaba SIEMPRE por-unidad y luego
+-- promedio simple entre unidades, y lo documentaba como "hipotesis debil sin
+-- ninguna pista en el repo". Eso YA NO APLICA: se investigo el motor de
+-- calculo LEGACY (en produccion, fuera de esta rama) contra el servidor real
+-- (172.233.184.248, 2026-09-03) y SI existe una regla, configurada por
+-- asignatura+plan de estudios en TASIGNATURA_PLAN (V22), con DOS campos:
 --
--- Ante eso se implementa la lectura mas defendible y se documenta como
--- hipotesis, en vez de dejar la columna vacia (la pantalla la pinta) o de
--- inventar una consolidacion persistente:
+--   * TASIGNATURA_PLAN.FK_TLV_ELEMENTO_CALCULO_DEF (TLISTA_VALOR, categoria
+--     ELEMENTO_CALCULO_DEF) = QUE se combina para dar la definitiva. En el
+--     servidor real SOLO existen dos valores, y nunca existio uno "Unidades":
+--         VALOR='2' "Actividades"  — 8023 filas activas (el caso normal)
+--         VALOR='1' "Instrumentos" — 1668 filas
+--     Reinterpretacion CONFIRMADA con negocio para el Planeador:
+--     "Instrumentos" es el nombre que el motor legacy le da a lo que aqui se
+--     llama UNIDAD. Por eso el modo canonico que devuelve el helper es
+--     'ACTIVIDADES' | 'UNIDADES' (y no 'INSTRUMENTOS'): se nombra el concepto
+--     del Planeador, no la etiqueta heredada.
+--   * TASIGNATURA_PLAN.FK_TLV_CALCULO_DEFINITIVA (TLISTA_VALOR, categoria
+--     CALCULO_DEFINITIVA) = COMO se combinan esos elementos. Es EL MISMO
+--     catalogo que TUNIDAD.FK_TLV_CALCULO_DEFINITIVA de V73, con los MISMOS
+--     VALOR ya confirmados en V223 ('1' Promediar, '2' Ponderar, '3'
+--     Sumatoria) — por eso el helper de resolucion es un calco exacto de
+--     fn_unidad_calculo_definitiva_modo, solo que leyendo la otra tabla.
 --
---   a) Solo cuentan las actividades ES_EVALUATIVA='S' de la asignatura a
---      las que el estudiante esta asignado y que YA tienen nota
---      (COALESCE(DEFINITIVA, CALIFICACION) IS NOT NULL) y son calificables
---      (CALIFICABLE <> 'N'). Por eso es "PROYECTADA": es la definitiva que
---      lleva HOY con lo calificado hasta hoy, no la del cierre.
---      Se usa COALESCE(DEFINITIVA, CALIFICACION) para que, cuando exista
---      recuperacion consolidada en TACTIVIDAD_NOTA.DEFINITIVA (V224 flujo de
---      recuperacion), esa mande sobre la nota original.
---   b) Por unidad se aplica el metodo de calculo YA definido en V223
---      (fn_unidad_calculo_definitiva_modo):
---        * PONDERAR / SUMATORIA -> promedio PONDERADO por
---          TACTIVIDAD.PONDERACION, renormalizado sobre las actividades ya
---          calificadas (SUM(nota*pond)/SUM(pond) de las calificadas). La
---          renormalizacion es lo que hace que sea una proyeccion y no un
---          castigo por lo que aun no se califica. En SUMATORIA la
---          PONDERACION ya es derivada de NOTA_MAXIMA (V223), asi que la
---          misma formula sirve para los dos modos.
---        * PROMEDIAR, o unidad sin metodo elegido -> promedio SIMPLE.
---        * Si el modo es ponderado pero ninguna actividad calificada tiene
---          PONDERACION (suma de pesos 0) se cae a promedio simple: es eso o
---          division por cero.
---   c) Las actividades SIN unidad (FK_TUNIDAD NULL, posible desde V218) se
---      tratan como UN bucket propio con promedio simple. No tienen metodo de
---      calculo que consultar.
---   d) La definitiva de la asignatura es el promedio SIMPLE de las notas por
---      unidad (+ el bucket sin unidad). *** ESTE ES EL PUNTO MAS DEBIL ***:
---      no existe en el esquema NINGUNA columna de peso por unidad dentro del
---      periodo/asignatura (TUNIDAD no tiene ponderacion; PONDERACION de V223
---      pesa actividades DENTRO de una unidad, no unidades entre si), asi que
---      cualquier ponderacion inter-unidad seria inventada. Se deja promedio
---      simple y se marca como pendiente de confirmar con negocio.
---   e) Resultado en PORCENTAJE 0-100, igual que TACTIVIDAD_NOTA.CALIFICACION
+-- Formula final:
+--
+--   a) UNIVERSO (igual que antes). Solo cuentan las actividades
+--      ES_EVALUATIVA='S' de la asignatura a las que el estudiante esta
+--      asignado y que YA tienen nota (COALESCE(DEFINITIVA, CALIFICACION) IS
+--      NOT NULL) y son calificables (CALIFICABLE <> 'N'). Por eso es
+--      "PROYECTADA": es la definitiva que lleva HOY, no la del cierre. Se usa
+--      COALESCE(DEFINITIVA, CALIFICACION) para que la recuperacion
+--      consolidada (V224) mande sobre la nota original.
+--
+--   b) ELEMENTO_CALCULO_DEF = 'Actividades' (VALOR='2') -> calculo PLANO: se
+--      combinan DIRECTAMENTE todas las actividades evaluativas del estudiante
+--      en la asignatura, SIN pasar por unidad, con el modo de
+--      TASIGNATURA_PLAN.FK_TLV_CALCULO_DEFINITIVA:
+--        * PONDERAR / SUMATORIA -> SUM(nota*PONDERACION)/SUM(PONDERACION)
+--          sobre las YA calificadas (renormalizado: es una proyeccion, no un
+--          castigo por lo pendiente). En SUMATORIA la PONDERACION ya es
+--          derivada de NOTA_MAXIMA (V223), asi que la misma formula sirve.
+--        * PROMEDIAR, sin modo elegido, o suma de pesos 0 -> promedio SIMPLE.
+--      Ojo: PONDERACION esta validada al 100% POR (unidad, grupo) (V223), no
+--      por asignatura; al aplanar, las actividades de N unidades compiten en
+--      un mismo denominador. Es exactamente lo que hace el motor legacy en
+--      este modo — la renormalizacion por SUM(peso) lo deja consistente.
+--
+--   c) ELEMENTO_CALCULO_DEF = 'Instrumentos' (VALOR='1') -> calculo POR
+--      UNIDAD: cada unidad resuelve su nota con el metodo de V223
+--      (fn_unidad_calculo_definitiva_modo, mismas reglas del punto (b) pero
+--      acotadas a la unidad), y esas notas-de-unidad se combinan entre si con
+--      TASIGNATURA_PLAN.FK_TLV_CALCULO_DEFINITIVA.
+--
+--      *** UNICA EXCEPCION DOCUMENTADA — ponderacion entre unidades. *** Si
+--      ese modo resulta PONDERAR o SUMATORIA, NO HAY CON QUE PONDERAR: no
+--      existe en el esquema ninguna columna de peso de una UNIDAD dentro de
+--      la asignatura (TACTIVIDAD.PONDERACION de V223 pesa una ACTIVIDAD
+--      DENTRO de su unidad, y TUNIDAD no tiene peso propio). Inventar un peso
+--      (p.ej. reusar la suma de PONDERACION de la unidad, o el numero de
+--      actividades) seria fabricar negocio. Se cae a PROMEDIO SIMPLE entre
+--      unidades y se deja constancia aqui. Es el unico punto de la formula
+--      que no reproduce fielmente al motor legacy.
+--
+--   d) Actividades SIN unidad (FK_TUNIDAD NULL, posible desde V218): en el
+--      modo por unidad forman UN bucket propio con promedio simple (no tienen
+--      metodo de calculo que consultar). En el modo plano no son un caso
+--      especial: entran como cualquier otra actividad.
+--
+--   e) SIN configuracion (no se pudo resolver la fila de TASIGNATURA_PLAN, o
+--      FK_TLV_ELEMENTO_CALCULO_DEF es NULL) -> fallback: por unidad y luego
+--      promedio simple entre unidades, es decir el mismo camino del punto (c)
+--      con modo inter-unidad no resuelto. Es el comportamiento por defecto
+--      razonable (respeta el metodo que el docente SI configuro en cada
+--      unidad) y se documenta como tal.
+--
+--   f) Resultado en PORCENTAJE 0-100, igual que TACTIVIDAD_NOTA.CALIFICACION
 --      (regla de V227): sin homologar a la escala visual del periodo — misma
---      frontera que ya documenta V227 y por el mismo motivo (resolver la
---      fila de TASIGNATURA_PLAN vigente no esta confirmado).
---   f) NO PERSISTE NADA. fn_planilla_definitiva_proyectada es STABLE y no
---      escribe en TUNIDAD_NOTA. Consolidar la nota de unidad es un flujo de
---      negocio (cierre de periodo) que no esta especificado en esta pantalla
---      y que no debe ocurrir como efecto colateral de una lectura.
+--      frontera que ya documenta V227.
+--   g) NO PERSISTE NADA. fn_planilla_definitiva_proyectada sigue siendo
+--      STABLE y no escribe en TUNIDAD_NOTA. Consolidar la nota de unidad es
+--      un flujo de cierre de periodo, no un efecto colateral de una lectura.
+--
+-- -------------------------------------------------------------------------
+-- RESOLUCION DEL TASIGNATURA_PLAN DEL ESTUDIANTE — LIMITACION CONOCIDA.
+--
+-- TASIGNATURA_PLAN es unico por (FK_TASIGNATURA, FK_TPLAN) y TPLAN cuelga de
+-- FK_TGRADO (V22/V44). NO hay FK de TMATRICULA ni de TGRUPO a TPLAN, asi que
+-- el unico camino es matricula -> grupo -> grado -> plan(es) del grado.
+--
+-- Se busco un helper ya existente antes de escribir uno (V44 modulo de plan
+-- de estudio, V45 horarios, V46 asignacion academica, V81, V186): NO EXISTE
+-- ninguna funcion "plan vigente de una matricula/grupo". Lo que SI existe es
+-- una CONVENCION uniforme en todo el repo: se asume UN solo TPLAN ACTIVE por
+-- grado. V44 fn_plan_* hace literalmente
+-- "SELECT PK_TPLAN INTO v_plan_id FROM TPLAN WHERE FK_TGRADO = ... AND
+-- ACTIVE = TRUE" (sin desempate, y crea el plan si no existe), y V45/V46/V186
+-- joinean "TPLAN ON FK_TGRADO = ... AND ACTIVE = TRUE" sin acotar a uno.
+--
+-- Pero en el servidor real hay 59 grados con MAS DE UN TPLAN activo, o sea
+-- que esa convencion no siempre se cumple y esos joins ya son ambiguos hoy.
+-- Aqui NO se inventa una regla de vigencia que el esquema no soporta (TPLAN
+-- no tiene fecha de vigencia ni marca de "principal"): se toma el plan activo
+-- MAS RECIENTE del grado (CREATED_AT DESC, PK_TPLAN DESC como desempate
+-- determinista) y se documenta como limitacion. En el caso mayoritario (un
+-- solo plan activo) es exacto; en un grado multi-plan puede elegir el plan
+-- equivocado y, con ello, aplicar el elemento/modo de calculo equivocado. El
+-- impacto esta acotado: si no se resuelve ninguna fila se cae al fallback (e),
+-- que es el comportamiento que esta migracion ya tenia.
+--
+-- Cuando el negocio defina como se vincula una matricula a su plan (columna
+-- en TMATRICULA/TGRUPO, o vigencia en TPLAN), el cambio es de UNA funcion:
+-- fn_asignatura_plan_vigente.
 --
 -- TODO EXPLICITO — la FLECHA verde/roja de "DEFINIT PROY." (sube/baja) NO se
 -- implementa. Requiere una linea base contra la cual comparar (la definitiva
@@ -182,7 +248,9 @@
 -- -------------------------------------------------------------------------
 -- Depende de (orden de version de Flyway):
 --   * V22  — TACTIVIDAD, TACTIVIDAD_ESTUDIANTE, TACTIVIDAD_NOTA, TUNIDAD,
---            TUNIDAD_NOTA, TMATRICULA, TGRUPO, TGRADO, TESTUDIANTE, TUSUARIO.
+--            TUNIDAD_NOTA, TMATRICULA, TGRUPO, TGRADO, TESTUDIANTE, TUSUARIO,
+--            TPLAN, TASIGNATURA_PLAN (FK_TLV_ELEMENTO_CALCULO_DEF y
+--            FK_TLV_CALCULO_DEFINITIVA: el motor de calculo de la definitiva).
 --   * V29/V185 — fn_assert_permiso_seccion.
 --   * V216 — menu 'PLANEADOR'.
 --   * V223 — TACTIVIDAD.PONDERACION, fn_unidad_calculo_definitiva_modo.
@@ -316,12 +384,120 @@ COMMENT ON FUNCTION academico_test.fn_planilla_actividades_universo(BIGINT, BIGI
     IS 'Definicion UNICA de las COLUMNAS de la pantalla "Planilla de calificacion" y de su orden: actividades ACTIVE de la asignatura cuyo FK_TGRUPO es el grupo pedido, MAS las actividades sin grupo (FK_TGRUPO NULL) que tengan al menos un TACTIVIDAD_ESTUDIANTE ACTIVO matriculado en ese grupo (una actividad sin grupo no pertenece a ninguna planilla por si sola; la trae aqui el haberle asignado estudiantes de este grupo). Filtra por ventana de fechas con la MISMA semantica de solapamiento de fn_actividad_listar (V224) y por texto sobre TITULO+DESCRIPCION. Devuelve orden_columna (ROW_NUMBER por NOMBRE de unidad NULLS LAST -> FECHA_INICIO -> PK, de modo que las actividades de una misma unidad salen SIEMPRE contiguas, requisito del sub-header "Ver por: Unidad"; TUNIDAD no tiene columna de orden en V22, por eso el criterio es el nombre), pk_tactividad y fk_tunidad. La usan fn_planilla_columnas_listar y fn_planilla_calificaciones_listar: es lo que impide que header y celdas se desalineen. No gatea permisos (helper interno). V239.';
 
 -- ---------------------------------------------------------------------------
+-- fn_asignatura_plan_vigente — resuelve la fila de TASIGNATURA_PLAN que
+-- configura el calculo de la definitiva para un (grupo, asignatura).
+--
+-- Camino unico posible con el esquema actual: grupo -> grado -> TPLAN activo
+-- del grado -> TASIGNATURA_PLAN activo de esa asignatura. Ver la seccion
+-- "RESOLUCION DEL TASIGNATURA_PLAN DEL ESTUDIANTE" de la cabecera: no existe
+-- ningun helper previo en el repo y el desempate entre varios planes activos
+-- del mismo grado (59 casos reales en el servidor) es una LIMITACION
+-- documentada, no una regla de negocio.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_plan_vigente(
+    p_fk_tgrupo       BIGINT,
+    p_fk_tasignatura  BIGINT
+)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT ap.PK_TASIGNATURA_PLAN
+      FROM academico_test.TGRUPO gr
+      JOIN academico_test.TPLAN pl
+        ON pl.FK_TGRADO = gr.FK_TGRADO AND pl.ACTIVE = TRUE
+      JOIN academico_test.TASIGNATURA_PLAN ap
+        ON ap.FK_TPLAN = pl.PK_TPLAN
+       AND ap.FK_TASIGNATURA = p_fk_tasignatura
+       AND ap.ACTIVE = TRUE
+     WHERE gr.PK_TGRUPO = p_fk_tgrupo
+       AND gr.ACTIVE = TRUE
+     -- Desempate determinista cuando el grado tiene varios planes activos.
+     ORDER BY pl.CREATED_AT DESC, pl.PK_TPLAN DESC
+     LIMIT 1;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asignatura_plan_vigente(BIGINT, BIGINT)
+    IS 'Resuelve la fila de TASIGNATURA_PLAN (V22) que configura el calculo de la definitiva de una asignatura para los estudiantes de un grupo: grupo -> grado -> TPLAN ACTIVE del grado -> TASIGNATURA_PLAN ACTIVE de esa asignatura. NULL si no hay ninguna. LIMITACION CONOCIDA: el esquema no vincula una matricula/grupo a un plan concreto (no hay FK, ni vigencia ni marca de "principal" en TPLAN) y todo el repo (V44 fn_plan_*, V45, V46, V186) asume UN solo TPLAN activo por grado, cosa que en el servidor real no siempre se cumple (59 grados con mas de uno). Se toma el plan activo MAS RECIENTE (CREATED_AT DESC, PK_TPLAN DESC como desempate determinista); en un grado multi-plan puede elegir el equivocado. Punto UNICO de esa resolucion: cuando el negocio defina el vinculo real, se cambia solo aqui. V239.';
+
+-- ---------------------------------------------------------------------------
+-- fn_asignatura_plan_elemento_calculo — QUE se combina para dar la definitiva
+-- de la asignatura: 'ACTIVIDADES' (plano) | 'UNIDADES' (por unidad), o NULL.
+--
+-- TASIGNATURA_PLAN.FK_TLV_ELEMENTO_CALCULO_DEF, TLISTA_VALOR categoria
+-- ELEMENTO_CALCULO_DEF. Confirmado contra el servidor real: solo existen
+-- VALOR='2' "Actividades" y VALOR='1' "Instrumentos", y "Instrumentos" es el
+-- nombre legacy de lo que el Planeador llama UNIDAD (ver cabecera). Se
+-- resuelve por VALOR, nunca por PK, como manda la convencion del repo, y se
+-- devuelve el nombre del concepto del Planeador, no la etiqueta heredada.
+--
+-- No filtra por lv.ACTIVE, por el mismo motivo que
+-- fn_unidad_calculo_definitiva_modo (V223): desactivar la fila del catalogo
+-- no debe cambiar en silencio el calculo de una nota.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_plan_elemento_calculo(
+    p_pk_tasignatura_plan  BIGINT
+)
+RETURNS VARCHAR
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT CASE lv.VALOR
+               WHEN '2' THEN 'ACTIVIDADES'
+               WHEN '1' THEN 'UNIDADES'
+               ELSE NULL
+           END::VARCHAR
+      FROM academico_test.TASIGNATURA_PLAN ap
+      JOIN academico_test.TLISTA_VALOR lv
+        ON lv.PK_LISTA_VALOR = ap.FK_TLV_ELEMENTO_CALCULO_DEF
+     WHERE ap.PK_TASIGNATURA_PLAN = p_pk_tasignatura_plan;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asignatura_plan_elemento_calculo(BIGINT)
+    IS 'Elemento base con el que el motor calcula la definitiva de una asignatura, a partir de TASIGNATURA_PLAN.FK_TLV_ELEMENTO_CALCULO_DEF (TLISTA_VALOR categoria ELEMENTO_CALCULO_DEF): ''ACTIVIDADES'' (VALOR=''2'', combina PLANO todas las actividades evaluativas sin pasar por unidad; es el caso mayoritario en el servidor real: 8023 filas) | ''UNIDADES'' (VALOR=''1'', etiquetado "Instrumentos" en el legacy -- confirmado con negocio que "Instrumentos" es el nombre heredado de lo que el Planeador llama UNIDAD; 1668 filas) | NULL si no hay fila, el campo es NULL o el valor no se reconoce (nunca existio un tercer valor). Se resuelve por VALOR, nunca por PK. No filtra por lv.ACTIVE (mismo criterio que fn_unidad_calculo_definitiva_modo, V223: desactivar el catalogo no debe cambiar en silencio una nota). V239.';
+
+-- ---------------------------------------------------------------------------
+-- fn_asignatura_plan_calculo_definitiva_modo — COMO se combinan esos
+-- elementos: 'PONDERAR' | 'PROMEDIAR' | 'SUMATORIA' | NULL.
+--
+-- Calco exacto de fn_unidad_calculo_definitiva_modo (V223) sobre la otra
+-- tabla: TASIGNATURA_PLAN.FK_TLV_CALCULO_DEFINITIVA apunta al MISMO catalogo
+-- CALCULO_DEFINITIVA que TUNIDAD.FK_TLV_CALCULO_DEFINITIVA (V73), con los
+-- mismos VALOR '1'/'2'/'3' ya confirmados por SSH en V223. Se duplica el CASE
+-- en vez de factorizarlo porque el punto de entrada es otro (una fila de
+-- plan, no una unidad) y factorizarlo obligaria a un helper que recibiera un
+-- pk_lista_valor suelto — mas indireccion que valor.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_plan_calculo_definitiva_modo(
+    p_pk_tasignatura_plan  BIGINT
+)
+RETURNS VARCHAR
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT CASE lv.VALOR
+               WHEN '2' THEN 'PONDERAR'
+               WHEN '1' THEN 'PROMEDIAR'
+               WHEN '3' THEN 'SUMATORIA'
+               ELSE NULL
+           END::VARCHAR
+      FROM academico_test.TASIGNATURA_PLAN ap
+      JOIN academico_test.TLISTA_VALOR lv
+        ON lv.PK_LISTA_VALOR = ap.FK_TLV_CALCULO_DEFINITIVA
+     WHERE ap.PK_TASIGNATURA_PLAN = p_pk_tasignatura_plan;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asignatura_plan_calculo_definitiva_modo(BIGINT)
+    IS 'Modo canonico con el que se combinan los elementos base para dar la definitiva de una asignatura, a partir de TASIGNATURA_PLAN.FK_TLV_CALCULO_DEFINITIVA: ''PONDERAR'' | ''PROMEDIAR'' | ''SUMATORIA'' | NULL. Es el MISMO catalogo CALCULO_DEFINITIVA que usa TUNIDAD.FK_TLV_CALCULO_DEFINITIVA (V73) con los MISMOS VALOR (''1'' Promediar, ''2'' Ponderar, ''3'' Sumatoria, confirmados por SSH en V223), por eso este helper es un calco de fn_unidad_calculo_definitiva_modo sobre la otra tabla. Se resuelve por VALOR, nunca por PK. V239.';
+
+-- ---------------------------------------------------------------------------
 -- fn_planilla_definitiva_proyectada — columna "DEFINIT PROY.".
 --
--- *** HIPOTESIS DE TRABAJO, NO REGLA DE NEGOCIO CONFIRMADA. *** Ver la
--- seccion "DEFINITIVA PROYECTADA" de la cabecera para el detalle completo y,
--- en particular, para el punto (d) — el promedio simple ENTRE unidades, que
--- es la parte no confirmada.
+-- Implementa la regla del motor LEGACY (TASIGNATURA_PLAN: elemento base +
+-- modo de combinacion). Ver la seccion "DEFINITIVA PROYECTADA" de la
+-- cabecera para el detalle, y la seccion "RESOLUCION DEL TASIGNATURA_PLAN"
+-- para las dos limitaciones documentadas (plan ambiguo en grados multi-plan;
+-- ponderacion ENTRE unidades sin peso real -> promedio simple).
 --
 -- Deliberadamente NO recibe el rango de fechas ni el buscador de actividad:
 -- la definitiva de un estudiante en una asignatura no puede cambiar porque
@@ -336,9 +512,69 @@ CREATE OR REPLACE FUNCTION academico_test.fn_planilla_definitiva_proyectada(
     p_fk_tasignatura  BIGINT
 )
 RETURNS NUMERIC
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $$
+DECLARE
+    v_pk_asignatura_plan BIGINT;
+    v_elemento           VARCHAR;   -- 'ACTIVIDADES' | 'UNIDADES' | NULL
+    v_modo               VARCHAR;   -- 'PONDERAR' | 'PROMEDIAR' | 'SUMATORIA' | NULL
+    v_resultado          NUMERIC;
+BEGIN
+    -- Configuracion del motor de calculo para (grupo de la matricula,
+    -- asignatura). Puede no resolverse: en ese caso v_elemento queda NULL y
+    -- se aplica el fallback (punto (e) de la cabecera).
+    SELECT academico_test.fn_asignatura_plan_vigente(m.FK_TGRUPO, p_fk_tasignatura)
+      INTO v_pk_asignatura_plan
+      FROM academico_test.TMATRICULA m
+     WHERE m.PK_TMATRICULA = p_fk_tmatricula;
+
+    IF v_pk_asignatura_plan IS NOT NULL THEN
+        v_elemento := academico_test.fn_asignatura_plan_elemento_calculo(v_pk_asignatura_plan);
+        v_modo     := academico_test.fn_asignatura_plan_calculo_definitiva_modo(v_pk_asignatura_plan);
+    END IF;
+
+    IF v_elemento = 'ACTIVIDADES' THEN
+        -- (b) PLANO: todas las actividades evaluativas calificadas de la
+        -- asignatura compiten en un mismo calculo, sin pasar por unidad.
+        WITH notas AS (
+            SELECT COALESCE(a.PONDERACION, 0)             AS peso,
+                   COALESCE(n.DEFINITIVA, n.CALIFICACION) AS nota
+              FROM academico_test.TACTIVIDAD a
+              JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae
+                ON ae.FK_TACTIVIDAD = a.PK_TACTIVIDAD
+               AND ae.FK_TMATRICULA = p_fk_tmatricula
+               AND ae.ACTIVE = TRUE
+              JOIN academico_test.TACTIVIDAD_NOTA n
+                ON n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
+               AND n.ACTIVE = TRUE
+             WHERE a.ACTIVE = TRUE
+               AND a.FK_TASIGNATURA = p_fk_tasignatura
+               AND COALESCE(a.ES_EVALUATIVA::VARCHAR, 'S') = 'S'
+               AND COALESCE(n.CALIFICABLE, 'S') <> 'N'
+               AND COALESCE(n.DEFINITIVA, n.CALIFICACION) IS NOT NULL
+        )
+        SELECT ROUND(
+                   CASE
+                       WHEN v_modo IN ('PONDERAR', 'SUMATORIA') AND SUM(nt.peso) > 0
+                       THEN SUM(nt.nota * nt.peso) / SUM(nt.peso)
+                       ELSE AVG(nt.nota)
+                   END, 2)
+          INTO v_resultado
+          FROM notas nt;
+
+        RETURN v_resultado;
+    END IF;
+
+    -- (c) POR UNIDAD (v_elemento = 'UNIDADES') y (e) fallback sin
+    -- configuracion: comparten el mismo camino. Cada unidad calcula su nota
+    -- con el metodo de V223 y las notas-de-unidad se combinan entre si.
+    --
+    -- EXCEPCION DOCUMENTADA: la combinacion ENTRE unidades es SIEMPRE
+    -- promedio simple, incluso si v_modo dice PONDERAR/SUMATORIA. No existe
+    -- peso de una unidad dentro de la asignatura en ningun lado del esquema
+    -- (TACTIVIDAD.PONDERACION pesa la actividad DENTRO de su unidad), y
+    -- fabricar uno seria inventar negocio. Ver la cabecera.
     WITH notas AS (
         SELECT a.FK_TUNIDAD,
                COALESCE(a.PONDERACION, 0)                  AS peso,
@@ -369,11 +605,15 @@ AS $$
          GROUP BY nt.FK_TUNIDAD
     )
     SELECT ROUND(AVG(pu.nota_unidad), 2)
+      INTO v_resultado
       FROM por_unidad pu;
+
+    RETURN v_resultado;
+END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_planilla_definitiva_proyectada(BIGINT, BIGINT)
-    IS 'Columna "DEFINIT PROY." de la pantalla "Planilla de calificacion": definitiva PROYECTADA (porcentaje 0-100, sin homologar a la escala visual del periodo -- misma frontera que documenta V227) de un estudiante en una asignatura, con lo calificado HASTA HOY. *** HIPOTESIS DE TRABAJO, NO REGLA DE NEGOCIO CONFIRMADA: el repo no define ninguna formula (TUNIDAD_NOTA de V22 dice "promedio ponderado por INFLUENCIA" pero ninguna funcion fn_* la escribe ni la lee, y ese COMMENT contradice a V223, que dejo PONDERACION como el peso real). *** Formula: (a) solo actividades ES_EVALUATIVA=''S'' de la asignatura, asignadas al estudiante, con CALIFICABLE distinto de ''N'' y con nota COALESCE(TACTIVIDAD_NOTA.DEFINITIVA, CALIFICACION) no nula -- la DEFINITIVA manda para que la recuperacion consolidada (V224) pese sobre la nota original; (b) por unidad se aplica el metodo de V223 (fn_unidad_calculo_definitiva_modo): PONDERAR/SUMATORIA -> promedio ponderado por TACTIVIDAD.PONDERACION RENORMALIZADO sobre las actividades ya calificadas (por eso es proyeccion y no castigo por lo pendiente; en SUMATORIA la PONDERACION ya es derivada de NOTA_MAXIMA), PROMEDIAR / sin metodo / suma de pesos 0 -> promedio simple; (c) las actividades sin unidad (FK_TUNIDAD NULL) forman un bucket propio con promedio simple; (d) el total es el promedio SIMPLE de las notas por unidad -- ESTE ES EL PUNTO NO CONFIRMADO: el esquema no tiene ninguna columna de peso por unidad dentro del periodo (PONDERACION pesa actividades DENTRO de una unidad, no unidades entre si), asi que cualquier ponderacion inter-unidad seria inventada; pendiente de confirmar con negocio. NULL si el estudiante no tiene ninguna actividad calificada. NO recibe el rango de fechas ni el buscador: la definitiva no puede cambiar porque el docente filtre la vista. NO persiste nada (STABLE): consolidar TUNIDAD_NOTA es un flujo de cierre de periodo, no un efecto colateral de una lectura. V239.';
+    IS 'Columna "DEFINIT PROY." de la pantalla "Planilla de calificacion": definitiva PROYECTADA (porcentaje 0-100, sin homologar a la escala visual del periodo -- misma frontera que documenta V227) de un estudiante en una asignatura, con lo calificado HASTA HOY. Implementa la regla del motor de calculo LEGACY, confirmada contra el servidor real y con negocio: TASIGNATURA_PLAN (V22) define QUE se combina (FK_TLV_ELEMENTO_CALCULO_DEF -> fn_asignatura_plan_elemento_calculo) y COMO (FK_TLV_CALCULO_DEFINITIVA -> fn_asignatura_plan_calculo_definitiva_modo, mismo catalogo CALCULO_DEFINITIVA de V73/V223). Formula: (a) universo = actividades ES_EVALUATIVA=''S'' de la asignatura, asignadas al estudiante, con CALIFICABLE distinto de ''N'' y con nota COALESCE(TACTIVIDAD_NOTA.DEFINITIVA, CALIFICACION) no nula -- la DEFINITIVA manda para que la recuperacion consolidada (V224) pese sobre la nota original; (b) ELEMENTO=''ACTIVIDADES'' (VALOR=''2'', el caso mayoritario) -> calculo PLANO sobre TODAS esas actividades SIN pasar por unidad, con el modo del plan: PONDERAR/SUMATORIA -> SUM(nota*PONDERACION)/SUM(PONDERACION) renormalizado sobre las ya calificadas (por eso es proyeccion y no castigo por lo pendiente; en SUMATORIA la PONDERACION ya es derivada de NOTA_MAXIMA, V223), PROMEDIAR / sin modo / suma de pesos 0 -> promedio simple; (c) ELEMENTO=''UNIDADES'' (VALOR=''1'', etiquetado "Instrumentos" en el legacy: confirmado que es el nombre heredado de la UNIDAD del Planeador) -> cada unidad calcula su nota con fn_unidad_calculo_definitiva_modo (V223, misma mecanica del punto (b) acotada a la unidad; las actividades sin unidad forman un bucket propio con promedio simple) y esas notas-de-unidad se combinan entre si; (d) sin configuracion resoluble (no hay TASIGNATURA_PLAN o el elemento es NULL) -> fallback documentado: el mismo camino por unidad de (c). DOS LIMITACIONES DOCUMENTADAS: (1) la combinacion ENTRE unidades es SIEMPRE promedio simple aunque el plan diga PONDERAR/SUMATORIA, porque no existe en el esquema ningun peso de una UNIDAD dentro de la asignatura (TACTIVIDAD.PONDERACION pesa la actividad DENTRO de su unidad) e inventarlo seria fabricar negocio; (2) la fila de TASIGNATURA_PLAN se resuelve via fn_asignatura_plan_vigente (grupo -> grado -> plan activo mas reciente), que puede elegir mal en los grados con varios TPLAN activos. NULL si el estudiante no tiene ninguna actividad calificada. NO recibe el rango de fechas ni el buscador: la definitiva no puede cambiar porque el docente filtre la vista. NO persiste nada (STABLE): consolidar TUNIDAD_NOTA es un flujo de cierre de periodo, no un efecto colateral de una lectura. V239.';
 
 -- ===========================================================================
 -- (2) LECTURA — HEADER Y CUERPO DE LA PLANILLA
@@ -625,4 +865,4 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_planilla_calificaciones_listar(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR, VARCHAR, INT, INT)
-    IS 'CUERPO de la pantalla "Planilla de calificacion": una fila por estudiante ACTIVO matriculado en el grupo, con (a) su nombre completo, (b) definitiva_proyectada (fn_planilla_definitiva_proyectada -- HIPOTESIS de negocio documentada en la cabecera de V239, NO confirmada en su promedio ENTRE unidades), (c) definitiva_registrada + tendencia (''SUBE''|''BAJA''|''IGUAL''|NULL) para la flecha verde/roja: la linea base sale de TUNIDAD_NOTA y HOY ES SIEMPRE NULL porque ninguna funcion del repo consolida esa tabla -- viene calculado para que la flecha funcione sola cuando exista la consolidacion, sin cambiar el contrato; mientras tendencia sea NULL el cliente no debe pintar flecha, y (d) celdas: JSONB ordenado por ordenColumna con una entrada por actividad-columna {ordenColumna, pkTactividad, pkTunidad, pkTactividadEstudiante, estado, calificacion, recuperacion, definitiva, nota, calificable, observacion}. estado distingue explicitamente los CUATRO casos que pinta la pantalla: ''NO_ASIGNADA'' (sin TACTIVIDAD_ESTUDIANTE activo -> el icono de prohibido; pkTactividadEstudiante viene NULL, asi que por construccion no se puede abrir el popover de una celda que no aplica), ''NO_CALIFICABLE'' (asignado pero CALIFICABLE=''N''), ''SIN_CALIFICAR'' y ''CALIFICADA'' (el check). Las columnas y su orden salen de fn_planilla_actividades_universo, el MISMO helper que usa fn_planilla_columnas_listar: header y celdas no pueden desalinearse, y los metadatos de cada actividad NO se repiten por estudiante (van en el header). El toggle "Ver por: Actividad | Unidad" NO cambia esta consulta: es la misma matriz, agrupada en el cliente por pkTunidad. Paginacion por ESTUDIANTE (total_count via COUNT(*) OVER()); los agregados corren solo contra las filas de la pagina. Gate VER sobre PLANEADOR + fn_planilla_grupo_asignatura_assert. V239.';
+    IS 'CUERPO de la pantalla "Planilla de calificacion": una fila por estudiante ACTIVO matriculado en el grupo, con (a) su nombre completo, (b) definitiva_proyectada (fn_planilla_definitiva_proyectada -- regla del motor legacy configurada en TASIGNATURA_PLAN: plano por actividades o por unidad, ver la cabecera de V239 y sus dos limitaciones documentadas), (c) definitiva_registrada + tendencia (''SUBE''|''BAJA''|''IGUAL''|NULL) para la flecha verde/roja: la linea base sale de TUNIDAD_NOTA y HOY ES SIEMPRE NULL porque ninguna funcion del repo consolida esa tabla -- viene calculado para que la flecha funcione sola cuando exista la consolidacion, sin cambiar el contrato; mientras tendencia sea NULL el cliente no debe pintar flecha, y (d) celdas: JSONB ordenado por ordenColumna con una entrada por actividad-columna {ordenColumna, pkTactividad, pkTunidad, pkTactividadEstudiante, estado, calificacion, recuperacion, definitiva, nota, calificable, observacion}. estado distingue explicitamente los CUATRO casos que pinta la pantalla: ''NO_ASIGNADA'' (sin TACTIVIDAD_ESTUDIANTE activo -> el icono de prohibido; pkTactividadEstudiante viene NULL, asi que por construccion no se puede abrir el popover de una celda que no aplica), ''NO_CALIFICABLE'' (asignado pero CALIFICABLE=''N''), ''SIN_CALIFICAR'' y ''CALIFICADA'' (el check). Las columnas y su orden salen de fn_planilla_actividades_universo, el MISMO helper que usa fn_planilla_columnas_listar: header y celdas no pueden desalinearse, y los metadatos de cada actividad NO se repiten por estudiante (van en el header). El toggle "Ver por: Actividad | Unidad" NO cambia esta consulta: es la misma matriz, agrupada en el cliente por pkTunidad. Paginacion por ESTUDIANTE (total_count via COUNT(*) OVER()); los agregados corren solo contra las filas de la pagina. Gate VER sobre PLANEADOR + fn_planilla_grupo_asignatura_assert. V239.';
