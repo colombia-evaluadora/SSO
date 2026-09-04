@@ -37,6 +37,18 @@
 --   * V218 — TUNIDAD sin FK_TPERIODO_EVALUACION, UN_TUNIDAD_1 (NOMBRE,
 --            FK_TASIGNATURA, FK_TGRADO), TACTIVIDAD.FK_TUNIDAD nullable.
 --   * V29/V185/V213 — modelo de capability por menu (fn_assert_permiso_seccion).
+--   * V239 — TUNIDAD.PONDERACION (peso % de la unidad dentro de su
+--            (asignatura, grado)) + fn_unidad_ponderacion_intra_asignatura_asignada,
+--            fn_asignatura_plan_vigente_por_grado,
+--            fn_asignatura_plan_elemento_calculo y
+--            fn_asignatura_plan_calculo_definitiva_modo, que usan
+--            fn_unidad_crear / fn_unidad_actualizar via p_ponderacion.
+--            DEPENDENCIA HACIA ADELANTE deliberada: V239 se aplica DESPUES que
+--            este archivo, pero los cuerpos PL/pgSQL no se resuelven al
+--            crearlos (check_function_bodies solo hace analisis sintactico en
+--            plpgsql), asi que la migracion no falla; p_ponderacion
+--            simplemente no es usable hasta que V239 corra. Se prefiere esto a
+--            partir el CRUD de la unidad en dos archivos.
 --
 -- Nomenclatura/estilo: sigue V213 (fn_ con gate fn_assert_permiso_seccion,
 -- validaciones 22023/23503/23505/P0002, PATCH parcial con COALESCE,
@@ -86,10 +98,12 @@ SELECT t.pk_trol, m.pk_tmenu, 1, TRUE, 'V216_seed'
 -- ===========================================================================
 -- fn_unidad_crear
 -- ===========================================================================
--- Gana p_enunciados (BIGINT[]) al final: cambia el numero de parametros, asi
--- que CREATE OR REPLACE no reemplaza la firma vieja (10 args) -- se antepone
--- el DROP FUNCTION IF EXISTS de esa firma, mismo patron que V100/V106/V109/V113.
+-- Gana p_enunciados (BIGINT[]) y despues p_ponderacion (NUMERIC) al final:
+-- cada uno cambia el numero de parametros, asi que CREATE OR REPLACE no
+-- reemplaza las firmas viejas -- se anteponen los DROP FUNCTION IF EXISTS de
+-- esas firmas, mismo patron que V100/V106/V109/V113.
 DROP FUNCTION IF EXISTS academico_test.fn_unidad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[]);
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[], BIGINT[]);
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_crear(
     p_pk_usuario_solicitante        BIGINT,
     p_nombre                        VARCHAR(250),
@@ -109,13 +123,20 @@ CREATE OR REPLACE FUNCTION academico_test.fn_unidad_crear(
     -- relaciona via fn_unidad_enunciado_relacionar (V136), que ya valida
     -- que el enunciado sea nivel 1 y comparta el nivel de ensenanza de la
     -- unidad (a traves del grado) -- no se duplica esa validacion aqui.
-    p_enunciados                    BIGINT[]      DEFAULT NULL
+    p_enunciados                    BIGINT[]      DEFAULT NULL,
+    -- Peso (%) de ESTA unidad dentro de su (asignatura, grado) —
+    -- TUNIDAD.PONDERACION (V239). Opcional. Ver el bloque 2.c.
+    p_ponderacion                   NUMERIC       DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
     v_id_creado  BIGINT;
+    v_pk_plan    BIGINT;
+    v_elemento   VARCHAR;
+    v_modo       VARCHAR;
+    v_suma       NUMERIC(9,2);
 BEGIN
     -- 0. Gate: capability CREAR sobre PLANEADOR (sin scope territorial).
     PERFORM academico_test.fn_assert_permiso_seccion(
@@ -173,6 +194,65 @@ BEGIN
             USING ERRCODE = '23503';
     END IF;
 
+    -- 2.c Peso (%) de la unidad dentro de su (asignatura, grado)
+    --     — TUNIDAD.PONDERACION (V239). Mismo tratamiento que V223/V224 le dan
+    --     a TACTIVIDAD.PONDERACION un nivel abajo: rango 0..100, "el modo de
+    --     calculo manda si el campo aplica", y chequeo previo del 100% para
+    --     dar un error claro ANTES de que salte el trigger
+    --     tr_tunidad_ponderacion_asignatura.
+    IF p_ponderacion IS NOT NULL THEN
+        IF p_ponderacion < 0 OR p_ponderacion > 100 THEN
+            RAISE EXCEPTION 'La ponderacion (%) debe estar entre 0 y 100', p_ponderacion
+                USING ERRCODE = '22023';
+        END IF;
+
+        -- Quien decide si el peso de la UNIDAD aplica no es la unidad (su
+        -- FK_TLV_CALCULO_DEFINITIVA gobierna a sus ACTIVIDADES), sino el PLAN
+        -- de la asignatura para ese GRADO: solo si la definitiva se calcula
+        -- por UNIDADES y esas unidades se combinan PONDERANDO/SUMANDO existe
+        -- un peso de unidad que signifique algo (V239,
+        -- fn_planilla_definitiva_proyectada).
+        --
+        -- TUNIDAD no tiene grupo, por eso se resuelve el plan por GRADO
+        -- (fn_asignatura_plan_vigente_por_grado, V239) y no por grupo.
+        --
+        -- CRITERIO ANTE LO NO RESOLUBLE (consistente con el fallback (e) de
+        -- V239): solo se rechaza cuando se puede AFIRMAR que el peso no
+        -- aplica. Si no hay fila de TASIGNATURA_PLAN, o el plan no tiene
+        -- elemento/modo configurado (helpers -> NULL), no hay con que validar
+        -- y se PERMITE guardar el peso: es un dato de configuracion inocuo
+        -- que la definitiva simplemente ignorara mientras el plan no lo
+        -- habilite, y bloquear ahi impediria preparar la unidad antes de que
+        -- coordinacion termine de configurar el plan.
+        v_pk_plan := academico_test.fn_asignatura_plan_vigente_por_grado(
+                         p_fk_tgrado, p_fk_tasignatura);
+        IF v_pk_plan IS NOT NULL THEN
+            v_elemento := academico_test.fn_asignatura_plan_elemento_calculo(v_pk_plan);
+            v_modo     := academico_test.fn_asignatura_plan_calculo_definitiva_modo(v_pk_plan);
+
+            IF v_elemento = 'ACTIVIDADES' THEN
+                RAISE EXCEPTION 'La ponderacion de la unidad no aplica: el plan de la asignatura no calcula por unidades'
+                    USING ERRCODE = '22023',
+                          HINT = 'TASIGNATURA_PLAN.FK_TLV_ELEMENTO_CALCULO_DEF de esa asignatura combina ACTIVIDADES; el peso por actividad se captura en TACTIVIDAD.PONDERACION (V223)';
+            END IF;
+            IF v_modo = 'PROMEDIAR' THEN
+                RAISE EXCEPTION 'La ponderacion de la unidad no aplica: el plan de la asignatura promedia sus unidades'
+                    USING ERRCODE = '22023';
+            END IF;
+        END IF;
+
+        -- Regla del 100% por (asignatura, grado). Sin excluir nada: la unidad
+        -- todavia no existe.
+        v_suma := academico_test.fn_unidad_ponderacion_intra_asignatura_asignada(
+                      p_fk_tasignatura, p_fk_tgrado, NULL);
+        IF v_suma + p_ponderacion > 100 THEN
+            RAISE EXCEPTION
+              'Las unidades de esa asignatura y grado ya tienen % %% ponderado; % %% adicionales pasarian de 100',
+              v_suma, p_ponderacion
+              USING ERRCODE = '23514';
+        END IF;
+    END IF;
+
     -- 3. Unicidad (NOMBRE, asignatura, grado) entre unidades activas —
     --    backstop del constraint UN_TUNIDAD_1 (V218).
     IF EXISTS (
@@ -190,11 +270,11 @@ BEGIN
     INSERT INTO academico_test.TUNIDAD (
         NOMBRE, FK_TASIGNATURA, FK_TGRADO, FK_TFUNCIONARIO,
         DESCRIPCION, FK_TLV_CALCULO_DEFINITIVA, FK_REFERENTE_CURRICULAR,
-        CREATED_BY, CREATED_AT, ACTIVE
+        PONDERACION, CREATED_BY, CREATED_AT, ACTIVE
     ) VALUES (
         TRIM(p_nombre), p_fk_tasignatura, p_fk_tgrado, p_fk_tfuncionario,
         NULLIF(TRIM(p_descripcion), ''), p_fk_tlv_calculo_definitiva, p_fk_referente_curricular,
-        p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
+        p_ponderacion, p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
     )
     RETURNING PK_TUNIDAD INTO v_id_creado;
 
@@ -236,8 +316,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_unidad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[], BIGINT[])
-    IS 'Crea una unidad tematica del Planeador (gate CREAR sobre PLANEADOR): inserta TUNIDAD (identificacion nombre/asignatura/grado/autor + DESCRIPCION + FK_TLV_CALCULO_DEFINITIVA [forma de calculo de la nota, catalogo CALCULO_DEFINITIVA, OBLIGATORIA, V73] + FK_REFERENTE_CURRICULAR [referente al que se acoge, opcional, V212]) y, si se pasan, sus objetivos (TUNIDAD_OBJETIVO), contenidos/componentes (TUNIDAD_CONTENIDO) con ORDEN por posicion del array, ignorando los vacios, y los enunciados del referente que aplican (p_enunciados, PKs de TREFERENTE_ENUNCIADO nivel 1, via fn_unidad_enunciado_relacionar V136 -- valida nivel 1 y mismo nivel de ensenanza que la unidad, aborta el CREATE si alguno no cumple). La unidad ya no depende de un periodo de evaluacion (V218). Valida existencia/estado de todas las FKs y unicidad (nombre, asignatura, grado) entre unidades activas. Retorna PK_TUNIDAD.';
+COMMENT ON FUNCTION academico_test.fn_unidad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[], BIGINT[], NUMERIC)
+    IS 'Crea una unidad tematica del Planeador (gate CREAR sobre PLANEADOR): inserta TUNIDAD (identificacion nombre/asignatura/grado/autor + DESCRIPCION + FK_TLV_CALCULO_DEFINITIVA [forma de calculo de la nota, catalogo CALCULO_DEFINITIVA, OBLIGATORIA, V73] + FK_REFERENTE_CURRICULAR [referente al que se acoge, opcional, V212]) y, si se pasan, sus objetivos (TUNIDAD_OBJETIVO), contenidos/componentes (TUNIDAD_CONTENIDO) con ORDEN por posicion del array, ignorando los vacios, y los enunciados del referente que aplican (p_enunciados, PKs de TREFERENTE_ENUNCIADO nivel 1, via fn_unidad_enunciado_relacionar V136 -- valida nivel 1 y mismo nivel de ensenanza que la unidad, aborta el CREATE si alguno no cumple). La unidad ya no depende de un periodo de evaluacion (V218). Valida existencia/estado de todas las FKs y unicidad (nombre, asignatura, grado) entre unidades activas. p_ponderacion (opcional) fija TUNIDAD.PONDERACION (V239): el peso (%) de esta unidad dentro de su (asignatura, grado), analogo a TACTIVIDAD.PONDERACION un nivel abajo. Se valida 0..100, la regla del 100% por (asignatura, grado) via fn_unidad_ponderacion_intra_asignatura_asignada (error claro antes del trigger tr_tunidad_ponderacion_asignatura) y que el campo APLIQUE segun el plan de la asignatura para ese grado (fn_asignatura_plan_vigente_por_grado + fn_asignatura_plan_elemento_calculo / _calculo_definitiva_modo, V239): se rechaza con 22023 si el plan calcula por ACTIVIDADES (el peso de unidad no significa nada) o si PROMEDIA sus unidades. Si el plan no se resuelve o no tiene elemento/modo configurados no hay con que validar y se PERMITE guardar el peso -- criterio consistente con el fallback de V239; la definitiva simplemente lo ignora hasta que el plan lo habilite. Retorna PK_TUNIDAD.';
 
 -- ---------------------------------------------------------------------------
 -- Indice de busqueda libre del listado de unidades.
@@ -407,6 +487,10 @@ COMMENT ON FUNCTION academico_test.fn_unidad_listar(BIGINT, VARCHAR, BIGINT, BIG
 -- ===========================================================================
 -- fn_unidad_actualizar — PATCH parcial (cada parametro NULL preserva).
 -- ===========================================================================
+-- Gana p_ponderacion (NUMERIC) al final: cambia el numero de parametros, asi
+-- que CREATE OR REPLACE no reemplaza la firma vieja (12 args) -- mismo patron
+-- de DROP FUNCTION IF EXISTS que fn_unidad_crear.
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR[], VARCHAR[]);
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_actualizar(
     p_pk_usuario_solicitante        BIGINT,
     p_pk_tunidad                    BIGINT,
@@ -423,16 +507,26 @@ CREATE OR REPLACE FUNCTION academico_test.fn_unidad_actualizar(
     -- NULL = no tocar la lista; array (incl. vacio) = reemplazo completo:
     -- se desactivan los activos y se re-insertan los del array.
     p_objetivos                     VARCHAR[]     DEFAULT NULL,
-    p_contenidos                    VARCHAR[]     DEFAULT NULL
+    p_contenidos                    VARCHAR[]     DEFAULT NULL,
+    -- Peso (%) de la unidad dentro de su (asignatura, grado), TUNIDAD.PONDERACION
+    -- (V239). NULL = no tocar; p_limpiar_ponderacion = TRUE lo vuelve NULL
+    -- (mismo par "valor / limpiar" que ya usa el referente curricular).
+    p_ponderacion                   NUMERIC       DEFAULT NULL,
+    p_limpiar_ponderacion           BOOLEAN       DEFAULT FALSE
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_actual   academico_test.TUNIDAD%ROWTYPE;
-    v_nombre   VARCHAR(250);
-    v_asig     BIGINT;
-    v_grado    BIGINT;
+    v_actual     academico_test.TUNIDAD%ROWTYPE;
+    v_nombre     VARCHAR(250);
+    v_asig       BIGINT;
+    v_grado      BIGINT;
+    v_ponder     NUMERIC;
+    v_pk_plan    BIGINT;
+    v_elemento   VARCHAR;
+    v_modo       VARCHAR;
+    v_suma       NUMERIC(9,2);
 BEGIN
     SELECT * INTO v_actual
       FROM academico_test.TUNIDAD
@@ -495,6 +589,54 @@ BEGIN
             USING ERRCODE = '23505';
     END IF;
 
+    -- Peso (%) de la unidad dentro de su (asignatura, grado) — TUNIDAD.PONDERACION
+    -- (V239). Se valida sobre los valores RESULTANTES del PATCH (v_asig /
+    -- v_grado ya calculados arriba), mismo criterio que V224 aplica a
+    -- ES_EVALUATIVA / unidad / instrumento: un PATCH que mueve la unidad de
+    -- asignatura o de grado cambia el bucket contra el que se mide el 100%.
+    v_ponder := CASE WHEN p_limpiar_ponderacion THEN NULL
+                     ELSE COALESCE(p_ponderacion, v_actual.PONDERACION) END;
+
+    IF v_ponder IS NOT NULL THEN
+        IF v_ponder < 0 OR v_ponder > 100 THEN
+            RAISE EXCEPTION 'La ponderacion (%) debe estar entre 0 y 100', v_ponder
+                USING ERRCODE = '22023';
+        END IF;
+
+        -- Mismo gate por plan (y mismo criterio ante lo no resoluble) que
+        -- fn_unidad_crear; ver el comentario extenso del bloque 2.c de esa
+        -- funcion. Solo se evalua cuando el caller esta TOCANDO el campo:
+        -- un PATCH de otra cosa no debe reventar por un peso heredado que
+        -- dejo de aplicar al reconfigurarse el plan.
+        IF p_ponderacion IS NOT NULL THEN
+            v_pk_plan := academico_test.fn_asignatura_plan_vigente_por_grado(v_grado, v_asig);
+            IF v_pk_plan IS NOT NULL THEN
+                v_elemento := academico_test.fn_asignatura_plan_elemento_calculo(v_pk_plan);
+                v_modo     := academico_test.fn_asignatura_plan_calculo_definitiva_modo(v_pk_plan);
+
+                IF v_elemento = 'ACTIVIDADES' THEN
+                    RAISE EXCEPTION 'La ponderacion de la unidad no aplica: el plan de la asignatura no calcula por unidades'
+                        USING ERRCODE = '22023',
+                              HINT = 'TASIGNATURA_PLAN.FK_TLV_ELEMENTO_CALCULO_DEF de esa asignatura combina ACTIVIDADES; el peso por actividad se captura en TACTIVIDAD.PONDERACION (V223)';
+                END IF;
+                IF v_modo = 'PROMEDIAR' THEN
+                    RAISE EXCEPTION 'La ponderacion de la unidad no aplica: el plan de la asignatura promedia sus unidades'
+                        USING ERRCODE = '22023';
+                END IF;
+            END IF;
+        END IF;
+
+        -- Regla del 100% sin contar el peso viejo de la fila que se toca.
+        v_suma := academico_test.fn_unidad_ponderacion_intra_asignatura_asignada(
+                      v_asig, v_grado, p_pk_tunidad);
+        IF v_suma + v_ponder > 100 THEN
+            RAISE EXCEPTION
+              'Las unidades de esa asignatura y grado ya tienen % %% ponderado; % %% pasarian de 100',
+              v_suma, v_ponder
+              USING ERRCODE = '23514';
+        END IF;
+    END IF;
+
     UPDATE academico_test.TUNIDAD
        SET NOMBRE                    = v_nombre,
            DESCRIPCION               = CASE WHEN p_descripcion IS NULL THEN DESCRIPCION
@@ -505,6 +647,7 @@ BEGIN
            FK_TLV_CALCULO_DEFINITIVA = COALESCE(p_fk_tlv_calculo_definitiva, FK_TLV_CALCULO_DEFINITIVA),
            FK_REFERENTE_CURRICULAR   = CASE WHEN p_limpiar_referente THEN NULL
                                             ELSE COALESCE(p_fk_referente_curricular, FK_REFERENTE_CURRICULAR) END,
+           PONDERACION               = v_ponder,
            MODIFIED_BY               = p_pk_usuario_solicitante::VARCHAR,
            MODIFIED_AT               = CURRENT_TIMESTAMP
      WHERE PK_TUNIDAD = p_pk_tunidad;
@@ -539,8 +682,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_unidad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR[], VARCHAR[])
-    IS 'PATCH parcial de TUNIDAD (gate EDITAR): cada parametro NULL preserva el valor actual. p_limpiar_referente=TRUE fuerza FK_REFERENTE_CURRICULAR a NULL. p_objetivos / p_contenidos NULL = no tocar; cualquier array (incl. vacio) = reemplazo completo (desactiva los activos y re-inserta con ORDEN por posicion, ignora vacios). Revalida FKs y unicidad (nombre, asignatura, grado) -- la unidad ya no depende de un periodo de evaluacion (V218). Retorna PK_TUNIDAD.';
+COMMENT ON FUNCTION academico_test.fn_unidad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR[], VARCHAR[], NUMERIC, BOOLEAN)
+    IS 'PATCH parcial de TUNIDAD (gate EDITAR): cada parametro NULL preserva el valor actual. p_limpiar_referente=TRUE fuerza FK_REFERENTE_CURRICULAR a NULL. p_objetivos / p_contenidos NULL = no tocar; cualquier array (incl. vacio) = reemplazo completo (desactiva los activos y re-inserta con ORDEN por posicion, ignora vacios). Revalida FKs y unicidad (nombre, asignatura, grado) -- la unidad ya no depende de un periodo de evaluacion (V218). p_ponderacion / p_limpiar_ponderacion editan TUNIDAD.PONDERACION (V239, peso % de la unidad dentro de su (asignatura, grado)): NULL = no tocar, p_limpiar_ponderacion=TRUE la vuelve NULL. Se valida contra los valores RESULTANTES del PATCH (un PATCH que mueve la unidad de asignatura o grado cambia el bucket del 100%): rango 0..100, regla del 100% via fn_unidad_ponderacion_intra_asignatura_asignada excluyendo el peso viejo de esta misma unidad, y -- solo cuando el caller esta tocando el campo -- que el peso APLIQUE segun el plan de la asignatura para ese grado (22023 si el plan calcula por ACTIVIDADES o promedia sus unidades; si el plan no se resuelve o no esta configurado se permite, mismo criterio que fn_unidad_crear). Retorna PK_TUNIDAD.';
 
 -- ===========================================================================
 -- fn_unidad_eliminar — soft delete en cascada.
