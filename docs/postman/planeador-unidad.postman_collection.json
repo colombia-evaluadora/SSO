@@ -1,0 +1,916 @@
+{
+  "info": {
+    "_postman_id": "6a2e9b4c-1d7f-4a3e-8c6b-0f5d3a9e21ab",
+    "name": "SSO — Planeador educativo: Unidad (query-service eval-col)",
+    "description": "Endpoints del dominio **UNIDAD** del módulo Planeador educativo (CU-86e311xxp, LOTE 1), servidos por el query-service `eval-col` a través del gateway (`api/eval-col/...`).\n\nRegistrados en `public.query` por la migración **V245** (`postgres/migrations/V245__query_endpoints_unidad.sql`). Las funciones Postgres subyacentes ya existían y están validadas en esta rama:\n\n| Método | Ruta | Función Postgres |\n| --- | --- | --- |\n| `POST` | `/api/eval-col/planeador/unidades` | `fn_unidad_crear` (V216) |\n| `PUT` | `/api/eval-col/planeador/unidades/:ID` | `fn_unidad_actualizar` (V216) |\n| `PATCH` | `/api/eval-col/planeador/unidades/:ID` | `fn_unidad_eliminar` (V216) — ver nota DELETE→PATCH |\n| `GET` | `/api/eval-col/planeador/unidades/:ID` | `fn_unidad_buscar_por_pk` (V216) |\n| `GET` | `/api/eval-col/planeador/unidades` | `fn_unidad_listar` (V216) |\n| `GET` | `/api/eval-col/planeador/unidades/:ID/actividades` | `fn_unidad_actividades_listar` (V216) |\n| `GET` | `/api/eval-col/planeador/unidades/:ID/objetivos` | `fn_unidad_objetivos_listar` (V216) |\n| `GET` | `/api/eval-col/planeador/unidades/:ID/contenidos` | `fn_unidad_contenidos_listar` (V216) |\n| `GET` | `/api/eval-col/planeador/unidades/:ID/criterios` | `fn_unidad_criterio_listar` (V222) |\n| `POST` | `/api/eval-col/planeador/unidades/:ID/criterios` | `fn_unidad_criterio_agregar` (V216, delega en `fn_unidad_rubrica_asegurar` de V222) |\n| `PUT` | `/api/eval-col/planeador/unidades/criterios/:ID` | `fn_unidad_criterio_actualizar` (V222) |\n| `PATCH` | `/api/eval-col/planeador/unidades/criterios/:ID` | `fn_unidad_criterio_eliminar` (V222) |\n| `POST` | `/api/eval-col/planeador/unidades/:ID/enunciados` | `fn_unidad_enunciado_relacionar` (V136) |\n| `PATCH` | `/api/eval-col/planeador/unidades/enunciados/:ID` | `fn_unidad_enunciado_quitar` (V136) |\n| `PUT` | `/api/eval-col/planeador/unidades/:ID/actividades/:ACTIVIDADID` | `fn_unidad_actividad_vincular` (V223, editada en V244) |\n| `PATCH` | `/api/eval-col/planeador/unidades/actividades/:ACTIVIDADID` | `fn_unidad_actividad_desvincular` (V223) |\n| `PUT` | `/api/eval-col/planeador/unidades/actividades/:ACTIVIDADID/ponderacion` | `fn_unidad_actividad_ponderacion_set` (V223) |\n| `GET` | `/api/eval-col/planeador/unidades/:ID/ponderacion-disponible` | `fn_unidad_ponderacion_disponible` (V223) |\n\n---\n\n## `DELETE` → `PATCH`\n\nEl `CHECK ck_query_http_method` de `public.query` (verificado contra el Postgres local de Docker) solo admite `{GET, POST, PUT, PATCH}` — no existe `DELETE`. Los 4 endpoints de borrado/desvinculación de este lote (unidad, criterio, enunciado, actividad↔unidad) se registran como `PATCH`, mismo criterio ya documentado en otras migraciones del repo (`funcionario-filtros-permiso`, `V149`).\n\n---\n\n## Autorización\n\n- **`role_query`**: `CEVAL-SUPER_ADMINISTRADOR` únicamente. El catálogo real de roles académicos (`TROL`: `DOCENTE`, `SUPER_ADMINISTRADOR`, ...) no está sembrado en las migraciones de este repo (viene del dump base del servidor) y su puente hacia `public.role` (V111) no trae, en este Postgres local, un rol `CEVAL-DOCENTE` — solo existe `CEVAL-SUPER_ADMINISTRADOR`. Se sigue el mismo patrón ya aplicado y funcionando en este entorno para el endpoint hermano `/referentes-curriculares/:ID/enunciados` (V214). `role_query` **no tiene bypass de admin**: solo pasa quien esté explícitamente listado.\n- **Gate fino real** (dentro de cada función): `fn_assert_permiso_seccion(usuario, 'PLANEADOR', <CREAR|VER|EDITAR|ELIMINAR>)` — capability por menú (`TROL_MENU`) recortada por `TUSUARIO_ROL_PERMISO`. El menú `PLANEADOR` se concede por seed a `DOCENTE` y `SUPER_ADMINISTRADOR` (V216). Sin scope territorial adicional.\n- `p_pk_usuario_solicitante` **siempre** se resuelve de `:CONTEXT.USER_ID` vía `public.fn_get_academico_usuario_id(...)` — nunca es un parámetro editable por el cliente.\n\n### Códigos de error comunes\n\n| SQLSTATE | HTTP | Caso |\n| --- | --- | --- |\n| — | `401` | sin token / token inválido |\n| — | `403` | rol fuera de `role_query` |\n| `42501` | `403` | `fn_assert_permiso_seccion` rechaza (sin capability sobre PLANEADOR) |\n| `P0002` | `404` | la unidad / criterio / actividad / relación no existe |\n| `22023` | `400` | validación de negocio (campo obligatorio vacío, rango 0..100, unidad inactiva, ponderación no aplica según el modo de cálculo, payload de niveles mal formado, ...) |\n| `23503` | `409`/`400` (según mapeo del query-service) | FK inexistente o inactiva (asignatura, grado, funcionario, referente curricular, enunciado, criterio ajeno) |\n| `23505` | `409` | nombre duplicado (unidad activa con mismo nombre/asignatura/grado) |\n| `23514` | `409` | la ponderación pasaría del 100% en el bucket (unidad, grupo) o (asignatura, grado) |\n\n---\n\n## 404 previo al reinicio del contenedor\n\nV245 da de alta 18 filas nuevas en `public.query`. El gateway enruta `api/eval-col/...` contra el contenedor `query-service-eval-col`, que **cachea el catálogo al arrancar**. Hasta que ese contenedor se reinicie, **cualquiera** de estas rutas responde **404** aunque la migración ya esté aplicada. La carpeta *Rechazos esperados* incluye ese caso como nota, no como test automático (depende del estado del contenedor en el momento de correr la colección).\n\n---\n\n**Antes de empezar**\n\n1. Elige el entorno **SSO — test** e introduce `password` (usuario `email`, que debe tener el rol `CEVAL-SUPER_ADMINISTRADOR`).\n2. Ajusta las variables de colección (`asignaturaId`, `gradoId`, `funcionarioId`, `calculoDefinitivaPonderarId`, etc.) a datos válidos de tu entorno. Los ejemplos asumen catálogo `CALCULO_DEFINITIVA`: `1`=Promediar, `2`=Ponderar, `3`=Sumatoria (VALOR, no PK — confirmar contra tu entorno).\n3. Corre la carpeta **1 — CRUD unidad** en orden (crea, lee, lista, actualiza) antes de las carpetas de sub-recursos (necesitan `unidadId`).\n\nEl **login es automático**: un script de colección pide el token antes de cada petición y lo reutiliza hasta que caduca (1 h).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Login automático antes de CADA petición: si el token vivo ya",
+          "// está en la variable de colección, no hace nada.",
+          "const rutaLogin = '/api/auth/login';",
+          "if (pm.request.url.getPath().endsWith(rutaLogin)) { return; }",
+          "",
+          "function caducado(jwt) {",
+          "    try {",
+          "        const carga = JSON.parse(atob(jwt.split('.')[1]));",
+          "        return !carga.exp || (carga.exp - 30) * 1000 < Date.now();",
+          "    } catch (e) { return true; }",
+          "}",
+          "",
+          "const actual = pm.collectionVariables.get('token');",
+          "if (actual && !caducado(actual)) { return; }",
+          "",
+          "const clave = pm.environment.get('password');",
+          "if (!clave) { throw new Error('Falta `password` en el entorno «SSO — test».'); }",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + rutaLogin,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "        email: pm.environment.get('email'),",
+          "        password: clave",
+          "    }) }",
+          "}, (err, res) => {",
+          "    if (err) { throw new Error('No se pudo contactar con el gateway: ' + err); }",
+          "    if (res.code !== 200) { throw new Error('Login rechazado (' + res.code + '). Revisa `email` y `password`.'); }",
+          "    pm.collectionVariables.set('token', res.json().token);",
+          "    console.log('token renovado automáticamente');",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "token", "value": "" },
+    { "key": "unidadId", "value": "1" },
+    { "key": "criterioUnidadId", "value": "1" },
+    { "key": "unidadEnunciadoId", "value": "1" },
+    { "key": "actividadId", "value": "1" },
+    { "key": "asignaturaId", "value": "1" },
+    { "key": "gradoId", "value": "1" },
+    { "key": "funcionarioId", "value": "1" },
+    { "key": "calculoDefinitivaPonderarId", "value": "497" },
+    { "key": "referenteCurricularId", "value": "1" },
+    { "key": "referenteEnunciadoId", "value": "1" },
+    { "key": "grupoId", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "0 — Login (ver la respuesta)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const token = pm.response.json().token;",
+              "pm.test('devuelve token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+              "pm.collectionVariables.set('token', token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "login"]
+        }
+      }
+    },
+    {
+      "name": "1 — CRUD unidad",
+      "item": [
+        {
+          "name": "1.1 — POST crear unidad",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().rows;",
+                  "pm.test('devuelve PK_TUNIDAD', () => pm.expect(rows).to.be.an('array').with.length.above(0));",
+                  "if (rows && rows.length) { pm.collectionVariables.set('unidadId', Object.values(rows[0])[0]); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Fracciones y numeros racionales\",\n  \"fkTasignatura\": {{asignaturaId}},\n  \"fkTgrado\": {{gradoId}},\n  \"fkTfuncionario\": {{funcionarioId}},\n  \"fkTlvCalculoDefinitiva\": {{calculoDefinitivaPonderarId}},\n  \"descripcion\": \"Unidad introductoria de fracciones\",\n  \"objetivos\": [\"Reconocer fracciones equivalentes\", \"Operar con fracciones\"],\n  \"contenidos\": [\"Fraccion como parte-todo\", \"Suma y resta de fracciones\"],\n  \"ponderacion\": 25\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades"]
+            },
+            "description": "Crea una unidad (`fn_unidad_crear`, V216). Obligatorios: `nombre`, `fkTasignatura`, `fkTgrado`, `fkTfuncionario`, `fkTlvCalculoDefinitiva` (forma de cálculo, catálogo `TLISTA_VALOR` categoría `CALCULO_DEFINITIVA`: VALOR `1`=Promediar, `2`=Ponderar, `3`=Sumatoria). `ponderacion` (0..100) solo aplica si el plan de la asignatura calcula por unidades y no promedia. Devuelve `PK_TUNIDAD`."
+          },
+          "response": [
+            {
+              "name": "200 — creada",
+              "originalRequest": { "method": "POST", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"fn_unidad_crear\": 501 } ]\n}"
+            },
+            {
+              "name": "400 — falta FK_TLV_CALCULO_DEFINITIVA (22023)",
+              "originalRequest": { "method": "POST", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades" } },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"La forma de calculo de la nota (FK_TLV_CALCULO_DEFINITIVA) es obligatoria\",\n  \"sqlState\": \"22023\"\n}"
+            },
+            {
+              "name": "409 — nombre duplicado en la misma (asignatura, grado) (23505)",
+              "originalRequest": { "method": "POST", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades" } },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"Ya existe una unidad activa \\\"Fracciones y numeros racionales\\\" para esa asignatura y grado\",\n  \"sqlState\": \"23505\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "1.2 — GET detalle de unidad",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "const rows = pm.response.json().rows;", "pm.test('trae campos_disponibles', () => pm.expect(rows[0]).to.have.property('campos_disponibles'));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "{{unidadId}}"],
+              "variable": [{ "key": "ID", "value": "{{unidadId}}", "description": "PK_TUNIDAD" }]
+            },
+            "description": "Detalle de la unidad (`fn_unidad_buscar_por_pk`, V216): escalares + nombres resueltos, fechas derivadas (MIN/MAX de actividades activas), `objetivos`/`contenidos` como JSONB ordenado y `campos_disponibles` (dependencia referente→rúbrica, V137)."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ {\n    \"pk_tunidad\": 501,\n    \"nombre\": \"Fracciones y numeros racionales\",\n    \"asignatura\": \"Matematicas\",\n    \"grado\": \"Sexto\",\n    \"calculo_definitiva\": \"Ponderar Actividades o Descriptores\",\n    \"objetivos\": [ { \"pk\": 1, \"orden\": 1, \"descripcion\": \"Reconocer fracciones equivalentes\" } ],\n    \"contenidos\": [ { \"pk\": 1, \"orden\": 1, \"descripcion\": \"Fraccion como parte-todo\" } ],\n    \"active\": true\n  } ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "1.3 — GET listar unidades (paginado + filtros)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "const rows = pm.response.json().rows;", "pm.test('rows es array', () => pm.expect(rows).to.be.an('array'));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades?search=fracciones&asignatura={{asignaturaId}}&grado={{gradoId}}&ordenPor=nombre&ordenAsc=true&size=20&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades"],
+              "query": [
+                { "key": "search", "value": "fracciones" },
+                { "key": "asignatura", "value": "{{asignaturaId}}" },
+                { "key": "grado", "value": "{{gradoId}}" },
+                { "key": "ordenPor", "value": "nombre", "description": "whitelist: nombre|asignatura|grado" },
+                { "key": "ordenAsc", "value": "true" },
+                { "key": "size", "value": "20" },
+                { "key": "offset", "value": "0" }
+              ]
+            },
+            "description": "Pagina de unidades (`fn_unidad_listar`, V216). Filtros `search`/`asignatura`/`grado`/`funcionario`/`incluirInactivos` (default false), orden `ordenPor` (whitelist)/`ordenAsc`, paginación system-bound `size`/`offset`. `total_count` via `COUNT(*) OVER()`."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"pk_tunidad\": 501, \"nombre\": \"Fracciones y numeros racionales\", \"asignatura\": \"Matematicas\", \"grado\": \"Sexto\", \"total_actividades\": 0, \"total_count\": 1 } ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "1.4 — PUT actualizar unidad (PATCH parcial)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"descripcion\": \"Unidad introductoria de fracciones (revisada)\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "{{unidadId}}"],
+              "variable": [{ "key": "ID", "value": "{{unidadId}}", "description": "PK_TUNIDAD" }]
+            },
+            "description": "PATCH parcial (`fn_unidad_actualizar`, V216): campos ausentes/NULL preservan el valor actual. `limpiarReferente`/`limpiarPonderacion` fuerzan sus columnas a NULL. `objetivos`/`contenidos`: NULL=no tocar, array (incl. vacío)=reemplazo completo."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "PUT", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"fn_unidad_actualizar\": 501 } ]\n}"
+            },
+            {
+              "name": "404 — unidad inexistente (P0002)",
+              "originalRequest": { "method": "PUT", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/99999999" } },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"No se encontro la unidad tematica solicitada\",\n  \"sqlState\": \"P0002\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "1.5 — PATCH eliminar unidad (soft delete)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200 o 409 (bloqueo por actividades activas)', () => pm.expect([200,409]).to.include(pm.response.code));"] } }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "{{unidadId}}"],
+              "variable": [{ "key": "ID", "value": "{{unidadId}}", "description": "PK_TUNIDAD" }]
+            },
+            "description": "Soft delete en cascada (`fn_unidad_eliminar`, V216): niveles→criterios→rúbrica, objetivos, contenidos y la unidad. **DELETE→PATCH**: el CHECK de `public.query` no admite DELETE. Se bloquea (23503) si la unidad todavía tiene actividades ACTIVE vinculadas — desvincularlas antes con `PATCH /planeador/unidades/actividades/:ACTIVIDADID`."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "PATCH", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"fn_unidad_eliminar\": 501 } ]\n}"
+            },
+            {
+              "name": "409 — tiene actividades activas vinculadas (23503)",
+              "originalRequest": { "method": "PATCH", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}" } },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"La unidad \\\"Fracciones y numeros racionales\\\" tiene 2 actividad(es) activa(s) vinculada(s); desvinculelas o eliminelas antes de eliminar la unidad\",\n  \"sqlState\": \"23503\",\n  \"hint\": \"Use fn_unidad_actividad_desvincular (V223) para soltar cada actividad, o fn_actividad_eliminar (V224) para borrarla logicamente, y reintente\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 — Actividades de la unidad",
+      "item": [
+        {
+          "name": "2.1 — GET actividades vinculadas a la unidad",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "const rows = pm.response.json().rows;", "pm.test('rows es array', () => pm.expect(rows).to.be.an('array'));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/actividades?ordenPor=porcentaje&ordenAsc=false&size=50&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "{{unidadId}}", "actividades"],
+              "query": [
+                { "key": "ordenPor", "value": "porcentaje", "description": "actividad|tipo|instrumento|grupo|porcentaje" },
+                { "key": "ordenAsc", "value": "false" },
+                { "key": "size", "value": "50" },
+                { "key": "offset", "value": "0" }
+              ],
+              "variable": [{ "key": "ID", "value": "{{unidadId}}", "description": "PK_TUNIDAD" }]
+            },
+            "description": "Actividades vinculadas a la unidad con su `ponderacion` (%, TACTIVIDAD.PONDERACION, V223) resuelta (`fn_unidad_actividades_listar`, V216)."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/actividades" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"pk_tactividad\": 900, \"titulo\": \"Taller de fracciones\", \"ponderacion\": 40, \"total_count\": 1 } ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "2.2 — PUT vincular actividad a la unidad",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ponderacion\": 40,\n  \"permitirMoverDeUnidad\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/actividades/{{actividadId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "{{unidadId}}", "actividades", "{{actividadId}}"],
+              "variable": [
+                { "key": "ID", "value": "{{unidadId}}", "description": "PK_TUNIDAD destino" },
+                { "key": "ACTIVIDADID", "value": "{{actividadId}}", "description": "PK_TACTIVIDAD" }
+              ]
+            },
+            "description": "Vincula (o mueve) una actividad a la unidad y fija su ponderación (%) (`fn_unidad_actividad_vincular`, V223, editada en V244). `permitirMoverDeUnidad=true` es obligatorio si la actividad YA tenía otra unidad (fix V244: evita mover en silencio). Se rechaza `ponderacion` si la unidad Promedia o calcula por Sumatoria."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "PUT", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/actividades/{{actividadId}}" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"fn_unidad_actividad_vincular\": 900 } ]\n}"
+            },
+            {
+              "name": "400 — mover sin confirmar (22023)",
+              "originalRequest": { "method": "PUT", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/actividades/{{actividadId}}" } },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"La actividad ya esta vinculada a la unidad 340; confirme p_permitir_mover_de_unidad=true para moverla a la unidad 501\",\n  \"sqlState\": \"22023\"\n}"
+            },
+            {
+              "name": "409 — pasaria de 100% (23514)",
+              "originalRequest": { "method": "PUT", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/actividades/{{actividadId}}" } },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"La unidad 501 ya tiene 80 %% ponderado para el grupo 12; 40 %% adicionales pasarian de 100\",\n  \"sqlState\": \"23514\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "2.3 — PUT ponderación inline de la actividad",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"ponderacion\": 35\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/actividades/{{actividadId}}/ponderacion",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "actividades", "{{actividadId}}", "ponderacion"],
+              "variable": [{ "key": "ACTIVIDADID", "value": "{{actividadId}}", "description": "PK_TACTIVIDAD" }]
+            },
+            "description": "Edición inline de la columna \"(%)\" (`fn_unidad_actividad_ponderacion_set`, V223). Solo aplica en unidades que Ponderan; rechaza (22023) si la unidad Promedia/Sumatoria o la actividad no tiene unidad."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "PUT", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/actividades/{{actividadId}}/ponderacion" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"fn_unidad_actividad_ponderacion_set\": 900 } ]\n}"
+            },
+            {
+              "name": "400 — unidad no vinculada (22023)",
+              "originalRequest": { "method": "PUT", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/actividades/{{actividadId}}/ponderacion" } },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"La actividad no esta vinculada a ninguna unidad; use fn_unidad_actividad_vincular\",\n  \"sqlState\": \"22023\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "2.4 — PATCH desvincular actividad de la unidad",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/actividades/{{actividadId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "actividades", "{{actividadId}}"],
+              "variable": [{ "key": "ACTIVIDADID", "value": "{{actividadId}}", "description": "PK_TACTIVIDAD" }]
+            },
+            "description": "Desvincula la actividad de su unidad (`fn_unidad_actividad_desvincular`, V223): `FK_TUNIDAD` y `PONDERACION` quedan en NULL. **DELETE→PATCH** (ver nota general de la colección)."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "PATCH", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/actividades/{{actividadId}}" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"fn_unidad_actividad_desvincular\": 900 } ]\n}"
+            },
+            {
+              "name": "404 — actividad inexistente (P0002)",
+              "originalRequest": { "method": "PATCH", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/actividades/99999999" } },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"No se encontro la actividad solicitada\",\n  \"sqlState\": \"P0002\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "2.5 — GET ponderación disponible (unidad, grupo)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/ponderacion-disponible?grupo={{grupoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "{{unidadId}}", "ponderacion-disponible"],
+              "query": [{ "key": "grupo", "value": "{{grupoId}}" }],
+              "variable": [{ "key": "ID", "value": "{{unidadId}}", "description": "PK_TUNIDAD" }]
+            },
+            "description": "\"Disponible para asignar: X%\" (`fn_unidad_ponderacion_disponible`, V223) = 100 - lo ya asignado en ese (unidad, grupo)."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/ponderacion-disponible" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"fn_unidad_ponderacion_disponible\": 60 } ]\n}"
+            },
+            {
+              "name": "404 — unidad inexistente (P0002)",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/99999999/ponderacion-disponible" } },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"No se encontro la unidad tematica solicitada\",\n  \"sqlState\": \"P0002\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 — Objetivos y contenidos",
+      "item": [
+        {
+          "name": "3.1 — GET objetivos de la unidad",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/objetivos",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "{{unidadId}}", "objetivos"],
+              "variable": [{ "key": "ID", "value": "{{unidadId}}", "description": "PK_TUNIDAD" }]
+            },
+            "description": "Objetivos ACTIVE de la unidad, ordenados (`fn_unidad_objetivos_listar`, V216)."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/objetivos" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"pk_tunidad_objetivo\": 1, \"orden\": 1, \"descripcion\": \"Reconocer fracciones equivalentes\" } ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "3.2 — GET contenidos de la unidad",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/contenidos",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "{{unidadId}}", "contenidos"],
+              "variable": [{ "key": "ID", "value": "{{unidadId}}", "description": "PK_TUNIDAD" }]
+            },
+            "description": "Contenidos/componentes ACTIVE de la unidad, ordenados (`fn_unidad_contenidos_listar`, V216)."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/contenidos" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"pk_tunidad_contenido\": 1, \"orden\": 1, \"descripcion\": \"Fraccion como parte-todo\" } ]\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4 — Rúbrica / criterios de la unidad",
+      "item": [
+        {
+          "name": "4.1 — GET criterios de la rúbrica",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/criterios?incluirInactivos=false",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "{{unidadId}}", "criterios"],
+              "query": [{ "key": "incluirInactivos", "value": "false" }],
+              "variable": [{ "key": "ID", "value": "{{unidadId}}", "description": "PK_TUNIDAD" }]
+            },
+            "description": "Criterios de la rúbrica de la unidad con sus niveles (uno por valoración de la escala) en JSONB (`fn_unidad_criterio_listar`, V222)."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/criterios" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ {\n    \"pk_tcriterio_unidad\": 1,\n    \"orden\": 1,\n    \"descripcion\": \"Resuelve operaciones con fracciones\",\n    \"publico\": \"S\",\n    \"niveles\": [\n      { \"pk\": 1, \"fkTescalaValoracion\": 10, \"valoracion\": \"Bajo\", \"orden\": 1, \"indicador\": \"No resuelve\" },\n      { \"pk\": 2, \"fkTescalaValoracion\": 11, \"valoracion\": \"Basico\", \"orden\": 2, \"indicador\": \"Resuelve con ayuda\" }\n    ],\n    \"active\": true\n  } ]\n}"
+            },
+            {
+              "name": "404 — unidad inexistente (P0002)",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/99999999/criterios" } },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"No se encontro la unidad tematica solicitada\",\n  \"sqlState\": \"P0002\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "4.2 — POST agregar criterio",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().rows;",
+                  "if (rows && rows.length) { pm.collectionVariables.set('criterioUnidadId', Object.values(rows[0])[0]); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"descripcion\": \"Resuelve operaciones con fracciones\",\n  \"publico\": \"S\",\n  \"descriptorProm\": \"N\",\n  \"niveles\": [\n    { \"fkTescalaValoracion\": 10, \"indicador\": \"No resuelve las operaciones\" },\n    { \"fkTescalaValoracion\": 11, \"indicador\": \"Resuelve con ayuda\" },\n    { \"fkTescalaValoracion\": 12, \"indicador\": \"Resuelve de forma autonoma\" },\n    { \"fkTescalaValoracion\": 13, \"indicador\": \"Resuelve y explica el procedimiento\" }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/criterios",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "{{unidadId}}", "criterios"],
+              "variable": [{ "key": "ID", "value": "{{unidadId}}", "description": "PK_TUNIDAD" }]
+            },
+            "description": "Agrega un criterio a la rúbrica de la unidad (`fn_unidad_criterio_agregar`, V216; crea la rúbrica al vuelo con `fn_unidad_rubrica_asegurar`, V222). `niveles` exige EXACTAMENTE un elemento por cada valoración activa de la escala del periodo académico del grado de la unidad (sin faltantes/sobrantes/duplicados) -- ajustar los `fkTescalaValoracion` de ejemplo a la escala real del entorno."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "POST", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/criterios" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"fn_unidad_criterio_agregar\": 1 } ]\n}"
+            },
+            {
+              "name": "400 — payload de niveles no calza con la escala (22023)",
+              "originalRequest": { "method": "POST", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/criterios" } },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"Debe enviar exactamente un indicador por cada valoracion activa de la escala (esperados: 4, recibidos: 3)\",\n  \"sqlState\": \"22023\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "4.3 — PUT actualizar criterio (PATCH parcial)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"descripcion\": \"Resuelve operaciones con fracciones (ajustado)\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/criterios/{{criterioUnidadId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "criterios", "{{criterioUnidadId}}"],
+              "variable": [{ "key": "ID", "value": "{{criterioUnidadId}}", "description": "PK_TCRITERIO_UNIDAD" }]
+            },
+            "description": "PATCH parcial del criterio y/o de los textos de sus niveles ya existentes (`fn_unidad_criterio_actualizar`, V222); no crea niveles nuevos."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "PUT", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/criterios/{{criterioUnidadId}}" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"fn_unidad_criterio_actualizar\": 1 } ]\n}"
+            },
+            {
+              "name": "404 — criterio inexistente (P0002)",
+              "originalRequest": { "method": "PUT", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/criterios/99999999" } },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"No se encontro el criterio de rubrica solicitado\",\n  \"sqlState\": \"P0002\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "4.4 — PATCH eliminar criterio",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/criterios/{{criterioUnidadId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "criterios", "{{criterioUnidadId}}"],
+              "variable": [{ "key": "ID", "value": "{{criterioUnidadId}}", "description": "PK_TCRITERIO_UNIDAD" }]
+            },
+            "description": "Soft delete del criterio y sus niveles (`fn_unidad_criterio_eliminar`, V222). **DELETE→PATCH** (ver nota general)."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "PATCH", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/criterios/{{criterioUnidadId}}" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"fn_unidad_criterio_eliminar\": 1 } ]\n}"
+            },
+            {
+              "name": "400 — ya inactivo (22023)",
+              "originalRequest": { "method": "PATCH", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/criterios/{{criterioUnidadId}}" } },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"El criterio ya se encuentra inactivo\",\n  \"sqlState\": \"22023\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5 — Enunciados del referente curricular",
+      "item": [
+        {
+          "name": "5.1 — POST relacionar enunciado con la unidad",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().rows;",
+                  "if (rows && rows.length) { pm.collectionVariables.set('unidadEnunciadoId', Object.values(rows[0])[0]); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"fkReferenteEnunciado\": {{referenteEnunciadoId}}\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/enunciados",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "{{unidadId}}", "enunciados"],
+              "variable": [{ "key": "ID", "value": "{{unidadId}}", "description": "PK_TUNIDAD" }]
+            },
+            "description": "Relaciona (o reactiva) un enunciado (nivel 1) del referente curricular con la unidad (`fn_unidad_enunciado_relacionar`, V136). Exige que el enunciado sea nivel 1 y comparta el nivel de enseñanza de la unidad."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "POST", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/enunciados" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"fn_unidad_enunciado_relacionar\": 30 } ]\n}"
+            },
+            {
+              "name": "400 — enunciado es evidencia (nivel 2) (22023)",
+              "originalRequest": { "method": "POST", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/enunciados" } },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"FK_REFERENTE_ENUNCIADO (57) es una evidencia (nivel 2), no un enunciado (nivel 1)\",\n  \"sqlState\": \"22023\"\n}"
+            },
+            {
+              "name": "400 — nivel de enseñanza distinto (22023)",
+              "originalRequest": { "method": "POST", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/enunciados" } },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"El enunciado (30) pertenece a un nivel de ensenanza distinto al de la unidad \\\"Fracciones y numeros racionales\\\"\",\n  \"sqlState\": \"22023\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "5.2 — PATCH quitar enunciado de la unidad",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/enunciados/{{unidadEnunciadoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "enunciados", "{{unidadEnunciadoId}}"],
+              "variable": [{ "key": "ID", "value": "{{unidadEnunciadoId}}", "description": "PK_TUNIDAD_ENUNCIADO" }]
+            },
+            "description": "Borrado lógico de la relación unidad↔enunciado (`fn_unidad_enunciado_quitar`, V136); arrastra las `TACTIVIDAD_EVIDENCIA` de esa unidad cuyo enunciado padre era este. **DELETE→PATCH** (ver nota general)."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "PATCH", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/enunciados/{{unidadEnunciadoId}}" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"fn_unidad_enunciado_quitar\": true } ]\n}"
+            },
+            {
+              "name": "409 — relación inexistente o inactiva (23503)",
+              "originalRequest": { "method": "PATCH", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/enunciados/99999999" } },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"PK_TUNIDAD_ENUNCIADO (99999999) no existe o ya esta inactivo\",\n  \"sqlState\": \"23503\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Rechazos esperados (transversales)",
+      "item": [
+        {
+          "name": "GET unidad sin token → 401",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('401', () => pm.response.to.have.status(401));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "{{unidadId}}"]
+            }
+          }
+        },
+        {
+          "name": "POST crear unidad con rol sin role_query → 403",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('403', () => pm.response.to.have.status(403));"] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"nombre\": \"x\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades"]
+            },
+            "description": "Requiere loguearse con un usuario cuyo rol NO esté en `role_query` (hoy solo `CEVAL-SUPER_ADMINISTRADOR`). Con el usuario por defecto del entorno este test puede no aplicar -- déjalo documentado como caso esperado, no como aserción automática confiable."
+          }
+        },
+        {
+          "name": "GET unidad inexistente → 404 (P0002)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('404', () => pm.response.to.have.status(404));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/99999999",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "unidades", "99999999"]
+            },
+            "description": "**Nota:** antes de reiniciar el contenedor `query-service-eval-col` esta misma ruta (con cualquier `:ID`) responde 404 porque las 18 filas de `public.query` que agrega V245 aún no están en el catálogo cacheado por el contenedor -- no por `P0002`. Distinguirlos requiere inspeccionar el body: el 404 \"real\" (P0002) trae `sqlState` y mensaje de negocio; el 404 \"por catálogo no recargado\" suele venir sin ese detalle (respuesta genérica del gateway/query-service)."
+          }
+        }
+      ]
+    }
+  ]
+}
