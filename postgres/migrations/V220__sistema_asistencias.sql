@@ -375,6 +375,40 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_asistencia_tipo_pk(NUMERIC)
     IS 'PK_LISTA_VALOR del TIPO_ASISTENCIA con ese VALOR (1,2,3,5,6). Resuelve por (CATEGORIA, VALOR) porque los pk no son estables entre ambientes. NULL si el valor no existe o esta inactivo.';
 
+-- Duracion de UN bloque, con reserva cuando THORARIO no trae horas propias.
+--
+--   Hallazgo real (172.233.184.248, sede 1655 "SEDE SECUNDARIA"): 0 de 9
+--   filas ACTIVE de THORARIO tienen HORA_INICIO/HORA_FIN (a nivel de TODO el
+--   sistema, ~52% de THORARIO esta en la misma situacion -- 4839 de 9270).
+--   Sin reserva, "Horas programadas" queda en 0h aunque el calendario SI
+--   muestre las sesiones (el conteo no depende de la hora, la duracion si).
+--
+--   TPERIODO_ACADEMICO (V22) YA trae la jornada completa de la sede/periodo:
+--   HORA_INICIO, HORA_FIN y BLOQUES_POR_DEFECTO. Cuando el bloque puntual no
+--   tiene horas, se estima su duracion como (jornada_fin - jornada_inicio)
+--   / bloques_por_defecto -- una aproximacion (asume bloques iguales), pero
+--   muy superior a asumir 0h. Si tampoco hay reserva (periodo sin jornada
+--   configurada, o BLOQUES_POR_DEFECTO en 0/NULL), el resultado sigue en 0h,
+--   igual que antes.
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_horas_bloque(
+    p_hora_inicio         TIMESTAMP,
+    p_hora_fin            TIMESTAMP,
+    p_jornada_inicio      TIME,
+    p_jornada_fin         TIME,
+    p_bloques_por_defecto BIGINT
+)
+RETURNS NUMERIC
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT ROUND(COALESCE(
+               EXTRACT(EPOCH FROM (p_hora_fin - p_hora_inicio)) / 3600.0,
+               EXTRACT(EPOCH FROM (p_jornada_fin - p_jornada_inicio)) / 3600.0
+                   / NULLIF(p_bloques_por_defecto, 0),
+               0)::NUMERIC, 2);
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_horas_bloque(TIMESTAMP, TIMESTAMP, TIME, TIME, BIGINT)
+    IS 'Duracion en horas de un bloque de THORARIO. Si trae HORA_INICIO/HORA_FIN propias, la duracion real. Si no (comun: ~52% de THORARIO no las tiene), se estima como la jornada del TPERIODO_ACADEMICO (HORA_INICIO/HORA_FIN, ambas TIME) dividida por BLOQUES_POR_DEFECTO. Sin ninguna de las dos, 0. La usan v_asistencia_detalle y fn_asistencia_sesiones_programadas -- unico sitio con esta regla.';
+
 
 -- ===========================================================================
 -- 5. VISTA v_asistencia_detalle
@@ -410,8 +444,10 @@ SELECT
     a.BLOQUE                                  AS bloque,
     h.HORA_INICIO                             AS hora_inicio,
     h.HORA_FIN                                AS hora_fin,
-    -- Duracion de la sesion en horas (0 si el bloque no esta en THORARIO).
-    ROUND(COALESCE(EXTRACT(EPOCH FROM (h.HORA_FIN - h.HORA_INICIO)) / 3600.0, 0)::NUMERIC, 2)
+    -- Duracion de la sesion en horas: real si THORARIO la trae, si no
+    -- estimada por la jornada del periodo academico (fn_asistencia_horas_bloque).
+    academico_test.fn_asistencia_horas_bloque(
+        h.HORA_INICIO, h.HORA_FIN, pa.HORA_INICIO, pa.HORA_FIN, pa.BLOQUES_POR_DEFECTO)
                                               AS horas,
     a.FK_TLV_TIPO_ASISTENCIA                  AS fk_tlv_tipo_asistencia,
     -- El estado se compara SIEMPRE como TEXTO contra el dominio fijo de
@@ -1031,7 +1067,8 @@ BEGIN
            th.FK_TASIGNATURA, asig.NOMBRE,
            th.NUMERO_BLOQUE,
            th.HORA_INICIO,    th.HORA_FIN,
-           ROUND(COALESCE(EXTRACT(EPOCH FROM (th.HORA_FIN - th.HORA_INICIO)) / 3600.0, 0)::NUMERIC, 2)
+           academico_test.fn_asistencia_horas_bloque(
+               th.HORA_INICIO, th.HORA_FIN, pa.HORA_INICIO, pa.HORA_FIN, pa.BLOQUES_POR_DEFECTO)
       FROM generate_series(p_fecha_desde, p_fecha_hasta, INTERVAL '1 day') dd
       JOIN academico_test.TLISTA_VALOR dia
         ON dia.CATEGORIA = 'DIA_SEMANA'
@@ -1057,7 +1094,8 @@ BEGIN
        AND academico_test.fn_asistencia_puede_ver(p_pk_usuario, th.FK_TGRUPO)
      GROUP BY dd::date, th.FK_TGRUPO, gr.NOMBRE, g.PK_TGRADO, g.NOMBRE, g.CODIGO,
               gr.FK_TLV_JORNADA, jor.NOMBRE, jor.VALOR, th.FK_TASIGNATURA, asig.NOMBRE,
-              th.NUMERO_BLOQUE, th.HORA_INICIO, th.HORA_FIN;  -- colapsa bloques duplicados
+              th.NUMERO_BLOQUE, th.HORA_INICIO, th.HORA_FIN,
+              pa.HORA_INICIO, pa.HORA_FIN, pa.BLOQUES_POR_DEFECTO;  -- colapsa bloques duplicados
 END;
 $$;
 
@@ -1134,7 +1172,7 @@ BEGIN
     WITH programadas AS (
         SELECT sp.fecha, sp.fk_tgrupo, sp.grupo, sp.fk_tgrado, sp.grado, sp.grado_valor,
                sp.fk_tlv_jornada, sp.jornada, sp.jornada_valor, sp.fk_tasignatura, sp.asignatura,
-               sp.bloque, sp.hora_inicio, sp.hora_fin
+               sp.bloque, sp.hora_inicio, sp.hora_fin, sp.horas
           FROM academico_test.fn_asistencia_sesiones_programadas(
                    p_pk_usuario, p_fk_tsede, v_ini, v_fin - 1,
                    p_fk_tgrupo, p_fk_tasignatura, p_fk_tfuncionario) sp
@@ -1146,6 +1184,7 @@ BEGIN
                d.bloque,
                MIN(d.hora_inicio)                            AS hora_inicio,
                MIN(d.hora_fin)                               AS hora_fin,
+               MIN(d.horas)                                  AS horas,
                COUNT(*)                                      AS n_total,
                COUNT(*) FILTER (WHERE d.tipo_valor = 1)      AS n_a_tiempo,
                COUNT(*) FILTER (WHERE d.es_tarde)            AS n_tarde,
@@ -1180,8 +1219,10 @@ BEGIN
         COALESCE(p.bloque, r.bloque),
         COALESCE(p.hora_inicio, r.hora_inicio),
         COALESCE(p.hora_fin, r.hora_fin),
-        ROUND(COALESCE(EXTRACT(EPOCH FROM (COALESCE(p.hora_fin, r.hora_fin)
-                                         - COALESCE(p.hora_inicio, r.hora_inicio))) / 3600.0, 0)::NUMERIC, 2),
+        -- Reusa la duracion YA calculada (con reserva de jornada) por cada
+        -- CTE -- no se recalcula desde hora_inicio/hora_fin, que es lo que
+        -- antes tiraba a 0h cuando THORARIO no las traia.
+        COALESCE(p.horas, r.horas, 0),
         COALESCE(r.n_total, 0)::BIGINT,
         COALESCE(r.n_a_tiempo, 0)::BIGINT,
         COALESCE(r.n_tarde, 0)::BIGINT,
