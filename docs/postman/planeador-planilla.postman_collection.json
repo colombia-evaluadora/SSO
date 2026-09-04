@@ -1,0 +1,397 @@
+{
+  "info": {
+    "_postman_id": "3e1b7a2c-6d9f-4a1e-9c3b-8f2a5d6e0b17",
+    "name": "SSO — Planeador educativo: Planilla de calificación (query-service eval-col)",
+    "description": "Endpoints de la pantalla **Planilla de calificación** y del **filtro Grado → Grupo → Asignatura del docente** del módulo Planeador educativo (CU-86e311xxp, LOTE 4 — ÚLTIMO de la tanda), servidos por el query-service `eval-col` a través del gateway (`api/eval-col/...`).\n\nRegistrados en `public.query` por la migración **V248** (`postgres/migrations/V248__query_endpoints_planilla.sql`). Las funciones Postgres subyacentes ya existían y están validadas en esta rama:\n\n| Método | Ruta | Función Postgres |\n| --- | --- | --- |\n| `GET` | `/api/eval-col/planeador/planilla/columnas` | `fn_planilla_columnas_listar` (V239) |\n| `GET` | `/api/eval-col/planeador/planilla/calificaciones` | `fn_planilla_calificaciones_listar` (V239) |\n| `GET` | `/api/eval-col/planeador/docentes/grupos` | `fn_docente_grupos_listar` (V242) |\n| `GET` | `/api/eval-col/planeador/docentes/grado-asignatura` | `fn_docente_grado_asignatura_listar` (V242) |\n| `GET` | `/api/eval-col/planeador/asignaturas/:ID/ponderacion-disponible` | `fn_asignatura_grado_ponderacion_disponible` (V239) |\n\n---\n\n## Decisiones de alcance de este lote\n\n- **`fn_planilla_definitiva_proyectada` (V239, la columna \"DEFINIT PROY.\") NO se expone como endpoint aparte.** `GET /planeador/planilla/calificaciones` YA la invoca por cada fila de estudiante y la devuelve embebida como `definitiva_proyectada`. Además esa función no tiene gate de permisos propio (está pensada para ser llamada desde dentro de otra función que ya validó el permiso), así que exponerla sola solo repetiría, por estudiante, el mismo número que el listado ya trae por fila — cero información adicional y una llamada N+1 en el cliente.\n- **`fn_asignatura_grado_ponderacion_disponible` (V239) SÍ se expone aquí**, aunque conceptualmente es del formulario de UNIDAD (\"Disponible para asignar: X%\" al capturar `TUNIDAD.PONDERACION`) y no de la pantalla Planilla: es la única función pública de V239 (fuera de las 3 propias de la planilla) con gate de permisos y utilidad directa para un cliente HTTP, y el LOTE 1 (V245, dominio Unidad) fue escrito sin conocer este helper — quedó sin exponer hasta este lote final.\n- Ningún otro `CREATE OR REPLACE FUNCTION` de V239 se expone: son helpers internos sin gate de permisos propio (`fn_planilla_grupo_asignatura_assert`, `fn_planilla_actividades_universo`, `fn_asignatura_plan_vigente[_por_grado]`, `fn_asignatura_criterio_evaluacion_vigente`, `fn_criterio_evaluacion_porcentaje_inicial`/`_maximo_recuperacion`, `fn_asignatura_plan_elemento_calculo`, `fn_asignatura_plan_calculo_definitiva_modo`), consumidos por V227/V239 internamente.\n- `fn_docente_grupos_listar`/`fn_docente_grado_asignatura_listar` (V242) reciben `p_fk_tfuncionario` **ya resuelto por el query-service**, con el mismo patrón usado en la rama de Asistencias (CU-86e32gvpp): `(SELECT f.PK_TFUNCIONARIO FROM academico_test.TFUNCIONARIO f WHERE f.FK_TUSUARIO = public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT) AND f.ACTIVE = TRUE)`. Confirmado NULL-safe: si el usuario autenticado no es funcionario activo, la subconsulta da NULL y el `WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario` de ambas funciones descarta todas las filas sin error (SQL estándar: `x = NULL` nunca es `TRUE`) — responde `200` con lista vacía, no `500`.\n\n---\n\n## Autorización\n\n- **`role_query`**: `CEVAL-SUPER_ADMINISTRADOR` únicamente — mismo criterio que V245/V246/V247/V214 (el catálogo real de `TROL` — DOCENTE, RECTOR, etc. — no está sembrado en las migraciones de este repo; ver nota de memoria del proyecto). `role_query` **no tiene bypass de admin**.\n- **Gate fino real** (dentro de cada función): `fn_assert_permiso_seccion(usuario, 'PLANEADOR', 'VER')` (+ `fn_periodo_usuario_puede_ver` en las 2 funciones de docente).\n- `p_pk_usuario_solicitante` **siempre** se resuelve de `:CONTEXT.USER_ID` vía `public.fn_get_academico_usuario_id(...)` — nunca es un parámetro editable por el cliente.\n\n### Códigos de error comunes\n\n| SQLSTATE | HTTP | Caso |\n| --- | --- | --- |\n| — | `401` | sin token / token inválido |\n| — | `403` | rol fuera de `role_query` |\n| `42501` | `403` | `fn_assert_permiso_seccion` rechaza (sin capability VER sobre PLANEADOR) |\n| `P0002` | `404` | el grupo / la asignatura / el grado no existe o no está activo |\n| `22023` | `400` | falta `grupo` o `asignatura` en el filtro (obligatorios) |\n| `23503` | `400` | el `grado` enviado no corresponde al grupo seleccionado |\n\n---\n\n## 404 previo al reinicio del contenedor\n\nV248 da de alta 5 filas nuevas en `public.query`. El gateway enruta `api/eval-col/...` contra el contenedor `query-service-eval-col`, que **cachea el catálogo al arrancar**. Hasta que ese contenedor se reinicie, **cualquiera** de estas rutas responde **404** aunque la migración ya esté aplicada (confirmado: la migración se validó directamente en Postgres, sin reiniciar el contenedor — no interferir con las pruebas end-to-end que otro agente corre en paralelo sobre los lotes anteriores). La carpeta *Rechazos esperados* incluye ese caso como nota, no como test automático (depende del estado del contenedor en el momento de correr la colección).\n\n---\n\n**Antes de empezar**\n\n1. Elige el entorno **SSO — test** e introduce `password` (usuario `email`, que debe tener el rol `CEVAL-SUPER_ADMINISTRADOR`).\n2. Ajusta las variables de colección (`grupoId`, `asignaturaId`, `gradoId`, `periodoId`) a datos válidos de tu entorno (un grupo con actividades y estudiantes matriculados, un periodo donde el usuario autenticado dicte alguna asignatura si se quiere ver datos reales en `docentes/*`).\n3. Los endpoints `docentes/*` responden `200` con lista vacía si el usuario autenticado no es un `TFUNCIONARIO` activo — es el comportamiento esperado para un rol administrativo, no un error.\n\nEl **login es automático**: un script de colección pide el token antes de cada petición y lo reutiliza hasta que caduca (1 h).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Login automático antes de CADA petición: si el token vivo ya",
+          "// está en la variable de colección, no hace nada.",
+          "const rutaLogin = '/api/auth/login';",
+          "if (pm.request.url.getPath().endsWith(rutaLogin)) { return; }",
+          "",
+          "function caducado(jwt) {",
+          "    try {",
+          "        const carga = JSON.parse(atob(jwt.split('.')[1]));",
+          "        return !carga.exp || (carga.exp - 30) * 1000 < Date.now();",
+          "    } catch (e) { return true; }",
+          "}",
+          "",
+          "const actual = pm.collectionVariables.get('token');",
+          "if (actual && !caducado(actual)) { return; }",
+          "",
+          "const clave = pm.environment.get('password');",
+          "if (!clave) { throw new Error('Falta `password` en el entorno «SSO — test».'); }",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + rutaLogin,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "        email: pm.environment.get('email'),",
+          "        password: clave",
+          "    }) }",
+          "}, (err, res) => {",
+          "    if (err) { throw new Error('No se pudo contactar con el gateway: ' + err); }",
+          "    if (res.code !== 200) { throw new Error('Login rechazado (' + res.code + '). Revisa `email` y `password`.'); }",
+          "    pm.collectionVariables.set('token', res.json().token);",
+          "    console.log('token renovado automáticamente');",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "token", "value": "" },
+    { "key": "grupoId", "value": "1", "description": "PK_TGRUPO" },
+    { "key": "asignaturaId", "value": "1", "description": "PK_TASIGNATURA" },
+    { "key": "gradoId", "value": "1", "description": "PK_TGRADO (el grado del grupo anterior)" },
+    { "key": "periodoId", "value": "1", "description": "PK_TPERIODO_ACADEMICO" }
+  ],
+  "item": [
+    {
+      "name": "0 — Login (ver la respuesta)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const token = pm.response.json().token;",
+              "pm.test('devuelve token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+              "pm.collectionVariables.set('token', token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "login"]
+        }
+      }
+    },
+    {
+      "name": "1 — Planilla de calificación",
+      "item": [
+        {
+          "name": "1.1 — GET columnas (header)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "const rows = pm.response.json().rows;", "pm.test('rows es array', () => pm.expect(rows).to.be.an('array'));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/planilla/columnas?grupo={{grupoId}}&asignatura={{asignaturaId}}&grado={{gradoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "planilla", "columnas"],
+              "query": [
+                { "key": "grupo", "value": "{{grupoId}}" },
+                { "key": "asignatura", "value": "{{asignaturaId}}" },
+                { "key": "grado", "value": "{{gradoId}}" },
+                { "key": "fechaDesde", "value": "", "disabled": true },
+                { "key": "fechaHasta", "value": "", "disabled": true },
+                { "key": "search", "value": "", "disabled": true }
+              ]
+            },
+            "description": "HEADER de la planilla: una fila por actividad-columna del (grupo, asignatura), con su unidad resuelta e instrumento (`fn_planilla_columnas_listar`, V239). `grupo` y `asignatura` obligatorios. `grado` opcional (si viene, debe ser el del grupo)."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/planilla/columnas?grupo={{grupoId}}&asignatura={{asignaturaId}}" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ {\n    \"orden_columna\": 1,\n    \"pk_tactividad\": 900,\n    \"titulo\": \"Taller de Fracciones\",\n    \"fk_tunidad\": 10,\n    \"unidad\": \"Unidad 1\",\n    \"fk_tlv_instrumento_evaluacion\": 55,\n    \"instrumento\": \"RUBRICA\",\n    \"instrumento_nombre\": \"Rubrica\",\n    \"ponderacion\": 30.0,\n    \"nota_maxima\": null,\n    \"es_evaluativa\": \"S\",\n    \"fecha_inicio\": \"2026-08-01\",\n    \"fecha_cierre\": \"2026-08-15\",\n    \"estudiantes_asignados\": 25,\n    \"estudiantes_calificados\": 18\n  } ]\n}"
+            },
+            {
+              "name": "400 — falta grupo o asignatura (22023)",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/planilla/columnas" } },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"Debe seleccionar grupo y asignatura para consultar la planilla de calificacion\",\n  \"sqlState\": \"22023\"\n}"
+            },
+            {
+              "name": "400 — grado no corresponde al grupo (23503)",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/planilla/columnas?grupo={{grupoId}}&asignatura={{asignaturaId}}&grado=99999999" } },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"El grupo 6-A no pertenece al grado seleccionado\",\n  \"sqlState\": \"23503\"\n}"
+            },
+            {
+              "name": "404 — grupo inexistente (P0002)",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/planilla/columnas?grupo=99999999&asignatura={{asignaturaId}}" } },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"No se encontro el grupo solicitado\",\n  \"sqlState\": \"P0002\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "1.2 — GET calificaciones (cuerpo paginado)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "const rows = pm.response.json().rows;", "pm.test('rows es array', () => pm.expect(rows).to.be.an('array'));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/planilla/calificaciones?grupo={{grupoId}}&asignatura={{asignaturaId}}&grado={{gradoId}}&size=50&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "planilla", "calificaciones"],
+              "query": [
+                { "key": "grupo", "value": "{{grupoId}}" },
+                { "key": "asignatura", "value": "{{asignaturaId}}" },
+                { "key": "grado", "value": "{{gradoId}}" },
+                { "key": "size", "value": "50" },
+                { "key": "offset", "value": "0" },
+                { "key": "searchActividad", "value": "", "disabled": true },
+                { "key": "searchEstudiante", "value": "", "disabled": true },
+                { "key": "fechaDesde", "value": "", "disabled": true },
+                { "key": "fechaHasta", "value": "", "disabled": true }
+              ]
+            },
+            "description": "CUERPO paginado de la planilla: una fila por estudiante con sus celdas (JSONB) y la definitiva proyectada YA EMBEBIDA (`fn_planilla_calificaciones_listar`, V239). `grupo`/`asignatura` obligatorios; `grado` opcional; paginación via `size`/`offset` (system-bound, default 50/0)."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/planilla/calificaciones?grupo={{grupoId}}&asignatura={{asignaturaId}}" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ {\n    \"pk_tmatricula\": 30,\n    \"pk_testudiante\": 12,\n    \"nombre_estudiante\": \"Santiago Jose Gomez Lopez\",\n    \"definitiva_proyectada\": 78.5,\n    \"definitiva_registrada\": null,\n    \"tendencia\": null,\n    \"celdas\": [\n      {\n        \"ordenColumna\": 1,\n        \"pkTactividad\": 900,\n        \"pkTunidad\": 10,\n        \"pkTactividadEstudiante\": null,\n        \"estado\": \"NO_ASIGNADA\",\n        \"calificacion\": null,\n        \"recuperacion\": null,\n        \"definitiva\": null,\n        \"nota\": null,\n        \"calificable\": null,\n        \"observacion\": null\n      }\n    ],\n    \"total_count\": 25\n  } ]\n}"
+            },
+            {
+              "name": "400 — falta grupo o asignatura (22023)",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/planilla/calificaciones" } },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"Debe seleccionar grupo y asignatura para consultar la planilla de calificacion\",\n  \"sqlState\": \"22023\"\n}"
+            },
+            {
+              "name": "404 — asignatura inexistente (P0002)",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/planilla/calificaciones?grupo={{grupoId}}&asignatura=99999999" } },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"No se encontro la asignatura solicitada\",\n  \"sqlState\": \"P0002\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 — Filtro Grado → Grupo → Asignatura (docente)",
+      "item": [
+        {
+          "name": "2.1 — GET grupos del docente",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "const rows = pm.response.json().rows;", "pm.test('rows es array', () => pm.expect(rows).to.be.an('array'));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/docentes/grupos?periodo={{periodoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "docentes", "grupos"],
+              "query": [{ "key": "periodo", "value": "{{periodoId}}" }]
+            },
+            "description": "Paso 1-2 del filtro en cascada: grupos (con grado y nivel de enseñanza) donde el DOCENTE autenticado dicta al menos una asignatura en el periodo (`fn_docente_grupos_listar`, V242). `p_fk_tfuncionario` se resuelve del token en el query-service, no lo envía el cliente. Si el usuario autenticado no es funcionario activo, responde 200 con lista vacía (NULL-safe, confirmado leyendo V242)."
+          },
+          "response": [
+            {
+              "name": "200 — con datos",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/docentes/grupos?periodo={{periodoId}}" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ {\n    \"grupo_id\": 1,\n    \"grupo_codigo\": \"6A\",\n    \"grupo_nombre\": \"6-A\",\n    \"capacidad\": 35,\n    \"jornada_id\": 20,\n    \"jornada_valor\": \"1\",\n    \"jornada_nombre\": \"Manana\",\n    \"modelo_pedagogico_id\": 21,\n    \"modelo_pedagogico_valor\": \"1\",\n    \"modelo_pedagogico_nombre\": \"Tradicional\",\n    \"grado_id\": 1,\n    \"grado_codigo\": \"06\",\n    \"grado_nombre\": \"Sexto\",\n    \"nivel_ensenanza_id\": 3,\n    \"nivel_ensenanza_nombre\": \"Secundaria\"\n  } ]\n}"
+            },
+            {
+              "name": "200 — usuario no es funcionario (lista vacia)",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/docentes/grupos?periodo={{periodoId}}" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": []\n}"
+            }
+          ]
+        },
+        {
+          "name": "2.2 — GET pares grado-asignatura del docente",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "const rows = pm.response.json().rows;", "pm.test('rows es array', () => pm.expect(rows).to.be.an('array'));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/docentes/grado-asignatura?periodo={{periodoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "docentes", "grado-asignatura"],
+              "query": [{ "key": "periodo", "value": "{{periodoId}}" }]
+            },
+            "description": "Paso 3 del filtro en cascada: pares (grado, asignatura) distintos que el DOCENTE autenticado dicta en el periodo (`fn_docente_grado_asignatura_listar`, V242). Mismo patrón de resolución de `p_fk_tfuncionario` que 2.1."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/docentes/grado-asignatura?periodo={{periodoId}}" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ {\n    \"grado_id\": 1,\n    \"grado_codigo\": \"06\",\n    \"grado_nombre\": \"Sexto\",\n    \"asignatura_id\": 1,\n    \"asignatura_codigo\": \"MAT\",\n    \"asignatura_nombre\": \"Matematicas\"\n  } ]\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 — Ponderación de unidades por asignatura",
+      "item": [
+        {
+          "name": "3.1 — GET ponderación disponible (asignatura, grado)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/asignaturas/{{asignaturaId}}/ponderacion-disponible?grado={{gradoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "asignaturas", "{{asignaturaId}}", "ponderacion-disponible"],
+              "query": [{ "key": "grado", "value": "{{gradoId}}" }],
+              "variable": [{ "key": "ID", "value": "{{asignaturaId}}", "description": "PK_TASIGNATURA" }]
+            },
+            "description": "Porcentaje libre para repartir entre las UNIDADES de una (asignatura, grado): 100 - suma de `TUNIDAD.PONDERACION` ya asignada (`fn_asignatura_grado_ponderacion_disponible`, V239). Alimenta el \"Disponible para asignar: X%\" del formulario de unidad (`fn_unidad_crear`/`_actualizar`, V216/V245). Análogo, un nivel arriba, de `GET /planeador/unidades/:ID/ponderacion-disponible` (V245 punto 18)."
+          },
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/asignaturas/{{asignaturaId}}/ponderacion-disponible?grado={{gradoId}}" } },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ { \"ponderacion_disponible\": 40.0 } ]\n}"
+            },
+            {
+              "name": "404 — asignatura inexistente (P0002)",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/asignaturas/99999999/ponderacion-disponible?grado={{gradoId}}" } },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"No se encontro la asignatura solicitada\",\n  \"sqlState\": \"P0002\"\n}"
+            },
+            {
+              "name": "404 — grado inexistente (P0002)",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/asignaturas/{{asignaturaId}}/ponderacion-disponible?grado=99999999" } },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"No se encontro el grado solicitado\",\n  \"sqlState\": \"P0002\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Rechazos esperados (transversales)",
+      "item": [
+        {
+          "name": "GET columnas sin token → 401",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('401', () => pm.response.to.have.status(401));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/planilla/columnas?grupo={{grupoId}}&asignatura={{asignaturaId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "planilla", "columnas"],
+              "query": [
+                { "key": "grupo", "value": "{{grupoId}}" },
+                { "key": "asignatura", "value": "{{asignaturaId}}" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET calificaciones con rol sin role_query → 403",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('403', () => pm.response.to.have.status(403));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/planilla/calificaciones?grupo={{grupoId}}&asignatura={{asignaturaId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "planilla", "calificaciones"],
+              "query": [
+                { "key": "grupo", "value": "{{grupoId}}" },
+                { "key": "asignatura", "value": "{{asignaturaId}}" }
+              ]
+            },
+            "description": "Requiere loguearse con un usuario cuyo rol NO esté en `role_query` (hoy solo `CEVAL-SUPER_ADMINISTRADOR`). Con el usuario por defecto del entorno este test puede no aplicar -- déjalo documentado como caso esperado, no como aserción automática confiable."
+          }
+        },
+        {
+          "name": "GET columnas — 404 previo al reinicio del contenedor",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('404', () => pm.response.to.have.status(404));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/planilla/columnas?grupo={{grupoId}}&asignatura={{asignaturaId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "planilla", "columnas"],
+              "query": [
+                { "key": "grupo", "value": "{{grupoId}}" },
+                { "key": "asignatura", "value": "{{asignaturaId}}" }
+              ]
+            },
+            "description": "**Nota:** antes de reiniciar el contenedor `query-service-eval-col` esta misma ruta (y las otras 4 de V248) responde 404 porque las 5 filas nuevas de `public.query` aún no están en el catálogo cacheado por el contenedor -- no por `P0002` de las funciones. Distinguirlos requiere inspeccionar el body: el 404 \"real\" trae `sqlState` y mensaje de negocio; el 404 \"por catálogo no recargado\" suele venir sin ese detalle (respuesta genérica del gateway/query-service)."
+          }
+        }
+      ]
+    }
+  ]
+}
