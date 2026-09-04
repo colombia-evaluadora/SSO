@@ -505,6 +505,7 @@ DECLARE
     v_entrada    JSONB;
     v_invalido   TEXT;
     v_estado     RECORD;
+    v_fk_tsede   BIGINT;
 BEGIN
     -- 0. Obligatorios de forma (antes del gate: no filtran informacion).
     IF p_fk_tgrupo IS NULL OR p_fk_tasignatura IS NULL OR p_fecha IS NULL THEN
@@ -549,6 +550,13 @@ BEGIN
             p_fk_tgrupo, p_fecha USING ERRCODE = '22023';
     END IF;
 
+    -- 3b. Sede del grupo, para acotar el soporte (fkArchivo) del paso 5:
+    -- TARCHIVO.FK_TSEDE es la "sede propietaria del archivo" (V22). Sin esto,
+    -- cualquier archivo ACTIVE de CUALQUIER sede del sistema pasaba la
+    -- validacion -- un docente de la sede A podia adjuntar como soporte un
+    -- TARCHIVO que pertenece a la sede B (fuera de su scope).
+    v_fk_tsede := academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(p_fk_tgrupo));
+
     -- 4. Entrada normalizada a JSONB. "Marcar todo": se construye el arreglo
     --    desde las matriculas activas del grupo.
     IF p_registros IS NOT NULL AND jsonb_array_length(p_registros) > 0 THEN
@@ -583,8 +591,10 @@ BEGIN
                                e.valor_tipo)
                  WHEN e.fk_archivo IS NOT NULL
                       AND NOT EXISTS (SELECT 1 FROM academico_test.TARCHIVO ar
-                                       WHERE ar.PK_TARCHIVO = e.fk_archivo AND ar.ACTIVE = TRUE)
-                   THEN format('el archivo de soporte %s no existe o no esta activo', e.fk_archivo)
+                                       WHERE ar.PK_TARCHIVO = e.fk_archivo AND ar.ACTIVE = TRUE
+                                         AND (ar.FK_TSEDE IS NULL OR ar.FK_TSEDE = v_fk_tsede))
+                   THEN format('el archivo de soporte %s no existe, no esta activo, o no pertenece a la sede del grupo',
+                               e.fk_archivo)
                  ELSE NULL
                END AS motivo
           FROM jsonb_array_elements(v_entrada) r
@@ -640,7 +650,7 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_registrar_bulk(
     BIGINT, BIGINT, BIGINT, DATE, NUMERIC, JSONB, NUMERIC
-) IS 'Registro/actualizacion masiva de la asistencia de un grupo en una sesion (FECHA + BLOQUE). p_registros = JSONB [{fkMatricula,tipoAsistencia,observacion,fkArchivo}]. Si viene vacio y p_marcar_todos_valor no es NULL, aplica ese estado a todas las matriculas activas del grupo ("Marcar todo como Asistio" -> 1). Upsert por (FK_TMATRICULA,FK_TASIGNATURA,FECHA,COALESCE(BLOQUE,0)) sobre filas ACTIVE (UQ_TASISTENCIA_SESION). FK_TPERIODO_EVALUACION resuelto por fn_asistencia_periodo_eval; la franja horaria NO se guarda (se deriva de THORARIO al leer). Gate: fn_asistencia_gate_escritura(usuario, grupo, ''CREAR''). Valida todas las filas de entrada en un solo recorrido y lanza con el primer motivo concreto. Retorna # de registros afectados.';
+) IS 'Registro/actualizacion masiva de la asistencia de un grupo en una sesion (FECHA + BLOQUE). p_registros = JSONB [{fkMatricula,tipoAsistencia,observacion,fkArchivo}]. Si viene vacio y p_marcar_todos_valor no es NULL, aplica ese estado a todas las matriculas activas del grupo ("Marcar todo como Asistio" -> 1). Upsert por (FK_TMATRICULA,FK_TASIGNATURA,FECHA,COALESCE(BLOQUE,0)) sobre filas ACTIVE (UQ_TASISTENCIA_SESION). FK_TPERIODO_EVALUACION resuelto por fn_asistencia_periodo_eval; la franja horaria NO se guarda (se deriva de THORARIO al leer). Gate: fn_asistencia_gate_escritura(usuario, grupo, ''CREAR''). fkArchivo (soporte) debe ser un TARCHIVO ACTIVE cuyo FK_TSEDE sea NULL (generico) o igual a la sede del grupo -- rechaza adjuntar el soporte de otra sede aunque el archivo este activo. Valida todas las filas de entrada en un solo recorrido y lanza con el primer motivo concreto. Retorna # de registros afectados.';
 
 
 -- ---------------------------------------------------------------------------
@@ -694,11 +704,17 @@ BEGIN
         END IF;
     END IF;
 
+    -- El soporte debe ser un TARCHIVO activo cuya sede sea NULL (generico) o
+    -- la del grupo del registro -- mismo criterio que registrar_bulk: sin
+    -- esto se podia adjuntar como soporte un archivo de OTRA sede.
     IF p_fk_soporte_archivo IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM academico_test.TARCHIVO
-         WHERE PK_TARCHIVO = p_fk_soporte_archivo AND ACTIVE = TRUE
+        SELECT 1 FROM academico_test.TARCHIVO ar
+         WHERE ar.PK_TARCHIVO = p_fk_soporte_archivo AND ar.ACTIVE = TRUE
+           AND (ar.FK_TSEDE IS NULL
+                OR ar.FK_TSEDE = academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(v_fk_tgrupo)))
     ) THEN
-        RAISE EXCEPTION 'archivo (%) no existe o no esta activo', p_fk_soporte_archivo
+        RAISE EXCEPTION 'archivo (%) no existe, no esta activo, o no pertenece a la sede del grupo',
+            p_fk_soporte_archivo
             USING ERRCODE = '23503';
     END IF;
 
@@ -719,7 +735,7 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_editar(
     BIGINT, BIGINT, NUMERIC, VARCHAR, BIGINT, BOOLEAN, BOOLEAN
-) IS 'Edita un registro individual de TASISTENCIA (estado, observacion, soporte). Solo aplica los campos no nulos; p_limpiar_archivo / p_limpiar_observacion fuerzan NULL. El grupo del registro se resuelve primero y con el se autoriza via fn_asistencia_gate_escritura(..., ''EDITAR''). Retorna PK_TASISTENCIA.';
+) IS 'Edita un registro individual de TASISTENCIA (estado, observacion, soporte). Solo aplica los campos no nulos; p_limpiar_archivo / p_limpiar_observacion fuerzan NULL. El grupo del registro se resuelve primero y con el se autoriza via fn_asistencia_gate_escritura(..., ''EDITAR''). p_fk_soporte_archivo debe ser un TARCHIVO ACTIVE con FK_TSEDE NULL o igual a la sede del grupo. Retorna PK_TASISTENCIA.';
 
 
 -- ===========================================================================
