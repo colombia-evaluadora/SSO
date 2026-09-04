@@ -857,32 +857,35 @@ $function$;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_enfasis_resolver(
     p_fk_establecimiento BIGINT,
-    p_nombre VARCHAR,
-    p_codigo VARCHAR DEFAULT NULL,
+    p_nombre             VARCHAR(130),
+    p_codigo             VARCHAR(30) DEFAULT NULL,
     p_pk_usuario_solicitante BIGINT DEFAULT NULL
 )
-RETURNS BIGINT LANGUAGE plpgsql AS $function$
+RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
     v_id BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-    -- Especialidad "Otro" para enfasis creados al vuelo. Ver comentario de
-    -- migracion V64: 2 es el valor consistente con los datos existentes,
-    -- no el PK real de la fila "Otro" (4) ni el valor previo (7,
-    -- "Agropecuario").
-    c_especialidad_otro CONSTANT BIGINT := 2;
+    v_next INT;
+    c_especialidad_otro CONSTANT BIGINT := 7;
 BEGIN
     PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, p_fk_establecimiento);
     SELECT PK_TENFASIS INTO v_id FROM academico_test.TENFASIS
      WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento AND ACTIVE = TRUE
        AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(p_nombre));
     IF v_id IS NULL THEN
+        IF p_codigo IS NULL THEN
+            PERFORM pg_advisory_xact_lock(hashtext('tenfasis:' || p_fk_establecimiento::text));
+            SELECT COALESCE(MAX(CODIGO::int), -1) + 1 INTO v_next
+              FROM academico_test.TENFASIS
+             WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento AND CODIGO ~ '^[0-9]+$';
+        END IF;
         INSERT INTO academico_test.TENFASIS (CODIGO, NOMBRE, FK_TESPECIALIDAD, FK_TESTABLECIMIENTO, CREATED_BY)
-        VALUES (COALESCE(p_codigo, LEFT(p_nombre, 30)), p_nombre, c_especialidad_otro, p_fk_establecimiento, v_audit)
+        VALUES (COALESCE(p_codigo, lpad(v_next::text, 5, '0')), p_nombre, c_especialidad_otro, p_fk_establecimiento, v_audit)
         RETURNING PK_TENFASIS INTO v_id;
     END IF;
     RETURN v_id;
 END;
-$function$;
+$$;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_especialidad_enfasis_listar(
     p_fk_establecimiento BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL

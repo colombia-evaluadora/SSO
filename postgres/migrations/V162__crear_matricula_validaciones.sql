@@ -172,3 +172,54 @@ BEGIN
     END IF;
 END;
 $function$;
+
+-- =============================================================================
+-- fn_jornadas_activas_por_sede -- referenciada en el comentario del header de
+-- este archivo ("ver fn_jornadas_activas_por_sede") pero nunca se habia
+-- creado. Jornadas (TLISTA_VALOR) de los periodos académicos ACTIVOS de la
+-- sede dada, dentro del año lectivo actual -- nunca de años anteriores, y
+-- nunca el catálogo genérico JORNADA sin relación con un periodo real. Ya
+-- consumida por el front (use-sede-jornadas.ts, endpoint
+-- /eval-col/sedes/jornadas-activas) para el select de Jornada de "Permisos
+-- de funcionario" y del alta de matricula. Con la unicidad año+sede+jornada
+-- (ver fn_periodo_crear), puede devolver mas de una fila.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_jornadas_activas_por_sede(
+    p_fk_sede    BIGINT,
+    p_pk_usuario BIGINT DEFAULT NULL
+)
+RETURNS TABLE (id BIGINT, nombre VARCHAR)
+LANGUAGE sql STABLE AS $$
+    SELECT jor.PK_LISTA_VALOR, jor.NOMBRE
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TANO_LECTIVO al  ON al.PK_ANO_LECTIVO = pa.FK_TANO_LECTIVO
+      JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = pa.FK_TLV_JORNADA
+     WHERE pa.FK_TSEDE = p_fk_sede
+       AND pa.ACTIVE  = TRUE
+       AND al.ACTIVE  = TRUE
+       AND al.NOMBRE  = to_char(CURRENT_DATE, 'YYYY')
+       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, pa.PK_TPERIODO_ACADEMICO)
+     ORDER BY jor.NOMBRE;
+$$;
+
+-- =============================================================================
+-- fn_sede_tiene_periodos -- la otra pieza que faltaba del mismo flujo (ver
+-- use-sede-jornadas.ts, endpoint /eval-col/sedes/tiene-periodos). Distingue
+-- "esta sede nunca tuvo ningun periodo académico" (el front avisa "crea un
+-- periodo académico primero") de "tiene periodos pero ninguno activo este
+-- año" (el select de Jornada de arriba simplemente sale vacío). Por eso NO
+-- filtra por ACTIVE ni por año: cualquier fila cuenta como "sí tiene
+-- periodos".
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_sede_tiene_periodos(
+    p_fk_sede BIGINT
+)
+RETURNS BOOLEAN
+LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM academico_test.TPERIODO_ACADEMICO
+         WHERE FK_TSEDE = p_fk_sede
+    );
+$$;

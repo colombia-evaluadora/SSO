@@ -11,8 +11,8 @@
 --   TMATRICULA -> TGRUPO -> TGRADO -> TPERIODO_ACADEMICO -> TSEDE -> TESTABLECIMIENTO
 --   TGRUPO.FK_TLV_JORNADA -> TLISTA_VALOR            (shift, string libre)
 --   TMATRICULA.FK_TLV_ESTADO_MATRICULA -> TLISTA_VALOR (status)
---   TMATRICULA.FK_TPADRE -> TPADRE -> TUSUARIO        (guardian, nombre)
---   TMATRICULA.FK_TLV_ACUDIENTE_PARENTESCO -> TLISTA_VALOR (guardian, parentesco)
+--   TESTUDIANTE -> TNUCLEO_FAMILIAR -> TPADRE -> TUSUARIO (guardian, nombre)
+--   TNUCLEO_FAMILIAR.FK_TLV_PARENTESCO -> TLISTA_VALOR (guardian, parentesco)
 --
 -- Alcance/seguridad: se reusa academico_test.fn_periodo_usuario_puede_ver
 -- (V37) sobre el periodo academico del grado de cada matricula — mismo
@@ -39,18 +39,20 @@
 --     asi que esta funcion devuelve el codigo tal cual (casteado a INT) sin
 --     recortar rango — filas con grade fuera de 0..11 SI aparecen.
 --
---  3. status: el catalogo real ESTADO_MATRICULA (TLISTA_VALOR, 11 valores
---     activos) no coincide con el enum viejo de 6 valores del front
---     (`MatriculaStatus`: cursando/aprobado/reprobado/promovido/reubicado/
---     retirado) — catalogo real: Cursando, Aprobado, Reprobado, Retirado,
---     Graduado, "Promovido Anticipadamente", Trasladado, "Sin definir",
---     Desertor, "Esperando Aprobación", Rechazado. DECIDIDO: el front se
---     adapta a los valores reales, asi que no hay mapeo — `status` es un
---     slug derivado directo de TLISTA_VALOR.NOMBRE (minusculas, espacios a
---     "_", tildes fuera): cursando, aprobado, reprobado, retirado, graduado,
---     promovido_anticipadamente, trasladado, sin_definir, desertor,
---     esperando_aprobacion, rechazado. Si se agregan valores nuevos al
---     catalogo, aparecen solos (mismo slug) sin tocar esta funcion.
+--  3. status: el catalogo real ESTADO_MATRICULA (TLISTA_VALOR, 13 valores
+--     activos) no coincide con el enum viejo del front. DECIDIDO (revisado
+--     2026-09-03): el front usa el `NOMBRE` crudo de TLISTA_VALOR tal cual
+--     ("Cursando", "Promovido Anticipadamente", "Sin definir", etc.), SIN
+--     armar un slug propio -- mismo criterio que ya usan el detalle
+--     (GET matricula por ID, columna `estado_matricula_nombre`) y el
+--     catalogo genérico (`GET /eval-col/select/ESTADO_MATRICULA`), que
+--     siempre mandaron el nombre crudo. Antes esta funcion era la única que
+--     armaba un slug en minusculas (`cursando`, `sin_definir`, ...), lo que
+--     dejaba el listado inconsistente con esos otros dos endpoints -- se
+--     corrige acá para que los tres devuelvan exactamente el mismo texto.
+--     `p_statuses` recibe ahora esos mismos nombres crudos, no slugs. Si se
+--     agregan valores nuevos al catalogo, aparecen solos (mismo `NOMBRE`)
+--     sin tocar esta funcion.
 --
 --  4. enrollmentDate: TMATRICULA no tiene una columna de fecha de matricula
 --     propia (no es TINSCRIPCION/TPREMATRICULA, que son trazabilidad
@@ -61,13 +63,29 @@
 --     las dos con valor no nulo cuenta como "tiene calificaciones". No se
 --     pudo probar contra datos reales: TMATRICULA/TASIGNATURA_NOTA/
 --     TASIGNATURA_DEFINITIVA estan en 0 filas en el ambiente consultado.
+--
+--  6. guardian (corregido tras probar contra datos reales, 2026-08-31):
+--     TMATRICULA.FK_TPADRE / TMATRICULA.FK_TLV_ACUDIENTE_PARENTESCO estan
+--     SIEMPRE null en los datos migrados -- el vinculo real esta en
+--     TNUCLEO_FAMILIAR (tabla muchos-a-muchos ESTUDIANTE<->PADRE, con
+--     FK_TLV_PARENTESCO propia), confirmado con el equipo de back. Un mismo
+--     TESTUDIANTE puede tener varias filas en TNUCLEO_FAMILIAR (padre, madre,
+--     etc.); se prioriza la marcada ACUDIENTE = 'S', y si ninguna lo esta
+--     (visto en datos reales: existe al menos una fila con ACUDIENTE NULL
+--     que el detalle igual muestra como acudiente) se toma cualquiera como
+--     fallback en vez de dejar el campo vacio. Solo 33.040 de 76.821
+--     matriculas activas tienen alguna fila en TNUCLEO_FAMILIAR -- el resto
+--     legitimamente no tiene acudiente registrado, `guardian` sale NULL.
+--     Nombre del acudiente: solo primer nombre + primer apellido (no los 4
+--     campos), por consistencia con como ya se muestra el nombre del
+--     estudiante en este mismo listado.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_matricula_listar(
     p_search      TEXT    DEFAULT NULL,  -- ILIKE sobre documento/nombres/institucion/acudiente
-    p_statuses    TEXT[]  DEFAULT NULL,  -- slugs reales del catalogo (ver nota 3)
+    p_statuses    TEXT[]  DEFAULT NULL,  -- NOMBRE crudo de TLISTA_VALOR (ver nota 3)
     p_campus      TEXT    DEFAULT NULL,  -- TSEDE.NOMBRE, match exacto
     p_shift       TEXT    DEFAULT NULL,  -- TLISTA_VALOR(JORNADA).NOMBRE, match exacto
     p_grade       INT     DEFAULT NULL,  -- TGRADO.CODIGO::INT, match exacto (ver nota 2)
@@ -142,17 +160,19 @@ BEGIN
                 NULLIF(g.CODIGO,'')::INT AS grade_num,
                 gr.NOMBRE AS grupo,
                 m.CREATED_AT::DATE AS enrollment_date,
-                NULLIF(TRIM(regexp_replace(
-                    concat_ws(' ', pu.PRIMER_NOMBRE, pu.SEGUNDO_NOMBRE, pu.PRIMER_APELLIDO, pu.SEGUNDO_APELLIDO),
-                    '\s+', ' ', 'g')), '')
+                -- Solo primer nombre + primer apellido -- ver nota 6 del header.
+                NULLIF(TRIM(concat_ws(' ', pu.PRIMER_NOMBRE, pu.PRIMER_APELLIDO)), '')
                     || COALESCE(' (' || par.NOMBRE || ')', '') AS guardian_name,
-                -- Slug directo del catalogo real -- ver nota 3 del header
-                -- (el front se adapta a estos valores, sin mapeo a un enum
-                -- fijo). Tildes fuera con translate(), espacios a "_".
-                lower(regexp_replace(
-                    translate(trim(est_m.NOMBRE), 'ÁÉÍÓÚÑáéíóúñ', 'AEIOUNaeioun'),
-                    '\s+', '_', 'g'
-                )) AS status,
+                -- NOMBRE crudo de TLISTA_VALOR, tal cual -- el front ya no
+                -- arma un slug propio, usa el mismo valor que detalle y
+                -- catálogo (ver nota 3 del header). Cast explícito a TEXT:
+                -- TLISTA_VALOR.NOMBRE es VARCHAR, pero RETURNS TABLE declara
+                -- `status TEXT` -- en un RETURN QUERY EXECUTE con SQL
+                -- dinámico, Postgres exige que el tipo calce exacto (no hay
+                -- coerción implícita VARCHAR->TEXT acá), así que sin el cast
+                -- la función falla en runtime con "structure of query does
+                -- not match function result type" (el 500 que se vio).
+                est_m.NOMBRE::TEXT AS status,
                 EXISTS (
                     SELECT 1 FROM academico_test.TASIGNATURA_NOTA an
                      WHERE an.FK_TMATRICULA = m.PK_TMATRICULA AND an.ACTIVE = TRUE
@@ -173,9 +193,21 @@ BEGIN
               JOIN academico_test.TESTABLECIMIENTO est ON est.PK_ESTABLECIMIENTO = sd.FK_TESTABLECIMIENTO
               JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
               JOIN academico_test.TLISTA_VALOR est_m ON est_m.PK_LISTA_VALOR = m.FK_TLV_ESTADO_MATRICULA
-         LEFT JOIN academico_test.TPADRE p        ON p.PK_TPADRE = m.FK_TPADRE
+         -- Acudiente real via TNUCLEO_FAMILIAR (muchos-a-muchos ESTUDIANTE<->
+         -- PADRE) -- ver nota 6 del header, NO via TMATRICULA.FK_TPADRE (esa
+         -- columna esta siempre null en los datos reales). Prioriza
+         -- ACUDIENTE='S'; si ninguna fila lo tiene marcado, cae a cualquiera
+         -- (fila mas antigua) en vez de dejar el campo vacio.
+         LEFT JOIN LATERAL (
+                SELECT nf.FK_TPADRE, nf.FK_TLV_PARENTESCO
+                  FROM academico_test.TNUCLEO_FAMILIAR nf
+                 WHERE nf.FK_TESTUDIANTE = m.FK_TESTUDIANTE AND nf.ACTIVE = TRUE
+                 ORDER BY (nf.ACUDIENTE = 'S') DESC NULLS LAST, nf.PK_TNUCLEO_FAMILIAR
+                 LIMIT 1
+         ) nf ON TRUE
+         LEFT JOIN academico_test.TPADRE p        ON p.PK_TPADRE = nf.FK_TPADRE
          LEFT JOIN academico_test.TUSUARIO pu     ON pu.PK_TUSUARIO = p.FK_TUSUARIO
-         LEFT JOIN academico_test.TLISTA_VALOR par ON par.PK_LISTA_VALOR = m.FK_TLV_ACUDIENTE_PARENTESCO
+         LEFT JOIN academico_test.TLISTA_VALOR par ON par.PK_LISTA_VALOR = nf.FK_TLV_PARENTESCO
              WHERE m.ACTIVE = TRUE
                AND academico_test.fn_periodo_usuario_puede_ver($9, pa.PK_TPERIODO_ACADEMICO)
                AND ($1 IS NULL OR (
@@ -191,10 +223,11 @@ BEGIN
                AND ($6 IS NULL OR gr.NOMBRE = $6)
         ) q
         -- Filtro de statuses sobre el alias ya mapeado (q.status), no sobre
-        -- el catalogo crudo -- ver nota 3 del header sobre el mapeo. Va en un
-        -- nivel aparte (y total_count se calcula DESPUES, en el siguiente)
-        -- porque una alias de SELECT no es visible en el WHERE del mismo
-        -- nivel, y count(*) OVER() debe reflejar este filtro tambien.
+        -- el catalogo crudo. Va en un nivel aparte (y total_count se calcula
+        -- DESPUES, en el siguiente) porque una alias de SELECT no es visible
+        -- en el WHERE del mismo nivel, y count(*) OVER() debe reflejar este
+        -- filtro tambien. $2 ahora contiene el NOMBRE crudo ("Cursando"), no
+        -- un slug -- ver nota 3 del header.
         WHERE ($2 IS NULL OR CARDINALITY($2) = 0 OR q.status = ANY($2))
         ) qs
         ORDER BY %s %s, id

@@ -58,12 +58,21 @@ DECLARE
     v_codigo VARCHAR(30);
     v_nombre VARCHAR(130);
     v_tmp_nombre VARCHAR(130);
+    v_nombre_sede VARCHAR(130);
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante,
         academico_test.fn_periodo_establecimiento(p_fk_periodo)
     );
+
+    -- Nombre de la sede del periodo, para que la etiqueta de auditoria de
+    -- abajo diga a que sede va dirigida la accion (no solo el establecimiento,
+    -- que ya viaja aparte como contexto estructurado de fn_audit_declarar).
+    SELECT s.NOMBRE INTO v_nombre_sede
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo;
 
     IF p_fk_periodo IS NULL
        OR p_fk_nivel IS NULL
@@ -188,7 +197,7 @@ BEGIN
 
     PERFORM academico_test.fn_audit_declarar(
         p_pk_usuario_solicitante,
-        format('Creación del grado %s', v_nombre),
+        format('Creación del grado %s en la sede %s', v_nombre, v_nombre_sede),
         academico_test.fn_periodo_establecimiento(p_fk_periodo)
     );
 
@@ -231,6 +240,7 @@ RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
     r academico_test.TGRADO;
     v_nombre VARCHAR(130); v_fk_sig BIGINT; v_tmp_nombre VARCHAR(130);
+    v_nombre_sede VARCHAR(130);
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
     PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
@@ -259,6 +269,11 @@ BEGIN
         END IF;
     END IF;
     v_nombre := COALESCE(p_nombre, r.NOMBRE);
+    -- Nombre de la sede del periodo, para la etiqueta de auditoria de abajo.
+    SELECT s.NOMBRE INTO v_nombre_sede
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE pa.PK_TPERIODO_ACADEMICO = r.FK_TPERIODO_ACADEMICO;
     -- El codigo NO se cambia en edicion (queda el derivado del catalogo al crear).
     -- Si p_tiene_grado_siguiente = FALSE, se limpia el FK; si TRUE o NULL, se
     -- usa p_fk_grado_siguiente (COALESCE con el actual cuando llega NULL).
@@ -286,7 +301,7 @@ BEGIN
     END IF;
     PERFORM academico_test.fn_audit_declarar(
         p_pk_usuario_solicitante,
-        format('Actualización del grado %s', v_nombre),
+        format('Actualización del grado %s en la sede %s', v_nombre, v_nombre_sede),
         academico_test.fn_periodo_establecimiento(r.FK_TPERIODO_ACADEMICO)
     );
 
@@ -306,13 +321,19 @@ RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
     v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_nombre_grado VARCHAR(130);
+    v_nombre_sede VARCHAR(130);
 BEGIN
     PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
         SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
           FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_pk));
     -- Nombre del grado (si el pk no corresponde a ninguna fila, queda NULL y
     -- los mensajes de bloqueo de abajo caen al texto generico via COALESCE).
-    SELECT NOMBRE INTO v_nombre_grado FROM academico_test.TGRADO WHERE PK_TGRADO = p_pk;
+    -- Nombre de la sede, para la etiqueta de auditoria de abajo.
+    SELECT g.NOMBRE, s.NOMBRE INTO v_nombre_grado, v_nombre_sede
+      FROM academico_test.TGRADO g
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE g.PK_TGRADO = p_pk;
     -- Bloqueo por dependencias (solo filas activas), de lo mas especifico a lo general.
     IF EXISTS (
         SELECT 1 FROM academico_test.TMATRICULA m
@@ -344,7 +365,8 @@ BEGIN
     END IF;
     PERFORM academico_test.fn_audit_declarar(
         p_pk_usuario_solicitante,
-        format('Eliminación del grado %s', COALESCE(v_nombre_grado, p_pk::TEXT)),
+        format('Eliminación del grado %s en la sede %s',
+            COALESCE(v_nombre_grado, p_pk::TEXT), COALESCE(v_nombre_sede, 'desconocida')),
         academico_test.fn_periodo_establecimiento((
             SELECT FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO WHERE PK_TGRADO = p_pk))
     );
@@ -384,7 +406,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_grupo_crear(
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
     v_id BIGINT; v_jornada BIGINT; v_sede BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-    v_tmp_nombre VARCHAR(130); v_nombre_director VARCHAR(200);
+    v_tmp_nombre VARCHAR(130); v_nombre_director VARCHAR(200); v_nombre_sede VARCHAR(130);
 BEGIN
     PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
         SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
@@ -397,9 +419,11 @@ BEGIN
         RAISE EXCEPTION 'La capacidad del grupo debe ser mayor a 0' USING ERRCODE = '22023';
     END IF;
     -- Jornada y sede desde el periodo del grado (el grado debe estar activo).
-    SELECT pa.FK_TLV_JORNADA, pa.FK_TSEDE INTO v_jornada, v_sede
-      FROM academico_test.TGRADO g JOIN academico_test.TPERIODO_ACADEMICO pa
-        ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+    -- v_nombre_sede alimenta la etiqueta de auditoria de mas abajo.
+    SELECT pa.FK_TLV_JORNADA, pa.FK_TSEDE, s.NOMBRE INTO v_jornada, v_sede, v_nombre_sede
+      FROM academico_test.TGRADO g
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
      WHERE g.PK_TGRADO = p_fk_grado AND g.ACTIVE = TRUE;
     IF v_jornada IS NULL THEN
         SELECT NOMBRE INTO v_tmp_nombre FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_grado;
@@ -443,7 +467,7 @@ BEGIN
     END IF;
     PERFORM academico_test.fn_audit_declarar(
         p_pk_usuario_solicitante,
-        format('Creación del grupo %s', p_nombre),
+        format('Creación del grupo %s en la sede %s', p_nombre, v_nombre_sede),
         academico_test.fn_periodo_establecimiento((
             SELECT FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_grado))
     );
@@ -468,7 +492,7 @@ RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
     r academico_test.TGRUPO; v_nombre VARCHAR(130);
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-    v_tmp_nombre VARCHAR(130); v_nombre_director VARCHAR(200);
+    v_tmp_nombre VARCHAR(130); v_nombre_director VARCHAR(200); v_nombre_sede VARCHAR(130);
 BEGIN
     PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
         SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
@@ -525,9 +549,15 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Ya existe un grupo con el nombre % en este grado y jornada', v_nombre USING ERRCODE = '23505';
     END IF;
+    -- Nombre de la sede del grado, para la etiqueta de auditoria de abajo.
+    SELECT s.NOMBRE INTO v_nombre_sede
+      FROM academico_test.TGRADO g
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE g.PK_TGRADO = r.FK_TGRADO;
     PERFORM academico_test.fn_audit_declarar(
         p_pk_usuario_solicitante,
-        format('Actualización del grupo %s', v_nombre),
+        format('Actualización del grupo %s en la sede %s', v_nombre, v_nombre_sede),
         academico_test.fn_periodo_establecimiento((
             SELECT g.FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO g WHERE g.PK_TGRADO = r.FK_TGRADO))
     );
@@ -548,12 +578,19 @@ RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
     v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_nombre_grupo VARCHAR(130);
+    v_nombre_sede VARCHAR(130);
 BEGIN
     PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, (
         SELECT academico_test.fn_periodo_establecimiento(g.FK_TPERIODO_ACADEMICO)
           FROM academico_test.TGRUPO gr JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
          WHERE gr.PK_TGRUPO = p_pk));
-    SELECT NOMBRE INTO v_nombre_grupo FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_pk;
+    -- Nombre de la sede, para la etiqueta de auditoria de abajo.
+    SELECT gr.NOMBRE, s.NOMBRE INTO v_nombre_grupo, v_nombre_sede
+      FROM academico_test.TGRUPO gr
+      JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE gr.PK_TGRUPO = p_pk;
     -- Bloqueo por dependencias (solo filas activas).
     IF EXISTS (
         SELECT 1 FROM academico_test.TMATRICULA m WHERE m.FK_TGRUPO = p_pk AND m.ACTIVE = TRUE
@@ -595,7 +632,8 @@ BEGIN
     END IF;
     PERFORM academico_test.fn_audit_declarar(
         p_pk_usuario_solicitante,
-        format('Eliminación del grupo %s', COALESCE(v_nombre_grupo, p_pk::TEXT)),
+        format('Eliminación del grupo %s en la sede %s',
+            COALESCE(v_nombre_grupo, p_pk::TEXT), COALESCE(v_nombre_sede, 'desconocida')),
         academico_test.fn_periodo_establecimiento((
             SELECT g.FK_TPERIODO_ACADEMICO FROM academico_test.TGRUPO gr
               JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
@@ -651,7 +689,13 @@ RETURNS TABLE (
     grado_siguiente VARCHAR,
     grado_siguiente_name VARCHAR,
     tiene_grado_siguiente BOOLEAN,
-    total_count BIGINT
+    total_count BIGINT,
+    -- Antes solo exponia NOMBRE (duplicado en nombre/grado) — el select de
+    -- Grado del alta de matricula (Sede -> Jornada -> Grado -> Grupo)
+    -- necesita el codigo numerico para pasarlo a fn_matricula_listar(p_grade),
+    -- que filtra por g.CODIGO::INT (ver fn_matricula_listar). Aditivo, al
+    -- final del RETURNS TABLE (mismo criterio que fn_periodo_eval_listar).
+    codigo INT
 )
 LANGUAGE plpgsql STABLE AS $$
 DECLARE
@@ -682,7 +726,8 @@ BEGIN
             gs.VALOR,
             gs.NOMBRE,
             (g.TIENE_GRADO_SIGUIENTE = 'S'),
-            count(*) OVER()::BIGINT AS total_count
+            count(*) OVER()::BIGINT AS total_count,
+            NULLIF(g.CODIGO,'')::INT
 
         FROM academico_test.TGRADO g
 
