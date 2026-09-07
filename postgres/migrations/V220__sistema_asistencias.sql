@@ -552,6 +552,48 @@ COMMENT ON FUNCTION academico_test.fn_asistencia_franja_bloque(DATE, TIMESTAMP, 
     IS 'Franja horaria (reloj) de un bloque de THORARIO estampada sobre la FECHA de la sesion. Si el bloque trae HORA_INICIO/HORA_FIN propias, se usa su parte de reloj (::TIME) -- su parte de fecha es la del dia en que se cargo el horario, no la de la sesion, y devolverla tal cual daba una fecha incoherente con la rama de reserva. Si no, la jornada del TPERIODO_ACADEMICO (HORA_INICIO/HORA_FIN, TIME) puesta sobre la fecha -- misma reserva que fn_asistencia_horas_bloque pero para el reloj puntual, no la duracion agregada. La usan v_asistencia_detalle, fn_asistencia_estudiantes_sesion, fn_asistencia_sesiones_programadas y fn_asistencia_asignaturas_sesion -- unico sitio con esta regla.';
 
 
+-- Horas que aporta UNA sesion (un dia) de una actividad.
+--
+--   TACTIVIDAD.DURACION_ESTIMADA es la duracion de la ACTIVIDAD COMPLETA
+--   ("Duracion estimada en horas o sesiones (programacion)", COMMENT de V22),
+--   no la de cada dia. Devolverla tal cual en cada dia del rango la
+--   multiplica por la duracion del proyecto:
+--
+--     *** BUG REAL (medido en el servidor) ***
+--     La actividad 23 de un grupo de preescolar declara 45 y va del 01 al 15
+--     de septiembre. Cobrandola por dia, el mes reportaba 15 x 45 = 675 h
+--     PROGRAMADAS para un solo proyecto (y 315 h en una semana). El total
+--     del mes de la sede paso de 58 h a 675 h -- absurdo en cualquier
+--     unidad.
+--
+--   Se reparte entre los dias del rango, asi la suma sobre TODA la actividad
+--   vuelve a ser exactamente su DURACION_ESTIMADA y una ventana parcial
+--   (semana/mes) recibe solo su parte proporcional.
+--
+--   NULL / rango vacio -> 0, igual que un bloque sin horas ni jornada.
+--
+--   OJO CON LA UNIDAD: el COMMENT de la columna dice "horas o sesiones", asi
+--   que el numero puede no estar en horas (45 parece un periodo de clase en
+--   MINUTOS). Esta funcion NO convierte: reparte lo que haya. Si se confirma
+--   que el dato viene en minutos, el ajuste es un /60 AQUI y en ningun otro
+--   sitio.
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_horas_actividad(
+    p_duracion_estimada NUMERIC,
+    p_fecha_inicio      DATE,
+    p_fecha_cierre      DATE
+)
+RETURNS NUMERIC
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT ROUND(COALESCE(
+               p_duracion_estimada
+                   / NULLIF(GREATEST(p_fecha_cierre - p_fecha_inicio + 1, 0), 0),
+               0)::NUMERIC, 2);
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_horas_actividad(NUMERIC, DATE, DATE)
+    IS 'Horas que aporta UN dia de una actividad: DURACION_ESTIMADA repartida entre los dias de su rango [inicio, cierre] (ambos inclusive). DURACION_ESTIMADA es la duracion de la actividad COMPLETA, no la de cada dia -- cobrarla por dia inflaba el mes a 675 h por un solo proyecto de 45 (bug medido en el servidor). Repartida, la suma sobre toda la actividad es de nuevo su DURACION_ESTIMADA. NULL o rango invalido -> 0. NO convierte unidades: el COMMENT de la columna dice "horas o sesiones", asi que si se confirma que viene en minutos el /60 va aqui y solo aqui. La usan v_asistencia_detalle (sesion registrada) y fn_asistencia_actividades_programadas (sesion programada) -- el mismo valor por los dos lados.';
+
+
 -- ---------------------------------------------------------------------------
 -- fn_asistencia_grupo_es_formativo — ¿este grupo toma asistencia por
 -- ACTIVIDAD en vez de por asignatura+bloque?
@@ -705,11 +747,26 @@ SELECT
     -- pintar "16 FEBRERO (7:00-10:00)" ni "Bloque 2 (8:30-10:00)".
     franja.hora_inicio                        AS hora_inicio,
     franja.hora_fin                            AS hora_fin,
-    -- Duracion de la sesion en horas: real si THORARIO la trae, si no
-    -- estimada por la jornada del periodo academico (fn_asistencia_horas_bloque).
-    academico_test.fn_asistencia_horas_bloque(
-        h.HORA_INICIO, h.HORA_FIN, pa.HORA_INICIO, pa.HORA_FIN, pa.BLOQUES_POR_DEFECTO)
-                                              AS horas,
+    -- Duracion de la sesion en horas. DOS reglas, una por mundo:
+    --
+    --   * FORMATIVO (hay actividad): TACTIVIDAD.DURACION_ESTIMADA. Es la
+    --     unica duracion que tiene una actividad, y es la MISMA fuente que
+    --     usa fn_asistencia_actividades_programadas -- si no, la misma
+    --     sesion valdria distinto segun estuviera registrada o solo
+    --     programada (bug real: 1.00h registrada vs 0.00h programada,
+    --     porque el LATERAL a THORARIO no casa con BLOQUE NULL y caia a la
+    --     reserva de jornada, que nadie diseno para actividades).
+    --     NULL -> 0: no hay dato de duracion, y arrastrar la jornada
+    --     completa inflaria un proyecto de 19 dias a 95h.
+    --   * EVALUATIVO: THORARIO, con reserva de jornada (fn_asistencia_horas_bloque).
+    CASE WHEN a.FK_TACTIVIDAD IS NOT NULL
+         THEN academico_test.fn_asistencia_horas_actividad(
+                  act.DURACION_ESTIMADA,
+                  COALESCE(act.FECHA_INICIO, act.FECHA_CREACION),
+                  COALESCE(act.FECHA_CIERRE, act.FECHA_INICIO, act.FECHA_CREACION))
+         ELSE academico_test.fn_asistencia_horas_bloque(
+                  h.HORA_INICIO, h.HORA_FIN, pa.HORA_INICIO, pa.HORA_FIN, pa.BLOQUES_POR_DEFECTO)
+    END                                       AS horas,
     a.FK_TLV_TIPO_ASISTENCIA                  AS fk_tlv_tipo_asistencia,
     -- El estado se compara SIEMPRE como TEXTO contra el dominio fijo de
     -- TIPO_ASISTENCIA ('1','2','3','5','6'). No se hace lv.VALOR::INT: el
@@ -1563,7 +1620,8 @@ BEGIN
            gr.FK_TLV_JORNADA, jor.NOMBRE,     jor.VALOR,
            a.PK_TACTIVIDAD,   a.TITULO,
            a.FK_TASIGNATURA,  asig.NOMBRE,
-           ROUND(COALESCE(a.DURACION_ESTIMADA, 0)::NUMERIC, 2)
+           academico_test.fn_asistencia_horas_actividad(
+               a.DURACION_ESTIMADA, v.inicio, v.cierre)
       FROM academico_test.TACTIVIDAD a
       JOIN academico_test.TGRUPO gr             ON gr.PK_TGRUPO = a.FK_TGRUPO AND gr.ACTIVE = TRUE
       JOIN academico_test.TGRADO g              ON g.PK_TGRADO = gr.FK_TGRADO
@@ -1660,7 +1718,14 @@ RETURNS TABLE (
     hora_inicio       TIMESTAMP,
     hora_fin          TIMESTAMP,
     horas             NUMERIC,
+    -- total_estudiantes = PADRON del grupo (matriculas activas), NO el
+    -- numero de filas de asistencia. Antes era lo segundo, y una sesion sin
+    -- tomar reportaba 0 estudiantes aunque el grupo tuviera 5 -- ademas de
+    -- chocar con fn_asistencia_estudiantes_sesion, que usa ESE MISMO nombre
+    -- para el padron. Un solo significado en todo el modulo; lo registrado
+    -- va aparte en `registrados`, asi el front puede pintar "3 de 5".
     total_estudiantes BIGINT,
+    registrados       BIGINT,
     a_tiempo          BIGINT,
     tarde             BIGINT,
     ausentes          BIGINT,
@@ -1739,6 +1804,14 @@ BEGIN
          GROUP BY d.fecha, d.fk_tgrupo, d.grupo, d.fk_tgrado, d.grado, d.grado_valor,
                   d.fk_tlv_jornada, d.jornada, d.jornada_valor, d.fk_tasignatura, d.asignatura,
                   d.fk_tactividad, d.actividad, d.bloque
+    ),
+    -- Padron por grupo, resuelto UNA vez: una subconsulta correlacionada por
+    -- fila costaria una pasada por cada sesion del mes de toda la sede.
+    padron AS (
+        SELECT m.FK_TGRUPO AS fk_tgrupo, COUNT(*)::BIGINT AS matriculas
+          FROM academico_test.TMATRICULA m
+         WHERE m.ACTIVE = TRUE
+         GROUP BY m.FK_TGRUPO
     )
     SELECT
         COALESCE(p.fecha, r.fecha),
@@ -1762,6 +1835,7 @@ BEGIN
         -- CTE -- no se recalcula desde hora_inicio/hora_fin, que es lo que
         -- antes tiraba a 0h cuando THORARIO no las traia.
         COALESCE(p.horas, r.horas, 0),
+        COALESCE(pad.matriculas, 0)::BIGINT,
         COALESCE(r.n_total, 0)::BIGINT,
         COALESCE(r.n_a_tiempo, 0)::BIGINT,
         COALESCE(r.n_tarde, 0)::BIGINT,
@@ -1791,6 +1865,7 @@ BEGIN
        AND (p.fk_tactividad IS NOT NULL
             OR (COALESCE(r.fk_tasignatura, -1) = COALESCE(p.fk_tasignatura, -1)
                 AND COALESCE(r.bloque, -1) = COALESCE(p.bloque, -1)))
+      LEFT JOIN padron pad ON pad.fk_tgrupo = COALESCE(p.fk_tgrupo, r.fk_tgrupo)
      ORDER BY 1, 3, 11, 15;  -- fecha, grupo, asignatura, bloque
                              -- (15 y no 14: fk_tactividad/actividad/
                              --  es_formativa entraron antes de bloque)
@@ -1880,6 +1955,12 @@ BEGIN
     -- Horas PROGRAMADAS: proyeccion del horario sobre [semana U mes] (una
     -- sola llamada; la semana puede desbordar el mes en su primer/ultimo
     -- tramo, por eso el rango cubre ambos).
+    -- MISMA doble fuente que fn_asistencia_calendario, y por el mismo
+    -- motivo: sin esto un grupo de preescolar reportaba horas PROGRAMADAS
+    -- sacadas de THORARIO (26h/mes en el grupo de prueba) mientras el
+    -- calendario ya no mostraba ni una sola sesion de horario -- el widget
+    -- "dictadas vs programadas" comparaba contra una fuente que la pantalla
+    -- no muestra. Las dos ramas se excluyen por grupo.
     programadas AS (
         SELECT sp.fecha, sp.horas
           FROM academico_test.fn_asistencia_sesiones_programadas(
@@ -1887,6 +1968,15 @@ BEGIN
                    LEAST(v_sem_ini, v_mes_ini),
                    GREATEST(v_sem_fin, v_mes_fin) - 1,
                    p_fk_tgrupo, p_fk_tasignatura, p_fk_tfuncionario) sp
+         WHERE NOT academico_test.fn_asistencia_grupo_es_formativo(sp.fk_tgrupo)
+        UNION ALL
+        SELECT ap.fecha, ap.horas
+          FROM academico_test.fn_asistencia_actividades_programadas(
+                   p_pk_usuario, p_fk_tsede,
+                   LEAST(v_sem_ini, v_mes_ini),
+                   GREATEST(v_sem_fin, v_mes_fin) - 1,
+                   p_fk_tgrupo, p_fk_tfuncionario) ap
+         WHERE p_fk_tasignatura IS NULL OR ap.fk_tasignatura = p_fk_tasignatura
     ),
     -- Estado de las sesiones del MES (reusa el calendario: una sola
     -- definicion de REGISTRADA / RETRASADA / PENDIENTE en todo el modulo).
