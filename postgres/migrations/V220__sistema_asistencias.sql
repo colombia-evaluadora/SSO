@@ -166,6 +166,14 @@ DROP FUNCTION IF EXISTS academico_test.fn_asistencia_registrar_bulk(
     BIGINT, BIGINT, BIGINT, DATE, TIMESTAMP, TIMESTAMP, BIGINT, BIGINT, JSONB, NUMERIC);
 DROP FUNCTION IF EXISTS academico_test.fn_asistencia_registrar_bulk(
     BIGINT, BIGINT, BIGINT, DATE, TIMESTAMP, TIMESTAMP, NUMERIC, BIGINT, JSONB, NUMERIC);
+-- fn_asistencia_registrar_bulk y fn_asistencia_estudiantes_sesion ganaron
+-- p_fk_tactividad (sesion formativa). Un parametro nuevo CON DEFAULT no
+-- reemplaza a la firma vieja: crea una SOBRECARGA, y una llamada con los
+-- argumentos de antes queda ambigua (42725). Se sueltan explicitamente.
+DROP FUNCTION IF EXISTS academico_test.fn_asistencia_registrar_bulk(
+    BIGINT, BIGINT, BIGINT, DATE, NUMERIC, JSONB, NUMERIC);
+DROP FUNCTION IF EXISTS academico_test.fn_asistencia_estudiantes_sesion(
+    BIGINT, BIGINT, BIGINT, DATE, NUMERIC);
 DROP FUNCTION IF EXISTS academico_test.fn_asistencia_listar_seguimiento(
     DATE, DATE, BIGINT, BIGINT, NUMERIC, TEXT, INT, INT, TEXT, TEXT);
 -- fn_asistencia_calendario / fn_asistencia_resumen_horas ganaron el parametro
@@ -187,15 +195,109 @@ DROP FUNCTION IF EXISTS academico_test.fn_asistencia_resumen_horas(
     BIGINT, BIGINT, DATE, BIGINT, BIGINT);
 
 -- ===========================================================================
--- 1. INDICES
+-- 1. DDL — asistencia por ACTIVIDAD (preescolar / referente FORMATIVO)
+--
+--   En preescolar la clase no se organiza por asignatura+bloque de horario
+--   sino por ACTIVIDAD ("Proyecto Pedagogico"), asi que la sesion se
+--   identifica por (matricula, ACTIVIDAD, fecha) y la asignatura deja de ser
+--   obligatoria. Dos piezas:
+--
+--   a) FK_TACTIVIDAD (nullable). NO es exclusivo de este archivo: V243 de la
+--      rama del Planeador agrega exactamente la misma columna con el mismo
+--      ADD COLUMN IF NOT EXISTS y la misma FK, y en el servidor de test YA
+--      esta aplicada. Ambos archivos son idempotentes y compatibles en
+--      cualquier orden -- se replica aqui para que ESTA rama aplique sola
+--      sobre `dev`, no para reclamar la columna.
+--
+--   b) FK_TASIGNATURA pasa a NULLABLE, con un CHECK que impide una fila sin
+--      NINGUN contexto academico: o trae asignatura (mundo evaluativo, como
+--      siempre) o trae actividad (mundo formativo). Nunca ninguna de las dos.
+--
+--   *** POR QUE NO BASTA CON HEREDAR LA ASIGNATURA DE LA ACTIVIDAD ***
+--   TACTIVIDAD.FK_TASIGNATURA es NOT NULL, asi que tecnicamente toda
+--   actividad tiene una asignatura de la que copiar. Se opto igual por
+--   permitir NULL (decision explicita del usuario): en preescolar esa
+--   asignatura es un artefacto del modelo, no un dato que el docente
+--   eligio, y guardarla haria que los reportes por asignatura mostraran
+--   materias que en preescolar no se dictan.
 -- ===========================================================================
 
--- Unicidad operativa: un registro ACTIVO por estudiante / asignatura /
--- sesion. Indice unico PARCIAL (memoria "v65-unique-constraints-partial-
--- active") y target de ON CONFLICT del upsert masivo.
+DO $ddl$
+BEGIN
+    -- La tabla existe desde V22 en esta rama; el guard es por simetria con
+    -- V243 (que si puede aplicarse sobre un ambiente sin TASISTENCIA).
+    IF to_regclass('academico_test.TASISTENCIA') IS NULL THEN
+        RAISE NOTICE 'TASISTENCIA no existe todavia: se omite el DDL de asistencia por actividad';
+        RETURN;
+    END IF;
+
+    EXECUTE 'ALTER TABLE academico_test.TASISTENCIA
+                 ADD COLUMN IF NOT EXISTS FK_TACTIVIDAD BIGINT';
+
+    -- La FK solo se puede crear si TACTIVIDAD existe (rama del Planeador /
+    -- V22 segun el ambiente). Sin ella la columna queda igual de util para
+    -- el modulo; simplemente no hay integridad referencial declarada.
+    IF to_regclass('academico_test.TACTIVIDAD') IS NOT NULL THEN
+        EXECUTE 'ALTER TABLE academico_test.TASISTENCIA
+                     DROP CONSTRAINT IF EXISTS FK_TASISTENCIA_ACTIVIDAD';
+        EXECUTE 'ALTER TABLE academico_test.TASISTENCIA
+                     ADD CONSTRAINT FK_TASISTENCIA_ACTIVIDAD
+                     FOREIGN KEY (FK_TACTIVIDAD)
+                     REFERENCES academico_test.TACTIVIDAD (PK_TACTIVIDAD)';
+    END IF;
+
+    EXECUTE 'ALTER TABLE academico_test.TASISTENCIA
+                 ALTER COLUMN FK_TASIGNATURA DROP NOT NULL';
+
+    -- Se recrea para poder reaplicar el archivo (ADD CONSTRAINT no admite
+    -- IF NOT EXISTS). NOT VALID no: la tabla no tiene filas sin contexto
+    -- (FK_TASIGNATURA era NOT NULL hasta hace un momento), asi que validar
+    -- es gratis y deja la constraint utilizable por el planner.
+    EXECUTE 'ALTER TABLE academico_test.TASISTENCIA
+                 DROP CONSTRAINT IF EXISTS CK_TASISTENCIA_CONTEXTO';
+    EXECUTE 'ALTER TABLE academico_test.TASISTENCIA
+                 ADD CONSTRAINT CK_TASISTENCIA_CONTEXTO
+                 CHECK (FK_TASIGNATURA IS NOT NULL OR FK_TACTIVIDAD IS NOT NULL)';
+END
+$ddl$;
+
+
+-- ===========================================================================
+-- 2. INDICES
+-- ===========================================================================
+
+-- Unicidad operativa: un registro ACTIVO por estudiante / sesion, donde
+-- "sesion" tiene ahora dos formas -- (asignatura, bloque) en el mundo
+-- evaluativo y (actividad) en el formativo.
+--
+--   *** POR QUE UN SOLO INDICE Y NO UNO POR MUNDO ***
+--   Con dos indices parciales harian falta dos INSERT ... ON CONFLICT
+--   distintos (el target debe coincidir exactamente con UN indice), y ese
+--   upsert es el corazon de fn_asistencia_registrar_bulk: duplicarlo es
+--   duplicar la logica que mas cara sale de mantener desalineada. Metiendo
+--   las dos dimensiones en una sola clave con COALESCE, el upsert sigue
+--   siendo UN statement con UN target.
+--
+--   Los NULL se colapsan a 0 a proposito: en un indice unico dos NULL nunca
+--   son iguales, asi que dejar FK_TASIGNATURA/FK_TACTIVIDAD crudos haria que
+--   las filas del mundo contrario NO quedaran deduplicadas -- protegidas
+--   solo en apariencia. Con COALESCE(...,0) ambas quedan cubiertas:
+--     evaluativo -> (mat, asignatura, 0,         fecha, bloque)
+--     formativo  -> (mat, 0,          actividad, fecha, 0)
+--   (0 no colisiona con ningun pk real: las identity de este esquema
+--   arrancan en 1.)
+DROP INDEX IF EXISTS academico_test.UQ_TASISTENCIA_SESION;
 CREATE UNIQUE INDEX IF NOT EXISTS UQ_TASISTENCIA_SESION
-  ON TASISTENCIA (FK_TMATRICULA, FK_TASIGNATURA, FECHA, COALESCE(BLOQUE, 0))
+  ON TASISTENCIA (FK_TMATRICULA,
+                  COALESCE(FK_TASIGNATURA, 0),
+                  COALESCE(FK_TACTIVIDAD, 0),
+                  FECHA,
+                  COALESCE(BLOQUE, 0))
   WHERE ACTIVE = true ;
+
+-- Lookup del padron / calendario formativo por actividad y fecha.
+CREATE INDEX IF NOT EXISTS IDX_TASISTENCIA_11
+  ON TASISTENCIA (FK_TACTIVIDAD, FECHA) WHERE ACTIVE = true ;
 
 -- Acceso del listado / calendario: filtran por rango de FECHA + asignatura y
 -- solo miran filas activas. V22 solo trae IX_TASISTENCIA_2 (FECHA) suelto.
@@ -213,7 +315,7 @@ CREATE INDEX IF NOT EXISTS IDX_THORARIO_LOOKUP
 
 
 -- ===========================================================================
--- 2. MENU DE CAPABILITY: 'ASISTENCIAS'  (NO se crea aqui)
+-- 3. MENU DE CAPABILITY: 'ASISTENCIAS'  (NO se crea aqui)
 --    El menu que usa el front y al que estan cableados los roles es
 --    academico_test.tmenu CODIGO='ASISTENCIAS' (plural, url '/app/asistencia',
 --    bajo el grupo GESTION_ACADEMICA). Viene del dump base y ya lo tienen
@@ -232,7 +334,7 @@ CREATE INDEX IF NOT EXISTS IDX_THORARIO_LOOKUP
 
 
 -- ===========================================================================
--- 3. AUTORIZACION — envoltorios sobre los helpers de V29/V40
+-- 4. AUTORIZACION — envoltorios sobre los helpers de V29/V40
 -- ===========================================================================
 
 -- Gate de ESCRITURA. Adaptador de seccion == fn_matricula_gate_escritura
@@ -308,7 +410,7 @@ COMMENT ON FUNCTION academico_test.fn_asistencia_puede_ver(BIGINT, BIGINT)
 
 
 -- ===========================================================================
--- 4. RESOLUCION (helpers de dominio, reutilizados por las 5 funciones)
+-- 5. RESOLUCION (helpers de dominio, reutilizados por las 5 funciones)
 -- ===========================================================================
 
 -- Periodo de evaluacion de una sesion (FK_TPERIODO_EVALUACION es NOT NULL en
@@ -450,8 +552,116 @@ COMMENT ON FUNCTION academico_test.fn_asistencia_franja_bloque(DATE, TIMESTAMP, 
     IS 'Franja horaria (reloj) de un bloque de THORARIO estampada sobre la FECHA de la sesion. Si el bloque trae HORA_INICIO/HORA_FIN propias, se usa su parte de reloj (::TIME) -- su parte de fecha es la del dia en que se cargo el horario, no la de la sesion, y devolverla tal cual daba una fecha incoherente con la rama de reserva. Si no, la jornada del TPERIODO_ACADEMICO (HORA_INICIO/HORA_FIN, TIME) puesta sobre la fecha -- misma reserva que fn_asistencia_horas_bloque pero para el reloj puntual, no la duracion agregada. La usan v_asistencia_detalle, fn_asistencia_estudiantes_sesion, fn_asistencia_sesiones_programadas y fn_asistencia_asignaturas_sesion -- unico sitio con esta regla.';
 
 
+-- ---------------------------------------------------------------------------
+-- fn_asistencia_grupo_es_formativo — ¿este grupo toma asistencia por
+-- ACTIVIDAD en vez de por asignatura+bloque?
+--
+--   Discriminador: el NIVEL DE ENSENANZA del grado del grupo es Preescolar.
+--   Se resuelve por TNIVEL_ENSENANZA.CODIGO ('1'), NO por pk: los pk de
+--   catalogo no son estables entre ambientes (mismo criterio que
+--   fn_asistencia_tipo_pk con TIPO_ASISTENCIA).
+--
+--   *** POR QUE NO SE USA EL ENFOQUE DEL REFERENTE CURRICULAR ***
+--   Seria lo "natural" (TREFERENTE_CURRICULAR.FK_TLV_ENFOQUE_PEDAGOGICO ya
+--   distingue FORMATIVO/EVALUATIVO, y fn_actividad_es_formativa de V243 lo
+--   usa), pero el referente es una propiedad de la UNIDAD, no del nivel:
+--   verificado en el servidor de test, Preescolar tiene 4 referentes activos
+--   -- 2 EVALUATIVO y 2 FORMATIVO -- y "DBA - Secundaria" esta marcado
+--   FORMATIVO bajo Basica Secundaria. Derivarlo del nivel por esa via
+--   pondria los 1701 grupos de secundaria en modo actividades. Ademas el
+--   calendario necesita responder esto ANTES de tener una actividad en la
+--   mano, cosa que fn_actividad_es_formativa no puede hacer.
+--   Decision del usuario: nivel Preescolar, fijo.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_grupo_es_formativo(
+    p_fk_tgrupo BIGINT
+)
+RETURNS BOOLEAN
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+    SELECT COALESCE(
+        (SELECT ne.CODIGO = '1'
+           FROM academico_test.TGRUPO gr
+           JOIN academico_test.TGRADO g  ON g.PK_TGRADO = gr.FK_TGRADO
+           JOIN academico_test.TNIVEL_ENSENANZA ne
+             ON ne.PK_NIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
+            AND ne.ACTIVE = TRUE
+          WHERE gr.PK_TGRUPO = p_fk_tgrupo
+            AND gr.ACTIVE = TRUE),
+        FALSE);
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_grupo_es_formativo(BIGINT)
+    IS 'TRUE si el grupo toma asistencia por ACTIVIDAD ("Proyecto Pedagogico") en vez de por asignatura + bloque de horario: su grado pertenece al nivel de ensenanza Preescolar (TNIVEL_ENSENANZA.CODIGO = ''1'', resuelto por codigo y no por pk porque los pk de catalogo no son estables entre ambientes). FALSE para el resto y para un grupo inexistente/inactivo -- el comportamiento por defecto sigue siendo el de siempre. NO se deriva del enfoque del referente curricular: ese es propiedad de la UNIDAD, no del nivel (en test Preescolar tiene referentes de ambos enfoques y uno de Secundaria esta marcado FORMATIVO), y el calendario necesita decidirlo sin tener una actividad. La usan fn_asistencia_calendario y fn_asistencia_estudiantes_sesion.';
+
+
+-- ---------------------------------------------------------------------------
+-- fn_asistencia_actividades_dia — las ACTIVIDADES vigentes de un grupo en
+-- una fecha. Es el equivalente formativo de fn_asistencia_asignaturas_sesion:
+-- arma las pestanas de "Asistencia manual" y alimenta el calendario.
+--
+--   VIGENCIA: una actividad ocupa su RANGO [FECHA_INICIO, FECHA_CIERRE]
+--   (decision del usuario), no un dia suelto -- un proyecto de preescolar
+--   dura varios dias y hay que poder tomar asistencia cada uno. Ambas
+--   columnas son nullable en TACTIVIDAD, asi que:
+--     inicio := COALESCE(FECHA_INICIO, FECHA_CREACION)   -- FECHA_CREACION es NOT NULL
+--     cierre := COALESCE(FECHA_CIERRE, FECHA_INICIO, FECHA_CREACION)
+--   Una actividad sin fechas queda vigente SOLO el dia en que se creo, que
+--   es la interpretacion conservadora (no se asume que dure para siempre).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_actividades_dia(
+    p_pk_usuario      BIGINT,
+    p_fk_tgrupo       BIGINT,
+    p_fecha           DATE,
+    p_fk_tfuncionario BIGINT DEFAULT NULL
+)
+RETURNS TABLE (
+    fk_tactividad  BIGINT,
+    actividad      VARCHAR,
+    fk_tasignatura BIGINT,
+    asignatura     VARCHAR,
+    fecha_inicio   DATE,
+    fecha_cierre   DATE
+)
+LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    IF NOT academico_test.fn_asistencia_puede_ver(p_pk_usuario, p_fk_tgrupo) THEN
+        RAISE EXCEPTION 'El usuario no puede ver la asistencia del grupo %', p_fk_tgrupo
+            USING ERRCODE = '42501';
+    END IF;
+    IF p_fk_tgrupo IS NULL OR p_fecha IS NULL THEN
+        RAISE EXCEPTION 'grupo y fecha son obligatorios' USING ERRCODE = '23502';
+    END IF;
+
+    RETURN QUERY
+    SELECT a.PK_TACTIVIDAD, a.TITULO,
+           a.FK_TASIGNATURA, asig.NOMBRE,
+           v.inicio, v.cierre
+      FROM academico_test.TACTIVIDAD a
+      LEFT JOIN academico_test.TASIGNATURA asig
+             ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
+      CROSS JOIN LATERAL (
+          SELECT COALESCE(a.FECHA_INICIO, a.FECHA_CREACION)                    AS inicio,
+                 COALESCE(a.FECHA_CIERRE, a.FECHA_INICIO, a.FECHA_CREACION)    AS cierre
+      ) v
+     WHERE a.FK_TGRUPO = p_fk_tgrupo
+       AND a.ACTIVE = TRUE
+       AND p_fecha BETWEEN v.inicio AND v.cierre
+       AND (p_fk_tfuncionario IS NULL OR EXISTS (
+               SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+                WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario
+                  AND da.FK_TGRUPO       = a.FK_TGRUPO
+                  AND da.FK_TASIGNATURA  = a.FK_TASIGNATURA
+                  AND da.ACTIVE = TRUE))
+     ORDER BY v.inicio, a.TITULO, a.PK_TACTIVIDAD;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_actividades_dia(BIGINT, BIGINT, DATE, BIGINT)
+    IS 'Actividades de un grupo VIGENTES en una fecha -- equivalente formativo de fn_asistencia_asignaturas_sesion: arma las pestanas de "Asistencia manual" en preescolar y alimenta fn_asistencia_calendario. Vigencia por RANGO: [COALESCE(FECHA_INICIO,FECHA_CREACION), COALESCE(FECHA_CIERRE,FECHA_INICIO,FECHA_CREACION)] -- una actividad sin fechas vale solo el dia en que se creo. p_fk_tfuncionario no NULL acota a las asignadas a ese docente en TDOCENTE_ASIGNATURA (por la asignatura de la actividad). Gate: fn_asistencia_puede_ver(usuario, grupo).';
+
+
 -- ===========================================================================
--- 5. VISTA v_asistencia_detalle
+-- 6. VISTA v_asistencia_detalle
 --    Un unico sitio con: la cadena de joins (asistencia -> matricula ->
 --    estudiante/usuario, grupo -> grado -> periodo academico -> sede), la
 --    franja horaria via LATERAL a THORARIO por dia de semana, y la
@@ -479,6 +689,13 @@ SELECT
     pa.FK_TSEDE                               AS fk_tsede,
     a.FK_TASIGNATURA                          AS fk_tasignatura,
     asig.NOMBRE                               AS asignatura,
+    -- Contexto FORMATIVO (preescolar): la sesion es una ACTIVIDAD, no una
+    -- asignatura + bloque. Las dos columnas son excluyentes en la practica
+    -- (CK_TASISTENCIA_CONTEXTO exige al menos una), asi que el front usa
+    -- `actividad` cuando viene y `asignatura` cuando no.
+    a.FK_TACTIVIDAD                           AS fk_tactividad,
+    act.TITULO                                AS actividad,
+    (a.FK_TACTIVIDAD IS NOT NULL)             AS es_formativa,
     a.FK_TPERIODO_EVALUACION                  AS fk_tperiodo_evaluacion,
     a.FECHA                                   AS fecha,
     a.BLOQUE                                  AS bloque,
@@ -529,7 +746,12 @@ SELECT
   JOIN academico_test.TGRADO      g    ON g.PK_TGRADO = gr.FK_TGRADO
   JOIN academico_test.TPERIODO_ACADEMICO pa
                                        ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
-  JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
+  -- LEFT y no INNER: desde el DDL de la seccion 1 FK_TASIGNATURA es
+  -- nullable (asistencia formativa por actividad). Con INNER, TODA la
+  -- asistencia de preescolar desapareceria en silencio de la vista -- y con
+  -- ella de Seguimiento, del calendario y del resumen de horas.
+  LEFT JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
+  LEFT JOIN academico_test.TACTIVIDAD  act  ON act.PK_TACTIVIDAD  = a.FK_TACTIVIDAD
   JOIN academico_test.TLISTA_VALOR lv  ON lv.PK_LISTA_VALOR = a.FK_TLV_TIPO_ASISTENCIA
   LEFT JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
                                             AND jor.CATEGORIA = 'JORNADA'
@@ -555,11 +777,11 @@ SELECT
  WHERE a.ACTIVE = TRUE;
 
 COMMENT ON VIEW academico_test.v_asistencia_detalle
-    IS 'Detalle plano de TASISTENCIA (solo ACTIVE) con la cadena de joins ya resuelta: estudiante (nombre/documento), grupo, grado (fk_tgrado/grado/grado_valor -- CODIGO de TGRADO), periodo academico, sede, jornada (fk_tlv_jornada/jornada/jornada_valor -- NOMBRE/VALOR de TLISTA_VALOR CATEGORIA=''JORNADA''), asignatura, soporte, y la franja horaria + duracion tomadas de THORARIO por (grupo, asignatura, bloque, DIA DE SEMANA de la fecha) via LEFT JOIN LATERAL LIMIT 1 -- el join sin el dia duplica filas porque el mismo bloque se repite por dia. Expone la clasificacion del estado como banderas (es_presente / es_tarde / es_ausente / es_justificado) para no repetir los literales 1/2,3/5,6. La consumen fn_asistencia_listar_seguimiento, fn_asistencia_calendario y fn_asistencia_resumen_horas.';
+    IS 'Detalle plano de TASISTENCIA (solo ACTIVE). Cubre los DOS mundos: el evaluativo (asignatura + bloque de horario) y el FORMATIVO de preescolar (fk_tactividad/actividad/es_formativa, sesion por actividad y asignatura posiblemente NULL -- por eso el join a TASIGNATURA es LEFT). Cadena de joins ya resuelta: estudiante (nombre/documento), grupo, grado (fk_tgrado/grado/grado_valor -- CODIGO de TGRADO), periodo academico, sede, jornada (fk_tlv_jornada/jornada/jornada_valor -- NOMBRE/VALOR de TLISTA_VALOR CATEGORIA=''JORNADA''), asignatura, soporte, y la franja horaria + duracion tomadas de THORARIO por (grupo, asignatura, bloque, DIA DE SEMANA de la fecha) via LEFT JOIN LATERAL LIMIT 1 -- el join sin el dia duplica filas porque el mismo bloque se repite por dia. Expone la clasificacion del estado como banderas (es_presente / es_tarde / es_ausente / es_justificado) para no repetir los literales 1/2,3/5,6. La consumen fn_asistencia_listar_seguimiento, fn_asistencia_calendario y fn_asistencia_resumen_horas.';
 
 
 -- ===========================================================================
--- 6. ESCRITURA
+-- 7. ESCRITURA
 -- ===========================================================================
 
 -- ---------------------------------------------------------------------------
@@ -577,7 +799,11 @@ CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_registrar_bulk(
     p_registros              JSONB   DEFAULT NULL,
     -- valor de TIPO_ASISTENCIA aplicado a TODO el grupo cuando p_registros
     -- viene NULL/vacio ("Marcar todo como Asistio" -> 1).
-    p_marcar_todos_valor     NUMERIC DEFAULT NULL
+    p_marcar_todos_valor     NUMERIC DEFAULT NULL,
+    -- Sesion FORMATIVA (preescolar): la clase es una ACTIVIDAD, no una
+    -- asignatura + bloque. Va al final para no mover las posiciones que ya
+    -- usan los llamadores. Con actividad, p_fk_tasignatura puede ser NULL.
+    p_fk_tactividad          BIGINT  DEFAULT NULL
 )
 RETURNS INTEGER
 LANGUAGE plpgsql VOLATILE AS $$
@@ -590,8 +816,17 @@ DECLARE
     v_fk_tsede   BIGINT;
 BEGIN
     -- 0. Obligatorios de forma (antes del gate: no filtran informacion).
-    IF p_fk_tgrupo IS NULL OR p_fk_tasignatura IS NULL OR p_fecha IS NULL THEN
-        RAISE EXCEPTION 'grupo, asignatura y fecha son obligatorios' USING ERRCODE = '23502';
+    --    La asignatura dejo de ser obligatoria: en preescolar la sesion se
+    --    identifica por ACTIVIDAD. Se exige al menos uno de los dos, que es
+    --    la misma regla que hace cumplir CK_TASISTENCIA_CONTEXTO en la
+    --    tabla -- aqui se valida antes para dar un mensaje util en vez de
+    --    un error de constraint.
+    IF p_fk_tgrupo IS NULL OR p_fecha IS NULL THEN
+        RAISE EXCEPTION 'grupo y fecha son obligatorios' USING ERRCODE = '23502';
+    END IF;
+    IF p_fk_tasignatura IS NULL AND p_fk_tactividad IS NULL THEN
+        RAISE EXCEPTION 'debe enviar la asignatura (sesion por horario) o la actividad (sesion formativa)'
+            USING ERRCODE = '23502';
     END IF;
 
     -- 1. Gate de capability + scope (menu ASISTENCIAS, accion CREAR).
@@ -608,9 +843,21 @@ BEGIN
                     WHERE PK_TGRUPO = p_fk_tgrupo AND ACTIVE = TRUE) THEN
         RAISE EXCEPTION 'grupo (%) no existe o no esta activo', p_fk_tgrupo USING ERRCODE = '23503';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA
-                    WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
+    IF p_fk_tasignatura IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA
+                        WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
         RAISE EXCEPTION 'asignatura (%) no existe o no esta activa', p_fk_tasignatura USING ERRCODE = '23503';
+    END IF;
+    -- La actividad debe existir, estar activa y ser DE ESTE GRUPO: sin el
+    -- chequeo de grupo se podria colgar la asistencia de un alumno de una
+    -- actividad de otro curso (el gate autoriza sobre el grupo, no sobre la
+    -- actividad, asi que esto no lo cubre la autorizacion).
+    IF p_fk_tactividad IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD
+                        WHERE PK_TACTIVIDAD = p_fk_tactividad AND ACTIVE = TRUE
+                          AND FK_TGRUPO = p_fk_tgrupo) THEN
+        RAISE EXCEPTION 'la actividad (%) no existe, no esta activa o no pertenece al grupo %',
+            p_fk_tactividad, p_fk_tgrupo USING ERRCODE = '23503';
     END IF;
 
     -- 2b. Periodo academico CERRADO -> no se registra asistencia. Se comprueba
@@ -705,15 +952,24 @@ BEGIN
           FROM jsonb_array_elements(v_entrada) r
     ), up AS (
         INSERT INTO academico_test.TASISTENCIA (
-            FECHA, FK_TLV_TIPO_ASISTENCIA, FK_TASIGNATURA, FK_TPERIODO_EVALUACION,
+            FECHA, FK_TLV_TIPO_ASISTENCIA, FK_TASIGNATURA, FK_TACTIVIDAD,
+            FK_TPERIODO_EVALUACION,
             FK_TMATRICULA, OBSERVACION, FK_SOPORTE_ARCHIVO, BLOQUE,
             CREATED_BY, CREATED_AT, ACTIVE
         )
-        SELECT p_fecha, e.fk_tlv_tipo, p_fk_tasignatura, v_fk_periodo,
+        SELECT p_fecha, e.fk_tlv_tipo, p_fk_tasignatura, p_fk_tactividad,
+               v_fk_periodo,
                e.fk_matricula, e.observacion, e.fk_archivo, p_bloque,
                p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
           FROM entrada e
-        ON CONFLICT (FK_TMATRICULA, FK_TASIGNATURA, FECHA, COALESCE(BLOQUE, 0))
+        -- Target = UQ_TASISTENCIA_SESION (seccion 2), el indice combinado
+        -- que cubre las dos identidades de sesion. La lista debe coincidir
+        -- EXACTAMENTE con la del indice, COALESCE incluido.
+        ON CONFLICT (FK_TMATRICULA,
+                     COALESCE(FK_TASIGNATURA, 0),
+                     COALESCE(FK_TACTIVIDAD, 0),
+                     FECHA,
+                     COALESCE(BLOQUE, 0))
                  WHERE ACTIVE = true
         DO UPDATE SET
             FK_TLV_TIPO_ASISTENCIA = EXCLUDED.FK_TLV_TIPO_ASISTENCIA,
@@ -731,8 +987,8 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_registrar_bulk(
-    BIGINT, BIGINT, BIGINT, DATE, NUMERIC, JSONB, NUMERIC
-) IS 'Registro/actualizacion masiva de la asistencia de un grupo en una sesion (FECHA + BLOQUE). p_registros = JSONB [{fkMatricula,tipoAsistencia,observacion,fkArchivo}]. Si viene vacio y p_marcar_todos_valor no es NULL, aplica ese estado a todas las matriculas activas del grupo ("Marcar todo como Asistio" -> 1). Upsert por (FK_TMATRICULA,FK_TASIGNATURA,FECHA,COALESCE(BLOQUE,0)) sobre filas ACTIVE (UQ_TASISTENCIA_SESION). FK_TPERIODO_EVALUACION resuelto por fn_asistencia_periodo_eval; la franja horaria NO se guarda (se deriva de THORARIO al leer). Gate: fn_asistencia_gate_escritura(usuario, grupo, ''CREAR''). fkArchivo (soporte) debe ser un TARCHIVO ACTIVE cuyo FK_TSEDE sea NULL (generico) o igual a la sede del grupo -- rechaza adjuntar el soporte de otra sede aunque el archivo este activo. Valida todas las filas de entrada en un solo recorrido y lanza con el primer motivo concreto. Retorna # de registros afectados.';
+    BIGINT, BIGINT, BIGINT, DATE, NUMERIC, JSONB, NUMERIC, BIGINT
+) IS 'Registro/actualizacion masiva de la asistencia de un grupo en una sesion. La sesion se identifica de dos formas segun el mundo: EVALUATIVO por (asignatura, FECHA, BLOQUE) y FORMATIVO/preescolar por (p_fk_tactividad, FECHA) -- hay que enviar asignatura o actividad (al menos una; la actividad debe ser del mismo grupo). p_registros = JSONB [{fkMatricula,tipoAsistencia,observacion,fkArchivo}]. Si viene vacio y p_marcar_todos_valor no es NULL, aplica ese estado a todas las matriculas activas del grupo ("Marcar todo como Asistio" -> 1). Upsert por (FK_TMATRICULA,FK_TASIGNATURA,FECHA,COALESCE(BLOQUE,0)) sobre filas ACTIVE (UQ_TASISTENCIA_SESION). FK_TPERIODO_EVALUACION resuelto por fn_asistencia_periodo_eval; la franja horaria NO se guarda (se deriva de THORARIO al leer). Gate: fn_asistencia_gate_escritura(usuario, grupo, ''CREAR''). fkArchivo (soporte) debe ser un TARCHIVO ACTIVE cuyo FK_TSEDE sea NULL (generico) o igual a la sede del grupo -- rechaza adjuntar el soporte de otra sede aunque el archivo este activo. Valida todas las filas de entrada en un solo recorrido y lanza con el primer motivo concreto. Retorna # de registros afectados.';
 
 
 -- ---------------------------------------------------------------------------
@@ -821,7 +1077,7 @@ COMMENT ON FUNCTION academico_test.fn_asistencia_editar(
 
 
 -- ===========================================================================
--- 7. LECTURA
+-- 8. LECTURA
 -- ===========================================================================
 
 -- ---------------------------------------------------------------------------
@@ -849,7 +1105,10 @@ CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_estudiantes_sesion(
     p_fk_tgrupo      BIGINT,
     p_fk_tasignatura BIGINT,
     p_fecha          DATE,
-    p_bloque         NUMERIC DEFAULT NULL
+    p_bloque         NUMERIC DEFAULT NULL,
+    -- Sesion FORMATIVA: el padron se resuelve por ACTIVIDAD y la asignatura
+    -- puede venir NULL. Al final de la firma para no mover posiciones.
+    p_fk_tactividad  BIGINT  DEFAULT NULL
 )
 RETURNS TABLE (
     fk_tmatricula          BIGINT,
@@ -879,16 +1138,30 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
-    IF p_fk_tgrupo IS NULL OR p_fk_tasignatura IS NULL OR p_fecha IS NULL THEN
-        RAISE EXCEPTION 'grupo, asignatura y fecha son obligatorios' USING ERRCODE = '23502';
+    IF p_fk_tgrupo IS NULL OR p_fecha IS NULL THEN
+        RAISE EXCEPTION 'grupo y fecha son obligatorios' USING ERRCODE = '23502';
+    END IF;
+    -- Mismo contrato que fn_asistencia_registrar_bulk: asignatura (mundo
+    -- evaluativo) o actividad (mundo formativo), al menos una.
+    IF p_fk_tasignatura IS NULL AND p_fk_tactividad IS NULL THEN
+        RAISE EXCEPTION 'debe enviar la asignatura (sesion por horario) o la actividad (sesion formativa)'
+            USING ERRCODE = '23502';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM academico_test.TGRUPO
                     WHERE PK_TGRUPO = p_fk_tgrupo AND ACTIVE = TRUE) THEN
         RAISE EXCEPTION 'grupo (%) no existe o no esta activo', p_fk_tgrupo USING ERRCODE = '23503';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA
-                    WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
+    IF p_fk_tasignatura IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA
+                        WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
         RAISE EXCEPTION 'asignatura (%) no existe o no esta activa', p_fk_tasignatura USING ERRCODE = '23503';
+    END IF;
+    IF p_fk_tactividad IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD
+                        WHERE PK_TACTIVIDAD = p_fk_tactividad AND ACTIVE = TRUE
+                          AND FK_TGRUPO = p_fk_tgrupo) THEN
+        RAISE EXCEPTION 'la actividad (%) no existe, no esta activa o no pertenece al grupo %',
+            p_fk_tactividad, p_fk_tgrupo USING ERRCODE = '23503';
     END IF;
 
     RETURN QUERY
@@ -923,8 +1196,14 @@ BEGIN
         SELECT d.fk_tmatricula, d.pk_tasistencia, d.tipo_valor, d.tipo_nombre,
                d.observacion, d.fk_soporte_archivo, d.soporte_nombre
           FROM academico_test.v_asistencia_detalle d
-         WHERE d.fk_tasignatura = p_fk_tasignatura
-           AND d.fecha = p_fecha
+         WHERE d.fecha = p_fecha
+           -- Se casa por la MISMA clave con la que se escribio (ver el
+           -- indice combinado de la seccion 2): por actividad si la sesion
+           -- es formativa, por asignatura + bloque si no. Comparar siempre
+           -- por asignatura devolveria el padron vacio en preescolar,
+           -- donde esa columna es NULL.
+           AND COALESCE(d.fk_tasignatura, 0) = COALESCE(p_fk_tasignatura, 0)
+           AND COALESCE(d.fk_tactividad, 0)  = COALESCE(p_fk_tactividad, 0)
            AND COALESCE(d.bloque, 0) = COALESCE(p_bloque, 0)
     )
     SELECT
@@ -957,8 +1236,8 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_estudiantes_sesion(
-    BIGINT, BIGINT, BIGINT, DATE, NUMERIC
-) IS 'Padron de una sesion para la pantalla "Asistencia manual": una fila por matricula activa del grupo, con el estado ACTUAL del alumno para ese (asignatura, fecha, bloque) si ya hay registro (pk_tasistencia / tipo / observacion / soporte) o NULL si falta tomarlo ("Seleccionar"). Arranca de TMATRICULA con LEFT JOIN a los registros -- v_asistencia_detalle no sirve porque es inner sobre TASISTENCIA. Repite en cada fila la cabecera de la sesion: fk_tperiodo_evaluacion (fn_asistencia_periodo_eval) y hora_inicio/hora_fin de THORARIO por dia de semana de la fecha. total_estudiantes y registrados son ventanas sobre el padron completo. Gate: fn_asistencia_puede_ver(usuario, grupo). Orden: apellidos, nombres.';
+    BIGINT, BIGINT, BIGINT, DATE, NUMERIC, BIGINT
+) IS 'Padron de una sesion para la pantalla "Asistencia manual": una fila por matricula activa del grupo, con el estado ACTUAL del alumno para esa sesion -- (asignatura, fecha, bloque) en el mundo evaluativo o (p_fk_tactividad, fecha) en el FORMATIVO de preescolar; hay que enviar asignatura o actividad si ya hay registro (pk_tasistencia / tipo / observacion / soporte) o NULL si falta tomarlo ("Seleccionar"). Arranca de TMATRICULA con LEFT JOIN a los registros -- v_asistencia_detalle no sirve porque es inner sobre TASISTENCIA. Repite en cada fila la cabecera de la sesion: fk_tperiodo_evaluacion (fn_asistencia_periodo_eval) y hora_inicio/hora_fin de THORARIO por dia de semana de la fecha. total_estudiantes y registrados son ventanas sobre el padron completo. Gate: fn_asistencia_puede_ver(usuario, grupo). Orden: apellidos, nombres.';
 
 
 -- ---------------------------------------------------------------------------
@@ -1237,12 +1516,108 @@ COMMENT ON FUNCTION academico_test.fn_asistencia_sesiones_programadas(
 
 
 -- ---------------------------------------------------------------------------
+-- fn_asistencia_actividades_programadas — equivalente FORMATIVO de
+-- fn_asistencia_sesiones_programadas: en vez de proyectar THORARIO sobre el
+-- mes, proyecta el RANGO de cada actividad sobre las fechas reales.
+--
+--   Solo devuelve filas de grupos formativos (fn_asistencia_grupo_es_formativo):
+--   asi el calendario puede hacer UNION ALL de las dos fuentes sin que un
+--   grupo aparezca por partida doble -- la rama de horario excluye
+--   exactamente los mismos grupos que esta incluye.
+--
+--   horas: TACTIVIDAD.DURACION_ESTIMADA. Es lo unico parecido a una duracion
+--   que tiene una actividad (no cuelga de THORARIO, que es de donde salen
+--   las horas en el mundo evaluativo). NULL -> 0, igual que un bloque sin
+--   horas ni jornada de reserva.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_actividades_programadas(
+    p_pk_usuario      BIGINT,
+    p_fk_tsede        BIGINT,
+    p_fecha_desde     DATE,
+    p_fecha_hasta     DATE,     -- INCLUSIVO
+    p_fk_tgrupo       BIGINT DEFAULT NULL,
+    p_fk_tfuncionario BIGINT DEFAULT NULL
+)
+RETURNS TABLE (
+    fecha          DATE,
+    fk_tgrupo      BIGINT,
+    grupo          VARCHAR,
+    fk_tgrado      BIGINT,
+    grado          VARCHAR,
+    grado_valor    VARCHAR,
+    fk_tlv_jornada BIGINT,
+    jornada        VARCHAR,
+    jornada_valor  VARCHAR,
+    fk_tactividad  BIGINT,
+    actividad      VARCHAR,
+    fk_tasignatura BIGINT,
+    asignatura     VARCHAR,
+    horas          NUMERIC
+)
+LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN QUERY
+    SELECT dd::date,
+           gr.PK_TGRUPO,      gr.NOMBRE,
+           g.PK_TGRADO,       g.NOMBRE,       g.CODIGO,
+           gr.FK_TLV_JORNADA, jor.NOMBRE,     jor.VALOR,
+           a.PK_TACTIVIDAD,   a.TITULO,
+           a.FK_TASIGNATURA,  asig.NOMBRE,
+           ROUND(COALESCE(a.DURACION_ESTIMADA, 0)::NUMERIC, 2)
+      FROM academico_test.TACTIVIDAD a
+      JOIN academico_test.TGRUPO gr             ON gr.PK_TGRUPO = a.FK_TGRUPO AND gr.ACTIVE = TRUE
+      JOIN academico_test.TGRADO g              ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      LEFT JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
+      LEFT JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
+                                                AND jor.CATEGORIA = 'JORNADA'
+      -- Vigencia de la actividad, con el mismo criterio que
+      -- fn_asistencia_actividades_dia (unico sitio con esa regla, replicado
+      -- aqui porque alli es por fecha suelta y aqui por rango).
+      CROSS JOIN LATERAL (
+          SELECT COALESCE(a.FECHA_INICIO, a.FECHA_CREACION)                 AS inicio,
+                 COALESCE(a.FECHA_CIERRE, a.FECHA_INICIO, a.FECHA_CREACION) AS cierre
+      ) v
+      -- Interseccion del rango de la actividad con la ventana pedida: se
+      -- generan solo los dias que caen en ambos.
+      CROSS JOIN LATERAL generate_series(
+          GREATEST(v.inicio, p_fecha_desde),
+          LEAST(v.cierre,  p_fecha_hasta),
+          INTERVAL '1 day') dd
+     WHERE a.ACTIVE = TRUE
+       AND pa.FK_TSEDE = p_fk_tsede
+       AND academico_test.fn_asistencia_grupo_es_formativo(gr.PK_TGRUPO)
+       AND (p_fk_tgrupo IS NULL OR gr.PK_TGRUPO = p_fk_tgrupo)
+       AND (p_fk_tfuncionario IS NULL OR EXISTS (
+               SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+                WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario
+                  AND da.FK_TGRUPO       = a.FK_TGRUPO
+                  AND da.FK_TASIGNATURA  = a.FK_TASIGNATURA
+                  AND da.ACTIVE = TRUE))
+       AND academico_test.fn_asistencia_puede_ver(p_pk_usuario, gr.PK_TGRUPO);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_actividades_programadas(
+    BIGINT, BIGINT, DATE, DATE, BIGINT, BIGINT
+) IS 'Equivalente FORMATIVO de fn_asistencia_sesiones_programadas: proyecta el RANGO de cada actividad ([COALESCE(FECHA_INICIO,FECHA_CREACION), COALESCE(FECHA_CIERRE,FECHA_INICIO,FECHA_CREACION)] intersectado con la ventana pedida) sobre las fechas reales, una fila por (actividad, fecha). SOLO grupos formativos (fn_asistencia_grupo_es_formativo), para que fn_asistencia_calendario pueda unir las dos fuentes sin duplicar ningun grupo. horas = TACTIVIDAD.DURACION_ESTIMADA (NULL = 0): una actividad no cuelga de THORARIO. Scope por sede + fn_asistencia_puede_ver; p_fk_tfuncionario acota por TDOCENTE_ASIGNATURA segun la asignatura de la actividad.';
+
+
+-- ---------------------------------------------------------------------------
 -- fn_asistencia_calendario — pantalla "Asistencia" (calendario mensual).
 --
---   Devuelve TODAS las sesiones del mes: las PROGRAMADAS en THORARIO
---   (fn_asistencia_sesiones_programadas) y ademas las registradas que no
---   correspondan a ningun bloque programado (asistencia manual suelta) ->
---   FULL OUTER JOIN.
+--   Devuelve TODAS las sesiones del mes: las PROGRAMADAS y ademas las
+--   registradas que no correspondan a ninguna sesion programada (asistencia
+--   manual suelta) -> FULL OUTER JOIN.
+--
+--   Lo PROGRAMADO sale de DOS fuentes excluyentes, segun el grupo:
+--     * grupo normal    -> fn_asistencia_sesiones_programadas (THORARIO)
+--     * grupo FORMATIVO -> fn_asistencia_actividades_programadas (rango de
+--       cada actividad). En preescolar el calendario muestra ACTIVIDADES en
+--       vez de asignaturas, y NO se mezcla con el horario aunque el grupo
+--       tenga THORARIO cargado (decision del usuario: "solo actividades").
+--   Las dos ramas se excluyen por fn_asistencia_grupo_es_formativo, asi que
+--   ningun grupo puede aparecer por las dos.
 --
 --   p_fk_tfuncionario: si no es NULL, el calendario queda acotado a las
 --   asignaturas ASIGNADAS a ese docente (los puntos = "sus" clases). El
@@ -1275,6 +1650,12 @@ RETURNS TABLE (
     jornada_valor     VARCHAR,
     fk_tasignatura    BIGINT,
     asignatura        VARCHAR,
+    -- Sesion FORMATIVA (preescolar): el punto del calendario es una
+    -- ACTIVIDAD. es_formativa le dice al front cual de las dos etiquetas
+    -- pintar sin tener que adivinar por el NULL.
+    fk_tactividad     BIGINT,
+    actividad         VARCHAR,
+    es_formativa      BOOLEAN,
     bloque            NUMERIC,
     hora_inicio       TIMESTAMP,
     hora_fin          TIMESTAMP,
@@ -1300,19 +1681,41 @@ BEGIN
     END IF;
 
     RETURN QUERY
-    -- (a) Sesiones PROGRAMADAS del mes (helper compartido).
+    -- (a) Sesiones PROGRAMADAS del mes. Dos fuentes EXCLUYENTES (ver
+    --     cabecera): horario para los grupos normales, actividades para los
+    --     formativos. El filtro NOT fn_asistencia_grupo_es_formativo en la
+    --     primera rama es lo que impide que un grupo de preescolar CON
+    --     horario cargado aparezca por las dos.
     WITH programadas AS (
         SELECT sp.fecha, sp.fk_tgrupo, sp.grupo, sp.fk_tgrado, sp.grado, sp.grado_valor,
                sp.fk_tlv_jornada, sp.jornada, sp.jornada_valor, sp.fk_tasignatura, sp.asignatura,
+               NULL::BIGINT  AS fk_tactividad,
+               NULL::VARCHAR AS actividad,
                sp.bloque, sp.hora_inicio, sp.hora_fin, sp.horas
           FROM academico_test.fn_asistencia_sesiones_programadas(
                    p_pk_usuario, p_fk_tsede, v_ini, v_fin - 1,
                    p_fk_tgrupo, p_fk_tasignatura, p_fk_tfuncionario) sp
+         WHERE NOT academico_test.fn_asistencia_grupo_es_formativo(sp.fk_tgrupo)
+        UNION ALL
+        SELECT ap.fecha, ap.fk_tgrupo, ap.grupo, ap.fk_tgrado, ap.grado, ap.grado_valor,
+               ap.fk_tlv_jornada, ap.jornada, ap.jornada_valor, ap.fk_tasignatura, ap.asignatura,
+               ap.fk_tactividad, ap.actividad,
+               -- Una actividad no cuelga de un bloque de horario ni tiene
+               -- franja: el front pinta la etiqueta de la actividad.
+               NULL::NUMERIC   AS bloque,
+               NULL::TIMESTAMP AS hora_inicio,
+               NULL::TIMESTAMP AS hora_fin,
+               ap.horas
+          FROM academico_test.fn_asistencia_actividades_programadas(
+                   p_pk_usuario, p_fk_tsede, v_ini, v_fin - 1,
+                   p_fk_tgrupo, p_fk_tfuncionario) ap
+         WHERE p_fk_tasignatura IS NULL OR ap.fk_tasignatura = p_fk_tasignatura
     ),
     -- (b) Sesiones REGISTRADAS del mes, ya agregadas por sesion.
     registradas AS (
         SELECT d.fecha, d.fk_tgrupo, d.grupo, d.fk_tgrado, d.grado, d.grado_valor,
                d.fk_tlv_jornada, d.jornada, d.jornada_valor, d.fk_tasignatura, d.asignatura,
+               d.fk_tactividad, d.actividad,
                d.bloque,
                MIN(d.hora_inicio)                            AS hora_inicio,
                MIN(d.hora_fin)                               AS hora_fin,
@@ -1334,7 +1737,8 @@ BEGIN
                       AND da.ACTIVE = TRUE))
            AND academico_test.fn_asistencia_puede_ver(p_pk_usuario, d.fk_tgrupo)
          GROUP BY d.fecha, d.fk_tgrupo, d.grupo, d.fk_tgrado, d.grado, d.grado_valor,
-                  d.fk_tlv_jornada, d.jornada, d.jornada_valor, d.fk_tasignatura, d.asignatura, d.bloque
+                  d.fk_tlv_jornada, d.jornada, d.jornada_valor, d.fk_tasignatura, d.asignatura,
+                  d.fk_tactividad, d.actividad, d.bloque
     )
     SELECT
         COALESCE(p.fecha, r.fecha),
@@ -1348,6 +1752,9 @@ BEGIN
         COALESCE(p.jornada_valor, r.jornada_valor),
         COALESCE(p.fk_tasignatura, r.fk_tasignatura),
         COALESCE(p.asignatura, r.asignatura),
+        COALESCE(p.fk_tactividad, r.fk_tactividad),
+        COALESCE(p.actividad, r.actividad),
+        (COALESCE(p.fk_tactividad, r.fk_tactividad) IS NOT NULL),
         COALESCE(p.bloque, r.bloque),
         COALESCE(p.hora_inicio, r.hora_inicio),
         COALESCE(p.hora_fin, r.hora_fin),
@@ -1367,9 +1774,26 @@ BEGIN
       FULL OUTER JOIN registradas r
         ON r.fecha          = p.fecha
        AND r.fk_tgrupo      = p.fk_tgrupo
-       AND r.fk_tasignatura = p.fk_tasignatura
-       AND COALESCE(r.bloque, -1) = COALESCE(p.bloque, -1)
-     ORDER BY 1, 3, 11, 12;  -- fecha, grupo, asignatura, bloque
+       -- La ACTIVIDAD entra en la clave, y cuando esta presente es lo UNICO
+       -- que identifica la sesion: ni la asignatura ni el bloque cuentan.
+       --
+       --   *** POR QUE (bug real, visto en el servidor) ***
+       --   Una sesion formativa se GUARDA con FK_TASIGNATURA NULL (asi lo
+       --   escribe fn_asistencia_registrar_bulk cuando el cliente manda solo
+       --   ACTIVIDAD), pero la PROYECCION la trae con la asignatura de la
+       --   actividad (TACTIVIDAD.FK_TASIGNATURA es NOT NULL). Comparando la
+       --   asignatura, esos dos lados NUNCA casaban y la misma sesion salia
+       --   DOS veces: una REGISTRADA con sus alumnos y otra RETRASADA con 0.
+       --   Ademas hay filas sembradas por el Planeador que traen asignatura
+       --   Y actividad, asi que tampoco sirve forzar NULL en la proyeccion:
+       --   la unica clave estable en el mundo formativo es la actividad.
+       AND COALESCE(r.fk_tactividad, -1) = COALESCE(p.fk_tactividad, -1)
+       AND (p.fk_tactividad IS NOT NULL
+            OR (COALESCE(r.fk_tasignatura, -1) = COALESCE(p.fk_tasignatura, -1)
+                AND COALESCE(r.bloque, -1) = COALESCE(p.bloque, -1)))
+     ORDER BY 1, 3, 11, 15;  -- fecha, grupo, asignatura, bloque
+                             -- (15 y no 14: fk_tactividad/actividad/
+                             --  es_formativa entraron antes de bloque)
 END;
 $$;
 

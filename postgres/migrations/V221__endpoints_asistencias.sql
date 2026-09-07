@@ -26,7 +26,10 @@
 -- caller NUNCA los manda (si no, cualquiera se haria pasar por otro usuario
 -- y saltaria el scope por rol de V220).
 --
--- Endpoints registrados (8):
+-- Endpoints registrados (9):
+--   GET    /asistencias/sesion/actividades  fn_asistencia_actividades_dia
+--          pestanas de "Asistencia manual" en PREESCOLAR: la sesion es una
+--          ACTIVIDAD, no una asignatura del horario.
 --   POST   /asistencias/soporte      (destino FILE, via file-service)
 --          sube UN archivo de soporte y devuelve su pk_tarchivo -- paso 1
 --          del flujo de 2 pasos. Sin el, un docente no podia adjuntar nada:
@@ -93,20 +96,27 @@ SELECT
     p_fecha                  => CAST(:BODY.FECHA AS DATE),
     p_bloque                 => CAST(:BODY.BLOQUE AS NUMERIC),
     p_registros              => CAST(:BODY_RAW.REGISTROS AS JSONB),
-    p_marcar_todos_valor     => CAST(:BODY.MARCAR_TODOS AS NUMERIC)
+    p_marcar_todos_valor     => CAST(:BODY.MARCAR_TODOS AS NUMERIC),
+    p_fk_tactividad          => CAST(:BODY.ACTIVIDAD AS BIGINT)
 ) AS registros_afectados$q$,
     'postgres', false, false, m.id_microservice,
     '/asistencias/registrar', 'SELECT', 'POST',
+    -- ASIGNATURA ya NO lleva "!": en preescolar (referente FORMATIVO) la
+    -- sesion se identifica por ACTIVIDAD y la asignatura no viaja. La regla
+    -- real -- una de las dos, al menos -- la hace cumplir la funcion (23502)
+    -- y CK_TASISTENCIA_CONTEXTO en la tabla; param_types solo sabe declarar
+    -- obligatoriedad por campo suelto, no "uno u otro".
     '{
        "BODY.GRUPO":         "BIGINT!",
-       "BODY.ASIGNATURA":    "BIGINT!",
+       "BODY.ASIGNATURA":    "BIGINT",
+       "BODY.ACTIVIDAD":     "BIGINT",
        "BODY.FECHA":         "VARCHAR!",
        "BODY.BLOQUE":        "NUMERIC",
        "BODY.REGISTROS":     "JSONB",
        "BODY_RAW.REGISTROS": "JSONB",
        "BODY.MARCAR_TODOS":  "NUMERIC"
      }'::jsonb,
-    'V221 -- registra/actualiza la asistencia de un grupo en una sesion (FECHA + BLOQUE). REGISTROS = [{fkMatricula,tipoAsistencia,observacion,fkArchivo}]. Si REGISTROS viene vacio y MARCAR_TODOS trae un valor de TIPO_ASISTENCIA (1=Asistio), lo aplica a todo el grupo. Upsert idempotente por (matricula, asignatura, fecha, bloque). RECHAZA (22023) si el TPERIODO_ACADEMICO del grupo esta Cerrado.'
+    'V221 -- registra/actualiza la asistencia de un grupo en una sesion: (ASIGNATURA + FECHA + BLOQUE) en el mundo evaluativo, o (ACTIVIDAD + FECHA) en preescolar/FORMATIVO -- hay que enviar ASIGNATURA o ACTIVIDAD (al menos una; la actividad debe pertenecer al grupo). REGISTROS = [{fkMatricula,tipoAsistencia,observacion,fkArchivo}]. Si REGISTROS viene vacio y MARCAR_TODOS trae un valor de TIPO_ASISTENCIA (1=Asistio), lo aplica a todo el grupo. Upsert idempotente por (matricula, asignatura, fecha, bloque). RECHAZA (22023) si el TPERIODO_ACADEMICO del grupo esta Cerrado.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (uuid) DO UPDATE
@@ -215,13 +225,15 @@ SELECT
     p_fk_tgrupo      => CAST(:QUERY.GRUPO AS BIGINT),
     p_fk_tasignatura => CAST(:QUERY.ASIGNATURA AS BIGINT),
     p_fecha          => CAST(:QUERY.FECHA AS DATE),
-    p_bloque         => CAST(:QUERY.BLOQUE AS NUMERIC)
+    p_bloque         => CAST(:QUERY.BLOQUE AS NUMERIC),
+    p_fk_tactividad  => CAST(:QUERY.ACTIVIDAD AS BIGINT)
 );$q$,
     'postgres', false, false, m.id_microservice,
     '/asistencias/sesion/estudiantes', 'SELECT', 'GET',
     '{
        "QUERY.GRUPO":      "BIGINT!",
-       "QUERY.ASIGNATURA": "BIGINT!",
+       "QUERY.ASIGNATURA": "BIGINT",
+       "QUERY.ACTIVIDAD":  "BIGINT",
        "QUERY.FECHA":      "VARCHAR!",
        "QUERY.BLOQUE":     "NUMERIC"
      }'::jsonb,
@@ -268,6 +280,51 @@ SELECT
        "QUERY.FUNCIONARIO":"BIGINT"
      }'::jsonb,
     'V221 -- pestanas por asignatura de "Asistencia manual": las (asignatura, bloque, hora_inicio, hora_fin) que THORARIO tiene programadas para ese GRUPO en el dia de semana de FECHA. QUERY.MIAS=true acota a las asignaturas asignadas al docente del token (vista "mis clases"); QUERY.FUNCIONARIO filtra por un docente concreto.'
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (uuid) DO UPDATE
+   SET query = EXCLUDED.query, param_types = EXCLUDED.param_types,
+       path_template = EXCLUDED.path_template, http_method = EXCLUDED.http_method,
+       execution_mode = EXCLUDED.execution_mode, microservice_id = EXCLUDED.microservice_id,
+       detail = EXCLUDED.detail;
+
+-- ---------------------------------------------------------------------------
+-- 3c-bis. PESTANAS FORMATIVAS: actividades del dia (preescolar)
+--     Equivalente de /asistencias/sesion/asignaturas para los grupos cuyo
+--     nivel de ensenanza es Preescolar: ahi la sesion es una ACTIVIDAD, y
+--     las pestanas de "Asistencia manual" son las actividades VIGENTES ese
+--     dia (rango FECHA_INICIO..FECHA_CIERRE de TACTIVIDAD).
+--
+--     El front decide cual de los dos endpoints llamar con el flag
+--     es_formativa que ya viene en /asistencias/calendario.
+-- ---------------------------------------------------------------------------
+INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
+                          path_template, execution_mode, http_method, param_types, detail)
+SELECT
+    'asis-sesion-actividades',
+    $q$SELECT * FROM academico_test.fn_asistencia_actividades_dia(
+    p_pk_usuario      => public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    p_fk_tgrupo       => CAST(:QUERY.GRUPO AS BIGINT),
+    p_fecha           => CAST(:QUERY.FECHA AS DATE),
+    -- Mismo criterio que el resto del modulo: MIAS=true resuelve el docente
+    -- desde el token; FUNCIONARIO filtra por uno concreto; NULL -> todas.
+    p_fk_tfuncionario => CASE
+        WHEN COALESCE(CAST(:QUERY.MIAS AS BOOLEAN), FALSE)
+        THEN COALESCE((SELECT f.PK_TFUNCIONARIO FROM academico_test.TFUNCIONARIO f
+                        WHERE f.FK_TUSUARIO = public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT)
+                          AND f.ACTIVE = TRUE), -1)
+        ELSE CAST(:QUERY.FUNCIONARIO AS BIGINT)
+    END
+);$q$,
+    'postgres', false, false, m.id_microservice,
+    '/asistencias/sesion/actividades', 'SELECT', 'GET',
+    '{
+       "QUERY.GRUPO":      "BIGINT!",
+       "QUERY.FECHA":      "VARCHAR!",
+       "QUERY.MIAS":       "BOOLEAN",
+       "QUERY.FUNCIONARIO":"BIGINT"
+     }'::jsonb,
+    'V221 -- pestanas de "Asistencia manual" en preescolar (nivel de ensenanza FORMATIVO): las actividades del GRUPO vigentes en FECHA, con su asignatura de respaldo y su rango (fecha_inicio/fecha_cierre). Una actividad sin fechas vale solo el dia en que se creo. QUERY.MIAS=true acota a las asignadas al docente del token; QUERY.FUNCIONARIO a un docente concreto. Su equivalente evaluativo es /asistencias/sesion/asignaturas.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (uuid) DO UPDATE
@@ -446,6 +503,7 @@ SELECT pr.id_role, q.id_query
   JOIN public.role pr ON pr.name = src.rname
  WHERE q.uuid IN ('asis-registrar', 'asis-editar', 'asis-seguimiento',
                   'asis-sesion-estudiantes', 'asis-sesion-asignaturas',
+                  'asis-sesion-actividades',
                   'asis-calendario', 'asis-resumen-horas', 'asis-soporte')
    AND NOT EXISTS (
        SELECT 1 FROM public.role_query rq
@@ -490,6 +548,10 @@ SELECT q.id_query, c.param_key, c.only_positive, c.allow_decimals, c.max_digits,
     ('asis-sesion-estudiantes', 'QUERY.GRUPO',            TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-sesion-estudiantes', 'QUERY.ASIGNATURA',       TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-sesion-estudiantes', 'QUERY.BLOQUE',           NULL,  FALSE, 2,      NULL,   NULL,   NULL,   0::numeric,  30::numeric),
+    ('asis-registrar',    'BODY.ACTIVIDAD',               TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
+    ('asis-sesion-estudiantes', 'QUERY.ACTIVIDAD',        TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
+    ('asis-sesion-actividades', 'QUERY.GRUPO',            TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
+    ('asis-sesion-actividades', 'QUERY.FUNCIONARIO',      TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-sesion-asignaturas', 'QUERY.GRUPO',            TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-sesion-asignaturas', 'QUERY.FUNCIONARIO',      TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-seguimiento',  'BODY.FILTERS.GRUPO',           TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
