@@ -93,6 +93,13 @@
 --   7) Quitarle a un referente un area que todavia tiene enunciados
 --      amarrados (FK_REFERENTE_CURRICULAR_AREA) esta BLOQUEADO (23503): el
 --      caller debe reasignar o borrar esos enunciados primero.
+--   8) REVISION: unicidad de NOMBRE es por (NOMBRE, FK_TNIVEL_ENSENANZA),
+--      NO solo por NOMBRE -- dos referentes activos pueden compartir
+--      nombre si son de niveles educativos distintos (p.ej. "DBA" en
+--      Basica primaria y "DBA" en Basica secundaria son validos a la vez;
+--      dos "DBA" en el MISMO nivel siguen dando 23505). Corregido en
+--      fn_refcurr_crear y fn_refcurr_actualizar (esta ultima evalua el
+--      par NOMBRE/NIVEL efectivo, considerando lo que llega en el PATCH).
 --
 -- Idempotencia: CREATE OR REPLACE FUNCTION (sin cambios de firma, nada de
 -- DROP previo necesario); el seed de TMENU/TROL_MENU usa WHERE NOT EXISTS
@@ -217,10 +224,16 @@ BEGIN
             USING ERRCODE = '23503';
     END IF;
 
-    -- 3. Unicidad de NOMBRE entre activos (chequeo a nivel de funcion, mismo
-    --    criterio que TESTABLECIMIENTO/TSEDE en V52/V53).
-    IF EXISTS (SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR WHERE NOMBRE = p_nombre AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'Ya existe un referente curricular activo con el nombre "%"', p_nombre
+    -- 3. Unicidad de (NOMBRE, FK_TNIVEL_ENSENANZA) entre activos (chequeo a
+    --    nivel de funcion, mismo criterio que TESTABLECIMIENTO/TSEDE en
+    --    V52/V53). NO es solo por NOMBRE: dos referentes distintos pueden
+    --    compartir nombre si son de niveles educativos distintos (p.ej.
+    --    "DBA" para Basica primaria y "DBA" para Basica secundaria).
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR
+         WHERE NOMBRE = p_nombre AND FK_TNIVEL_ENSENANZA = p_fk_tnivel_ensenanza AND ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'Ya existe un referente curricular activo con el nombre "%" para ese nivel educativo', p_nombre
             USING ERRCODE = '23505';
     END IF;
 
@@ -297,6 +310,8 @@ DECLARE
     v_actual         academico_test.TREFERENTE_CURRICULAR%ROWTYPE;
     v_nuevo_desde    INTEGER;
     v_nuevo_hasta    INTEGER;
+    v_nuevo_nombre   VARCHAR;
+    v_nuevo_nivel    BIGINT;
 BEGIN
     SELECT * INTO v_actual
       FROM academico_test.TREFERENTE_CURRICULAR
@@ -320,10 +335,17 @@ BEGIN
     IF p_nombre IS NOT NULL AND NULLIF(TRIM(p_nombre), '') IS NULL THEN
         RAISE EXCEPTION 'Nombre del referente no puede quedar vacio' USING ERRCODE = '22023';
     END IF;
-    IF p_nombre IS NOT NULL AND UPPER(TRIM(p_nombre)) <> UPPER(TRIM(v_actual.NOMBRE))
+
+    -- Unicidad de (NOMBRE, FK_TNIVEL_ENSENANZA) entre activos, igual que en
+    -- fn_refcurr_crear -- se evalua sobre el par EFECTIVO (lo que llega en
+    -- el PATCH, o lo que ya tenia el referente si ese campo no se toca).
+    v_nuevo_nombre := COALESCE(p_nombre, v_actual.NOMBRE);
+    v_nuevo_nivel  := COALESCE(p_fk_tnivel_ensenanza, v_actual.FK_TNIVEL_ENSENANZA);
+    IF (UPPER(TRIM(v_nuevo_nombre)) <> UPPER(TRIM(v_actual.NOMBRE)) OR v_nuevo_nivel <> v_actual.FK_TNIVEL_ENSENANZA)
        AND EXISTS (SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR
-                    WHERE NOMBRE = p_nombre AND ACTIVE = TRUE AND PK_REFERENTE_CURRICULAR <> p_pk_referente_curricular) THEN
-        RAISE EXCEPTION 'Ya existe otro referente curricular activo con el nombre "%"', p_nombre
+                    WHERE NOMBRE = v_nuevo_nombre AND FK_TNIVEL_ENSENANZA = v_nuevo_nivel AND ACTIVE = TRUE
+                      AND PK_REFERENTE_CURRICULAR <> p_pk_referente_curricular) THEN
+        RAISE EXCEPTION 'Ya existe otro referente curricular activo con el nombre "%" para ese nivel educativo', v_nuevo_nombre
             USING ERRCODE = '23505';
     END IF;
 
@@ -503,6 +525,9 @@ COMMENT ON FUNCTION academico_test.fn_refcurr_eliminar(BIGINT, BIGINT)
 -- ===========================================================================
 -- fn_refcurr_listar — pagina con filtros/orden (pantalla listado).
 -- ===========================================================================
+-- Cambia el RETURNS TABLE (agrega columna): CREATE OR REPLACE no lo permite,
+-- hay que borrar la firma vieja primero (mismo patron que V58).
+DROP FUNCTION IF EXISTS academico_test.fn_refcurr_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BOOLEAN, VARCHAR, BOOLEAN, INT, INT);
 CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_listar(
     p_pk_usuario_solicitante      BIGINT,
     p_search                      VARCHAR   DEFAULT NULL,
