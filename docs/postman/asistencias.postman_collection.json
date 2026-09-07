@@ -278,7 +278,7 @@
             "type": "text/javascript",
             "exec": [
               "pm.test(\"200\", () => pm.response.to.have.status(200));",
-              "const r = pm.response.json();",
+              "const r = (pm.response.json() || {}).rows || [];  // la API responde {\"rows\":[...]}, no un array pelado",
               "pm.test(\"padron con cabecera de sesion\", () => {",
               "  if (!r.length) return;",
               "  pm.expect(r[0]).to.have.property(\"estudiante\");",
@@ -339,7 +339,7 @@
             "type": "text/javascript",
             "exec": [
               "pm.test(\"200\", () => pm.response.to.have.status(200));",
-              "const r = pm.response.json();",
+              "const r = (pm.response.json() || {}).rows || [];  // la API responde {\"rows\":[...]}, no un array pelado",
               "pm.test(\"pestanas con franja resuelta\", () => {",
               "  if (!r.length) return;",
               "  pm.expect(r[0]).to.have.property(\"asignatura\");",
@@ -403,7 +403,7 @@
             "type": "text/javascript",
             "exec": [
               "pm.test(\"200\", () => pm.response.to.have.status(200));",
-              "const r = pm.response.json();",
+              "const r = (pm.response.json() || {}).rows || [];  // la API responde {\"rows\":[...]}, no un array pelado",
               "pm.test(\"actividades con su rango\", () => {",
               "  if (!r.length) return;",
               "  pm.expect(r[0]).to.have.property(\"fk_tactividad\");",
@@ -720,7 +720,7 @@
             "exec": [
               "pm.test(\"200\", () => pm.response.to.have.status(200));",
               "pm.test(\"registro formativo aplicado\", () => {",
-              "  pm.expect(pm.response.json()[0].registros_afectados).to.be.above(0); });"
+              "  pm.expect((((pm.response.json() || {}).rows || [])[0] || {}).registros_afectados).to.be.above(0); });"
             ]
           }
         }
@@ -773,7 +773,7 @@
             "type": "text/javascript",
             "exec": [
               "pm.test(\"200\", () => pm.response.to.have.status(200));",
-              "const r = pm.response.json();",
+              "const r = (pm.response.json() || {}).rows || [];  // la API responde {\"rows\":[...]}, no un array pelado",
               "if (r.length) { pm.test(\"trae agregados\", () => {",
               "  pm.expect(r[0]).to.have.property(\"total_count\");",
               "  pm.expect(r[0]).to.have.property(\"total_estudiantes\");",
@@ -882,7 +882,7 @@
             "type": "text/javascript",
             "exec": [
               "pm.test(\"200\", () => pm.response.to.have.status(200));",
-              "const r = pm.response.json();",
+              "const r = (pm.response.json() || {}).rows || [];  // la API responde {\"rows\":[...]}, no un array pelado",
               "pm.test(\"filas de la actividad pedida\", () => {",
               "  if (!r.length) return;",
               "  pm.expect(r[0]).to.have.property(\"actividad\");",
