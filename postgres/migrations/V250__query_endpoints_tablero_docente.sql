@@ -108,6 +108,10 @@ COMMENT ON FUNCTION academico_test.fn_docente_periodo_vigente(BIGINT)
 -- p_fk_periodo pasa a ser OPCIONAL (DEFAULT NULL): sin el, se resuelve con
 -- fn_docente_periodo_vigente a partir de las asignaciones del propio docente.
 -- ===========================================================================
+-- Cambia el tipo de retorno (gana grupo_etiqueta), y CREATE OR REPLACE no
+-- puede cambiarlo: hay que soltarla antes.
+DROP FUNCTION IF EXISTS academico_test.fn_docente_grupos_listar(BIGINT, BIGINT, BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_docente_grupos_listar(
     p_pk_usuario_solicitante BIGINT,
     p_fk_periodo             BIGINT DEFAULT NULL,
@@ -117,6 +121,12 @@ RETURNS TABLE (
     grupo_id                BIGINT,
     grupo_codigo             VARCHAR,
     grupo_nombre             VARCHAR,
+    -- Etiqueta lista para pintar en el selector: "<grado> <grupo>". Sin ella
+    -- el cliente no puede distinguir un grupo de otro -- CODIGO viene NULL y
+    -- NOMBRE es "01" en todos los grupos, asi que dos grados distintos se ven
+    -- identicos en la lista. Misma convencion que fn_asignacion_pool (V46),
+    -- que ya expone grado_grupo como "<grado> <grupo>".
+    grupo_etiqueta           VARCHAR,
     capacidad                NUMERIC,
     jornada_id               BIGINT,
     jornada_valor            VARCHAR,
@@ -153,6 +163,7 @@ BEGIN
     RETURN QUERY
     SELECT DISTINCT
            gr.PK_TGRUPO, gr.CODIGO, gr.NOMBRE,
+           TRIM(CONCAT_WS(' ', g.NOMBRE, gr.NOMBRE))::VARCHAR,
            gr.CAPACIDAD,
            jor.PK_LISTA_VALOR, jor.VALOR, jor.NOMBRE,
            mp.PK_LISTA_VALOR, mp.VALOR, mp.NOMBRE,
