@@ -26,7 +26,11 @@
 -- caller NUNCA los manda (si no, cualquiera se haria pasar por otro usuario
 -- y saltaria el scope por rol de V220).
 --
--- Endpoints registrados (7):
+-- Endpoints registrados (8):
+--   POST   /asistencias/soporte      (destino FILE, via file-service)
+--          sube UN archivo de soporte y devuelve su pk_tarchivo -- paso 1
+--          del flujo de 2 pasos. Sin el, un docente no podia adjuntar nada:
+--          ningun destino FILE de eval-col tenia CEVAL-DOCENTE.
 --   GET    /asistencias/sesion/estudiantes  fn_asistencia_estudiantes_sesion
 --          padron de la pantalla "Asistencia manual" (alumnos + estado actual)
 --   GET    /asistencias/sesion/asignaturas  fn_asistencia_asignaturas_sesion
@@ -273,6 +277,53 @@ ON CONFLICT (uuid) DO UPDATE
        detail = EXCLUDED.detail;
 
 -- ---------------------------------------------------------------------------
+-- 3d. SUBIR EL SOPORTE de un estudiante (paso 1 del flujo de 2 pasos)
+--
+--     Destino FILE dedicado del modulo. `file-service` intercepta
+--     POST /files/eval-col/asistencias/soporte, sube el binario a S3, crea la
+--     fila en TARCHIVO y reenvia aca el pk resultante; esta query solo lo
+--     devuelve -- misma mecanica que /tmp-icono-simbolo, que es lo que el
+--     front venia usando prestado.
+--
+--     *** POR QUE EXISTE (hallazgo real, probado en 172.233.184.248) ***
+--     `role_query` de /tmp-icono-simbolo solo tiene DIRECTOR_ET,
+--     JEFE_SISTEMA_ET, SUPER_ADMINISTRADOR y SSO-ADMIN. Revisadas LAS 9
+--     queries de eval-col que declaran algun campo FILE, CEVAL-DOCENTE no
+--     aparece en NINGUNA: un docente recibia 403 ("El catalogo rechazo la
+--     consulta") al subir el soporte, aunque si tiene el binding
+--     role_endpoint POST /files/** -- ese permiso no sirve de nada sin un
+--     destino que el rol pueda invocar. Es decir: el rol que TOMA la
+--     asistencia era el unico que no podia adjuntar la justificacion.
+--     Con este endpoint el permiso se deriva del menu ASISTENCIAS, igual
+--     que los otros 7, en vez de depender de un endpoint generico ajeno.
+--
+--     "FILE:asistencia" -> la clasificacion es el prefijo de la clave S3
+--     (<clasificacion>/<pk>.<ext>, ver TransformadorMultipart.claveDe), asi
+--     que los soportes quedan agrupados en su propia carpeta en vez de
+--     mezclados con los iconos. Un archivo por llamada: FILE[] no existe
+--     todavia (ParamTypes.java) -- por eso el flujo sigue siendo de 2 pasos
+--     y un POST por estudiante con soporte.
+-- ---------------------------------------------------------------------------
+INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
+                          path_template, execution_mode, http_method, param_types, detail)
+SELECT
+    'asis-soporte',
+    $q$SELECT :BODY.SOPORTE::bigint AS pk_tarchivo$q$,
+    'postgres', false, false, m.id_microservice,
+    '/asistencias/soporte', 'SELECT', 'POST',
+    '{
+       "BODY.SOPORTE": "FILE:asistencia"
+     }'::jsonb,
+    'V221 -- paso 1 del flujo de soporte: sube UN archivo (multipart, campo SOPORTE) a POST /files/eval-col/asistencias/soporte y devuelve su pk_tarchivo, que luego se manda como REGISTROS[i].fkArchivo en POST /asistencias/registrar (o como SOPORTE_ARCHIVO en el PATCH). Existe para que el permiso de subida se derive del menu ASISTENCIAS: el generico /tmp-icono-simbolo es solo de admins y dejaba al docente sin poder adjuntar. La validacion de sede del archivo la hace fn_asistencia_registrar_bulk al adjuntarlo, no aqui.'
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (uuid) DO UPDATE
+   SET query = EXCLUDED.query, param_types = EXCLUDED.param_types,
+       path_template = EXCLUDED.path_template, http_method = EXCLUDED.http_method,
+       execution_mode = EXCLUDED.execution_mode, microservice_id = EXCLUDED.microservice_id,
+       detail = EXCLUDED.detail;
+
+-- ---------------------------------------------------------------------------
 -- 4. CALENDARIO mensual por sede (GET con query-string)
 -- ---------------------------------------------------------------------------
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
@@ -395,7 +446,7 @@ SELECT pr.id_role, q.id_query
   JOIN public.role pr ON pr.name = src.rname
  WHERE q.uuid IN ('asis-registrar', 'asis-editar', 'asis-seguimiento',
                   'asis-sesion-estudiantes', 'asis-sesion-asignaturas',
-                  'asis-calendario', 'asis-resumen-horas')
+                  'asis-calendario', 'asis-resumen-horas', 'asis-soporte')
    AND NOT EXISTS (
        SELECT 1 FROM public.role_query rq
         WHERE rq.query_id = q.id_query AND rq.role_id = pr.id_role
