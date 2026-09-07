@@ -179,6 +179,7 @@ SELECT
     p_fecha_hasta     => CAST(:BODY.FILTERS.FECHA_HASTA AS DATE),
     p_fk_tgrupo       => CAST(:BODY.FILTERS.GRUPO AS BIGINT),
     p_fk_tasignatura  => CAST(:BODY.FILTERS.ASIGNATURA AS BIGINT),
+    p_fk_tactividad   => CAST(:BODY.FILTERS.ACTIVIDAD AS BIGINT),
     p_tipo_asistencia => CAST(:BODY.FILTERS.TIPO_ASISTENCIA AS NUMERIC),
     p_search          => CAST(:BODY.FILTERS.SEARCH AS TEXT),
     p_page_index      => COALESCE(CAST(:BODY.PAGEINDEX AS INTEGER), 0),
@@ -194,6 +195,7 @@ SELECT
        "BODY.FILTERS.FECHA_HASTA":     "VARCHAR",
        "BODY.FILTERS.GRUPO":           "BIGINT",
        "BODY.FILTERS.ASIGNATURA":      "BIGINT",
+       "BODY.FILTERS.ACTIVIDAD":       "BIGINT",
        "BODY.FILTERS.TIPO_ASISTENCIA": "NUMERIC",
        "BODY.FILTERS.SEARCH":          "VARCHAR",
        "BODY.SORTING.ID":              "VARCHAR",
@@ -201,7 +203,7 @@ SELECT
        "BODY.PAGEINDEX":               "INTEGER",
        "BODY.PAGESIZE":                "INTEGER"
      }'::jsonb,
-    'V221 -- pantalla Seguimiento: pagina de registros de asistencia con filtros rango de fecha / grupo / asignatura / tipo y busqueda libre. Cada fila trae total_estudiantes, ausentes y total_count (ventanas sobre el set filtrado completo, para las tarjetas y el pageCount). SORTING.ID: estudiante|documento|fecha|tipo|grupo|asignatura.'
+    'V221 -- pantalla Seguimiento: pagina de registros de asistencia con filtros rango de fecha / grupo / asignatura / ACTIVIDAD / tipo y busqueda libre (que incluye el titulo de la actividad). Cada fila trae fk_tactividad/actividad/es_formativa junto a la asignatura: en preescolar la columna de la pantalla es la ACTIVIDAD y la asignatura viene NULL, asi que filtrar o buscar por asignatura ahi no devuelve nada. FILTERS.ASIGNATURA y FILTERS.ACTIVIDAD son independientes y combinables. Cada fila trae total_estudiantes, ausentes y total_count (ventanas sobre el set filtrado completo, para las tarjetas y el pageCount). SORTING.ID: estudiante|documento|fecha|tipo|grupo|asignatura|actividad.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (uuid) DO UPDATE
@@ -556,6 +558,7 @@ SELECT q.id_query, c.param_key, c.only_positive, c.allow_decimals, c.max_digits,
     ('asis-sesion-asignaturas', 'QUERY.FUNCIONARIO',      TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-seguimiento',  'BODY.FILTERS.GRUPO',           TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-seguimiento',  'BODY.FILTERS.ASIGNATURA',      TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
+    ('asis-seguimiento',  'BODY.FILTERS.ACTIVIDAD',       TRUE,  FALSE, NULL,   NULL,   NULL,   NULL,   NULL,   NULL),
     ('asis-seguimiento',  'BODY.FILTERS.TIPO_ASISTENCIA', TRUE,  FALSE, 1,      NULL,   NULL,   NULL,   1::numeric,  6::numeric),
     ('asis-seguimiento',  'BODY.FILTERS.SEARCH',          NULL,  NULL,  NULL,   FALSE,  NULL,   100,    NULL,   NULL),
     ('asis-seguimiento',  'BODY.PAGEINDEX',               NULL,  FALSE, 6,      NULL,   NULL,   NULL,   0::numeric,  NULL),

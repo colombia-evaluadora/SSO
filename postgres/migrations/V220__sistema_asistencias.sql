@@ -176,6 +176,9 @@ DROP FUNCTION IF EXISTS academico_test.fn_asistencia_estudiantes_sesion(
     BIGINT, BIGINT, BIGINT, DATE, NUMERIC);
 DROP FUNCTION IF EXISTS academico_test.fn_asistencia_listar_seguimiento(
     DATE, DATE, BIGINT, BIGINT, NUMERIC, TEXT, INT, INT, TEXT, TEXT);
+-- ...y la de 11 parametros, que gana p_fk_tactividad (filtro por actividad).
+DROP FUNCTION IF EXISTS academico_test.fn_asistencia_listar_seguimiento(
+    BIGINT, DATE, DATE, BIGINT, BIGINT, NUMERIC, TEXT, INT, INT, TEXT, TEXT);
 -- fn_asistencia_calendario / fn_asistencia_resumen_horas ganaron el parametro
 -- p_fk_tfuncionario (filtro "mis asignaturas asignadas"); y resumen_horas
 -- ademas dos columnas de horas programadas -> cambia la firma / el RETURNS.
@@ -1387,8 +1390,14 @@ CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_listar_seguimiento(
     p_search          TEXT    DEFAULT NULL,
     p_page_index      INT     DEFAULT 0,
     p_page_size       INT     DEFAULT 10,
-    p_sort_by         TEXT    DEFAULT NULL,   -- estudiante|fecha|tipo|grupo|asignatura|documento
-    p_sort_dir        TEXT    DEFAULT NULL    -- asc|desc
+    p_sort_by         TEXT    DEFAULT NULL,   -- estudiante|fecha|tipo|grupo|asignatura|actividad|documento
+    p_sort_dir        TEXT    DEFAULT NULL,   -- asc|desc
+    -- Filtro FORMATIVO: en preescolar la columna de la pantalla no es la
+    -- asignatura sino la ACTIVIDAD, asi que se filtra por ella. Es
+    -- independiente de p_fk_tasignatura (se pueden combinar o usar sueltos):
+    -- una fila formativa tiene asignatura NULL, asi que filtrar por
+    -- asignatura la dejaria fuera.
+    p_fk_tactividad   BIGINT  DEFAULT NULL
 )
 RETURNS TABLE (
     pk_tasistencia        BIGINT,
@@ -1396,6 +1405,12 @@ RETURNS TABLE (
     documento             VARCHAR,
     grupo                 VARCHAR,
     asignatura            VARCHAR,
+    -- La pantalla pinta UNA columna: `asignatura` en el mundo evaluativo y
+    -- `actividad` en el formativo. es_formativa le dice cual sin que tenga
+    -- que deducirlo de un NULL.
+    fk_tactividad         BIGINT,
+    actividad             VARCHAR,
+    es_formativa          BOOLEAN,
     fecha                 DATE,
     bloque                NUMERIC,
     hora_inicio           TIMESTAMP,
@@ -1422,13 +1437,15 @@ BEGIN
         WHEN 'tipo'       THEN 'tipo_asistencia_valor'
         WHEN 'grupo'      THEN 'grupo'
         WHEN 'asignatura' THEN 'asignatura'
+        WHEN 'actividad'  THEN 'actividad'
         ELSE 'fecha'
     END;
     v_dir := CASE WHEN lower(coalesce(p_sort_dir, '')) = 'asc' THEN 'ASC' ELSE 'DESC' END;
 
     RETURN QUERY EXECUTE format($q$
         SELECT
-            pk_tasistencia, estudiante, documento, grupo, asignatura, fecha,
+            pk_tasistencia, estudiante, documento, grupo, asignatura,
+            fk_tactividad, actividad, es_formativa, fecha,
             bloque, hora_inicio, hora_fin, tipo_asistencia_valor, tipo_asistencia,
             observacion, tiene_soporte, fk_soporte_archivo, soporte_nombre,
             -- DISTINCT no existe en funciones de ventana: se cuenta la
@@ -1439,6 +1456,7 @@ BEGIN
         FROM (
             SELECT
                 d.pk_tasistencia, d.estudiante, d.documento, d.grupo, d.asignatura,
+                d.fk_tactividad, d.actividad, d.es_formativa,
                 d.fecha, d.bloque, d.hora_inicio, d.hora_fin,
                 d.tipo_valor  AS tipo_asistencia_valor,
                 d.tipo_nombre AS tipo_asistencia,
@@ -1454,12 +1472,17 @@ BEGIN
                AND ($3 IS NULL OR d.fecha <= $3)
                AND ($4 IS NULL OR d.fk_tgrupo = $4)
                AND ($5 IS NULL OR d.fk_tasignatura = $5)
+               AND ($10 IS NULL OR d.fk_tactividad = $10)
                AND ($6 IS NULL OR d.tipo_valor = $6::INT)
+               -- La busqueda libre incluye la ACTIVIDAD: en preescolar es lo
+               -- que la pantalla muestra en esa columna, y buscar por
+               -- asignatura ahi no encuentra nada (viene NULL).
                AND ($7 IS NULL OR (
                        d.estudiante  ILIKE '%%' || $7 || '%%' OR
                        d.documento   ILIKE '%%' || $7 || '%%' OR
                        d.grupo       ILIKE '%%' || $7 || '%%' OR
                        d.asignatura  ILIKE '%%' || $7 || '%%' OR
+                       d.actividad   ILIKE '%%' || $7 || '%%' OR
                        d.tipo_nombre ILIKE '%%' || $7 || '%%'
                    ))
                -- Alcance por rol. Se evalua al final y una sola vez por
@@ -1471,13 +1494,14 @@ BEGIN
        OFFSET COALESCE($8, 0) * COALESCE(NULLIF($9, 0), 0)
     $q$, v_col, v_dir)
     USING p_pk_usuario, p_fecha_desde, p_fecha_hasta, p_fk_tgrupo, p_fk_tasignatura,
-          p_tipo_asistencia, NULLIF(TRIM(p_search), ''), p_page_index, p_page_size;
+          p_tipo_asistencia, NULLIF(TRIM(p_search), ''), p_page_index, p_page_size,
+          p_fk_tactividad;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_listar_seguimiento(
-    BIGINT, DATE, DATE, BIGINT, BIGINT, NUMERIC, TEXT, INT, INT, TEXT, TEXT
-) IS 'Pantalla Seguimiento: listado paginado sobre v_asistencia_detalle con filtros rango de fecha / grupo / asignatura / tipo (VALOR) / busqueda libre (estudiante, documento, grupo, asignatura, estado). Alcance por rol via fn_asistencia_puede_ver. total_estudiantes y ausentes cuentan ESTUDIANTES DISTINTOS (no registros) del set filtrado completo, y total_count sus filas -- las tres son ventanas independientes de la pagina. Orden por estudiante|documento|fecha|tipo|grupo|asignatura.';
+    BIGINT, DATE, DATE, BIGINT, BIGINT, NUMERIC, TEXT, INT, INT, TEXT, TEXT, BIGINT
+) IS 'Pantalla Seguimiento: listado paginado sobre v_asistencia_detalle con filtros rango de fecha / grupo / asignatura / ACTIVIDAD / tipo (VALOR) / busqueda libre (estudiante, documento, grupo, asignatura, actividad, estado). Devuelve fk_tactividad/actividad/es_formativa junto a la asignatura: en preescolar la columna de la pantalla es la ACTIVIDAD y la asignatura viene NULL, asi que filtrar o buscar por asignatura ahi no encuentra nada. p_fk_tasignatura y p_fk_tactividad son independientes y combinables. Alcance por rol via fn_asistencia_puede_ver. total_estudiantes y ausentes cuentan ESTUDIANTES DISTINTOS (no registros) del set filtrado completo, y total_count sus filas -- las tres son ventanas independientes de la pagina. Orden por estudiante|documento|fecha|tipo|grupo|asignatura|actividad.';
 
 
 -- ---------------------------------------------------------------------------
