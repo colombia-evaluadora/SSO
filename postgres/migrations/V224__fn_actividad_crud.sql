@@ -454,17 +454,20 @@ PARALLEL SAFE
 AS $$
     SELECT CASE
         WHEN p_fecha_calificado IS NOT NULL                                  THEN 'FINALIZADA'
-        WHEN p_fecha_inicio IS NULL AND p_fecha_cierre IS NULL               THEN 'SIN_PROGRAMAR'
         WHEN p_fecha_cierre IS NOT NULL
          AND p_hoy > p_fecha_cierre + COALESCE(p_dias_gracia, 2)             THEN 'VENCIDA'
-        WHEN p_fecha_cierre IS NOT NULL AND p_hoy > p_fecha_cierre           THEN 'PENDIENTE_POR_EVALUAR'
-        WHEN p_fecha_inicio IS NOT NULL AND p_hoy < p_fecha_inicio           THEN 'PROGRAMADA'
-        ELSE 'EN_EVALUACION'
+        -- Vigente: hoy cae dentro de la ventana. Que falte UN extremo no
+        -- invalida la vigencia (solo-inicio ya empezado, o solo-cierre aun no
+        -- pasado); sin NINGUNA fecha no es vigente y cae a pendiente.
+        WHEN (p_fecha_inicio IS NOT NULL OR p_fecha_cierre IS NOT NULL)
+         AND (p_fecha_inicio IS NULL OR p_hoy >= p_fecha_inicio)
+         AND (p_fecha_cierre IS NULL OR p_hoy <= p_fecha_cierre)             THEN 'EN_EVALUACION'
+        ELSE 'PENDIENTE_POR_EVALUAR'
     END::VARCHAR;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_estado(DATE, DATE, DATE, DATE, INT)
-    IS 'Estado DERIVADO de una actividad (no hay columna de estado), en este orden: FINALIZADA (tiene FECHA_CALIFICADO) > SIN_PROGRAMAR (sin fechas) > VENCIDA (cierre + p_dias_gracia < hoy, sin calificar) > PENDIENTE_POR_EVALUAR (cierre pasado, dentro de la gracia) > PROGRAMADA (aun no inicia) > EN_EVALUACION (vigente). IMMUTABLE: recibe el "hoy" por parametro. Unica definicion, usada por listar / detalle / calendario / resumen. V224.';
+    IS 'Estado DERIVADO de una actividad (no hay columna de estado). Son EXACTAMENTE los CUATRO del tablero, en este orden: FINALIZADA (tiene FECHA_CALIFICADO) > VENCIDA (cierre + p_dias_gracia < hoy, sin calificar) > EN_EVALUACION (hoy dentro de la ventana [inicio, cierre]; basta con que se cumpla el extremo presente) > PENDIENTE_POR_EVALUAR (todo lo demas: aun no inicia, sin fechas, o cierre pasado pero dentro de los dias de gracia). Antes devolvia ademas PROGRAMADA (aun no inicia) y SIN_PROGRAMAR (sin fechas), que no corresponden a ninguna tarjeta del tablero -- el listado devolvia PROGRAMADA y el front no tenia donde pintarla; se colapsaron en PENDIENTE_POR_EVALUAR por decision de negocio. IMMUTABLE: recibe el "hoy" por parametro. Unica definicion, usada por listar / detalle / calendario / resumen. V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_material_reemplazar — materiales de apoyo.
@@ -2221,6 +2224,10 @@ COMMENT ON FUNCTION academico_test.fn_actividad_buscar_por_pk(BIGINT, BIGINT, IN
 -- Agrega p_fk_tfuncionario al final (V250) -- mismo motivo de DROP que
 -- fn_actividad_listar arriba: un argumento nuevo es un overload nuevo.
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_resumen_estados(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT);
+-- Firma con p_fk_tfuncionario pero que aun devolvia programadas/sin_programar:
+-- al pasar a las CUATRO tarjetas cambia el tipo de retorno, y CREATE OR
+-- REPLACE no puede cambiarlo -- hay que soltarla antes.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_resumen_estados(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resumen_estados(
     p_pk_usuario_solicitante   BIGINT,
     p_fk_tasignatura           BIGINT DEFAULT NULL,
@@ -2239,8 +2246,6 @@ RETURNS TABLE (
     en_evaluacion           BIGINT,
     finalizadas             BIGINT,
     vencidas                BIGINT,
-    programadas             BIGINT,
-    sin_programar           BIGINT,
     total                   BIGINT
 )
 LANGUAGE plpgsql
@@ -2279,15 +2284,13 @@ BEGIN
            COUNT(*) FILTER (WHERE estado = 'EN_EVALUACION')::BIGINT,
            COUNT(*) FILTER (WHERE estado = 'FINALIZADA')::BIGINT,
            COUNT(*) FILTER (WHERE estado = 'VENCIDA')::BIGINT,
-           COUNT(*) FILTER (WHERE estado = 'PROGRAMADA')::BIGINT,
-           COUNT(*) FILTER (WHERE estado = 'SIN_PROGRAMAR')::BIGINT,
            COUNT(*)::BIGINT
       FROM est;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_resumen_estados(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT, BIGINT)
-    IS 'Contadores del tablero del Planeador (Pendientes por evaluar / En evaluacion vigentes / Finalizadas / Vencidas > p_dias_gracia dias / Programadas / Sin programar) en UNA sola pasada con COUNT(*) FILTER sobre el estado derivado por fn_actividad_estado — no seis queries. Filtros opcionales por asignatura, grupo, unidad, ventana de fechas y (V250) docente que DICTA la actividad (p_fk_tfuncionario, via TDOCENTE_ASIGNATURA por FK_TGRUPO+FK_TASIGNATURA -- no el autor de la unidad). Gate VER sobre PLANEADOR. V224/V250.';
+    IS 'Contadores del tablero del Planeador (Pendientes por evaluar / En evaluacion vigentes / Finalizadas / Vencidas > p_dias_gracia dias) en UNA sola pasada con COUNT(*) FILTER sobre el estado derivado por fn_actividad_estado — no cuatro queries. Devuelve EXACTAMENTE las cuatro tarjetas mas el total: se quitaron programadas y sin_programar, que con la derivacion de cuatro estados de fn_actividad_estado quedarian siempre en 0. Filtros opcionales por asignatura, grupo, unidad, ventana de fechas y (V250) docente que DICTA la actividad (p_fk_tfuncionario, via TDOCENTE_ASIGNATURA por FK_TGRUPO+FK_TASIGNATURA -- no el autor de la unidad). Gate VER sobre PLANEADOR. V224/V250.';
 
 -- ---------------------------------------------------------------------------
 -- fn_funcionario_actual — resuelve el TFUNCIONARIO del usuario autenticado.
@@ -2330,6 +2333,10 @@ COMMENT ON FUNCTION academico_test.fn_funcionario_actual(BIGINT)
 -- tablero de "mis actividades" no tiene sentido para un no-docente, pero
 -- no es un error de autorizacion (eso ya lo filtra el gate PLANEADOR/VER).
 -- ---------------------------------------------------------------------------
+-- Cambia el tipo de retorno al pasar a las CUATRO tarjetas: CREATE OR REPLACE
+-- no puede cambiarlo, hay que soltarla antes.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_resumen_estados_docente(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resumen_estados_docente(
     p_pk_usuario_solicitante   BIGINT,
     p_fk_tasignatura           BIGINT DEFAULT NULL,
@@ -2344,8 +2351,6 @@ RETURNS TABLE (
     en_evaluacion           BIGINT,
     finalizadas             BIGINT,
     vencidas                BIGINT,
-    programadas             BIGINT,
-    sin_programar           BIGINT,
     total                   BIGINT
 )
 LANGUAGE plpgsql
@@ -2364,7 +2369,7 @@ BEGIN
     v_fk_tfuncionario := academico_test.fn_funcionario_actual(p_pk_usuario_solicitante);
 
     IF v_fk_tfuncionario IS NULL THEN
-        RETURN QUERY SELECT 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT;
+        RETURN QUERY SELECT 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT;
         RETURN;
     END IF;
 
@@ -2377,7 +2382,129 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_resumen_estados_docente(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT)
-    IS 'Tablero "mis actividades" del docente autenticado (4+2 tarjetas: Pendientes por evaluar / En evaluacion vigentes / Finalizadas / Vencidas > p_dias_gracia dias / Programadas / Sin programar). Wrapper delgado: resuelve el TFUNCIONARIO del caller con fn_funcionario_actual y delega el conteo en fn_actividad_resumen_estados (misma fuente de verdad que el resumen general y que fn_actividad_listar) -- no duplica la logica de fn_actividad_estado. Si el usuario autenticado no es un docente activo (fn_funcionario_actual devuelve NULL), retorna todos los contadores en 0 (no es un error: el gate PLANEADOR/VER ya se evaluo primero). Gate VER sobre PLANEADOR. V250.';
+    IS 'Tablero "mis actividades" del docente autenticado (las CUATRO tarjetas: Pendientes por evaluar / En evaluacion vigentes / Finalizadas / Vencidas > p_dias_gracia dias, mas el total). Wrapper delgado: resuelve el TFUNCIONARIO del caller con fn_funcionario_actual y delega el conteo en fn_actividad_resumen_estados (misma fuente de verdad que el resumen general y que fn_actividad_listar) -- no duplica la logica de fn_actividad_estado. Si el usuario autenticado no es un docente activo (fn_funcionario_actual devuelve NULL), retorna todos los contadores en 0 (no es un error: el gate PLANEADOR/VER ya se evaluo primero). Gate VER sobre PLANEADOR. V250.';
+
+-- ---------------------------------------------------------------------------
+-- FECHA_CALIFICADO — se mantiene sola: sin esto FINALIZADA era INALCANZABLE.
+--
+-- fn_actividad_estado deriva FINALIZADA de TACTIVIDAD.FECHA_CALIFICADO, pero
+-- NINGUNA funcion escribia nunca esa columna: actividades con TODOS sus
+-- estudiantes calificados seguian con la fecha en NULL y estado
+-- EN_EVALUACION, asi que la tarjeta "Finalizadas" marcaba 0 sin importar
+-- cuanto se calificara. Se cierra ese hueco aqui.
+--
+-- Por TRIGGER y no llamando a un helper desde cada funcion de calificacion:
+-- hoy los puntos de escritura son ocho (rubrica / cotejo / escala / otro
+-- individuales, sus tres variantes bulk, y observar grupal e individual de
+-- V243) y cualquier flujo nuevo tendria que acordarse de invocarlo. El
+-- trigger sobre TACTIVIDAD_NOTA los cubre todos por construccion; el de
+-- TACTIVIDAD_ESTUDIANTE cubre la reapertura al asignar un alumno nuevo.
+--
+-- "Resuelto" contempla las DOS naturalezas de evaluacion del modulo:
+--   * evaluativa -> CALIFICACION no nula
+--   * formativa  -> CALIFICABLE='N' con OBSERVACION (preescolar, V243: no
+--                   lleva nota numerica, pero observar a todo el grupo SI
+--                   cierra la actividad)
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_finalizacion_refrescar(
+    p_pk_tactividad BIGINT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_asignados INT;
+    v_resueltos INT;
+BEGIN
+    IF p_pk_tactividad IS NULL THEN
+        RETURN;
+    END IF;
+
+    SELECT COUNT(*),
+           COUNT(*) FILTER (
+               WHERE n.PK_TACTIVIDAD_NOTA IS NOT NULL
+                 AND ( n.CALIFICACION IS NOT NULL
+                       OR (n.CALIFICABLE = 'N' AND NULLIF(TRIM(n.OBSERVACION), '') IS NOT NULL) ))
+      INTO v_asignados, v_resueltos
+      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+      LEFT JOIN academico_test.TACTIVIDAD_NOTA n
+             ON n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
+            AND n.ACTIVE = TRUE
+     WHERE ae.FK_TACTIVIDAD = p_pk_tactividad
+       AND ae.ACTIVE = TRUE;
+
+    IF v_asignados > 0 AND v_resueltos = v_asignados THEN
+        -- Solo si no estaba: no se pisa la fecha original cada vez que se
+        -- re-califica a alguien de una actividad ya cerrada.
+        UPDATE academico_test.TACTIVIDAD
+           SET FECHA_CALIFICADO = CURRENT_DATE
+         WHERE PK_TACTIVIDAD = p_pk_tactividad
+           AND FECHA_CALIFICADO IS NULL;
+    ELSE
+        -- Se reabre: quedo alguien sin resolver (alumno nuevo, nota borrada).
+        UPDATE academico_test.TACTIVIDAD
+           SET FECHA_CALIFICADO = NULL
+         WHERE PK_TACTIVIDAD = p_pk_tactividad
+           AND FECHA_CALIFICADO IS NOT NULL;
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_finalizacion_refrescar(BIGINT)
+    IS 'Recalcula TACTIVIDAD.FECHA_CALIFICADO de UNA actividad: la fija en CURRENT_DATE cuando todos sus estudiantes ACTIVE tienen la evaluacion resuelta, y la vuelve a NULL si alguno deja de estarlo (alumno nuevo asignado, nota borrada). "Resuelto" = CALIFICACION no nula (actividad evaluativa) u OBSERVACION con CALIFICABLE=''N'' (actividad formativa de preescolar, V243). Es lo que hace ALCANZABLE el estado FINALIZADA de fn_actividad_estado, que antes nadie podia producir porque ninguna funcion escribia esta columna. No se invoca desde las funciones de calificar: lo disparan los triggers de TACTIVIDAD_NOTA y TACTIVIDAD_ESTUDIANTE, para cubrir por construccion los ocho puntos de escritura actuales y los que se agreguen despues. V224.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_tactividad_nota_finalizacion()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_pk_tactividad BIGINT;
+BEGIN
+    SELECT ae.FK_TACTIVIDAD INTO v_pk_tactividad
+      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+     WHERE ae.PK_TACTIVIDAD_ESTUDIANTE
+           = COALESCE(NEW.FK_TACTIVIDAD_ESTUDIANTE, OLD.FK_TACTIVIDAD_ESTUDIANTE);
+
+    PERFORM academico_test.fn_actividad_finalizacion_refrescar(v_pk_tactividad);
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS tr_tactividad_nota_finalizacion ON academico_test.TACTIVIDAD_NOTA;
+CREATE TRIGGER tr_tactividad_nota_finalizacion
+    AFTER INSERT OR UPDATE OR DELETE ON academico_test.TACTIVIDAD_NOTA
+    FOR EACH ROW EXECUTE FUNCTION academico_test.fn_tactividad_nota_finalizacion();
+
+CREATE OR REPLACE FUNCTION academico_test.fn_tactividad_estudiante_finalizacion()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM academico_test.fn_actividad_finalizacion_refrescar(
+        COALESCE(NEW.FK_TACTIVIDAD, OLD.FK_TACTIVIDAD));
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS tr_tactividad_estudiante_finalizacion ON academico_test.TACTIVIDAD_ESTUDIANTE;
+CREATE TRIGGER tr_tactividad_estudiante_finalizacion
+    AFTER INSERT OR UPDATE OR DELETE ON academico_test.TACTIVIDAD_ESTUDIANTE
+    FOR EACH ROW EXECUTE FUNCTION academico_test.fn_tactividad_estudiante_finalizacion();
+
+-- Backfill: las actividades ya calificadas antes de que existiera el trigger
+-- deben quedar FINALIZADA sin esperar a que alguien las vuelva a tocar.
+DO $backfill$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN SELECT DISTINCT ae.FK_TACTIVIDAD AS pk
+               FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+              WHERE ae.ACTIVE = TRUE
+    LOOP
+        PERFORM academico_test.fn_actividad_finalizacion_refrescar(r.pk);
+    END LOOP;
+END
+$backfill$;
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_listar_docente — "Ver detalles" de cada tarjeta: el mismo

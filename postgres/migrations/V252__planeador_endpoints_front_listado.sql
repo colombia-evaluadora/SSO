@@ -123,8 +123,6 @@ SELECT
        t.en_evaluacion,
        t.finalizadas,
        t.vencidas,
-       t.programadas,
-       t.sin_programar,
        t.total
   FROM academico_test.fn_actividad_resumen_estados_docente(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
@@ -151,3 +149,20 @@ SELECT r.id_role, q.id_query
  WHERE m.serviceid = 'eval-col'
    AND q.path_template = '/planeador/actividades/stats'
 ON CONFLICT DO NOTHING;
+
+-- El INSERT de arriba lleva ON CONFLICT DO NOTHING, asi que en un ambiente
+-- donde la fila YA existe (registrada antes de que fn_actividad_resumen_estados
+-- pasara a las cuatro tarjetas) no actualizaria su SQL, y el endpoint
+-- reventaria pidiendo t.programadas / t.sin_programar, columnas que la funcion
+-- ya no devuelve. Este UPDATE deja la fila existente igual a la de un ambiente
+-- nuevo -- es lo que hace re-aplicable el archivo.
+UPDATE public.query q
+   SET query = replace(
+                 replace(q.query, E'       t.programadas,\n', ''),
+                 E'       t.sin_programar,\n', '')
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id
+   AND m.serviceid       = 'eval-col'
+   AND q.path_template   = '/planeador/actividades/stats'
+   AND q.http_method     = 'GET'
+   AND (q.query LIKE '%t.programadas%' OR q.query LIKE '%t.sin_programar%');
