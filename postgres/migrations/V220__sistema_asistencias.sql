@@ -436,12 +436,18 @@ CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_franja_bloque(
 )
 RETURNS TABLE (hora_inicio TIMESTAMP, hora_fin TIMESTAMP)
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-    SELECT COALESCE(p_hora_inicio, p_fecha + p_jornada_inicio),
-           COALESCE(p_hora_fin,    p_fecha + p_jornada_fin);
+    -- Se toma SOLO la hora de reloj (::TIME) y se estampa sobre la FECHA de
+    -- la sesion. THORARIO.HORA_INICIO/HORA_FIN son TIMESTAMP, pero su parte
+    -- de FECHA es la del dia en que se cargo el horario, no la de la sesion:
+    -- devolverlas tal cual daba "2026-09-04 11:00" para una sesion del
+    -- 2026-09-07, e incoherente con la rama de reserva (que si usaba la
+    -- fecha real). Ahora ambas ramas devuelven la misma fecha: la de la sesion.
+    SELECT p_fecha + COALESCE(p_hora_inicio::TIME, p_jornada_inicio),
+           p_fecha + COALESCE(p_hora_fin::TIME,    p_jornada_fin);
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_franja_bloque(DATE, TIMESTAMP, TIMESTAMP, TIME, TIME)
-    IS 'Franja horaria (reloj) de un bloque de THORARIO para la FECHA de la sesion. Si el bloque trae HORA_INICIO/HORA_FIN propias, esas. Si no, la jornada del TPERIODO_ACADEMICO (HORA_INICIO/HORA_FIN, TIME) puesta sobre la fecha -- misma reserva que fn_asistencia_horas_bloque pero para el reloj puntual, no la duracion agregada. La usan v_asistencia_detalle, fn_asistencia_estudiantes_sesion, fn_asistencia_sesiones_programadas y fn_asistencia_asignaturas_sesion -- unico sitio con esta regla.';
+    IS 'Franja horaria (reloj) de un bloque de THORARIO estampada sobre la FECHA de la sesion. Si el bloque trae HORA_INICIO/HORA_FIN propias, se usa su parte de reloj (::TIME) -- su parte de fecha es la del dia en que se cargo el horario, no la de la sesion, y devolverla tal cual daba una fecha incoherente con la rama de reserva. Si no, la jornada del TPERIODO_ACADEMICO (HORA_INICIO/HORA_FIN, TIME) puesta sobre la fecha -- misma reserva que fn_asistencia_horas_bloque pero para el reloj puntual, no la duracion agregada. La usan v_asistencia_detalle, fn_asistencia_estudiantes_sesion, fn_asistencia_sesiones_programadas y fn_asistencia_asignaturas_sesion -- unico sitio con esta regla.';
 
 
 -- ===========================================================================
