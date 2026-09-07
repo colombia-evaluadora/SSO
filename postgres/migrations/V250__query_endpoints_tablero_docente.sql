@@ -63,13 +63,55 @@
 SET search_path TO academico_test, public;
 
 -- ===========================================================================
+-- (0) fn_docente_periodo_vigente — el periodo sale de los DATOS, no del
+--     cliente.
+--
+-- Antes, los dos endpoints del filtro exigian ?periodo=: el front tenia que
+-- conocer el PK_TPERIODO_ACADEMICO antes de poder pedir los grupos, un dato
+-- que no tiene a mano al pintar la pantalla. Pero el periodo ya esta implicito
+-- en las propias asignaciones del docente (TDOCENTE_ASIGNATURA lo lleva), asi
+-- que se deduce aqui.
+--
+-- Cual, cuando el docente tiene varios: primero el que este VIGENTE por fechas
+-- (CURRENT_DATE dentro de [FECHA_INICIO, FECHA_FIN]); si ninguno lo esta, el
+-- mas reciente por fecha de inicio. Asi, en mitad del ano lectivo devuelve el
+-- periodo en curso, y fuera de el (vacaciones, periodo recien cerrado) sigue
+-- devolviendo el ultimo en el que trabajo en vez de una lista vacia.
+-- ===========================================================================
+CREATE OR REPLACE FUNCTION academico_test.fn_docente_periodo_vigente(
+    p_fk_tfuncionario BIGINT
+)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT pa.PK_TPERIODO_ACADEMICO
+      FROM academico_test.TDOCENTE_ASIGNATURA da
+      JOIN academico_test.TPERIODO_ACADEMICO pa
+        ON pa.PK_TPERIODO_ACADEMICO = da.FK_TPERIODO_ACADEMICO
+       AND pa.ACTIVE = TRUE
+     WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario
+       AND da.ACTIVE = TRUE
+     ORDER BY (CURRENT_DATE BETWEEN pa.FECHA_INICIO AND pa.FECHA_FIN) DESC,
+              pa.FECHA_INICIO DESC,
+              pa.PK_TPERIODO_ACADEMICO DESC
+     LIMIT 1;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_docente_periodo_vigente(BIGINT)
+    IS 'Periodo academico que corresponde a un docente segun SUS PROPIAS asignaciones (TDOCENTE_ASIGNATURA), sin que el cliente tenga que conocerlo: prioriza el que esta vigente por fechas (CURRENT_DATE dentro de [FECHA_INICIO, FECHA_FIN]) y, si ninguno lo esta, el mas reciente por fecha de inicio -- asi fuera del calendario lectivo sigue devolviendo el ultimo periodo trabajado en vez de vacio. NULL si el docente no tiene ninguna asignacion activa. Lo usan fn_docente_grupos_listar y fn_docente_grado_asignatura_listar cuando se las llama sin periodo. V250.';
+
+-- ===========================================================================
 -- (1) FIX del gate de V242 — auto-consulta del docente sobre sus propias
 --     asignaciones. Ver cabecera.
+--
+-- p_fk_periodo pasa a ser OPCIONAL (DEFAULT NULL): sin el, se resuelve con
+-- fn_docente_periodo_vigente a partir de las asignaciones del propio docente.
 -- ===========================================================================
 CREATE OR REPLACE FUNCTION academico_test.fn_docente_grupos_listar(
     p_pk_usuario_solicitante BIGINT,
-    p_fk_periodo             BIGINT,
-    p_fk_tfuncionario        BIGINT
+    p_fk_periodo             BIGINT DEFAULT NULL,
+    p_fk_tfuncionario        BIGINT DEFAULT NULL
 )
 RETURNS TABLE (
     grupo_id                BIGINT,
@@ -91,10 +133,22 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 STABLE
 AS $$
+DECLARE
+    v_func    BIGINT;
+    v_periodo BIGINT;
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
     );
+
+    -- Sin funcionario explicito, "yo": el caso normal desde la pantalla del
+    -- docente. Un administrativo que consulte a OTRO docente si lo manda.
+    v_func    := COALESCE(p_fk_tfuncionario,
+                          academico_test.fn_funcionario_actual(p_pk_usuario_solicitante));
+    -- Sin periodo explicito, el que corresponde a las asignaciones de ese
+    -- docente (ver fn_docente_periodo_vigente).
+    v_periodo := COALESCE(p_fk_periodo,
+                          academico_test.fn_docente_periodo_vigente(v_func));
 
     RETURN QUERY
     SELECT DISTINCT
@@ -110,13 +164,13 @@ BEGIN
       JOIN academico_test.TNIVEL_ENSENANZA ne ON ne.PK_NIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
       JOIN academico_test.TLISTA_VALOR jor    ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
       JOIN academico_test.TLISTA_VALOR mp     ON mp.PK_LISTA_VALOR = gr.FK_TLV_MODELO_PEDAGOGICO
-     WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario
-       AND da.FK_TPERIODO_ACADEMICO = p_fk_periodo
+     WHERE da.FK_TFUNCIONARIO = v_func
+       AND da.FK_TPERIODO_ACADEMICO = v_periodo
        AND da.ACTIVE = TRUE
        -- V250: el alcance territorial (admin/coordinador) O la auto-consulta
        -- del propio docente sobre sus asignaciones -- ver cabecera.
-       AND ( academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario_solicitante, p_fk_periodo)
-             OR p_fk_tfuncionario = academico_test.fn_funcionario_actual(p_pk_usuario_solicitante) )
+       AND ( academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario_solicitante, v_periodo)
+             OR v_func = academico_test.fn_funcionario_actual(p_pk_usuario_solicitante) )
      ORDER BY g.NOMBRE, gr.NOMBRE;
 END;
 $$;
@@ -126,8 +180,8 @@ COMMENT ON FUNCTION academico_test.fn_docente_grupos_listar(BIGINT, BIGINT, BIGI
 
 CREATE OR REPLACE FUNCTION academico_test.fn_docente_grado_asignatura_listar(
     p_pk_usuario_solicitante BIGINT,
-    p_fk_periodo             BIGINT,
-    p_fk_tfuncionario        BIGINT
+    p_fk_periodo             BIGINT DEFAULT NULL,
+    p_fk_tfuncionario        BIGINT DEFAULT NULL
 )
 RETURNS TABLE (
     grado_id       BIGINT,
@@ -140,10 +194,18 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 STABLE
 AS $$
+DECLARE
+    v_func    BIGINT;
+    v_periodo BIGINT;
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
     );
+
+    v_func    := COALESCE(p_fk_tfuncionario,
+                          academico_test.fn_funcionario_actual(p_pk_usuario_solicitante));
+    v_periodo := COALESCE(p_fk_periodo,
+                          academico_test.fn_docente_periodo_vigente(v_func));
 
     RETURN QUERY
     SELECT DISTINCT
@@ -153,11 +215,11 @@ BEGIN
       JOIN academico_test.TGRUPO gr       ON gr.PK_TGRUPO = da.FK_TGRUPO AND gr.ACTIVE = TRUE
       JOIN academico_test.TGRADO g        ON g.PK_TGRADO = gr.FK_TGRADO AND g.ACTIVE = TRUE
       JOIN academico_test.TASIGNATURA s   ON s.PK_TASIGNATURA = da.FK_TASIGNATURA AND s.ACTIVE = TRUE
-     WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario
-       AND da.FK_TPERIODO_ACADEMICO = p_fk_periodo
+     WHERE da.FK_TFUNCIONARIO = v_func
+       AND da.FK_TPERIODO_ACADEMICO = v_periodo
        AND da.ACTIVE = TRUE
-       AND ( academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario_solicitante, p_fk_periodo)
-             OR p_fk_tfuncionario = academico_test.fn_funcionario_actual(p_pk_usuario_solicitante) )
+       AND ( academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario_solicitante, v_periodo)
+             OR v_func = academico_test.fn_funcionario_actual(p_pk_usuario_solicitante) )
      ORDER BY g.NOMBRE, s.NOMBRE;
 END;
 $$;

@@ -273,15 +273,12 @@ SELECT
     'SELECT * FROM academico_test.fn_docente_grupos_listar(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:QUERY.PERIODO AS BIGINT),
-    (SELECT f.PK_TFUNCIONARIO
-       FROM academico_test.TFUNCIONARIO f
-      WHERE f.FK_TUSUARIO = public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT)
-        AND f.ACTIVE = TRUE)
+    NULL
 );',
     'postgres', false, false,
     m.id_microservice, '/planeador/docentes/grupos', 'SELECT', 'GET',
     '{"QUERY.PERIODO": "BIGINT"}'::jsonb,
-    'V248 -- paso 1-2 del filtro en cascada Grado -> Grupo -> Asignatura de la pantalla "Planilla de calificacion" (V239) para el DOCENTE autenticado: grupos (con su grado y nivel de ensenanza) donde el docente dicta al menos una asignatura en el periodo pedido (fn_docente_grupos_listar, V242). ?periodo= obligatorio (PK_TPERIODO_ACADEMICO). p_fk_tfuncionario se resuelve del token AQUI (TFUNCIONARIO.FK_TUSUARIO = usuario autenticado, ACTIVE=TRUE), nunca lo envia el cliente -- mismo patron que la rama de Asistencias (CU-86e32gvpp). Si el usuario autenticado no es funcionario activo (o no dicta nada en ese periodo), responde 200 con lista vacia, no error (confirmado NULL-safe leyendo V242). Cada fila trae grupo_id/codigo/nombre/capacidad, jornada (id/valor/nombre), modelo_pedagogico (id/valor/nombre), grado (id/codigo/nombre) y nivel_ensenanza (id/nombre). Sin paginar (universo de un docente en un periodo). Gate VER sobre PLANEADOR + fn_periodo_usuario_puede_ver. NO usar TGRUPO.FK_TFUNCIONARIO (ese es el director de grupo, no el docente de la asignatura).'
+    'V248 -- paso 1-2 del filtro en cascada Grado -> Grupo -> Asignatura de la pantalla "Planilla de calificacion" (V239) para el DOCENTE autenticado: grupos (con su grado y nivel de ensenanza) donde el docente dicta al menos una asignatura en el periodo pedido (fn_docente_grupos_listar, V242). ?periodo= es OPCIONAL: si no se envia, la funcion lo deduce de las propias asignaciones del docente (fn_docente_periodo_vigente, V250 -- el vigente por fechas o, si ninguno lo esta, el mas reciente), asi el front no necesita conocer el PK_TPERIODO_ACADEMICO para pintar la pantalla. El docente tampoco se envia: la funcion lo resuelve del token (fn_funcionario_actual). Si el usuario autenticado no es funcionario activo (o no dicta nada en ese periodo), responde 200 con lista vacia, no error (confirmado NULL-safe leyendo V242). Cada fila trae grupo_id/codigo/nombre/capacidad, jornada (id/valor/nombre), modelo_pedagogico (id/valor/nombre), grado (id/codigo/nombre) y nivel_ensenanza (id/nombre). Sin paginar (universo de un docente en un periodo). Gate VER sobre PLANEADOR + fn_periodo_usuario_puede_ver. NO usar TGRUPO.FK_TFUNCIONARIO (ese es el director de grupo, no el docente de la asignatura).'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
@@ -310,15 +307,12 @@ SELECT
     'SELECT * FROM academico_test.fn_docente_grado_asignatura_listar(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:QUERY.PERIODO AS BIGINT),
-    (SELECT f.PK_TFUNCIONARIO
-       FROM academico_test.TFUNCIONARIO f
-      WHERE f.FK_TUSUARIO = public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT)
-        AND f.ACTIVE = TRUE)
+    NULL
 );',
     'postgres', false, false,
     m.id_microservice, '/planeador/docentes/grado-asignatura', 'SELECT', 'GET',
     '{"QUERY.PERIODO": "BIGINT"}'::jsonb,
-    'V248 -- paso 3 del filtro en cascada Grado -> Grupo -> Asignatura de la pantalla "Planilla de calificacion" (V239) para el DOCENTE autenticado: pares (grado, asignatura) DISTINTOS que dicta en el periodo pedido, sin repetir por tener la misma asignatura en varios grupos del mismo grado (fn_docente_grado_asignatura_listar, V242). ?periodo= obligatorio. p_fk_tfuncionario se resuelve del token igual que en GET /planeador/docentes/grupos (punto 3) -- NULL-safe: usuario no-funcionario responde 200 con lista vacia. Cada fila trae grado (id/codigo/nombre) y asignatura (id/codigo/nombre). Sin paginar. Gate VER sobre PLANEADOR + fn_periodo_usuario_puede_ver.'
+    'V248 -- paso 3 del filtro en cascada Grado -> Grupo -> Asignatura de la pantalla "Planilla de calificacion" (V239) para el DOCENTE autenticado: pares (grado, asignatura) DISTINTOS que dicta en el periodo pedido, sin repetir por tener la misma asignatura en varios grupos del mismo grado (fn_docente_grado_asignatura_listar, V242). ?periodo= es OPCIONAL (se deduce igual que en GET /planeador/docentes/grupos, punto 3); el docente sale del token. NULL-safe: un usuario no-funcionario responde 200 con lista vacia. Cada fila trae grado (id/codigo/nombre) y asignatura (id/codigo/nombre). Sin paginar. Gate VER sobre PLANEADOR + fn_periodo_usuario_puede_ver.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
@@ -366,3 +360,36 @@ SELECT r.id_role, q.id_query
    AND q.path_template = '/planeador/asignaturas/:ID/ponderacion-disponible'
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
+
+-- ===========================================================================
+-- Sincronizacion de las dos filas del filtro docente (?periodo= opcional).
+--
+-- Los INSERT de arriba llevan ON CONFLICT DO NOTHING, asi que en un ambiente
+-- donde ya estaban registradas NO actualizarian su SQL, y seguirian exigiendo
+-- el periodo y resolviendo el funcionario por fuera. Estos UPDATE dejan esas
+-- filas iguales a las de un ambiente nuevo -- es lo que hace re-aplicable el
+-- archivo.
+-- ===========================================================================
+UPDATE public.query q
+   SET query = 'SELECT * FROM academico_test.fn_docente_grupos_listar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:QUERY.PERIODO AS BIGINT),
+    NULL
+);'
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id
+   AND m.serviceid       = 'eval-col'
+   AND q.path_template   = '/planeador/docentes/grupos'
+   AND q.http_method     = 'GET';
+
+UPDATE public.query q
+   SET query = 'SELECT * FROM academico_test.fn_docente_grado_asignatura_listar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:QUERY.PERIODO AS BIGINT),
+    NULL
+);'
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id
+   AND m.serviceid       = 'eval-col'
+   AND q.path_template   = '/planeador/docentes/grado-asignatura'
+   AND q.http_method     = 'GET';
