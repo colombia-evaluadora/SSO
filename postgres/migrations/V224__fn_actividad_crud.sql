@@ -21,6 +21,13 @@
 --   (5) Lectura optimizada           — fn_actividad_listar,
 --                                       fn_actividad_buscar_por_pk,
 --                                       fn_actividad_resumen_estados,
+--                                       fn_funcionario_actual (V250, helper
+--                                       generico -- TFUNCIONARIO del
+--                                       usuario autenticado),
+--                                       fn_actividad_resumen_estados_docente
+--                                       (V250, tablero "mis actividades"),
+--                                       fn_actividad_listar_docente (V250,
+--                                       "ver detalles" de cada tarjeta),
 --                                       fn_actividad_calendario.
 --
 -- ASIGNACION DE ESTUDIANTES: fn_actividad_crear NO vincula a nadie por
@@ -1804,6 +1811,12 @@ COMMENT ON FUNCTION academico_test.fn_actividad_eliminar(BIGINT, BIGINT)
 -- de la pagina — no contra todo el universo (leccion de V112: evitar
 -- SubPlan con loops = N filas del universo).
 -- ---------------------------------------------------------------------------
+-- Agrega p_fk_tfuncionario al final de la firma (V250): CREATE OR REPLACE
+-- por si solo NO reemplaza -- Postgres identifica la funcion por su lista
+-- de tipos de argumento, asi que agregar uno crea un OVERLOAD nuevo en vez
+-- de sustituir el viejo (14 vs 15 args son "funciones distintas"). El DROP
+-- de la firma vieja evita dejar dos fn_actividad_listar coexistiendo.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar(
     p_pk_usuario_solicitante   BIGINT,
     p_search                   VARCHAR   DEFAULT NULL,
@@ -1822,7 +1835,13 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar(
     p_orden_por                VARCHAR   DEFAULT 'fecha_inicio',
     p_orden_asc                BOOLEAN   DEFAULT TRUE,
     p_limite                   INT       DEFAULT 20,
-    p_offset                   INT       DEFAULT 0
+    p_offset                   INT       DEFAULT 0,
+    -- V250 -- filtro por docente que DICTA la actividad (TDOCENTE_ASIGNATURA
+    -- por grupo+asignatura, V46 -- NO el autor de la unidad, ver el CTE
+    -- base mas abajo). Al FINAL de la firma (no en medio) para no romper la
+    -- llamada POSICIONAL que V246 ya tiene registrada en public.query para
+    -- GET /planeador/actividades.
+    p_fk_tfuncionario          BIGINT    DEFAULT NULL
 )
 RETURNS TABLE (
     pk_tactividad                   BIGINT,
@@ -1879,6 +1898,20 @@ BEGIN
            AND (p_fk_tasignatura        IS NULL OR a.FK_TASIGNATURA = p_fk_tasignatura)
            AND (p_fk_tgrupo             IS NULL OR a.FK_TGRUPO = p_fk_tgrupo)
            AND (p_fk_tunidad            IS NULL OR a.FK_TUNIDAD = p_fk_tunidad)
+           -- V250 -- docente que DICTA la actividad: NO es el autor de la
+           -- unidad (TUNIDAD.FK_TFUNCIONARIO puede ser otro docente, o el
+           -- coordinador que armo la unidad). El vinculo real
+           -- docente<->asignatura<->grupo vive en TDOCENTE_ASIGNATURA
+           -- (V46, ver V242/fn_docente_grupos_listar): se cruza por
+           -- (FK_TGRUPO, FK_TASIGNATURA) de la actividad -- si la actividad
+           -- no tiene grupo (FK_TGRUPO NULL, p.ej. un "Criterio"), no hay
+           -- match posible y queda excluida cuando se filtra por docente.
+           AND (p_fk_tfuncionario       IS NULL OR EXISTS (
+                    SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+                     WHERE da.FK_TGRUPO      = a.FK_TGRUPO
+                       AND da.FK_TASIGNATURA = a.FK_TASIGNATURA
+                       AND da.FK_TFUNCIONARIO = p_fk_tfuncionario
+                       AND da.ACTIVE = TRUE))
            AND (p_fk_tlv_tipo_actividad IS NULL OR a.FK_TLV_TIPO_ACTIVIDAD = p_fk_tlv_tipo_actividad)
            AND (p_fk_tlv_instrumento    IS NULL OR a.FK_TLV_INSTRUMENTO_EVALUACION = p_fk_tlv_instrumento)
            -- Ventana de fechas: solapamiento con [desde, hasta].
@@ -1996,8 +2029,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT)
-    IS 'Pagina de actividades del Planeador (gate VER). Filtros indexados: asignatura, grupo, unidad, tipo, instrumento y ventana de fechas. p_search es el buscador unico "nombre, nivel educativo o instrumento": matchea (a) TITULO+DESCRIPCION con la expresion identica a la de idx_tactividad_busqueda_trgm, (b) el NOMBRE del nivel de ensenanza de la actividad (via FK_TUNIDAD -> TUNIDAD.FK_TGRADO -> TGRADO.FK_TNIVEL_ENSENANZA -> TNIVEL_ENSENANZA; solo aplica si la actividad tiene unidad) y (c) el NOMBRE del instrumento (TLISTA_VALOR de FK_TLV_INSTRUMENTO_EVALUACION). HONESTIDAD DE RENDIMIENTO: solo (a) puede entrar por el indice trigram; (b) y (c) son un post-filtro por EXISTS NO indexado sobre catalogos pequeños que, al ir en OR, impide el Bitmap Index Scan puro del trigram cuando p_search viene informado -- se evalua dentro del mismo CTE base ya acotado por los demas filtros y por LIMIT/OFFSET, nunca sobre un seq scan del universo sin filtrar. p_estados filtra por el estado DERIVADO (fn_actividad_estado) con p_dias_gracia (default 2). Orden (whitelist): fecha_inicio|fecha_cierre|fecha_creacion|titulo|ponderacion, cualquier otro valor cae a fecha_inicio. Devuelve nombres resueltos (asignatura, area, unidad, grupo, tipo, instrumento), el estado derivado y el progreso de evaluacion (asignados/evaluados/%). Optimizacion: el CTE base pagina tocando solo TACTIVIDAD y los joins + el LATERAL de progreso corren unicamente contra las filas de la pagina. total_count via COUNT(*) OVER(). V224.';
+COMMENT ON FUNCTION academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT)
+    IS 'Pagina de actividades del Planeador (gate VER). Filtros indexados: asignatura, grupo, unidad, tipo, instrumento y ventana de fechas. p_search es el buscador unico "nombre, nivel educativo o instrumento": matchea (a) TITULO+DESCRIPCION con la expresion identica a la de idx_tactividad_busqueda_trgm, (b) el NOMBRE del nivel de ensenanza de la actividad (via FK_TUNIDAD -> TUNIDAD.FK_TGRADO -> TGRADO.FK_TNIVEL_ENSENANZA -> TNIVEL_ENSENANZA; solo aplica si la actividad tiene unidad) y (c) el NOMBRE del instrumento (TLISTA_VALOR de FK_TLV_INSTRUMENTO_EVALUACION). HONESTIDAD DE RENDIMIENTO: solo (a) puede entrar por el indice trigram; (b) y (c) son un post-filtro por EXISTS NO indexado sobre catalogos pequeños que, al ir en OR, impide el Bitmap Index Scan puro del trigram cuando p_search viene informado -- se evalua dentro del mismo CTE base ya acotado por los demas filtros y por LIMIT/OFFSET, nunca sobre un seq scan del universo sin filtrar. p_estados filtra por el estado DERIVADO (fn_actividad_estado) con p_dias_gracia (default 2). p_fk_tfuncionario (V250, al final de la firma para no romper la llamada posicional ya registrada de V246) filtra por el docente que DICTA la actividad -- NO el autor de la unidad (TUNIDAD.FK_TFUNCIONARIO puede ser otro docente o un coordinador): se resuelve via TDOCENTE_ASIGNATURA (V46, mismo vinculo que fn_docente_grupos_listar/V242) cruzando por (FK_TGRUPO, FK_TASIGNATURA) de la actividad, EXISTS -- actividades sin FK_TGRUPO (p.ej. un "Criterio") quedan fuera cuando se usa este filtro. Orden (whitelist): fecha_inicio|fecha_cierre|fecha_creacion|titulo|ponderacion, cualquier otro valor cae a fecha_inicio. Devuelve nombres resueltos (asignatura, area, unidad, grupo, tipo, instrumento), el estado derivado y el progreso de evaluacion (asignados/evaluados/%). Optimizacion: el CTE base pagina tocando solo TACTIVIDAD y los joins + el LATERAL de progreso corren unicamente contra las filas de la pagina. total_count via COUNT(*) OVER(). V224/V250.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_buscar_por_pk — detalle completo (una fila).
@@ -2185,6 +2218,9 @@ COMMENT ON FUNCTION academico_test.fn_actividad_buscar_por_pk(BIGINT, BIGINT, IN
 -- ---------------------------------------------------------------------------
 -- fn_actividad_resumen_estados — las tarjetas del Planeador en UNA pasada.
 -- ---------------------------------------------------------------------------
+-- Agrega p_fk_tfuncionario al final (V250) -- mismo motivo de DROP que
+-- fn_actividad_listar arriba: un argumento nuevo es un overload nuevo.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_resumen_estados(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resumen_estados(
     p_pk_usuario_solicitante   BIGINT,
     p_fk_tasignatura           BIGINT DEFAULT NULL,
@@ -2192,7 +2228,11 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resumen_estados(
     p_fk_tunidad               BIGINT DEFAULT NULL,
     p_fecha_desde              DATE   DEFAULT NULL,
     p_fecha_hasta              DATE   DEFAULT NULL,
-    p_dias_gracia              INT    DEFAULT 2
+    p_dias_gracia              INT    DEFAULT 2,
+    -- V250 -- mismo filtro/misma razon que fn_actividad_listar: TACTIVIDAD
+    -- no tiene FK_TFUNCIONARIO propia, se resuelve via TUNIDAD. Al final
+    -- de la firma por si algo la invoca posicionalmente.
+    p_fk_tfuncionario          BIGINT DEFAULT NULL
 )
 RETURNS TABLE (
     pendientes_por_evaluar  BIGINT,
@@ -2223,6 +2263,15 @@ BEGIN
            AND (p_fk_tasignatura IS NULL OR a.FK_TASIGNATURA = p_fk_tasignatura)
            AND (p_fk_tgrupo      IS NULL OR a.FK_TGRUPO = p_fk_tgrupo)
            AND (p_fk_tunidad     IS NULL OR a.FK_TUNIDAD = p_fk_tunidad)
+           -- V250 -- igual que fn_actividad_listar: docente que DICTA
+           -- (TDOCENTE_ASIGNATURA por grupo+asignatura), no el autor de la
+           -- unidad.
+           AND (p_fk_tfuncionario IS NULL OR EXISTS (
+                    SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+                     WHERE da.FK_TGRUPO      = a.FK_TGRUPO
+                       AND da.FK_TASIGNATURA = a.FK_TASIGNATURA
+                       AND da.FK_TFUNCIONARIO = p_fk_tfuncionario
+                       AND da.ACTIVE = TRUE))
            AND (p_fecha_desde IS NULL OR COALESCE(a.FECHA_CIERRE, a.FECHA_INICIO) >= p_fecha_desde)
            AND (p_fecha_hasta IS NULL OR COALESCE(a.FECHA_INICIO, a.FECHA_CIERRE) <= p_fecha_hasta)
     )
@@ -2237,8 +2286,193 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_resumen_estados(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT)
-    IS 'Contadores del tablero del Planeador (Pendientes por evaluar / En evaluacion vigentes / Finalizadas / Vencidas > p_dias_gracia dias / Programadas / Sin programar) en UNA sola pasada con COUNT(*) FILTER sobre el estado derivado por fn_actividad_estado — no seis queries. Filtros opcionales por asignatura, grupo, unidad y ventana de fechas. Gate VER sobre PLANEADOR. V224.';
+COMMENT ON FUNCTION academico_test.fn_actividad_resumen_estados(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT, BIGINT)
+    IS 'Contadores del tablero del Planeador (Pendientes por evaluar / En evaluacion vigentes / Finalizadas / Vencidas > p_dias_gracia dias / Programadas / Sin programar) en UNA sola pasada con COUNT(*) FILTER sobre el estado derivado por fn_actividad_estado — no seis queries. Filtros opcionales por asignatura, grupo, unidad, ventana de fechas y (V250) docente que DICTA la actividad (p_fk_tfuncionario, via TDOCENTE_ASIGNATURA por FK_TGRUPO+FK_TASIGNATURA -- no el autor de la unidad). Gate VER sobre PLANEADOR. V224/V250.';
+
+-- ---------------------------------------------------------------------------
+-- fn_funcionario_actual — resuelve el TFUNCIONARIO del usuario autenticado.
+--
+-- Helper generico y reusable (no especifico de actividades): a partir del
+-- p_pk_usuario_solicitante que YA resuelve todo este modulo desde
+-- :CONTEXT.USER_ID (public.fn_get_academico_usuario_id, V48), busca el
+-- TFUNCIONARIO cuyo FK_TUSUARIO coincide -- unico (U_TFUNCIONARIO_2, V22).
+-- NULL si el usuario autenticado no tiene un funcionario activo asociado
+-- (p.ej. un estudiante o acudiente) -- el caller decide que hacer con eso.
+-- LANGUAGE sql (no plpgsql): un solo SELECT, sin logica condicional.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_funcionario_actual(
+    p_pk_usuario_solicitante   BIGINT
+)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT f.PK_TFUNCIONARIO
+      FROM academico_test.TFUNCIONARIO f
+     WHERE f.FK_TUSUARIO = p_pk_usuario_solicitante
+       AND f.ACTIVE = TRUE;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_funcionario_actual(BIGINT)
+    IS 'Resuelve el PK_TFUNCIONARIO del usuario autenticado (TFUNCIONARIO.FK_TUSUARIO = p_pk_usuario_solicitante, UNIQUE via U_TFUNCIONARIO_2), solo si esta ACTIVE. NULL si el usuario no tiene un funcionario asociado (estudiante, acudiente, o funcionario inactivo). Helper generico -- no especifico del Planeador -- para que cualquier funcion resuelva "el docente que soy yo" sin repetir el JOIN. Usado por fn_actividad_resumen_estados_docente y fn_actividad_listar_docente (V250) para atar el filtro por docente al usuario autenticado sin exponerlo como parametro editable por el cliente.';
+
+-- ---------------------------------------------------------------------------
+-- fn_actividad_resumen_estados_docente — wrapper de "mis actividades" para
+-- el tablero del docente (4 tarjetas: Pendientes por evaluar / En
+-- evaluacion vigentes / Finalizadas / Vencidas > N dias).
+--
+-- NO reimplementa el conteo: resuelve el TFUNCIONARIO del caller
+-- (fn_funcionario_actual) y delega en fn_actividad_resumen_estados con ese
+-- pk fijo -- una sola fuente de verdad para la derivacion de estado
+-- (fn_actividad_estado) y para el conteo (fn_actividad_resumen_estados).
+-- Si el usuario autenticado no tiene un TFUNCIONARIO activo (no es
+-- docente), devuelve todos los contadores en 0 en vez de fallar: el
+-- tablero de "mis actividades" no tiene sentido para un no-docente, pero
+-- no es un error de autorizacion (eso ya lo filtra el gate PLANEADOR/VER).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resumen_estados_docente(
+    p_pk_usuario_solicitante   BIGINT,
+    p_fk_tasignatura           BIGINT DEFAULT NULL,
+    p_fk_tgrupo                BIGINT DEFAULT NULL,
+    p_fk_tunidad               BIGINT DEFAULT NULL,
+    p_fecha_desde              DATE   DEFAULT NULL,
+    p_fecha_hasta              DATE   DEFAULT NULL,
+    p_dias_gracia              INT    DEFAULT 2
+)
+RETURNS TABLE (
+    pendientes_por_evaluar  BIGINT,
+    en_evaluacion           BIGINT,
+    finalizadas             BIGINT,
+    vencidas                BIGINT,
+    programadas             BIGINT,
+    sin_programar           BIGINT,
+    total                   BIGINT
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_fk_tfuncionario BIGINT;
+BEGIN
+    -- Gate propio (ademas del que hace fn_actividad_resumen_estados por
+    -- dentro): asi el 403 sale ANTES de tocar TFUNCIONARIO si el usuario
+    -- no tiene ni siquiera capability de VER sobre PLANEADOR.
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    );
+
+    v_fk_tfuncionario := academico_test.fn_funcionario_actual(p_pk_usuario_solicitante);
+
+    IF v_fk_tfuncionario IS NULL THEN
+        RETURN QUERY SELECT 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT;
+        RETURN;
+    END IF;
+
+    RETURN QUERY
+    SELECT * FROM academico_test.fn_actividad_resumen_estados(
+        p_pk_usuario_solicitante, p_fk_tasignatura, p_fk_tgrupo, p_fk_tunidad,
+        p_fecha_desde, p_fecha_hasta, p_dias_gracia, v_fk_tfuncionario
+    );
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_resumen_estados_docente(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT)
+    IS 'Tablero "mis actividades" del docente autenticado (4+2 tarjetas: Pendientes por evaluar / En evaluacion vigentes / Finalizadas / Vencidas > p_dias_gracia dias / Programadas / Sin programar). Wrapper delgado: resuelve el TFUNCIONARIO del caller con fn_funcionario_actual y delega el conteo en fn_actividad_resumen_estados (misma fuente de verdad que el resumen general y que fn_actividad_listar) -- no duplica la logica de fn_actividad_estado. Si el usuario autenticado no es un docente activo (fn_funcionario_actual devuelve NULL), retorna todos los contadores en 0 (no es un error: el gate PLANEADOR/VER ya se evaluo primero). Gate VER sobre PLANEADOR. V250.';
+
+-- ---------------------------------------------------------------------------
+-- fn_actividad_listar_docente — "Ver detalles" de cada tarjeta: el mismo
+-- listado paginado de fn_actividad_listar, pero SIEMPRE acotado al docente
+-- autenticado (nunca editable por el cliente) y con p_estados obligatorio
+-- en la practica (para eso son las tarjetas -- si no se manda, lista TODAS
+-- las actividades del docente, como fn_actividad_listar sin filtro).
+--
+-- Por que un wrapper y no simplemente resolver FK_TFUNCIONARIO inline en
+-- el registro de public.query (patron de V248/Asistencias, CU-86e32gvpp):
+-- alli funciona porque el filtro de esas funciones es una comparacion
+-- ("da.FK_TFUNCIONARIO = p_fk_tfuncionario") -- si el usuario autenticado
+-- no es docente, la sub-consulta de resolucion da NULL y "columna = NULL"
+-- nunca es TRUE, asi que el WHERE descarta todo solo. fn_actividad_listar
+-- NO puede seguir ese patron: su version del filtro es
+-- "p_fk_tfuncionario IS NULL OR EXISTS (...)" (a proposito, para que el
+-- caller GENERAL -- fn_actividad_listar sin _docente -- pueda seguir
+-- tratando NULL como "sin filtro", igual que el resto de sus parametros
+-- opcionales). Si se resolviera FK_TFUNCIONARIO inline y diera NULL, ESE
+-- mismo IS NULL haria que un usuario NO docente viera TODAS las
+-- actividades de TODOS los docentes en su tablero personal -- justo lo que
+-- este wrapper evita con el guard explicito de mas abajo.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar_docente(
+    p_pk_usuario_solicitante   BIGINT,
+    p_search                   VARCHAR   DEFAULT NULL,
+    p_fk_tasignatura           BIGINT    DEFAULT NULL,
+    p_fk_tgrupo                BIGINT    DEFAULT NULL,
+    p_fk_tunidad               BIGINT    DEFAULT NULL,
+    p_estados                  VARCHAR[] DEFAULT NULL,
+    p_dias_gracia              INT       DEFAULT 2,
+    p_orden_por                VARCHAR   DEFAULT 'fecha_inicio',
+    p_orden_asc                BOOLEAN   DEFAULT TRUE,
+    p_limite                   INT       DEFAULT 20,
+    p_offset                   INT       DEFAULT 0
+)
+RETURNS TABLE (
+    pk_tactividad                   BIGINT,
+    titulo                          VARCHAR,
+    descripcion                     VARCHAR,
+    fk_tasignatura                  BIGINT,
+    asignatura                      VARCHAR,
+    fk_tarea                        BIGINT,
+    area                            VARCHAR,
+    fk_tunidad                      BIGINT,
+    unidad                          VARCHAR,
+    fk_tgrupo                       BIGINT,
+    grupo                           VARCHAR,
+    fk_tlv_tipo_actividad           BIGINT,
+    tipo_actividad                  VARCHAR,
+    fk_tlv_instrumento_evaluacion   BIGINT,
+    instrumento_evaluacion          VARCHAR,
+    ponderacion                     NUMERIC,
+    influencia                      NUMERIC,
+    es_evaluativa                   VARCHAR,
+    fecha_inicio                    DATE,
+    fecha_cierre                    DATE,
+    fecha_calificado                DATE,
+    estado                          VARCHAR,
+    estudiantes_asignados           BIGINT,
+    estudiantes_evaluados           BIGINT,
+    porcentaje_evaluado             NUMERIC,
+    active                          BOOLEAN,
+    total_count                     BIGINT
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_fk_tfuncionario BIGINT;
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    );
+
+    v_fk_tfuncionario := academico_test.fn_funcionario_actual(p_pk_usuario_solicitante);
+
+    -- Guard explicito: si no es docente, 0 filas -- NUNCA delegar con
+    -- p_fk_tfuncionario NULL (fn_actividad_listar lo tomaria como "sin
+    -- filtro" y devolveria el universo completo). Ver nota de arriba.
+    IF v_fk_tfuncionario IS NULL THEN
+        RETURN;
+    END IF;
+
+    RETURN QUERY
+    SELECT * FROM academico_test.fn_actividad_listar(
+        p_pk_usuario_solicitante, p_search, p_fk_tasignatura, p_fk_tgrupo, p_fk_tunidad,
+        NULL, NULL, NULL, NULL, p_estados, p_dias_gracia, FALSE,
+        p_orden_por, p_orden_asc, p_limite, p_offset, v_fk_tfuncionario
+    );
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_listar_docente(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR[], INT, VARCHAR, BOOLEAN, INT, INT)
+    IS '"Ver detalles" de cada tarjeta del tablero del docente autenticado: pagina de sus actividades (mismos filtros/orden/paginacion/columnas que fn_actividad_listar), SIEMPRE acotada a su propio FK_TFUNCIONARIO (fn_funcionario_actual) -- nunca editable por el cliente. p_estados es el filtro tipico desde una tarjeta (p.ej. ARRAY[''PENDIENTE_POR_EVALUAR'']), pero es opcional: sin el, lista todas las actividades del docente. Guard explicito: si el usuario autenticado no es un docente activo, devuelve 0 filas (no delega con p_fk_tfuncionario NULL, que en fn_actividad_listar significa "sin filtro" y expondria el universo completo). No incluye p_fk_tlv_tipo_actividad/p_fk_tlv_instrumento/p_fecha_desde/p_fecha_hasta/p_incluir_inactivas del listado general -- si el tablero los necesita despues, se agregan aqui sin tocar fn_actividad_listar. Gate VER sobre PLANEADOR. V250.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_calendario — grilla mensual.
