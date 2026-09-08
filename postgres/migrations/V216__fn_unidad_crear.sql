@@ -1329,8 +1329,8 @@ DECLARE
     v_anio         INT := EXTRACT(YEAR FROM CURRENT_DATE)::INT;
     v_etiqueta     VARCHAR;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', NULL, p_fk_tgrado
     );
 
     SELECT g.FK_TNIVEL_ENSENANZA

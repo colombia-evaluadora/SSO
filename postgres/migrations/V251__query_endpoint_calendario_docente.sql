@@ -95,11 +95,23 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
+    v_sedes_lectura BIGINT[];
+    v_alcance_total BOOLEAN;
     v_hoy DATE := CURRENT_DATE;
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
     );
+
+    -- Alcance de LECTURA (V277), mismo criterio que fn_actividad_listar: lo
+    -- define el sistema de rol/menu via fn_usuario_sedes_lectura. Nivel 0/1 no
+    -- se acotan por alcance, pero el ACTIVE de la sede lo respeta todo el
+    -- mundo: una sede dada de baja no la ve nadie.
+    v_alcance_total := COALESCE(
+        academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante), 99) <= 1;
+    v_sedes_lectura := ARRAY(
+        SELECT sl.sede_id
+          FROM academico_test.fn_usuario_sedes_lectura(p_pk_usuario_solicitante) sl);
 
     IF p_fecha_desde IS NULL OR p_fecha_hasta IS NULL THEN
         RAISE EXCEPTION 'El rango de fechas (p_fecha_desde, p_fecha_hasta) es obligatorio'
@@ -127,6 +139,33 @@ BEGIN
       LEFT JOIN academico_test.TAREA ar    ON ar.PK_TAREA = asig.FK_TAREA
       LEFT JOIN academico_test.TGRUPO g    ON g.PK_TGRUPO = a.FK_TGRUPO
      WHERE a.ACTIVE = TRUE
+           AND (
+                 EXISTS (SELECT 1
+                           FROM academico_test.TGRUPO g_sc
+                           JOIN academico_test.TGRADO gr_sc
+                             ON gr_sc.PK_TGRADO = g_sc.FK_TGRADO
+                           JOIN academico_test.TPERIODO_ACADEMICO pa_sc
+                             ON pa_sc.PK_TPERIODO_ACADEMICO = gr_sc.FK_TPERIODO_ACADEMICO
+                           JOIN academico_test.TSEDE s_sc
+                             ON s_sc.PK_TSEDE = pa_sc.FK_TSEDE AND s_sc.ACTIVE = TRUE
+                          WHERE g_sc.PK_TGRUPO = a.FK_TGRUPO
+                            AND (v_alcance_total
+                                 OR pa_sc.FK_TSEDE = ANY(v_sedes_lectura)))
+              OR EXISTS (SELECT 1
+                           FROM academico_test.TUNIDAD u_sc
+                           JOIN academico_test.TGRADO gr_sc
+                             ON gr_sc.PK_TGRADO = u_sc.FK_TGRADO
+                           JOIN academico_test.TPERIODO_ACADEMICO pa_sc
+                             ON pa_sc.PK_TPERIODO_ACADEMICO = gr_sc.FK_TPERIODO_ACADEMICO
+                           JOIN academico_test.TSEDE s_sc
+                             ON s_sc.PK_TSEDE = pa_sc.FK_TSEDE AND s_sc.ACTIVE = TRUE
+                          WHERE u_sc.PK_TUNIDAD = a.FK_TUNIDAD
+                            AND (v_alcance_total
+                                 OR pa_sc.FK_TSEDE = ANY(v_sedes_lectura)))
+              OR (a.FK_TGRUPO IS NULL AND a.FK_TUNIDAD IS NULL
+                  AND (v_alcance_total
+                       OR a.CREATED_BY = p_pk_usuario_solicitante::VARCHAR))
+               )
        -- V251: SOLAPAMIENTO con el rango, no "el dia de anclaje cae dentro"
        -- (misma semantica que fn_actividad_listar): una actividad del 28/08
        -- al 10/09 tiene que aparecer en la grilla de septiembre.

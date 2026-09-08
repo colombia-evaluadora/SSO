@@ -479,8 +479,8 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', NULL, p_fk_tgrado
     );
 
     IF NOT EXISTS (
@@ -1036,8 +1036,8 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', p_fk_tgrupo
     );
     PERFORM academico_test.fn_planilla_grupo_asignatura_assert(
         p_fk_tgrupo, p_fk_tasignatura, p_fk_tgrado
@@ -1130,8 +1130,8 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', p_fk_tgrupo
     );
     PERFORM academico_test.fn_planilla_grupo_asignatura_assert(
         p_fk_tgrupo, p_fk_tasignatura, p_fk_tgrado
