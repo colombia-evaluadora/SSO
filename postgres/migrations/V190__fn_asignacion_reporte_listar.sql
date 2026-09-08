@@ -50,7 +50,7 @@ LANGUAGE sql STABLE AS $$
                                                   AND su.FK_TSEDE = pa.FK_TSEDE
                                                   AND su.FK_TROL = 14 AND su.ACTIVE = TRUE
      WHERE da.FK_TPERIODO_ACADEMICO = p_fk_periodo AND da.ACTIVE = TRUE
-       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_fk_periodo)
+       AND academico_test.fn_periodo_puede_ver(p_pk_usuario, p_fk_periodo)
        AND (p_fk_funcionario IS NULL OR CARDINALITY(p_fk_funcionario) = 0 OR f.PK_TFUNCIONARIO = ANY(p_fk_funcionario))
        AND (p_fk_grado       IS NULL OR CARDINALITY(p_fk_grado)       = 0 OR g.PK_TGRADO       = ANY(p_fk_grado))
        AND (p_fk_asignatura  IS NULL OR CARDINALITY(p_fk_asignatura)  = 0 OR s.PK_TASIGNATURA  = ANY(p_fk_asignatura))
