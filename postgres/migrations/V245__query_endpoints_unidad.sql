@@ -231,12 +231,14 @@ SELECT
     COALESCE(CAST(:QUERY.ORDEN_POR AS VARCHAR), ''nombre''),
     COALESCE(CAST(:QUERY.ORDEN_ASC AS BOOLEAN), TRUE),
     COALESCE(CAST(:QUERY.SIZE AS INT), 20),
-    COALESCE(CAST(:QUERY.OFFSET AS INT), 0)
+    COALESCE(CAST(:QUERY.OFFSET AS INT), 0),
+    CAST(:QUERY.DIA AS DATE),
+    COALESCE(CAST(:QUERY.DIAS_GRACIA AS INT), 2)
 );',
     'postgres', false, false,
     m.id_microservice, '/planeador/unidades', 'SELECT', 'GET',
-    '{"QUERY.SEARCH": "VARCHAR", "QUERY.ASIGNATURA": "BIGINT", "QUERY.GRADO": "BIGINT", "QUERY.FUNCIONARIO": "BIGINT", "QUERY.INCLUIR_INACTIVOS": "BOOLEAN", "QUERY.ORDEN_POR": "VARCHAR", "QUERY.ORDEN_ASC": "BOOLEAN"}'::jsonb,
-    'V245 -- pagina de unidades (fn_unidad_listar, V216) con filtros ?search=, ?asignatura=, ?grado=, ?funcionario=, ?incluirInactivos= (default false) y orden ?ordenPor= (whitelist nombre|asignatura|grado, cualquier otro cae a nombre) / ?ordenAsc= (default true). Paginacion system-bound ?size=/?offset= (default 20/0). Devuelve nombres resueltos (asignatura, area, grado, docente, forma de calculo, referente curricular), conteos (actividades/objetivos/contenidos activos), fechas DERIVADAS y total_count via COUNT(*) OVER(). Gate VER sobre PLANEADOR.'
+    '{"QUERY.SEARCH": "VARCHAR", "QUERY.ASIGNATURA": "BIGINT", "QUERY.GRADO": "BIGINT", "QUERY.FUNCIONARIO": "BIGINT", "QUERY.INCLUIR_INACTIVOS": "BOOLEAN", "QUERY.ORDEN_POR": "VARCHAR", "QUERY.ORDEN_ASC": "BOOLEAN", "QUERY.DIA": "DATE", "QUERY.DIAS_GRACIA": "INT"}'::jsonb,
+    'V245 -- pagina de unidades (fn_unidad_listar, V216). Devuelve estado: el estado DERIVADO de la unidad, agregando el de sus actividades -- UNA sola VENCIDA marca la unidad como VENCIDA; si no hay vencidas pero si alguna PENDIENTE_POR_EVALUAR, PENDIENTE_POR_EVALUAR; si TODAS estan finalizadas, FINALIZADA; en cualquier otro caso EN_EVALUACION (incluida la unidad sin actividades, que se reconoce por total_actividades = 0). Son los mismos cuatro valores del estado de actividad, asi que el chip se pinta con la misma paleta; ?diasGracia= (default 2) ajusta el umbral de VENCIDA. PAGINADO POR DIA ACTIVO ?dia=YYYY-MM-DD (la barra "Hoy | MARTES 16 | < >"): deja solo las unidades con ALGUNA actividad activa VIGENTE ese dia -- vigente = la ventana [fechaInicio, fechaCierre] CUBRE el dia, no que empiece o cierre en el; una actividad de tres dias aparece en los tres. La respuesta trae dia, dia_anterior y dia_siguiente para las flechas: el dia ocupado mas cercano a cada lado bajo los MISMOS filtros, SALTANDO los dias vacios (no es dia-1/dia+1 a ciegas), y NULL cuando no hay mas dias por ese lado -- con eso se deshabilita la flecha. Sin ?dia= el listado es el de siempre y esas tres columnas vienen NULL. Filtros ?search=, ?asignatura=, ?grado=, ?funcionario=, ?incluirInactivos= (default false) y orden ?ordenPor= (whitelist nombre|asignatura|grado, cualquier otro cae a nombre) / ?ordenAsc= (default true). Paginacion system-bound ?size=/?offset= (default 20/0). Devuelve nombres resueltos (asignatura, area, grado, docente, forma de calculo, referente curricular), conteos (actividades/objetivos/contenidos activos), fechas DERIVADAS y total_count via COUNT(*) OVER(). Gate VER sobre PLANEADOR.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
