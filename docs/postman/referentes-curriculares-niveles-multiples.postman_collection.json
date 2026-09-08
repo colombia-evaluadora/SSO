@@ -4,29 +4,91 @@
     "name": "SSO - Referentes Curriculares: niveles educativos N:N",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "description": {
-      "content": "Coleccion de **regresion** del cambio a relacion N:N entre `TREFERENTE_CURRICULAR` y `TNIVEL_ENSENANZA` (tabla puente `TREFERENTE_CURRICULAR_NIVEL`, V212 / V213 / V214).\n\nLa coleccion CRUD completa del modulo sigue siendo `referentes-curriculares.postman_collection.json`; esta se enfoca SOLO en lo que cambio: un referente aplica a **uno o varios** niveles educativos, y eso se ve en crear, listar, detalle, editar y eliminar.\n\n## Que cambio respecto al modelo anterior\n\n| Antes | Ahora |\n|---|---|\n| `TREFERENTE_CURRICULAR.FK_TNIVEL_ENSENANZA` (una FK) | tabla puente `TREFERENTE_CURRICULAR_NIVEL` (N:N); la columna se elimino |\n| `BODY.NIVEL_EDUCATIVO` (BIGINT) al crear/editar | `BODY.NIVELES_IDS` (BIGINT[]) |\n| detalle devolvia `fk_tnivel_ensenanza` + `nivel_educativo` | detalle devuelve `niveles` = `[{id, codigo, nombre}]` |\n| listado devolvia `nivel_educativo` | listado devuelve `niveles_educativos` (nombres concatenados) + `niveles` (JSON) |\n| — | nuevo `GET /referentes-curriculares/:ID/niveles` (`fn_refcurr_niveles_listar`) |\n\n## Reglas que valida esta corrida\n\n- **El set nunca queda vacio**: al crear, `NIVELES_IDS` es obligatorio con al menos un nivel (`22023`); al editar, ausente = no tocar los niveles y `[]` da `22023`. Esto es DISTINTO de `AREAS_IDS`, donde vacio significa \"aplica a todas\".\n- **Unicidad de nombre POR NIVEL, por solapamiento de sets**: dos referentes activos pueden llamarse igual si sus niveles son disjuntos; si comparten al menos un nivel, `23505`.\n- **Filtro del listado por un solo nivel**: `FILTERS.NIVEL_EDUCATIVO` sigue siendo un BIGINT — el referente califica si CUALQUIERA de sus niveles coincide.\n- **Baja logica en cascada**: `fn_refcurr_eliminar` tambien desactiva las filas de la tabla puente (evidencias -> enunciados -> areas -> niveles -> referente).\n\n## Requisitos para correrla\n\n1. Un usuario con rol `CEVAL-SUPER_ADMINISTRADOR` (`email` / `password` en el entorno). Cualquier otro rol recibe `403`: hoy solo ese rol tiene fila `role_query`, y solo `SUPER_ADMIN` pasa el gate `fn_assert_permiso_seccion`.\n2. **Al menos DOS `tnivel_ensenanza` activos** en la base. Con uno solo, los pasos multi-nivel se degradan a un solo nivel y la coleccion lo avisa por consola en vez de fallar.\n3. `query-service-eval-col` reiniciado despues de aplicar V214: las filas de `public.query` nuevas dan `404` por el gateway hasta que el contenedor las relee.\n\n## Convencion de corrida limpia\n\nEl nombre del referente de prueba lleva un sufijo con `{{$timestamp}}` (variable `refNombre`, se fija en el paso 1), asi que la coleccion se puede correr varias veces sin choques de unicidad. El ultimo paso da de baja lo que creo, de modo que la corrida queda en cero. Los pasos que esperan error NO crean nada.\n\nCorrida por CLI: `newman run docs/postman/referentes-curriculares-niveles-multiples.postman_collection.json -e <entorno>`.",
+      "content": "Coleccion de **regresion** del cambio a relacion N:N entre `TREFERENTE_CURRICULAR` y `TNIVEL_ENSENANZA` (tabla puente `TREFERENTE_CURRICULAR_NIVEL`, V212 / V213 / V214).\n\nLa coleccion CRUD completa del modulo sigue siendo `referentes-curriculares.postman_collection.json`; esta se enfoca SOLO en lo que cambio: un referente aplica a **uno o varios** niveles educativos, y eso se ve en crear, listar, detalle, editar y eliminar.\n\n## Que cambio respecto al modelo anterior\n\n| Antes | Ahora |\n|---|---|\n| `TREFERENTE_CURRICULAR.FK_TNIVEL_ENSENANZA` (una FK) | tabla puente `TREFERENTE_CURRICULAR_NIVEL` (N:N); la columna se elimino |\n| `BODY.NIVEL_EDUCATIVO` (BIGINT) al crear/editar | `BODY.NIVELES_IDS` (BIGINT[]) |\n| detalle devolvia `fk_tnivel_ensenanza` + `nivel_educativo` | detalle devuelve `niveles` = `[{id, codigo, nombre}]` |\n| listado devolvia `nivel_educativo` | listado devuelve `niveles_educativos` (nombres concatenados) + `niveles` (JSON) |\n| — | nuevo `GET /referentes-curriculares/:ID/niveles` (`fn_refcurr_niveles_listar`) |\n\n## Reglas que valida esta corrida\n\n- **El set nunca queda vacio**: al crear, `NIVELES_IDS` es obligatorio con al menos un nivel (`22023`); al editar, ausente = no tocar los niveles y `[]` da `22023`. Esto es DISTINTO de `AREAS_IDS`, donde vacio significa \"aplica a todas\".\n- **Unicidad de nombre POR NIVEL, por solapamiento de sets**: dos referentes activos pueden llamarse igual si sus niveles son disjuntos; si comparten al menos un nivel, `23505`.\n- **Filtro del listado por un solo nivel**: `FILTERS.NIVEL_EDUCATIVO` sigue siendo un BIGINT — el referente califica si CUALQUIERA de sus niveles coincide.\n- **Baja logica en cascada**: `fn_refcurr_eliminar` tambien desactiva las filas de la tabla puente (evidencias -> enunciados -> areas -> niveles -> referente).\n\n## Requisitos para correrla\n\n1. Un usuario con rol `CEVAL-SUPER_ADMINISTRADOR` (`email` / `password` en el entorno). Cualquier otro rol recibe `403`: hoy solo ese rol tiene fila `role_query`, y solo `SUPER_ADMIN` pasa el gate `fn_assert_permiso_seccion`.\n2. **Al menos DOS `tnivel_ensenanza` activos** en la base. Con uno solo, los pasos multi-nivel se degradan a un solo nivel y la coleccion lo avisa por consola en vez de fallar. El servidor de test tiene los 4 niveles, asi que ahi corre completa.\n3. `query-service-eval-col` reiniciado despues de aplicar V214: las filas de `public.query` nuevas dan `404` por el gateway hasta que el contenedor las relee. En el servidor de test las migraciones ya se aplicaron y el contenedor ya se reinicio (2026-09-08), asi que `GET .../niveles` esta disponible. Sin token el gateway responde `401` antes de resolver la ruta, asi que un `401` NO sirve para distinguir una ruta registrada de una que no lo esta: hay que autenticarse para comprobarlo.\n\n## Convencion de corrida limpia\n\nEl nombre del referente de prueba lleva un sufijo con `{{$timestamp}}` (variable `refNombre`, se fija en el paso 1), asi que la coleccion se puede correr varias veces sin choques de unicidad. El ultimo paso da de baja lo que creo, de modo que la corrida queda en cero. Los pasos que esperan error NO crean nada.\n\nCorrida por CLI: `newman run docs/postman/referentes-curriculares-niveles-multiples.postman_collection.json -e <entorno>`.\n\n## Valores por defecto (servidor de test)\n\nLas variables de la coleccion vienen precargadas con PKs **reales** del servidor de test (`172.233.184.248`, gateway en `:8080`), leidas de su base despues de aplicar las migraciones:\n\n| Variable | Valor | Corresponde a |\n|---|---|---|\n| `baseUrl` | `http://172.233.184.248:8080` | `sso-api-gateway` |\n| `nivelA` / `pkNivelEnsenanza` | `2` | `TNIVEL_ENSENANZA` Basica Primaria |\n| `nivelB` / `pkNivelEnsenanza2` | `3` | `TNIVEL_ENSENANZA` Basica Secundaria |\n| `pkEnfoquePedagogico` | `51972` | `TLISTA_VALOR` ENFOQUE_PEDAGOGICO / Formativo |\n| `pkTipoEvaluacion` | `51969` | `TLISTA_VALOR` TIPO_EVALUACION / Cuantitativa y cualitativa |\n| `pkTareaAsignatura` | `1` | `TAREA_ASIGNATURA` CIENCIAS NATURALES Y ED AMBIENTAL |\n\nEl catalogo completo de niveles en ese servidor es `1 Preescolar`, `2 Basica Primaria`, `3 Basica Secundaria`, `4 Media` -- suficiente para probar el N:N de verdad y tambien el caso de mismo nombre con niveles disjuntos.\n\nLos PKs de `TLISTA_VALOR` **no son estables entre bases** (en un Postgres limpio las mismas categorias salen con ids bajos): al correr contra otro entorno hay que releerlos de `GET {{baseUrl}}/api/eval-col/select/ENFOQUE_PEDAGOGICO` y `/select/TIPO_EVALUACION`. Solo faltan `email` / `password` de un usuario `CEVAL-SUPER_ADMINISTRADOR`, que no se versionan.\n",
       "type": "text/markdown"
     }
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:8080", "type": "string" },
-    { "key": "email", "value": "", "type": "string" },
-    { "key": "password", "value": "", "type": "string" }
+    {
+      "key": "baseUrl",
+      "value": "http://172.233.184.248:8080",
+      "type": "string"
+    },
+    {
+      "key": "email",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "nivelA",
+      "value": "2",
+      "type": "string"
+    },
+    {
+      "key": "nivelB",
+      "value": "3",
+      "type": "string"
+    },
+    {
+      "key": "pkNivelEnsenanza",
+      "value": "2",
+      "type": "string"
+    },
+    {
+      "key": "pkNivelEnsenanza2",
+      "value": "3",
+      "type": "string"
+    },
+    {
+      "key": "pkEnfoquePedagogico",
+      "value": "51972",
+      "type": "string"
+    },
+    {
+      "key": "pkTipoEvaluacion",
+      "value": "51969",
+      "type": "string"
+    },
+    {
+      "key": "pkTareaAsignatura",
+      "value": "1",
+      "type": "string"
+    }
   ],
   "item": [
     {
       "name": "0 - Login",
       "request": {
         "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
         "url": {
           "raw": "{{baseUrl}}/api/auth/login",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "auth", "login"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
         },
         "body": {
           "mode": "raw",
-          "options": { "raw": { "language": "json" } },
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
           "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
         },
         "description": {
@@ -52,14 +114,26 @@
       "name": "1 - Catalogo: niveles de ensenanza (toma dos)",
       "request": {
         "method": "GET",
-        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/catalogos/niveles-ensenanza",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "catalogos", "niveles-ensenanza"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "catalogos",
+            "niveles-ensenanza"
+          ]
         },
         "description": {
-          "content": "`fn_nivel_ensenanza_listar` (V43). Devuelve `[{ id, codigo, nombre }]`; los `id` alimentan `BODY.NIVELES_IDS`. Guarda `nivelA` y `nivelB` (si el catalogo trae un solo nivel, `nivelB` repite `nivelA` y la corrida avisa por consola: los pasos multi-nivel dejan de ser significativos).",
+          "content": "`fn_nivel_ensenanza_listar` (V43). Devuelve `[{ id, codigo, nombre }]`; los `id` alimentan `BODY.NIVELES_IDS`. Guarda `nivelA` y `nivelB` (si el catalogo trae un solo nivel, `nivelB` repite `nivelA` y la corrida avisa por consola: los pasos multi-nivel dejan de ser significativos).\n\nEn el servidor de test este catalogo devuelve los 4 niveles (`1 Preescolar`, `2 Basica Primaria`, `3 Basica Secundaria`, `4 Media`), asi que `nivelA`/`nivelB` quedan en 1 y 2 al correr la coleccion; los defaults de la coleccion (2 y 3) son el fallback si este paso no corre.",
           "type": "text/markdown"
         }
       },
@@ -86,17 +160,33 @@
       "request": {
         "method": "POST",
         "header": [
-          { "key": "Content-Type", "value": "application/json" },
-          { "key": "Authorization", "value": "Bearer {{token}}" }
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
         ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "referentes-curriculares"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares"
+          ]
         },
         "body": {
           "mode": "raw",
-          "options": { "raw": { "language": "json" } },
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
           "raw": "{\n  \"NOMBRE\": \"{{refNombre}}\",\n  \"DESCRIPCION\": \"Referente de prueba que aplica a varios niveles educativos.\",\n  \"NIVELES_IDS\": [{{nivelA}}, {{nivelB}}],\n  \"ENFOQUE_PEDAGOGICO\": {{pkEnfoquePedagogico}},\n  \"TIPO_EVALUACION\": {{pkTipoEvaluacion}},\n  \"INSTRUMENTO\": \"Unidad tematica\",\n  \"NORMATIVIDAD\": \"Decreto 1290 de 2009.\",\n  \"ANIO_DESDE\": 2023,\n  \"ESTADO\": \"A\"\n}"
         },
         "description": {
@@ -139,17 +229,33 @@
       "request": {
         "method": "POST",
         "header": [
-          { "key": "Content-Type", "value": "application/json" },
-          { "key": "Authorization", "value": "Bearer {{token}}" }
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
         ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "referentes-curriculares"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares"
+          ]
         },
         "body": {
           "mode": "raw",
-          "options": { "raw": { "language": "json" } },
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
           "raw": "{\n  \"NOMBRE\": \"{{refNombre}} sin nivel\",\n  \"DESCRIPCION\": \"No debe crearse.\",\n  \"ENFOQUE_PEDAGOGICO\": {{pkEnfoquePedagogico}},\n  \"TIPO_EVALUACION\": {{pkTipoEvaluacion}},\n  \"INSTRUMENTO\": \"Unidad tematica\",\n  \"NORMATIVIDAD\": \"Decreto 1290 de 2009.\",\n  \"ANIO_DESDE\": 2023\n}"
         },
         "description": {
@@ -174,17 +280,33 @@
       "request": {
         "method": "POST",
         "header": [
-          { "key": "Content-Type", "value": "application/json" },
-          { "key": "Authorization", "value": "Bearer {{token}}" }
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
         ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "referentes-curriculares"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares"
+          ]
         },
         "body": {
           "mode": "raw",
-          "options": { "raw": { "language": "json" } },
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
           "raw": "{\n  \"NOMBRE\": \"{{refNombre}} nivel vacio\",\n  \"DESCRIPCION\": \"No debe crearse.\",\n  \"NIVELES_IDS\": [],\n  \"ENFOQUE_PEDAGOGICO\": {{pkEnfoquePedagogico}},\n  \"TIPO_EVALUACION\": {{pkTipoEvaluacion}},\n  \"INSTRUMENTO\": \"Unidad tematica\",\n  \"NORMATIVIDAD\": \"Decreto 1290 de 2009.\",\n  \"ANIO_DESDE\": 2023\n}"
         },
         "description": {
@@ -209,17 +331,33 @@
       "request": {
         "method": "POST",
         "header": [
-          { "key": "Content-Type", "value": "application/json" },
-          { "key": "Authorization", "value": "Bearer {{token}}" }
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
         ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "referentes-curriculares"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares"
+          ]
         },
         "body": {
           "mode": "raw",
-          "options": { "raw": { "language": "json" } },
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
           "raw": "{\n  \"NOMBRE\": \"{{refNombre}}\",\n  \"DESCRIPCION\": \"Choca con el del paso 2 porque comparte el nivel A.\",\n  \"NIVELES_IDS\": [{{nivelA}}],\n  \"ENFOQUE_PEDAGOGICO\": {{pkEnfoquePedagogico}},\n  \"TIPO_EVALUACION\": {{pkTipoEvaluacion}},\n  \"INSTRUMENTO\": \"Unidad tematica\",\n  \"NORMATIVIDAD\": \"Decreto 1290 de 2009.\",\n  \"ANIO_DESDE\": 2023\n}"
         },
         "description": {
@@ -243,11 +381,23 @@
       "name": "6 - Detalle: la columna niveles trae el arreglo",
       "request": {
         "method": "GET",
-        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares",
+            "{{pkReferenteCurricular}}"
+          ]
         },
         "description": {
           "content": "`fn_refcurr_buscar_por_pk`. Los campos `fk_tnivel_ensenanza` / `nivel_educativo` del modelo viejo YA NO EXISTEN: en su lugar viene `niveles` = `[{id, codigo, nombre}]` (ordenado por nombre, `[]` nunca deberia darse en un referente activo). El `id` de cada elemento es el que se manda de vuelta en `NIVELES_IDS` al editar.",
@@ -283,11 +433,24 @@
       "name": "7 - Niveles del referente (endpoint nuevo)",
       "request": {
         "method": "GET",
-        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/niveles",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}", "niveles"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares",
+            "{{pkReferenteCurricular}}",
+            "niveles"
+          ]
         },
         "description": {
           "content": "`fn_refcurr_niveles_listar` -- endpoint NUEVO de este cambio (`refcurr-niveles` en `public.query`). Precarga el multi-select \"Nivel educativo\" al editar. Devuelve `[{ pk_referente_curricular_nivel, fk_tnivel_ensenanza, codigo, nombre }]`.\n\n**Ojo con el id correcto**: para `NIVELES_IDS` se usa `fk_tnivel_ensenanza` (el PK del catalogo `TNIVEL_ENSENANZA`), NO `pk_referente_curricular_nivel` (el PK de la fila puente). Es el mismo tropiezo que con las areas, donde el enunciado si pide el PK de la puente (`pk_referente_curricular_area`).",
@@ -320,17 +483,34 @@
       "request": {
         "method": "POST",
         "header": [
-          { "key": "Content-Type", "value": "application/json" },
-          { "key": "Authorization", "value": "Bearer {{token}}" }
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
         ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/query",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "referentes-curriculares", "query"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares",
+            "query"
+          ]
         },
         "body": {
           "mode": "raw",
-          "options": { "raw": { "language": "json" } },
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
           "raw": "{\n  \"FILTERS\": {\n    \"SEARCH\": \"{{refNombre}}\",\n    \"NIVEL_EDUCATIVO\": {{nivelB}},\n    \"ENFOQUE_PEDAGOGICO\": null,\n    \"TIPO_EVALUACION\": null,\n    \"ESTADO\": null\n  },\n  \"SORTING\": { \"ID\": \"nivel_educativo\", \"DESC\": false },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 20\n}"
         },
         "description": {
@@ -364,17 +544,34 @@
       "request": {
         "method": "PATCH",
         "header": [
-          { "key": "Content-Type", "value": "application/json" },
-          { "key": "Authorization", "value": "Bearer {{token}}" }
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
         ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares",
+            "{{pkReferenteCurricular}}"
+          ]
         },
         "body": {
           "mode": "raw",
-          "options": { "raw": { "language": "json" } },
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
           "raw": "{\n  \"NIVELES_IDS\": [{{nivelA}}]\n}"
         },
         "description": {
@@ -398,11 +595,24 @@
       "name": "10 - Verifica el reemplazo (queda 1 nivel)",
       "request": {
         "method": "GET",
-        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/niveles",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}", "niveles"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares",
+            "{{pkReferenteCurricular}}",
+            "niveles"
+          ]
         },
         "description": {
           "content": "Solo lectura: confirma que el reemplazo del paso 9 dejo activo unicamente `nivelA`.",
@@ -428,17 +638,34 @@
       "request": {
         "method": "PATCH",
         "header": [
-          { "key": "Content-Type", "value": "application/json" },
-          { "key": "Authorization", "value": "Bearer {{token}}" }
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
         ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares",
+            "{{pkReferenteCurricular}}"
+          ]
         },
         "body": {
           "mode": "raw",
-          "options": { "raw": { "language": "json" } },
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
           "raw": "{\n  \"NIVELES_IDS\": []\n}"
         },
         "description": {
@@ -463,17 +690,34 @@
       "request": {
         "method": "PATCH",
         "header": [
-          { "key": "Content-Type", "value": "application/json" },
-          { "key": "Authorization", "value": "Bearer {{token}}" }
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
         ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares",
+            "{{pkReferenteCurricular}}"
+          ]
         },
         "body": {
           "mode": "raw",
-          "options": { "raw": { "language": "json" } },
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
           "raw": "{\n  \"DESCRIPCION\": \"Descripcion editada sin tocar los niveles educativos.\"\n}"
         },
         "description": {
@@ -497,11 +741,24 @@
       "name": "13 - Verifica que el PATCH parcial no toco los niveles",
       "request": {
         "method": "GET",
-        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/niveles",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}", "niveles"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares",
+            "{{pkReferenteCurricular}}",
+            "niveles"
+          ]
         },
         "description": {
           "content": "Solo lectura: sigue habiendo un nivel activo (el del paso 9), no cero ni dos.",
@@ -525,11 +782,24 @@
       "name": "14 - Eliminar referente (la cascada incluye los niveles)",
       "request": {
         "method": "PATCH",
-        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/eliminar",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}", "eliminar"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares",
+            "{{pkReferenteCurricular}}",
+            "eliminar"
+          ]
         },
         "description": {
           "content": "`fn_refcurr_eliminar`. PATCH, no DELETE (`ck_query_http_method` no admite DELETE). La cascada de baja logica ahora tiene un paso mas: evidencias -> enunciados -> areas -> **niveles** -> referente. `22023` si ya estaba inactivo.\n\nCon esto la corrida queda en cero: el referente que creo el paso 2 vuelve a `ACTIVE = FALSE` junto con sus filas de la tabla puente.",
@@ -552,11 +822,24 @@
       "name": "15 - Verifica la cascada (sin niveles activos)",
       "request": {
         "method": "GET",
-        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "url": {
           "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/niveles",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}", "niveles"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares",
+            "{{pkReferenteCurricular}}",
+            "niveles"
+          ]
         },
         "description": {
           "content": "Tras la baja logica no queda ninguna fila activa en `TREFERENTE_CURRICULAR_NIVEL` para ese referente, asi que este endpoint devuelve una lista vacia.",
