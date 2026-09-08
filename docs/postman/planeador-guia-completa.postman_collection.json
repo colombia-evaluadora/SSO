@@ -736,7 +736,8 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200', () => pm.response.to.have.status(200));",
-                  "const filas = pm.response.json();",
+                  "// El motor responde {\"rows\":[{...}]}, no un arreglo plano.",
+                  "const filas = pm.response.json().rows || [];",
                   "pm.test('cada unidad trae su estado derivado', () => {",
                   "  const validos = ['VENCIDA', 'PENDIENTE_POR_EVALUAR', 'FINALIZADA', 'EN_EVALUACION'];",
                   "  filas.filter(f => f.pk_tunidad !== null)",
@@ -1126,7 +1127,8 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200', () => pm.response.to.have.status(200));",
-                  "const filas = pm.response.json();",
+                  "// El motor responde {\"rows\":[{...}]}, no un arreglo plano.",
+                  "const filas = pm.response.json().rows || [];",
                   "pm.test('devuelve al menos un referente para el grado', () => pm.expect(filas).to.be.an('array').and.not.empty);",
                   "const r = filas[0];",
                   "pm.test('trae las dos banderas que gobiernan la UI', () => {",
@@ -1189,9 +1191,9 @@
                   "disabled": true
                 }
               ]
-            }
-          },
-          "description": "El mismo arbol que 3.1, pero SIN unidad todavia: es el que sirve para armar la unidad y para pintar la actividad ANTES de que exista la unidad. Con unidad ya creada, usar 3.1.\n\n**El recorrido:** `TGRADO -> FK_TNIVEL_ENSENANZA -> TREFERENTE_CURRICULAR_NIVEL -> referente`. El referente no se elige a mano en ninguna pantalla; sale del grado.\n\n**Devuelve un ARREGLO, no un objeto.** La relacion referente<->nivel es N:N, asi que un nivel puede tener varios referentes y forzar \"uno solo\" seria inventar un criterio que el modelo no tiene. El orden ES la preferencia: primero los acotados al area de la asignatura pedida (`especificidad` 0, `aplica_a_area` true), luego los universales (`especificidad` 1), y dentro de cada grupo la vigencia mas reciente. Mostrar el criterio con esos dos campos en vez de tomar `[0]` a ciegas.\n\n**`?asignatura=` es un filtro por AREA, no una llave.** Un referente SIN areas declaradas aplica a TODAS (`areas: []` + `aplica_a_area: false`), no a ninguna. Y el area de la asignatura se resuelve por `TASIGNATURA.FK_TAREA_ASIGNATURA` o, si viene vacia (lo normal en las filas sembradas), por la de su `TAREA`.\n\nTrae lo mismo que 3.1 -- `es_evaluativo`, `tipo_evaluacion_valor`, `nivel_1_etiqueta`/`nivel_2_etiqueta`, `enunciados[].evidencias[]` -- mas `instrumento`, `instrumento_info_adicional`, `normatividad`, la vigencia y los `niveles`/`areas` del referente. Lo que NO trae es `relacionadoConUnidad`/`pkTunidadEnunciado`: aqui no hay unidad contra la que marcar, es el catalogo a ofrecer.\n\n**Permisos:** el sistema convencional, igual que el resto del Planeador -- gate VER sobre PLANEADOR mas el alcance territorial por el grado consultado (un docente de nivel 3 no puede sondear grados de sedes que no le corresponden). NO usa el menu REFERENTES_CURRICULARES, que hoy solo tiene el super admin.\n\n404 si el grado -- o la asignatura, cuando se manda -- no existe."
+            },
+            "description": "El mismo arbol que 3.1, pero SIN unidad todavia: es el que sirve para armar la unidad y para pintar la actividad ANTES de que exista la unidad. Con unidad ya creada, usar 3.1.\n\n**El recorrido:** `TGRADO -> FK_TNIVEL_ENSENANZA -> TREFERENTE_CURRICULAR_NIVEL -> referente`. El referente no se elige a mano en ninguna pantalla; sale del grado.\n\n**Devuelve un ARREGLO, no un objeto.** La relacion referente<->nivel es N:N, asi que un nivel puede tener varios referentes y forzar \"uno solo\" seria inventar un criterio que el modelo no tiene. El orden ES la preferencia: primero los acotados al area de la asignatura pedida (`especificidad` 0, `aplica_a_area` true), luego los universales (`especificidad` 1), y dentro de cada grupo la vigencia mas reciente. Mostrar el criterio con esos dos campos en vez de tomar `[0]` a ciegas.\n\n**`?asignatura=` es un filtro por AREA, no una llave.** Un referente SIN areas declaradas aplica a TODAS (`areas: []` + `aplica_a_area: false`), no a ninguna. Y el area de la asignatura se resuelve por `TASIGNATURA.FK_TAREA_ASIGNATURA` o, si viene vacia (lo normal en las filas sembradas), por la de su `TAREA`.\n\nTrae lo mismo que 3.1 -- `es_evaluativo`, `tipo_evaluacion_valor`, `nivel_1_etiqueta`/`nivel_2_etiqueta`, `enunciados[].evidencias[]` -- mas `instrumento`, `instrumento_info_adicional`, `normatividad`, la vigencia y los `niveles`/`areas` del referente. Lo que NO trae es `relacionadoConUnidad`/`pkTunidadEnunciado`: aqui no hay unidad contra la que marcar, es el catalogo a ofrecer.\n\n**Permisos:** el sistema convencional, igual que el resto del Planeador -- gate VER sobre PLANEADOR mas el alcance territorial por el grado consultado (un docente de nivel 3 no puede sondear grados de sedes que no le corresponden). NO usa el menu REFERENTES_CURRICULARES, que hoy solo tiene el super admin.\n\n**403 vs 404:** un grado INEXISTENTE responde **403**, no 404 -- el gate de alcance corre antes que la comprobacion de existencia, a proposito, porque al reves el endpoint le diria a cualquiera que PK_TGRADO existen. El 404 queda para el grado que existe y el usuario si alcanza, y para una `?asignatura=` que no existe. Verificado contra el servidor de test."
+          }
         },
         {
           "name": "3.1 — GET referente curricular de la unidad (arbol completo)",
@@ -1561,7 +1563,8 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200', () => pm.response.to.have.status(200));",
-                  "const filas = pm.response.json();",
+                  "// El motor responde {\"rows\":[{...}]}, no un arreglo plano.",
+                  "const filas = pm.response.json().rows || [];",
                   "const reales = filas.filter(f => f.pk_tactividad !== null);",
                   "const dia = pm.request.url.query.get('dia');",
                   "pm.test('con ?dia= solo llegan actividades vigentes ese dia', () => {",
