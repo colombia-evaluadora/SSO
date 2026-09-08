@@ -23,16 +23,22 @@ grupo y cambiar de estado.
 | `POST` | `/cobertura-academica/matricula/corregir` | 298 | **Corrección en lote** |
 | `PATCH` | `/usuarios/:ID` | 295 | **Datos de la persona** |
 
-Y uno que **no está en el catálogo**, porque vive en auth-center:
+Y los que sirven para **resolver a una persona** antes de mandarla a una
+matrícula, sea como estudiante o como acudiente:
 
 | Método | Ruta | Qué hace |
 |---|---|---|
-| `POST` | `/register/usuario` | Da de alta una persona, **o la devuelve si ya existe** |
+| `GET` | `/usuarios/autocompletar-por-documento` | Busca por documento y devuelve la ficha |
+| `GET` | `/usuarios/buscar-por-documento` | Igual, crudo, con opción de incluir inactivos |
+| `POST` | `/register/usuario` | Da de alta una persona **nueva** (auth-center, fuera del catálogo) |
 
-Se usa para resolver al acudiente antes de sustituirlo en una matrícula: el
-front pide la persona por sus datos y recibe su `PK_TUSUARIO`, sin tener que
-comprobar antes si estaba registrada. Comparte `fn_usu_crear` con
-`POST /register/funcionario`.
+`/register/usuario` **no** es un "crear o recuperar": si el correo ya está
+tomado responde **409**. Quien decide si hay que crear es el autocompletado —
+primero se busca por documento, y sólo si no aparece se crea. `POST
+/register/funcionario` sí reutiliza, pero ése es el alta de funcionario y no
+aplica aquí.
+
+El detalle del flujo está en [Resolver a una persona](#resolver-a-una-persona).
 
 `PATCH` para editar (convención del sistema: establecimientos 87, sedes 90,
 funcionarios 119, referentes 232). `PUT` para las acciones sobre **una**
@@ -358,6 +364,86 @@ El acudiente es la excepción: no lo decide una bandera sino una **key**, porque
 hay tres cosas que pueden pasarle y una bandera sólo distingue dos. Ver la
 sección siguiente.
 
+### Resolver a una persona
+
+Tanto el alta como la sustitución del acudiente reciben un **`PK_TUSUARIO`**, no
+los datos de la persona. Resolverlo son dos pasos, y el orden importa: **buscar
+primero, crear sólo si no aparece.**
+
+**1 · Buscar por documento**
+
+```
+GET /usuarios/autocompletar-por-documento
+    ?FKTLVTIPODOCUMENTO=<tipo>&IDENTIFICACION=<numero>
+```
+
+Devuelve los datos de identidad y tres campos que dicen **qué es ya** esa
+persona. Ojo: las claves salen en **snake_case**, porque el endpoint es un
+`SELECT *` sobre la función y no un `jsonb_build_object` como el resto:
+
+| Campo | Para qué sirve |
+|---|---|
+| `pk_tusuario` | lo que hay que mandar como `PK_USUARIO_ACUDIENTE` |
+| `pk_tpadre_activo` | no es `null` ⇒ **ya es acudiente** de alguien |
+| `pk_tfuncionario_activo` | no es `null` ⇒ ya es funcionario (un docente, p. ej.) |
+| `pk_testudiante_activo` | no es `null` ⇒ ya es estudiante |
+
+Los tres pueden venir a la vez: la misma persona puede ser docente, padre de un
+alumno y estudiante de un programa. Ninguno impide usarla como acudiente; sirven
+para avisar al usuario de a quién está eligiendo.
+
+No lleva gate: encuentra a la persona aunque pertenezca a otro establecimiento.
+Es deliberado —si no, el autocompletado se rompería justo en el caso que lo hace
+útil— y es también la razón de que el `GET` de un funcionario no valide alcance
+sobre el objetivo.
+
+`GET /usuarios/buscar-por-documento` hace lo mismo devolviendo la fila cruda de
+`TUSUARIO` y acepta `INCLUIR_INACTIVOS`. Sirve para diagnosticar un documento
+que "no aparece" porque su persona está dada de baja.
+
+**2 · Crear, sólo si no apareció**
+
+```
+POST /register/usuario
+```
+
+Cuidado con esto: **no es un "crear o recuperar"**. Si el correo ya está tomado
+responde **409**, no devuelve la persona. Por eso el paso 1 no es opcional.
+
+Cuerpo (auth-center, camelCase — no sigue la convención `UPPER_SNAKE` del
+catálogo, porque no pasa por él):
+
+```jsonc
+{
+  "email": "…",              // obligatorio, es la cuenta de acceso
+  "fullName": "…",
+  "password": "…",
+  "identificacion": "…",
+  "fkTlvTipoDocumento": 1,
+  "primerNombre": "…",
+  "primerApellido": "…",
+  "fkTlvGenero": 1,
+  "segundoNombre": "…",      // opcionales de aquí en adelante
+  "segundoApellido": "…",
+  "fechaNacimiento": "1990-01-01",
+  "telefono": "…",
+  "correoElectronico": "…"
+}
+```
+
+Respuesta: `{ idUser, pkTusuario, pkFuncionario, email }`. El que interesa es
+**`pkTusuario`**.
+
+Puede darse que la persona no aparezca por documento y aun así el correo esté
+tomado —misma dirección, otro documento—. Ahí el 409 es correcto y hay que
+pedirle otro correo al usuario, no reintentar.
+
+**Un caso que conviene tener presente:** una persona dada de baja libera su
+documento y su cuenta en `TUSUARIO`, porque los índices únicos son parciales
+(`WHERE active = true`). Pero su fila en `public.users` **no** se borra y el
+índice de `email` **no** es parcial, así que ese correo sigue ocupado para
+siempre. Un documento reutilizable con un correo bloqueado es esa situación.
+
 ### El acudiente: sustituirlo o editarlo
 
 **Cómo se conecta.** `TMATRICULA.FK_TPADRE` es el vínculo matrícula ↔ acudiente.
@@ -382,10 +468,11 @@ quien debe quedar como acudiente de esa matrícula. Mándala **siempre**:
 | **otra** key + `PARENTESCO` | se sustituye | `sustituido` |
 | no la mandas | el acudiente no se toca | `sin cambio` |
 
-Para sustituir, el front resuelve primero la persona con
-`POST /register/usuario` (auth-center, fuera del catálogo), que **la devuelve si
-ya existe** en vez de duplicarla —un docente, un padre con otro hijo
-matriculado—, y manda esa key.
+Para sustituir, el front resuelve primero la persona y manda su `PK_TUSUARIO`.
+Ese paso es el mismo que ya hace el **alta**, que recibe
+`PK_USUARIO_ESTUDIANTE` y `PK_USUARIO_ACUDIENTE`: la clave del editar se llama
+igual a propósito. Cómo se resuelve, en [Resolver a una
+persona](#resolver-a-una-persona).
 
 **`PARENTESCO` es obligatorio al sustituir.** `TNUCLEO_FAMILIAR.FK_TLV_PARENTESCO`
 es `NOT NULL` y no se puede deducir: si entra un acudiente nuevo hay que decir
@@ -480,9 +567,9 @@ Para "Otros documentos relevantes", que admiten N, se opera por
 - **`fn_matricula_listar` divergió del repo.** La que corría en el servidor no
   era la de V200: había una revisión aplicada a mano que nunca se escribió al
   archivo, y traía un comentario dando por muerta la columna `FK_TPADRE` —de ahí
-  el bug de los 2.037 acudientes equivocados—. La corrección va en **V239**
+  el bug de los 2.037 acudientes equivocados—. La corrección va en **V270**
   partiendo de la versión **viva**, para no perder ese trabajo ni subirlo al
-  repo sin que su autor lo revise. Cuando escriba V200, V239 sigue siendo la
+  repo sin que su autor lo revise. Cuando escriba V200, V270 sigue siendo la
   última palabra por número de versión. Pendiente: que lo haga.
 - **`TMATRICULA_PROMOCION` tiene ocho `justificacion_*` heredados en `NOT NULL`**
   que pertenecen al formulario de promoción *anticipada*, no a este flujo. Se

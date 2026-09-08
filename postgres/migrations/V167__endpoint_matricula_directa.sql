@@ -50,6 +50,21 @@
 -- (varios) segun cuantos ficheros haya bajo ese nombre de campo -- ver el
 -- comentario en fn_matricula_archivo_crear_lote (V165), que acepta ambas
 -- formas.
+--
+-- -----------------------------------------------------------------------------
+-- Los "Otros documentos relevantes" NO viajan por aqui
+-- -----------------------------------------------------------------------------
+-- Es el unico documento de la ficha que admite N archivos, y un campo
+-- multi-archivo no se puede declarar en param_types: no existe el tipo FILE[]
+-- (docs/subida-archivos-a-queries.md, seccion 10). La declaracion doble que
+-- habia -- FILE para que file-service lo acepte y JSONB por BODY_RAW para leer
+-- la lista -- es insatisfacible, porque el binder valida las dos claves contra
+-- el mismo valor. El detalle esta en V201, que ademas registra el endpoint que
+-- si resuelve el caso:
+--
+--   POST /cobertura-academica/matricula/:ID/documentos
+--
+-- Se llama en bucle DESPUES de este alta, con el pk_tmatricula que devuelve.
 -- =============================================================================
 
 INSERT INTO public.query (
@@ -120,8 +135,7 @@ SELECT
         p_fk_tarchivo_documento_identidad => CAST(:BODY.DOCUMENTO_DE_IDENTIDAD_DEL_ESTUDIANTE AS BIGINT),
         p_fk_tarchivo_certificado_estudios => CAST(:BODY.CERTIFICADO_DE_ESTUDIOS_DEL_ANO_ANTERIOR AS BIGINT),
         p_fk_tarchivo_certificado_medico => CAST(:BODY.CERTIFICADO_MEDICO_DEL_ESTUDIANTE AS BIGINT),
-        p_fk_tarchivo_foto => CAST(:BODY.FOTO_DEL_ESTUDIANTE AS BIGINT),
-        p_fk_tarchivo_otros => CAST(:BODY_RAW.OTROS_DOCUMENTOS_RELEVANTES AS JSONB)
+        p_fk_tarchivo_foto => CAST(:BODY.FOTO_DEL_ESTUDIANTE AS BIGINT)
     )',
     'postgres', false, false,
     m.id_microservice,
@@ -131,7 +145,6 @@ SELECT
         "BODY.CERTIFICADO_DE_ESTUDIOS_DEL_ANO_ANTERIOR": "FILE:matricula",
         "BODY.CERTIFICADO_MEDICO_DEL_ESTUDIANTE": "FILE:matricula",
         "BODY.FOTO_DEL_ESTUDIANTE": "FILE:matricula",
-        "BODY.OTROS_DOCUMENTOS_RELEVANTES": "FILE:matricula",
 
         "BODY.SEDE": "BIGINT",
         "BODY.JORNADA": "BIGINT",
@@ -187,9 +200,7 @@ SELECT
         "BODY.ALUMNOS_MADRE_CABEZA_DE_FAMILIA": "VARCHAR",
         "BODY.HIJOS_DE_MADRE_CABEZA_DE_FAMILIA": "VARCHAR",
         "BODY.VETERANOS_DE_LA_FUERZA_PUBLICA": "VARCHAR",
-        "BODY.HEROES_DE_LA_NACION": "VARCHAR",
-
-        "BODY_RAW.OTROS_DOCUMENTOS_RELEVANTES": "JSONB"
+        "BODY.HEROES_DE_LA_NACION": "VARCHAR"
     }'::jsonb,
     'V167 REV2 -- alta de matricula directa. Nombres de campo alineados con TMATRICULA_CAMPO.NOMBRE normalizado (tildes fuera, no-alfanumerico -> _), para que coincidan con GET /matricula/configuracion.'
   FROM public.microservice m

@@ -1,5 +1,5 @@
 -- =============================================================================
--- V239 -- fn_matricula_listar: el acudiente de la fila sale de
+-- V270 -- fn_matricula_listar: el acudiente de la fila sale de
 -- TMATRICULA.FK_TPADRE, no de un desempate arbitrario del nucleo familiar.
 --
 -- -----------------------------------------------------------------------------

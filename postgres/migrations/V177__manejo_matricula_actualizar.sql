@@ -398,6 +398,10 @@ $function$;
 --       referenciado por otra matricula (una promocion copia el enlace, no el
 --       archivo). El GET filtra por ACTIVE, asi que deja de aparecer.
 --
+--       SOLO para los tipos 1-a-1. Sobre "Otros documentos relevantes" ('06'),
+--       que admite N, se rechaza: borrar por tipo vaciaria la lista entera. Hay
+--       que nombrar el documento con p_pk_tmatricula_archivo.
+--
 --   p_pk_tmatricula_archivo NOT NULL
 --       opera sobre ESE enlace concreto, sin mirar el tipo: se reemplaza su
 --       archivo o se inactiva. Es lo que hace falta para "Otros documentos
@@ -420,6 +424,7 @@ AS $function$
 DECLARE
     v_fk_establecimiento BIGINT;
     v_tipo               BIGINT;
+    v_tipo_multiple      BIGINT;
     v_nuevo              BIGINT;
 BEGIN
     -- -----------------------------------------------------------------
@@ -474,13 +479,41 @@ BEGIN
 
         v_tipo := p_fk_tlv_tipo_archivo;
 
-        UPDATE academico_test.TMATRICULA_ARCHIVO
-           SET ACTIVE      = FALSE,
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
-               MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE FK_TMATRICULA       = p_fk_tmatricula
-           AND FK_TLV_TIPO_ARCHIVO = v_tipo
-           AND ACTIVE              = TRUE;
+        -- El barrido por tipo es correcto para los tipos 1-a-1: reemplazar el
+        -- documento de identidad ES inactivar el vigente y crear el nuevo. Para
+        -- un tipo que admite N documentos ("Otros documentos relevantes", '06')
+        -- seria destructivo: agregar el tercero borraria los dos que ya
+        -- estaban, en silencio y sin que el llamante lo pidiera.
+        --
+        -- Se comprobo midiendo: con dos "otros" activos, agregar uno dejaba UNO
+        -- solo; y dos nuevos en la misma llamada dejaban solo el ultimo, porque
+        -- cada vuelta del bucle de fn_matricula_archivo_actualizar_lote volvia a
+        -- barrer el tipo.
+        SELECT PK_LISTA_VALOR INTO v_tipo_multiple
+          FROM academico_test.TLISTA_VALOR
+         WHERE CATEGORIA = 'ARCHIVO_MATRICULA' AND VALOR = '06' AND ACTIVE = TRUE;
+
+        IF v_tipo IS NOT DISTINCT FROM v_tipo_multiple THEN
+            -- Sin archivo nuevo no hay nada que interpretar: seria "borra todos
+            -- los otros documentos", y eso no se acepta sin nombrarlos. Un
+            -- cuerpo mal armado en el front no debe poder vaciar la lista.
+            IF p_fk_tarchivo IS NULL THEN
+                RAISE EXCEPTION 'Para quitar un documento de "Otros documentos relevantes" hay que indicar cual'
+                    USING ERRCODE = '22023',
+                          HINT    = 'Envie p_pk_tmatricula_archivo del documento a quitar. Este tipo admite '
+                                 || 'varios documentos, asi que no se borra por tipo: se nombra uno por uno';
+            END IF;
+            -- Con archivo nuevo: agregar es solo agregar. Se cae al paso 2 sin
+            -- inactivar nada.
+        ELSE
+            UPDATE academico_test.TMATRICULA_ARCHIVO
+               SET ACTIVE      = FALSE,
+                   MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+                   MODIFIED_AT = CURRENT_TIMESTAMP
+             WHERE FK_TMATRICULA       = p_fk_tmatricula
+               AND FK_TLV_TIPO_ARCHIVO = v_tipo
+               AND ACTIVE              = TRUE;
+        END IF;
     END IF;
 
     -- -----------------------------------------------------------------

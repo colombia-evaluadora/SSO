@@ -46,6 +46,16 @@
 --     edicion (294); el 215 tenia el mismo hueco y solo no habia salido porque
 --     nadie habia enviado ese campo.
 --
+--     CORREGIDO DESPUES, en V201: para el ALTA este arreglo no alcanzaba. El
+--     problema de fondo es que ese campo lleva N archivos y no hay tipo FILE[]
+--     en param_types, asi que la declaracion doble (FILE + JSONB sobre el mismo
+--     valor) es insatisfacible en las dos direcciones. V201 saca el campo del
+--     alta y registra un endpoint que sube los documentos de uno en uno. El
+--     UPDATE de mas abajo queda como no-op para el 215 -- su WHERE exige la
+--     clave BODY_RAW., que V201 ya quito -- y sigue aplicando al 294, donde el
+--     JSONB si es lo correcto porque el editar manda identificadores, no
+--     ficheros.
+--
 -- =============================================================================
 -- PARTE 2 -- "El campo 'SOPORTE' no esta declarado como archivo para esta ruta"
 -- =============================================================================

@@ -422,7 +422,7 @@ BEGIN
     --
     --      El alta no lo llenaba, asi que toda matricula creada por la app
     --      quedaba con el puntero vacio y la lectura tenia que adivinar
-    --      (ver V239). Se rellena aqui y no en fn_matricula_crear porque
+    --      (ver V270). Se rellena aqui y no en fn_matricula_crear porque
     --      esa funcion es de otro modulo y no recibe el acudiente.
     --
     --      FK_TLV_ACUDIENTE_PARENTESCO acompaña al puntero: es el

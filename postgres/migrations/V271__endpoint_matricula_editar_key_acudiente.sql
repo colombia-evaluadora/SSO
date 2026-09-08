@@ -1,5 +1,5 @@
 -- =============================================================================
--- V240 -- El editar de matricula acepta la key del acudiente que debe quedar.
+-- V271 -- El editar de matricula acepta la key del acudiente que debe quedar.
 --
 -- Empalma con el parametro nuevo de fn_matricula_directa_actualizar
 -- (p_pk_usuario_acudiente, ver V177). El front manda SIEMPRE
