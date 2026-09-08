@@ -303,6 +303,11 @@
       "key": "actRubricaNivelId",
       "value": "",
       "description": "La rellena 6.2: nivel de ese criterio"
+    },
+    {
+      "key": "diaActivo",
+      "value": "2026-09-15",
+      "description": "Dia para el paginado por dia activo (?dia=). Poner un dia con actividades; para probar la navegacion en vacio, uno sin ellas y mirar dia_anterior/dia_siguiente."
     }
   ],
   "item": [
@@ -675,7 +680,7 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades",
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades?size=20&offset=0&dia={{diaActivo}}",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -686,6 +691,19 @@
                 "unidades"
               ],
               "query": [
+                {
+                  "key": "size",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                },
+                {
+                  "key": "dia",
+                  "value": "{{diaActivo}}",
+                  "description": "Paginado por DIA ACTIVO (YYYY-MM-DD): solo las unidades con alguna actividad vigente ese dia. Quitarlo para el listado completo."
+                },
                 {
                   "key": "search",
                   "value": "",
@@ -702,21 +720,41 @@
                   "disabled": true
                 },
                 {
-                  "key": "size",
-                  "value": "20",
-                  "description": "default 20",
-                  "disabled": true
-                },
-                {
-                  "key": "offset",
-                  "value": "0",
-                  "description": "default 0",
+                  "key": "diasGracia",
+                  "value": "2",
+                  "description": "Umbral de VENCIDA del estado derivado (default 2).",
                   "disabled": true
                 }
               ]
             },
-            "description": "Pagina de unidades con filtros (`search`, `asignatura`, `grado`, `funcionario`, `incluir_inactivos`) y orden (`orden_por` en nombre|asignatura|grado, `orden_asc`). Es la grilla principal de la pantalla 'Unidades'. Trae nombres ya resueltos y conteos (actividades/objetivos/contenidos activos) para no golpear el detalle de cada fila.\n\n**Pantalla del prototipo:** P5 - listado lateral de unidades, con \"N Actividades\" y el rango de fechas ya resueltos."
-          }
+            "description": "Listado de unidades tematicas. Dos cosas que el front usa directo:\n\n**`estado` (derivado, no hay columna).** Agrega el estado de las actividades de la unidad con esta cascada, en este orden exacto: UNA sola actividad `VENCIDA` marca la unidad como **VENCIDA**; si no hay vencidas pero si alguna `PENDIENTE_POR_EVALUAR`, **PENDIENTE_POR_EVALUAR**; si TODAS estan finalizadas, **FINALIZADA**; en cualquier otro caso, **EN_EVALUACION**. Son los MISMOS cuatro valores del estado de actividad, asi que el chip se pinta con la misma paleta sin traducir nada. `?diasGracia=` (default 2) mueve el umbral de VENCIDA.\n\n*Caso borde:* una unidad sin actividades cae en EN_EVALUACION (es \"cualquier otro caso\"); se reconoce por `total_actividades: 0` en la misma fila.\n\n**`?dia=YYYY-MM-DD` -- paginado por dia activo** (la barra `Hoy | MARTES 16 | < >`). Deja solo las unidades con ALGUNA actividad activa **vigente** ese dia: vigente = la ventana `[fechaInicio, fechaCierre]` CUBRE el dia, no que empiece o cierre en el -- una actividad de tres dias aparece en los tres. La unidad no tiene fechas propias, por eso el dia se resuelve siempre por sus actividades.\n\nLa respuesta agrega `dia`, `dia_anterior` y `dia_siguiente` para las flechas: son el dia **ocupado** mas cercano a cada lado bajo los mismos filtros, **saltando los dias vacios** -- no son `dia-1`/`dia+1` a ciegas --, y `null` cuando no hay mas dias por ese lado (ahi se deshabilita la flecha).\n\n*Dia vacio:* si ese dia no tiene ninguna unidad, llega **una** fila con todas las columnas de la unidad en `null` y `total_count: 0`, pero con las flechas informadas. Es deliberado: sin esa fila el usuario quedaria encerrado en un dia vacio. Reconocerla por `total_count === 0` (o `pk_tunidad === null`) y no pintarla como tarjeta.\n\nSin `?dia=` nada de esto cambia el comportamiento anterior: las tres columnas vienen `null` y una pagina vacia sigue siendo 0 filas."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json();",
+                  "pm.test('cada unidad trae su estado derivado', () => {",
+                  "  const validos = ['VENCIDA', 'PENDIENTE_POR_EVALUAR', 'FINALIZADA', 'EN_EVALUACION'];",
+                  "  filas.filter(f => f.pk_tunidad !== null)",
+                  "       .forEach(f => pm.expect(validos, f.nombre).to.include(f.estado));",
+                  "});",
+                  "// Con ?dia= la respuesta trae la navegacion de la barra de dias. En un dia",
+                  "// VACIO llega UNA fila con pk_tunidad null y total_count 0 -- a proposito:",
+                  "// sin ella no habria con que SALIR del dia vacio.",
+                  "pm.test('con ?dia= trae la navegacion de la barra', () => {",
+                  "  if (!pm.request.url.query.has('dia')) return;",
+                  "  pm.expect(filas, 'siempre al menos una fila con ?dia=').to.not.be.empty;",
+                  "  pm.expect(filas[0]).to.have.property('dia_anterior');",
+                  "  pm.expect(filas[0]).to.have.property('dia_siguiente');",
+                  "});"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "2.2 — POST crear unidad",
@@ -1080,6 +1118,82 @@
       "description": "El corazon de lo dinamico del Planeador. El referente curricular de una unidad se DERIVA (grado -> nivel de ensenanza -> referente), nunca se elige a mano: GET .../referente (3.1) hace ese recorrido y devuelve el arbol enunciado->evidencias mas las dos banderas (enfoque, tipo de evaluacion) que la carpeta 5 usa para decidir que pintar en la actividad. Aqui tambien vive la rubrica PROPIA de la unidad (distinta de la rubrica de INSTRUMENTO de una actividad, carpeta 6) y la relacion unidad<->enunciado que habilita, mas abajo, que una actividad pueda marcar evidencias (carpeta 4).",
       "item": [
         {
+          "name": "3.0 - GET referente curricular por GRADO + ASIGNATURA (antes de crear la unidad)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json();",
+                  "pm.test('devuelve al menos un referente para el grado', () => pm.expect(filas).to.be.an('array').and.not.empty);",
+                  "const r = filas[0];",
+                  "pm.test('trae las dos banderas que gobiernan la UI', () => {",
+                  "  pm.expect(r).to.have.property('es_evaluativo');",
+                  "  pm.expect(r.tipo_evaluacion_valor, 'tipo_evaluacion_valor').to.be.a('string');",
+                  "});",
+                  "pm.test('trae las etiquetas de nivel (rotular con esto, no con literales)', () => {",
+                  "  pm.expect(r.nivel_1_etiqueta).to.be.a('string').and.not.empty;",
+                  "  pm.expect(r.nivel_2_etiqueta).to.be.a('string').and.not.empty;",
+                  "});",
+                  "pm.test('trae el arbol de enunciados con evidencias anidadas', () => {",
+                  "  pm.expect(r.enunciados).to.be.an('array');",
+                  "  if (r.enunciados.length) pm.expect(r.enunciados[0]).to.have.property('evidencias');",
+                  "});",
+                  "// El orden ES la preferencia: los acotados al area de la asignatura van",
+                  "// primero (especificidad 0), los universales despues (1). Nunca al reves.",
+                  "pm.test('ordenado por especificidad', () => {",
+                  "  const esp = filas.map(x => x.especificidad);",
+                  "  pm.expect(esp).to.deep.equal(esp.slice().sort((a, b) => a - b));",
+                  "});",
+                  "if (filas.length) pm.collectionVariables.set('referenteId', String(filas[0].pk_referente_curricular));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/referente-curricular?grado={{gradoId}}&asignatura={{asignaturaId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "referente-curricular"
+              ],
+              "query": [
+                {
+                  "key": "grado",
+                  "value": "{{gradoId}}",
+                  "description": "OBLIGATORIO. PK_TGRADO. De aqui sale el nivel de ensenanza y, por el, el referente."
+                },
+                {
+                  "key": "asignatura",
+                  "value": "{{asignaturaId}}",
+                  "description": "Opcional. PK_TASIGNATURA. Solo FILTRA por area; sin ella se devuelven todos los referentes del nivel."
+                },
+                {
+                  "key": "anio",
+                  "value": "",
+                  "description": "Opcional (default: anio en curso). Descarta los referentes fuera de vigencia.",
+                  "disabled": true
+                }
+              ]
+            }
+          },
+          "description": "El mismo arbol que 3.1, pero SIN unidad todavia: es el que sirve para armar la unidad y para pintar la actividad ANTES de que exista la unidad. Con unidad ya creada, usar 3.1.\n\n**El recorrido:** `TGRADO -> FK_TNIVEL_ENSENANZA -> TREFERENTE_CURRICULAR_NIVEL -> referente`. El referente no se elige a mano en ninguna pantalla; sale del grado.\n\n**Devuelve un ARREGLO, no un objeto.** La relacion referente<->nivel es N:N, asi que un nivel puede tener varios referentes y forzar \"uno solo\" seria inventar un criterio que el modelo no tiene. El orden ES la preferencia: primero los acotados al area de la asignatura pedida (`especificidad` 0, `aplica_a_area` true), luego los universales (`especificidad` 1), y dentro de cada grupo la vigencia mas reciente. Mostrar el criterio con esos dos campos en vez de tomar `[0]` a ciegas.\n\n**`?asignatura=` es un filtro por AREA, no una llave.** Un referente SIN areas declaradas aplica a TODAS (`areas: []` + `aplica_a_area: false`), no a ninguna. Y el area de la asignatura se resuelve por `TASIGNATURA.FK_TAREA_ASIGNATURA` o, si viene vacia (lo normal en las filas sembradas), por la de su `TAREA`.\n\nTrae lo mismo que 3.1 -- `es_evaluativo`, `tipo_evaluacion_valor`, `nivel_1_etiqueta`/`nivel_2_etiqueta`, `enunciados[].evidencias[]` -- mas `instrumento`, `instrumento_info_adicional`, `normatividad`, la vigencia y los `niveles`/`areas` del referente. Lo que NO trae es `relacionadoConUnidad`/`pkTunidadEnunciado`: aqui no hay unidad contra la que marcar, es el catalogo a ofrecer.\n\n**Permisos:** el sistema convencional, igual que el resto del Planeador -- gate VER sobre PLANEADOR mas el alcance territorial por el grado consultado (un docente de nivel 3 no puede sondear grados de sedes que no le corresponden). NO usa el menu REFERENTES_CURRICULARES, que hoy solo tiene el super admin.\n\n404 si el grado -- o la asignatura, cuando se manda -- no existe."
+        },
+        {
           "name": "3.1 — GET referente curricular de la unidad (arbol completo)",
           "request": {
             "method": "GET",
@@ -1391,7 +1505,7 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades",
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades?size=20&offset=0&dia={{diaActivo}}",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -1403,18 +1517,27 @@
               ],
               "query": [
                 {
+                  "key": "size",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                },
+                {
+                  "key": "dia",
+                  "value": "{{diaActivo}}",
+                  "description": "Paginado por DIA ACTIVO (YYYY-MM-DD): solo las actividades vigentes ese dia. Quitarlo para el listado completo."
+                },
+                {
                   "key": "search",
                   "value": "",
                   "disabled": true
                 },
                 {
-                  "key": "asignatura",
-                  "value": "{{asignaturaId}}",
-                  "disabled": true
-                },
-                {
-                  "key": "grupo",
-                  "value": "{{grupoId}}",
+                  "key": "estados",
+                  "value": "PENDIENTE_POR_EVALUAR,VENCIDA",
+                  "description": "Lista separada por comas (NO array: ver V253).",
                   "disabled": true
                 },
                 {
@@ -1423,32 +1546,43 @@
                   "disabled": true
                 },
                 {
-                  "key": "estados",
-                  "value": "",
-                  "description": "UN estado a la vez",
-                  "disabled": true
-                },
-                {
-                  "key": "dias_gracia",
+                  "key": "diasGracia",
                   "value": "2",
-                  "description": "default 2",
-                  "disabled": true
-                },
-                {
-                  "key": "size",
-                  "value": "20",
-                  "description": "default 20",
-                  "disabled": true
-                },
-                {
-                  "key": "offset",
-                  "value": "0",
                   "disabled": true
                 }
               ]
             },
-            "description": "Pagina general de actividades (no acotada a un docente -- para eso esta 8.3 `/mias`) con filtros indexados (`asignatura`,`grupo`,`unidad`,`tipo_actividad`,`instrumento`), ventana `fecha_desde`/`fecha_hasta` por solapamiento, `search` (buscador unico por nombre/nivel/instrumento) y `estados` (el estado DERIVADO -- ver carpeta 8; UN estado a la vez, el multi-estado por coma esta roto). `dias_gracia` (default 2) ajusta el umbral de VENCIDA.\n\n**Pantalla del prototipo:** P1 - columna de tarjetas de actividad, con el buscador unico y el embudo de filtros."
-          }
+            "description": "Pagina general de actividades (no acotada a un docente -- para eso esta 8.3 `/mias`) con filtros indexados (`asignatura`,`grupo`,`unidad`,`tipo_actividad`,`instrumento`), ventana `fecha_desde`/`fecha_hasta` por solapamiento, `search` (buscador unico por nombre/nivel/instrumento) y `estados` (el estado DERIVADO -- ver carpeta 8; UN estado a la vez, el multi-estado por coma esta roto). `dias_gracia` (default 2) ajusta el umbral de VENCIDA.\n\n**Pantalla del prototipo:** P1 - columna de tarjetas de actividad, con el buscador unico y el embudo de filtros.\n\n---\n\n**`?dia=YYYY-MM-DD` -- paginado por dia activo** (la barra `Hoy | MARTES 16 | < >`). Deja solo las actividades **vigentes** ese dia: vigente = la ventana `[fechaInicio, fechaCierre]` CUBRE el dia, **no** que empiece o cierre en el -- una actividad de tres dias tiene que aparecer en los tres. Una actividad sin ninguna fecha no esta en ningun dia y no sale en esta vista.\n\nLa respuesta agrega `dia`, `dia_anterior` y `dia_siguiente` para las flechas: el dia **ocupado** mas cercano a cada lado bajo los MISMOS filtros, **saltando los dias vacios** (no son `dia-1`/`dia+1` a ciegas), y `null` cuando no hay mas dias por ese lado.\n\n*Dia vacio:* llega **una** fila con las columnas de la actividad en `null` y `total_count: 0`, pero con las flechas informadas -- sin ella el usuario no tendria con que salir del dia vacio. Reconocerla por `total_count === 0` (o `pk_tactividad === null`).\n\nSin `?dia=` el comportamiento no cambia: esas tres columnas vienen `null` y una pagina vacia sigue siendo 0 filas."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json();",
+                  "const reales = filas.filter(f => f.pk_tactividad !== null);",
+                  "const dia = pm.request.url.query.get('dia');",
+                  "pm.test('con ?dia= solo llegan actividades vigentes ese dia', () => {",
+                  "  if (!dia) return;",
+                  "  reales.forEach(f => {",
+                  "    if (f.fecha_inicio) pm.expect(f.fecha_inicio, f.titulo).to.be.at.most(dia);",
+                  "    if (f.fecha_cierre) pm.expect(f.fecha_cierre, f.titulo).to.be.at.least(dia);",
+                  "  });",
+                  "});",
+                  "// Las flechas SALTAN los dias vacios, asi que nunca pueden caer en el dia",
+                  "// consultado ni al lado equivocado.",
+                  "pm.test('las flechas apuntan al lado correcto', () => {",
+                  "  if (!dia || !filas.length) return;",
+                  "  const ant = filas[0].dia_anterior, sig = filas[0].dia_siguiente;",
+                  "  if (ant) pm.expect(ant).to.be.below(dia);",
+                  "  if (sig) pm.expect(sig).to.be.above(dia);",
+                  "});"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "4.2 — POST crear actividad",
@@ -2736,7 +2870,7 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/mias?size=50&offset=0",
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/mias?size=50&offset=0&dia={{diaActivo}}",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -2749,30 +2883,27 @@
               ],
               "query": [
                 {
-                  "key": "estados",
-                  "value": "VENCIDA",
-                  "description": "el estado de la tarjeta pulsada",
-                  "disabled": true
-                },
-                {
-                  "key": "dias_gracia",
-                  "value": "2",
-                  "description": "default 2",
-                  "disabled": true
-                },
-                {
                   "key": "size",
-                  "value": "50",
-                  "description": "obligatorio en la practica"
+                  "value": "50"
                 },
                 {
                   "key": "offset",
-                  "value": "0",
-                  "description": "obligatorio en la practica"
+                  "value": "0"
+                },
+                {
+                  "key": "dia",
+                  "value": "{{diaActivo}}",
+                  "description": "Paginado por DIA ACTIVO (YYYY-MM-DD), igual que en el listado general. Es esta ruta la que alimenta la barra de dias del tablero."
+                },
+                {
+                  "key": "estados",
+                  "value": "PENDIENTE_POR_EVALUAR",
+                  "description": "El filtro que viene de la tarjeta pulsada. Lista separada por comas.",
+                  "disabled": true
                 }
               ]
             },
-            "description": "Al pulsar 'Ver detalles' en una tarjeta del tablero: mismo listado/orden/paginacion que 4.1 pero acotado al DOCENTE AUTENTICADO. `estados` es el filtro que llega de la tarjeta pulsada (solo existen CUATRO: PENDIENTE_POR_EVALUAR / EN_EVALUACION / FINALIZADA / VENCIDA); sin el, trae todas las del docente. `size`/`offset` son opcionales y tienen default; se pueden mandar explicitos para fijar el tamano de pagina.\n\n**Pantalla del prototipo:** P1 - enlace \"Ver detalles\" de una tarjeta, que llega con el estado ya filtrado."
+            "description": "Al pulsar 'Ver detalles' en una tarjeta del tablero: mismo listado/orden/paginacion que 4.1 pero acotado al DOCENTE AUTENTICADO. `estados` es el filtro que llega de la tarjeta pulsada (solo existen CUATRO: PENDIENTE_POR_EVALUAR / EN_EVALUACION / FINALIZADA / VENCIDA); sin el, trae todas las del docente. `size`/`offset` son opcionales y tienen default; se pueden mandar explicitos para fijar el tamano de pagina.\n\n**Pantalla del prototipo:** P1 - enlace \"Ver detalles\" de una tarjeta, que llega con el estado ya filtrado.\n\n---\n\n**`?dia=YYYY-MM-DD`** -- el mismo paginado por dia activo del listado general, con la misma semantica (vigente = la ventana CUBRE el dia) y las mismas columnas `dia`/`dia_anterior`/`dia_siguiente`, incluida la fila unica con `total_count: 0` en un dia vacio. Es justamente esta ruta la que alimenta la barra `Hoy | MARTES 16 | < >` del tablero del docente."
           }
         },
         {
