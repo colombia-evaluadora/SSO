@@ -67,6 +67,43 @@
 -- validan, y su mensaje se recoge en el informe de la fila. Duplicar la regla
 -- seria garantizar que las dos copias divergan.
 --
+-- -----------------------------------------------------------------------------
+-- Permisos: capability al entrar, ALCANCE fila por fila
+-- -----------------------------------------------------------------------------
+-- Delegar TODOS los permisos en las funciones orquestadas no alcanzaba, por dos
+-- agujeros que se midieron:
+--
+--   1. En modo validacion no se llama a ninguna de ellas, asi que no se
+--      comprobaba nada. Un usuario de nivel 2 SIN ningun permiso de PLANEADOR
+--      obtenia el informe completo, con las PKs a las que resolvia cada
+--      etiqueta y si la unidad existia o habia que crearla. Poca cosa por si
+--      sola, pero es informacion del establecimiento de otro y no hay razon
+--      para entregarla.
+--
+--   2. fn_actividad_crear comprueba capability pero NO alcance -- llama a
+--      fn_assert_permiso_seccion sin objetivo, como las 91 funciones del
+--      modulo. Un docente de nivel 3 con permiso de CREAR importo una actividad
+--      en un establecimiento que no era el suyo.
+--
+-- Asi que aqui:
+--   * capability se exige al entrar, en LOS DOS modos. Validar es un paso de
+--     importar, no una consulta aparte, asi que se pide CREAR y no VER: quien
+--     no puede importar no tiene por que ver el informe de una importacion.
+--   * el ALCANCE del destino se comprueba por fila, con fn_planeador_alcanza
+--     (V202), y se reporta como cualquier otro problema de la fila. Encaja con
+--     el informe que ya existe: el usuario ve "esta actividad va a un
+--     establecimiento que no alcanzas" junto al resto de los motivos, en vez de
+--     que la importacion entera reviente por una fila.
+--
+-- -----------------------------------------------------------------------------
+-- Solo el periodo academico en curso
+-- -----------------------------------------------------------------------------
+-- El destino tiene que estar en un periodo que no haya terminado
+-- (fn_planeador_periodo_vigente, V203), y NO es elegible: no hay parametro para
+-- importar a un año cerrado. Una actividad metida en un periodo terminado no la
+-- ve ni la califica nadie -- queda colgada de un grupo que ya no funciona como
+-- tal. Se reporta por fila, igual que el alcance.
+--
 -- Idempotente: CREATE OR REPLACE.
 -- =============================================================================
 
@@ -203,6 +240,12 @@ DECLARE
     v_es_eval    academico_test.bool_sn;
     v_matriculas BIGINT[];
 BEGIN
+    -- Capability, antes de resolver nada y en los dos modos. En validacion no
+    -- se llama a ninguna funcion orquestada, asi que sin esto el informe se
+    -- entregaba a cualquiera -- ver la cabecera.
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'CREAR');
+
     IF p_actividades IS NULL OR jsonb_typeof(p_actividades) <> 'array' THEN
         RAISE EXCEPTION 'p_actividades debe ser un array JSON de actividades'
             USING ERRCODE = '22023',
@@ -595,6 +638,32 @@ BEGIN
             v_err := v_err || ('otro: el instrumento es Otro (personalizado) pero no viene "otro"')::TEXT;
         END IF;
 
+        -- ---- periodo del destino ----
+        -- Antes del alcance a proposito: si el periodo ya termino, da igual
+        -- quien seas. Y el mensaje es mas util -- "ese año esta cerrado"
+        -- explica el problema mejor que "no alcanzas ese establecimiento".
+        IF COALESCE(v_grupo, v_grado, v_unidad) IS NOT NULL
+           AND NOT academico_test.fn_planeador_periodo_vigente(v_grupo, v_grado, v_unidad) THEN
+            v_err := v_err || ('destino: el periodo academico del grupo ya termino. El planeador '
+                           || 'solo opera sobre el periodo en curso')::TEXT;
+        END IF;
+
+        -- ---- alcance del destino ----
+        -- El grupo, el grado o la unidad resuelven la sede y la jornada, y de
+        -- ahi el modelo dinamico decide. Se comprueba aunque la fila ya tenga
+        -- otros errores: al usuario le sirve mas ver todos los motivos de una.
+        --
+        -- Si no hay ninguno de los tres, no se dice nada aqui: la fila ya
+        -- arrastra el error de destino sin resolver, y anadir "no se pudo
+        -- verificar el alcance" seria repetir el mismo problema con otras
+        -- palabras.
+        IF COALESCE(v_grupo, v_grado, v_unidad) IS NOT NULL
+           AND NOT academico_test.fn_planeador_alcanza(
+                       p_pk_usuario_solicitante, 'CREAR', v_grupo, v_grado, v_unidad) THEN
+            v_err := v_err || ('destino: la actividad va a un establecimiento, sede o jornada '
+                           || 'fuera del alcance del usuario. Importe sobre un grupo propio')::TEXT;
+        END IF;
+
         -- ---- informe de la fila ----
         v_resuelto := jsonb_strip_nulls(jsonb_build_object(
             'fkTasignatura', v_asig, 'fkTgrupo', v_grupo, 'fkTgrado', v_grado,
@@ -869,4 +938,4 @@ END;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_importar(BIGINT, JSONB, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BOOLEAN)
-    IS 'Importa actividades del planeador desde el JSON de intercambio que produce fn_actividad_exportar. Dos fases: p_solo_validar = TRUE (por defecto) devuelve el informe fila por fila sin escribir nada; FALSE aplica, y es todo o nada -- si alguna fila tiene errores no se escribe ninguna. El destino sale del bloque _identificadores del archivo y, si no viene, de los parametros p_fk_tasignatura / p_fk_tgrupo / p_fk_tgrado: nunca se resuelve por nombre, porque hay 304 nombres para 3.591 asignaturas activas. Las etiquetas que no existan en catalogo se reportan con la categoria donde se busco, sin equivalencias inventadas. Orquesta fn_unidad_crear, fn_actividad_crear y los *_definir del instrumento en vez de escribir tablas. Tampoco se inventan notas: si un nivel de rubrica o de escala no trae ponderacion se rechaza la fila, y una ponderacion sobre una actividad no evaluativa tambien (el "ponderacion": 0 que pone el formato de negocio en esas si se descarta, porque no es una nota). Una adaptacion "para estudiantes concretos" solo se importa si trae PKs de matricula del grupo destino: un nombre de alumno no identifica una matricula. V274.';
+    IS 'Importa actividades del planeador desde el JSON de intercambio que produce fn_actividad_exportar. Dos fases: p_solo_validar = TRUE (por defecto) devuelve el informe fila por fila sin escribir nada; FALSE aplica, y es todo o nada -- si alguna fila tiene errores no se escribe ninguna. El destino sale del bloque _identificadores del archivo y, si no viene, de los parametros p_fk_tasignatura / p_fk_tgrupo / p_fk_tgrado: nunca se resuelve por nombre, porque hay 304 nombres para 3.591 asignaturas activas. Las etiquetas que no existan en catalogo se reportan con la categoria donde se busco, sin equivalencias inventadas. Orquesta fn_unidad_crear, fn_actividad_crear y los *_definir del instrumento en vez de escribir tablas. Exige capability (PLANEADOR/CREAR) al entrar y en los DOS modos -- en validacion no se llama a ninguna funcion orquestada, asi que antes el informe se entregaba a quien no tenia permiso -- y exige que el periodo academico del destino no haya terminado (fn_planeador_periodo_vigente, V203) sin opcion de saltarselo, y comprueba el ALCANCE del destino fila por fila con fn_planeador_alcanza (V202), porque fn_actividad_crear valida capability pero no establecimiento: se midio que un docente de nivel 3 importaba en un EE ajeno. Tampoco se inventan notas: si un nivel de rubrica o de escala no trae ponderacion se rechaza la fila, y una ponderacion sobre una actividad no evaluativa tambien (el "ponderacion": 0 que pone el formato de negocio en esas si se descarta, porque no es una nota). Una adaptacion "para estudiantes concretos" solo se importa si trae PKs de matricula del grupo destino: un nombre de alumno no identifica una matricula. V274.';

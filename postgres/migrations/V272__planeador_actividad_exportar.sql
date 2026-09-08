@@ -20,14 +20,37 @@
 -- reglas, y el gate es exactamente el mismo que ve el usuario al abrir la
 -- actividad en pantalla.
 --
--- OJO con el alcance de ese gate, que es mas ancho de lo que parece:
--- fn_actividad_buscar_por_pk solo llama a fn_assert_permiso_seccion con
--- (PLANEADOR, VER) -- comprueba el permiso del MENU y NO acota por
--- establecimiento. Se verifico: un usuario del EE 745 con ese permiso exporta
--- sin problema una actividad del EE 877. Es el comportamiento de la funcion de
--- lectura del modulo, no algo que introduzca el exportador, y por eso no se
--- corrige aqui -- pero conviene saberlo antes de exponer el endpoint a roles
--- territoriales.
+-- El gate de esa lectura, sin embargo, NO alcanza: fn_actividad_buscar_por_pk
+-- solo llama a fn_assert_permiso_seccion con (PLANEADOR, VER), o sea comprueba
+-- el permiso del MENU y no acota por establecimiento. Se midio: un usuario del
+-- EE 745 con ese permiso exportaba una actividad del EE 877.
+--
+-- Asi que el alcance se aplica AQUI, con fn_planeador_alcanza (V202), que
+-- resuelve la sede y la jornada de cada actividad y las pasa por el modelo
+-- dinamico. Y se aplica distinto segun como se pidio, porque nombrar y filtrar
+-- no son la misma pretension:
+--
+--   IDS explicitos -> nombrar una actividad es afirmar que es tuya. Si no la
+--                     alcanzas, se dice: 42501 con los identificadores. Callar y
+--                     devolver el resto haria creer que esas no existen.
+--   solo filtros   -> "dame lo que casa" ya lleva implicito "de lo mio". Las que
+--                     no alcanza se excluyen sin ruido, como en cualquier
+--                     listado.
+--
+-- Esto cubre el exportar. Las otras 89 funciones del planeador siguen sin
+-- acotar -- ver la cabecera de V202.
+--
+-- -----------------------------------------------------------------------------
+-- Solo el periodo academico en curso
+-- -----------------------------------------------------------------------------
+-- Se filtra tambien por fn_planeador_periodo_vigente (V203), y NO es elegible:
+-- no hay parametro para pedir un año cerrado. Se reporta con el mismo criterio
+-- que el alcance -- nombrar una actividad de un periodo terminado da error
+-- diciendo cual, y por filtro se excluye.
+--
+-- El predicado va dentro del WHERE del paso 2 y no en un bucle: la funcion es
+-- LANGUAGE sql para que el planificador la pueda inline, asi que filtrar por
+-- periodo no cuesta una llamada por fila.
 --
 -- -----------------------------------------------------------------------------
 -- El bloque _identificadores
@@ -109,6 +132,8 @@ AS $function$
 DECLARE
     v_pedidos   BIGINT[];  -- la lista explicita, ya sin el caso "vacia"
     v_faltan    BIGINT[];  -- los identificadores pedidos que no resolvieron
+    v_ajenas    BIGINT[];  -- los que existen pero el usuario no alcanza
+    v_vencidas  BIGINT[];  -- los que estan en un periodo academico terminado
     v_ids       BIGINT[];
     v_pk        BIGINT;
     v_salida    JSONB := '[]'::JSONB;
@@ -121,6 +146,16 @@ DECLARE
     v_adapt     JSONB;
     v_item      JSONB;
 BEGIN
+    -- -----------------------------------------------------------------
+    -- 0. Capability. La comprueba tambien fn_actividad_buscar_por_pk mas
+    --    abajo, pero hacerlo aqui da el 42501 antes de resolver nada, y
+    --    deja claro que sin permiso de menu no se responde '[]' sino que
+    --    se rechaza. El ALCANCE es lo que se aplica actividad por
+    --    actividad, en el paso 2.b.
+    -- -----------------------------------------------------------------
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'VER');
+
     -- -----------------------------------------------------------------
     -- 1. Al menos un filtro. Exportar "todo" no es un caso de uso: son
     --    decenas de miles de filas y ningun formulario lo pide.
@@ -149,18 +184,76 @@ BEGIN
     -- -----------------------------------------------------------------
     -- 2. Resolver que actividades entran. El gate NO se aplica aca: lo
     --    aplica fn_actividad_buscar_por_pk una por una, mas abajo.
+    --
+    --    Las de un periodo TERMINADO se apartan antes que nada, porque
+    --    para el resto de los pasos ni existen: no se exportan y da igual
+    --    si el usuario las alcanza. Se guardan para poder decir por que,
+    --    si se habian nombrado.
     -- -----------------------------------------------------------------
+    IF v_pedidos IS NOT NULL THEN
+        SELECT ARRAY_AGG(a.PK_TACTIVIDAD ORDER BY a.PK_TACTIVIDAD)
+          INTO v_vencidas
+          FROM academico_test.TACTIVIDAD a
+         WHERE a.ACTIVE = TRUE
+           AND a.PK_TACTIVIDAD = ANY(v_pedidos)
+           AND NOT academico_test.fn_planeador_periodo_vigente(a.FK_TGRUPO, NULL, a.FK_TUNIDAD);
+
+        IF v_vencidas IS NOT NULL THEN
+            RAISE EXCEPTION 'Las actividades % pertenecen a un periodo academico que ya termino',
+                ARRAY_TO_STRING(v_vencidas, ', ')
+                USING ERRCODE = '22023',
+                      HINT    = 'El planeador solo opera sobre el periodo en curso; no es una '
+                             || 'opcion exportar un año cerrado';
+        END IF;
+    END IF;
+
     SELECT ARRAY_AGG(a.PK_TACTIVIDAD ORDER BY a.FK_TUNIDAD NULLS LAST, a.PK_TACTIVIDAD)
       INTO v_ids
       FROM academico_test.TACTIVIDAD a
      WHERE a.ACTIVE = TRUE
+       AND academico_test.fn_planeador_periodo_vigente(a.FK_TGRUPO, NULL, a.FK_TUNIDAD)
        AND (v_pedidos        IS NULL OR a.PK_TACTIVIDAD = ANY(v_pedidos))
        AND (p_pk_tunidad      IS NULL OR a.FK_TUNIDAD      = p_pk_tunidad)
        AND (p_fk_tasignatura  IS NULL OR a.FK_TASIGNATURA  = p_fk_tasignatura)
        AND (p_fk_tgrupo       IS NULL OR a.FK_TGRUPO       = p_fk_tgrupo);
 
     -- -----------------------------------------------------------------
-    -- 2.b Si se pidieron identificadores concretos, TODOS tienen que
+    -- 2.b ALCANCE. Cada actividad que sobrevivio al filtro tiene que
+    --     estar dentro del alcance del solicitante segun los permisos
+    --     dinamicos: nivel 1 llega a todos los EE, nivel 2 a los suyos,
+    --     nivel 3 a su sede y jornada.
+    --
+    --     Se separa en dos listas a proposito, porque para el llamante
+    --     "no existe" y "no es tuya" son problemas distintos y se
+    --     corrigen distinto.
+    -- -----------------------------------------------------------------
+    IF v_ids IS NOT NULL THEN
+        SELECT ARRAY_AGG(x ORDER BY x)
+          INTO v_ajenas
+          FROM UNNEST(v_ids) AS x
+         WHERE NOT academico_test.fn_planeador_alcanza(
+                       p_pk_usuario_solicitante, 'VER', p_pk_tactividad => x);
+
+        IF v_ajenas IS NOT NULL THEN
+            IF v_pedidos IS NULL THEN
+                -- Se pidio por filtros: se excluyen y no se dice nada. Es
+                -- lo que hace cualquier listado.
+                SELECT ARRAY_AGG(x ORDER BY x) INTO v_ids
+                  FROM UNNEST(v_ids) AS x
+                 WHERE NOT (x = ANY(v_ajenas));
+            ELSE
+                -- Se nombraron: callar seria hacer creer que no existen.
+                RAISE EXCEPTION 'El usuario no tiene alcance sobre las actividades %',
+                    ARRAY_TO_STRING(v_ajenas, ', ')
+                    USING ERRCODE = '42501',
+                          HINT    = 'Pertenecen a un establecimiento, sede o jornada fuera del '
+                                 || 'alcance del solicitante segun sus permisos';
+            END IF;
+        END IF;
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2.c Si se pidieron identificadores concretos, TODOS tienen que
     --     haber resuelto. Se dice cuales no, con su numero: es la unica
     --     forma de que el llamante sepa que corregir.
     --
@@ -187,7 +280,9 @@ BEGIN
 
     -- Sin identificadores explicitos, un resultado vacio SI es una
     -- respuesta valida: esa unidad, asignatura o grupo no tiene
-    -- actividades.
+    -- actividades, o las que tiene quedan fuera del alcance del
+    -- solicitante, o son de un periodo ya terminado. Las tres cosas son
+    -- ciertas a la vez desde su punto de vista, y ninguna es un error.
     IF v_ids IS NULL THEN
         RETURN '[]'::JSONB;
     END IF;
@@ -420,4 +515,4 @@ END;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_exportar(BIGINT, BIGINT[], BIGINT, BIGINT, BIGINT)
-    IS 'Exporta actividades del planeador al formato JSON de intercambio (el que lee el importador). Reensambla sobre fn_actividad_buscar_por_pk y fn_actividad_instrumento_obtener en vez de leer tablas, asi que el gate se aplica actividad por actividad. Filtros combinables por lista de PKs, unidad, asignatura o grupo; sin ninguno lanza 22023, y una lista de identificadores vacia cuenta como "sin filtro". Si se piden PKs concretas, las que no resuelvan se reportan por numero en vez de devolver un array vacio ambiguo; con solo unidad/asignatura/grupo, en cambio, el array vacio es una respuesta legitima. Cada actividad lleva un bloque _identificadores con las PKs para que un archivo exportado se reimporte sin resolver nombres (hay 3.591 asignaturas activas con 304 nombres distintos, asi que el nombre no identifica). Las adaptaciones se traducen a la forma del formato de negocio (usaVersionModificada + formatoAdaptacion se juntan en instrumento_modificado, y el destino en adjunto), sin lo cual el archivo exportado no se podria reimportar; "estudiantes" se deja como PKs de matricula, que es lo unico con lo que el importador puede volver a atar la adaptacion a alumnos concretos. V272.';
+    IS 'Exporta actividades del planeador al formato JSON de intercambio (el que lee el importador). Reensambla sobre fn_actividad_buscar_por_pk y fn_actividad_instrumento_obtener en vez de leer tablas, asi que el gate se aplica actividad por actividad. Acota por los permisos dinamicos con fn_planeador_alcanza (V202): las actividades nombradas por IDS que el usuario no alcance se reportan con 42501, y las que aparecen solo por filtro se excluyen en silencio, como en cualquier listado. Hace falta porque fn_actividad_buscar_por_pk comprueba el permiso del menu pero no el establecimiento. Solo devuelve actividades del periodo academico en curso (fn_planeador_periodo_vigente, V203) y eso no es elegible: nombrar una de un periodo terminado da 22023, y por filtro se excluye. Filtros combinables por lista de PKs, unidad, asignatura o grupo; sin ninguno lanza 22023, y una lista de identificadores vacia cuenta como "sin filtro". Si se piden PKs concretas, las que no resuelvan se reportan por numero en vez de devolver un array vacio ambiguo; con solo unidad/asignatura/grupo, en cambio, el array vacio es una respuesta legitima. Cada actividad lleva un bloque _identificadores con las PKs para que un archivo exportado se reimporte sin resolver nombres (hay 3.591 asignaturas activas con 304 nombres distintos, asi que el nombre no identifica). Las adaptaciones se traducen a la forma del formato de negocio (usaVersionModificada + formatoAdaptacion se juntan en instrumento_modificado, y el destino en adjunto), sin lo cual el archivo exportado no se podria reimportar; "estudiantes" se deja como PKs de matricula, que es lo unico con lo que el importador puede volver a atar la adaptacion a alumnos concretos. V272.';
