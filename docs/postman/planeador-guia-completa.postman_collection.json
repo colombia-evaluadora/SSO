@@ -1142,6 +1142,33 @@
           }
         },
         {
+          "name": "3.2b — GET valoraciones de la escala que aplica a la unidad",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadEvaluativaId}}/valoraciones",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadEvaluativaId}}",
+                "valoraciones"
+              ]
+            },
+            "description": "El select que hace falta ANTES de 3.3. Agregar un criterio exige un indicador por cada valoracion activa de la escala, y cada uno se identifica con su `pk_tescala_valoracion`: esta ruta los devuelve.\n\nLa escala se DERIVA de la unidad (asignatura + grado -> criterio de evaluacion vigente -> escala; si esa combinacion no tiene criterio, por el nivel de ensenanza del grado), asi que el cliente no tiene que conocerla ni elegir entre las escalas del periodo. Existe precisamente para no depender de `POST /escalas/:PERIODO_ACADEMICO_ID`, que responde 403 a un docente y ademas devuelve las valoraciones de TODAS las escalas del periodo, una por nivel de ensenanza.\n\nCada fila trae los limites crudos en porcentaje 0-100 (`limite_inferior` / `limite_superior`, que es como se guardan) y esos mismos limites ya convertidos al formato de calificacion del colegio (`nota_minima` / `nota_maxima`), para poder rotular \"Alto (4.0 - 4.7)\" sin rehacer la conversion. En un formato no numerico (Valoraciones, Simbolos, Caritas) esos dos vienen NULL y se usan `valoracion_simbolo` / `valoracion_carita`.\n\nEs la misma escala que usa la homologacion de notas (`fn_nota_homologar`), asi que las bandas que se listan aqui son exactamente las que despues clasifican la calificacion.\n\n**Pantalla del prototipo:** P6 - alimenta el boton \"Agregar criterio\" de la matriz \"Criterios de la unidad\"; las columnas de esa matriz (BAJO / BASICO / ALTO / SUPERIOR) son exactamente estas filas."
+          }
+        },
+        {
           "name": "3.3 — POST agregar criterio a la rubrica de unidad",
           "request": {
             "method": "POST",

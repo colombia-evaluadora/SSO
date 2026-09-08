@@ -1784,3 +1784,322 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_estudiantes_calificaciones_listar(BIGINT, BIGINT, DATE, VARCHAR)
     IS 'Lectura que alimenta la TABLA de la pantalla "Calificaciones: <actividad>": una fila por cada TACTIVIDAD_ESTUDIANTE ACTIVO de la actividad con (a) el nombre completo del estudiante (TACTIVIDAD_ESTUDIANTE -> TMATRICULA -> TESTUDIANTE -> TUSUARIO), (b) la asistencia de p_fecha (DEFAULT CURRENT_DATE) buscada igual que fn_actividad_nota_asistencia_assert (matricula + TACTIVIDAD.FK_TASIGNATURA + FECHA) pero de SOLO LECTURA: si no hay registro NO lanza excepcion y pk_tasistencia/fk_tlv_tipo_asistencia/tipo_asistencia/asistencia_observacion/fk_soporte_archivo vienen NULL ("sin registrar"); se devuelven los datos crudos para que el cliente arme el texto "Justificada..." y el icono de adjunto, (c) la nota de TACTIVIDAD_NOTA (LEFT JOIN: puede no existir todavia) y (d) el instrumento de la actividad repetido por fila, para evitarle al cliente una segunda consulta. p_search filtra por nombre con ILIKE simple; sin paginacion (el universo ya esta acotado a una actividad). Ordena por nombre. Distinta de fn_actividad_nota_obtener, que es el DETALLE de UN estudiante e incluye el detalle de captura completo del instrumento. Gate VER sobre PLANEADOR. V227.';
+
+
+-- ===========================================================================
+-- HOMOLOGACION DE LA NOTA A LA ESCALA DEL COLEGIO
+--
+-- La cabecera de este archivo declaraba la homologacion "fuera de alcance" y
+-- la delegaba en "la capa de lectura/reporte existente". Esa capa no existe
+-- para las notas del Planeador: TACTIVIDAD_NOTA.CALIFICACION se guarda y se
+-- devuelve siempre como porcentaje 0-100 y ningun endpoint del modulo expone
+-- el equivalente, asi que cada cliente estaba reimplementando la conversion
+-- por su cuenta. Y la formula no es "porcentaje / 20": depende del formato
+-- que el colegio configuro, de los decimales configurados, y para tres de los
+-- seis formatos NO es un numero.
+--
+-- Se resuelve aqui, junto al resto de las reglas de calificacion, porque la
+-- fuente de verdad es la misma que ya usa fn_actividad_nota_ajustar_por_criterio:
+-- TCRITERIO_EVALUACION, resuelto con fn_asignatura_criterio_evaluacion_vigente.
+--
+-- ---------------------------------------------------------------------------
+-- POR QUE NO ES UN SIMPLE "x / 20"
+--
+-- TLISTA_VALOR categoria FORMATO_CALIFICACION tiene SEIS valores, no tres
+-- (verificado en el catalogo):
+--
+--     CINCO   -> DE CERO A CINCO     numerico, maximo 5
+--     DIEZ    -> DE CERO A DIEZ      numerico, maximo 10
+--     CIEN    -> DE CERO A CIEN      numerico, maximo 100
+--     LITERAL -> Valoraciones        NO numerico
+--     SIMBOLO -> Simbolos            NO numerico
+--     CARITA  -> Caritas             NO numerico
+--
+-- El CASE inline que ya existe en fn_criterio_eval_obtener (V62) termina en
+-- "... ELSE 100", asi que a un colegio configurado con Caritas le devolveria
+-- la nota como si fuera sobre 100. Aqui NO se replica ese atajo: en los tres
+-- formatos no numericos nota_homologada viene NULL y lo que se muestra es la
+-- VALORACION, que se devuelve siempre.
+--
+-- Segundo motivo para no duplicar ese CASE: V62 lo escribe comparando contra
+-- TLISTA_VALOR.NOMBRE ('DE CERO A CINCO') y V97 contra VALOR ('CINCO'), y el
+-- propio V97 documenta que comparar por NOMBRE fue un bug. Aqui se compara
+-- por VALOR, que es el codigo estable.
+--
+-- ---------------------------------------------------------------------------
+-- LA VALORACION SE DEVUELVE SIEMPRE, Y PUEDE SER NULL
+--
+-- Las bandas viven en TESCALA_VALORACION.LIMITE_INFERIOR/SUPERIOR y YA estan
+-- guardadas en porcentaje 0-100 (V97 las convierte al guardar), asi que se
+-- comparan directo contra la calificacion, sin conversion intermedia.
+--
+-- Las bandas NO cubren necesariamente todo el rango: en el servidor de test la
+-- escala 272 va 10-30 / 60-79 / 80-94 / 95-100, o sea que un 45 % no cae en
+-- ninguna. Eso es una escala mal configurada, no un caso que se pueda
+-- inventar: cuando no hay banda se devuelve valoracion NULL en vez de
+-- aproximar a la mas cercana, porque a que lado redondear es una decision de
+-- negocio de cada colegio. El cliente pinta el numero y deja la etiqueta
+-- vacia.
+-- ===========================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_criterio_evaluacion_formato(
+    p_pk_tcriterio_evaluacion BIGINT
+)
+RETURNS TABLE (
+    formato_valor   VARCHAR,
+    formato_nombre  VARCHAR,
+    es_numerico     BOOLEAN,
+    nota_maxima     NUMERIC,
+    decimales       INT,
+    fk_tescala      BIGINT
+)
+LANGUAGE sql
+STABLE
+AS $fn$
+    SELECT lv.VALOR,
+           lv.NOMBRE,
+           (lv.VALOR IN ('CINCO', 'DIEZ', 'CIEN')),
+           CASE lv.VALOR WHEN 'CINCO' THEN 5 WHEN 'DIEZ' THEN 10 WHEN 'CIEN' THEN 100 END::NUMERIC,
+           COALESCE(ce.NUMERO_DECIMALES, 1)::INT,
+           ce.FK_TESCALA
+      FROM academico_test.TCRITERIO_EVALUACION ce
+      LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = ce.FK_TLV_FORMATO_CALIFICACION
+     WHERE ce.PK_TCRITERIO_EVALUACION = p_pk_tcriterio_evaluacion
+       AND ce.ACTIVE = TRUE;
+$fn$;
+
+COMMENT ON FUNCTION academico_test.fn_criterio_evaluacion_formato(BIGINT)
+    IS 'Accesor del FORMATO DE CALIFICACION configurado en TCRITERIO_EVALUACION para un periodo: codigo (TLISTA_VALOR.VALOR de la categoria FORMATO_CALIFICACION), nombre, si es numerico, la nota maxima equivalente, los decimales a usar y la escala institucional asociada. es_numerico distingue los tres formatos con nota (CINCO/DIEZ/CIEN) de los tres que NO la tienen (LITERAL/SIMBOLO/CARITA), para los que nota_maxima viene NULL: en esos el colegio no califica con un numero sino con la valoracion. Se compara por VALOR y no por NOMBRE -- V97 documenta que comparar por NOMBRE fue un bug y fn_criterio_eval_obtener (V62) todavia lo arrastra. Mismo estilo de accesor que fn_criterio_evaluacion_porcentaje_inicial / _maximo_recuperacion (V239). V227.';
+
+-- ---------------------------------------------------------------------------
+-- fn_nota_homologar — porcentaje 0-100 -> lo que el colegio muestra.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_nota_homologar(
+    p_porcentaje     NUMERIC,
+    p_fk_tasignatura BIGINT,
+    p_fk_tgrado      BIGINT
+)
+RETURNS TABLE (
+    porcentaje              NUMERIC,
+    nota_homologada         NUMERIC,
+    formato_valor           VARCHAR,
+    formato_nombre          VARCHAR,
+    nota_maxima             NUMERIC,
+    decimales               INT,
+    pk_tescala_valoracion   BIGINT,
+    valoracion_codigo       VARCHAR,
+    valoracion_nombre       VARCHAR,
+    valoracion_simbolo      VARCHAR
+)
+LANGUAGE plpgsql
+STABLE
+AS $fn$
+DECLARE
+    v_criterio BIGINT;
+    v_fmt      RECORD;
+BEGIN
+    -- Sin los tres datos no hay nada que homologar. Se devuelve la fila con
+    -- todo en NULL en vez de no devolver fila, para que un LEFT JOIN LATERAL
+    -- desde un listado no pierda al estudiante sin calificar.
+    IF p_porcentaje IS NULL OR p_fk_tasignatura IS NULL OR p_fk_tgrado IS NULL THEN
+        RETURN QUERY SELECT p_porcentaje, NULL::NUMERIC, NULL::VARCHAR, NULL::VARCHAR,
+                            NULL::NUMERIC, NULL::INT, NULL::BIGINT,
+                            NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR;
+        RETURN;
+    END IF;
+
+    v_criterio := academico_test.fn_asignatura_criterio_evaluacion_vigente(p_fk_tasignatura, p_fk_tgrado);
+
+    SELECT f.* INTO v_fmt
+      FROM academico_test.fn_criterio_evaluacion_formato(v_criterio) f;
+
+    -- Sin criterio configurado no se puede homologar; se devuelve el crudo.
+    IF v_fmt IS NULL THEN
+        RETURN QUERY SELECT p_porcentaje, NULL::NUMERIC, NULL::VARCHAR, NULL::VARCHAR,
+                            NULL::NUMERIC, NULL::INT, NULL::BIGINT,
+                            NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR;
+        RETURN;
+    END IF;
+
+    RETURN QUERY
+    SELECT p_porcentaje,
+           -- Solo los formatos numericos producen nota; en LITERAL/SIMBOLO/
+           -- CARITA el colegio no califica con un numero y forzar uno seria
+           -- inventarselo.
+           CASE WHEN v_fmt.es_numerico
+                THEN ROUND(p_porcentaje / 100 * v_fmt.nota_maxima, v_fmt.decimales)
+           END,
+           v_fmt.formato_valor,
+           v_fmt.formato_nombre,
+           v_fmt.nota_maxima,
+           v_fmt.decimales,
+           ev.PK_TESCALA_VALORACION,
+           val.CODIGO,
+           val.NOMBRE,
+           val.GRAFICA_SIMBOLO
+      -- LEFT JOIN LATERAL y no JOIN: si el porcentaje cae en un hueco entre
+      -- bandas (las escalas reales los tienen) la fila sale igual, con la
+      -- valoracion en NULL.
+      FROM (SELECT 1) _base
+      LEFT JOIN LATERAL (
+            SELECT sv.PK_TESCALA_VALORACION, sv.FK_TVALORACION
+              FROM academico_test.TESCALA_VALORACION sv
+             WHERE sv.FK_TESCALA = v_fmt.fk_tescala
+               AND sv.ACTIVE = TRUE
+               AND p_porcentaje BETWEEN sv.LIMITE_INFERIOR AND sv.LIMITE_SUPERIOR
+             ORDER BY sv.ORDEN
+             LIMIT 1
+      ) ev ON TRUE
+      LEFT JOIN academico_test.TVALORACION val ON val.PK_TVALORACION = ev.FK_TVALORACION;
+END;
+$fn$;
+
+COMMENT ON FUNCTION academico_test.fn_nota_homologar(NUMERIC, BIGINT, BIGINT)
+    IS 'Traduce una calificacion del Planeador (porcentaje 0-100, que es como se guarda SIEMPRE en TACTIVIDAD_NOTA) a lo que el colegio muestra, resolviendo el TCRITERIO_EVALUACION vigente de (asignatura, grado) con fn_asignatura_criterio_evaluacion_vigente. Devuelve SIEMPRE una fila, incluso con p_porcentaje NULL o sin criterio configurado, para poder usarse en LEFT JOIN LATERAL desde un listado sin perder al estudiante sin calificar. nota_homologada = ROUND(% / 100 * nota_maxima, decimales) SOLO en los formatos numericos (CINCO/DIEZ/CIEN); en LITERAL/SIMBOLO/CARITA viene NULL porque ahi el colegio no califica con un numero -- devolverlo seria inventarlo, que es lo que hace el "ELSE 100" de fn_criterio_eval_obtener (V62). La valoracion (la banda Bajo/Basico/Alto/Superior de TESCALA_VALORACION) se devuelve siempre que exista, y se compara directo contra el porcentaje porque LIMITE_INFERIOR/SUPERIOR ya estan guardados en 0-100 (V97). Si el porcentaje cae en un hueco entre bandas -- las escalas reales los tienen -- la valoracion viene NULL en vez de aproximar a la mas cercana: a que lado redondear es una decision de negocio de cada colegio. NO aplica piso ni tope: de eso se encarga fn_actividad_nota_ajustar_por_criterio en la ESCRITURA, y repetirlo en la lectura lo contaria dos veces. V227.';
+
+-- ===========================================================================
+-- fn_unidad_valoraciones_listar — las valoraciones que aplican a UNA unidad.
+--
+-- El front necesita los PK_TESCALA_VALORACION para poder crear un criterio de
+-- rubrica de unidad (POST /planeador/unidades/:ID/criterios exige un indicador
+-- por cada valoracion activa de la escala). Esos PKs ya los expone
+-- POST /escalas/:PERIODO_ACADEMICO_ID (fn_escala_listar), pero esa ruta no la
+-- puede llamar un docente y ademas devuelve las valoraciones de TODAS las
+-- escalas del periodo, una por nivel de ensenanza.
+--
+-- Mismo precedente que fn_unidad_referente_detalle (V255): en vez de abrirle
+-- al docente un endpoint de otro modulo, se expone una lectura acotada al
+-- Planeador que DERIVA la escala desde la unidad y devuelve solo esa.
+--
+-- La escala se resuelve por el criterio de evaluacion vigente de la
+-- (asignatura, grado) de la unidad -- TCRITERIO_EVALUACION.FK_TESCALA -- que
+-- es la misma fuente que usa la homologacion de arriba, de modo que las
+-- bandas que se listan aqui son exactamente las que despues clasifican la
+-- nota. Si no hay criterio configurado se cae a TNIVEL_ESCALA (grado -> nivel
+-- de ensenanza -> escala del periodo), que es como lo resuelve el modulo de
+-- escalas; en el servidor de test los dos caminos coinciden.
+--
+-- nota_minima / nota_maxima repiten los limites YA convertidos al formato del
+-- colegio, para que el cliente pueda rotular "Alto (4.0 - 4.7)" sin rehacer
+-- la conversion; limite_inferior / limite_superior son los crudos en %.
+-- ===========================================================================
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_valoraciones_listar(
+    p_pk_usuario_solicitante BIGINT,
+    p_pk_tunidad             BIGINT
+)
+RETURNS TABLE (
+    pk_tescala_valoracion  BIGINT,
+    fk_tescala             BIGINT,
+    escala_nombre          VARCHAR,
+    orden                  NUMERIC,
+    valoracion_codigo      VARCHAR,
+    valoracion_nombre      VARCHAR,
+    valoracion_simbolo     VARCHAR,
+    valoracion_carita      VARCHAR,
+    limite_inferior        NUMERIC,
+    limite_superior        NUMERIC,
+    nota_minima            NUMERIC,
+    nota_maxima            NUMERIC,
+    formato_valor          VARCHAR,
+    es_numerico            BOOLEAN
+)
+LANGUAGE plpgsql
+STABLE
+AS $fn$
+DECLARE
+    v_asignatura BIGINT;
+    v_grado      BIGINT;
+    v_criterio   BIGINT;
+    v_fmt        RECORD;
+    v_escala     BIGINT;
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    );
+
+    SELECT u.FK_TASIGNATURA, u.FK_TGRADO
+      INTO v_asignatura, v_grado
+      FROM academico_test.TUNIDAD u
+     WHERE u.PK_TUNIDAD = p_pk_tunidad;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se encontro la unidad solicitada' USING ERRCODE = 'P0002';
+    END IF;
+
+    v_criterio := academico_test.fn_asignatura_criterio_evaluacion_vigente(v_asignatura, v_grado);
+
+    SELECT f.* INTO v_fmt
+      FROM academico_test.fn_criterio_evaluacion_formato(v_criterio) f;
+
+    v_escala := v_fmt.fk_tescala;
+
+    -- Respaldo por nivel de ensenanza cuando la (asignatura, grado) no tiene
+    -- criterio con escala: es como lo resuelve el modulo de escalas.
+    IF v_escala IS NULL THEN
+        SELECT nes.FK_TESCALA INTO v_escala
+          FROM academico_test.TGRADO g
+          JOIN academico_test.TNIVEL_ESCALA nes
+            ON nes.FK_TNIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
+           AND nes.ACTIVE = TRUE
+         WHERE g.PK_TGRADO = v_grado
+         ORDER BY nes.PK_TNIVEL_ESCALA DESC
+         LIMIT 1;
+    END IF;
+
+    RETURN QUERY
+    SELECT sv.PK_TESCALA_VALORACION,
+           sv.FK_TESCALA,
+           esc.NOMBRE,
+           sv.ORDEN,
+           val.CODIGO,
+           val.NOMBRE,
+           val.GRAFICA_SIMBOLO,
+           val.GRAFICA_CARITAS,
+           sv.LIMITE_INFERIOR,
+           sv.LIMITE_SUPERIOR,
+           CASE WHEN v_fmt.es_numerico
+                THEN ROUND(sv.LIMITE_INFERIOR / 100 * v_fmt.nota_maxima, v_fmt.decimales) END,
+           CASE WHEN v_fmt.es_numerico
+                THEN ROUND(sv.LIMITE_SUPERIOR / 100 * v_fmt.nota_maxima, v_fmt.decimales) END,
+           v_fmt.formato_valor,
+           v_fmt.es_numerico
+      FROM academico_test.TESCALA_VALORACION sv
+      JOIN academico_test.TVALORACION val ON val.PK_TVALORACION = sv.FK_TVALORACION
+      LEFT JOIN academico_test.TESCALA esc ON esc.PK_TESCALA = sv.FK_TESCALA
+     WHERE sv.FK_TESCALA = v_escala
+       AND sv.ACTIVE = TRUE
+     ORDER BY sv.ORDEN, sv.LIMITE_INFERIOR;
+END;
+$fn$;
+
+COMMENT ON FUNCTION academico_test.fn_unidad_valoraciones_listar(BIGINT, BIGINT)
+    IS 'Valoraciones (las bandas Bajo/Basico/Alto/Superior) de la escala que aplica a UNA unidad, con su PK_TESCALA_VALORACION -- que es lo que POST /planeador/unidades/:ID/criterios pide en cada elemento de NIVELES (fkTescalaValoracion). Existe para no obligar al Planeador a llamar POST /escalas/:PERIODO_ACADEMICO_ID, que no esta abierto al docente y ademas devuelve las valoraciones de TODAS las escalas del periodo (una por nivel de ensenanza); mismo precedente que fn_unidad_referente_detalle (V255). La escala se DERIVA de la unidad: (asignatura, grado) -> fn_asignatura_criterio_evaluacion_vigente -> TCRITERIO_EVALUACION.FK_TESCALA, la misma fuente que usa fn_nota_homologar, de modo que las bandas listadas aqui son exactamente las que despues clasifican la nota; si esa (asignatura, grado) no tiene criterio con escala, cae a TNIVEL_ESCALA por el nivel de ensenanza del grado. limite_inferior/superior son los crudos en porcentaje 0-100 (asi se guardan, V97) y nota_minima/nota_maxima los mismos ya convertidos al formato del colegio, para poder rotular "Alto (4.0 - 4.7)" sin rehacer la conversion -- NULL en los formatos no numericos. Gate VER sobre PLANEADOR. V227.';
+
+-- ===========================================================================
+-- ENDPOINT — GET /planeador/unidades/:ID/valoraciones
+-- ===========================================================================
+INSERT INTO public.query
+    (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
+SELECT
+    gen_random_uuid()::text,
+    'SELECT * FROM academico_test.fn_unidad_valoraciones_listar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:PARAM.ID AS BIGINT)
+);',
+    'postgres', false, false,
+    m.id_microservice, '/planeador/unidades/:ID/valoraciones', 'SELECT', 'GET',
+    '{"PARAM.ID": "BIGINT"}'::jsonb,
+    'V227 -- valoraciones (las bandas Bajo/Basico/Alto/Superior) de la escala que aplica a la unidad :ID. Es el select que faltaba para poder AGREGAR UN CRITERIO a la rubrica de la unidad: POST /planeador/unidades/:ID/criterios exige un indicador por cada valoracion activa de la escala, y cada uno se identifica con el pk_tescala_valoracion que devuelve esta ruta. La escala se deriva de la unidad (asignatura + grado -> criterio de evaluacion vigente -> escala; si no hay, por el nivel de ensenanza del grado), asi que el cliente no tiene que conocerla ni filtrar entre las escalas del periodo. Cada fila trae el orden, el codigo/nombre de la valoracion y sus graficas (simbolo, carita), los limites crudos en porcentaje 0-100 (limite_inferior/limite_superior, que es como se guardan) y esos mismos limites ya convertidos al formato de calificacion del colegio (nota_minima/nota_maxima, NULL si el formato no es numerico) para poder rotular "Alto (4.0 - 4.7)". Sin paginacion: una escala tiene unas pocas bandas. Gate VER sobre PLANEADOR.'
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
+
+INSERT INTO public.role_query (role_id, query_id)
+SELECT r.id_role, q.id_query
+  FROM public.query q
+  JOIN public.microservice m ON m.id_microservice = q.microservice_id
+  JOIN public.role r ON r.name IN ('CEVAL-SUPER_ADMINISTRADOR', 'CEVAL-DOCENTE')
+ WHERE m.serviceid    = 'eval-col'
+   AND q.path_template = '/planeador/unidades/:ID/valoraciones'
+   AND q.http_method   = 'GET'
+ON CONFLICT DO NOTHING;
