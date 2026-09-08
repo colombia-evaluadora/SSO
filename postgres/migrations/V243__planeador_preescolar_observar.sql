@@ -214,8 +214,8 @@ DECLARE
     v_pk_nota    BIGINT;
     v_observados INT := 0;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, p_pk_tactividad
     );
 
     IF NOT EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE) THEN
@@ -276,8 +276,8 @@ DECLARE
     v_pk_tactividad BIGINT;
     v_pk_nota       BIGINT;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante)
     );
 
     v_pk_tactividad := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);

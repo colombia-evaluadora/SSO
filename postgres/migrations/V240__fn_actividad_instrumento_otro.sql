@@ -238,8 +238,8 @@ DECLARE
     v_definicion         JSONB;
     v_pk_otro            BIGINT;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, p_pk_tactividad
     );
     PERFORM academico_test.fn_actividad_instrumento_assert(p_pk_tactividad, 'OTRO');
 

@@ -400,8 +400,8 @@ DECLARE
     v_unidad_previa  BIGINT;
     v_fk_grupo       BIGINT;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, p_pk_tactividad
     );
 
     SELECT ACTIVE, FK_TUNIDAD, FK_TGRUPO INTO v_act_active, v_unidad_previa, v_fk_grupo
@@ -446,8 +446,8 @@ DECLARE
     v_modo        VARCHAR;
     v_suma        NUMERIC(9,2);
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, p_pk_tactividad
     );
 
     SELECT ACTIVE, FK_TUNIDAD, FK_TGRUPO INTO v_act_active, v_fk_unidad, v_fk_grupo

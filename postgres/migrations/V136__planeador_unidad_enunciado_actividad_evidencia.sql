@@ -191,8 +191,8 @@ DECLARE
     v_pk                  BIGINT;
 BEGIN
     -- 0. Gate: capability EDITAR sobre PLANEADOR.
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, p_fk_tunidad
     );
 
     -- 1. Obligatorios.
@@ -278,8 +278,9 @@ RETURNS BOOLEAN
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, (SELECT ue.FK_TUNIDAD FROM academico_test.TUNIDAD_ENUNCIADO ue
+                     WHERE ue.PK_TUNIDAD_ENUNCIADO = p_pk_tunidad_enunciado)
     );
 
     IF NOT EXISTS (
@@ -337,8 +338,8 @@ DECLARE
     v_pk                  BIGINT;
 BEGIN
     -- 0. Gate: capability EDITAR sobre PLANEADOR.
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, p_fk_tactividad
     );
 
     -- 1. Obligatorios.
@@ -430,8 +431,9 @@ RETURNS BOOLEAN
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, (SELECT ae.FK_TACTIVIDAD FROM academico_test.TACTIVIDAD_EVIDENCIA ae
+                           WHERE ae.PK_TACTIVIDAD_EVIDENCIA = p_pk_tactividad_evidencia)
     );
 
     IF NOT EXISTS (
@@ -473,8 +475,8 @@ DECLARE
     v_pk                  BIGINT;
 BEGIN
     -- 0. Gate: capability EDITAR sobre PLANEADOR.
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, p_fk_tactividad
     );
 
     -- 1. Obligatorios.
@@ -559,8 +561,9 @@ RETURNS BOOLEAN
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, (SELECT ac.FK_TACTIVIDAD FROM academico_test.TACTIVIDAD_CRITERIO_UNIDAD ac
+                           WHERE ac.PK_TACTIVIDAD_CRITERIO_UNIDAD = p_pk_tactividad_criterio_unidad)
     );
 
     IF NOT EXISTS (

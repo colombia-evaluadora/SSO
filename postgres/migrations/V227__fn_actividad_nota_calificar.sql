@@ -686,8 +686,8 @@ DECLARE
     v_nivel_ponderacion NUMERIC(5,2);
     v_pk_eval_existente BIGINT;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante)
     );
 
     v_pk_tactividad := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
@@ -847,8 +847,8 @@ DECLARE
     v_pct               NUMERIC(5,2);
     v_cubiertos         INT;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, p_pk_tactividad
     );
 
     IF p_pk_tactividad_estudiante IS NULL
@@ -981,8 +981,8 @@ DECLARE
     v_total_items   INT;
     v_pct_final     NUMERIC(5,2);
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante)
     );
 
     v_pk_tactividad := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
@@ -1101,8 +1101,8 @@ DECLARE
     v_pct               NUMERIC(5,2);
     v_cumplidos         INT;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, p_pk_tactividad
     );
 
     IF p_pk_tactividad_estudiante IS NULL
@@ -1228,8 +1228,8 @@ DECLARE
     v_pond_final      NUMERIC(5,2);
     v_nivel_final     BIGINT;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante)
     );
 
     v_pk_tactividad := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
@@ -1400,8 +1400,8 @@ DECLARE
     v_pk_est   BIGINT;
     v_pct      NUMERIC(5,2);
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, p_pk_tactividad
     );
 
     IF p_pk_tactividad_estudiante IS NULL
@@ -1486,8 +1486,8 @@ DECLARE
     v_pk_nota       BIGINT;
     v_pct_final     NUMERIC(5,2);
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante)
     );
 
     v_pk_tactividad := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);

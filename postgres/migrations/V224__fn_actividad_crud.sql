@@ -1119,8 +1119,8 @@ AS $$
 DECLARE
     v_id_creado BIGINT;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'CREAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'CREAR', p_fk_tgrupo, NULL, p_fk_tunidad
     );
 
     -- 1. Obligatorios.
@@ -1387,8 +1387,8 @@ BEGIN
         RAISE EXCEPTION 'No se encontro la actividad solicitada' USING ERRCODE = 'P0002';
     END IF;
 
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', p_fk_tgrupo, NULL, p_fk_tunidad, p_pk_tactividad
     );
 
     IF v_actual.ACTIVE = FALSE THEN
@@ -1647,8 +1647,8 @@ BEGIN
         RAISE EXCEPTION 'No se encontro la actividad solicitada' USING ERRCODE = 'P0002';
     END IF;
 
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'ELIMINAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'ELIMINAR', NULL, NULL, NULL, p_pk_tactividad
     );
 
     IF v_active = FALSE THEN

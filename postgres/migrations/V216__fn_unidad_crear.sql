@@ -139,8 +139,8 @@ DECLARE
     v_suma       NUMERIC(9,2);
 BEGIN
     -- 0. Gate: capability CREAR sobre PLANEADOR (sin scope territorial).
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'CREAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'CREAR', NULL, p_fk_tgrado
     );
 
     -- 1. Obligatorios.
@@ -555,8 +555,8 @@ BEGIN
             USING ERRCODE = 'P0002';
     END IF;
 
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, p_fk_tgrado, p_pk_tunidad
     );
 
     IF v_actual.ACTIVE = FALSE THEN
@@ -730,8 +730,8 @@ BEGIN
             USING ERRCODE = 'P0002';
     END IF;
 
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'ELIMINAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'ELIMINAR', NULL, NULL, p_pk_tunidad
     );
 
     IF v_active = FALSE THEN
@@ -860,8 +860,8 @@ DECLARE
     v_payload_unicos  BIGINT;
 BEGIN
     -- 0. Gate: capability EDITAR sobre PLANEADOR (se edita la unidad).
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, p_pk_tunidad
     );
 
     -- 1. Unidad existe y esta activa.

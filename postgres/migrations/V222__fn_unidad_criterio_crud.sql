@@ -44,8 +44,8 @@ DECLARE
     v_unidad_active BOOLEAN;
     v_pk_rubrica    BIGINT;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, p_pk_tunidad
     );
 
     SELECT ACTIVE INTO v_unidad_active
@@ -179,8 +179,10 @@ BEGIN
         RAISE EXCEPTION 'No se encontro el criterio de rubrica solicitado' USING ERRCODE = 'P0002';
     END IF;
 
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'EDITAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, (SELECT r.FK_TUNIDAD FROM academico_test.TRUBRICA_UNIDAD r
+                      JOIN academico_test.TCRITERIO_UNIDAD c ON c.FK_TRUBRICA_UNIDAD = r.PK_TRUBRICA_UNIDAD
+                     WHERE c.PK_TCRITERIO_UNIDAD = p_pk_tcriterio_unidad)
     );
 
     IF v_active = FALSE THEN
@@ -274,8 +276,10 @@ BEGIN
         RAISE EXCEPTION 'No se encontro el criterio de rubrica solicitado' USING ERRCODE = 'P0002';
     END IF;
 
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'ELIMINAR'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'ELIMINAR', NULL, NULL, (SELECT r.FK_TUNIDAD FROM academico_test.TRUBRICA_UNIDAD r
+                      JOIN academico_test.TCRITERIO_UNIDAD c ON c.FK_TRUBRICA_UNIDAD = r.PK_TRUBRICA_UNIDAD
+                     WHERE c.PK_TCRITERIO_UNIDAD = p_pk_tcriterio_unidad)
     );
 
     IF v_active = FALSE THEN
