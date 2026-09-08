@@ -317,16 +317,36 @@ SELECT
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.ID AS BIGINT),
     CAST(:BODY.PK_NIVEL AS BIGINT),
+    CAST(:BODY.VALOR_NUMERICO AS NUMERIC),
     CAST(:BODY.ESTUDIANTES AS BIGINT[]),
     COALESCE(CAST(:BODY.FECHA AS DATE), CURRENT_DATE)
 );',
     'postgres', false, false,
     m.id_microservice, '/planeador/actividades/:ID/calificar-bulk/escala', 'SELECT', 'PUT',
-    '{"PARAM.ID": "BIGINT", "BODY.PK_NIVEL": "BIGINT", "BODY.ESTUDIANTES": "BIGINT[]", "BODY.FECHA": "DATE"}'::jsonb,
-    'V247 -- calificacion BULK por escala de valoracion: aplica UN nivel de la escala CUALITATIVA a VARIOS estudiantes de la misma actividad de una sola pasada (fn_actividad_nota_calificar_escala_bulk, V227). Solo aplica a escala CUALITATIVA -- la escala NUMERICA (valor digitado por estudiante) no admite bulk, se califica individual via PUT .../calificar. :ID = PK_TACTIVIDAD. BODY.PK_NIVEL debe pertenecer a la escala CUALITATIVA de esta actividad; BODY.ESTUDIANTES (obligatorio, >=1) = PKs de TACTIVIDAD_ESTUDIANTE, cada uno debe pertenecer a esta actividad y tener asistencia valida en BODY.FECHA (default hoy). Devuelve una fila por estudiante {pk_tactividad_estudiante, calificacion}. Gate EDITAR sobre PLANEADOR. 22023 si la actividad no tiene instrumento ESCALA_VALORACION, la escala es NUMERICA, el nivel no pertenece a ella, o algun estudiante no pertenece a la actividad o no tiene asistencia valida esa fecha.'
+    '{"PARAM.ID": "BIGINT", "BODY.PK_NIVEL": "BIGINT", "BODY.VALOR_NUMERICO": "NUMERIC", "BODY.ESTUDIANTES": "BIGINT[]", "BODY.FECHA": "DATE"}'::jsonb,
+    'V247 -- calificacion BULK por escala de valoracion: aplica UN mismo valor a VARIOS estudiantes de la misma actividad de una sola pasada (fn_actividad_nota_calificar_escala_bulk, V227). Sirve los DOS tipos de escala y hay que mandar EXACTAMENTE UNO de los dos campos, el que corresponda al tipo de escala de la actividad: BODY.PK_NIVEL si es CUALITATIVA (un nivel de la escala de esta actividad), BODY.VALOR_NUMERICO si es NUMERICA (un numero dentro de [VALOR_MIN, VALOR_MAX] de la escala) -- es el caso del "Valor (1-5)" que la pantalla de calificacion masiva de la Planilla aplica a los estudiantes marcados. :ID = PK_TACTIVIDAD. BODY.ESTUDIANTES (obligatorio, >=1) = PKs de TACTIVIDAD_ESTUDIANTE, cada uno debe pertenecer a esta actividad y tener asistencia valida en BODY.FECHA (default hoy). Devuelve una fila por estudiante {pk_tactividad_estudiante, calificacion} con el porcentaje 0-100 resultante. Gate EDITAR sobre PLANEADOR. 22023 si la actividad no tiene instrumento ESCALA_VALORACION, si vienen los dos campos o ninguno, si el campo enviado no corresponde al tipo de escala, si el nivel no pertenece a ella o el valor cae fuera del rango, o si algun estudiante no pertenece a la actividad o no tiene asistencia valida esa fecha.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
+
+-- El INSERT de arriba no toca la fila si ya existe (DO NOTHING), y este
+-- endpoint YA estaba registrado con la firma de 5 argumentos. Sin este UPDATE
+-- el catalogo seguiria llamando a una funcion que ya no existe.
+UPDATE public.query q
+   SET query = 'SELECT * FROM academico_test.fn_actividad_nota_calificar_escala_bulk(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:PARAM.ID AS BIGINT),
+    CAST(:BODY.PK_NIVEL AS BIGINT),
+    CAST(:BODY.VALOR_NUMERICO AS NUMERIC),
+    CAST(:BODY.ESTUDIANTES AS BIGINT[]),
+    COALESCE(CAST(:BODY.FECHA AS DATE), CURRENT_DATE)
+);',
+       param_types = '{"PARAM.ID": "BIGINT", "BODY.PK_NIVEL": "BIGINT", "BODY.VALOR_NUMERICO": "NUMERIC", "BODY.ESTUDIANTES": "BIGINT[]", "BODY.FECHA": "DATE"}'::jsonb
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id
+   AND m.serviceid       = 'eval-col'
+   AND q.path_template   = '/planeador/actividades/:ID/calificar-bulk/escala'
+   AND q.http_method     = 'PUT';
 
 INSERT INTO public.role_query (role_id, query_id)
 SELECT r.id_role, q.id_query

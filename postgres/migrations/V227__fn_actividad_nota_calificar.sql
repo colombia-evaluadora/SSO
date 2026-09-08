@@ -1341,17 +1341,23 @@ COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_escala(BIGINT, BI
     IS 'Califica a un estudiante con la escala de valoracion de su actividad. Exactamente uno de p_pk_nivel (CUALITATIVA: % = ponderacion del nivel / MAX ponderacion de la escala * 100) o p_valor_numerico (NUMERICA, dentro de [VALOR_MIN,VALOR_MAX]: % = (valor - min)/(max - min) * 100). p_fecha (DEFAULT CURRENT_DATE) es el dia de clase que se califica: se exige asistencia registrada y no injustificada para esa fecha (fn_actividad_nota_asistencia_assert). Al % calculado se le aplica el piso/tope institucional con fn_actividad_nota_ajustar_por_criterio (TCRITERIO_EVALUACION: tope de recuperacion si ES_RECUPERACION=''S'', luego piso PORCENTAJE_INICIAL_CALIF); se ajusta SOLO la nota derivada, no la seleccion cruda del docente, que se sigue guardando tal cual en TACTIVIDAD_ESCALA_EVALUACION. Un solo punto de ajuste sirve para individual y bulk, porque fn_actividad_nota_calificar_escala_bulk delega en esta funcion. Upsert de TACTIVIDAD_ESCALA_EVALUACION (1:1 por estudiante, UN_TAC_ESCALA_EVAL_1) y de TACTIVIDAD_NOTA.CALIFICACION (porcentaje 0-100). Gate EDITAR sobre PLANEADOR. V227.';
 
 -- ---------------------------------------------------------------------------
--- fn_actividad_nota_calificar_escala_bulk — UN nivel de la escala
--- CUALITATIVA aplicado a VARIOS estudiantes de una vez.
+-- fn_actividad_nota_calificar_escala_bulk — UN valor de la escala aplicado a
+-- VARIOS estudiantes de una vez: un NIVEL si la escala es CUALITATIVA, o un
+-- VALOR NUMERICO si es NUMERICA.
 --
 -- Mismo espiritu que _rubrica_bulk / _cotejo_bulk, pero la escala es 1:1 por
 -- estudiante (UN_TAC_ESCALA_EVAL_1): no existe el concepto de "faltan otros
 -- niveles/items", asi que SIEMPRE se recalcula y se guarda la nota en la
 -- misma pasada.
 --
--- SOLO CUALITATIVA: si la escala de la actividad es NUMERICA se rechaza —
--- un valor numerico es por definicion individual por estudiante, no hay
--- "nivel" comun que aplicar en bloque.
+-- LOS DOS TIPOS DE ESCALA. Antes esta funcion rechazaba la escala NUMERICA
+-- razonando que "un valor numerico es por definicion individual". Ese
+-- razonamiento era falso: poner el mismo 4.2 a los diez estudiantes que
+-- entregaron el mismo taller es exactamente igual de legitimo que aplicarles
+-- el mismo nivel cualitativo, y es lo que hace el docente en la pantalla de
+-- calificacion masiva de la Planilla. Lo que SI es cierto es que el valor
+-- tiene que corresponder al tipo de escala, y de eso se encarga la
+-- validacion de coherencia de abajo.
 --
 -- DECISION DE DISEÑO (reutilizacion): en vez de duplicar el calculo
 -- (% = ponderacion del nivel / MAX ponderacion de la escala * 100) y el
@@ -1367,10 +1373,19 @@ COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_escala(BIGINT, BI
 -- Se pagan N llamadas (una por estudiante) a cambio de cero duplicacion de
 -- reglas — el universo es el grupo de una actividad, no un catalogo.
 -- ---------------------------------------------------------------------------
+-- El parametro nuevo (p_valor_numerico) va en la MISMA posicion que en
+-- fn_actividad_nota_calificar_escala, la individual, para que las dos firmas
+-- se lean igual. Eso cambia la aridad y el orden, y CREATE OR REPLACE no
+-- reemplaza una funcion cuando la aridad cambia: crearia una SOBRECARGA y
+-- toda llamada con la forma antigua quedaria ambigua ("function ... is not
+-- unique"). De ahi el DROP explicito de la firma vieja.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar_escala_bulk(BIGINT, BIGINT, BIGINT, BIGINT[], DATE);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_calificar_escala_bulk(
     p_pk_usuario_solicitante    BIGINT,
     p_pk_tactividad             BIGINT,
     p_pk_nivel                  BIGINT,
+    p_valor_numerico            NUMERIC,
     p_pk_tactividad_estudiante  BIGINT[],
     p_fecha                     DATE DEFAULT CURRENT_DATE
 )
@@ -1394,8 +1409,11 @@ BEGIN
         RAISE EXCEPTION 'p_pk_tactividad_estudiante debe traer al menos un estudiante' USING ERRCODE = '22023';
     END IF;
 
-    IF p_pk_nivel IS NULL THEN
-        RAISE EXCEPTION 'p_pk_nivel es obligatorio: la calificacion bulk aplica UN nivel de la escala a varios estudiantes'
+    -- Exactamente uno de los dos, igual que en la individual: mandar los dos
+    -- o ninguno es un error del cliente, no algo que se pueda resolver por
+    -- defecto sin adivinar.
+    IF (p_pk_nivel IS NOT NULL) = (p_valor_numerico IS NOT NULL) THEN
+        RAISE EXCEPTION 'Debe indicarse exactamente uno de pkNivel (escala CUALITATIVA) o valorNumerico (escala NUMERICA)'
             USING ERRCODE = '22023';
     END IF;
 
@@ -1410,8 +1428,18 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    IF v_tipo_val <> 'CUALITATIVA' THEN
-        RAISE EXCEPTION 'la escala NUMERICA no admite calificacion bulk por nivel — cada estudiante requiere su propio valor numerico, use fn_actividad_nota_calificar_escala individual'
+    -- Coherencia entre lo que manda el cliente y el tipo de escala de la
+    -- actividad. Se comprueba UNA vez aqui, antes del bucle, y no N veces
+    -- dentro: si el instrumento esta mal usado no tiene sentido calificar a
+    -- medio grupo y reventar en el tercer estudiante. La individual vuelve a
+    -- validarlo por su cuenta, que es lo correcto -- tambien se la llama
+    -- suelta -- pero aqui el fallo llega antes de escribir nada.
+    IF v_tipo_val = 'CUALITATIVA' AND p_pk_nivel IS NULL THEN
+        RAISE EXCEPTION 'La escala de esta actividad es CUALITATIVA: la calificacion bulk requiere pkNivel, no valorNumerico'
+            USING ERRCODE = '22023';
+    END IF;
+    IF v_tipo_val <> 'CUALITATIVA' AND p_valor_numerico IS NULL THEN
+        RAISE EXCEPTION 'La escala de esta actividad es NUMERICA: la calificacion bulk requiere valorNumerico, no pkNivel'
             USING ERRCODE = '22023';
     END IF;
 
@@ -1422,10 +1450,12 @@ BEGIN
         END IF;
 
         -- Delegacion (ver DECISION DE DISEÑO arriba): la individual valida
-        -- asistencia, el nivel contra la escala, hace el upsert y escribe la
-        -- nota. Aqui no se recalcula nada por cuenta propia.
+        -- asistencia, el nivel contra la escala o el valor contra
+        -- [VALOR_MIN, VALOR_MAX], hace el upsert y escribe la nota. Aqui no se
+        -- recalcula nada por cuenta propia; se pasan los dos parametros tal
+        -- cual y ella decide segun el tipo de escala.
         v_pct := academico_test.fn_actividad_nota_calificar_escala(
-                     p_pk_usuario_solicitante, v_pk_est, p_pk_nivel, NULL, p_fecha);
+                     p_pk_usuario_solicitante, v_pk_est, p_pk_nivel, p_valor_numerico, p_fecha);
 
         pk_tactividad_estudiante := v_pk_est;
         calificacion             := v_pct;
@@ -1434,8 +1464,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_escala_bulk(BIGINT, BIGINT, BIGINT, BIGINT[], DATE)
-    IS 'Calificacion BULK por escala de valoracion CUALITATIVA: aplica UN nivel a VARIOS estudiantes de la misma actividad. Si la escala de la actividad es NUMERICA rechaza con 22023 ("la escala NUMERICA no admite calificacion bulk por nivel..."): un valor numerico es por definicion individual por estudiante. Valida gate EDITAR sobre PLANEADOR, instrumento ESCALA_VALORACION (fn_actividad_instrumento_assert) y que cada TACTIVIDAD_ESTUDIANTE pertenezca a ESA actividad (fn_actividad_estudiante_actividad); luego DELEGA por estudiante en fn_actividad_nota_calificar_escala, que ya valida la asistencia de p_fecha, comprueba el nivel contra la escala, hace el upsert de TACTIVIDAD_ESCALA_EVALUACION (1:1) y guarda el % en TACTIVIDAD_NOTA. No se extrajo un helper de recalculo (como si se hizo en rubrica/cotejo) porque la escala guarda UNA sola fila por estudiante y el % se deriva por completo de los parametros de entrada: no hay captura parcial que releer ni formula que compartir. Al ser 1:1, SIEMPRE recalcula y guarda la nota en la misma pasada. Devuelve una fila por estudiante {pk_tactividad_estudiante, calificacion}. V227.';
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_escala_bulk(BIGINT, BIGINT, BIGINT, NUMERIC, BIGINT[], DATE)
+    IS 'Calificacion BULK por escala de valoracion: aplica UN mismo valor a VARIOS estudiantes de la misma actividad, sirviendo los DOS tipos de escala -- p_pk_nivel si es CUALITATIVA, p_valor_numerico si es NUMERICA. Debe venir exactamente uno de los dos (22023 si vienen ambos o ninguno) y tiene que corresponder al tipo de escala de la actividad, que se comprueba una sola vez antes del bucle para no calificar a medio grupo y fallar en el tercer estudiante. La NUMERICA se admite desde que se reviso el prototipo de la Planilla: poner el mismo 4.2 a los diez estudiantes que entregaron el mismo taller es tan legitimo como aplicarles el mismo nivel cualitativo -- antes se rechazaba por el razonamiento erroneo de que un valor numerico es "por definicion individual". Valida gate EDITAR sobre PLANEADOR, instrumento ESCALA_VALORACION (fn_actividad_instrumento_assert) y que cada TACTIVIDAD_ESTUDIANTE pertenezca a ESA actividad (fn_actividad_estudiante_actividad); luego DELEGA por estudiante en fn_actividad_nota_calificar_escala, que ya valida la asistencia de p_fecha, comprueba el nivel contra la escala o el valor contra [VALOR_MIN, VALOR_MAX], hace el upsert de TACTIVIDAD_ESCALA_EVALUACION (1:1) y guarda el % en TACTIVIDAD_NOTA. No se extrajo un helper de recalculo (como si se hizo en rubrica/cotejo) porque la escala guarda UNA sola fila por estudiante y el % se deriva por completo de los parametros de entrada: no hay captura parcial que releer ni formula que compartir. Al ser 1:1, SIEMPRE recalcula y guarda la nota en la misma pasada. Devuelve una fila por estudiante {pk_tactividad_estudiante, calificacion}. V227.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_nota_calificar_otro — sin calculo automatico.
