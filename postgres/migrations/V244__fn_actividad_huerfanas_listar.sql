@@ -64,6 +64,14 @@ SET search_path TO academico_test, public;
 -- ---------------------------------------------------------------------------
 -- 1. fn_unidad_actividad_vincular — fix: no mover de unidad sin confirmar.
 -- ---------------------------------------------------------------------------
+-- El parametro nuevo (p_permitir_mover_de_unidad) CAMBIA la aridad, y
+-- CREATE OR REPLACE no reemplaza una funcion cuando eso pasa: crea una
+-- SOBRECARGA. Sin este DROP quedaban vivas las dos firmas (la de 4 args de
+-- V223 y la de 5 de aqui) y, como el parametro nuevo tiene DEFAULT, una
+-- llamada con 4 argumentos se vuelve AMBIGUA -- PostgreSQL responde
+-- "function ... is not unique" y no ejecuta nada. Verificado en el servidor.
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_actividad_vincular(BIGINT, BIGINT, BIGINT, NUMERIC);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_actividad_vincular(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tactividad            BIGINT,
