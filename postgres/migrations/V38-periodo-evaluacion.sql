@@ -1,33 +1,52 @@
 -- ===========================================================================
--- V38 — Modulo de Periodo de Evaluacion (academico_test).
--- Reglas: dentro del rango del padre, sin solaparse con otro activo del mismo
--- padre, y la suma de PORCENTAJE del padre no puede superar 100.
+-- Periodo de Evaluacion — funciones consolidadas (ultima version)
+-- Generado: 2026-09-04
+--
+-- Documento de referencia de SOLO LECTURA. NO ejecutar. NO es una migracion
+-- Flyway y NO debe copiarse a postgres/migrations/. Consolida, para cada
+-- funcion del modulo, el bloque CREATE OR REPLACE tal como quedo en la
+-- migracion mas reciente que lo redefine (las funciones se reescriben con
+-- CREATE OR REPLACE FUNCTION en migraciones posteriores; este archivo evita
+-- tener que rastrear cual version quedo vigente).
+--
+-- Migraciones fuente consultadas:
+--   - V38__evaluation_period_module.sql
+--   - V101__periodo_evaluacion_mensajes_error_con_nombre.sql
+--   - V192__fn_periodo_eval_listar_expone_sede.sql
 -- ===========================================================================
 
+-- Fuente: V101__periodo_evaluacion_mensajes_error_con_nombre.sql
 SET search_path TO academico_test, public;
 
--- Validacion compartida (rango del padre, solape, suma de pesos). No es
--- gate; se llama desde crear/actualizar. p_pk_excluir = fila a ignorar (update).
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_validar(
-    p_fk_periodo   BIGINT,
-    p_fecha_inicio DATE,
-    p_fecha_fin    DATE,
-    p_porcentaje   NUMERIC,
-    p_codigo       VARCHAR DEFAULT NULL,
-    p_nombre       VARCHAR DEFAULT NULL,
-    p_abreviacion  VARCHAR DEFAULT NULL,
-    p_pk_excluir   BIGINT DEFAULT NULL
+    p_fk_periodo bigint,
+    p_fecha_inicio date,
+    p_fecha_fin date,
+    p_porcentaje numeric,
+    p_codigo character varying DEFAULT NULL::character varying,
+    p_nombre character varying DEFAULT NULL::character varying,
+    p_abreviacion character varying DEFAULT NULL::character varying,
+    p_pk_excluir bigint DEFAULT NULL::bigint
 )
-RETURNS VOID
-LANGUAGE plpgsql AS $$
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
     v_pi DATE; v_pf DATE; v_suma NUMERIC;
+    v_nombre_periodo_academico VARCHAR(130);
 BEGIN
     SELECT FECHA_INICIO, FECHA_FIN INTO v_pi, v_pf
       FROM academico_test.TPERIODO_ACADEMICO
      WHERE PK_TPERIODO_ACADEMICO = p_fk_periodo AND ACTIVE = TRUE;
     IF v_pi IS NULL THEN
-        RAISE EXCEPTION 'El periodo academico % no existe o esta inactivo', p_fk_periodo USING ERRCODE = '23503';
+        SELECT NOMBRE INTO v_nombre_periodo_academico
+          FROM academico_test.TPERIODO_ACADEMICO WHERE PK_TPERIODO_ACADEMICO = p_fk_periodo;
+        IF v_nombre_periodo_academico IS NOT NULL THEN
+            RAISE EXCEPTION 'El periodo academico "%" esta inactivo', v_nombre_periodo_academico
+                USING ERRCODE = '23503';
+        ELSE
+            RAISE EXCEPTION 'El periodo academico indicado no existe' USING ERRCODE = '23503';
+        END IF;
     END IF;
     IF p_porcentaje IS NOT NULL AND p_porcentaje < 0 THEN
         RAISE EXCEPTION 'El porcentaje (%) no puede ser negativo', p_porcentaje USING ERRCODE = '22023';
@@ -80,8 +99,9 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 END;
-$$;
+$function$;
 
+-- Fuente: V38__evaluation_period_module.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_crear(
     p_fk_periodo     BIGINT,
     p_codigo         VARCHAR(30),
@@ -124,43 +144,47 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V101__periodo_evaluacion_mensajes_error_con_nombre.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_actualizar(
-    p_pk             BIGINT,
-    p_codigo         VARCHAR(30) DEFAULT NULL,
-    p_nombre         VARCHAR(130) DEFAULT NULL,
-    p_abreviacion    VARCHAR(30) DEFAULT NULL,
-    p_fecha_inicio   DATE DEFAULT NULL,
-    p_fecha_fin      DATE DEFAULT NULL,
-    p_fk_estado      BIGINT DEFAULT NULL,
-    p_porcentaje     NUMERIC DEFAULT NULL,
-    p_pk_usuario_solicitante BIGINT DEFAULT NULL
+    p_pk bigint,
+    p_codigo character varying DEFAULT NULL::character varying,
+    p_nombre character varying DEFAULT NULL::character varying,
+    p_abreviacion character varying DEFAULT NULL::character varying,
+    p_fecha_inicio date DEFAULT NULL::date,
+    p_fecha_fin date DEFAULT NULL::date,
+    p_fk_estado bigint DEFAULT NULL::bigint,
+    p_porcentaje numeric DEFAULT NULL::numeric,
+    p_pk_usuario_solicitante bigint DEFAULT NULL::bigint
 )
-RETURNS BIGINT LANGUAGE plpgsql AS $$
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
     r academico_test.TPERIODO_EVALUACION;
     v_ini DATE; v_fin DATE; v_pct NUMERIC; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT;
 BEGIN
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast; scope abajo con la
+    -- sede/jornada del periodo academico padre.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, NULL, NULL, NULL, 'EDITAR');
     SELECT * INTO r FROM academico_test.TPERIODO_EVALUACION WHERE PK_TPERIODO_EVALUACION = p_pk;
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'No existe el periodo de evaluacion %', p_pk USING ERRCODE = 'P0002';
+        RAISE EXCEPTION 'No existe el periodo de evaluacion indicado' USING ERRCODE = 'P0002';
     END IF;
     IF r.ACTIVE = FALSE THEN
-        RAISE EXCEPTION 'El periodo de evaluacion % esta inactivo; no se puede actualizar', p_pk
+        RAISE EXCEPTION 'El periodo de evaluacion "%" esta inactivo; no se puede actualizar', r.NOMBRE
             USING ERRCODE = '22023';
     END IF;
-    -- Gate fino: el establecimiento del periodo padre debe estar en su alcance.
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, (
-             SELECT s.FK_TESTABLECIMIENTO
-               FROM academico_test.TPERIODO_ACADEMICO pa
-               JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-              WHERE pa.PK_TPERIODO_ACADEMICO = r.FK_TPERIODO_ACADEMICO)) THEN
-        RAISE EXCEPTION 'El usuario no puede gestionar periodos de evaluacion de este establecimiento'
-            USING ERRCODE = '42501';
-    END IF;
+    -- Gate fino (CU-86e2w4xdt): capability + scope (EE, sede, jornada) del periodo academico padre.
+    SELECT s.FK_TESTABLECIMIENTO INTO v_establecimiento_id
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE pa.PK_TPERIODO_ACADEMICO = r.FK_TPERIODO_ACADEMICO;
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, v_establecimiento_id,
+        academico_test.fn_periodo_sede(r.FK_TPERIODO_ACADEMICO),
+        academico_test.fn_periodo_jornada(r.FK_TPERIODO_ACADEMICO), 'EDITAR');
     v_ini := COALESCE(p_fecha_inicio, r.FECHA_INICIO);
     v_fin := COALESCE(p_fecha_fin, r.FECHA_FIN);
     v_pct := COALESCE(p_porcentaje, r.PORCENTAJE);
@@ -169,6 +193,9 @@ BEGIN
     END IF;
     PERFORM academico_test.fn_periodo_eval_validar(r.FK_TPERIODO_ACADEMICO, v_ini, v_fin, v_pct,
         COALESCE(p_codigo, r.CODIGO), COALESCE(p_nombre, r.NOMBRE), COALESCE(p_abreviacion, r.ABREVIACION), p_pk);
+
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización del periodo de evaluación %s', COALESCE(p_nombre, r.NOMBRE)), v_establecimiento_id);
 
     UPDATE academico_test.TPERIODO_EVALUACION SET
         CODIGO = COALESCE(p_codigo, CODIGO), NOMBRE = COALESCE(p_nombre, NOMBRE),
@@ -179,27 +206,37 @@ BEGIN
      WHERE PK_TPERIODO_EVALUACION = p_pk;
     RETURN p_pk;
 END;
-$$;
+$function$;
 
+-- Fuente: V101__periodo_evaluacion_mensajes_error_con_nombre.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_soft_delete(
-    p_pk BIGINT, p_pk_usuario_solicitante BIGINT
+    p_pk bigint,
+    p_pk_usuario_solicitante bigint
 )
-RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR; v_est BIGINT;
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR; v_est BIGINT;
+    v_nombre_periodo_eval VARCHAR(130);
+    v_sede_id    BIGINT;
+    v_jornada_id BIGINT;
 BEGIN
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
-    -- Gate fino: el establecimiento del periodo padre debe estar en su alcance.
-    SELECT s.FK_TESTABLECIMIENTO INTO v_est
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, NULL, NULL, NULL, 'ELIMINAR');
+    -- Gate fino (CU-86e2w4xdt): capability + scope (EE, sede, jornada) del periodo academico padre.
+    -- Se trae tambien el NOMBRE aqui (antes solo se leia en la rama de error)
+    -- porque la etiqueta de auditoria lo necesita en el camino feliz.
+    SELECT s.FK_TESTABLECIMIENTO, pa.FK_TSEDE, pa.FK_TLV_JORNADA, pe.NOMBRE
+      INTO v_est, v_sede_id, v_jornada_id, v_nombre_periodo_eval
       FROM academico_test.TPERIODO_EVALUACION pe
       JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = pe.FK_TPERIODO_ACADEMICO
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
      WHERE pe.PK_TPERIODO_EVALUACION = p_pk;
-    IF v_est IS NOT NULL AND NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_est) THEN
-        RAISE EXCEPTION 'El usuario no puede gestionar periodos de evaluacion de este establecimiento'
-            USING ERRCODE = '42501';
+    IF v_est IS NOT NULL THEN
+        PERFORM academico_test.fn_periodo_gate_escritura(
+            p_pk_usuario_solicitante, v_est, v_sede_id, v_jornada_id, 'ELIMINAR');
     END IF;
     -- Bloqueo: existen calificaciones (notas) registradas contra este periodo de
     -- evaluacion. Protege informacion historica (TAREA_NOTA/TASIGNATURA_NOTA no
@@ -211,46 +248,58 @@ BEGIN
         SELECT 1 FROM academico_test.TAREA_NOTA tn
          WHERE tn.FK_TPERIODO_EVALUACION = p_pk AND tn.ACTIVE = TRUE
     ) THEN
-        RAISE EXCEPTION 'No se puede eliminar el periodo de evaluacion %: existen calificaciones registradas', p_pk
-            USING ERRCODE = '23503';
+        SELECT NOMBRE INTO v_nombre_periodo_eval
+          FROM academico_test.TPERIODO_EVALUACION WHERE PK_TPERIODO_EVALUACION = p_pk;
+        IF v_nombre_periodo_eval IS NOT NULL THEN
+            RAISE EXCEPTION 'No se puede eliminar el periodo de evaluacion "%": existen calificaciones registradas',
+                v_nombre_periodo_eval USING ERRCODE = '23503';
+        ELSE
+            RAISE EXCEPTION 'No se puede eliminar el periodo de evaluacion indicado: existen calificaciones registradas'
+                USING ERRCODE = '23503';
+        END IF;
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación del periodo de evaluación %s', v_nombre_periodo_eval), v_est);
+
     UPDATE academico_test.TPERIODO_EVALUACION
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TPERIODO_EVALUACION = p_pk AND ACTIVE = TRUE;
     GET DIAGNOSTICS v_n = ROW_COUNT;
     IF v_n = 0 THEN
-        RAISE EXCEPTION 'No existe un periodo de evaluacion activo con PK %', p_pk USING ERRCODE = 'P0002';
+        SELECT NOMBRE INTO v_nombre_periodo_eval
+          FROM academico_test.TPERIODO_EVALUACION WHERE PK_TPERIODO_EVALUACION = p_pk;
+        IF v_nombre_periodo_eval IS NOT NULL THEN
+            RAISE EXCEPTION 'El periodo de evaluacion "%" ya se encuentra inactivo', v_nombre_periodo_eval
+                USING ERRCODE = 'P0002';
+        ELSE
+            RAISE EXCEPTION 'No existe un periodo de evaluacion activo con el PK indicado' USING ERRCODE = 'P0002';
+        END IF;
     END IF;
     RETURN p_pk;
 END;
-$$;
+$function$;
 
-DROP FUNCTION IF EXISTS academico_test.fn_periodo_eval_listar(BIGINT, TEXT, INT, INT);
-DROP FUNCTION IF EXISTS academico_test.fn_periodo_eval_listar(BIGINT, TEXT, INT, INT, BIGINT);
-DROP FUNCTION IF EXISTS academico_test.fn_periodo_eval_listar(BIGINT, TEXT, INT, INT, BIGINT, TEXT, TEXT);
+-- Fuente: V192__fn_periodo_eval_listar_expone_sede.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_listar(
     p_fk_periodo BIGINT,
     p_filtro     TEXT DEFAULT NULL,
     p_page_index INT  DEFAULT 0,
     p_page_size  INT  DEFAULT 10,
-    p_pk_usuario BIGINT DEFAULT NULL,  -- alcance (global / establecimiento)
-    -- Orden: id de columna del front + direccion ('asc'/'desc'), igual que fn_periodo_listar (V37).
+    p_pk_usuario BIGINT DEFAULT NULL,
     p_sort_by    TEXT DEFAULT NULL,
     p_sort_dir   TEXT DEFAULT NULL
 )
 RETURNS TABLE (
     id BIGINT, codigo VARCHAR, nombre VARCHAR, abreviacion VARCHAR,
     start_date DATE, end_date DATE, peso NUMERIC, status_id BIGINT, estado VARCHAR, estado_name VARCHAR,
-    academic_period_id BIGINT, total_count BIGINT
+    academic_period_id BIGINT, sede_id BIGINT, sede_name VARCHAR, total_count BIGINT
 )
 LANGUAGE plpgsql STABLE AS $$
 DECLARE
     v_col TEXT;
     v_dir TEXT;
 BEGIN
-    -- Whitelist: mapea el id de columna del front -> columna real. Cualquier
-    -- valor no listado cae al default (fecha de inicio). Nunca se interpola
-    -- input del usuario crudo -> sin riesgo de inyeccion.
     v_col := CASE lower(coalesce(p_sort_by, ''))
         WHEN 'codigo'      THEN 'pe.CODIGO'
         WHEN 'nombre'      THEN 'pe.NOMBRE'
@@ -266,13 +315,15 @@ BEGIN
     RETURN QUERY EXECUTE format($q$
         SELECT pe.PK_TPERIODO_EVALUACION, pe.CODIGO, pe.NOMBRE, pe.ABREVIACION,
                pe.FECHA_INICIO, pe.FECHA_FIN, pe.PORCENTAJE, pe.FK_TLV_ESTADO, est.VALOR, est.NOMBRE,
-               pe.FK_TPERIODO_ACADEMICO, count(*) OVER()::BIGINT
+               pe.FK_TPERIODO_ACADEMICO, s.PK_TSEDE, s.NOMBRE,
+               count(*) OVER()::BIGINT
           FROM academico_test.TPERIODO_EVALUACION pe
           JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pe.FK_TLV_ESTADO
+          JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = pe.FK_TPERIODO_ACADEMICO
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
          WHERE pe.FK_TPERIODO_ACADEMICO = $1 AND pe.ACTIVE = TRUE
            AND ($2 IS NULL OR pe.NOMBRE ILIKE '%%' || $2 || '%%' OR pe.CODIGO ILIKE '%%' || $2 || '%%')
-           -- Alcance por rol: global ve todo; establecimiento solo el suyo.
-           AND academico_test.fn_periodo_usuario_puede_ver($5, pe.FK_TPERIODO_ACADEMICO)
+           AND academico_test.fn_periodo_puede_ver($5, pe.FK_TPERIODO_ACADEMICO)
          ORDER BY %s %s, pe.PK_TPERIODO_EVALUACION DESC
          LIMIT NULLIF($4, 0)
         OFFSET COALESCE($3, 0) * COALESCE(NULLIF($4, 0), 0)
@@ -281,9 +332,7 @@ BEGIN
 END;
 $$;
 
--- Un periodo de evaluacion por PK (mismos campos que el listado).
-DROP FUNCTION IF EXISTS academico_test.fn_periodo_eval_detalle(BIGINT);
-DROP FUNCTION IF EXISTS academico_test.fn_periodo_eval_detalle(BIGINT, BIGINT);
+-- Fuente: V38__evaluation_period_module.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_detalle(
     p_pk BIGINT, p_pk_usuario BIGINT DEFAULT NULL
 )
@@ -299,14 +348,11 @@ LANGUAGE sql STABLE AS $$
       FROM academico_test.TPERIODO_EVALUACION pe
       JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pe.FK_TLV_ESTADO
      WHERE pe.PK_TPERIODO_EVALUACION = p_pk AND pe.ACTIVE = TRUE
-       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, pe.FK_TPERIODO_ACADEMICO);
+       AND academico_test.fn_periodo_puede_ver(p_pk_usuario, pe.FK_TPERIODO_ACADEMICO);
 $$;
 
--- Borrado multiple: intenta cada id; salta los bloqueados (dependencias/no existe).
--- Devuelve una fila por id: eliminado=TRUE, o FALSE con error_code (SQLSTATE)
--- y error_mensaje. Cada id en su subtransaccion; un fallo no revierte al resto.
-    DROP FUNCTION IF EXISTS academico_test.fn_periodo_eval_bulk_delete(BIGINT[], BIGINT);
-    CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_bulk_delete(
+-- Fuente: V38__evaluation_period_module.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_bulk_delete(
         p_ids BIGINT[], p_pk_usuario_solicitante BIGINT
     )
     RETURNS TABLE (id BIGINT, eliminado BOOLEAN, error_code TEXT, error_mensaje TEXT)

@@ -1,3 +1,126 @@
+-- ===========================================================================
+-- Periodo Académico — funciones consolidadas (última versión)
+--
+-- Fecha de generación: 2026-09-04
+--
+-- Documento de REFERENCIA DE SOLO LECTURA. NO ejecutar contra ninguna base de
+-- datos. NO es una migración Flyway y NO debe copiarse a postgres/migrations/.
+-- Su único propósito es reunir en un solo lugar la última versión vigente de
+-- cada función PL/pgSQL del módulo Periodo Académico, ya que muchas de ellas
+-- fueron redefinidas (CREATE OR REPLACE FUNCTION) en migraciones posteriores
+-- a su creación original.
+--
+-- Migraciones fuente consultadas para este consolidado:
+--   - V37__academic_period_module.sql
+--   - V100__periodo_academico_mensajes_error_con_nombre.sql
+--   - V191__fn_periodo_anos_lectivos_listar.sql
+--
+-- Verificación: se confirmó con
+--   grep -rn "FUNCTION academico_test.<nombre>(" postgres/migrations/
+-- que ninguna migración posterior a las listadas arriba (incluyendo V38, V40,
+-- V101, V162, V192, V220, V221 — que sí tocan otras funciones de nombre
+-- similar como fn_periodo_eval_*, fn_periodo_establecimiento,
+-- fn_periodo_gate_escritura, fn_periodo_areas_asignaturas_listar o
+-- fn_periodo_resolver_matricula) vuelve a definir ninguna de las funciones
+-- incluidas aquí.
+-- ===========================================================================
+
+SET search_path TO academico_test, public;
+
+
+-- ===========================================================================
+-- Helpers de scoping de usuario
+-- ===========================================================================
+
+-- Fuente: V37__academic_period_module.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_es_super_admin(p_pk_usuario BIGINT)
+RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM academico_test.TSEDE_USUARIO
+         WHERE FK_TUSUARIO = p_pk_usuario AND FK_TROL = 1 AND ACTIVE = TRUE
+    );
+$$;
+
+-- Fuente: V37__academic_period_module.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_usuario_global(p_pk_usuario BIGINT)
+RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM academico_test.TSEDE_USUARIO
+         WHERE FK_TUSUARIO = p_pk_usuario AND ACTIVE = TRUE AND FK_TROL IN (1, 2, 3)
+    );
+$$;
+
+-- Fuente: V37__academic_period_module.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_usuario_establecimientos(p_pk_usuario BIGINT)
+RETURNS TABLE (establecimiento_id BIGINT) LANGUAGE sql STABLE AS $$
+    SELECT DISTINCT s.FK_TESTABLECIMIENTO
+      FROM academico_test.TSEDE_USUARIO su
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+     WHERE su.FK_TUSUARIO = p_pk_usuario AND su.ACTIVE = TRUE
+       AND su.FK_TROL IN (7, 8, 9);
+$$;
+
+-- Fuente: V37__academic_period_module.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_usuario_sedes(p_pk_usuario BIGINT)
+RETURNS TABLE (sede_id BIGINT) LANGUAGE sql STABLE AS $$
+    SELECT DISTINCT su.FK_TSEDE
+      FROM academico_test.TSEDE_USUARIO su
+     WHERE su.FK_TUSUARIO = p_pk_usuario AND su.ACTIVE = TRUE
+       AND su.FK_TROL IN (11);
+$$;
+
+-- Fuente: V37__academic_period_module.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_usuario_puede_ver(
+    p_pk_usuario BIGINT, p_fk_periodo BIGINT
+)
+RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+    SELECT academico_test.fn_periodo_usuario_global(p_pk_usuario)
+        OR EXISTS (
+            SELECT 1
+              FROM academico_test.TPERIODO_ACADEMICO pa
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+             WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo
+               AND ( s.FK_TESTABLECIMIENTO IN (
+                         SELECT establecimiento_id
+                           FROM academico_test.fn_periodo_usuario_establecimientos(p_pk_usuario))
+                     OR pa.FK_TSEDE IN (
+                         SELECT sede_id
+                           FROM academico_test.fn_periodo_usuario_sedes(p_pk_usuario)) )
+        );
+$$;
+
+-- CU-86e2w4xdt (2026-08): fn_periodo_usuario_puede_gestionar y
+-- fn_periodo_usuario_puede_escribir (V37) se ELIMINARON — DROP formal en
+-- V211__cleanup_gates_redundantes.sql. Autorizaban la escritura academica por
+-- lista fija de FK_TROL (1,2,3,7,8,9); esa ruta ahora pasa por
+-- fn_periodo_gate_escritura -> fn_assert_permiso_seccion (ver
+-- 00-helpers-permisos.sql). fn_periodo_usuario_global / _establecimientos /
+-- _sedes / _puede_ver de arriba SE CONSERVAN sin cambios: los siguen usando
+-- ~24 listados y reportes fuera de este alcance.
+
+
+-- ===========================================================================
+-- CRUD del período académico
+-- ===========================================================================
+
+-- Fuente: V100__periodo_academico_mensajes_error_con_nombre.sql. DDL
+-- inseparable de fn_periodo_crear de abajo: su INSERT ... ON CONFLICT
+-- (FK_TESTABLECIMIENTO, NOMBRE) DO NOTHING sobre TANO_LECTIVO exige una
+-- constraint EXACTA (no un indice parcial) para que Postgres pueda
+-- inferirla. Una migracion previa (V71) habia reemplazado U_TANO_LECTIVO_1
+-- por un indice unico PARCIAL (WHERE active = true), lo que rompio el ON
+-- CONFLICT en produccion (42P10: "no unique or exclusion constraint
+-- matching"); V100 es la que corrige la regresion volviendo a una UNIQUE
+-- CONSTRAINT plana.
+ALTER TABLE academico_test.TANO_LECTIVO DROP CONSTRAINT IF EXISTS U_TANO_LECTIVO_1;
+DROP INDEX IF EXISTS academico_test.U_TANO_LECTIVO_1;
+DROP INDEX IF EXISTS academico_test.u_tano_lectivo_1;
+
+ALTER TABLE academico_test.TANO_LECTIVO
+    ADD CONSTRAINT U_TANO_LECTIVO_1 UNIQUE (FK_TESTABLECIMIENTO, NOMBRE);
+
+-- Fuente: V100__periodo_academico_mensajes_error_con_nombre.sql (reemplaza la
+-- version de V37__academic_period_module.sql)
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_crear(
     p_fk_sede BIGINT,
     p_fk_estado BIGINT,
@@ -220,6 +343,8 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V100__periodo_academico_mensajes_error_con_nombre.sql (reemplaza la
+-- version de V37__academic_period_module.sql)
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_actualizar(
     p_pk_periodo              BIGINT,
     p_fk_estado               BIGINT   DEFAULT NULL,
@@ -496,6 +621,8 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V100__periodo_academico_mensajes_error_con_nombre.sql (reemplaza la
+-- version de V37__academic_period_module.sql)
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_soft_delete(p_pk_periodo bigint, p_pk_usuario_solicitante bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -615,6 +742,169 @@ BEGIN
 END;
 $function$;
 
+-- Fuente: V100__periodo_academico_mensajes_error_con_nombre.sql (reemplaza la
+-- version de V37__academic_period_module.sql). Declarada como CREATE FUNCTION
+-- sin OR REPLACE porque el RETURNS TABLE cambia (agrega previous_period_id);
+-- Postgres exige el DROP FUNCTION previo para poder recrearla con un
+-- RETURNS TABLE distinto. Se conserva el DROP tal cual aparece en el archivo
+-- fuente, inmediatamente antes del CREATE.
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_detalle(BIGINT, BIGINT);
+
+CREATE FUNCTION academico_test.fn_periodo_detalle(
+    p_pk_periodo BIGINT,
+    p_pk_usuario BIGINT DEFAULT NULL
+)
+RETURNS TABLE(
+    id BIGINT,
+    sede_id BIGINT,
+    sede_name VARCHAR,
+    school_year_id BIGINT,
+    school_year_name VARCHAR,
+    status_id BIGINT,
+    status VARCHAR,
+    status_name VARCHAR,
+    start_date DATE,
+    end_date DATE,
+    enrollment_deadline DATE,
+    name VARCHAR,
+    jornada_id BIGINT,
+    jornada VARCHAR,
+    jornada_name VARCHAR,
+    reserva academico_test.bool_sn,
+    default_blocks_count BIGINT,
+    schedule_start_time TIME,
+    schedule_end_time TIME,
+    descansos JSONB,
+    previous_period_id BIGINT
+)
+LANGUAGE sql STABLE AS $function$
+    SELECT pa.PK_TPERIODO_ACADEMICO, pa.FK_TSEDE, s.NOMBRE, pa.FK_TANO_LECTIVO,
+           al.NOMBRE, pa.FK_TLV_ESTADO, est.VALOR, est.NOMBRE,
+           pa.FECHA_INICIO, pa.FECHA_FIN, pa.FECHA_LIMITE_MATRICULA, pa.NOMBRE,
+           pa.FK_TLV_JORNADA, jor.VALOR, jor.NOMBRE, pa.RESERVA, pa.BLOQUES_POR_DEFECTO,
+           pa.HORA_INICIO, pa.HORA_FIN,
+           COALESCE((
+               SELECT jsonb_agg(
+                          jsonb_build_object(
+                              'startTime', to_char(d.HORA_INICIO, 'HH24:MI'),
+                              'endTime',   to_char(d.HORA_FIN,    'HH24:MI'))
+                          ORDER BY d.HORA_INICIO)
+                 FROM academico_test.TDESCANSOS d
+                WHERE d.FK_TPERIODO_ACADEMICO = pa.PK_TPERIODO_ACADEMICO
+                  AND d.ACTIVE = TRUE
+           ), '[]'::jsonb),
+           pa.FK_TPERIODO_ACADEMICO
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TSEDE s          ON s.PK_TSEDE = pa.FK_TSEDE
+      JOIN academico_test.TANO_LECTIVO al  ON al.PK_ANO_LECTIVO = pa.FK_TANO_LECTIVO
+      JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pa.FK_TLV_ESTADO
+      JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = pa.FK_TLV_JORNADA
+     WHERE pa.PK_TPERIODO_ACADEMICO = p_pk_periodo AND pa.ACTIVE = TRUE
+       AND academico_test.fn_periodo_puede_ver(p_pk_usuario, p_pk_periodo);
+$function$;
+
+
+-- ===========================================================================
+-- Listados y picker
+-- ===========================================================================
+
+-- Fuente: V37__academic_period_module.sql (sin override posterior)
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_listar(
+    p_fk_sede      BIGINT   DEFAULT NULL,
+    p_nombre_sede  TEXT     DEFAULT NULL,
+    p_ano          TEXT     DEFAULT NULL,
+    p_fk_estado    BIGINT   DEFAULT NULL,
+    p_fecha_desde  DATE     DEFAULT NULL,
+    p_fecha_hasta  DATE     DEFAULT NULL,
+    p_pk_usuario   BIGINT   DEFAULT NULL,   -- alcance (global / establecimiento)
+    p_page_index   INT      DEFAULT 0,
+    p_page_size    INT      DEFAULT 10,
+    -- Orden: id de columna del front + direccion ('asc'/'desc').
+    p_sort_by      TEXT     DEFAULT NULL,
+    p_sort_dir     TEXT     DEFAULT NULL
+)
+RETURNS TABLE (
+    id BIGINT, sede_id BIGINT, sede_name VARCHAR, school_year_id BIGINT,
+    school_year_name VARCHAR, status_id BIGINT, status VARCHAR, status_name VARCHAR,
+    start_date DATE, end_date DATE, enrollment_deadline DATE, name VARCHAR,
+    jornada_id BIGINT, jornada VARCHAR, jornada_name VARCHAR,
+    reserva bool_sn, default_blocks_count BIGINT,
+    schedule_start_time TIME, schedule_end_time TIME, total_count BIGINT
+)
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_col TEXT;
+    v_dir TEXT;
+BEGIN
+    -- Whitelist: mapea el id de columna del front → columna real. Cualquier
+    -- valor no listado cae al default (fecha de inicio). Nunca se interpola
+    -- input del usuario crudo → sin riesgo de inyeccion.
+    v_col := CASE lower(coalesce(p_sort_by, ''))
+        WHEN 'sedename'           THEN 's.NOMBRE'
+        WHEN 'schoolyearid'       THEN 'al.NOMBRE'
+        WHEN 'status'             THEN 'est.VALOR'
+        WHEN 'startdate'          THEN 'pa.FECHA_INICIO'
+        WHEN 'enddate'            THEN 'pa.FECHA_FIN'
+        WHEN 'enrollmentdeadline' THEN 'pa.FECHA_LIMITE_MATRICULA'
+        WHEN 'name'               THEN 'pa.NOMBRE'
+        ELSE 'pa.FECHA_INICIO'
+    END;
+    v_dir := CASE WHEN lower(coalesce(p_sort_dir, '')) = 'asc' THEN 'ASC' ELSE 'DESC' END;
+
+    RETURN QUERY EXECUTE format($q$
+        SELECT pa.PK_TPERIODO_ACADEMICO, pa.FK_TSEDE, s.NOMBRE, pa.FK_TANO_LECTIVO,
+               al.NOMBRE, pa.FK_TLV_ESTADO, est.VALOR, est.NOMBRE,
+               pa.FECHA_INICIO, pa.FECHA_FIN, pa.FECHA_LIMITE_MATRICULA, pa.NOMBRE,
+               pa.FK_TLV_JORNADA, jor.VALOR, jor.NOMBRE, pa.RESERVA, pa.BLOQUES_POR_DEFECTO,
+               pa.HORA_INICIO, pa.HORA_FIN, count(*) OVER()::BIGINT
+          FROM academico_test.TPERIODO_ACADEMICO pa
+          JOIN academico_test.TSEDE s          ON s.PK_TSEDE = pa.FK_TSEDE
+          JOIN academico_test.TANO_LECTIVO al  ON al.PK_ANO_LECTIVO = pa.FK_TANO_LECTIVO
+          JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pa.FK_TLV_ESTADO
+          JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = pa.FK_TLV_JORNADA
+         WHERE pa.ACTIVE = TRUE
+           AND ($1 IS NULL OR pa.FK_TSEDE = $1)
+           AND ($2 IS NULL OR s.NOMBRE ILIKE '%%' || $2 || '%%')
+           AND ($3 IS NULL OR al.NOMBRE = $3)
+           AND ($4 IS NULL OR pa.FK_TLV_ESTADO = $4)
+           AND ($5 IS NULL OR pa.FECHA_INICIO >= $5)
+           AND ($6 IS NULL OR pa.FECHA_INICIO <= $6)
+           -- CU-86e2w4xdt: capability (menu PERIODOS_ACADEMICOS en VER) +
+           -- scope por categoria de rol, no solo scope por lista de FK_TROL.
+           AND academico_test.fn_periodo_puede_ver($7, pa.PK_TPERIODO_ACADEMICO)
+         ORDER BY %s %s, pa.PK_TPERIODO_ACADEMICO DESC
+         LIMIT NULLIF($9, 0)
+        OFFSET COALESCE($8, 0) * COALESCE(NULLIF($9, 0), 0)
+    $q$, v_col, v_dir)
+    USING p_fk_sede, p_nombre_sede, p_ano, p_fk_estado, p_fecha_desde,
+          p_fecha_hasta, p_pk_usuario, p_page_index, p_page_size;
+END;
+$$;
+
+-- Fuente: V37__academic_period_module.sql (sin override posterior)
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_anteriores_por_sede(
+    p_fk_sede          BIGINT,
+    p_excluir_periodo  BIGINT DEFAULT NULL,
+    p_pk_usuario       BIGINT DEFAULT NULL
+)
+RETURNS TABLE (id BIGINT, name VARCHAR, start_date DATE)
+LANGUAGE sql STABLE AS $$
+    SELECT pa.PK_TPERIODO_ACADEMICO, pa.NOMBRE, pa.FECHA_INICIO
+      FROM academico_test.TPERIODO_ACADEMICO pa
+     WHERE pa.FK_TSEDE = p_fk_sede
+       AND pa.ACTIVE = TRUE
+       AND (p_excluir_periodo IS NULL OR pa.PK_TPERIODO_ACADEMICO <> p_excluir_periodo)
+       AND academico_test.fn_periodo_puede_ver(p_pk_usuario, pa.PK_TPERIODO_ACADEMICO)
+     ORDER BY pa.FECHA_INICIO DESC;
+$$;
+
+
+-- ===========================================================================
+-- Descansos (edición suelta)
+-- ===========================================================================
+
+-- Fuente: V100__periodo_academico_mensajes_error_con_nombre.sql (reemplaza la
+-- version de V37__academic_period_module.sql)
 CREATE OR REPLACE FUNCTION academico_test.fn_descanso_agregar(p_fk_periodo bigint, p_hora_inicio time without time zone, p_hora_fin time without time zone, p_pk_usuario_solicitante bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -669,85 +959,8 @@ BEGIN
 END;
 $function$;
 
--- Consolidado desde V71 (fn_periodo_detalle_return_previous_period.sql):
--- fn_periodo_detalle no estaba en este archivo. Su estado vigente (el unico
--- redefinido entre V37 y V99) agrega la columna previous_period_id al
--- RETURNS TABLE -- el front no podia mostrar el periodo anterior ya guardado
--- al editar. Nunca fue tocado por ninguna migracion de mensajes con nombre
--- (es LANGUAGE sql, sin RAISE EXCEPTION), asi que se copia tal cual.
-DROP FUNCTION IF EXISTS academico_test.fn_periodo_detalle(BIGINT, BIGINT);
-
-CREATE FUNCTION academico_test.fn_periodo_detalle(
-    p_pk_periodo BIGINT,
-    p_pk_usuario BIGINT DEFAULT NULL
-)
-RETURNS TABLE(
-    id BIGINT,
-    sede_id BIGINT,
-    sede_name VARCHAR,
-    school_year_id BIGINT,
-    school_year_name VARCHAR,
-    status_id BIGINT,
-    status VARCHAR,
-    status_name VARCHAR,
-    start_date DATE,
-    end_date DATE,
-    enrollment_deadline DATE,
-    name VARCHAR,
-    jornada_id BIGINT,
-    jornada VARCHAR,
-    jornada_name VARCHAR,
-    reserva academico_test.bool_sn,
-    default_blocks_count BIGINT,
-    schedule_start_time TIME,
-    schedule_end_time TIME,
-    descansos JSONB,
-    previous_period_id BIGINT
-)
-LANGUAGE sql STABLE AS $function$
-    SELECT pa.PK_TPERIODO_ACADEMICO, pa.FK_TSEDE, s.NOMBRE, pa.FK_TANO_LECTIVO,
-           al.NOMBRE, pa.FK_TLV_ESTADO, est.VALOR, est.NOMBRE,
-           pa.FECHA_INICIO, pa.FECHA_FIN, pa.FECHA_LIMITE_MATRICULA, pa.NOMBRE,
-           pa.FK_TLV_JORNADA, jor.VALOR, jor.NOMBRE, pa.RESERVA, pa.BLOQUES_POR_DEFECTO,
-           pa.HORA_INICIO, pa.HORA_FIN,
-           COALESCE((
-               SELECT jsonb_agg(
-                          jsonb_build_object(
-                              'startTime', to_char(d.HORA_INICIO, 'HH24:MI'),
-                              'endTime',   to_char(d.HORA_FIN,    'HH24:MI'))
-                          ORDER BY d.HORA_INICIO)
-                 FROM academico_test.TDESCANSOS d
-                WHERE d.FK_TPERIODO_ACADEMICO = pa.PK_TPERIODO_ACADEMICO
-                  AND d.ACTIVE = TRUE
-           ), '[]'::jsonb),
-           pa.FK_TPERIODO_ACADEMICO
-      FROM academico_test.TPERIODO_ACADEMICO pa
-      JOIN academico_test.TSEDE s          ON s.PK_TSEDE = pa.FK_TSEDE
-      JOIN academico_test.TANO_LECTIVO al  ON al.PK_ANO_LECTIVO = pa.FK_TANO_LECTIVO
-      JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pa.FK_TLV_ESTADO
-      JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = pa.FK_TLV_JORNADA
-     WHERE pa.PK_TPERIODO_ACADEMICO = p_pk_periodo AND pa.ACTIVE = TRUE
-       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_pk_periodo);
-$function$;
-
--- Consolidado desde V98 (tano_lectivo_unique_partial_index.sql): DDL (no es
--- funcion) que afecta directamente a fn_periodo_crear/fn_periodo_actualizar
--- de este mismo archivo, cuyo INSERT ... ON CONFLICT (FK_TESTABLECIMIENTO,
--- NOMBRE) DO NOTHING sobre TANO_LECTIVO exige una constraint EXACTA (no un
--- indice parcial) para que Postgres pueda inferirla. V71
--- (academico_test_unique_constraints_partial_active.sql) habia reemplazado
--- U_TANO_LECTIVO_1 por un indice unico PARCIAL (WHERE active = true), lo que
--- rompio el ON CONFLICT en produccion (42P10: "no unique or exclusion
--- constraint matching"). V98 es la migracion mas reciente sobre esta
--- constraint (regresion corregida): vuelve a una UNIQUE CONSTRAINT plana.
--- Se consolida ese estado vigente, no el de V71.
-ALTER TABLE academico_test.TANO_LECTIVO DROP CONSTRAINT IF EXISTS U_TANO_LECTIVO_1;
-DROP INDEX IF EXISTS academico_test.U_TANO_LECTIVO_1;
-DROP INDEX IF EXISTS academico_test.u_tano_lectivo_1;
-
-ALTER TABLE academico_test.TANO_LECTIVO
-    ADD CONSTRAINT U_TANO_LECTIVO_1 UNIQUE (FK_TESTABLECIMIENTO, NOMBRE);
-
+-- Fuente: V100__periodo_academico_mensajes_error_con_nombre.sql (reemplaza la
+-- version de V37__academic_period_module.sql)
 CREATE OR REPLACE FUNCTION academico_test.fn_descanso_eliminar(p_pk_descanso bigint, p_pk_usuario_solicitante bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -796,3 +1009,65 @@ BEGIN
     RETURN p_pk_descanso;
 END;
 $function$;
+
+
+-- ===========================================================================
+-- Borrado múltiple
+-- ===========================================================================
+
+-- Fuente: V37__academic_period_module.sql (sin override posterior)
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_bulk_delete(
+    p_ids BIGINT[], p_pk_usuario_solicitante BIGINT
+)
+RETURNS TABLE (id BIGINT, eliminado BOOLEAN, error_code TEXT, error_mensaje TEXT)
+LANGUAGE plpgsql AS $$
+DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
+BEGIN
+    -- CU-86e2w4xdt: capability por el menu PERIODOS_ACADEMICOS. Sin objeto:
+    -- el scope (EE / sede+jornada) de cada id lo aplica, dentro del bucle,
+    -- fn_periodo_soft_delete, que si resuelve el periodo concreto.
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PERIODOS_ACADEMICOS', 'ELIMINAR');
+    IF p_ids IS NULL THEN RETURN; END IF;
+    FOREACH v_id IN ARRAY p_ids LOOP
+        BEGIN
+            PERFORM academico_test.fn_periodo_soft_delete(v_id, p_pk_usuario_solicitante);
+            id := v_id; eliminado := TRUE; error_code := NULL; error_mensaje := NULL;
+            RETURN NEXT;
+        EXCEPTION WHEN OTHERS THEN
+            GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
+            id := v_id; eliminado := FALSE; error_code := v_state; error_mensaje := v_msg;
+            RETURN NEXT;
+        END;
+    END LOOP;
+    RETURN;
+END;
+$$;
+
+
+-- ===========================================================================
+-- Años lectivos
+-- ===========================================================================
+
+-- Fuente: V191__fn_periodo_anos_lectivos_listar.sql (función nueva, sin
+-- version anterior)
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_anos_lectivos_listar(
+    p_pk_usuario BIGINT DEFAULT NULL
+)
+RETURNS TABLE (id BIGINT, name VARCHAR)
+LANGUAGE sql STABLE AS $$
+    -- `TANO_LECTIVO` es único por (establecimiento, nombre): el mismo año
+    -- "2026" existe como una fila distinta por cada establecimiento. El
+    -- filtro solo necesita el nombre, así que se agrupa por NOMBRE (un id
+    -- representativo por año, no uno por establecimiento).
+    SELECT MIN(al.PK_ANO_LECTIVO), al.NOMBRE
+      FROM academico_test.TANO_LECTIVO al
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.FK_TANO_LECTIVO = al.PK_ANO_LECTIVO
+     WHERE al.ACTIVE = TRUE
+       AND pa.ACTIVE = TRUE
+       -- CU-86e2w4xdt: capability (menu PERIODOS_ACADEMICOS en VER) + scope
+       -- por categoria de rol, no solo scope por lista de FK_TROL.
+       AND academico_test.fn_periodo_puede_ver(p_pk_usuario, pa.PK_TPERIODO_ACADEMICO)
+     GROUP BY al.NOMBRE
+     ORDER BY al.NOMBRE DESC;
+$$;

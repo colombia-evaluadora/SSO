@@ -1,24 +1,25 @@
--- fn_criterio_prom_guardar respondia con el PK crudo de TASIGNATURA/TAREA en
--- tres mensajes distintos:
---   - "La asignatura % no existe, esta inactiva o no pertenece al periodo"
---   - "El area % no existe, esta inactiva o no pertenece al periodo"
---   - "Obligatoria duplicada (asignatura % / area %)"
--- En los dos primeros el id viene del arreglo p_obligatorias (FK pasada por
--- el usuario para el bloque de "obligatorias"); se sigue el patron de la
--- regla 4: se intenta resolver el NOMBRE ignorando ACTIVE/periodo justo
--- antes del RAISE -- si existe (aunque inactiva o de otro periodo) se
--- muestra su nombre, si no existe en absoluto el mensaje queda generico sin
--- id. En el tercero (regla 3) el id ya fue confirmado activo y del periodo
--- por el chequeo EXISTS inmediatamente anterior, asi que se resuelve el
--- nombre directo sin condicional.
+-- ===========================================================================
+-- Criterio de Promoción — funciones consolidadas (última versión)
+-- Generado: 2026-09-04
 --
--- fn_criterio_prom_obtener se reviso y NO tiene ningun RAISE EXCEPTION
--- aplicable (es LANGUAGE sql, sin manejo de errores propio), por lo que no
--- se toca.
+-- Este es un documento de REFERENCIA de solo lectura. NO ejecutar directamente,
+-- NO es una migracion Flyway, y NO debe copiarse a postgres/migrations/.
+-- Su unico proposito es reunir en un solo lugar la version vigente de cada
+-- funcion del modulo, ya que con el tiempo varias han sido redefinidas
+-- (CREATE OR REPLACE FUNCTION) en migraciones posteriores.
 --
--- Firma, tipos, DEFAULTs, ERRCODEs y logica se preservan tal cual; solo se
--- agregan variables DECLARE (v_nombre_asig, v_nombre_area) y los SELECT de
--- lookup antes de cada RAISE afectado.
+-- Migraciones fuente consultadas:
+--   - V39__promotion_criteria_module.sql
+--   - V102__criterio_promocion_mensajes_error_con_nombre.sql
+--
+-- Verificacion: se corrio
+--   grep -rn "FUNCTION academico_test.<nombre>(" postgres/migrations/
+-- para fn_criterio_prom_guardar, fn_criterio_prom_obtener y
+-- fn_nodo_curricular_listar; ninguna migracion posterior a V102/V39 las toca.
+-- ===========================================================================
+
+-- Fuente: V102__criterio_promocion_mensajes_error_con_nombre.sql
+SET search_path TO academico_test, public;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_criterio_prom_guardar(p_fk_periodo bigint, p_fk_grado bigint DEFAULT NULL::bigint, p_nodo_curricular academico_test.nodo_curricular DEFAULT NULL::character varying, p_cantidad_nivelar numeric DEFAULT NULL::numeric, p_asignatura_obligatoria academico_test.bool_sn DEFAULT NULL::character varying, p_aprobacion_promedio academico_test.bool_sn DEFAULT NULL::character varying, p_desempenho_min_general numeric DEFAULT NULL::numeric, p_desempenho_minimo numeric DEFAULT NULL::numeric, p_max_asig_promedio numeric DEFAULT NULL::numeric, p_minimo_inasistencias numeric DEFAULT NULL::numeric, p_max_asig_nivelar_prom numeric DEFAULT NULL::numeric, p_obligatorias bigint[] DEFAULT NULL::bigint[], p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
  RETURNS bigint
@@ -32,7 +33,7 @@ DECLARE
     v_nombre_grado VARCHAR(130); v_establecimiento_id BIGINT;
 BEGIN
     -- Autorizacion (CU-86e2w4xdt): capability fail-fast + scope por (EE, sede,
-    -- jornada) del periodo academico. Wrapper sobre fn_assert_permiso_seccion (V29).
+    -- jornada) del periodo academico. Wrapper sobre fn_assert_permiso_seccion.
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante, NULL, NULL, NULL, 'EDITAR');
     IF p_fk_periodo IS NULL THEN
@@ -189,3 +190,53 @@ BEGIN
 END;
 $function$
 ;
+
+-- Fuente: V39__promotion_criteria_module.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_criterio_prom_obtener(
+    p_fk_periodo BIGINT DEFAULT NULL,
+    p_fk_grado   BIGINT DEFAULT NULL,
+    p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
+RETURNS TABLE (
+    id BIGINT, academic_period_id BIGINT, grade_id BIGINT, curriculum_node nodo_curricular,
+    max_failed_recovery NUMERIC, asignatura_obligatoria bool_sn, apply_average_approval bool_sn,
+    base_percentage NUMERIC, minimum_subject_percentage NUMERIC, max_failed_for_average NUMERIC,
+    absence_percentage NUMERIC, max_leveled_subjects NUMERIC, mandatory_subjects JSONB
+)
+LANGUAGE sql STABLE AS $$
+    SELECT cp.PK_TCRITERIO_PROMOCION, cp.FK_TPERIODO_ACADEMICO, cp.FK_TGRADO,
+           cp.NODO_CURRICULAR, cp.CANTIDAD_NIVELAR, cp.ASIGNATURA_OBLIGATORIA,
+           cp.APROBACION_PROMEDIO, cp.DESEMPENHO_MINIMO_GENERAL, cp.DESEMPENHO_MINIMO,
+           cp.MAX_ASIG_PROMEDIO, cp.MINIMO_INASISTENCIAS, cp.MAX_ASIG_NIVELAR_PROMOVIDO,
+           -- Obligatorias del criterio (XOR asignatura/area). Para una asignatura,
+           -- el area se deriva de TASIGNATURA.FK_TAREA (no se guarda por separado).
+           COALESCE((
+               SELECT jsonb_agg(jsonb_build_object(
+                          'id', o.PK_TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA,
+                          'type', CASE WHEN o.FK_TASIGNATURA IS NOT NULL THEN 'subject' ELSE 'area' END,
+                          'subjectId', o.FK_TASIGNATURA,
+                          'subjectName', s.NOMBRE,
+                          'areaId', COALESCE(o.FK_TAREA, s.FK_TAREA),
+                          'areaName', COALESCE(ar.NOMBRE, sar.NOMBRE))
+                          ORDER BY o.PK_TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA)
+                 FROM academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA o
+                 LEFT JOIN academico_test.TASIGNATURA s ON s.PK_TASIGNATURA = o.FK_TASIGNATURA
+                 LEFT JOIN academico_test.TAREA sar ON sar.PK_TAREA = s.FK_TAREA
+                 LEFT JOIN academico_test.TAREA ar  ON ar.PK_TAREA = o.FK_TAREA
+                WHERE o.FK_TCRITERIO_PROMOCION = cp.PK_TCRITERIO_PROMOCION AND o.ACTIVE = TRUE),
+               '[]'::jsonb)
+      FROM academico_test.TCRITERIO_PROMOCION cp
+     WHERE cp.ACTIVE = TRUE
+       AND academico_test.fn_periodo_puede_ver(p_pk_usuario_solicitante, cp.FK_TPERIODO_ACADEMICO)
+       AND ( (p_fk_grado IS NOT NULL AND cp.FK_TGRADO = p_fk_grado)
+          OR (p_fk_grado IS NULL AND cp.FK_TPERIODO_ACADEMICO = p_fk_periodo AND cp.FK_TGRADO IS NULL) );
+$$;
+
+-- Fuente: V39__promotion_criteria_module.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_nodo_curricular_listar(
+    p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
+RETURNS TABLE (key TEXT, label TEXT)
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT * FROM (VALUES ('AS', 'Asignatura'), ('AR', 'Area')) AS t(key, label);
+$$;

@@ -1,44 +1,43 @@
--- fn_asignacion_guardar respondia varios RAISE EXCEPTION con PKs crudos en
--- lugar del nombre legible de la entidad -- mismo patron ya corregido en
--- V99-V102 para periodo/criterio-promocion. Se revisaron las 4 funciones del
--- modulo "asignacion academica" (fn_asignacion_guardar, fn_asignacion_docente,
--- fn_asignacion_pool, fn_asignacion_docente_listar); solo fn_asignacion_guardar
--- tiene RAISE EXCEPTION (las otras 3 son SELECT/consulta pura, sin errores).
+-- ===========================================================================
+-- Asignación Académica — funciones consolidadas (última versión)
+-- Generado: 2026-09-04
 --
--- Cambios dentro de fn_asignacion_guardar:
---   1) "El periodo academico % no existe o no esta activo" -- p_academic_period_id
---      es una FK que el usuario manda. Se agrega lookup del NOMBRE del periodo
---      IGNORANDO ACTIVE: si existe pero inactivo -> nombre + "existe pero esta
---      inactivo"; si no existe -> mensaje generico sin id. Mismo ERRCODE (23503).
---   2) "No existe un funcionario con id %" -- mismo patron que (1): lookup del
---      nombre completo del funcionario (via TUSUARIO) ignorando ACTIVE. Mismo
---      ERRCODE (23503).
---   3) "La asignatura % en el grupo % ya esta asignada a otro docente en el
---      periodo" -- en este punto asignatura y grupo YA fueron confirmados
---      activos por el chequeo de pool inmediatamente anterior (linea "El par
---      debe ser una combinacion valida del pool"), asi que se resuelven sus
---      nombres sin volver a filtrar por ACTIVE. Mismo ERRCODE (23505).
---   4) "La asignatura % en el grupo % esta duplicada en la asignacion" --
---      mismo caso que (3), reutiliza el mismo lookup de nombres.
+-- Este es un documento de REFERENCIA de solo lectura. NO ejecutar directamente,
+-- NO es una migracion Flyway, y NO debe copiarse a postgres/migrations/.
+-- Su unico proposito es reunir en un solo lugar la version vigente de cada
+-- funcion del modulo, ya que con el tiempo varias han sido redefinidas
+-- (CREATE OR REPLACE FUNCTION) en migraciones posteriores.
 --
--- NO tocados (y por que):
---   - "Identificador de asignacion invalido: %" (v_pair) -- ya es el string
---     crudo ingresado por el usuario, no un PK de una entidad (regla 1).
---   - "La asignatura % no corresponde al grupo % en el plan del periodo" --
---     ambiguo: se dispara precisamente cuando el JOIN (grupo activo + plan +
---     asignatura activa + asignatura_plan) NO encuentra fila, con lo cual no
---     sabemos si asignatura/grupo no existen, estan inactivos, o simplemente
---     no pertenecen al plan de ese grado/periodo. No es un lookup de una sola
---     FK tipo regla 4/5 ni una entidad confirmada activa tipo regla 3 -- es
---     una validacion de combinacion invalida entre dos ids no confirmados. Se
---     deja intacto; si se quiere mejorar requeriria decidir un mensaje para
---     cada una de las 3+ causas posibles por separado (fuera del alcance de
---     este parche mecanico).
---   - fn_asignacion_docente, fn_asignacion_pool, fn_asignacion_docente_listar:
---     no tienen RAISE EXCEPTION (son SELECT/plpgsql de solo lectura).
+-- Migraciones fuente consultadas:
+--   - V46__academic_assignment_module.sql
+--   - V109__asignacion_academica_mensajes_error_con_nombre.sql
+--   - V135__query_rows_reportes_modulo_academico.sql
+--   - V190__fn_asignacion_reporte_listar.sql
 --
--- Firma, tipos, DEFAULTs, ERRCODEs y logica de negocio quedan intactos; solo
--- se agregan variables DECLARE y SELECTs de lookup antes de los RAISE.
+-- Verificacion: se corrio
+--   grep -rn "FUNCTION academico_test.<nombre>(" postgres/migrations/
+-- para fn_asignacion_guardar, fn_asignacion_pool, fn_asignacion_docente,
+-- fn_asignacion_docente_listar y fn_asignacion_reporte_listar. No aparecio
+-- ninguna migracion mas nueva que las listadas arriba.
+--
+-- DISCREPANCIA encontrada respecto al mapeo original: se indicaba que
+-- V109 contiene DOS overloads reales y simultaneos de
+-- fn_asignacion_docente_listar (uno ~linea 234, otro ~linea 335, este ultimo
+-- con paginacion). Al abrir V109 completo, ambas definiciones tienen
+-- EXACTAMENTE la misma firma (mismos 8 parametros y mismos tipos: BIGINT,
+-- TEXT, TEXT, BIGINT, INT, INT, TEXT, TEXT en ambos casos) -- no son overloads
+-- distintos en el sentido de Postgres, sino la MISMA funcion definida dos
+-- veces dentro del mismo archivo. El propio V109 lo dice explicitamente en su
+-- comentario (linea ~333): "Reemplaza la definicion de fn_asignacion_docente_listar
+-- de mas arriba en este archivo." Ademas la version de la linea 335 corrige un
+-- bug de scope de la de la linea 234 (filtra/devuelve TSEDE_USUARIO.TLV_ESTADO,
+-- el estado del docente EN LA SEDE del periodo, en vez de TUSUARIO.ESTADO, el
+-- estado global de la cuenta). Por lo tanto abajo se incluye UNA sola version
+-- vigente (la de la linea ~335), no dos overloads.
+-- ===========================================================================
+
+-- Fuente: V109__asignacion_academica_mensajes_error_con_nombre.sql
+SET search_path TO academico_test, public;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_guardar(p_academic_period_id bigint, p_fk_funcionario bigint, p_subject_ids text[], p_pk_usuario_solicitante bigint)
  RETURNS integer
@@ -52,8 +51,12 @@ DECLARE
     v_nombre_asig TEXT;
     v_nombre_grupo TEXT;
 BEGIN
+    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo academico.
     PERFORM academico_test.fn_periodo_gate_escritura(
-        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_academic_period_id));
+        p_pk_usuario_solicitante,
+        academico_test.fn_periodo_establecimiento(p_academic_period_id),
+        academico_test.fn_periodo_sede(p_academic_period_id),
+        academico_test.fn_periodo_jornada(p_academic_period_id), 'EDITAR');
 
     IF NOT EXISTS (
         SELECT 1 FROM academico_test.TPERIODO_ACADEMICO
@@ -180,112 +183,7 @@ BEGIN
 END;
 $function$;
 
--- ===========================================================================
--- Consolidacion adicional para autocontener el modulo "asignacion academica":
--- ademas de fn_asignacion_guardar, el modulo (creado en V46) incluye
--- fn_asignacion_docente (sin cambios de cuerpo entre V46 y V99, no se
--- duplica aqui por regla 5), fn_asignacion_pool y fn_asignacion_docente_listar
--- -- estas dos ULTIMAS SI tuvieron cambios de cuerpo antes de V100 que este
--- archivo aun no incluia (V109 solo tocaba fn_asignacion_guardar):
---
---   fn_asignacion_docente_listar: creada en V46 (SELECT plano, sin paginar).
---     V83__add_asignacion_docentes_listar_endpoint.sql le cambio la firma
---     (agrego p_page_index/p_page_size/p_sort_by/p_sort_dir + total_count,
---     mismo patron de fn_periodo_listar) y de paso dio de alta su endpoint.
---     V84__fix_asignacion_docentes_listar_order_by.sql corrigio un bug de esa
---     misma migracion: las columnas del SELECT interno (subconsulta `t`) no
---     tenian alias, asi que el ORDER BY externo (funcionario_id) y el
---     whitelist de columnas ordenables (u.IDENTIFICACION/u.ESTADO, referencias
---     a un alias que solo existe dentro de la subconsulta) fallaban en
---     runtime. No hay otro cambio de cuerpo antes de V100 -> V84 es el estado
---     vigente, se copia completo abajo (con su DROP FUNCTION IF EXISTS previo,
---     la firma cambio en V83).
---
---   fn_asignacion_pool: creada en V46 (sin columna funcionario_id, y con
---     "p_solo_sin_docente" usado directo sin COALESCE). Cambio de cuerpo en
---     dos pasos antes de V100:
---       V87__fix_asignacion_pool_solo_sin_docente_null.sql: el query-service
---         siempre manda el parametro (aunque el front no lo pida), asi que
---         "no enviado" llega como NULL, no como "omitido" -- con el DEFAULT
---         FALSE original, `NOT p_solo_sin_docente OR ...` evaluaba a NULL y
---         WHERE lo trataba como "no matchea", ocultando filas con docente
---         asignado aun sin pedir el filtro. Fix: COALESCE(p_solo_sin_docente,
---         FALSE).
---       V89__fn_asignacion_pool_incluye_funcionario_actual.sql: agrego la
---         columna funcionario_id (LEFT JOIN a TDOCENTE_ASIGNATURA) para que
---         el front pueda distinguir "libre" de "tomado por otro docente" del
---         de "tomado por el docente que se esta editando" sin depender solo
---         de p_solo_sin_docente. Este CREATE OR REPLACE YA incluye el
---         COALESCE de V87 (no lo revierte), asi que V89 es el estado vigente
---         justo antes de V100 -- se copia completo abajo (con su DROP
---         FUNCTION IF EXISTS previo, la firma de columnas de salida cambio).
---
--- Los cambios de V85/V86/V88 (mover PERIODO_ACADEMICO_ID/ACADEMIC_PERIOD_ID/
--- ID de query-string a path-param) son UPDATE sobre el catalogo public.query
--- (routing del endpoint), no redefinen el cuerpo de ninguna funcion PL/pgSQL
--- -- fuera del alcance de esta consolidacion (que es sobre funciones de
--- academico_test), no se duplican aqui para no arriesgar un UPDATE
--- inconsistente sobre una fila de catalogo que ya fue migrada en su momento.
--- ===========================================================================
-
-SET search_path TO academico_test, public;
-
-DROP FUNCTION IF EXISTS academico_test.fn_asignacion_docente_listar(BIGINT, TEXT, TEXT, BIGINT);
-CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_docente_listar(
-    p_academic_period_id BIGINT,
-    p_estado             TEXT DEFAULT NULL,
-    p_filtro             TEXT DEFAULT NULL,
-    p_pk_usuario         BIGINT DEFAULT NULL,
-    p_page_index         INT  DEFAULT 0,
-    p_page_size          INT  DEFAULT 10,
-    p_sort_by            TEXT DEFAULT NULL,
-    p_sort_dir           TEXT DEFAULT NULL
-)
-RETURNS TABLE (
-    funcionario_id BIGINT, document_number VARCHAR, nombre_completo TEXT, estado TEXT,
-    total_count BIGINT
-)
-LANGUAGE plpgsql STABLE AS $$
-DECLARE
-    v_col TEXT;
-    v_dir TEXT;
-BEGIN
-    v_col := CASE lower(coalesce(p_sort_by, ''))
-        WHEN 'documentnumber' THEN 'document_number'
-        WHEN 'status'         THEN 'estado'
-        ELSE 'nombre_completo'
-    END;
-    v_dir := CASE WHEN lower(coalesce(p_sort_dir, '')) = 'desc' THEN 'DESC' ELSE 'ASC' END;
-
-    RETURN QUERY EXECUTE format($q$
-        SELECT * FROM (
-            SELECT DISTINCT f.PK_TFUNCIONARIO AS funcionario_id, u.IDENTIFICACION AS document_number,
-                   TRIM(concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO))
-                       AS nombre_completo,
-                   u.ESTADO::text AS estado,
-                   count(*) OVER()::BIGINT AS total_count
-              FROM academico_test.TPERIODO_ACADEMICO pa
-              JOIN academico_test.TSEDE_USUARIO su ON su.FK_TSEDE = pa.FK_TSEDE AND su.ACTIVE = TRUE
-                                                  AND su.FK_TROL = 14  -- rol Docente
-              JOIN academico_test.TUSUARIO u      ON u.PK_TUSUARIO = su.FK_TUSUARIO AND u.ACTIVE = TRUE
-              JOIN academico_test.TFUNCIONARIO f  ON f.FK_TUSUARIO = u.PK_TUSUARIO AND f.ACTIVE = TRUE
-             WHERE pa.PK_TPERIODO_ACADEMICO = $1
-               AND academico_test.fn_periodo_usuario_puede_ver($4, $1)
-               AND (NULLIF(TRIM($2),'') IS NULL OR u.ESTADO::text = $2)
-               AND (NULLIF(TRIM($3),'') IS NULL
-                    OR u.IDENTIFICACION ILIKE '%%' || $3 || '%%'
-                    OR TRIM(concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO))
-                       ILIKE '%%' || $3 || '%%')
-        ) t
-         ORDER BY %s %s, funcionario_id
-         LIMIT NULLIF($6, 0)
-        OFFSET COALESCE($5, 0) * COALESCE(NULLIF($6, 0), 0)
-    $q$, v_col, v_dir)
-    USING p_academic_period_id, p_estado, p_filtro, p_pk_usuario, p_page_index, p_page_size;
-END;
-$$;
-
-DROP FUNCTION IF EXISTS academico_test.fn_asignacion_pool(BIGINT, TEXT, BOOLEAN, BIGINT);
+-- Fuente: V109__asignacion_academica_mensajes_error_con_nombre.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_pool(
     p_academic_period_id BIGINT,
     p_filtro             TEXT    DEFAULT NULL,
@@ -309,7 +207,7 @@ LANGUAGE sql STABLE AS $$
              ON da.FK_TGRUPO = gr.PK_TGRUPO AND da.FK_TASIGNATURA = s.PK_TASIGNATURA
             AND da.FK_TPERIODO_ACADEMICO = p_academic_period_id AND da.ACTIVE = TRUE
      WHERE g.FK_TPERIODO_ACADEMICO = p_academic_period_id AND g.ACTIVE = TRUE
-       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_academic_period_id)
+       AND academico_test.fn_periodo_puede_ver(p_pk_usuario, p_academic_period_id)
        AND (NULLIF(TRIM(p_filtro),'') IS NULL
             OR s.NOMBRE  ILIKE '%' || p_filtro || '%'
             OR g.NOMBRE  ILIKE '%' || p_filtro || '%'
@@ -322,16 +220,26 @@ LANGUAGE sql STABLE AS $$
      ORDER BY g.NOMBRE, gr.NOMBRE, s.NOMBRE;
 $$;
 
--- Consolidado desde V126 (fn_asignacion_docente_listar_estado_de_sede_usuario.sql,
--- de la rama feature, eliminada por colision de numero de version con dev):
--- bug de scope -- fn_asignacion_docente_listar filtraba/devolvia
--- TUSUARIO.ESTADO (estado GLOBAL de la cuenta) en vez de
--- TSEDE_USUARIO.TLV_ESTADO (el estado del docente EN LA SEDE de este
--- periodo puntual, el mismo campo que ya usan fn_grupo_crear/
--- fn_grupo_actualizar para validar el director de grupo). Un docente puede
--- estar activo globalmente pero con otro estado en una sede especifica.
--- Reemplaza la definicion de fn_asignacion_docente_listar de mas arriba en
--- este archivo.
+-- Fuente: V46__academic_assignment_module.sql
+-- Asignaciones vigentes de un docente (por documento) en el periodo.
+CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_docente(
+    p_academic_period_id BIGINT, p_fk_funcionario BIGINT,
+    p_pk_usuario BIGINT DEFAULT NULL  -- alcance (global / establecimiento)
+)
+RETURNS TABLE (assignment_id TEXT)
+LANGUAGE sql STABLE AS $$
+    SELECT da.FK_TGRUPO || ':' || da.FK_TASIGNATURA
+      FROM academico_test.TDOCENTE_ASIGNATURA da
+     WHERE da.FK_TPERIODO_ACADEMICO = p_academic_period_id
+       AND da.FK_TFUNCIONARIO = p_fk_funcionario AND da.ACTIVE = TRUE
+       AND academico_test.fn_periodo_puede_ver(p_pk_usuario, p_academic_period_id);
+$$;
+
+-- Fuente: V109__asignacion_academica_mensajes_error_con_nombre.sql
+-- NOTA: ver discrepancia explicada en el encabezado del archivo -- esta es la
+-- UNICA version vigente de fn_asignacion_docente_listar (la definicion previa
+-- en el mismo V109, con la misma firma, queda reemplazada por esta; no son
+-- dos overloads simultaneos).
 CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_docente_listar(p_academic_period_id bigint, p_estado text DEFAULT NULL::text, p_filtro text DEFAULT NULL::text, p_pk_usuario bigint DEFAULT NULL::bigint, p_page_index integer DEFAULT 0, p_page_size integer DEFAULT 10, p_sort_by text DEFAULT NULL::text, p_sort_dir text DEFAULT NULL::text)
  RETURNS TABLE(funcionario_id bigint, document_number character varying, nombre_completo text, estado text, total_count bigint)
  LANGUAGE plpgsql
@@ -361,7 +269,7 @@ BEGIN
               JOIN academico_test.TUSUARIO u      ON u.PK_TUSUARIO = su.FK_TUSUARIO AND u.ACTIVE = TRUE
               JOIN academico_test.TFUNCIONARIO f  ON f.FK_TUSUARIO = u.PK_TUSUARIO AND f.ACTIVE = TRUE
              WHERE pa.PK_TPERIODO_ACADEMICO = $1
-               AND academico_test.fn_periodo_usuario_puede_ver($4, $1)
+               AND academico_test.fn_periodo_puede_ver($4, $1)
                AND (NULLIF(TRIM($2),'') IS NULL OR su.TLV_ESTADO = $2)
                AND (NULLIF(TRIM($3),'') IS NULL
                     OR u.IDENTIFICACION ILIKE '%%' || $3 || '%%'
@@ -374,4 +282,58 @@ BEGIN
     $q$, v_col, v_dir)
     USING p_academic_period_id, p_estado, p_filtro, p_pk_usuario, p_page_index, p_page_size;
 END;
+$$;
+
+-- Fuente: V190__fn_asignacion_reporte_listar.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_reporte_listar(
+    p_fk_periodo     BIGINT,
+    p_fk_funcionario BIGINT[] DEFAULT NULL,
+    p_fk_grado       BIGINT[] DEFAULT NULL,
+    p_fk_asignatura  BIGINT[] DEFAULT NULL,
+    p_fk_jornada     BIGINT[] DEFAULT NULL,
+    p_estado         TEXT     DEFAULT NULL,
+    p_pk_usuario     BIGINT   DEFAULT NULL,
+    p_page_index     INT      DEFAULT 0,
+    p_page_size      INT      DEFAULT 10
+)
+RETURNS TABLE (
+    docente_id BIGINT, document_number VARCHAR, docente_nombre TEXT, estado TEXT,
+    asignatura_id BIGINT, asignatura VARCHAR,
+    grado_id BIGINT, grado_name VARCHAR,
+    grupo_id BIGINT, grupo_name VARCHAR,
+    jornada_id BIGINT, jornada_name VARCHAR,
+    total_count BIGINT
+)
+LANGUAGE sql STABLE AS $$
+    SELECT f.PK_TFUNCIONARIO, u.IDENTIFICACION,
+           TRIM(regexp_replace(
+               concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO),
+               '\s+', ' ', 'g')),
+           su.TLV_ESTADO::text,
+           s.PK_TASIGNATURA, s.NOMBRE,
+           g.PK_TGRADO, g.NOMBRE,
+           gr.PK_TGRUPO, gr.NOMBRE,
+           jor.PK_LISTA_VALOR, jor.NOMBRE,
+           count(*) OVER()::BIGINT
+      FROM academico_test.TDOCENTE_ASIGNATURA da
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = da.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TGRUPO gr              ON gr.PK_TGRUPO = da.FK_TGRUPO
+      JOIN academico_test.TGRADO g               ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TLISTA_VALOR jor       ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
+      JOIN academico_test.TASIGNATURA s          ON s.PK_TASIGNATURA = da.FK_TASIGNATURA
+      JOIN academico_test.TFUNCIONARIO f         ON f.PK_TFUNCIONARIO = da.FK_TFUNCIONARIO
+      JOIN academico_test.TUSUARIO u             ON u.PK_TUSUARIO = f.FK_TUSUARIO
+ LEFT JOIN academico_test.TSEDE_USUARIO su        ON su.FK_TUSUARIO = u.PK_TUSUARIO
+                                                  AND su.FK_TSEDE = pa.FK_TSEDE
+                                                  AND su.FK_TROL = 14 AND su.ACTIVE = TRUE
+     WHERE da.FK_TPERIODO_ACADEMICO = p_fk_periodo AND da.ACTIVE = TRUE
+       AND academico_test.fn_periodo_puede_ver(p_pk_usuario, p_fk_periodo)
+       AND (p_fk_funcionario IS NULL OR CARDINALITY(p_fk_funcionario) = 0 OR f.PK_TFUNCIONARIO = ANY(p_fk_funcionario))
+       AND (p_fk_grado       IS NULL OR CARDINALITY(p_fk_grado)       = 0 OR g.PK_TGRADO       = ANY(p_fk_grado))
+       AND (p_fk_asignatura  IS NULL OR CARDINALITY(p_fk_asignatura)  = 0 OR s.PK_TASIGNATURA  = ANY(p_fk_asignatura))
+       AND (p_fk_jornada     IS NULL OR CARDINALITY(p_fk_jornada)     = 0 OR jor.PK_LISTA_VALOR = ANY(p_fk_jornada))
+       AND (NULLIF(TRIM(p_estado), '') IS NULL OR su.TLV_ESTADO = p_estado)
+     ORDER BY g.NOMBRE, gr.NOMBRE, s.NOMBRE, u.PRIMER_APELLIDO
+     LIMIT NULLIF(p_page_size, 0)
+    OFFSET COALESCE(p_page_index, 0) * COALESCE(NULLIF(p_page_size, 0), 0);
 $$;
