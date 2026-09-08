@@ -29,7 +29,7 @@
 -- public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT) -- el
 -- caller nunca lo manda (evita que alguien se haga pasar por otro usuario).
 --
--- Endpoints registrados (11 del modulo + 2 catalogos reusados, ninguno
+-- Endpoints registrados (12 del modulo + 2 catalogos reusados, ninguno
 -- nuevo en PL/pgSQL -- fn_nivel_ensenanza_listar de V43 y
 -- fn_area_asignatura_listar de V40 nunca habian sido expuestos como query):
 --
@@ -40,6 +40,7 @@
 --     POST   /referentes-curriculares/query                   fn_refcurr_listar (paginado)
 --     GET    /referentes-curriculares/:ID                     fn_refcurr_buscar_por_pk
 --     GET    /referentes-curriculares/:ID/areas                fn_refcurr_areas_listar
+--     GET    /referentes-curriculares/:ID/niveles              fn_refcurr_niveles_listar
 --   Enunciado / evidencia:
 --     POST   /referentes-curriculares/:ID/enunciados           fn_refenunc_crear
 --     PATCH  /referentes-curriculares/enunciados/:ID           fn_refenunc_actualizar
@@ -53,6 +54,14 @@
 --   son TLISTA_VALOR (V212), ya cubiertos por el catalogo generico
 --   GET /eval-col/select/:CATEGORIA (V94) -- el front llama
 --   /select/ENFOQUE_PEDAGOGICO y /select/TIPO_EVALUACION directo.
+--
+-- Nivel educativo: la relacion referente <-> TNIVEL_ENSENANZA es N:N
+-- (TREFERENTE_CURRICULAR_NIVEL, V212), asi que crear/editar reciben
+-- BODY.NIVELES_IDS (BIGINT[]) en vez del viejo BODY.NIVEL_EDUCATIVO
+-- (BIGINT). El array llega SIEMPRE por body (el ParamBinder no arma arrays
+-- desde querystring, igual que BODY.AREAS_IDS). El filtro del listado
+-- (BODY.FILTERS.NIVEL_EDUCATIVO) sigue siendo un solo nivel: el referente
+-- califica si CUALQUIERA de sus niveles coincide.
 --
 -- role_query: SOLO 'CEVAL-SUPER_ADMINISTRADOR' (public.role; academico_test
 -- .trol.codigo='SUPER_ADMINISTRADOR', ver V113) en TODOS -- incluidos los
@@ -80,7 +89,7 @@ SELECT
     p_pk_usuario_solicitante     => public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     p_nombre                     => CAST(:BODY.NOMBRE AS VARCHAR),
     p_descripcion                => CAST(:BODY.DESCRIPCION AS VARCHAR),
-    p_fk_tnivel_ensenanza        => CAST(:BODY.NIVEL_EDUCATIVO AS BIGINT),
+    p_fk_tnivel_ensenanza_ids    => CAST(:BODY.NIVELES_IDS AS BIGINT[]),
     p_fk_tlv_enfoque_pedagogico  => CAST(:BODY.ENFOQUE_PEDAGOGICO AS BIGINT),
     p_fk_tlv_tipo_evaluacion     => CAST(:BODY.TIPO_EVALUACION AS BIGINT),
     p_instrumento                => CAST(:BODY.INSTRUMENTO AS VARCHAR),
@@ -98,7 +107,7 @@ SELECT
     '{
        "BODY.NOMBRE":             "VARCHAR",
        "BODY.DESCRIPCION":        "VARCHAR",
-       "BODY.NIVEL_EDUCATIVO":    "BIGINT",
+       "BODY.NIVELES_IDS":        "BIGINT[]",
        "BODY.ENFOQUE_PEDAGOGICO": "BIGINT",
        "BODY.TIPO_EVALUACION":    "BIGINT",
        "BODY.INSTRUMENTO":        "VARCHAR",
@@ -111,7 +120,7 @@ SELECT
        "BODY.ESTADO":             "VARCHAR",
        "BODY.AREAS_IDS":          "BIGINT[]"
      }'::jsonb,
-    'V214 -- crea un referente curricular (DBA, Propositos e Imprescindibles, etc.); BODY.AREAS_IDS vacio/ausente = aplica a todas las areas'
+    'V214 -- crea un referente curricular (DBA, Propositos e Imprescindibles, etc.); BODY.NIVELES_IDS (BIGINT[]) es obligatorio y debe traer al menos un nivel educativo (relacion N:N); BODY.AREAS_IDS vacio/ausente = aplica a todas las areas'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (uuid) DO UPDATE
@@ -132,7 +141,7 @@ SELECT
     p_pk_referente_curricular    => CAST(:PARAM.ID AS BIGINT),
     p_nombre                     => CAST(:BODY.NOMBRE AS VARCHAR),
     p_descripcion                => CAST(:BODY.DESCRIPCION AS VARCHAR),
-    p_fk_tnivel_ensenanza        => CAST(:BODY.NIVEL_EDUCATIVO AS BIGINT),
+    p_fk_tnivel_ensenanza_ids    => CAST(:BODY.NIVELES_IDS AS BIGINT[]),
     p_fk_tlv_enfoque_pedagogico  => CAST(:BODY.ENFOQUE_PEDAGOGICO AS BIGINT),
     p_fk_tlv_tipo_evaluacion     => CAST(:BODY.TIPO_EVALUACION AS BIGINT),
     p_nivel_1_etiqueta             => CAST(:BODY.NIVEL_1_ETIQUETA AS VARCHAR),
@@ -151,7 +160,7 @@ SELECT
        "PARAM.ID":                "BIGINT",
        "BODY.NOMBRE":             "VARCHAR",
        "BODY.DESCRIPCION":        "VARCHAR",
-       "BODY.NIVEL_EDUCATIVO":    "BIGINT",
+       "BODY.NIVELES_IDS":        "BIGINT[]",
        "BODY.ENFOQUE_PEDAGOGICO": "BIGINT",
        "BODY.TIPO_EVALUACION":    "BIGINT",
        "BODY.NIVEL_1_ETIQUETA":   "VARCHAR",
@@ -164,7 +173,7 @@ SELECT
        "BODY.ESTADO":             "VARCHAR",
        "BODY.AREAS_IDS":          "BIGINT[]"
      }'::jsonb,
-    'V214 -- PATCH parcial de un referente curricular; cada campo ausente preserva su valor actual. BODY.AREAS_IDS ausente = no tocar areas, [] = vaciarlas'
+    'V214 -- PATCH parcial de un referente curricular; cada campo ausente preserva su valor actual. BODY.NIVELES_IDS ausente = no tocar los niveles educativos, array = reemplazo completo del set (vacio da 22023: siempre queda al menos un nivel). BODY.AREAS_IDS ausente = no tocar areas, [] = vaciarlas'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (uuid) DO UPDATE
@@ -287,7 +296,31 @@ ON CONFLICT (uuid) DO UPDATE
        detail = EXCLUDED.detail;
 
 -- ---------------------------------------------------------------------------
--- 7. Enunciado/evidencia — CREAR (p_fk_padre en el body: ausente/NULL =
+-- 7. Referente — NIVELES educativos asociados (multi-select "Nivel
+--    educativo" del formulario de edicion; relacion N:N de V212)
+-- ---------------------------------------------------------------------------
+INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
+                           path_template, execution_mode, http_method, param_types, detail)
+SELECT
+    'refcurr-niveles',
+    $q$SELECT * FROM academico_test.fn_refcurr_niveles_listar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:PARAM.ID AS BIGINT)
+);$q$,
+    'postgres', false, false, m.id_microservice,
+    '/referentes-curriculares/:ID/niveles', 'SELECT', 'GET',
+    '{"PARAM.ID": "BIGINT"}'::jsonb,
+    'V214 -- niveles educativos ACTIVE asociados al referente (N:N); el detalle tambien los trae en su columna niveles'
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (uuid) DO UPDATE
+   SET query = EXCLUDED.query, param_types = EXCLUDED.param_types,
+       path_template = EXCLUDED.path_template, http_method = EXCLUDED.http_method,
+       execution_mode = EXCLUDED.execution_mode, microservice_id = EXCLUDED.microservice_id,
+       detail = EXCLUDED.detail;
+
+-- ---------------------------------------------------------------------------
+-- 8. Enunciado/evidencia — CREAR (p_fk_padre en el body: ausente/NULL =
 --    enunciado nivel 1; PK de un enunciado ya existente = evidencia nivel 2)
 -- ---------------------------------------------------------------------------
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
@@ -321,7 +354,7 @@ ON CONFLICT (uuid) DO UPDATE
        detail = EXCLUDED.detail;
 
 -- ---------------------------------------------------------------------------
--- 8. Enunciado/evidencia — ACTUALIZAR
+-- 9. Enunciado/evidencia — ACTUALIZAR
 -- ---------------------------------------------------------------------------
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
                            path_template, execution_mode, http_method, param_types, detail)
@@ -354,7 +387,7 @@ ON CONFLICT (uuid) DO UPDATE
        detail = EXCLUDED.detail;
 
 -- ---------------------------------------------------------------------------
--- 9. Enunciado/evidencia — ELIMINAR (soft delete; cascada a evidencias si
+-- 10. Enunciado/evidencia — ELIMINAR (soft delete; cascada a evidencias si
 --    es un enunciado). DELETE -> PATCH, ver cabecera.
 -- ---------------------------------------------------------------------------
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
@@ -378,7 +411,7 @@ ON CONFLICT (uuid) DO UPDATE
        detail = EXCLUDED.detail;
 
 -- ---------------------------------------------------------------------------
--- 10. Enunciados de un referente (panel izquierdo pestaña Enunciado),
+-- 11. Enunciados de un referente (panel izquierdo pestaña Enunciado),
 --     filtro opcional por area via querystring.
 -- ---------------------------------------------------------------------------
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
@@ -403,7 +436,7 @@ ON CONFLICT (uuid) DO UPDATE
        detail = EXCLUDED.detail;
 
 -- ---------------------------------------------------------------------------
--- 11. Evidencias de UN enunciado (tabla "Evidencias del enunciado")
+-- 12. Evidencias de UN enunciado (tabla "Evidencias del enunciado")
 -- ---------------------------------------------------------------------------
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
                            path_template, execution_mode, http_method, param_types, detail)
@@ -426,7 +459,7 @@ ON CONFLICT (uuid) DO UPDATE
        detail = EXCLUDED.detail;
 
 -- ---------------------------------------------------------------------------
--- 12. Catalogo — Niveles de ensenanza (select "Nivel educativo"). Reusa
+-- 13. Catalogo — Niveles de ensenanza (select "Nivel educativo"). Reusa
 --     fn_nivel_ensenanza_listar (V43), nunca antes expuesta como query.
 -- ---------------------------------------------------------------------------
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
@@ -448,7 +481,7 @@ ON CONFLICT (uuid) DO UPDATE
        detail = EXCLUDED.detail;
 
 -- ---------------------------------------------------------------------------
--- 13. Catalogo — Areas/asignaturas (select "Areas o dimensiones"). Reusa
+-- 14. Catalogo — Areas/asignaturas (select "Areas o dimensiones"). Reusa
 --     fn_area_asignatura_listar (V40), nunca antes expuesta como query.
 -- ---------------------------------------------------------------------------
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
@@ -470,7 +503,7 @@ ON CONFLICT (uuid) DO UPDATE
        detail = EXCLUDED.detail;
 
 -- ---------------------------------------------------------------------------
--- 14. role_query — SOLO CEVAL-SUPER_ADMINISTRADOR, en las 13 filas de arriba.
+-- 15. role_query — SOLO CEVAL-SUPER_ADMINISTRADOR, en las 14 filas de arriba.
 -- ---------------------------------------------------------------------------
 INSERT INTO public.role_query (role_id, query_id)
 SELECT r.id_role, q.id_query
@@ -480,7 +513,7 @@ SELECT r.id_role, q.id_query
  WHERE r.name = 'CEVAL-SUPER_ADMINISTRADOR'
    AND q.uuid IN (
        'refcurr-crear', 'refcurr-actualizar', 'refcurr-eliminar', 'refcurr-listar',
-       'refcurr-detalle', 'refcurr-areas',
+       'refcurr-detalle', 'refcurr-areas', 'refcurr-niveles',
        'refenunc-crear', 'refenunc-actualizar', 'refenunc-eliminar',
        'refenunc-listar', 'refenunc-evidencias',
        'cat-niveles-ensenanza', 'cat-areas-asignaturas'
