@@ -3,7 +3,7 @@
     "_postman_id": "b7e3c1a2-4d5f-4a6b-9c8d-refcurricular1",
     "name": "SSO - Referentes Curriculares (CRUD)",
     "description": {
-      "content": "CRUD de **Referentes Curriculares** (DBA, Propositos e Imprescindibles, etc.) y su arbol de enunciados/evidencias -- V213 (funciones PL/pgSQL) + V214 (endpoints `public.query`).\n\n## Autorizacion\n\nDos capas:\n\n1. **Gateway (`role_query`)**: HOY solo el rol `CEVAL-SUPER_ADMINISTRADOR` tiene fila `role_query` para estos 13 endpoints. Cualquier otro rol recibe `403` del gateway antes de llegar a la base de datos.\n2. **Gate de negocio (`fn_assert_permiso_seccion`)**: dentro de cada funcion PL/pgSQL. Con el `role_query` actual, en la practica solo `SUPER_ADMIN` (nivel 0 de `CATEGORIA_ROL`) pasa este segundo gate tambien -- es el bypass de nivel 0. Si el super admin le concede el menu `REFERENTES_CURRICULARES` a otro rol (fuera del alcance de esta migracion, se hace desde la plataforma), ese rol necesitaria ADEMAS una fila `role_query` nueva para poder invocar el endpoint.\n\n## Reglas de negocio a tener en cuenta al probar\n\n- **Enunciados antes que evidencias**: `POST .../enunciados` con `ENUNCIADO_PADRE` exige que ese enunciado YA exista y este activo -- si no, `P0002`.\n- **Un solo nivel de anidamiento**: el padre de una evidencia debe ser el un enunciado de nivel 1 (sin padre); anidar una evidencia sobre otra evidencia da `22023`.\n- **Area del enunciado siempre opcional**: `AREA_ID` ausente/NULL = el enunciado aplica a TODAS las areas del referente, tenga o no areas asociadas. Si se manda, debe ser una de las areas ACTIVAS de ESE referente (`23503` si no).\n- **Una evidencia nunca elige area propia** (hereda la del enunciado padre): mandar `AREA_ID` en una evidencia da `22023`.\n- **`BODY.AREAS_IDS` en crear/editar referente**: ausente/`null` en editar = no tocar las areas actuales; `[]` = vaciarlas (\"aplica a todas\"); un array con PKs = reemplazo completo del set -- bloqueado (`23503`) si intenta quitar un area que todavia tiene enunciados vivos amarrados.\n- **`ESTADO` ('A'/'I') vs borrado logico**: `ESTADO` es el toggle Activo/Inactivo que edita el usuario (se puede crear un referente ya inactivo); el borrado real (soft delete, este CRUD) es aparte -- los endpoints `.../eliminar` (PATCH, no DELETE: `ck_query_http_method` no admite DELETE).\n\n## Selects reusados (sin endpoint nuevo)\n\n- **Enfoque pedagogico** / **Tipo de evaluacion**: `GET {{baseUrl}}/api/eval-col/select/ENFOQUE_PEDAGOGICO` y `GET {{baseUrl}}/api/eval-col/select/TIPO_EVALUACION` (catalogo generico existente sobre `TLISTA_VALOR`, categorias seedeadas en V212).\n\n## Errores comunes\n\n| Codigo | Causa |\n|---|---|\n| `404` (antes de reiniciar) | La fila `query` es nueva -- `query-service-eval-col` necesita reiniciarse para tomarla (ver nota en README de deploy). |\n| `403` | Rol sin fila `role_query`, o gate interno (`fn_assert_permiso_seccion`) rechazado -- solo SUPER_ADMIN por ahora. |\n| `422` / `400` | Validacion de negocio (`22023`), FK inexistente (`23503`), duplicado (`23505`) o no encontrado (`P0002`) -- ver el mapeo de `PostgresErrorMapper`. |\n\n## Orden de uso sugerido\n\n1. Login\n2. Catalogos (niveles / areas) -- para tener PKs validos a mano\n3. Crear referente -> guarda `pkReferenteCurricular`\n4. Areas del referente / Detalle / Listado\n5. Crear enunciado -> guarda `pkReferenteEnunciado`\n6. Crear evidencia (usa `pkReferenteEnunciado` como `ENUNCIADO_PADRE`)\n7. Listar enunciados / evidencias\n8. Actualizar / Eliminar (enunciado, luego referente)",
+      "content": "CRUD de **Referentes Curriculares** (DBA, Propositos e Imprescindibles, etc.) y su arbol de enunciados/evidencias -- V213 (funciones PL/pgSQL) + V214 (endpoints `public.query`).\n\n## Autorizacion\n\nDos capas:\n\n1. **Gateway (`role_query`)**: HOY solo el rol `CEVAL-SUPER_ADMINISTRADOR` tiene fila `role_query` para estos 14 endpoints. Cualquier otro rol recibe `403` del gateway antes de llegar a la base de datos.\n2. **Gate de negocio (`fn_assert_permiso_seccion`)**: dentro de cada funcion PL/pgSQL. Con el `role_query` actual, en la practica solo `SUPER_ADMIN` (nivel 0 de `CATEGORIA_ROL`) pasa este segundo gate tambien -- es el bypass de nivel 0. Si el super admin le concede el menu `REFERENTES_CURRICULARES` a otro rol (fuera del alcance de esta migracion, se hace desde la plataforma), ese rol necesitaria ADEMAS una fila `role_query` nueva para poder invocar el endpoint.\n\n## Reglas de negocio a tener en cuenta al probar\n\n- **Enunciados antes que evidencias**: `POST .../enunciados` con `ENUNCIADO_PADRE` exige que ese enunciado YA exista y este activo -- si no, `P0002`.\n- **Un solo nivel de anidamiento**: el padre de una evidencia debe ser el un enunciado de nivel 1 (sin padre); anidar una evidencia sobre otra evidencia da `22023`.\n- **Area del enunciado siempre opcional**: `AREA_ID` ausente/NULL = el enunciado aplica a TODAS las areas del referente, tenga o no areas asociadas. Si se manda, debe ser una de las areas ACTIVAS de ESE referente (`23503` si no).\n- **Una evidencia nunca elige area propia** (hereda la del enunciado padre): mandar `AREA_ID` en una evidencia da `22023`.\n- **`BODY.NIVELES_IDS` en crear/editar referente**: la relacion referente <-> nivel educativo es N:N (`TREFERENTE_CURRICULAR_NIVEL`), asi que el nivel llega como ARRAY de PKs. Es obligatorio al crear (al menos uno, `22023` si falta o viene vacio); al editar, ausente = no tocar los niveles y `[]` da `22023` (nunca se queda sin nivel). La unicidad del nombre es POR NIVEL: dos referentes activos pueden llamarse igual si no comparten ningun nivel (`23505` si se solapan).\n- **`BODY.AREAS_IDS` en crear/editar referente**: ausente/`null` en editar = no tocar las areas actuales; `[]` = vaciarlas (\"aplica a todas\"); un array con PKs = reemplazo completo del set -- bloqueado (`23503`) si intenta quitar un area que todavia tiene enunciados vivos amarrados.\n- **`ESTADO` ('A'/'I') vs borrado logico**: `ESTADO` es el toggle Activo/Inactivo que edita el usuario (se puede crear un referente ya inactivo); el borrado real (soft delete, este CRUD) es aparte -- los endpoints `.../eliminar` (PATCH, no DELETE: `ck_query_http_method` no admite DELETE).\n\n## Selects reusados (sin endpoint nuevo)\n\n- **Enfoque pedagogico** / **Tipo de evaluacion**: `GET {{baseUrl}}/api/eval-col/select/ENFOQUE_PEDAGOGICO` y `GET {{baseUrl}}/api/eval-col/select/TIPO_EVALUACION` (catalogo generico existente sobre `TLISTA_VALOR`, categorias seedeadas en V212).\n\n## Errores comunes\n\n| Codigo | Causa |\n|---|---|\n| `404` (antes de reiniciar) | La fila `query` es nueva -- `query-service-eval-col` necesita reiniciarse para tomarla (ver nota en README de deploy). |\n| `403` | Rol sin fila `role_query`, o gate interno (`fn_assert_permiso_seccion`) rechazado -- solo SUPER_ADMIN por ahora. |\n| `422` / `400` | Validacion de negocio (`22023`), FK inexistente (`23503`), duplicado (`23505`) o no encontrado (`P0002`) -- ver el mapeo de `PostgresErrorMapper`. |\n\n## Orden de uso sugerido\n\n1. Login\n2. Catalogos (niveles / areas) -- para tener PKs validos a mano\n3. Crear referente -> guarda `pkReferenteCurricular`\n4. Areas / niveles del referente / Detalle / Listado\n5. Crear enunciado -> guarda `pkReferenteEnunciado`\n6. Crear evidencia (usa `pkReferenteEnunciado` como `ENUNCIADO_PADRE`)\n7. Listar enunciados / evidencias\n8. Actualizar / Eliminar (enunciado, luego referente)",
       "type": "text/markdown"
     },
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -53,7 +53,7 @@
           "path": ["api", "eval-col", "catalogos", "niveles-ensenanza"]
         },
         "description": {
-          "content": "`fn_nivel_ensenanza_listar` (V43), reusada tal cual, nunca antes expuesta como query. Devuelve `[{ id, codigo, nombre }]` -- `id` alimenta `BODY.NIVEL_EDUCATIVO` al crear/editar un referente. Sin restricciones de rol propias mas alla de `role_query` (solo SUPER_ADMIN por ahora, ver descripcion de la coleccion).",
+          "content": "`fn_nivel_ensenanza_listar` (V43), reusada tal cual, nunca antes expuesta como query. Devuelve `[{ id, codigo, nombre }]` -- `id` alimenta `BODY.NIVELES_IDS` (array) al crear/editar un referente -- la relacion referente <-> nivel es N:N, un referente puede aplicar a varios niveles. Sin restricciones de rol propias mas alla de `role_query` (solo SUPER_ADMIN por ahora, ver descripcion de la coleccion).",
           "type": "text/markdown"
         }
       },
@@ -64,7 +64,9 @@
             "type": "text/javascript",
             "exec": [
               "const d = pm.response.json();",
-              "if (Array.isArray(d) && d[0]) { pm.environment.set(\"pkNivelEnsenanza\", d[0].id); }"
+              "if (Array.isArray(d) && d[0]) { pm.environment.set(\"pkNivelEnsenanza\", d[0].id); }",
+              "// Segundo nivel (si el catalogo trae mas de uno) para probar el multi-nivel; si no, se repite el primero.",
+              "if (Array.isArray(d) && d[0]) { pm.environment.set(\"pkNivelEnsenanza2\", (d[1] || d[0]).id); }"
             ]
           }
         }
@@ -114,10 +116,10 @@
         "body": {
           "mode": "raw",
           "options": { "raw": { "language": "json" } },
-          "raw": "{\n  \"NOMBRE\": \"DBA - Primaria\",\n  \"DESCRIPCION\": \"Derechos Basicos de Aprendizaje para educacion basica primaria.\",\n  \"NIVEL_EDUCATIVO\": {{pkNivelEnsenanza}},\n  \"ENFOQUE_PEDAGOGICO\": 0,\n  \"TIPO_EVALUACION\": 0,\n  \"INSTRUMENTO\": \"Unidad tematica\",\n  \"INSTRUMENTO_INFO\": \"Incluye planes de area, rubricas, informes de logro.\",\n  \"NORMATIVIDAD\": \"Decreto 1290 de 2009.\\nLey 115 de 1994 (Art. 77).\\nDecreto 1411 de 2022.\",\n  \"ANIO_DESDE\": 2023,\n  \"ANIO_HASTA\": null,\n  \"NIVEL_1_ETIQUETA\": \"Enunciado\",\n  \"NIVEL_2_ETIQUETA\": \"Evidencia\",\n  \"ESTADO\": \"A\",\n  \"AREAS_IDS\": [{{pkTareaAsignatura}}]\n}"
+          "raw": "{\n  \"NOMBRE\": \"DBA - Primaria\",\n  \"DESCRIPCION\": \"Derechos Basicos de Aprendizaje para educacion basica primaria.\",\n  \"NIVELES_IDS\": [{{pkNivelEnsenanza}}, {{pkNivelEnsenanza2}}],\n  \"ENFOQUE_PEDAGOGICO\": 0,\n  \"TIPO_EVALUACION\": 0,\n  \"INSTRUMENTO\": \"Unidad tematica\",\n  \"INSTRUMENTO_INFO\": \"Incluye planes de area, rubricas, informes de logro.\",\n  \"NORMATIVIDAD\": \"Decreto 1290 de 2009.\\nLey 115 de 1994 (Art. 77).\\nDecreto 1411 de 2022.\",\n  \"ANIO_DESDE\": 2023,\n  \"ANIO_HASTA\": null,\n  \"NIVEL_1_ETIQUETA\": \"Enunciado\",\n  \"NIVEL_2_ETIQUETA\": \"Evidencia\",\n  \"ESTADO\": \"A\",\n  \"AREAS_IDS\": [{{pkTareaAsignatura}}]\n}"
         },
         "description": {
-          "content": "`fn_refcurr_crear`. Campos obligatorios: `NOMBRE` (<=150), `DESCRIPCION` (<=400), `NIVEL_EDUCATIVO` (BIGINT, PK de `/catalogos/niveles-ensenanza`), `ENFOQUE_PEDAGOGICO` / `TIPO_EVALUACION` (BIGINT, PK de `GET /select/ENFOQUE_PEDAGOGICO` y `/select/TIPO_EVALUACION`), `INSTRUMENTO` (<=400), `NORMATIVIDAD` (<=400), `ANIO_DESDE` (INTEGER). Opcionales: `NIVEL_1_ETIQUETA`/`NIVEL_2_ETIQUETA` (default 'Enunciado'/'Evidencia' -- texto libre, sin regla especial para Preescolar), `INSTRUMENTO_INFO` (<=400), `ANIO_HASTA` (INTEGER, debe ser >= ANIO_DESDE), `ESTADO` ('A'/'I', default 'A' -- se puede crear inactivo), `AREAS_IDS` (BIGINT[], ausente/vacio = aplica a todas las areas).\n\n**Errores**: `22023` obligatorio faltante / vigencia invertida / estado invalido; `23503` FK inexistente o inactiva (nivel, enfoque, tipo evaluacion, alguna area); `23505` nombre duplicado entre activos; `403` gate.\n\nGuarda `id` de la respuesta en `pkReferenteCurricular`.",
+          "content": "`fn_refcurr_crear`. Campos obligatorios: `NOMBRE` (<=150), `DESCRIPCION` (<=400), `NIVELES_IDS` (BIGINT[], PKs de `/catalogos/niveles-ensenanza` -- relacion N:N, al menos un nivel; `22023` si llega vacio o ausente), `ENFOQUE_PEDAGOGICO` / `TIPO_EVALUACION` (BIGINT, PK de `GET /select/ENFOQUE_PEDAGOGICO` y `/select/TIPO_EVALUACION`), `INSTRUMENTO` (<=400), `NORMATIVIDAD` (<=400), `ANIO_DESDE` (INTEGER). Opcionales: `NIVEL_1_ETIQUETA`/`NIVEL_2_ETIQUETA` (default 'Enunciado'/'Evidencia' -- texto libre, sin regla especial para Preescolar), `INSTRUMENTO_INFO` (<=400), `ANIO_HASTA` (INTEGER, debe ser >= ANIO_DESDE), `ESTADO` ('A'/'I', default 'A' -- se puede crear inactivo), `AREAS_IDS` (BIGINT[], ausente/vacio = aplica a todas las areas).\n\n**Errores**: `22023` obligatorio faltante / vigencia invertida / estado invalido; `23503` FK inexistente o inactiva (nivel, enfoque, tipo evaluacion, alguna area); `23505` nombre duplicado entre activos que comparte al menos un nivel educativo (dos referentes pueden llamarse igual si sus niveles son disjuntos); `403` gate.\n\nGuarda `id` de la respuesta en `pkReferenteCurricular`.",
           "type": "text/markdown"
         }
       },
@@ -177,7 +179,7 @@
           "raw": "{\n  \"FILTERS\": {\n    \"SEARCH\": \"DBA\",\n    \"NIVEL_EDUCATIVO\": null,\n    \"ENFOQUE_PEDAGOGICO\": null,\n    \"TIPO_EVALUACION\": null,\n    \"ESTADO\": null\n  },\n  \"SORTING\": { \"ID\": \"nombre\", \"DESC\": false },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 20\n}"
         },
         "description": {
-          "content": "`fn_refcurr_listar`. Todos los campos de `FILTERS` son opcionales (null = sin ese filtro). `SORTING.ID` in (`nombre`|`nivel_educativo`|`instrumento`|`estado`). `PAGEINDEX` (0-based) x `PAGESIZE` -> `p_offset`/`p_limite`. La respuesta trae `total_count` (mismo valor repetido en cada fila) para `pageCount`.",
+          "content": "`fn_refcurr_listar`. Todos los campos de `FILTERS` son opcionales (null = sin ese filtro). `SORTING.ID` in (`nombre`|`nivel_educativo`|`instrumento`|`estado`). `PAGEINDEX` (0-based) x `PAGESIZE` -> `p_offset`/`p_limite`. El filtro `FILTERS.NIVEL_EDUCATIVO` es UN solo nivel: el referente califica si CUALQUIERA de sus niveles coincide. Cada fila trae `niveles_educativos` (nombres concatenados, tambien la clave de orden de `nivel_educativo`) y `niveles` (`[{id, codigo, nombre}]`, para chips y para precargar el multi-select). La respuesta trae `total_count` (mismo valor repetido en cada fila) para `pageCount`.",
           "type": "text/markdown"
         }
       }
@@ -193,7 +195,7 @@
           "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}"]
         },
         "description": {
-          "content": "`fn_refcurr_buscar_por_pk`. Pestaña \"Información general\" del detalle -- nombres de nivel/enfoque/tipo ya resueltos. 0 filas (cuerpo vacio) si el `:ID` no existe: el front lo trata como 404.",
+          "content": "`fn_refcurr_buscar_por_pk`. Pestaña \"Información general\" del detalle -- enfoque/tipo con nombre ya resuelto y `niveles` como arreglo `[{id, codigo, nombre}]` (N:N). 0 filas (cuerpo vacio) si el `:ID` no existe: el front lo trata como 404.",
           "type": "text/markdown"
         }
       }
@@ -227,7 +229,23 @@
       ]
     },
     {
-      "name": "7 - Actualizar referente (PATCH parcial)",
+      "name": "7 - Niveles educativos del referente",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/niveles",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}", "niveles"]
+        },
+        "description": {
+          "content": "`fn_refcurr_niveles_listar`. Niveles educativos ACTIVOS del referente (relacion N:N, `TREFERENTE_CURRICULAR_NIVEL`) -- precarga el multi-select \"Nivel educativo\" al editar. Devuelve `[{ pk_referente_curricular_nivel, fk_tnivel_ensenanza, codigo, nombre }]`; para `NIVELES_IDS` se usa `fk_tnivel_ensenanza` (el PK del catalogo), NO `pk_referente_curricular_nivel`. Nunca deberia venir vacio en un referente activo: el nivel es obligatorio.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "8 - Actualizar referente (PATCH parcial)",
       "request": {
         "method": "PATCH",
         "header": [
@@ -242,16 +260,16 @@
         "body": {
           "mode": "raw",
           "options": { "raw": { "language": "json" } },
-          "raw": "{\n  \"DESCRIPCION\": \"Descripcion actualizada.\",\n  \"ESTADO\": \"A\"\n}"
+          "raw": "{\n  \"DESCRIPCION\": \"Descripcion actualizada.\",\n  \"NIVELES_IDS\": [{{pkNivelEnsenanza}}],\n  \"ESTADO\": \"A\"\n}"
         },
         "description": {
-          "content": "`fn_refcurr_actualizar`. Cualquier campo ausente/null preserva su valor actual (PATCH real, no PUT). `AREAS_IDS`: ausente = no tocar; `[]` = vaciar (vuelve a \"aplica a todas\"); array con PKs = reemplazo completo -- `23503` si intenta quitar un area con enunciados vivos amarrados.",
+          "content": "`fn_refcurr_actualizar`. Cualquier campo ausente/null preserva su valor actual (PATCH real, no PUT). `NIVELES_IDS`: ausente = no tocar los niveles; array = reemplazo completo del set -- NO acepta `[]` (`22023`: el referente siempre conserva al menos un nivel), y da `23505` si el set resultante choca con otro referente activo del mismo nombre. `AREAS_IDS`: ausente = no tocar; `[]` = vaciar (vuelve a \"aplica a todas\"); array con PKs = reemplazo completo -- `23503` si intenta quitar un area con enunciados vivos amarrados.",
           "type": "text/markdown"
         }
       }
     },
     {
-      "name": "8 - Crear enunciado (nivel 1)",
+      "name": "9 - Crear enunciado (nivel 1)",
       "request": {
         "method": "POST",
         "header": [
@@ -288,7 +306,7 @@
       ]
     },
     {
-      "name": "9 - Crear evidencia (nivel 2, de un enunciado)",
+      "name": "10 - Crear evidencia (nivel 2, de un enunciado)",
       "request": {
         "method": "POST",
         "header": [
@@ -312,7 +330,7 @@
       }
     },
     {
-      "name": "10 - Listar enunciados de un referente",
+      "name": "11 - Listar enunciados de un referente",
       "request": {
         "method": "GET",
         "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
@@ -331,7 +349,7 @@
       }
     },
     {
-      "name": "11 - Listar evidencias de un enunciado",
+      "name": "12 - Listar evidencias de un enunciado",
       "request": {
         "method": "GET",
         "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
@@ -347,7 +365,7 @@
       }
     },
     {
-      "name": "12 - Actualizar enunciado/evidencia (PATCH parcial)",
+      "name": "13 - Actualizar enunciado/evidencia (PATCH parcial)",
       "request": {
         "method": "PATCH",
         "header": [
@@ -371,7 +389,7 @@
       }
     },
     {
-      "name": "13 - Eliminar enunciado/evidencia (soft delete)",
+      "name": "14 - Eliminar enunciado/evidencia (soft delete)",
       "request": {
         "method": "PATCH",
         "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
@@ -387,7 +405,7 @@
       }
     },
     {
-      "name": "14 - Eliminar referente (soft delete en cascada)",
+      "name": "15 - Eliminar referente (soft delete en cascada)",
       "request": {
         "method": "PATCH",
         "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
@@ -397,7 +415,7 @@
           "path": ["api", "eval-col", "referentes-curriculares", "{{pkReferenteCurricular}}", "eliminar"]
         },
         "description": {
-          "content": "`fn_refcurr_eliminar`. PATCH, no DELETE. Cascada: evidencias -> enunciados -> areas -> referente. `22023` si ya estaba inactivo.",
+          "content": "`fn_refcurr_eliminar`. PATCH, no DELETE. Cascada: evidencias -> enunciados -> areas -> niveles -> referente. `22023` si ya estaba inactivo.",
           "type": "text/markdown"
         }
       }
