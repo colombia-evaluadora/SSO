@@ -393,8 +393,8 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', NULL, NULL, NULL, p_pk_tactividad
     );
 
     RETURN QUERY

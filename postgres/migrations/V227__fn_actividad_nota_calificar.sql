@@ -1721,8 +1721,8 @@ DECLARE
     v_pk_asignatura BIGINT;
     v_instrumento   VARCHAR;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', NULL, NULL, NULL, p_pk_tactividad
     );
 
     SELECT a.FK_TASIGNATURA, lv.VALOR
@@ -2013,8 +2013,8 @@ DECLARE
     v_fmt        RECORD;
     v_escala     BIGINT;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', NULL, NULL, p_pk_tunidad
     );
 
     SELECT u.FK_TASIGNATURA, u.FK_TGRADO

@@ -111,13 +111,55 @@
 -- reconstruirla desde la base seria adivinar su intencion. Queda reportado.
 --
 -- ---------------------------------------------------------------------------
--- 6. QUE NO HACE ESTA MIGRACION
+-- 6. LAS LECTURAS
 --
--- Solo cablea ESCRITURAS. Las LECTURAS (fn_actividad_listar, fn_unidad_listar
--- y el resto) siguen sin acotar, y no se tocan a proposito: decidir si un
--- docente ve solo lo suyo, todo su establecimiento o todo lo que dicta es una
--- regla de negocio que no esta definida, y elegirla aqui seria inventarla.
--- Queda como decision pendiente, no como olvido.
+-- Tambien quedan acotadas. El criterio NO se inventa aqui: ya estaba definido
+-- en el sistema de rol/menu, y se aplica tal cual via fn_usuario_sedes_lectura
+--
+--     nivel 0 (super admin) y 1 (territoriales)  todas las sedes
+--     nivel 2 (administrativos establecimiento)  las de sus EE accesibles
+--     nivel 3 (administrativos sedes, DOCENTE)   las suyas
+--     nivel 4 (estudiantes / familia)            ninguna
+--
+-- Un docente es nivel 3, asi que ve lo de SUS sedes -- ni solo lo suyo ni todo
+-- el establecimiento. Eso ya estaba decidido; aqui solo se conecta.
+--
+-- Dos patrones distintos, porque el problema no es el mismo:
+--
+--   a) DETALLE de un objeto (18 funciones: buscar_por_pk, campos_disponibles,
+--      objetivos, contenidos, criterios, referente, valoraciones, nota,
+--      instrumento, configuracion...). Se resuelve igual que las escrituras,
+--      cambiando el gate por fn_planeador_assert_alcance con el objeto pedido:
+--      pedir algo fuera de alcance da 403.
+--
+--   b) LISTADOS (fn_unidad_listar, fn_actividad_listar,
+--      fn_actividad_huerfanas_listar). Aqui no vale un 403: hay que FILTRAR
+--      filas. Se resuelven las sedes del usuario UNA vez por llamada, en un
+--      array, y cada fila se compara contra el -- no una funcion por fila.
+--
+-- DOS REGLAS QUE SE CRUZAN, Y NO SON LA MISMA:
+--
+--   * ALCANCE: nivel 0/1 no se filtran por sede (v_alcance_total).
+--   * BORRADO LOGICO: una sede ACTIVE = FALSE se oculta a TODOS, tambien al
+--     super admin. Por eso el ACTIVE de TSEDE va en el JOIN, que aplica
+--     siempre, y v_alcance_total solo exime del ANY(v_sedes_lectura).
+--
+-- Confundirlas fue un error real durante la implementacion: al principio el
+-- bypass de nivel 0/1 se puso sobre todo el predicado, y eso les habria
+-- mostrado unidades de sedes dadas de baja.
+--
+-- ACTIVIDAD SIN ANCLA: una actividad sin grupo y sin unidad no esta en ninguna
+-- sede, asi que no hay alcance que aplicarle. La ven su autor (CREATED_BY, que
+-- es VARCHAR: columna de auditoria de texto libre, de ahi el cast) y los
+-- niveles 0/1. En cuanto se le asigna grupo o unidad pasa a filtrarse como
+-- todas.
+--
+-- LO QUE FALTA. Quedan sin acotar los listados restantes -- calendario,
+-- resumen de estados, planilla, disponibles/candidatas y los selects del
+-- docente. Los que son "del docente" (fn_actividad_listar_docente,
+-- fn_actividad_calendario_docente, fn_docente_grupos_listar) ya se atan al
+-- funcionario autenticado, asi que no filtran de mas; los demas siguen
+-- abiertos y son el siguiente paso.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -126,6 +168,7 @@ SET search_path TO academico_test, public;
 -- fn_planeador_assert_alcance — capability + alcance territorial.
 -- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_planeador_assert_alcance(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_planeador_assert_alcance(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_planeador_assert_alcance(
     p_pk_usuario_solicitante BIGINT,
@@ -133,7 +176,8 @@ CREATE OR REPLACE FUNCTION academico_test.fn_planeador_assert_alcance(
     p_fk_tgrupo              BIGINT DEFAULT NULL,
     p_fk_tgrado              BIGINT DEFAULT NULL,
     p_fk_tunidad             BIGINT DEFAULT NULL,
-    p_pk_tactividad          BIGINT DEFAULT NULL
+    p_pk_tactividad          BIGINT DEFAULT NULL,
+    p_permitir_sin_ancla     BOOLEAN DEFAULT FALSE
 )
 RETURNS VOID
 LANGUAGE plpgsql
@@ -182,6 +226,21 @@ BEGIN
         PERFORM academico_test.fn_assert_permiso_seccion(
             p_pk_usuario_solicitante, 'PLANEADOR', p_accion);
 
+        -- p_permitir_sin_ancla: hay UN caso legitimo de objeto sin ancla
+        -- territorial, la actividad huerfana (se crea sin grupo y sin unidad,
+        -- para vincularla despues). No se le puede comprobar alcance porque no
+        -- esta en ninguna sede todavia, y exigir nivel 0/1 romperia el flujo:
+        -- un docente dejaria de poder crearlas. Es seguro dejarla pasar con
+        -- solo capability porque una actividad sin ancla no esta en el
+        -- establecimiento de nadie, y las dos operaciones que luego la anclan
+        -- -- vincularla a una unidad y editarle el grupo -- SI comprueban
+        -- alcance. La bandera va en FALSE por defecto a proposito: quien la
+        -- active tiene que poder justificar por que su objeto puede existir
+        -- sin sede.
+        IF p_permitir_sin_ancla THEN
+            RETURN;
+        END IF;
+
         v_nivel := academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante);
         IF v_nivel IS DISTINCT FROM 0 AND v_nivel IS DISTINCT FROM 1 THEN
             RAISE EXCEPTION 'No se pudo determinar la sede de la actividad, asi que no se '
@@ -200,8 +259,8 @@ BEGIN
 END;
 $fn$;
 
-COMMENT ON FUNCTION academico_test.fn_planeador_assert_alcance(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT)
-    IS 'Capability + ALCANCE para el planeador. Resuelve el establecimiento, la sede y la jornada del objetivo por la cadena actividad/grupo/unidad -> grado -> periodo academico -> sede, y se los pasa a fn_assert_permiso_seccion, que ya sabe aplicar el modelo dinamico (nivel 1 todos los EE, nivel 2 por fn_usuario_ee_accesibles, nivel 3 por sede+jornada). Existe porque las funciones del planeador llamaban a ese assert con tres argumentos, y en esa forma el bloque de alcance no se ejecuta: quedaba solo la capability. p_pk_tactividad (V277) se agrego porque la mayoria de las escrituras reciben la actividad y no el grupo/grado/unidad; aporta el grupo y la unidad de la actividad SIN pisar los que lleguen por parametro, porque un caller que manda grupo explicito esta declarando a donde va a quedar el objeto, que puede no ser donde esta hoy. Si no se puede resolver una sede (actividad huerfana sin grupo, grado sin periodo) se exige capability y, para todo el que no sea nivel 0 o 1, se rechaza con 42501 en vez de dejar pasar. Recuperada al repositorio en V277: existia solo en la base del servidor, aplicada a mano y sin commitear en ninguna rama.';
+COMMENT ON FUNCTION academico_test.fn_planeador_assert_alcance(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BOOLEAN)
+    IS 'Capability + ALCANCE para el planeador. Resuelve el establecimiento, la sede y la jornada del objetivo por la cadena actividad/grupo/unidad -> grado -> periodo academico -> sede, y se los pasa a fn_assert_permiso_seccion, que ya sabe aplicar el modelo dinamico (nivel 1 todos los EE, nivel 2 por fn_usuario_ee_accesibles, nivel 3 por sede+jornada). Existe porque las funciones del planeador llamaban a ese assert con tres argumentos, y en esa forma el bloque de alcance no se ejecuta: quedaba solo la capability. p_pk_tactividad (V277) se agrego porque la mayoria de las escrituras reciben la actividad y no el grupo/grado/unidad; aporta el grupo y la unidad de la actividad SIN pisar los que lleguen por parametro, porque un caller que manda grupo explicito esta declarando a donde va a quedar el objeto, que puede no ser donde esta hoy. Si no se puede resolver una sede (actividad huerfana sin grupo, grado sin periodo) se exige capability y, para todo el que no sea nivel 0 o 1, se rechaza con 42501 en vez de dejar pasar. p_permitir_sin_ancla (FALSE por defecto) cubre el unico objeto legitimamente sin sede, la actividad huerfana: sin el un docente no podria crearlas, y dejarla pasar es seguro porque una actividad sin ancla no esta en el establecimiento de nadie y las dos operaciones que luego la anclan (vincular a unidad, editarle el grupo) si comprueban alcance. Recuperada al repositorio en V277: existia solo en la base del servidor, aplicada a mano y sin commitear en ninguna rama.';
 
 -- ---------------------------------------------------------------------------
 -- fn_planeador_alcanza — la misma comprobacion, en forma de BOOLEAN.

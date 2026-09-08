@@ -248,8 +248,8 @@ DECLARE
     v_evaluativo    BOOLEAN;
     v_tiene_ref     BOOLEAN;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', NULL, NULL, p_pk_tunidad
     );
 
     SELECT TRUE, u.FK_REFERENTE_CURRICULAR IS NOT NULL
@@ -331,8 +331,8 @@ DECLARE
     v_existe   BOOLEAN;
     v_tipo     VARCHAR;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', NULL, NULL, NULL, p_pk_tactividad
     );
 
     SELECT TRUE INTO v_existe
@@ -400,8 +400,8 @@ DECLARE
     v_modo_calculo      VARCHAR;
     v_ponderacion       JSONB;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', NULL, NULL, NULL, p_pk_tactividad
     );
 
     SELECT a.TITULO, a.FK_TUNIDAD, UPPER(TRIM(COALESCE(a.ES_EVALUATIVA::VARCHAR, 'S')))
@@ -521,8 +521,8 @@ DECLARE
     v_fk_tunidad   BIGINT;
     v_resultado    JSONB;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', NULL, NULL, NULL, p_pk_tactividad
     );
 
     SELECT a.FK_TUNIDAD INTO v_fk_tunidad

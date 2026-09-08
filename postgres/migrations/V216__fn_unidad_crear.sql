@@ -408,11 +408,27 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
+    v_sedes_lectura BIGINT[];
+    v_alcance_total BOOLEAN;
     v_key VARCHAR;
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
     );
+
+    -- Alcance de LECTURA (V277). El criterio no se elige aqui: ya lo define el
+    -- sistema de rol/menu, via fn_usuario_sedes_lectura -- nivel 0/1 todas las
+    -- sedes, nivel 2 las de sus establecimientos, nivel 3 las suyas, nivel 4
+    -- ninguna. Se resuelve una sola vez por llamada.
+    -- Nivel 0 (super admin) y 1 (territoriales) no se acotan por alcance
+    -- territorial: ven todas las sedes. Lo que NO se salta nadie, ni ellos,
+    -- es el borrado logico: el ACTIVE de la sede va en el JOIN de abajo, no
+    -- aqui, para que una sede desactivada quede oculta para todo el mundo.
+    v_alcance_total := COALESCE(
+        academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante), 99) <= 1;
+    v_sedes_lectura := ARRAY(
+        SELECT sl.sede_id
+          FROM academico_test.fn_usuario_sedes_lectura(p_pk_usuario_solicitante) sl);
 
     -- Whitelist del criterio de orden (evita ramas muertas en el ORDER BY),
     -- mismo patron que fn_actividad_listar (V224).
@@ -429,6 +445,12 @@ BEGIN
           JOIN academico_test.TASIGNATURA basig ON basig.PK_TASIGNATURA = u.FK_TASIGNATURA
           JOIN academico_test.TGRADO bgr        ON bgr.PK_TGRADO = u.FK_TGRADO
          WHERE (p_incluir_inactivos OR u.ACTIVE = TRUE)
+           AND EXISTS (SELECT 1 FROM academico_test.TPERIODO_ACADEMICO pa_sc
+                        JOIN academico_test.TSEDE s_sc
+                          ON s_sc.PK_TSEDE = pa_sc.FK_TSEDE AND s_sc.ACTIVE = TRUE
+                       WHERE pa_sc.PK_TPERIODO_ACADEMICO = bgr.FK_TPERIODO_ACADEMICO
+                         AND (v_alcance_total
+                              OR pa_sc.FK_TSEDE = ANY(v_sedes_lectura)))
            -- Texto libre: la expresion debe ser IDENTICA a la de
            -- idx_tunidad_busqueda_trgm para que el planner la use.
            AND (p_search IS NULL OR
@@ -1052,8 +1074,8 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', NULL, NULL, p_pk_tunidad
     );
 
     IF NOT EXISTS (SELECT 1 FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_pk_tunidad) THEN
@@ -1159,8 +1181,8 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', NULL, NULL, p_pk_tunidad
     );
 
     RETURN QUERY
@@ -1229,8 +1251,8 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', NULL, NULL, p_pk_tunidad
     );
 
     RETURN QUERY
@@ -1256,8 +1278,8 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', NULL, NULL, p_pk_tunidad
     );
 
     RETURN QUERY

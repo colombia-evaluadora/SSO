@@ -215,12 +215,28 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
+    v_sedes_lectura BIGINT[];
+    v_alcance_total BOOLEAN;
     v_limite INT;
     v_offset INT;
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
     );
+
+    -- Alcance de LECTURA (V277). El criterio no se elige aqui: ya lo define el
+    -- sistema de rol/menu, via fn_usuario_sedes_lectura -- nivel 0/1 todas las
+    -- sedes, nivel 2 las de sus establecimientos, nivel 3 las suyas, nivel 4
+    -- ninguna. Se resuelve una sola vez por llamada.
+    -- Nivel 0 (super admin) y 1 (territoriales) no se acotan por alcance
+    -- territorial: ven todas las sedes. Lo que NO se salta nadie, ni ellos,
+    -- es el borrado logico: el ACTIVE de la sede va en el JOIN de abajo, no
+    -- aqui, para que una sede desactivada quede oculta para todo el mundo.
+    v_alcance_total := COALESCE(
+        academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante), 99) <= 1;
+    v_sedes_lectura := ARRAY(
+        SELECT sl.sede_id
+          FROM academico_test.fn_usuario_sedes_lectura(p_pk_usuario_solicitante) sl);
 
     v_limite := GREATEST(COALESCE(p_tamano_pagina, 20), 1);
     v_offset := (GREATEST(COALESCE(p_pagina, 1), 1) - 1) * v_limite;
@@ -232,6 +248,23 @@ BEGIN
           FROM academico_test.TACTIVIDAD a
          WHERE a.ACTIVE = TRUE
            AND a.FK_TUNIDAD IS NULL
+           AND (
+                 EXISTS (SELECT 1
+                           FROM academico_test.TGRUPO g_sc
+                           JOIN academico_test.TGRADO gr_sc
+                             ON gr_sc.PK_TGRADO = g_sc.FK_TGRADO
+                           JOIN academico_test.TPERIODO_ACADEMICO pa_sc
+                             ON pa_sc.PK_TPERIODO_ACADEMICO = gr_sc.FK_TPERIODO_ACADEMICO
+                           JOIN academico_test.TSEDE s_sc
+                             ON s_sc.PK_TSEDE = pa_sc.FK_TSEDE AND s_sc.ACTIVE = TRUE
+                          WHERE g_sc.PK_TGRUPO = a.FK_TGRUPO
+                            AND (v_alcance_total
+                                 OR pa_sc.FK_TSEDE = ANY(v_sedes_lectura)))
+              -- Sin grupo no hay sede: solo la ve quien la creo. CREATED_BY es
+              -- VARCHAR (auditoria de texto libre), de ahi el cast.
+              OR (a.FK_TGRUPO IS NULL AND (v_alcance_total
+                      OR a.CREATED_BY = p_pk_usuario_solicitante::VARCHAR))
+               )
            AND (p_fk_tasignatura IS NULL OR a.FK_TASIGNATURA = p_fk_tasignatura)
            AND (p_fk_tgrupo      IS NULL OR a.FK_TGRUPO = p_fk_tgrupo)
            AND (p_fecha_desde IS NULL OR COALESCE(a.FECHA_CIERRE, a.FECHA_INICIO) >= p_fecha_desde)
