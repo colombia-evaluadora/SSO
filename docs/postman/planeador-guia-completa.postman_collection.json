@@ -1,0 +1,2792 @@
+{
+  "info": {
+    "_postman_id": "6f5a2d1e-9b34-4c7a-8e1f-2a7c5b8d9f10",
+    "name": "SSO — Planeador educativo: guia completa",
+    "description": "> ## ATENCION antes de ejecutar la coleccion completa\n>\n> Esta coleccion **no es de solo lectura**: 20 de sus peticiones escriben en la base\n> (crear/editar/inactivar unidades, actividades, criterios, evidencias y notas).\n>\n> Para que un \"Run collection\" no destroce los datos que documentan las lecturas,\n> todas esas peticiones apuntan a **registros desechables**, identificados por las\n> variables que terminan en `Sandbox` (`unidadSandboxId`, `actividadSandboxId`,\n> `criterioSandboxId`, `unidadEnunciadoSandboxId`, `actEstudianteSandboxId`,\n> `actCriterioSandboxId`, `actEvidenciaSandboxId`).\n>\n> Las variables SIN `Sandbox` (`unidadEvaluativaId`, `actividadEvaluativaId`, ...) son\n> los datos de referencia que usan los ejemplos de lectura: **no las pongas en una\n> peticion de escritura** salvo que quieras modificarlos de verdad. Ya ocurrio una vez:\n> una corrida renombro la unidad 12, desvinculo la actividad 23 de su unidad y cambio\n> la ponderacion de la 24, dejando el grupo sumando 85% en vez de 100%.\n\n---\nGuia completa del modulo **Planeador educativo**: los 56 endpoints reales desplegados en `query-service` bajo `/api/eval-col/planeador/...`, organizados por el flujo de pantalla en el que se usan (no por metodo HTTP ni orden alfabetico).\n\nTodos los endpoints estan tomados del inventario real registrado en la base de test -- ningun endpoint ni parametro de esta coleccion esta inventado.\n\n---\n\n## Ideas de dominio que hay que tener presentes en TODA la coleccion\n\n- **El referente curricular manda, no se elige a mano.** Se deriva del GRADO de la unidad -> nivel de ensenanza -> referente (carpeta 3, `GET .../referente`). Dos atributos suyos gobiernan la UI de la actividad (carpeta 5, `GET .../configuracion`): el **enfoque** (`EVALUATIVO` habilita evaluacion con nota; `FORMATIVO` = preescolar, no hay nota, se observa) y el **tipo de evaluacion** (`CUALITATIVA` -> rubrica/cotejo; `CUANTITATIVA` -> escala; `CUANTITATIVA_CUALITATIVA` -> los 4 instrumentos).\n- **Las etiquetas de nivel salen del referente**, no de literales fijos: `nivel_1_etiqueta`/`nivel_2_etiqueta` cambian de un referente a otro ('Enunciado'/'Evidencia' vs 'Proposito'/'Evidencia').\n- **Jerarquia enunciado -> evidencia**: una actividad solo puede marcar evidencias de enunciados que **su unidad ya relaciono**. Sin unidad, no hay evidencias posibles.\n- **Al quitar una relacion** (enunciado de unidad, evidencia/criterio de actividad) el PATCH pide el PK de **la relacion**, no el del enunciado/evidencia/criterio original.\n- **La unidad es opcional en la actividad**: existen actividades 'huerfanas' que se crean sueltas y se vinculan despues. Sin unidad quedan deshabilitadas las evidencias y los criterios de rubrica (pero SI pueden tener adaptaciones).\n- **Ponderacion**: depende del metodo de calculo de la unidad -- Ponderar (el docente escribe el %), Promediar (no aplica) y Sumatoria (se captura puntaje/NOTA_MAXIMA y el % lo calcula el sistema). Los endpoints `ponderacion-disponible` dicen cuanto queda libre; la suma nunca puede pasar de 100.\n- **Los 4 estados de actividad** son derivados, no una columna: `FINALIZADA` (todos evaluados), `VENCIDA` (cerro hace mas de `dias_gracia` dias), `EN_EVALUACION` (hoy dentro de la ventana), `PENDIENTE_POR_EVALUAR` (el resto). En `/stats` vienen ademas con los alias del front (`pending`/`in_progress`/`completed`/`cancelled`) -- `cancelled` es alias de `vencidas`, nada se cancela.\n- **Preescolar (referente formativo) no se califica, se observa.** `POST .../observar-grupal` aplica un texto a todo el grupo, `PUT .../observar` lo particulariza por estudiante. Calificar con nota una actividad formativa devuelve 422/22023.\n- **Las notas se guardan como porcentaje 0-100**, nunca en la escala del colegio -- asi un cambio de escala no invalida el historico. La Planilla traduce al mostrar.\n- **El docente sale del token** en `/mias`, `/stats`, `/tablero`, `/calendario` y en los filtros de docente: no hay parametro de funcionario, nadie ve lo de otro.\n- **`?periodo=` es opcional** en `/docentes/grupos`, `/docentes/grado-asignatura` y `/periodos-evaluacion`: se deduce de las asignaciones del docente.\n\n---\n\n## Reglas tecnicas verificadas (no son teoria)\n\n1. **Parametros multi-palabra en snake_case.** El binder solo hace `toUpperCase()`, no convierte camelCase. `?fecha_desde=` funciona; `?fechaDesde=` se bindea NULL y **el filtro se ignora en silencio**, sin error. Los de una palabra dan igual en cualquier caja.\n2. **Body con las claves en MAYUSCULAS exactas** tal como aparecen en el catalogo de parametros (`FK_TASIGNATURA`, no `fkTasignatura`).\n3. **Campos `JSONB` van como string serializado**, no objeto anidado (`\"DEFINICION\": \"[{...}]\"`). Los arrays `BIGINT[]`/`TEXT[]` si van como array nativo.\n4. **`size`/`offset` son opcionales** en general; si se omiten aplica el default -- excepto en `/actividades/mias` (8.3), donde mandarlos explicitos evita un bug conocido del motor con la paginacion system-bound.\n5. **Defecto abierto**: `?estados=A,B` (multi-estado por coma) devuelve 0 filas. Con un solo estado funciona. Filtrar de a uno mientras no este corregido.\n6. Ruta de login: `/api/auth/login`.\n7. Las rutas nuevas dan 404 hasta reiniciar `query-service-eval-col`.\n\n---\n\n**Antes de empezar:** elige el entorno *SSO — test* y define `email`/`password`. El login es automatico: un script `prerequest` de coleccion pide el token antes de cada peticion y lo reutiliza hasta que caduca.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Login automatico: si el token vivo ya esta en la variable de",
+          "// coleccion, no vuelve a pedirlo.",
+          "const rutaLogin = '/api/auth/login';",
+          "if (pm.request.url.getPath().endsWith(rutaLogin)) { return; }",
+          "",
+          "function caducado(jwt) {",
+          "    try {",
+          "        const carga = JSON.parse(atob(jwt.split('.')[1]));",
+          "        return !carga.exp || (carga.exp - 30) * 1000 < Date.now();",
+          "    } catch (e) { return true; }",
+          "}",
+          "",
+          "const actual = pm.collectionVariables.get('token');",
+          "if (actual && !caducado(actual)) { return; }",
+          "",
+          "const clave = pm.environment.get('password');",
+          "if (!clave) { throw new Error('Falta `password` en el entorno «SSO — test».'); }",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + rutaLogin,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "        email: pm.environment.get('email'),",
+          "        password: clave",
+          "    }) }",
+          "}, (err, res) => {",
+          "    if (err) { throw new Error('No se pudo contactar con el gateway: ' + err); }",
+          "    if (res.code !== 200) { throw new Error('Login rechazado (' + res.code + '). Revisa `email` y `password`.'); }",
+          "    pm.collectionVariables.set('token', res.json().token);",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "periodoId",
+      "value": "1777",
+      "description": "PK_TPERIODO_ACADEMICO vigente"
+    },
+    {
+      "key": "gradoId",
+      "value": "3743",
+      "description": "Pre-Jardin (Preescolar)"
+    },
+    {
+      "key": "gradoId2",
+      "value": "3744",
+      "description": "Jardin I (Preescolar)"
+    },
+    {
+      "key": "asignaturaId",
+      "value": "4190",
+      "description": "MATEMATICAS"
+    },
+    {
+      "key": "asignaturaId2",
+      "value": "4191",
+      "description": "MATEMATICA FINANCIERA"
+    },
+    {
+      "key": "grupoId",
+      "value": "11473",
+      "description": "Grupo 01 Pre-Jardin, 5 estudiantes"
+    },
+    {
+      "key": "grupoId2",
+      "value": "11474",
+      "description": "Grupo 01 Jardin I, 1 estudiante"
+    },
+    {
+      "key": "unidadEvaluativaId",
+      "value": "12",
+      "description": "Unidad evaluativa (referente EVALUATIVO)"
+    },
+    {
+      "key": "unidadFormativaId",
+      "value": "13",
+      "description": "Unidad 'Proyecto Pedagogico' (referente FORMATIVO, preescolar)"
+    },
+    {
+      "key": "actividadEvaluativaId",
+      "value": "23",
+      "description": "Actividad de ejemplo, rango real 23-41"
+    },
+    {
+      "key": "actividadHuerfanaId",
+      "value": "27",
+      "description": "Actividad de ejemplo para vincular a una unidad"
+    },
+    {
+      "key": "actividadFormativaId",
+      "value": "28",
+      "description": "Actividad de la unidad formativa (se observa, no se califica)"
+    },
+    {
+      "key": "referenteId",
+      "value": "11",
+      "description": "Referente curricular"
+    },
+    {
+      "key": "enunciadoId",
+      "value": "20",
+      "description": "Enunciado nivel 1 del referente 11"
+    },
+    {
+      "key": "enunciadoId2",
+      "value": "21",
+      "description": "Enunciado nivel 1 del referente 11"
+    },
+    {
+      "key": "evidenciaId",
+      "value": "22",
+      "description": "Evidencia (nivel 2) del enunciado 20"
+    },
+    {
+      "key": "evidenciaId2",
+      "value": "23",
+      "description": "Evidencia (nivel 2)"
+    },
+    {
+      "key": "evidenciaId3",
+      "value": "24",
+      "description": "Evidencia (nivel 2)"
+    },
+    {
+      "key": "unidadEnunciadoId",
+      "value": "4",
+      "description": "PK_TUNIDAD_ENUNCIADO -- el pkTunidadEnunciado que devuelve GET .../referente (3.1), no el PK del enunciado"
+    },
+    {
+      "key": "actividadEstudianteId",
+      "value": "1",
+      "description": "PK_TACTIVIDAD_ESTUDIANTE -- se obtiene de GET .../calificaciones (7.8), no es el PK de la actividad"
+    },
+    {
+      "key": "criterioUnidadId",
+      "value": "1",
+      "description": "PK_TCRITERIO_UNIDAD -- se obtiene de GET /unidades/:ID/criterios (3.2)"
+    },
+    {
+      "key": "nivelCriterioId",
+      "value": "1",
+      "description": "PK del nivel de desempeno de un criterio de unidad"
+    },
+    {
+      "key": "actividadCriterioUnidadId",
+      "value": "1",
+      "description": "PK_TACTIVIDAD_CRITERIO_UNIDAD -- PK de la relacion, no del criterio"
+    },
+    {
+      "key": "actividadEvidenciaId",
+      "value": "1",
+      "description": "PK_TACTIVIDAD_EVIDENCIA -- PK de la relacion, no de la evidencia"
+    },
+    {
+      "key": "cotejoItemId",
+      "value": "16",
+      "description": "PK_TACTIVIDAD_COTEJO_ITEM del instrumento LISTA_COTEJO vigente"
+    },
+    {
+      "key": "nivelEscalaId",
+      "value": "13",
+      "description": "PK del nivel de una escala CUALITATIVA"
+    },
+    {
+      "key": "tipoActividadId",
+      "value": "269",
+      "description": "PK TLISTA_VALOR categoria TIPO_ACTIVIDAD"
+    },
+    {
+      "key": "jerarquiaActividadId",
+      "value": "439",
+      "description": "PK TLISTA_VALOR categoria TIPO_JERARQUIA_ACTIVIDAD (Actividad/Criterio)"
+    },
+    {
+      "key": "calculoPonderarId",
+      "value": "497",
+      "description": "PK TLISTA_VALOR categoria CALCULO_DEFINITIVA = Ponderar"
+    },
+    {
+      "key": "funcionarioId",
+      "value": "3587701",
+      "description": "PK_TFUNCIONARIO docente autor de la unidad"
+    },
+    {
+      "key": "escalaValoracion1Id",
+      "value": "64",
+      "description": "PK de una valoracion activa de la escala del periodo"
+    },
+    {
+      "key": "escalaValoracion2Id",
+      "value": "72",
+      "description": "PK de otra valoracion activa de la escala del periodo"
+    },
+    {
+      "key": "tipoRecursoUrlId",
+      "value": "51990",
+      "description": "PK TLISTA_VALOR categoria TIPO_RECURSO (variante URL)"
+    },
+    {
+      "key": "tipoAdaptacionId",
+      "value": "51988",
+      "description": "PK TLISTA_VALOR categoria TIPO_ADAPTACION"
+    },
+    {
+      "key": "aplicaTodoElGrupoId",
+      "value": "51986",
+      "description": "PK TLISTA_VALOR categoria APLICA_A = TODO_EL_GRUPO"
+    },
+    {
+      "key": "escalaValoracion3Id",
+      "value": "73"
+    },
+    {
+      "key": "escalaValoracion4Id",
+      "value": "74"
+    },
+    {
+      "key": "unidadSandboxId",
+      "value": "15",
+      "description": "Registro DESECHABLE para las peticiones de escritura: no es dato de referencia"
+    },
+    {
+      "key": "actividadSandboxId",
+      "value": "30",
+      "description": "Registro DESECHABLE para las peticiones de escritura: no es dato de referencia"
+    },
+    {
+      "key": "criterioSandboxId",
+      "value": "4",
+      "description": "Registro DESECHABLE para las peticiones de escritura: no es dato de referencia"
+    },
+    {
+      "key": "unidadEnunciadoSandboxId",
+      "value": "9",
+      "description": "Registro DESECHABLE para las peticiones de escritura: no es dato de referencia"
+    },
+    {
+      "key": "actEstudianteSandboxId",
+      "value": "11",
+      "description": "Registro DESECHABLE para las peticiones de escritura: no es dato de referencia"
+    },
+    {
+      "key": "actCriterioSandboxId",
+      "value": "4",
+      "description": "Registro DESECHABLE para las peticiones de escritura: no es dato de referencia"
+    },
+    {
+      "key": "actEvidenciaSandboxId",
+      "value": "7",
+      "description": "Registro DESECHABLE para las peticiones de escritura: no es dato de referencia"
+    },
+    {
+      "key": "nivelCriterioSandboxId",
+      "value": "13",
+      "description": "Nivel del criterio SANDBOX (escala 64). Va con criterioSandboxId"
+    },
+    {
+      "key": "estudianteFormativoId",
+      "value": "5",
+      "description": "TACTIVIDAD_ESTUDIANTE de la actividad FORMATIVA (28): observar solo aplica ahi"
+    },
+    {
+      "key": "criterioRecienCreadoId",
+      "value": "",
+      "description": "Lo rellena 3.3 al vuelo: el criterio que 3.4 edita y 3.5 elimina, para que cada corrida quede en cero y no toque criterioSandboxId"
+    },
+    {
+      "key": "unidadRecienCreadaId",
+      "value": "",
+      "description": "La rellena 2.2 al vuelo; es la unidad que elimina 2.5, para que la corrida no acumule unidades"
+    },
+    {
+      "key": "actividadRecienCreadaId",
+      "value": "",
+      "description": "La rellena 4.2 al vuelo; es la actividad que elimina 4.5"
+    },
+    {
+      "key": "actRubricaCriterioId",
+      "value": "",
+      "description": "La rellena 6.2: criterio de la rubrica PROPIA de la actividad (TACTIVIDAD_RUBRICA_CRITERIO), que se recrea cada vez que se define el instrumento"
+    },
+    {
+      "key": "actRubricaNivelId",
+      "value": "",
+      "description": "La rellena 6.2: nivel de ese criterio"
+    }
+  ],
+  "item": [
+    {
+      "name": "0 — Login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const token = pm.response.json().token;",
+              "pm.test('devuelve token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+              "pm.collectionVariables.set('token', token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "description": "Login del gateway (`/api/auth/login`). El token se reutiliza via el script `prerequest` de la coleccion hasta que caduca -- ejecuta esta request a mano solo para inspeccionar la respuesta."
+      }
+    },
+    {
+      "name": "1 — Selects y contexto (de donde salen los datos del formulario)",
+      "description": "Los filtros en cascada y catalogos que alimentan los desplegables de las pantallas del Planeador ANTES de poder crear o editar nada: grado/grupo/asignatura del docente autenticado, periodos de evaluacion, y los tres '% disponible' que evitan pasarse del 100 al repartir peso (unidades dentro de una asignatura+grado, actividades dentro de una unidad+grupo, y el picker de materiales reutilizables). Todo de solo lectura, se llama ANTES de los POST/PUT de las carpetas siguientes.",
+      "item": [
+        {
+          "name": "1.1 — GET grupos del docente (cascada, paso 1-2)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/docentes/grupos?periodo={{periodoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "docentes",
+                "grupos"
+              ],
+              "query": [
+                {
+                  "key": "periodo",
+                  "value": "{{periodoId}}",
+                  "description": "PK_TPERIODO_ACADEMICO -- opcional, se deduce si se omite"
+                }
+              ]
+            },
+            "description": "Primer y segundo paso del filtro en cascada Grado -> Grupo -> Asignatura que abre cualquier pantalla del Planeador (unidad, actividad, planilla). Grupos donde el DOCENTE AUTENTICADO dicta al menos una asignatura en el periodo -- el docente sale del token, no es parametro. `?periodo=` es opcional: si se omite se deduce de las asignaciones del docente (fn_docente_periodo_vigente). Usa TDOCENTE_ASIGNATURA (quien dicta), no TGRUPO.FK_TFUNCIONARIO (el director de grupo)."
+          },
+          "response": [
+            {
+              "name": "200 — captura real",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"rows\": [\n    {\n      \"grupo_id\": 11474,\n      \"grupo_codigo\": null,\n      \"grupo_nombre\": \"01\",\n      \"capacidad\": 10,\n      \"jornada_id\": 51887,\n      \"jornada_valor\": \"M\",\n      \"jornada_nombre\": \"Mañana\",\n      \"modelo_pedagogico_id\": 51897,\n      \"modelo_pedagogico_valor\": \"11\",\n      \"modelo_pedagogico_nombre\": \"Escolarizado\",\n      \"grado_id\": 3744,\n      \"grado_codigo\": \"-1\",\n      \"grado_nombre\": \"Jardin I o A o Kinder\",\n      \"nivel_ensenanza_id\": 1,\n      \"nivel_ensenanza_nombre\": \"Preescolar\"\n    },\n    {\n      \"grupo_id\": 11473,\n      \"grupo_codigo\": null,\n      \"grupo_nombre\": \"01\",\n      \"capacidad\": 10,\n      \"jornada_id\": 51887,\n      \"jornada_valor\": \"M\",\n      \"jornada_nombre\": \"Mañana\",\n      \"modelo_pedagogico_id\": 51897,\n      \"modelo_pedagogico_valor\": \"11\",\n      \"modelo_pedagogico_nombre\": \"Escolarizado\",\n      \"grado_id\": 3743,\n      \"grado_codigo\": \"-2\",\n      \"grado_nombre\": \"Pre-Jardin\",\n      \"nivel_ensenanza_id\": 1,\n      \"nivel_ensenanza_nombre\": \"Preescolar\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "1.2 — GET pares grado-asignatura del docente (cascada, paso 3)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/docentes/grado-asignatura?periodo={{periodoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "docentes",
+                "grado-asignatura"
+              ],
+              "query": [
+                {
+                  "key": "periodo",
+                  "value": "{{periodoId}}",
+                  "description": "PK_TPERIODO_ACADEMICO -- opcional"
+                }
+              ]
+            },
+            "description": "Tercer paso de la cascada: pares (grado, asignatura) DISTINTOS que dicta el docente autenticado en el periodo, sin repetir por dictar la misma asignatura en varios grupos del mismo grado. `?periodo=` opcional, mismo criterio de deduccion que 1.1."
+          },
+          "response": [
+            {
+              "name": "200 — captura real",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"rows\": [\n    {\n      \"grado_id\": 3744,\n      \"grado_codigo\": \"-1\",\n      \"grado_nombre\": \"Jardin I o A o Kinder\",\n      \"asignatura_id\": 4191,\n      \"asignatura_codigo\": \"MATF\",\n      \"asignatura_nombre\": \"MATEMATICA FINANCIERA\"\n    },\n    {\n      \"grado_id\": 3744,\n      \"grado_codigo\": \"-1\",\n      \"grado_nombre\": \"Jardin I o A o Kinder\",\n      \"asignatura_id\": 4190,\n      \"asignatura_codigo\": \"MAT\",\n      \"asignatura_nombre\": \"MATEMATICAS\"\n    },\n    {\n      \"grado_id\": 3743,\n      \"grado_codigo\": \"-2\",\n      \"grado_nombre\": \"Pre-Jardin\",\n      \"asignatura_id\": 4190,\n      \"asignatura_codigo\": \"MAT\",\n      \"asignatura_nombre\": \"MATEMATICAS\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "1.3 — GET periodos de evaluacion",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/periodos-evaluacion?periodo={{periodoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "periodos-evaluacion"
+              ],
+              "query": [
+                {
+                  "key": "periodo",
+                  "value": "{{periodoId}}",
+                  "description": "opcional"
+                },
+                {
+                  "key": "estado",
+                  "value": "",
+                  "description": "PK del catalogo ESTADOPERIODOEVALUACION -- opcional",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Cortes ('Primer periodo', 'Segundo periodo', ...) para el selector de periodo de evaluacion. Devuelve TODOS los ACTIVE sin filtrar por estado -- cada fila trae `estado_valor`/`estado_nombre` (Calificable / NO Calificable / Habilitados para algunas asignaturas / En Recuperaciones) para que el front decida cual habilitar y cual pintar en gris; en ese catalogo no existe un estado literal 'activo'. `?estado=` filtra a uno solo (p.ej. solo calificables). `?periodo=` opcional (se deduce del docente autenticado). `vigente_hoy` (derivado) sirve para preseleccionar el corte actual."
+          }
+        },
+        {
+          "name": "1.4 — GET % disponible de UNIDADES en (asignatura, grado)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/asignaturas/{{asignaturaId}}/ponderacion-disponible?grado={{gradoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "asignaturas",
+                "{{asignaturaId}}",
+                "ponderacion-disponible"
+              ],
+              "query": [
+                {
+                  "key": "grado",
+                  "value": "{{gradoId}}",
+                  "description": "PK_TGRADO -- obligatorio"
+                }
+              ]
+            },
+            "description": "Al crear/editar una UNIDAD: cuanto porcentaje queda libre para repartir entre las unidades de esa (asignatura, grado) -- pinta 'Disponible para asignar: X%' junto a TUNIDAD.PONDERACION. Un nivel arriba de 1.5 (que reparte el peso de las ACTIVIDADES dentro de UNA unidad). `:ID` = PK_TASIGNATURA, `?grado=` obligatorio."
+          }
+        },
+        {
+          "name": "1.5 — GET % disponible de ACTIVIDADES en (unidad, grupo)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadEvaluativaId}}/ponderacion-disponible",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadEvaluativaId}}",
+                "ponderacion-disponible"
+              ],
+              "query": [
+                {
+                  "key": "grupo",
+                  "value": "{{grupoId}}",
+                  "description": "opcional",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Al vincular/editar el peso de una ACTIVIDAD dentro de una unidad: cuanto porcentaje queda libre en esa (unidad, grupo) -- alimenta el 'Disponible para asignar: X%' del modal 'Vincular actividad' (carpeta 2). `:ID` = PK_TUNIDAD, `?grupo=` opcional (grupo NULL es su propio bucket)."
+          }
+        },
+        {
+          "name": "1.6 — GET actividades candidatas a vincular a una unidad",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadEvaluativaId}}/actividades-disponibles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadEvaluativaId}}",
+                "actividades-disponibles"
+              ],
+              "query": [
+                {
+                  "key": "search",
+                  "value": "",
+                  "description": "trigram sobre titulo+descripcion",
+                  "disabled": true
+                },
+                {
+                  "key": "pagina",
+                  "value": "1",
+                  "description": "default 1",
+                  "disabled": true
+                },
+                {
+                  "key": "size",
+                  "value": "20",
+                  "description": "default 20",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Alimenta el modal 'Vincular actividad' de la pantalla de unidad: actividades ACTIVE, sin unidad, de la misma asignatura y (via su grupo) del mismo grado que la unidad :ID. Cada fila ya trae `porcentaje_disponible` calculado para esa combinacion (unidad, grupo de la fila), asi el front no necesita llamar 1.5 por cada candidata."
+          }
+        },
+        {
+          "name": "1.7 — GET materiales reutilizables (picker de repositorio)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadEvaluativaId}}/materiales-reutilizables",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadEvaluativaId}}",
+                "materiales-reutilizables"
+              ],
+              "query": [
+                {
+                  "key": "search",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "asignatura",
+                  "value": "{{asignaturaId}}",
+                  "disabled": true
+                },
+                {
+                  "key": "funcionario",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "pagina",
+                  "value": "1",
+                  "description": "default 1",
+                  "disabled": true
+                },
+                {
+                  "key": "size",
+                  "value": "20",
+                  "description": "default 20",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Picker de 'Unidad virtual / repositorio' al armar los materiales de apoyo de una actividad: materiales con archivo de OTRAS actividades activas, para referenciar el mismo TARCHIVO sin volver a subirlo (con `tipoRecurso=REPOSITORIO` en el PUT de materiales de la carpeta 4). `:ID` excluye sus propios materiales. `?asignatura=`/`?funcionario=` acotan por la unidad de origen; `?search=` busca por nombre de archivo o titulo de la actividad de origen. \n\nEn el entorno de test devuelve 0 filas y eso es correcto: todavia no hay materiales con archivo adjunto en otras actividades del docente. El picker aparece vacio hasta que exista al menos uno."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 — CRUD de unidad",
+      "description": "El ciclo de vida de la unidad tematica: listar, crear, ver, editar y eliminar, mas sus objetivos/contenidos y el vinculo con las actividades que la componen (vincular, desvincular, editar peso inline). La unidad es el contenedor que decide -- via su grado y su referente curricular -- que reglas de evaluacion aplican a las actividades que cuelgan de ella (ver carpeta 3 y 5).",
+      "item": [
+        {
+          "name": "2.1 — GET listado de unidades",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades"
+              ],
+              "query": [
+                {
+                  "key": "search",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "asignatura",
+                  "value": "{{asignaturaId}}",
+                  "disabled": true
+                },
+                {
+                  "key": "grado",
+                  "value": "{{gradoId}}",
+                  "disabled": true
+                },
+                {
+                  "key": "size",
+                  "value": "20",
+                  "description": "default 20",
+                  "disabled": true
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "default 0",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Pagina de unidades con filtros (`search`, `asignatura`, `grado`, `funcionario`, `incluir_inactivos`) y orden (`orden_por` en nombre|asignatura|grado, `orden_asc`). Es la grilla principal de la pantalla 'Unidades'. Trae nombres ya resueltos y conteos (actividades/objetivos/contenidos activos) para no golpear el detalle de cada fila."
+          }
+        },
+        {
+          "name": "2.2 — POST crear unidad",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades"
+              ]
+            },
+            "description": "Crea la unidad tematica. Obligatorios: NOMBRE, FK_TASIGNATURA, FK_TGRADO, FK_TFUNCIONARIO, FK_TLV_CALCULO_DEFINITIVA (Ponderar/Promediar/Sumatoria -- gobierna como se reparte el peso de sus actividades, ver 1.5 y carpeta 2.9-2.10). FK_REFERENTE_CURRICULAR es OPCIONAL aqui pero en la practica se deriva del grado -> nivel de ensenanza (ver GET .../referente en carpeta 3): si se deja vacio, la unidad queda sin referente y sin evaluacion dinamica hasta que se le asigne. ENUNCIADOS (opcional) relaciona de una vez enunciados nivel 1 del referente. PONDERACION valida la regla del 100% de 1.4.\n\nEl nombre lleva `{{$timestamp}}` a proposito: sin el, la segunda corrida choca con la regla de unicidad (409) porque el registro de la primera sigue activo.\n\nPONDERACION baja a proposito: la suma de las unidades ACTIVAS de una misma asignatura+grado no puede pasar de 100, y el grado ya tiene unidades cargadas.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"NOMBRE\": \"Numeros hasta el 10 {{$timestamp}}\",\n  \"DESCRIPCION\": \"Reconocimiento de cantidades\",\n  \"FK_TASIGNATURA\": {{asignaturaId}},\n  \"FK_TGRADO\": {{gradoId}},\n  \"FK_TFUNCIONARIO\": {{funcionarioId}},\n  \"FK_TLV_CALCULO_DEFINITIVA\": {{calculoPonderarId}},\n  \"FK_REFERENTE_CURRICULAR\": {{referenteId}},\n  \"OBJETIVOS\": [\n    \"Reconocer cantidades hasta 10\"\n  ],\n  \"CONTENIDOS\": [\n    \"Conteo\",\n    \"Correspondencia uno a uno\"\n  ],\n  \"PONDERACION\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// El motor responde {\"rows\":[{...}]}: el pk es el primer campo de la fila.",
+                  "if (pm.response.code === 200) {",
+                  "    const fila = (pm.response.json().rows || [])[0];",
+                  "    const pk = fila && fila[Object.keys(fila)[0]];",
+                  "    if (pk) { pm.collectionVariables.set(\"unidadRecienCreadaId\", String(pk)); }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.3 — GET detalle de unidad",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadEvaluativaId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadEvaluativaId}}"
+              ]
+            },
+            "description": "Detalle completo de una unidad: escalares + nombres resueltos, Inicio/Fin DERIVADOS (min/max de fechas de sus actividades activas), objetivos/contenidos, `campos_disponibles` (si tiene referente habilita la rubrica) y `active`. Es la pantalla de detalle/edicion de unidad."
+          }
+        },
+        {
+          "name": "2.4 — PUT editar unidad (parcial)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadSandboxId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadSandboxId}}"
+              ]
+            },
+            "description": "Actualiza campos de la unidad -- pese al verbo PUT, el motor lo trata como PATCH: cada campo ausente/NULL preserva el valor actual. `LIMPIAR_REFERENTE=true` fuerza FK_REFERENTE_CURRICULAR a NULL (apaga la evaluacion dinamica); `LIMPIAR_PONDERACION=true` fuerza PONDERACION a NULL. OBJETIVOS/CONTENIDOS: NULL = no tocar, array (incl. vacio) = reemplazo completo. Revalida unicidad y la regla del 100%.\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"NOMBRE\": \"Unidad SANDBOX (editada por Postman)\",\n  \"PONDERACION\": 35\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "2.5 — PATCH eliminar unidad (soft delete)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadRecienCreadaId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadRecienCreadaId}}"
+              ]
+            },
+            "description": "Soft delete en cascada: niveles -> criterios -> rubrica, objetivos, contenidos y la unidad. Se RECHAZA (23503) si la unidad todavia tiene actividades activas vinculadas -- hay que desvincularlas (2.11) o eliminarlas antes.\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.\n\nDESHABILITADA en la corrida de la coleccion porque inactiva la unidad sandbox, y todo lo que viene despues cuelga de ella. Sigue documentada y se puede lanzar a mano; despues hay que rehidratar el registro sandbox.\n\nSALTADA en la corrida de la coleccion (inactiva la unidad sandbox y todo lo que sigue cuelga de ella). Para lanzarla igualmente, define `MANUAL=1` en el entorno.\n\nElimina la unidad que acaba de crear 2.2 (unidadRecienCreadaId), no la sandbox: asi la corrida completa no deja unidades acumuladas y ademas no choca con la regla de que la suma de ponderaciones por asignatura+grado no pase de 100."
+          },
+          "event": []
+        },
+        {
+          "name": "2.6 — GET objetivos de la unidad",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadEvaluativaId}}/objetivos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadEvaluativaId}}",
+                "objetivos"
+              ]
+            },
+            "description": "Objetivos activos de la unidad, ordenados. Se usan al pintar la pestaña 'Objetivos' del detalle de unidad (redundante con el detalle 2.3, pero sin el resto de campos)."
+          }
+        },
+        {
+          "name": "2.7 — GET contenidos de la unidad",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadEvaluativaId}}/contenidos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadEvaluativaId}}",
+                "contenidos"
+              ]
+            },
+            "description": "Contenidos/componentes activos de la unidad, ordenados. Analogo a 2.6 para la pestaña 'Contenidos'."
+          }
+        },
+        {
+          "name": "2.8 — GET actividades de la unidad",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadEvaluativaId}}/actividades",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadEvaluativaId}}",
+                "actividades"
+              ],
+              "query": [
+                {
+                  "key": "grupo",
+                  "value": "{{grupoId}}",
+                  "disabled": true
+                },
+                {
+                  "key": "size",
+                  "value": "50",
+                  "description": "default 50",
+                  "disabled": true
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Tabla de actividades ya vinculadas a la unidad, con su PONDERACION (%, columna visible de la pantalla). Filtros `search`, `grupo`, `incluir_inactivas`; orden `orden_por` en actividad|tipo|instrumento|grupo|porcentaje."
+          }
+        },
+        {
+          "name": "2.9 — PUT vincular actividad a la unidad",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadSandboxId}}/actividades/{{actividadHuerfanaId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadSandboxId}}",
+                "actividades",
+                "{{actividadHuerfanaId}}"
+              ]
+            },
+            "description": "Vincula una actividad (tipicamente una 'huerfana', ver carpeta 4) a esta unidad y fija su PONDERACION (%). `PONDERACION` NULL no cambia el peso actual; se rechaza si la unidad Promedia o calcula por Sumatoria (ahi el % se autocalcula desde NOTA_MAXIMA). `PERMITIR_MOVER_DE_UNIDAD=true` es OBLIGATORIO si la actividad YA estaba en OTRA unidad (evita mover de unidad en silencio); vincular una huerfana no lo requiere. Valida la regla del 100% consultada en 1.5.\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"PONDERACION\": 20,\n  \"PERMITIR_MOVER_DE_UNIDAD\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "2.10 — PATCH desvincular actividad de su unidad",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/actividades/{{actividadHuerfanaId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "actividades",
+                "{{actividadHuerfanaId}}"
+              ]
+            },
+            "description": "Desvincula la actividad: FK_TUNIDAD y PONDERACION quedan en NULL (vuelve a ser huerfana). Si la unidad de origen calculaba por Sumatoria, recalcula el % del resto de actividades de ese (unidad,grupo).\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.\n\nDESHABILITADA en la corrida de la coleccion porque desvincula la actividad sandbox de su unidad, lo que hace fallar la edicion de ponderacion inline y la definicion de instrumento. Sigue documentada y se puede lanzar a mano; despues hay que rehidratar el registro sandbox.\n\nDesvincula la actividad que 2.9 acaba de vincular, dejandola huerfana otra vez. Es deliberado: la actividad huerfana es el ejemplo que documenta el listado de huerfanas (4.6) y el dato tiene que sobrevivir a la corrida."
+          },
+          "event": []
+        },
+        {
+          "name": "2.11 — PUT editar ponderacion inline de una actividad vinculada",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/actividades/{{actividadSandboxId}}/ponderacion",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "actividades",
+                "{{actividadSandboxId}}",
+                "ponderacion"
+              ]
+            },
+            "description": "Edicion rapida (inline) del peso (%) de una actividad ya vinculada, sin pasar por el PUT completo de la actividad. Obligatorio 0..100; se rechaza si la unidad Promedia o calcula por Sumatoria, o si la actividad no esta vinculada a ninguna unidad. Valida la regla del 100%.\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"PONDERACION\": 25\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 — Referente curricular: enunciados, evidencias y rubrica de unidad",
+      "description": "El corazon de lo dinamico del Planeador. El referente curricular de una unidad se DERIVA (grado -> nivel de ensenanza -> referente), nunca se elige a mano: GET .../referente (3.1) hace ese recorrido y devuelve el arbol enunciado->evidencias mas las dos banderas (enfoque, tipo de evaluacion) que la carpeta 5 usa para decidir que pintar en la actividad. Aqui tambien vive la rubrica PROPIA de la unidad (distinta de la rubrica de INSTRUMENTO de una actividad, carpeta 6) y la relacion unidad<->enunciado que habilita, mas abajo, que una actividad pueda marcar evidencias (carpeta 4).",
+      "item": [
+        {
+          "name": "3.1 — GET referente curricular de la unidad (arbol completo)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadEvaluativaId}}/referente",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadEvaluativaId}}",
+                "referente"
+              ]
+            },
+            "description": "EL endpoint clave del modulo dinamico. El referente NO se elige a mano: se deriva del GRADO de la unidad -> nivel de ensenanza -> referente de ese nivel, y esta ruta hace ese recorrido en una sola llamada. Devuelve el contexto (unidad/grado/nivel), el referente, y las DOS banderas que gobiernan toda la UI: `enfoque_valor`/`es_evaluativo` (EVALUATIVO habilita evaluacion con nota; FORMATIVO = preescolar, no hay nota, se observa) y `tipo_evaluacion_valor` (CUALITATIVA -> solo rubrica/lista de cotejo; CUANTITATIVA -> solo escala; CUANTITATIVA_CUALITATIVA -> los 4 instrumentos). Tambien `nivel_1_etiqueta`/`nivel_2_etiqueta`: como llama ESTE referente a sus niveles ('Enunciado'/'Evidencia' en primaria, 'Proposito'/'Evidencia' en preescolar) -- rotular con esto, nunca con literales. `enunciados` viene con `relacionadoConUnidad` (pre-marca lo ya vinculado) y `pkTunidadEnunciado` (el PK de la RELACION, el que pide 3.6 para quitarla -- NO el PK del enunciado), con sus `evidencias` anidadas porque una actividad solo puede marcar evidencias de enunciados que la unidad ya relaciono. Si la unidad no tiene referente, todo viene NULL/[]."
+          }
+        },
+        {
+          "name": "3.2 — GET criterios de la rubrica de unidad",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadEvaluativaId}}/criterios",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadEvaluativaId}}",
+                "criterios"
+              ],
+              "query": [
+                {
+                  "key": "incluir_inactivos",
+                  "value": "false",
+                  "description": "default false",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Criterios de la rubrica propia de la unidad (TCRITERIO_UNIDAD, distinta de la rubrica de instrumento de una actividad puntual, carpeta 6), ordenados, con sus niveles de desempeno agregados en JSONB (uno por cada valoracion activa de la escala del periodo). Esta rubrica es la que luego se relaciona actividad por actividad (carpeta 4, POST criterios)."
+          }
+        },
+        {
+          "name": "3.3 — POST agregar criterio a la rubrica de unidad",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadSandboxId}}/criterios",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadSandboxId}}",
+                "criterios"
+              ]
+            },
+            "description": "Agrega un criterio a la rubrica de la unidad (crea la rubrica si aun no existe). NIVELES exige EXACTAMENTE un elemento por cada valoracion activa de la escala configurada para el periodo academico del grado de la unidad -- sin faltantes, sobrantes ni duplicados.\n\nNIVELES debe traer EXACTAMENTE un indicador por cada valoracion activa de la escala del establecimiento (aqui 4). Mandar menos devuelve 400: una rubrica a medio definir dejaria criterios imposibles de calificar.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"CODIGO\": \"C1\",\n  \"DESCRIPCION\": \"Reconoce cantidades\",\n  \"PUBLICO\": \"S\",\n  \"DESCRIPTOR_PROM\": \"N\",\n  \"NIVELES\": \"[{\\\"fkTescalaValoracion\\\":\\\"{{escalaValoracion1Id}}\\\",\\\"indicador\\\":\\\"Lo logra siempre\\\"},{\\\"fkTescalaValoracion\\\":\\\"{{escalaValoracion2Id}}\\\",\\\"indicador\\\":\\\"Lo logra casi siempre\\\"},{\\\"fkTescalaValoracion\\\":\\\"{{escalaValoracion3Id}}\\\",\\\"indicador\\\":\\\"Lo logra a veces\\\"},{\\\"fkTescalaValoracion\\\":\\\"{{escalaValoracion4Id}}\\\",\\\"indicador\\\":\\\"Aun no lo logra\\\"}]\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// El motor responde {\"rows\":[{...}]}: el pk es el primer campo de la fila.",
+                  "if (pm.response.code === 200) {",
+                  "    const fila = (pm.response.json().rows || [])[0];",
+                  "    const pk = fila && fila[Object.keys(fila)[0]];",
+                  "    if (pk) { pm.collectionVariables.set(\"criterioRecienCreadoId\", String(pk)); }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.4 — PUT editar criterio de la rubrica de unidad",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/criterios/{{criterioRecienCreadoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "criterios",
+                "{{criterioRecienCreadoId}}"
+              ]
+            },
+            "description": "Edicion parcial del criterio (`:ID` = PK_TCRITERIO_UNIDAD). `LIMPIAR_CODIGO=true` fuerza CODIGO a NULL. NIVELES (opcional) SOLO actualiza los textos de niveles YA existentes de ese criterio -- no crea niveles nuevos.\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.\n\nOpera sobre el criterio que acaba de crear 3.3 (variable criterioRecienCreadoId), no sobre criterioSandboxId: asi la corrida completa no deja basura ni deja sin criterio a 4.9.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"DESCRIPCION\": \"Reconoce cantidades hasta 10\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "3.5 — PATCH eliminar criterio de la rubrica de unidad",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/criterios/{{criterioRecienCreadoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "criterios",
+                "{{criterioRecienCreadoId}}"
+              ]
+            },
+            "description": "Soft delete del criterio y sus niveles. No renumera el ORDEN de los criterios restantes.\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.\n\nOpera sobre el criterio que acaba de crear 3.3 (variable criterioRecienCreadoId), no sobre criterioSandboxId: asi la corrida completa no deja basura ni deja sin criterio a 4.9."
+          }
+        },
+        {
+          "name": "3.6 — POST relacionar enunciado con la unidad",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadEvaluativaId}}/enunciados",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadEvaluativaId}}",
+                "enunciados"
+              ]
+            },
+            "description": "Relaciona (o reactiva) un enunciado NIVEL 1 del referente con la unidad -- el paso previo obligatorio antes de que cualquier actividad de esa unidad pueda marcar sus evidencias (carpeta 4). Valida que el enunciado sea nivel 1 (FK_PADRE IS NULL) y comparta nivel de ensenanza con la unidad. `FK_REFERENTE_ENUNCIADO` sale de la lista de 3.1.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FK_REFERENTE_ENUNCIADO\": {{enunciadoId}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "3.7 — PATCH quitar enunciado de la unidad",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/enunciados/{{unidadEnunciadoSandboxId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "enunciados",
+                "{{unidadEnunciadoSandboxId}}"
+              ]
+            },
+            "description": "Borrado logico de la relacion unidad<->enunciado. `:ID` = PK_TUNIDAD_ENUNCIADO -- el PK de la RELACION que devuelve 3.1 como `pkTunidadEnunciado`, NO el PK del enunciado. Arrastra la desactivacion de las evidencias de actividad (carpeta 4) cuyo enunciado padre era este.\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.\n\nSALTADA en la corrida de la coleccion (quitar un enunciado de la unidad consume el vinculo sandbox y deja 3.6 sin nada que mostrar en la siguiente corrida). Para lanzarla igualmente, define `MANUAL=1` en el entorno."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// quitar un enunciado de la unidad consume el vinculo sandbox y deja 3.6 sin nada que mostrar en la siguiente corrida",
+                  "// Para lanzarla a mano: pon MANUAL=1 en el entorno.",
+                  "if (!pm.environment.get(\"MANUAL\")) {",
+                  "    console.log(\"Saltada en la corrida: 3.7\");",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4 — CRUD de actividad",
+      "description": "El ciclo de vida completo de la actividad: listar, crear (con o sin unidad), ver detalle, editar, eliminar; la pantalla de 'huerfanas' para vincular despues; materiales y adaptaciones (reemplazo completo); y la relacion con la rubrica de unidad (criterios) y el referente (evidencias) que la carpeta 3 dejo preparados. Cierra con exportar/importar para clonar actividades entre grupos o asignaturas.",
+      "item": [
+        {
+          "name": "4.1 — GET listado de actividades",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades"
+              ],
+              "query": [
+                {
+                  "key": "search",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "asignatura",
+                  "value": "{{asignaturaId}}",
+                  "disabled": true
+                },
+                {
+                  "key": "grupo",
+                  "value": "{{grupoId}}",
+                  "disabled": true
+                },
+                {
+                  "key": "unidad",
+                  "value": "{{unidadEvaluativaId}}",
+                  "disabled": true
+                },
+                {
+                  "key": "estados",
+                  "value": "",
+                  "description": "UN estado a la vez",
+                  "disabled": true
+                },
+                {
+                  "key": "dias_gracia",
+                  "value": "2",
+                  "description": "default 2",
+                  "disabled": true
+                },
+                {
+                  "key": "size",
+                  "value": "20",
+                  "description": "default 20",
+                  "disabled": true
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Pagina general de actividades (no acotada a un docente -- para eso esta 8.3 `/mias`) con filtros indexados (`asignatura`,`grupo`,`unidad`,`tipo_actividad`,`instrumento`), ventana `fecha_desde`/`fecha_hasta` por solapamiento, `search` (buscador unico por nombre/nivel/instrumento) y `estados` (el estado DERIVADO -- ver carpeta 8; UN estado a la vez, el multi-estado por coma esta roto). `dias_gracia` (default 2) ajusta el umbral de VENCIDA."
+          }
+        },
+        {
+          "name": "4.2 — POST crear actividad",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades"
+              ]
+            },
+            "description": "Crea la actividad. Obligatorios: TITULO, FK_TASIGNATURA, FK_TLV_TIPO_ACTIVIDAD, FK_TLV_JERARQUIA (Actividad/Criterio). La UNIDAD es OPCIONAL: sin FK_TUNIDAD la actividad queda 'huerfana' (ver 4.6) y sin evidencias/criterios posibles -- se puede vincular despues (carpeta 2.9). Si trae unidad, PONDERACION valida contra el % disponible de 1.5. EVIDENCIAS solo acepta PKs cuyo enunciado padre YA este relacionado con la unidad (carpeta 3.6); CRITERIOS solo PKs de la rubrica de ESA unidad (carpeta 3.3). FK_TLV_INSTRUMENTO_EVALUACION solo se admite si hay unidad con referente EVALUATIVO. RECUPERACION exige ES_EVALUATIVA=S. MATERIALES/ADAPTACIONES son arrays JSONB con el mismo formato que los PUT dedicados (4.7/4.8).\n\nEl nombre lleva `{{$timestamp}}` a proposito: sin el, la segunda corrida choca con la regla de unicidad (409) porque el registro de la primera sigue activo.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TITULO\": \"Taller de conteo {{$timestamp}}\",\n  \"DESCRIPCION\": \"Actividad de refuerzo\",\n  \"FK_TASIGNATURA\": {{asignaturaId}},\n  \"FK_TGRUPO\": {{grupoId}},\n  \"FK_TUNIDAD\": {{unidadEvaluativaId}},\n  \"FK_TLV_TIPO_ACTIVIDAD\": {{tipoActividadId}},\n  \"FK_TLV_JERARQUIA\": {{jerarquiaActividadId}},\n  \"ES_EVALUATIVA\": \"S\",\n  \"FECHA_INICIO\": \"2026-09-10\",\n  \"FECHA_CIERRE\": \"2026-09-20\",\n  \"ASIGNAR_TODO_EL_GRUPO\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// El motor responde {\"rows\":[{...}]}: el pk es el primer campo de la fila.",
+                  "if (pm.response.code === 200) {",
+                  "    const fila = (pm.response.json().rows || [])[0];",
+                  "    const pk = fila && fila[Object.keys(fila)[0]];",
+                  "    if (pk) { pm.collectionVariables.set(\"actividadRecienCreadaId\", String(pk)); }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.3 — GET detalle de actividad",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadEvaluativaId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadEvaluativaId}}"
+              ],
+              "query": [
+                {
+                  "key": "dias_gracia",
+                  "value": "2",
+                  "description": "default 2",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Detalle completo: campos con catalogos resueltos, estado DERIVADO, progreso de evaluacion, materiales/adaptaciones, config de recuperacion, `campos_disponibles` (ver carpeta 5) y `unidad_configuracion` (snapshot de la unidad: objetivos, contenidos, referente, rubrica, enunciados/evidencias -- para no encadenar el detalle de la unidad aparte)."
+          }
+        },
+        {
+          "name": "4.4 — PUT editar actividad (parcial)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadSandboxId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadSandboxId}}"
+              ]
+            },
+            "description": "Igual que en unidad, el PUT se comporta como PATCH parcial: campo ausente/NULL preserva el valor actual. `DESVINCULAR_UNIDAD=true` es excluyente con FK_TUNIDAD/PONDERACION (se delega en los endpoints de la carpeta 2). `QUITAR_RECUPERACION=true` es excluyente con RECUPERACION. MATERIALES/ADAPTACIONES/FK_TMATRICULAS: NULL = no tocar, array (incl. vacio) = reemplazo completo. Revalida las condiciones dinamicas de evaluacion/ponderacion contra los valores RESULTANTES del PATCH.\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TITULO\": \"Taller de conteo (ajustado)\",\n  \"FECHA_CIERRE\": \"2026-09-25\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "4.5 — PATCH eliminar actividad (soft delete en cascada)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadRecienCreadaId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadRecienCreadaId}}"
+              ]
+            },
+            "description": "Soft delete en cascada de la actividad y todos sus satelites activos (capturas, asignaciones, instrumento, materiales, adaptaciones, recuperacion, evidencias, criterios). BLOQUEADA (23503) si tiene notas registradas o si otra actividad de recuperacion activa la referencia. Suelta la actividad de su unidad y recalcula el bucket si era de Sumatoria.\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.\n\nDESHABILITADA en la corrida de la coleccion porque inactiva la actividad sandbox en cascada, dejando sin sujeto a las carpetas 6 y 7. Sigue documentada y se puede lanzar a mano; despues hay que rehidratar el registro sandbox.\n\nSALTADA en la corrida de la coleccion (inactiva la actividad sandbox en cascada y deja sin sujeto a las carpetas 6 y 7). Para lanzarla igualmente, define `MANUAL=1` en el entorno.\n\nElimina la actividad que acaba de crear 4.2 (actividadRecienCreadaId), no la sandbox: las carpetas 6 y 7 siguen necesitando la sandbox viva."
+          },
+          "event": []
+        },
+        {
+          "name": "4.6 — GET actividades huerfanas (sin unidad)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/huerfanas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "huerfanas"
+              ],
+              "query": [
+                {
+                  "key": "search",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "asignatura",
+                  "value": "{{asignaturaId}}",
+                  "disabled": true
+                },
+                {
+                  "key": "grupo",
+                  "value": "{{grupoId}}",
+                  "disabled": true
+                },
+                {
+                  "key": "pagina",
+                  "value": "1",
+                  "description": "default 1",
+                  "disabled": true
+                },
+                {
+                  "key": "size",
+                  "value": "20",
+                  "description": "default 20",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Actividades ACTIVE sin unidad, para la pantalla de vinculacion posterior (complemento de 4.2 cuando se crea sin unidad, y de 1.6 que lista candidatas DESDE la unidad). No proyecta PONDERACION (siempre NULL en una huerfana). Vincular una fila resultante usa el PUT de la carpeta 2.9."
+          }
+        },
+        {
+          "name": "4.7 — PUT materiales de apoyo (reemplazo completo)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadSandboxId}}/materiales",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadSandboxId}}",
+                "materiales"
+              ]
+            },
+            "description": "Reemplaza TODOS los materiales de la actividad de una pasada (array vacio = dejarla sin materiales). Cada elemento trae EXACTAMENTE uno de `url`/`fkTarchivo`; para reutilizar un archivo de otra actividad (picker 1.7) se pasa el mismo `fkTarchivo` con `tipoRecurso=REPOSITORIO`. El orden del array fija el ORDEN mostrado.\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"MATERIALES\": \"[{\\\"tipoRecurso\\\":\\\"{{tipoRecursoUrlId}}\\\",\\\"url\\\":\\\"https://ejemplo.com/guia.pdf\\\",\\\"descripcion\\\":\\\"Guia de conteo\\\"}]\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "4.8 — PUT adaptaciones curriculares (reemplazo completo)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadSandboxId}}/adaptaciones",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadSandboxId}}",
+                "adaptaciones"
+              ]
+            },
+            "description": "Reemplaza TODAS las adaptaciones curriculares de la actividad (array vacio = quitarlas todas). Confirmado con negocio: una actividad SIN unidad SI puede tener adaptaciones -- es independiente de si se evalua. `aplicaA=ESTUDIANTES_SELECCIONADOS` exige que esos estudiantes ya esten asignados a la actividad (TACTIVIDAD_ESTUDIANTE).\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ADAPTACIONES\": \"[{\\\"tipoAdaptacion\\\":\\\"{{tipoAdaptacionId}}\\\",\\\"descripcion\\\":\\\"Tiempo adicional\\\",\\\"usaVersionModificada\\\":\\\"N\\\",\\\"aplicaA\\\":\\\"{{aplicaTodoElGrupoId}}\\\"}]\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "4.9 — POST relacionar criterio de unidad con la actividad",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadSandboxId}}/criterios",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadSandboxId}}",
+                "criterios"
+              ]
+            },
+            "description": "Relaciona (o reactiva) un criterio de la RUBRICA DE LA UNIDAD (carpeta 3.2/3.3) con esta actividad puntual. Exige que la actividad tenga FK_TUNIDAD y que el criterio pertenezca a la rubrica de esa misma unidad.\n\nEl criterio tiene que pertenecer a la rubrica de la MISMA unidad de la actividad; por eso aqui va criterioSandboxId (unidad sandbox) y no criterioUnidadId (unidad 12).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FK_TCRITERIO_UNIDAD\": {{criterioSandboxId}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// El motor responde {\"rows\":[{...}]}: el pk es el primer campo de la fila.",
+                  "if (pm.response.code === 200) {",
+                  "    const fila = (pm.response.json().rows || [])[0];",
+                  "    const pk = fila && fila[Object.keys(fila)[0]];",
+                  "    if (pk) { pm.collectionVariables.set(\"actCriterioSandboxId\", String(pk)); }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.10 — PATCH quitar criterio de la actividad",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/criterios/{{actCriterioSandboxId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "criterios",
+                "{{actCriterioSandboxId}}"
+              ]
+            },
+            "description": "Borrado logico de la relacion actividad<->criterio de rubrica. `:ID` = PK_TACTIVIDAD_CRITERIO_UNIDAD (la relacion, no el criterio).\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.\n\nSALTADA en la corrida de la coleccion (quitar el criterio consume lo que crea 4.9; se encadena solo si se corre la carpeta suelta). Para lanzarla igualmente, define `MANUAL=1` en el entorno."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// quitar el criterio consume lo que crea 4.9; se encadena solo si se corre la carpeta suelta",
+                  "// Para lanzarla a mano: pon MANUAL=1 en el entorno.",
+                  "if (!pm.environment.get(\"MANUAL\")) {",
+                  "    console.log(\"Saltada en la corrida: 4.10\");",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.11 — POST relacionar evidencia con la actividad",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadSandboxId}}/evidencias",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadSandboxId}}",
+                "evidencias"
+              ]
+            },
+            "description": "Relaciona (o reactiva) una evidencia (TREFERENTE_ENUNCIADO nivel 2) con esta actividad. Exige que la actividad tenga FK_TUNIDAD y que el ENUNCIADO PADRE de esa evidencia ya este relacionado (activo) con la misma unidad (carpeta 3.6) -- sin unidad, o sin ese enunciado relacionado, no hay evidencias posibles.\n\nFK_REFERENTE_ENUNCIADO tiene que ser una EVIDENCIA (nivel 2: un enunciado con padre), no un enunciado raiz. Aqui va evidenciaId3, la evidencia que cuelga del enunciado vinculado a la unidad sandbox.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FK_REFERENTE_ENUNCIADO\": {{evidenciaId3}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// El motor responde {\"rows\":[{...}]}: el pk es el primer campo de la fila.",
+                  "if (pm.response.code === 200) {",
+                  "    const fila = (pm.response.json().rows || [])[0];",
+                  "    const pk = fila && fila[Object.keys(fila)[0]];",
+                  "    if (pk) { pm.collectionVariables.set(\"actEvidenciaSandboxId\", String(pk)); }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.12 — PATCH quitar evidencia de la actividad",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/evidencias/{{actEvidenciaSandboxId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "evidencias",
+                "{{actEvidenciaSandboxId}}"
+              ]
+            },
+            "description": "Borrado logico de la relacion actividad<->evidencia. `:ID` = PK_TACTIVIDAD_EVIDENCIA (la relacion, no la evidencia).\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.\n\nSALTADA en la corrida de la coleccion (quitar la evidencia consume lo que crea 4.11). Para lanzarla igualmente, define `MANUAL=1` en el entorno."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// quitar la evidencia consume lo que crea 4.11",
+                  "// Para lanzarla a mano: pon MANUAL=1 en el entorno.",
+                  "if (!pm.environment.get(\"MANUAL\")) {",
+                  "    console.log(\"Saltada en la corrida: 4.12\");",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.13 — POST exportar actividades",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/exportar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "exportar"
+              ]
+            },
+            "description": "Exporta actividades al formato JSON de intercambio (por lista de IDS, unidad, asignatura o grupo -- al menos uno). Cada actividad incluye su `unidad_meta`, el instrumento de evaluacion vigente y un bloque `_identificadores` con las PKs para poder reimportarla sin resolver nombres. Es el par de 4.14.\n\nEl parametro se llama PK_TUNIDAD (la unidad como sujeto de la exportacion), no FK_TUNIDAD: el motor rechaza con 400 cualquier clave del body que no este declarada en el catalogo.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"PK_TUNIDAD\": {{unidadEvaluativaId}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "4.14 — POST importar actividades",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/importar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "importar"
+              ]
+            },
+            "description": "Importa actividades desde el JSON que produce 4.13. Con `SOLO_VALIDAR=true` (default) no escribe nada: devuelve el informe fila por fila con lo que no casa contra catalogos o reglas de negocio -- usar SIEMPRE primero en modo validacion. Con `SOLO_VALIDAR=false` aplica todo o nada. El destino sale de `_identificadores` de cada actividad si vienen, o de los FK_ del cuerpo; nunca se resuelve por nombre.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"SOLO_VALIDAR\": true,\n  \"FK_TGRADO\": {{gradoId}},\n  \"FK_TASIGNATURA\": {{asignaturaId}},\n  \"ACTIVIDADES\": \"[]\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 — Pintado dinamico (que secciones se habilitan)",
+      "description": "Un solo endpoint, pero es la bisagra entre el referente curricular (carpeta 3) y el formulario de actividad (carpeta 4): traduce el enfoque y tipo de evaluacion del referente de la unidad en que campos mostrar/exigir en ESTA actividad puntual, con el motivo de cada decision. El front lo consulta (o usa el mismo bloque que ya trae el detalle de actividad, 4.3) antes de pintar las secciones de evaluacion, ponderacion y criterio.",
+      "item": [
+        {
+          "name": "5.1 — GET configuracion dinamica de la actividad",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadEvaluativaId}}/configuracion",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadEvaluativaId}}",
+                "configuracion"
+              ]
+            },
+            "description": "El endpoint que le dice al front EXACTAMENTE que pintar para esta actividad puntual, con el MOTIVO de cada decision -- 'visualizacion construida por endpoint', no logica de UI adivinando reglas. `campos_disponibles`: `criterio` (oculto solo en Preescolar, opcional en el resto), `evaluacion` (visible/requerido solo si la unidad tiene referente EVALUATIVO -- carpeta 3.1 -- con `instrumentosPermitidos` ya filtrado por el TIPO_EVALUACION del referente), `ponderacion` (oculto sin unidad o si ES_EVALUATIVA=N; el modo -- PORCENTAJE vs PUNTAJE autocalculado -- lo decide el metodo de calculo de la unidad, V73). `unidad_configuracion` es el mismo snapshot completo que ya trae el detalle de actividad (4.3), o `{tieneUnidad:false}` si no tiene unidad. Llamar esto (o leerlo del detalle 4.3) es el paso previo a mostrar el formulario de evaluacion/ponderacion/instrumento de una actividad."
+          }
+        }
+      ]
+    },
+    {
+      "name": "6 — CRUD de instrumentos de evaluacion",
+      "description": "Ver y (re)definir el instrumento de evaluacion vigente de UNA actividad puntual -- rubrica, lista de cotejo, escala de valoracion, u 'otro' con un metodo de valoracion equivalente. `instrumentosPermitidos` (carpeta 5) ya viene filtrado por el TIPO_EVALUACION del referente de la unidad, asi que el front nunca ofrece un instrumento que la unidad no admite.",
+      "item": [
+        {
+          "name": "6.1 — GET instrumento de evaluacion de la actividad",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadEvaluativaId}}/instrumento",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadEvaluativaId}}",
+                "instrumento"
+              ]
+            },
+            "description": "Lee la definicion del instrumento vigente de la actividad (el que quedo fijado en FK_TLV_INSTRUMENTO_EVALUACION). La forma de `definicion` cambia segun el instrumento: RUBRICA -> array de criterios con niveles ordenados por ponderacion DESC; LISTA_COTEJO -> array de items; ESCALA_VALORACION -> objeto con tipoEscala y niveles (si es CUALITATIVA) o rango numerico (si es NUMERICA); OTRO -> reutiliza el formato del metodo de valoracion elegido. Sin instrumento definido, `definicion` es NULL."
+          }
+        },
+        {
+          "name": "6.2 — PUT definir instrumento de evaluacion",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadSandboxId}}/instrumento",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadSandboxId}}",
+                "instrumento"
+              ]
+            },
+            "description": "Reemplazo completo del instrumento vigente. Es una FACHADA UNICA: por dentro despacha a la funcion especifica de rubrica/cotejo/escala/otro segun el instrumento ya fijado en la actividad -- por eso `BODY.DEFINICION` cambia de forma segun cual sea (consultar antes con 5.1 `campos_disponibles.evaluacion.instrumentosPermitidos`, o el detalle de actividad). Las 3 funciones especificas NO se exponen aparte, decision documentada en la migracion V226/V240: esta ruta ya hace todo el trabajo de despacho.\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"DEFINICION\": \"[{\\\"nombre\\\":\\\"Comprension\\\",\\\"descripcion\\\":\\\"Entiende la consigna\\\",\\\"niveles\\\":[{\\\"etiqueta\\\":\\\"Logrado\\\",\\\"descripcion\\\":\\\"Cumple todos los criterios\\\",\\\"ponderacion\\\":100},{\\\"etiqueta\\\":\\\"En proceso\\\",\\\"descripcion\\\":\\\"Cumple parcialmente\\\",\\\"ponderacion\\\":50}]}]\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Definir el instrumento RECREA la rubrica propia de la actividad, asi que",
+                  "// sus pks cambian en cada corrida. Se releen aqui para que la carpeta 7",
+                  "// califique contra los ids que acaban de nacer.",
+                  "//",
+                  "// OJO con la confusion mas facil del modulo: el PK_CRITERIO de",
+                  "// /calificar-bulk/rubrica NO es el criterio de la rubrica de la UNIDAD",
+                  "// (TCRITERIO_UNIDAD, carpeta 3) sino el de la rubrica propia de la",
+                  "// ACTIVIDAD (TACTIVIDAD_RUBRICA_CRITERIO), la que define este endpoint.",
+                  "if (pm.response.code === 200) {",
+                  "    pm.sendRequest({",
+                  "        url: pm.environment.get(\"baseUrl\") + \"/api/eval-col/planeador/actividades/\"",
+                  "             + pm.collectionVariables.get(\"actividadSandboxId\") + \"/instrumento\",",
+                  "        method: \"GET\",",
+                  "        header: { Authorization: \"Bearer \" + pm.collectionVariables.get(\"token\") }",
+                  "    }, (err, res) => {",
+                  "        if (err || res.code !== 200) { return; }",
+                  "        const def = ((res.json().rows || [])[0] || {}).definicion || [];",
+                  "        if (!def.length) { return; }",
+                  "        pm.collectionVariables.set(\"actRubricaCriterioId\", String(def[0].pk));",
+                  "        const niveles = def[0].niveles || [];",
+                  "        if (niveles.length) { pm.collectionVariables.set(\"actRubricaNivelId\", String(niveles[0].pk)); }",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7 — Calificaciones",
+      "description": "Todo lo que pasa despues de tener el instrumento definido (carpeta 6): calificar individual o en bloque (los tres bulk, uno por instrumento), observar en preescolar (grupal e individual, sin nota), consultar el detalle de un estudiante o la tabla completa de una actividad, y la Planilla de calificacion (columnas + filas) que agrupa todo un grupo+asignatura a la vez. La nota siempre se guarda como % 0-100, nunca en la escala del colegio.",
+      "item": [
+        {
+          "name": "7.1 — PUT calificar con nota a UN estudiante",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{actEstudianteSandboxId}}/calificar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "estudiantes",
+                "{{actEstudianteSandboxId}}",
+                "calificar"
+              ]
+            },
+            "description": "Califica con nota numerica a UN estudiante segun el instrumento vigente de su actividad. `:ID` = PK_TACTIVIDAD_ESTUDIANTE (NO el de la actividad). `BODY.CALIFICACION` cambia de forma segun el instrumento: RUBRICA exige cubrir TODOS los criterios activos (ni de mas ni de menos, a diferencia del bulk 7.2 que hace upsert parcial); LISTA_COTEJO/ESCALA/OTRO tienen su propio shape (ver detalle). Valida asistencia en `FECHA` (default hoy) -- bloquea si no la hay o es inasistencia injustificada. Guarda SIEMPRE el % (0-100), nunca en la escala del colegio: asi un cambio de escala no invalida el historico. RECHAZA de entrada cualquier actividad de referente FORMATIVO (preescolar) -- ahi se observa, no se califica (7.5/7.6).\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.\n\nSALTADA en la corrida de la coleccion (calificar exige asistencia registrada para la asignatura en la fecha de hoy; sin ella el backend responde 400). Para lanzarla igualmente, registra la asistencia del dia y define MANUAL=1 en el entorno.\n\npkCriterio / pkNivel son de la rubrica propia de la actividad, igual que en 7.2.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"CALIFICACION\": \"{\\\"niveles\\\":[{\\\"pkCriterio\\\":\\\"{{actRubricaCriterioId}}\\\",\\\"pkNivel\\\":\\\"{{actRubricaNivelId}}\\\"}]}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// calificar exige asistencia registrada para la asignatura en la fecha de hoy; sin ella el backend responde 400",
+                  "// Para lanzarla a mano: pon MANUAL=1 en el entorno.",
+                  "if (!pm.environment.get(\"MANUAL\")) {",
+                  "    console.log(\"Saltada en la corrida: 7.1\");",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7.2 — PUT calificar BULK por rubrica",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadSandboxId}}/calificar-bulk/rubrica",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadSandboxId}}",
+                "calificar-bulk",
+                "rubrica"
+              ]
+            },
+            "description": "Flujo real de la Planilla cuando el docente elige la columna 'Criterio: Nivel' y la aplica a los estudiantes marcados: UN criterio + UN nivel para VARIOS estudiantes en una pasada. Hace upsert de una sola fila por estudiante (ese criterio) -- NO toca los demas criterios ya capturados, a diferencia de 7.1 que exige el set completo. `calificacion_actualizada=true` en la respuesta indica que ese estudiante ya cubrio todos los criterios y se guardo la nota; `false` es informativo (faltan criterios), no un error.\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.\n\nESTUDIANTES se declara BIGINT[]: los elementos van SIN comillas. Con comillas el motor responde 400 (\"se declaro como BIGINT[] pero el elemento [0] es String\").\n\nPK_CRITERIO / PK_NIVEL son de la rubrica PROPIA de la actividad (TACTIVIDAD_RUBRICA_CRITERIO / _NIVEL, la que define 6.2), NO los criterios de la rubrica de la unidad de la carpeta 3. Son dos rubricas distintas y confundirlas devuelve \"El criterio N no pertenece a la rubrica de esta actividad\". Los valores los rellena 6.2 al vuelo porque definir el instrumento recrea esa rubrica.\n\nSALTADA en la corrida de la coleccion (calificar exige asistencia registrada para la asignatura en la fecha de hoy, y la asistencia no se crea desde el Planeador). Es la misma precondicion de 7.1: el Planeador no califica un dia en el que el grupo no tiene asistencia tomada.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"PK_CRITERIO\": {{actRubricaCriterioId}},\n  \"PK_NIVEL\": {{actRubricaNivelId}},\n  \"ESTUDIANTES\": [\n    {{actEstudianteSandboxId}}\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// calificar exige asistencia registrada para la asignatura en la fecha de hoy, y la asistencia no se crea desde el Planeador",
+                  "// Para lanzarla a mano: registra la asistencia del dia y pon MANUAL=1.",
+                  "if (!pm.environment.get(\"MANUAL\")) {",
+                  "    console.log(\"Saltada en la corrida: 7.2\");",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7.3 — PUT calificar BULK por lista de cotejo",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadSandboxId}}/calificar-bulk/cotejo",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadSandboxId}}",
+                "calificar-bulk",
+                "cotejo"
+              ]
+            },
+            "description": "El docente recorre la lista de cotejo item por item: UN item marcado cumplido/no cumplido para VARIOS estudiantes de una pasada. A diferencia del bulk de rubrica, SIEMPRE recalcula y guarda la calificacion final en la misma pasada -- un item sin captura cuenta como no cumplido por diseno, no existe 'incompleto'.\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.\n\nDESHABILITADA en la corrida de la coleccion: calificar por cotejo exige que la actividad tenga ESE instrumento, y la actividad sandbox esta configurada como RUBRICA (una actividad solo tiene uno). Para probarla manualmente apunta a la actividad 24 (Clasificamos objetos, LISTA_COTEJO) -- ten en cuenta que eso escribe notas reales y puede pasar la actividad a FINALIZADA.\n\nSALTADA en la corrida de la coleccion (calificar por lista de cotejo exige una actividad con ESE instrumento; la sandbox es RUBRICA. Manualmente: actividad 24). Para lanzarla igualmente, define `MANUAL=1` en el entorno.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"PK_ITEM\": {{cotejoItemId}},\n  \"CUMPLIDO\": \"S\",\n  \"ESTUDIANTES\": [\n    {{actEstudianteSandboxId}}\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// calificar por lista de cotejo exige una actividad con ESE instrumento; la sandbox es RUBRICA. Manualmente: actividad 24",
+                  "// Para lanzarla a mano: pon MANUAL=1 en el entorno.",
+                  "if (!pm.environment.get(\"MANUAL\")) {",
+                  "    console.log(\"Saltada en la corrida: 7.3\");",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7.4 — PUT calificar BULK por escala de valoracion",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadSandboxId}}/calificar-bulk/escala",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadSandboxId}}",
+                "calificar-bulk",
+                "escala"
+              ]
+            },
+            "description": "UN nivel de la escala CUALITATIVA para VARIOS estudiantes de una pasada. Solo aplica a escala CUALITATIVA -- la escala NUMERICA (valor digitado por estudiante) no admite bulk, se califica individual via 7.1.\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.\n\nDESHABILITADA en la corrida de la coleccion: calificar por escala exige que la actividad tenga ESE instrumento, y la actividad sandbox esta configurada como RUBRICA (una actividad solo tiene uno). Para probarla manualmente apunta a la actividad 25 (Participacion en la ronda, ESCALA_VALORACION) -- ten en cuenta que eso escribe notas reales y puede pasar la actividad a FINALIZADA.\n\nSALTADA en la corrida de la coleccion (calificar por escala exige una actividad con ESE instrumento; la sandbox es RUBRICA. Manualmente: actividad 25). Para lanzarla igualmente, define `MANUAL=1` en el entorno.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"PK_NIVEL\": {{nivelEscalaId}},\n  \"ESTUDIANTES\": [\n    {{actEstudianteSandboxId}}\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// calificar por escala exige una actividad con ESE instrumento; la sandbox es RUBRICA. Manualmente: actividad 25",
+                  "// Para lanzarla a mano: pon MANUAL=1 en el entorno.",
+                  "if (!pm.environment.get(\"MANUAL\")) {",
+                  "    console.log(\"Saltada en la corrida: 7.4\");",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7.5 — POST observar grupalmente (actividad formativa)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadFormativaId}}/observar-grupal",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadFormativaId}}",
+                "observar-grupal"
+              ]
+            },
+            "description": "En preescolar (referente FORMATIVO) no hay nota numerica: se OBSERVA. Aplica la MISMA observacion de texto libre a todos los estudiantes activos de la actividad de una pasada. Por estudiante sin asistencia valida ese dia, se OMITE (no detiene al resto). Guarda OBSERVACION + CALIFICACION=NULL + CALIFICABLE=N. Rechaza (22023) si la actividad SI es evaluativa (tiene referente EVALUATIVO o no tiene unidad) -- ahi usar 7.1.\n\nObservar es exclusivo del referente FORMATIVO (Preescolar): en una actividad evaluativa el backend responde 400 y remite a calificar con nota. Por eso apunta a actividadFormativaId y no a la evaluativa.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"OBSERVACION\": \"El grupo participo activamente en la actividad\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "7.6 — PUT observar a UN estudiante (particular)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{estudianteFormativoId}}/observar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "estudiantes",
+                "{{estudianteFormativoId}}",
+                "observar"
+              ]
+            },
+            "description": "Comentario particular de un estudiante para una actividad FORMATIVA, sobreescribe lo que haya dejado 7.5 (u otra llamada previa) para ESE estudiante. `:ID` = PK_TACTIVIDAD_ESTUDIANTE. A diferencia de la grupal, SI propaga el error de asistencia si no la hay (accion puntual, no deberia omitirse en silencio).\n\n[ESCRITURA] Esta peticion MODIFICA datos. Apunta a registros desechables (variables *Sandbox*), no a los datos de referencia que usan las lecturas, para que ejecutar la coleccion completa no los altere. Si la repuntas a un registro real, lo modificara de verdad.\n\nSALTADA en la corrida de la coleccion (observar a un estudiante exige asistencia registrada para esa actividad en la fecha de hoy). Para lanzarla igualmente, define `MANUAL=1` en el entorno.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"OBSERVACION\": \"Mostro mucho interes en la actividad\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// observar a un estudiante exige asistencia registrada para esa actividad en la fecha de hoy",
+                  "// Para lanzarla a mano: pon MANUAL=1 en el entorno.",
+                  "if (!pm.environment.get(\"MANUAL\")) {",
+                  "    console.log(\"Saltada en la corrida: 7.6\");",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7.7 — GET detalle de nota de UN estudiante",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{actividadEstudianteId}}/nota",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "estudiantes",
+                "{{actividadEstudianteId}}",
+                "nota"
+              ]
+            },
+            "description": "Detalle de la calificacion de un estudiante puntual: `calificacion` (% 0-100 o NULL), `observacion` (de 7.5/7.6), y `detalle` (la captura cruda segun el instrumento: pares criterio/nivel en rubrica, items cumplidos en cotejo, etc.). Distinta de 7.8, que es la tabla completa de TODOS los estudiantes de la actividad."
+          }
+        },
+        {
+          "name": "7.8 — GET tabla de calificaciones de la actividad",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadEvaluativaId}}/calificaciones",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadEvaluativaId}}",
+                "calificaciones"
+              ],
+              "query": [
+                {
+                  "key": "fecha",
+                  "value": "",
+                  "description": "default hoy",
+                  "disabled": true
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Tabla 'Calificaciones: <actividad>': una fila por cada estudiante ACTIVO asignado, con su asistencia de `?fecha=` (default hoy) y su nota. Los campos de asistencia vienen todos NULL si no hay registro ese dia -- no es un error. `search` filtra por nombre. Sin paginacion (universo acotado a una actividad)."
+          }
+        },
+        {
+          "name": "7.9 — GET columnas de la planilla de calificacion",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/planilla/columnas?grupo={{grupoId}}&asignatura={{asignaturaId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "planilla",
+                "columnas"
+              ],
+              "query": [
+                {
+                  "key": "grupo",
+                  "value": "{{grupoId}}",
+                  "description": "obligatorio"
+                },
+                {
+                  "key": "asignatura",
+                  "value": "{{asignaturaId}}",
+                  "description": "obligatorio"
+                }
+              ]
+            },
+            "description": "HEADER de la pantalla 'Planilla de calificacion': una fila por actividad-columna del (grupo, asignatura), en el MISMO orden que las celdas de 7.10 (comparten funcion origen, no pueden desalinearse). `grupo` y `asignatura` OBLIGATORIOS. Trae `fk_tunidad`+`unidad` (para armar el sub-header del toggle 'Ver por: Unidad' agrupando columnas contiguas) e `instrumento` (para saber que popover de calificacion abrir -- 7.1 a 7.4 segun corresponda)."
+          }
+        },
+        {
+          "name": "7.10 — GET filas de la planilla de calificacion",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/planilla/calificaciones?grupo={{grupoId}}&asignatura={{asignaturaId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "planilla",
+                "calificaciones"
+              ],
+              "query": [
+                {
+                  "key": "grupo",
+                  "value": "{{grupoId}}",
+                  "description": "obligatorio"
+                },
+                {
+                  "key": "asignatura",
+                  "value": "{{asignaturaId}}",
+                  "description": "obligatorio"
+                },
+                {
+                  "key": "size",
+                  "value": "50",
+                  "description": "default 50",
+                  "disabled": true
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "default 0",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "CUERPO paginado de la Planilla: una fila por estudiante activo matriculado, con sus celdas por actividad y la `definitiva_proyectada` YA CALCULADA (regla del motor legacy configurada en TASIGNATURA_PLAN -- no hay endpoint aparte para pedirla por estudiante). `tendencia` (flecha SUBE/BAJA/IGUAL) viene SIEMPRE NULL hoy porque ninguna funcion consolida TUNIDAD_NOTA todavia -- el cliente no debe pintar flecha mientras sea NULL. Cada celda trae `estado` (NO_ASIGNADA -- icono prohibido, no se puede abrir popover -- | NO_CALIFICABLE | SIN_CALIFICAR | CALIFICADA). El toggle 'Ver por: Actividad | Unidad' se resuelve en el cliente agrupando por `pkTunidad`, no cambia esta consulta. `grupo` y `asignatura` OBLIGATORIOS."
+          }
+        }
+      ]
+    },
+    {
+      "name": "8 — Tablero y calendario",
+      "description": "La pantalla principal del docente: las 4 tarjetas de resumen (stats/tablero, misma funcion bajo dos rutas por compatibilidad con el front), el listado que abre cada tarjeta al pulsar 'Ver detalles', y la vista de calendario mensual. En las cuatro rutas el docente sale del token -- nadie ve el tablero de otro.",
+      "item": [
+        {
+          "name": "8.1 — GET stats (contadores de las 4 tarjetas)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/stats",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "stats"
+              ],
+              "query": [
+                {
+                  "key": "dias_gracia",
+                  "value": "2",
+                  "description": "default 2",
+                  "disabled": true
+                },
+                {
+                  "key": "asignatura",
+                  "value": "{{asignaturaId}}",
+                  "disabled": true
+                },
+                {
+                  "key": "grupo",
+                  "value": "{{grupoId}}",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Contadores de las 4 tarjetas de la pantalla principal, del DOCENTE AUTENTICADO (se resuelve del token, no es parametro). Devuelve las DOS nomenclaturas en la misma fila: los alias del front (`pending`/`in_progress`/`completed`/`cancelled`) y los nombres reales (`pendientes_por_evaluar`/`en_evaluacion`/`finalizadas`/`vencidas`) -- OJO: `cancelled` es solo un ALIAS de `vencidas`, en el Planeador nada se cancela. `dias_gracia` (default 2) es el N de la tarjeta 'Vencidas (> N dias)'. Un solo COUNT(*) FILTER, reemplaza el atajo de traer size=500 y contar en el navegador."
+          }
+        },
+        {
+          "name": "8.2 — GET tablero (misma funcion que stats)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/tablero",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "tablero"
+              ],
+              "query": [
+                {
+                  "key": "dias_gracia",
+                  "value": "2",
+                  "description": "default 2",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Misma funcion SQL que 8.1 (`fn_actividad_resumen_estados_docente`), registrada bajo otra ruta porque es la que el front ya tenia escrita -- no duplica logica. Ademas cuenta SOLO lo que el docente DICTA (TDOCENTE_ASIGNATURA), no lo que aparece en unidades de las que es autor."
+          }
+        },
+        {
+          "name": "8.3 — GET mis actividades ('Ver detalles' de una tarjeta)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/mias?size=50&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "mias"
+              ],
+              "query": [
+                {
+                  "key": "estados",
+                  "value": "VENCIDA",
+                  "description": "el estado de la tarjeta pulsada",
+                  "disabled": true
+                },
+                {
+                  "key": "dias_gracia",
+                  "value": "2",
+                  "description": "default 2",
+                  "disabled": true
+                },
+                {
+                  "key": "size",
+                  "value": "50",
+                  "description": "obligatorio en la practica"
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "obligatorio en la practica"
+                }
+              ]
+            },
+            "description": "Al pulsar 'Ver detalles' en una tarjeta del tablero: mismo listado/orden/paginacion que 4.1 pero acotado al DOCENTE AUTENTICADO. `estados` es el filtro que llega de la tarjeta pulsada (PENDIENTE_POR_EVALUAR/EN_EVALUACION/FINALIZADA/VENCIDA/PROGRAMADA/SIN_PROGRAMAR); sin el, trae todas las del docente. IMPORTANTE: mandar `size`/`offset` SIEMPRE explicitos (bug conocido del motor con los system-bound de paginacion en esta ruta puntual)."
+          }
+        },
+        {
+          "name": "8.4 — GET calendario mensual del docente",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/calendario?fecha_desde=2026-09-01&fecha_hasta=2026-09-30",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "calendario"
+              ],
+              "query": [
+                {
+                  "key": "fecha_desde",
+                  "value": "2026-09-01",
+                  "description": "obligatorio"
+                },
+                {
+                  "key": "fecha_hasta",
+                  "value": "2026-09-30",
+                  "description": "obligatorio"
+                }
+              ]
+            },
+            "description": "Grilla mensual del calendario del DOCENTE AUTENTICADO. `fecha_desde`/`fecha_hasta` son OBLIGATORIOS y acotan por SOLAPAMIENTO -- una actividad que cruza el mes aparece en su grilla. SIN paginacion: un mes nunca es volumen grande, por eso NO se manda `size`/`offset` aqui (sustituye el atajo de pedir el listado completo con size=500 y filtrar el mes en el cliente). Cada fila trae `fecha` (dia de anclaje ya resuelto, para agrupar por dia sin recalcular) ademas de fecha_inicio/fecha_cierre y el mismo estado DERIVADO del tablero."
+          }
+        }
+      ]
+    }
+  ]
+}
