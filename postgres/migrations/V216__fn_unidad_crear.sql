@@ -368,6 +368,15 @@ COMMENT ON INDEX academico_test.idx_tunidad_busqueda_trgm
 -- filas de la pagina -- antes se evaluaban 5 subconsultas correlacionadas
 -- por CADA fila del universo, ANTES del LIMIT.
 -- ===========================================================================
+-- La firma y las columnas de salida cambiaron al agregar el estado derivado y
+-- el paginado por dia activo. CREATE OR REPLACE no puede cambiar el tipo de
+-- retorno de una funcion existente, y dejar viva la version vieja haria
+-- AMBIGUA la llamada posicional de 10 argumentos que V245 ya tiene registrada
+-- en public.query. Se elimina primero la firma anterior (IF EXISTS: en una
+-- base nueva no existe).
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_listar(
+    BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_listar(
     p_pk_usuario_solicitante      BIGINT,
     p_search                      VARCHAR   DEFAULT NULL,
@@ -378,7 +387,16 @@ CREATE OR REPLACE FUNCTION academico_test.fn_unidad_listar(
     p_orden_por                   VARCHAR   DEFAULT 'nombre',
     p_orden_asc                   BOOLEAN   DEFAULT TRUE,
     p_limite                      INT       DEFAULT 20,
-    p_offset                      INT       DEFAULT 0
+    p_offset                      INT       DEFAULT 0,
+    -- Paginado por DIA ACTIVO, la misma barra "Hoy | MARTES 16 | < >" de las
+    -- actividades. Una unidad "esta" en un dia si ALGUNA de sus actividades
+    -- activas esta vigente ese dia (la unidad no tiene fechas propias: sus
+    -- fecha_inicio/fecha_fin ya son derivadas de las actividades).
+    -- NULL = sin paginado por dia.
+    p_dia                         DATE      DEFAULT NULL,
+    -- Dias de gracia del estado derivado; se propaga tal cual a
+    -- fn_unidad_estado -> fn_actividad_estado. Mismo default que alla.
+    p_dias_gracia                 INT       DEFAULT 2
 )
 RETURNS TABLE (
     pk_tunidad                  BIGINT,
@@ -401,7 +419,19 @@ RETURNS TABLE (
     total_contenidos            BIGINT,
     fecha_inicio                DATE,
     fecha_fin                   DATE,
+    -- Estado DERIVADO de la unidad (fn_unidad_estado, V224): agrega el de sus
+    -- actividades con la cascada de prioridades de negocio -- una vencida
+    -- manda, si no una pendiente, si todas finalizadas FINALIZADA, si no
+    -- EN_EVALUACION. Son los MISMOS cuatro valores del estado de actividad.
+    estado                      VARCHAR,
     active                      BOOLEAN,
+    -- Navegacion del paginado por dia (flechas < >), con la misma semantica
+    -- que en fn_actividad_listar: el dia ocupado mas cercano a cada lado bajo
+    -- los mismos filtros, saltando los vacios. NULL si no se pidio dia o si
+    -- no hay mas dias por ese lado.
+    dia                         DATE,
+    dia_anterior                DATE,
+    dia_siguiente               DATE,
     total_count                 BIGINT
 )
 LANGUAGE plpgsql
@@ -438,9 +468,15 @@ BEGIN
     END IF;
 
     RETURN QUERY
-    WITH base AS (
+    -- Mismo patron que fn_actividad_listar (V224): el universo es el filtro
+    -- completo MENOS el dia, y de ahi salen tanto la pagina (del_dia -> base)
+    -- como las flechas (nav), que tienen que ver precisamente los dias que el
+    -- filtro por dia esconde. Asi el filtro se escribe una sola vez.
+    WITH universo AS (
         SELECT u.PK_TUNIDAD AS pk,
-               COUNT(*) OVER() AS total
+               u.NOMBRE      AS nom,
+               basig.NOMBRE  AS asig_nom,
+               bgr.NOMBRE    AS gr_nom
           FROM academico_test.TUNIDAD u
           JOIN academico_test.TASIGNATURA basig ON basig.PK_TASIGNATURA = u.FK_TASIGNATURA
           JOIN academico_test.TGRADO bgr        ON bgr.PK_TGRADO = u.FK_TGRADO
@@ -459,14 +495,55 @@ BEGIN
            AND (p_fk_tasignatura  IS NULL OR u.FK_TASIGNATURA = p_fk_tasignatura)
            AND (p_fk_tgrado       IS NULL OR u.FK_TGRADO = p_fk_tgrado)
            AND (p_fk_tfuncionario IS NULL OR u.FK_TFUNCIONARIO = p_fk_tfuncionario)
+    ),
+    -- La unidad "esta" en el dia pedido si ALGUNA de sus actividades activas
+    -- esta vigente ese dia -- la ventana lo CUBRE, con la misma tolerancia a
+    -- un extremo faltante que fn_actividad_estado. La unidad no tiene fechas
+    -- propias, por eso el dia se resuelve siempre por sus actividades.
+    del_dia AS (
+        SELECT un.*
+          FROM universo un
+         WHERE p_dia IS NULL
+            OR EXISTS (SELECT 1
+                         FROM academico_test.TACTIVIDAD a_d
+                        WHERE a_d.FK_TUNIDAD = un.pk
+                          AND a_d.ACTIVE = TRUE
+                          AND (a_d.FECHA_INICIO IS NOT NULL OR a_d.FECHA_CIERRE IS NOT NULL)
+                          AND (a_d.FECHA_INICIO IS NULL OR a_d.FECHA_INICIO <= p_dia)
+                          AND (a_d.FECHA_CIERRE IS NULL OR a_d.FECHA_CIERRE >= p_dia))
+    ),
+    -- Flechas < >: el dia ocupado mas cercano a cada lado, sobre el universo
+    -- SIN filtrar por dia y sobre las actividades de esas unidades. Una
+    -- actividad que ya cerro aporta su cierre; una que atraviesa el dia
+    -- aporta el dia contiguo. MAX/MIN dan el mas cercano, saltando vacios.
+    nav AS (
+        SELECT MAX(CASE WHEN a_n.FECHA_CIERRE IS NOT NULL AND a_n.FECHA_CIERRE < p_dia THEN a_n.FECHA_CIERRE
+                        WHEN a_n.FECHA_INICIO IS NOT NULL AND a_n.FECHA_INICIO < p_dia THEN p_dia - 1
+                   END) AS anterior,
+               MIN(CASE WHEN a_n.FECHA_INICIO IS NOT NULL AND a_n.FECHA_INICIO > p_dia THEN a_n.FECHA_INICIO
+                        WHEN a_n.FECHA_CIERRE IS NOT NULL AND a_n.FECHA_CIERRE > p_dia THEN p_dia + 1
+                   END) AS siguiente
+          FROM universo un
+          JOIN academico_test.TACTIVIDAD a_n
+                ON a_n.FK_TUNIDAD = un.pk AND a_n.ACTIVE = TRUE
+         WHERE p_dia IS NOT NULL
+        -- HAVING (no WHERE) para controlar si nav aporta FILA: un agregado sin
+        -- GROUP BY siempre devuelve una, y aqui hace falta que devuelva CERO
+        -- cuando no se pidio dia. Ver el FULL OUTER JOIN de abajo.
+        HAVING p_dia IS NOT NULL
+    ),
+    base AS (
+        SELECT d.pk,
+               COUNT(*) OVER() AS total
+          FROM del_dia d
          ORDER BY
-           CASE WHEN     p_orden_asc AND v_key = 'nombre'     THEN u.NOMBRE     END ASC  NULLS LAST,
-           CASE WHEN NOT p_orden_asc AND v_key = 'nombre'     THEN u.NOMBRE     END DESC NULLS LAST,
-           CASE WHEN     p_orden_asc AND v_key = 'asignatura' THEN basig.NOMBRE END ASC  NULLS LAST,
-           CASE WHEN NOT p_orden_asc AND v_key = 'asignatura' THEN basig.NOMBRE END DESC NULLS LAST,
-           CASE WHEN     p_orden_asc AND v_key = 'grado'      THEN bgr.NOMBRE   END ASC  NULLS LAST,
-           CASE WHEN NOT p_orden_asc AND v_key = 'grado'      THEN bgr.NOMBRE   END DESC NULLS LAST,
-           u.PK_TUNIDAD
+           CASE WHEN     p_orden_asc AND v_key = 'nombre'     THEN d.nom      END ASC  NULLS LAST,
+           CASE WHEN NOT p_orden_asc AND v_key = 'nombre'     THEN d.nom      END DESC NULLS LAST,
+           CASE WHEN     p_orden_asc AND v_key = 'asignatura' THEN d.asig_nom END ASC  NULLS LAST,
+           CASE WHEN NOT p_orden_asc AND v_key = 'asignatura' THEN d.asig_nom END DESC NULLS LAST,
+           CASE WHEN     p_orden_asc AND v_key = 'grado'      THEN d.gr_nom   END ASC  NULLS LAST,
+           CASE WHEN NOT p_orden_asc AND v_key = 'grado'      THEN d.gr_nom   END DESC NULLS LAST,
+           d.pk
          LIMIT GREATEST(p_limite, 1)
         OFFSET GREATEST(p_offset, 0)
     )
@@ -490,13 +567,26 @@ BEGIN
            (SELECT COUNT(*) FROM academico_test.TUNIDAD_CONTENIDO c WHERE c.FK_TUNIDAD = u.PK_TUNIDAD AND c.ACTIVE = TRUE),
            agg.fecha_inicio,
            agg.fecha_fin,
+           academico_test.fn_unidad_estado(u.PK_TUNIDAD, CURRENT_DATE, p_dias_gracia),
            u.ACTIVE,
-           b.total
+           p_dia,
+           n.anterior,
+           n.siguiente,
+           COALESCE(b.total, 0)
       FROM base b
-      JOIN academico_test.TUNIDAD u              ON u.PK_TUNIDAD = b.pk
-      JOIN academico_test.TASIGNATURA asig       ON asig.PK_TASIGNATURA = u.FK_TASIGNATURA
+      -- FULL OUTER ... ON TRUE, y no CROSS JOIN, por el dia VACIO: si la
+      -- pagina no tiene filas, un CROSS JOIN no devuelve nada y el cliente se
+      -- queda sin dia_anterior/dia_siguiente, es decir sin con que SALIR de un
+      -- dia sin unidades. Mismo patron que fn_actividad_listar (V224): sin
+      -- p_dia nav no aporta fila y el listado de siempre no cambia; con p_dia
+      -- y pagina vacia queda UNA fila con las columnas de la unidad en NULL,
+      -- total_count = 0 y las flechas informadas. Por eso los joins pasan a
+      -- LEFT: esa fila no tiene unidad que resolver.
+      FULL OUTER JOIN nav n ON TRUE
+      LEFT JOIN academico_test.TUNIDAD u         ON u.PK_TUNIDAD = b.pk
+      LEFT JOIN academico_test.TASIGNATURA asig  ON asig.PK_TASIGNATURA = u.FK_TASIGNATURA
       LEFT JOIN academico_test.TAREA ar          ON ar.PK_TAREA = asig.FK_TAREA
-      JOIN academico_test.TGRADO gr              ON gr.PK_TGRADO = u.FK_TGRADO
+      LEFT JOIN academico_test.TGRADO gr         ON gr.PK_TGRADO = u.FK_TGRADO
       LEFT JOIN academico_test.TFUNCIONARIO fu   ON fu.PK_TFUNCIONARIO = u.FK_TFUNCIONARIO
       LEFT JOIN academico_test.TUSUARIO us       ON us.PK_TUSUARIO = fu.FK_TUSUARIO
       LEFT JOIN academico_test.TLISTA_VALOR lvc  ON lvc.PK_LISTA_VALOR = u.FK_TLV_CALCULO_DEFINITIVA
@@ -521,8 +611,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_unidad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT)
-    IS 'Pagina de TUNIDAD con filtros (search, asignatura, grado, docente) y orden (whitelist nombre|asignatura|grado; cualquier otro valor cae a nombre). p_search hace UN solo ILIKE sobre COALESCE(NOMBRE,'''')||'' ''||COALESCE(DESCRIPCION,''''), expresion identica a la de idx_tunidad_busqueda_trgm para que el GIN trigram se use (no dos ILIKE con OR). Optimizacion: un CTE base pagina tocando solo TUNIDAD+TASIGNATURA+TGRADO y los joins de catalogo, los conteos y el LATERAL de fechas derivadas corren unicamente contra las filas de la pagina (patron de fn_actividad_listar, V224). Devuelve nombres resueltos (asignatura, area via TASIGNATURA.FK_TAREA->TAREA -- la etiqueta "Comunicativa/Cognitiva/..." de las tarjetas), forma de calculo, referente curricular, conteos de actividades/objetivos/contenidos activos y las fechas DERIVADAS de la unidad (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas). La unidad ya no depende de un periodo de evaluacion (V218). total_count via COUNT(*) OVER(). Gate VER. p_incluir_inactivos=FALSE por defecto.';
+COMMENT ON FUNCTION academico_test.fn_unidad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, DATE, INT)
+    IS 'Devuelve estado: el estado DERIVADO de la unidad (fn_unidad_estado, V224), que agrega el de sus actividades con la cascada de negocio -- UNA vencida manda; si no, alguna pendiente; si todas finalizadas, FINALIZADA; en cualquier otro caso EN_EVALUACION (incluida la unidad sin actividades, que se distingue por total_actividades = 0) --, con los MISMOS cuatro valores del estado de actividad para que el front use una sola paleta; p_dias_gracia se propaga alla (default 2). p_dia es el PAGINADO POR DIA ACTIVO (barra "Hoy | MARTES 16 | < >"): deja solo las unidades que tienen ALGUNA actividad activa vigente ese dia (la unidad no tiene fechas propias), y devuelve dia / dia_anterior / dia_siguiente para las flechas -- el dia ocupado mas cercano a cada lado bajo los mismos filtros, SALTANDO los dias vacios, NULL si no hay mas por ese lado. El filtro vive en un CTE (universo) del que salen tanto la pagina como la navegacion, porque las flechas tienen que ver los dias que el filtro por dia esconde. DIA VACIO: si se pide p_dia y ese dia no tiene ninguna unidad, se devuelve UNA fila con las columnas de la unidad en NULL, total_count = 0 y las flechas informadas -- sin ella el cliente no tendria con que salir del dia vacio. Se reconoce por total_count = 0 (o pk_tunidad NULL). Sin p_dia nada cambia: una pagina vacia sigue siendo 0 filas. Pagina de TUNIDAD con filtros (search, asignatura, grado, docente) y orden (whitelist nombre|asignatura|grado; cualquier otro valor cae a nombre). p_search hace UN solo ILIKE sobre COALESCE(NOMBRE,'''')||'' ''||COALESCE(DESCRIPCION,''''), expresion identica a la de idx_tunidad_busqueda_trgm para que el GIN trigram se use (no dos ILIKE con OR). Optimizacion: un CTE base pagina tocando solo TUNIDAD+TASIGNATURA+TGRADO y los joins de catalogo, los conteos y el LATERAL de fechas derivadas corren unicamente contra las filas de la pagina (patron de fn_actividad_listar, V224). Devuelve nombres resueltos (asignatura, area via TASIGNATURA.FK_TAREA->TAREA -- la etiqueta "Comunicativa/Cognitiva/..." de las tarjetas), forma de calculo, referente curricular, conteos de actividades/objetivos/contenidos activos y las fechas DERIVADAS de la unidad (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas). La unidad ya no depende de un periodo de evaluacion (V218). total_count via COUNT(*) OVER(). Gate VER. p_incluir_inactivos=FALSE por defecto.';
 
 -- ===========================================================================
 -- fn_unidad_actualizar — PATCH parcial (cada parametro NULL preserva).
@@ -1150,6 +1240,12 @@ COMMENT ON FUNCTION academico_test.fn_unidad_actividades_listar(BIGINT, BIGINT, 
 -- Objetivos y contenidos se devuelven como arreglos JSONB ordenados
 -- (mismo patron de agregacion que otros detalles del back).
 -- ===========================================================================
+-- Cambian las columnas de salida (se agrega estado), y CREATE OR REPLACE no
+-- puede cambiar el tipo de retorno de una funcion existente. La firma es la
+-- misma, asi que aqui no hay riesgo de ambiguedad: solo hay que soltarla
+-- primero (IF EXISTS: en una base nueva no existe).
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_buscar_por_pk(BIGINT, BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_buscar_por_pk(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tunidad               BIGINT
@@ -1176,6 +1272,9 @@ RETURNS TABLE (
     objetivos                   JSONB,
     contenidos                  JSONB,
     campos_disponibles          JSONB,
+    -- Mismo estado derivado del listado (fn_unidad_estado, V224): el chip
+    -- de la unidad tiene que decir lo mismo en la tarjeta y en el detalle.
+    estado                      VARCHAR,
     active                      BOOLEAN
 )
 LANGUAGE plpgsql
@@ -1219,6 +1318,7 @@ BEGIN
            -- Dependencia dinamica "referente -> rubrica" (V137), calculada
            -- solo para esta fila (detalle), no en un listado.
            academico_test.fn_unidad_campos_disponibles(p_pk_usuario_solicitante, u.PK_TUNIDAD),
+           academico_test.fn_unidad_estado(u.PK_TUNIDAD, CURRENT_DATE),
            u.ACTIVE
       FROM academico_test.TUNIDAD u
       JOIN academico_test.TASIGNATURA asig       ON asig.PK_TASIGNATURA = u.FK_TASIGNATURA
@@ -1233,7 +1333,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_buscar_por_pk(BIGINT, BIGINT)
-    IS 'Detalle de una TUNIDAD (pestaña "Informacion general"): escalares + nombres resueltos (asignatura, area, grado, docente, forma de calculo, referente curricular), total de actividades activas, Inicio/Fin DERIVADOS (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas) y los arreglos JSONB ordenados objetivos [{pk,orden,descripcion}] y contenidos [{pk,orden,descripcion}]. campos_disponibles = fn_unidad_campos_disponibles (dependencia dinamica referente->rubrica, V137), calculado solo para esta fila (detalle), no en fn_unidad_listar. La unidad ya no depende de un periodo de evaluacion (V218). SETOF 0 o 1 fila (incluye inactivas). Gate VER.';
+    IS 'Devuelve estado: el estado DERIVADO de la unidad (fn_unidad_estado, V224), el MISMO que fn_unidad_listar -- una vencida manda; si no, alguna pendiente; si todas finalizadas, FINALIZADA; en cualquier otro caso EN_EVALUACION (incluida la unidad sin actividades, que se distingue por total_actividades = 0) -- para que el chip diga lo mismo en la tarjeta y en el detalle; usa los dias de gracia por defecto (2). Detalle de una TUNIDAD (pestaña "Informacion general"): escalares + nombres resueltos (asignatura, area, grado, docente, forma de calculo, referente curricular), total de actividades activas, Inicio/Fin DERIVADOS (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas) y los arreglos JSONB ordenados objetivos [{pk,orden,descripcion}] y contenidos [{pk,orden,descripcion}]. campos_disponibles = fn_unidad_campos_disponibles (dependencia dinamica referente->rubrica, V137), calculado solo para esta fila (detalle), no en fn_unidad_listar. La unidad ya no depende de un periodo de evaluacion (V218). SETOF 0 o 1 fila (incluye inactivas). Gate VER.';
 
 -- ===========================================================================
 -- fn_unidad_objetivos_listar / fn_unidad_contenidos_listar — listas planas

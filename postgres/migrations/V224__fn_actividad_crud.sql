@@ -470,6 +470,67 @@ COMMENT ON FUNCTION academico_test.fn_actividad_estado(DATE, DATE, DATE, DATE, I
     IS 'Estado DERIVADO de una actividad (no hay columna de estado). Son EXACTAMENTE los CUATRO del tablero, en este orden: FINALIZADA (tiene FECHA_CALIFICADO) > VENCIDA (cierre + p_dias_gracia < hoy, sin calificar) > EN_EVALUACION (hoy dentro de la ventana [inicio, cierre]; basta con que se cumpla el extremo presente) > PENDIENTE_POR_EVALUAR (todo lo demas: aun no inicia, sin fechas, o cierre pasado pero dentro de los dias de gracia). Antes devolvia ademas PROGRAMADA (aun no inicia) y SIN_PROGRAMAR (sin fechas), que no corresponden a ninguna tarjeta del tablero -- el listado devolvia PROGRAMADA y el front no tenia donde pintarla; se colapsaron en PENDIENTE_POR_EVALUAR por decision de negocio. IMMUTABLE: recibe el "hoy" por parametro. Unica definicion, usada por listar / detalle / calendario / resumen. V224.';
 
 -- ---------------------------------------------------------------------------
+-- fn_unidad_estado — estado DERIVADO de una unidad, agregando el de sus
+-- actividades. Tampoco hay columna de estado en TUNIDAD.
+--
+-- El criterio es de negocio y NO es "el peor estado" ni una mayoria: es una
+-- cascada de prioridades acordada con el area, en este orden exacto:
+--
+--   1. una sola VENCIDA               -> VENCIDA
+--   2. sin vencidas, alguna PENDIENTE -> PENDIENTE_POR_EVALUAR
+--   3. TODAS finalizadas              -> FINALIZADA
+--   4. cualquier otro caso            -> EN_EVALUACION
+--
+-- Los cuatro valores son EXACTAMENTE los de fn_actividad_estado, a proposito:
+-- el front pinta el chip de la unidad con la misma paleta que el de la
+-- actividad, sin traducir nada.
+--
+-- CASO BORDE — unidad SIN actividades activas: cae en la rama 4
+-- (EN_EVALUACION), que es la lectura literal del criterio ("todas
+-- finalizadas" no se cumple si no hay ninguna, asi que es "cualquier otro
+-- caso"). Se deja asi en vez de inventar un quinto estado SIN_ACTIVIDADES
+-- que el front no tendria donde pintar; para distinguirlo, el listado ya
+-- devuelve total_actividades = 0 en la misma fila.
+--
+-- Se apoya en fn_actividad_estado para no tener dos definiciones del estado
+-- de actividad. Por eso vive aqui, junto a ella, y no en V216 (donde la usan
+-- fn_unidad_listar / fn_unidad_buscar_por_pk): esas son plpgsql y resuelven
+-- la referencia en ejecucion, cuando esta migracion ya corrio.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_estado(
+    p_pk_tunidad   BIGINT,
+    p_hoy          DATE,
+    p_dias_gracia  INT DEFAULT 2
+)
+RETURNS VARCHAR
+LANGUAGE sql
+STABLE
+AS $$
+    WITH estados AS (
+        SELECT academico_test.fn_actividad_estado(
+                   a.FECHA_INICIO, a.FECHA_CIERRE, a.FECHA_CALIFICADO,
+                   p_hoy, p_dias_gracia) AS estado
+          FROM academico_test.TACTIVIDAD a
+         WHERE a.FK_TUNIDAD = p_pk_tunidad
+           AND a.ACTIVE = TRUE
+    )
+    SELECT CASE
+        WHEN COUNT(*) FILTER (WHERE estado = 'VENCIDA') > 0
+            THEN 'VENCIDA'
+        WHEN COUNT(*) FILTER (WHERE estado = 'PENDIENTE_POR_EVALUAR') > 0
+            THEN 'PENDIENTE_POR_EVALUAR'
+        WHEN COUNT(*) > 0
+         AND COUNT(*) = COUNT(*) FILTER (WHERE estado = 'FINALIZADA')
+            THEN 'FINALIZADA'
+        ELSE 'EN_EVALUACION'
+    END::VARCHAR
+      FROM estados;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_unidad_estado(BIGINT, DATE, INT)
+    IS 'Estado DERIVADO de una unidad (no hay columna de estado en TUNIDAD), agregando el estado de sus actividades ACTIVAS via fn_actividad_estado -- unica definicion del estado de actividad, no se duplica. El criterio NO es "el peor estado" ni una mayoria: es una cascada de prioridades de negocio, en este orden exacto: (1) UNA sola actividad VENCIDA -> VENCIDA; (2) sin vencidas pero alguna PENDIENTE_POR_EVALUAR -> PENDIENTE_POR_EVALUAR; (3) TODAS finalizadas -> FINALIZADA; (4) cualquier otro caso -> EN_EVALUACION. Devuelve exactamente los cuatro valores de fn_actividad_estado para que el front use la misma paleta en el chip de la unidad y en el de la actividad, sin traducir. CASO BORDE: una unidad SIN actividades activas cae en la rama 4 (EN_EVALUACION) -- es la lectura literal del criterio y evita un quinto estado que el front no tendria donde pintar; para distinguirla, el listado devuelve total_actividades = 0 en la misma fila. p_dias_gracia se propaga tal cual a fn_actividad_estado (default 2). V224.';
+
+-- ---------------------------------------------------------------------------
 -- fn_actividad_material_reemplazar — materiales de apoyo.
 -- p_materiales JSONB = [{tipoRecurso, url?, fkTarchivo?, descripcion?}]
 -- ---------------------------------------------------------------------------
@@ -1824,6 +1885,17 @@ COMMENT ON FUNCTION academico_test.fn_actividad_eliminar(BIGINT, BIGINT)
 -- de sustituir el viejo (14 vs 15 args son "funciones distintas"). El DROP
 -- de la firma vieja evita dejar dos fn_actividad_listar coexistiendo.
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT);
+-- La firma y las columnas de salida cambiaron al agregar el paginado por dia
+-- activo (p_dia + dia/dia_anterior/dia_siguiente). CREATE OR REPLACE no puede
+-- cambiar el tipo de retorno de una funcion existente, y dejar la version
+-- vieja viva haria AMBIGUA la llamada posicional que V246 ya tiene registrada
+-- en public.query (16 argumentos: omite p_fk_tfuncionario, que solo usa el
+-- tablero del docente). Por eso se elimina la firma anterior primero
+-- (IF EXISTS: en una base nueva no existe).
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar(
+    BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE,
+    VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar(
     p_pk_usuario_solicitante   BIGINT,
     p_search                   VARCHAR   DEFAULT NULL,
@@ -1848,7 +1920,16 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar(
     -- base mas abajo). Al FINAL de la firma (no en medio) para no romper la
     -- llamada POSICIONAL que V246 ya tiene registrada en public.query para
     -- GET /planeador/actividades.
-    p_fk_tfuncionario          BIGINT    DEFAULT NULL
+    p_fk_tfuncionario          BIGINT    DEFAULT NULL,
+    -- Paginado por DIA ACTIVO: la barra "Hoy | MARTES 16 | < >" del tablero.
+    -- Deja solo las actividades VIGENTES ese dia -- que lo cubran con su
+    -- ventana [FECHA_INICIO, FECHA_CIERRE] --, no las que empiezan o cierran
+    -- exactamente ese dia: una actividad de tres dias tiene que aparecer en
+    -- los tres. Es la MISMA nocion de "vigente" de fn_actividad_estado (un
+    -- extremo faltante no invalida la vigencia; sin ninguna fecha, la
+    -- actividad no esta en ningun dia y queda fuera de esta vista).
+    -- NULL = sin paginado por dia (el listado completo de siempre).
+    p_dia                      DATE      DEFAULT NULL
 )
 RETURNS TABLE (
     pk_tactividad                   BIGINT,
@@ -1877,6 +1958,14 @@ RETURNS TABLE (
     estudiantes_evaluados           BIGINT,
     porcentaje_evaluado             NUMERIC,
     active                          BOOLEAN,
+    -- Navegacion del paginado por dia (las flechas < > de la barra). NULL
+    -- cuando no se pidio dia. dia_anterior / dia_siguiente SALTAN los dias
+    -- vacios: son el dia mas cercano, antes / despues, que si tiene alguna
+    -- actividad bajo los MISMOS filtros -- sin esto las flechas avanzarian
+    -- de a un dia sobre semanas sin nada. NULL = no hay mas dias por ese lado.
+    dia                             DATE,
+    dia_anterior                    DATE,
+    dia_siguiente                   DATE,
     total_count                     BIGINT
 )
 LANGUAGE plpgsql
@@ -1913,9 +2002,17 @@ BEGIN
     END IF;
 
     RETURN QUERY
-    WITH base AS (
-        SELECT a.PK_TACTIVIDAD AS pk,
-               COUNT(*) OVER() AS total
+    -- El universo es el filtro completo MENOS el dia. De ahi salen las dos
+    -- cosas que necesita la barra de dias sin escribir el filtro dos veces:
+    -- la pagina (del_dia -> base) y las flechas (nav, que tienen que ver los
+    -- dias que el filtro por dia justamente esconde).
+    WITH universo AS (
+        SELECT a.PK_TACTIVIDAD  AS pk,
+               a.FECHA_INICIO   AS fi,
+               a.FECHA_CIERRE   AS fc,
+               a.FECHA_CREACION AS fcr,
+               a.TITULO         AS titulo,
+               a.PONDERACION    AS pond
           FROM academico_test.TACTIVIDAD a
          WHERE (p_incluir_inactivas OR a.ACTIVE = TRUE)
            AND (
@@ -2003,18 +2100,54 @@ BEGIN
            AND (p_estados IS NULL OR academico_test.fn_actividad_estado(
                     a.FECHA_INICIO, a.FECHA_CIERRE, a.FECHA_CALIFICADO, v_hoy, p_dias_gracia
                 ) = ANY(p_estados))
+    ),
+    -- Vigentes el dia pedido: la ventana lo CUBRE (no "empieza/cierra ese
+    -- dia"), con la misma tolerancia a un extremo faltante que
+    -- fn_actividad_estado. Sin ninguna fecha, la actividad no esta en ningun
+    -- dia y no aparece en esta vista.
+    del_dia AS (
+        SELECT u.*
+          FROM universo u
+         WHERE p_dia IS NULL
+            OR ((u.fi IS NOT NULL OR u.fc IS NOT NULL)
+                AND (u.fi IS NULL OR u.fi <= p_dia)
+                AND (u.fc IS NULL OR u.fc >= p_dia))
+    ),
+    -- Las flechas < >, sobre el universo SIN filtrar por dia (si mirasen
+    -- del_dia no verian nada fuera del dia actual). Para cada actividad se
+    -- calcula que dia aporta a cada lado: una que ya cerro aporta su cierre;
+    -- una que atraviesa el dia aporta el dia contiguo. El MAX/MIN de todas
+    -- da el dia ocupado mas cercano, saltando los vacios de por medio.
+    nav AS (
+        SELECT MAX(CASE WHEN u.fc IS NOT NULL AND u.fc < p_dia THEN u.fc
+                        WHEN u.fi IS NOT NULL AND u.fi < p_dia THEN p_dia - 1
+                   END) AS anterior,
+               MIN(CASE WHEN u.fi IS NOT NULL AND u.fi > p_dia THEN u.fi
+                        WHEN u.fc IS NOT NULL AND u.fc > p_dia THEN p_dia + 1
+                   END) AS siguiente
+          FROM universo u
+         WHERE p_dia IS NOT NULL
+        -- HAVING (no WHERE) para controlar si nav aporta FILA: un agregado
+        -- sin GROUP BY siempre devuelve una, y aqui hace falta que devuelva
+        -- CERO cuando no se pidio dia. Ver el FULL OUTER JOIN de abajo.
+        HAVING p_dia IS NOT NULL
+    ),
+    base AS (
+        SELECT d.pk,
+               COUNT(*) OVER() AS total
+          FROM del_dia d
          ORDER BY
-           CASE WHEN     p_orden_asc AND v_key = 'fecha_inicio'   THEN a.FECHA_INICIO   END ASC  NULLS LAST,
-           CASE WHEN NOT p_orden_asc AND v_key = 'fecha_inicio'   THEN a.FECHA_INICIO   END DESC NULLS LAST,
-           CASE WHEN     p_orden_asc AND v_key = 'fecha_cierre'   THEN a.FECHA_CIERRE   END ASC  NULLS LAST,
-           CASE WHEN NOT p_orden_asc AND v_key = 'fecha_cierre'   THEN a.FECHA_CIERRE   END DESC NULLS LAST,
-           CASE WHEN     p_orden_asc AND v_key = 'fecha_creacion' THEN a.FECHA_CREACION END ASC  NULLS LAST,
-           CASE WHEN NOT p_orden_asc AND v_key = 'fecha_creacion' THEN a.FECHA_CREACION END DESC NULLS LAST,
-           CASE WHEN     p_orden_asc AND v_key = 'titulo'         THEN a.TITULO         END ASC  NULLS LAST,
-           CASE WHEN NOT p_orden_asc AND v_key = 'titulo'         THEN a.TITULO         END DESC NULLS LAST,
-           CASE WHEN     p_orden_asc AND v_key = 'ponderacion'    THEN a.PONDERACION    END ASC  NULLS LAST,
-           CASE WHEN NOT p_orden_asc AND v_key = 'ponderacion'    THEN a.PONDERACION    END DESC NULLS LAST,
-           a.PK_TACTIVIDAD
+           CASE WHEN     p_orden_asc AND v_key = 'fecha_inicio'   THEN d.fi     END ASC  NULLS LAST,
+           CASE WHEN NOT p_orden_asc AND v_key = 'fecha_inicio'   THEN d.fi     END DESC NULLS LAST,
+           CASE WHEN     p_orden_asc AND v_key = 'fecha_cierre'   THEN d.fc     END ASC  NULLS LAST,
+           CASE WHEN NOT p_orden_asc AND v_key = 'fecha_cierre'   THEN d.fc     END DESC NULLS LAST,
+           CASE WHEN     p_orden_asc AND v_key = 'fecha_creacion' THEN d.fcr    END ASC  NULLS LAST,
+           CASE WHEN NOT p_orden_asc AND v_key = 'fecha_creacion' THEN d.fcr    END DESC NULLS LAST,
+           CASE WHEN     p_orden_asc AND v_key = 'titulo'         THEN d.titulo END ASC  NULLS LAST,
+           CASE WHEN NOT p_orden_asc AND v_key = 'titulo'         THEN d.titulo END DESC NULLS LAST,
+           CASE WHEN     p_orden_asc AND v_key = 'ponderacion'    THEN d.pond   END ASC  NULLS LAST,
+           CASE WHEN NOT p_orden_asc AND v_key = 'ponderacion'    THEN d.pond   END DESC NULLS LAST,
+           d.pk
          LIMIT GREATEST(p_limite, 1)
         OFFSET GREATEST(p_offset, 0)
     )
@@ -2046,10 +2179,26 @@ BEGIN
                 THEN ROUND(prog.evaluados * 100.0 / prog.asignados, 2)
                 ELSE 0 END,
            a.ACTIVE,
-           b.total
+           p_dia,
+           n.anterior,
+           n.siguiente,
+           COALESCE(b.total, 0)
       FROM base b
-      JOIN academico_test.TACTIVIDAD a           ON a.PK_TACTIVIDAD = b.pk
-      JOIN academico_test.TASIGNATURA asig       ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
+      -- FULL OUTER ... ON TRUE, y no CROSS JOIN, por el dia VACIO: si la
+      -- pagina no tiene filas, un CROSS JOIN no devuelve nada y el cliente se
+      -- queda sin dia_anterior/dia_siguiente -- justo cuando mas los necesita,
+      -- porque no tiene con que salir de un dia sin actividades. Con FULL
+      -- OUTER: (a) sin p_dia, nav no aporta fila y el resultado es la pagina
+      -- tal cual, 0 filas incluidas -- el listado de siempre no cambia;
+      -- (b) con p_dia y pagina no vacia, nav aporta su unica fila a todas;
+      -- (c) con p_dia y pagina VACIA, queda UNA fila con las columnas de la
+      -- actividad en NULL, total_count = 0 y las flechas informadas. El
+      -- cliente reconoce ese caso por total_count = 0 (o pk_tactividad NULL).
+      -- Por eso los joins de abajo pasan a LEFT: esa fila no tiene actividad
+      -- que resolver y un INNER la borraria.
+      FULL OUTER JOIN nav n ON TRUE
+      LEFT JOIN academico_test.TACTIVIDAD a      ON a.PK_TACTIVIDAD = b.pk
+      LEFT JOIN academico_test.TASIGNATURA asig  ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
       LEFT JOIN academico_test.TAREA ar          ON ar.PK_TAREA = asig.FK_TAREA
       LEFT JOIN academico_test.TUNIDAD u         ON u.PK_TUNIDAD = a.FK_TUNIDAD
       LEFT JOIN academico_test.TGRUPO g          ON g.PK_TGRUPO = a.FK_TGRUPO
@@ -2083,8 +2232,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT)
-    IS 'Pagina de actividades del Planeador (gate VER). Filtros indexados: asignatura, grupo, unidad, tipo, instrumento y ventana de fechas. p_search es el buscador unico "nombre, nivel educativo o instrumento": matchea (a) TITULO+DESCRIPCION con la expresion identica a la de idx_tactividad_busqueda_trgm, (b) el NOMBRE del nivel de ensenanza de la actividad (via FK_TUNIDAD -> TUNIDAD.FK_TGRADO -> TGRADO.FK_TNIVEL_ENSENANZA -> TNIVEL_ENSENANZA; solo aplica si la actividad tiene unidad) y (c) el NOMBRE del instrumento (TLISTA_VALOR de FK_TLV_INSTRUMENTO_EVALUACION). HONESTIDAD DE RENDIMIENTO: solo (a) puede entrar por el indice trigram; (b) y (c) son un post-filtro por EXISTS NO indexado sobre catalogos pequeños que, al ir en OR, impide el Bitmap Index Scan puro del trigram cuando p_search viene informado -- se evalua dentro del mismo CTE base ya acotado por los demas filtros y por LIMIT/OFFSET, nunca sobre un seq scan del universo sin filtrar. p_estados filtra por el estado DERIVADO (fn_actividad_estado) con p_dias_gracia (default 2). p_fk_tfuncionario (V250, al final de la firma para no romper la llamada posicional ya registrada de V246) filtra por el docente que DICTA la actividad -- NO el autor de la unidad (TUNIDAD.FK_TFUNCIONARIO puede ser otro docente o un coordinador): se resuelve via TDOCENTE_ASIGNATURA (V46, mismo vinculo que fn_docente_grupos_listar/V242) cruzando por (FK_TGRUPO, FK_TASIGNATURA) de la actividad, EXISTS -- actividades sin FK_TGRUPO (p.ej. un "Criterio") quedan fuera cuando se usa este filtro. Orden (whitelist): fecha_inicio|fecha_cierre|fecha_creacion|titulo|ponderacion, cualquier otro valor cae a fecha_inicio. Devuelve nombres resueltos (asignatura, area, unidad, grupo, tipo, instrumento), el estado derivado y el progreso de evaluacion (asignados/evaluados/%). Optimizacion: el CTE base pagina tocando solo TACTIVIDAD y los joins + el LATERAL de progreso corren unicamente contra las filas de la pagina. total_count via COUNT(*) OVER(). V224/V250.';
+COMMENT ON FUNCTION academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT, DATE)
+    IS 'Pagina de actividades del Planeador (gate VER). p_dia es el PAGINADO POR DIA ACTIVO (la barra "Hoy | MARTES 16 | < >" del tablero): deja solo las actividades VIGENTES ese dia -- las que lo CUBREN con su ventana [FECHA_INICIO, FECHA_CIERRE], no las que empiezan o cierran exactamente ese dia, para que una actividad de tres dias aparezca en los tres --, con la misma tolerancia a un extremo faltante que fn_actividad_estado; una actividad sin ninguna fecha no esta en ningun dia y no aparece en esta vista. NULL = sin paginado por dia. Devuelve ademas dia / dia_anterior / dia_siguiente para las flechas: son el dia ocupado mas cercano a cada lado bajo los MISMOS filtros, SALTANDO los dias vacios (sin eso las flechas avanzarian de a un dia sobre semanas sin nada), y NULL cuando no hay mas dias por ese lado. Se calculan sobre el universo SIN el filtro por dia -- si mirasen la pagina no verian nada fuera del dia actual --, por eso el filtro vive en un CTE (universo) del que salen tanto la pagina como la navegacion, sin escribirlo dos veces. DIA VACIO: cuando se pide p_dia y ese dia no tiene ninguna actividad, se devuelve UNA fila con las columnas de la actividad en NULL, total_count = 0 y las flechas informadas -- sin ella el cliente se quedaria sin con que SALIR de un dia vacio. Se reconoce por total_count = 0 (o pk_tactividad NULL). Sin p_dia el comportamiento no cambia en nada: una pagina vacia sigue siendo 0 filas. Filtros indexados: asignatura, grupo, unidad, tipo, instrumento y ventana de fechas. p_search es el buscador unico "nombre, nivel educativo o instrumento": matchea (a) TITULO+DESCRIPCION con la expresion identica a la de idx_tactividad_busqueda_trgm, (b) el NOMBRE del nivel de ensenanza de la actividad (via FK_TUNIDAD -> TUNIDAD.FK_TGRADO -> TGRADO.FK_TNIVEL_ENSENANZA -> TNIVEL_ENSENANZA; solo aplica si la actividad tiene unidad) y (c) el NOMBRE del instrumento (TLISTA_VALOR de FK_TLV_INSTRUMENTO_EVALUACION). HONESTIDAD DE RENDIMIENTO: solo (a) puede entrar por el indice trigram; (b) y (c) son un post-filtro por EXISTS NO indexado sobre catalogos pequeños que, al ir en OR, impide el Bitmap Index Scan puro del trigram cuando p_search viene informado -- se evalua dentro del mismo CTE base ya acotado por los demas filtros y por LIMIT/OFFSET, nunca sobre un seq scan del universo sin filtrar. p_estados filtra por el estado DERIVADO (fn_actividad_estado) con p_dias_gracia (default 2). p_fk_tfuncionario (V250, al final de la firma para no romper la llamada posicional ya registrada de V246) filtra por el docente que DICTA la actividad -- NO el autor de la unidad (TUNIDAD.FK_TFUNCIONARIO puede ser otro docente o un coordinador): se resuelve via TDOCENTE_ASIGNATURA (V46, mismo vinculo que fn_docente_grupos_listar/V242) cruzando por (FK_TGRUPO, FK_TASIGNATURA) de la actividad, EXISTS -- actividades sin FK_TGRUPO (p.ej. un "Criterio") quedan fuera cuando se usa este filtro. Orden (whitelist): fecha_inicio|fecha_cierre|fecha_creacion|titulo|ponderacion, cualquier otro valor cae a fecha_inicio. Devuelve nombres resueltos (asignatura, area, unidad, grupo, tipo, instrumento), el estado derivado y el progreso de evaluacion (asignados/evaluados/%). Optimizacion: el CTE base pagina tocando solo TACTIVIDAD y los joins + el LATERAL de progreso corren unicamente contra las filas de la pagina. total_count via COUNT(*) OVER(). V224/V250.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_buscar_por_pk — detalle completo (una fila).
@@ -2652,6 +2801,12 @@ $backfill$;
 -- actividades de TODOS los docentes en su tablero personal -- justo lo que
 -- este wrapper evita con el guard explicito de mas abajo.
 -- ---------------------------------------------------------------------------
+-- Misma razon que en fn_actividad_listar: cambian firma y columnas de salida,
+-- y la version vieja volveria ambigua la llamada de 11 argumentos que V250 ya
+-- tiene registrada.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar_docente(
+    BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR[], INT, VARCHAR, BOOLEAN, INT, INT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar_docente(
     p_pk_usuario_solicitante   BIGINT,
     p_search                   VARCHAR   DEFAULT NULL,
@@ -2663,7 +2818,10 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar_docente(
     p_orden_por                VARCHAR   DEFAULT 'fecha_inicio',
     p_orden_asc                BOOLEAN   DEFAULT TRUE,
     p_limite                   INT       DEFAULT 20,
-    p_offset                   INT       DEFAULT 0
+    p_offset                   INT       DEFAULT 0,
+    -- Paginado por dia activo, igual que en fn_actividad_listar: es
+    -- justamente el tablero del docente el que pinta la barra de dias.
+    p_dia                      DATE      DEFAULT NULL
 )
 RETURNS TABLE (
     pk_tactividad                   BIGINT,
@@ -2692,6 +2850,9 @@ RETURNS TABLE (
     estudiantes_evaluados           BIGINT,
     porcentaje_evaluado             NUMERIC,
     active                          BOOLEAN,
+    dia                             DATE,
+    dia_anterior                    DATE,
+    dia_siguiente                   DATE,
     total_count                     BIGINT
 )
 LANGUAGE plpgsql
@@ -2717,13 +2878,13 @@ BEGIN
     SELECT * FROM academico_test.fn_actividad_listar(
         p_pk_usuario_solicitante, p_search, p_fk_tasignatura, p_fk_tgrupo, p_fk_tunidad,
         NULL, NULL, NULL, NULL, p_estados, p_dias_gracia, FALSE,
-        p_orden_por, p_orden_asc, p_limite, p_offset, v_fk_tfuncionario
+        p_orden_por, p_orden_asc, p_limite, p_offset, v_fk_tfuncionario, p_dia
     );
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_listar_docente(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR[], INT, VARCHAR, BOOLEAN, INT, INT)
-    IS '"Ver detalles" de cada tarjeta del tablero del docente autenticado: pagina de sus actividades (mismos filtros/orden/paginacion/columnas que fn_actividad_listar), SIEMPRE acotada a su propio FK_TFUNCIONARIO (fn_funcionario_actual) -- nunca editable por el cliente. p_estados es el filtro tipico desde una tarjeta (p.ej. ARRAY[''PENDIENTE_POR_EVALUAR'']), pero es opcional: sin el, lista todas las actividades del docente. Guard explicito: si el usuario autenticado no es un docente activo, devuelve 0 filas (no delega con p_fk_tfuncionario NULL, que en fn_actividad_listar significa "sin filtro" y expondria el universo completo). No incluye p_fk_tlv_tipo_actividad/p_fk_tlv_instrumento/p_fecha_desde/p_fecha_hasta/p_incluir_inactivas del listado general -- si el tablero los necesita despues, se agregan aqui sin tocar fn_actividad_listar. Gate VER sobre PLANEADOR. V250.';
+COMMENT ON FUNCTION academico_test.fn_actividad_listar_docente(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR[], INT, VARCHAR, BOOLEAN, INT, INT, DATE)
+    IS '"Ver detalles" de cada tarjeta del tablero del docente autenticado: pagina de sus actividades (mismos filtros/orden/paginacion/columnas que fn_actividad_listar, incluido el paginado por dia activo p_dia y sus dia/dia_anterior/dia_siguiente), SIEMPRE acotada a su propio FK_TFUNCIONARIO (fn_funcionario_actual) -- nunca editable por el cliente. p_estados es el filtro tipico desde una tarjeta (p.ej. ARRAY[''PENDIENTE_POR_EVALUAR'']), pero es opcional: sin el, lista todas las actividades del docente. Guard explicito: si el usuario autenticado no es un docente activo, devuelve 0 filas (no delega con p_fk_tfuncionario NULL, que en fn_actividad_listar significa "sin filtro" y expondria el universo completo). No incluye p_fk_tlv_tipo_actividad/p_fk_tlv_instrumento/p_fecha_desde/p_fecha_hasta/p_incluir_inactivas del listado general -- si el tablero los necesita despues, se agregan aqui sin tocar fn_actividad_listar. Gate VER sobre PLANEADOR. V250.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_calendario — grilla mensual.
