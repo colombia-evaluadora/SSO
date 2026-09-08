@@ -2310,14 +2310,48 @@ RETURNS BIGINT
 LANGUAGE sql
 STABLE
 AS $$
+    -- U_TFUNCIONARIO_2 es UNIQUE (FK_TUSUARIO, FK_ESTABLECIMIENTO) WHERE
+    -- ACTIVE, NO unico por usuario: un mismo usuario tiene UN funcionario POR
+    -- ESTABLECIMIENTO, y en el esquema real hay usuarios con hasta tres. La
+    -- version anterior de esta funcion no ordenaba ni acotaba, asi que para
+    -- ellos devolvia una fila arbitraria -- y podia cambiar entre ejecuciones.
+    --
+    -- El desempate es el ALCANCE del propio usuario: de sus sedes activas
+    -- (TSEDE_USUARIO -> TSEDE) sale el establecimiento en el que esta
+    -- trabajando, y se prefiere el funcionario de ESE establecimiento.
+    --
+    -- Es una PREFERENCIA, no un filtro. Medido sobre los datos reales, el
+    -- cruce por sede desambigua solo uno de los seis usuarios con varios
+    -- funcionarios: en el resto, FK_ESTABLECIMIENTO del funcionario no
+    -- coincide con el establecimiento de ninguna de sus sedes (y a menudo es
+    -- NULL). Con un JOIN duro esos usuarios se quedarian sin funcionario y
+    -- dejarian de poder crear -- peor que hoy. Por eso va como ORDER BY con
+    -- NULLS LAST: el conjunto de candidatos es el mismo de antes, solo deja
+    -- de ser arbitrario cual sale.
+    --
+    -- PREDETERMINADO se usa como criterio secundario sabiendo que la columna
+    -- esta sucia: deberia ser una bandera 0/1 pero guarda valores arbitrarios
+    -- (10, 100, 101...), asi que solo se trata el 1 como "sede por defecto" y
+    -- no se construye nada mas encima.
+    --
+    -- El LIMIT 1 final es lo que garantiza que el resultado sea estable.
     SELECT f.PK_TFUNCIONARIO
       FROM academico_test.TFUNCIONARIO f
      WHERE f.FK_TUSUARIO = p_pk_usuario_solicitante
-       AND f.ACTIVE = TRUE;
+       AND f.ACTIVE = TRUE
+     ORDER BY (SELECT MIN(CASE WHEN su.PREDETERMINADO = 1 THEN 0 ELSE 1 END)
+                 FROM academico_test.TSEDE_USUARIO su
+                 JOIN academico_test.TSEDE s
+                   ON s.PK_TSEDE = su.FK_TSEDE AND s.ACTIVE = TRUE
+                WHERE su.FK_TUSUARIO = p_pk_usuario_solicitante
+                  AND su.ACTIVE = TRUE
+                  AND s.FK_TESTABLECIMIENTO = f.FK_ESTABLECIMIENTO) NULLS LAST,
+              f.PK_TFUNCIONARIO
+     LIMIT 1;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_funcionario_actual(BIGINT)
-    IS 'Resuelve el PK_TFUNCIONARIO del usuario autenticado (TFUNCIONARIO.FK_TUSUARIO = p_pk_usuario_solicitante, UNIQUE via U_TFUNCIONARIO_2), solo si esta ACTIVE. NULL si el usuario no tiene un funcionario asociado (estudiante, acudiente, o funcionario inactivo). Helper generico -- no especifico del Planeador -- para que cualquier funcion resuelva "el docente que soy yo" sin repetir el JOIN. Usado por fn_actividad_resumen_estados_docente y fn_actividad_listar_docente (V250) para atar el filtro por docente al usuario autenticado sin exponerlo como parametro editable por el cliente.';
+    IS 'Resuelve el PK_TFUNCIONARIO del usuario autenticado a partir de TFUNCIONARIO.FK_TUSUARIO, solo entre los ACTIVE. NULL si el usuario no tiene funcionario asociado (estudiante, acudiente, o funcionario inactivo). OJO con la unicidad: U_TFUNCIONARIO_2 es UNIQUE (FK_TUSUARIO, FK_ESTABLECIMIENTO) WHERE ACTIVE, es decir un funcionario POR ESTABLECIMIENTO y NO uno por usuario -- en el esquema real hay usuarios con tres. Cuando hay varios se desempata por el ALCANCE del usuario: se prefiere el funcionario cuyo establecimiento coincide con el de alguna de sus sedes activas (TSEDE_USUARIO -> TSEDE), y dentro de esas la marcada PREDETERMINADO = 1; despues, PK_TFUNCIONARIO ascendente. Es una preferencia con NULLS LAST y no un JOIN: sobre los datos reales el cruce por sede desambigua solo uno de los seis casos, y filtrar dejaria al resto sin funcionario. El LIMIT 1 es lo que hace el resultado ESTABLE -- antes la funcion no ordenaba ni acotaba y para esos usuarios devolvia una fila arbitraria. Helper generico, no especifico del Planeador. Usado por fn_actividad_resumen_estados_docente y fn_actividad_listar_docente (V250), fn_periodo_evaluacion_listar (V254) y fn_unidad_crear (V216, para derivar el docente autor y que el cliente no tenga que mandarlo).';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_resumen_estados_docente — wrapper de "mis actividades" para

@@ -154,8 +154,26 @@ BEGIN
     IF p_fk_tgrado IS NULL THEN
         RAISE EXCEPTION 'El grado (FK_TGRADO) es obligatorio' USING ERRCODE = '22023';
     END IF;
+    -- El docente autor NO se le pide al cliente: se DERIVA del usuario
+    -- autenticado. El front no tiene de donde sacar un PK_TFUNCIONARIO -- el
+    -- JWT solo trae el id de usuario, y su claim "fid" es un identificador de
+    -- sesion que cambia en cada login, no el funcionario -- asi que exigirlo
+    -- en el body obligaba a inventarlo. fn_funcionario_actual (V224) hace la
+    -- resolucion, desempatando por el alcance del propio usuario cuando tiene
+    -- funcionario en varios establecimientos.
+    --
+    -- Se mantiene el parametro y se respeta si viene: un coordinador o rector
+    -- puede crear la unidad a nombre de otro docente. Solo deja de ser
+    -- obligatorio.
+    p_fk_tfuncionario := COALESCE(
+        p_fk_tfuncionario,
+        academico_test.fn_funcionario_actual(p_pk_usuario_solicitante)
+    );
+
     IF p_fk_tfuncionario IS NULL THEN
-        RAISE EXCEPTION 'El docente autor (FK_TFUNCIONARIO) es obligatorio' USING ERRCODE = '22023';
+        RAISE EXCEPTION 'No se pudo determinar el docente autor de la unidad'
+            USING ERRCODE = '22023',
+                  HINT = 'El usuario autenticado no tiene un funcionario activo asociado; envie FK_TFUNCIONARIO explicitamente';
     END IF;
     IF p_fk_tlv_calculo_definitiva IS NULL THEN
         RAISE EXCEPTION 'La forma de calculo de la nota (FK_TLV_CALCULO_DEFINITIVA) es obligatoria'
@@ -317,7 +335,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[], BIGINT[], NUMERIC)
-    IS 'Crea una unidad tematica del Planeador (gate CREAR sobre PLANEADOR): inserta TUNIDAD (identificacion nombre/asignatura/grado/autor + DESCRIPCION + FK_TLV_CALCULO_DEFINITIVA [forma de calculo de la nota, catalogo CALCULO_DEFINITIVA, OBLIGATORIA, V73] + FK_REFERENTE_CURRICULAR [referente al que se acoge, opcional, V212]) y, si se pasan, sus objetivos (TUNIDAD_OBJETIVO), contenidos/componentes (TUNIDAD_CONTENIDO) con ORDEN por posicion del array, ignorando los vacios, y los enunciados del referente que aplican (p_enunciados, PKs de TREFERENTE_ENUNCIADO nivel 1, via fn_unidad_enunciado_relacionar V136 -- valida nivel 1 y mismo nivel de ensenanza que la unidad, aborta el CREATE si alguno no cumple). La unidad ya no depende de un periodo de evaluacion (V218). Valida existencia/estado de todas las FKs y unicidad (nombre, asignatura, grado) entre unidades activas. p_ponderacion (opcional) fija TUNIDAD.PONDERACION (V239): el peso (%) de esta unidad dentro de su (asignatura, grado), analogo a TACTIVIDAD.PONDERACION un nivel abajo. Se valida 0..100, la regla del 100% por (asignatura, grado) via fn_unidad_ponderacion_intra_asignatura_asignada (error claro antes del trigger tr_tunidad_ponderacion_asignatura) y que el campo APLIQUE segun el plan de la asignatura para ese grado (fn_asignatura_plan_vigente_por_grado + fn_asignatura_plan_elemento_calculo / _calculo_definitiva_modo, V239): se rechaza con 22023 si el plan calcula por ACTIVIDADES (el peso de unidad no significa nada) o si PROMEDIA sus unidades. Si el plan no se resuelve o no tiene elemento/modo configurados no hay con que validar y se PERMITE guardar el peso -- criterio consistente con el fallback de V239; la definitiva simplemente lo ignora hasta que el plan lo habilite. Retorna PK_TUNIDAD.';
+    IS 'Crea una unidad tematica del Planeador (gate CREAR sobre PLANEADOR). p_fk_tfuncionario (el docente autor) es OPCIONAL: si viene NULL se DERIVA del usuario autenticado con fn_funcionario_actual (V224), porque el cliente no tiene de donde sacar un PK_TFUNCIONARIO -- el JWT solo trae el id de usuario y su claim "fid" es un identificador de sesion que cambia en cada login, no el funcionario. Se sigue respetando si se envia explicitamente, para que un coordinador o rector pueda crear la unidad a nombre de otro docente; solo falla (22023) si no viene y el usuario autenticado tampoco tiene funcionario activo. Inserta TUNIDAD (identificacion nombre/asignatura/grado/autor + DESCRIPCION + FK_TLV_CALCULO_DEFINITIVA [forma de calculo de la nota, catalogo CALCULO_DEFINITIVA, OBLIGATORIA, V73] + FK_REFERENTE_CURRICULAR [referente al que se acoge, opcional, V212]) y, si se pasan, sus objetivos (TUNIDAD_OBJETIVO), contenidos/componentes (TUNIDAD_CONTENIDO) con ORDEN por posicion del array, ignorando los vacios, y los enunciados del referente que aplican (p_enunciados, PKs de TREFERENTE_ENUNCIADO nivel 1, via fn_unidad_enunciado_relacionar V136 -- valida nivel 1 y mismo nivel de ensenanza que la unidad, aborta el CREATE si alguno no cumple). La unidad ya no depende de un periodo de evaluacion (V218). Valida existencia/estado de todas las FKs y unicidad (nombre, asignatura, grado) entre unidades activas. p_ponderacion (opcional) fija TUNIDAD.PONDERACION (V239): el peso (%) de esta unidad dentro de su (asignatura, grado), analogo a TACTIVIDAD.PONDERACION un nivel abajo. Se valida 0..100, la regla del 100% por (asignatura, grado) via fn_unidad_ponderacion_intra_asignatura_asignada (error claro antes del trigger tr_tunidad_ponderacion_asignatura) y que el campo APLIQUE segun el plan de la asignatura para ese grado (fn_asignatura_plan_vigente_por_grado + fn_asignatura_plan_elemento_calculo / _calculo_definitiva_modo, V239): se rechaza con 22023 si el plan calcula por ACTIVIDADES (el peso de unidad no significa nada) o si PROMEDIA sus unidades. Si el plan no se resuelve o no tiene elemento/modo configurados no hay con que validar y se PERMITE guardar el peso -- criterio consistente con el fallback de V239; la definitiva simplemente lo ignora hasta que el plan lo habilite. Retorna PK_TUNIDAD.';
 
 -- ---------------------------------------------------------------------------
 -- Indice de busqueda libre del listado de unidades.
