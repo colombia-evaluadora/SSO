@@ -3,8 +3,7 @@
 --
 -- Fecha de generación: 2026-09-04
 --
--- Documento de REFERENCIA DE SOLO LECTURA. NO ejecutar contra ninguna base de
--- datos. NO es una migración Flyway y NO debe copiarse a postgres/migrations/.
+-- Migración real, aplicada por Flyway en orden secuencial.
 -- Su único propósito es reunir en un solo lugar la última versión vigente de
 -- cada función PL/pgSQL del módulo Periodo Académico, ya que muchas de ellas
 -- fueron redefinidas (CREATE OR REPLACE FUNCTION) en migraciones posteriores

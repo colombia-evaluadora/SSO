@@ -2,8 +2,9 @@
 -- Horario — funciones consolidadas (última versión)
 -- Generado: 2026-09-04
 --
--- Documento de referencia de SOLO LECTURA. NO ejecutar. NO es una migración
--- Flyway y NO debe copiarse a postgres/migrations/. Consolida, tal cual
+-- Migracion real: ejecutada en orden secuencial por Flyway. El bloque de
+-- gate de permisos (fn_periodo_gate_escritura, fn_periodo_puede_ver, etc.)
+-- vive en V36_1__gate_permisos_periodo_academico.sql, que corre antes.
 -- (sin reformatear), la última versión vigente de cada función del módulo
 -- Horario, verificada contra el número de migración más alto que la
 -- redefine en postgres/migrations/.

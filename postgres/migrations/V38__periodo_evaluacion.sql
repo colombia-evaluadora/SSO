@@ -2,8 +2,9 @@
 -- Periodo de Evaluacion — funciones consolidadas (ultima version)
 -- Generado: 2026-09-04
 --
--- Documento de referencia de SOLO LECTURA. NO ejecutar. NO es una migracion
--- Flyway y NO debe copiarse a postgres/migrations/. Consolida, para cada
+-- Migracion real: ejecutada en orden secuencial por Flyway. El bloque de
+-- gate de permisos (fn_periodo_gate_escritura, fn_periodo_puede_ver, etc.)
+-- vive en V36_1__gate_permisos_periodo_academico.sql, que corre antes.
 -- funcion del modulo, el bloque CREATE OR REPLACE tal como quedo en la
 -- migracion mas reciente que lo redefine (las funciones se reescriben con
 -- CREATE OR REPLACE FUNCTION en migraciones posteriores; este archivo evita

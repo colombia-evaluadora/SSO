@@ -2,8 +2,7 @@
 -- Grado/Grupo — funciones consolidadas (última versión)
 -- Generado: 2026-09-04
 --
--- Este es un documento de REFERENCIA de solo lectura. NO ejecutar directamente,
--- NO es una migracion Flyway, y NO debe copiarse a postgres/migrations/.
+-- Migracion real, aplicada por Flyway en orden secuencial.
 -- Su unico proposito es reunir en un solo lugar la version vigente de cada
 -- funcion del modulo, ya que con el tiempo varias han sido redefinidas
 -- (CREATE OR REPLACE FUNCTION) en migraciones posteriores.
