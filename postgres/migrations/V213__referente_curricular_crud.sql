@@ -42,7 +42,9 @@
 --                                    vaciarlas ("aplica a todas").
 --     fn_refcurr_eliminar         — soft delete en cascada: evidencias ->
 --                                    enunciados -> areas -> niveles ->
---                                    referente.
+--                                    referente. Exige confirmacion explicita
+--                                    (p_confirmar_cascada) si hay contenido
+--                                    vigente colgando. Ver regla 10.
 --     fn_refcurr_listar           — pagina con filtros/orden (pantalla
 --                                    "Referentes curriculares").
 --     fn_refcurr_buscar_por_pk    — detalle (pestaña "Información general").
@@ -116,6 +118,18 @@
 --      fn_refcurr_actualizar rechaza un array vacio -- para no tocar los
 --      niveles actuales se omite el parametro. A diferencia de las areas,
 --      "vacio" NO significa "aplica a todos".
+--  10) REVISION: dar de baja el referente NO es lo mismo que inactivarlo.
+--      ESTADO ('A'/'I') es un dato de negocio y viaja por
+--      fn_refcurr_actualizar, que jamas toca TREFERENTE_ENUNCIADO; ACTIVE
+--      es el borrado logico y solo lo apaga fn_refcurr_eliminar. Como los
+--      dos endpoints son PATCH sobre el mismo :ID (V214: /:ID vs
+--      /:ID/eliminar — ck_query_http_method no admite DELETE), un caller
+--      que confunda las rutas se lleva por delante todo el contenido del
+--      referente. Defensa en profundidad: fn_refcurr_eliminar rechaza
+--      (23503, sin escribir nada) la baja de un referente que todavia
+--      tiene enunciados o evidencias ACTIVE=TRUE, salvo que el caller
+--      mande p_confirmar_cascada = TRUE. Es la misma forma de la regla 7:
+--      primero se limpia el contenido, o se reconoce que se va con el.
 --
 -- Idempotencia: CREATE OR REPLACE FUNCTION; las funciones cuya FIRMA o
 -- cuyo RETURNS TABLE cambio al pasar a la relacion N:N de niveles llevan
@@ -558,11 +572,16 @@ COMMENT ON FUNCTION academico_test.fn_refcurr_actualizar(BIGINT, BIGINT, VARCHAR
     IS 'PATCH parcial de TREFERENTE_CURRICULAR (gate EDITAR, solo SUPER_ADMIN por defecto): cada parametro NULL preserva el valor actual. p_fk_tnivel_ensenanza_ids NULL = no tocar los niveles educativos; array = reemplazo completo del set en TREFERENTE_CURRICULAR_NIVEL, nunca vacio (22023: el referente conserva al menos un nivel). p_fk_tarea_asignatura_ids NULL = no tocar areas; ARRAY[]::BIGINT[] = vaciarlas (vuelve a "aplica a todas"); cualquier otro array = reemplazo completo del set, bloqueado (23503) si intenta quitar un area con enunciados activos amarrados.';
 
 -- ===========================================================================
--- fn_refcurr_eliminar — soft delete en cascada.
+-- fn_refcurr_eliminar — soft delete en cascada, con confirmacion explicita.
 -- ===========================================================================
+-- Gana un tercer parametro (p_confirmar_cascada): CREATE OR REPLACE dejaria
+-- viva la firma de 2 argumentos y la llamada de 2 argumentos quedaria
+-- ambigua, hay que borrar la firma vieja (patron V58).
+DROP FUNCTION IF EXISTS academico_test.fn_refcurr_eliminar(BIGINT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_eliminar(
     p_pk_usuario_solicitante   BIGINT,
-    p_pk_referente_curricular  BIGINT
+    p_pk_referente_curricular  BIGINT,
+    p_confirmar_cascada        BOOLEAN DEFAULT FALSE
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -574,6 +593,8 @@ DECLARE
     v_enunciados     BIGINT := 0;
     v_areas          BIGINT := 0;
     v_niveles        BIGINT := 0;
+    v_pendientes     BIGINT := 0;
+    v_pend_evid      BIGINT := 0;
 BEGIN
     SELECT ACTIVE, NOMBRE INTO v_estado_actual, v_nombre_actual
       FROM academico_test.TREFERENTE_CURRICULAR
@@ -591,6 +612,26 @@ BEGIN
     IF v_estado_actual = FALSE THEN
         RAISE EXCEPTION 'El referente curricular "%" ya se encuentra inactivo', v_nombre_actual
             USING ERRCODE = '22023';
+    END IF;
+
+    -- Regla 10: un referente con contenido vivo no se da de baja "de paso".
+    -- Simetrico a la regla 7 (quitar un area con enunciados amarrados): el
+    -- caller tiene que reconocer que se lleva por delante los enunciados y
+    -- sus evidencias, mandando p_confirmar_cascada = TRUE. Sin eso, 23503 y
+    -- no se toca ninguna fila.
+    IF NOT COALESCE(p_confirmar_cascada, FALSE) THEN
+        SELECT COUNT(*) FILTER (WHERE FK_PADRE IS NULL),
+               COUNT(*) FILTER (WHERE FK_PADRE IS NOT NULL)
+          INTO v_pendientes, v_pend_evid
+          FROM academico_test.TREFERENTE_ENUNCIADO
+         WHERE FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
+           AND ACTIVE = TRUE;
+
+        IF v_pendientes > 0 OR v_pend_evid > 0 THEN
+            RAISE EXCEPTION 'El referente curricular "%" todavia tiene % enunciado(s) y % evidencia(s) vigentes; eliminelos primero o confirme que quiere darlos de baja junto con el referente', v_nombre_actual, v_pendientes, v_pend_evid
+                USING ERRCODE = '23503',
+                      HINT = 'Repita la peticion con confirmar = true si de verdad quiere dar de baja el referente y todo su contenido';
+        END IF;
     END IF;
 
     -- 1. Evidencias (nivel 2) primero.
@@ -635,8 +676,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_refcurr_eliminar(BIGINT, BIGINT)
-    IS 'Soft delete (ACTIVE=FALSE) de un TREFERENTE_CURRICULAR (gate ELIMINAR, solo SUPER_ADMIN por defecto), en cascada: evidencias (nivel 2) -> enunciados (nivel 1) -> TREFERENTE_CURRICULAR_AREA -> TREFERENTE_CURRICULAR_NIVEL -> el referente. No toca TUNIDAD.FK_REFERENTE_CURRICULAR (unidades que citaban este referente simplemente quedan apuntando a un referente inactivo; es responsabilidad del caller/UI avisar).';
+COMMENT ON FUNCTION academico_test.fn_refcurr_eliminar(BIGINT, BIGINT, BOOLEAN)
+    IS 'Soft delete (ACTIVE=FALSE) de un TREFERENTE_CURRICULAR (gate ELIMINAR, solo SUPER_ADMIN por defecto). Si el referente tiene enunciados o evidencias vigentes exige p_confirmar_cascada = TRUE; sin esa confirmacion lanza 23503 sin tocar ninguna fila (simetrico a la regla 7 de las areas). Confirmada, la baja es en cascada: evidencias (nivel 2) -> enunciados (nivel 1) -> TREFERENTE_CURRICULAR_AREA -> TREFERENTE_CURRICULAR_NIVEL -> el referente. No toca TUNIDAD.FK_REFERENTE_CURRICULAR (unidades que citaban este referente simplemente quedan apuntando a un referente inactivo; es responsabilidad del caller/UI avisar).';
 
 -- ===========================================================================
 -- fn_refcurr_listar — pagina con filtros/orden (pantalla listado).

@@ -37,6 +37,8 @@
 --     POST   /referentes-curriculares                       fn_refcurr_crear
 --     PATCH  /referentes-curriculares/:ID                    fn_refcurr_actualizar
 --     PATCH  /referentes-curriculares/:ID/eliminar            fn_refcurr_eliminar
+--            (BODY.CONFIRMAR = true obligatorio si el referente todavia
+--             tiene enunciados/evidencias vigentes -- V213, regla 10)
 --     POST   /referentes-curriculares/query                   fn_refcurr_listar (paginado)
 --     GET    /referentes-curriculares/:ID                     fn_refcurr_buscar_por_pk
 --     GET    /referentes-curriculares/:ID/areas                fn_refcurr_areas_listar
@@ -190,13 +192,14 @@ INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_i
 SELECT
     'refcurr-eliminar',
     $q$SELECT academico_test.fn_refcurr_eliminar(
-    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
-    CAST(:PARAM.ID AS BIGINT)
+    p_pk_usuario_solicitante  => public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    p_pk_referente_curricular => CAST(:PARAM.ID AS BIGINT),
+    p_confirmar_cascada       => COALESCE(CAST(:BODY.CONFIRMAR AS BOOLEAN), FALSE)
 ) AS pk_referente_curricular$q$,
     'postgres', false, false, m.id_microservice,
     '/referentes-curriculares/:ID/eliminar', 'SELECT', 'PATCH',
-    '{"PARAM.ID": "BIGINT"}'::jsonb,
-    'V214 -- baja logica en cascada (evidencias -> enunciados -> areas -> referente)'
+    '{"PARAM.ID": "BIGINT", "BODY.CONFIRMAR": "BOOLEAN"}'::jsonb,
+    'V214 -- baja logica en cascada (evidencias -> enunciados -> areas -> niveles -> referente). Si el referente tiene enunciados/evidencias vigentes responde 23503 y no toca nada; para llevarselos por delante hay que repetir la peticion con BODY.CONFIRMAR = true (doble confirmacion: este sub-path comparte metodo y :ID con el PATCH de edicion)'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (uuid) DO UPDATE
