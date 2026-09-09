@@ -187,7 +187,10 @@ DECLARE
     v_nombre_unidad       VARCHAR;
     v_nivel_unidad        BIGINT;
     v_padre_enunciado     BIGINT;
-    v_nivel_enunciado     BIGINT;
+    -- Referente de la unidad y del enunciado: con el modelo N:N la regla se
+    -- comprueba por REFERENTE, no por un nivel unico (ver el paso 4).
+    v_referente_unidad    BIGINT;
+    v_referente_enunciado BIGINT;
     v_pk                  BIGINT;
 BEGIN
     -- 0. Gate: capability EDITAR sobre PLANEADOR.
@@ -203,9 +206,10 @@ BEGIN
         RAISE EXCEPTION 'El enunciado (FK_REFERENTE_ENUNCIADO) es obligatorio' USING ERRCODE = '22023';
     END IF;
 
-    -- 2. Unidad existe/activa; nivel de ensenanza via su grado.
-    SELECT u.NOMBRE, g.FK_TNIVEL_ENSENANZA
-      INTO v_nombre_unidad, v_nivel_unidad
+    -- 2. Unidad existe/activa; su nivel de ensenanza (via grado) y el
+    --    referente al que se acoge.
+    SELECT u.NOMBRE, g.FK_TNIVEL_ENSENANZA, u.FK_REFERENTE_CURRICULAR
+      INTO v_nombre_unidad, v_nivel_unidad, v_referente_unidad
       FROM academico_test.TUNIDAD u
       JOIN academico_test.TGRADO g ON g.PK_TGRADO = u.FK_TGRADO
      WHERE u.PK_TUNIDAD = p_fk_tunidad
@@ -215,16 +219,27 @@ BEGIN
         RAISE EXCEPTION 'FK_TUNIDAD (%) no existe o no esta activa', p_fk_tunidad USING ERRCODE = '23503';
     END IF;
 
-    -- 3. Enunciado existe/activo, es nivel 1 (FK_PADRE IS NULL); nivel de
-    --    ensenanza via su referente curricular.
-    SELECT e.FK_PADRE, rc.FK_TNIVEL_ENSENANZA
-      INTO v_padre_enunciado, v_nivel_enunciado
+    -- 3. Enunciado existe/activo, es nivel 1 (FK_PADRE IS NULL) y de que
+    --    referente es.
+    --
+    -- ESTABA ROTO. Aqui se leia `rc.FK_TNIVEL_ENSENANZA`, una columna DIRECTA
+    -- de TREFERENTE_CURRICULAR que dejo de existir cuando la relacion
+    -- referente <-> nivel paso a ser N:N por TREFERENTE_CURRICULAR_NIVEL
+    -- (V212, editada en sitio en la rama CU-86e311xqh). Al ser plpgsql no
+    -- fallaba al crear la funcion: fallaba al invocarla, con
+    --     column rc.fk_tnivel_ensenanza does not exist (42703)
+    -- y como esta funcion es la que relaciona los enunciados escogidos con la
+    -- unidad -- tanto desde POST /planeador/unidades/:ID/enunciados como desde
+    -- el parametro p_enunciados de fn_unidad_crear --, el paso "escoger los
+    -- enunciados de la unidad" del flujo estaba MUERTO: POST /planeador/unidades
+    -- con ENUNCIADOS respondia 500. Comprobado contra el servidor de test.
+    SELECT e.FK_PADRE, e.FK_REFERENTE_CURRICULAR
+      INTO v_padre_enunciado, v_referente_enunciado
       FROM academico_test.TREFERENTE_ENUNCIADO e
-      JOIN academico_test.TREFERENTE_CURRICULAR rc ON rc.PK_REFERENTE_CURRICULAR = e.FK_REFERENTE_CURRICULAR
      WHERE e.PK_REFERENTE_ENUNCIADO = p_fk_referente_enunciado
        AND e.ACTIVE = TRUE;
 
-    IF v_nivel_enunciado IS NULL THEN
+    IF v_referente_enunciado IS NULL THEN
         RAISE EXCEPTION 'FK_REFERENTE_ENUNCIADO (%) no existe o no esta activo', p_fk_referente_enunciado USING ERRCODE = '23503';
     END IF;
     IF v_padre_enunciado IS NOT NULL THEN
@@ -232,10 +247,36 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    -- 4. Regla de negocio: mismo nivel de ensenanza entre unidad y referente
-    --    curricular del enunciado.
-    IF v_nivel_unidad IS DISTINCT FROM v_nivel_enunciado THEN
-        RAISE EXCEPTION 'El enunciado (%) pertenece a un nivel de ensenanza distinto al de la unidad "%"', p_fk_referente_enunciado, v_nombre_unidad
+    -- 4. Regla de negocio. Con el modelo N:N la comprobacion cambia, y a algo
+    --    mas estricto que "mismo nivel":
+    --
+    --    a) Si la unidad tiene referente (lo normal desde V216, que lo deriva
+    --       del grado), el enunciado tiene que ser DE ESE referente. Es la
+    --       misma invariante que V280 dejo en los datos al reparar las
+    --       unidades: los enunciados de una unidad pertenecen a su referente.
+    --       Comprobar solo el nivel seria mas laxo -- dejaria colgar de la
+    --       unidad enunciados de OTRO referente del mismo nivel, que es
+    --       exactamente el estado inconsistente que V280 tuvo que limpiar.
+    --
+    --    b) Si la unidad no tiene referente (su grado aun no tiene ninguno en
+    --       el catalogo), se cae a la regla de nivel original, ahora resuelta
+    --       por el puente: el referente del enunciado debe cubrir el nivel de
+    --       la unidad. Sin este fallback no se podria marcar ningun enunciado
+    --       en esas unidades.
+    IF v_referente_unidad IS NOT NULL THEN
+        IF v_referente_enunciado IS DISTINCT FROM v_referente_unidad THEN
+            RAISE EXCEPTION 'El enunciado (%) es de otro referente curricular (%) que el de la unidad "%" (%)',
+                p_fk_referente_enunciado, v_referente_enunciado, v_nombre_unidad, v_referente_unidad
+                USING ERRCODE = '22023';
+        END IF;
+    ELSIF NOT EXISTS (
+        SELECT 1
+          FROM academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
+         WHERE rcn.FK_REFERENTE_CURRICULAR = v_referente_enunciado
+           AND rcn.FK_TNIVEL_ENSENANZA = v_nivel_unidad
+           AND rcn.ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'El enunciado (%) pertenece a un referente que no cubre el nivel de ensenanza de la unidad "%"', p_fk_referente_enunciado, v_nombre_unidad
             USING ERRCODE = '22023';
     END IF;
 
@@ -265,7 +306,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_enunciado_relacionar(BIGINT, BIGINT, BIGINT)
-    IS 'Relaciona (o reactiva) un enunciado del referente curricular (TREFERENTE_ENUNCIADO nivel 1, FK_PADRE IS NULL) con una unidad (TUNIDAD_ENUNCIADO), validando que ambos compartan el mismo nivel de ensenanza (unidad: via TGRADO.FK_TNIVEL_ENSENANZA; enunciado: via TREFERENTE_CURRICULAR.FK_TNIVEL_ENSENANZA). Gate EDITAR sobre PLANEADOR. Retorna PK_TUNIDAD_ENUNCIADO. V136.';
+    IS 'Relaciona (o reactiva) un enunciado del referente curricular (TREFERENTE_ENUNCIADO nivel 1, FK_PADRE IS NULL) con una unidad (TUNIDAD_ENUNCIADO). ESTABA ROTA: validaba el nivel del enunciado leyendo TREFERENTE_CURRICULAR.FK_TNIVEL_ENSENANZA, columna directa que desaparecio al pasar la relacion referente<->nivel a N:N (TREFERENTE_CURRICULAR_NIVEL, V212 editada en sitio); siendo plpgsql fallaba en ejecucion con "column rc.fk_tnivel_ensenanza does not exist" (42703), asi que el paso "escoger los enunciados de la unidad" estaba muerto -- POST /planeador/unidades con ENUNCIADOS devolvia 500 y POST /planeador/unidades/:ID/enunciados tampoco funcionaba. Validacion actual, mas estricta que la original: si la unidad TIENE referente (lo normal desde V216, que lo deriva del grado) el enunciado debe ser DE ESE referente -- misma invariante que V280 dejo en los datos, y comprobar solo el nivel permitiria colgar enunciados de otro referente del mismo nivel, que es el estado inconsistente que V280 tuvo que limpiar; si la unidad no tiene referente se cae a la regla de nivel original, resuelta ahora por el puente (el referente del enunciado debe cubrir el nivel de la unidad), para que esas unidades no queden sin poder marcar nada. Gate EDITAR sobre PLANEADOR. Retorna PK_TUNIDAD_ENUNCIADO. V136.';
 
 -- ===========================================================================
 -- fn_unidad_enunciado_quitar
