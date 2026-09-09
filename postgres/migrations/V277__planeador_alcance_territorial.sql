@@ -64,7 +64,7 @@
 -- por
 --     PERFORM fn_planeador_assert_alcance(usuario, accion, <objetivo>);
 --
---   V136  enunciados de unidad, criterios y evidencias de actividad (6)
+--   V214.1  enunciados de unidad, criterios y evidencias de actividad (6)
 --   V216  unidad crear / actualizar / eliminar, criterio agregar (4)
 --   V222  rubrica de unidad: asegurar, criterio actualizar / eliminar (3)
 --   V223  desvincular actividad, ponderacion inline (2)

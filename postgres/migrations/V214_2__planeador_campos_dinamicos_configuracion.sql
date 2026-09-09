@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V137 — Planeador educativo: campos dinamicos y configuracion agregada
+-- V214.2 — Planeador educativo: campos dinamicos y configuracion agregada
 -- (CU-86e311xxp — G. Academico Back Planeador educativo).
 --
 -- Contexto (diagrama de dependencias del formulario Planeador -- lineas
@@ -12,7 +12,7 @@
 --      V212) cuyo FK_TLV_ENFOQUE_PEDAGOGICO (TLISTA_VALOR CATEGORIA=
 --      ENFOQUE_PEDAGOGICO) sea EVALUATIVO. Sin referente, o referente
 --      FORMATIVO, la rubrica queda opcional/oculta.
---   2. actividad -> criterio: TACTIVIDAD_CRITERIO_UNIDAD (V136) es opcional
+--   2. actividad -> criterio: TACTIVIDAD_CRITERIO_UNIDAD (V214.1) es opcional
 --      para TODOS los niveles de ensenanza EXCEPTO Preescolar, donde no
 --      aplica en absoluto. Nivel via TACTIVIDAD.FK_TUNIDAD -> TUNIDAD.
 --      FK_TGRADO -> TGRADO.FK_TNIVEL_ENSENANZA -> TNIVEL_ENSENANZA.
@@ -93,7 +93,7 @@
 -- Depende de (orden de version de Flyway):
 --   * V22  — TUNIDAD, TACTIVIDAD, TGRADO, TNIVEL_ENSENANZA, TCRITERIO_UNIDAD,
 --            TRUBRICA_UNIDAD, TLISTA_VALOR.
---   * V136 — TUNIDAD_ENUNCIADO, TACTIVIDAD_EVIDENCIA, TACTIVIDAD_CRITERIO_UNIDAD.
+--   * V214.1 — TUNIDAD_ENUNCIADO, TACTIVIDAD_EVIDENCIA, TACTIVIDAD_CRITERIO_UNIDAD.
 --   * V212 — TREFERENTE_CURRICULAR (+ CATEGORIA ENFOQUE_PEDAGOGICO), FK_REFERENTE_CURRICULAR en TUNIDAD.
 --   * V212 — TREFERENTE_CURRICULAR.FK_TLV_TIPO_EVALUACION + CATEGORIA TIPO_EVALUACION.
 --   * V73  — TUNIDAD.FK_TLV_CALCULO_DEFINITIVA (rama CU-86e30a25v).
@@ -144,7 +144,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_referente_evaluativo(BIGINT)
-    IS 'Helper interno: TRUE si la unidad (activa) tiene un referente curricular VIGENTE (ACTIVE = TRUE Y ESTADO = ''A'') cuyo FK_TLV_ENFOQUE_PEDAGOGICO es EVALUATIVO; FALSE si es FORMATIVO, si no tiene referente, si el referente ya no esta vigente o si la unidad no existe/esta inactiva. La condicion de vigencia es la MISMA que aplica fn_unidad_actualizar (V216) para decidir si conserva el referente o lo re-deriva: antes aqui solo se miraba ACTIVE, y un referente retirado (ESTADO=''I'') se reportaba como evaluativo, habilitaba la seccion de evaluacion y dejaba fijar instrumentos que el siguiente PATCH de la unidad volvia huerfanos. Base de las condiciones dinamicas referente->rubrica y actividad->evaluacion. V137.';
+    IS 'Helper interno: TRUE si la unidad (activa) tiene un referente curricular VIGENTE (ACTIVE = TRUE Y ESTADO = ''A'') cuyo FK_TLV_ENFOQUE_PEDAGOGICO es EVALUATIVO; FALSE si es FORMATIVO, si no tiene referente, si el referente ya no esta vigente o si la unidad no existe/esta inactiva. La condicion de vigencia es la MISMA que aplica fn_unidad_actualizar (V216) para decidir si conserva el referente o lo re-deriva: antes aqui solo se miraba ACTIVE, y un referente retirado (ESTADO=''I'') se reportaba como evaluativo, habilitaba la seccion de evaluacion y dejaba fijar instrumentos que el siguiente PATCH de la unidad volvia huerfanos. Base de las condiciones dinamicas referente->rubrica y actividad->evaluacion. V214.2.';
 
 -- ===========================================================================
 -- fn_unidad_referente_tipo_evaluacion — helper interno: VALOR del
@@ -173,7 +173,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_referente_tipo_evaluacion(BIGINT)
-    IS 'Helper interno: VALOR de TLISTA_VALOR CATEGORIA=TIPO_EVALUACION (CUALITATIVA / CUANTITATIVA / CUANTITATIVA_CUALITATIVA, V212) del referente curricular de una unidad, o NULL si la unidad no existe/esta inactiva, no tiene referente, el referente esta inactivo o el referente no tiene tipo de evaluacion. Contraparte "que tipo" de fn_unidad_referente_evaluativo (que solo devuelve el booleano evaluativo/formativo); la usan el filtrado de instrumentos (fn_actividad_instrumentos_permitidos) y las validaciones de fn_actividad_rubrica/cotejo/escala_definir (V226). V137.';
+    IS 'Helper interno: VALOR de TLISTA_VALOR CATEGORIA=TIPO_EVALUACION (CUALITATIVA / CUANTITATIVA / CUANTITATIVA_CUALITATIVA, V212) del referente curricular de una unidad, o NULL si la unidad no existe/esta inactiva, no tiene referente, el referente esta inactivo o el referente no tiene tipo de evaluacion. Contraparte "que tipo" de fn_unidad_referente_evaluativo (que solo devuelve el booleano evaluativo/formativo); la usan el filtrado de instrumentos (fn_actividad_instrumentos_permitidos) y las validaciones de fn_actividad_rubrica/cotejo/escala_definir (V226). V214.2.';
 
 -- ===========================================================================
 -- fn_actividad_referente_tipo_evaluacion — lo mismo, entrando por la
@@ -195,7 +195,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_referente_tipo_evaluacion(BIGINT)
-    IS 'TIPO_EVALUACION (VALOR) del referente curricular de la unidad de una actividad, via TACTIVIDAD.FK_TUNIDAD -> fn_unidad_referente_tipo_evaluacion. NULL si la actividad no existe/esta inactiva, no tiene unidad, o la unidad no tiene referente con tipo de evaluacion. V137.';
+    IS 'TIPO_EVALUACION (VALOR) del referente curricular de la unidad de una actividad, via TACTIVIDAD.FK_TUNIDAD -> fn_unidad_referente_tipo_evaluacion. NULL si la actividad no existe/esta inactiva, no tiene unidad, o la unidad no tiene referente con tipo de evaluacion. V214.2.';
 
 -- ===========================================================================
 -- fn_instrumento_permitido_por_tipo_evaluacion — DEFINICION UNICA del mapeo
@@ -236,7 +236,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_instrumento_permitido_por_tipo_evaluacion(VARCHAR, VARCHAR)
-    IS 'Definicion UNICA del mapeo "listado de instrumentos dado por el referente": TRUE si un instrumento (VALOR de INSTRUMENTO_EVALUACION) es compatible con un TIPO_EVALUACION (VALOR de TIPO_EVALUACION, V212). CUALITATIVA -> RUBRICA/LISTA_COTEJO; CUANTITATIVA -> ESCALA_VALORACION (que ademas debe configurarse NUMERICA, eso lo valida fn_actividad_escala_definir de V226); CUANTITATIVA_CUALITATIVA o tipo NULL -> los cuatro. OTRO (instrumento libre) siempre pasa. NO evalua si el referente es EVALUATIVO (eso es fn_actividad_evaluacion_requerida). Usada por fn_actividad_instrumentos_permitidos y por las tres fn_actividad_*_definir de V226 para que listado y validacion no diverjan. V137.';
+    IS 'Definicion UNICA del mapeo "listado de instrumentos dado por el referente": TRUE si un instrumento (VALOR de INSTRUMENTO_EVALUACION) es compatible con un TIPO_EVALUACION (VALOR de TIPO_EVALUACION, V212). CUALITATIVA -> RUBRICA/LISTA_COTEJO; CUANTITATIVA -> ESCALA_VALORACION (que ademas debe configurarse NUMERICA, eso lo valida fn_actividad_escala_definir de V226); CUANTITATIVA_CUALITATIVA o tipo NULL -> los cuatro. OTRO (instrumento libre) siempre pasa. NO evalua si el referente es EVALUATIVO (eso es fn_actividad_evaluacion_requerida). Usada por fn_actividad_instrumentos_permitidos y por las tres fn_actividad_*_definir de V226 para que listado y validacion no diverjan. V214.2.';
 
 -- ===========================================================================
 -- fn_unidad_campos_disponibles — condicion dinamica 1 (referente -> rubrica)
@@ -293,7 +293,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_campos_disponibles(BIGINT, BIGINT)
-    IS 'Resuelve la dependencia dinamica "referente -> rubrica" para una unidad: {rubrica:{visible,requerido,motivo}, enunciados:{visible,requerido,motivo}}. rubrica.visible = TRUE solo si la unidad tiene TREFERENTE_CURRICULAR activo con FK_TLV_ENFOQUE_PEDAGOGICO=EVALUATIVO (fn_unidad_referente_evaluativo). enunciados.visible = TRUE si la unidad tiene cualquier referente (evaluativo o formativo). Ninguna de las dos secciones es requerida (siempre opcionales, solo cambia si se muestran). Gate VER sobre PLANEADOR. V137.';
+    IS 'Resuelve la dependencia dinamica "referente -> rubrica" para una unidad: {rubrica:{visible,requerido,motivo}, enunciados:{visible,requerido,motivo}}. rubrica.visible = TRUE solo si la unidad tiene TREFERENTE_CURRICULAR activo con FK_TLV_ENFOQUE_PEDAGOGICO=EVALUATIVO (fn_unidad_referente_evaluativo). enunciados.visible = TRUE si la unidad tiene cualquier referente (evaluativo o formativo). Ninguna de las dos secciones es requerida (siempre opcionales, solo cambia si se muestran). Gate VER sobre PLANEADOR. V214.2.';
 
 -- ===========================================================================
 -- fn_actividad_evaluacion_requerida — condicion dinamica 3, aislada como
@@ -321,7 +321,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_evaluacion_requerida(BIGINT)
-    IS 'TRUE si la unidad de la actividad (TACTIVIDAD.FK_TUNIDAD) tiene un referente curricular EVALUATIVO (condicion dinamica "actividad -> evaluacion"); FALSE si es FORMATIVO, si la actividad no tiene unidad, si la unidad no tiene referente, o si la actividad no existe/esta inactiva (nunca NULL). No gatea VER: es un helper booleano puro, sin lectura de datos sensibles mas alla de lo que ya expone fn_actividad_campos_disponibles. V137.';
+    IS 'TRUE si la unidad de la actividad (TACTIVIDAD.FK_TUNIDAD) tiene un referente curricular EVALUATIVO (condicion dinamica "actividad -> evaluacion"); FALSE si es FORMATIVO, si la actividad no tiene unidad, si la unidad no tiene referente, o si la actividad no existe/esta inactiva (nunca NULL). No gatea VER: es un helper booleano puro, sin lectura de datos sensibles mas alla de lo que ya expone fn_actividad_campos_disponibles. V214.2.';
 
 -- ===========================================================================
 -- fn_actividad_instrumentos_permitidos — condicion dinamica 4.
@@ -381,7 +381,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_instrumentos_permitidos(BIGINT, BIGINT)
-    IS 'Instrumentos de evaluacion aplicables a una actividad (TLISTA_VALOR CATEGORIA=INSTRUMENTO_EVALUACION: RUBRICA/LISTA_COTEJO/ESCALA_VALORACION/OTRO): [] si el referente de la unidad de la actividad no es EVALUATIVO (fn_actividad_evaluacion_requerida); si lo es, el catalogo FILTRADO por el TIPO_EVALUACION de ese referente (fn_actividad_referente_tipo_evaluacion + fn_instrumento_permitido_por_tipo_evaluacion, "listado dado por el referente"): CUALITATIVA -> RUBRICA y LISTA_COTEJO; CUANTITATIVA -> ESCALA_VALORACION (que ademas debe definirse NUMERICA, lo valida V226); CUANTITATIVA_CUALITATIVA o referente sin tipo -> los cuatro. OTRO siempre se ofrece (instrumento libre). Devuelve [{pk,valor,etiqueta}] ordenado por NOMBRE. Limitacion conocida: TREFERENTE_CURRICULAR.INSTRUMENTO es texto libre y NO se parsea; el filtro sale del TIPO_EVALUACION estructurado. Gate VER sobre PLANEADOR. V137.';
+    IS 'Instrumentos de evaluacion aplicables a una actividad (TLISTA_VALOR CATEGORIA=INSTRUMENTO_EVALUACION: RUBRICA/LISTA_COTEJO/ESCALA_VALORACION/OTRO): [] si el referente de la unidad de la actividad no es EVALUATIVO (fn_actividad_evaluacion_requerida); si lo es, el catalogo FILTRADO por el TIPO_EVALUACION de ese referente (fn_actividad_referente_tipo_evaluacion + fn_instrumento_permitido_por_tipo_evaluacion, "listado dado por el referente"): CUALITATIVA -> RUBRICA y LISTA_COTEJO; CUANTITATIVA -> ESCALA_VALORACION (que ademas debe definirse NUMERICA, lo valida V226); CUANTITATIVA_CUALITATIVA o referente sin tipo -> los cuatro. OTRO siempre se ofrece (instrumento libre). Devuelve [{pk,valor,etiqueta}] ordenado por NOMBRE. Limitacion conocida: TREFERENTE_CURRICULAR.INSTRUMENTO es texto libre y NO se parsea; el filtro sale del TIPO_EVALUACION estructurado. Gate VER sobre PLANEADOR. V214.2.';
 
 -- ===========================================================================
 -- fn_actividad_campos_disponibles — condiciones dinamicas 2, 3 y 4
@@ -509,7 +509,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_campos_disponibles(BIGINT, BIGINT)
-    IS 'Resuelve las dependencias dinamicas "actividad -> criterio" y "actividad -> evaluacion" para una actividad: {criterio:{visible,requerido,motivo}, evaluacion:{visible,requerido,motivo,instrumentosPermitidos}}. criterio.visible = FALSE solo cuando el nivel de ensenanza del grado de la unidad de la actividad es Preescolar (resuelto por TNIVEL_ENSENANZA.NOMBRE ILIKE ''preescolar%'', ver nota de estilo en el cuerpo); es opcional (nunca requerido) en el resto de niveles. evaluacion.visible/requerido = fn_actividad_evaluacion_requerida (referente EVALUATIVO); instrumentosPermitidos = fn_actividad_instrumentos_permitidos (ya filtrado por el TIPO_EVALUACION del referente). ponderacion:{visible,requerido,modo,motivo,autocalculado?,campo?} resuelve el campo PONDERACION (%): visible=false si la actividad no tiene unidad o no es evaluativa (ES_EVALUATIVA=''N''); si la tiene, manda el metodo de calculo de la unidad (TUNIDAD.FK_TLV_CALCULO_DEFINITIVA, V73, resuelto con fn_unidad_calculo_definitiva_modo de V223) -- Ponderar: visible/requerido con modo PORCENTAJE sobre el campo PONDERACION; Sumatoria: visible/requerido con modo PUNTAJE sobre el campo NOTA_MAXIMA y autocalculado=true (el % lo calcula el sistema, V223); Promediar: visible=false; sin metodo elegido: visible=false. Gate VER sobre PLANEADOR. V137.';
+    IS 'Resuelve las dependencias dinamicas "actividad -> criterio" y "actividad -> evaluacion" para una actividad: {criterio:{visible,requerido,motivo}, evaluacion:{visible,requerido,motivo,instrumentosPermitidos}}. criterio.visible = FALSE solo cuando el nivel de ensenanza del grado de la unidad de la actividad es Preescolar (resuelto por TNIVEL_ENSENANZA.NOMBRE ILIKE ''preescolar%'', ver nota de estilo en el cuerpo); es opcional (nunca requerido) en el resto de niveles. evaluacion.visible/requerido = fn_actividad_evaluacion_requerida (referente EVALUATIVO); instrumentosPermitidos = fn_actividad_instrumentos_permitidos (ya filtrado por el TIPO_EVALUACION del referente). ponderacion:{visible,requerido,modo,motivo,autocalculado?,campo?} resuelve el campo PONDERACION (%): visible=false si la actividad no tiene unidad o no es evaluativa (ES_EVALUATIVA=''N''); si la tiene, manda el metodo de calculo de la unidad (TUNIDAD.FK_TLV_CALCULO_DEFINITIVA, V73, resuelto con fn_unidad_calculo_definitiva_modo de V223) -- Ponderar: visible/requerido con modo PORCENTAJE sobre el campo PONDERACION; Sumatoria: visible/requerido con modo PUNTAJE sobre el campo NOTA_MAXIMA y autocalculado=true (el % lo calcula el sistema, V223); Promediar: visible=false; sin metodo elegido: visible=false. Gate VER sobre PLANEADOR. V214.2.';
 
 -- ===========================================================================
 -- fn_actividad_unidad_configuracion — snapshot completo de la unidad de una
@@ -634,7 +634,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_unidad_configuracion(BIGINT, BIGINT)
-    IS 'Snapshot completo de la configuracion de la unidad de una actividad (TACTIVIDAD.FK_TUNIDAD): {tieneUnidad:false} si la actividad no tiene unidad relacionada (opcional desde V218); si la tiene, {tieneUnidad:true, pkTunidad, nombre, descripcion, objetivos:[...], contenidos:[...], referenteCurricular:{...}|null, rubrica:[{pk,orden,descripcion,niveles:[...]}] (misma forma que fn_unidad_criterio_listar de V222), enunciados:[{pkTunidadEnunciado,pk,texto,evidencias:[{pk,texto}]}] (TUNIDAD_ENUNCIADO de V136 con sus evidencias hijas de TREFERENTE_ENUNCIADO)}. Gate VER sobre PLANEADOR. V137.';
+    IS 'Snapshot completo de la configuracion de la unidad de una actividad (TACTIVIDAD.FK_TUNIDAD): {tieneUnidad:false} si la actividad no tiene unidad relacionada (opcional desde V218); si la tiene, {tieneUnidad:true, pkTunidad, nombre, descripcion, objetivos:[...], contenidos:[...], referenteCurricular:{...}|null, rubrica:[{pk,orden,descripcion,niveles:[...]}] (misma forma que fn_unidad_criterio_listar de V222), enunciados:[{pkTunidadEnunciado,pk,texto,evidencias:[{pk,texto}]}] (TUNIDAD_ENUNCIADO de V214.1 con sus evidencias hijas de TREFERENTE_ENUNCIADO)}. Gate VER sobre PLANEADOR. V214.2.';
 
 -- ===========================================================================
 -- GUARD "instrumento huerfano" — dos helpers de listado + el trigger que
@@ -697,7 +697,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_instrumento_nombre(BIGINT)
-    IS 'Rotulo de pantalla de un instrumento de evaluacion (TLISTA_VALOR.NOMBRE de la categoria INSTRUMENTO_EVALUACION): "Rubrica", "Lista de cotejo", "Escala de valoracion", "Otro". Devuelve ''seleccionado'' si el PK no resuelve, para que el mensaje siga leyendose. Existe para que los errores de fn_actividad_crear / _actualizar (V224) nombren el instrumento en vez de soltar el PK o la clave tecnica. V137.';
+    IS 'Rotulo de pantalla de un instrumento de evaluacion (TLISTA_VALOR.NOMBRE de la categoria INSTRUMENTO_EVALUACION): "Rubrica", "Lista de cotejo", "Escala de valoracion", "Otro". Devuelve ''seleccionado'' si el PK no resuelve, para que el mensaje siga leyendose. Existe para que los errores de fn_actividad_crear / _actualizar (V224) nombren el instrumento en vez de soltar el PK o la clave tecnica. V214.2.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_referente_es_evaluativo_vigente(
     p_pk_referente_curricular   BIGINT
@@ -718,7 +718,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_referente_es_evaluativo_vigente(BIGINT)
-    IS 'Definicion UNICA de "referente evaluativo vigente" a partir de su PK: enfoque pedagogico EVALUATIVO + ACTIVE = TRUE + ESTADO = ''A''. FALSE tambien para NULL (referente sin asignar). Es la misma condicion que fn_unidad_referente_evaluativo aplica partiendo de la unidad; existe aparte porque fn_unidad_actualizar (V216) necesita evaluarla sobre el referente RESULTANTE del PATCH, que todavia no esta escrito en la unidad. V137.';
+    IS 'Definicion UNICA de "referente evaluativo vigente" a partir de su PK: enfoque pedagogico EVALUATIVO + ACTIVE = TRUE + ESTADO = ''A''. FALSE tambien para NULL (referente sin asignar). Es la misma condicion que fn_unidad_referente_evaluativo aplica partiendo de la unidad; existe aparte porque fn_unidad_actualizar (V216) necesita evaluarla sobre el referente RESULTANTE del PATCH, que todavia no esta escrito en la unidad. V214.2.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_actividades_instrumentadas(
     p_pk_tunidad   BIGINT
@@ -748,7 +748,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_actividades_instrumentadas(BIGINT)
-    IS 'Listado LEGIBLE (no PKs) de las actividades activas de una unidad que ya tienen instrumento de evaluacion configurado, con el nombre del instrumento entre parentesis: ''"Mi historia favorita" (Rubrica), "Clasificamos objetos" (Lista de cotejo)''. NULL si no hay ninguna. Se corta en 5 y remata con "y N mas" para que el mensaje de error siga siendo legible. Lo consume el guard de fn_unidad_actualizar (V216), que aborta el PATCH cuando la unidad dejaria de ser evaluativa con estas actividades colgando. V137.';
+    IS 'Listado LEGIBLE (no PKs) de las actividades activas de una unidad que ya tienen instrumento de evaluacion configurado, con el nombre del instrumento entre parentesis: ''"Mi historia favorita" (Rubrica), "Clasificamos objetos" (Lista de cotejo)''. NULL si no hay ninguna. Se corta en 5 y remata con "y N mas" para que el mensaje de error siga siendo legible. Lo consume el guard de fn_unidad_actualizar (V216), que aborta el PATCH cuando la unidad dejaria de ser evaluativa con estas actividades colgando. V214.2.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_referente_actividades_instrumentadas(
     p_pk_referente_curricular   BIGINT
@@ -778,7 +778,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_referente_actividades_instrumentadas(BIGINT)
-    IS 'Igual que fn_unidad_actividades_instrumentadas pero un nivel arriba: las actividades instrumentadas de TODAS las unidades activas acogidas a un referente curricular, rotuladas con la unidad a la que pertenecen. NULL si no hay ninguna. Lo consume el trigger tr_refcurr_enfoque_con_instrumentos, que impide retirar el referente o volverle el enfoque a FORMATIVO mientras esas actividades existan. V137.';
+    IS 'Igual que fn_unidad_actividades_instrumentadas pero un nivel arriba: las actividades instrumentadas de TODAS las unidades activas acogidas a un referente curricular, rotuladas con la unidad a la que pertenecen. NULL si no hay ninguna. Lo consume el trigger tr_refcurr_enfoque_con_instrumentos, que impide retirar el referente o volverle el enfoque a FORMATIVO mientras esas actividades existan. V214.2.';
 
 -- ---------------------------------------------------------------------------
 -- Trigger: el enfoque de un referente no se voltea (ni se retira el referente)
@@ -837,7 +837,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_refcurr_enfoque_guard()
-    IS 'Cuerpo de tr_refcurr_enfoque_con_instrumentos: aborta (22023) cualquier UPDATE de TREFERENTE_CURRICULAR que haga que el referente DEJE de ser "evaluativo vigente" (enfoque EVALUATIVO + ACTIVE + ESTADO=''A'', la misma definicion que fn_unidad_referente_evaluativo) mientras alguna unidad acogida a el tenga actividades con instrumento de evaluacion configurado. Cubre las tres formas de romperlo: voltear el enfoque a FORMATIVO, desactivar el referente y marcarlo como retirado (ESTADO). Sin este guard esas actividades quedaban con un instrumento que su unidad ya no admite y fn_actividad_actualizar (V224) rechazaba desde entonces CUALQUIER edicion sobre ellas. La transicion inversa (pasar a evaluativo) y los UPDATE que no tocan esos campos salen por el camino rapido, sin consultar actividades. V137.';
+    IS 'Cuerpo de tr_refcurr_enfoque_con_instrumentos: aborta (22023) cualquier UPDATE de TREFERENTE_CURRICULAR que haga que el referente DEJE de ser "evaluativo vigente" (enfoque EVALUATIVO + ACTIVE + ESTADO=''A'', la misma definicion que fn_unidad_referente_evaluativo) mientras alguna unidad acogida a el tenga actividades con instrumento de evaluacion configurado. Cubre las tres formas de romperlo: voltear el enfoque a FORMATIVO, desactivar el referente y marcarlo como retirado (ESTADO). Sin este guard esas actividades quedaban con un instrumento que su unidad ya no admite y fn_actividad_actualizar (V224) rechazaba desde entonces CUALQUIER edicion sobre ellas. La transicion inversa (pasar a evaluativo) y los UPDATE que no tocan esos campos salen por el camino rapido, sin consultar actividades. V214.2.';
 
 DROP TRIGGER IF EXISTS tr_refcurr_enfoque_con_instrumentos ON academico_test.TREFERENTE_CURRICULAR;
 CREATE TRIGGER tr_refcurr_enfoque_con_instrumentos

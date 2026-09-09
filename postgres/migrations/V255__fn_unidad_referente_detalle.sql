@@ -4,7 +4,7 @@
 -- (CU-86e311xxp).
 --
 -- QUE FALTABA: el Planeador ya sabe RELACIONAR una unidad con enunciados
--- (POST /planeador/unidades/:ID/enunciados, V136/V245) y una actividad con
+-- (POST /planeador/unidades/:ID/enunciados, V214.1/V245) y una actividad con
 -- evidencias (POST /planeador/actividades/:ID/evidencias), pero no habia
 -- forma de LEER el arbol contra el que se marcan esas casillas: que referente
 -- le toca a la unidad, que enunciados tiene, que evidencias cuelgan de cada
@@ -33,7 +33,7 @@
 --
 -- Asi que la lectura se hace aqui, sobre las mismas tablas
 -- (TREFERENTE_CURRICULAR / TREFERENTE_ENUNCIADO, con FK_PADRE separando
--- nivel 1 = enunciado y nivel 2 = evidencia -- ver V136), pero con el gate
+-- nivel 1 = enunciado y nivel 2 = evidencia -- ver V214.1), pero con el gate
 -- del Planeador y ACOTADA a la unidad: el docente nunca ve mas referente que
 -- el de la unidad que consulta. Es una lectura derivada, no una puerta al
 -- catalogo.
@@ -46,17 +46,17 @@
 --     "Proposito"/"Evidencia" en Preescolar). La UI debe rotular con esto,
 --     no con literales.
 --   * enfoque (EVALUATIVO / FORMATIVO) y tipo_evaluacion -- las dos reglas
---     que deciden que secciones se habilitan en la actividad (V137): sin
+--     que deciden que secciones se habilitan en la actividad (V214.2): sin
 --     referente evaluativo no hay seccion de evaluacion, y el tipo filtra
 --     que instrumentos aplican.
 --   * relacionado_con_unidad + pk_tunidad_enunciado por enunciado -- para
 --     pre-marcar las casillas Y para poder desmarcarlas: el PATCH de quitar
 --     (V245) pide el PK de la RELACION, no el del enunciado.
 --   * evidencias anidadas por enunciado -- la actividad solo puede marcar
---     evidencias de enunciados que la unidad ya relaciono (regla de V136),
+--     evidencias de enunciados que la unidad ya relaciono (regla de V214.1),
 --     asi que el front necesita el arbol, no dos listas sueltas.
 --
--- Depende de: V136 (TUNIDAD_ENUNCIADO, jerarquia de TREFERENTE_ENUNCIADO),
+-- Depende de: V214.1 (TUNIDAD_ENUNCIADO, jerarquia de TREFERENTE_ENUNCIADO),
 -- V212 (TREFERENTE_CURRICULAR y su catalogo, rama CU-86e311xqh),
 -- V216 (menu PLANEADOR + fn_assert_permiso_seccion).
 -- ===========================================================================
@@ -160,7 +160,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_referente_detalle(BIGINT, BIGINT)
-    IS 'Referente curricular de UNA unidad con su arbol de enunciados (nivel 1) y evidencias (nivel 2), para pintar dinamicamente la unidad y la actividad. Devuelve el recorrido completo unidad -> grado -> nivel de ensenanza -> referente, mas: nivel_1_etiqueta / nivel_2_etiqueta (como llama ESE referente a sus niveles -- "Enunciado"/"Evidencia" o "Proposito"/"Evidencia" -- la UI debe rotular con esto, no con literales), enfoque y es_evaluativo + tipo_evaluacion (las dos reglas que deciden que secciones e instrumentos se habilitan en la actividad, V137), y por cada enunciado: relacionadoConUnidad y pkTunidadEnunciado (el PK de la RELACION, que es lo que pide el PATCH de quitar, no el del enunciado) con sus evidencias anidadas. NO delega en fn_refenunc_listar/fn_refenunc_evidencias_listar (V213) a proposito: esas gatean sobre el menu REFERENTES_CURRICULARES, que hoy solo tiene el super admin, y un docente recibiria 42501 justo donde debe marcar evidencias de su propia unidad; aqui la lectura va con el gate del Planeador y ACOTADA a la unidad consultada -- lectura derivada, no una puerta al catalogo global. Gate VER sobre PLANEADOR. P0002 si la unidad no existe. Si la unidad no tiene referente, las columnas del referente vienen NULL y enunciados como []. V255.';
+    IS 'Referente curricular de UNA unidad con su arbol de enunciados (nivel 1) y evidencias (nivel 2), para pintar dinamicamente la unidad y la actividad. Devuelve el recorrido completo unidad -> grado -> nivel de ensenanza -> referente, mas: nivel_1_etiqueta / nivel_2_etiqueta (como llama ESE referente a sus niveles -- "Enunciado"/"Evidencia" o "Proposito"/"Evidencia" -- la UI debe rotular con esto, no con literales), enfoque y es_evaluativo + tipo_evaluacion (las dos reglas que deciden que secciones e instrumentos se habilitan en la actividad, V214.2), y por cada enunciado: relacionadoConUnidad y pkTunidadEnunciado (el PK de la RELACION, que es lo que pide el PATCH de quitar, no el del enunciado) con sus evidencias anidadas. NO delega en fn_refenunc_listar/fn_refenunc_evidencias_listar (V213) a proposito: esas gatean sobre el menu REFERENTES_CURRICULARES, que hoy solo tiene el super admin, y un docente recibiria 42501 justo donde debe marcar evidencias de su propia unidad; aqui la lectura va con el gate del Planeador y ACOTADA a la unidad consultada -- lectura derivada, no una puerta al catalogo global. Gate VER sobre PLANEADOR. P0002 si la unidad no existe. Si la unidad no tiene referente, las columnas del referente vienen NULL y enunciados como []. V255.';
 
 -- ===========================================================================
 -- ENDPOINT — GET /planeador/unidades/:ID/referente

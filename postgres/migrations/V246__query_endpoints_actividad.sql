@@ -4,7 +4,7 @@
 -- LOTE 2 de la tanda de endpoints del Planeador).
 --
 -- Este archivo NO crea funciones nuevas: las funciones ya existen y estan
--- validadas en esta rama (V224, V137, V223, V244, V243, V136). Solo registra
+-- validadas en esta rama (V224, V214.2, V223, V244, V243, V214.1). Solo registra
 -- las filas public.query (+ role_query) para exponerlas via el gateway como
 -- api/eval-col/... . El LOTE 1 (V245, dominio UNIDAD) y el lote de
 -- INSTRUMENTOS (V226/V240/V241, en paralelo) registran sus propios
@@ -111,8 +111,8 @@
 --     posterior si se confirma la pantalla de tablero/calendario.
 --
 -- Depende de (orden de version de Flyway): V224 (CRUD + helpers de
--- actividad), V137 (campos dinamicos / configuracion), V223 (disponibles por
--- unidad), V244 (huerfanas), V243 (observar preescolar), V136 (evidencias /
+-- actividad), V214.2 (campos dinamicos / configuracion), V223 (disponibles por
+-- unidad), V244 (huerfanas), V243 (observar preescolar), V214.1 (evidencias /
 -- criterios de unidad).
 -- ===========================================================================
 
@@ -359,7 +359,7 @@ ON CONFLICT DO NOTHING;
 -- 6. GET /planeador/actividades/:ID/configuracion — "visualizacion construida
 --    por endpoint" / secciones dinamicas del formulario de actividad
 --    (fn_actividad_campos_disponibles + fn_actividad_unidad_configuracion,
---    V137). ESTE ES EL ENDPOINT MAS IMPORTANTE DEL PEDIDO ORIGINAL: le dice
+--    V214.2). ESTE ES EL ENDPOINT MAS IMPORTANTE DEL PEDIDO ORIGINAL: le dice
 --    al front, para ESTA actividad puntual, que secciones/campos del
 --    formulario mostrar habilitados/deshabilitados y POR QUE.
 --
@@ -405,7 +405,7 @@ SELECT
     'postgres', false, false,
     m.id_microservice, '/planeador/actividades/:ID/configuracion', 'SELECT', 'GET',
     '{"PARAM.ID": "BIGINT"}'::jsonb,
-    'V246 -- "visualizacion construida por endpoint": secciones dinamicas habilitadas/deshabilitadas del formulario de actividad para ESTA actividad puntual, con el MOTIVO de cada decision (fn_actividad_campos_disponibles + fn_actividad_unidad_configuracion, V137). :ID = PK_TACTIVIDAD. campos_disponibles = {criterio:{visible,requerido,motivo} -- oculto solo en Preescolar, opcional en el resto; evaluacion:{visible,requerido,motivo,instrumentosPermitidos} -- visible/requerido solo si la unidad tiene referente EVALUATIVO, instrumentosPermitidos ya filtrado por el TIPO_EVALUACION del referente; ponderacion:{visible,requerido,modo,motivo,autocalculado?,campo?} -- oculto sin unidad o si ES_EVALUATIVA=N, si aplica el modo (PORCENTAJE sobre PONDERACION, o PUNTAJE autocalculado sobre NOTA_MAXIMA) lo decide el metodo de calculo de la unidad (V73)}. unidad_configuracion = snapshot completo de la unidad relacionada (objetivos, contenidos, referente curricular, rubrica con criterios/niveles, enunciados/evidencias) o {"tieneUnidad":false} si la actividad no tiene unidad. Gate VER sobre PLANEADOR (en ambas funciones). 404 (P0002) si la actividad no existe.'
+    'V246 -- "visualizacion construida por endpoint": secciones dinamicas habilitadas/deshabilitadas del formulario de actividad para ESTA actividad puntual, con el MOTIVO de cada decision (fn_actividad_campos_disponibles + fn_actividad_unidad_configuracion, V214.2). :ID = PK_TACTIVIDAD. campos_disponibles = {criterio:{visible,requerido,motivo} -- oculto solo en Preescolar, opcional en el resto; evaluacion:{visible,requerido,motivo,instrumentosPermitidos} -- visible/requerido solo si la unidad tiene referente EVALUATIVO, instrumentosPermitidos ya filtrado por el TIPO_EVALUACION del referente; ponderacion:{visible,requerido,modo,motivo,autocalculado?,campo?} -- oculto sin unidad o si ES_EVALUATIVA=N, si aplica el modo (PORCENTAJE sobre PONDERACION, o PUNTAJE autocalculado sobre NOTA_MAXIMA) lo decide el metodo de calculo de la unidad (V73)}. unidad_configuracion = snapshot completo de la unidad relacionada (objetivos, contenidos, referente curricular, rubrica con criterios/niveles, enunciados/evidencias) o {"tieneUnidad":false} si la actividad no tiene unidad. Gate VER sobre PLANEADOR (en ambas funciones). 404 (P0002) si la actividad no existe.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
@@ -666,7 +666,7 @@ ON CONFLICT DO NOTHING;
 
 -- ===========================================================================
 -- 14. POST /planeador/actividades/:ID/evidencias —
---     fn_actividad_evidencia_relacionar (V136).
+--     fn_actividad_evidencia_relacionar (V214.1).
 -- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
@@ -680,7 +680,7 @@ SELECT
     'postgres', false, false,
     m.id_microservice, '/planeador/actividades/:ID/evidencias', 'SELECT', 'POST',
     '{"PARAM.ID": "BIGINT", "BODY.FK_REFERENTE_ENUNCIADO": "BIGINT"}'::jsonb,
-    'V246 -- relaciona (o reactiva) una evidencia del referente curricular (TREFERENTE_ENUNCIADO nivel 2, FK_PADRE NOT NULL) con la actividad :ID (fn_actividad_evidencia_relacionar, V136). :ID = PK_TACTIVIDAD (FK_TACTIVIDAD de la relacion). Exige que la actividad tenga FK_TUNIDAD y que el enunciado padre de la evidencia ya este relacionado (activo) con esa misma unidad via TUNIDAD_ENUNCIADO (POST /planeador/unidades/:ID/enunciados, V245). Retorna PK_TACTIVIDAD_EVIDENCIA. Gate EDITAR sobre PLANEADOR. 23503 si la actividad o la evidencia no existen/no estan activas; 22023 si la actividad no tiene unidad, el PK es un enunciado (nivel 1) en vez de evidencia, o el enunciado padre no esta relacionado con la unidad.'
+    'V246 -- relaciona (o reactiva) una evidencia del referente curricular (TREFERENTE_ENUNCIADO nivel 2, FK_PADRE NOT NULL) con la actividad :ID (fn_actividad_evidencia_relacionar, V214.1). :ID = PK_TACTIVIDAD (FK_TACTIVIDAD de la relacion). Exige que la actividad tenga FK_TUNIDAD y que el enunciado padre de la evidencia ya este relacionado (activo) con esa misma unidad via TUNIDAD_ENUNCIADO (POST /planeador/unidades/:ID/enunciados, V245). Retorna PK_TACTIVIDAD_EVIDENCIA. Gate EDITAR sobre PLANEADOR. 23503 si la actividad o la evidencia no existen/no estan activas; 22023 si la actividad no tiene unidad, el PK es un enunciado (nivel 1) en vez de evidencia, o el enunciado padre no esta relacionado con la unidad.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
@@ -698,7 +698,7 @@ ON CONFLICT DO NOTHING;
 
 -- ===========================================================================
 -- 15. PATCH /planeador/actividades/evidencias/:ID —
---     fn_actividad_evidencia_quitar (V136; :ID = PK_TACTIVIDAD_EVIDENCIA).
+--     fn_actividad_evidencia_quitar (V214.1; :ID = PK_TACTIVIDAD_EVIDENCIA).
 -- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
@@ -711,7 +711,7 @@ SELECT
     'postgres', false, false,
     m.id_microservice, '/planeador/actividades/evidencias/:ID', 'SELECT', 'PATCH',
     '{"PARAM.ID": "BIGINT"}'::jsonb,
-    'V246 -- borrado logico (ACTIVE=FALSE) de una relacion actividad<->evidencia (fn_actividad_evidencia_quitar, V136). :ID = PK_TACTIVIDAD_EVIDENCIA. Gate EDITAR sobre PLANEADOR. 23503 si la relacion no existe o ya esta inactiva.'
+    'V246 -- borrado logico (ACTIVE=FALSE) de una relacion actividad<->evidencia (fn_actividad_evidencia_quitar, V214.1). :ID = PK_TACTIVIDAD_EVIDENCIA. Gate EDITAR sobre PLANEADOR. 23503 si la relacion no existe o ya esta inactiva.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
@@ -729,7 +729,7 @@ ON CONFLICT DO NOTHING;
 
 -- ===========================================================================
 -- 16. POST /planeador/actividades/:ID/criterios —
---     fn_actividad_criterio_relacionar (V136).
+--     fn_actividad_criterio_relacionar (V214.1).
 -- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
@@ -743,7 +743,7 @@ SELECT
     'postgres', false, false,
     m.id_microservice, '/planeador/actividades/:ID/criterios', 'SELECT', 'POST',
     '{"PARAM.ID": "BIGINT", "BODY.FK_TCRITERIO_UNIDAD": "BIGINT"}'::jsonb,
-    'V246 -- relaciona (o reactiva) un criterio de la rubrica de la unidad (TCRITERIO_UNIDAD) con la actividad :ID (fn_actividad_criterio_relacionar, V136). :ID = PK_TACTIVIDAD (FK_TACTIVIDAD de la relacion). Exige que la actividad tenga FK_TUNIDAD y que el criterio pertenezca a la rubrica (TRUBRICA_UNIDAD) de esa misma unidad (rubrica gestionada en POST /planeador/unidades/:ID/criterios, V245). Retorna PK_TACTIVIDAD_CRITERIO_UNIDAD. Gate EDITAR sobre PLANEADOR. 23503 si la actividad o el criterio no existen/no estan activos; 22023 si la actividad no tiene unidad o el criterio pertenece a la rubrica de otra unidad.'
+    'V246 -- relaciona (o reactiva) un criterio de la rubrica de la unidad (TCRITERIO_UNIDAD) con la actividad :ID (fn_actividad_criterio_relacionar, V214.1). :ID = PK_TACTIVIDAD (FK_TACTIVIDAD de la relacion). Exige que la actividad tenga FK_TUNIDAD y que el criterio pertenezca a la rubrica (TRUBRICA_UNIDAD) de esa misma unidad (rubrica gestionada en POST /planeador/unidades/:ID/criterios, V245). Retorna PK_TACTIVIDAD_CRITERIO_UNIDAD. Gate EDITAR sobre PLANEADOR. 23503 si la actividad o el criterio no existen/no estan activos; 22023 si la actividad no tiene unidad o el criterio pertenece a la rubrica de otra unidad.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
@@ -761,7 +761,7 @@ ON CONFLICT DO NOTHING;
 
 -- ===========================================================================
 -- 17. PATCH /planeador/actividades/criterios/:ID —
---     fn_actividad_criterio_quitar (V136; :ID = PK_TACTIVIDAD_CRITERIO_UNIDAD).
+--     fn_actividad_criterio_quitar (V214.1; :ID = PK_TACTIVIDAD_CRITERIO_UNIDAD).
 -- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
@@ -774,7 +774,7 @@ SELECT
     'postgres', false, false,
     m.id_microservice, '/planeador/actividades/criterios/:ID', 'SELECT', 'PATCH',
     '{"PARAM.ID": "BIGINT"}'::jsonb,
-    'V246 -- borrado logico (ACTIVE=FALSE) de una relacion actividad<->criterio de rubrica (fn_actividad_criterio_quitar, V136). :ID = PK_TACTIVIDAD_CRITERIO_UNIDAD. Gate EDITAR sobre PLANEADOR. 23503 si la relacion no existe o ya esta inactiva.'
+    'V246 -- borrado logico (ACTIVE=FALSE) de una relacion actividad<->criterio de rubrica (fn_actividad_criterio_quitar, V214.1). :ID = PK_TACTIVIDAD_CRITERIO_UNIDAD. Gate EDITAR sobre PLANEADOR. 23503 si la relacion no existe o ya esta inactiva.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;

@@ -3,10 +3,10 @@
 -- referente FORMATIVO (preescolar) (CU-86e311xxp — G. Academico Back
 -- Planeador educativo).
 --
--- CONTEXTO YA RESUELTO (no se repite investigacion aqui, ver V137/V226/V227):
+-- CONTEXTO YA RESUELTO (no se repite investigacion aqui, ver V214.2/V226/V227):
 -- el "referente curricular" de una unidad (TUNIDAD.FK_REFERENTE_CURRICULAR ->
 -- TREFERENTE_CURRICULAR.FK_TLV_ENFOQUE_PEDAGOGICO) YA distingue EVALUATIVO
--- vs FORMATIVO (catalogo ENFOQUE_PEDAGOGICO, V137/V212). Preescolar es
+-- vs FORMATIVO (catalogo ENFOQUE_PEDAGOGICO, V214.2/V212). Preescolar es
 -- referente FORMATIVO.
 --
 -- DECISION DE NEGOCIO (confirmada por el usuario, no se vuelve a preguntar):
@@ -33,7 +33,7 @@
 -- -------------------------------------------------------------------------
 -- fn_actividad_es_formativa — como se resuelve "es preescolar/formativa".
 --
--- Entra por TACTIVIDAD.FK_TUNIDAD -> fn_unidad_referente_evaluativo (V137):
+-- Entra por TACTIVIDAD.FK_TUNIDAD -> fn_unidad_referente_evaluativo (V214.2):
 -- formativa = NOT evaluativo. CASO LIMITE actividad SIN unidad (posible
 -- desde V218: FK_TUNIDAD es nullable): no hay con que resolver el referente,
 -- asi que se devuelve FALSE (NO formativa) por defecto -- se prefiere no
@@ -85,7 +85,7 @@
 -- columna que ya se lee.
 --
 -- Depende de (orden de version de Flyway):
---   * V137 — fn_unidad_referente_evaluativo.
+--   * V214.2 — fn_unidad_referente_evaluativo.
 --   * V227 — fn_actividad_estudiante_actividad, fn_actividad_nota_get_or_create,
 --     TACTIVIDAD_NOTA.OBSERVACION.
 --   * V241 — fn_actividad_nota_calificar (misma firma, CREATE OR REPLACE).
@@ -93,7 +93,7 @@
 --     fn_asistencia_tipo_pk de feature/CU-86e32gvpp-G-Academ-Back-Asistencias
 --     V220.
 --
--- Estilo: V227 (gate de asistencia, get-or-create, 22023/P0002), V137
+-- Estilo: V227 (gate de asistencia, get-or-create, 22023/P0002), V214.2
 -- (helpers de referente por VALOR).
 -- ===========================================================================
 
@@ -141,7 +141,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_es_formativa(BIGINT)
-    IS 'TRUE si una actividad debe tratarse como FORMATIVA (preescolar/"Proyecto Pedagogico"): su unidad (TACTIVIDAD.FK_TUNIDAD) tiene un referente curricular activo cuyo enfoque pedagogico NO es EVALUATIVO (fn_unidad_referente_evaluativo, V137). FALSE si la actividad no existe, esta inactiva, o NO TIENE UNIDAD (posible desde V218: sin unidad no hay con que resolver el referente, se prefiere no bloquear el flujo de calificar normal) -- este ultimo caso es una decision explicita, no un olvido. La usan fn_actividad_nota_calificar (para rechazar 22023 si es formativa) y fn_actividad_observar_grupal/_estudiante (para exigir que SI lo sea). V243.';
+    IS 'TRUE si una actividad debe tratarse como FORMATIVA (preescolar/"Proyecto Pedagogico"): su unidad (TACTIVIDAD.FK_TUNIDAD) tiene un referente curricular activo cuyo enfoque pedagogico NO es EVALUATIVO (fn_unidad_referente_evaluativo, V214.2). FALSE si la actividad no existe, esta inactiva, o NO TIENE UNIDAD (posible desde V218: sin unidad no hay con que resolver el referente, se prefiere no bloquear el flujo de calificar normal) -- este ultimo caso es una decision explicita, no un olvido. La usan fn_actividad_nota_calificar (para rechazar 22023 si es formativa) y fn_actividad_observar_grupal/_estudiante (para exigir que SI lo sea). V243.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_nota_asistencia_assert_preescolar — gate de asistencia

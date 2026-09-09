@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V136 — Planeador educativo: relaciones UNIDAD<->ENUNCIADO (referente
+-- V214.1 — Planeador educativo: relaciones UNIDAD<->ENUNCIADO (referente
 -- curricular) y ACTIVIDAD<->EVIDENCIA (CU-86e311xxp).
 --
 -- Contexto (diagrama de dependencias del Planeador):
@@ -306,7 +306,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_enunciado_relacionar(BIGINT, BIGINT, BIGINT)
-    IS 'Relaciona (o reactiva) un enunciado del referente curricular (TREFERENTE_ENUNCIADO nivel 1, FK_PADRE IS NULL) con una unidad (TUNIDAD_ENUNCIADO). ESTABA ROTA: validaba el nivel del enunciado leyendo TREFERENTE_CURRICULAR.FK_TNIVEL_ENSENANZA, columna directa que desaparecio al pasar la relacion referente<->nivel a N:N (TREFERENTE_CURRICULAR_NIVEL, V212 editada en sitio); siendo plpgsql fallaba en ejecucion con "column rc.fk_tnivel_ensenanza does not exist" (42703), asi que el paso "escoger los enunciados de la unidad" estaba muerto -- POST /planeador/unidades con ENUNCIADOS devolvia 500 y POST /planeador/unidades/:ID/enunciados tampoco funcionaba. Validacion actual, mas estricta que la original: si la unidad TIENE referente (lo normal desde V216, que lo deriva del grado) el enunciado debe ser DE ESE referente -- misma invariante que V280 dejo en los datos, y comprobar solo el nivel permitiria colgar enunciados de otro referente del mismo nivel, que es el estado inconsistente que V280 tuvo que limpiar; si la unidad no tiene referente se cae a la regla de nivel original, resuelta ahora por el puente (el referente del enunciado debe cubrir el nivel de la unidad), para que esas unidades no queden sin poder marcar nada. Gate EDITAR sobre PLANEADOR. Retorna PK_TUNIDAD_ENUNCIADO. V136.';
+    IS 'Relaciona (o reactiva) un enunciado del referente curricular (TREFERENTE_ENUNCIADO nivel 1, FK_PADRE IS NULL) con una unidad (TUNIDAD_ENUNCIADO). ESTABA ROTA: validaba el nivel del enunciado leyendo TREFERENTE_CURRICULAR.FK_TNIVEL_ENSENANZA, columna directa que desaparecio al pasar la relacion referente<->nivel a N:N (TREFERENTE_CURRICULAR_NIVEL, V212 editada en sitio); siendo plpgsql fallaba en ejecucion con "column rc.fk_tnivel_ensenanza does not exist" (42703), asi que el paso "escoger los enunciados de la unidad" estaba muerto -- POST /planeador/unidades con ENUNCIADOS devolvia 500 y POST /planeador/unidades/:ID/enunciados tampoco funcionaba. Validacion actual, mas estricta que la original: si la unidad TIENE referente (lo normal desde V216, que lo deriva del grado) el enunciado debe ser DE ESE referente -- misma invariante que V280 dejo en los datos, y comprobar solo el nivel permitiria colgar enunciados de otro referente del mismo nivel, que es el estado inconsistente que V280 tuvo que limpiar; si la unidad no tiene referente se cae a la regla de nivel original, resuelta ahora por el puente (el referente del enunciado debe cubrir el nivel de la unidad), para que esas unidades no queden sin poder marcar nada. Gate EDITAR sobre PLANEADOR. Retorna PK_TUNIDAD_ENUNCIADO. V214.1.';
 
 -- ===========================================================================
 -- fn_unidad_enunciado_quitar
@@ -359,7 +359,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_enunciado_quitar(BIGINT, BIGINT)
-    IS 'Borrado logico (ACTIVE=FALSE) de una relacion TUNIDAD_ENUNCIADO; arrastra la desactivacion de las TACTIVIDAD_EVIDENCIA de esa unidad cuyo enunciado padre era este. Gate EDITAR sobre PLANEADOR. V136.';
+    IS 'Borrado logico (ACTIVE=FALSE) de una relacion TUNIDAD_ENUNCIADO; arrastra la desactivacion de las TACTIVIDAD_EVIDENCIA de esa unidad cuyo enunciado padre era este. Gate EDITAR sobre PLANEADOR. V214.1.';
 
 -- ===========================================================================
 -- fn_actividad_evidencia_relacionar
@@ -459,7 +459,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_evidencia_relacionar(BIGINT, BIGINT, BIGINT)
-    IS 'Relaciona (o reactiva) una evidencia del referente curricular (TREFERENTE_ENUNCIADO nivel 2, FK_PADRE NOT NULL) con una actividad (TACTIVIDAD_EVIDENCIA), exigiendo que la actividad tenga FK_TUNIDAD y que el enunciado padre de la evidencia ya este relacionado (TUNIDAD_ENUNCIADO, activo) con esa misma unidad. Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD_EVIDENCIA. V136.';
+    IS 'Relaciona (o reactiva) una evidencia del referente curricular (TREFERENTE_ENUNCIADO nivel 2, FK_PADRE NOT NULL) con una actividad (TACTIVIDAD_EVIDENCIA), exigiendo que la actividad tenga FK_TUNIDAD y que el enunciado padre de la evidencia ya este relacionado (TUNIDAD_ENUNCIADO, activo) con esa misma unidad. Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD_EVIDENCIA. V214.1.';
 
 -- ===========================================================================
 -- fn_actividad_evidencia_quitar
@@ -495,7 +495,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_evidencia_quitar(BIGINT, BIGINT)
-    IS 'Borrado logico (ACTIVE=FALSE) de una relacion TACTIVIDAD_EVIDENCIA. Gate EDITAR sobre PLANEADOR. V136.';
+    IS 'Borrado logico (ACTIVE=FALSE) de una relacion TACTIVIDAD_EVIDENCIA. Gate EDITAR sobre PLANEADOR. V214.1.';
 
 -- ===========================================================================
 -- fn_actividad_criterio_relacionar
@@ -589,7 +589,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_criterio_relacionar(BIGINT, BIGINT, BIGINT)
-    IS 'Relaciona (o reactiva) un criterio de la rubrica de la unidad (TCRITERIO_UNIDAD) con una actividad (TACTIVIDAD_CRITERIO_UNIDAD), exigiendo que la actividad tenga FK_TUNIDAD y que el criterio pertenezca a la rubrica (TRUBRICA_UNIDAD) de esa misma unidad. Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD_CRITERIO_UNIDAD. V136.';
+    IS 'Relaciona (o reactiva) un criterio de la rubrica de la unidad (TCRITERIO_UNIDAD) con una actividad (TACTIVIDAD_CRITERIO_UNIDAD), exigiendo que la actividad tenga FK_TUNIDAD y que el criterio pertenezca a la rubrica (TRUBRICA_UNIDAD) de esa misma unidad. Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD_CRITERIO_UNIDAD. V214.1.';
 
 -- ===========================================================================
 -- fn_actividad_criterio_quitar
@@ -625,4 +625,4 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_criterio_quitar(BIGINT, BIGINT)
-    IS 'Borrado logico (ACTIVE=FALSE) de una relacion TACTIVIDAD_CRITERIO_UNIDAD. Gate EDITAR sobre PLANEADOR. V136.';
+    IS 'Borrado logico (ACTIVE=FALSE) de una relacion TACTIVIDAD_CRITERIO_UNIDAD. Gate EDITAR sobre PLANEADOR. V214.1.';

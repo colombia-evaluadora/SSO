@@ -9,7 +9,7 @@
 --   formulario se autocompleta con lo que aporta el referente de esa unidad
 --
 -- El ultimo paso ya estaba resuelto... pero solo DESPUES de crear la
--- actividad: GET /planeador/actividades/:ID/configuracion (V137) devuelve
+-- actividad: GET /planeador/actividades/:ID/configuracion (V214.2) devuelve
 -- campos_disponibles + el arbol de enunciados/evidencias de la unidad, y pide
 -- un PK_TACTIVIDAD. En el formulario de creacion la actividad todavia no
 -- existe, asi que no habia forma de saber que secciones pintar ni que
@@ -26,7 +26,7 @@
 -- -------------------------------------------------------------------------
 -- POR QUE SE PUEDE RESOLVER SIN LA ACTIVIDAD
 --
--- Mirando fn_actividad_campos_disponibles (V137), sus tres respuestas se
+-- Mirando fn_actividad_campos_disponibles (V214.2), sus tres respuestas se
 -- derivan de la UNIDAD, no de la actividad:
 --   * criterio  -> nivel de ensenanza del grado de la unidad
 --   * evaluacion-> referente de la unidad (EVALUATIVO) y su TIPO_EVALUACION
@@ -38,12 +38,12 @@
 -- Asi que esta funcion NO reimplementa las reglas: compone los helpers que ya
 -- existen y que ya son por unidad -- fn_unidad_referente_evaluativo,
 -- fn_unidad_referente_tipo_evaluacion,
--- fn_instrumento_permitido_por_tipo_evaluacion (V137) y
+-- fn_instrumento_permitido_por_tipo_evaluacion (V214.2) y
 -- fn_unidad_calculo_definitiva_modo (V223). Los motivos y la forma del JSON se
 -- mantienen iguales a los de la version por actividad para que el front pueda
 -- usar el mismo codigo de render antes y despues de crear.
 --
--- Depende de: V137 (los helpers y la forma del JSON), V223
+-- Depende de: V214.2 (los helpers y la forma del JSON), V223
 -- (fn_unidad_calculo_definitiva_modo), V216 (menu PLANEADOR, alcance).
 -- ===========================================================================
 
@@ -89,7 +89,7 @@ BEGIN
         RAISE EXCEPTION 'No se encontro la unidad solicitada' USING ERRCODE = 'P0002';
     END IF;
 
-    -- Mismo criterio que V137 para Preescolar (por NOMBRE del nivel, no por
+    -- Mismo criterio que V214.2 para Preescolar (por NOMBRE del nivel, no por
     -- PK: los pks de TNIVEL_ENSENANZA no son estables entre bases).
     v_es_preescolar := COALESCE(v_nivel_nombre ILIKE 'preescolar%', FALSE);
 
@@ -170,7 +170,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_configuracion_actividad(BIGINT, BIGINT, VARCHAR)
-    IS 'La configuracion del formulario de NUEVA ACTIVIDAD a partir de la unidad escogida, es decir ANTES de que la actividad exista. Cubre el hueco del flujo: GET /planeador/actividades/:ID/configuracion (V137) responde lo mismo pero exige un PK_TACTIVIDAD, y en el formulario de creacion la actividad todavia no esta creada -- no habia forma de saber que secciones pintar ni que instrumentos ofrecer hasta despues de guardar. Se puede resolver sin la actividad porque las tres respuestas de fn_actividad_campos_disponibles se derivan de la UNIDAD (criterio: nivel de ensenanza de su grado; evaluacion: referente EVALUATIVO y su TIPO_EVALUACION; ponderacion: metodo de calculo de la unidad); el unico dato propio de la actividad es ES_EVALUATIVA, que en el formulario lo esta eligiendo el usuario y aqui entra como p_es_evaluativa (default ''S''). NO reimplementa las reglas: compone los helpers que ya existen y ya son por unidad -- fn_unidad_referente_evaluativo, fn_unidad_referente_tipo_evaluacion, fn_instrumento_permitido_por_tipo_evaluacion (V137) y fn_unidad_calculo_definitiva_modo (V223) --, y conserva la forma del JSON y los textos de motivo de la version por actividad para que el front use el mismo codigo de render antes y despues de crear. Preescolar se detecta por NOMBRE del nivel (ILIKE ''preescolar%''), no por PK, igual que V137: los pks de TNIVEL_ENSENANZA no son estables entre bases. El ARBOL de enunciados y evidencias no se duplica aqui: para eso esta GET /planeador/unidades/:ID/referente (V255), que ademas marca cuales relaciono la unidad. Gate VER sobre PLANEADOR + alcance por la unidad. P0002 si la unidad no existe o esta inactiva. V282.';
+    IS 'La configuracion del formulario de NUEVA ACTIVIDAD a partir de la unidad escogida, es decir ANTES de que la actividad exista. Cubre el hueco del flujo: GET /planeador/actividades/:ID/configuracion (V214.2) responde lo mismo pero exige un PK_TACTIVIDAD, y en el formulario de creacion la actividad todavia no esta creada -- no habia forma de saber que secciones pintar ni que instrumentos ofrecer hasta despues de guardar. Se puede resolver sin la actividad porque las tres respuestas de fn_actividad_campos_disponibles se derivan de la UNIDAD (criterio: nivel de ensenanza de su grado; evaluacion: referente EVALUATIVO y su TIPO_EVALUACION; ponderacion: metodo de calculo de la unidad); el unico dato propio de la actividad es ES_EVALUATIVA, que en el formulario lo esta eligiendo el usuario y aqui entra como p_es_evaluativa (default ''S''). NO reimplementa las reglas: compone los helpers que ya existen y ya son por unidad -- fn_unidad_referente_evaluativo, fn_unidad_referente_tipo_evaluacion, fn_instrumento_permitido_por_tipo_evaluacion (V214.2) y fn_unidad_calculo_definitiva_modo (V223) --, y conserva la forma del JSON y los textos de motivo de la version por actividad para que el front use el mismo codigo de render antes y despues de crear. Preescolar se detecta por NOMBRE del nivel (ILIKE ''preescolar%''), no por PK, igual que V214.2: los pks de TNIVEL_ENSENANZA no son estables entre bases. El ARBOL de enunciados y evidencias no se duplica aqui: para eso esta GET /planeador/unidades/:ID/referente (V255), que ademas marca cuales relaciono la unidad. Gate VER sobre PLANEADOR + alcance por la unidad. P0002 si la unidad no existe o esta inactiva. V282.';
 
 -- ===========================================================================
 -- ENDPOINT — GET /planeador/unidades/:ID/configuracion-actividad?ES_EVALUATIVA=

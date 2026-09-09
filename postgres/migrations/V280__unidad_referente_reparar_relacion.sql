@@ -38,7 +38,7 @@
 -- cambia el referente de la unidad y se dejan, quedan relaciones a enunciados
 -- de un referente que la unidad ya no usa: el arbol de V255 no los muestra
 -- (solo recorre el referente vigente) pero siguen ahi, y las evidencias de
--- actividad cuelgan de ellos (V136 exige que el enunciado padre este
+-- actividad cuelgan de ellos (V214.1 exige que el enunciado padre este
 -- relacionado con la unidad). Es decir: invisibles pero con efectos.
 --
 -- Asi que se desactivan (borrado logico, no DELETE) los TUNIDAD_ENUNCIADO
@@ -50,7 +50,7 @@
 --
 -- Idempotente: al segundo pase no hay nada que cumpla las condiciones.
 --
--- Depende de: V216 (fn_unidad_referente_aplicable), V136 (TUNIDAD_ENUNCIADO),
+-- Depende de: V216 (fn_unidad_referente_aplicable), V214.1 (TUNIDAD_ENUNCIADO),
 -- V212 (TREFERENTE_CURRICULAR*, rama CU-86e311xqh).
 -- ===========================================================================
 

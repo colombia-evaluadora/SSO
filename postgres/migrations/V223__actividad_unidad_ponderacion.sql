@@ -164,7 +164,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_calculo_definitiva_modo(BIGINT)
-    IS 'Modo canonico de calculo de la definitiva de una unidad a partir de TUNIDAD.FK_TLV_CALCULO_DEFINITIVA (V73, TLISTA_VALOR CATEGORIA=CALCULO_DEFINITIVA): ''PONDERAR'' | ''PROMEDIAR'' | ''SUMATORIA'', o NULL si la unidad no existe, no tiene metodo elegido o el valor no se reconoce. Punto UNICO de esa resolucion (trigger del 100%, fn_unidad_actividad_vincular/_ponderacion_set/_desvincular, fn_actividad_crear/_actualizar/_eliminar de V224 y el bloque "ponderacion" de fn_actividad_campos_disponibles de V137). Se resuelve por VALOR (confirmado por SSH contra 172.233.184.248 el 2026-09-03: VALOR=''1''->Promediar, ''2''->Ponderar, ''3''->Sumatoria), nunca por PK. V223.';
+    IS 'Modo canonico de calculo de la definitiva de una unidad a partir de TUNIDAD.FK_TLV_CALCULO_DEFINITIVA (V73, TLISTA_VALOR CATEGORIA=CALCULO_DEFINITIVA): ''PONDERAR'' | ''PROMEDIAR'' | ''SUMATORIA'', o NULL si la unidad no existe, no tiene metodo elegido o el valor no se reconoce. Punto UNICO de esa resolucion (trigger del 100%, fn_unidad_actividad_vincular/_ponderacion_set/_desvincular, fn_actividad_crear/_actualizar/_eliminar de V224 y el bloque "ponderacion" de fn_actividad_campos_disponibles de V214.2). Se resuelve por VALOR (confirmado por SSH contra 172.233.184.248 el 2026-09-03: VALOR=''1''->Promediar, ''2''->Ponderar, ''3''->Sumatoria), nunca por PK. V223.';
 
 -- ---------------------------------------------------------------------------
 -- 2.c fn_unidad_ponderacion_recalcular_sumatoria — autocalculo del % en las

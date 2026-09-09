@@ -4,7 +4,7 @@
 -- LOTE 1 de la tanda de endpoints del Planeador).
 --
 -- Este archivo NO crea funciones nuevas: las funciones ya existen y estan
--- validadas en esta rama (V216, V222, V136, V223, editada en V244). Solo
+-- validadas en esta rama (V216, V222, V214.1, V223, editada en V244). Solo
 -- registra las filas public.query (+ role_query) para exponerlas via el
 -- gateway como api/eval-col/... . Otros lotes (actividad, instrumentos,
 -- planilla/observar, docente-grupos/huerfanas) registran sus propios
@@ -198,7 +198,7 @@ SELECT
     'postgres', false, false,
     m.id_microservice, '/planeador/unidades/:ID', 'SELECT', 'GET',
     '{"PARAM.ID": "BIGINT"}'::jsonb,
-    'V245 -- detalle de una unidad (fn_unidad_buscar_por_pk, V216): escalares + nombres resueltos (asignatura, area, grado, docente, forma de calculo, referente curricular), Inicio/Fin DERIVADOS (MIN/MAX de fechas de sus actividades activas), objetivos/contenidos como JSONB ordenados, campos_disponibles (dependencia referente->rubrica, V137) y active. :ID = PK_TUNIDAD. SETOF 0 o 1 fila (incluye inactivas). Gate VER sobre PLANEADOR.'
+    'V245 -- detalle de una unidad (fn_unidad_buscar_por_pk, V216): escalares + nombres resueltos (asignatura, area, grado, docente, forma de calculo, referente curricular), Inicio/Fin DERIVADOS (MIN/MAX de fechas de sus actividades activas), objetivos/contenidos como JSONB ordenados, campos_disponibles (dependencia referente->rubrica, V214.2) y active. :ID = PK_TUNIDAD. SETOF 0 o 1 fila (incluye inactivas). Gate VER sobre PLANEADOR.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
@@ -494,7 +494,7 @@ ON CONFLICT DO NOTHING;
 
 -- ===========================================================================
 -- 13. POST /planeador/unidades/:ID/enunciados — fn_unidad_enunciado_relacionar
---     (V136; :ID = FK_TUNIDAD, body FK_REFERENTE_ENUNCIADO).
+--     (V214.1; :ID = FK_TUNIDAD, body FK_REFERENTE_ENUNCIADO).
 -- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
@@ -508,7 +508,7 @@ SELECT
     'postgres', false, false,
     m.id_microservice, '/planeador/unidades/:ID/enunciados', 'SELECT', 'POST',
     '{"PARAM.ID": "BIGINT", "BODY.FK_REFERENTE_ENUNCIADO": "BIGINT"}'::jsonb,
-    'V245 -- relaciona (o reactiva) un enunciado del referente curricular (TREFERENTE_ENUNCIADO nivel 1) con la unidad (fn_unidad_enunciado_relacionar, V136). :ID = PK_TUNIDAD (FK_TUNIDAD de la relacion). Valida que el enunciado sea nivel 1 (FK_PADRE IS NULL) y comparta el mismo nivel de ensenanza que la unidad (via TGRADO.FK_TNIVEL_ENSENANZA). Retorna PK_TUNIDAD_ENUNCIADO. Gate EDITAR sobre PLANEADOR. 23503 si la unidad o el enunciado no existen/no estan activos; 22023 si el enunciado es una evidencia (nivel 2) o el nivel de ensenanza no coincide.'
+    'V245 -- relaciona (o reactiva) un enunciado del referente curricular (TREFERENTE_ENUNCIADO nivel 1) con la unidad (fn_unidad_enunciado_relacionar, V214.1). :ID = PK_TUNIDAD (FK_TUNIDAD de la relacion). Valida que el enunciado sea nivel 1 (FK_PADRE IS NULL) y comparta el mismo nivel de ensenanza que la unidad (via TGRADO.FK_TNIVEL_ENSENANZA). Retorna PK_TUNIDAD_ENUNCIADO. Gate EDITAR sobre PLANEADOR. 23503 si la unidad o el enunciado no existen/no estan activos; 22023 si el enunciado es una evidencia (nivel 2) o el nivel de ensenanza no coincide.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
@@ -526,7 +526,7 @@ ON CONFLICT DO NOTHING;
 
 -- ===========================================================================
 -- 14. PATCH /planeador/unidades/enunciados/:ID — fn_unidad_enunciado_quitar
---     (V136; :ID = PK_TUNIDAD_ENUNCIADO).
+--     (V214.1; :ID = PK_TUNIDAD_ENUNCIADO).
 -- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
@@ -539,7 +539,7 @@ SELECT
     'postgres', false, false,
     m.id_microservice, '/planeador/unidades/enunciados/:ID', 'SELECT', 'PATCH',
     '{"PARAM.ID": "BIGINT"}'::jsonb,
-    'V245 -- borrado logico de una relacion unidad<->enunciado (fn_unidad_enunciado_quitar, V136). :ID = PK_TUNIDAD_ENUNCIADO. Arrastra la desactivacion de las TACTIVIDAD_EVIDENCIA de esa unidad cuyo enunciado padre era este. Gate EDITAR sobre PLANEADOR. 23503 si la relacion no existe o ya esta inactiva.'
+    'V245 -- borrado logico de una relacion unidad<->enunciado (fn_unidad_enunciado_quitar, V214.1). :ID = PK_TUNIDAD_ENUNCIADO. Arrastra la desactivacion de las TACTIVIDAD_EVIDENCIA de esa unidad cuyo enunciado padre era este. Gate EDITAR sobre PLANEADOR. 23503 si la relacion no existe o ya esta inactiva.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;

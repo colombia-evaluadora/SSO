@@ -74,7 +74,7 @@
 --       GET /planeador/unidades/:ID/ponderacion-disponible. Por cronologia de
 --       archivo (V239 < V245) podria pensarse que le tocaba a V245, pero V245
 --       fue escrita sin conocer este helper nuevo (su cabecera solo declara
---       dependencia de V216/V222/V136/V223/V244) y por eso quedo sin exponer.
+--       dependencia de V216/V222/V214.1/V223/V244) y por eso quedo sin exponer.
 --       Se cierra aqui, en el ULTIMO lote de la tanda, para no dejar un
 --       endpoint gateado huerfano. Aunque conceptualmente es del formulario de
 --       UNIDAD (no de la pantalla Planilla), es la unica funcion publica de
