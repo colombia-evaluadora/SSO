@@ -3,6 +3,7 @@ package com.co.eurekatic.files;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -30,9 +31,15 @@ import java.util.Set;
  *       ({@code tusuario.fk_tarchivo}) y las de un funcionario
  *       ligado a esa cuenta ({@code tfuncionario.fk_tarchivo} vía
  *       {@code tfuncionario.fk_tusuario}). Cualquier otro archivo
- *       (actividades, soportes, matrículas...) queda fuera de este
+ *       (actividades, matrículas...) queda fuera de este
  *       segundo camino hasta que se necesite — añadir un caso es
  *       una cláusula más en {@link #esPropietario}, no un rediseño.</li>
+ *   <li><b>Soporte de asistencia</b> — ver
+ *       {@link #esSoporteDeAsistenciaVisible}. Va aparte de
+ *       {@link #esPropietario} a propósito (no es una quinta
+ *       {@code UNION ALL}): depende de una función de negocio que
+ *       puede no existir todavía en un entorno dado, y una rama que
+ *       no resuelve no debe tumbar las otras cuatro.</li>
  * </ol>
  *
  * <p>No hay JPA aquí a propósito — ver el comentario en el {@code
@@ -68,7 +75,8 @@ public class FileAccessService {
         if (esPrivilegiado(roles)) {
             return true;
         }
-        return esPropietario(archivoId, email);
+        return esPropietario(archivoId, email)
+                || esSoporteDeAsistenciaVisible(archivoId, email);
     }
 
     /**
@@ -180,6 +188,68 @@ public class FileAccessService {
             log.debug("archivo id={} no está ligado a la cuenta {}", archivoId, email);
         }
         return propio;
+    }
+
+    /**
+     * ¿Es este archivo el SOPORTE de una asistencia que el llamante
+     * tiene derecho a ver? Tercer camino de {@link #puedeVer},
+     * añadido porque {@link #esPropietario} no conocía
+     * {@code TASISTENCIA.FK_SOPORTE_ARCHIVO} en absoluto: un docente
+     * que adjuntaba la justificación de un alumno recibía 404 al
+     * intentar abrir ESE MISMO archivo — el clip de la pantalla
+     * Seguimiento no funcionaba para el rol que toma la asistencia.
+     *
+     * <p>La alternativa —darle a {@code CEVAL-DOCENTE} el binding
+     * {@code role_endpoint GET /files/view/**}— sería una escalada de
+     * privilegio: ese binding es global ("ve CUALQUIER archivo, sin
+     * importar de quién sea", ver {@link #esPrivilegiado}), así que le
+     * abriría también matrículas, fotos y documentos institucionales.
+     * Este camino, en cambio, autoriza archivo por archivo.
+     *
+     * <p>El permiso NO se reimplementa aquí: se delega en
+     * {@code fn_asistencia_puede_ver(usuario, grupo)}, el mismo gate
+     * (capability por menú {@code ASISTENCIAS} + scope por categoría
+     * de rol) que usan los listados del módulo. Si el usuario no puede
+     * ver la asistencia, tampoco ve su soporte — una sola definición
+     * de alcance, sin scope propio de file-service.
+     *
+     * <p><b>Por qué va en su propia consulta y con {@code catch}:</b>
+     * {@code fn_asistencia_puede_ver} y los helpers de los que
+     * depende viven en migraciones que pueden no estar aplicadas en
+     * un entorno concreto. Como PostgreSQL resuelve los nombres al
+     * PLANIFICAR, meter esta rama como una {@code UNION ALL} más
+     * dentro de {@link #esPropietario} haría fallar la consulta
+     * ENTERA —las cuatro ramas que sí funcionan incluidas— en cuanto
+     * faltara la función. Aislada, un entorno sin ella simplemente
+     * pierde este camino y queda como antes de este cambio.
+     */
+    private boolean esSoporteDeAsistenciaVisible(long archivoId, String email) {
+        if (email == null || email.isBlank()) {
+            return false;
+        }
+        try {
+            Integer encontrado = jdbc.queryForObject("""
+                    SELECT count(*)
+                      FROM %1$s.tasistencia a
+                      JOIN %1$s.tmatricula m ON m.pk_tmatricula = a.fk_tmatricula
+                      JOIN %1$s.tusuario u ON lower(u.cuenta) = lower(:email)
+                     WHERE a.fk_soporte_archivo = :archivoId
+                       AND a.active
+                       AND u.active
+                       AND %1$s.fn_asistencia_puede_ver(u.pk_tusuario, m.fk_tgrupo)
+                    """.formatted(schema),
+                    new MapSqlParameterSource()
+                            .addValue("archivoId", archivoId)
+                            .addValue("email", email),
+                    Integer.class);
+            return encontrado != null && encontrado > 0;
+        } catch (DataAccessException e) {
+            // Entorno sin el módulo de asistencias (o sin los helpers de
+            // permisos que consume): se pierde este camino, no el resto.
+            log.debug("no se pudo evaluar el soporte de asistencia para el archivo id={}: {}",
+                    archivoId, e.getMessage());
+            return false;
+        }
     }
 
     private record Endpoint(String method, String path) {}
