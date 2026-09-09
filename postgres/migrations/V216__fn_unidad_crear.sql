@@ -96,6 +96,105 @@ SELECT t.pk_trol, m.pk_tmenu, 1, TRUE, 'V216_seed'
        );
 
 -- ===========================================================================
+-- fn_unidad_referente_aplicable — QUE referente curricular le corresponde a
+-- un (grado, asignatura). UNICA definicion de la regla de derivacion.
+--
+-- El referente NO lo elige el usuario en ninguna pantalla: se deriva del
+-- grado. Esta funcion es esa derivacion, y la comparten los tres sitios que
+-- la necesitaban por separado: fn_unidad_crear (rellenarlo cuando el cliente
+-- no lo manda), fn_unidad_actualizar (revalidarlo cuando cambia el grado) y
+-- fn_refcurr_por_grado_asignatura / V278 (exponer el arbol completo al front).
+--
+-- Regla, identica a la de V278 -- ver la cabecera de esa migracion para el
+-- razonamiento largo:
+--   * grado -> TGRADO.FK_TNIVEL_ENSENANZA -> TREFERENTE_CURRICULAR_NIVEL (N:N)
+--   * ACTIVE = true Y ESTADO = 'A' -- son dos cosas distintas: ACTIVE es el
+--     borrado logico y ESTADO es el estado de NEGOCIO que edita el usuario
+--     (hay referentes con ACTIVE = true y ESTADO = 'I' en el servidor de test)
+--   * vigencia que cubra p_anio (por defecto, el anio en curso)
+--   * si se pasa asignatura, filtro por area (TREFERENTE_CURRICULAR_AREA);
+--     "sin filas de area" = aplica a TODAS, no a ninguna (semantica de V212),
+--     y el area de la asignatura se resuelve con
+--     COALESCE(TASIGNATURA.FK_TAREA_ASIGNATURA, TAREA.FK_TAREA_ASIGNATURA)
+--     porque la primera es nullable y viene vacia en casi todas las filas
+--   * gana el mas ESPECIFICO (acotado al area) y, a igual especificidad, el
+--     de vigencia mas reciente
+--
+-- Devuelve UN pk (el preferido) o NULL si no hay ninguno aplicable. Que no
+-- haya no es un error: hay grados sin referente cargado todavia.
+--
+-- Es plpgsql y no sql a proposito: el cuerpo de una funcion sql se valida al
+-- crearla, y TREFERENTE_CURRICULAR* viene de V212 (rama CU-86e311xqh), que en
+-- esta rama no existe como archivo. plpgsql resuelve en ejecucion, igual que
+-- ya hacen fn_unidad_crear y V255 con esas mismas tablas.
+-- ===========================================================================
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_referente_aplicable(
+    p_fk_tgrado       BIGINT,
+    p_fk_tasignatura  BIGINT DEFAULT NULL,
+    p_anio            INT    DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+STABLE
+AS $fnra$
+DECLARE
+    v_nivel BIGINT;
+    v_area  BIGINT;
+    v_anio  INT := COALESCE(p_anio, EXTRACT(YEAR FROM CURRENT_DATE)::INT);
+    v_pk    BIGINT;
+BEGIN
+    IF p_fk_tgrado IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT g.FK_TNIVEL_ENSENANZA INTO v_nivel
+      FROM academico_test.TGRADO g
+     WHERE g.PK_TGRADO = p_fk_tgrado;
+
+    IF v_nivel IS NULL THEN
+        RETURN NULL;   -- grado inexistente o sin nivel: nada que derivar
+    END IF;
+
+    IF p_fk_tasignatura IS NOT NULL THEN
+        SELECT COALESCE(asig.FK_TAREA_ASIGNATURA, ta.FK_TAREA_ASIGNATURA) INTO v_area
+          FROM academico_test.TASIGNATURA asig
+          LEFT JOIN academico_test.TAREA ta ON ta.PK_TAREA = asig.FK_TAREA
+         WHERE asig.PK_TASIGNATURA = p_fk_tasignatura;
+    END IF;
+
+    SELECT rc.PK_REFERENTE_CURRICULAR INTO v_pk
+      FROM academico_test.TREFERENTE_CURRICULAR rc
+      JOIN academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
+            ON rcn.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
+           AND rcn.FK_TNIVEL_ENSENANZA = v_nivel
+           AND rcn.ACTIVE = TRUE
+     WHERE rc.ACTIVE = TRUE
+       AND rc.ESTADO = 'A'
+       AND rc.ANIO_VIGENCIA_DESDE <= v_anio
+       AND (rc.ANIO_VIGENCIA_HASTA IS NULL OR rc.ANIO_VIGENCIA_HASTA >= v_anio)
+       AND (v_area IS NULL
+            OR NOT EXISTS (SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_AREA a
+                            WHERE a.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
+                              AND a.ACTIVE = TRUE)
+            OR EXISTS (SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_AREA a
+                        WHERE a.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
+                          AND a.FK_TAREA_ASIGNATURA = v_area
+                          AND a.ACTIVE = TRUE))
+     ORDER BY CASE WHEN EXISTS (SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_AREA a
+                                 WHERE a.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
+                                   AND a.ACTIVE = TRUE) THEN 0 ELSE 1 END,
+              rc.ANIO_VIGENCIA_DESDE DESC,
+              rc.PK_REFERENTE_CURRICULAR
+     LIMIT 1;
+
+    RETURN v_pk;
+END;
+$fnra$;
+
+COMMENT ON FUNCTION academico_test.fn_unidad_referente_aplicable(BIGINT, BIGINT, INT)
+    IS 'El referente curricular que le CORRESPONDE a un (grado, asignatura): unica definicion de la regla de derivacion, compartida por fn_unidad_crear, fn_unidad_actualizar y fn_refcurr_por_grado_asignatura (V278, que expone el arbol completo con la misma regla). grado -> TGRADO.FK_TNIVEL_ENSENANZA -> TREFERENTE_CURRICULAR_NIVEL (N:N, V212), vigencia que cubra p_anio (default: anio en curso), y si se pasa asignatura, filtro por area con la semantica de V212 -- un referente SIN filas de area aplica a TODAS, no a ninguna -- resolviendo el area con COALESCE(TASIGNATURA.FK_TAREA_ASIGNATURA, TAREA.FK_TAREA_ASIGNATURA) porque la primera es nullable y viene vacia en casi todas las filas sembradas. Gana el mas especifico (acotado al area) y, a igual especificidad, la vigencia mas reciente. Devuelve NULL si no hay ninguno aplicable, que NO es un error: hay grados sin referente cargado. Sin gate: es un helper de lectura de catalogo que solo se invoca desde funciones que ya gatearon. V216.';
+
+-- ===========================================================================
 -- fn_unidad_crear
 -- ===========================================================================
 -- Gana p_enunciados (BIGINT[]) y despues p_ponderacion (NUMERIC) al final:
@@ -133,6 +232,9 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_id_creado  BIGINT;
+    -- Referente EFECTIVO: el que mando el cliente o, si no lo mando, el
+    -- derivado del grado. Es este el que se inserta, nunca el parametro.
+    v_fk_referente BIGINT;
     v_pk_plan    BIGINT;
     v_elemento   VARCHAR;
     v_modo       VARCHAR;
@@ -202,14 +304,59 @@ BEGIN
             USING ERRCODE = '23503';
     END IF;
 
-    -- 2.b Referente curricular al que se acoge la unidad (opcional).
-    IF p_fk_referente_curricular IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR
-         WHERE PK_REFERENTE_CURRICULAR = p_fk_referente_curricular
-           AND ACTIVE = TRUE
-    ) THEN
-        RAISE EXCEPTION 'FK_REFERENTE_CURRICULAR (%) no existe o no esta activo', p_fk_referente_curricular
-            USING ERRCODE = '23503';
+    -- 2.b Referente curricular al que se acoge la unidad.
+    --
+    -- El parametro es opcional, pero "no lo mandaron" NO puede significar
+    -- "unidad sin referente": el referente se DERIVA del grado (no se elige a
+    -- mano en ninguna pantalla), y una unidad sin el queda inservible -- el
+    -- front no puede rotular los niveles, ni decidir si hay seccion de
+    -- evaluacion, ni ofrecer enunciados que marcar, porque
+    -- GET /planeador/unidades/:ID/referente (V255) le devuelve todo NULL.
+    -- Comprobado en el servidor de test: las unidades creadas desde la UI
+    -- (60, 61, 62) quedaron con FK_REFERENTE_CURRICULAR NULL.
+    --
+    -- Asi que si no llega, se deriva aqui con la MISMA regla que usa el
+    -- endpoint que el front consulta (fn_unidad_referente_aplicable). Si no
+    -- hay ninguno aplicable queda NULL, que sigue siendo legitimo: hay grados
+    -- sin referente cargado todavia.
+    IF p_fk_referente_curricular IS NULL THEN
+        v_fk_referente := academico_test.fn_unidad_referente_aplicable(
+            p_fk_tgrado, p_fk_tasignatura);
+    ELSE
+        v_fk_referente := p_fk_referente_curricular;
+
+        -- ACTIVE (borrado logico) Y ESTADO (estado de negocio que edita el
+        -- usuario): un referente marcado Inactivo no se puede relacionar,
+        -- aunque su fila siga viva.
+        IF NOT EXISTS (
+            SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR
+             WHERE PK_REFERENTE_CURRICULAR = v_fk_referente
+               AND ACTIVE = TRUE
+               AND ESTADO = 'A'
+        ) THEN
+            RAISE EXCEPTION 'FK_REFERENTE_CURRICULAR (%) no existe, no esta activo o esta marcado como inactivo (ESTADO)', v_fk_referente
+                USING ERRCODE = '23503';
+        END IF;
+
+        -- Y que APLIQUE al nivel educativo del grado de la unidad. Sin esta
+        -- comprobacion se podia crear una unidad de Preescolar acogida a un
+        -- referente de Primaria (probado en el servidor de test: pasaba sin
+        -- queja). El resultado no era un error visible sino un callejon sin
+        -- salida: fn_unidad_enunciado_relacionar (V136) exige que el enunciado
+        -- sea del mismo nivel que la unidad, asi que ese referente no podia
+        -- aportar NI UN enunciado -- una unidad con referente que nunca sirve
+        -- para nada.
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
+              JOIN academico_test.TGRADO g ON g.PK_TGRADO = p_fk_tgrado
+             WHERE rcn.FK_REFERENTE_CURRICULAR = v_fk_referente
+               AND rcn.FK_TNIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
+               AND rcn.ACTIVE = TRUE
+        ) THEN
+            RAISE EXCEPTION 'El referente curricular (%) no aplica al nivel educativo del grado (%) de la unidad', v_fk_referente, p_fk_tgrado
+                USING ERRCODE = '23503';
+        END IF;
     END IF;
 
     -- 2.c Peso (%) de la unidad dentro de su (asignatura, grado)
@@ -291,7 +438,7 @@ BEGIN
         PONDERACION, CREATED_BY, CREATED_AT, ACTIVE
     ) VALUES (
         TRIM(p_nombre), p_fk_tasignatura, p_fk_tgrado, p_fk_tfuncionario,
-        NULLIF(TRIM(p_descripcion), ''), p_fk_tlv_calculo_definitiva, p_fk_referente_curricular,
+        NULLIF(TRIM(p_descripcion), ''), p_fk_tlv_calculo_definitiva, v_fk_referente,
         p_ponderacion, p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
     )
     RETURNING PK_TUNIDAD INTO v_id_creado;
@@ -335,7 +482,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[], BIGINT[], NUMERIC)
-    IS 'Crea una unidad tematica del Planeador (gate CREAR sobre PLANEADOR). p_fk_tfuncionario (el docente autor) es OPCIONAL: si viene NULL se DERIVA del usuario autenticado con fn_funcionario_actual (V224), porque el cliente no tiene de donde sacar un PK_TFUNCIONARIO -- el JWT solo trae el id de usuario y su claim "fid" es un identificador de sesion que cambia en cada login, no el funcionario. Se sigue respetando si se envia explicitamente, para que un coordinador o rector pueda crear la unidad a nombre de otro docente; solo falla (22023) si no viene y el usuario autenticado tampoco tiene funcionario activo. Inserta TUNIDAD (identificacion nombre/asignatura/grado/autor + DESCRIPCION + FK_TLV_CALCULO_DEFINITIVA [forma de calculo de la nota, catalogo CALCULO_DEFINITIVA, OBLIGATORIA, V73] + FK_REFERENTE_CURRICULAR [referente al que se acoge, opcional, V212]) y, si se pasan, sus objetivos (TUNIDAD_OBJETIVO), contenidos/componentes (TUNIDAD_CONTENIDO) con ORDEN por posicion del array, ignorando los vacios, y los enunciados del referente que aplican (p_enunciados, PKs de TREFERENTE_ENUNCIADO nivel 1, via fn_unidad_enunciado_relacionar V136 -- valida nivel 1 y mismo nivel de ensenanza que la unidad, aborta el CREATE si alguno no cumple). La unidad ya no depende de un periodo de evaluacion (V218). Valida existencia/estado de todas las FKs y unicidad (nombre, asignatura, grado) entre unidades activas. p_ponderacion (opcional) fija TUNIDAD.PONDERACION (V239): el peso (%) de esta unidad dentro de su (asignatura, grado), analogo a TACTIVIDAD.PONDERACION un nivel abajo. Se valida 0..100, la regla del 100% por (asignatura, grado) via fn_unidad_ponderacion_intra_asignatura_asignada (error claro antes del trigger tr_tunidad_ponderacion_asignatura) y que el campo APLIQUE segun el plan de la asignatura para ese grado (fn_asignatura_plan_vigente_por_grado + fn_asignatura_plan_elemento_calculo / _calculo_definitiva_modo, V239): se rechaza con 22023 si el plan calcula por ACTIVIDADES (el peso de unidad no significa nada) o si PROMEDIA sus unidades. Si el plan no se resuelve o no tiene elemento/modo configurados no hay con que validar y se PERMITE guardar el peso -- criterio consistente con el fallback de V239; la definitiva simplemente lo ignora hasta que el plan lo habilite. Retorna PK_TUNIDAD.';
+    IS 'Crea una unidad tematica del Planeador (gate CREAR sobre PLANEADOR). REFERENTE CURRICULAR: p_fk_referente_curricular es opcional, pero omitirlo NO significa "unidad sin referente" -- se DERIVA del grado con fn_unidad_referente_aplicable, la misma regla que expone GET /planeador/referente-curricular (V278), porque el referente no se elige a mano en ninguna pantalla y una unidad sin el queda inservible (el front no puede rotular niveles, ni saber si hay seccion de evaluacion, ni ofrecer enunciados). Si se envia explicitamente, ademas de existir y estar activo se exige que APLIQUE al nivel educativo del grado de la unidad: antes se podia crear una unidad de Preescolar acogida a un referente de Primaria, y el resultado no era un error visible sino un callejon sin salida, porque fn_unidad_enunciado_relacionar (V136) exige que el enunciado sea del mismo nivel y ese referente no podia aportar ni uno. Si no hay referente aplicable queda NULL, que sigue siendo legitimo: hay grados sin referente cargado. p_fk_tfuncionario (el docente autor) es OPCIONAL: si viene NULL se DERIVA del usuario autenticado con fn_funcionario_actual (V224), porque el cliente no tiene de donde sacar un PK_TFUNCIONARIO -- el JWT solo trae el id de usuario y su claim "fid" es un identificador de sesion que cambia en cada login, no el funcionario. Se sigue respetando si se envia explicitamente, para que un coordinador o rector pueda crear la unidad a nombre de otro docente; solo falla (22023) si no viene y el usuario autenticado tampoco tiene funcionario activo. Inserta TUNIDAD (identificacion nombre/asignatura/grado/autor + DESCRIPCION + FK_TLV_CALCULO_DEFINITIVA [forma de calculo de la nota, catalogo CALCULO_DEFINITIVA, OBLIGATORIA, V73] + FK_REFERENTE_CURRICULAR [referente al que se acoge, opcional, V212]) y, si se pasan, sus objetivos (TUNIDAD_OBJETIVO), contenidos/componentes (TUNIDAD_CONTENIDO) con ORDEN por posicion del array, ignorando los vacios, y los enunciados del referente que aplican (p_enunciados, PKs de TREFERENTE_ENUNCIADO nivel 1, via fn_unidad_enunciado_relacionar V136 -- valida nivel 1 y mismo nivel de ensenanza que la unidad, aborta el CREATE si alguno no cumple). La unidad ya no depende de un periodo de evaluacion (V218). Valida existencia/estado de todas las FKs y unicidad (nombre, asignatura, grado) entre unidades activas. p_ponderacion (opcional) fija TUNIDAD.PONDERACION (V239): el peso (%) de esta unidad dentro de su (asignatura, grado), analogo a TACTIVIDAD.PONDERACION un nivel abajo. Se valida 0..100, la regla del 100% por (asignatura, grado) via fn_unidad_ponderacion_intra_asignatura_asignada (error claro antes del trigger tr_tunidad_ponderacion_asignatura) y que el campo APLIQUE segun el plan de la asignatura para ese grado (fn_asignatura_plan_vigente_por_grado + fn_asignatura_plan_elemento_calculo / _calculo_definitiva_modo, V239): se rechaza con 22023 si el plan calcula por ACTIVIDADES (el peso de unidad no significa nada) o si PROMEDIA sus unidades. Si el plan no se resuelve o no tiene elemento/modo configurados no hay con que validar y se PERMITE guardar el peso -- criterio consistente con el fallback de V239; la definitiva simplemente lo ignora hasta que el plan lo habilite. Retorna PK_TUNIDAD.';
 
 -- ---------------------------------------------------------------------------
 -- Indice de busqueda libre del listado de unidades.
@@ -376,6 +523,10 @@ COMMENT ON INDEX academico_test.idx_tunidad_busqueda_trgm
 -- base nueva no existe).
 DROP FUNCTION IF EXISTS academico_test.fn_unidad_listar(
     BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT);
+-- Y la firma intermedia (con p_dia/p_dias_gracia pero sin referente_vigente):
+-- en una base que ya recibio esa version, el tipo de retorno tampoco coincide.
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_listar(
+    BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, DATE, INT);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_listar(
     p_pk_usuario_solicitante      BIGINT,
@@ -414,6 +565,13 @@ RETURNS TABLE (
     calculo_definitiva          VARCHAR,
     fk_referente_curricular     BIGINT,
     referente_curricular        VARCHAR,
+    -- FALSE solo cuando la unidad TIENE un FK_REFERENTE_CURRICULAR guardado
+    -- que ya no resuelve (lo desactivaron en el catalogo). Sirve para no
+    -- confundir "esta unidad no se acoge a ningun referente" (FK NULL, esto
+    -- TRUE) con "se acoge a uno que ya no existe" (FK puesta, esto FALSE),
+    -- que para el front son dos situaciones distintas: la segunda hay que
+    -- avisarla, porque la unidad no va a poder ofrecer enunciados.
+    referente_vigente           BOOLEAN,
     total_actividades           BIGINT,
     total_objetivos             BIGINT,
     total_contenidos            BIGINT,
@@ -562,6 +720,7 @@ BEGIN
            lvc.NOMBRE,
            u.FK_REFERENTE_CURRICULAR,
            rc.NOMBRE,
+           (u.FK_REFERENTE_CURRICULAR IS NULL OR rc.PK_REFERENTE_CURRICULAR IS NOT NULL),
            agg.total_actividades,
            (SELECT COUNT(*) FROM academico_test.TUNIDAD_OBJETIVO o  WHERE o.FK_TUNIDAD = u.PK_TUNIDAD AND o.ACTIVE = TRUE),
            (SELECT COUNT(*) FROM academico_test.TUNIDAD_CONTENIDO c WHERE c.FK_TUNIDAD = u.PK_TUNIDAD AND c.ACTIVE = TRUE),
@@ -590,7 +749,15 @@ BEGIN
       LEFT JOIN academico_test.TFUNCIONARIO fu   ON fu.PK_TFUNCIONARIO = u.FK_TFUNCIONARIO
       LEFT JOIN academico_test.TUSUARIO us       ON us.PK_TUSUARIO = fu.FK_TUSUARIO
       LEFT JOIN academico_test.TLISTA_VALOR lvc  ON lvc.PK_LISTA_VALOR = u.FK_TLV_CALCULO_DEFINITIVA
+      -- ACTIVE = TRUE, igual que fn_unidad_referente_detalle (V255): sin este
+      -- filtro el listado mostraba el nombre de referentes ya desactivados
+      -- mientras el detalle devolvia NULL para la MISMA unidad -- dos
+      -- endpoints contradiciendose (visto en el servidor de test con los
+      -- referentes 11 y 12). Si esta desactivado, referente_curricular viene
+      -- NULL y referente_vigente = FALSE lo explica.
       LEFT JOIN academico_test.TREFERENTE_CURRICULAR rc ON rc.PK_REFERENTE_CURRICULAR = u.FK_REFERENTE_CURRICULAR
+                                                      AND rc.ACTIVE = TRUE
+                                                      AND rc.ESTADO = 'A'
       -- Un solo LATERAL sobre TACTIVIDAD: conteo + fechas derivadas en la
       -- misma pasada (antes eran 3 subconsultas correlacionadas distintas).
       LEFT JOIN LATERAL (
@@ -612,7 +779,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, DATE, INT)
-    IS 'Devuelve estado: el estado DERIVADO de la unidad (fn_unidad_estado, V224), que agrega el de sus actividades con la cascada de negocio -- UNA vencida manda; si no, alguna pendiente; si todas finalizadas, FINALIZADA; en cualquier otro caso EN_EVALUACION (incluida la unidad sin actividades, que se distingue por total_actividades = 0) --, con los MISMOS cuatro valores del estado de actividad para que el front use una sola paleta; p_dias_gracia se propaga alla (default 2). p_dia es el PAGINADO POR DIA ACTIVO (barra "Hoy | MARTES 16 | < >"): deja solo las unidades que tienen ALGUNA actividad activa vigente ese dia (la unidad no tiene fechas propias), y devuelve dia / dia_anterior / dia_siguiente para las flechas -- el dia ocupado mas cercano a cada lado bajo los mismos filtros, SALTANDO los dias vacios, NULL si no hay mas por ese lado. El filtro vive en un CTE (universo) del que salen tanto la pagina como la navegacion, porque las flechas tienen que ver los dias que el filtro por dia esconde. DIA VACIO: si se pide p_dia y ese dia no tiene ninguna unidad, se devuelve UNA fila con las columnas de la unidad en NULL, total_count = 0 y las flechas informadas -- sin ella el cliente no tendria con que salir del dia vacio. Se reconoce por total_count = 0 (o pk_tunidad NULL). Sin p_dia nada cambia: una pagina vacia sigue siendo 0 filas. Pagina de TUNIDAD con filtros (search, asignatura, grado, docente) y orden (whitelist nombre|asignatura|grado; cualquier otro valor cae a nombre). p_search hace UN solo ILIKE sobre COALESCE(NOMBRE,'''')||'' ''||COALESCE(DESCRIPCION,''''), expresion identica a la de idx_tunidad_busqueda_trgm para que el GIN trigram se use (no dos ILIKE con OR). Optimizacion: un CTE base pagina tocando solo TUNIDAD+TASIGNATURA+TGRADO y los joins de catalogo, los conteos y el LATERAL de fechas derivadas corren unicamente contra las filas de la pagina (patron de fn_actividad_listar, V224). Devuelve nombres resueltos (asignatura, area via TASIGNATURA.FK_TAREA->TAREA -- la etiqueta "Comunicativa/Cognitiva/..." de las tarjetas), forma de calculo, referente curricular, conteos de actividades/objetivos/contenidos activos y las fechas DERIVADAS de la unidad (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas). La unidad ya no depende de un periodo de evaluacion (V218). total_count via COUNT(*) OVER(). Gate VER. p_incluir_inactivos=FALSE por defecto.';
+    IS 'El referente curricular se resuelve SOLO si esta ACTIVE, igual que fn_unidad_referente_detalle (V255): antes el listado mostraba el nombre de referentes ya desactivados mientras el detalle devolvia NULL para la MISMA unidad. Cuando la unidad guarda una FK que ya no resuelve, referente_curricular viene NULL y referente_vigente = FALSE lo explica -- distinguir eso de "no se acoge a ninguno" (FK NULL, referente_vigente TRUE) importa, porque una unidad con referente muerto no puede ofrecer enunciados. Devuelve estado: el estado DERIVADO de la unidad (fn_unidad_estado, V224), que agrega el de sus actividades con la cascada de negocio -- UNA vencida manda; si no, alguna pendiente; si todas finalizadas, FINALIZADA; en cualquier otro caso EN_EVALUACION (incluida la unidad sin actividades, que se distingue por total_actividades = 0) --, con los MISMOS cuatro valores del estado de actividad para que el front use una sola paleta; p_dias_gracia se propaga alla (default 2). p_dia es el PAGINADO POR DIA ACTIVO (barra "Hoy | MARTES 16 | < >"): deja solo las unidades que tienen ALGUNA actividad activa vigente ese dia (la unidad no tiene fechas propias), y devuelve dia / dia_anterior / dia_siguiente para las flechas -- el dia ocupado mas cercano a cada lado bajo los mismos filtros, SALTANDO los dias vacios, NULL si no hay mas por ese lado. El filtro vive en un CTE (universo) del que salen tanto la pagina como la navegacion, porque las flechas tienen que ver los dias que el filtro por dia esconde. DIA VACIO: si se pide p_dia y ese dia no tiene ninguna unidad, se devuelve UNA fila con las columnas de la unidad en NULL, total_count = 0 y las flechas informadas -- sin ella el cliente no tendria con que salir del dia vacio. Se reconoce por total_count = 0 (o pk_tunidad NULL). Sin p_dia nada cambia: una pagina vacia sigue siendo 0 filas. Pagina de TUNIDAD con filtros (search, asignatura, grado, docente) y orden (whitelist nombre|asignatura|grado; cualquier otro valor cae a nombre). p_search hace UN solo ILIKE sobre COALESCE(NOMBRE,'''')||'' ''||COALESCE(DESCRIPCION,''''), expresion identica a la de idx_tunidad_busqueda_trgm para que el GIN trigram se use (no dos ILIKE con OR). Optimizacion: un CTE base pagina tocando solo TUNIDAD+TASIGNATURA+TGRADO y los joins de catalogo, los conteos y el LATERAL de fechas derivadas corren unicamente contra las filas de la pagina (patron de fn_actividad_listar, V224). Devuelve nombres resueltos (asignatura, area via TASIGNATURA.FK_TAREA->TAREA -- la etiqueta "Comunicativa/Cognitiva/..." de las tarjetas), forma de calculo, referente curricular, conteos de actividades/objetivos/contenidos activos y las fechas DERIVADAS de la unidad (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas). La unidad ya no depende de un periodo de evaluacion (V218). total_count via COUNT(*) OVER(). Gate VER. p_incluir_inactivos=FALSE por defecto.';
 
 -- ===========================================================================
 -- fn_unidad_actualizar — PATCH parcial (cada parametro NULL preserva).
@@ -652,6 +819,8 @@ DECLARE
     v_nombre     VARCHAR(250);
     v_asig       BIGINT;
     v_grado      BIGINT;
+    -- Referente EFECTIVO tras el PATCH; ver el bloque que lo resuelve.
+    v_fk_referente BIGINT;
     v_ponder     NUMERIC;
     v_pk_plan    BIGINT;
     v_elemento   VARCHAR;
@@ -697,16 +866,76 @@ BEGIN
         RAISE EXCEPTION 'FK_TLV_CALCULO_DEFINITIVA (%) no existe, no esta activo o no es de la categoria CALCULO_DEFINITIVA', p_fk_tlv_calculo_definitiva
             USING ERRCODE = '23503';
     END IF;
+    -- ACTIVE (borrado logico) Y ESTADO (estado de negocio): ver la nota
+    -- equivalente en fn_unidad_crear.
     IF NOT p_limpiar_referente AND p_fk_referente_curricular IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR WHERE PK_REFERENTE_CURRICULAR = p_fk_referente_curricular AND ACTIVE = TRUE
+        SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR
+         WHERE PK_REFERENTE_CURRICULAR = p_fk_referente_curricular AND ACTIVE = TRUE AND ESTADO = 'A'
     ) THEN
-        RAISE EXCEPTION 'FK_REFERENTE_CURRICULAR (%) no existe o no esta activo', p_fk_referente_curricular USING ERRCODE = '23503';
+        RAISE EXCEPTION 'FK_REFERENTE_CURRICULAR (%) no existe, no esta activo o esta marcado como inactivo (ESTADO)', p_fk_referente_curricular USING ERRCODE = '23503';
     END IF;
 
     -- Unicidad con los valores resultantes (NOMBRE, asignatura, grado).
     v_nombre := COALESCE(NULLIF(TRIM(p_nombre), ''), v_actual.NOMBRE);
     v_asig   := COALESCE(p_fk_tasignatura, v_actual.FK_TASIGNATURA);
     v_grado  := COALESCE(p_fk_tgrado, v_actual.FK_TGRADO);
+
+    -- ----------------------------------------------------------------------
+    -- Referente EFECTIVO tras el PATCH. Se resuelve aqui, y no arriba, porque
+    -- depende del grado RESULTANTE: mover la unidad de grado puede cambiarle
+    -- el nivel educativo, y con el, que referentes aplican.
+    --
+    -- Tres casos:
+    --   a) p_limpiar_referente = TRUE  -> NULL (el caller lo pidio explicito).
+    --   b) llega un referente nuevo    -> se exige que aplique al nivel del
+    --      grado resultante (misma razon que en fn_unidad_crear: un referente
+    --      de otro nivel no puede aportar ni un enunciado, por la validacion
+    --      de fn_unidad_enunciado_relacionar / V136).
+    --   c) no lo tocan                 -> se CONSERVA el actual, salvo que
+    --      haya dejado de aplicar (porque cambio el grado, o porque alguien
+    --      desactivo ese referente en el catalogo). En ese caso se RE-DERIVA
+    --      con la regla del grado nuevo en vez de dejar una FK muerta.
+    --
+    -- El caso (c) es el que estaba roto en el servidor de test: las unidades
+    -- 12-15 apuntaban a los referentes 11 y 12, ambos ACTIVE = false, y
+    -- GET /planeador/unidades/:ID/referente devolvia todo NULL mientras el
+    -- listado seguia mostrando el nombre del referente muerto.
+    -- ----------------------------------------------------------------------
+    IF p_limpiar_referente THEN
+        v_fk_referente := NULL;
+    ELSIF p_fk_referente_curricular IS NOT NULL THEN
+        v_fk_referente := p_fk_referente_curricular;
+
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
+              JOIN academico_test.TGRADO g ON g.PK_TGRADO = v_grado
+             WHERE rcn.FK_REFERENTE_CURRICULAR = v_fk_referente
+               AND rcn.FK_TNIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
+               AND rcn.ACTIVE = TRUE
+        ) THEN
+            RAISE EXCEPTION 'El referente curricular (%) no aplica al nivel educativo del grado (%) de la unidad', v_fk_referente, v_grado
+                USING ERRCODE = '23503';
+        END IF;
+    ELSE
+        v_fk_referente := v_actual.FK_REFERENTE_CURRICULAR;
+
+        IF v_fk_referente IS NULL
+           OR NOT EXISTS (
+                SELECT 1
+                  FROM academico_test.TREFERENTE_CURRICULAR rc
+                  JOIN academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
+                        ON rcn.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
+                       AND rcn.ACTIVE = TRUE
+                  JOIN academico_test.TGRADO g ON g.PK_TGRADO = v_grado
+                 WHERE rc.PK_REFERENTE_CURRICULAR = v_fk_referente
+                   AND rc.ACTIVE = TRUE
+                   AND rc.ESTADO = 'A'
+                   AND rcn.FK_TNIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
+           ) THEN
+            v_fk_referente := academico_test.fn_unidad_referente_aplicable(v_grado, v_asig);
+        END IF;
+    END IF;
     IF EXISTS (
         SELECT 1 FROM academico_test.TUNIDAD
          WHERE UPPER(TRIM(NOMBRE)) = UPPER(TRIM(v_nombre))
@@ -775,8 +1004,9 @@ BEGIN
            FK_TGRADO                 = v_grado,
            FK_TFUNCIONARIO           = COALESCE(p_fk_tfuncionario, FK_TFUNCIONARIO),
            FK_TLV_CALCULO_DEFINITIVA = COALESCE(p_fk_tlv_calculo_definitiva, FK_TLV_CALCULO_DEFINITIVA),
-           FK_REFERENTE_CURRICULAR   = CASE WHEN p_limpiar_referente THEN NULL
-                                            ELSE COALESCE(p_fk_referente_curricular, FK_REFERENTE_CURRICULAR) END,
+           -- Ya resuelto arriba (limpiar / nuevo validado / conservar o
+           -- re-derivar si dejo de aplicar). No se recalcula aqui.
+           FK_REFERENTE_CURRICULAR   = v_fk_referente,
            PONDERACION               = v_ponder,
            MODIFIED_BY               = p_pk_usuario_solicitante::VARCHAR,
            MODIFIED_AT               = CURRENT_TIMESTAMP
@@ -813,7 +1043,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR[], VARCHAR[], NUMERIC, BOOLEAN)
-    IS 'PATCH parcial de TUNIDAD (gate EDITAR): cada parametro NULL preserva el valor actual. p_limpiar_referente=TRUE fuerza FK_REFERENTE_CURRICULAR a NULL. p_objetivos / p_contenidos NULL = no tocar; cualquier array (incl. vacio) = reemplazo completo (desactiva los activos y re-inserta con ORDEN por posicion, ignora vacios). Revalida FKs y unicidad (nombre, asignatura, grado) -- la unidad ya no depende de un periodo de evaluacion (V218). p_ponderacion / p_limpiar_ponderacion editan TUNIDAD.PONDERACION (V239, peso % de la unidad dentro de su (asignatura, grado)): NULL = no tocar, p_limpiar_ponderacion=TRUE la vuelve NULL. Se valida contra los valores RESULTANTES del PATCH (un PATCH que mueve la unidad de asignatura o grado cambia el bucket del 100%): rango 0..100, regla del 100% via fn_unidad_ponderacion_intra_asignatura_asignada excluyendo el peso viejo de esta misma unidad, y -- solo cuando el caller esta tocando el campo -- que el peso APLIQUE segun el plan de la asignatura para ese grado (22023 si el plan calcula por ACTIVIDADES o promedia sus unidades; si el plan no se resuelve o no esta configurado se permite, mismo criterio que fn_unidad_crear). Retorna PK_TUNIDAD.';
+    IS 'PATCH parcial de TUNIDAD (gate EDITAR): cada parametro NULL preserva el valor actual. REFERENTE CURRICULAR, tres casos, resueltos contra el grado RESULTANTE del PATCH (mover la unidad de grado le cambia el nivel educativo y con el que referentes aplican): p_limpiar_referente=TRUE lo fuerza a NULL; si llega uno nuevo se exige que APLIQUE al nivel de ese grado (23503 si no, misma razon que en fn_unidad_crear); y si no lo tocan se CONSERVA el actual salvo que haya dejado de aplicar -- porque cambio el grado o porque lo desactivaron en el catalogo --, caso en el que se RE-DERIVA con fn_unidad_referente_aplicable en vez de dejar una FK muerta (era lo que pasaba en el servidor de test: unidades apuntando a referentes con ACTIVE=false, con el detalle devolviendo NULL y el listado mostrando el nombre del referente muerto). p_objetivos / p_contenidos NULL = no tocar; cualquier array (incl. vacio) = reemplazo completo (desactiva los activos y re-inserta con ORDEN por posicion, ignora vacios). Revalida FKs y unicidad (nombre, asignatura, grado) -- la unidad ya no depende de un periodo de evaluacion (V218). p_ponderacion / p_limpiar_ponderacion editan TUNIDAD.PONDERACION (V239, peso % de la unidad dentro de su (asignatura, grado)): NULL = no tocar, p_limpiar_ponderacion=TRUE la vuelve NULL. Se valida contra los valores RESULTANTES del PATCH (un PATCH que mueve la unidad de asignatura o grado cambia el bucket del 100%): rango 0..100, regla del 100% via fn_unidad_ponderacion_intra_asignatura_asignada excluyendo el peso viejo de esta misma unidad, y -- solo cuando el caller esta tocando el campo -- que el peso APLIQUE segun el plan de la asignatura para ese grado (22023 si el plan calcula por ACTIVIDADES o promedia sus unidades; si el plan no se resuelve o no esta configurado se permite, mismo criterio que fn_unidad_crear). Retorna PK_TUNIDAD.';
 
 -- ===========================================================================
 -- fn_unidad_eliminar — soft delete en cascada.
@@ -1266,6 +1496,13 @@ RETURNS TABLE (
     calculo_definitiva          VARCHAR,
     fk_referente_curricular     BIGINT,
     referente_curricular        VARCHAR,
+    -- FALSE solo cuando la unidad TIENE un FK_REFERENTE_CURRICULAR guardado
+    -- que ya no resuelve (lo desactivaron en el catalogo). Sirve para no
+    -- confundir "esta unidad no se acoge a ningun referente" (FK NULL, esto
+    -- TRUE) con "se acoge a uno que ya no existe" (FK puesta, esto FALSE),
+    -- que para el front son dos situaciones distintas: la segunda hay que
+    -- avisarla, porque la unidad no va a poder ofrecer enunciados.
+    referente_vigente           BOOLEAN,
     total_actividades           BIGINT,
     fecha_inicio                DATE,
     fecha_fin                   DATE,
@@ -1300,6 +1537,7 @@ BEGIN
            lvc.NOMBRE,
            u.FK_REFERENTE_CURRICULAR,
            rc.NOMBRE,
+           (u.FK_REFERENTE_CURRICULAR IS NULL OR rc.PK_REFERENTE_CURRICULAR IS NOT NULL),
            (SELECT COUNT(*) FROM academico_test.TACTIVIDAD a WHERE a.FK_TUNIDAD = u.PK_TUNIDAD AND a.ACTIVE = TRUE),
            (SELECT MIN(a.FECHA_INICIO) FROM academico_test.TACTIVIDAD a WHERE a.FK_TUNIDAD = u.PK_TUNIDAD AND a.ACTIVE = TRUE),
            (SELECT MAX(a.FECHA_CIERRE) FROM academico_test.TACTIVIDAD a WHERE a.FK_TUNIDAD = u.PK_TUNIDAD AND a.ACTIVE = TRUE),
@@ -1327,13 +1565,21 @@ BEGIN
       LEFT JOIN academico_test.TFUNCIONARIO fu   ON fu.PK_TFUNCIONARIO = u.FK_TFUNCIONARIO
       LEFT JOIN academico_test.TUSUARIO us       ON us.PK_TUSUARIO = fu.FK_TUSUARIO
       LEFT JOIN academico_test.TLISTA_VALOR lvc  ON lvc.PK_LISTA_VALOR = u.FK_TLV_CALCULO_DEFINITIVA
+      -- ACTIVE = TRUE, igual que fn_unidad_referente_detalle (V255): sin este
+      -- filtro el listado mostraba el nombre de referentes ya desactivados
+      -- mientras el detalle devolvia NULL para la MISMA unidad -- dos
+      -- endpoints contradiciendose (visto en el servidor de test con los
+      -- referentes 11 y 12). Si esta desactivado, referente_curricular viene
+      -- NULL y referente_vigente = FALSE lo explica.
       LEFT JOIN academico_test.TREFERENTE_CURRICULAR rc ON rc.PK_REFERENTE_CURRICULAR = u.FK_REFERENTE_CURRICULAR
+                                                      AND rc.ACTIVE = TRUE
+                                                      AND rc.ESTADO = 'A'
      WHERE u.PK_TUNIDAD = p_pk_tunidad;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_buscar_por_pk(BIGINT, BIGINT)
-    IS 'Devuelve estado: el estado DERIVADO de la unidad (fn_unidad_estado, V224), el MISMO que fn_unidad_listar -- una vencida manda; si no, alguna pendiente; si todas finalizadas, FINALIZADA; en cualquier otro caso EN_EVALUACION (incluida la unidad sin actividades, que se distingue por total_actividades = 0) -- para que el chip diga lo mismo en la tarjeta y en el detalle; usa los dias de gracia por defecto (2). Detalle de una TUNIDAD (pestaña "Informacion general"): escalares + nombres resueltos (asignatura, area, grado, docente, forma de calculo, referente curricular), total de actividades activas, Inicio/Fin DERIVADOS (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas) y los arreglos JSONB ordenados objetivos [{pk,orden,descripcion}] y contenidos [{pk,orden,descripcion}]. campos_disponibles = fn_unidad_campos_disponibles (dependencia dinamica referente->rubrica, V137), calculado solo para esta fila (detalle), no en fn_unidad_listar. La unidad ya no depende de un periodo de evaluacion (V218). SETOF 0 o 1 fila (incluye inactivas). Gate VER.';
+    IS 'El referente curricular se resuelve solo si esta ACTIVE y referente_vigente distingue "no tiene" de "tiene uno que ya no vale", igual que en fn_unidad_listar. Devuelve estado: el estado DERIVADO de la unidad (fn_unidad_estado, V224), el MISMO que fn_unidad_listar -- una vencida manda; si no, alguna pendiente; si todas finalizadas, FINALIZADA; en cualquier otro caso EN_EVALUACION (incluida la unidad sin actividades, que se distingue por total_actividades = 0) -- para que el chip diga lo mismo en la tarjeta y en el detalle; usa los dias de gracia por defecto (2). Detalle de una TUNIDAD (pestaña "Informacion general"): escalares + nombres resueltos (asignatura, area, grado, docente, forma de calculo, referente curricular), total de actividades activas, Inicio/Fin DERIVADOS (MIN FECHA_INICIO / MAX FECHA_CIERRE de sus actividades activas) y los arreglos JSONB ordenados objetivos [{pk,orden,descripcion}] y contenidos [{pk,orden,descripcion}]. campos_disponibles = fn_unidad_campos_disponibles (dependencia dinamica referente->rubrica, V137), calculado solo para esta fila (detalle), no en fn_unidad_listar. La unidad ya no depende de un periodo de evaluacion (V218). SETOF 0 o 1 fila (incluye inactivas). Gate VER.';
 
 -- ===========================================================================
 -- fn_unidad_objetivos_listar / fn_unidad_contenidos_listar — listas planas

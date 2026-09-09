@@ -147,9 +147,12 @@ BEGIN
       FROM academico_test.TUNIDAD u
       LEFT JOIN academico_test.TGRADO g            ON g.PK_TGRADO = u.FK_TGRADO
       LEFT JOIN academico_test.TNIVEL_ENSENANZA ne ON ne.PK_NIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
+      -- ACTIVE (borrado logico) Y ESTADO (estado de negocio que edita el
+      -- usuario): un referente marcado Inactivo no debe pintar la unidad.
       LEFT JOIN academico_test.TREFERENTE_CURRICULAR rc
              ON rc.PK_REFERENTE_CURRICULAR = u.FK_REFERENTE_CURRICULAR
             AND rc.ACTIVE = TRUE
+            AND rc.ESTADO = 'A'
       LEFT JOIN academico_test.TLISTA_VALOR enf ON enf.PK_LISTA_VALOR = rc.FK_TLV_ENFOQUE_PEDAGOGICO
       LEFT JOIN academico_test.TLISTA_VALOR tev ON tev.PK_LISTA_VALOR = rc.FK_TLV_TIPO_EVALUACION
      WHERE u.PK_TUNIDAD = p_pk_tunidad;
