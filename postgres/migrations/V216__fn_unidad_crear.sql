@@ -1642,25 +1642,30 @@ COMMENT ON FUNCTION academico_test.fn_unidad_contenidos_listar(BIGINT, BIGINT)
 -- ===========================================================================
 -- fn_unidad_etiqueta_por_grado — nombre con el que se muestra la "unidad".
 --
--- El rotulo NO es fijo ("Unidad tematica"): lo define el referente
--- curricular vigente para el nivel educativo del grado. En
--- TREFERENTE_CURRICULAR (V212, rama CU-86e311xqh) el campo INSTRUMENTO es
--- justamente "el nombre con el que se visualizara la unidad" para ese
--- nivel (p.ej. "Unidad tematica", "Proyecto pedagogico", "Relatos
--- pedagogicos...").
+-- El rotulo NO es fijo ("Unidad tematica"): lo define el referente curricular
+-- que aplica al nivel educativo del grado. En TREFERENTE_CURRICULAR (V212) el
+-- campo INSTRUMENTO es justamente "el nombre con el que se visualizara la
+-- unidad" para ese nivel ("Unidad tematica", "Proyecto pedagogico",
+-- "Valores"...), e INSTRUMENTO_INFO_ADICIONAL su descripcion larga.
 --
--- Resolucion:
---   TGRADO.FK_TNIVEL_ENSENANZA
---     -> TREFERENTE_CURRICULAR rc  (mismo nivel educativo, ACTIVE, ESTADO='A'
---        y vigente por anio: ANIO_VIGENCIA_DESDE <= anio actual y
---        ANIO_VIGENCIA_HASTA NULL o >= anio actual)
---     -> rc.INSTRUMENTO
+-- ESTABA ROTA. Resolvia el nivel con `rc.FK_TNIVEL_ENSENANZA`, una columna
+-- DIRECTA de TREFERENTE_CURRICULAR que dejo de existir cuando la relacion
+-- referente <-> nivel paso a ser N:N por TREFERENTE_CURRICULAR_NIVEL (V212,
+-- editada en sitio en la rama CU-86e311xqh). Al ser plpgsql no fallaba al
+-- crearse: fallaba al invocarla, con
+--     column rc.fk_tnivel_ensenanza does not exist (42703)
+-- Comprobado contra el servidor de test. Es decir: el rotulo dinamico de la
+-- pestana estaba muerto y nadie se habia dado cuenta.
 --
--- p_fk_tasignatura (opcional) desempata cuando hay varios referentes para
--- el nivel: se prefiere el que aplica a la asignatura (via
--- TREFERENTE_CURRICULAR_AREA -> TAREA_ASIGNATURA; sin filas = aplica a
--- todas, mismo criterio que V213). Si aun asi quedan varios, gana el de
--- vigencia mas reciente. Si no hay ninguno, cae a 'Unidad tematica'.
+-- Ahora delega la eleccion del referente en fn_unidad_referente_aplicable, que
+-- es la UNICA definicion de esa regla (puente N:N + vigencia + ACTIVE +
+-- ESTADO='A' + desempate por area de la asignatura y por vigencia). Antes esta
+-- funcion tenia su propia copia de la regla, que es como se quedo atras cuando
+-- el modelo cambio; ahora no hay copia que mantener.
+--
+-- Si no hay referente aplicable cae a 'Unidad tematica', que es el rotulo
+-- historico y lo que espera el front cuando el catalogo aun no tiene referente
+-- para ese nivel.
 -- ===========================================================================
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_etiqueta_por_grado(
     p_pk_usuario_solicitante   BIGINT,
@@ -1669,63 +1674,32 @@ CREATE OR REPLACE FUNCTION academico_test.fn_unidad_etiqueta_por_grado(
 )
 RETURNS VARCHAR
 LANGUAGE plpgsql
+STABLE
 AS $$
 DECLARE
-    v_fk_nivel     BIGINT;
-    v_anio         INT := EXTRACT(YEAR FROM CURRENT_DATE)::INT;
+    v_pk_referente BIGINT;
     v_etiqueta     VARCHAR;
 BEGIN
     PERFORM academico_test.fn_planeador_assert_alcance(
         p_pk_usuario_solicitante, 'VER', NULL, p_fk_tgrado
     );
 
-    SELECT g.FK_TNIVEL_ENSENANZA
-      INTO v_fk_nivel
-      FROM academico_test.TGRADO g
-     WHERE g.PK_TGRADO = p_fk_tgrado AND g.ACTIVE = TRUE;
-
-    IF NOT FOUND THEN
+    IF NOT EXISTS (SELECT 1 FROM academico_test.TGRADO g
+                    WHERE g.PK_TGRADO = p_fk_tgrado AND g.ACTIVE = TRUE) THEN
         RAISE EXCEPTION 'FK_TGRADO (%) no existe o no esta activo', p_fk_tgrado USING ERRCODE = '23503';
     END IF;
 
-    SELECT rc.INSTRUMENTO
+    v_pk_referente := academico_test.fn_unidad_referente_aplicable(
+        p_fk_tgrado, p_fk_tasignatura);
+
+    SELECT NULLIF(TRIM(rc.INSTRUMENTO), '')
       INTO v_etiqueta
       FROM academico_test.TREFERENTE_CURRICULAR rc
-     WHERE rc.FK_TNIVEL_ENSENANZA = v_fk_nivel
-       AND rc.ACTIVE = TRUE
-       AND rc.ESTADO = 'A'
-       AND rc.ANIO_VIGENCIA_DESDE <= v_anio
-       AND (rc.ANIO_VIGENCIA_HASTA IS NULL OR rc.ANIO_VIGENCIA_HASTA >= v_anio)
-       AND (
-             p_fk_tasignatura IS NULL
-             OR NOT EXISTS (
-                 SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_AREA a
-                  WHERE a.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR AND a.ACTIVE = TRUE
-             )
-             OR EXISTS (
-                 SELECT 1
-                   FROM academico_test.TREFERENTE_CURRICULAR_AREA a
-                   JOIN academico_test.TASIGNATURA s ON s.FK_TAREA_ASIGNATURA = a.FK_TAREA_ASIGNATURA
-                  WHERE a.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
-                    AND a.ACTIVE = TRUE
-                    AND s.PK_TASIGNATURA = p_fk_tasignatura
-             )
-           )
-     ORDER BY
-       -- primero los que aplican explicitamente a la asignatura pedida
-       (CASE WHEN p_fk_tasignatura IS NOT NULL AND EXISTS (
-                 SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_AREA a
-                   JOIN academico_test.TASIGNATURA s ON s.FK_TAREA_ASIGNATURA = a.FK_TAREA_ASIGNATURA
-                  WHERE a.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
-                    AND a.ACTIVE = TRUE AND s.PK_TASIGNATURA = p_fk_tasignatura
-             ) THEN 0 ELSE 1 END),
-       rc.ANIO_VIGENCIA_DESDE DESC,
-       rc.PK_REFERENTE_CURRICULAR DESC
-     LIMIT 1;
+     WHERE rc.PK_REFERENTE_CURRICULAR = v_pk_referente;
 
-    RETURN COALESCE(NULLIF(TRIM(v_etiqueta), ''), 'Unidad tematica');
+    RETURN COALESCE(v_etiqueta, 'Unidad tematica');
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_etiqueta_por_grado(BIGINT, BIGINT, BIGINT)
-    IS 'Devuelve UNICAMENTE el nombre con el que se muestra la "unidad" para un grado dado: TREFERENTE_CURRICULAR.INSTRUMENTO del referente curricular vigente (ACTIVE, ESTADO=''A'', vigente por anio) del nivel educativo del grado (TGRADO.FK_TNIVEL_ENSENANZA). p_fk_tasignatura (opcional) desempata por area (TREFERENTE_CURRICULAR_AREA; sin areas = aplica a todas). Si hay varios, gana el de vigencia mas reciente; si no hay ninguno, retorna ''Unidad tematica''. Gate VER sobre PLANEADOR. Depende de V212 (rama CU-86e311xqh).';
+    IS 'Devuelve UNICAMENTE el nombre con el que se muestra la "unidad" para un grado dado: TREFERENTE_CURRICULAR.INSTRUMENTO del referente que aplica a ese grado ("Unidad tematica", "Proyecto pedagogico", "Valores"...). ESTABA ROTA: resolvia el nivel con rc.FK_TNIVEL_ENSENANZA, una columna directa que dejo de existir cuando la relacion referente<->nivel paso a N:N por TREFERENTE_CURRICULAR_NIVEL (V212, editada en sitio); al ser plpgsql no fallaba al crearse sino al invocarla, con "column rc.fk_tnivel_ensenanza does not exist" (42703, comprobado en el servidor de test) -- o sea que el rotulo dinamico de la pestana estaba muerto. Ahora delega la eleccion del referente en fn_unidad_referente_aplicable, UNICA definicion de esa regla (puente N:N + vigencia + ACTIVE + ESTADO=''A'' + desempate por area de la asignatura y por vigencia), en vez de tener su propia copia -- que es como se quedo atras cuando el modelo cambio. p_fk_tasignatura (opcional) desempata por area. Si no hay referente aplicable retorna ''Unidad tematica'', el rotulo historico. Para las PESTANAS de un docente completo (varios niveles), usar fn_docente_unidad_tabs_listar (V281), que devuelve la lista. Gate VER sobre PLANEADOR + alcance por el grado. Depende de V212 (rama CU-86e311xqh).';
