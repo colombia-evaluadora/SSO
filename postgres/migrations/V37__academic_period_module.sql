@@ -246,16 +246,7 @@ BEGIN
          WHERE FK_TESTABLECIMIENTO = v_establecimiento AND NOMBRE = v_nombre_ano;
     END IF;
 
-    -- 5. Un solo periodo activo por (año lectivo, sede).
-    IF EXISTS (
-        SELECT 1 FROM academico_test.TPERIODO_ACADEMICO
-         WHERE FK_TANO_LECTIVO = v_ano_id AND FK_TSEDE = p_fk_sede AND ACTIVE = TRUE
-    ) THEN
-        RAISE EXCEPTION 'La sede "%" ya tiene un periodo academico activo para el año lectivo %',
-            v_nombre_sede, v_nombre_ano USING ERRCODE = '23505';
-    END IF;
-
-    -- 6a. Validar FK_TLV_ESTADO — debe existir y pertenecer a la categoria
+    -- 5a. Validar FK_TLV_ESTADO — debe existir y pertenecer a la categoria
     --     ESTADOPERIODO en TLISTA_VALOR.
     SELECT VALOR, CATEGORIA INTO v_nombre_estado, v_categoria_estado
       FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = p_fk_estado;
@@ -267,8 +258,9 @@ BEGIN
             v_nombre_estado, v_categoria_estado USING ERRCODE = '22023';
     END IF;
 
-    -- 6b. Nombre derivado de la jornada — debe existir y pertenecer a la
-    --     categoria JORNADA en TLISTA_VALOR.
+    -- 5b. Nombre derivado de la jornada — debe existir y pertenecer a la
+    --     categoria JORNADA en TLISTA_VALOR. Se resuelve ANTES del chequeo de
+    --     unicidad de abajo (6) para poder nombrarla en el mensaje de error.
     SELECT VALOR, CATEGORIA INTO v_nombre_jornada, v_categoria_jornada
       FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = p_fk_jornada;
     IF v_nombre_jornada IS NULL THEN
@@ -279,8 +271,23 @@ BEGIN
             v_nombre_jornada, v_categoria_jornada USING ERRCODE = '22023';
     END IF;
 
+    -- 6. Un solo periodo activo por (año lectivo, sede, jornada) — antes era
+    --    por (año lectivo, sede) a secas. Ahora se permiten dos periodos
+    --    activos en el mismo año y sede si la jornada difiere (mañana/tarde),
+    --    y solo se rechaza cuando coinciden los tres. Portado de V107
+    --    (antes V100).
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TPERIODO_ACADEMICO
+         WHERE FK_TANO_LECTIVO = v_ano_id AND FK_TSEDE = p_fk_sede
+           AND FK_TLV_JORNADA = p_fk_jornada AND ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'La sede "%" ya tiene un periodo academico activo en la jornada "%" para el año lectivo %',
+            v_nombre_sede, v_nombre_jornada, v_nombre_ano USING ERRCODE = '23505';
+    END IF;
+
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
-        format('Creación del periodo académico %s - %s', v_nombre_ano, v_nombre_jornada), v_establecimiento);
+        format('Creación del periodo académico %s - %s en la sede %s', v_nombre_ano, v_nombre_jornada, v_nombre_sede),
+        v_establecimiento);
 
     -- 7. Insert del periodo.
     INSERT INTO academico_test.TPERIODO_ACADEMICO (
@@ -454,10 +461,11 @@ BEGIN
     -- de la funcion es la reconciliacion de descansos que sigue, y en este
     -- punto v_nombre_ano/v_nombre_jornada/v_est_new todavia no se calculan.
     v_nombre_ano := to_char(v_inicio, 'YYYY');
-    SELECT FK_TESTABLECIMIENTO INTO v_est_new FROM academico_test.TSEDE WHERE PK_TSEDE = v_sede;
+    SELECT FK_TESTABLECIMIENTO, NOMBRE INTO v_est_new, v_nombre_sede FROM academico_test.TSEDE WHERE PK_TSEDE = v_sede;
     SELECT VALOR INTO v_nombre_jornada FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = v_jornada;
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
-        format('Actualización del periodo académico %s - %s', v_nombre_ano, v_nombre_jornada), v_est_new);
+        format('Actualización del periodo académico %s - %s en la sede %s', v_nombre_ano, v_nombre_jornada, v_nombre_sede),
+        v_est_new);
 
     -- Reconciliacion de descansos.
     --   p_descanso_inicio IS NULL → no se tocan; se conserva el guard: los
@@ -564,14 +572,16 @@ BEGIN
          WHERE FK_TESTABLECIMIENTO = v_est_new AND NOMBRE = v_nombre_ano;
     END IF;
 
-    -- Un solo periodo activo por (año, sede) — excluyendose a si mismo.
+    -- Un solo periodo activo por (año, sede, jornada) — excluyendose a si
+    -- mismo. Antes era por (año, sede) a secas; ver fn_periodo_crear.
     IF EXISTS (
         SELECT 1 FROM academico_test.TPERIODO_ACADEMICO
-         WHERE FK_TANO_LECTIVO = v_ano_id AND FK_TSEDE = v_sede AND ACTIVE = TRUE
+         WHERE FK_TANO_LECTIVO = v_ano_id AND FK_TSEDE = v_sede
+           AND FK_TLV_JORNADA = v_jornada AND ACTIVE = TRUE
            AND PK_TPERIODO_ACADEMICO <> p_pk_periodo
     ) THEN
-        RAISE EXCEPTION 'La sede "%" ya tiene un periodo academico activo para el año lectivo %',
-            v_nombre_sede, v_nombre_ano USING ERRCODE = '23505';
+        RAISE EXCEPTION 'La sede "%" ya tiene un periodo academico activo en la jornada "%" para el año lectivo %',
+            v_nombre_sede, v_nombre_jornada, v_nombre_ano USING ERRCODE = '23505';
     END IF;
 
     -- Validar FK_TLV_ESTADO efectivo — debe existir y pertenecer a la categoria
@@ -638,8 +648,17 @@ BEGIN
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante, NULL, NULL, NULL, 'ELIMINAR');
 
-    SELECT ACTIVE, NOMBRE INTO v_activo, v_nombre_periodo
-      FROM academico_test.TPERIODO_ACADEMICO WHERE PK_TPERIODO_ACADEMICO = p_pk_periodo;
+    -- Etiqueta del periodo para los mensajes de abajo: sede - año - jornada.
+    -- Antes era solo TPERIODO_ACADEMICO.NOMBRE (año - jornada, sin sede), que
+    -- quedo ambiguo desde que puede haber mas de un periodo activo por año y
+    -- sede, uno por jornada. Portado de V107 (antes V100).
+    SELECT pa.ACTIVE, s.NOMBRE || ' - ' || al.NOMBRE || ' - ' || jor.NOMBRE
+      INTO v_activo, v_nombre_periodo
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TSEDE s          ON s.PK_TSEDE = pa.FK_TSEDE
+      JOIN academico_test.TANO_LECTIVO al  ON al.PK_ANO_LECTIVO = pa.FK_TANO_LECTIVO
+      JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = pa.FK_TLV_JORNADA
+     WHERE pa.PK_TPERIODO_ACADEMICO = p_pk_periodo;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'No existe el periodo academico' USING ERRCODE = 'P0002';
     END IF;
@@ -911,6 +930,7 @@ AS $function$
 DECLARE
     v_pi TIME; v_pf TIME; v_id BIGINT;
     v_establecimiento_id BIGINT;
+    v_nombre_sede VARCHAR(130);
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
     -- Autorizacion (CU-86e2w4xdt): capability fail-fast.
@@ -923,7 +943,7 @@ BEGIN
         RAISE EXCEPTION 'No existe el periodo academico' USING ERRCODE = 'P0002';
     END IF;
     -- Autorizacion fina (CU-86e2w4xdt): capability + scope (EE, sede, jornada) del periodo.
-    SELECT s.FK_TESTABLECIMIENTO INTO v_establecimiento_id
+    SELECT s.FK_TESTABLECIMIENTO, s.NOMBRE INTO v_establecimiento_id, v_nombre_sede
       FROM academico_test.TPERIODO_ACADEMICO pa
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
      WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo;
@@ -949,7 +969,8 @@ BEGIN
     END IF;
 
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
-        format('Agregado de descanso %s-%s al periodo académico', p_hora_inicio, p_hora_fin), v_establecimiento_id);
+        format('Agregado de descanso %s-%s al periodo académico de la sede %s', p_hora_inicio, p_hora_fin, v_nombre_sede),
+        v_establecimiento_id);
 
     INSERT INTO academico_test.TDESCANSOS (FK_TPERIODO_ACADEMICO, HORA_INICIO, HORA_FIN, CREATED_BY)
     VALUES (p_fk_periodo, p_hora_inicio, p_hora_fin, v_audit)
@@ -969,6 +990,7 @@ DECLARE
     v_n INT;
     v_tmp_hi TIME;
     v_tmp_hf TIME;
+    v_nombre_sede VARCHAR(130);
     v_establecimiento_id BIGINT;
     v_sede_id    BIGINT;
     v_jornada_id BIGINT;
@@ -977,8 +999,8 @@ BEGIN
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante, NULL, NULL, NULL, 'EDITAR');
     -- Alcance fino (CU-86e2w4xdt): capability + scope (EE, sede, jornada) del periodo del descanso.
-    SELECT s.FK_TESTABLECIMIENTO, pa.FK_TSEDE, pa.FK_TLV_JORNADA
-      INTO v_establecimiento_id, v_sede_id, v_jornada_id
+    SELECT s.FK_TESTABLECIMIENTO, pa.FK_TSEDE, pa.FK_TLV_JORNADA, s.NOMBRE
+      INTO v_establecimiento_id, v_sede_id, v_jornada_id, v_nombre_sede
       FROM academico_test.TDESCANSOS d
       JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = d.FK_TPERIODO_ACADEMICO
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
@@ -990,7 +1012,8 @@ BEGIN
     SELECT HORA_INICIO, HORA_FIN INTO v_tmp_hi, v_tmp_hf
       FROM academico_test.TDESCANSOS WHERE PK_TDESCANSOS = p_pk_descanso;
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
-        format('Eliminación del descanso %s-%s', v_tmp_hi, v_tmp_hf), v_establecimiento_id);
+        format('Eliminación del descanso %s-%s de la sede %s', v_tmp_hi, v_tmp_hf, v_nombre_sede),
+        v_establecimiento_id);
     UPDATE academico_test.TDESCANSOS
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TDESCANSOS = p_pk_descanso AND ACTIVE = TRUE;

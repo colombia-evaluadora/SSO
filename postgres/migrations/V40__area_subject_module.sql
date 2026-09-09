@@ -451,6 +451,7 @@ RETURNS BIGINT LANGUAGE plpgsql AS $function$
 DECLARE
     v_id BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_next INT;
     -- Especialidad "Otro" para enfasis creados al vuelo. Ver comentario de
     -- migracion V64: 2 es el valor consistente con los datos existentes,
     -- no el PK real de la fila "Otro" (4) ni el valor previo (7,
@@ -462,8 +463,19 @@ BEGIN
      WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento AND ACTIVE = TRUE
        AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(p_nombre));
     IF v_id IS NULL THEN
+        -- CODIGO autonumerico por establecimiento cuando el caller no lo manda.
+        -- Antes se usaba LEFT(p_nombre, 30), que choca con la unicidad de
+        -- CODIGO en cuanto dos enfasis comparten los primeros 30 caracteres.
+        -- El advisory lock serializa el MAX()+1 entre transacciones concurrentes
+        -- del mismo establecimiento. Portado de V107 (antes V103).
+        IF p_codigo IS NULL THEN
+            PERFORM pg_advisory_xact_lock(hashtext('tenfasis:' || p_fk_establecimiento::text));
+            SELECT COALESCE(MAX(CODIGO::int), -1) + 1 INTO v_next
+              FROM academico_test.TENFASIS
+             WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento AND CODIGO ~ '^[0-9]+$';
+        END IF;
         INSERT INTO academico_test.TENFASIS (CODIGO, NOMBRE, FK_TESPECIALIDAD, FK_TESTABLECIMIENTO, CREATED_BY)
-        VALUES (COALESCE(p_codigo, LEFT(p_nombre, 30)), p_nombre, c_especialidad_otro, p_fk_establecimiento, v_audit)
+        VALUES (COALESCE(p_codigo, lpad(v_next::text, 5, '0')), p_nombre, c_especialidad_otro, p_fk_establecimiento, v_audit)
         RETURNING PK_TENFASIS INTO v_id;
     END IF;
     RETURN v_id;
@@ -1057,13 +1069,18 @@ BEGIN
         academico_test.fn_periodo_jornada(v_periodo), 'EDITAR');
 
     -- Reemplazo: baja logica de las asignaturas del area que NO vienen en el set.
-    UPDATE academico_test.TASIGNATURA
+    -- El set se identifica por `id` (PK), no por NOMBRE: el nombre de una
+    -- asignatura no es unico dentro del area, asi que matchear por nombre daba
+    -- de baja filas que si venian en el payload (y conservaba otras que no).
+    -- Desde V111 el front manda el PK real de cada asignatura que edita; los
+    -- items sin `id` son altas nuevas y por tanto no protegen a nadie de la
+    -- baja logica. Portado de V107 (antes V193).
+    UPDATE academico_test.TASIGNATURA t
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE FK_TAREA = p_fk_area AND ACTIVE = TRUE
-       AND UPPER(TRIM(NOMBRE)) NOT IN (
-           SELECT UPPER(TRIM(e->>'nombreInterno'))
-             FROM jsonb_array_elements(COALESCE(p_asignaturas, '[]'::jsonb)) e
-            WHERE NULLIF(TRIM(e->>'nombreInterno'),'') IS NOT NULL
+     WHERE t.FK_TAREA = p_fk_area AND t.ACTIVE = TRUE
+       AND NOT EXISTS (
+           SELECT 1 FROM jsonb_array_elements(COALESCE(p_asignaturas, '[]'::jsonb)) e
+            WHERE NULLIF(TRIM(e->>'id'), '')::bigint = t.PK_TASIGNATURA
        );
 
     FOR it IN SELECT * FROM jsonb_array_elements(COALESCE(p_asignaturas, '[]'::jsonb))
