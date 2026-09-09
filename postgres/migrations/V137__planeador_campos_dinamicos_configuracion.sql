@@ -131,13 +131,20 @@ AS $$
            JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = rc.FK_TLV_ENFOQUE_PEDAGOGICO
           WHERE u.PK_TUNIDAD = p_pk_tunidad
             AND u.ACTIVE = TRUE
-            AND rc.ACTIVE = TRUE),
+            AND rc.ACTIVE = TRUE
+            -- ESTADO ('A' vigente / 'I' retirado) se exige ADEMAS de ACTIVE:
+            -- fn_unidad_actualizar ya trata un referente con ESTADO='I' como
+            -- muerto y lo re-deriva (caso (c) de V216). Si aqui no se mirara,
+            -- una unidad acogida a un referente retirado diria "es evaluativo",
+            -- ofreceria la seccion de evaluacion y dejaria fijar instrumentos
+            -- que el primer PATCH de la unidad convertiria en huerfanos.
+            AND rc.ESTADO = 'A'),
         FALSE
     );
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_referente_evaluativo(BIGINT)
-    IS 'Helper interno: TRUE si la unidad (activa) tiene un referente curricular activo (TUNIDAD.FK_REFERENTE_CURRICULAR) cuyo FK_TLV_ENFOQUE_PEDAGOGICO es EVALUATIVO; FALSE si es FORMATIVO, si no tiene referente o si la unidad no existe/esta inactiva. Base de las condiciones dinamicas referente->rubrica y actividad->evaluacion. V137.';
+    IS 'Helper interno: TRUE si la unidad (activa) tiene un referente curricular VIGENTE (ACTIVE = TRUE Y ESTADO = ''A'') cuyo FK_TLV_ENFOQUE_PEDAGOGICO es EVALUATIVO; FALSE si es FORMATIVO, si no tiene referente, si el referente ya no esta vigente o si la unidad no existe/esta inactiva. La condicion de vigencia es la MISMA que aplica fn_unidad_actualizar (V216) para decidir si conserva el referente o lo re-deriva: antes aqui solo se miraba ACTIVE, y un referente retirado (ESTADO=''I'') se reportaba como evaluativo, habilitaba la seccion de evaluacion y dejaba fijar instrumentos que el siguiente PATCH de la unidad volvia huerfanos. Base de las condiciones dinamicas referente->rubrica y actividad->evaluacion. V137.';
 
 -- ===========================================================================
 -- fn_unidad_referente_tipo_evaluacion — helper interno: VALOR del
@@ -628,3 +635,212 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_unidad_configuracion(BIGINT, BIGINT)
     IS 'Snapshot completo de la configuracion de la unidad de una actividad (TACTIVIDAD.FK_TUNIDAD): {tieneUnidad:false} si la actividad no tiene unidad relacionada (opcional desde V218); si la tiene, {tieneUnidad:true, pkTunidad, nombre, descripcion, objetivos:[...], contenidos:[...], referenteCurricular:{...}|null, rubrica:[{pk,orden,descripcion,niveles:[...]}] (misma forma que fn_unidad_criterio_listar de V222), enunciados:[{pkTunidadEnunciado,pk,texto,evidencias:[{pk,texto}]}] (TUNIDAD_ENUNCIADO de V136 con sus evidencias hijas de TREFERENTE_ENUNCIADO)}. Gate VER sobre PLANEADOR. V137.';
+
+-- ===========================================================================
+-- GUARD "instrumento huerfano" — dos helpers de listado + el trigger que
+-- protege el catalogo de referentes.
+--
+-- Problema que resuelven (detectado el 2026-09-09 contra el servidor de test,
+-- 6 actividades activas afectadas: 23, 24, 25, 26, 29 y 30):
+--
+--   La validacion del instrumento de evaluacion era ASIMETRICA. El lado
+--   actividad es estricto — fn_actividad_actualizar (V224) exige que el
+--   instrumento RESULTANTE (nuevo o heredado) se corresponda con una unidad
+--   de referente EVALUATIVO —, pero el lado unidad y el lado referente no
+--   validaban nada:
+--
+--     * fn_unidad_actualizar dejaba mover la unidad a un referente FORMATIVO,
+--       limpiarle el referente o re-derivarlo (caso (c) de V216) con
+--       actividades ya instrumentadas colgando;
+--     * fn_refcurr_actualizar (V213, rama del Referente Curricular) deja
+--       voltear FK_TLV_ENFOQUE_PEDAGOGICO de EVALUATIVO a FORMATIVO sin
+--       mirar quien esta acogido al referente.
+--
+--   El resultado no era un error visible sino un callejon sin salida: la
+--   actividad conservaba un instrumento que su unidad ya no admite, y desde
+--   ese momento NINGUN PATCH sobre ella pasaba — ni el titulo, ni las fechas,
+--   ni desvincularla de la unidad —, porque fn_actividad_actualizar revalida
+--   el instrumento heredado en cada llamada. Se comprobo por HTTP: los cuatro
+--   intentos (tocar solo la descripcion, mandar el instrumento en null,
+--   desvincular la unidad, y sobre una actividad sin unidad) devolvian 400.
+--
+-- Por que un TRIGGER y no un CREATE OR REPLACE de fn_refcurr_actualizar:
+-- esa funcion vive en V213, en la rama feature/CU-86e311xqh (Referente
+-- Curricular), no en esta. Redefinirla desde aqui la duplicaria y las dos
+-- copias divergirian en el primer cambio de aquella rama. El trigger es
+-- aditivo, no toca codigo ajeno y ademas cubre TODOS los caminos (la funcion
+-- de hoy, cualquier funcion futura y los UPDATE directos), que es
+-- exactamente lo que se quiere de un invariante de datos.
+--
+-- El guard equivalente del lado unidad NO es un trigger sino una validacion
+-- explicita dentro de fn_unidad_actualizar (V216): ahi hay que distinguir el
+-- referente RESULTANTE del PATCH (que depende del grado resultante y de la
+-- re-derivacion) antes de escribir, y eso no se ve desde un trigger de fila.
+-- ===========================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_instrumento_nombre(
+    p_pk_lista_valor   BIGINT
+)
+RETURNS TEXT
+LANGUAGE sql
+STABLE
+AS $$
+    -- NOMBRE (rotulo de pantalla: "Rubrica", "Lista de cotejo"), nunca VALOR
+    -- (la clave tecnica RUBRICA / LISTA_COTEJO) ni el PK: estos textos van a
+    -- mensajes que lee el docente.
+    SELECT COALESCE(
+        (SELECT lv.NOMBRE FROM academico_test.TLISTA_VALOR lv
+          WHERE lv.PK_LISTA_VALOR = p_pk_lista_valor
+            AND lv.CATEGORIA = 'INSTRUMENTO_EVALUACION'),
+        'seleccionado'
+    );
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_instrumento_nombre(BIGINT)
+    IS 'Rotulo de pantalla de un instrumento de evaluacion (TLISTA_VALOR.NOMBRE de la categoria INSTRUMENTO_EVALUACION): "Rubrica", "Lista de cotejo", "Escala de valoracion", "Otro". Devuelve ''seleccionado'' si el PK no resuelve, para que el mensaje siga leyendose. Existe para que los errores de fn_actividad_crear / _actualizar (V224) nombren el instrumento en vez de soltar el PK o la clave tecnica. V137.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_referente_es_evaluativo_vigente(
+    p_pk_referente_curricular   BIGINT
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(
+        (SELECT lv.VALOR = 'EVALUATIVO'
+           FROM academico_test.TREFERENTE_CURRICULAR rc
+           JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = rc.FK_TLV_ENFOQUE_PEDAGOGICO
+          WHERE rc.PK_REFERENTE_CURRICULAR = p_pk_referente_curricular
+            AND rc.ACTIVE = TRUE
+            AND rc.ESTADO = 'A'),
+        FALSE
+    );
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_referente_es_evaluativo_vigente(BIGINT)
+    IS 'Definicion UNICA de "referente evaluativo vigente" a partir de su PK: enfoque pedagogico EVALUATIVO + ACTIVE = TRUE + ESTADO = ''A''. FALSE tambien para NULL (referente sin asignar). Es la misma condicion que fn_unidad_referente_evaluativo aplica partiendo de la unidad; existe aparte porque fn_unidad_actualizar (V216) necesita evaluarla sobre el referente RESULTANTE del PATCH, que todavia no esta escrito en la unidad. V137.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_actividades_instrumentadas(
+    p_pk_tunidad   BIGINT
+)
+RETURNS TEXT
+LANGUAGE sql
+STABLE
+AS $$
+    -- Texto legible para el mensaje de error: nombres, nunca PKs. Se cortan
+    -- a 5 para que el mensaje no se vuelva ilegible con una unidad grande.
+    SELECT CASE WHEN count(*) = 0 THEN NULL
+                ELSE string_agg(t.etiqueta, ', ' ORDER BY t.etiqueta)
+                     FILTER (WHERE t.rn <= 5)
+                     || CASE WHEN count(*) > 5
+                             THEN ' y ' || (count(*) - 5) || ' mas'
+                             ELSE '' END
+           END
+      FROM (
+            SELECT '"' || a.TITULO || '" (' || lv.NOMBRE || ')' AS etiqueta,
+                   row_number() OVER (ORDER BY a.TITULO)         AS rn
+              FROM academico_test.TACTIVIDAD a
+              JOIN academico_test.TLISTA_VALOR lv
+                    ON lv.PK_LISTA_VALOR = a.FK_TLV_INSTRUMENTO_EVALUACION
+             WHERE a.FK_TUNIDAD = p_pk_tunidad
+               AND a.ACTIVE = TRUE
+      ) t;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_unidad_actividades_instrumentadas(BIGINT)
+    IS 'Listado LEGIBLE (no PKs) de las actividades activas de una unidad que ya tienen instrumento de evaluacion configurado, con el nombre del instrumento entre parentesis: ''"Mi historia favorita" (Rubrica), "Clasificamos objetos" (Lista de cotejo)''. NULL si no hay ninguna. Se corta en 5 y remata con "y N mas" para que el mensaje de error siga siendo legible. Lo consume el guard de fn_unidad_actualizar (V216), que aborta el PATCH cuando la unidad dejaria de ser evaluativa con estas actividades colgando. V137.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_referente_actividades_instrumentadas(
+    p_pk_referente_curricular   BIGINT
+)
+RETURNS TEXT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT CASE WHEN count(*) = 0 THEN NULL
+                ELSE string_agg(t.etiqueta, ', ' ORDER BY t.etiqueta)
+                     FILTER (WHERE t.rn <= 5)
+                     || CASE WHEN count(*) > 5
+                             THEN ' y ' || (count(*) - 5) || ' mas'
+                             ELSE '' END
+           END
+      FROM (
+            SELECT '"' || a.TITULO || '" (unidad "' || u.NOMBRE || '")' AS etiqueta,
+                   row_number() OVER (ORDER BY u.NOMBRE, a.TITULO)      AS rn
+              FROM academico_test.TUNIDAD u
+              JOIN academico_test.TACTIVIDAD a
+                    ON a.FK_TUNIDAD = u.PK_TUNIDAD
+                   AND a.ACTIVE = TRUE
+                   AND a.FK_TLV_INSTRUMENTO_EVALUACION IS NOT NULL
+             WHERE u.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
+               AND u.ACTIVE = TRUE
+      ) t;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_referente_actividades_instrumentadas(BIGINT)
+    IS 'Igual que fn_unidad_actividades_instrumentadas pero un nivel arriba: las actividades instrumentadas de TODAS las unidades activas acogidas a un referente curricular, rotuladas con la unidad a la que pertenecen. NULL si no hay ninguna. Lo consume el trigger tr_refcurr_enfoque_con_instrumentos, que impide retirar el referente o volverle el enfoque a FORMATIVO mientras esas actividades existan. V137.';
+
+-- ---------------------------------------------------------------------------
+-- Trigger: el enfoque de un referente no se voltea (ni se retira el referente)
+-- con actividades instrumentadas debajo.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_enfoque_guard()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_era_evaluativo   BOOLEAN;
+    v_sigue_evaluativo BOOLEAN;
+    v_afectadas        TEXT;
+    v_enfoque_nuevo    TEXT;
+BEGIN
+    -- "Evaluativo vigente" = la MISMA condicion de fn_unidad_referente_evaluativo
+    -- (enfoque EVALUATIVO + ACTIVE + ESTADO='A'), resuelta sobre OLD y NEW. Se
+    -- reproduce aqui en vez de llamar a esa funcion porque ella parte de una
+    -- unidad y aqui todavia no hay fila escrita que consultar.
+    SELECT lv.VALOR = 'EVALUATIVO' INTO v_era_evaluativo
+      FROM academico_test.TLISTA_VALOR lv
+     WHERE lv.PK_LISTA_VALOR = OLD.FK_TLV_ENFOQUE_PEDAGOGICO;
+    v_era_evaluativo := COALESCE(v_era_evaluativo, FALSE)
+                        AND OLD.ACTIVE = TRUE AND OLD.ESTADO = 'A';
+
+    SELECT lv.VALOR = 'EVALUATIVO', lv.NOMBRE INTO v_sigue_evaluativo, v_enfoque_nuevo
+      FROM academico_test.TLISTA_VALOR lv
+     WHERE lv.PK_LISTA_VALOR = NEW.FK_TLV_ENFOQUE_PEDAGOGICO;
+    v_sigue_evaluativo := COALESCE(v_sigue_evaluativo, FALSE)
+                          AND NEW.ACTIVE = TRUE AND NEW.ESTADO = 'A';
+
+    -- Solo interesa la transicion "dejaba de valer" (evaluativo -> ya no). El
+    -- camino contrario, y cualquier edicion que no toque esos tres campos,
+    -- pasan sin coste adicional.
+    IF NOT v_era_evaluativo OR v_sigue_evaluativo THEN
+        RETURN NEW;
+    END IF;
+
+    v_afectadas := academico_test.fn_referente_actividades_instrumentadas(OLD.PK_REFERENTE_CURRICULAR);
+    IF v_afectadas IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.ACTIVE = FALSE OR NEW.ESTADO <> 'A' THEN
+        RAISE EXCEPTION
+            'No se puede retirar el referente curricular "%": todavia hay actividades con instrumento de evaluacion que dependen de el (%). Ajusta primero esas actividades y vuelve a intentarlo.',
+            OLD.NOMBRE, v_afectadas
+            USING ERRCODE = '22023';
+    ELSE
+        RAISE EXCEPTION
+            'No se puede cambiar el enfoque del referente curricular "%" a %: con ese enfoque el aprendizaje se valora con observaciones, y todavia hay actividades con instrumento de evaluacion que dependen de este referente (%). Ajusta primero esas actividades y vuelve a intentarlo.',
+            OLD.NOMBRE, COALESCE(v_enfoque_nuevo, 'ese'), v_afectadas
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_enfoque_guard()
+    IS 'Cuerpo de tr_refcurr_enfoque_con_instrumentos: aborta (22023) cualquier UPDATE de TREFERENTE_CURRICULAR que haga que el referente DEJE de ser "evaluativo vigente" (enfoque EVALUATIVO + ACTIVE + ESTADO=''A'', la misma definicion que fn_unidad_referente_evaluativo) mientras alguna unidad acogida a el tenga actividades con instrumento de evaluacion configurado. Cubre las tres formas de romperlo: voltear el enfoque a FORMATIVO, desactivar el referente y marcarlo como retirado (ESTADO). Sin este guard esas actividades quedaban con un instrumento que su unidad ya no admite y fn_actividad_actualizar (V224) rechazaba desde entonces CUALQUIER edicion sobre ellas. La transicion inversa (pasar a evaluativo) y los UPDATE que no tocan esos campos salen por el camino rapido, sin consultar actividades. V137.';
+
+DROP TRIGGER IF EXISTS tr_refcurr_enfoque_con_instrumentos ON academico_test.TREFERENTE_CURRICULAR;
+CREATE TRIGGER tr_refcurr_enfoque_con_instrumentos
+    BEFORE UPDATE ON academico_test.TREFERENTE_CURRICULAR
+    FOR EACH ROW
+    EXECUTE FUNCTION academico_test.fn_refcurr_enfoque_guard();
