@@ -284,13 +284,13 @@ BEGIN
 
     -- 2. FKs existen y estan activas.
     IF NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'FK_TASIGNATURA (%) no existe o no esta activa', p_fk_tasignatura USING ERRCODE = '23503';
+        RAISE EXCEPTION 'La asignatura seleccionada no esta disponible' USING ERRCODE = '23503';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_tgrado AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'FK_TGRADO (%) no existe o no esta activo', p_fk_tgrado USING ERRCODE = '23503';
+        RAISE EXCEPTION 'El grado seleccionado no esta disponible' USING ERRCODE = '23503';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM academico_test.TFUNCIONARIO WHERE PK_TFUNCIONARIO = p_fk_tfuncionario AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'FK_TFUNCIONARIO (%) no existe o no esta activo', p_fk_tfuncionario USING ERRCODE = '23503';
+        RAISE EXCEPTION 'El docente seleccionado no esta disponible' USING ERRCODE = '23503';
     END IF;
 
     -- 2.a Forma de calculo de la nota de la unidad (obligatoria).
@@ -300,8 +300,7 @@ BEGIN
            AND CATEGORIA = 'CALCULO_DEFINITIVA'
            AND ACTIVE = TRUE
     ) THEN
-        RAISE EXCEPTION 'FK_TLV_CALCULO_DEFINITIVA (%) no existe, no esta activo o no es de la categoria CALCULO_DEFINITIVA', p_fk_tlv_calculo_definitiva
-            USING ERRCODE = '23503';
+        RAISE EXCEPTION 'La forma de calculo de la nota seleccionada no es valida' USING ERRCODE = '23503';
     END IF;
 
     -- 2.b Referente curricular al que se acoge la unidad.
@@ -334,7 +333,7 @@ BEGIN
                AND ACTIVE = TRUE
                AND ESTADO = 'A'
         ) THEN
-            RAISE EXCEPTION 'FK_REFERENTE_CURRICULAR (%) no existe, no esta activo o esta marcado como inactivo (ESTADO)', v_fk_referente
+            RAISE EXCEPTION 'El referente curricular seleccionado ya no esta vigente'
                 USING ERRCODE = '23503';
         END IF;
 
@@ -396,12 +395,12 @@ BEGIN
             v_modo     := academico_test.fn_asignatura_plan_calculo_definitiva_modo(v_pk_plan);
 
             IF v_elemento = 'ACTIVIDADES' THEN
-                RAISE EXCEPTION 'La ponderacion de la unidad no aplica: el plan de la asignatura no calcula por unidades'
+                RAISE EXCEPTION 'Esta asignatura no reparte la nota por unidades, asi que la unidad no lleva peso (%%); el peso se define en cada actividad'
                     USING ERRCODE = '22023',
                           HINT = 'TASIGNATURA_PLAN.FK_TLV_ELEMENTO_CALCULO_DEF de esa asignatura combina ACTIVIDADES; el peso por actividad se captura en TACTIVIDAD.PONDERACION (V223)';
             END IF;
             IF v_modo = 'PROMEDIAR' THEN
-                RAISE EXCEPTION 'La ponderacion de la unidad no aplica: el plan de la asignatura promedia sus unidades'
+                RAISE EXCEPTION 'Esta asignatura promedia sus unidades, asi que la unidad no lleva peso (%%)'
                     USING ERRCODE = '22023';
             END IF;
         END IF;
@@ -826,6 +825,9 @@ DECLARE
     v_elemento   VARCHAR;
     v_modo       VARCHAR;
     v_suma       NUMERIC(9,2);
+    -- Guard "instrumento huerfano": actividades de la unidad que ya tienen
+    -- instrumento de evaluacion y bloquean dejar la unidad no evaluativa.
+    v_instrumentadas TEXT;
 BEGIN
     SELECT * INTO v_actual
       FROM academico_test.TUNIDAD
@@ -841,7 +843,7 @@ BEGIN
     );
 
     IF v_actual.ACTIVE = FALSE THEN
-        RAISE EXCEPTION 'La unidad "%" esta inactiva (borrado logico); no se puede editar', v_actual.NOMBRE
+        RAISE EXCEPTION 'La unidad "%" ya no esta disponible; no se puede editar', v_actual.NOMBRE
             USING ERRCODE = '22023';
     END IF;
 
@@ -851,20 +853,19 @@ BEGIN
 
     -- FKs nuevas (solo si vienen) existen y estan activas.
     IF p_fk_tasignatura IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'FK_TASIGNATURA (%) no existe o no esta activa', p_fk_tasignatura USING ERRCODE = '23503';
+        RAISE EXCEPTION 'La asignatura seleccionada no esta disponible' USING ERRCODE = '23503';
     END IF;
     IF p_fk_tgrado IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_tgrado AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'FK_TGRADO (%) no existe o no esta activo', p_fk_tgrado USING ERRCODE = '23503';
+        RAISE EXCEPTION 'El grado seleccionado no esta disponible' USING ERRCODE = '23503';
     END IF;
     IF p_fk_tfuncionario IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TFUNCIONARIO WHERE PK_TFUNCIONARIO = p_fk_tfuncionario AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'FK_TFUNCIONARIO (%) no existe o no esta activo', p_fk_tfuncionario USING ERRCODE = '23503';
+        RAISE EXCEPTION 'El docente seleccionado no esta disponible' USING ERRCODE = '23503';
     END IF;
     IF p_fk_tlv_calculo_definitiva IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM academico_test.TLISTA_VALOR
          WHERE PK_LISTA_VALOR = p_fk_tlv_calculo_definitiva AND CATEGORIA = 'CALCULO_DEFINITIVA' AND ACTIVE = TRUE
     ) THEN
-        RAISE EXCEPTION 'FK_TLV_CALCULO_DEFINITIVA (%) no existe, no esta activo o no es de la categoria CALCULO_DEFINITIVA', p_fk_tlv_calculo_definitiva
-            USING ERRCODE = '23503';
+        RAISE EXCEPTION 'La forma de calculo de la nota seleccionada no es valida' USING ERRCODE = '23503';
     END IF;
     -- ACTIVE (borrado logico) Y ESTADO (estado de negocio): ver la nota
     -- equivalente en fn_unidad_crear.
@@ -872,7 +873,7 @@ BEGIN
         SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR
          WHERE PK_REFERENTE_CURRICULAR = p_fk_referente_curricular AND ACTIVE = TRUE AND ESTADO = 'A'
     ) THEN
-        RAISE EXCEPTION 'FK_REFERENTE_CURRICULAR (%) no existe, no esta activo o esta marcado como inactivo (ESTADO)', p_fk_referente_curricular USING ERRCODE = '23503';
+        RAISE EXCEPTION 'El referente curricular seleccionado ya no esta vigente' USING ERRCODE = '23503';
     END IF;
 
     -- Unicidad con los valores resultantes (NOMBRE, asignatura, grado).
@@ -914,7 +915,9 @@ BEGIN
                AND rcn.FK_TNIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
                AND rcn.ACTIVE = TRUE
         ) THEN
-            RAISE EXCEPTION 'El referente curricular (%) no aplica al nivel educativo del grado (%) de la unidad', v_fk_referente, v_grado
+            RAISE EXCEPTION 'El referente curricular "%" no aplica al nivel educativo del grado "%"',
+                (SELECT NOMBRE FROM academico_test.TREFERENTE_CURRICULAR WHERE PK_REFERENTE_CURRICULAR = v_fk_referente),
+                (SELECT NOMBRE FROM academico_test.TGRADO WHERE PK_TGRADO = v_grado)
                 USING ERRCODE = '23503';
         END IF;
     ELSE
@@ -936,6 +939,43 @@ BEGIN
             v_fk_referente := academico_test.fn_unidad_referente_aplicable(v_grado, v_asig);
         END IF;
     END IF;
+    -- ----------------------------------------------------------------------
+    -- GUARD "instrumento huerfano" (V137). Si la unidad ERA evaluativa y tras
+    -- el PATCH deja de serlo, sus actividades con instrumento de evaluacion
+    -- quedarian con un instrumento que la unidad ya no admite -- y a partir de
+    -- ahi fn_actividad_actualizar (V224) rechaza CUALQUIER edicion sobre
+    -- ellas, incluso desvincularlas, porque revalida el instrumento heredado.
+    -- Se aborta antes de escribir, nombrando las actividades que lo impiden.
+    --
+    -- Cubre los TRES caminos que dejan la unidad no evaluativa, porque los
+    -- tres desembocan en el mismo v_fk_referente: limpiarle el referente
+    -- (p_limpiar_referente), moverla a uno FORMATIVO, y la re-derivacion
+    -- silenciosa del caso (c) -- que es la que produjo las 6 actividades
+    -- rotas del servidor de test: al desactivarse el referente evaluativo de
+    -- Preescolar, un PATCH de solo el nombre las re-derivo al unico vigente,
+    -- que es formativo.
+    -- ----------------------------------------------------------------------
+    IF academico_test.fn_unidad_referente_evaluativo(p_pk_tunidad)
+       AND NOT academico_test.fn_referente_es_evaluativo_vigente(v_fk_referente) THEN
+        v_instrumentadas := academico_test.fn_unidad_actividades_instrumentadas(p_pk_tunidad);
+
+        IF v_instrumentadas IS NOT NULL THEN
+            IF v_fk_referente IS NULL THEN
+                RAISE EXCEPTION
+                    'No se puede dejar la unidad "%" sin referente curricular: estas actividades ya tienen un instrumento de evaluacion configurado y lo necesitan (%). Ajusta primero esas actividades y vuelve a intentarlo.',
+                    v_actual.NOMBRE, v_instrumentadas
+                    USING ERRCODE = '22023';
+            ELSE
+                RAISE EXCEPTION
+                    'No se puede acoger la unidad "%" al referente curricular "%": con ese referente el aprendizaje se valora con observaciones y no con instrumentos, y estas actividades ya tienen uno configurado (%). Ajusta primero esas actividades y vuelve a intentarlo.',
+                    v_actual.NOMBRE,
+                    (SELECT NOMBRE FROM academico_test.TREFERENTE_CURRICULAR WHERE PK_REFERENTE_CURRICULAR = v_fk_referente),
+                    v_instrumentadas
+                    USING ERRCODE = '22023';
+            END IF;
+        END IF;
+    END IF;
+
     IF EXISTS (
         SELECT 1 FROM academico_test.TUNIDAD
          WHERE UPPER(TRIM(NOMBRE)) = UPPER(TRIM(v_nombre))
@@ -974,12 +1014,12 @@ BEGIN
                 v_modo     := academico_test.fn_asignatura_plan_calculo_definitiva_modo(v_pk_plan);
 
                 IF v_elemento = 'ACTIVIDADES' THEN
-                    RAISE EXCEPTION 'La ponderacion de la unidad no aplica: el plan de la asignatura no calcula por unidades'
+                    RAISE EXCEPTION 'Esta asignatura no reparte la nota por unidades, asi que la unidad no lleva peso (%%); el peso se define en cada actividad'
                         USING ERRCODE = '22023',
                               HINT = 'TASIGNATURA_PLAN.FK_TLV_ELEMENTO_CALCULO_DEF de esa asignatura combina ACTIVIDADES; el peso por actividad se captura en TACTIVIDAD.PONDERACION (V223)';
                 END IF;
                 IF v_modo = 'PROMEDIAR' THEN
-                    RAISE EXCEPTION 'La ponderacion de la unidad no aplica: el plan de la asignatura promedia sus unidades'
+                    RAISE EXCEPTION 'Esta asignatura promedia sus unidades, asi que la unidad no lleva peso (%%)'
                         USING ERRCODE = '22023';
                 END IF;
             END IF;
@@ -1043,7 +1083,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR[], VARCHAR[], NUMERIC, BOOLEAN)
-    IS 'PATCH parcial de TUNIDAD (gate EDITAR): cada parametro NULL preserva el valor actual. REFERENTE CURRICULAR, tres casos, resueltos contra el grado RESULTANTE del PATCH (mover la unidad de grado le cambia el nivel educativo y con el que referentes aplican): p_limpiar_referente=TRUE lo fuerza a NULL; si llega uno nuevo se exige que APLIQUE al nivel de ese grado (23503 si no, misma razon que en fn_unidad_crear); y si no lo tocan se CONSERVA el actual salvo que haya dejado de aplicar -- porque cambio el grado o porque lo desactivaron en el catalogo --, caso en el que se RE-DERIVA con fn_unidad_referente_aplicable en vez de dejar una FK muerta (era lo que pasaba en el servidor de test: unidades apuntando a referentes con ACTIVE=false, con el detalle devolviendo NULL y el listado mostrando el nombre del referente muerto). p_objetivos / p_contenidos NULL = no tocar; cualquier array (incl. vacio) = reemplazo completo (desactiva los activos y re-inserta con ORDEN por posicion, ignora vacios). Revalida FKs y unicidad (nombre, asignatura, grado) -- la unidad ya no depende de un periodo de evaluacion (V218). p_ponderacion / p_limpiar_ponderacion editan TUNIDAD.PONDERACION (V239, peso % de la unidad dentro de su (asignatura, grado)): NULL = no tocar, p_limpiar_ponderacion=TRUE la vuelve NULL. Se valida contra los valores RESULTANTES del PATCH (un PATCH que mueve la unidad de asignatura o grado cambia el bucket del 100%): rango 0..100, regla del 100% via fn_unidad_ponderacion_intra_asignatura_asignada excluyendo el peso viejo de esta misma unidad, y -- solo cuando el caller esta tocando el campo -- que el peso APLIQUE segun el plan de la asignatura para ese grado (22023 si el plan calcula por ACTIVIDADES o promedia sus unidades; si el plan no se resuelve o no esta configurado se permite, mismo criterio que fn_unidad_crear). Retorna PK_TUNIDAD.';
+    IS 'PATCH parcial de TUNIDAD (gate EDITAR): cada parametro NULL preserva el valor actual. REFERENTE CURRICULAR, tres casos, resueltos contra el grado RESULTANTE del PATCH (mover la unidad de grado le cambia el nivel educativo y con el que referentes aplican): p_limpiar_referente=TRUE lo fuerza a NULL; si llega uno nuevo se exige que APLIQUE al nivel de ese grado (23503 si no, misma razon que en fn_unidad_crear); y si no lo tocan se CONSERVA el actual salvo que haya dejado de aplicar -- porque cambio el grado o porque lo desactivaron en el catalogo --, caso en el que se RE-DERIVA con fn_unidad_referente_aplicable en vez de dejar una FK muerta (era lo que pasaba en el servidor de test: unidades apuntando a referentes con ACTIVE=false, con el detalle devolviendo NULL y el listado mostrando el nombre del referente muerto). p_objetivos / p_contenidos NULL = no tocar; cualquier array (incl. vacio) = reemplazo completo (desactiva los activos y re-inserta con ORDEN por posicion, ignora vacios). Revalida FKs y unicidad (nombre, asignatura, grado) -- la unidad ya no depende de un periodo de evaluacion (V218). p_ponderacion / p_limpiar_ponderacion editan TUNIDAD.PONDERACION (V239, peso % de la unidad dentro de su (asignatura, grado)): NULL = no tocar, p_limpiar_ponderacion=TRUE la vuelve NULL. Se valida contra los valores RESULTANTES del PATCH (un PATCH que mueve la unidad de asignatura o grado cambia el bucket del 100%): rango 0..100, regla del 100% via fn_unidad_ponderacion_intra_asignatura_asignada excluyendo el peso viejo de esta misma unidad, y -- solo cuando el caller esta tocando el campo -- que el peso APLIQUE segun el plan de la asignatura para ese grado (22023 si el plan calcula por ACTIVIDADES o promedia sus unidades; si el plan no se resuelve o no esta configurado se permite, mismo criterio que fn_unidad_crear). GUARD "instrumento huerfano" (V137): si la unidad ERA evaluativa y el PATCH la deja no evaluativa -- por los TRES caminos: p_limpiar_referente, mover a un referente FORMATIVO, o la re-derivacion silenciosa del caso (c) --, se ABORTA (22023) cuando alguna de sus actividades activas ya tiene instrumento de evaluacion configurado, nombrandolas con fn_unidad_actividades_instrumentadas. Antes pasaba sin queja y esas actividades quedaban con un instrumento que la unidad ya no admite, estado desde el cual fn_actividad_actualizar (V224) rechaza CUALQUIER edicion sobre ellas -- incluido desvincularlas --, porque revalida el instrumento heredado en cada llamada. Retorna PK_TUNIDAD.';
 
 -- ===========================================================================
 -- fn_unidad_eliminar — soft delete en cascada.
@@ -1686,7 +1726,7 @@ BEGIN
 
     IF NOT EXISTS (SELECT 1 FROM academico_test.TGRADO g
                     WHERE g.PK_TGRADO = p_fk_tgrado AND g.ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'FK_TGRADO (%) no existe o no esta activo', p_fk_tgrado USING ERRCODE = '23503';
+        RAISE EXCEPTION 'El grado seleccionado no esta disponible' USING ERRCODE = '23503';
     END IF;
 
     v_pk_referente := academico_test.fn_unidad_referente_aplicable(
