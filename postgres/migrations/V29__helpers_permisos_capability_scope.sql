@@ -8,7 +8,12 @@
 -- QUE HACE
 --   Crea 9 funciones nuevas y NO modifica ninguna existente. Son los
 --   ladrillos que consumen los gates de establecimiento / sedes /
---   funcionarios / periodos academicos.
+--   funcionarios / periodos academicos. Al final del archivo se agregan
+--   ademas los gates propios de Periodo Academico (fn_periodo_establecimiento
+--   / _sede / _jornada / fn_periodo_gate_escritura / fn_periodo_puede_ver,
+--   antes en V30 aparte): sus unicas dependencias son estos mismos helpers y
+--   TPERIODO_ACADEMICO/TSEDE (creadas en V22, anterior a este archivo), asi
+--   que no necesitaban un numero de version propio.
 --
 -- POR QUE ESTE NUMERO TAN BAJO (V29)
 --   Los gates de esas secciones NO se reescriben en migraciones nuevas: se
@@ -706,3 +711,136 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_assert_permiso_funcionario(BIGINT, VARCHAR, BIGINT)
     IS 'Assertion de autorizacion del modulo FUNCIONARIOS: combina las 3 capas. (1) capability -- delega en fn_assert_permiso_seccion(u, ''FUNCIONARIOS'', accion) sin objeto, lo que tambien resuelve el bypass del SUPER_ADMIN (nivel 0). (2) scope -- si p_pk_funcionario_objetivo no es NULL y el solicitante no es de nivel 1 (territorial, alcanza a cualquiera), el funcionario objetivo debe: ser rector/secretaria de un EE de fn_usuario_ee_accesibles(u), O tener un TSEDE_USUARIO ACTIVE en una sede ACTIVE de uno de esos EE (nivel 2 + punteros), O -- para un solicitante de categoria ADMINISTRATIVOS_SEDES (nivel 3) -- tener un TSEDE_USUARIO ACTIVE en una SEDE de fn_usuario_sedes_jornadas_accesibles(u); si nada aplica, 42501 nombrando al funcionario. Es dinamico: basta con que el super admin conceda la capability de FUNCIONARIOS a un rol de nivel 3 para que ese rol alcance a los funcionarios de sus sedes. (3) rango -- PERFORM fn_assert_rango_rol(u, objetivo): no se alcanza a funcionarios de categoria igual o superior (esto sigue protegiendo a los pares del nivel 3 entre si). p_pk_funcionario_objetivo NULL (p.ej. ''CREAR'') solo exige capability: el EE se valida al vincular. Los tres 42501 llevan mensajes distintos.';
+
+-- ===========================================================================
+-- 10-14) Gate de permisos (capability + scope) para la cascada de Periodo
+-- Académico. Fusionado aqui (antes V30 aparte) porque sus unicas
+-- dependencias -- los helpers de arriba y TPERIODO_ACADEMICO/TSEDE
+-- (creadas en V22, anterior a este archivo) -- ya existen en este mismo
+-- punto del historial; no hacia falta un numero de version propio.
+-- ===========================================================================
+
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_establecimiento(p_fk_periodo BIGINT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT s.FK_TESTABLECIMIENTO
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_sede(p_fk_periodo BIGINT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT pa.FK_TSEDE
+      FROM academico_test.TPERIODO_ACADEMICO pa
+     WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_jornada(p_fk_periodo BIGINT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT pa.FK_TLV_JORNADA
+      FROM academico_test.TPERIODO_ACADEMICO pa
+     WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_periodo_sede(BIGINT)
+    IS 'FK_TSEDE del periodo academico (NULL si no existe). Para pasar el par (sede, jornada) a fn_periodo_gate_escritura, que es lo que el scope de nivel 3 (ADMINISTRATIVOS_SEDES) necesita.';
+COMMENT ON FUNCTION academico_test.fn_periodo_jornada(BIGINT)
+    IS 'FK_TLV_JORNADA del periodo academico (NULL si no existe). Todo lo que cuelga de un periodo hereda su jornada.';
+
+-- Reemplaza la firma vieja (BIGINT, BIGINT), que autorizaba por
+-- fn_periodo_usuario_puede_gestionar / _puede_escribir (listas fijas de
+-- FK_TROL, eliminadas — DROP formal en V211). Ahora es un wrapper de una
+-- linea sobre fn_assert_permiso_seccion (arriba), menu 'PERIODOS_ACADEMICOS'.
+-- La firma posicional vieja (usuario, EE) se conserva; sede/jornada/accion
+-- se agregan AL FINAL con DEFAULT, asi que los call sites de 2 argumentos
+-- que quedan sin tocar en varios módulos (grado/grupo, plan de estudio,
+-- horario, asignacion academica, escala de valoracion, criterio de
+-- evaluacion) siguen funcionando: heredan capability + scope de
+-- establecimiento, pero un usuario de nivel 3 (ADMINISTRATIVOS_SEDES) no
+-- satisface el scope sin sede+jornada y queda denegado (fallo seguro).
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_gate_escritura(
+    p_pk_usuario          BIGINT,
+    p_fk_establecimiento  BIGINT,
+    p_fk_tsede            BIGINT  DEFAULT NULL,
+    p_fk_tlv_jornada      BIGINT  DEFAULT NULL,
+    p_accion              VARCHAR DEFAULT 'EDITAR'
+)
+RETURNS VOID LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario, 'PERIODOS_ACADEMICOS', p_accion,
+        p_fk_establecimiento, p_fk_tsede, p_fk_tlv_jornada);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_periodo_gate_escritura(BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR)
+    IS 'Gate de ESCRITURA de la cascada academica (areas, asignaturas, enfasis, criterios, escalas, grados, grupos, planes, horarios, asignaciones) y de periodos / periodos de evaluacion / descansos. Wrapper de una linea sobre fn_assert_permiso_seccion, menu ''PERIODOS_ACADEMICOS''. CAPABILITY: TROL_MENU concede / TUSUARIO_ROL_PERMISO recorta. SCOPE: nivel 1 territorial = todos los EE; nivel 2 = fn_usuario_ee_accesibles; nivel 3 = par (sede, jornada) en fn_usuario_sedes_jornadas_accesibles. BYPASS: SUPER_ADMIN. Ya NO usa fn_periodo_usuario_puede_gestionar / _puede_escribir ni listas de FK_TROL. FALLO SEGURO: sin sede+jornada un usuario de nivel 3 no satisface el scope y se le deniega. Con los tres NULL solo se exige capability (bulk_delete).';
+
+-- Gate de LECTURA de la cascada academica de Periodo Academico. Motivo: el
+-- unico control real de que, por ejemplo, un docente no vea la
+-- configuracion completa de un periodo academico era que el front oculte
+-- el item de menu; contra el endpoint directo, fn_periodo_usuario_puede_ver
+-- (V37, la version vieja) solo mira el scope de establecimiento por
+-- TSEDE_USUARIO, sin revisar la capability del menu -- no distingue un rol
+-- al que el super admin le quito PERIODOS_ACADEMICOS de uno al que se lo
+-- dejo. fn_periodo_puede_ver es la version booleana (no lanza) del mismo
+-- modelo capability + scope de fn_periodo_gate_escritura, pero para la
+-- accion 'VER' -- mismo patron que fn_matricula_puede_ver (V40) para el
+-- modulo Matricula. Reemplaza a fn_periodo_usuario_puede_ver en los
+-- listados/reportes propios del modulo Periodo Academico (V37 a V46, V135,
+-- V186-V190); fn_periodo_usuario_puede_ver NO se toca ni se elimina, porque
+-- la siguen usando Matricula (V162) y otros modulos fuera de este alcance.
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_puede_ver(
+    p_pk_usuario  BIGINT,
+    p_fk_periodo  BIGINT
+)
+RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_nivel INT;
+    v_est   BIGINT;
+BEGIN
+    -- Llamada interna (p.ej. reportes en modo administrador) sin usuario que
+    -- scopear: pasa. Mismo criterio que fn_matricula_puede_ver.
+    IF p_pk_usuario IS NULL THEN
+        RETURN TRUE;
+    END IF;
+
+    v_nivel := COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario), 99);
+
+    -- SUPER_ADMIN: bypass total, no se le exige ni capability ni scope.
+    IF v_nivel = 0 THEN
+        RETURN TRUE;
+    END IF;
+
+    -- Capability: sin el menu PERIODOS_ACADEMICOS en modo VER (por TROL_MENU
+    -- o recortado por TUSUARIO_ROL_PERMISO), no ve nada de la cascada.
+    IF NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario, 'PERIODOS_ACADEMICOS', 'VER') THEN
+        RETURN FALSE;
+    END IF;
+
+    IF v_nivel = 1 THEN
+        -- Territorial: todos los EE.
+        RETURN TRUE;
+    ELSIF v_nivel = 2 THEN
+        v_est := academico_test.fn_periodo_establecimiento(p_fk_periodo);
+        RETURN v_est IS NOT NULL AND v_est IN (
+            SELECT establecimiento_id
+              FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario)
+        );
+    ELSIF v_nivel = 3 THEN
+        -- Nivel sede+jornada (coordinador/docente/etc.): exige AMBAS
+        -- coordenadas del periodo, igual que el scope de escritura.
+        RETURN (academico_test.fn_periodo_sede(p_fk_periodo), academico_test.fn_periodo_jornada(p_fk_periodo))
+               IN (
+                   SELECT sj.sede_id, sj.jornada_id
+                     FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario) sj
+               );
+    END IF;
+
+    -- Nivel 4 (estudiantes/familia) o sin categoria: fail-closed.
+    RETURN FALSE;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_periodo_puede_ver(BIGINT, BIGINT)
+    IS 'Version BOOLEAN (no lanza) del gate de LECTURA de la cascada academica de Periodo Academico, para el WHERE de listados/reportes: capability ''VER'' sobre el menu PERIODOS_ACADEMICOS (fn_usuario_puede_en_menu) + scope por categoria de rol del periodo indicado (nivel 1 territorial = todos los EE; nivel 2 = EE del periodo en fn_usuario_ee_accesibles; nivel 3 = par (sede, jornada) del periodo en fn_usuario_sedes_jornadas_accesibles). p_pk_usuario NULL o SUPER_ADMIN (nivel 0) => TRUE. Reemplaza a fn_periodo_usuario_puede_ver (que NO revisaba capability, solo scope por rol) en los listados/obtener del modulo Periodo Academico.';
