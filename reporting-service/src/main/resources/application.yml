@@ -210,6 +210,27 @@ reporting:
         direccion: Direccion
         telefono: Telefono
 
+    # E03HU57 -- Reporte de asistencia por grupo. path = fila 'asis-reporte-grupo'
+    # (V281): fn_asistencia_listar_seguimiento sin paginar, con GRUPO y el
+    # rango de fechas obligatorios. asignatura/actividad quedan como dos
+    # columnas separadas (nunca las dos llenas a la vez -- CK_TASISTENCIA_CONTEXTO
+    # exige asignatura o actividad, nunca ambas): en preescolar/formativo la
+    # fila trae actividad y asignatura vacia, y viceversa en el resto de grupos.
+    asistencia:
+      path: /asistencias/reporte
+      title: Asistencia por grupo
+      file-name: asistencia-grupo
+      columns:
+        estudiante: Estudiante
+        documento: Documento
+        grupo: Grupo
+        asignatura: Asignatura
+        actividad: Actividad
+        fecha: Fecha
+        tipo_asistencia: Estado
+        observacion: Observacion
+        soporte_nombre: Soporte
+
 sso:
   jwt:
     # Solo la publica: este servicio verifica firmas, no emite tokens.
