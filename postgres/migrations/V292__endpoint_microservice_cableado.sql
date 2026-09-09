@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V206 - cableado endpoint <-> microservicio que solo existia en la base del
+-- V292 - cableado endpoint <-> microservicio que solo existia en la base del
 --        servidor de test.
 --
 -- POR QUE ESTA MIGRACION EXISTE
@@ -13,7 +13,7 @@
 --   que si esta versionado y cuyo unico hueco se cerro en V129.
 --
 -- NUMERACION
---   Hueco libre V206, verificado contra TODAS las ramas de origin. Va por
+--   Hueco libre V292, verificado contra TODAS las ramas de origin. Va por
 --   encima de todas las migraciones que crean los endpoints referenciados:
 --     * V15  - el catalogo base.
 --     * V56  - /register/funcionario y /register/usuario.

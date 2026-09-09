@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V205 - cableado app <-> microservicio y app <-> ruta que solo existia en la
+-- V291 - cableado app <-> microservicio y app <-> ruta que solo existia en la
 --        base del servidor de test.
 --
 -- POR QUE ESTA MIGRACION EXISTE
@@ -17,7 +17,7 @@
 --   Lo que V148 arreglo para una app, esta migracion lo cierra para las tres.
 --
 -- NUMERACION
---   Hueco libre V205, verificado contra TODAS las ramas de origin. Tiene que
+--   Hueco libre V291, verificado contra TODAS las ramas de origin. Tiene que
 --   ir por encima de:
 --     * V6/V10/V14  - crean las apps y sus columnas.
 --     * V16/V35/V68 - microservicios sso-admin, auth-center, file-service,

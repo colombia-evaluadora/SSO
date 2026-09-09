@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V207 - reorganizacion del menu de administracion (public.route): tipos,
+-- V293 - reorganizacion del menu de administracion (public.route): tipos,
 --        jerarquia y las rutas que se reemplazaron.
 --
 -- POR QUE ESTA MIGRACION EXISTE
@@ -17,8 +17,8 @@
 --   afectadas son las de /admin/* de la epoca de V9.
 --
 -- NUMERACION
---   Hueco libre V207, verificado contra TODAS las ramas de origin. Va despues
---   de V205, que crea la ruta /app/activity-log y su bind de app_route: si
+--   Hueco libre V293, verificado contra TODAS las ramas de origin. Va despues
+--   de V291, que crea la ruta /app/activity-log y su bind de app_route: si
 --   corriera antes, esta migracion reorganizaria un arbol al que todavia le
 --   falta una rama. Flyway corre con -outOfOrder=true (docker-compose.yml).
 --
@@ -163,7 +163,7 @@ SELECT rt.id_route, ro.id_role
         WHERE x.route_id = rt.id_route AND x.role_id = ro.id_role
    );
 
--- app_route incluye ademas /usuarios/equipo|Equipo: V205 ata a la app las
+-- app_route incluye ademas /usuarios/equipo|Equipo: V291 ata a la app las
 -- rutas que empiezan por /admin/ (replicando V10) y esta no encaja en ese
 -- patron, asi que se ata aqui junto a su contenedor.
 INSERT INTO app_route (id_app, id_route)

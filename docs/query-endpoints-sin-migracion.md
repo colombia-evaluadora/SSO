@@ -196,7 +196,7 @@ Una fila nueva en `public.query` da **404** por el gateway
 reinicia. En local ese contenedor es de provisión dinámica y `docker compose
 up` no lo recrea: hay que `docker inspect` + `docker run` manual.
 
-## 7. Tablas puente de configuración (V205 / V206)
+## 7. Tablas puente de configuración (V291 / V292)
 
 Auditoría del resto del schema `public`. Se separan las tablas de
 configuración (deben ser reproducibles por migraciones) de las de runtime
@@ -205,16 +205,16 @@ configuración (deben ser reproducibles por migraciones) de las de runtime
 
 | Migración | Tabla | Faltaban | Estado |
 |---|---|---:|---|
-| `V205` | `app_microservice` | 10 de 11 | cerrado |
-| `V205` | `route` + `app_route` | 1 + 1 | cerrado |
-| `V206` | `endpoint_microservice` | 8 de 10 | cerrado (2 excluidas a propósito) |
+| `V291` | `app_microservice` | 10 de 11 | cerrado |
+| `V291` | `route` + `app_route` | 1 + 1 | cerrado |
+| `V292` | `endpoint_microservice` | 8 de 10 | cerrado (2 excluidas a propósito) |
 
 `app_microservice` no era cosmético: `QueryAdminService.rolesPermitidosPara`
 la consulta vía `AppRepository.findByMicroserviceId` para filtrar roles por
 app. Sobre base limpia quedaba con una sola fila y el filtro se volvía
 permisivo — el mismo problema que V148 ya había advertido para `pigse`.
 
-Las 2 ataduras excluidas de `V206` son los únicos endpoints del servidor con
+Las 2 ataduras excluidas de `V292` son los únicos endpoints del servidor con
 más de un microservicio, y en ambos casos la segunda contradice al dueño real
 del código: `POST /app/save → auth-center` (lo sirve `AppController` de
 sso-admin) y `POST /googleLogin → sso-admin` (lo sirve auth-center). Quedan
