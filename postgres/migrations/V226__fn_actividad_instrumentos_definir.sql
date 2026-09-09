@@ -754,3 +754,71 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_instrumento_obtener(BIGINT, BIGINT)
     IS 'Lee el instrumento de evaluacion definido para una actividad: devuelve su VALOR/NOMBRE y la definicion como JSONB segun el tipo — RUBRICA: [{pk,orden,nombre,descripcion,niveles:[{pk,etiqueta,descripcion,ponderacion}]}] (niveles ordenados por ponderacion DESC); LISTA_COTEJO: [{pk,orden,descripcion,ponderacion}]; ESCALA_VALORACION: {tipoEscala,criteriosGenerales,valorMin,valorMax,interpretacionRangos,niveles:[...]}; OTRO/sin instrumento: NULL. Gate VER sobre PLANEADOR. V226.';
+
+-- ===========================================================================
+-- SANEAMIENTO — actividades que quedaron con un instrumento de evaluacion
+-- que su unidad ya no admite ("instrumento huerfano").
+--
+-- Antes de los guards de V137/V216 nada impedia que una unidad dejara de ser
+-- evaluativa con actividades ya instrumentadas debajo. Cuando eso pasaba, la
+-- actividad conservaba el instrumento y a partir de ahi fn_actividad_actualizar
+-- (V224) rechazaba CUALQUIER edicion sobre ella -- el titulo, las fechas, e
+-- incluso desvincularla de la unidad --, porque revalida el instrumento
+-- heredado en cada llamada. No habia salida: mandar el instrumento en null no
+-- lo limpia (NULL significa "no tocar" en un PATCH) y PUT
+-- /actividades/:id/instrumento solo define el contenido del instrumento ya
+-- elegido, nunca la eleccion.
+--
+-- En el servidor de test (172.233.184.248, verificado el 2026-09-09) habia 6
+-- actividades activas asi: 23, 24, 25 y 30 con la unidad movida a un referente
+-- formativo, 29 igual, y 26 sin unidad ninguna. Este bloque las devuelve a un
+-- estado editable.
+--
+-- Se escribe por CONDICION, no por lista de PKs: es idempotente (una segunda
+-- pasada no encuentra nada) y sirve igual en cualquier entorno que arrastre el
+-- mismo problema, incluidos los que aun no existen. Los guards de V137/V216
+-- impiden que vuelva a haber filas asi, de modo que a partir de aqui el bloque
+-- es un no-op permanente.
+--
+-- Lo que NO toca, a proposito: TACTIVIDAD_NOTA. Cuatro de esas seis
+-- actividades tienen una calificacion registrada, y borrar notas de estudiantes
+-- para arreglar un problema de configuracion seria un remedio peor que la
+-- enfermedad. La nota conserva su porcentaje; lo que desaparece es la
+-- estructura del instrumento con la que se calculo. Queda anotado para que no
+-- se lea como un olvido.
+-- ===========================================================================
+DO $sane$
+DECLARE
+    r           RECORD;
+    v_afectadas INT := 0;
+BEGIN
+    FOR r IN
+        SELECT a.PK_TACTIVIDAD, a.TITULO
+          FROM academico_test.TACTIVIDAD a
+         WHERE a.ACTIVE = TRUE
+           AND a.FK_TLV_INSTRUMENTO_EVALUACION IS NOT NULL
+           -- fn_unidad_referente_evaluativo devuelve FALSE tanto si la unidad
+           -- es formativa como si la actividad no tiene unidad (FK_TUNIDAD
+           -- NULL no casa con ninguna fila), que son los dos estados rotos.
+           AND NOT academico_test.fn_unidad_referente_evaluativo(a.FK_TUNIDAD)
+    LOOP
+        -- Baja logica de rubrica / lista de cotejo / escala de la actividad.
+        -- p_conservar = NULL las limpia las tres. Se pasa el usuario del
+        -- sistema (0) como autor del cambio: no hay sesion en una migracion.
+        PERFORM academico_test.fn_actividad_instrumento_reset(0, r.PK_TACTIVIDAD, NULL);
+
+        UPDATE academico_test.TACTIVIDAD
+           SET FK_TLV_INSTRUMENTO_EVALUACION = NULL,
+               DESCRIPCION_INSTRUMENTO       = NULL,
+               MODIFIED_BY                   = '0',
+               MODIFIED_AT                   = CURRENT_TIMESTAMP
+         WHERE PK_TACTIVIDAD = r.PK_TACTIVIDAD;
+
+        v_afectadas := v_afectadas + 1;
+        RAISE NOTICE 'Saneada la actividad % ("%"): se retiro el instrumento de evaluacion que su unidad ya no admitia',
+            r.PK_TACTIVIDAD, r.TITULO;
+    END LOOP;
+
+    RAISE NOTICE 'Saneamiento de instrumentos huerfanos: % actividad(es) corregida(s)', v_afectadas;
+END;
+$sane$;
