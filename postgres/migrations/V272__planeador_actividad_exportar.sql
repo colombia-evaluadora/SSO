@@ -53,6 +53,18 @@
 -- periodo no cuesta una llamada por fila.
 --
 -- -----------------------------------------------------------------------------
+-- La unidad es OPCIONAL, y de ahi sale el grado
+-- -----------------------------------------------------------------------------
+-- TACTIVIDAD.FK_TUNIDAD es nullable y se usa: 12 de las 18 actividades activas
+-- no tienen unidad. Su grado cuelga entonces del GRUPO, no de la unidad.
+--
+-- Por eso el grado -- nombre y PK -- se resuelve con
+-- fn_actividad_grado_resolver, que es COALESCE(unidad.grado, grupo.grado), y no
+-- leyendo la unidad. Una sola fuente para el mismo hecho: el "grado" legible y
+-- el "_identificadores.fkTgrado" no pueden discrepar porque salen de la misma
+-- llamada.
+--
+-- -----------------------------------------------------------------------------
 -- El bloque _identificadores
 -- -----------------------------------------------------------------------------
 -- Cada actividad exportada lleva un bloque _identificadores con las PKs. No es
@@ -140,6 +152,8 @@ DECLARE
     v_a         RECORD;   -- fila de fn_actividad_buscar_por_pk
     v_i         RECORD;   -- fila de fn_actividad_instrumento_obtener
     v_creado    TIMESTAMP;
+    v_grado     BIGINT;    -- el grado de la actividad, por su unidad o su grupo
+    v_grado_nom VARCHAR;
     v_uni       RECORD;
     v_meta      JSONB;
     v_recursos  JSONB;
@@ -312,17 +326,41 @@ BEGIN
         -- llego el formato de negocio, aunque la columna sea un solo
         -- texto: cambiar la forma rompiria al consumidor.
         -- -------------------------------------------------------------
+        -- El GRADO sale de fn_actividad_grado_resolver, que es
+        -- COALESCE(unidad.grado, grupo.grado). Es la MISMA fuente que usa
+        -- _identificadores.fkTgrado, y eso es el arreglo de fondo: antes el
+        -- nombre se sacaba de v_uni y la PK del resolver -- dos fuentes para el
+        -- mismo hecho, que podian discrepar y de hecho lo hacian.
+        --
+        -- Importa porque la unidad es OPCIONAL: 12 de las 18 actividades
+        -- activas no tienen ninguna, y su grado cuelga del grupo. Leerlo de la
+        -- unidad daba dos fallos:
+        --
+        --   * con una actividad sin unidad y sin asignacion previa de v_uni,
+        --     55000 "record v_uni is not assigned yet" -- la exportacion
+        --     entera reventaba;
+        --   * y si alguna anterior si tenia unidad, la de sin unidad exportaba
+        --     EL GRADO DE LA ANTERIOR, en silencio. Peor que el error.
+        --
+        -- El ORDER BY del paso 2 es FK_TUNIDAD NULLS LAST, asi que reventaba
+        -- solo cuando NINGUNA de las actividades del lote tenia unidad. De ahi
+        -- el "a veces funciona y a veces no".
+        v_grado := academico_test.fn_actividad_grado_resolver(v_pk);
+        SELECT gr.NOMBRE INTO v_grado_nom
+          FROM academico_test.TGRADO gr
+         WHERE gr.PK_TGRADO = v_grado;
+
+        -- v_uni se asigna SIEMPRE, tambien sin unidad: un SELECT INTO que no
+        -- devuelve filas deja el RECORD asignado con los campos en NULL
+        -- (comprobado). Dentro del IF quedaba sin asignar en la primera
+        -- iteracion y con el valor de la anterior en las siguientes.
+        SELECT u.DESCRIPCION AS descripcion, u.NOMBRE AS nombre
+          INTO v_uni
+          FROM academico_test.TUNIDAD u
+         WHERE u.PK_TUNIDAD = v_a.fk_tunidad;
+
         v_meta := NULL;
         IF v_a.fk_tunidad IS NOT NULL THEN
-            -- El nombre del grado no viene en unidad_configuracion, asi que
-            -- se resuelve aca: la unidad es la que cuelga del grado.
-            SELECT u.DESCRIPCION AS descripcion, u.NOMBRE AS nombre,
-                   gr.NOMBRE AS grado
-              INTO v_uni
-              FROM academico_test.TUNIDAD u
-              LEFT JOIN academico_test.TGRADO gr ON gr.PK_TGRADO = u.FK_TGRADO
-             WHERE u.PK_TUNIDAD = v_a.fk_tunidad;
-
             v_meta := jsonb_build_object(
                 'nombre',      COALESCE(v_a.unidad_configuracion->>'nombre', v_uni.nombre),
                 'contenidos',  COALESCE((
@@ -416,7 +454,7 @@ BEGIN
             -- los junta en un solo "3o A", pero en la base son cosas
             -- distintas: el grado cuelga del periodo academico y el grupo del
             -- grado. Juntarlos haria imposible reimportar sin adivinar.
-            'grado',               v_uni.grado,
+            'grado',               v_grado_nom,
             'grupo',               v_a.grupo,
             'unidad_meta',         v_meta,
             'fecha_inicio',        v_a.fecha_inicio,
@@ -442,7 +480,7 @@ BEGIN
                                        'pkTunidad',      v_a.fk_tunidad,
                                        'fkTasignatura',  v_a.fk_tasignatura,
                                        'fkTgrupo',       v_a.fk_tgrupo,
-                                       'fkTgrado',       academico_test.fn_actividad_grado_resolver(v_pk))));
+                                       'fkTgrado',       v_grado)));
 
         -- -------------------------------------------------------------
         -- El instrumento, si lo tiene. La definicion ya viene anidada de
