@@ -19,6 +19,15 @@
 -- existen de antemano, no filas que este mismo flujo esté creando en
 -- el momento.
 --
+-- REV (2026-09-01): la versión previa de esta migración documentaba lo
+-- anterior pero el SQL seguía llevando `AND ACTIVE = TRUE` en los dos
+-- bloques de TARCHIVO — el bug nunca se corrigió. En test 172.233.184.248
+-- un PATCH de funcionario con foto nueva seguía fallando con
+-- `23503 archivo de foto (N) no existe o no esta activo` sobre una fila de
+-- TARCHIVO recién subida (active=false). Se quita ahora el ACTIVE = TRUE de
+-- esos dos NOT EXISTS (edición in-place; el paso de re-aplicar migraciones
+-- con checksum cambiado de deploy-test lo propaga).
+--
 -- NOTA (CU-86e2w4xdt — Permisos según rol): esta es la definición que GANA
 -- de fn_fun_actualizar (la de V51:~1535 quedó obsoleta al redefinirse aquí),
 -- así que es aquí donde su gate pasa al modelo capability+scope+rango de
@@ -135,14 +144,18 @@ BEGIN
             USING ERRCODE = '23503';
     END IF;
 
+    -- Solo EXISTENCIA (sin ACTIVE = TRUE): file-service reserva la fila con
+    -- active=false, sube a S3 y la activa DESPUES de que este catalogo
+    -- responda 2xx. Exigir "ya activo" aqui bloquea todo PATCH con foto
+    -- nueva (23503). Alinea con fn_est_crear, que valida su p_fk_archivo
+    -- igual. Ver encabezado de esta migracion.
     IF p_fk_tarchivo_foto IS NOT NULL
        AND NOT EXISTS (
             SELECT 1 FROM academico_test.TARCHIVO
              WHERE PK_TARCHIVO = p_fk_tarchivo_foto
-               AND ACTIVE       = TRUE
           )
     THEN
-        RAISE EXCEPTION 'archivo de foto (%) no existe o no esta activo', p_fk_tarchivo_foto
+        RAISE EXCEPTION 'archivo de foto (%) no existe en TARCHIVO', p_fk_tarchivo_foto
             USING ERRCODE = '23503';
     END IF;
 
@@ -364,14 +377,14 @@ BEGIN
             USING ERRCODE = '23503';
     END IF;
 
+    -- Solo EXISTENCIA (sin ACTIVE = TRUE): mismo motivo que p_fk_tarchivo_foto.
     IF p_fk_tarchivo IS NOT NULL
        AND NOT EXISTS (
             SELECT 1 FROM academico_test.TARCHIVO
              WHERE PK_TARCHIVO = p_fk_tarchivo
-               AND ACTIVE       = TRUE
           )
     THEN
-        RAISE EXCEPTION 'archivo (%) no existe o no esta activo en TARCHIVO', p_fk_tarchivo
+        RAISE EXCEPTION 'archivo (%) no existe en TARCHIVO', p_fk_tarchivo
             USING ERRCODE = '23503';
     END IF;
 
