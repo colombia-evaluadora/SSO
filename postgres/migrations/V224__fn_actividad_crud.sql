@@ -1280,15 +1280,15 @@ BEGIN
     -- 3. FKs propias.
     IF NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA
                     WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'FK_TASIGNATURA (%) no existe o no esta activa', p_fk_tasignatura USING ERRCODE = '23503';
+        RAISE EXCEPTION 'La asignatura seleccionada no esta disponible' USING ERRCODE = '23503';
     END IF;
     IF p_fk_tgrupo IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TGRUPO
                     WHERE PK_TGRUPO = p_fk_tgrupo AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'FK_TGRUPO (%) no existe o no esta activo', p_fk_tgrupo USING ERRCODE = '23503';
+        RAISE EXCEPTION 'El grupo seleccionado no esta disponible' USING ERRCODE = '23503';
     END IF;
     IF p_fk_tunidad IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TUNIDAD
                     WHERE PK_TUNIDAD = p_fk_tunidad AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'FK_TUNIDAD (%) no existe o no esta activa', p_fk_tunidad USING ERRCODE = '23503';
+        RAISE EXCEPTION 'La unidad seleccionada no esta disponible' USING ERRCODE = '23503';
     END IF;
     IF p_ponderacion IS NOT NULL AND (p_ponderacion < 0 OR p_ponderacion > 100) THEN
         RAISE EXCEPTION 'La ponderacion (%) debe estar entre 0 y 100', p_ponderacion USING ERRCODE = '22023';
@@ -1342,10 +1342,13 @@ BEGIN
     --     paso 6, mas abajo).
     IF p_fk_tlv_instrumento_evaluacion IS NOT NULL THEN
         IF p_fk_tunidad IS NULL THEN
-            RAISE EXCEPTION 'El instrumento de evaluacion (FK_TLV_INSTRUMENTO_EVALUACION) no aplica: la actividad no esta vinculada a una unidad'
+            RAISE EXCEPTION 'Para usar el instrumento de evaluacion % hay que relacionar la actividad con una unidad',
+                academico_test.fn_instrumento_nombre(p_fk_tlv_instrumento_evaluacion)
                 USING ERRCODE = '22023';
         ELSIF NOT academico_test.fn_unidad_referente_evaluativo(p_fk_tunidad) THEN
-            RAISE EXCEPTION 'El instrumento de evaluacion (FK_TLV_INSTRUMENTO_EVALUACION) no aplica: el referente curricular de la unidad no es EVALUATIVO'
+            RAISE EXCEPTION 'No se puede usar el instrumento de evaluacion % en la unidad "%": esa unidad se rige por un referente curricular en el que el aprendizaje se valora con observaciones, no con instrumentos',
+                academico_test.fn_instrumento_nombre(p_fk_tlv_instrumento_evaluacion),
+                (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad)
                 USING ERRCODE = '22023';
         END IF;
     END IF;
@@ -1522,18 +1525,18 @@ BEGIN
     );
 
     IF v_actual.ACTIVE = FALSE THEN
-        RAISE EXCEPTION 'La actividad "%" esta inactiva (borrado logico); no se puede editar', v_actual.TITULO
+        RAISE EXCEPTION 'La actividad "%" ya no esta disponible; no se puede editar', v_actual.TITULO
             USING ERRCODE = '22023';
     END IF;
     IF p_titulo IS NOT NULL AND NULLIF(TRIM(p_titulo), '') IS NULL THEN
         RAISE EXCEPTION 'El nombre de la actividad no puede quedar vacio' USING ERRCODE = '22023';
     END IF;
     IF p_desvincular_unidad AND (p_fk_tunidad IS NOT NULL OR p_ponderacion IS NOT NULL) THEN
-        RAISE EXCEPTION 'p_desvincular_unidad es excluyente con p_fk_tunidad / p_ponderacion'
+        RAISE EXCEPTION 'No se puede quitar la actividad de su unidad y a la vez asignarle una unidad o un peso: elige una de las dos cosas'
             USING ERRCODE = '22023';
     END IF;
     IF p_quitar_recuperacion AND p_recuperacion IS NOT NULL THEN
-        RAISE EXCEPTION 'p_quitar_recuperacion es excluyente con p_recuperacion' USING ERRCODE = '22023';
+        RAISE EXCEPTION 'No se puede quitar y configurar la recuperacion de la actividad en la misma operacion: elige una de las dos cosas' USING ERRCODE = '22023';
     END IF;
     IF p_recuperacion IS NOT NULL
        AND COALESCE(p_es_evaluativa, v_actual.ES_EVALUATIVA) = 'N' THEN
@@ -1565,11 +1568,11 @@ BEGIN
     v_modo_calc := CASE WHEN v_fk_tunidad IS NULL THEN NULL
                         ELSE academico_test.fn_unidad_calculo_definitiva_modo(v_fk_tunidad) END;
     IF p_ponderacion IS NOT NULL AND v_modo_calc = 'PROMEDIAR' THEN
-        RAISE EXCEPTION 'La ponderacion no aplica: la unidad (%) promedia sus actividades', v_fk_tunidad
+        RAISE EXCEPTION 'La unidad "%" promedia sus actividades, asi que la actividad no lleva peso (%%)', (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = v_fk_tunidad)
             USING ERRCODE = '22023';
     END IF;
     IF p_ponderacion IS NOT NULL AND v_modo_calc = 'SUMATORIA' THEN
-        RAISE EXCEPTION 'La ponderacion de la unidad (%) se autocalcula: es una unidad de Sumatoria, envie el puntaje de la actividad (p_nota_maxima) en vez del porcentaje', v_fk_tunidad
+        RAISE EXCEPTION 'La unidad "%" suma los puntajes de sus actividades: indica el puntaje maximo de la actividad en vez del peso (%%), que se calcula solo', (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = v_fk_tunidad)
             USING ERRCODE = '22023';
     END IF;
 
@@ -1580,11 +1583,11 @@ BEGIN
 
     IF p_fk_tasignatura IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA
                     WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'FK_TASIGNATURA (%) no existe o no esta activa', p_fk_tasignatura USING ERRCODE = '23503';
+        RAISE EXCEPTION 'La asignatura seleccionada no esta disponible' USING ERRCODE = '23503';
     END IF;
     IF p_fk_tgrupo IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TGRUPO
                     WHERE PK_TGRUPO = p_fk_tgrupo AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'FK_TGRUPO (%) no existe o no esta activo', p_fk_tgrupo USING ERRCODE = '23503';
+        RAISE EXCEPTION 'El grupo seleccionado no esta disponible' USING ERRCODE = '23503';
     END IF;
 
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_actividad,          'TIPO_ACTIVIDAD',         'FK_TLV_TIPO_ACTIVIDAD');
@@ -1602,10 +1605,10 @@ BEGIN
     -- ahora" como "desvincular la unidad dejando un instrumento heredado".
     IF v_instrumento IS NOT NULL THEN
         IF v_fk_tunidad IS NULL THEN
-            RAISE EXCEPTION 'El instrumento de evaluacion (FK_TLV_INSTRUMENTO_EVALUACION) no aplica: la actividad no queda vinculada a una unidad'
+            RAISE EXCEPTION 'La actividad "%" tiene un instrumento de evaluacion configurado (%), y un instrumento solo se puede usar dentro de una unidad. Vuelve a relacionarla con una unidad o retirale el instrumento.', v_titulo, academico_test.fn_instrumento_nombre(v_instrumento)
                 USING ERRCODE = '22023';
         ELSIF NOT academico_test.fn_unidad_referente_evaluativo(v_fk_tunidad) THEN
-            RAISE EXCEPTION 'El instrumento de evaluacion (FK_TLV_INSTRUMENTO_EVALUACION) no aplica: el referente curricular de la unidad no es EVALUATIVO'
+            RAISE EXCEPTION 'La actividad "%" tiene configurado el instrumento de evaluacion %, pero la unidad "%" se rige por un referente curricular en el que el aprendizaje se valora con observaciones y no con instrumentos. Retirale el instrumento a la actividad o llevala a una unidad que si los admita.', v_titulo, academico_test.fn_instrumento_nombre(v_instrumento), (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = v_fk_tunidad)
                 USING ERRCODE = '22023';
         END IF;
     END IF;
