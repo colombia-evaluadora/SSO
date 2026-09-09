@@ -1,0 +1,1146 @@
+{
+  "info": {
+    "_postman_id": "9f2b7c41-63ad-4e58-8c17-0a5b6d9e4f27",
+    "name": "SSO — ciclo de vida de una cuenta de rector (alta, login, recuperación y cambio de correo)",
+    "description": "Runbook **ejecutable de punta a punta** del ciclo de vida de una cuenta de rector, tal como se probó contra el servidor de test (`172.233.184.248:8080`, Flyway en `V217`, con `V215` aplicada).\n\nCubre: alta del funcionario + su establecimiento (que es lo que le otorga el rol de rector), login, recuperación de contraseña, **cambio de correo conservando el resto de los datos y la contraseña**, y una segunda recuperación ya sobre la cuenta renombrada.\n\n---\n\n## Cómo correrla\n\n1. Importar también `ciclo-vida-cuenta-rector.postman_environment.json` y poner `adminPassword` (un usuario con `CEVAL-SUPER_ADMINISTRADOR`).\n2. **Collection Runner en orden.** Las carpetas encadenan variables (`pkFuncionario`, `resetToken`, …) que se llenan en los tests; suelta, una petición del paso 4 no funciona sin haber corrido el 1.\n3. Cada corrida genera su propio `sufijo` (epoch) en el prerequest del paso 0.1, así que **es re-ejecutable**: cada pasada crea un rector, un establecimiento y una identificación nuevos. No borra nada — los datos de prueba quedan en la BD.\n\n## Las tres contraseñas\n\n| Variable | Cuándo | Se prueba en |\n| --- | --- | --- |\n| `claveInicial` | la del alta | 2.1 |\n| `claveReseteo` | primer forgot/restore | 3.4, 4.2 |\n| `claveFinal` | segundo forgot/restore, ya con el correo nuevo | 5.4 |\n\n## Dos trampas de rutas que cuestan una tarde\n\n- El login es `POST /login` con **`{\"email\": …}`** — con `username` da `401 Credenciales inválidas` sin más pistas.\n- Los endpoints públicos de cuenta viven en **`/api/sso-admin/…`**; `/sso-admin/…` existe pero exige `Authorization` (401).\n\n## Qué corre sin intervención\n\nLas carpetas **0, 1, 2 y 4** corren solas de punta a punta: alta, login, cambio de correo y login con el correo nuevo conservando la contraseña. Las carpetas **3 y 5** (recuperación) se omiten salvo que les pases el token del correo en `resetToken` / `resetToken2`: desde que el token dejó de volver en la respuesta no hay forma de encadenarlo por HTTP, que es justamente la propiedad que se quería. La variable `claveVigente` hace que la carpeta 4 funcione con o sin la 3.\n\n## Seguridad de este flujo\n\n`GET /api/sso-admin/forgotPassword` es `permitAll` y **distingue con un 404 si el correo existe** — decisión de producto (`d26969a`), es el mensaje \"Ese correo no está registrado\" que ve el usuario. Ya **no** devuelve el token de reseteo en el cuerpo: eso se cerró, porque junto con el 404 permitía tomar cualquier cuenta conociendo sólo el correo. Detalle en 3.1 y 3.7.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0 — Sesión del super admin",
+      "description": "El alta de funcionario y de establecimiento van autenticadas con un **super admin** (`CEVAL-SUPER_ADMINISTRADOR`). El resto del runbook —login del rector, forgot/restore— no usa este token.\n\nEl login vive en `POST /login` (no `/auth/login`): `JsonLoginFilter` está cableado a un `PathPatternRequestMatcher` de `\"/login\"`, y el gateway expone además el alias `POST /api/auth/login` con `StripPrefix=2`.\n\n⚠️ El campo del body es **`email`**, no `username`.",
+      "item": [
+        {
+          "name": "0.1 — Login super admin",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "login"
+              ]
+            },
+            "description": "Guarda el JWT en la variable de colección `{{token}}`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Sufijo único por corrida: hace el runbook re-ejecutable",
+                  "// sin chocar con el correo/identificación de la corrida previa.",
+                  "if (!pm.collectionVariables.get('sufijo')) {",
+                  "    pm.collectionVariables.set('sufijo', String(Math.floor(Date.now() / 1000)));",
+                  "}",
+                  "const s = pm.collectionVariables.get('sufijo');",
+                  "pm.collectionVariables.set('correoRector', 'rector.prueba.' + s + '@example.com');",
+                  "pm.collectionVariables.set('correoRectorNuevo', 'rector.nuevo.' + s + '@example.com');",
+                  "pm.collectionVariables.set('claveVigente', pm.variables.get('claveInicial'));",
+                  "console.log('sufijo de esta corrida: ' + s);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const token = pm.response.json().token;",
+                  "pm.test('devuelve token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+                  "pm.collectionVariables.set('token', token);",
+                  "const carga = JSON.parse(atob(token.split('.')[1]));",
+                  "pm.test('es super admin', () =>",
+                  "    pm.expect(carga.roles).to.include('CEVAL-SUPER_ADMINISTRADOR'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1 — Alta del rector y su establecimiento",
+      "description": "Dos llamadas. La cuenta **no nace con rol de rector**: el rol `CEVAL-RECTOR` / `PIGSE-RECTOR` lo otorga `fn_est_crear` al recibir el funcionario como `principal`, sincronizando `public.role_users` (V111 / V150).\n\n| # | Endpoint | Función Postgres | Deja |\n| --- | --- | --- | --- |\n| 1.1 | `POST /api/auth/register/funcionario` | `fn_usu_crear` + `fn_fun_crear` | `users` + `tusuario` + `tfuncionario` |\n| 1.2 | `POST /api/eval-col/establecimientos` | `fn_est_crear` (query `id_query=40`) | `testablecimiento` + rol de rector |\n\n**Catálogos** (ids del servidor de test, verificados):\n- `fkTlvTipoDocumento=51860` → `TLISTA_VALOR` categoría `TIPO_DOCUMENTO`, Cédula de Ciudadanía.\n- `fkTlvGenero=130` → categoría `GENERO`, Masculino.\n- `address.zone=214` → categoría `ZONA`, Urbana.\n- `additionalInfo.calendar=43` → categoría `CALENDARIO`, Calendario A.\n- `basicInfo.ownershipType=1` → **`academico_test.tpropiedad_juridica`**, Oficial. Ojo: *no* es un `TLISTA_VALOR`. Mandar un `pk_lista_valor` de la categoría `PROPIEDAD_JURIDICA_OFICIAL` (p. ej. `538`) devuelve `409 propiedad juridica (538) no existe o no esta activa`.\n- `address.municipality=1` → `tmunicipio` MEDELLIN.\n\n**Unicidad:** `fn_est_crear` rechaza con `409 Ya existe un establecimiento activo con NIT <nit>` si el NIT se repite entre establecimientos `ACTIVE`. Por eso el NIT sale del `sufijo` (`900{{sufijo}}`, cabe en el `VARCHAR(30)`) y no es un literal: si no, la colección sólo correría una vez. Lo mismo aplica al `dane` (`CODIGO`) y al `nombre`.",
+      "item": [
+        {
+          "name": "1.1 — Crear funcionario (cuenta del rector)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register/funcionario",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register",
+                "funcionario"
+              ]
+            },
+            "description": "Crea `users` + `tusuario` + `tfuncionario` en una transacción y devuelve las tres llaves. La contraseña viaja en el body y queda hasheada con argon2id.\n\nRespuesta real:\n```json\n{\"idUser\":105,\"pkTusuario\":197432,\"pkFuncionario\":3587703,\"email\":\"rector.prueba.1788302849@example.com\"}\n```",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{correoRector}}\",\n  \"fullName\": \"Rector Prueba QA\",\n  \"password\": \"{{claveInicial}}\",\n  \"identificacion\": \"{{sufijo}}\",\n  \"primerNombre\": \"Rector\",\n  \"primerApellido\": \"Prueba\",\n  \"fechaNacimiento\": \"1985-04-12\",\n  \"fkTlvTipoDocumento\": 51860,\n  \"fkTlvGenero\": 130,\n  \"telefono\": \"3001234567\",\n  \"correoElectronico\": \"{{correoRector}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const c = pm.response.json();",
+                  "pm.test('devuelve las tres llaves', () => {",
+                  "    pm.expect(c.idUser).to.be.a('number');",
+                  "    pm.expect(c.pkTusuario).to.be.a('number');",
+                  "    pm.expect(c.pkFuncionario).to.be.a('number');",
+                  "});",
+                  "pm.collectionVariables.set('idUser', c.idUser);",
+                  "pm.collectionVariables.set('pkTusuario', c.pkTusuario);",
+                  "pm.collectionVariables.set('pkFuncionario', c.pkFuncionario);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.2 — Crear establecimiento con ese rector",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/establecimientos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "establecimientos"
+              ]
+            },
+            "description": "`principal` = `PK_TFUNCIONARIO` del paso 1.1. Al asignarlo, `fn_est_crear` le sincroniza el rol de rector en `role_users` — por eso el siguiente login ya trae `CEVAL-RECTOR` y `PIGSE-RECTOR` en el JWT.\n\nRespuesta real: `{\"rows\":[{\"pk_establecimiento_creado\":880}]}`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"basicInfo\": {\n    \"name\": \"IE Prueba QA {{sufijo}}\",\n    \"nit\": \"900{{sufijo}}\",\n    \"ownershipType\": 1,\n    \"dane\": \"QA{{sufijo}}\"\n  },\n  \"address\": {\n    \"municipality\": 1,\n    \"locality\": \"Centro\",\n    \"commune\": \"10\",\n    \"district\": \"La Candelaria\",\n    \"address\": \"Calle 50 #45-20\",\n    \"zone\": 214\n  },\n  \"contact\": {\n    \"email\": \"ie.qa{{sufijo}}@example.com\",\n    \"phone\": \"6041234567\",\n    \"fax\": \"\",\n    \"website\": \"https://ieqa.example.com\"\n  },\n  \"additionalInfo\": {\n    \"approvalResolution\": \"RES-001\",\n    \"licenseStatus\": \"LIC-001\",\n    \"licenseDate\": \"2020-01-15\",\n    \"calendar\": 43,\n    \"teachingLanguage\": null,\n    \"populationGender\": null,\n    \"disabilityType\": null,\n    \"giftedAttention\": false,\n    \"ethnicAttention\": false,\n    \"subsidy\": false\n  },\n  \"principal\": \"{{pkFuncionario}}\",\n  \"secretary\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const fila = pm.response.json().rows[0];",
+                  "pm.test('devuelve el pk del establecimiento', () =>",
+                  "    pm.expect(fila.pk_establecimiento_creado).to.be.a('number'));",
+                  "pm.collectionVariables.set('pkEstablecimiento', fila.pk_establecimiento_creado);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 — Login del rector (contraseña inicial)",
+      "description": "Verifica que la cuenta recién creada entra y que el JWT ya trae los roles que le puso `fn_est_crear`.\n\nCarga real del token:\n```json\n{\"sub\":\"rector.prueba.…@example.com\",\"roles\":[\"PIGSE-RECTOR\",\"CEVAL-RECTOR\"],\"typ\":\"access\",\"uid\":105}\n```",
+      "item": [
+        {
+          "name": "2.1 — Login con la contraseña inicial",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "login"
+              ]
+            },
+            "description": "Guarda el JWT del rector en `{{tokenRector}}` (separado de `{{token}}`, que es el del super admin).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{correoRector}}\",\n  \"password\": \"{{claveInicial}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const token = pm.response.json().token;",
+                  "pm.collectionVariables.set('tokenRector', token);",
+                  "const carga = JSON.parse(atob(token.split('.')[1]));",
+                  "pm.test('el sub es el correo del rector', () =>",
+                  "    pm.expect(carga.sub).to.eql(pm.collectionVariables.get('correoRector')));",
+                  "pm.test('trae el rol de rector', () =>",
+                  "    pm.expect(carga.roles).to.include('CEVAL-RECTOR'));",
+                  "pm.test('el uid es el idUser del alta', () =>",
+                  "    pm.expect(String(carga.uid)).to.eql(String(pm.collectionVariables.get('idUser'))));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 — Recuperación de contraseña",
+      "description": "⚠️ **La ruta pública es `/api/sso-admin/…`, no `/sso-admin/…`.** `GatewaySecurityConfig` sólo lleva `permitAll` sobre `/api/sso-admin/{activateAccount,restorePassword,forgotPassword,resetTokenStatus}` (y sus gemelas bajo `/api/sso-admin/user/…`). La forma sin `/api` responde **401** sin sesión.\n\n| # | Endpoint | Comprueba |\n| --- | --- | --- |\n| 3.1 | `GET /api/sso-admin/forgotPassword` | emite token de reseteo (TTL 1800s) + correo `password-reset` |\n| 3.2 | `GET /api/sso-admin/resetTokenStatus` | `valid` + `maskedEmail` |\n| 3.3 | `POST /api/sso-admin/restorePassword` | cambia la contraseña (body, nunca query string) |\n| 3.4 | `POST /login` | entra con la contraseña nueva |\n| 3.5 | `POST /login` | la contraseña vieja ya no sirve (401) |\n| 3.6 | `POST /api/sso-admin/restorePassword` | el token es de un solo uso (404) |\n| 3.7 | `GET /api/sso-admin/forgotPassword` | correo inexistente (404) |\n\nEl cambio se propaga a `academico_test.tusuario.contrasena` por el trigger `trg_sync_users_to_tusuario` (V215).\n\n**Esta carpeta no corre sola en newman.** El token de reseteo sale sólo por correo, así que 3.2–3.6 se omiten salvo que pongas el token en la variable `resetToken` (ver 3.1). Es el precio correcto: si el runbook pudiera encadenarlo por HTTP, cualquiera podría.",
+      "item": [
+        {
+          "name": "3.1 — forgotPassword (correo registrado)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/sso-admin/forgotPassword?email={{correoRector}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sso-admin",
+                "forgotPassword"
+              ],
+              "query": [
+                {
+                  "key": "email",
+                  "value": "{{correoRector}}"
+                }
+              ]
+            },
+            "description": "Público (sin `Authorization`).\n\nRespuesta: `{\"maskedEmail\":\"r****@example.com\",\"expiresIn\":1800}`\n\n🔒 **El token de reseteo ya no vuelve en el cuerpo.** Sale sólo por correo, dentro del enlace. Antes sí volvía, y combinado con el 404 de 3.7 permitía apropiarse de cualquier cuenta conociendo sólo el correo: pedir el reseteo con la dirección de la víctima, leer el token de la respuesta y cambiar la contraseña sin tocar ese buzón. Ver `ForgotPasswordResponse` para la historia completa.\n\n**Por eso los pasos 3.2–3.6 se omiten solos** si no le das el token: ya no hay forma de encadenarlo por HTTP, que es justo la propiedad que se buscaba. Para correrlos, pon el token en la variable `resetToken`, sacándolo del enlace del correo o del servidor:\n\n    SELECT token_restore FROM public.users WHERE email = '…';\n\n(por `ssh … docker exec -i sso-postgres psql -U neondb_owner -d sso_db`)"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const c = pm.response.json();",
+                  "pm.test('TTL de 1800s', () => pm.expect(c.expiresIn).to.eql(1800));",
+                  "pm.test('confirma a donde se envio, enmascarado', () =>",
+                  "    pm.expect(c.maskedEmail).to.match(/^.[*]+@/));",
+                  "// Pin de la vulnerabilidad cerrada: el token de reseteo NO",
+                  "// puede volver por ningun campo de esta respuesta.",
+                  "pm.test('[seguridad] la respuesta no lleva el token', () => {",
+                  "    pm.expect(c).to.not.have.property('token');",
+                  "    pm.expect(JSON.stringify(c)).to.not.match(/[0-9a-f]{8}-[0-9a-f]{4}-/);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.2 — resetTokenStatus",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/sso-admin/resetTokenStatus?token={{resetToken}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sso-admin",
+                "resetTokenStatus"
+              ],
+              "query": [
+                {
+                  "key": "token",
+                  "value": "{{resetToken}}"
+                }
+              ]
+            },
+            "description": "Pantalla de confirmación del enlace. Siempre 200: un token inexistente es `status: \"invalid\"`, no un 404.\n\nRespuesta real: `{\"status\":\"valid\",\"expiresIn\":1792,\"ttlSeconds\":1800,\"maskedEmail\":\"r****@example.com\"}`"
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.variables.get('resetToken');",
+                  "if (!t) {",
+                  "    console.log('OMITIDO: no hay resetToken. El token de reseteo ya no vuelve' +",
+                  "        ' en la respuesta de forgotPassword — sale solo por correo.' +",
+                  "        ' Ver la descripcion de la carpeta.');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const c = pm.response.json();",
+                  "pm.test('status = valid', () => pm.expect(c.status).to.eql('valid'));",
+                  "pm.test('el correo va enmascarado', () =>",
+                  "    pm.expect(c.maskedEmail).to.match(/^.\\*+@/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.3 — restorePassword",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/sso-admin/restorePassword",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sso-admin",
+                "restorePassword"
+              ]
+            },
+            "description": "`POST` + body a propósito: la forma vieja (`GET` con `?token=…&password=…`) filtraba la contraseña por access logs, historial del navegador y `Referer`, y permitía forzar el cambio con un `<img>`. Un `GET` aquí hoy responde **405** con `Allow: POST` (lo fija `smoke-account-lifecycle.sh`).\n\nResponde `200` con cuerpo vacío. Dispara el correo `password-changed`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{resetToken}}\",\n  \"password\": \"{{claveReseteo}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.variables.get('resetToken');",
+                  "if (!t) {",
+                  "    console.log('OMITIDO: no hay resetToken. El token de reseteo ya no vuelve' +",
+                  "        ' en la respuesta de forgotPassword — sale solo por correo.' +",
+                  "        ' Ver la descripcion de la carpeta.');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('cuerpo vacio', () => pm.expect(pm.response.text()).to.be.empty);",
+                  "pm.collectionVariables.set('claveVigente', pm.variables.get('claveReseteo'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.4 — Login con la contraseña nueva",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "login"
+              ]
+            },
+            "description": "La cuenta entra con la contraseña del reseteo, con los mismos `uid` y roles.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{correoRector}}\",\n  \"password\": \"{{claveReseteo}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.variables.get('resetToken');",
+                  "if (!t) {",
+                  "    console.log('OMITIDO: no hay resetToken. El token de reseteo ya no vuelve' +",
+                  "        ' en la respuesta de forgotPassword — sale solo por correo.' +",
+                  "        ' Ver la descripcion de la carpeta.');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const carga = JSON.parse(atob(pm.response.json().token.split('.')[1]));",
+                  "pm.test('mismo uid que antes del reseteo', () =>",
+                  "    pm.expect(String(carga.uid)).to.eql(String(pm.collectionVariables.get('idUser'))));",
+                  "pm.test('conserva el rol de rector', () =>",
+                  "    pm.expect(carga.roles).to.include('CEVAL-RECTOR'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.5 — Login con la contraseña vieja → 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "login"
+              ]
+            },
+            "description": "Pin de regresión: el reseteo **reemplaza**, no agrega.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{correoRector}}\",\n  \"password\": \"{{claveInicial}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.variables.get('resetToken');",
+                  "if (!t) {",
+                  "    console.log('OMITIDO: no hay resetToken. El token de reseteo ya no vuelve' +",
+                  "        ' en la respuesta de forgotPassword — sale solo por correo.' +",
+                  "        ' Ver la descripcion de la carpeta.');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 — credencial rechazada', () => pm.response.to.have.status(401));",
+                  "pm.test('mensaje de credenciales invalidas', () =>",
+                  "    pm.expect(pm.response.json().error).to.eql('authentication_failed'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.6 — Reusar el token de reseteo → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/sso-admin/restorePassword",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sso-admin",
+                "restorePassword"
+              ]
+            },
+            "description": "El token es de un solo uso: `restorePassword` deja `users.token_restore` en `NULL`.\n\nRespuesta real: `{\"code\":\"TOKEN_NOT_FOUND\",\"message\":\"El token no existe o ya fue utilizado\"}`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{resetToken}}\",\n  \"password\": \"OtraClave2026!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.variables.get('resetToken');",
+                  "if (!t) {",
+                  "    console.log('OMITIDO: no hay resetToken. El token de reseteo ya no vuelve' +",
+                  "        ' en la respuesta de forgotPassword — sale solo por correo.' +",
+                  "        ' Ver la descripcion de la carpeta.');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));",
+                  "pm.test('TOKEN_NOT_FOUND', () =>",
+                  "    pm.expect(pm.response.json().code).to.eql('TOKEN_NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.7 — forgotPassword de un correo inexistente → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/sso-admin/forgotPassword?email=no.existe.{{sufijo}}@example.com",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sso-admin",
+                "forgotPassword"
+              ],
+              "query": [
+                {
+                  "key": "email",
+                  "value": "no.existe.{{sufijo}}@example.com"
+                }
+              ]
+            },
+            "description": "Es el 404 que la SPA pinta como **\"Ese correo no está registrado\"**.\n\nRespuesta real: `{\"code\":\"NOT_FOUND\",\"message\":\"No se encontró el usuario: …\"}`\n\n⚠️ **Decisión de producto, con un costo de seguridad conocido.** El 404 se pidió explícitamente (`d26969a`) para no mostrarle al usuario una confirmación falsa, y deja el endpoint como enumerador de cuentas: público y sin autenticar, permite averiguar qué direcciones existen. Hoy eso revela *existencia* y nada más — la parte grave (el token en el cuerpo, que convertía la enumeración en apropiación de cuenta) ya está cerrada, ver 3.1.\n\nCerrar también la enumeración exige responder igual exista o no el correo, lo que cambia el mensaje que ve el usuario: es decisión del equipo, no técnica. Si se toma, este test pasa a esperar `200`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 — hoy el endpoint distingue existe/no existe', () =>",
+                  "    pm.response.to.have.status(404));",
+                  "pm.test('NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4 — Cambio de correo (renombre de la cuenta)",
+      "description": "Hay **dos caminos** para editar el correo; los dos convergen por trigger porque V215 (`sync cuenta correo password users tusuario`) dejó la sincronización bidireccional:\n\n| Vía | Endpoint | Toca | Propaga |\n| --- | --- | --- | --- |\n| **Producto** (la de esta carpeta) | `PATCH /api/eval-col/establecimientos/funcionarios/:ID` → `fn_fun_actualizar` (`id_query=119`) | `tusuario.correo_electronico` | `trg_sync_tusuario_to_users` → `tusuario.cuenta` + `users.email` |\n| Administrativa | `PUT /sso-admin/updateAccount` (body `{id, email, …}`) | `users.email` | `trg_sync_users_to_tusuario` → `tusuario` |\n\n`fn_fun_actualizar` usa `COALESCE(p_x, columna)` en **todos** los campos, así que mandar sólo `person.email` es una actualización parcial de verdad: identificación, nombres, teléfono, tipo de documento, género, fecha de nacimiento, foto y estado quedan intactos, igual que `pk_tusuario`, `pk_tfuncionario`, los roles y el hash de la contraseña.\n\nEl trigger detecta que `OLD.cuenta = OLD.correo_electronico` y trata el cambio como **renombre de cuenta**: reescribe también `CUENTA`. Por eso el correo viejo deja de existir (no queda alias).",
+      "item": [
+        {
+          "name": "4.1 — PATCH sólo el correo del funcionario",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/establecimientos/funcionarios/:ID",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "establecimientos",
+                "funcionarios",
+                ":ID"
+              ],
+              "variable": [
+                {
+                  "key": "ID",
+                  "value": "{{pkFuncionario}}",
+                  "description": "PK_TFUNCIONARIO"
+                }
+              ]
+            },
+            "description": "`:ID` = `PK_TFUNCIONARIO` (no `pk_tusuario` ni `id_user`).\n\nBody mínimo — cualquier campo ausente llega `NULL` a la función y el `COALESCE` lo deja como está. **No** hace falta reenviar el resto de la ficha.\n\nRespuesta real: `{\"rows\":[{\"pk_funcionario_actualizado\":3587703}]}`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"person\": {\n    \"email\": \"{{correoRectorNuevo}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('devuelve el pk actualizado', () =>",
+                  "    pm.expect(String(pm.response.json().rows[0].pk_funcionario_actualizado))",
+                  "        .to.eql(String(pm.collectionVariables.get('pkFuncionario'))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.2 — Login con el correo nuevo y la MISMA contraseña",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "login"
+              ]
+            },
+            "description": "El punto del flujo: el renombre no toca el hash. Mismo `uid`, mismos roles, misma contraseña del paso 3.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{correoRectorNuevo}}\",\n  \"password\": \"{{claveVigente}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const carga = JSON.parse(atob(pm.response.json().token.split('.')[1]));",
+                  "pm.test('el sub es el correo nuevo', () =>",
+                  "    pm.expect(carga.sub).to.eql(pm.collectionVariables.get('correoRectorNuevo')));",
+                  "pm.test('mismo uid — la cuenta se movio, no se duplico', () =>",
+                  "    pm.expect(String(carga.uid)).to.eql(String(pm.collectionVariables.get('idUser'))));",
+                  "pm.test('conserva los dos roles de rector', () => {",
+                  "    pm.expect(carga.roles).to.include('CEVAL-RECTOR');",
+                  "    pm.expect(carga.roles).to.include('PIGSE-RECTOR');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.3 — Login con el correo viejo → 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "login"
+              ]
+            },
+            "description": "El renombre es total: no queda alias del correo anterior.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{correoRector}}\",\n  \"password\": \"{{claveVigente}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 — credencial rechazada', () => pm.response.to.have.status(401));",
+                  "pm.test('mensaje de credenciales invalidas', () =>",
+                  "    pm.expect(pm.response.json().error).to.eql('authentication_failed'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5 — Recuperación después del renombre",
+      "description": "Cierra el círculo: comprueba que la recuperación de contraseña sigue funcionando **sobre la cuenta renombrada** — resuelve el usuario por el correo nuevo, manda el correo al buzón nuevo (`SmtpEmailProvider: SMTP delivered to rector.nuevo.…`), y el hash resultante se sincroniza en `users` y `tusuario` a la vez.\n\n5.1 y 5.2 corren siempre; 5.3–5.5 necesitan el token nuevo en `resetToken2` (el que emite 5.1 y llega por correo) y se omiten si no está.",
+      "item": [
+        {
+          "name": "5.1 — forgotPassword con el correo nuevo",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/sso-admin/forgotPassword?email={{correoRectorNuevo}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sso-admin",
+                "forgotPassword"
+              ],
+              "query": [
+                {
+                  "key": "email",
+                  "value": "{{correoRectorNuevo}}"
+                }
+              ]
+            },
+            "description": "Emite un token nuevo y entrega el correo al buzón nuevo."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('tampoco aqui vuelve el token', () =>",
+                  "    pm.expect(pm.response.json()).to.not.have.property('token'));",
+                  "console.log('Token emitido y enviado por correo a ' +",
+                  "    pm.response.json().maskedEmail + '. Para seguir con 5.3, pon el' +",
+                  "    ' token en la variable resetToken2 (del enlace del correo o por psql).');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.2 — forgotPassword con el correo viejo → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/sso-admin/forgotPassword?email={{correoRector}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sso-admin",
+                "forgotPassword"
+              ],
+              "query": [
+                {
+                  "key": "email",
+                  "value": "{{correoRector}}"
+                }
+              ]
+            },
+            "description": "Confirma desde el lado de la recuperación que el correo anterior ya no resuelve a ningún usuario."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));",
+                  "pm.test('NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.3 — restorePassword (segunda contraseña)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/sso-admin/restorePassword",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sso-admin",
+                "restorePassword"
+              ]
+            },
+            "description": "Mismo contrato que 3.3, ahora sobre la cuenta renombrada.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{resetToken2}}\",\n  \"password\": \"{{claveFinal}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.variables.get('resetToken2');",
+                  "if (!t) {",
+                  "    console.log('OMITIDO: no hay resetToken2. El token de reseteo ya no vuelve' +",
+                  "        ' en la respuesta de forgotPassword — sale solo por correo.' +",
+                  "        ' Ver la descripcion de la carpeta.');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('claveVigente', pm.variables.get('claveFinal'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.4 — Login con el correo nuevo y la contraseña final",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "login"
+              ]
+            },
+            "description": "Estado final de la cuenta de prueba.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{correoRectorNuevo}}\",\n  \"password\": \"{{claveFinal}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.variables.get('resetToken2');",
+                  "if (!t) {",
+                  "    console.log('OMITIDO: no hay resetToken2. El token de reseteo ya no vuelve' +",
+                  "        ' en la respuesta de forgotPassword — sale solo por correo.' +",
+                  "        ' Ver la descripcion de la carpeta.');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const carga = JSON.parse(atob(pm.response.json().token.split('.')[1]));",
+                  "pm.test('mismo uid de punta a punta', () =>",
+                  "    pm.expect(String(carga.uid)).to.eql(String(pm.collectionVariables.get('idUser'))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.5 — Login con la contraseña anterior → 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "login"
+              ]
+            },
+            "description": "Pin de regresión del segundo reseteo.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{correoRectorNuevo}}\",\n  \"password\": \"{{claveReseteo}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.variables.get('resetToken2');",
+                  "if (!t) {",
+                  "    console.log('OMITIDO: no hay resetToken2. El token de reseteo ya no vuelve' +",
+                  "        ' en la respuesta de forgotPassword — sale solo por correo.' +",
+                  "        ' Ver la descripcion de la carpeta.');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 — credencial rechazada', () => pm.response.to.have.status(401));",
+                  "pm.test('mensaje de credenciales invalidas', () =>",
+                  "    pm.expect(pm.response.json().error).to.eql('authentication_failed'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6 — Verificación en base de datos (no es HTTP)",
+      "description": "Estas consultas no se ejecutan desde Postman; quedan aquí porque son la mitad de la prueba: confirman que los triggers de V215 dejaron las dos tablas consistentes.\n\n```bash\nssh root@172.233.184.248 \"docker exec -i sso-postgres \\\n  psql -U neondb_owner -d sso_db -x -c \\\"\n    SELECT u.id_user, u.email, t.cuenta, t.correo_electronico,\n           t.identificacion, t.primer_nombre, t.primer_apellido, t.telefono,\n           (u.password = t.contrasena) AS pwd_sync,\n           COALESCE(u.token_restore, '(consumido)') AS token\n      FROM public.users u\n      JOIN academico_test.tusuario t ON t.pk_tusuario = <pkTusuario>\n     WHERE u.id_user = <idUser>\\\"\"\n```\n\nLo que debe verse al terminar el runbook:\n\n- `users.email = tusuario.cuenta = tusuario.correo_electronico` = el correo **nuevo**.\n- `pwd_sync = t` — el hash argon2id es el mismo en las dos tablas.\n- `token = (consumido)` — `token_restore` en `NULL` tras el restore.\n- Identificación, nombres, teléfono, tipo de documento y género **idénticos al alta**.\n- Roles en `role_users`: `CEVAL-RECTOR`, `PIGSE-RECTOR`.\n- `testablecimiento.fk_tfuncionario_rector` sigue apuntando al mismo `pk_tfuncionario`.\n\nTriggers involucrados (`\\d public.users` / `\\d academico_test.tusuario`):\n`trg_sync_users_to_tusuario` y `trg_sync_tusuario_to_users`, ambos con guarda `pg_trigger_depth() > 1` para no reentrar.",
+      "item": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "token",
+      "value": "",
+      "description": "JWT del super admin — lo llena 0.1"
+    },
+    {
+      "key": "tokenRector",
+      "value": "",
+      "description": "JWT del rector — lo llena 2.1"
+    },
+    {
+      "key": "sufijo",
+      "value": "",
+      "description": "Epoch de la corrida; hace único el correo y la identificación"
+    },
+    {
+      "key": "correoRector",
+      "value": "",
+      "description": "rector.prueba.<sufijo>@example.com — lo arma 0.1"
+    },
+    {
+      "key": "correoRectorNuevo",
+      "value": "",
+      "description": "rector.nuevo.<sufijo>@example.com — destino del PATCH de 4.1"
+    },
+    {
+      "key": "claveInicial",
+      "value": "RectorPrueba2026!"
+    },
+    {
+      "key": "claveReseteo",
+      "value": "NuevaClaveRector2026!"
+    },
+    {
+      "key": "claveFinal",
+      "value": "TerceraClave2026!"
+    },
+    {
+      "key": "claveVigente",
+      "value": "",
+      "description": "La contrasena que la cuenta tiene AHORA MISMO en la corrida; arranca en claveInicial y la mueven 3.3 y 5.3. Existe porque las carpetas 3 y 5 se omiten si no hay token, y la carpeta 4 tiene que loguear igual."
+    },
+    {
+      "key": "idUser",
+      "value": "",
+      "description": "public.users.id_user — de 1.1"
+    },
+    {
+      "key": "pkTusuario",
+      "value": "",
+      "description": "academico_test.tusuario.pk_tusuario — de 1.1"
+    },
+    {
+      "key": "pkFuncionario",
+      "value": "",
+      "description": "academico_test.tfuncionario.pk_tfuncionario — de 1.1, es el :ID de 4.1"
+    },
+    {
+      "key": "pkEstablecimiento",
+      "value": "",
+      "description": "de 1.2"
+    },
+    {
+      "key": "resetToken",
+      "value": "",
+      "description": "token de reseteo — de 3.1"
+    },
+    {
+      "key": "resetToken2",
+      "value": "",
+      "description": "token de reseteo — de 5.1"
+    }
+  ]
+}
