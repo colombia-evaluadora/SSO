@@ -146,6 +146,13 @@ DECLARE
     v_pk_cursando         BIGINT;
     v_tipo_promocion      BIGINT;
     v_estado_traslado     BIGINT;
+    -- Estados "superados": la matricula quedo atras al encadenarse otra, asi
+    -- que no ocupa cupo en el periodo. Ver el paso 7.
+    v_estados_superados   BIGINT[];
+    v_pk_retirado         BIGINT;
+    v_dup_pk              BIGINT;
+    v_dup_estado          BIGINT;
+    v_dup_estado_nom      TEXT;
     v_fila                RECORD;
     v_pk_nueva            BIGINT;
     v_pk_traslado         BIGINT;
@@ -250,6 +257,23 @@ BEGIN
     SELECT PK_LISTA_VALOR INTO v_pk_cursando FROM academico_test.TLISTA_VALOR
      WHERE CATEGORIA = 'ESTADO_MATRICULA' AND VALOR = '1' AND ACTIVE = TRUE;
 
+    -- Promovido ('13') y Reubicado ('14'): los estados en los que queda la
+    -- matricula de ORIGEN cuando se encadena otra. No ocupan cupo.
+    --
+    -- Se resuelven por VALOR y NO por nombre a proposito: el catalogo tiene
+    -- 'Promovido' (VALOR '13') y 'Promovido Anticipadamente' (VALOR '6'), que
+    -- empiezan igual y son cosas distintas -- el segundo es una matricula
+    -- VIGENTE y si tiene que bloquear. Un LIKE 'PROMOVIDO%' habria abierto un
+    -- agujero silencioso.
+    SELECT ARRAY_AGG(PK_LISTA_VALOR) INTO v_estados_superados
+      FROM academico_test.TLISTA_VALOR
+     WHERE CATEGORIA = 'ESTADO_MATRICULA' AND VALOR IN ('13', '14') AND ACTIVE = TRUE;
+
+    -- Retirado ('4') SI bloquea, pero merece su propio mensaje: el camino es
+    -- reingresar y despues mover, y con el mensaje genarico nadie lo adivina.
+    SELECT PK_LISTA_VALOR INTO v_pk_retirado FROM academico_test.TLISTA_VALOR
+     WHERE CATEGORIA = 'ESTADO_MATRICULA' AND VALOR = '4' AND ACTIVE = TRUE;
+
     IF p_valor_destino IS NOT NULL THEN
         SELECT PK_LISTA_VALOR, NOMBRE INTO v_pk_destino_estado, v_nombre_destino
           FROM academico_test.TLISTA_VALOR
@@ -284,11 +308,17 @@ BEGIN
     -- 6. Cupo, para el lote completo y antes de tocar nada. En correccion
     --    la matricula se MUEVE, no se duplica, asi que las del propio lote
     --    que ya esten en el grupo destino no cuentan dos veces.
+    --
+    --    La cuenta la hace fn_matricula_cupo_ocupado (V145), la misma que usa
+    --    el alta: solo ocupan plaza Cursando, Aprobado y Reprobado. Antes era
+    --    un COUNT(*) por grupo sin mirar el estado, asi que un Reubicado o un
+    --    Promovido gastaban una silla que su estudiante ya no ocupa -- esta en
+    --    el grupo nuevo. Vivir en un solo sitio evita que las dos cuentas de
+    --    cupo del modulo digan cosas distintas.
     -- -----------------------------------------------------------------
-    SELECT COUNT(*) INTO v_ocupados
-      FROM academico_test.TMATRICULA
-     WHERE FK_TGRUPO = p_fk_tgrupo_destino AND ACTIVE = TRUE
-       AND (v_crea OR NOT (PK_TMATRICULA = ANY(v_ids)));
+    v_ocupados := academico_test.fn_matricula_cupo_ocupado(
+        p_fk_tgrupo := p_fk_tgrupo_destino,
+        p_excluir   := CASE WHEN v_crea THEN NULL ELSE v_ids END);
 
     IF v_ocupados + v_total > v_capacidad THEN
         RAISE EXCEPTION 'El grupo destino % no tiene cupo suficiente: el lote pide % y quedan % disponibles (capacidad %, ocupados %)',
@@ -397,25 +427,79 @@ BEGIN
         END IF;
 
         -- El estudiante no puede quedar con dos matriculas activas en el
-        -- periodo destino. Se excluyen las del propio lote: la matricula que
-        -- se esta moviendo sigue activa y en su periodo, asi que contaria
-        -- contra si misma y romperia el caso de mover dentro del mismo
-        -- periodo -- justamente el de bajar de grado a mitad de año. Al
-        -- terminar quedan en Promovido o Reubicado, sin ocupar cupo, o
-        -- movidas al destino si fue una correccion.
-        IF EXISTS (
-            SELECT 1
-              FROM academico_test.TMATRICULA m2
-              JOIN academico_test.TGRUPO gr2 ON gr2.PK_TGRUPO = m2.FK_TGRUPO
-              JOIN academico_test.TGRADO g2  ON g2.PK_TGRADO = gr2.FK_TGRADO
-             WHERE m2.FK_TESTUDIANTE = v_fila.estudiante
-               AND m2.ACTIVE = TRUE
-               AND g2.FK_TPERIODO_ACADEMICO = v_periodo_destino
-               AND NOT (m2.PK_TMATRICULA = ANY(v_ids))
-        ) THEN
-            RAISE EXCEPTION 'El estudiante % ya tiene una matricula activa en el periodo academico destino',
-                v_fila.etiqueta
-                USING ERRCODE = '23505';
+        -- periodo destino. Hay dos exclusiones, y las dos hacen falta:
+        --
+        --   1. Las del propio lote. La matricula que se esta moviendo sigue
+        --      activa y en su periodo, asi que contaria contra si misma y
+        --      romperia el caso de mover dentro del mismo periodo --
+        --      justamente el de bajar de grado a mitad de año.
+        --
+        --   2. Las que ya quedaron ATRAS: Promovido y Reubicado. Cuando se
+        --      promueve o se reubica, la matricula de origen no se borra --
+        --      queda activa con ese estado, encadenada a la nueva por
+        --      FK_TMATRICULA_ANTERIOR. Sin excluirla, la matricula NUEVA que
+        --      acaba de nacer de ese movimiento no se puede volver a mover:
+        --      la de origen la bloquea. Se reprodujo asi -- crear, reubicar,
+        --      y al corregir la resultante saltaba
+        --      "ya tiene una matricula activa en el periodo academico
+        --      destino", señalando a la que quedo en Reubicado.
+        --
+        --      El comentario anterior ya decia que esas quedan "sin ocupar
+        --      cupo", pero la consulta no las excluia: describia la intencion,
+        --      no lo que hacia.
+        --
+        -- Se recoge la matricula que estorba en vez de un EXISTS pelado para
+        -- poder distinguir el caso de Retirado, que merece su propio mensaje, y
+        -- para nombrar su ESTADO.
+        --
+        -- Su numero NO se pone en el mensaje: al usuario final no le dice nada
+        -- y el error lo lee el, no un desarrollador. Tampoco se pone en DETAIL
+        -- -- SqlErrorSanitizer lee ese campo, asi que podria acabar en la
+        -- respuesta de todas formas. El estado si va: "en estado Aprobado" le
+        -- dice que hacer, un numero de matricula no.
+        SELECT m2.PK_TMATRICULA, m2.FK_TLV_ESTADO_MATRICULA,
+               COALESCE(NULLIF(BTRIM(lv2.NOMBRE, CHR(32) || CHR(9) || CHR(13) || CHR(10)), ''),
+                        'sin estado')
+          INTO v_dup_pk, v_dup_estado, v_dup_estado_nom
+          FROM academico_test.TMATRICULA m2
+          JOIN academico_test.TGRUPO gr2 ON gr2.PK_TGRUPO = m2.FK_TGRUPO
+          JOIN academico_test.TGRADO g2  ON g2.PK_TGRADO = gr2.FK_TGRADO
+          LEFT JOIN academico_test.TLISTA_VALOR lv2
+                 ON lv2.PK_LISTA_VALOR = m2.FK_TLV_ESTADO_MATRICULA
+         WHERE m2.FK_TESTUDIANTE = v_fila.estudiante
+           AND m2.ACTIVE = TRUE
+           AND g2.FK_TPERIODO_ACADEMICO = v_periodo_destino
+           AND NOT (m2.PK_TMATRICULA = ANY(v_ids))
+           AND NOT (m2.FK_TLV_ESTADO_MATRICULA
+                        = ANY(COALESCE(v_estados_superados, ARRAY[]::BIGINT[])))
+         ORDER BY m2.PK_TMATRICULA
+         LIMIT 1;
+
+        IF v_dup_pk IS NOT NULL THEN
+            IF v_dup_estado IS NOT DISTINCT FROM v_pk_retirado THEN
+                -- Retirado bloquea a proposito: retirar no elimina la
+                -- matricula, solo cambia su estado -- sigue siendo la del
+                -- estudiante en ese periodo. El camino es reingresarla y mover
+                -- esa, no crear otra en paralelo.
+                --
+                -- Ojo con el vocabulario: esto NO es el cupo. El cupo es de un
+                -- GRUPO (TGRUPO.CAPACIDAD, ver fn_matricula_validar_cupo y el
+                -- paso 6) y esta regla es "una sola matricula activa por
+                -- estudiante y periodo". Son cosas distintas y mezclarlas en el
+                -- mensaje confunde a quien lo lee.
+                RAISE EXCEPTION 'El estudiante % ya tiene una matricula retirada en el periodo '
+                                'academico destino',
+                    v_fila.etiqueta
+                    USING ERRCODE = '23505',
+                          HINT    = 'Retirar no elimina la matricula: sigue siendo la del '
+                                 || 'estudiante en ese periodo, solo que sin asistir. Reingresela '
+                                 || 'y muevala, en vez de mover otra en paralelo';
+            ELSE
+                RAISE EXCEPTION 'El estudiante % ya tiene una matricula activa en el periodo '
+                                'academico destino, en estado %',
+                    v_fila.etiqueta, v_dup_estado_nom
+                    USING ERRCODE = '23505';
+            END IF;
         END IF;
     END LOOP;
 
