@@ -1359,6 +1359,116 @@
           }
         }
       ]
+    },
+    {
+      "name": "20 - Reporte de asistencia por grupo (E03HU57)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/reporte",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "reporte"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FILTERS\": {\n    \"FECHA_DESDE\": \"2026-02-01\",\n    \"FECHA_HASTA\": \"2026-02-28\",\n    \"GRUPO\": \"{{grupoId}}\"\n  },\n  \"SORTING\": {\n    \"ID\": \"estudiante\",\n    \"DESC\": false\n  }\n}"
+        },
+        "description": {
+          "content": "**E03HU57 — Reporte de asistencia por grupo** (\"Como docente quiero generar un reporte semanal/mensual de asistencia de mi grupo para compartirlo con coordinacion o padres de familia\").\n\nNo es una funcion nueva: es la MISMA `fn_asistencia_listar_seguimiento` de `9`/`10`/`10b`, invocada **sin paginar** (`page_size`/`page_index` van en `NULL` -- \"sin limite\" desde V66) detras de una ruta separada. `reporting-service` (microservicio REST registrado en V68) llama esta misma ruta para armar el PDF o el Excel a partir de las filas -- el `catalogo` no cambia, solo el consumidor.\n\nCada fila trae `observacion` y `tiene_soporte`/`soporte_nombre` (la justificacion) ademas de `total_estudiantes`/`ausentes` como ventana sobre el set filtrado completo -- el mismo dato que ya usa la pantalla Seguimiento para sus tarjetas, aqui reusado para los porcentajes de asistencia/faltas/tardanzas del reporte (se tabulan a partir de las filas devueltas, no en esta funcion).\n\nA diferencia de `/asistencias/query`: aqui **GRUPO**, **FECHA_DESDE** y **FECHA_HASTA** son OBLIGATORIOS (sin paginacion, faltar el grupo o el rango materializaria el historico completo de la sede en una sola llamada). `ASIGNATURA`/`ACTIVIDAD`/`TIPO_ASISTENCIA`/`SEARCH` siguen siendo opcionales y combinables, igual que en `9`. `BODY.PAGEINDEX`/`BODY.PAGESIZE` no existen en este endpoint -- no se puede paginar un reporte ni por accidente.\n\nMismos roles que `9 - Seguimiento` (role_query copiado 1:1 de 'asis-seguimiento': \"quien ve el listado puede exportarlo\"); mismo gate de negocio (`fn_asistencia_puede_ver`, corre dentro de la funcion reusada).",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test(\"sin paginar: no trae PAGEINDEX/PAGESIZE en el body de entrada\", () => {",
+              "  if (!r.length) return;",
+              "  pm.expect(r[0]).to.have.property(\"total_count\");",
+              "  pm.expect(r[0]).to.have.property(\"observacion\");",
+              "  pm.expect(r[0]).to.have.property(\"tiene_soporte\"); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "21 - [400] reporte sin rango de fechas",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/reporte",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "reporte"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FILTERS\": {\n    \"GRUPO\": \"{{grupoId}}\"\n  }\n}"
+        },
+        "description": {
+          "content": "**400** `PARAM_CONSTRAINT_VIOLATION` (o el 400 generico de parametro requerido del gateway): `FECHA_DESDE`/`FECHA_HASTA` estan declarados `VARCHAR!` para este endpoint -- a diferencia de `9 - Seguimiento`, donde el rango es opcional porque esa pantalla pagina. Sin paginacion, un reporte sin rango materializaria el historico completo del grupo en una sola llamada.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"400\", () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
     }
   ],
   "variable": [
