@@ -76,9 +76,26 @@ DROP INDEX IF EXISTS IDX_TUNIDAD_3;
 
 ALTER TABLE TUNIDAD DROP COLUMN IF EXISTS FK_TPERIODO_EVALUACION;
 
-ALTER TABLE TUNIDAD
-  ADD CONSTRAINT UN_TUNIDAD_1 UNIQUE (NOMBRE, FK_TASIGNATURA, FK_TGRADO)
-    DEFERRABLE INITIALLY DEFERRED;
+-- Unicidad SOLO entre unidades ACTIVAS, como indice parcial -- no como
+-- constraint UNIQUE plana. Dos motivos:
+--
+--   1. Datos. Una UNIQUE plana cuenta tambien las filas con borrado logico, y
+--      en el servidor de test existen unidades inactivas que comparten
+--      (NOMBRE, FK_TASIGNATURA, FK_TGRADO) con una activa. Crearla ahi falla
+--      con 23505 y tumba el deploy entero.
+--   2. Coherencia. Es el patron que V65/V71 aplicaron a las 84 restricciones
+--      de academico_test, y el que V280 vuelve a dejar unas migraciones mas
+--      abajo: crearla aqui plana para que V280 la rehiciera parcial no
+--      aportaba nada y solo abria esta ventana de fallo.
+--
+-- Se pierde el DEFERRABLE INITIALLY DEFERRED original: Postgres no permite
+-- respaldar un constraint deferrable con un indice parcial. Es la misma
+-- perdida asumida en V65/V71 para las otras 26 restricciones deferrables.
+-- fn_unidad_crear ya valida la unicidad entre activas por su cuenta y con un
+-- mensaje de negocio, asi que el indice queda como red de seguridad.
+CREATE UNIQUE INDEX IF NOT EXISTS UN_TUNIDAD_1
+    ON academico_test.TUNIDAD (NOMBRE, FK_TASIGNATURA, FK_TGRADO)
+ WHERE ACTIVE = TRUE;
 
 -- ---------------------------------------------------------------------------
 -- 4. TUSUARIO.FECHA_NACIMIENTO nullable (alinea con el servidor; V22 NOT NULL)
