@@ -63,7 +63,14 @@ COMMENT ON COLUMN TACTIVIDAD.FK_TUNIDAD IS 'Llave foranea a tabla TUNIDAD. Opcio
 -- ---------------------------------------------------------------------------
 -- 3. TUNIDAD deja de depender del periodo de evaluacion
 -- ---------------------------------------------------------------------------
+-- un_tunidad_1 puede existir en DOS formas: como constraint (V22, o esta misma
+-- migracion en una pasada anterior) o como indice suelto (V71 lo convirtio en
+-- parcial, y V280 lo vuelve a dejar asi despues de esta migracion). Hay que
+-- soltar las dos: DROP CONSTRAINT no elimina un indice que no respalda ningun
+-- constraint, y sin esto el ADD CONSTRAINT de mas abajo falla con
+-- "relation un_tunidad_1 already exists" al re-ejecutar la migracion.
 ALTER TABLE TUNIDAD DROP CONSTRAINT IF EXISTS UN_TUNIDAD_1;
+DROP INDEX IF EXISTS academico_test.UN_TUNIDAD_1;
 ALTER TABLE TUNIDAD DROP CONSTRAINT IF EXISTS FK_TUNIDAD_3;
 DROP INDEX IF EXISTS IDX_TUNIDAD_3;
 
