@@ -1,0 +1,1338 @@
+{
+  "info": {
+    "_postman_id": "c3d81a47-5b62-4f18-9e30-7a4c1d92f6b8",
+    "name": "SSO — Planeador: cambios de esta tanda (delta)",
+    "description": "Coleccion **atomica**: solo lo que cambio en esta tanda y lo que el front tiene que hacer con ello. Para el modulo completo, ver `planeador-guia-completa`.\n\n## Resumen de los cambios\n\n| # | Cambio | Endpoints | Migracion |\n|---|--------|-----------|-----------|\n| 1 | Paginado por **dia activo** (`?dia=`) + `dia_anterior` / `dia_siguiente` | `/unidades`, `/actividades`, `/actividades/mias` | V216, V224, V279 |\n| 2 | **`estado`** derivado de la unidad | `/unidades`, `/unidades/:ID` | V224 (`fn_unidad_estado`), V216 |\n| 3 | **`grado_grupo`** (+ `fk_tgrado`, `grado`, `grado_codigo`) | `/actividades`, `/actividades/mias`, `/actividades/:ID`, `/actividades/calendario` | V224, V251 |\n| 4 | **Endpoint nuevo**: referente por grado+asignatura | `GET /planeador/referente-curricular` | V278 |\n| 5 | El referente de la unidad se **deriva y se valida** | `POST /unidades`, `PUT /unidades/:ID` | V216, V280 |\n| 6 | **`referente_vigente`**: listado y detalle dejan de contradecirse | `/unidades`, `/unidades/:ID` | V216, V255 |\n| 7 | Catalogo **AGRUPACION_PLANILLA** | `GET /select/AGRUPACION_PLANILLA` | V74 |\n| 8 | **Endpoint nuevo**: las pestanas de unidad del docente | `GET /planeador/unidades/tabs` | V281 |\n| 9 | El rotulo dinamico de la pestana **estaba roto** (42703) | `fn_unidad_etiqueta_por_grado` | V216 |\n| 10 | El nombre de una unidad borrada ya no queda ocupado | `POST /unidades` | V280 |\n\n## Lo que el FRONT tiene que cambiar\n\n**a) Pintar `grado_grupo` donde hoy se pinta otra cosa.** Es el cambio con impacto visible. Antes estos endpoints solo devolvian `grupo` (`\"01\"`), sin el grado, y por eso el calendario estaba pintando el **`pk_tactividad`** en la celda (`34 | MATEMA...`) y las tarjetas mostraban `MATEMATICAS 01` (asignatura + grupo). Ahora hay que usar `grado_grupo` -- el `601` del prototipo. Los campos sueltos (`grado`, `grado_codigo`, `fk_tgrado`) van tambien en la respuesta por si se prefiere componer otra etiqueta.\n\n**b) Manejar la fila sintetica del dia vacio.** Con `?dia=` un dia SIN resultados devuelve **una** fila con todos los campos de la entidad en `null`, `total_count: 0` y las flechas informadas. Es deliberado: sin ella no habria con que **salir** del dia vacio. Reconocerla por `total_count === 0` (o `pk_* === null`) y **no** pintarla como tarjeta.\n\n**c) Usar `dia_anterior` / `dia_siguiente` para las flechas, no `dia ± 1`.** Saltan los dias vacios; `null` significa \"no hay mas por ese lado\" y ahi la flecha se deshabilita.\n\n**d) Dejar de mandar el referente al crear la unidad.** Ya se deriva del grado en el back. Si se manda uno que no aplica al nivel del grado, ahora responde **409** (antes lo aceptaba en silencio y la unidad quedaba inservible).\n\n**e) Distinguir `referente_vigente: false`.** Significa que la unidad guarda un referente que ya no vale (lo desactivaron): hay que avisar, porque esa unidad no puede ofrecer enunciados. Es distinto de \"no se acoge a ninguno\" (`fk_referente_curricular: null` con `referente_vigente: true`).\n\n**f) `estado` de la unidad: cuatro valores, la misma paleta que la actividad.** `VENCIDA` / `PENDIENTE_POR_EVALUAR` / `FINALIZADA` / `EN_EVALUACION`. Una unidad **sin actividades** cae en `EN_EVALUACION`; se reconoce por `total_actividades: 0`.\n\n**g) Revisar el `?dia=` del tab \"Unidad tematica\".** Hoy el front manda `?dia=<hoy>` tambien ahi, y eso **oculta** las unidades que no tienen ninguna actividad ese dia. El endpoint hace lo documentado; probablemente el parametro se copio del listado de actividades y en ese tab no se quiere.\n\n## Entorno\n\nReutiliza **SSO — test** (`sso-test.postman_environment.json`): `baseUrl`, `email`, `password`. El login es automatico. Los valores por defecto son los reales del servidor de test.\n\n**La corrida termina en cero:** la unica peticion que escribe (4.2) crea una unidad desechable que 4.5 borra al final.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Login automatico: si el token vivo ya esta en la variable de coleccion,",
+          "// no vuelve a pedirlo.",
+          "const rutaLogin = '/api/auth/login';",
+          "if (pm.request.url.getPath().endsWith(rutaLogin)) { return; }",
+          "",
+          "function caducado(jwt) {",
+          "    try {",
+          "        const carga = JSON.parse(atob(jwt.split('.')[1]));",
+          "        return !carga.exp || (carga.exp - 30) * 1000 < Date.now();",
+          "    } catch (e) { return true; }",
+          "}",
+          "",
+          "const actual = pm.collectionVariables.get('token');",
+          "if (actual && !caducado(actual)) { return; }",
+          "",
+          "const clave = pm.environment.get('password');",
+          "if (!clave) { throw new Error('Falta `password` en el entorno.'); }",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + rutaLogin,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "        email: pm.environment.get('email'),",
+          "        password: clave",
+          "    }) }",
+          "}, (err, res) => {",
+          "    if (err) { throw new Error('No se pudo contactar con el gateway: ' + err); }",
+          "    if (res.code !== 200) { throw new Error('Login rechazado (' + res.code + ').'); }",
+          "    pm.collectionVariables.set('token', res.json().token);",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "token",
+      "value": "",
+      "description": "Lo llena el script prerequest."
+    },
+    {
+      "key": "diaActivo",
+      "value": "2026-09-09",
+      "description": "Dia CON actividades en el servidor de test."
+    },
+    {
+      "key": "diaVacio",
+      "value": "2026-10-25",
+      "description": "Dia SIN actividades: sirve para ver la fila sintetica y las flechas."
+    },
+    {
+      "key": "gradoId",
+      "value": "3743",
+      "description": "Pre-Jardin (nivel 1, Preescolar)."
+    },
+    {
+      "key": "gradoId2",
+      "value": "3744",
+      "description": "Jardin I o A o Kinder (nivel 1)."
+    },
+    {
+      "key": "asignaturaId",
+      "value": "4190",
+      "description": "MATEMATICAS."
+    },
+    {
+      "key": "unidadId",
+      "value": "12",
+      "description": "Unidad existente del docente de prueba."
+    },
+    {
+      "key": "actividadId",
+      "value": "23",
+      "description": "Actividad existente CON unidad."
+    },
+    {
+      "key": "referenteOtroNivelId",
+      "value": "27",
+      "description": "DBA - Primaria (nivel 2): NO aplica a un grado de Preescolar."
+    },
+    {
+      "key": "gradoAjenoId",
+      "value": "1750",
+      "description": "Grado de una sede que el docente NO alcanza."
+    },
+    {
+      "key": "unidadSandboxId",
+      "value": "",
+      "description": "La crea 4.2 y la borra 4.5."
+    },
+    {
+      "key": "nombreSandbox",
+      "value": "",
+      "description": "Nombre unico por corrida; lo genera el prerequest de 4.2 (ver nota (h))."
+    },
+    {
+      "key": "nombreReuso",
+      "value": "",
+      "description": "Nombre unico por corrida para la prueba de unicidad de la carpeta 7."
+    },
+    {
+      "key": "unidadReusoId",
+      "value": "",
+      "description": "La unidad de la carpeta 7; la borra 7.5."
+    }
+  ],
+  "item": [
+    {
+      "name": "1 — Paginado por dia activo (?dia=)",
+      "item": [
+        {
+          "name": "1.1 — Dia CON actividades",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/mias?size=50&offset=0&dia={{diaActivo}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "mias"
+              ],
+              "query": [
+                {
+                  "key": "size",
+                  "value": "50"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                },
+                {
+                  "key": "dia",
+                  "value": "{{diaActivo}}"
+                }
+              ]
+            },
+            "description": "`?dia=YYYY-MM-DD` deja solo lo **vigente** ese dia: la ventana `[fechaInicio, fechaCierre]` **cubre** el dia, no que empiece o cierre en el -- una actividad de tres dias aparece en los tres. Una actividad sin ninguna fecha no esta en ningun dia y no sale en esta vista.\n\n`dia_anterior` / `dia_siguiente` son el dia **ocupado** mas cercano a cada lado bajo los MISMOS filtros, **saltando los vacios**: no son `dia ± 1`. Usarlos para las flechas.\n\nSin `?dia=` el comportamiento es el de siempre y las tres columnas vienen `null`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().rows || [];",
+                  "const dia = pm.request.url.query.get('dia');",
+                  "const reales = filas.filter(f => f.pk_tactividad !== null);",
+                  "pm.test('hay actividades ese dia', () => pm.expect(reales).to.not.be.empty);",
+                  "// Las fechas ISO se comparan como texto (YYYY-MM-DD ordena igual que",
+                  "// la fecha); chai exigiria number/date con at.most/at.least.",
+                  "pm.test('todas CUBREN el dia (no solo empiezan/cierran en el)', () => {",
+                  "  reales.forEach(f => {",
+                  "    const ini = f.fecha_inicio && f.fecha_inicio.slice(0, 10);",
+                  "    const fin = f.fecha_cierre && f.fecha_cierre.slice(0, 10);",
+                  "    if (ini) pm.expect(ini <= dia, f.titulo + ' empieza ' + ini).to.be.true;",
+                  "    if (fin) pm.expect(fin >= dia, f.titulo + ' cierra ' + fin).to.be.true;",
+                  "  });",
+                  "});",
+                  "pm.test('las flechas apuntan al lado correcto', () => {",
+                  "  const a = filas[0].dia_anterior && filas[0].dia_anterior.slice(0, 10);",
+                  "  const s = filas[0].dia_siguiente && filas[0].dia_siguiente.slice(0, 10);",
+                  "  if (a) pm.expect(a < dia, 'dia_anterior ' + a).to.be.true;",
+                  "  if (s) pm.expect(s > dia, 'dia_siguiente ' + s).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.2 — Dia VACIO (la fila sintetica que el front debe reconocer)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/mias?size=50&offset=0&dia={{diaVacio}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "mias"
+              ],
+              "query": [
+                {
+                  "key": "size",
+                  "value": "50"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                },
+                {
+                  "key": "dia",
+                  "value": "{{diaVacio}}"
+                }
+              ]
+            },
+            "description": "**El caso que hay que programar en el front.** Un dia sin resultados devuelve **una** fila con todos los campos de la actividad en `null`, `total_count: 0` y las flechas informadas.\n\nEs deliberado: si no devolviera nada, el usuario se quedaria encerrado en un dia vacio sin `dia_anterior` / `dia_siguiente` con que salir. Reconocerla por `total_count === 0` (o `pk_tactividad === null`) y **no** pintarla como tarjeta -- pintar el estado vacio y dejar las flechas activas.\n\nOjo: **sin** `?dia=` una pagina vacia sigue siendo `rows: []`. La fila sintetica existe solo cuando se pide un dia."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().rows || [];",
+                  "pm.test('exactamente UNA fila', () => pm.expect(filas).to.have.lengthOf(1));",
+                  "pm.test('es la sintetica: pk null y total_count 0', () => {",
+                  "  pm.expect(filas[0].pk_tactividad, 'pk_tactividad').to.be.null;",
+                  "  pm.expect(filas[0].total_count, 'total_count').to.eql(0);",
+                  "});",
+                  "pm.test('pero trae con que salir del dia vacio', () => {",
+                  "  const f = filas[0];",
+                  "  pm.expect(f.dia, 'dia').to.not.be.null;",
+                  "  pm.expect(!!f.dia_anterior || !!f.dia_siguiente, 'al menos una flecha').to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.3 — El mismo ?dia= en el listado de unidades",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades?size=20&offset=0&dia={{diaActivo}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades"
+              ],
+              "query": [
+                {
+                  "key": "size",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                },
+                {
+                  "key": "dia",
+                  "value": "{{diaActivo}}"
+                }
+              ]
+            },
+            "description": "Misma semantica, un nivel arriba: deja las unidades con **alguna** actividad activa vigente ese dia. La unidad no tiene fechas propias, por eso el dia se resuelve siempre por sus actividades.\n\n**Implicacion (g) del resumen:** en el tab \"Unidad tematica\" esto **oculta** las unidades sin actividades ese dia. Si ese tab debe listar todas, hay que **dejar de mandar** `?dia=` ahi."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().rows || [];",
+                  "pm.test('con ?dia= siempre llega al menos una fila', () => pm.expect(filas).to.not.be.empty);",
+                  "pm.test('trae la navegacion de la barra', () => {",
+                  "  pm.expect(filas[0]).to.have.property('dia_anterior');",
+                  "  pm.expect(filas[0]).to.have.property('dia_siguiente');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 — Estado derivado de la unidad",
+      "item": [
+        {
+          "name": "2.1 — Listado: estado + referente_vigente",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades?size=20&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades"
+              ],
+              "query": [
+                {
+                  "key": "size",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "**`estado`** (nuevo). No hay columna: agrega el estado de las actividades de la unidad con esta cascada, en este orden exacto:\n\n1. UNA sola actividad `VENCIDA` -> **VENCIDA**\n2. sin vencidas pero alguna `PENDIENTE_POR_EVALUAR` -> **PENDIENTE_POR_EVALUAR**\n3. TODAS finalizadas -> **FINALIZADA**\n4. cualquier otro caso -> **EN_EVALUACION**\n\nSon los **mismos cuatro valores** del estado de actividad, asi que el chip se pinta con la misma paleta sin traducir nada. `?DIAS_GRACIA=` (default 2) mueve el umbral de `VENCIDA`.\n\n*Caso borde:* una unidad **sin actividades** cae en `EN_EVALUACION` (es \"cualquier otro caso\"); se reconoce por `total_actividades: 0`.\n\n**`referente_vigente`** (nuevo). `false` = la unidad guarda un referente que ya no resuelve (lo desactivaron: `ACTIVE=false` o `ESTADO='I'`). Antes este listado mostraba el **nombre** de referentes muertos mientras el detalle devolvia `null` para la misma unidad. Distinguirlo de \"no se acoge a ninguno\" (`fk_referente_curricular: null`, `referente_vigente: true`) importa: una unidad con referente muerto no puede ofrecer enunciados."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().rows || [];",
+                  "const reales = filas.filter(f => f.pk_tunidad !== null);",
+                  "pm.test('cada unidad trae uno de los cuatro estados', () => {",
+                  "  reales.forEach(f => pm.expect(['VENCIDA', 'PENDIENTE_POR_EVALUAR', 'FINALIZADA', 'EN_EVALUACION'], f.nombre).to.include(f.estado));",
+                  "});",
+                  "pm.test('referente_vigente es coherente con la FK', () => {",
+                  "  reales.forEach(f => {",
+                  "    // vigente=false solo puede darse con FK puesta y nombre sin resolver",
+                  "    if (f.referente_vigente === false) {",
+                  "      pm.expect(f.fk_referente_curricular, f.nombre).to.not.be.null;",
+                  "      pm.expect(f.referente_curricular, f.nombre).to.be.null;",
+                  "    }",
+                  "  });",
+                  "});",
+                  "if (reales.length) pm.collectionVariables.set('unidadId', String(reales[0].pk_tunidad));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.2 — Detalle: dice lo MISMO que el listado",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadId}}"
+              ]
+            },
+            "description": "El detalle devuelve el mismo `estado` y el mismo `referente_vigente` que el listado, con los dias de gracia por defecto (2). El chip tiene que decir lo mismo en la tarjeta y en el detalle."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().rows || [];",
+                  "pm.test('trae estado y referente_vigente', () => {",
+                  "  pm.expect(['VENCIDA', 'PENDIENTE_POR_EVALUAR', 'FINALIZADA', 'EN_EVALUACION']).to.include(filas[0].estado);",
+                  "  pm.expect(filas[0]).to.have.property('referente_vigente');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 — grado-grupo en las lecturas de actividad",
+      "item": [
+        {
+          "name": "3.1 — Tablero del docente",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/mias?size=50&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "mias"
+              ],
+              "query": [
+                {
+                  "key": "size",
+                  "value": "50"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "**El cambio con impacto visible en la pantalla.** Antes estas lecturas devolvian solo `grupo` (`\"01\"`), sin el grado, y la UI no tenia de donde sacar el `601` del prototipo.\n\nAhora llegan `fk_tgrado`, `grado`, `grado_codigo` y la etiqueta ya compuesta **`grado_grupo`**.\n\nLa etiqueta **no** es `grado || grupo`, porque conviven dos convenciones de `TGRUPO.NOMBRE`: en los grupos cargados de verdad el nombre ya incluye el grado (grado `8`, grupo `803M` -- concatenar daria `8803M`) y en los sembrados a mano es solo el consecutivo (`01`), donde el codigo del grado tampoco sirve porque en Preescolar es **negativo** (`-2` -> `-201`). La regla: si el nombre del grupo ya empieza por el codigo del grado se devuelve tal cual (`803M`); si no, se compone con el **nombre** del grado (`Pre-Jardin 01`).\n\nEl grado sale del **grupo** de la actividad y, cuando no tiene grupo (criterios, huerfanas), del grado de su **unidad**.\n\nAqui alimenta la **tarjeta** del panel izquierdo."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().rows || [];",
+                  "const reales = filas.filter(f => f.pk_tactividad !== null);",
+                  "pm.test('llegan los cuatro campos de grado', () => {",
+                  "  reales.forEach(f => ['fk_tgrado', 'grado', 'grado_codigo', 'grado_grupo']",
+                  "      .forEach(k => pm.expect(f, f.titulo + ' -> ' + k).to.have.property(k)));",
+                  "});",
+                  "pm.test('grado_grupo nunca sale malformado', () => {",
+                  "  reales.filter(f => f.grado_grupo).forEach(f => {",
+                  "    // ni el codigo negativo pegado ni el codigo duplicado delante",
+                  "    pm.expect(f.grado_grupo, f.titulo).to.not.match(/^-/);",
+                  "    if (f.grado_codigo && f.grupo && f.grupo.startsWith(f.grado_codigo)) {",
+                  "      pm.expect(f.grado_grupo, f.titulo).to.eql(f.grupo);",
+                  "    }",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.2 — Calendario (donde se pintaba el pk_tactividad)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/calendario?fecha_desde=2026-09-01&fecha_hasta=2026-09-30",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "calendario"
+              ],
+              "query": [
+                {
+                  "key": "fecha_desde",
+                  "value": "2026-09-01"
+                },
+                {
+                  "key": "fecha_hasta",
+                  "value": "2026-09-30"
+                }
+              ]
+            },
+            "description": "**El cambio con impacto visible en la pantalla.** Antes estas lecturas devolvian solo `grupo` (`\"01\"`), sin el grado, y la UI no tenia de donde sacar el `601` del prototipo.\n\nAhora llegan `fk_tgrado`, `grado`, `grado_codigo` y la etiqueta ya compuesta **`grado_grupo`**.\n\nLa etiqueta **no** es `grado || grupo`, porque conviven dos convenciones de `TGRUPO.NOMBRE`: en los grupos cargados de verdad el nombre ya incluye el grado (grado `8`, grupo `803M` -- concatenar daria `8803M`) y en los sembrados a mano es solo el consecutivo (`01`), donde el codigo del grado tampoco sirve porque en Preescolar es **negativo** (`-2` -> `-201`). La regla: si el nombre del grupo ya empieza por el codigo del grado se devuelve tal cual (`803M`); si no, se compone con el **nombre** del grado (`Pre-Jardin 01`).\n\nEl grado sale del **grupo** de la actividad y, cuando no tiene grupo (criterios, huerfanas), del grado de su **unidad**.\n\n**Este es el sitio del bug visible:** la celda del calendario mostraba `34 | MATEMA...`, donde `34` era el `pk_tactividad`. Debe mostrar `grado_grupo`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().rows || [];",
+                  "const reales = filas.filter(f => f.pk_tactividad !== null);",
+                  "pm.test('llegan los cuatro campos de grado', () => {",
+                  "  reales.forEach(f => ['fk_tgrado', 'grado', 'grado_codigo', 'grado_grupo']",
+                  "      .forEach(k => pm.expect(f, f.titulo + ' -> ' + k).to.have.property(k)));",
+                  "});",
+                  "pm.test('grado_grupo nunca sale malformado', () => {",
+                  "  reales.filter(f => f.grado_grupo).forEach(f => {",
+                  "    // ni el codigo negativo pegado ni el codigo duplicado delante",
+                  "    pm.expect(f.grado_grupo, f.titulo).to.not.match(/^-/);",
+                  "    if (f.grado_codigo && f.grupo && f.grupo.startsWith(f.grado_codigo)) {",
+                  "      pm.expect(f.grado_grupo, f.titulo).to.eql(f.grupo);",
+                  "    }",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.3 — Detalle de actividad",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "{{actividadId}}"
+              ]
+            },
+            "description": "**El cambio con impacto visible en la pantalla.** Antes estas lecturas devolvian solo `grupo` (`\"01\"`), sin el grado, y la UI no tenia de donde sacar el `601` del prototipo.\n\nAhora llegan `fk_tgrado`, `grado`, `grado_codigo` y la etiqueta ya compuesta **`grado_grupo`**.\n\nLa etiqueta **no** es `grado || grupo`, porque conviven dos convenciones de `TGRUPO.NOMBRE`: en los grupos cargados de verdad el nombre ya incluye el grado (grado `8`, grupo `803M` -- concatenar daria `8803M`) y en los sembrados a mano es solo el consecutivo (`01`), donde el codigo del grado tampoco sirve porque en Preescolar es **negativo** (`-2` -> `-201`). La regla: si el nombre del grupo ya empieza por el codigo del grado se devuelve tal cual (`803M`); si no, se compone con el **nombre** del grado (`Pre-Jardin 01`).\n\nEl grado sale del **grupo** de la actividad y, cuando no tiene grupo (criterios, huerfanas), del grado de su **unidad**.\n\nSe agrego tambien al detalle para que la cabecera no tenga que recomponerlo."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().rows || [];",
+                  "pm.test('el detalle trae grado_grupo', () => {",
+                  "  pm.expect(filas[0]).to.have.property('grado_grupo');",
+                  "  pm.expect(filas[0]).to.have.property('fk_tgrado');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.4 — Listado general (mismos campos)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades?size=20&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades"
+              ],
+              "query": [
+                {
+                  "key": "size",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "**El cambio con impacto visible en la pantalla.** Antes estas lecturas devolvian solo `grupo` (`\"01\"`), sin el grado, y la UI no tenia de donde sacar el `601` del prototipo.\n\nAhora llegan `fk_tgrado`, `grado`, `grado_codigo` y la etiqueta ya compuesta **`grado_grupo`**.\n\nLa etiqueta **no** es `grado || grupo`, porque conviven dos convenciones de `TGRUPO.NOMBRE`: en los grupos cargados de verdad el nombre ya incluye el grado (grado `8`, grupo `803M` -- concatenar daria `8803M`) y en los sembrados a mano es solo el consecutivo (`01`), donde el codigo del grado tampoco sirve porque en Preescolar es **negativo** (`-2` -> `-201`). La regla: si el nombre del grupo ya empieza por el codigo del grado se devuelve tal cual (`803M`); si no, se compone con el **nombre** del grado (`Pre-Jardin 01`).\n\nEl grado sale del **grupo** de la actividad y, cuando no tiene grupo (criterios, huerfanas), del grado de su **unidad**.\n\nEl listado general (no acotado al docente) devuelve exactamente los mismos campos."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().rows || [];",
+                  "const reales = filas.filter(f => f.pk_tactividad !== null);",
+                  "pm.test('llegan los cuatro campos de grado', () => {",
+                  "  reales.forEach(f => ['fk_tgrado', 'grado', 'grado_codigo', 'grado_grupo']",
+                  "      .forEach(k => pm.expect(f, f.titulo + ' -> ' + k).to.have.property(k)));",
+                  "});",
+                  "pm.test('grado_grupo nunca sale malformado', () => {",
+                  "  reales.filter(f => f.grado_grupo).forEach(f => {",
+                  "    // ni el codigo negativo pegado ni el codigo duplicado delante",
+                  "    pm.expect(f.grado_grupo, f.titulo).to.not.match(/^-/);",
+                  "    if (f.grado_codigo && f.grupo && f.grupo.startsWith(f.grado_codigo)) {",
+                  "      pm.expect(f.grado_grupo, f.titulo).to.eql(f.grupo);",
+                  "    }",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4 — Referente curricular: derivado y validado",
+      "item": [
+        {
+          "name": "4.1 — [NUEVO] Referente por grado + asignatura",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/referente-curricular?grado={{gradoId}}&asignatura={{asignaturaId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "referente-curricular"
+              ],
+              "query": [
+                {
+                  "key": "grado",
+                  "value": "{{gradoId}}"
+                },
+                {
+                  "key": "asignatura",
+                  "value": "{{asignaturaId}}"
+                }
+              ]
+            },
+            "description": "**Endpoint nuevo (V278).** Dado un grado y, opcionalmente, una asignatura, devuelve el referente que les corresponde con todo lo que hace falta para pintar la pantalla: enunciados y evidencias, tipo de evaluacion y enfoque pedagogico.\n\nEl referente **no se elige a mano**: se deriva del grado (`grado -> nivel de ensenanza -> referente del nivel`). Este endpoint hace el recorrido en una llamada, y es el que sirve **mientras se arma la unidad**, antes de que exista. Con la unidad ya creada, el equivalente es `GET /planeador/unidades/:ID/referente`.\n\n**Devuelve un ARREGLO, no un objeto** (la relacion referente<->nivel es N:N). El orden ES la preferencia: primero los acotados al area de la asignatura (`especificidad: 0`, `aplica_a_area: true`), luego los universales (`especificidad: 1`). Leer esos dos campos en vez de tomar `[0]` a ciegas.\n\n`?asignatura=` **filtra por area**: un referente sin areas declaradas aplica a **TODAS**, no a ninguna. `?anio=` (default: anio en curso) descarta los fuera de vigencia.\n\nSolo devuelve referentes con `ACTIVE` **y** `ESTADO = 'A'`: son dos cosas distintas -- el borrado logico y el estado de negocio que se edita en el catalogo --, y hay filas con uno sin el otro.\n\n**Rotular con `nivel_1_etiqueta` / `nivel_2_etiqueta`**, nunca con literales: en Preescolar son `Proposito` / `Imprescindible`, en Primaria `Enunciado` / `Evidencia`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().rows || [];",
+                  "pm.test('devuelve al menos un referente', () => pm.expect(filas).to.not.be.empty);",
+                  "const r = filas[0];",
+                  "pm.test('trae las banderas que gobiernan la UI', () => {",
+                  "  pm.expect(r).to.have.property('es_evaluativo');",
+                  "  pm.expect(r.tipo_evaluacion_valor).to.be.oneOf(['CUALITATIVA', 'CUANTITATIVA', 'CUANTITATIVA_CUALITATIVA']);",
+                  "});",
+                  "pm.test('trae las etiquetas de nivel del propio referente', () => {",
+                  "  pm.expect(r.nivel_1_etiqueta).to.be.a('string').and.not.empty;",
+                  "  pm.expect(r.nivel_2_etiqueta).to.be.a('string').and.not.empty;",
+                  "});",
+                  "pm.test('el arbol trae evidencias anidadas por enunciado', () => {",
+                  "  pm.expect(r.enunciados).to.be.an('array');",
+                  "  r.enunciados.forEach(e => pm.expect(e, e.texto).to.have.property('evidencias'));",
+                  "});",
+                  "pm.test('ordenado por especificidad (el orden ES la preferencia)', () => {",
+                  "  const esp = filas.map(x => x.especificidad);",
+                  "  pm.expect(esp).to.deep.equal(esp.slice().sort((a, b) => a - b));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.2 — Crear unidad SIN mandar referente (se deriva)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades"
+              ]
+            },
+            "description": "**Implicacion (d): el front puede dejar de mandar el referente.** `FK_REFERENTE_CURRICULAR` ya no va en el body: si no llega, el back lo **deriva del grado** con la misma regla de 4.1.\n\nAntes no se derivaba, y las unidades creadas desde la UI quedaban con el referente en `NULL`; el efecto era que `GET /planeador/unidades/:ID/referente` devolvia **todo NULL** y la pantalla no podia rotular niveles, ni saber si hay seccion de evaluacion, ni ofrecer enunciados.\n\nOjo con los nombres del body: son `FK_TASIGNATURA`, `FK_TGRADO`, `FK_TLV_CALCULO_DEFINITIVA` (no `ASIGNATURA` / `GRADO` / ...); mandar claves que no existen da un error del motor sobre placeholders sin tipo.\n\nEsta unidad es **desechable** y la borra 4.5.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"NOMBRE\": \"{{nombreSandbox}}\",\n  \"FK_TASIGNATURA\": 4190,\n  \"FK_TGRADO\": 3743,\n  \"FK_TLV_CALCULO_DEFINITIVA\": 496,\n  \"DESCRIPCION\": \"Unidad desechable de la coleccion delta.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Nombre UNICO por corrida. Hace falta por un defecto del esquema:",
+                  "// un_tunidad_1 es un indice unico (nombre, asignatura, grado) SIN",
+                  "// WHERE active = true, asi que el nombre de una unidad borrada queda",
+                  "// ocupado para siempre y re-crearla da 409. Ver la nota (h) de la",
+                  "// descripcion de la coleccion.",
+                  "pm.collectionVariables.set('nombreSandbox',",
+                  "    'ZZZ delta sandbox ' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201/200', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "// El motor responde {\"rows\":[{\"fn_unidad_crear\": <pk>}]}.",
+                  "const fila = (pm.response.json().rows || [])[0];",
+                  "const pk = fila && fila[Object.keys(fila)[0]];",
+                  "pm.test('devuelve el pk de la unidad creada', () => pm.expect(pk).to.be.a('number'));",
+                  "if (pk) pm.collectionVariables.set('unidadSandboxId', String(pk));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.3 — Su referente ya NO viene vacio",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadSandboxId}}/referente",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadSandboxId}}",
+                "referente"
+              ]
+            },
+            "description": "La comprobacion de que 4.2 derivo bien: la unidad recien creada, **sin** haber mandado referente, ya trae el arbol completo -- referente, etiquetas de nivel, enfoque, tipo de evaluacion y enunciados que ofrecer.\n\nAntes de este cambio esta misma llamada devolvia todas las columnas del referente en `null` y `enunciados: []`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().rows || [];",
+                  "const r = filas[0];",
+                  "pm.test('el referente se derivo (no viene null)', () => {",
+                  "  pm.expect(r.pk_referente_curricular, 'pk_referente_curricular').to.not.be.null;",
+                  "  pm.expect(r.referente_nombre, 'referente_nombre').to.not.be.null;",
+                  "});",
+                  "pm.test('y trae con que pintar la unidad', () => {",
+                  "  pm.expect(r.nivel_1_etiqueta).to.be.a('string').and.not.empty;",
+                  "  pm.expect(r.enunciados).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.4 — Referente de OTRO nivel educativo -> 409",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadSandboxId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadSandboxId}}"
+              ]
+            },
+            "description": "**Implicacion (d), la otra mitad.** La unidad es de Preescolar y el referente 27 es de Primaria: ahora responde **409**.\n\nAntes se aceptaba sin queja, y no era un error visible sino un callejon sin salida: relacionar enunciados exige que el enunciado sea del mismo nivel que la unidad, asi que ese referente no podia aportar **ni un** enunciado. El front debe mostrar el mensaje del 409 en vez de asumir que guardo.\n\nTambien da 409 un referente desactivado (`ACTIVE=false`) o marcado inactivo (`ESTADO='I'`).\n\n*Nota sobre el PATCH que no ves aqui:* si **no** se manda referente y el que la unidad tiene dejo de aplicar (cambio el grado, o lo desactivaron), el back lo **re-deriva** solo en vez de dejar una FK muerta.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FK_REFERENTE_CURRICULAR\": 27\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 por nivel educativo que no aplica', () => pm.response.to.have.status(409));",
+                  "pm.test('el mensaje explica el motivo', () => {",
+                  "  pm.expect(pm.response.json().message).to.match(/no aplica al nivel educativo/i);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.5 — Limpieza: borra la unidad de 4.2",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadSandboxId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadSandboxId}}"
+              ]
+            },
+            "description": "Borrado logico de la unidad desechable, para que la corrida termine en cero."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('unidadSandboxId', '');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.6 — Grado fuera del alcance -> 403",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/referente-curricular?grado={{gradoAjenoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "referente-curricular"
+              ],
+              "query": [
+                {
+                  "key": "grado",
+                  "value": "{{gradoAjenoId}}"
+                }
+              ]
+            },
+            "description": "El endpoint nuevo usa el sistema de permisos convencional: gate **VER sobre PLANEADOR** mas el **alcance territorial por el grado**. El grado 1750 es de una sede que el docente de prueba no alcanza: **403**.\n\n**Detalle que confunde:** un grado **inexistente** tambien da **403**, no 404. El gate de alcance corre antes que la comprobacion de existencia, a proposito: al reves, cualquiera que pueda autenticarse podria sondear que grados existen. El 404 queda para el grado que existe y el usuario si alcanza, y para una `?asignatura=` inexistente."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 por alcance territorial', () => pm.response.to.have.status(403));",
+                  "// Con un super admin (nivel 0) esta misma peticion responde 200."
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5 — Catalogo AGRUPACION_PLANILLA",
+      "item": [
+        {
+          "name": "5.1 — GET /select/AGRUPACION_PLANILLA",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/select/AGRUPACION_PLANILLA",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "select",
+                "AGRUPACION_PLANILLA"
+              ]
+            },
+            "description": "Categoria nueva en `TLISTA_VALOR` (V74): como se agrupa la planilla de calificaciones, por **ACTIVIDAD** o por **UNIDAD**.\n\n**No lleva endpoint propio:** al ser una categoria del catalogo generico, `GET /select/:CATEGORIA` ya la expone y `CEVAL-DOCENTE` ya tiene permiso.\n\nComparar por **`valor`** (`ACTIVIDAD` / `UNIDAD`), nunca por `pk_lista_valor`: los pks no son estables entre bases (52021/52022 en el servidor de test, otros en local)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().rows || [];",
+                  "pm.test('trae los dos valores esperados', () => {",
+                  "  const valores = filas.map(f => f.valor).sort();",
+                  "  pm.expect(valores).to.deep.equal(['ACTIVIDAD', 'UNIDAD']);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6 — Pestanas de unidad del docente",
+      "item": [
+        {
+          "name": "6.1 — [NUEVO] Las pestanas que le corresponden al docente",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/tabs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "tabs"
+              ]
+            },
+            "description": "**Endpoint nuevo (V281).** El rotulo de la pestana de unidad **no es fijo**: lo define el referente curricular del nivel educativo, en su campo `instrumento` (`\"Proyecto pedagogico\"` en Preescolar, `\"Unidad tematica\"` en Basica Primaria, `\"Valores\"`...), con `instrumento_info_adicional` como descripcion larga.\n\nY un docente no tiene UNA pestana, sino las que le salgan de los niveles que dicta:\n\n* solo Preescolar -> **una** fila, `Proyecto pedagogico`;\n* grados de Primaria y Secundaria -> **una por referente**.\n\nSin parametros: el docente se resuelve del token (no se pueden ver las pestanas de otro), y si el usuario no es docente activo devuelve 0 filas.\n\n**De donde salen los niveles:** `TDOCENTE_ASIGNATURA -> TGRUPO -> TGRADO -> nivel`, el vinculo real que el docente dicta -- no `TUNIDAD.FK_TFUNCIONARIO`, que es el AUTOR de la unidad y puede ser otro docente o el coordinador.\n\n**Agrupacion:** por referente. Si dos niveles comparten referente (la relacion es N:N) es **una sola** pestana, no dos con el mismo nombre; `niveles` trae los dos.\n\n**Niveles sin referente cargado:** NO se omiten. Vienen con `pk_referente_curricular: null` e `instrumento: \"Unidad tematica\"` (el rotulo historico) -- hay que pintar la pestana igual, aunque dentro no haya arbol de enunciados que marcar. Omitirlas dejaria al docente sin pestana para grados que si dicta.\n\nCada fila trae `niveles` / `grados` / `asignaturas` con lo que cae bajo esa pestana, para filtrar el contenido al cambiar de pestana sin volver a preguntar, y las banderas del referente (`es_evaluativo`, `tipo_evaluacion_valor`, `nivel_1_etiqueta`, `nivel_2_etiqueta`) para saber como pintarla sin pedir el detalle.\n\n*Relacionado:* `fn_unidad_etiqueta_por_grado` (que resuelve UN grado) **estaba rota** -- resolvia el nivel con una columna que el paso a N:N elimino, y fallaba en ejecucion con `column rc.fk_tnivel_ensenanza does not exist` (42703). O sea que el rotulo dinamico llevaba tiempo muerto. Corregida en V216."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().rows || [];",
+                  "pm.test('devuelve al menos una pestana', () => pm.expect(filas).to.not.be.empty);",
+                  "pm.test('instrumento nunca viene vacio (cae a Unidad tematica)', () => {",
+                  "  filas.forEach(f => pm.expect(f.instrumento, 'instrumento').to.be.a('string').and.not.empty);",
+                  "});",
+                  "pm.test('cada pestana dice que grados y asignaturas cubre', () => {",
+                  "  filas.forEach(f => {",
+                  "    pm.expect(f.niveles, 'niveles').to.be.an('array').and.not.empty;",
+                  "    pm.expect(f.grados, 'grados').to.be.an('array').and.not.empty;",
+                  "    pm.expect(f.asignaturas, 'asignaturas').to.be.an('array').and.not.empty;",
+                  "  });",
+                  "});",
+                  "// Una pestana por referente: no puede repetirse el mismo referente.",
+                  "pm.test('sin pestanas duplicadas por referente', () => {",
+                  "  const refs = filas.map(f => f.pk_referente_curricular).filter(x => x !== null);",
+                  "  pm.expect(refs).to.have.lengthOf(new Set(refs).size);",
+                  "});",
+                  "pm.test('las que tienen referente van primero', () => {",
+                  "  const conRef = filas.map(f => f.pk_referente_curricular !== null);",
+                  "  pm.expect(conRef).to.deep.equal(conRef.slice().sort((a, b) => (b ? 1 : 0) - (a ? 1 : 0)));",
+                  "});",
+                  "// El docente de prueba solo dicta Preescolar: una sola pestana.",
+                  "pm.test('el docente de prueba (solo Preescolar) recibe UNA pestana', () => {",
+                  "  pm.expect(filas).to.have.lengthOf(1);",
+                  "  pm.expect(filas[0].instrumento).to.eql('Proyecto pedagógico');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7 — El nombre de una unidad borrada se puede reusar",
+      "item": [
+        {
+          "name": "7.1 — Crear la unidad de prueba",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades"
+              ]
+            },
+            "description": "Prepara el escenario de (j)/(h): se crea una unidad, 7.2 la borra y 7.3 vuelve a crear otra con el **mismo** nombre.\n\nAntes del arreglo, 7.3 respondia **409**: `un_tunidad_1` era un UNIQUE plano sobre `(nombre, fk_tasignatura, fk_tgrado)` y las filas borradas seguian ocupando la combinacion.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"NOMBRE\": \"{{nombreReuso}}\",\n  \"FK_TASIGNATURA\": 4190,\n  \"FK_TGRADO\": 3743,\n  \"FK_TLV_CALCULO_DEFINITIVA\": 496,\n  \"DESCRIPCION\": \"Prueba de unicidad parcial.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('nombreReuso', 'ZZZ reuso nombre ' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201/200', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "const fila = (pm.response.json().rows || [])[0];",
+                  "const pk = fila && fila[Object.keys(fila)[0]];",
+                  "pm.test('devuelve el pk', () => pm.expect(pk).to.be.a('number'));",
+                  "if (pk) pm.collectionVariables.set('unidadReusoId', String(pk));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7.2 — Borrarla (borrado logico)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadReusoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadReusoId}}"
+              ]
+            },
+            "description": "Borrado logico: la fila sigue en la tabla con `active = false`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7.3 — Re-crear con el MISMO nombre (antes: 409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades"
+              ]
+            },
+            "description": "**La comprobacion del arreglo.** `un_tunidad_1` es ahora un indice unico **parcial** (`WHERE active = true`), el mismo patron que V65/V71 aplicaron a las otras 84 restricciones del esquema. Un nombre liberado por un borrado vuelve a estar disponible.\n\nEl arreglo va en **V280** y no en V71 porque V71 ya lo habia hecho -- con las cuatro columnas de entonces -- y V218 lo deshizo despues al recrear el indice con tres columnas sin el predicado.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"NOMBRE\": \"{{nombreReuso}}\",\n  \"FK_TASIGNATURA\": 4190,\n  \"FK_TGRADO\": 3743,\n  \"FK_TLV_CALCULO_DEFINITIVA\": 496,\n  \"DESCRIPCION\": \"Mismo nombre que la borrada.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('ahora SI se puede reusar el nombre', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "const fila = (pm.response.json().rows || [])[0];",
+                  "const pk = fila && fila[Object.keys(fila)[0]];",
+                  "if (pk) pm.collectionVariables.set('unidadReusoId', String(pk));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7.4 — Pero el duplicado ENTRE ACTIVAS sigue rechazado",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades"
+              ]
+            },
+            "description": "La unicidad no se relajo: dos unidades **activas** con el mismo (nombre, asignatura, grado) siguen dando **409**.\n\nY ahora llega con el mensaje propio de la funcion -- `Ya existe una unidad activa \"X\" para esa asignatura y grado` --, que se puede mostrar al usuario, en vez del generico del motor que antes tapaba el de la funcion porque el indice saltaba primero.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"NOMBRE\": \"{{nombreReuso}}\",\n  \"FK_TASIGNATURA\": 4190,\n  \"FK_TGRADO\": 3743,\n  \"FK_TLV_CALCULO_DEFINITIVA\": 496\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409', () => pm.response.to.have.status(409));",
+                  "pm.test('con el mensaje propio de la funcion, no el generico del motor', () => {",
+                  "  pm.expect(pm.response.json().message).to.match(/Ya existe una unidad activa/i);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7.5 — Limpieza",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadReusoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadReusoId}}"
+              ]
+            },
+            "description": "Deja la corrida en cero."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('unidadReusoId', '');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
