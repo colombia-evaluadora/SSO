@@ -384,28 +384,33 @@ public class UserAdminService {
     /**
      * Issues a restore-password email.
      *
-     * <p><b>Devuelve el token en la respuesta</b> — ver la advertencia de
-     * seguridad en {@link ForgotPasswordResponse}. Es un vector de apropiacion
-     * de cuenta y se expone a pedido explicito del equipo.
+     * <p><b>El token NO vuelve en la respuesta</b> — sale solo por correo, en
+     * el enlace. Ver {@link ForgotPasswordResponse} para por que se cerro:
+     * combinado con el 404 de abajo, devolverlo permitia apropiarse de una
+     * cuenta ajena conociendo unicamente el correo. La respuesta entrega
+     * {@code maskedEmail} + {@code expiresIn}, que es lo que la pantalla de
+     * confirmacion necesitaba.
      *
-     * <p><b>Un correo desconocido responde 404</b>, tambien a pedido explicito
-     * del equipo: el front pide decirle al usuario que esa direccion no esta
-     * registrada en vez de mostrarle una confirmacion falsa. El costo conocido
-     * es que este endpoint queda como enumerador de cuentas — publico y sin
-     * autenticar, permite averiguar que direcciones existen pegandole correos.
-     * La version anterior devolvia siempre 200 con un token generado al vuelo
-     * (no persistido, inservible para restablecer nada) justamente para
-     * evitarlo. Si algun dia se quiere cerrar la fuga, hay que revertir este
-     * 404 Y dejar de devolver el token en el cuerpo.
+     * <p><b>Un correo desconocido responde 404</b>, a pedido explicito del
+     * equipo: el front prefiere decirle al usuario que esa direccion no esta
+     * registrada antes que mostrarle una confirmacion falsa. El costo conocido
+     * y aceptado es que este endpoint queda como enumerador de cuentas —
+     * publico y sin autenticar, permite averiguar que direcciones existen
+     * pegandole correos. Sin el token en el cuerpo eso ya solo revela
+     * existencia, no entrega el control de la cuenta; cerrarlo del todo
+     * exigiria responder igual en ambos casos y es una decision de producto,
+     * no tecnica.
+     *
+     * <p>La busqueda va por {@code findByEmail} y no cargando la tabla entera:
+     * es un endpoint publico, y recorrer todos los usuarios en memoria por
+     * cada llamada lo convertia en un amplificador de carga gratuito.
      *
      * <p>Ningun correo sale para una direccion desconocida: el evento
      * {@code password-reset} solo se publica despues de encontrar al usuario.
      */
     @Transactional
     public ForgotPasswordResponse forgotPassword(String email, String appName) {
-        Optional<User> encontrado = userRepository.findAll().stream()
-                .filter(u -> email.equals(u.getEmail()))
-                .findFirst();
+        Optional<User> encontrado = userRepository.findByEmail(email);
 
         if (encontrado.isEmpty()) {
             throw new NotFoundException("User", email);
@@ -423,7 +428,7 @@ public class UserAdminService {
         events.publish("email", String.valueOf(u.getId()), u.getEmail(),
                 "password-reset", payload, null);
 
-        return new ForgotPasswordResponse(token, RESTORE_TTL_SECONDS);
+        return new ForgotPasswordResponse(maskEmail(u.getEmail()), RESTORE_TTL_SECONDS);
     }
 
     /**

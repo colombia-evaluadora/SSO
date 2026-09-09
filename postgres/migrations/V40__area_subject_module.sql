@@ -12,13 +12,145 @@
 --   V193__fn_subject_guardar_bulk_matchea_solo_por_id.sql
 --   V194__fn_subject_periodo_listar_expone_enfasis_nombre.sql
 --
--- Los helpers de gate (fn_periodo_establecimiento, fn_periodo_sede,
+-- Los helpers de gate de PERIODO (fn_periodo_establecimiento, fn_periodo_sede,
 -- fn_periodo_jornada, fn_periodo_gate_escritura, fn_periodo_puede_ver) se
--- movieron a V36_1__gate_permisos_periodo_academico.sql: V37 (Periodo
+-- movieron a V29__helpers_permisos_capability_scope.sql: V37 (Periodo
 -- Académico) los necesita y corre antes que este archivo.
+--
+-- Los helpers de gate de MATRICULA (fn_grupo_*, fn_matricula_grupo,
+-- fn_matricula_gate_escritura, fn_matricula_puede_ver) SI viven aqui:
+-- dependen de TGRUPO/TGRADO/TMATRICULA, no solo de TPERIODO_ACADEMICO/
+-- TSEDE, asi que no pueden bajar a V29. Ver la seccion inmediatamente
+-- posterior a SET search_path.
 -- =============================================================================
 
 SET search_path TO academico_test, public;
+
+
+-- ---------------------------------------------------------------------------
+-- Helpers de alcance de MATRICULA (CU-86e2w4xdt). La matricula cuelga de un
+-- grupo (TMATRICULA.FK_TGRUPO -> TGRUPO.FK_TGRADO -> TGRADO.FK_TPERIODO_ACADEMICO),
+-- y de ahi hereda sede+jornada+EE igual que las areas/asignaturas del periodo.
+-- Se colocan aqui (V40) para que el modulo de matricula (V159-V168, V200),
+-- muy posterior, los tenga disponibles. Referencian solo tablas de V22
+-- (TMATRICULA/TGRUPO/TGRADO), asi que son LANGUAGE sql sin problema.
+--   fn_grupo_periodo(grupo)         -> periodo academico del grupo.
+--   fn_grupo_jornada(grupo)         -> TGRUPO.FK_TLV_JORNADA (la del grupo, no
+--                                      la del periodo: es la autoritativa para
+--                                      esa matricula, ver u_tgrupo_1).
+--   fn_grupo_establecimiento(grupo) -> EE dueño (grupo -> grado -> periodo -> sede).
+--   fn_matricula_grupo(matricula)   -> TMATRICULA.FK_TGRUPO.
+--   fn_matricula_gate_escritura(usuario, grupo [, accion]) -> gate de la
+--     seccion Matricula: wrapper de una linea sobre fn_assert_permiso_seccion
+--     (V29), menu 'MATRICULA'. Mismo modelo capability + scope que
+--     fn_periodo_gate_escritura. Con p_fk_tgrupo NULL solo exige capability.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_grupo_periodo(p_fk_tgrupo BIGINT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT g.FK_TPERIODO_ACADEMICO
+      FROM academico_test.TGRUPO gr
+      JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+     WHERE gr.PK_TGRUPO = p_fk_tgrupo;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_grupo_jornada(p_fk_tgrupo BIGINT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT gr.FK_TLV_JORNADA
+      FROM academico_test.TGRUPO gr
+     WHERE gr.PK_TGRUPO = p_fk_tgrupo;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_grupo_establecimiento(p_fk_tgrupo BIGINT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT academico_test.fn_periodo_establecimiento(academico_test.fn_grupo_periodo(p_fk_tgrupo));
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_grupo(p_fk_tmatricula BIGINT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT m.FK_TGRUPO
+      FROM academico_test.TMATRICULA m
+     WHERE m.PK_TMATRICULA = p_fk_tmatricula;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_grupo_jornada(BIGINT)
+    IS 'FK_TLV_JORNADA del grupo (NULL si no existe). Es la jornada autoritativa de toda matricula de ese grupo (u_tgrupo_1 = fk_tgrado, fk_tlv_jornada, nombre).';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_gate_escritura(
+    p_pk_usuario  BIGINT,
+    p_fk_tgrupo   BIGINT,
+    p_accion      VARCHAR DEFAULT 'EDITAR'
+)
+RETURNS VOID LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario, 'MATRICULA', p_accion,
+        academico_test.fn_grupo_establecimiento(p_fk_tgrupo),
+        academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(p_fk_tgrupo)),
+        academico_test.fn_grupo_jornada(p_fk_tgrupo));
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_matricula_gate_escritura(BIGINT, BIGINT, VARCHAR)
+    IS 'Gate de ESCRITURA de la seccion Matricula (estudiante/acudiente al ligarlos, matricula, socioeconomico, archivos, matricula directa). Wrapper de una linea sobre fn_assert_permiso_seccion (V29), menu ''MATRICULA''. Mismo modelo que fn_periodo_gate_escritura: CAPABILITY dinamica (TROL_MENU concede / TUSUARIO_ROL_PERMISO recorta) + SCOPE por categoria de rol (nivel 1 territorial = todos los EE; nivel 2 = fn_usuario_ee_accesibles; nivel 3 = par (sede, jornada) del grupo en fn_usuario_sedes_jornadas_accesibles) + BYPASS del SUPER_ADMIN. El scope se resuelve por el grupo: TMATRICULA -> TGRUPO -> TGRADO -> TPERIODO_ACADEMICO. Con p_fk_tgrupo NULL las tres coordenadas quedan NULL y solo se exige capability (altas de persona sin sede todavia).';
+
+-- fn_matricula_puede_ver: version BOOLEAN del gate, para el WHERE del LISTADO
+-- de matricula (fn_matricula_listar, V200) -- reemplaza a
+-- fn_periodo_usuario_puede_ver. Misma decision de capability + scope que
+-- fn_matricula_gate_escritura pero SIN lanzar: devuelve TRUE/FALSE por fila.
+-- Reusa los mismos helpers de V29 (fn_usuario_categoria_rol_nivel,
+-- fn_usuario_puede_en_menu, fn_usuario_ee_accesibles,
+-- fn_usuario_sedes_jornadas_accesibles) que consume fn_assert_permiso_seccion;
+-- no captura excepciones (evita una subtransaccion por fila en el listado).
+--   p_pk_usuario NULL  -> TRUE (llamada interna sin scoping).
+--   categoria nivel 0  -> TRUE (SUPER_ADMIN, bypass; no se le exige capability).
+--   sin capability VER  -> FALSE.
+--   nivel 1 territorial -> TRUE (todos los EE).
+--   nivel 2            -> EE del grupo en fn_usuario_ee_accesibles.
+--   nivel 3            -> par (sede, jornada) del grupo en fn_usuario_sedes_jornadas_accesibles.
+--   nivel 4 / sin categoria -> FALSE (fail-closed).
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_puede_ver(
+    p_pk_usuario  BIGINT,
+    p_fk_tgrupo   BIGINT
+)
+RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_nivel INT;
+BEGIN
+    IF p_pk_usuario IS NULL THEN
+        RETURN TRUE;
+    END IF;
+
+    v_nivel := COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario), 99);
+
+    IF v_nivel = 0 THEN
+        RETURN TRUE;
+    END IF;
+
+    IF NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario, 'MATRICULA', 'VER') THEN
+        RETURN FALSE;
+    END IF;
+
+    IF v_nivel = 1 THEN
+        RETURN TRUE;
+    ELSIF v_nivel = 2 THEN
+        RETURN academico_test.fn_grupo_establecimiento(p_fk_tgrupo) IN (
+                   SELECT establecimiento_id
+                     FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario));
+    ELSIF v_nivel = 3 THEN
+        RETURN (
+                   academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(p_fk_tgrupo)),
+                   academico_test.fn_grupo_jornada(p_fk_tgrupo)
+               ) IN (
+                   SELECT sede_id, jornada_id
+                     FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario));
+    END IF;
+
+    RETURN FALSE;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_matricula_puede_ver(BIGINT, BIGINT)
+    IS 'Version BOOLEAN de fn_matricula_gate_escritura para el WHERE de fn_matricula_listar (V200): capability ''VER'' sobre el menu MATRICULA + scope por categoria de rol, resuelto por el grupo. p_pk_usuario NULL o SUPER_ADMIN => TRUE. Reemplaza a fn_periodo_usuario_puede_ver en el listado de matricula. No lanza (no subtransaccion por fila).';
 
 
 -- =============================================================================
@@ -319,6 +451,7 @@ RETURNS BIGINT LANGUAGE plpgsql AS $function$
 DECLARE
     v_id BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_next INT;
     -- Especialidad "Otro" para enfasis creados al vuelo. Ver comentario de
     -- migracion V64: 2 es el valor consistente con los datos existentes,
     -- no el PK real de la fila "Otro" (4) ni el valor previo (7,
@@ -330,8 +463,19 @@ BEGIN
      WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento AND ACTIVE = TRUE
        AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(p_nombre));
     IF v_id IS NULL THEN
+        -- CODIGO autonumerico por establecimiento cuando el caller no lo manda.
+        -- Antes se usaba LEFT(p_nombre, 30), que choca con la unicidad de
+        -- CODIGO en cuanto dos enfasis comparten los primeros 30 caracteres.
+        -- El advisory lock serializa el MAX()+1 entre transacciones concurrentes
+        -- del mismo establecimiento. Portado de V107 (antes V103).
+        IF p_codigo IS NULL THEN
+            PERFORM pg_advisory_xact_lock(hashtext('tenfasis:' || p_fk_establecimiento::text));
+            SELECT COALESCE(MAX(CODIGO::int), -1) + 1 INTO v_next
+              FROM academico_test.TENFASIS
+             WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento AND CODIGO ~ '^[0-9]+$';
+        END IF;
         INSERT INTO academico_test.TENFASIS (CODIGO, NOMBRE, FK_TESPECIALIDAD, FK_TESTABLECIMIENTO, CREATED_BY)
-        VALUES (COALESCE(p_codigo, LEFT(p_nombre, 30)), p_nombre, c_especialidad_otro, p_fk_establecimiento, v_audit)
+        VALUES (COALESCE(p_codigo, lpad(v_next::text, 5, '0')), p_nombre, c_especialidad_otro, p_fk_establecimiento, v_audit)
         RETURNING PK_TENFASIS INTO v_id;
     END IF;
     RETURN v_id;
@@ -925,13 +1069,18 @@ BEGIN
         academico_test.fn_periodo_jornada(v_periodo), 'EDITAR');
 
     -- Reemplazo: baja logica de las asignaturas del area que NO vienen en el set.
-    UPDATE academico_test.TASIGNATURA
+    -- El set se identifica por `id` (PK), no por NOMBRE: el nombre de una
+    -- asignatura no es unico dentro del area, asi que matchear por nombre daba
+    -- de baja filas que si venian en el payload (y conservaba otras que no).
+    -- Desde V111 el front manda el PK real de cada asignatura que edita; los
+    -- items sin `id` son altas nuevas y por tanto no protegen a nadie de la
+    -- baja logica. Portado de V107 (antes V193).
+    UPDATE academico_test.TASIGNATURA t
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE FK_TAREA = p_fk_area AND ACTIVE = TRUE
-       AND UPPER(TRIM(NOMBRE)) NOT IN (
-           SELECT UPPER(TRIM(e->>'nombreInterno'))
-             FROM jsonb_array_elements(COALESCE(p_asignaturas, '[]'::jsonb)) e
-            WHERE NULLIF(TRIM(e->>'nombreInterno'),'') IS NOT NULL
+     WHERE t.FK_TAREA = p_fk_area AND t.ACTIVE = TRUE
+       AND NOT EXISTS (
+           SELECT 1 FROM jsonb_array_elements(COALESCE(p_asignaturas, '[]'::jsonb)) e
+            WHERE NULLIF(TRIM(e->>'id'), '')::bigint = t.PK_TASIGNATURA
        );
 
     FOR it IN SELECT * FROM jsonb_array_elements(COALESCE(p_asignaturas, '[]'::jsonb))

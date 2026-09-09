@@ -1,0 +1,1046 @@
+{
+  "info": {
+    "_postman_id": "c9d1e2f3-a4b5-46c7-8d9e-planeador-exp-imp",
+    "name": "Planeador -- exportar e importar actividades",
+    "description": {
+      "content": "Intercambio de actividades del planeador en JSON: sacarlas de un grupo y\nvolverlas a meter en otro, o en el mismo.\n\n```\nPOST /api/eval-col/planeador/actividades/exportar    (V272 + V273)\nPOST /api/eval-col/planeador/actividades/importar    (V274 + V275)\n```\n\nLos dos son `POST` y los dos van por **query-service** (`/api/eval-col/...`),\nno por file-service: no hay ficheros, es JSON. El exportar es una lectura y\nseria un `GET` natural, pero uno de los filtros es una lista de\nidentificadores y meterla en el query string es incomodo; se sigue el\nprecedente de `POST /establecimientos/funcionarios/reporte`.\n\n### Una sola actividad y una lista son el MISMO endpoint\n\nNo hay endpoint individual, y no hace falta: `IDS` es una lista, asi que una\nsola actividad es `\"IDS\": [42]`. Se evaluo hacer uno aparte y se descarto -- la\nunica diferencia real seria devolver un objeto en vez de un array de uno.\n\nLo que el front tiene que tener en cuenta:\n\n- **el exportar SIEMPRE devuelve un array**, tambien para una sola. Con una\n  actividad es `[{...}]`, no `{...}`.\n- **el importar SIEMPRE recibe un array** en `ACTIVIDADES`. Para una sola es\n  `[{...}]`.\n- el informe del importar trae `total`, `validas`, `conError` y una entrada en\n  `filas` por cada elemento, con su `indice`. Con una sola actividad el informe\n  tiene la misma forma, con `total: 1`.\n\nEs decir: el front escribe **un solo camino** y el caso de una es el caso de N\ncon longitud 1. No hay ramas.\n\n### `IDS` lleva NUMEROS, no strings\n\nEs el error mas facil de cometer desde el front, donde los identificadores suelen\nvenir de la URL o de un formulario y por tanto son texto:\n\n```json\n{ \"IDS\": [42] }      // bien\n{ \"IDS\": [\"42\"] }    // 400\n```\n\n`IDS` esta declarado `BIGINT[]` y el binder valida **cada elemento**: un String no\npasa, ni siquiera uno que contenga un numero. El mensaje lo dice:\n\n```\nEl array BODY.IDS se declaro como BIGINT[] pero el elemento [0] es String\n(esperado Long). Mezclar tipos en el array produce errores cripticos de PG;\nel cliente debe enviar todos los elementos del mismo tipo.\n```\n\nPor eso en esta coleccion `{{pkTactividad}}` va **sin comillas** dentro de `IDS`.\n\nCon los campos ESCALARES (`PK_TUNIDAD`, `FK_TASIGNATURA`, los `FK_*` del\nimportar) el binder si es tolerante y acepta un String que parsee como numero.\nLo que NO acepta es la cadena vacia: si un `FK_*` opcional no aplica, **quita la\nclave** en vez de mandarla como `\"\"`, que responde 400.\n\n### Los nombres no identifican nada\n\nEs la regla que gobierna los dos endpoints. Hay **3.591 asignaturas activas con\nsolo 304 nombres distintos** -- unas doce filas por nombre, porque la asignatura\nse acota por area curricular. \"Diseño\" no es una asignatura: son doce. El grado\nigual, que cuelga del periodo academico.\n\nPor eso el destino de una importacion sale, **en este orden**:\n\n1. del bloque `_identificadores` de cada actividad, si viene. Es lo que pone el\n   exportador, y hace que un archivo nuestro se reimporte sin adivinar nada.\n2. de los `FK_*` del cuerpo, que el front tiene en contexto porque el\n   importador se abre desde la pantalla de una asignatura.\n\nSi no hay ninguno de los dos, **la fila se reporta con error**. Nunca se resuelve\npor nombre: acertar la asignatura equivocada es peor que fallar.\n\n## Solo el periodo academico en curso\n\nLos dos endpoints operan **unicamente sobre el periodo que no ha terminado**, y\n**no es elegible**: no hay parametro para pedir un año cerrado y no se puede\ndesactivar.\n\n| Operacion | Periodo terminado |\n|---|---|\n| exportar nombrando `IDS` | **`22023`**: *\"Las actividades 23 pertenecen a un periodo academico que ya termino\"* |\n| exportar por filtros | se **excluyen** de la respuesta |\n| importar | error **de la fila**: *\"destino: el periodo academico del grupo ya termino\"* |\n\nEl motivo es de negocio, no tecnico: una actividad importada a un periodo\nterminado no la ve ni la califica nadie -- queda colgada de un grupo que ya no\nfunciona como tal. Y exportar un año cerrado no es un caso de uso, es un\naccidente.\n\n### \"Vigente\" significa que no ha TERMINADO\n\nSe exige `FECHA_FIN >= hoy` y nada mas. **Un periodo que todavia no ha empezado\nSI se acepta**, y es deliberado: planificar el periodo siguiente antes de que\narranque es justo para lo que existe el planeador. Exigir que ya hubiera\nempezado rompería el caso de uso principal.\n\n### Por que por fecha y no por el estado del periodo\n\n`TPERIODO_ACADEMICO` tiene un estado (Abierto / Cerrado / Inscripciones /\nNivelaciones / Promociones), pero **no se mantiene**. Se midio:\n\n```\nestado                    no terminados   terminados\nA Abierto                            12           80   <-- 80 \"abiertos\" que ya acabaron\nC Cerrado                             0          205\nI Inscripciones                       2           11\nN Nivelaciones                        0           45\nP Promociones                         0            7\n```\n\nOchenta periodos siguen en \"Abierto\" despues de haber terminado, mientras que\nningun periodo no terminado esta en \"Cerrado\": la fecha nunca contradice al\nestado, pero el estado se queda atras. Es ademas la convencion que ya usa\n`fn_matricula_validar_periodo_vigente`.\n\n## Permisos: capability y ALCANCE\n\nLos dos endpoints comprueban dos cosas distintas, y conviene no confundirlas\nporque los errores se leen distinto:\n\n| | Que es | Si falla |\n|---|---|---|\n| **capability** | que el rol pueda `VER` (exportar) o `CREAR` (importar) en el menu `PLANEADOR` | `42501`, la llamada entera |\n| **alcance** | que el establecimiento, la sede y la jornada del objetivo esten dentro de lo que el usuario alcanza | depende de como se pidio, ver abajo |\n\nEl alcance sale del modelo dinamico, sin reglas nuevas: **nivel 0** pasa,\n**nivel 1** (territoriales) llega a todos los EE, **nivel 2** a los suyos por\n`fn_usuario_ee_accesibles`, y **nivel 3** (docentes, coordinadores de sede) a su\n**sede y jornada**. La sede y la jornada de una actividad se resuelven por\n`grupo -> grado -> periodo academico -> sede`.\n\n### Como se reporta\n\n| Operacion | Fuera de alcance |\n|---|---|\n| exportar nombrando `IDS` | **`42501`** diciendo cuales: *\"El usuario no tiene alcance sobre las actividades 30\"* |\n| exportar por filtros | se **excluyen** de la respuesta, sin ruido, como en cualquier listado |\n| importar | error **de la fila**, junto al resto de los motivos: *\"destino: la actividad va a un establecimiento, sede o jornada fuera del alcance del usuario\"* |\n\nLa asimetria del exportar es deliberada: **nombrar una actividad es afirmar que\nes tuya**, asi que callar y devolver el resto haria creer que las otras no\nexisten. Filtrar, en cambio, ya lleva implicito \"de lo mio\".\n\n### Por que hizo falta anadirlo\n\n`fn_assert_permiso_seccion` ya sabe aplicar el alcance, pero **solo si se le\npasa el objetivo**, y las 91 funciones del planeador lo llaman sin objetivo: el\nmodulo comprobaba capability y nada mas. Se midio -- un docente de nivel 3 con\nuna sola sede accesible importo una actividad en otro establecimiento y exporto\nlas de alli. No habia explotado porque la interfaz manda siempre el grupo del\ncontexto del usuario: la UI acotaba y la API no.\n\n**Ojo, esto cubre estos dos endpoints y no el modulo entero.** Las otras 89\nfunciones del planeador (crear, actualizar, eliminar y las lecturas) siguen sin\nacotar; queda como deuda conocida.\n\n## El importar tiene DOS pasos, no uno\n\n`SOLO_VALIDAR` decide, y **por defecto es `true`**: si el front se olvida del\ncampo, la llamada NO escribe. Equivocarse hacia el lado que no toca la base es\nlo unico aceptable aqui.\n\n| Paso | `SOLO_VALIDAR` | Que hace |\n|---|---|---|\n| 1. Previsualizar | `true` (o ausente) | no escribe nada; devuelve el informe fila por fila |\n| 2. Aplicar | `false` | escribe, y es **todo o nada** |\n\nEl paso 1 existe para que el usuario vea \"12 actividades, 3 con problemas\"\n**antes** de tocar la base. El paso 2 es todo o nada a proposito: media\nimportacion deja al usuario sin saber que quedo dentro.\n\n### Que significa un array vacio\n\nYa no hay ambiguedad: **depende de como se pidio**, y esa distincion la resuelve\nla funcion, no el front.\n\n| Que se pidio | Que responde |\n|---|---|\n| `\"IDS\": [42]` y 42 no resuelve | **`22023`** nombrando los identificadores que faltan |\n| `\"IDS\": []` | **`22023`** \"al menos un filtro\" -- una lista vacia no es un filtro |\n| sin ningun filtro | **`22023`** \"al menos un filtro\" |\n| `\"PK_TUNIDAD\": 9` y esa unidad no tiene actividades | **`[]`**, que es la respuesta correcta |\n\nLa regla: **si nombras identificadores, todos tienen que resolver**; si filtras\npor unidad, asignatura o grupo, un `[]` es un hecho y no un error.\n\nPara el front eso significa que **un `[]` nunca hay que interpretarlo**: si\nllega, es que el filtro no caso, y punto. Los errores llegan como error.\n\nUn identificador \"no resuelve\" si no existe, si esta inactivo, **o si los otros\nfiltros lo excluyen** -- se combinan con AND, asi que pedir la actividad 42 junto\ncon una unidad a la que no pertenece la deja fuera. El `HINT` del error lo dice.\n\nUn tercer motivo de vacio legitimo: que las actividades que casan sean de un\nperiodo ya **terminado**. Se excluyen igual que las que quedan fuera de\nalcance.\n\nLos permisos se reportan aparte y no como un vacio: sin capability se rechaza la\nllamada entera, y una actividad fuera de **alcance** nombrada por `IDS` da\n`42501` diciendo cual. Lo que si puede dejar la lista vacia es filtrar cuando\nninguna de las actividades que casan esta dentro del alcance -- y eso, desde el\npunto de vista del solicitante, es un vacio legitimo. Ver la seccion de permisos\nen la descripcion de la coleccion.\n\n## Orden de uso\n\n1. **Login** -> `token`\n2. **Exportar** (por lista o por filtros) -> el JSON de intercambio\n3. **Importar / validar** con ese JSON -> informe\n4. Si `conError` es 0, **Importar / aplicar**\n\nLas peticiones 1 y 2 guardan el resultado en la variable `exportado`, y las\ndel importar lo leen de ahi, asi que la coleccion se puede correr de arriba\nabajo.",
+      "type": "text/markdown"
+    },
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://172.233.184.248:8080"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "pkTactividad",
+      "value": "23"
+    },
+    {
+      "key": "pkTunidad",
+      "value": "12"
+    },
+    {
+      "key": "fkTasignatura",
+      "value": "4190"
+    },
+    {
+      "key": "fkTgrupo",
+      "value": "11474"
+    },
+    {
+      "key": "fkTgrado",
+      "value": "3744"
+    },
+    {
+      "key": "fkTfuncionario",
+      "value": ""
+    },
+    {
+      "key": "fkTlvCalculoDefinitiva",
+      "value": ""
+    },
+    {
+      "key": "fkReferenteCurricular",
+      "value": ""
+    },
+    {
+      "key": "exportado",
+      "value": "[]"
+    },
+    {
+      "key": "pkTactividadAjena",
+      "value": ""
+    },
+    {
+      "key": "fkTasignaturaAjena",
+      "value": ""
+    },
+    {
+      "key": "fkTgrupoAjeno",
+      "value": ""
+    },
+    {
+      "key": "fkTgradoAjeno",
+      "value": ""
+    },
+    {
+      "key": "pkTactividadPeriodoCerrado",
+      "value": ""
+    },
+    {
+      "key": "fkTgrupoPeriodoCerrado",
+      "value": ""
+    },
+    {
+      "key": "fkTgradoPeriodoCerrado",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "0 - Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "description": {
+          "content": "Guarda el `token` de la respuesta.\n\nEl usuario tiene que tener permiso de **VER** en el menu `PLANEADOR` para\nexportar, y de **CREAR** para importar. Sin eso las dos funciones levantan\n`42501` antes de mirar nada mas -- el importar tambien en modo validacion,\nque antes entregaba el informe a cualquiera.\n\nY el permiso del menu es solo la mitad: el **alcance** decide sobre que\nestablecimientos, sedes y jornadas puede operar. Ver la seccion de permisos\nen la descripcion de la coleccion.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (d.token) { pm.environment.set(\"token\", d.token); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 - Exportar VARIAS actividades (lista de IDS)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/exportar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "actividades",
+            "exportar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"IDS\": [23, 24, 25]\n}"
+        },
+        "description": {
+          "content": "El caso general: se piden varias por identificador.\n\n### Los cuatro filtros\n\n| Campo | Que trae |\n|---|---|\n| `IDS` | lista de `PK_TACTIVIDAD` |\n| `PK_TUNIDAD` | todas las de una unidad |\n| `FK_TASIGNATURA` | todas las de una asignatura |\n| `FK_TGRUPO` | todas las de un grupo |\n\nSe combinan con **AND** y hay que enviar **al menos uno**: sin ninguno responde\n`22023` en vez de intentar exportar la base entera.\n\n### `IDS` lleva NUMEROS, no strings\n\nEs el error mas facil de cometer desde el front, donde los identificadores suelen\nvenir de la URL o de un formulario y por tanto son texto:\n\n```json\n{ \"IDS\": [42] }      // bien\n{ \"IDS\": [\"42\"] }    // 400\n```\n\n`IDS` esta declarado `BIGINT[]` y el binder valida **cada elemento**: un String no\npasa, ni siquiera uno que contenga un numero. El mensaje lo dice:\n\n```\nEl array BODY.IDS se declaro como BIGINT[] pero el elemento [0] es String\n(esperado Long). Mezclar tipos en el array produce errores cripticos de PG;\nel cliente debe enviar todos los elementos del mismo tipo.\n```\n\nPor eso en esta coleccion `{{pkTactividad}}` va **sin comillas** dentro de `IDS`.\n\nCon los campos ESCALARES (`PK_TUNIDAD`, `FK_TASIGNATURA`, los `FK_*` del\nimportar) el binder si es tolerante y acepta un String que parsee como numero.\nLo que NO acepta es la cadena vacia: si un `FK_*` opcional no aplica, **quita la\nclave** en vez de mandarla como `\"\"`, que responde 400.\n\n### La respuesta\n\nUn array, con una entrada por actividad. El exportador reensambla sobre\n`fn_actividad_buscar_por_pk` en vez de leer tablas, asi que aplica el mismo\ngate de capability que ve el usuario al abrir la actividad en pantalla, y\nademas comprueba el **alcance** de cada una.\n\nCon `IDS` nombrados, una actividad fuera de alcance **rechaza la llamada** con\n`42501` diciendo cuales. Por filtros se excluyen en silencio. Ver la seccion de\npermisos en la descripcion de la coleccion.\n\n### Que significa un array vacio\n\nYa no hay ambiguedad: **depende de como se pidio**, y esa distincion la resuelve\nla funcion, no el front.\n\n| Que se pidio | Que responde |\n|---|---|\n| `\"IDS\": [42]` y 42 no resuelve | **`22023`** nombrando los identificadores que faltan |\n| `\"IDS\": []` | **`22023`** \"al menos un filtro\" -- una lista vacia no es un filtro |\n| sin ningun filtro | **`22023`** \"al menos un filtro\" |\n| `\"PK_TUNIDAD\": 9` y esa unidad no tiene actividades | **`[]`**, que es la respuesta correcta |\n\nLa regla: **si nombras identificadores, todos tienen que resolver**; si filtras\npor unidad, asignatura o grupo, un `[]` es un hecho y no un error.\n\nPara el front eso significa que **un `[]` nunca hay que interpretarlo**: si\nllega, es que el filtro no caso, y punto. Los errores llegan como error.\n\nUn identificador \"no resuelve\" si no existe, si esta inactivo, **o si los otros\nfiltros lo excluyen** -- se combinan con AND, asi que pedir la actividad 42 junto\ncon una unidad a la que no pertenece la deja fuera. El `HINT` del error lo dice.\n\nUn tercer motivo de vacio legitimo: que las actividades que casan sean de un\nperiodo ya **terminado**. Se excluyen igual que las que quedan fuera de\nalcance.\n\nLos permisos se reportan aparte y no como un vacio: sin capability se rechaza la\nllamada entera, y una actividad fuera de **alcance** nombrada por `IDS` da\n`42501` diciendo cual. Lo que si puede dejar la lista vacia es filtrar cuando\nninguna de las actividades que casan esta dentro del alcance -- y eso, desde el\npunto de vista del solicitante, es un vacio legitimo. Ver la seccion de permisos\nen la descripcion de la coleccion.",
+          "type": "text/markdown"
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "// La respuesta del query llega envuelta; el array esta en la primera fila.",
+              "const arr = d.rows ? d.rows[0].actividades : (d.actividades || d);",
+              "pm.environment.set(\"exportado\", JSON.stringify(arr));",
+              "",
+              "pm.test(\"devuelve un array\", () => pm.expect(arr).to.be.an(\"array\"));",
+              "// Con IDS explicitos la funcion ya garantiza que todos resolvieron: si alguno",
+              "// no estuviera, esto no seria un 200 con menos filas, seria un 22023.",
+              "pm.test(\"devuelve una actividad por cada ID pedido\",",
+              "  () => pm.expect(arr.length).to.eql(3));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - Exportar UNA sola (mismo endpoint, IDS de un elemento)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/exportar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "actividades",
+            "exportar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"IDS\": [{{pkTactividad}}]\n}"
+        },
+        "description": {
+          "content": "**No hay endpoint individual, y no hace falta.** Una sola actividad es una lista\nde uno.\n\nLa respuesta sigue siendo un **array de uno**: `[{...}]`, no `{...}`. El front no\nnecesita una rama para este caso; si quiere el objeto es `respuesta[0]`, pero\nantes tiene que comprobar que no vino vacio (ver la nota del array vacio).\n\nFijate en que `{{pkTactividad}}` va **sin comillas** en el cuerpo. Es a\nproposito: ver la nota de tipos.\n\n### Respuesta real de una actividad con rubrica\n\nCapturada del servidor, no inventada:\n\n```json\n[\n  {\n    \"tipo\": \"Trabajo en clase\",\n    \"grado\": \"Jardin I o A o Kinder\",\n    \"grupo\": \"01\",\n    \"creado\": \"2026-09-07T16:34:20.867507\",\n    \"nombre\": \"Mi historia favorita (rubrica)\",\n    \"semana\": \"Semana 1\",\n    \"unidad\": \"Numeros hasta el 10\",\n    \"rubrica\": [\n      {\n        \"nombre\": \"Comprension\",\n        \"niveles\": [\n          {\n            \"nombre\": \"Logrado\",\n            \"descriptor\": \"Cumple todos los criterios\",\n            \"ponderacion\": 100\n          },\n          {\n            \"nombre\": \"En proceso\",\n            \"descriptor\": \"Cumple parcialmente\",\n            \"ponderacion\": 50\n          }\n        ]\n      }\n    ],\n    \"duracion\": 45,\n    \"recursos\": [\n      {\n        \"url\": \"https://www.colombiaaprende.edu.co/\",\n        \"origen\": \"url\",\n        \"descripcion\": \"Portal Colombia Aprende - recursos de oralidad\"\n      }\n    ],\n    \"modalidad\": \"Presencial\",\n    \"asignatura\": \"MATEMATICAS\",\n    \"evaluativa\": \"Si\",\n    \"materiales\": \"Laminas de secuencia\",\n    \"descripcion\": \"El nino narra una experiencia propia ante el grupo.\",\n    \"instrumento\": \"Rúbrica\",\n    \"ponderacion\": 40,\n    \"unidad_meta\": {\n      \"nombre\": \"Numeros hasta el 10\",\n      \"objetivos\": [\n        \"Expresar ideas y emociones con claridad\",\n        \"Explorar cantidad, forma y espacio mediante el juego\"\n      ],\n      \"contenidos\": [\n        \"Narracion oral de experiencias\",\n        \"Escucha activa y turnos de conversacion\",\n        \"Agrupacion por atributos (color, tamano, forma)\"\n      ],\n      \"descripcion\": [\n        \"Unidad de prueba con referente EVALUATIVO: rubrica, enunciados y evidencias reales.\"\n      ]\n    },\n    \"adaptaciones\": [],\n    \"fecha_inicio\": \"2026-09-01\",\n    \"fecha_entrega\": \"2026-09-15\",\n    \"observaciones\": \"Observar seguridad al hablar en publico.\",\n    \"tipo_evidencia\": \"Observación\",\n    \"_identificadores\": {\n      \"fkTgrado\": 3744,\n      \"fkTgrupo\": 11474,\n      \"pkTunidad\": 12,\n      \"pkTactividad\": 23,\n      \"fkTasignatura\": 4190\n    },\n    \"genera_evidencias\": \"Si\",\n    \"requiere_validacion\": \"No\"\n  }\n]\n```\n\n### Que mirar en ese JSON\n\n- **`_identificadores`** es lo que hace reimportable el archivo. Trae\n  `pkTactividad`, `pkTunidad`, `fkTasignatura`, `fkTgrado` y `fkTgrupo`.\n- **la `unidad` es OPCIONAL**, y de ahi sale el grado. Dos de cada tres\n  actividades activas no tienen unidad; en ese caso su grado cuelga del\n  **grupo**. Tanto `grado` (el nombre) como `_identificadores.fkTgrado` (la PK)\n  salen de la misma resolucion, `COALESCE(unidad.grado, grupo.grado)`, asi que\n  no pueden discrepar. Si `_identificadores.pkTunidad` no viene, la actividad no\n  esta ligada a ninguna unidad y `unidad_meta` tampoco viene.\n- **`grado` y `grupo` van separados** a proposito. El formato de negocio los\n  junta en un `\"3o A\"`, pero en la base son cosas distintas: el grado cuelga del\n  periodo academico y el grupo del grado. Juntarlos haria imposible reimportar\n  sin adivinar.\n- **el instrumento aparece en su propia clave** segun cual sea: `rubrica`,\n  `cotejo`, `escala` u `otro`. Solo viene la que corresponde.\n- **la `ponderacion` de cada nivel de la rubrica es la NOTA** que ese nivel\n  otorga. El importador la exige y no la inventa.\n- las etiquetas de catalogo (`tipo`, `modalidad`, `instrumento`,\n  `tipo_evidencia`) van con su **nombre legible**, no con la PK. El importador\n  las resuelve tolerando acentos, mayusculas y guion bajo por espacio.",
+          "type": "text/markdown"
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "// La respuesta del query llega envuelta; el array esta en la primera fila.",
+              "const arr = d.rows ? d.rows[0].actividades : (d.actividades || d);",
+              "pm.environment.set(\"exportado\", JSON.stringify(arr));",
+              "",
+              "pm.test(\"devuelve un array\", () => pm.expect(arr).to.be.an(\"array\"));",
+              "pm.test(\"trae _identificadores para poder reimportar\",",
+              "  () => pm.expect(arr[0]).to.have.property(\"_identificadores\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 - Exportar por unidad, asignatura o grupo (sin IDS)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/exportar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "actividades",
+            "exportar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"PK_TUNIDAD\": {{pkTunidad}},\n  \"FK_TASIGNATURA\": {{fkTasignatura}}\n}"
+        },
+        "description": {
+          "content": "Los filtros se combinan con **AND**. Este ejemplo pide las de esa unidad Y esa\nasignatura.\n\nAqui **un `[]` si es una respuesta legitima**: significa que esa unidad no tiene\nactividades, que es un hecho, no un error. Es la diferencia con pedir `IDS`\nexplicitos, donde cada identificador nombrado deberia resolver.\n\nManda solo los filtros que quieras; los que no envies quedan en NULL y no\nacotan. Lo unico que no se puede es no enviar ninguno. **Quita la clave** en vez\nde mandarla vacia.",
+          "type": "text/markdown"
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "// La respuesta del query llega envuelta; el array esta en la primera fila.",
+              "const arr = d.rows ? d.rows[0].actividades : (d.actividades || d);",
+              "pm.environment.set(\"exportado\", JSON.stringify(arr));",
+              "",
+              "pm.test(\"devuelve un array\", () => pm.expect(arr).to.be.an(\"array\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 - Importar PASO 1: validar (SOLO_VALIDAR = true)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/importar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "actividades",
+            "importar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"ACTIVIDADES\": {{exportado}},\n  \"SOLO_VALIDAR\": true\n}"
+        },
+        "description": {
+          "content": "**No escribe nada.** Devuelve el informe fila por fila para que el usuario vea\nque va a pasar antes de confirmar.\n\nEl cuerpo usa `{{exportado}}`, que las peticiones 1 y 2 dejaron en el entorno:\nla coleccion se puede correr de arriba abajo. En el front, `ACTIVIDADES` es el\ncontenido del archivo que el usuario subio.\n\nEste ejemplo no manda ningun `FK_*` porque el JSON viene de nuestro exportador y\nya trae `_identificadores`. Para un archivo de un tercero hacen falta -- ver la\npeticion 6.\n\n### El informe\n\n```json\n{\n  \"modo\": \"validacion\",\n  \"filas\": [\n    {\n      \"estado\": \"ok\",\n      \"indice\": 0,\n      \"nombre\": \"Mi historia favorita (rubrica)\",\n      \"resuelto\": {\n        \"fkTgrado\": 3744,\n        \"fkTgrupo\": 11474,\n        \"pkTunidad\": 12,\n        \"instrumento\": \"RUBRICA\",\n        \"ponderacion\": 40,\n        \"fkTasignatura\": 4190,\n        \"fkTlvModalidad\": 51984,\n        \"duracionEstimada\": 45,\n        \"fkTlvTipoActividad\": 430,\n        \"fkTlvTipoEvidencia\": 51982\n      }\n    }\n  ],\n  \"total\": 1,\n  \"mensaje\": \"Todas las actividades son importables\",\n  \"validas\": 1,\n  \"conError\": 0,\n  \"aplicadas\": 0\n}\n```\n\n| Campo | Que es |\n|---|---|\n| `modo` | `\"validacion\"` o `\"aplicacion\"`, para que el front sepa que leyo |\n| `total` | cuantas actividades traia el archivo |\n| `validas` / `conError` | el reparto |\n| `aplicadas` | siempre `0` en validacion |\n| `filas[]` | una entrada por actividad, con su `indice` |\n| `filas[].estado` | `\"ok\"` o `\"error\"` |\n| `filas[].errores[]` | solo si hay error: la lista de motivos, en texto para mostrar |\n| `filas[].resuelto` | a que PKs resolvio cada etiqueta. Sirve para depurar y para que el usuario confirme que va al sitio correcto |\n\n### La regla para el front\n\nHabilita el boton de aplicar **solo si `conError` es 0**. Si no lo es, aplicar\nva a responder `aplicadas: 0` sin escribir nada, porque la importacion es todo o\nnada -- ver la peticion 5.",
+          "type": "text/markdown"
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "const inf = d.rows ? d.rows[0].resultado : (d.resultado || d);",
+              "pm.test(\"no escribio nada\", () => pm.expect(inf.aplicadas).to.eql(0));",
+              "pm.test(\"el informe trae una fila por actividad\",",
+              "  () => pm.expect(inf.filas.length).to.eql(inf.total));",
+              "// Es la condicion que el front tiene que usar para habilitar el aplicar.",
+              "pm.environment.set(\"importable\", inf.conError === 0 ? \"si\" : \"no\");"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 - Importar PASO 2: aplicar (SOLO_VALIDAR = false)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/importar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "actividades",
+            "importar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"ACTIVIDADES\": {{exportado}},\n  \"SOLO_VALIDAR\": false\n}"
+        },
+        "description": {
+          "content": "Escribe. **Todo o nada**: si alguna fila tiene errores no se escribe ninguna, y\nla respuesta llega con `aplicadas: 0` y el mismo informe del paso 1.\n\nCorrer esto sobre el mismo `{{exportado}}` **duplica** las actividades: el\nimportar siempre CREA, nunca actualiza. `_identificadores.pkTactividad` se usa\npara resolver el destino (unidad, asignatura, grado, grupo), no para reconocer\n\"esta ya la importe\". Si el usuario sube dos veces el mismo archivo tendra el\ndoble de actividades; eso lo tiene que prevenir el front, o el usuario\nborrarlas.\n\n### Que devuelve al aplicar\n\n```json\n{\n  \"modo\": \"aplicacion\",\n  \"total\": 4,\n  \"validas\": 4,\n  \"conError\": 0,\n  \"aplicadas\": 4,\n  \"mensaje\": \"4 actividades importadas\",\n  \"unidadesCreadas\": [\n    { \"nombre\": \"Unidad 1\", \"pkTunidad\": 26 },\n    { \"nombre\": \"Unidad 2\", \"pkTunidad\": 27 }\n  ],\n  \"filas\": [\n    { \"indice\": 0, \"nombre\": \"...\", \"pkTactividad\": 53, \"pkTunidad\": 26 }\n  ]\n}\n```\n\n`unidadesCreadas` importa: si el archivo nombra una unidad que no existe en el\ndestino, **se crea**. Para eso hacen falta `FK_TFUNCIONARIO` (el docente dueño) y\n`FK_TLV_CALCULO_DEFINITIVA`, y si alguna actividad trae instrumento tambien\n`FK_REFERENTE_CURRICULAR` con enfoque **EVALUATIVO** -- una actividad solo admite\ninstrumento si el referente de SU unidad lo tiene. Si falta alguno, la validacion\nlo dice por fila en vez de reventar a mitad.\n\n`filas[].pkTactividad` son las actividades nuevas: sirven para que el front\nnavegue a ellas o las liste.",
+          "type": "text/markdown"
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "const inf = d.rows ? d.rows[0].resultado : (d.resultado || d);",
+              "pm.test(\"aplico todas o ninguna\",",
+              "  () => pm.expect(inf.aplicadas).to.eql(inf.conError === 0 ? inf.total : 0));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6 - Importar UNA sola de un archivo ajeno (con destino explicito)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/importar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "actividades",
+            "importar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"ACTIVIDADES\": [\n    {\n      \"nombre\": \"Exposicion grupal: tema seleccionado\",\n      \"tipo\": \"Exposición\",\n      \"unidad\": \"Unidad 2\",\n      \"fecha_inicio\": \"2026-10-20\",\n      \"fecha_entrega\": \"2026-10-27\",\n      \"duracion\": \"3 sesiones\",\n      \"semana\": \"Semana 8\",\n      \"modalidad\": \"Presencial\",\n      \"evaluativa\": \"Sí\",\n      \"instrumento\": \"Lista de cotejo\",\n      \"ponderacion\": 10,\n      \"cotejo\": [\n        \"Claridad en la exposición\",\n        \"Uso de recursos visuales\",\n        \"Trabajo en equipo\"\n      ],\n      \"materiales\": \"Presentación\",\n      \"genera_evidencias\": \"Sí\",\n      \"tipo_evidencia\": \"Enlace\",\n      \"requiere_validacion\": \"Sí\",\n      \"observaciones\": \"Coordinar salas.\"\n    }\n  ],\n  \"FK_TASIGNATURA\": {{fkTasignatura}},\n  \"FK_TGRUPO\": {{fkTgrupo}},\n  \"FK_TGRADO\": {{fkTgrado}},\n  \"FK_TFUNCIONARIO\": {{fkTfuncionario}},\n  \"FK_TLV_CALCULO_DEFINITIVA\": {{fkTlvCalculoDefinitiva}},\n  \"FK_REFERENTE_CURRICULAR\": {{fkReferenteCurricular}},\n  \"SOLO_VALIDAR\": true\n}"
+        },
+        "description": {
+          "content": "Una sola actividad, y de un archivo que **no** salio de nuestro exportador: sin\n`_identificadores`. Es el caso del usuario que trae un JSON armado a mano o desde\notro sistema.\n\nFijate en dos cosas:\n\n1. **`ACTIVIDADES` sigue siendo un array**, de un elemento. Mismo contrato.\n2. **hacen falta los `FK_*`**, porque no hay `_identificadores` de donde sacar el\n   destino. El front los tiene en contexto: el importador se abre desde la\n   pantalla de una asignatura.\n\nLos tres ultimos `FK_*` solo hacen falta si hay que CREAR la unidad. Si no\naplican, **quita la clave**: mandarla vacia responde 400.\n\n### Los nombres no identifican nada\n\nEs la regla que gobierna los dos endpoints. Hay **3.591 asignaturas activas con\nsolo 304 nombres distintos** -- unas doce filas por nombre, porque la asignatura\nse acota por area curricular. \"Diseño\" no es una asignatura: son doce. El grado\nigual, que cuelga del periodo academico.\n\nPor eso el destino de una importacion sale, **en este orden**:\n\n1. del bloque `_identificadores` de cada actividad, si viene. Es lo que pone el\n   exportador, y hace que un archivo nuestro se reimporte sin adivinar nada.\n2. de los `FK_*` del cuerpo, que el front tiene en contexto porque el\n   importador se abre desde la pantalla de una asignatura.\n\nSi no hay ninguno de los dos, **la fila se reporta con error**. Nunca se resuelve\npor nombre: acertar la asignatura equivocada es peor que fallar.\n\n### Lo que el importador NO se salta\n\nSon reglas del dominio, y el JSON de ejemplo que llego de negocio las incumple\ntodas. Se reportan por fila:\n\n- **las etiquetas tienen que existir en el catalogo.** No hay valores por defecto\n  ni equivalencias inventadas. De los siete tipos de actividad de aquel archivo,\n  solo casaba \"Exposicion\".\n- **cada nivel de rubrica o de escala necesita su `ponderacion`**, que es la nota\n  que otorga. No se inventa: poner una escala descendente \"razonable\" seria\n  fabricar pesos de calificacion.\n- **dentro de un criterio, las ponderaciones tienen que ser distintas.** Dos\n  niveles con el mismo peso son el mismo nivel.\n- **una escala NUMERICA no lleva niveles**: se define con min/max e\n  interpretacion. Los niveles son de la CUALITATIVA.\n- **una actividad no evaluativa no lleva ponderacion.** El `\"ponderacion\": 0` que\n  el formato de negocio pone en esas se descarta (no es una nota); un peso real\n  sobre una no evaluativa se reporta.\n- **cada recurso necesita exactamente uno de `url` o `fkTarchivo`.** El nombre de\n  una carpeta no es un destino que la base pueda guardar.\n- **una adaptacion \"para estudiantes concretos\" necesita PKs de matricula** del\n  grupo destino. El formato de negocio trae nombres de alumno, y un nombre no\n  identifica una matricula.\n\n### Un informe con error\n\n```json\n{\n  \"modo\": \"validacion\",\n  \"filas\": [\n    {\n      \"estado\": \"error\",\n      \"indice\": 0,\n      \"nombre\": \"Actividad con problemas\",\n      \"errores\": [\n        \"tipo: \\\"Proyecto\\\" no existe en el catalogo TIPO_ACTIVIDAD\"\n      ],\n      \"resuelto\": {\n        \"fkTgrado\": 3744,\n        \"fkTgrupo\": 11474,\n        \"pkTunidad\": 12,\n        \"instrumento\": \"RUBRICA\",\n        \"ponderacion\": 40,\n        \"fkTasignatura\": 4190,\n        \"fkTlvModalidad\": 51984,\n        \"duracionEstimada\": 45,\n        \"fkTlvTipoEvidencia\": 51982\n      }\n    }\n  ],\n  \"total\": 1,\n  \"mensaje\": \"1 de 1 actividades tienen problemas\",\n  \"validas\": 0,\n  \"conError\": 1,\n  \"aplicadas\": 0\n}\n```\n\n`errores[]` esta escrito para mostrarse tal cual al usuario: dice la etiqueta que\nno casa y en que catalogo se busco.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "7 - Ida y vuelta: reimportar lo que se exporto",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/importar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "actividades",
+            "importar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"ACTIVIDADES\": {{exportado}},\n  \"SOLO_VALIDAR\": true\n}"
+        },
+        "description": {
+          "content": "La comprobacion de que los dos formatos son el mismo: exportar y reimportar sin\ntocar el archivo tiene que dar `conError: 0`.\n\nEs la prueba que descubrio un fallo real: el exportador volcaba las adaptaciones\ncon la forma de la base (`tipoAdaptacion` como FK, `usaVersionModificada` y\n`formatoAdaptacion` por separado) en vez de la forma del formato de negocio, asi\nque **un archivo nuestro no se podia reimportar**. Compilar no lo mostraba: solo\nsalio al cerrar el circulo.\n\nSi esta peticion falla despues de un cambio en cualquiera de las dos funciones,\nes que los formatos se separaron.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Rechazos esperados",
+      "item": [
+        {
+          "name": "Exportar sin ningun filtro -> 22023",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/exportar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "exportar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{}"
+            },
+            "description": {
+              "content": "Sin `IDS`, `PK_TUNIDAD`, `FK_TASIGNATURA` ni `FK_TGRUPO`:\n\n```\nHay que indicar al menos un filtro para exportar\n```\n\nDeliberado: sin filtros la alternativa seria exportar la base entera.",
+              "type": "text/markdown"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Exportar IDS con strings -> 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/exportar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "exportar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"IDS\": [\"23\"]\n}"
+            },
+            "description": {
+              "content": "### `IDS` lleva NUMEROS, no strings\n\nEs el error mas facil de cometer desde el front, donde los identificadores suelen\nvenir de la URL o de un formulario y por tanto son texto:\n\n```json\n{ \"IDS\": [42] }      // bien\n{ \"IDS\": [\"42\"] }    // 400\n```\n\n`IDS` esta declarado `BIGINT[]` y el binder valida **cada elemento**: un String no\npasa, ni siquiera uno que contenga un numero. El mensaje lo dice:\n\n```\nEl array BODY.IDS se declaro como BIGINT[] pero el elemento [0] es String\n(esperado Long). Mezclar tipos en el array produce errores cripticos de PG;\nel cliente debe enviar todos los elementos del mismo tipo.\n```\n\nPor eso en esta coleccion `{{pkTactividad}}` va **sin comillas** dentro de `IDS`.\n\nCon los campos ESCALARES (`PK_TUNIDAD`, `FK_TASIGNATURA`, los `FK_*` del\nimportar) el binder si es tolerante y acepta un String que parsee como numero.\nLo que NO acepta es la cadena vacia: si un `FK_*` opcional no aplica, **quita la\nclave** en vez de mandarla como `\"\"`, que responde 400.",
+              "type": "text/markdown"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Exportar con IDS: [] -> 22023",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/exportar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "exportar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"IDS\": []\n}"
+            },
+            "description": {
+              "content": "Una lista vacia **no es un filtro**: responde el mismo `22023` que no mandar\nninguno.\n\n```\nHay que indicar al menos un filtro para exportar\n\nHINT: Use p_pk_tactividades, p_pk_tunidad, p_fk_tasignatura o p_fk_tgrupo.\n      Una lista de identificadores vacia no cuenta como filtro\n```\n\nAntes devolvia `[]` en silencio, o sea el mismo \"no pediste nada\" con dos\nrespuestas distintas segun como lo escribieras.\n\n### Que significa un array vacio\n\nYa no hay ambiguedad: **depende de como se pidio**, y esa distincion la resuelve\nla funcion, no el front.\n\n| Que se pidio | Que responde |\n|---|---|\n| `\"IDS\": [42]` y 42 no resuelve | **`22023`** nombrando los identificadores que faltan |\n| `\"IDS\": []` | **`22023`** \"al menos un filtro\" -- una lista vacia no es un filtro |\n| sin ningun filtro | **`22023`** \"al menos un filtro\" |\n| `\"PK_TUNIDAD\": 9` y esa unidad no tiene actividades | **`[]`**, que es la respuesta correcta |\n\nLa regla: **si nombras identificadores, todos tienen que resolver**; si filtras\npor unidad, asignatura o grupo, un `[]` es un hecho y no un error.\n\nPara el front eso significa que **un `[]` nunca hay que interpretarlo**: si\nllega, es que el filtro no caso, y punto. Los errores llegan como error.\n\nUn identificador \"no resuelve\" si no existe, si esta inactivo, **o si los otros\nfiltros lo excluyen** -- se combinan con AND, asi que pedir la actividad 42 junto\ncon una unidad a la que no pertenece la deja fuera. El `HINT` del error lo dice.\n\nUn tercer motivo de vacio legitimo: que las actividades que casan sean de un\nperiodo ya **terminado**. Se excluyen igual que las que quedan fuera de\nalcance.\n\nLos permisos se reportan aparte y no como un vacio: sin capability se rechaza la\nllamada entera, y una actividad fuera de **alcance** nombrada por `IDS` da\n`42501` diciendo cual. Lo que si puede dejar la lista vacia es filtrar cuando\nninguna de las actividades que casan esta dentro del alcance -- y eso, desde el\npunto de vista del solicitante, es un vacio legitimo. Ver la seccion de permisos\nen la descripcion de la coleccion.",
+              "type": "text/markdown"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Exportar un identificador inexistente -> 22023",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/exportar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "exportar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"IDS\": [999999999]\n}"
+            },
+            "description": {
+              "content": "Cada identificador nombrado tiene que resolver. El que no, se reporta **con su\nnumero**:\n\n```\nNo se encontraron las actividades 999999999\n\nHINT: Cada identificador enviado tiene que existir y estar activo. Si tambien\n      se enviaron unidad, asignatura o grupo, recuerde que los filtros se\n      combinan con AND y pueden estar excluyendolas\n```\n\nCon varios, los nombra todos: pedir `[23, 24, 999999999]` responde\n`No se encontraron las actividades 999999999` y no exporta ninguna -- si un\nidentificador no esta donde el llamante cree, devolver los otros dos sin decir\nnada seria peor.\n\nEl caso menos obvio, y por eso esta en el `HINT`: **una actividad que existe\npero que los otros filtros excluyen**. Pedir `IDS: [23]` con\n`PK_TUNIDAD: 999999` responde `No se encontraron las actividades 23`, porque los\nfiltros se combinan con AND.\n\n### Que significa un array vacio\n\nYa no hay ambiguedad: **depende de como se pidio**, y esa distincion la resuelve\nla funcion, no el front.\n\n| Que se pidio | Que responde |\n|---|---|\n| `\"IDS\": [42]` y 42 no resuelve | **`22023`** nombrando los identificadores que faltan |\n| `\"IDS\": []` | **`22023`** \"al menos un filtro\" -- una lista vacia no es un filtro |\n| sin ningun filtro | **`22023`** \"al menos un filtro\" |\n| `\"PK_TUNIDAD\": 9` y esa unidad no tiene actividades | **`[]`**, que es la respuesta correcta |\n\nLa regla: **si nombras identificadores, todos tienen que resolver**; si filtras\npor unidad, asignatura o grupo, un `[]` es un hecho y no un error.\n\nPara el front eso significa que **un `[]` nunca hay que interpretarlo**: si\nllega, es que el filtro no caso, y punto. Los errores llegan como error.\n\nUn identificador \"no resuelve\" si no existe, si esta inactivo, **o si los otros\nfiltros lo excluyen** -- se combinan con AND, asi que pedir la actividad 42 junto\ncon una unidad a la que no pertenece la deja fuera. El `HINT` del error lo dice.\n\nUn tercer motivo de vacio legitimo: que las actividades que casan sean de un\nperiodo ya **terminado**. Se excluyen igual que las que quedan fuera de\nalcance.\n\nLos permisos se reportan aparte y no como un vacio: sin capability se rechaza la\nllamada entera, y una actividad fuera de **alcance** nombrada por `IDS` da\n`42501` diciendo cual. Lo que si puede dejar la lista vacia es filtrar cuando\nninguna de las actividades que casan esta dentro del alcance -- y eso, desde el\npunto de vista del solicitante, es un vacio legitimo. Ver la seccion de permisos\nen la descripcion de la coleccion.",
+              "type": "text/markdown"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Importar con errores y SOLO_VALIDAR = false -> aplicadas: 0",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/importar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "importar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"ACTIVIDADES\": [{\"nombre\":\"Una que si\",\"tipo\":\"Tarea\",\"unidad\":\"Unidad 1\"},{\"nombre\":\"Otra que no\",\"tipo\":\"Proyecto\",\"unidad\":\"Unidad 1\"}],\n  \"FK_TASIGNATURA\": {{fkTasignatura}},\n  \"FK_TGRUPO\": {{fkTgrupo}},\n  \"FK_TGRADO\": {{fkTgrado}},\n  \"SOLO_VALIDAR\": false\n}"
+            },
+            "description": {
+              "content": "`\"Proyecto\"` no existe en `TIPO_ACTIVIDAD`. Como la importacion es **todo o\nnada**, no se escribe **ninguna** de las dos:\n\n```\nNo se importo nada: 1 de 2 actividades tienen problemas.\nLa importacion es todo o nada\n```\n\nResponde `200` con `aplicadas: 0`, no un `4xx`: es un informe, no un fallo de\nla peticion. El front decide por `aplicadas` y `conError`, no por el codigo\nHTTP.\n\nMedia importacion seria peor que ninguna: dejaria al usuario sin saber que\nquedo dentro.",
+              "type": "text/markdown"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Importar sin destino ni _identificadores -> error por fila",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/importar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "importar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"ACTIVIDADES\": [{\"nombre\":\"Sin destino\",\"tipo\":\"Tarea\",\"unidad\":\"Unidad 1\"}],\n  \"SOLO_VALIDAR\": true\n}"
+            },
+            "description": {
+              "content": "Ni `_identificadores` en la actividad ni `FK_*` en el cuerpo: no hay de donde\nsacar la asignatura, el grupo ni el grado.\n\nLa fila se reporta con error nombrando lo que falta. **No se resuelve por\nnombre**, aunque la actividad traiga `asignatura` y `grado` en texto: hay 304\nnombres para 3.591 asignaturas activas.",
+              "type": "text/markdown"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Exportar una actividad fuera de alcance -> 42501",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/exportar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "exportar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"IDS\": [{{pkTactividadAjena}}]\n}"
+            },
+            "description": {
+              "content": "Una actividad de otro establecimiento, sede o jornada, **nombrada por `IDS`**:\n\n```\nEl usuario no tiene alcance sobre las actividades 30\n\nHINT: Pertenecen a un establecimiento, sede o jornada fuera del alcance\n      del solicitante segun sus permisos\n```\n\nCon varias, las nombra todas. Y no exporta ninguna: si el llamante afirmo que\nesas actividades eran suyas y no lo son, devolver las que si lo son en silencio\nle haria creer que las otras no existen.\n\nPon en `pkTactividadAjena` el identificador de una actividad de otro EE. Con un\nusuario de **nivel 0 o 1** esta peticion NO falla: alcanzan cualquier\nestablecimiento.\n\n## Permisos: capability y ALCANCE\n\nLos dos endpoints comprueban dos cosas distintas, y conviene no confundirlas\nporque los errores se leen distinto:\n\n| | Que es | Si falla |\n|---|---|---|\n| **capability** | que el rol pueda `VER` (exportar) o `CREAR` (importar) en el menu `PLANEADOR` | `42501`, la llamada entera |\n| **alcance** | que el establecimiento, la sede y la jornada del objetivo esten dentro de lo que el usuario alcanza | depende de como se pidio, ver abajo |\n\nEl alcance sale del modelo dinamico, sin reglas nuevas: **nivel 0** pasa,\n**nivel 1** (territoriales) llega a todos los EE, **nivel 2** a los suyos por\n`fn_usuario_ee_accesibles`, y **nivel 3** (docentes, coordinadores de sede) a su\n**sede y jornada**. La sede y la jornada de una actividad se resuelven por\n`grupo -> grado -> periodo academico -> sede`.\n\n### Como se reporta\n\n| Operacion | Fuera de alcance |\n|---|---|\n| exportar nombrando `IDS` | **`42501`** diciendo cuales: *\"El usuario no tiene alcance sobre las actividades 30\"* |\n| exportar por filtros | se **excluyen** de la respuesta, sin ruido, como en cualquier listado |\n| importar | error **de la fila**, junto al resto de los motivos: *\"destino: la actividad va a un establecimiento, sede o jornada fuera del alcance del usuario\"* |\n\nLa asimetria del exportar es deliberada: **nombrar una actividad es afirmar que\nes tuya**, asi que callar y devolver el resto haria creer que las otras no\nexisten. Filtrar, en cambio, ya lleva implicito \"de lo mio\".\n\n### Por que hizo falta anadirlo\n\n`fn_assert_permiso_seccion` ya sabe aplicar el alcance, pero **solo si se le\npasa el objetivo**, y las 91 funciones del planeador lo llaman sin objetivo: el\nmodulo comprobaba capability y nada mas. Se midio -- un docente de nivel 3 con\nuna sola sede accesible importo una actividad en otro establecimiento y exporto\nlas de alli. No habia explotado porque la interfaz manda siempre el grupo del\ncontexto del usuario: la UI acotaba y la API no.\n\n**Ojo, esto cubre estos dos endpoints y no el modulo entero.** Las otras 89\nfunciones del planeador (crear, actualizar, eliminar y las lecturas) siguen sin\nacotar; queda como deuda conocida.",
+              "type": "text/markdown"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Exportar por filtro incluyendo cosas fuera de alcance -> se excluyen",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/exportar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "exportar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"FK_TASIGNATURA\": {{fkTasignatura}}\n}"
+            },
+            "description": {
+              "content": "Una asignatura puede tener actividades en varias sedes. Filtrando por ella, un\nusuario de nivel 3 recibe **solo las de su sede y jornada**; las demas se\nexcluyen sin mencion.\n\nAqui un `[]` sigue siendo una respuesta legitima, y ahora tiene un motivo mas:\nesa asignatura puede tener actividades, pero ninguna dentro del alcance del\nsolicitante. Desde su punto de vista las dos cosas son ciertas y ninguna es un\nerror.\n\nEs la diferencia con nombrar `IDS`: filtrar es \"dame lo que casa\", y \"de lo\nmio\" va implicito.",
+              "type": "text/markdown"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Importar a un destino fuera de alcance -> error de la fila",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/importar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "importar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"ACTIVIDADES\": [{\"nombre\":\"A un EE que no es mio\",\"tipo\":\"Tarea\",\"unidad\":\"Unidad 1\"}],\n  \"FK_TASIGNATURA\": {{fkTasignaturaAjena}},\n  \"FK_TGRUPO\": {{fkTgrupoAjeno}},\n  \"FK_TGRADO\": {{fkTgradoAjeno}},\n  \"SOLO_VALIDAR\": true\n}"
+            },
+            "description": {
+              "content": "El destino manda: no importa de donde salga el archivo, sino **donde se quiere\nmeter**. Si el grupo pertenece a un establecimiento, sede o jornada que el\nusuario no alcanza, la fila se reporta:\n\n```json\n{\n  \"estado\": \"error\",\n  \"errores\": [\n    \"destino: la actividad va a un establecimiento, sede o jornada fuera del\n     alcance del usuario. Importe sobre un grupo propio\"\n  ]\n}\n```\n\nEs un error **de la fila**, no de la peticion, y por eso llega con `200`: sale\njunto al resto de los motivos en el mismo informe. Asi el usuario que sube un\narchivo con veinte actividades ve de una vez todo lo que tiene que corregir, en\nvez de que la importacion reviente por la primera.\n\nComo la importacion es todo o nada, basta una fila fuera de alcance para que no\nse escriba ninguna.\n\nEste era el agujero real: **un docente de nivel 3 llego a crear una actividad en\nun establecimiento ajeno**. La interfaz nunca lo permitia porque manda el grupo\ndel contexto, pero la API si.",
+              "type": "text/markdown"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Validar sin permiso de PLANEADOR -> 42501",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/importar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "importar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"ACTIVIDADES\": [{\"nombre\":\"Sondeo\",\"tipo\":\"Tarea\",\"unidad\":\"Unidad 1\"}],\n  \"FK_TASIGNATURA\": {{fkTasignatura}},\n  \"FK_TGRUPO\": {{fkTgrupo}},\n  \"FK_TGRADO\": {{fkTgrado}},\n  \"SOLO_VALIDAR\": true\n}"
+            },
+            "description": {
+              "content": "Con un token de un usuario sin `PLANEADOR/CREAR`:\n\n```\nEl usuario no tiene permiso para crear en el modulo PLANEADOR\n```\n\nSe pide **CREAR** y no VER incluso para validar, porque validar es un paso de\nimportar y no una consulta aparte: quien no puede importar no tiene por que ver\nel informe de una importacion.\n\nAntes esto respondia `200` con el informe completo -- las PKs a las que resolvia\ncada etiqueta y si la unidad existia o habia que crearla. En modo validacion no\nse llama a ninguna de las funciones orquestadas, asi que no habia nada que\ncomprobara el permiso.",
+              "type": "text/markdown"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Exportar una actividad de un periodo terminado -> 22023",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/exportar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "exportar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"IDS\": [{{pkTactividadPeriodoCerrado}}]\n}"
+            },
+            "description": {
+              "content": "Nombrada por `IDS`, una actividad de un año que ya cerro:\n\n```\nLas actividades 23 pertenecen a un periodo academico que ya termino\n\nHINT: El planeador solo opera sobre el periodo en curso; no es una opcion\n      exportar un año cerrado\n```\n\nSe comprueba **antes** que el alcance, a proposito: si el periodo ya termino da\nigual quien seas, y el mensaje explica mejor el problema que un \"no alcanzas\nese establecimiento\".\n\nPor filtro, en cambio, se excluyen sin mencion.\n\n## Solo el periodo academico en curso\n\nLos dos endpoints operan **unicamente sobre el periodo que no ha terminado**, y\n**no es elegible**: no hay parametro para pedir un año cerrado y no se puede\ndesactivar.\n\n| Operacion | Periodo terminado |\n|---|---|\n| exportar nombrando `IDS` | **`22023`**: *\"Las actividades 23 pertenecen a un periodo academico que ya termino\"* |\n| exportar por filtros | se **excluyen** de la respuesta |\n| importar | error **de la fila**: *\"destino: el periodo academico del grupo ya termino\"* |\n\nEl motivo es de negocio, no tecnico: una actividad importada a un periodo\nterminado no la ve ni la califica nadie -- queda colgada de un grupo que ya no\nfunciona como tal. Y exportar un año cerrado no es un caso de uso, es un\naccidente.\n\n### \"Vigente\" significa que no ha TERMINADO\n\nSe exige `FECHA_FIN >= hoy` y nada mas. **Un periodo que todavia no ha empezado\nSI se acepta**, y es deliberado: planificar el periodo siguiente antes de que\narranque es justo para lo que existe el planeador. Exigir que ya hubiera\nempezado rompería el caso de uso principal.\n\n### Por que por fecha y no por el estado del periodo\n\n`TPERIODO_ACADEMICO` tiene un estado (Abierto / Cerrado / Inscripciones /\nNivelaciones / Promociones), pero **no se mantiene**. Se midio:\n\n```\nestado                    no terminados   terminados\nA Abierto                            12           80   <-- 80 \"abiertos\" que ya acabaron\nC Cerrado                             0          205\nI Inscripciones                       2           11\nN Nivelaciones                        0           45\nP Promociones                         0            7\n```\n\nOchenta periodos siguen en \"Abierto\" despues de haber terminado, mientras que\nningun periodo no terminado esta en \"Cerrado\": la fecha nunca contradice al\nestado, pero el estado se queda atras. Es ademas la convencion que ya usa\n`fn_matricula_validar_periodo_vigente`.",
+              "type": "text/markdown"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Importar a un grupo de un periodo terminado -> error de la fila",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/importar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "importar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"ACTIVIDADES\": [{\"nombre\":\"A un año cerrado\",\"tipo\":\"Tarea\",\"unidad\":\"Unidad 1\"}],\n  \"FK_TASIGNATURA\": {{fkTasignatura}},\n  \"FK_TGRUPO\": {{fkTgrupoPeriodoCerrado}},\n  \"FK_TGRADO\": {{fkTgradoPeriodoCerrado}},\n  \"SOLO_VALIDAR\": true\n}"
+            },
+            "description": {
+              "content": "El destino manda, y si su periodo termino la fila se reporta:\n\n```json\n{\n  \"estado\": \"error\",\n  \"errores\": [\n    \"destino: el periodo academico del grupo ya termino. El planeador solo\n     opera sobre el periodo en curso\"\n  ]\n}\n```\n\nLlega con `200`, como el resto de los motivos del informe: asi el usuario ve de\nuna vez todo lo que hay que corregir. Y como la importacion es todo o nada,\nbasta una fila asi para que no se escriba ninguna.\n\nOjo con el caso al revés: **un periodo que aun no ha empezado SI se acepta**.\nImportar la planeacion del periodo siguiente antes de que arranque es el uso\nnormal, no una excepcion.",
+              "type": "text/markdown"
+            }
+          },
+          "response": []
+        }
+      ],
+      "description": {
+        "content": "Los rechazos de los dos endpoints no se parecen, y conviene saberlo antes de\nescribir el manejo de errores:\n\n- **el exportar** falla con codigo SQL (`22023`) o con `400` del binder.\n- **el importar** responde `200` con un informe. No usa el codigo HTTP para\n  decir \"esta fila no casa\": devuelve la lista de motivos para que el front la\n  muestre. Lo que decide es `conError` y `aplicadas`.",
+        "type": "text/markdown"
+      }
+    }
+  ]
+}

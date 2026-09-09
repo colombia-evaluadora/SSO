@@ -3,7 +3,7 @@
     "_postman_id": "b7e3c1a2-4d5f-4a6b-9c8d-matricula-directa",
     "name": "SSO - matricula directa (crear y consultar)",
     "description": {
-      "content": "Alta y consulta de **matricula directa** - `fn_matricula_directa_crear` / `fn_matricula_obtener_completa`.\n\n## Nombres de los campos\n\nLos nombres del body **no** siguen la convencion camelCase-ingles del resto del\ncatalogo. Salen de `TMATRICULA_CAMPO.NOMBRE` (el catalogo que alimenta\n`GET /matricula/configuracion`, donde cada establecimiento marca que campos son\nrequeridos/visibles), normalizados asi:\n\n- se quitan las tildes\n- todo caracter no alfanumerico pasa a `_` (`Caracter / Especialidad / Enfasis` -> `CARACTER_ESPECIALIDAD_ENFASIS`)\n\nEs deliberado: asi el front usa **el mismo identificador** que ya viene en la\nconfiguracion de campos, sin una tabla de traduccion en el medio.\n\nEl motor uppercasea las claves, asi que da igual la caja con la que se manden.\n\n## Origen de cada campo\n\nCada campo del form-data lo declara en su descripcion:\n\n| Marca | Que significa | Cuantos |\n|---|---|---|\n| `[catalogo #N]` | Tiene fila N en `TMATRICULA_CAMPO`: el front puede leer su `requerido`/`visible` de la configuracion. | 39 |\n| `[formulario, SIN fila en el catalogo]` | Esta en el formulario, pero el catalogo no tiene esa seccion. Son los 5 archivos de soporte. | 5 |\n| `[NI formulario NI catalogo - columna del DDL]` | No lo pide el formulario ni existe en el catalogo: es una columna real de `TMATRICULA`/`TPADRE`/`TNUCLEO_FAMILIAR` que se expone como parametro **opcional** para no perder capacidad. Hoy el front no tiene de donde sacar su valor. | 10 |\n| `[tecnico - no es un campo del formulario]` | Los dos `PK_USUARIO_*`, que salen de `/register/usuario`. | 2 |\n\nSolo los `[catalogo #N]` se pueden gobernar desde\n`GET /matricula/configuracion`. Para los demas, esa configuracion no dice nada.\n\n## Que NO va en este endpoint\n\nLos datos de identidad de las personas (nombres, apellidos, documento, fecha de\nnacimiento, genero, telefono, email) **no** viajan aca: van a\n`POST /register/usuario`, que crea el `TUSUARIO` y devuelve el `pkTusuario`\nque este endpoint recibe ya resuelto en `PK_USUARIO_ESTUDIANTE` /\n`PK_USUARIO_ACUDIENTE`.\n\nTampoco viajan `GRADO` (se deriva del grupo), `ESTADO_DE_LA_MATRICULA` (la\nfuncion lo resuelve como \"Cursando\") ni los `..._DEPARTAMENTO`, que no existen\ncomo columna - `TUSUARIO` solo guarda el municipio.\n\nLa lista completa esta en `docs/postman/matricula-campos.md`.\n\n## Orden de uso\n\n1. **Login** -> token\n2. **Registrar usuario (estudiante)** -> guarda `pkTusuario`\n3. **Registrar usuario (acudiente)** -> guarda `pkTusuario`\n4. **Crear matricula** (con archivos, via file-service) o la variante JSON sin archivos\n5. **Consultar matricula por ID**",
+      "content": "Alta y consulta de **matricula directa** - `fn_matricula_directa_crear` / `fn_matricula_obtener_completa`.\n\n## Nombres de los campos\n\nLos nombres del body **no** siguen la convencion camelCase-ingles del resto del\ncatalogo. Salen de `TMATRICULA_CAMPO.NOMBRE` (el catalogo que alimenta\n`GET /matricula/configuracion`, donde cada establecimiento marca que campos son\nrequeridos/visibles), normalizados asi:\n\n- se quitan las tildes\n- todo caracter no alfanumerico pasa a `_` (`Caracter / Especialidad / Enfasis` -> `CARACTER_ESPECIALIDAD_ENFASIS`)\n\nEs deliberado: asi el front usa **el mismo identificador** que ya viene en la\nconfiguracion de campos, sin una tabla de traduccion en el medio.\n\nEl motor uppercasea las claves, asi que da igual la caja con la que se manden.\n\n## Origen de cada campo\n\nCada campo del form-data lo declara en su descripcion:\n\n| Marca | Que significa | Cuantos |\n|---|---|---|\n| `[catalogo #N]` | Tiene fila N en `TMATRICULA_CAMPO`: el front puede leer su `requerido`/`visible` de la configuracion. | 39 |\n| `[formulario, SIN fila en el catalogo]` | Esta en el formulario, pero el catalogo no tiene esa seccion. Son los 4 archivos de soporte 1-a-1. El quinto, `OTROS_DOCUMENTOS_RELEVANTES`, ya no viaja por este endpoint: ver la peticion 3.b. | 4 |\n| `[NI formulario NI catalogo - columna del DDL]` | No lo pide el formulario ni existe en el catalogo: es una columna real de `TMATRICULA`/`TPADRE`/`TNUCLEO_FAMILIAR` que se expone como parametro **opcional** para no perder capacidad. Hoy el front no tiene de donde sacar su valor. | 10 |\n| `[tecnico - no es un campo del formulario]` | Los dos `PK_USUARIO_*`, que salen de `/register/usuario`. | 2 |\n\nSolo los `[catalogo #N]` se pueden gobernar desde\n`GET /matricula/configuracion`. Para los demas, esa configuracion no dice nada.\n\n## Que NO va en este endpoint\n\nLos datos de identidad de las personas (nombres, apellidos, documento, fecha de\nnacimiento, genero, telefono, email) **no** viajan aca: van a\n`POST /register/usuario`, que crea el `TUSUARIO` y devuelve el `pkTusuario`\nque este endpoint recibe ya resuelto en `PK_USUARIO_ESTUDIANTE` /\n`PK_USUARIO_ACUDIENTE`.\n\nTampoco viajan `GRADO` (se deriva del grupo), `ESTADO_DE_LA_MATRICULA` (la\nfuncion lo resuelve como \"Cursando\") ni los `..._DEPARTAMENTO`, que no existen\ncomo columna - `TUSUARIO` solo guarda el municipio.\n\nLa lista completa esta en `docs/postman/matricula-campos.md`.\n\n## Orden de uso\n\n1. **Login** -> token\n2. **Registrar usuario (estudiante)** -> guarda `pkTusuario`\n3. **Registrar usuario (acudiente)** -> guarda `pkTusuario`\n4. **Crear matricula** (con los 4 archivos 1-a-1, via file-service) -> guarda `pk_tmatricula`\n5. **Subir los \"otros documentos\"** -- peticion 3.b, una vez por fichero\n6. **Consultar matricula por ID**",
       "type": "text/markdown"
     },
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -535,17 +535,124 @@
             },
             {
               "key": "OTROS_DOCUMENTOS_RELEVANTES",
-              "type": "file",
-              "src": [],
-              "description": "[formulario, SIN fila en el catalogo] Opcional, 0..N: repite la misma key por cada archivo. El catalogo no tiene la seccion de documentos de soporte; el nombre sale del formulario, con la misma convencion."
+              "value": "",
+              "type": "text",
+              "disabled": true,
+              "description": "YA NO VIAJA POR AQUI (V201). Se dejo desactivado a proposito, para que se vea que desaparecio y por que. Mandarlo como archivo ahora responde 400 (\"El campo no esta declarado como archivo para esta ruta\"): el campo se quito de param_types. Los \"Otros documentos relevantes\" se suben DESPUES del alta, uno por peticion, con POST /cobertura-academica/matricula/:ID/documentos -- ver la peticion 3.b."
             }
           ]
         },
         "description": {
-          "content": "**Este es el camino real.** Va a `/api/files/...` (file-service), que sube cada\nbinario a S3 con la etiqueta `matricula`, lo reemplaza por su `pk_tarchivo` y\nreenvia el JSON al query-service.\n\nNo pongas `Content-Type` a mano: Postman arma el `boundary`.\n\n`DOCUMENTO_DE_IDENTIDAD_DEL_ESTUDIANTE` y\n`CERTIFICADO_DE_ESTUDIOS_DEL_ANO_ANTERIOR` son **obligatorios** - sin ellos la\nfuncion falla con `23502`.\n\n`OTROS_DOCUMENTOS_RELEVANTES` admite varios archivos: repite la misma key.\n\nLos nombres de los campos de archivo se validan contra `param_types`: cualquier\nbinario con otro nombre se rechaza con 400 antes de tocar S3.\n\n### Origen de cada campo\n\nCada campo trae su marca de origen en la descripcion - ver la descripcion de la\ncoleccion para la tabla completa. Resumen: 39 vienen del catalogo,\n5 del formulario sin fila en el catalogo, 10 no estan en\nninguno de los dos (columnas del DDL, opcionales) y 2 son tecnicos.\n\n### Respuesta\n\n```json\n{\n  \"pk_testudiante\": 188732,\n  \"pk_tpadre\": 70027,\n  \"pk_tnucleo_familiar\": 76065,\n  \"pk_tmatricula\": 222701,\n  \"pk_tmatricula_socioeconomico\": 222701,\n  \"archivos_creados\": [\n    { \"pkTmatriculaArchivo\": 34, \"fkTlvTipoArchivo\": 830 },\n    { \"pkTmatriculaArchivo\": 35, \"fkTlvTipoArchivo\": 51968 }\n  ]\n}\n```\n\nTodo el alta es **atomica**: si algo falla en cualquier paso, no queda nada a medias.",
+          "content": "**Este es el camino real.** Va a `/api/files/...` (file-service), que sube cada\nbinario a S3 con la etiqueta `matricula`, lo reemplaza por su `pk_tarchivo` y\nreenvia el JSON al query-service.\n\nNo pongas `Content-Type` a mano: Postman arma el `boundary`.\n\n`DOCUMENTO_DE_IDENTIDAD_DEL_ESTUDIANTE` y\n`CERTIFICADO_DE_ESTUDIOS_DEL_ANO_ANTERIOR` son **obligatorios** - sin ellos la\nfuncion falla con `23502`.\n\n**`OTROS_DOCUMENTOS_RELEVANTES` ya no viaja por aqui.** Este endpoint recibe\nlos CUATRO documentos 1-a-1 y nada mas. La lista de otros documentos se sube\ndespues, uno por peticion -- ver la peticion **3.b** de esta coleccion.\n\n### El orden de las llamadas en el alta\n\nLa matricula tiene que existir antes de colgarle documentos, asi que el bucle va\nDESPUES del alta:\n\n```\n1. POST /register/usuario            (estudiante)   -> pkTusuario\n2. POST /register/usuario            (acudiente)    -> pkTusuario\n3. POST .../cobertura-academica/matricula           -> pk_tmatricula\n      multipart con los CUATRO documentos 1-a-1\n4. por cada \"otro documento\":\n   POST .../cobertura-academica/matricula/<pk>/documentos\n      multipart con ARCHIVO = <fichero>\n```\n\nEl paso 3 sigue siendo atomico. El 4 son N peticiones sueltas: si el usuario\ncierra el navegador a mitad, la matricula queda creada con parte de los\ndocumentos. Es preferible a lo contrario -- perder la matricula por un adjunto\n-- pero el front deberia dejar reintentar los que falten desde la ficha ya\ncreada, que es exactamente el mismo endpoint.\n\n### Por que va aparte y no como un campo mas\n\n`OTROS_DOCUMENTOS_RELEVANTES` es el unico documento de la ficha que admite\n**N archivos**. Los otros cuatro son 1-a-1 y viajan bien como un campo `FILE`\ncada uno.\n\nUn campo con varios archivos hoy **no se puede declarar en el catalogo**.\n`file-service` si los soporta -- sube todas las partes que comparten nombre de\ncampo y sustituye \"un id suelto si hay uno, una lista si hay varios\"\n(`TransformadorMultipart`) -- pero `param_types` no tiene el tipo `FILE[]` para\ndescribirlo. Esta escrito como limitacion conocida en\n`docs/subida-archivos-a-queries.md`, seccion 10.\n\nEl intento previo fue declarar el mismo campo dos veces: `FILE` para que\nfile-service lo acepte y `JSONB` por `BODY_RAW` para leer la lista. **No puede\nfuncionar.** `ParamBinder.buildStrict` valida TODAS las claves del cuerpo contra\nTODO `param_types`, sin mirar que placeholders usa el SQL, y el cuerpo produce\nlas dos claves (`flatten` deja `BODY.X`, `putRaw` deja `BODY_RAW.X`) apuntando\nal MISMO valor. Con esos dos tipos declarados no hay valor que satisfaga ambos:\n\n| Se manda | `BODY.X` es `FILE` (entero) | `BODY_RAW.X` es `JSONB` |\n|---|---|---|\n| 1 archivo, el valor es `17` | pasa | **400** -- JSONB solo admite objeto, array o string |\n| 2+ archivos, el valor es `[17,18]` | **400** -- no es un entero | pasa |\n\nEs decir: el unico caso que pasaba era **no mandar ninguno**. Cuadra con los\ndatos -- `TARCHIVO` solo tiene 96 filas con etiqueta `matricula`, todas\nmigradas: por ese camino nunca se subio nada.\n\nAsi que se partio en dos operaciones, que es lo que el catalogo si sabe\nexpresar: **un endpoint que sube UN archivo**, llamado en bucle.\n\nLos nombres de los campos de archivo se validan contra `param_types`: cualquier\nbinario con otro nombre se rechaza con 400 antes de tocar S3.\n\n### Origen de cada campo\n\nCada campo trae su marca de origen en la descripcion - ver la descripcion de la\ncoleccion para la tabla completa. Resumen: 39 vienen del catalogo,\n5 del formulario sin fila en el catalogo, 10 no estan en\nninguno de los dos (columnas del DDL, opcionales) y 2 son tecnicos.\n\n### Respuesta\n\n```json\n{\n  \"pk_testudiante\": 188732,\n  \"pk_tpadre\": 70027,\n  \"pk_tnucleo_familiar\": 76065,\n  \"pk_tmatricula\": 222701,\n  \"pk_tmatricula_socioeconomico\": 222701,\n  \"archivos_creados\": [\n    { \"pkTmatriculaArchivo\": 34, \"fkTlvTipoArchivo\": 830 },\n    { \"pkTmatriculaArchivo\": 35, \"fkTlvTipoArchivo\": 51968 }\n  ]\n}\n```\n\nTodo el alta es **atomica**: si algo falla en cualquier paso, no queda nada a medias.",
           "type": "text/markdown"
         }
-      }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "// Lo necesita la peticion 3.b: los documentos se cuelgan de la",
+              "// matricula, asi que hasta aqui no hay donde ponerlos.",
+              "if (d.pk_tmatricula) { pm.environment.set(\"pkMatricula\", d.pk_tmatricula); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3.b - Subir UN \"otro documento relevante\" (repetir por cada archivo)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/files/eval-col/cobertura-academica/matricula/{{pkMatricula}}/documentos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "eval-col",
+            "cobertura-academica",
+            "matricula",
+            "{{pkMatricula}}",
+            "documentos"
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "ARCHIVO",
+              "type": "file",
+              "src": [],
+              "description": "FILE:matricula -- UN fichero. Para varios, repite la peticion; NO repitas la key (esta declarada como archivo simple, no como lista)"
+            }
+          ]
+        },
+        "description": {
+          "content": "V201 -- sube UN documento de \"Otros documentos relevantes\" y lo enlaza a la\nmatricula. **Se llama en bucle**, una vez por fichero.\n\n### El endpoint de subida\n\n```\nPOST /api/files/eval-col/cobertura-academica/matricula/:ID/documentos\n     multipart:  ARCHIVO = <fichero>      (FILE:matricula)\n```\n\nRespuesta:\n\n```json\n{\n  \"pkTmatriculaArchivo\": 927,\n  \"pkTmatricula\": 102789,\n  \"fkTarchivo\": 330284,\n  \"tipo\": \"otros\",\n  \"totalOtrosDocumentos\": 1\n}\n```\n\n`totalOtrosDocumentos` es cuantos quedan activos tras esta subida, para que el\nfront muestre el avance del bucle sin volver a pedir la ficha.\n\n**Por que exige la matricula** y no devuelve un `fkTarchivo` suelto:\nfile-service reserva la fila de `TARCHIVO` inactiva y la **activa cuando el\ndestino responde 2xx**. Un endpoint de \"solo subir\" dejaria el archivo activo y\nsin dueño en cuanto responde; si el usuario abandona el formulario queda una\nfila y un objeto en S3 que nada referencia y nadie limpia. Enlazando en la misma\npeticion nace con dueño.\n\n**Un archivo por peticion, y son peticiones independientes.** No hay transaccion\nque las abarque: si la tercera falla, las dos primeras quedan guardadas. El\nfront tiene que reflejar eso -- reportar cual fallo y dejar reintentar solo esa,\nno rehacer el bucle entero, que subiria duplicados.\n\nEs un POST y no un PUT porque **agrega** un elemento a una coleccion. Repetirlo\ncon el mismo fichero crea otro enlace, y eso es correcto: el mismo documento\nsubido dos veces por error lo resuelve el usuario quitando uno, no la base\nrechazandolo.\n\n### Por que va aparte y no como un campo mas\n\n`OTROS_DOCUMENTOS_RELEVANTES` es el unico documento de la ficha que admite\n**N archivos**. Los otros cuatro son 1-a-1 y viajan bien como un campo `FILE`\ncada uno.\n\nUn campo con varios archivos hoy **no se puede declarar en el catalogo**.\n`file-service` si los soporta -- sube todas las partes que comparten nombre de\ncampo y sustituye \"un id suelto si hay uno, una lista si hay varios\"\n(`TransformadorMultipart`) -- pero `param_types` no tiene el tipo `FILE[]` para\ndescribirlo. Esta escrito como limitacion conocida en\n`docs/subida-archivos-a-queries.md`, seccion 10.\n\nEl intento previo fue declarar el mismo campo dos veces: `FILE` para que\nfile-service lo acepte y `JSONB` por `BODY_RAW` para leer la lista. **No puede\nfuncionar.** `ParamBinder.buildStrict` valida TODAS las claves del cuerpo contra\nTODO `param_types`, sin mirar que placeholders usa el SQL, y el cuerpo produce\nlas dos claves (`flatten` deja `BODY.X`, `putRaw` deja `BODY_RAW.X`) apuntando\nal MISMO valor. Con esos dos tipos declarados no hay valor que satisfaga ambos:\n\n| Se manda | `BODY.X` es `FILE` (entero) | `BODY_RAW.X` es `JSONB` |\n|---|---|---|\n| 1 archivo, el valor es `17` | pasa | **400** -- JSONB solo admite objeto, array o string |\n| 2+ archivos, el valor es `[17,18]` | **400** -- no es un entero | pasa |\n\nEs decir: el unico caso que pasaba era **no mandar ninguno**. Cuadra con los\ndatos -- `TARCHIVO` solo tiene 96 filas con etiqueta `matricula`, todas\nmigradas: por ese camino nunca se subio nada.\n\nAsi que se partio en dos operaciones, que es lo que el catalogo si sabe\nexpresar: **un endpoint que sube UN archivo**, llamado en bucle.\n\n### Quitar y reemplazar: eso sigue en el PATCH de la ficha\n\nEl endpoint de subida solo AGREGA. Para quitar o reemplazar se usa\n`OTROS_DOCUMENTOS_RELEVANTES` del `PATCH /cobertura-academica/matricula/:ID`, y\nesta bien que sea asi: desde el front tiene mas sentido mandar los\nidentificadores de lo que se quita que volver a subir lo que se conserva.\n\nEl campo es un **array de objetos**, y cada objeto es una operacion:\n\n```json\n[ { \"pkTmatriculaArchivo\": 12, \"fkTarchivo\": null },\n  { \"pkTmatriculaArchivo\": 13, \"fkTarchivo\": 987 } ]\n```\n\n| Que trae el objeto | Que hace |\n|---|---|\n| `pkTmatriculaArchivo` + `fkTarchivo: null` | quita ESE documento |\n| `pkTmatriculaArchivo` + `fkTarchivo: N` | reemplaza ESE documento por el archivo N |\n| solo `fkTarchivo: N` | agrega uno cuyo archivo YA existe. No sirve para un fichero nuevo: para eso esta el endpoint de subida |\n| `{}`, los dos ausentes | **se rechaza** |\n\nLos `pkTmatriculaArchivo` salen de `GET /cobertura-academica/matricula/:ID`, en\n`archivos[]`, donde los \"otros\" son los de `tipo_archivo_valor = \"06\"`.\n\nNo enviar el campo, o enviar `[]`, es \"no toques los documentos\". A diferencia\nde los cuatro 1-a-1, este **no lleva bandera `TOCAR_`**: la ausencia ya es\ninequivoca porque las operaciones son explicitas.\n\nEl `{}` se rechaza a proposito. Antes significaba \"borra todos los otros\ndocumentos\" -- por tipo, sin nombrarlos -- y un cuerpo mal armado en el front\npodia vaciar la lista entera sin que nadie lo pidiera. Para quitar varios se\nnombran uno por uno.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Rechazo esperado -- repetir la key ARCHIVO en una sola peticion",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/files/eval-col/cobertura-academica/matricula/{{pkMatricula}}/documentos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "eval-col",
+            "cobertura-academica",
+            "matricula",
+            "{{pkMatricula}}",
+            "documentos"
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "ARCHIVO",
+              "type": "file",
+              "src": [],
+              "description": "primer fichero"
+            },
+            {
+              "key": "ARCHIVO",
+              "type": "file",
+              "src": [],
+              "description": "segundo fichero -- ESTO es lo que falla"
+            }
+          ]
+        },
+        "description": {
+          "content": "Mandar dos ficheros bajo la misma key en UNA peticion **no funciona**, y es\njusto el error que la separacion pretende evitar.\n\nfile-service los sube los dos y sustituye el campo por una **lista**\n`[17, 18]`. Pero `ARCHIVO` esta declarado `FILE:matricula`, que la guardia de\n`ParamBinder` trata como `BIGINT`, asi que rechaza con 400:\n\n```\nEl parametro BODY.ARCHIVO se declaro como FILE (entero) pero el cliente\nenvio ArrayList. Verifica que el campo lleve un numero sin decimales.\n```\n\nOjo con el efecto colateral: el rechazo ocurre en query-service, **despues**\nde que file-service subio los binarios. Las filas de `TARCHIVO` quedan\nreservadas y se deshacen solas al no llegar el 2xx, pero es trabajo tirado.\nUna peticion por fichero.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
     },
     {
       "name": "4 - Crear matricula SIN archivos (JSON) - falla esperada 23502",
