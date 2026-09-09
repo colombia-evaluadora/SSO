@@ -1,0 +1,915 @@
+{
+  "info": {
+    "_postman_id": "mtb2d9k4-matricula-editar",
+    "name": "Matricula -- editar y movimientos",
+    "description": {
+      "content": "Edicion de la ficha de matricula, movimientos entre grupos y los documentos de\nsoporte.\n\n## Los documentos, de un vistazo\n\n| Que quieres hacer | Donde |\n|---|---|\n| Reemplazar o borrar uno de los 4 documentos 1-a-1 | `PATCH .../matricula/:ID` con su campo FILE y `TOCAR_*` |\n| Agregar un fichero nuevo a \"Otros documentos relevantes\" | `POST .../matricula/:ID/documentos`, uno por peticion |\n| Quitar o reemplazar uno de los \"otros\" | `PATCH .../matricula/:ID` con `OTROS_DOCUMENTOS_RELEVANTES` |\n| Ver que documentos tiene la ficha | `GET .../matricula/:ID` -> `archivos[]`, los \"otros\" son `tipo_archivo_valor = \"06\"` |\n\nEl alta esta en la coleccion `matricula-directa`, y sigue el mismo reparto: los\ncuatro 1-a-1 en el POST, los \"otros\" en bucle despues.",
+      "type": "text/markdown"
+    },
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://api.example.com"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "pkTmatricula",
+      "value": ""
+    },
+    {
+      "key": "grupoDestino",
+      "value": ""
+    },
+    {
+      "key": "pkTusuario",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "[294] PATCH /cobertura-academica/matricula/:ID",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "ARS",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "EPS",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "CUAL",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "SISBEN",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "PK_USUARIO_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT -- PK_TUSUARIO de quien debe quedar como acudiente DE ESTA MATRICULA. Mandalo SIEMPRE. Si coincide con el que la matricula ya tiene, no hay sustitucion. Si es otra persona, se sustituye y PARENTESCO pasa a ser obligatorio. Si no lo mandas, el acudiente no se toca. La persona se resuelve antes: se busca por documento y solo se crea si no aparece (ver la descripcion de la coleccion)."
+            },
+            {
+              "key": "PK_TPADRE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT Ya no es obligatorio con ACTUALIZAR_ACUDIENTE: si no viene, se edita el acudiente que la matricula señala hoy. Sirve para elegir a uno concreto cuando el estudiante tiene varios."
+            },
+            {
+              "key": "PARENTESCO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT OBLIGATORIO cuando PK_USUARIO_ACUDIENTE trae una persona distinta: TNUCLEO_FAMILIAR.FK_TLV_PARENTESCO es NOT NULL y no se puede deducir. Si falta, la respuesta es 23502."
+            },
+            {
+              "key": "SUBSIDIADO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "TOCAR_FOTO",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "VIVE_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ZONA_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "ASISTE_INFORMES",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ETNIA_RESGUARDO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "ASISTE_REUNIONES",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ESTUDIANTE_NUEVO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "FECHA_DE_INGRESO",
+              "value": "2026-01-15",
+              "type": "text",
+              "description": "DATE"
+            },
+            {
+              "key": "EDICION_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "GEOREFERENCIACION",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "FUENTE_DE_RECURSOS",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "FOTO_DEL_ESTUDIANTE",
+              "type": "file",
+              "src": [],
+              "description": "FILE:matricula -- adjunte el archivo"
+            },
+            {
+              "key": "HEROES_DE_LA_NACION",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "OCUPACION_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "PROFESION_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ACTUALIZAR_ACUDIENTE",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN Solo aplica a EDITAR los datos del acudiente que ya esta. En una sustitucion se ignora: los campos del formulario alimentan la creacion de los registros del nuevo."
+            },
+            {
+              "key": "ACTUALIZAR_MATRICULA",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "ESTUDIANTE_REPITENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ACTUALIZAR_ESTUDIANTE",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "TIPO_EMPLEO_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "DIRECCION_DE_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ESTADO_CIVIL_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "TALENTO_DEL_ESTUDIANTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "CARGO_ENTIDAD_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ESTADO_CIVIL_ESTUDIANTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "CONVIVE_CON_EL_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "DIRECCION_DEL_ESTUDIANTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "TOCAR_CERTIFICADO_MEDICO",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "ACTUALIZAR_SOCIOECONOMICO",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "NIVEL_EDUCATIVO_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "ULTIMO_MUNICIPIO_EXPULSOR",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "PROVIENE_DE_OTRO_MUNICIPIO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "PROVIENE_DE_SECTOR_PRIVADO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "SITUACION_DEL_ANO_ANTERIOR",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "OTROS_DOCUMENTOS_RELEVANTES",
+              "value": "[]",
+              "type": "text",
+              "description": "JSONB, SERIALIZADO como texto (no como form-data indexado). Array de operaciones sobre los documentos que YA existen: {\"pkTmatriculaArchivo\":12,\"fkTarchivo\":null} quita ese; {\"pkTmatriculaArchivo\":12,\"fkTarchivo\":987} lo reemplaza; {\"fkTarchivo\":987} agrega uno cuyo archivo ya existe; {} se rechaza. [] o ausente = no toques los documentos. Para subir un FICHERO nuevo usa POST /cobertura-academica/matricula/:ID/documentos, que esta en esta misma coleccion."
+            },
+            {
+              "key": "POBLACION_VICTIMA_CONFLICTO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "TOCAR_DOCUMENTO_DE_IDENTIDAD",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "CARACTER_ESPECIALIDAD_ENFASIS",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "LUGAR_DE_NACIMIENTO_MUNICIPIO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "TOCAR_CERTIFICADO_DE_ESTUDIOS",
+              "value": "false",
+              "type": "text",
+              "description": "BOOLEAN"
+            },
+            {
+              "key": "FRECUENCIA_DOMICILIO_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "NOMBRE_DE_LA_ENTIDAD_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "VETERANOS_DE_LA_FUERZA_PUBLICA",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ALUMNOS_MADRE_CABEZA_DE_FAMILIA",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "INSTITUCION_BIENESTAR_DE_ORIGEN",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "HIJOS_DE_MADRE_CABEZA_DE_FAMILIA",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "TELEFONO_DE_LA_ENTIDAD_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "CERTIFICADO_MEDICO_DEL_ESTUDIANTE",
+              "type": "file",
+              "src": [],
+              "description": "FILE:matricula -- adjunte el archivo"
+            },
+            {
+              "key": "DIRECCION_DE_LA_ENTIDAD_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "NOMBRE_DE_LA_INSTITUCION_ANTERIOR",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "CONDICIONES_ESPECIALES_DEL_ESTUDIANTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "DOCUMENTO_DE_IDENTIDAD_DEL_ESTUDIANTE",
+              "type": "file",
+              "src": [],
+              "description": "FILE:matricula -- adjunte el archivo"
+            },
+            {
+              "key": "ESTRATO_SOCIO_ECONOMICO_DEL_ESTUDIANTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "LUGAR_DE_RESIDENCIA_MUNICIPIO_ACUDIENTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "CERTIFICADO_DE_ESTUDIOS_DEL_ANO_ANTERIOR",
+              "type": "file",
+              "src": [],
+              "description": "FILE:matricula -- adjunte el archivo"
+            },
+            {
+              "key": "LUGAR_DE_RESIDENCIA_MUNICIPIO_ESTUDIANTE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "CONDICION_DEL_ESTUDIANTE_FIN_DEL_ANO_ANTERIOR",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "LUGAR_EXPEDICION_DOCUMENTO_ACUDIENTE_MUNICIPIO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "LUGAR_EXPEDICION_DOCUMENTO_ESTUDIANTE_MUNICIPIO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/files/eval-col/cobertura-academica/matricula/{{pkTmatricula}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "eval-col",
+            "cobertura-academica",
+            "matricula",
+            "{{pkTmatricula}}"
+          ]
+        },
+        "description": {
+          "content": "V179 + V177/V240 -- edicion de la ficha de matricula en una sola transaccion.\n\nLas banderas ACTUALIZAR_* eligen que secciones se guardan y las TOCAR_* que documentos se reemplazan o se borran logicamente. NULL no borra: no toca el campo. No cambia grupo ni estado (para eso estan promover/reubicar/corregir) ni los datos de identidad de la persona (PATCH /usuarios/:ID). Solo rector/secretaria/jefe de sistema; el super-admin NO puede ejecutarlo.\n\nEL ACUDIENTE -- tres casos, y los distingue PK_USUARIO_ACUDIENTE\n\n  1) No tocarlo\n     PK_USUARIO_ACUDIENTE = la misma key que ya tiene, ACTUALIZAR_ACUDIENTE = false.\n     (O no mandes la key: da igual.)\n     -> acudiente.accion = \"sin cambio\"\n\n  2) Editar sus datos\n     PK_USUARIO_ACUDIENTE = la misma key, ACTUALIZAR_ACUDIENTE = true, mas los campos\n     del formulario. La identidad y el contacto van aparte, por PATCH /usuarios/:ID.\n     -> acudiente.accion = \"datos actualizados\"\n\n  3) Sustituirlo por otra persona\n     Resuelve primero la persona con GET /usuarios/autocompletar-por-documento y, si no aparece, POST /register/usuario.\n     Manda su key en PK_USUARIO_ACUDIENTE y PARENTESCO, que es obligatorio. Los demas\n     campos del acudiente se usan para CREAR sus registros, no para modificar los de nadie.\n     -> acudiente.accion = \"sustituido\"\n\n     Que hace: crea o reusa el TPADRE de esa persona y su fila de nucleo familiar con el\n     parentesco indicado, repunta TMATRICULA.FK_TPADRE, y le concede el permiso de\n     acudiente en la sede.\n\n     Al que SALE no se le borra nada: sigue en el nucleo familiar del estudiante --el\n     vinculo familiar es real y sigue existiendo-- y conserva su TPADRE y su TUSUARIO. Lo\n     unico que pierde es el permiso de acceso en ESA sede, y solo si ya no es acudiente de\n     ninguna otra matricula activa alli.\n\nRESPUESTA\n\n  {\n    \"pkTpadre\": 2991,\n    \"acudiente\": {\n      \"accion\": \"sustituido\",              // \"sin cambio\" | \"datos actualizados\" | \"sustituido\"\n      \"pkTpadreAnterior\": 65124,\n      \"permisosRetiradosAlAnterior\": 1\n    },\n    \"actualizado\": { \"acudiente\": true, ... }\n  }\n\n  acudiente.accion dice sin ambiguedad que paso, asi que sirve para el mensaje al usuario\n  sin tener que inferirlo.\n\nLOS DOCUMENTOS DE SOPORTE -- dos caminos, y no se solapan\n\n  Los CUATRO 1-a-1 (identidad, certificado de estudios, certificado medico, foto)\n  viajan aqui: el fichero en su campo FILE y la bandera TOCAR_* correspondiente en\n  true. Con TOCAR_* en true y sin fichero, se borra logicamente.\n\n  Los \"Otros documentos relevantes\" son N, y se parten en dos:\n\n    - AGREGAR un fichero nuevo -> POST /cobertura-academica/matricula/:ID/documentos\n      (en esta coleccion), una peticion por fichero.\n    - QUITAR o REEMPLAZAR      -> OTROS_DOCUMENTOS_RELEVANTES, aqui.\n\n### Quitar y reemplazar: eso sigue en el PATCH de la ficha\n\nEl endpoint de subida solo AGREGA. Para quitar o reemplazar se usa\n`OTROS_DOCUMENTOS_RELEVANTES` del `PATCH /cobertura-academica/matricula/:ID`, y\nesta bien que sea asi: desde el front tiene mas sentido mandar los\nidentificadores de lo que se quita que volver a subir lo que se conserva.\n\nEl campo es un **array de objetos**, y cada objeto es una operacion:\n\n```json\n[ { \"pkTmatriculaArchivo\": 12, \"fkTarchivo\": null },\n  { \"pkTmatriculaArchivo\": 13, \"fkTarchivo\": 987 } ]\n```\n\n| Que trae el objeto | Que hace |\n|---|---|\n| `pkTmatriculaArchivo` + `fkTarchivo: null` | quita ESE documento |\n| `pkTmatriculaArchivo` + `fkTarchivo: N` | reemplaza ESE documento por el archivo N |\n| solo `fkTarchivo: N` | agrega uno cuyo archivo YA existe. No sirve para un fichero nuevo: para eso esta el endpoint de subida |\n| `{}`, los dos ausentes | **se rechaza** |\n\nLos `pkTmatriculaArchivo` salen de `GET /cobertura-academica/matricula/:ID`, en\n`archivos[]`, donde los \"otros\" son los de `tipo_archivo_valor = \"06\"`.\n\nNo enviar el campo, o enviar `[]`, es \"no toques los documentos\". A diferencia\nde los cuatro 1-a-1, este **no lleva bandera `TOCAR_`**: la ausencia ya es\ninequivoca porque las operaciones son explicitas.\n\nEl `{}` se rechaza a proposito. Antes significaba \"borra todos los otros\ndocumentos\" -- por tipo, sin nombrarlos -- y un cuerpo mal armado en el front\npodia vaciar la lista entera sin que nadie lo pidiera. Para quitar varios se\nnombran uno por uno.\n\n### La trampa del multipart: el JSON va SERIALIZADO\n\nEste PATCH se manda como `multipart/form-data` porque lleva los cuatro campos\nde archivo. En un multipart **todo es texto y no hay estructuras**: si el\ncliente aplana el array de objetos a la forma indexada que usan los form-data...\n\n```\nOTROS_DOCUMENTOS_RELEVANTES[0].pkTmatriculaArchivo = 12\n```\n\n...la peticion **falla con 400**. `ParamNamespace.normalizeName` valida cada\nnombre de clave contra `[A-Z][A-Z0-9_]*` y lanza con los corchetes: *\"La clave\nOTROS_DOCUMENTOS_RELEVANTES[0] no es un nombre de parametro valido\"*. Y de paso\n`fkTarchivo: null` se pierde, porque los aplanadores omiten los nulos -- y ahi\nel null es justo lo que significa \"quitalo\".\n\nLa forma correcta es **un solo campo de texto con el JSON ya serializado**:\n\n```js\n// en el front\nOTROS_DOCUMENTOS_RELEVANTES: JSON.stringify(operaciones)\n```\n\n`ParamBinder.validateAgainstDeclared` acepta explicitamente un String para\n`JSONB` (\"un JSON ya serializado por el cliente\"), asi que viaja entero en un\ncampo y sobrevive al multipart. En esta coleccion el campo ya esta como\n`type: text` justamente por eso -- **si en Postman funciona y en el front no,\neste es el motivo**.\n\n### Por que va aparte y no como un campo mas\n\n`OTROS_DOCUMENTOS_RELEVANTES` es el unico documento de la ficha que admite\n**N archivos**. Los otros cuatro son 1-a-1 y viajan bien como un campo `FILE`\ncada uno.\n\nUn campo con varios archivos hoy **no se puede declarar en el catalogo**.\n`file-service` si los soporta -- sube todas las partes que comparten nombre de\ncampo y sustituye \"un id suelto si hay uno, una lista si hay varios\"\n(`TransformadorMultipart`) -- pero `param_types` no tiene el tipo `FILE[]` para\ndescribirlo. Esta escrito como limitacion conocida en\n`docs/subida-archivos-a-queries.md`, seccion 10.\n\nEl intento previo fue declarar el mismo campo dos veces: `FILE` para que\nfile-service lo acepte y `JSONB` por `BODY_RAW` para leer la lista. **No puede\nfuncionar.** `ParamBinder.buildStrict` valida TODAS las claves del cuerpo contra\nTODO `param_types`, sin mirar que placeholders usa el SQL, y el cuerpo produce\nlas dos claves (`flatten` deja `BODY.X`, `putRaw` deja `BODY_RAW.X`) apuntando\nal MISMO valor. Con esos dos tipos declarados no hay valor que satisfaga ambos:\n\n| Se manda | `BODY.X` es `FILE` (entero) | `BODY_RAW.X` es `JSONB` |\n|---|---|---|\n| 1 archivo, el valor es `17` | pasa | **400** -- JSONB solo admite objeto, array o string |\n| 2+ archivos, el valor es `[17,18]` | **400** -- no es un entero | pasa |\n\nEs decir: el unico caso que pasaba era **no mandar ninguno**. Cuadra con los\ndatos -- `TARCHIVO` solo tiene 96 filas con etiqueta `matricula`, todas\nmigradas: por ese camino nunca se subio nada.\n\nAsi que se partio en dos operaciones, que es lo que el catalogo si sabe\nexpresar: **un endpoint que sube UN archivo**, llamado en bucle.\n\nRESOLVER A LA PERSONA -- dos pasos, y el orden importa\n\n  1) GET /usuarios/autocompletar-por-documento?FKTLVTIPODOCUMENTO=&IDENTIFICACION=\n     Devuelve pkTusuario y, ademas, pkTfuncionarioActivo y pkTestudianteActivo:\n     dicen si esa persona ya es funcionario o estudiante. Sin gate: la encuentra\n     aunque sea de otro establecimiento.\n\n  2) Solo si NO aparecio: POST /register/usuario (auth-center, cuerpo camelCase).\n     OJO: no es un \"crear o recuperar\". Si el correo ya esta tomado responde 409,\n     no devuelve la persona. Por eso el paso 1 no es opcional.\n     Respuesta: { idUser, pkTusuario, pkFuncionario, email } -- usar pkTusuario.\n\n  El alta de matricula usa este mismo patron: recibe PK_USUARIO_ESTUDIANTE y\n  PK_USUARIO_ACUDIENTE. La clave del editar se llama igual a proposito.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "[V201] POST /cobertura-academica/matricula/:ID/documentos",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/files/eval-col/cobertura-academica/matricula/{{pkTmatricula}}/documentos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "eval-col",
+            "cobertura-academica",
+            "matricula",
+            "{{pkTmatricula}}",
+            "documentos"
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "ARCHIVO",
+              "type": "file",
+              "src": [],
+              "description": "FILE:matricula -- UN fichero. Para varios, repite la peticion; NO repitas la key (esta declarada como archivo simple, no como lista)"
+            }
+          ]
+        },
+        "description": {
+          "content": "V201 -- sube UN documento de \"Otros documentos relevantes\" y lo enlaza a la\nmatricula. **Se llama en bucle**, una vez por fichero.\n\n### El endpoint de subida\n\n```\nPOST /api/files/eval-col/cobertura-academica/matricula/:ID/documentos\n     multipart:  ARCHIVO = <fichero>      (FILE:matricula)\n```\n\nRespuesta:\n\n```json\n{\n  \"pkTmatriculaArchivo\": 927,\n  \"pkTmatricula\": 102789,\n  \"fkTarchivo\": 330284,\n  \"tipo\": \"otros\",\n  \"totalOtrosDocumentos\": 1\n}\n```\n\n`totalOtrosDocumentos` es cuantos quedan activos tras esta subida, para que el\nfront muestre el avance del bucle sin volver a pedir la ficha.\n\n**Por que exige la matricula** y no devuelve un `fkTarchivo` suelto:\nfile-service reserva la fila de `TARCHIVO` inactiva y la **activa cuando el\ndestino responde 2xx**. Un endpoint de \"solo subir\" dejaria el archivo activo y\nsin dueño en cuanto responde; si el usuario abandona el formulario queda una\nfila y un objeto en S3 que nada referencia y nadie limpia. Enlazando en la misma\npeticion nace con dueño.\n\n**Un archivo por peticion, y son peticiones independientes.** No hay transaccion\nque las abarque: si la tercera falla, las dos primeras quedan guardadas. El\nfront tiene que reflejar eso -- reportar cual fallo y dejar reintentar solo esa,\nno rehacer el bucle entero, que subiria duplicados.\n\nEs un POST y no un PUT porque **agrega** un elemento a una coleccion. Repetirlo\ncon el mismo fichero crea otro enlace, y eso es correcto: el mismo documento\nsubido dos veces por error lo resuelve el usuario quitando uno, no la base\nrechazandolo.\n\n### Por que va aparte y no como un campo mas\n\n`OTROS_DOCUMENTOS_RELEVANTES` es el unico documento de la ficha que admite\n**N archivos**. Los otros cuatro son 1-a-1 y viajan bien como un campo `FILE`\ncada uno.\n\nUn campo con varios archivos hoy **no se puede declarar en el catalogo**.\n`file-service` si los soporta -- sube todas las partes que comparten nombre de\ncampo y sustituye \"un id suelto si hay uno, una lista si hay varios\"\n(`TransformadorMultipart`) -- pero `param_types` no tiene el tipo `FILE[]` para\ndescribirlo. Esta escrito como limitacion conocida en\n`docs/subida-archivos-a-queries.md`, seccion 10.\n\nEl intento previo fue declarar el mismo campo dos veces: `FILE` para que\nfile-service lo acepte y `JSONB` por `BODY_RAW` para leer la lista. **No puede\nfuncionar.** `ParamBinder.buildStrict` valida TODAS las claves del cuerpo contra\nTODO `param_types`, sin mirar que placeholders usa el SQL, y el cuerpo produce\nlas dos claves (`flatten` deja `BODY.X`, `putRaw` deja `BODY_RAW.X`) apuntando\nal MISMO valor. Con esos dos tipos declarados no hay valor que satisfaga ambos:\n\n| Se manda | `BODY.X` es `FILE` (entero) | `BODY_RAW.X` es `JSONB` |\n|---|---|---|\n| 1 archivo, el valor es `17` | pasa | **400** -- JSONB solo admite objeto, array o string |\n| 2+ archivos, el valor es `[17,18]` | **400** -- no es un entero | pasa |\n\nEs decir: el unico caso que pasaba era **no mandar ninguno**. Cuadra con los\ndatos -- `TARCHIVO` solo tiene 96 filas con etiqueta `matricula`, todas\nmigradas: por ese camino nunca se subio nada.\n\nAsi que se partio en dos operaciones, que es lo que el catalogo si sabe\nexpresar: **un endpoint que sube UN archivo**, llamado en bucle.\n\n### Quitar y reemplazar: eso sigue en el PATCH de la ficha\n\nEl endpoint de subida solo AGREGA. Para quitar o reemplazar se usa\n`OTROS_DOCUMENTOS_RELEVANTES` del `PATCH /cobertura-academica/matricula/:ID`, y\nesta bien que sea asi: desde el front tiene mas sentido mandar los\nidentificadores de lo que se quita que volver a subir lo que se conserva.\n\nEl campo es un **array de objetos**, y cada objeto es una operacion:\n\n```json\n[ { \"pkTmatriculaArchivo\": 12, \"fkTarchivo\": null },\n  { \"pkTmatriculaArchivo\": 13, \"fkTarchivo\": 987 } ]\n```\n\n| Que trae el objeto | Que hace |\n|---|---|\n| `pkTmatriculaArchivo` + `fkTarchivo: null` | quita ESE documento |\n| `pkTmatriculaArchivo` + `fkTarchivo: N` | reemplaza ESE documento por el archivo N |\n| solo `fkTarchivo: N` | agrega uno cuyo archivo YA existe. No sirve para un fichero nuevo: para eso esta el endpoint de subida |\n| `{}`, los dos ausentes | **se rechaza** |\n\nLos `pkTmatriculaArchivo` salen de `GET /cobertura-academica/matricula/:ID`, en\n`archivos[]`, donde los \"otros\" son los de `tipo_archivo_valor = \"06\"`.\n\nNo enviar el campo, o enviar `[]`, es \"no toques los documentos\". A diferencia\nde los cuatro 1-a-1, este **no lleva bandera `TOCAR_`**: la ausencia ya es\ninequivoca porque las operaciones son explicitas.\n\nEl `{}` se rechaza a proposito. Antes significaba \"borra todos los otros\ndocumentos\" -- por tipo, sin nombrarlos -- y un cuerpo mal armado en el front\npodia vaciar la lista entera sin que nadie lo pidiera. Para quitar varios se\nnombran uno por uno.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Rechazo esperado -- repetir la key ARCHIVO en una sola peticion",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/files/eval-col/cobertura-academica/matricula/{{pkTmatricula}}/documentos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "eval-col",
+            "cobertura-academica",
+            "matricula",
+            "{{pkTmatricula}}",
+            "documentos"
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "ARCHIVO",
+              "type": "file",
+              "src": [],
+              "description": "primer fichero"
+            },
+            {
+              "key": "ARCHIVO",
+              "type": "file",
+              "src": [],
+              "description": "segundo fichero -- ESTO es lo que falla"
+            }
+          ]
+        },
+        "description": {
+          "content": "Mandar dos ficheros bajo la misma key en UNA peticion **no funciona**, y es\njusto el error que la separacion pretende evitar.\n\nfile-service los sube los dos y sustituye el campo por una **lista**\n`[17, 18]`. Pero `ARCHIVO` esta declarado `FILE:matricula`, que la guardia de\n`ParamBinder` trata como `BIGINT`, asi que rechaza con 400:\n\n```\nEl parametro BODY.ARCHIVO se declaro como FILE (entero) pero el cliente\nenvio ArrayList. Verifica que el campo lleve un numero sin decimales.\n```\n\nOjo con el efecto colateral: el rechazo ocurre en query-service, **despues**\nde que file-service subio los binarios. Las filas de `TARCHIVO` quedan\nreservadas y se deshacen solas al no llegar el 2xx, pero es trabajo tirado.\nUna peticion por fichero.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Rechazo esperado -- OTROS_DOCUMENTOS_RELEVANTES con {}",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/files/eval-col/cobertura-academica/matricula/{{pkTmatricula}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "eval-col",
+            "cobertura-academica",
+            "matricula",
+            "{{pkTmatricula}}"
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "OTROS_DOCUMENTOS_RELEVANTES",
+              "value": "[{}]",
+              "type": "text",
+              "description": "una operacion sin pkTmatriculaArchivo y sin fkTarchivo"
+            }
+          ]
+        },
+        "description": {
+          "content": "Una operacion vacia se rechaza con `22023`:\n\n```\nPara quitar un documento de \"Otros documentos relevantes\" hay que\nindicar cual\n```\n\nAntes esto significaba \"borra todos los documentos de ese tipo\", porque\nsin `pkTmatriculaArchivo` la funcion borraba **por tipo**. En un tipo que\nadmite N eso vaciaba la lista entera, y un cuerpo mal armado en el front\nbastaba para dispararlo. Se comprobo midiendo: con dos documentos\nactivos, agregar uno dejaba UNO solo.\n\nCorregido en V177: el barrido por tipo quedo limitado a los cuatro\ndocumentos 1-a-1, donde reemplazar SI es inactivar el vigente y crear el\nnuevo. Sobre los \"otros\" hay que nombrar cual.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "[298] POST /cobertura-academica/matricula/corregir",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"IDS\": null,\n  \"GRUPO_DESTINO\": null\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "formdata": [
+            {
+              "key": "IDS",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT[]"
+            },
+            {
+              "key": "GRUPO_DESTINO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/cobertura-academica/matricula/corregir",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "cobertura-academica",
+            "matricula",
+            "corregir"
+          ]
+        },
+        "description": "V178/V230 -- correccion de grupo en lote. Mueve las matriculas al grupo indicado SIN crear ninguna nueva y SIN cambiar de estado: es el arreglo de un error de digitacion, no un movimiento academico.\n\nPor eso NO pide motivo ni soporte, a diferencia de promover y reubicar. Es POST aunque no lleve archivo: son tres acciones hermanas de la misma pantalla y tenerlas en verbos distintos solo complica al front.\n\n  IDS            lista de PK_TMATRICULA. En multipart va como texto:\n                 \"1,2,3\" o \"{1,2,3}\" -- no \"[1,2]\", que revienta con 22P02.\n  GRUPO_DESTINO  PK_TGRUPO al que se mueven.\n\nSolo desde estado Cursando, el periodo del grupo destino no puede haber terminado, y el lote es todo o nada."
+      },
+      "response": []
+    },
+    {
+      "name": "[263] POST /cobertura-academica/matricula/promover",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "IDS",
+              "value": "[{{pkTmatricula}}]",
+              "type": "text",
+              "description": "TEXT -- lista en texto. Acepta [1,2], {1,2} o 1,2"
+            },
+            {
+              "key": "MOTIVO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "SOPORTE",
+              "type": "file",
+              "src": [],
+              "description": "FILE:matricula -- adjunte el archivo"
+            },
+            {
+              "key": "GRUPO_DESTINO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/files/eval-col/cobertura-academica/matricula/promover",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "eval-col",
+            "cobertura-academica",
+            "matricula",
+            "promover"
+          ]
+        },
+        "description": "V179 -- promocion en lote hacia un grupo de grado superior de la MISMA sede. Crea una matricula nueva en Cursando por cada una (copiando socioeconomico y documentos, encadenada por FK_TMATRICULA_ANTERIOR) y deja la anterior en Promovido. Motivo y soporte OBLIGATORIOS; quedan en TMATRICULA_PROMOCION. Origen: solo Cursando. Todo o nada. Solo rector/secretaria/jefe de sistema"
+      },
+      "response": []
+    },
+    {
+      "name": "[264] POST /cobertura-academica/matricula/reubicar",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "IDS",
+              "value": "[{{pkTmatricula}}]",
+              "type": "text",
+              "description": "TEXT -- lista en texto. Acepta [1,2], {1,2} o 1,2"
+            },
+            {
+              "key": "MOTIVO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "SOPORTE",
+              "type": "file",
+              "src": [],
+              "description": "FILE:matricula -- adjunte el archivo"
+            },
+            {
+              "key": "GRUPO_DESTINO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/files/eval-col/cobertura-academica/matricula/reubicar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "eval-col",
+            "cobertura-academica",
+            "matricula",
+            "reubicar"
+          ]
+        },
+        "description": "V179 -- reubicacion en lote hacia un grupo de OTRA sede, o de un grado INFERIOR de la misma sede. Crea una matricula nueva en Cursando por cada una y deja la anterior en Reubicado. Motivo y soporte OBLIGATORIOS; quedan en TTRASLADO_ESTUDIANTE. Origen: solo Cursando. Todo o nada. Se exige permiso sobre el establecimiento de origen y el de destino"
+      },
+      "response": []
+    },
+    {
+      "name": "[295] PATCH /usuarios/:ID",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "FOTO",
+              "type": "file",
+              "src": [],
+              "description": "FILE:usuario -- adjunte el archivo"
+            },
+            {
+              "key": "BARRIO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "COMUNA",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "GENERO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "TELEFONO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "LOCALIDAD",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "PRIMER_NOMBRE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "SEGUNDO_NOMBRE",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "TIPO_DE_SANGRE",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "PRIMER_APELLIDO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "SEGUNDO_APELLIDO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "TIPO_DE_DOCUMENTO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "CORREO_ELECTRONICO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "ZONA_DE_RESIDENCIA",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            },
+            {
+              "key": "FECHA_DE_NACIMIENTO",
+              "value": "2026-01-15",
+              "type": "text",
+              "description": "DATE"
+            },
+            {
+              "key": "NUMERO_DE_DOCUMENTO",
+              "value": "",
+              "type": "text",
+              "description": "TEXT"
+            },
+            {
+              "key": "LUGAR_DE_NACIMIENTO_MUNICIPIO",
+              "value": "",
+              "type": "text",
+              "description": "BIGINT"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/files/eval-col/usuarios/{{pkTusuario}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "eval-col",
+            "usuarios",
+            "{{pkTusuario}}"
+          ]
+        },
+        "description": "V179 -- edita los datos de identidad y contacto de una persona (TUSUARIO): nombres, documento, fecha de nacimiento, genero, telefono, correo, foto y zona de residencia. NO toca cuenta ni contrasena. Se llama en cadena con el PATCH de matricula cuando se editan los dos a la vez. Permiso: rector/secretaria/jefe de sistema de un establecimiento al que la persona pertenezca"
+      },
+      "response": []
+    }
+  ]
+}

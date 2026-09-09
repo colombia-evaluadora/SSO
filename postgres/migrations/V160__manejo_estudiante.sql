@@ -194,14 +194,15 @@ $function$;
 -- Gate: a diferencia de fn_estudiante_crear, esta funcion se dispara justo
 -- despues de escribir el documento (autocompletado), momento en el que
 -- todavia no necesariamente se eligio una sede -- no hay contra que
--- escalar el gate por EE/sede. Por eso NO recibe p_fk_sede y usa el mismo
--- gate amplio (sin scoping a un EE concreto) que fn_usu_crear: super-admin
--- / jefe-de-sistema / aux.administrativo (fn_puede_afectar_usuarios) o
--- rector/secretaria de CUALQUIER EE activo (fallback por FK, para el caso
--- recien asignado sin TSEDE_USUARIO todavia). Es la info general (datos
--- de TUSUARIO/TESTUDIANTE) la que no amerita ese rigor -- lo que si es
--- sede-especifico (crear el vinculo, la matricula) ya lo valida su propia
--- funcion con el gate estricto.
+-- escalar el gate por EE/sede. Por eso NO recibe p_fk_sede y usa un gate
+-- AMPLIO (sin scoping a un EE concreto): rector o secretaria de CUALQUIER
+-- EE activo por FK -- que cubre tambien al recien asignado, sin
+-- TSEDE_USUARIO todavia -- o jefe de sistema de cualquier sede activa. Es
+-- la info general (datos de TUSUARIO/TESTUDIANTE) la que no amerita mas
+-- rigor; lo que si es sede-especifico (crear el vinculo, la matricula) ya
+-- lo valida su propia funcion con el gate estricto.
+--
+-- Amplio en ALCANCE, no en roles: el super-admin no entra (ver REV abajo).
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION academico_test.fn_estudiante_obtener_por_id(
