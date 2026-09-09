@@ -18,6 +18,17 @@
 -- SÍ deben seguir exigiendo ACTIVE = TRUE: son catálogos que ya
 -- existen de antemano, no filas que este mismo flujo esté creando en
 -- el momento.
+--
+-- NOTA (CU-86e2w4xdt — Permisos según rol): esta es la definición que GANA
+-- de fn_fun_actualizar (la de V51:~1535 quedó obsoleta al redefinirse aquí),
+-- así que es aquí donde su gate pasa al modelo capability+scope+rango de
+-- V29. El bloque "0. Gate" que estaba copiado inline (unión de EE
+-- accesibles + coordinador de sede + umbral FK_TROL >= 7) se sustituye por
+-- una sola línea:
+--     PERFORM academico_test.fn_assert_permiso_funcionario(
+--                 p_pk_usuario_solicitante, 'EDITAR', p_pk_funcionario);
+-- Menú de la sección: 'FUNCIONARIOS'. Ver
+-- docs/gate-permisos-por-menu-analysis.md.
 CREATE OR REPLACE FUNCTION academico_test.fn_fun_actualizar(p_pk_funcionario bigint, p_pk_usuario_solicitante bigint, p_correo_electronico character varying DEFAULT NULL::character varying, p_contrasena_hasheada character varying DEFAULT NULL::character varying, p_visado character varying DEFAULT NULL::character varying, p_identificacion character varying DEFAULT NULL::character varying, p_fk_tlv_tipo_documento bigint DEFAULT NULL::bigint, p_primer_nombre character varying DEFAULT NULL::character varying, p_segundo_nombre character varying DEFAULT NULL::character varying, p_primer_apellido character varying DEFAULT NULL::character varying, p_segundo_apellido character varying DEFAULT NULL::character varying, p_fecha_nacimiento date DEFAULT NULL::date, p_fk_tlv_genero bigint DEFAULT NULL::bigint, p_telefono character varying DEFAULT NULL::character varying, p_estado character varying DEFAULT NULL::character varying, p_fk_tarchivo_foto bigint DEFAULT NULL::bigint, p_fk_tmunicipio_expedicion bigint DEFAULT NULL::bigint, p_fk_tlv_clase_funcionario bigint DEFAULT NULL::bigint, p_fk_tlv_nivel_esenanza bigint DEFAULT NULL::bigint, p_fk_tlv_grado_escalafon bigint DEFAULT NULL::bigint, p_fk_tlv_nivel_educativo bigint DEFAULT NULL::bigint, p_fk_tlv_fuente_recurso bigint DEFAULT NULL::bigint, p_fk_tlv_cargo bigint DEFAULT NULL::bigint, p_fk_tlv_tipo_vinculacion bigint DEFAULT NULL::bigint, p_telefonos character varying DEFAULT NULL::character varying, p_fecha_vinculacion date DEFAULT NULL::date, p_fecha_amenazado date DEFAULT NULL::date, p_amenazado academico_test.bool_sn DEFAULT NULL::character varying, p_fk_tlv_area_ensenanza bigint DEFAULT NULL::bigint, p_fk_tlv_area_tecnica bigint DEFAULT NULL::bigint, p_descripcion_otra_area character varying DEFAULT NULL::character varying, p_fk_tlv_etnoeducador bigint DEFAULT NULL::bigint, p_fk_tlv_sobresueldo bigint DEFAULT NULL::bigint, p_fk_tlv_carrera_administrativa bigint DEFAULT NULL::bigint, p_fk_tlv_funcionario_comision bigint DEFAULT NULL::bigint, p_fk_tlv_nivel_jerarquico bigint DEFAULT NULL::bigint, p_asignacion_basica numeric DEFAULT NULL::numeric, p_fk_tlv_tiempo_asignado bigint DEFAULT NULL::bigint, p_fk_tdenominacion bigint DEFAULT NULL::bigint, p_fk_tlv_especialidad_docente bigint DEFAULT NULL::bigint, p_fk_tarchivo bigint DEFAULT NULL::bigint, p_direccion character varying DEFAULT NULL::character varying)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -53,68 +64,15 @@ BEGIN
     END IF;
 
     -- =====================================================================
-    -- 0. Gate de autorizacion -- REV3: "union de EE accesibles" +
-    --    coordinador de sede, mismo patron que fn_usu_empleado_buscar_por_pk
-    --    / fn_fun_baja_establecimiento / fn_usu_empleados_listar. Ya NO usa
-    --    fn_puede_afectar_usuarios como gate principal: esa funcion solo
-    --    pregunta si el solicitante tiene un rol de gestion EN ALGUNA
-    --    sede, sin mirar si esa sede tiene algo que ver con el funcionario
-    --    objetivo -- con eso, cualquier rector, secretaria o auxiliar
-    --    administrativo de CUALQUIER establecimiento podia editar datos y
-    --    permisos de CUALQUIER funcionario del sistema.
+    -- 0. Gate de autorizacion (CU-86e2w4xdt) -- ver nota del encabezado.
+    --    Una sola llamada reemplaza el bloque "union de EE accesibles" +
+    --    coordinador de sede que estaba copiado inline aqui: capability
+    --    'EDITAR' sobre el menu FUNCIONARIOS (TROL_MENU menos
+    --    TUSUARIO_ROL_PERMISO), scope sobre el funcionario objetivo y
+    --    rango de rol (solo categorias estrictamente inferiores).
     -- =====================================================================
-    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        WITH ee_accesibles AS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        ),
-        sedes_coordinador AS (
-            SELECT su.FK_TSEDE
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        )
-        SELECT EXISTS (
-            SELECT 1
-              FROM academico_test.TESTABLECIMIENTO e
-             WHERE e.ACTIVE = TRUE
-               AND e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-               AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
-            UNION ALL
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE su.FK_TUSUARIO = v_pk_usuario
-               AND su.ACTIVE      = TRUE
-               AND s.ACTIVE       = TRUE
-               AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-               AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
-            UNION ALL
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-             WHERE su.FK_TUSUARIO = v_pk_usuario
-               AND su.ACTIVE      = TRUE
-               AND su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador)
-               AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
-        ) INTO v_visible;
-
-        IF NOT v_visible THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
-    END IF;
+    PERFORM academico_test.fn_assert_permiso_funcionario(
+        p_pk_usuario_solicitante, 'EDITAR', p_pk_funcionario);
 
     -- =====================================================================
     -- 2. Validaciones de valor (campos no-NULL que si llegan vacios => RAISE).

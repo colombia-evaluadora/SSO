@@ -14,10 +14,22 @@
 --   TMATRICULA.FK_TPADRE -> TPADRE -> TUSUARIO        (guardian, nombre)
 --   TMATRICULA.FK_TLV_ACUDIENTE_PARENTESCO -> TLISTA_VALOR (guardian, parentesco)
 --
--- Alcance/seguridad: se reusa academico_test.fn_periodo_usuario_puede_ver
--- (V37) sobre el periodo academico del grado de cada matricula — mismo
--- criterio de visibilidad (global 1/2/3, establecimiento 7/8/9, sede 11) que
--- ya usa el modulo de Periodos Academicos. Ver memoria "role-scoping-academic".
+-- Alcance/seguridad (CU-86e2w4xdt): modelo capability + scope unificado
+-- (docs/gate-permisos-por-menu-analysis.md), igual que el resto de la
+-- seccion Matricula. Reemplaza a fn_periodo_usuario_puede_ver (listas fijas
+-- de FK_TROL):
+--   * CAPABILITY: se exige 'VER' sobre el menu MATRICULA
+--     (fn_usuario_puede_en_menu) -- TROL_MENU concede / TUSUARIO_ROL_PERMISO
+--     recorta, lo administra el super admin. Sin capability -> 42501.
+--     El SUPER_ADMIN (categoria nivel 0) no pasa por esta comprobacion.
+--   * SCOPE por categoria de rol (fn_usuario_categoria_rol_nivel):
+--       nivel 0/1 (super / territorial) -> ve TODAS las matriculas;
+--       nivel 2 (establecimiento)       -> EE en fn_usuario_ee_accesibles;
+--       nivel 3 (sede+jornada)          -> par (TSEDE, TGRUPO.FK_TLV_JORNADA)
+--                                          en fn_usuario_sedes_jornadas_accesibles;
+--       sin categoria / nivel 4         -> no ve ninguna (fail-closed).
+--   * p_pk_usuario NULL (llamada interna sin scoping) -> se trata como
+--     nivel 0: devuelve todo, sin exigir capability.
 --
 -- --------------------------------------------------------------------------
 -- Verificado contra la BD real (tunel SSH a 172.233.184.248, sso_db,
@@ -74,7 +86,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_matricula_listar(
     p_group       TEXT    DEFAULT NULL,  -- TGRUPO.NOMBRE, match exacto
     p_page_index  INT     DEFAULT 0,     -- 0-based
     p_page_size   INT     DEFAULT 10,    -- 0/NULL = sin paginar
-    p_pk_usuario  BIGINT  DEFAULT NULL,  -- alcance (ver fn_periodo_usuario_puede_ver)
+    p_pk_usuario  BIGINT  DEFAULT NULL,  -- alcance: capability 'VER' MATRICULA + scope por categoria de rol (NULL = interno, sin scoping)
     p_sort_by     TEXT    DEFAULT NULL,  -- id de columna del front (documentNumber, firstName, ...)
     p_sort_dir    TEXT    DEFAULT NULL   -- 'asc' | 'desc'
 )
@@ -100,6 +112,17 @@ DECLARE
     v_col TEXT;
     v_dir TEXT;
 BEGIN
+    -- Autorizacion (CU-86e2w4xdt): fail-fast de capability. Si el usuario no
+    -- es SUPER_ADMIN y no tiene 'VER' sobre el menu MATRICULA -> 42501 (mismo
+    -- trato que el resto de la seccion). El filtro FINO por scope (que EE /
+    -- sede+jornada ve) va por fila, con fn_matricula_puede_ver (V40), que
+    -- reemplaza a fn_periodo_usuario_puede_ver.
+    IF p_pk_usuario IS NOT NULL
+       AND COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario), 99) <> 0
+       AND NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario, 'MATRICULA', 'VER') THEN
+        RAISE EXCEPTION 'El usuario no tiene permiso para ver en el modulo MATRICULA'
+            USING ERRCODE = '42501';
+    END IF;
     -- Los alias de la derivada de abajo son los nombres de columna de salida
     -- (RETURNS TABLE) salvo educationlevel/grade_num/grupo/guardian_name, que
     -- son los alias reales usados en el SELECT interno.
@@ -177,7 +200,9 @@ BEGIN
          LEFT JOIN academico_test.TUSUARIO pu     ON pu.PK_TUSUARIO = p.FK_TUSUARIO
          LEFT JOIN academico_test.TLISTA_VALOR par ON par.PK_LISTA_VALOR = m.FK_TLV_ACUDIENTE_PARENTESCO
              WHERE m.ACTIVE = TRUE
-               AND academico_test.fn_periodo_usuario_puede_ver($9, pa.PK_TPERIODO_ACADEMICO)
+               -- Scope fino por fila (CU-86e2w4xdt): capability + EE / sede+
+               -- jornada segun categoria de rol. Reemplaza fn_periodo_usuario_puede_ver.
+               AND academico_test.fn_matricula_puede_ver($9, gr.PK_TGRUPO)
                AND ($1 IS NULL OR (
                        u.IDENTIFICACION ILIKE '%%' || $1 || '%%' OR
                        u.PRIMER_NOMBRE  ILIKE '%%' || $1 || '%%' OR

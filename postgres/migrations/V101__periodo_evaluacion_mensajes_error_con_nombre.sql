@@ -17,10 +17,10 @@ DECLARE
     v_ini DATE; v_fin DATE; v_pct NUMERIC; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_establecimiento_id BIGINT;
 BEGIN
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast; scope abajo con la
+    -- sede/jornada del periodo academico padre.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, NULL, NULL, NULL, 'EDITAR');
     SELECT * INTO r FROM academico_test.TPERIODO_EVALUACION WHERE PK_TPERIODO_EVALUACION = p_pk;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'No existe el periodo de evaluacion indicado' USING ERRCODE = 'P0002';
@@ -29,15 +29,15 @@ BEGIN
         RAISE EXCEPTION 'El periodo de evaluacion "%" esta inactivo; no se puede actualizar', r.NOMBRE
             USING ERRCODE = '22023';
     END IF;
-    -- Gate fino: el establecimiento del periodo padre debe estar en su alcance.
+    -- Gate fino (CU-86e2w4xdt): capability + scope (EE, sede, jornada) del periodo academico padre.
     SELECT s.FK_TESTABLECIMIENTO INTO v_establecimiento_id
       FROM academico_test.TPERIODO_ACADEMICO pa
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
      WHERE pa.PK_TPERIODO_ACADEMICO = r.FK_TPERIODO_ACADEMICO;
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_establecimiento_id) THEN
-        RAISE EXCEPTION 'El usuario no puede gestionar periodos de evaluacion de este establecimiento'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, v_establecimiento_id,
+        academico_test.fn_periodo_sede(r.FK_TPERIODO_ACADEMICO),
+        academico_test.fn_periodo_jornada(r.FK_TPERIODO_ACADEMICO), 'EDITAR');
     v_ini := COALESCE(p_fecha_inicio, r.FECHA_INICIO);
     v_fin := COALESCE(p_fecha_fin, r.FECHA_FIN);
     v_pct := COALESCE(p_porcentaje, r.PORCENTAJE);
@@ -71,22 +71,24 @@ AS $function$
 DECLARE
     v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR; v_est BIGINT;
     v_nombre_periodo_eval VARCHAR(130);
+    v_sede_id    BIGINT;
+    v_jornada_id BIGINT;
 BEGIN
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
-    -- Gate fino: el establecimiento del periodo padre debe estar en su alcance.
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, NULL, NULL, NULL, 'ELIMINAR');
+    -- Gate fino (CU-86e2w4xdt): capability + scope (EE, sede, jornada) del periodo academico padre.
     -- Se trae tambien el NOMBRE aqui (antes solo se leia en la rama de error)
     -- porque la etiqueta de auditoria lo necesita en el camino feliz.
-    SELECT s.FK_TESTABLECIMIENTO, pe.NOMBRE INTO v_est, v_nombre_periodo_eval
+    SELECT s.FK_TESTABLECIMIENTO, pa.FK_TSEDE, pa.FK_TLV_JORNADA, pe.NOMBRE
+      INTO v_est, v_sede_id, v_jornada_id, v_nombre_periodo_eval
       FROM academico_test.TPERIODO_EVALUACION pe
       JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = pe.FK_TPERIODO_ACADEMICO
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
      WHERE pe.PK_TPERIODO_EVALUACION = p_pk;
-    IF v_est IS NOT NULL AND NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_est) THEN
-        RAISE EXCEPTION 'El usuario no puede gestionar periodos de evaluacion de este establecimiento'
-            USING ERRCODE = '42501';
+    IF v_est IS NOT NULL THEN
+        PERFORM academico_test.fn_periodo_gate_escritura(
+            p_pk_usuario_solicitante, v_est, v_sede_id, v_jornada_id, 'ELIMINAR');
     END IF;
     -- Bloqueo: existen calificaciones (notas) registradas contra este periodo de
     -- evaluacion. Protege informacion historica (TAREA_NOTA/TASIGNATURA_NOTA no

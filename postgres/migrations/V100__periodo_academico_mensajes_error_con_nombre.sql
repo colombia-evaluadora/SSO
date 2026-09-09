@@ -39,11 +39,12 @@ DECLARE
     c_modo_redondear       CONSTANT BIGINT := 515;
     c_criterio_asignatura  CONSTANT BIGINT := 264;
 BEGIN
-    -- 0. Autorizacion (gate grueso: algun rol de gestion).
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- 0. Autorizacion (CU-86e2w4xdt): capability sobre el menu
+    --    PERIODOS_ACADEMICOS (fail-fast, sin scope todavia). El scope sobre
+    --    (establecimiento, sede, jornada) se valida en el punto 3a, cuando
+    --    ya se resolvio v_establecimiento. Ver docs/gate-permisos-por-menu-analysis.md.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, NULL, NULL, NULL, 'CREAR');
 
     -- 1. Obligatorios.
     IF p_fk_sede IS NULL OR p_fk_estado IS NULL OR p_fecha_inicio IS NULL
@@ -78,11 +79,11 @@ BEGIN
             RAISE EXCEPTION 'La sede seleccionada no existe' USING ERRCODE = '23503';
         END IF;
     END IF;
-    -- 3a. Autorizacion (gate fino: el establecimiento debe estar en su alcance).
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_establecimiento) THEN
-        RAISE EXCEPTION 'El usuario no puede gestionar periodos de este establecimiento'
-            USING ERRCODE = '42501';
-    END IF;
+    -- 3a. Autorizacion (CU-86e2w4xdt): capability + scope. Nivel territorial
+    --     alcanza cualquier EE; nivel establecimiento el EE en
+    --     fn_usuario_ee_accesibles; nivel sedes el par (sede, jornada) exacto.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, v_establecimiento, p_fk_sede, p_fk_jornada, 'CREAR');
 
     -- 3b. Periodo anterior (opcional): debe existir, estar activo y pertenecer al
     -- mismo establecimiento que la sede del nuevo periodo.
@@ -263,10 +264,10 @@ DECLARE
     i                 INT;
     j                 INT;
 BEGIN
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast; el scope se valida
+    -- abajo con la sede/jornada del periodo ya cargado.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, NULL, NULL, NULL, 'EDITAR');
 
     SELECT * INTO r FROM academico_test.TPERIODO_ACADEMICO WHERE PK_TPERIODO_ACADEMICO = p_pk_periodo;
     IF NOT FOUND THEN
@@ -276,13 +277,11 @@ BEGIN
         RAISE EXCEPTION 'El periodo academico "%" esta inactivo; no se puede actualizar', r.NOMBRE
             USING ERRCODE = '22023';
     END IF;
-    -- Autorizacion fina: el establecimiento del periodo debe estar en su alcance.
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(
-             p_pk_usuario_solicitante,
-             (SELECT FK_TESTABLECIMIENTO FROM academico_test.TSEDE WHERE PK_TSEDE = r.FK_TSEDE)) THEN
-        RAISE EXCEPTION 'El usuario no puede gestionar periodos de este establecimiento'
-            USING ERRCODE = '42501';
-    END IF;
+    -- Autorizacion fina (CU-86e2w4xdt): capability + scope sobre (EE, sede, jornada) del periodo.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante,
+        (SELECT FK_TESTABLECIMIENTO FROM academico_test.TSEDE WHERE PK_TSEDE = r.FK_TSEDE),
+        r.FK_TSEDE, r.FK_TLV_JORNADA, 'EDITAR');
 
     -- Valores efectivos (COALESCE param o actual).
     v_sede    := COALESCE(p_fk_sede, r.FK_TSEDE);
@@ -506,11 +505,12 @@ DECLARE
     v_nombre_periodo VARCHAR(200);
     v_establecimiento_id BIGINT;
     v_audit  VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_sede_id    BIGINT;
+    v_jornada_id BIGINT;
 BEGIN
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, NULL, NULL, NULL, 'ELIMINAR');
 
     SELECT ACTIVE, NOMBRE INTO v_activo, v_nombre_periodo
       FROM academico_test.TPERIODO_ACADEMICO WHERE PK_TPERIODO_ACADEMICO = p_pk_periodo;
@@ -520,15 +520,14 @@ BEGIN
     IF v_activo = FALSE THEN
         RAISE EXCEPTION 'El periodo academico "%" ya esta inactivo', v_nombre_periodo USING ERRCODE = '22023';
     END IF;
-    -- Autorizacion fina: el establecimiento del periodo debe estar en su alcance.
-    SELECT s.FK_TESTABLECIMIENTO INTO v_establecimiento_id
+    -- Autorizacion fina (CU-86e2w4xdt): capability + scope sobre (EE, sede, jornada) del periodo.
+    SELECT s.FK_TESTABLECIMIENTO, pa.FK_TSEDE, pa.FK_TLV_JORNADA
+      INTO v_establecimiento_id, v_sede_id, v_jornada_id
       FROM academico_test.TPERIODO_ACADEMICO pa
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
      WHERE pa.PK_TPERIODO_ACADEMICO = p_pk_periodo;
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_establecimiento_id) THEN
-        RAISE EXCEPTION 'El usuario no puede gestionar periodos de este establecimiento'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, v_establecimiento_id, v_sede_id, v_jornada_id, 'ELIMINAR');
 
     IF EXISTS (
         SELECT 1 FROM academico_test.THORARIO h
@@ -625,24 +624,24 @@ DECLARE
     v_establecimiento_id BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, NULL, NULL, NULL, 'EDITAR');
 
     SELECT HORA_INICIO, HORA_FIN INTO v_pi, v_pf
       FROM academico_test.TPERIODO_ACADEMICO WHERE PK_TPERIODO_ACADEMICO = p_fk_periodo;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'No existe el periodo academico' USING ERRCODE = 'P0002';
     END IF;
+    -- Autorizacion fina (CU-86e2w4xdt): capability + scope (EE, sede, jornada) del periodo.
     SELECT s.FK_TESTABLECIMIENTO INTO v_establecimiento_id
       FROM academico_test.TPERIODO_ACADEMICO pa
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
      WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo;
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_establecimiento_id) THEN
-        RAISE EXCEPTION 'El usuario no puede gestionar periodos de este establecimiento'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, v_establecimiento_id,
+        academico_test.fn_periodo_sede(p_fk_periodo),
+        academico_test.fn_periodo_jornada(p_fk_periodo), 'EDITAR');
     IF p_hora_fin < p_hora_inicio THEN
         RAISE EXCEPTION 'La hora fin del descanso no puede ser anterior a la inicio' USING ERRCODE = '22023';
     END IF;
@@ -759,21 +758,21 @@ DECLARE
     v_tmp_hi TIME;
     v_tmp_hf TIME;
     v_establecimiento_id BIGINT;
+    v_sede_id    BIGINT;
+    v_jornada_id BIGINT;
 BEGIN
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
-    -- Alcance fino: el establecimiento del periodo del descanso debe estar en su alcance.
-    SELECT s.FK_TESTABLECIMIENTO INTO v_establecimiento_id
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, NULL, NULL, NULL, 'EDITAR');
+    -- Alcance fino (CU-86e2w4xdt): capability + scope (EE, sede, jornada) del periodo del descanso.
+    SELECT s.FK_TESTABLECIMIENTO, pa.FK_TSEDE, pa.FK_TLV_JORNADA
+      INTO v_establecimiento_id, v_sede_id, v_jornada_id
       FROM academico_test.TDESCANSOS d
       JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = d.FK_TPERIODO_ACADEMICO
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
      WHERE d.PK_TDESCANSOS = p_pk_descanso;
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_establecimiento_id) THEN
-        RAISE EXCEPTION 'El usuario no puede gestionar periodos de este establecimiento'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, v_establecimiento_id, v_sede_id, v_jornada_id, 'EDITAR');
     -- Horas del descanso, para la etiqueta de auditoria (se reconsultan luego
     -- en la rama de error si el UPDATE no afecta filas; sin conflicto).
     SELECT HORA_INICIO, HORA_FIN INTO v_tmp_hi, v_tmp_hf

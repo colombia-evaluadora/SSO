@@ -96,20 +96,14 @@ CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_crear(
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE v_id BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    -- Alcance por rol (como V37): gate grueso (algun rol de gestion) + gate fino
-    -- (el establecimiento del periodo padre debe estar en su alcance).
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, (
-             SELECT s.FK_TESTABLECIMIENTO
-               FROM academico_test.TPERIODO_ACADEMICO pa
-               JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-              WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo)) THEN
-        RAISE EXCEPTION 'El usuario no puede gestionar periodos de evaluacion de este establecimiento'
-            USING ERRCODE = '42501';
-    END IF;
+    -- CU-86e2w4xdt: capability por el menu PERIODOS_ACADEMICOS + scope. El
+    -- periodo de evaluacion no tiene sede ni jornada propias: las HEREDA de
+    -- su TPERIODO_ACADEMICO padre.
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PERIODOS_ACADEMICOS', 'CREAR',
+        academico_test.fn_periodo_establecimiento(p_fk_periodo),
+        academico_test.fn_periodo_sede(p_fk_periodo),
+        academico_test.fn_periodo_jornada(p_fk_periodo));
     IF p_fk_periodo IS NULL OR NULLIF(TRIM(p_codigo),'') IS NULL OR NULLIF(TRIM(p_nombre),'') IS NULL
        OR NULLIF(TRIM(p_abreviacion),'') IS NULL OR p_fecha_inicio IS NULL OR p_fecha_fin IS NULL
        OR p_fk_estado IS NULL THEN
@@ -319,11 +313,11 @@ $$;
     LANGUAGE plpgsql AS $$
     DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
     BEGIN
-        -- Gate grueso; el fino por establecimiento lo aplica fn_periodo_eval_soft_delete.
-        IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
+        -- CU-86e2w4xdt: capability fail-fast sobre PERIODOS_ACADEMICOS; el
+        -- scope fino por (EE, sede, jornada) lo aplica fn_periodo_eval_soft_delete
+        -- por cada id dentro del bucle.
+        PERFORM academico_test.fn_periodo_gate_escritura(
+            p_pk_usuario_solicitante, NULL, NULL, NULL, 'ELIMINAR');
         IF p_ids IS NULL THEN RETURN; END IF;
         FOREACH v_id IN ARRAY p_ids LOOP
             BEGIN

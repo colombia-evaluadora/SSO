@@ -59,6 +59,28 @@
 -- Idempotencia:
 --   * CREATE OR REPLACE FUNCTION: el script es seguro de re-ejecutar dentro
 --     del mismo ambiente (Flyway lo corre una vez por version).
+--
+-- NOTA (CU-86e2w4xdt — Permisos segun rol):
+--   Los gates de autorizacion de este modulo YA NO son allowlists de numeros
+--   de rol ni bloques "ee_accesibles" copiados inline. Pasaron al modelo de
+--   3 capas de V29 (capability por menu + scope estructural + rango de rol),
+--   con una sola llamada por funcion:
+--       PERFORM academico_test.fn_assert_permiso_funcionario(
+--                   p_pk_usuario_solicitante, '<ACCION>', p_pk_funcionario);
+--   Menu de la seccion: 'FUNCIONARIOS' (TMENU.CODIGO, sembrado en V113).
+--   La capability sale de TROL_MENU (techo del rol) menos
+--   TUSUARIO_ROL_PERMISO (recorte por usuario), via fn_usuario_permisos_menu
+--   (V185); el scope, de fn_usuario_ee_accesibles; el rango, de la categoria
+--   de rol (TROL.FK_TLISTA_VALOR_CATEGORIA, V120). Ver
+--   docs/gate-permisos-por-menu-analysis.md.
+--   CAMBIO DE COMPORTAMIENTO DESEADO: el viejo umbral crudo FK_TROL >= 7
+--   dejaba que un rector viera/editara a OTRO rector. Con el rango por
+--   categoria ya no: solo se alcanza a categorias ESTRICTAMENTE inferiores.
+--   Las funciones de LISTADO (fn_usu_empleados_listar / _contar /
+--   fn_usu_empleado_buscar_por_pk) quedan fuera de este alcance y conservan
+--   su gate anterior.
+--   fn_puede_afectar_usuarios (V50) NO se elimina: la siguen usando
+--   fn_usu_crear (en este mismo archivo) y el modulo PIGSE (V150).
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -403,31 +425,16 @@ DECLARE
     v_pk_funcionario  BIGINT;
 BEGIN
     -- ---------------------------------------------------------------------
-    -- 0. Gate de autorizacion: solo roles con permiso de usuarios (1-3, 7-8, 9).
-    --    fn_usu_crear ya valida el gate, pero lo repetimos aqui para que
-    --    el caller reciba el error en el mismo nivel si la FK municipal
-    --    falla antes de invocar fn_usu_crear (fail-fast).
+    -- 0. Gate de autorizacion (CU-86e2w4xdt): capability 'CREAR' sobre el
+    --    menu FUNCIONARIOS. Objetivo NULL: el funcionario todavia no existe,
+    --    asi que no hay scope ni rango que validar aqui -- el EE se valida
+    --    al vincular (fn_fun_enlazar_establecimiento) y el rol al otorgarlo
+    --    (fn_fun_permisos_actualizar -> fn_assert_rango_rol_otorgable).
+    --    Sustituye a fn_puede_afectar_usuarios + su fallback de rector/
+    --    secretaria por puntero: ese fallback ya no hace falta, porque la
+    --    capability no depende de tener un TSEDE_USUARIO.
     -- ---------------------------------------------------------------------
-    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        -- Fallback: rector o secretaria de CUALQUIER EE activo, via
-        -- TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA --
-        -- fn_puede_afectar_usuarios (-> fn_puede_afectar_sede ->
-        -- fn_puede_afectar_establecimiento) solo reconoce el rol via
-        -- TSEDE_USUARIO (FK_TROL 1-3/7-8/9): un rector/secretaria recien
-        -- asignado, sin ningun TSEDE_USUARIO todavia (caso normal antes de
-        -- que se decida si se liga a todas las sedes o no), quedaba sin
-        -- poder gestionar a sus propios funcionarios.
-        IF NOT EXISTS (
-            SELECT 1
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f
-                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-        ) THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
-    END IF;
+    PERFORM academico_test.fn_assert_permiso_funcionario(p_pk_usuario_solicitante, 'CREAR', NULL);
 
     -- ---------------------------------------------------------------------
     -- 1. Validaciones de obligatoriedad propias del orquestador.
@@ -552,7 +559,7 @@ COMMENT ON FUNCTION academico_test.fn_fun_crear(
     BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR,
     VARCHAR, DATE, BIGINT, VARCHAR, BIGINT, VARCHAR, BIGINT
 )
-    IS 'REV5: crea (o reusa) un funcionario en dos pasos orquestados: (1) resuelve el TUSUARIO -- reusa uno activo existente con la misma cuenta (correo) o el mismo (tipo_documento, identificacion) en vez de abortar; si no existe ninguno, lo crea via fn_usu_crear, (2) resuelve el TFUNCIONARIO -- si el TUSUARIO resuelto YA tiene un TFUNCIONARIO activo, lo REUSA y retorna su PK sin crear uno nuevo (TFUNCIONARIO es una fila por persona, no por establecimiento, ver header del archivo; el viejo UNIQUE(FK_TUSUARIO, FK_ESTABLECIMIENTO) no evita duplicados porque esa columna vale NULL siempre); si no tiene ninguno, crea uno nuevo. p_fk_tmunicipio_expedicion ya no es obligatorio (columna dejo de ser NOT NULL, V60+). El resto de campos del funcionario (cargos, sede, escalafon, etc.) se completan via fn_fun_actualizar (PATCH). Validaciones: gate de autorizacion (fn_puede_afectar_usuarios), FK de municipio si llega. Retorna PK_TFUNCIONARIO (nuevo o reusado).';
+    IS 'REV5: crea (o reusa) un funcionario en dos pasos orquestados: (1) resuelve el TUSUARIO -- reusa uno activo existente con la misma cuenta (correo) o el mismo (tipo_documento, identificacion) en vez de abortar; si no existe ninguno, lo crea via fn_usu_crear, (2) resuelve el TFUNCIONARIO -- si el TUSUARIO resuelto YA tiene un TFUNCIONARIO activo, lo REUSA y retorna su PK sin crear uno nuevo (TFUNCIONARIO es una fila por persona, no por establecimiento, ver header del archivo; el viejo UNIQUE(FK_TUSUARIO, FK_ESTABLECIMIENTO) no evita duplicados porque esa columna vale NULL siempre); si no tiene ninguno, crea uno nuevo. p_fk_tmunicipio_expedicion ya no es obligatorio (columna dejo de ser NOT NULL, V60+). El resto de campos del funcionario (cargos, sede, escalafon, etc.) se completan via fn_fun_actualizar (PATCH). Validaciones: gate de autorizacion -- CU-86e2w4xdt: PERFORM fn_assert_permiso_funcionario(solicitante, ''CREAR'', NULL) (V29), es decir bypass super-admin + capability ''CREAR'' sobre el menu FUNCIONARIOS (TROL_MENU menos TUSUARIO_ROL_PERMISO, via fn_usuario_permisos_menu); objetivo NULL porque el funcionario aun no existe, asi que no hay scope ni rango que evaluar (el EE se valida al vincular y el rol al otorgarlo). Sustituye a fn_puede_afectar_usuarios + su fallback de rector/secretaria por puntero. OJO: fn_usu_crear, que esta funcion invoca cuando hay que crear el TUSUARIO, conserva su gate propio (fn_puede_afectar_usuarios) por estar fuera del alcance del CU. Ademas: FK de municipio si llega. Retorna PK_TFUNCIONARIO (nuevo o reusado).';
 
 
 -- ---------------------------------------------------------------------------
@@ -846,39 +853,20 @@ LANGUAGE plpgsql
 VOLATILE
 AS $$
 DECLARE
-    v_active  BOOLEAN;
+    v_active          BOOLEAN;
+    v_fk_tusuario     BIGINT;
+    v_fk_tsede        BIGINT;
+    v_pk_funcionario  BIGINT;
 BEGIN
     -- ---------------------------------------------------------------------
-    -- 0. Gate de autorizacion.
+    -- 1. Validaciones de existencia y estado. Se hacen ANTES del gate
+    --    porque el gate necesita saber sobre QUE funcionario/sede se opera
+    --    (esta funcion recibe un PK_TSEDE_USUARIO, no un PK_TFUNCIONARIO).
     -- ---------------------------------------------------------------------
-    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante) THEN
-        -- Fallback: rector o secretaria de CUALQUIER EE activo, via
-        -- TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA --
-        -- fn_puede_afectar_usuarios (-> fn_puede_afectar_sede ->
-        -- fn_puede_afectar_establecimiento) solo reconoce el rol via
-        -- TSEDE_USUARIO (FK_TROL 1-3/7-8/9): un rector/secretaria recien
-        -- asignado, sin ningun TSEDE_USUARIO todavia (caso normal antes de
-        -- que se decida si se liga a todas las sedes o no), quedaba sin
-        -- poder gestionar a sus propios funcionarios.
-        IF NOT EXISTS (
-            SELECT 1
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f
-                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-        ) THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
-    END IF;
-
-    -- ---------------------------------------------------------------------
-    -- 1. Validaciones de existencia y estado.
-    -- ---------------------------------------------------------------------
-    SELECT ACTIVE
-      INTO v_active
-      FROM academico_test.TSEDE_USUARIO
-     WHERE PK_TSEDE_USUARIO = p_pk_sede_usuario;
+    SELECT su.ACTIVE, su.FK_TUSUARIO, su.FK_TSEDE
+      INTO v_active, v_fk_tusuario, v_fk_tsede
+      FROM academico_test.TSEDE_USUARIO su
+     WHERE su.PK_TSEDE_USUARIO = p_pk_sede_usuario;
 
     IF NOT FOUND THEN
         RAISE EXCEPTION 'No se encontro el permiso solicitado'
@@ -888,6 +876,38 @@ BEGIN
     IF v_active = FALSE THEN
         RAISE EXCEPTION 'TSEDE_USUARIO % esta inactivo; no se puede actualizar', p_pk_sede_usuario
             USING ERRCODE = '22023';
+    END IF;
+
+    -- ---------------------------------------------------------------------
+    -- 0. Gate de autorizacion (CU-86e2w4xdt) -- ver nota del header.
+    --
+    --    DECISION (documentada): esta funcion no recibe p_pk_funcionario,
+    --    asi que el objetivo se RESUELVE desde la fila: FK_TUSUARIO ->
+    --    TFUNCIONARIO activo. Cuando resuelve, se usa
+    --    fn_assert_permiso_funcionario, que es el gate completo (capability
+    --    + scope sobre el funcionario + rango de rol) y ademas el mismo que
+    --    protege al resto del modulo -- el objetivo SIEMPRE es alcanzable
+    --    por scope, porque la propia fila que se edita es un TSEDE_USUARIO
+    --    activo suyo.
+    --    Si el TUSUARIO de la fila NO es funcionario (p.ej. un permiso de
+    --    estudiante/acudiente), no hay funcionario objetivo ni rango que
+    --    comparar: se cae a fn_assert_permiso_seccion con el alcance por
+    --    SEDE de la propia fila, que es el objeto realmente afectado.
+    -- ---------------------------------------------------------------------
+    SELECT f.PK_TFUNCIONARIO
+      INTO v_pk_funcionario
+      FROM academico_test.TFUNCIONARIO f
+     WHERE f.FK_TUSUARIO = v_fk_tusuario
+       AND f.ACTIVE      = TRUE
+     ORDER BY f.PK_TFUNCIONARIO
+     LIMIT 1;
+
+    IF v_pk_funcionario IS NOT NULL THEN
+        PERFORM academico_test.fn_assert_permiso_funcionario(
+            p_pk_usuario_solicitante, 'EDITAR', v_pk_funcionario);
+    ELSE
+        PERFORM academico_test.fn_assert_permiso_seccion(
+            p_pk_usuario_solicitante, 'FUNCIONARIOS', 'EDITAR', NULL, v_fk_tsede);
     END IF;
 
     -- ---------------------------------------------------------------------
@@ -958,7 +978,7 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_sede_usuario_actualizar(
     BIGINT, BIGINT, NUMERIC, BIGINT, VARCHAR, NUMERIC
 )
-    IS 'PATCH de un TSEDE_USUARIO existente. Solo opera sobre activos. Parametros NULL = no modifica. MODIFIED_BY/MODIFIED_AT se setean UNA sola vez y SOLO si hubo cambios efectivos (tecnica CTE + IS DISTINCT FROM). Valida TLV_ESTADO contra dominio estado_activo_inactivo (''ACTIVO''/''INACTIVO'') y FK_TLV_JORNADA contra TLISTA_VALOR activos si llega. Requiere p_pk_usuario_solicitante con permiso de usuarios via fn_puede_afectar_usuarios (V50). Retorna PK_TSEDE_USUARIO.';
+    IS 'PATCH de un TSEDE_USUARIO existente. Solo opera sobre activos. Parametros NULL = no modifica. MODIFIED_BY/MODIFIED_AT se setean UNA sola vez y SOLO si hubo cambios efectivos (tecnica CTE + IS DISTINCT FROM). Valida TLV_ESTADO contra dominio estado_activo_inactivo (''ACTIVO''/''INACTIVO'') y FK_TLV_JORNADA contra TLISTA_VALOR activos si llega. Gate (CU-86e2w4xdt, helpers de V29, reemplaza a fn_puede_afectar_usuarios): como la funcion recibe un PK_TSEDE_USUARIO y no un PK_TFUNCIONARIO, el objetivo se RESUELVE desde la fila (FK_TUSUARIO -> TFUNCIONARIO ACTIVE) y se valida con fn_assert_permiso_funcionario(solicitante, ''EDITAR'', funcionario_resuelto) = capability ''EDITAR'' sobre el menu FUNCIONARIOS + scope + rango de rol; el orden se invierte respecto al original (existencia/estado ANTES del gate) porque el gate necesita la fila para resolver el objetivo. Si el TUSUARIO de la fila no es funcionario (permiso de estudiante/acudiente), se usa fn_assert_permiso_seccion(..., ''FUNCIONARIOS'', ''EDITAR'', NULL, FK_TSEDE de la fila): sin funcionario objetivo no hay rango que comparar y el objeto realmente afectado es la sede. Retorna PK_TSEDE_USUARIO.';
 
 
 -- ---------------------------------------------------------------------------
@@ -1123,50 +1143,29 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e ON e.FK_TFUNCIONARIO_RECTOR = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TESTABLECIMIENTO e ON e.FK_TFUNCIONARIO_SECRETARIA = f.PK_TFUNCIONARIO
-         WHERE e.PK_ESTABLECIMIENTO = v_fk_establecimiento
-           AND e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
-           AND s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8
-           AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    -- REV4 -- coordinador (rol 11) de AL MENOS UNA sede del EE destino
-    -- tambien puede enlazar (a diferencia de jefe de sistema, esto no le
-    -- da autoridad sobre el resto del establecimiento -- solo sobre esta
-    -- operacion puntual de enlazar, y solo si administra alguna sede ahi).
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TSEDE_USUARIO su
-          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-         WHERE s.FK_TESTABLECIMIENTO = v_fk_establecimiento
-           AND s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11
-           AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSE
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- -----------------------------------------------------------------
+    -- Gate de autorizacion (CU-86e2w4xdt) -- ver nota del header.
+    --
+    --   DECISION (documentada): aqui NO se usa fn_assert_permiso_funcionario
+    --   con el funcionario objetivo. El objetivo de esta funcion es, por
+    --   definicion, un TFUNCIONARIO *pendiente* (FK_ESTABLECIMIENTO NULL,
+    --   recien creado por /register/funcionario): todavia no es rector ni
+    --   secretaria de ningun EE ni tiene TSEDE_USUARIO, asi que el chequeo
+    --   de scope "alcanzable en algun EE accesible" fallaria SIEMPRE y
+    --   ningun rector podria completar el alta. El objeto realmente
+    --   relevante es el EE DESTINO -- que es lo que dice tambien §4.3 del
+    --   analisis ("EE destino ∈ fn_usuario_ee_accesibles") -- asi que se
+    --   valida capability + scope sobre ese EE.
+    -- -----------------------------------------------------------------
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'FUNCIONARIOS', 'EDITAR', v_fk_establecimiento);
+
+    -- Capa 3 (rango): si el funcionario a enlazar YA tuviera algun rol
+    -- activo, no puede ser de categoria igual o superior a la del
+    -- solicitante. Para un pendiente genuino (sin roles) esto pasa sin
+    -- efecto -- fn_assert_rango_rol retorna cuando el objetivo no tiene
+    -- ningun TSEDE_USUARIO activo.
+    PERFORM academico_test.fn_assert_rango_rol(p_pk_usuario_solicitante, p_pk_funcionario);
 
     -- REV3: recibe el PK_TFUNCIONARIO exacto devuelto por /register/funcionario
     -- (antes lo buscaba por FK_TUSUARIO + FK_ESTABLECIMIENTO IS NULL LIMIT 1,
@@ -1196,7 +1195,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_fun_enlazar_establecimiento(BIGINT, BIGINT, BIGINT)
-    IS 'REV3: enlaza el TFUNCIONARIO pendiente (FK_ESTABLECIMIENTO NULL) al EE elegido en el select del front, identificandolo por su PK_TFUNCIONARIO exacto (p_pk_funcionario, el que devuelve /register/funcionario) en vez de buscarlo por FK_TUSUARIO. p_fk_establecimiento es OPCIONAL: si llega NULL, se resuelve via fn_resolver_establecimiento_unico (V50) contra el SOLICITANTE -- el select de EE del front solo aparece para super-admin, asi que rector/secretaria/jefe de sistema dependen de esta resolucion automatica. Si no se pudo resolver => 22023. Gate compuesto (validado contra el EE ya resuelto): super-admin, rector/secretaria del EE, o jefe de sistema (rol 8) en alguna sede del EE. P0002 si el PK no corresponde a un TFUNCIONARIO activo y pendiente (sin EE) -- incluye el caso de intentar re-enlazar uno que ya tiene EE.';
+    IS 'REV3: enlaza el TFUNCIONARIO pendiente (FK_ESTABLECIMIENTO NULL) al EE elegido en el select del front, identificandolo por su PK_TFUNCIONARIO exacto (p_pk_funcionario, el que devuelve /register/funcionario) en vez de buscarlo por FK_TUSUARIO. p_fk_establecimiento es OPCIONAL: si llega NULL, se resuelve via fn_resolver_establecimiento_unico (V50) contra el SOLICITANTE -- el select de EE del front solo aparece para super-admin, asi que rector/secretaria/jefe de sistema dependen de esta resolucion automatica. Si no se pudo resolver => 22023. Gate (CU-86e2w4xdt, helpers de V29; reemplaza al compuesto de super-admin / rector / secretaria / jefe de sistema rol 8 / coordinador rol 11): PERFORM fn_assert_permiso_seccion(solicitante, ''FUNCIONARIOS'', ''EDITAR'', v_fk_establecimiento) -- capability ''EDITAR'' sobre el menu FUNCIONARIOS y scope sobre el EE DESTINO ya resuelto -- mas fn_assert_rango_rol(solicitante, p_pk_funcionario). DECISION: NO se usa fn_assert_permiso_funcionario porque su chequeo de scope exige que el objetivo sea alcanzable en algun EE (rector/secretaria o TSEDE_USUARIO activo) y un TFUNCIONARIO pendiente no tiene nada de eso todavia: fallaria siempre y bloquearia el segundo paso del alta. El EE destino es el objeto correcto a validar (§4.3 del analisis). El rango se comprueba igual, y pasa sin efecto para un pendiente sin roles. P0002 si el PK no corresponde a un TFUNCIONARIO activo y pendiente (sin EE) -- incluye el caso de intentar re-enlazar uno que ya tiene EE.';
 
 
 -- ---------------------------------------------------------------------------
@@ -1225,7 +1224,6 @@ DECLARE
     v_active_fun     BOOLEAN;
     v_nombre_actual  VARCHAR;
     v_es_super       BOOLEAN;
-    v_visible        BOOLEAN;
     -- REV3 -- sedes donde el actor tiene autoridad PLENA (cualquier rol:
     -- rector/secretaria/jefe de sistema de ese EE), y sedes donde el actor
     -- es coordinador (autoridad LIMITADA: solo roles 9-14, nunca rector/
@@ -1258,66 +1256,48 @@ BEGIN
     END IF;
 
     -- =====================================================================
-    -- 0. Gate de autorizacion -- REV3: "union de EE accesibles" +
-    --    coordinador de sede, mismo patron que fn_fun_actualizar/
-    --    fn_usu_empleado_buscar_por_pk/fn_fun_baja_establecimiento. Ya NO
-    --    usa fn_puede_afectar_usuarios como gate principal (ver REV3 de
-    --    fn_fun_actualizar para el detalle del hueco que cerraba).
+    -- 0. Gate de autorizacion (CU-86e2w4xdt) -- ver nota del header.
+    --    Reemplaza el bloque "union de EE accesibles" + coordinador de sede
+    --    que estaba copiado inline aqui.
+    --
+    --    Si el funcionario YA tiene roles / es rector-secretaria por puntero,
+    --    gate completo: capability 'EDITAR' sobre FUNCIONARIOS + scope sobre
+    --    el objetivo + rango. Si es un funcionario RECIEN CREADO (sin ningun
+    --    TSEDE_USUARIO activo ni puntero) no hay scope que evaluar sobre el
+    --    objetivo -- la primera asignacion de rol quedaria bloqueada por un
+    --    chicken-and-egg (el gate exige que el objetivo sea alcanzable, y
+    --    solo es alcanzable cuando ya tiene un rol). En ese caso solo se
+    --    exige la capability: el scope de CADA rol nuevo lo valida el bloque
+    --    v_sedes_plenas / v_sedes_coord de abajo, y el rango cada
+    --    fn_assert_rango_rol_otorgable. Mismo criterio que
+    --    fn_fun_enlazar_establecimiento con un TFUNCIONARIO pendiente.
     -- =====================================================================
-    v_es_super := academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante);
-
-    IF NOT v_es_super THEN
-        WITH ee_accesibles AS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        ),
-        sedes_coordinador AS (
-            SELECT su.FK_TSEDE
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        )
-        SELECT EXISTS (
-            SELECT 1
-              FROM academico_test.TESTABLECIMIENTO e
-             WHERE e.ACTIVE = TRUE
-               AND e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-               AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
-            UNION ALL
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE su.FK_TUSUARIO = v_pk_usuario
-               AND su.ACTIVE      = TRUE
-               AND s.ACTIVE       = TRUE
-               AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-               AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
-            UNION ALL
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-             WHERE su.FK_TUSUARIO = v_pk_usuario
-               AND su.ACTIVE      = TRUE
-               AND su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador)
-               AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
-        ) INTO v_visible;
-
-        IF NOT v_visible THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
+    IF EXISTS (
+        SELECT 1
+          FROM academico_test.TFUNCIONARIO f
+          JOIN academico_test.TSEDE_USUARIO su
+            ON su.FK_TUSUARIO = f.FK_TUSUARIO AND su.ACTIVE = TRUE
+         WHERE f.PK_TFUNCIONARIO = p_pk_funcionario
+    ) OR EXISTS (
+        SELECT 1 FROM academico_test.TESTABLECIMIENTO e
+         WHERE e.ACTIVE = TRUE
+           AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario
+                OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
+    ) THEN
+        PERFORM academico_test.fn_assert_permiso_funcionario(
+            p_pk_usuario_solicitante, 'EDITAR', p_pk_funcionario);
+    ELSE
+        PERFORM academico_test.fn_assert_permiso_seccion(
+            p_pk_usuario_solicitante, 'FUNCIONARIOS', 'EDITAR');
     END IF;
+
+    -- v_es_super sigue siendo necesario mas abajo: distingue "sin
+    -- restriccion de sede" del resto para la validacion POR OPERACION del
+    -- array (v_sedes_plenas / v_sedes_coord), que NO es parte del gate.
+    -- CU-86e2w4xdt: se resuelve por CATEGORIA_ROL (nivel 0 SUPER_ADMIN o
+    -- nivel 1 ADMINISTRATIVOS_TERRITORIALES) en vez de la lista fija
+    -- fn_puede_afectar_establecimiento (FK_TROL IN (1,2,3)).
+    v_es_super := (academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante) <= 1);
 
     IF p_permisos IS NULL OR jsonb_typeof(p_permisos) <> 'array' THEN
         RAISE EXCEPTION 'p_permisos debe ser un JSON array'
@@ -1330,34 +1310,28 @@ BEGIN
     -- ajena, quedan bloqueados aunque haya pasado el gate general de
     -- arriba -- ese gate solo confirma que puede VER/gestionar a este
     -- funcionario en general, no que pueda tocar CUALQUIER sede suya).
+    -- CU-86e2w4xdt: ambos conjuntos se derivan de los helpers de categoria
+    -- (V29), no de listas fijas de FK_TROL.
+    --   * v_sedes_plenas  = sedes activas de los EE que el actor administra
+    --     (fn_usuario_ee_accesibles: rector/secretaria por puntero + roles
+    --     de categoria ADMINISTRATIVOS_ESTABLECIMIENTO por TSEDE_USUARIO).
+    --   * v_sedes_coord    = sedes del scope de coordinador del actor
+    --     (fn_usuario_sedes_jornadas_accesibles: solo devuelve algo si el
+    --     actor tiene un rol de categoria ADMINISTRATIVOS_SEDES).
     IF NOT v_es_super THEN
         SELECT ARRAY(
             SELECT s.PK_TSEDE
               FROM academico_test.TSEDE s
              WHERE s.ACTIVE = TRUE
                AND s.FK_TESTABLECIMIENTO IN (
-                   SELECT e.PK_ESTABLECIMIENTO
-                     FROM academico_test.TESTABLECIMIENTO e
-                     JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-                    WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-                   UNION
-                   SELECT e.PK_ESTABLECIMIENTO
-                     FROM academico_test.TESTABLECIMIENTO e
-                     JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-                    WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-                   UNION
-                   SELECT DISTINCT s2.FK_TESTABLECIMIENTO
-                     FROM academico_test.TSEDE_USUARIO su2
-                     JOIN academico_test.TSEDE s2 ON s2.PK_TSEDE = su2.FK_TSEDE
-                    WHERE s2.ACTIVE = TRUE AND su2.ACTIVE = TRUE AND su2.FK_TROL = 8 AND su2.FK_TUSUARIO = p_pk_usuario_solicitante
+                   SELECT establecimiento_id
+                     FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario_solicitante)
                )
         ) INTO v_sedes_plenas;
 
         SELECT ARRAY(
-            SELECT su.FK_TSEDE
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
+            SELECT DISTINCT sede_id
+              FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario_solicitante)
         ) INTO v_sedes_coord;
     END IF;
 
@@ -1385,9 +1359,19 @@ BEGIN
                 CONTINUE;
             END IF;
 
+            -- Capa 3 (CU-86e2w4xdt): no se puede OTORGAR un rol de
+            -- categoria igual o superior a la propia. Lanza 42501 y aborta
+            -- la llamada completa -- a diferencia de los 'error:*' de
+            -- abajo, esto no es un dato invalido de una fila sino un
+            -- intento de escalada de privilegios. El super admin (nivel 0)
+            -- pasa siempre.
+            PERFORM academico_test.fn_assert_rango_rol_otorgable(
+                p_pk_usuario_solicitante, v_perm.fk_rol);
+
             IF NOT v_es_super
                AND NOT (v_perm.fk_sede = ANY(v_sedes_plenas))
-               AND NOT (v_perm.fk_sede = ANY(v_sedes_coord) AND v_perm.fk_rol >= 9 AND v_perm.fk_rol NOT IN (15, 16))
+               AND NOT (v_perm.fk_sede = ANY(v_sedes_coord)
+                        AND academico_test.fn_rol_categoria_nivel(v_perm.fk_rol) = 3)
             THEN
                 status := 'error:sin_permiso_en_sede';
                 RETURN NEXT;
@@ -1420,7 +1404,8 @@ BEGIN
 
             IF FOUND AND NOT v_es_super
                AND NOT (v_fk_sede_op = ANY(v_sedes_plenas))
-               AND NOT (v_fk_sede_op = ANY(v_sedes_coord) AND v_fk_rol_op >= 9 AND v_fk_rol_op NOT IN (15, 16))
+               AND NOT (v_fk_sede_op = ANY(v_sedes_coord)
+                        AND academico_test.fn_rol_categoria_nivel(v_fk_rol_op) = 3)
             THEN
                 status := 'error:sin_permiso_en_sede';
                 RETURN NEXT;
@@ -1441,7 +1426,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_fun_permisos_actualizar(BIGINT, BIGINT, JSONB)
-    IS 'Procesa la lista de permisos (TSEDE_USUARIO) del funcionario segun el campo "accion" de cada elemento: crear (INSERT via fn_sede_usuario_crear), eliminar (soft-delete via fn_sede_usuario_soft_delete por id=pk_tsede_usuario), o sin accion (no-op). Reemplaza el bloque JSONB que antes vivia en fn_fun_actualizar. No soporta editar (no esta contemplado en el front).';
+    IS 'Procesa la lista de permisos (TSEDE_USUARIO) del funcionario segun el campo "accion" de cada elemento: crear (INSERT via fn_sede_usuario_crear), eliminar (soft-delete via fn_sede_usuario_soft_delete por id=pk_tsede_usuario), o sin accion (no-op). Reemplaza el bloque JSONB que antes vivia en fn_fun_actualizar. No soporta editar (no esta contemplado en el front). Gate (CU-86e2w4xdt, helpers de V29; reemplaza al bloque "union de EE accesibles" + coordinador de sede que estaba copiado inline): PERFORM fn_assert_permiso_funcionario(solicitante, ''EDITAR'', p_pk_funcionario) = bypass super-admin + capability ''EDITAR'' sobre el menu FUNCIONARIOS + scope sobre el funcionario objetivo + rango de rol. Capa 3 adicional: por cada elemento con accion=''crear'' se ejecuta fn_assert_rango_rol_otorgable(solicitante, fk_rol) -- no se puede otorgar un rol de categoria igual o superior a la propia; lanza 42501 y ABORTA la llamada completa (no devuelve un status por fila) porque es un intento de escalada de privilegios, no un dato invalido. La validacion por operacion contra las sedes del actor (v_sedes_plenas / v_sedes_coord -> status ''error:sin_permiso_en_sede'') se conserva, pero CU-86e2w4xdt la resuelve por CATEGORIA_ROL: v_es_super = categoria nivel <= 1; v_sedes_plenas = sedes de fn_usuario_ee_accesibles(solicitante); v_sedes_coord = sedes de fn_usuario_sedes_jornadas_accesibles(solicitante); y el permiso puntual que un coordinador puede crear/borrar en su sede se limita a roles de categoria nivel 3 (fn_rol_categoria_nivel(fk_rol) = 3) en vez de la lista FK_TROL >= 9 NOT IN (15,16). Ya no se usa fn_puede_afectar_establecimiento ni numeros de rol fijos.';
 
 
 -- ---------------------------------------------------------------------------
@@ -3226,7 +3211,6 @@ DECLARE
     v_es_rector           BOOLEAN;
     v_es_secretaria       BOOLEAN;
     v_tiene_vinculos_academicos BOOLEAN;
-    v_visible             BOOLEAN;
     v_le_queda_algo       BOOLEAN;
     v_tusuario_desactivado BOOLEAN := FALSE;
 BEGIN
@@ -3249,74 +3233,21 @@ BEGIN
             USING ERRCODE = 'P0002';
     END IF;
 
-    v_es_super := academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante);
-
     -- -----------------------------------------------------------------
-    -- Gate. Super-admin: siempre puede. Cualquier otro: debe administrar
-    -- (rector/secretaria/jefe de sistema) al menos un EE, Y el funcionario
-    -- objetivo debe ser alcanzable desde alguno de esos EE (es su rector,
-    -- su secretaria, o tiene un TSEDE_USUARIO activo en una sede de ese
-    -- EE) -- mismo patron "ee_accesibles" que fn_sed_soft_delete/
-    -- fn_usu_empleados_listar, generalizado a la union de EE en vez de
-    -- "el unico EE" (ver V51 REV5/REV6).
+    -- Gate de autorizacion (CU-86e2w4xdt) -- ver nota del header. Una sola
+    -- llamada reemplaza el bloque "union de EE accesibles" + coordinador de
+    -- sede que estaba copiado inline aqui.
     -- -----------------------------------------------------------------
-    IF NOT v_es_super THEN
-        WITH ee_accesibles AS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        ),
-        -- REV4 -- coordinador (rol 11) de una sede puntual: alcance de
-        -- SEDE, no de establecimiento.
-        sedes_coordinador AS (
-            SELECT su.FK_TSEDE
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 11 AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        )
-        SELECT EXISTS (
-            SELECT 1
-              FROM academico_test.TESTABLECIMIENTO e
-             WHERE e.ACTIVE = TRUE
-               AND e.PK_ESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-               AND (e.FK_TFUNCIONARIO_RECTOR = p_pk_funcionario OR e.FK_TFUNCIONARIO_SECRETARIA = p_pk_funcionario)
-            UNION ALL
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE su.FK_TUSUARIO = v_pk_usuario
-               AND su.ACTIVE      = TRUE
-               AND s.ACTIVE       = TRUE
-               AND s.FK_TESTABLECIMIENTO IN (SELECT PK_ESTABLECIMIENTO FROM ee_accesibles)
-               AND su.FK_TROL >= 7 AND su.FK_TROL NOT IN (15, 16)
-            UNION ALL
-            -- REV4 -- coordinador: solo si el permiso del funcionario
-            -- objetivo esta en SU sede, y es "otro cargo" (excluye
-            -- ademas rector/jefe de sistema).
-            SELECT 1
-              FROM academico_test.TSEDE_USUARIO su
-             WHERE su.FK_TUSUARIO = v_pk_usuario
-               AND su.ACTIVE      = TRUE
-               AND su.FK_TSEDE IN (SELECT FK_TSEDE FROM sedes_coordinador)
-               AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
-        ) INTO v_visible;
+    PERFORM academico_test.fn_assert_permiso_funcionario(
+        p_pk_usuario_solicitante, 'ELIMINAR', p_pk_funcionario);
 
-        IF NOT v_visible THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
-    END IF;
+    -- v_es_super NO es parte del gate: decide, mas abajo, si la baja es
+    -- INTEGRAL o PARCIAL (solo los TSEDE_USUARIO en los EE que el
+    -- solicitante administra). CU-86e2w4xdt: se resuelve por CATEGORIA_ROL
+    -- (nivel 0 SUPER_ADMIN o nivel 1 ADMINISTRATIVOS_TERRITORIALES => baja
+    -- INTEGRAL) en vez de la lista fija fn_puede_afectar_establecimiento
+    -- (FK_TROL IN (1,2,3)).
+    v_es_super := (academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante) <= 1);
 
     -- -----------------------------------------------------------------
     -- REV3 -- Bloqueos previos a cualquier cambio (fail-fast: si algo de
@@ -3426,31 +3357,26 @@ BEGIN
            AND su.FK_TUSUARIO = v_pk_usuario
            AND su.ACTIVE      = TRUE
            AND (
-                s.FK_TESTABLECIMIENTO IN (SELECT e.PK_ESTABLECIMIENTO
-                   FROM academico_test.TESTABLECIMIENTO e
-                   JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-                  WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-                 UNION
-                 SELECT e.PK_ESTABLECIMIENTO
-                   FROM academico_test.TESTABLECIMIENTO e
-                   JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-                  WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-                 UNION
-                 SELECT DISTINCT s2.FK_TESTABLECIMIENTO
-                   FROM academico_test.TSEDE_USUARIO su2
-                   JOIN academico_test.TSEDE s2 ON s2.PK_TSEDE = su2.FK_TSEDE
-                  WHERE s2.ACTIVE = TRUE AND su2.ACTIVE = TRUE AND su2.FK_TROL = 8 AND su2.FK_TUSUARIO = p_pk_usuario_solicitante)
-                -- REV4 -- coordinador: solo su propia sede, y solo el
-                -- permiso puntual que se esta dando de baja si es "otro
-                -- cargo" (nunca rector/jefe de sistema).
+                -- CU-86e2w4xdt: los EE que el solicitante administra por su
+                -- categoria (rector/secretaria por puntero + roles de
+                -- categoria ADMINISTRATIVOS_ESTABLECIMIENTO por TSEDE_USUARIO)
+                -- salen de fn_usuario_ee_accesibles, no de la union inline
+                -- por FK_TROL.
+                s.FK_TESTABLECIMIENTO IN (
+                    SELECT establecimiento_id
+                      FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario_solicitante)
+                )
+                -- Coordinador (categoria ADMINISTRATIVOS_SEDES, nivel 3):
+                -- solo en las sedes de su scope (fn_usuario_sedes_jornadas_
+                -- accesibles) y solo permisos de rol de categoria nivel 3
+                -- (pares o inferiores dentro de sede; nunca establecimiento/
+                -- territorial/super, ni estudiante/acudiente que son nivel 4).
                 OR (
                     su.FK_TSEDE IN (
-                        SELECT su3.FK_TSEDE
-                          FROM academico_test.TSEDE_USUARIO su3
-                          JOIN academico_test.TSEDE s3 ON s3.PK_TSEDE = su3.FK_TSEDE
-                         WHERE s3.ACTIVE = TRUE AND su3.ACTIVE = TRUE AND su3.FK_TROL = 11 AND su3.FK_TUSUARIO = p_pk_usuario_solicitante
+                        SELECT sede_id
+                          FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario_solicitante)
                     )
-                    AND su.FK_TROL >= 9 AND su.FK_TROL NOT IN (15, 16)
+                    AND academico_test.fn_rol_categoria_nivel(su.FK_TROL) = 3
                 )
            );
 
@@ -3489,7 +3415,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_fun_baja_establecimiento(BIGINT, BIGINT)
-    IS 'REV3 (cambio de modelo, ver header V51 REV5/REV6): ya NO depende de TFUNCIONARIO.FK_ESTABLECIMIENTO (esa columna quedo sin proposito, siempre NULL). Gate: super-admin, o rector/secretaria/jefe de sistema de AL MENOS UN establecimiento donde el funcionario objetivo sea alcanzable (es su rector, su secretaria, o tiene un TSEDE_USUARIO activo en una sede de ese EE) -- union de EE accesibles, no ""el unico EE"". Bloqueos previos (22023, sin excepcion por rol de quien llama, fail-fast -- nada se toca si aplican): (1) es rector de un EE activo, (2) es secretaria de un EE activo, (3) tiene responsabilidades academicas VIGENTES (TGRUPO como lider, TDOCENTE_ASIGNATURA, TUNIDAD, TTRASLADO_ESTUDIANTE o TPERIODO_PERMISO activos -- deliberadamente NO se incluyen tablas de registro historico como TACTA_GRADO/TEVALUACION_DOCENTE/TCOMPORTAMIENTO_CALIFICADO/TOBSERVADOR_ANOTACION/TFUNCIONARIO_ARCHIVO). Comportamiento por rol una vez superados los bloqueos: (a) super-admin -- baja INTEGRAL: desactiva TODOS sus TSEDE_USUARIO, desactiva el TFUNCIONARIO, y si el TUSUARIO no tiene ningun otro vinculo activo en la plataforma (fn_usu_tiene_otros_vinculos -- no es tambien padre de familia, estudiante, etc.) lo desactiva tambien; (b) cualquier otro rol permitido -- baja PARCIAL: solo quita los TSEDE_USUARIO del funcionario en sedes de SUS PROPIOS EE; si tras eso el funcionario sigue teniendo permisos en OTRO EE, el TFUNCIONARIO queda activo; si no le queda nada en ningun lado, se desactiva el TFUNCIONARIO (y, con el mismo criterio de fn_usu_tiene_otros_vinculos, el TUSUARIO). Sincroniza public.role_users al final (fn_sincronizar_rol_publico). p_pk_usuario_solicitante va al inicio (obligatorio).';
+    IS 'REV3 (cambio de modelo, ver header V51 REV5/REV6): ya NO depende de TFUNCIONARIO.FK_ESTABLECIMIENTO (esa columna quedo sin proposito, siempre NULL). Gate (CU-86e2w4xdt, helpers de V29; reemplaza al bloque "union de EE accesibles" + coordinador de sede copiado inline): PERFORM fn_assert_permiso_funcionario(solicitante, ''ELIMINAR'', p_pk_funcionario) = bypass super-admin + capability ''ELIMINAR'' sobre el menu FUNCIONARIOS + scope (el objetivo debe ser alcanzable en algun EE de fn_usuario_ee_accesibles, o el solicitante es territorial) + rango de rol (solo categorias estrictamente inferiores). Bloqueos previos (22023, sin excepcion por rol de quien llama, fail-fast -- nada se toca si aplican): (1) es rector de un EE activo, (2) es secretaria de un EE activo, (3) tiene responsabilidades academicas VIGENTES (TGRUPO como lider, TDOCENTE_ASIGNATURA, TUNIDAD, TTRASLADO_ESTUDIANTE o TPERIODO_PERMISO activos -- deliberadamente NO se incluyen tablas de registro historico como TACTA_GRADO/TEVALUACION_DOCENTE/TCOMPORTAMIENTO_CALIFICADO/TOBSERVADOR_ANOTACION/TFUNCIONARIO_ARCHIVO). Comportamiento por rol una vez superados los bloqueos (CU-86e2w4xdt: se decide por CATEGORIA_ROL, no por FK_TROL IN (1,2,3)): (a) categoria nivel <= 1 (SUPER_ADMIN o ADMINISTRATIVOS_TERRITORIALES) -- baja INTEGRAL: desactiva TODOS sus TSEDE_USUARIO, desactiva el TFUNCIONARIO, y si el TUSUARIO no tiene ningun otro vinculo activo en la plataforma (fn_usu_tiene_otros_vinculos -- no es tambien padre de familia, estudiante, etc.) lo desactiva tambien; (b) cualquier otra categoria -- baja PARCIAL: solo quita los TSEDE_USUARIO del funcionario en sedes de los EE de fn_usuario_ee_accesibles(solicitante), mas -- si el solicitante es de categoria ADMINISTRATIVOS_SEDES -- los permisos de rol de categoria nivel 3 en las sedes de fn_usuario_sedes_jornadas_accesibles(solicitante); si tras eso el funcionario sigue teniendo permisos en OTRO EE, el TFUNCIONARIO queda activo; si no le queda nada en ningun lado, se desactiva el TFUNCIONARIO (y, con el mismo criterio de fn_usu_tiene_otros_vinculos, el TUSUARIO). Sincroniza public.role_users al final (fn_sincronizar_rol_publico). p_pk_usuario_solicitante va al inicio (obligatorio).';
 
 
 -- ---------------------------------------------------------------------------
@@ -3570,7 +3496,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_fun_baja_establecimiento_bulk(BIGINT, BIGINT[])
-    IS 'REV3: variante bulk de fn_fun_baja_establecimiento (ver su comentario para el comportamiento por rol y los bloqueos previos -- rector, secretaria, vinculos academicos vigentes). Recibe un BIGINT[] de PK_TFUNCIONARIO (deduplicado) y aplica la misma baja a cada uno, EN SAVEPOINTS INDEPENDIENTES (bloque BEGIN/EXCEPTION por PK): un PK que falle NO aborta el resto del lote. Casos explicitos: si alguno de los tres bloqueos aplica, se omite (status=''omitido:rector''/''omitido:secretaria''/''omitido:vinculos_academicos'' segun corresponda) pero el resto del lote se procesa igual. Retorna SETOF (pk_funcionario, status) con un registro por PK. status en {''eliminado'', ''omitido:rector'', ''omitido:secretaria'', ''omitido:vinculos_academicos'', ''error:no_encontrado'', ''error:sin_permiso'', ''error:parametros_invalidos'', ''error:<mensaje>''}. p_pk_usuario_solicitante va al inicio (obligatorio).';
+    IS 'REV3: variante bulk de fn_fun_baja_establecimiento (ver su comentario para el comportamiento por rol y los bloqueos previos -- rector, secretaria, vinculos academicos vigentes). CU-86e2w4xdt: NO tiene gate propio, HEREDA el de fn_fun_baja_establecimiento (fn_assert_permiso_funcionario, ''ELIMINAR'') al delegar PK por PK; los 42501 del helper (capability, scope o rango) los captura el mismo handler de siempre y se reportan como status=''error:sin_permiso'' de ESE pk, sin abortar el lote. Recibe un BIGINT[] de PK_TFUNCIONARIO (deduplicado) y aplica la misma baja a cada uno, EN SAVEPOINTS INDEPENDIENTES (bloque BEGIN/EXCEPTION por PK): un PK que falle NO aborta el resto del lote. Casos explicitos: si alguno de los tres bloqueos aplica, se omite (status=''omitido:rector''/''omitido:secretaria''/''omitido:vinculos_academicos'' segun corresponda) pero el resto del lote se procesa igual. Retorna SETOF (pk_funcionario, status) con un registro por PK. status en {''eliminado'', ''omitido:rector'', ''omitido:secretaria'', ''omitido:vinculos_academicos'', ''error:no_encontrado'', ''error:sin_permiso'', ''error:parametros_invalidos'', ''error:<mensaje>''}. p_pk_usuario_solicitante va al inicio (obligatorio).';
 
 
 -- ---------------------------------------------------------------------------
@@ -3666,19 +3592,28 @@ BEGIN
                   HINT    = 'Usa fn_fun_permisos_actualizar (accion eliminar) para dar de baja los permisos de un funcionario real';
     END IF;
 
-    IF NOT academico_test.fn_puede_afectar_usuarios(p_pk_usuario_solicitante)
-       AND v_fk_usuario <> p_pk_usuario_solicitante
-    THEN
-        IF NOT EXISTS (
-            SELECT 1
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO f
-                ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-        ) THEN
-            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-                USING ERRCODE = '42501';
-        END IF;
+    -- -----------------------------------------------------------------
+    -- Gate de autorizacion (CU-86e2w4xdt) -- ver nota del header.
+    --
+    --   Se CONSERVA el atajo de auto-servicio: el dueno del pendiente
+    --   siempre puede cancelarlo, sin capability. Es el caso de uso
+    --   central de esta funcion (rollback del propio submit fallido, un
+    --   instante despues de que /register/funcionario lo creara).
+    --
+    --   DECISION (documentada): el objetivo se pasa como NULL, no como
+    --   p_pk_funcionario. Por definicion, un "pendiente cancelable" acaba
+    --   de ser validado justo arriba como NO rector/secretaria de ningun
+    --   EE y SIN ningun TSEDE_USUARIO activo -- es decir, no es alcanzable
+    --   por scope desde ningun EE, y fn_assert_permiso_funcionario con
+    --   objetivo daria 42501 SIEMPRE para cualquier no-super-admin,
+    --   dejando la funcion inservible. Con objetivo NULL se valida el
+    --   bypass y la capability ''EDITAR'' sobre el menu FUNCIONARIOS, que
+    --   es todo lo que hay que decidir aqui (no hay scope ni rango que
+    --   comparar: el funcionario no tiene ni EE ni rol).
+    -- -----------------------------------------------------------------
+    IF v_fk_usuario IS DISTINCT FROM p_pk_usuario_solicitante THEN
+        PERFORM academico_test.fn_assert_permiso_funcionario(
+            p_pk_usuario_solicitante, 'EDITAR', NULL);
     END IF;
 
     UPDATE academico_test.TFUNCIONARIO
@@ -3694,7 +3629,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_fun_cancelar_pendiente(BIGINT, BIGINT)
-    IS 'REV5: cancela (soft delete) un TFUNCIONARIO que todavia no se uso en ningun lado -- ni es rector/secretaria de un establecimiento activo, ni tiene ningun TSEDE_USUARIO activo. Pensada para que el front deshaga un registro que quedo huerfano porque el paso siguiente (crear/actualizar el establecimiento que lo iba a referenciar) fallo. Rechaza con 22023 si el funcionario YA esta en uso por cualquiera de esos dos caminos. Idempotente si ya estaba inactivo. Gate: fn_puede_afectar_usuarios (con su fallback de rector/secretaria de EE) O el propio TUSUARIO dueno del pendiente.';
+    IS 'REV5: cancela (soft delete) un TFUNCIONARIO que todavia no se uso en ningun lado -- ni es rector/secretaria de un establecimiento activo, ni tiene ningun TSEDE_USUARIO activo. Pensada para que el front deshaga un registro que quedo huerfano porque el paso siguiente (crear/actualizar el establecimiento que lo iba a referenciar) fallo. Rechaza con 22023 si el funcionario YA esta en uso por cualquiera de esos dos caminos. Idempotente si ya estaba inactivo. Gate (CU-86e2w4xdt, helpers de V29; reemplaza a fn_puede_afectar_usuarios + su fallback de rector/secretaria por puntero): el propio TUSUARIO dueno del pendiente pasa siempre (auto-servicio: rollback del propio submit fallido, es el caso de uso central); cualquier otro solicitante pasa por PERFORM fn_assert_permiso_funcionario(solicitante, ''EDITAR'', NULL). DECISION: el objetivo va en NULL a proposito -- un pendiente cancelable acaba de ser validado como NO rector/secretaria y SIN ningun TSEDE_USUARIO activo, o sea NO alcanzable por scope desde ningun EE, asi que pasar el objetivo daria 42501 siempre para todo no-super-admin y dejaria la funcion inservible; sin EE ni rol no hay scope ni rango que comparar, solo capability.';
 
 -- Registro en `query` (motor SSO): POST /funcionario/cancelar-pendiente
 -- (id_query=145 en el ambiente de prueba -- el id real depende del entorno).

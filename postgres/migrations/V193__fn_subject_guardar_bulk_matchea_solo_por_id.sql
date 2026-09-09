@@ -31,10 +31,9 @@ DECLARE
     v_nombre_area VARCHAR(130);
     v_nombre_aa VARCHAR(130);
 BEGIN
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, NULL, NULL, NULL, 'EDITAR');
     -- Periodo y establecimiento del area (valida que el area exista/activa).
     SELECT a.FK_TPERIODO_ACADEMICO, s.FK_TESTABLECIMIENTO INTO v_periodo, v_est
       FROM academico_test.TAREA a
@@ -49,11 +48,11 @@ BEGIN
             RAISE EXCEPTION 'El area seleccionada no existe' USING ERRCODE = '23503';
         END IF;
     END IF;
-    -- Gate fino: el establecimiento del area debe estar en el alcance del usuario.
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, v_est) THEN
-        RAISE EXCEPTION 'El usuario no puede gestionar datos academicos de este establecimiento'
-            USING ERRCODE = '42501';
-    END IF;
+    -- Gate fino (CU-86e2w4xdt): capability + scope (EE, sede, jornada) del periodo del area.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, v_est,
+        academico_test.fn_periodo_sede(v_periodo),
+        academico_test.fn_periodo_jornada(v_periodo), 'EDITAR');
 
     -- Reemplazo: baja logica de las asignaturas del area que NO vienen en el set.
     UPDATE academico_test.TASIGNATURA
