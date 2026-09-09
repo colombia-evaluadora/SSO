@@ -440,6 +440,66 @@ COMMENT ON FUNCTION academico_test.fn_actividad_lv_assert(BIGINT, VARCHAR, VARCH
 -- fn_actividad_estado — derivacion unica del estado de una actividad.
 -- IMMUTABLE: "hoy" entra por parametro, no se lee CURRENT_DATE adentro.
 -- ---------------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- fn_grado_grupo_etiqueta — la etiqueta "grado-grupo" de una actividad, UNA
+-- sola definicion para el listado, el tablero, el calendario y el detalle.
+--
+-- QUE PROBLEMA RESUELVE: las lecturas de actividad devolvian solo
+-- TGRUPO.NOMBRE, sin el grado. El prototipo pide "601 | Cognitiva" en cada
+-- celda del calendario y en cada tarjeta, donde 601 es el grado-grupo -- y al
+-- no tenerlo, la UI del servidor de test estaba pintando el pk_tactividad en
+-- su lugar ("34 | MATEMA..."), que para el docente no significa nada.
+--
+-- POR QUE NO ES UN SIMPLE grado || grupo: los datos reales traen dos
+-- convenciones de TGRUPO.NOMBRE conviviendo.
+--
+--   * En los grupos cargados de verdad el nombre YA incluye el grado:
+--     TGRADO.CODIGO = '8' y TGRUPO.NOMBRE = '803M', o '6' y '601M'. Concatenar
+--     daria "8803M".
+--   * En los grupos sembrados a mano el nombre es solo el consecutivo:
+--     TGRUPO.NOMBRE = '01'. Y ahi el codigo del grado no sirve para
+--     concatenar, porque en Preescolar es NEGATIVO ('-2' Pre-Jardin, '-1'
+--     Jardin): daria "-201".
+--
+-- Asi que la regla es: si el nombre del grupo ya empieza por el codigo del
+-- grado, ese nombre YA ES la etiqueta y se devuelve tal cual ('803M'); si no,
+-- se compone con el NOMBRE del grado, no con su codigo ('Pre-Jardin 01').
+-- Nunca produce el "-201" ni el "8803M".
+--
+-- Se devuelven ademas fk_tgrado / grado / grado_codigo por separado en cada
+-- funcion, para que el front pueda componer su propia etiqueta si la quiere
+-- distinta sin tener que volver a pedir el grado.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_grado_grupo_etiqueta(
+    p_grado_nombre  VARCHAR,
+    p_grado_codigo  VARCHAR,
+    p_grupo_nombre  VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT CASE
+        -- Sin grupo no hay etiqueta que componer (actividades sin grupo:
+        -- criterios, huerfanas). Se devuelve el grado solo, si lo hay.
+        WHEN NULLIF(TRIM(COALESCE(p_grupo_nombre, '')), '') IS NULL
+            THEN NULLIF(TRIM(COALESCE(p_grado_nombre, '')), '')
+        -- El nombre del grupo ya viene prefijado con el codigo del grado
+        -- ('803M' para el grado '8'): ya es la etiqueta compacta del prototipo.
+        WHEN NULLIF(TRIM(COALESCE(p_grado_codigo, '')), '') IS NOT NULL
+         AND TRIM(p_grupo_nombre) LIKE TRIM(p_grado_codigo) || '%'
+            THEN TRIM(p_grupo_nombre)
+        -- Si no, se compone con el NOMBRE del grado (nunca con el codigo, que
+        -- en Preescolar es negativo y daria '-201').
+        ELSE NULLIF(TRIM(COALESCE(TRIM(COALESCE(p_grado_nombre, '')) || ' ', '')
+                         || TRIM(p_grupo_nombre)), '')
+    END::VARCHAR;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_grado_grupo_etiqueta(VARCHAR, VARCHAR, VARCHAR)
+    IS 'Etiqueta "grado-grupo" de una actividad -- el "601" de cada celda del calendario y de cada tarjeta del prototipo --, con UNA sola definicion para el listado, el tablero, el calendario y el detalle. No es un simple grado || grupo porque en los datos reales conviven dos convenciones de TGRUPO.NOMBRE: en los grupos cargados de verdad el nombre YA incluye el grado (TGRADO.CODIGO ''8'' con TGRUPO.NOMBRE ''803M''), y en los sembrados a mano es solo el consecutivo (''01''), donde ademas el codigo del grado no sirve para concatenar porque en Preescolar es NEGATIVO (''-2'' Pre-Jardin). Regla: si el nombre del grupo ya empieza por el codigo del grado se devuelve tal cual (''803M''); si no, se compone con el NOMBRE del grado (''Pre-Jardin 01''). Nunca produce ''8803M'' ni ''-201''. Sin grupo (criterios, huerfanas) devuelve el nombre del grado solo, o NULL. IMMUTABLE. V224.';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_estado(
     p_fecha_inicio      DATE,
     p_fecha_cierre      DATE,
@@ -1895,6 +1955,11 @@ DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGI
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar(
     BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE,
     VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT);
+-- Y la firma de 18 argumentos (ya con p_dia): en una base que la recibio, el
+-- tipo de retorno cambia otra vez al agregar las columnas de grado.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar(
+    BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE,
+    VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT, DATE);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar(
     p_pk_usuario_solicitante   BIGINT,
@@ -1943,6 +2008,13 @@ RETURNS TABLE (
     unidad                          VARCHAR,
     fk_tgrupo                       BIGINT,
     grupo                           VARCHAR,
+    -- Grado del grupo de la actividad y, si no tiene grupo, el de su unidad.
+    -- grado_grupo es la etiqueta compuesta (fn_grado_grupo_etiqueta): es lo
+    -- que el prototipo pinta en la tarjeta y en la celda del calendario.
+    fk_tgrado                       BIGINT,
+    grado                           VARCHAR,
+    grado_codigo                    VARCHAR,
+    grado_grupo                     VARCHAR,
     fk_tlv_tipo_actividad           BIGINT,
     tipo_actividad                  VARCHAR,
     fk_tlv_instrumento_evaluacion   BIGINT,
@@ -2162,6 +2234,10 @@ BEGIN
            u.NOMBRE,
            a.FK_TGRUPO,
            g.NOMBRE,
+           gr.PK_TGRADO,
+           gr.NOMBRE,
+           gr.CODIGO,
+           academico_test.fn_grado_grupo_etiqueta(gr.NOMBRE, gr.CODIGO, g.NOMBRE),
            a.FK_TLV_TIPO_ACTIVIDAD,
            lvt.NOMBRE,
            a.FK_TLV_INSTRUMENTO_EVALUACION,
@@ -2202,6 +2278,10 @@ BEGIN
       LEFT JOIN academico_test.TAREA ar          ON ar.PK_TAREA = asig.FK_TAREA
       LEFT JOIN academico_test.TUNIDAD u         ON u.PK_TUNIDAD = a.FK_TUNIDAD
       LEFT JOIN academico_test.TGRUPO g          ON g.PK_TGRUPO = a.FK_TGRUPO
+      -- El grado sale del GRUPO de la actividad; si no tiene grupo (criterios,
+      -- huerfanas) se cae al grado de su unidad, que es el otro sitio donde la
+      -- actividad esta anclada a un grado. COALESCE de los dos caminos.
+      LEFT JOIN academico_test.TGRADO gr         ON gr.PK_TGRADO = COALESCE(g.FK_TGRADO, u.FK_TGRADO)
       LEFT JOIN academico_test.TLISTA_VALOR lvt  ON lvt.PK_LISTA_VALOR = a.FK_TLV_TIPO_ACTIVIDAD
       LEFT JOIN academico_test.TLISTA_VALOR lvi  ON lvi.PK_LISTA_VALOR = a.FK_TLV_INSTRUMENTO_EVALUACION
       -- Un solo LATERAL: asignados y evaluados en la misma pasada.
@@ -2233,11 +2313,15 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT, DATE)
-    IS 'Pagina de actividades del Planeador (gate VER). p_dia es el PAGINADO POR DIA ACTIVO (la barra "Hoy | MARTES 16 | < >" del tablero): deja solo las actividades VIGENTES ese dia -- las que lo CUBREN con su ventana [FECHA_INICIO, FECHA_CIERRE], no las que empiezan o cierran exactamente ese dia, para que una actividad de tres dias aparezca en los tres --, con la misma tolerancia a un extremo faltante que fn_actividad_estado; una actividad sin ninguna fecha no esta en ningun dia y no aparece en esta vista. NULL = sin paginado por dia. Devuelve ademas dia / dia_anterior / dia_siguiente para las flechas: son el dia ocupado mas cercano a cada lado bajo los MISMOS filtros, SALTANDO los dias vacios (sin eso las flechas avanzarian de a un dia sobre semanas sin nada), y NULL cuando no hay mas dias por ese lado. Se calculan sobre el universo SIN el filtro por dia -- si mirasen la pagina no verian nada fuera del dia actual --, por eso el filtro vive en un CTE (universo) del que salen tanto la pagina como la navegacion, sin escribirlo dos veces. DIA VACIO: cuando se pide p_dia y ese dia no tiene ninguna actividad, se devuelve UNA fila con las columnas de la actividad en NULL, total_count = 0 y las flechas informadas -- sin ella el cliente se quedaria sin con que SALIR de un dia vacio. Se reconoce por total_count = 0 (o pk_tactividad NULL). Sin p_dia el comportamiento no cambia en nada: una pagina vacia sigue siendo 0 filas. Filtros indexados: asignatura, grupo, unidad, tipo, instrumento y ventana de fechas. p_search es el buscador unico "nombre, nivel educativo o instrumento": matchea (a) TITULO+DESCRIPCION con la expresion identica a la de idx_tactividad_busqueda_trgm, (b) el NOMBRE del nivel de ensenanza de la actividad (via FK_TUNIDAD -> TUNIDAD.FK_TGRADO -> TGRADO.FK_TNIVEL_ENSENANZA -> TNIVEL_ENSENANZA; solo aplica si la actividad tiene unidad) y (c) el NOMBRE del instrumento (TLISTA_VALOR de FK_TLV_INSTRUMENTO_EVALUACION). HONESTIDAD DE RENDIMIENTO: solo (a) puede entrar por el indice trigram; (b) y (c) son un post-filtro por EXISTS NO indexado sobre catalogos pequeños que, al ir en OR, impide el Bitmap Index Scan puro del trigram cuando p_search viene informado -- se evalua dentro del mismo CTE base ya acotado por los demas filtros y por LIMIT/OFFSET, nunca sobre un seq scan del universo sin filtrar. p_estados filtra por el estado DERIVADO (fn_actividad_estado) con p_dias_gracia (default 2). p_fk_tfuncionario (V250, al final de la firma para no romper la llamada posicional ya registrada de V246) filtra por el docente que DICTA la actividad -- NO el autor de la unidad (TUNIDAD.FK_TFUNCIONARIO puede ser otro docente o un coordinador): se resuelve via TDOCENTE_ASIGNATURA (V46, mismo vinculo que fn_docente_grupos_listar/V242) cruzando por (FK_TGRUPO, FK_TASIGNATURA) de la actividad, EXISTS -- actividades sin FK_TGRUPO (p.ej. un "Criterio") quedan fuera cuando se usa este filtro. Orden (whitelist): fecha_inicio|fecha_cierre|fecha_creacion|titulo|ponderacion, cualquier otro valor cae a fecha_inicio. Devuelve nombres resueltos (asignatura, area, unidad, grupo, tipo, instrumento), el estado derivado y el progreso de evaluacion (asignados/evaluados/%). Optimizacion: el CTE base pagina tocando solo TACTIVIDAD y los joins + el LATERAL de progreso corren unicamente contra las filas de la pagina. total_count via COUNT(*) OVER(). V224/V250.';
+    IS 'Pagina de actividades del Planeador (gate VER). p_dia es el PAGINADO POR DIA ACTIVO (la barra "Hoy | MARTES 16 | < >" del tablero): deja solo las actividades VIGENTES ese dia -- las que lo CUBREN con su ventana [FECHA_INICIO, FECHA_CIERRE], no las que empiezan o cierran exactamente ese dia, para que una actividad de tres dias aparezca en los tres --, con la misma tolerancia a un extremo faltante que fn_actividad_estado; una actividad sin ninguna fecha no esta en ningun dia y no aparece en esta vista. NULL = sin paginado por dia. Devuelve ademas dia / dia_anterior / dia_siguiente para las flechas: son el dia ocupado mas cercano a cada lado bajo los MISMOS filtros, SALTANDO los dias vacios (sin eso las flechas avanzarian de a un dia sobre semanas sin nada), y NULL cuando no hay mas dias por ese lado. Se calculan sobre el universo SIN el filtro por dia -- si mirasen la pagina no verian nada fuera del dia actual --, por eso el filtro vive en un CTE (universo) del que salen tanto la pagina como la navegacion, sin escribirlo dos veces. DIA VACIO: cuando se pide p_dia y ese dia no tiene ninguna actividad, se devuelve UNA fila con las columnas de la actividad en NULL, total_count = 0 y las flechas informadas -- sin ella el cliente se quedaria sin con que SALIR de un dia vacio. Se reconoce por total_count = 0 (o pk_tactividad NULL). Sin p_dia el comportamiento no cambia en nada: una pagina vacia sigue siendo 0 filas. Filtros indexados: asignatura, grupo, unidad, tipo, instrumento y ventana de fechas. p_search es el buscador unico "nombre, nivel educativo o instrumento": matchea (a) TITULO+DESCRIPCION con la expresion identica a la de idx_tactividad_busqueda_trgm, (b) el NOMBRE del nivel de ensenanza de la actividad (via FK_TUNIDAD -> TUNIDAD.FK_TGRADO -> TGRADO.FK_TNIVEL_ENSENANZA -> TNIVEL_ENSENANZA; solo aplica si la actividad tiene unidad) y (c) el NOMBRE del instrumento (TLISTA_VALOR de FK_TLV_INSTRUMENTO_EVALUACION). HONESTIDAD DE RENDIMIENTO: solo (a) puede entrar por el indice trigram; (b) y (c) son un post-filtro por EXISTS NO indexado sobre catalogos pequeños que, al ir en OR, impide el Bitmap Index Scan puro del trigram cuando p_search viene informado -- se evalua dentro del mismo CTE base ya acotado por los demas filtros y por LIMIT/OFFSET, nunca sobre un seq scan del universo sin filtrar. p_estados filtra por el estado DERIVADO (fn_actividad_estado) con p_dias_gracia (default 2). p_fk_tfuncionario (V250, al final de la firma para no romper la llamada posicional ya registrada de V246) filtra por el docente que DICTA la actividad -- NO el autor de la unidad (TUNIDAD.FK_TFUNCIONARIO puede ser otro docente o un coordinador): se resuelve via TDOCENTE_ASIGNATURA (V46, mismo vinculo que fn_docente_grupos_listar/V242) cruzando por (FK_TGRUPO, FK_TASIGNATURA) de la actividad, EXISTS -- actividades sin FK_TGRUPO (p.ej. un "Criterio") quedan fuera cuando se usa este filtro. Orden (whitelist): fecha_inicio|fecha_cierre|fecha_creacion|titulo|ponderacion, cualquier otro valor cae a fecha_inicio. Devuelve nombres resueltos (asignatura, area, unidad, grupo, tipo, instrumento), el GRADO de la actividad -- del grupo, o de su unidad cuando no tiene grupo -- con fk_tgrado / grado / grado_codigo y la etiqueta compuesta grado_grupo (fn_grado_grupo_etiqueta: ''803M'' cuando el nombre del grupo ya trae el codigo del grado, ''Pre-Jardin 01'' cuando no), el estado derivado y el progreso de evaluacion (asignados/evaluados/%). Optimizacion: el CTE base pagina tocando solo TACTIVIDAD y los joins + el LATERAL de progreso corren unicamente contra las filas de la pagina. total_count via COUNT(*) OVER(). V224/V250.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_buscar_por_pk — detalle completo (una fila).
 -- ---------------------------------------------------------------------------
+-- Cambia el tipo de retorno al agregar las columnas de grado.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_buscar_por_pk(BIGINT, BIGINT, INT);
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_buscar_por_pk(BIGINT, BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_buscar_por_pk(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tactividad            BIGINT,
@@ -2253,6 +2337,13 @@ RETURNS TABLE (
     unidad                          VARCHAR,
     fk_tgrupo                       BIGINT,
     grupo                           VARCHAR,
+    -- Grado del grupo de la actividad y, si no tiene grupo, el de su unidad.
+    -- grado_grupo es la etiqueta compuesta (fn_grado_grupo_etiqueta): es lo
+    -- que el prototipo pinta en la tarjeta y en la celda del calendario.
+    fk_tgrado                       BIGINT,
+    grado                           VARCHAR,
+    grado_codigo                    VARCHAR,
+    grado_grupo                     VARCHAR,
     fk_tlv_tipo_actividad           BIGINT,
     tipo_actividad                  VARCHAR,
     fk_tlv_jerarquia                BIGINT,
@@ -2310,6 +2401,8 @@ BEGIN
            a.FK_TASIGNATURA, asig.NOMBRE,
            a.FK_TUNIDAD, u.NOMBRE,
            a.FK_TGRUPO, g.NOMBRE,
+           gr.PK_TGRADO, gr.NOMBRE, gr.CODIGO,
+           academico_test.fn_grado_grupo_etiqueta(gr.NOMBRE, gr.CODIGO, g.NOMBRE),
            a.FK_TLV_TIPO_ACTIVIDAD, lvt.NOMBRE,
            a.FK_TLV_JERARQUIA, lvj.NOMBRE,
            a.FK_TLV_MODALIDAD, lvm.NOMBRE,
@@ -2396,6 +2489,9 @@ BEGIN
       JOIN academico_test.TASIGNATURA asig      ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
       LEFT JOIN academico_test.TUNIDAD u        ON u.PK_TUNIDAD = a.FK_TUNIDAD
       LEFT JOIN academico_test.TGRUPO g         ON g.PK_TGRUPO = a.FK_TGRUPO
+      -- Igual que en fn_actividad_listar: grado del grupo o, si no tiene
+      -- grupo, el de su unidad.
+      LEFT JOIN academico_test.TGRADO gr        ON gr.PK_TGRADO = COALESCE(g.FK_TGRADO, u.FK_TGRADO)
       LEFT JOIN academico_test.TLISTA_VALOR lvt ON lvt.PK_LISTA_VALOR = a.FK_TLV_TIPO_ACTIVIDAD
       LEFT JOIN academico_test.TLISTA_VALOR lvj ON lvj.PK_LISTA_VALOR = a.FK_TLV_JERARQUIA
       LEFT JOIN academico_test.TLISTA_VALOR lvm ON lvm.PK_LISTA_VALOR = a.FK_TLV_MODALIDAD
@@ -2806,6 +2902,8 @@ $backfill$;
 -- tiene registrada.
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar_docente(
     BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR[], INT, VARCHAR, BOOLEAN, INT, INT);
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar_docente(
+    BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR[], INT, VARCHAR, BOOLEAN, INT, INT, DATE);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar_docente(
     p_pk_usuario_solicitante   BIGINT,
@@ -2835,6 +2933,13 @@ RETURNS TABLE (
     unidad                          VARCHAR,
     fk_tgrupo                       BIGINT,
     grupo                           VARCHAR,
+    -- Grado del grupo de la actividad y, si no tiene grupo, el de su unidad.
+    -- grado_grupo es la etiqueta compuesta (fn_grado_grupo_etiqueta): es lo
+    -- que el prototipo pinta en la tarjeta y en la celda del calendario.
+    fk_tgrado                       BIGINT,
+    grado                           VARCHAR,
+    grado_codigo                    VARCHAR,
+    grado_grupo                     VARCHAR,
     fk_tlv_tipo_actividad           BIGINT,
     tipo_actividad                  VARCHAR,
     fk_tlv_instrumento_evaluacion   BIGINT,
@@ -2884,7 +2989,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_listar_docente(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR[], INT, VARCHAR, BOOLEAN, INT, INT, DATE)
-    IS '"Ver detalles" de cada tarjeta del tablero del docente autenticado: pagina de sus actividades (mismos filtros/orden/paginacion/columnas que fn_actividad_listar, incluido el paginado por dia activo p_dia y sus dia/dia_anterior/dia_siguiente), SIEMPRE acotada a su propio FK_TFUNCIONARIO (fn_funcionario_actual) -- nunca editable por el cliente. p_estados es el filtro tipico desde una tarjeta (p.ej. ARRAY[''PENDIENTE_POR_EVALUAR'']), pero es opcional: sin el, lista todas las actividades del docente. Guard explicito: si el usuario autenticado no es un docente activo, devuelve 0 filas (no delega con p_fk_tfuncionario NULL, que en fn_actividad_listar significa "sin filtro" y expondria el universo completo). No incluye p_fk_tlv_tipo_actividad/p_fk_tlv_instrumento/p_fecha_desde/p_fecha_hasta/p_incluir_inactivas del listado general -- si el tablero los necesita despues, se agregan aqui sin tocar fn_actividad_listar. Gate VER sobre PLANEADOR. V250.';
+    IS '"Ver detalles" de cada tarjeta del tablero del docente autenticado: pagina de sus actividades (mismos filtros/orden/paginacion/columnas que fn_actividad_listar, incluido el paginado por dia activo p_dia con sus dia/dia_anterior/dia_siguiente y el grado_grupo), SIEMPRE acotada a su propio FK_TFUNCIONARIO (fn_funcionario_actual) -- nunca editable por el cliente. p_estados es el filtro tipico desde una tarjeta (p.ej. ARRAY[''PENDIENTE_POR_EVALUAR'']), pero es opcional: sin el, lista todas las actividades del docente. Guard explicito: si el usuario autenticado no es un docente activo, devuelve 0 filas (no delega con p_fk_tfuncionario NULL, que en fn_actividad_listar significa "sin filtro" y expondria el universo completo). No incluye p_fk_tlv_tipo_actividad/p_fk_tlv_instrumento/p_fecha_desde/p_fecha_hasta/p_incluir_inactivas del listado general -- si el tablero los necesita despues, se agregan aqui sin tocar fn_actividad_listar. Gate VER sobre PLANEADOR. V250.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_calendario — grilla mensual.

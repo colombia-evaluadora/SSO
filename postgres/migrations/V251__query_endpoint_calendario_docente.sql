@@ -67,6 +67,11 @@ SET search_path TO academico_test, public;
 -- (1) fn_actividad_calendario — + fechas, + solapamiento, + docente.
 -- ===========================================================================
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_calendario(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT);
+-- Y la firma de 8 argumentos que crea esta misma migracion: al agregar las
+-- columnas de grado cambia otra vez el tipo de retorno, y CREATE OR REPLACE
+-- no puede cambiarlo sobre una base que ya recibio la version anterior.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_calendario(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT, BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_calendario_docente(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_calendario(
     p_pk_usuario_solicitante   BIGINT,
@@ -86,6 +91,14 @@ RETURNS TABLE (
     titulo            VARCHAR,
     fk_tgrupo         BIGINT,
     grupo             VARCHAR,
+    -- grado_grupo es lo que va en la celda del calendario ("601"). Sin esto
+    -- la UI no tenia de donde sacarlo y estaba pintando el pk_tactividad
+    -- ("34 | MATEMA..."), que al docente no le dice nada. Unica definicion
+    -- de la etiqueta: fn_grado_grupo_etiqueta (V224).
+    fk_tgrado         BIGINT,
+    grado             VARCHAR,
+    grado_codigo      VARCHAR,
+    grado_grupo       VARCHAR,
     fk_tasignatura    BIGINT,
     asignatura        VARCHAR,
     area              VARCHAR,
@@ -130,6 +143,10 @@ BEGIN
            a.TITULO,
            a.FK_TGRUPO,
            g.NOMBRE,
+           gr.PK_TGRADO,
+           gr.NOMBRE,
+           gr.CODIGO,
+           academico_test.fn_grado_grupo_etiqueta(gr.NOMBRE, gr.CODIGO, g.NOMBRE),
            a.FK_TASIGNATURA,
            asig.NOMBRE,
            ar.NOMBRE,
@@ -138,6 +155,10 @@ BEGIN
       JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
       LEFT JOIN academico_test.TAREA ar    ON ar.PK_TAREA = asig.FK_TAREA
       LEFT JOIN academico_test.TGRUPO g    ON g.PK_TGRUPO = a.FK_TGRUPO
+      -- Mismo criterio que fn_actividad_listar (V224): el grado sale del
+      -- grupo y, si la actividad no tiene grupo, de su unidad.
+      LEFT JOIN academico_test.TUNIDAD u_g ON u_g.PK_TUNIDAD = a.FK_TUNIDAD
+      LEFT JOIN academico_test.TGRADO gr   ON gr.PK_TGRADO = COALESCE(g.FK_TGRADO, u_g.FK_TGRADO)
      WHERE a.ACTIVE = TRUE
            AND (
                  EXISTS (SELECT 1
@@ -207,6 +228,14 @@ RETURNS TABLE (
     titulo            VARCHAR,
     fk_tgrupo         BIGINT,
     grupo             VARCHAR,
+    -- grado_grupo es lo que va en la celda del calendario ("601"). Sin esto
+    -- la UI no tenia de donde sacarlo y estaba pintando el pk_tactividad
+    -- ("34 | MATEMA..."), que al docente no le dice nada. Unica definicion
+    -- de la etiqueta: fn_grado_grupo_etiqueta (V224).
+    fk_tgrado         BIGINT,
+    grado             VARCHAR,
+    grado_codigo      VARCHAR,
+    grado_grupo       VARCHAR,
     fk_tasignatura    BIGINT,
     asignatura        VARCHAR,
     area              VARCHAR,
@@ -241,7 +270,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_calendario_docente(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT)
-    IS 'Grilla mensual "mi calendario" del docente autenticado: mismas columnas y reglas que fn_actividad_calendario, SIEMPRE acotada a su propio FK_TFUNCIONARIO (fn_funcionario_actual) -- nunca editable por el cliente. Si el usuario autenticado no es un docente activo devuelve 0 filas (guard explicito: delegar con NULL significaria "sin filtro" y expondria el calendario completo). Completa el trio del tablero del docente junto a fn_actividad_resumen_estados_docente (tarjetas) y fn_actividad_listar_docente (listado), los tres sobre la misma derivacion de estado (fn_actividad_estado). Gate VER sobre PLANEADOR. V251.';
+    IS 'Devuelve grado_grupo (fn_grado_grupo_etiqueta, V224) ademas de grupo: es la etiqueta que va en la celda del calendario -- sin ella la UI pintaba el pk_tactividad. Grilla mensual "mi calendario" del docente autenticado: mismas columnas y reglas que fn_actividad_calendario, SIEMPRE acotada a su propio FK_TFUNCIONARIO (fn_funcionario_actual) -- nunca editable por el cliente. Si el usuario autenticado no es un docente activo devuelve 0 filas (guard explicito: delegar con NULL significaria "sin filtro" y expondria el calendario completo). Completa el trio del tablero del docente junto a fn_actividad_resumen_estados_docente (tarjetas) y fn_actividad_listar_docente (listado), los tres sobre la misma derivacion de estado (fn_actividad_estado). Gate VER sobre PLANEADOR. V251.';
 
 -- ===========================================================================
 -- (3) ENDPOINT — GET /planeador/actividades/calendario
