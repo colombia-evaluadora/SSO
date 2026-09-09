@@ -450,21 +450,22 @@ COMMENT ON FUNCTION academico_test.fn_actividad_lv_assert(BIGINT, VARCHAR, VARCH
 -- no tenerlo, la UI del servidor de test estaba pintando el pk_tactividad en
 -- su lugar ("34 | MATEMA..."), que para el docente no significa nada.
 --
--- POR QUE NO ES UN SIMPLE grado || grupo: los datos reales traen dos
--- convenciones de TGRUPO.NOMBRE conviviendo.
+-- LA REGLA: CODIGO del grado + nombre del grupo, sin separador.
 --
---   * En los grupos cargados de verdad el nombre YA incluye el grado:
---     TGRADO.CODIGO = '8' y TGRUPO.NOMBRE = '803M', o '6' y '601M'. Concatenar
---     daria "8803M".
---   * En los grupos sembrados a mano el nombre es solo el consecutivo:
---     TGRUPO.NOMBRE = '01'. Y ahi el codigo del grado no sirve para
---     concatenar, porque en Preescolar es NEGATIVO ('-2' Pre-Jardin, '-1'
---     Jardin): daria "-201".
+--     grado '6'  + grupo '01'  ->  '601'
+--     grado '-2' + grupo '01'  ->  '-201'   (Preescolar usa codigos negativos)
 --
--- Asi que la regla es: si el nombre del grupo ya empieza por el codigo del
--- grado, ese nombre YA ES la etiqueta y se devuelve tal cual ('803M'); si no,
--- se compone con el NOMBRE del grado, no con su codigo ('Pre-Jardin 01').
--- Nunca produce el "-201" ni el "8803M".
+-- Se usa TGRADO.CODIGO y no TGRADO.NOMBRE: el codigo es la parte corta que el
+-- prototipo pinta en la celda del calendario. En Preescolar los codigos son
+-- negativos ('-2' Pre-Jardin, '-1' Jardin) y la etiqueta sale como '-201';
+-- es el resultado de la regla y se acepta a proposito.
+--
+-- UNICA salvaguarda: en los grupos cargados de verdad el nombre de TGRUPO YA
+-- incluye el codigo del grado -- TGRADO.CODIGO = '8' con TGRUPO.NOMBRE =
+-- '803M', o '6' con '601M' --, asi que concatenar daria '8803M'. Cuando el
+-- nombre del grupo ya empieza por el codigo del grado se devuelve tal cual,
+-- porque ya ES la etiqueta. En los grupos sembrados a mano el nombre es solo
+-- el consecutivo ('01') y ahi la concatenacion si aplica.
 --
 -- Se devuelven ademas fk_tgrado / grado / grado_codigo por separado en cada
 -- funcion, para que el front pueda componer su propia etiqueta si la quiere
@@ -482,23 +483,27 @@ PARALLEL SAFE
 AS $$
     SELECT CASE
         -- Sin grupo no hay etiqueta que componer (actividades sin grupo:
-        -- criterios, huerfanas). Se devuelve el grado solo, si lo hay.
+        -- criterios, huerfanas). Se devuelve el CODIGO del grado, que es la
+        -- parte que aporta el grado a la etiqueta.
         WHEN NULLIF(TRIM(COALESCE(p_grupo_nombre, '')), '') IS NULL
-            THEN NULLIF(TRIM(COALESCE(p_grado_nombre, '')), '')
-        -- El nombre del grupo ya viene prefijado con el codigo del grado
-        -- ('803M' para el grado '8'): ya es la etiqueta compacta del prototipo.
-        WHEN NULLIF(TRIM(COALESCE(p_grado_codigo, '')), '') IS NOT NULL
-         AND TRIM(p_grupo_nombre) LIKE TRIM(p_grado_codigo) || '%'
+            THEN NULLIF(TRIM(COALESCE(p_grado_codigo, '')), '')
+        -- Sin codigo de grado no hay nada que anteponer: el grupo es la etiqueta.
+        WHEN NULLIF(TRIM(COALESCE(p_grado_codigo, '')), '') IS NULL
             THEN TRIM(p_grupo_nombre)
-        -- Si no, se compone con el NOMBRE del grado (nunca con el codigo, que
-        -- en Preescolar es negativo y daria '-201').
-        ELSE NULLIF(TRIM(COALESCE(TRIM(COALESCE(p_grado_nombre, '')) || ' ', '')
-                         || TRIM(p_grupo_nombre)), '')
+        -- El nombre del grupo YA viene prefijado con el codigo del grado
+        -- ('803M' para el grado '8'): concatenar daria '8803M'. Ya es la
+        -- etiqueta, se devuelve tal cual. UNICA salvaguarda de la regla.
+        WHEN TRIM(p_grupo_nombre) LIKE TRIM(p_grado_codigo) || '%'
+            THEN TRIM(p_grupo_nombre)
+        -- La regla: CODIGO del grado + nombre del grupo, sin separador.
+        --   grado '6'  + grupo '01' -> '601'
+        --   grado '-2' + grupo '01' -> '-201'  (Preescolar usa codigos negativos)
+        ELSE TRIM(p_grado_codigo) || TRIM(p_grupo_nombre)
     END::VARCHAR;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_grado_grupo_etiqueta(VARCHAR, VARCHAR, VARCHAR)
-    IS 'Etiqueta "grado-grupo" de una actividad -- el "601" de cada celda del calendario y de cada tarjeta del prototipo --, con UNA sola definicion para el listado, el tablero, el calendario y el detalle. No es un simple grado || grupo porque en los datos reales conviven dos convenciones de TGRUPO.NOMBRE: en los grupos cargados de verdad el nombre YA incluye el grado (TGRADO.CODIGO ''8'' con TGRUPO.NOMBRE ''803M''), y en los sembrados a mano es solo el consecutivo (''01''), donde ademas el codigo del grado no sirve para concatenar porque en Preescolar es NEGATIVO (''-2'' Pre-Jardin). Regla: si el nombre del grupo ya empieza por el codigo del grado se devuelve tal cual (''803M''); si no, se compone con el NOMBRE del grado (''Pre-Jardin 01''). Nunca produce ''8803M'' ni ''-201''. Sin grupo (criterios, huerfanas) devuelve el nombre del grado solo, o NULL. IMMUTABLE. V224.';
+    IS 'Etiqueta "grado-grupo" de una actividad -- el "601" de cada celda del calendario y de cada tarjeta del prototipo --, con UNA sola definicion para el listado, el tablero, el calendario y el detalle. Regla: CODIGO del grado + nombre del grupo, sin separador (grado ''6'' + grupo ''01'' -> ''601''). Se usa TGRADO.CODIGO y no TGRADO.NOMBRE porque el codigo es la parte corta que pinta el prototipo; en Preescolar los codigos son negativos (''-2'' Pre-Jardin) y la etiqueta sale ''-201'', que es el resultado de la regla y se acepta a proposito. UNICA salvaguarda: en los grupos cargados de verdad TGRUPO.NOMBRE ya incluye el codigo del grado (''803M'' para el grado ''8''), asi que concatenar daria ''8803M''; cuando el nombre del grupo ya empieza por el codigo se devuelve tal cual porque ya ES la etiqueta. En los grupos sembrados a mano el nombre es solo el consecutivo (''01'') y ahi la concatenacion si aplica. Sin grupo (criterios, huerfanas) devuelve el codigo del grado solo, o NULL; sin codigo de grado, el nombre del grupo. IMMUTABLE. V224.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_estado(
     p_fecha_inicio      DATE,
@@ -2313,7 +2318,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT, DATE)
-    IS 'Pagina de actividades del Planeador (gate VER). p_dia es el PAGINADO POR DIA ACTIVO (la barra "Hoy | MARTES 16 | < >" del tablero): deja solo las actividades VIGENTES ese dia -- las que lo CUBREN con su ventana [FECHA_INICIO, FECHA_CIERRE], no las que empiezan o cierran exactamente ese dia, para que una actividad de tres dias aparezca en los tres --, con la misma tolerancia a un extremo faltante que fn_actividad_estado; una actividad sin ninguna fecha no esta en ningun dia y no aparece en esta vista. NULL = sin paginado por dia. Devuelve ademas dia / dia_anterior / dia_siguiente para las flechas: son el dia ocupado mas cercano a cada lado bajo los MISMOS filtros, SALTANDO los dias vacios (sin eso las flechas avanzarian de a un dia sobre semanas sin nada), y NULL cuando no hay mas dias por ese lado. Se calculan sobre el universo SIN el filtro por dia -- si mirasen la pagina no verian nada fuera del dia actual --, por eso el filtro vive en un CTE (universo) del que salen tanto la pagina como la navegacion, sin escribirlo dos veces. DIA VACIO: cuando se pide p_dia y ese dia no tiene ninguna actividad, se devuelve UNA fila con las columnas de la actividad en NULL, total_count = 0 y las flechas informadas -- sin ella el cliente se quedaria sin con que SALIR de un dia vacio. Se reconoce por total_count = 0 (o pk_tactividad NULL). Sin p_dia el comportamiento no cambia en nada: una pagina vacia sigue siendo 0 filas. Filtros indexados: asignatura, grupo, unidad, tipo, instrumento y ventana de fechas. p_search es el buscador unico "nombre, nivel educativo o instrumento": matchea (a) TITULO+DESCRIPCION con la expresion identica a la de idx_tactividad_busqueda_trgm, (b) el NOMBRE del nivel de ensenanza de la actividad (via FK_TUNIDAD -> TUNIDAD.FK_TGRADO -> TGRADO.FK_TNIVEL_ENSENANZA -> TNIVEL_ENSENANZA; solo aplica si la actividad tiene unidad) y (c) el NOMBRE del instrumento (TLISTA_VALOR de FK_TLV_INSTRUMENTO_EVALUACION). HONESTIDAD DE RENDIMIENTO: solo (a) puede entrar por el indice trigram; (b) y (c) son un post-filtro por EXISTS NO indexado sobre catalogos pequeños que, al ir en OR, impide el Bitmap Index Scan puro del trigram cuando p_search viene informado -- se evalua dentro del mismo CTE base ya acotado por los demas filtros y por LIMIT/OFFSET, nunca sobre un seq scan del universo sin filtrar. p_estados filtra por el estado DERIVADO (fn_actividad_estado) con p_dias_gracia (default 2). p_fk_tfuncionario (V250, al final de la firma para no romper la llamada posicional ya registrada de V246) filtra por el docente que DICTA la actividad -- NO el autor de la unidad (TUNIDAD.FK_TFUNCIONARIO puede ser otro docente o un coordinador): se resuelve via TDOCENTE_ASIGNATURA (V46, mismo vinculo que fn_docente_grupos_listar/V242) cruzando por (FK_TGRUPO, FK_TASIGNATURA) de la actividad, EXISTS -- actividades sin FK_TGRUPO (p.ej. un "Criterio") quedan fuera cuando se usa este filtro. Orden (whitelist): fecha_inicio|fecha_cierre|fecha_creacion|titulo|ponderacion, cualquier otro valor cae a fecha_inicio. Devuelve nombres resueltos (asignatura, area, unidad, grupo, tipo, instrumento), el GRADO de la actividad -- del grupo, o de su unidad cuando no tiene grupo -- con fk_tgrado / grado / grado_codigo y la etiqueta compuesta grado_grupo (fn_grado_grupo_etiqueta: ''803M'' cuando el nombre del grupo ya trae el codigo del grado, ''Pre-Jardin 01'' cuando no), el estado derivado y el progreso de evaluacion (asignados/evaluados/%). Optimizacion: el CTE base pagina tocando solo TACTIVIDAD y los joins + el LATERAL de progreso corren unicamente contra las filas de la pagina. total_count via COUNT(*) OVER(). V224/V250.';
+    IS 'Pagina de actividades del Planeador (gate VER). p_dia es el PAGINADO POR DIA ACTIVO (la barra "Hoy | MARTES 16 | < >" del tablero): deja solo las actividades VIGENTES ese dia -- las que lo CUBREN con su ventana [FECHA_INICIO, FECHA_CIERRE], no las que empiezan o cierran exactamente ese dia, para que una actividad de tres dias aparezca en los tres --, con la misma tolerancia a un extremo faltante que fn_actividad_estado; una actividad sin ninguna fecha no esta en ningun dia y no aparece en esta vista. NULL = sin paginado por dia. Devuelve ademas dia / dia_anterior / dia_siguiente para las flechas: son el dia ocupado mas cercano a cada lado bajo los MISMOS filtros, SALTANDO los dias vacios (sin eso las flechas avanzarian de a un dia sobre semanas sin nada), y NULL cuando no hay mas dias por ese lado. Se calculan sobre el universo SIN el filtro por dia -- si mirasen la pagina no verian nada fuera del dia actual --, por eso el filtro vive en un CTE (universo) del que salen tanto la pagina como la navegacion, sin escribirlo dos veces. DIA VACIO: cuando se pide p_dia y ese dia no tiene ninguna actividad, se devuelve UNA fila con las columnas de la actividad en NULL, total_count = 0 y las flechas informadas -- sin ella el cliente se quedaria sin con que SALIR de un dia vacio. Se reconoce por total_count = 0 (o pk_tactividad NULL). Sin p_dia el comportamiento no cambia en nada: una pagina vacia sigue siendo 0 filas. Filtros indexados: asignatura, grupo, unidad, tipo, instrumento y ventana de fechas. p_search es el buscador unico "nombre, nivel educativo o instrumento": matchea (a) TITULO+DESCRIPCION con la expresion identica a la de idx_tactividad_busqueda_trgm, (b) el NOMBRE del nivel de ensenanza de la actividad (via FK_TUNIDAD -> TUNIDAD.FK_TGRADO -> TGRADO.FK_TNIVEL_ENSENANZA -> TNIVEL_ENSENANZA; solo aplica si la actividad tiene unidad) y (c) el NOMBRE del instrumento (TLISTA_VALOR de FK_TLV_INSTRUMENTO_EVALUACION). HONESTIDAD DE RENDIMIENTO: solo (a) puede entrar por el indice trigram; (b) y (c) son un post-filtro por EXISTS NO indexado sobre catalogos pequeños que, al ir en OR, impide el Bitmap Index Scan puro del trigram cuando p_search viene informado -- se evalua dentro del mismo CTE base ya acotado por los demas filtros y por LIMIT/OFFSET, nunca sobre un seq scan del universo sin filtrar. p_estados filtra por el estado DERIVADO (fn_actividad_estado) con p_dias_gracia (default 2). p_fk_tfuncionario (V250, al final de la firma para no romper la llamada posicional ya registrada de V246) filtra por el docente que DICTA la actividad -- NO el autor de la unidad (TUNIDAD.FK_TFUNCIONARIO puede ser otro docente o un coordinador): se resuelve via TDOCENTE_ASIGNATURA (V46, mismo vinculo que fn_docente_grupos_listar/V242) cruzando por (FK_TGRUPO, FK_TASIGNATURA) de la actividad, EXISTS -- actividades sin FK_TGRUPO (p.ej. un "Criterio") quedan fuera cuando se usa este filtro. Orden (whitelist): fecha_inicio|fecha_cierre|fecha_creacion|titulo|ponderacion, cualquier otro valor cae a fecha_inicio. Devuelve nombres resueltos (asignatura, area, unidad, grupo, tipo, instrumento), el GRADO de la actividad -- del grupo, o de su unidad cuando no tiene grupo -- con fk_tgrado / grado / grado_codigo y la etiqueta compuesta grado_grupo (fn_grado_grupo_etiqueta: CODIGO del grado + grupo, ''6''+''01'' -> ''601''; si el nombre del grupo ya trae el codigo del grado se devuelve tal cual, ''803M'', para no producir ''8803M''), el estado derivado y el progreso de evaluacion (asignados/evaluados/%). Optimizacion: el CTE base pagina tocando solo TACTIVIDAD y los joins + el LATERAL de progreso corren unicamente contra las filas de la pagina. total_count via COUNT(*) OVER(). V224/V250.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_buscar_por_pk — detalle completo (una fila).
