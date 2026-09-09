@@ -195,7 +195,7 @@
             "method": "GET",
             "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
             "url": {
-              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades?search=fracciones&asignatura={{asignaturaId}}&grado={{gradoId}}&ordenPor=nombre&ordenAsc=true&size=20&offset=0",
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades?search=fracciones&asignatura={{asignaturaId}}&grado={{gradoId}}&ORDEN_POR=nombre&ORDEN_ASC=true&size=20&offset=0",
               "host": ["{{baseUrl}}"],
               "path": ["api", "eval-col", "planeador", "unidades"],
               "query": [
@@ -317,7 +317,7 @@
             "method": "GET",
             "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
             "url": {
-              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/actividades?ordenPor=porcentaje&ordenAsc=false&size=50&offset=0",
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/actividades?ORDEN_POR=porcentaje&ORDEN_ASC=false&size=50&offset=0",
               "host": ["{{baseUrl}}"],
               "path": ["api", "eval-col", "planeador", "unidades", "{{unidadId}}", "actividades"],
               "query": [
@@ -589,7 +589,7 @@
             "method": "GET",
             "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
             "url": {
-              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/criterios?incluirInactivos=false",
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/criterios?INCLUIR_INACTIVOS=false",
               "host": ["{{baseUrl}}"],
               "path": ["api", "eval-col", "planeador", "unidades", "{{unidadId}}", "criterios"],
               "query": [{ "key": "incluirInactivos", "value": "false" }],

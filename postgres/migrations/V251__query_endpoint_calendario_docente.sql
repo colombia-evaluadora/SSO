@@ -20,14 +20,14 @@
 --              completed    -> FINALIZADA
 --              cancelled    -> VENCIDA        <-- OJO: no es "cancelada".
 --          Nada se cancela en el Planeador; la cuarta tarjeta es
---          "Vencidas (> N dias)", y ese N es el parametro ?diasGracia=
+--          "Vencidas (> N dias)", y ese N es el parametro ?DIAS_GRACIA=
 --          (default 2) -- por eso la etiqueta de la tarjeta dice "> 2 dias".
 --          Ademas el tablero devuelve 2 contadores que el front todavia no
 --          pinta (PROGRAMADA y SIN_PROGRAMAR) y el total.
 --
 --   (b) "GET /planeador/actividades?desde=&hasta=&sinPaginar=true"
 --       -> el filtro por rango YA existe en el listado como
---          ?fechaDesde=/?fechaHasta= (V246, fn_actividad_listar), con
+--          ?FECHA_DESDE=/?FECHA_HASTA= (V246, fn_actividad_listar), con
 --          semantica de SOLAPAMIENTO. Lo que faltaba de verdad era exponer
 --          fn_actividad_calendario (V224), que es la funcion hecha a
 --          proposito para la grilla: sin paginacion (el rango es un mes,
@@ -291,7 +291,7 @@ SELECT
     'postgres', false, false,
     m.id_microservice, '/planeador/actividades/calendario', 'SELECT', 'GET',
     '{"QUERY.FECHA_DESDE": "DATE", "QUERY.FECHA_HASTA": "DATE", "QUERY.ASIGNATURA": "BIGINT", "QUERY.GRUPO": "BIGINT", "QUERY.UNIDAD": "BIGINT", "QUERY.DIAS_GRACIA": "INT"}'::jsonb,
-    'V251 -- grilla mensual del calendario del Planeador para el DOCENTE autenticado (fn_actividad_calendario_docente, V251). ?fechaDesde= y ?fechaHasta= son OBLIGATORIOS (22023 si falta alguno, o si hasta < desde) y acotan por SOLAPAMIENTO con [fecha_inicio, fecha_cierre]: una actividad que cruza el mes aparece en su grilla. SIN paginacion -- un mes nunca es un volumen grande, por eso NO hay que mandar ?size=/?offset= aqui (sustituye el atajo del front de pedir el listado completo con size=500 y filtrar el mes en el cliente). Cada fila trae: fecha (dia de anclaje ya resuelto, para agrupar por dia sin recalcular), fecha_inicio, fecha_cierre, pk_tactividad, titulo, fk_tgrupo + grupo, fk_tasignatura + asignatura, area y estado DERIVADO (mismo fn_actividad_estado del tablero y del listado, con ?diasGracia= default 2). El docente se resuelve del token y NO es un parametro: nadie pinta el calendario de otro docente por esta ruta; si el usuario no es docente activo, 0 filas. Filtros opcionales ?asignatura=, ?grupo=, ?unidad=. Gate VER sobre PLANEADOR.'
+    'V251 -- grilla mensual del calendario del Planeador para el DOCENTE autenticado (fn_actividad_calendario_docente, V251). ?FECHA_DESDE= y ?FECHA_HASTA= son OBLIGATORIOS (22023 si falta alguno, o si hasta < desde) y acotan por SOLAPAMIENTO con [fecha_inicio, fecha_cierre]: una actividad que cruza el mes aparece en su grilla. SIN paginacion -- un mes nunca es un volumen grande, por eso NO hay que mandar ?size=/?offset= aqui (sustituye el atajo del front de pedir el listado completo con size=500 y filtrar el mes en el cliente). Cada fila trae: fecha (dia de anclaje ya resuelto, para agrupar por dia sin recalcular), fecha_inicio, fecha_cierre, pk_tactividad, titulo, fk_tgrupo + grupo, fk_tasignatura + asignatura, area y estado DERIVADO (mismo fn_actividad_estado del tablero y del listado, con ?DIAS_GRACIA= default 2). El docente se resuelve del token y NO es un parametro: nadie pinta el calendario de otro docente por esta ruta; si el usuario no es docente activo, 0 filas. Filtros opcionales ?asignatura=, ?grupo=, ?unidad=. Gate VER sobre PLANEADOR.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;

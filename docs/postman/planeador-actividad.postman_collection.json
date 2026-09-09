@@ -163,7 +163,7 @@
             "method": "GET",
             "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
             "url": {
-              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadId}}?diasGracia=2",
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadId}}?DIAS_GRACIA=2",
               "host": ["{{baseUrl}}"], "path": ["api", "eval-col", "planeador", "actividades", "{{actividadId}}"],
               "query": [{ "key": "diasGracia", "value": "2" }]
             },

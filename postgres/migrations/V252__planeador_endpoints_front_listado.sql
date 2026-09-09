@@ -52,7 +52,7 @@
 --   completed    = finalizadas              (FINALIZADA)
 --   cancelled    = vencidas                 (VENCIDA)
 -- OJO con la ultima: en el Planeador nada se "cancela". La cuarta tarjeta
--- es "Vencidas (> N dias)" y ese N es ?diasGracia= (default 2) -- de ahi el
+-- es "Vencidas (> N dias)" y ese N es ?DIAS_GRACIA= (default 2) -- de ahi el
 -- "> 2 dias" de la etiqueta. Se mantiene el alias `cancelled` porque es el
 -- nombre que ya usa el tipo ActividadStatus del front, pero el nombre real
 -- (`vencidas`) viaja en la misma fila.
@@ -60,7 +60,7 @@
 -- -------------------------------------------------------------------------
 -- (3) ?desde= / ?hasta= en /planeador/actividades.
 --
--- El rango YA existia como ?fechaDesde=/?fechaHasta= (V246). El front
+-- El rango YA existia como ?FECHA_DESDE=/?FECHA_HASTA= (V246). El front
 -- escribio ?desde=/?hasta=. En vez de renombrar (romperia lo ya
 -- documentado) se aceptan AMBOS: COALESCE(fechaDesde, desde). Para la
 -- grilla mensual sigue siendo preferible /planeador/actividades/calendario
@@ -136,7 +136,7 @@ SELECT
     'postgres', false, false,
     m.id_microservice, '/planeador/actividades/stats', 'SELECT', 'GET',
     '{"QUERY.ASIGNATURA": "BIGINT", "QUERY.GRUPO": "BIGINT", "QUERY.UNIDAD": "BIGINT", "QUERY.FECHA_DESDE": "DATE", "QUERY.FECHA_HASTA": "DATE", "QUERY.DIAS_GRACIA": "INT"}'::jsonb,
-    'V252 -- contadores por estado para las 4 tarjetas de resumen de la pantalla principal del Planeador, del DOCENTE autenticado (fn_actividad_resumen_estados_docente, V224/V250). Misma funcion que GET /planeador/actividades/tablero (V250): esta ruta existe porque es la que el front ya tenia escrita, no duplica logica. Devuelve la fila con LAS DOS nomenclaturas -- los alias que usa el tipo ActividadStatus del front (pending / in_progress / completed / cancelled) y los nombres reales del estado derivado (pendientes_por_evaluar / en_evaluacion / finalizadas / vencidas), mas programadas, sin_programar y total. OJO: `cancelled` es un ALIAS de `vencidas`; en el Planeador nada se cancela -- la cuarta tarjeta es "Vencidas (> N dias)" y ese N es ?diasGracia= (default 2). Reemplaza el atajo del front de traer el listado completo con size=500 y contar en el navegador: aqui es un solo COUNT(*) FILTER. El docente se resuelve del token y NO es parametro; si el usuario no es docente activo, todos los contadores en 0. Filtros opcionales ?asignatura=, ?grupo=, ?unidad=, ?fechaDesde=, ?fechaHasta=. Sin paginacion. Gate VER sobre PLANEADOR.'
+    'V252 -- contadores por estado para las 4 tarjetas de resumen de la pantalla principal del Planeador, del DOCENTE autenticado (fn_actividad_resumen_estados_docente, V224/V250). Misma funcion que GET /planeador/actividades/tablero (V250): esta ruta existe porque es la que el front ya tenia escrita, no duplica logica. Devuelve la fila con LAS DOS nomenclaturas -- los alias que usa el tipo ActividadStatus del front (pending / in_progress / completed / cancelled) y los nombres reales del estado derivado (pendientes_por_evaluar / en_evaluacion / finalizadas / vencidas), mas programadas, sin_programar y total. OJO: `cancelled` es un ALIAS de `vencidas`; en el Planeador nada se cancela -- la cuarta tarjeta es "Vencidas (> N dias)" y ese N es ?DIAS_GRACIA= (default 2). Reemplaza el atajo del front de traer el listado completo con size=500 y contar en el navegador: aqui es un solo COUNT(*) FILTER. El docente se resuelve del token y NO es parametro; si el usuario no es docente activo, todos los contadores en 0. Filtros opcionales ?asignatura=, ?grupo=, ?unidad=, ?FECHA_DESDE=, ?FECHA_HASTA=. Sin paginacion. Gate VER sobre PLANEADOR.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
