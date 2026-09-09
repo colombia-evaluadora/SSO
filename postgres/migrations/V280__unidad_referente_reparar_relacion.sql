@@ -1,6 +1,6 @@
 -- ===========================================================================
--- V280 — Planeador: repara la relacion unidad <-> referente curricular que
--- quedo mal en las unidades ya creadas (CU-86e311xxp).
+-- V280 — Planeador: repara TUNIDAD -- la relacion con el referente curricular
+-- de las unidades ya creadas, y la unicidad de su nombre (CU-86e311xxp).
 --
 -- V216 ya corrige las CAUSAS (fn_unidad_crear deriva el referente del grado
 -- cuando el cliente no lo manda, y crear/editar exigen que el referente
@@ -123,3 +123,50 @@ BEGIN
     RAISE NOTICE 'V280: % unidades re-apuntadas al referente que les corresponde, % enunciados marcados desactivados por no pertenecer a ese referente, % unidades siguen sin referente porque su grado no tiene ninguno aplicable (falta cargarlo en el catalogo).',
         v_unidades, v_enunc, v_pendientes;
 END $$;
+
+-- ===========================================================================
+-- (3) un_tunidad_1 pasa a indice PARCIAL (WHERE active = true).
+--
+-- SINTOMA: borrar una unidad quemaba su nombre para siempre. Re-crear una
+-- unidad con el mismo (nombre, asignatura, grado) que una ya borrada respondia
+-- 409 con el mensaje GENERICO del motor
+--     "Ya existe un registro con el mismo valor en 'nombre, asignatura, grado'"
+-- en vez del mensaje propio de la funcion. Comprobado contra el servidor de
+-- test, donde hay 17 unidades borradas ocupando su combinacion.
+--
+-- CAUSA: fn_unidad_crear si comprueba la unicidad solo entre unidades ACTIVAS
+-- (WHERE ... AND ACTIVE = TRUE), que es la intencion de negocio de todo el
+-- esquema de soft-delete. Pero el indice un_tunidad_1 es un UNIQUE plano y
+-- salta ANTES de que la funcion pueda dar su error, sobre filas que para el
+-- negocio ya no existen.
+--
+-- POR QUE NO SE ARREGLA EN V71, QUE ES DONDE DEBERIA ESTAR: V71 ya convirtio
+-- este mismo indice a parcial (linea "un_tunidad_1 ... WHERE active = true"),
+-- pero con las CUATRO columnas que tenia entonces
+-- (nombre, fk_tasignatura, fk_tgrado, fk_tperiodo_evaluacion). Despues V218
+-- --que vive en la rama CU-86e329pvq-- quito FK_TPERIODO_EVALUACION de TUNIDAD
+-- y recreo el indice con tres columnas, esta vez SIN el predicado, deshaciendo
+-- el arreglo. Volver a tocarlo en V71 no serviria: V218 corre despues y lo
+-- pisaria otra vez. Por eso va aqui, en la migracion de reparacion de TUNIDAD
+-- de esta rama, que corre despues de V218.
+--
+-- Mismo patron que V65/V71 aplicaron a las otras 84 restricciones de
+-- academico_test, y con la misma perdida intencional del DEFERRABLE: Postgres
+-- no permite respaldar un constraint deferrable con un indice parcial.
+--
+-- Idempotente: DROP ... IF EXISTS de las dos formas (constraint e indice) y
+-- CREATE ... IF NOT EXISTS.
+-- ===========================================================================
+
+-- Puede existir como constraint (V22/V218) o como indice suelto: se sueltan
+-- las dos formas, porque DROP CONSTRAINT no elimina un indice que no respalda
+-- ningun constraint y DROP INDEX no puede eliminar el que si lo respalda.
+ALTER TABLE academico_test.TUNIDAD DROP CONSTRAINT IF EXISTS un_tunidad_1;
+DROP INDEX IF EXISTS academico_test.un_tunidad_1;
+
+CREATE UNIQUE INDEX IF NOT EXISTS un_tunidad_1
+    ON academico_test.TUNIDAD (nombre, fk_tasignatura, fk_tgrado)
+ WHERE active = true;
+
+COMMENT ON INDEX academico_test.un_tunidad_1
+    IS 'Unicidad de (NOMBRE, FK_TASIGNATURA, FK_TGRADO) solo entre unidades ACTIVAS. Parcial a proposito (patron de V65/V71): con un UNIQUE plano, una unidad borrada seguia ocupando su nombre y re-crearla daba 409 con el mensaje generico del motor, tapando el de fn_unidad_crear -- que ya comprobaba la unicidad solo entre activas. V218 lo habia dejado sin el predicado al recrearlo con tres columnas; se restaura aqui porque V218 corre despues de V71. Pierde el DEFERRABLE original: Postgres no respalda constraints deferrables con indices parciales. V280.';
