@@ -124,4 +124,26 @@ class RenderersTest {
         byte[] xlsx = new ExcelRenderer().render("vacio", definicion(), List.of(), meta());
         assertEquals('P', (char) xlsx[0]);
     }
+
+    /** Mismo criterio que el resto: con un subconjunto de columnas (las
+     *  "visibles" del front), el archivo sigue saliendo valido y mas chico. */
+    @Test
+    void elPdfConColumnasFiltradasSaleMasChicoYValido() {
+        byte[] completo = new PdfRenderer().render("funcionarios", definicion(), filas(), meta(), null);
+        byte[] filtrado = new PdfRenderer().render(
+                "funcionarios", definicion(), filas(), meta(), List.of("numero_documento", "nombre_completo"));
+
+        assertEquals("%PDF-", new String(filtrado, 0, 5));
+        assertTrue(filtrado.length < completo.length,
+                "el PDF con menos columnas deberia pesar menos: filtrado=" + filtrado.length
+                        + " completo=" + completo.length);
+    }
+
+    @Test
+    void elExcelConColumnasFiltradasSaleValido() {
+        byte[] xlsx = new ExcelRenderer().render(
+                "funcionarios", definicion(), filas(), meta(), List.of("nombre_completo"));
+        assertEquals('P', (char) xlsx[0]);
+        assertEquals('K', (char) xlsx[1]);
+    }
 }
