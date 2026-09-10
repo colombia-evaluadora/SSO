@@ -1,5 +1,6 @@
 package com.co.eurekatic.query.write;
 
+import com.co.eurekatic.common.query.SqlIdentifiers;
 import com.co.eurekatic.common.security.AuthPrincipal;
 import com.co.eurekatic.query.catalog.CatalogClient;
 import com.co.eurekatic.query.catalog.WriteDefinition;
@@ -180,11 +181,53 @@ public class WriteService {
     }
 
     /**
+     * Comprueba que la tabla y las columnas que trae el catálogo son
+     * identificadores SQL antes de interpolarlos.
+     *
+     * <p>La clase promete arriba que "we never build SQL by
+     * string-concatenating column names", y no es del todo cierto:
+     * {@link #buildInsert} y {@link #buildUpdate} sí los concatenan.
+     * Lo que la promesa quiere decir es que no salen de la petición
+     * HTTP, sino del catálogo — y eso sigue siendo verdad. Pero
+     * "viene del catálogo" no es lo mismo que "es seguro
+     * interpolarlo": una fila corrupta, un bug en el formulario que
+     * la crea o un admin de más bastan para meter texto arbitrario
+     * en la sentencia.
+     *
+     * <p>{@code WriteDefinitionRequest} ya documentaba esta
+     * validación como existente ("query-service re-validates it
+     * against an identifier regex before"). No existía. Ahora sí.
+     *
+     * <p>Es un 500 y no un 400 a propósito: el caller no controla
+     * estos valores, así que no hay nada que pueda corregir en su
+     * petición. Un catálogo mal formado es un fallo del servidor.
+     */
+    private static void validarIdentificadores(WriteDefinition def) {
+        try {
+            SqlIdentifiers.exigirTabla(def.tableName(), "El nombre de tabla del catálogo");
+            for (String c : def.columns()) {
+                SqlIdentifiers.exigirSimple(c, "La columna del catálogo");
+            }
+            if (def.keyColumns() != null) {
+                for (String c : def.keyColumns()) {
+                    SqlIdentifiers.exigirSimple(c, "La columna clave del catálogo");
+                }
+            }
+        } catch (IllegalArgumentException e) {
+            log.error("WriteDefinition uuid={} con identificadores inválidos: {}",
+                    def.uuid(), e.getMessage());
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "La definición de escritura del catálogo no es válida");
+        }
+    }
+
+    /**
      * Builds an {@code INSERT INTO <table> (col1, col2, ...)
      * VALUES (:col1, :col2, ...)} statement. The column
      * names are pinned by the catalog definition.
      */
     private static String buildInsert(WriteDefinition def) {
+        validarIdentificadores(def);
         List<String> cols = def.columns();
         StringBuilder colsSql = new StringBuilder();
         StringBuilder valsSql = new StringBuilder();
@@ -206,6 +249,7 @@ public class WriteService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "UPDATE requiere keyColumns");
         }
+        validarIdentificadores(def);
         List<String> updateCols = new ArrayList<>(def.columns());
         updateCols.removeAll(keyCols);
 

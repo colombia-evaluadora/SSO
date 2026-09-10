@@ -37,7 +37,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -63,10 +62,10 @@ import java.util.stream.Collectors;
  *       activation landing page. This is the FIRST place a
  *       password ever enters the system for that account.</li>
  *   <li>{@link #forgotPassword} — issues a restore token and
- *       publishes a restore-password email event. Always returns
- *       silently even if the email is unknown, to avoid leaking
- *       which addresses are registered. The user types a new
- *       password at {@code POST /restorePassword}.</li>
+ *       publishes a restore-password email event. Un correo
+ *       desconocido responde 404 y no dispara ningun envio — ver
+ *       la nota sobre enumeracion de cuentas en ese metodo. The
+ *       user types a new password at {@code POST /restorePassword}.</li>
  *   <li>{@link #resendActivation} — only valid while
  *       {@link User#getStatus()} is PENDING_ACTIVATION; reissues
  *       the activation token and republishes the email (V13
@@ -383,28 +382,38 @@ public class UserAdminService {
     }
 
     /**
-     * Issues a restore-password email. Always returns
-     * successfully (even if the email is unknown) so the API
-     * doesn't leak which addresses are registered.
+     * Issues a restore-password email.
      *
-     * <p><b>Devuelve el token en la respuesta</b> — ver la advertencia de
-     * seguridad en {@link ForgotPasswordResponse}. Es un vector de apropiacion
-     * de cuenta y se expone a pedido explicito del equipo.
+     * <p><b>El token NO vuelve en la respuesta</b> — sale solo por correo, en
+     * el enlace. Ver {@link ForgotPasswordResponse} para por que se cerro:
+     * combinado con el 404 de abajo, devolverlo permitia apropiarse de una
+     * cuenta ajena conociendo unicamente el correo. La respuesta entrega
+     * {@code maskedEmail} + {@code expiresIn}, que es lo que la pantalla de
+     * confirmacion necesitaba.
      *
-     * <p>Para NO delatar que direcciones existen, un correo desconocido recibe
-     * igual un token con la misma forma y vida: se genera al vuelo y no se
-     * persiste, asi que no sirve para restablecer nada. Sin esto, la sola
-     * presencia del token en la respuesta convertiria este endpoint en un
-     * enumerador de cuentas.
+     * <p><b>Un correo desconocido responde 404</b>, a pedido explicito del
+     * equipo: el front prefiere decirle al usuario que esa direccion no esta
+     * registrada antes que mostrarle una confirmacion falsa. El costo conocido
+     * y aceptado es que este endpoint queda como enumerador de cuentas —
+     * publico y sin autenticar, permite averiguar que direcciones existen
+     * pegandole correos. Sin el token en el cuerpo eso ya solo revela
+     * existencia, no entrega el control de la cuenta; cerrarlo del todo
+     * exigiria responder igual en ambos casos y es una decision de producto,
+     * no tecnica.
+     *
+     * <p>La busqueda va por {@code findByEmail} y no cargando la tabla entera:
+     * es un endpoint publico, y recorrer todos los usuarios en memoria por
+     * cada llamada lo convertia en un amplificador de carga gratuito.
+     *
+     * <p>Ningun correo sale para una direccion desconocida: el evento
+     * {@code password-reset} solo se publica despues de encontrar al usuario.
      */
     @Transactional
     public ForgotPasswordResponse forgotPassword(String email, String appName) {
-        Optional<User> encontrado = userRepository.findAll().stream()
-                .filter(u -> email.equals(u.getEmail()))
-                .findFirst();
+        Optional<User> encontrado = userRepository.findByEmail(email);
 
         if (encontrado.isEmpty()) {
-            return new ForgotPasswordResponse(UUID.randomUUID().toString(), RESTORE_TTL_SECONDS);
+            throw new NotFoundException("User", email);
         }
 
         User u = encontrado.get();
@@ -419,7 +428,7 @@ public class UserAdminService {
         events.publish("email", String.valueOf(u.getId()), u.getEmail(),
                 "password-reset", payload, null);
 
-        return new ForgotPasswordResponse(token, RESTORE_TTL_SECONDS);
+        return new ForgotPasswordResponse(maskEmail(u.getEmail()), RESTORE_TTL_SECONDS);
     }
 
     /**

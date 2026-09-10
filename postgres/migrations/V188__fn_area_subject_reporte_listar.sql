@@ -43,7 +43,7 @@ LANGUAGE sql STABLE AS $$
  LEFT JOIN academico_test.TENFASIS en          ON en.PK_TENFASIS = s.FK_TENFASIS
      WHERE a.FK_TPERIODO_ACADEMICO = p_fk_periodo
        AND (p_incluir_inactivos OR a.ACTIVE = TRUE)
-       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_fk_periodo)
+       AND academico_test.fn_periodo_puede_ver(p_pk_usuario, p_fk_periodo)
        AND (p_fk_area         IS NULL OR CARDINALITY(p_fk_area)         = 0 OR a.PK_TAREA        = ANY(p_fk_area))
        AND (p_fk_asignatura   IS NULL OR CARDINALITY(p_fk_asignatura)   = 0 OR s.PK_TASIGNATURA   = ANY(p_fk_asignatura))
        AND (p_fk_especialidad IS NULL OR CARDINALITY(p_fk_especialidad) = 0 OR en.PK_TENFASIS     = ANY(p_fk_especialidad))

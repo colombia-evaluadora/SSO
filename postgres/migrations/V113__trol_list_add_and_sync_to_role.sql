@@ -82,10 +82,13 @@
 --
 --   3. fn_list_menu_possibilities_for_rol(p_user_pk, p_pk_trol)
 --      Devuelve TODAS las combinaciones padre -> submenu del catalogo,
---      marcadas con ya_asignado + orden_rol cuando la combinacion (rol,
---      submenu) ya existe en trol_menu, y con plan_id (tmenu.fk_tplan del
---      submenu). Pensada para la grilla "Submenus" del dialog "Agregar
---      menu". Solo 2 niveles de jerarquia.
+--      marcadas con ya_asignado + orden_rol + solo_lectura cuando la
+--      combinacion (rol, submenu) ya existe en trol_menu, y con plan_id
+--      (tmenu.fk_tplan del submenu). solo_lectura = (trol_menu.SOLO_LECTURA
+--      = 'SI') refleja si el rol concede ese menu solo para ver (columna
+--      agregada por V99, consumida tambien por fn_usuario_permisos_menu de
+--      V185). Pensada para la grilla "Submenus" del dialog "Agregar menu".
+--      Solo 2 niveles de jerarquia.
 --
 --   4. fn_associate_menus_to_rol(p_user_pk, p_pk_trol, p_pk_tmenus[],
 --                                p_created_by, p_full_replace DEFAULT FALSE)
@@ -516,9 +519,11 @@ CREATE TRIGGER trg_sync_trol_to_public_role
 -- ---------------------------------------------------------------------------
 -- 4) fn_list_menu_possibilities_for_rol
 --    Devuelve TODAS las combinaciones padre -> submenu, marcadas con
---    ya_asignado + orden_rol (de trol_menu) y plan_id (de tmenu.fk_tplan
---    del submenu). Pensada para la grilla "Submenus" del dialog "Agregar
---    menu". Solo 2 niveles de jerarquia.
+--    ya_asignado + orden_rol + solo_lectura (de trol_menu) y plan_id (de
+--    tmenu.fk_tplan del submenu). solo_lectura = (trol_menu.SOLO_LECTURA =
+--    'SI'); FALSE para no asignados o asignados sin modo solo-lectura.
+--    Pensada para la grilla "Submenus" del dialog "Agregar menu". Solo 2
+--    niveles de jerarquia.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_list_menu_possibilities_for_rol(
     p_user_pk  BIGINT,
@@ -536,7 +541,13 @@ RETURNS TABLE (
     orden_submenu   NUMERIC,
     plan_id         BIGINT,
     ya_asignado     BOOLEAN,
-    orden_rol       NUMERIC
+    orden_rol       NUMERIC,
+    -- solo_lectura: (trol_menu.SOLO_LECTURA = 'SI') para los combos (rol,
+    -- submenu) ya asignados; FALSE para los no asignados o asignados sin
+    -- modo solo-lectura. Es el flag que la grilla "Submenus" del dialog
+    -- "Agregar menu" pinta como checkbox por fila. La columna
+    -- trol_menu.SOLO_LECTURA la agrega V99.
+    solo_lectura    BOOLEAN
 )
 LANGUAGE plpgsql
 STABLE
@@ -572,7 +583,8 @@ BEGIN
         hijo.orden                      AS orden_submenu,
         hijo.fk_tplan                   AS plan_id,
         (tm.pk_trol_menu IS NOT NULL)   AS ya_asignado,
-        tm.orden_rol                    AS orden_rol
+        tm.orden_rol                    AS orden_rol,
+        COALESCE(tm.solo_lectura = 'SI', FALSE) AS solo_lectura
     FROM academico_test.tmenu padre
     INNER JOIN academico_test.tmenu hijo
            ON hijo.fk_tmenu  = padre.pk_tmenu

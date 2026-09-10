@@ -6,7 +6,24 @@
 -- con funciones del esquema `academico_test` y prefijo comun `fn_est_`.
 -- Patrones reutilizados de V26 (contexto auditor) y de V22 (idempotencia
 -- con DO $$ ... IF NOT EXISTS ... $$).
+-- NOTA (2026-08, CU-86e2w4xdt — Permisos segun rol):
+--   El gate de fn_est_soft_delete YA NO usa fn_puede_afectar_establecimiento
+--   (allowlist fija de roles 1-3). Pasa al modelo capability+scope de V29:
+--   una sola llamada a fn_assert_permiso_seccion(u, 'ESTABLECIMIENTO',
+--   'ELIMINAR', p_pk_establecimiento), que resuelve el bypass del
+--   SUPER_ADMIN, la capability configurable por menu (TROL_MENU +
+--   TUSUARIO_ROL_PERMISO) y el scope territorial/por EE. Motivo: el permiso
+--   de cada seccion tiene que ser administrable por el super admin desde la
+--   pantalla de roles/menus, no estar quemado en el cuerpo de la funcion.
+--   fn_est_soft_delete_bulk NO lleva gate propio: delega por fila en
+--   fn_est_soft_delete y hereda el suyo (sigue mapeando 42501 a
+--   'error:sin_permiso'). fn_est_crear / fn_est_actualizar tambien migran,
+--   pero su definicion VIGENTE esta en V111 (esta de V53 quedo obsoleta,
+--   una posterior la redefine), asi que el cambio de esas dos vive alli.
+--   Ver docs/gate-permisos-por-menu-analysis.md.
+--
 -- Dependencias:
+--   * V29 (helpers de permisos): fn_assert_permiso_seccion.
 --   * V50 (utilities): consume fn_puede_afectar_establecimiento desde alli.
 --   * V52 (campus):    fn_est_soft_delete delega en fn_sed_soft_delete
 --                       para la cascade de sedes (TSEDE, TSEDE_USUARIO,
@@ -607,23 +624,34 @@ BEGIN
     --    (a) super-admin => ok;
     --    (b) rector del EE objetivo => ok;
     --    (c) cualquier otro => 42501.
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        NULL;
-    ELSIF EXISTS (
-        SELECT 1
-          FROM academico_test.TFUNCIONARIO f
-         WHERE f.PK_TFUNCIONARIO = (
-                   SELECT e2.FK_TFUNCIONARIO_RECTOR
-                     FROM academico_test.TESTABLECIMIENTO e2
-                    WHERE e2.PK_ESTABLECIMIENTO = p_pk_establecimiento
-               )
-           AND f.ACTIVE          = TRUE
-           AND f.FK_TUSUARIO     = p_pk_usuario_solicitante
-    ) THEN
-        NULL;
-    ELSE
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
+    IF academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante) <> 0 THEN
+        -- REV -- gate por el modelo dinamico (CU-86e2zenhr): capability 'VER'
+        -- sobre el menu ESTABLECIMIENTO + el objeto tiene que caer dentro del
+        -- scope de LECTURA del usuario. Reemplaza la cadena de ELSIF que
+        -- enumeraba rector / secretaria / rol 8 a mano.
+        --
+        -- El SUPER_ADMIN (nivel 0) no entra a este bloque: fn_usuario_ee_lectura
+        -- ya le devuelve todo. Es una consulta, no una escritura, asi que aca no
+        -- aplica la exclusion del super-admin que tiene el modulo de matricula.
+        --
+        -- Ensancha a proposito: el gate viejo de esta funcion solo aceptaba
+        -- super-admin y RECTOR -- ni secretaria ni jefe de sistema, aunque ambos
+        -- si podian ver el establecimiento en el listado. Quien lo ve en la
+        -- lista ahora tambien puede abrirlo.
+        IF NOT academico_test.fn_usuario_puede_en_menu(
+                   p_pk_usuario_solicitante, 'ESTABLECIMIENTO', 'VER') THEN
+            RAISE EXCEPTION 'El usuario no tiene permiso para ver en el modulo ESTABLECIMIENTO'
+                USING ERRCODE = '42501';
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1
+              FROM academico_test.fn_usuario_ee_lectura(p_pk_usuario_solicitante) el
+             WHERE el.establecimiento_id = p_pk_establecimiento
+        ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+                USING ERRCODE = '42501';
+        END IF;
     END IF;
 
     -- 4. Retorno de la fila completa (todos los campos del DDL).
@@ -959,59 +987,35 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 BEGIN
-    IF academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        RETURN QUERY
-        SELECT e.PK_ESTABLECIMIENTO, e.NOMBRE
-          FROM academico_test.TESTABLECIMIENTO e
-         WHERE e.ACTIVE = TRUE
-         ORDER BY e.NOMBRE ASC, e.PK_ESTABLECIMIENTO ASC;
-        RETURN;
-    END IF;
-
-    IF NOT EXISTS (
-        WITH ee_accesibles AS (
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT e.PK_ESTABLECIMIENTO
-              FROM academico_test.TESTABLECIMIENTO e
-              JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
-             WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-            UNION
-            SELECT DISTINCT s.FK_TESTABLECIMIENTO
-              FROM academico_test.TSEDE_USUARIO su
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-             WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8
-               AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-        )
-        SELECT 1 FROM ee_accesibles
-    ) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
+    -- REV -- gate UNICO por el modelo dinamico (CU-86e2zenhr, sigue el patron
+    -- que CU-86e2w4xdt aplico a fn_est_listar): capability 'VER' sobre el menu
+    -- ESTABLECIMIENTO + scope de lectura resuelto por el JOIN de abajo.
+    --
+    -- Antes eran dos gates cosidos a mano: un fast-path para
+    -- fn_puede_afectar_establecimiento (roles 1-3) y, para el resto, un EXISTS
+    -- sobre un CTE de EE accesibles que se repetia otra vez, casi igual, en el
+    -- RETURN QUERY. Esa duplicacion es justo lo que hacia que agregar un rol
+    -- obligara a tocar codigo en dos lugares.
+    --
+    -- El SUPER_ADMIN (nivel 0) no pasa por la capability: fn_usuario_ee_lectura
+    -- ya le devuelve todos los establecimientos. Es una CONSULTA de opciones,
+    -- asi que aca no aplica la exclusion del super-admin que si tiene el modulo
+    -- de matricula -- esa es sobre ESCRITURA de datos academicos.
+    --
+    -- Gana ademas el nivel 3 (coordinador y companiia), que antes quedaba fuera
+    -- del gate y no podia ni ver el establecimiento de su propia sede en el
+    -- select: fn_usuario_ee_lectura le devuelve el EE de sus sedes.
+    IF academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante) <> 0
+       AND NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario_solicitante, 'ESTABLECIMIENTO', 'VER') THEN
+        RAISE EXCEPTION 'El usuario no tiene permiso para ver en el modulo ESTABLECIMIENTO'
             USING ERRCODE = '42501';
     END IF;
 
     RETURN QUERY
-    SELECT DISTINCT e.PK_ESTABLECIMIENTO, e.NOMBRE
+    SELECT e.PK_ESTABLECIMIENTO, e.NOMBRE
       FROM academico_test.TESTABLECIMIENTO e
-      JOIN (
-          SELECT e2.PK_ESTABLECIMIENTO
-            FROM academico_test.TESTABLECIMIENTO e2
-            JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e2.FK_TFUNCIONARIO_RECTOR
-           WHERE e2.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-          UNION
-          SELECT e2.PK_ESTABLECIMIENTO
-            FROM academico_test.TESTABLECIMIENTO e2
-            JOIN academico_test.TFUNCIONARIO  f ON f.PK_TFUNCIONARIO = e2.FK_TFUNCIONARIO_SECRETARIA
-           WHERE e2.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_usuario_solicitante
-          UNION
-          SELECT DISTINCT s.FK_TESTABLECIMIENTO
-            FROM academico_test.TSEDE_USUARIO su
-            JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-           WHERE s.ACTIVE = TRUE AND su.ACTIVE = TRUE AND su.FK_TROL = 8
-             AND su.FK_TUSUARIO = p_pk_usuario_solicitante
-      ) ee ON ee.PK_ESTABLECIMIENTO = e.PK_ESTABLECIMIENTO
+      JOIN academico_test.fn_usuario_ee_lectura(p_pk_usuario_solicitante) el
+        ON el.establecimiento_id = e.PK_ESTABLECIMIENTO
      WHERE e.ACTIVE = TRUE
      ORDER BY e.NOMBRE ASC, e.PK_ESTABLECIMIENTO ASC;
 END;
@@ -1165,8 +1169,9 @@ COMMENT ON FUNCTION academico_test.fn_est_listar_paginado(
 --   Retorna: BIGINT con el PK_ESTABLECIMIENTO dado de baja.
 --
 --   Excepciones:
---     SQLSTATE '42501' — El usuario no es super-admin (gate via
---                        fn_puede_afectar_establecimiento, definida en V50).
+--     SQLSTATE '42501' — El usuario no tiene la capability ELIMINAR en el
+--                        menu ESTABLECIMIENTO, o no alcanza el EE objetivo
+--                        (gate via fn_assert_permiso_seccion, V29).
 --     SQLSTATE 'P0002' — No existe el TESTABLECIMIENTO con ese PK.
 --     SQLSTATE '22023' — El TESTABLECIMIENTO ya estaba inactivo.
 --     SQLSTATE 'P0002'/'22023'/'42501' propagados desde fn_sed_soft_delete
@@ -1187,12 +1192,16 @@ DECLARE
     v_pk_sede       BIGINT;
 BEGIN
     -- -----------------------------------------------------------------
-    -- 0. Gate de autorizacion: solo roles con permiso de establecimiento (1-3).
+    -- 0. Gate de autorizacion (CU-86e2w4xdt): capability por el menu
+    --    ESTABLECIMIENTO + scope sobre el EE objetivo. Ver V29.
+    --    ENDURECIMIENTO: antes solo se validaba capability global
+    --    (fn_puede_afectar_establecimiento -> roles 1-3, sin mirar de que
+    --    EE se trataba); ahora un usuario de nivel 2 solo puede dar de
+    --    baja los EE que alcanza (fn_usuario_ee_accesibles).
     -- -----------------------------------------------------------------
-    IF NOT academico_test.fn_puede_afectar_establecimiento(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'ESTABLECIMIENTO', 'ELIMINAR', p_pk_establecimiento
+    );
 
     -- -----------------------------------------------------------------
     -- 1. Validaciones previas
@@ -1254,7 +1263,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_est_soft_delete(BIGINT, BIGINT)
-    IS 'Baja logica en cascada: marca ACTIVE=FALSE en TESTABLECIMIENTO y delega en academico_test.fn_sed_soft_delete (V52) para cada sede activa del EE. fn_sed_soft_delete se encarga a su vez de TSEDE, TSEDE_USUARIO y TSEDE_NIVEL (cuyo detalle vive en V52). Todo en una sola transaccion: si la delegation falla para cualquier sede, todo el borrado se revierte. Requiere p_pk_usuario_solicitante con rol 1, 2 o 3 (validado via fn_puede_afectar_establecimiento, definida en V50). p_pk_usuario_solicitante va primero en la firma (obligatorio, mismo patron que V52). Retorna PK_ESTABLECIMIENTO dado de baja.';
+    IS 'Baja logica en cascada: marca ACTIVE=FALSE en TESTABLECIMIENTO y delega en academico_test.fn_sed_soft_delete (V52) para cada sede activa del EE. fn_sed_soft_delete se encarga a su vez de TSEDE, TSEDE_USUARIO y TSEDE_NIVEL (cuyo detalle vive en V52). Todo en una sola transaccion: si la delegation falla para cualquier sede, todo el borrado se revierte. GATE (CU-86e2w4xdt): PERFORM fn_assert_permiso_seccion(solicitante, ''ESTABLECIMIENTO'', ''ELIMINAR'', p_pk_establecimiento) (V29) -- bypass del SUPER_ADMIN (nivel 0), capability ELIMINAR sobre el menu ESTABLECIMIENTO segun TROL_MENU/TUSUARIO_ROL_PERMISO, y scope sobre el EE objetivo (nivel 1 territorial alcanza todos; nivel 2 solo los de fn_usuario_ee_accesibles). Sustituye a fn_puede_afectar_establecimiento (rol 1/2/3 fijo) y ENDURECE el comportamiento: antes no se validaba SOBRE QUE EE se actuaba. Ambos fallos siguen siendo 42501, con mensajes distintos para capability y para scope. p_pk_usuario_solicitante va primero en la firma (obligatorio, mismo patron que V52). Retorna PK_ESTABLECIMIENTO dado de baja.';
 
 
 -- ---------------------------------------------------------------------------

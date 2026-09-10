@@ -1,0 +1,612 @@
+{
+  "info": {
+    "_postman_id": "e5f92c31-7a48-4d6b-9c02-1b3e8f7a5d64",
+    "name": "SSO — Planeador: flujo crear unidad y actividad (minimo)",
+    "description": "La **cadena minima** de llamadas para crear una unidad y una actividad respetando lo dinamico del modulo: el nombre de la pestana, el referente que se autocompleta y los enunciados / evidencias que de ahi salen.\n\nSe corre **en orden**: cada peticion deja en variables lo que necesita la siguiente (`instrumento`, `gradoId`, `asignaturaId`, `referenteId`, `enunciadoId`, `evidenciaId`, `unidadId`, `actividadId`). No hay que copiar ids a mano.\n\n## La cadena\n\n```\n1  GET  /planeador/unidades/tabs                     -> COMO se llama la pestana\n2  GET  /planeador/docentes/grado-asignatura         -> que grado y asignatura puede\n3  GET  /planeador/referente-curricular              -> referente + enunciados/evidencias\n4  POST /planeador/unidades                          -> crea (referente derivado solo)\n5  GET  /planeador/unidades/:ID/referente            -> arbol con lo ya marcado\n6  GET  /planeador/unidades/:ID/configuracion-actividad -> que pintar en el form\n7  POST /planeador/actividades                       -> crea con sus evidencias\n8  GET  /planeador/actividades/:ID/configuracion     -> confirma que coincide\n9  PATCH /planeador/actividades/:ID   (limpieza)\n10 PATCH /planeador/unidades/:ID      (limpieza)\n```\n\n## Lo dinamico, en tres puntos\n\n**El nombre de la pestana no es fijo.** No es \"Unidad tematica\": sale de `instrumento` del referente del nivel que dicta el docente (`Proyecto pedagogico` en Preescolar, `Unidad tematica` en Primaria, `Valores`...). Paso 1.\n\n**El referente no se elige a mano.** Se deriva del grado. El paso 3 lo muestra para que el front pinte el formulario, pero el paso 4 **no lo manda**: lo deriva el back con la misma regla. Mandar uno que no aplique al nivel del grado da 409.\n\n**Las etiquetas de los niveles del arbol tampoco son fijas.** `nivel_1_etiqueta` / `nivel_2_etiqueta` son `Proposito`/`Imprescindible` en Preescolar y `Enunciado`/`Evidencia` en Primaria. Rotular con esos campos, nunca con literales.\n\n## Dos avisos sobre los parametros\n\n* Los parametros de query van con el **nombre declarado**, no en camelCase: `?ES_EVALUATIVA=`, `?ORDEN_POR=`, `?DIAS_GRACIA=`. Un `?esEvaluativa=` se **ignora en silencio**.\n* Los del body igual: `FK_TASIGNATURA`, `FK_TGRADO`, `FK_TLV_CALCULO_DEFINITIVA`. Mandar `ASIGNATURA` o `GRADO` da un error del motor sobre placeholders sin tipo.\n\n## Entorno\n\nUsa **SSO — test** (`sso-test.postman_environment.json`): `baseUrl`, `email`, `password`. Login automatico.\n\n**La corrida termina en cero:** los pasos 9 y 10 borran lo que crearon 4 y 7.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Login automatico: reutiliza el token vivo de la variable de coleccion.",
+          "const rutaLogin = '/api/auth/login';",
+          "if (pm.request.url.getPath().endsWith(rutaLogin)) { return; }",
+          "",
+          "function caducado(jwt) {",
+          "    try {",
+          "        const carga = JSON.parse(atob(jwt.split('.')[1]));",
+          "        return !carga.exp || (carga.exp - 30) * 1000 < Date.now();",
+          "    } catch (e) { return true; }",
+          "}",
+          "",
+          "const actual = pm.collectionVariables.get('token');",
+          "if (actual && !caducado(actual)) { return; }",
+          "",
+          "const clave = pm.environment.get('password');",
+          "if (!clave) { throw new Error('Falta `password` en el entorno.'); }",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + rutaLogin,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "        email: pm.environment.get('email'),",
+          "        password: clave",
+          "    }) }",
+          "}, (err, res) => {",
+          "    if (err) { throw new Error('No se pudo contactar con el gateway: ' + err); }",
+          "    if (res.code !== 200) { throw new Error('Login rechazado (' + res.code + ').'); }",
+          "    pm.collectionVariables.set('token', res.json().token);",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "token",
+      "value": "",
+      "description": "Lo llena el prerequest."
+    },
+    {
+      "key": "periodoId",
+      "value": "1777",
+      "description": "Periodo academico del docente de prueba."
+    },
+    {
+      "key": "instrumento",
+      "value": "",
+      "description": "Paso 1: el rotulo dinamico de la pestana."
+    },
+    {
+      "key": "gradoId",
+      "value": "",
+      "description": "Paso 2."
+    },
+    {
+      "key": "asignaturaId",
+      "value": "",
+      "description": "Paso 2."
+    },
+    {
+      "key": "referenteId",
+      "value": "",
+      "description": "Paso 3: el referente derivado del grado."
+    },
+    {
+      "key": "enunciadoId",
+      "value": "",
+      "description": "Paso 3: enunciado (nivel 1) a marcar en la unidad."
+    },
+    {
+      "key": "evidenciaId",
+      "value": "",
+      "description": "Paso 3: evidencia (nivel 2) a marcar en la actividad."
+    },
+    {
+      "key": "unidadId",
+      "value": "",
+      "description": "Paso 4."
+    },
+    {
+      "key": "actividadId",
+      "value": "",
+      "description": "Paso 7."
+    },
+    {
+      "key": "nombreUnidad",
+      "value": "",
+      "description": "Nombre unico por corrida (prerequest del paso 4)."
+    }
+  ],
+  "item": [
+    {
+      "name": "1 — Como se llama la pestana (rotulo dinamico)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/tabs",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "unidades",
+            "tabs"
+          ]
+        },
+        "description": "**Primero esto, no despues.** El rotulo de la pestana de unidad no es fijo: lo define el referente curricular del nivel educativo que dicta el docente, en su campo `instrumento`, con `instrumento_info_adicional` como descripcion larga.\n\nUn docente solo de Preescolar recibe **una** fila (`Proyecto pedagogico`); uno con grados de varios niveles recibe **una por referente** -- son varias pestanas, no una.\n\nCada fila trae ademas `grados` y `asignaturas`: lo que cae bajo esa pestana, para filtrar el contenido al cambiar de pestana sin volver a preguntar."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const filas = pm.response.json().rows || [];",
+              "pm.test('el docente tiene al menos una pestana', () => pm.expect(filas).to.not.be.empty);",
+              "pm.test('cada pestana trae su rotulo', () => {",
+              "  filas.forEach(f => pm.expect(f.instrumento).to.be.a('string').and.not.empty);",
+              "});",
+              "pm.collectionVariables.set('instrumento', filas[0].instrumento);",
+              "console.log('Rotulo de la pestana: ' + filas[0].instrumento);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 — Que grado y asignatura puede usar",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/docentes/grado-asignatura?PERIODO={{periodoId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "docentes",
+            "grado-asignatura"
+          ],
+          "query": [
+            {
+              "key": "PERIODO",
+              "value": "{{periodoId}}"
+            }
+          ]
+        },
+        "description": "Los pares (grado, asignatura) que el docente realmente dicta. Son los dos selects del formulario de unidad, y salen de su relacion real `TDOCENTE_ASIGNATURA -> TGRUPO -> TGRADO`.\n\nSe toma el primer par para el resto de la cadena."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const filas = pm.response.json().rows || [];",
+              "pm.test('el docente dicta al menos un grado+asignatura', () => pm.expect(filas).to.not.be.empty);",
+              "pm.collectionVariables.set('gradoId', String(filas[0].grado_id));",
+              "pm.collectionVariables.set('asignaturaId', String(filas[0].asignatura_id));",
+              "console.log('Grado ' + filas[0].grado_nombre + ' / ' + filas[0].asignatura_nombre);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 — El referente que le corresponde (autocompletado)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/referente-curricular?GRADO={{gradoId}}&ASIGNATURA={{asignaturaId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "referente-curricular"
+          ],
+          "query": [
+            {
+              "key": "GRADO",
+              "value": "{{gradoId}}"
+            },
+            {
+              "key": "ASIGNATURA",
+              "value": "{{asignaturaId}}"
+            }
+          ]
+        },
+        "description": "Con el grado y la asignatura escogidos, **el referente se autocompleta**: `grado -> nivel de ensenanza -> referente del nivel`. No hay select de referente.\n\nDe aqui sale todo lo que el formulario de unidad necesita pintar:\n\n* `nivel_1_etiqueta` / `nivel_2_etiqueta` -- como llama ESE referente a sus niveles (`Proposito`/`Imprescindible` en Preescolar). **Rotular con esto.**\n* `es_evaluativo` y `tipo_evaluacion_valor` -- deciden si hay seccion de evaluacion y que instrumentos aplican.\n* `enunciados: [{pk, texto, evidencias:[{pk, texto}]}]` -- el arbol a ofrecer: los **enunciados** se marcan en la unidad (paso 4) y sus **evidencias** en la actividad (paso 7).\n\nDevuelve un **arreglo** ordenado por preferencia (la relacion referente<->nivel es N:N): leer `aplica_a_area` / `especificidad` en vez de tomar `[0]` a ciegas."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const filas = pm.response.json().rows || [];",
+              "pm.test('el grado tiene referente', () => pm.expect(filas).to.not.be.empty);",
+              "const r = filas[0];",
+              "pm.test('trae las etiquetas dinamicas de los niveles', () => {",
+              "  pm.expect(r.nivel_1_etiqueta).to.be.a('string').and.not.empty;",
+              "  pm.expect(r.nivel_2_etiqueta).to.be.a('string').and.not.empty;",
+              "});",
+              "pm.test('trae el arbol de enunciados con sus evidencias', () => {",
+              "  pm.expect(r.enunciados).to.be.an('array').and.not.be.empty;",
+              "  pm.expect(r.enunciados[0].evidencias).to.be.an('array');",
+              "});",
+              "pm.collectionVariables.set('referenteId', String(r.pk_referente_curricular));",
+              "pm.collectionVariables.set('enunciadoId', String(r.enunciados[0].pk));",
+              "const evs = r.enunciados[0].evidencias;",
+              "pm.collectionVariables.set('evidenciaId', evs.length ? String(evs[0].pk) : '');",
+              "console.log('Referente ' + r.referente_nombre + ' | ' + r.nivel_1_etiqueta + '/' + r.nivel_2_etiqueta);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 — Crear la unidad con los enunciados escogidos",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/unidades",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "unidades"
+          ]
+        },
+        "description": "**No se manda `FK_REFERENTE_CURRICULAR`.** El back lo deriva del grado con la misma regla del paso 3; mandarlo es opcional y, si no aplica al nivel del grado, responde **409**.\n\n`ENUNCIADOS` son los PKs de los enunciados (nivel 1) que el docente marco en el paso 3. Se validan uno a uno: tienen que pertenecer al referente de la unidad.\n\n`FK_TLV_CALCULO_DEFINITIVA` es obligatorio (catalogo `CALCULO_DEFINITIVA`, `GET /select/CALCULO_DEFINITIVA`) y decide si mas adelante la actividad pide ponderacion.\n\nOjo con los nombres del body: `FK_TASIGNATURA` / `FK_TGRADO`, no `ASIGNATURA` / `GRADO`.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"NOMBRE\": \"{{nombreUnidad}}\",\n  \"FK_TASIGNATURA\": {{asignaturaId}},\n  \"FK_TGRADO\": {{gradoId}},\n  \"FK_TLV_CALCULO_DEFINITIVA\": 496,\n  \"DESCRIPCION\": \"Unidad de la cadena minima.\",\n  \"ENUNCIADOS\": [{{enunciadoId}}]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Nombre unico por corrida: la unicidad (nombre, asignatura, grado) es",
+              "// solo entre unidades ACTIVAS, pero asi la cadena no depende de que la",
+              "// limpieza del paso 10 haya corrido.",
+              "pm.collectionVariables.set('nombreUnidad', 'Unidad flujo ' + Date.now());"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201/200', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+              "// El motor devuelve {\"rows\":[{\"<nombre_funcion>\": <pk>}]}: el pk es el",
+              "// primer (y unico) campo de la fila.",
+              "const fila = (pm.response.json().rows || [])[0];",
+              "const pk = fila && fila[Object.keys(fila)[0]];",
+              "pm.test('devuelve el pk de la unidad', () => pm.expect(pk).to.be.a('number'));",
+              "if (pk) pm.collectionVariables.set('unidadId', String(pk));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 — El arbol de la unidad, con lo ya marcado",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/referente",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "unidades",
+            "{{unidadId}}",
+            "referente"
+          ]
+        },
+        "description": "El mismo arbol del paso 3, pero ya **referido a la unidad**: cada enunciado trae `relacionadoConUnidad` (para premarcar las casillas) y `pkTunidadEnunciado`, que es el PK de la **relacion** -- el que pide `PATCH /planeador/unidades/enunciados/:ID` para quitarla, no el del enunciado.\n\nComprueba que el paso 4 derivo el referente y relaciono el enunciado. Es tambien la fuente de las **evidencias** que la actividad podra marcar: solo las de enunciados que la unidad ya relaciono."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const filas = pm.response.json().rows || [];",
+              "const r = filas[0];",
+              "pm.test('el referente se derivo solo (no se mando en el paso 4)', () => {",
+              "  pm.expect(r.pk_referente_curricular).to.not.be.null;",
+              "  pm.expect(String(r.pk_referente_curricular)).to.eql(pm.collectionVariables.get('referenteId'));",
+              "});",
+              "pm.test('el enunciado escogido quedo relacionado', () => {",
+              "  const esperado = Number(pm.collectionVariables.get('enunciadoId'));",
+              "  const e = r.enunciados.find(x => x.pk === esperado);",
+              "  pm.expect(e, 'el enunciado del paso 3 esta en el arbol').to.exist;",
+              "  pm.expect(e.relacionadoConUnidad, 'relacionadoConUnidad').to.be.true;",
+              "  pm.expect(e.pkTunidadEnunciado, 'pk de la RELACION').to.not.be.null;",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6 — Que pintar en el form de NUEVA actividad",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}/configuracion-actividad?ES_EVALUATIVA=S",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "unidades",
+            "{{unidadId}}",
+            "configuracion-actividad"
+          ],
+          "query": [
+            {
+              "key": "ES_EVALUATIVA",
+              "value": "S"
+            }
+          ]
+        },
+        "description": "**El paso que faltaba.** Con la unidad escogida en el select, esto dice que secciones pintar **antes** de crear la actividad. `GET /planeador/actividades/:ID/configuracion` responde lo mismo pero exige un PK de actividad, que en el formulario todavia no existe.\n\nDevuelve `campos_disponibles` con la misma forma que la version por actividad -- `criterio`, `evaluacion` (con `tipoEvaluacion` e `instrumentosPermitidos`) y `ponderacion` (con `modo` y `campo`) --, asi que sirve el mismo codigo de render antes y despues de crear.\n\n`?ES_EVALUATIVA=S|N` es lo unico que no sale de la unidad: lo que el usuario acaba de marcar. Con `N` se apagan evaluacion y ponderacion. **En mayusculas**: `?esEvaluativa=` se ignora en silencio."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const c = (pm.response.json().rows || [])[0].configuracion;",
+              "pm.test('trae las tres secciones del formulario', () => {",
+              "  ['criterio', 'evaluacion', 'ponderacion'].forEach(k =>",
+              "      pm.expect(c.campos_disponibles, k).to.have.property(k));",
+              "});",
+              "pm.test('la seccion de evaluacion trae sus instrumentos', () => {",
+              "  pm.expect(c.campos_disponibles.evaluacion.instrumentosPermitidos).to.be.an('array');",
+              "});",
+              "console.log('criterio=' + c.campos_disponibles.criterio.visible +",
+              "            ' evaluacion=' + c.campos_disponibles.evaluacion.visible +",
+              "            ' ponderacion=' + c.campos_disponibles.ponderacion.visible);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7 — Crear la actividad con sus evidencias",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "actividades"
+          ]
+        },
+        "description": "Al ligar la actividad a la unidad (`FK_TUNIDAD`), hereda su referente: de ahi salen las **evidencias** que puede marcar.\n\n`EVIDENCIAS` son PKs de evidencias (nivel 2) y se validan contra la unidad: solo se aceptan las que cuelgan de un enunciado que la unidad **ya relaciono** en el paso 4. Una evidencia de otro enunciado se rechaza -- por eso el orden de la cadena importa.\n\nTambien se pueden relacionar despues, de una en una, con `POST /planeador/actividades/:ID/evidencias`.\n\nQue campos son obligatorios aqui depende de lo que devolvio el paso 6: si `evaluacion.visible` fuera `true` habria que mandar `FK_TLV_INSTRUMENTO_EVALUACION` (uno de `instrumentosPermitidos`), y si `ponderacion.visible` fuera `true`, el campo que indique `ponderacion.campo`.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"TITULO\": \"Actividad flujo minimo\",\n  \"FK_TASIGNATURA\": {{asignaturaId}},\n  \"FK_TUNIDAD\": {{unidadId}},\n  \"FK_TLV_TIPO_ACTIVIDAD\": 432,\n  \"FK_TLV_JERARQUIA\": 439,\n  \"FECHA_INICIO\": \"2026-09-10\",\n  \"FECHA_CIERRE\": \"2026-09-20\",\n  \"EVIDENCIAS\": [{{evidenciaId}}]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201/200', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+              "// El motor devuelve {\"rows\":[{\"<nombre_funcion>\": <pk>}]}: el pk es el",
+              "// primer (y unico) campo de la fila.",
+              "const fila = (pm.response.json().rows || [])[0];",
+              "const pk = fila && fila[Object.keys(fila)[0]];",
+              "pm.test('devuelve el pk de la actividad', () => pm.expect(pk).to.be.a('number'));",
+              "if (pk) pm.collectionVariables.set('actividadId', String(pk));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8 — La configuracion post-creacion coincide",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadId}}/configuracion",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "actividades",
+            "{{actividadId}}",
+            "configuracion"
+          ]
+        },
+        "description": "Cierra el circulo: lo que el paso 6 anticipo por unidad es lo mismo que responde el endpoint por actividad ya creada. Ademas trae `unidad_configuracion` con el arbol de enunciados y evidencias de la unidad, que es lo que el formulario de edicion usa para premarcar."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const d = (pm.response.json().rows || [])[0];",
+              "pm.test('trae campos_disponibles y el arbol de la unidad', () => {",
+              "  pm.expect(d).to.have.property('campos_disponibles');",
+              "  pm.expect(d).to.have.property('unidad_configuracion');",
+              "});",
+              "pm.test('la actividad quedo ligada a la unidad de la cadena', () => {",
+              "  pm.expect(String(d.unidad_configuracion.pkTunidad))",
+              "      .to.eql(pm.collectionVariables.get('unidadId'));",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "9 — Limpieza: borrar la actividad",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "actividades",
+            "{{actividadId}}"
+          ]
+        },
+        "description": "Borrado logico, para que la corrida termine en cero."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set('actividadId', '');"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 — Limpieza: borrar la unidad",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "unidades",
+            "{{unidadId}}"
+          ]
+        },
+        "description": "Borrado logico. El nombre queda libre para reusarse (la unicidad es solo entre activas)."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set('unidadId', '');"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,184 @@
+# =============================================================================
+# release.yml — un tag `v*` publica imágenes inmutables y despliega a
+# producción.
+#
+#   feature/CU-xxxx → dev → test → main ──tag v1.2.3──> servidor de producción
+#                      │
+#                      └── deploy-test.yml → servidor de pruebas
+#
+# ---- Por qué reconstruye TODO -----------------------------------------------
+#
+# deploy-test.yml solo reconstruye lo que cambió: en `dev` interesa la
+# velocidad. Aquí no. Un release tiene que ser reproducible, y `test-latest`
+# de un servicio que no cambió apunta a un build viejo, hecho desde otro
+# commit. Promover por digest lo resolvería, pero exige rastrear el digest de
+# los 12 servicios a lo largo de decenas de despliegues parciales.
+#
+# Reconstruir los 12 desde el commit del tag es determinista y aburrido, que
+# es lo que se quiere de un release. Con la caché `type=gha` cuesta unos
+# 15-20 min.
+#
+# ---- Por qué el tag y no `main` --------------------------------------------
+#
+# El environment `production` tiene política de rama "solo tags v*", así que
+# un push a `main` no puede desplegar aunque alguien añada el trigger. Y exige
+# revisor: el job se queda esperando aprobación antes de tocar el servidor.
+#
+# ---- Rollback --------------------------------------------------------------
+#
+# Los tags de imagen son inmutables (`:v1.2.3`, nunca `:latest`). Volver a la
+# versión anterior es editar IMAGE_TAG en /opt/sso/.env y `docker compose up
+# -d`, o relanzar este workflow con `workflow_dispatch` sobre el tag viejo.
+# =============================================================================
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Para re-desplegar un tag ya publicado sin volver a etiquetar (rollback,
+  # o un deploy que falló por causas ajenas al build).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag ya existente a re-desplegar (p.ej. v1.2.3)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+# Dos releases a la vez dejarían el servidor con imágenes de dos versiones
+# distintas según cuál gane cada carrera. `cancel-in-progress: false` porque
+# matar un despliegue a mitad es peor que esperar a que acabe.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_PREFIX: ghcr.io/colombia-evaluadora/sso
+
+jobs:
+  # ───────── Qué versión se está publicando ─────────
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      services: ${{ steps.resolve.outputs.services }}
+    steps:
+      - id: resolve
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG='${{ inputs.tag }}'
+          else
+            TAG='${{ github.ref_name }}'
+          fi
+          # Se valida el formato porque el valor acaba interpolado en el
+          # nombre de la imagen y en un `sed` del .env remoto. Un tag con
+          # una barra o un espacio rompería las dos cosas de formas poco
+          # obvias.
+          if ! printf '%s' "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::Tag '$TAG' no sigue vMAJOR.MINOR.PATCH[-prerelease]."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # Los 12 servicios que compone el stack. Misma lista que el
+          # TODOS= de deploy-test.yml; aquí van todos, siempre.
+          echo 'services=["eurekaserver","auth-center","api-gateway","sso-admin","query-service","file-service","reporting-service","provisioner","notification-service","hello-service","cdc-capture","cdc-worker"]' >> "$GITHUB_OUTPUT"
+          echo "Publicando $TAG"
+
+  # ───────── Construir y publicar las 12 imágenes ─────────
+  build-push:
+    name: build-push (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    needs: [version]
+    strategy:
+      fail-fast: true
+      matrix:
+        service:
+          - eurekaserver
+          - auth-center
+          - api-gateway
+          - sso-admin
+          - query-service
+          - file-service
+          - reporting-service
+          - provisioner
+          - notification-service
+          - hello-service
+          - cdc-capture
+          - cdc-worker
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # cdc-capture y cdc-worker viven en su propio reactor y necesitan la
+      # raíz del repo como contexto extra: su Dockerfile hace
+      # `COPY --from=repo postgres/migrations/V22__academic-schema.sql`
+      # para regenerar column-types.json.
+      - id: ctx
+        run: |
+          case "${{ matrix.service }}" in
+            cdc-capture)
+              echo 'context=cdc-sync' >> "$GITHUB_OUTPUT"
+              echo 'dockerfile=cdc-sync/cdc-capture/Dockerfile' >> "$GITHUB_OUTPUT"
+              echo 'extra=repo=.' >> "$GITHUB_OUTPUT" ;;
+            cdc-worker)
+              echo 'context=cdc-sync' >> "$GITHUB_OUTPUT"
+              echo 'dockerfile=cdc-sync/cdc-worker/Dockerfile' >> "$GITHUB_OUTPUT"
+              echo 'extra=repo=.' >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo 'context=.' >> "$GITHUB_OUTPUT"
+              echo 'dockerfile=${{ matrix.service }}/Dockerfile' >> "$GITHUB_OUTPUT"
+              echo 'extra=' >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.ctx.outputs.context }}
+          file: ${{ steps.ctx.outputs.dockerfile }}
+          build-contexts: ${{ steps.ctx.outputs.extra }}
+          push: true
+          # SOLO el tag de versión. Nada de `latest` ni de `prod-latest`:
+          # un tag móvil apuntando a producción es la forma más rápida de
+          # no saber qué está corriendo.
+          tags: ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ needs.version.outputs.tag }}
+          build-args: |
+            VITE_APP_NAME=${{ vars.VITE_APP_NAME || 'SSO-ADMIN' }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.version.outputs.tag }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  # ───────── Desplegar ─────────
+  #
+  # Misma lógica que el servidor de pruebas, byte por byte: deploy.yml es
+  # compartido. Aquí el job se DETIENE esperando la aprobación que exige el
+  # environment `production`.
+  deploy:
+    name: deploy to production
+    needs: [version, build-push]
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: production
+      ref: ${{ needs.version.outputs.tag }}
+      image_tag: ${{ needs.version.outputs.tag }}
+      # Todos: un release despliega el stack completo, no un delta.
+      changed_services: ${{ needs.version.outputs.services }}
+    secrets: inherit

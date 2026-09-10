@@ -316,20 +316,20 @@ class UserAdminServiceTest {
     /* ====================== forgotPassword ====================== */
 
     @Test
-    void forgotPasswordIsNoOpWhenEmailUnknown() {
-        when(userRepository.findAll()).thenReturn(List.of());
+    void forgotPasswordFailsWhenEmailUnknown() {
+        when(userRepository.findByEmail("nobody@example.com")).thenReturn(Optional.empty());
 
-        // Should NOT throw — legacy would have failed noisily.
-        var res = service.forgotPassword("nobody@example.com", null);
+        // 404 a pedido del equipo: el front le dice al usuario que esa
+        // dirección no está registrada en vez de mostrar una confirmación
+        // falsa. Deja el endpoint como enumerador de cuentas — ver la nota en
+        // UserAdminService#forgotPassword.
+        assertThatThrownBy(() -> service.forgotPassword("nobody@example.com", null))
+                .isInstanceOf(NotFoundException.class);
 
+        // Lo que no cambia: a un correo desconocido no le sale ningún correo
+        // ni se le emite token.
         verify(emailService, never()).sendRestorePasswordEmail(any(), anyString());
         verify(tokenService, never()).issueRestoreToken(any());
-        // La respuesta trae token igual, con la misma forma que la del caso
-        // conocido: si un correo inexistente se distinguiera por venir sin
-        // token, el endpoint serviría para enumerar cuentas. Ese token es
-        // descartable — no se persiste, así que no restablece nada.
-        assertThat(res.token()).isNotBlank();
-        assertThat(res.expiresIn()).isPositive();
         verify(userRepository, never()).save(any());
     }
 
@@ -337,15 +337,15 @@ class UserAdminServiceTest {
     void forgotPasswordIssuesTokenAndEmailsWhenKnown() {
         User u = new User();
         u.setEmail("alice@example.com");
-        when(userRepository.findAll()).thenReturn(List.of(u));
+        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(u));
         when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
         when(userRepository.save(u)).thenReturn(u);
 
         var res = service.forgotPassword("alice@example.com", null);
 
-        // El token emitido es el que vuelve en la respuesta, no otro: es el
-        // mismo que viaja en el enlace del correo.
-        assertThat(res.token()).isEqualTo("rtok");
+        // La respuesta confirma a donde se envio y cuanto dura, sin entregar
+        // la credencial: el token solo viaja en el enlace del correo.
+        assertThat(res.maskedEmail()).isEqualTo("a****@example.com");
         assertThat(res.expiresIn()).isEqualTo(30 * 60);
 
         // Restore-token must be issued, and the password-reset event
@@ -365,6 +365,30 @@ class UserAdminServiceTest {
         Map<String, Object> p = payload.getValue();
         assertThat(p.get("resetLink").toString())
                 .isEqualTo("http://localhost/admin/restore-password?token=rtok");
+    }
+
+    /**
+     * Pin de la vulnerabilidad que cerro este cambio. Entre #67 y hoy el token
+     * de reseteo volvia en el cuerpo de un endpoint publico que ademas
+     * responde 404 para correos desconocidos: con solo el correo de la victima
+     * se pedia el reseteo, se leia el token de la respuesta y se cambiaba la
+     * contrasena sin tocar ese buzon. Si alguien vuelve a exponerlo — por el
+     * campo que sea — este test se pone rojo.
+     */
+    @Test
+    void forgotPasswordResponseNeverCarriesTheResetToken() {
+        User u = new User();
+        u.setEmail("alice@example.com");
+        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(u));
+        when(tokenService.issueRestoreToken(u)).thenReturn("rtok-secreto");
+        when(userRepository.save(u)).thenReturn(u);
+
+        var res = service.forgotPassword("alice@example.com", null);
+
+        assertThat(res.toString()).doesNotContain("rtok-secreto");
+        assertThat(res.maskedEmail()).doesNotContain("rtok-secreto");
+        // Y el correo del destinatario tampoco vuelve en claro.
+        assertThat(res.maskedEmail()).isNotEqualTo("alice@example.com");
     }
 
     /* ==================== resetTokenStatus ==================== */
@@ -432,7 +456,7 @@ class UserAdminServiceTest {
         com.co.eurekatic.common.entity.App app = new com.co.eurekatic.common.entity.App();
         app.setName("COLOMBIA-EVALUADORA");
         app.setLaunchUrl("https://colombia-evaluadora.example.com");
-        when(userRepository.findAll()).thenReturn(List.of(u));
+        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(u));
         when(appRepository.findByName("COLOMBIA-EVALUADORA"))
                 .thenReturn(Optional.of(app));
         when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
@@ -464,7 +488,7 @@ class UserAdminServiceTest {
         com.co.eurekatic.common.entity.App app = new com.co.eurekatic.common.entity.App();
         app.setName("COLOMBIA-EVALUADORA");
         app.setLaunchUrl("https://colombia-evaluadora.example.com/");
-        when(userRepository.findAll()).thenReturn(List.of(u));
+        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(u));
         when(appRepository.findByName("COLOMBIA-EVALUADORA"))
                 .thenReturn(Optional.of(app));
         when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
@@ -490,7 +514,7 @@ class UserAdminServiceTest {
         com.co.eurekatic.common.entity.App app = new com.co.eurekatic.common.entity.App();
         app.setName("SSO-ADMIN");
         app.setLaunchUrl("/admin"); // SSO console uses a relative path
-        when(userRepository.findAll()).thenReturn(List.of(u));
+        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(u));
         when(appRepository.findByName("SSO-ADMIN")).thenReturn(Optional.of(app));
         when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
         when(userRepository.save(u)).thenReturn(u);
@@ -514,7 +538,7 @@ class UserAdminServiceTest {
     void forgotPasswordFallsBackWhenAppNotFound() {
         User u = new User();
         u.setEmail("alice@example.com");
-        when(userRepository.findAll()).thenReturn(List.of(u));
+        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(u));
         when(appRepository.findByName("GHOST-APP")).thenReturn(Optional.empty());
         when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
         when(userRepository.save(u)).thenReturn(u);
