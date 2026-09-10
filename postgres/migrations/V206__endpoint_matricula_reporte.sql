@@ -65,27 +65,34 @@ INSERT INTO public.query
 SELECT
     'q-matricula-reporte',
     'SELECT * FROM academico_test.fn_matricula_listar(
-              p_search     => CAST(:BODY.SEARCH AS TEXT),
-              p_statuses   => CAST(:BODY.STATUSES AS TEXT[]),
-              p_campus     => CAST(:BODY.CAMPUS AS TEXT),
-              p_shift      => CAST(:BODY.SHIFT AS TEXT),
-              p_grade      => CAST(:BODY.GRADE AS INT),
-              p_group      => CAST(:BODY.GROUP AS TEXT),
+              p_search     => CAST(:BODY.FILTERS.SEARCH AS TEXT),
+              p_statuses   => CAST(:BODY.FILTERS.STATUSES AS TEXT[]),
+              p_campus     => CAST(:BODY.FILTERS.CAMPUS AS TEXT),
+              p_shift      => CAST(:BODY.FILTERS.SHIFT AS TEXT),
+              p_grade      => CAST(:BODY.FILTERS.GRADE AS INT),
+              p_group      => CAST(:BODY.FILTERS.GROUP AS TEXT),
               p_page_index => NULL::INT,
               p_page_size  => NULL::INT,
               p_pk_usuario => public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
-              p_sort_by    => CAST(:BODY.SORTBY AS TEXT),
-              p_sort_dir   => CAST(:BODY.SORTDIR AS TEXT)
+              p_sort_by    => CAST(:BODY.SORTING.SORTBY AS TEXT),
+              p_sort_dir   => CAST(:BODY.SORTING.SORTDIR AS TEXT)
           )',
     'postgres', false, false,
     m.id_microservice,
     '/matricula/reporte', 'SELECT', 'POST',
-    -- Mismos binds que /matricula/query MENOS PAGEINDEX/PAGESIZE (no se
-    -- puede paginar un reporte ni por accidente -- mismo criterio que V67).
-    -- BODY.COLUMNS no se declara aqui: lo consume reporting-service antes de
-    -- llegar a query-service (ver ReportController), asi que ni siquiera
-    -- viaja hasta esta fila.
-    '{"BODY.GRADE": "INTEGER", "BODY.GROUP": "TEXT", "BODY.SHIFT": "TEXT", "BODY.CAMPUS": "TEXT", "BODY.SEARCH": "TEXT", "BODY.SORTBY": "TEXT", "BODY.SORTDIR": "TEXT", "BODY.STATUSES": "TEXT[]"}'::jsonb,
+    -- OJO: a diferencia de /matricula/query (V127, binds PLANOS -- lo llama
+    -- el front directo con BODY.SEARCH/BODY.CAMPUS/... sueltos), esta fila la
+    -- llama reporting-service (QueryServiceClient.fetchRows), que SIEMPRE
+    -- empaqueta los filtros bajo una clave "filters" y el orden bajo
+    -- "sorting" (ver QueryServiceClient.java) -- igual que hacen los reportes
+    -- de V67/V220. Los binds van por eso bajo BODY.FILTERS.*/BODY.SORTING.*,
+    -- NO BODY.* plano (el bug real de la primera version de este archivo: los
+    -- binds resolvian contra una clave que la llamada real nunca manda, y
+    -- query-service respondia 400). Ademas quedan sin PAGEINDEX/PAGESIZE (no
+    -- se puede paginar un reporte ni por accidente -- mismo criterio que V67)
+    -- y sin BODY.COLUMNS: ese lo consume reporting-service antes de llegar a
+    -- query-service (ver ReportController), asi que ni siquiera viaja aqui.
+    '{"BODY.FILTERS.GRADE": "INTEGER", "BODY.FILTERS.GROUP": "TEXT", "BODY.FILTERS.SHIFT": "TEXT", "BODY.FILTERS.CAMPUS": "TEXT", "BODY.FILTERS.SEARCH": "TEXT", "BODY.SORTING.SORTBY": "TEXT", "BODY.SORTING.SORTDIR": "TEXT", "BODY.FILTERS.STATUSES": "TEXT[]"}'::jsonb,
     NULL,
     'V206 -- Reporte de Matricula: igual que /matricula/query (fn_matricula_listar) pero SIN paginar -- el insumo que reporting-service usa para armar el PDF/Excel. Las columnas del archivo las decide reporting-service (config + el `columns` que mande el front con las que tenga visibles en la tabla), no esta fila. Mismo gate que el listado: fn_matricula_puede_ver por fila dentro de la funcion reusada.',
     NULL,
