@@ -85,9 +85,10 @@ public class ReportService {
         // de una sola sede".
         ReportMeta meta = new ReportMeta(usuario, request == null ? null : request.filters());
 
+        List<String> columnas = request == null ? null : request.columns();
         byte[] content = switch (formato) {
-            case PDF -> pdf.render(clave, def, rows, meta);
-            case EXCEL -> excel.render(clave, def, rows, meta);
+            case PDF -> pdf.render(clave, def, rows, meta, columnas);
+            case EXCEL -> excel.render(clave, def, rows, meta, columnas);
         };
 
         String base = def.getFileName() == null ? clave : def.getFileName();

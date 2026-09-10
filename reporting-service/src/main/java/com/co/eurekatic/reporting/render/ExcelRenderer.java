@@ -75,8 +75,17 @@ public class ExcelRenderer {
                          ReportingProperties.Report def,
                          List<Map<String, Object>> rows,
                          ReportMeta meta) {
+        return render(clave, def, rows, meta, null);
+    }
 
-        Map<String, String> columnas = ColumnLayout.resolver(def, rows);
+    /** @param columnas claves a incluir, en orden; null/vacio = todas las configuradas (ver ColumnLayout.resolver). */
+    public byte[] render(String clave,
+                         ReportingProperties.Report def,
+                         List<Map<String, Object>> rows,
+                         ReportMeta meta,
+                         List<String> columnasPedidas) {
+
+        Map<String, String> columnas = ColumnLayout.resolver(def, rows, columnasPedidas);
         String titulo = def == null || def.getTitle() == null ? clave : def.getTitle();
 
         try (SXSSFWorkbook wb = new SXSSFWorkbook(VENTANA_FILAS);
