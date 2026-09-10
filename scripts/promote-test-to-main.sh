@@ -104,6 +104,26 @@ if [[ "$PENDIENTES" -eq 0 ]]; then
     exit 0
 fi
 
+# El contaje de commits MIENTE cuando la promoción anterior se mergeó con
+# squash: el commit aplastado no es ancestro de `test`, así que git sigue
+# viendo "pendientes" commits cuyo contenido ya está en `main`.
+#
+# Detectado probando este mismo script: reportaba 9 commits pendientes y
+# abrió una PR vacía, cuando `main` y `test` eran idénticos byte a byte.
+# Lo que decide si hay algo que promover es el CONTENIDO, no la ancestría.
+if git diff --quiet "origin/${MAIN}" "origin/${TEST}"; then
+    echo
+    echo "Nada que promover: 'main' y 'test' son IDÉNTICOS en contenido."
+    echo
+    echo "Git reporta ${PENDIENTES} commit(s) pendientes, pero es un espejismo:"
+    echo "la promoción anterior se mergeó con squash, así que su commit no es"
+    echo "ancestro de 'test' y los cambios ya aplicados siguen contándose."
+    echo
+    echo "Por eso CONTRIBUTING §1 exige merge commit en las promociones:"
+    echo "  gh pr merge <n> --merge      # NO --squash"
+    exit 0
+fi
+
 # ─── ¿Mergea limpio? ─────────────────────────────────────────────────────────
 #
 # `merge-tree --write-tree` simula el merge sin tocar el árbol de trabajo ni
