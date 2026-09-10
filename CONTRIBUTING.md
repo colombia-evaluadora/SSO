@@ -149,9 +149,18 @@ Configuradas como branch protection sobre `dev`, `test` y `main`
 (`scripts/branch-protection.sh`):
 
 - 1 aprobación de un CODEOWNER del archivo tocado.
-- Todos los checks verdes (`maven-common`, `maven-auth-center`,
-  `maven-sso-admin`, `maven-api-gateway`, `admin-ui-*`).
+- **`ci-ok` en verde.** Es el único check que conviene marcar como
+  requerido: `ci.yml` tiene 20 jobs y casi todos son condicionales
+  (sólo corren si su módulo cambió). Un job que se salta NO cuenta
+  como cumplido, así que exigirlos uno a uno bloquearía el merge para
+  siempre. `ci-ok` agrega el resultado de todos con `always()` y falla
+  sólo si alguno terminó en `failure` o `cancelled`.
 - Rama actualizada con la base antes de mergear.
+
+> **Ojo:** `ci.yml` corre **sólo en `dev`** (PR y push). En `test` y
+> `main` no hay CI: son promociones de contenido ya verificado en
+> `dev`. Si algún día se quiere un gate propio en `main`, hay que
+> añadirle un workflow con su `on: push: branches: [main]`.
 
 **El método depende del paso** (§1): squash para entrar a `dev`,
 merge commit para promover a `test` y a `main`. GitHub no permite
@@ -225,18 +234,38 @@ PR. La promoción es optativa: si no hay release a la vista, no se hace.
      --body "Promoción de los commits acumulados en \`test\` desde la última promoción. Sin código propio; revisa \`git log origin/main..origin/test --oneline\` antes de aprobar."
    ```
 
-   La PR tiene que pasar los checks de main (mismos 8) y 1 review. Su
-   commit de merge es la **liberación**; taguealo con SemVer al
-   mergear (§5).
+   En `main` **no corre CI** (§3.3): lo que se promueve ya se verificó
+   en `dev`. La garantía es que `test` esté verde y desplegado, más 1
+   review sobre esta PR.
 
-   **Atajo sólo para emergencias** (ej. hotfix ya mergeado en main
-   pero el release no se tageó hace tiempo) — fast-forward directo:
+   **Mergea con merge commit, nunca con squash:**
 
    ```bash
-   git checkout main
-   git merge --ff-only origin/test
-   git push origin main   # falla si protection lo bloquea
+   gh pr merge <n> --merge
    ```
+
+   Un squash aquí crea en `main` un commit que no existe en `test`; las
+   dos ramas divergen para siempre y la siguiente promoción vuelve a
+   conflictuar sobre contenido ya aplicado. No es teórico: las
+   promociones #117 y #121 salieron aplastadas y la siguiente dio 41
+   conflictos, todos sobre migraciones que ya estaban en las dos ramas.
+
+   El commit de merge es la **liberación**; taguealo con SemVer (§5).
+
+   **En vez de hacerlo a mano**, usa el asistente — deduce el repo,
+   simula el merge antes de abrir nada, crea rama de promoción si hay
+   conflictos y siempre mergea con merge commit:
+
+   ```bash
+   ./scripts/promote-test-to-main.sh            # abre la PR
+   ./scripts/promote-test-to-main.sh --merge    # abre y mergea
+   ```
+
+   **Atajo de emergencia.** El fast-forward directo (`git merge
+   --ff-only origin/test`) sólo funciona si `main` no tiene ningún
+   commit que `test` no tenga — justo lo que no se cumple cuando hay
+   hotfixes en `main`, que es cuando querrías el atajo. Si `--ff-only`
+   falla, no insistas con `--force`: usa el script.
 
 4. **Tag + release.** Inmediatamente después del merge, ver §5.
 
@@ -251,9 +280,12 @@ PR. La promoción es optativa: si no hay release a la vista, no se hace.
    git push origin test
    ```
 
-   El CI de `test` re-corre los 8 checks. Una divergencia > 5 commits
-   es señal de que el flujo `test → main` se está cumpliendo a
-   medias.
+   Cuidado: en `test` **no corre CI** (§3.3), así que un cherry-pick
+   aquí no lo verifica nadie. Si lo que traes de vuelta toca código y
+   no sólo configuración, pásalo antes por `dev`.
+
+   Una divergencia > 5 commits es señal de que el flujo `test → main`
+   se está cumpliendo a medias.
 
 ---
 
