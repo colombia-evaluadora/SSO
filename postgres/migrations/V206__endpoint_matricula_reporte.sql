@@ -89,7 +89,7 @@ SELECT
     NULL,
     'V206 -- Reporte de Matricula: igual que /matricula/query (fn_matricula_listar) pero SIN paginar -- el insumo que reporting-service usa para armar el PDF/Excel. Las columnas del archivo las decide reporting-service (config + el `columns` que mande el front con las que tenga visibles en la tabla), no esta fila. Mismo gate que el listado: fn_matricula_puede_ver por fila dentro de la funcion reusada.',
     NULL,
-    NULL, NULL,
+    NULL,
     false, 60
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
