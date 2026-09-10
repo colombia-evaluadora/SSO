@@ -704,7 +704,16 @@ class SsoAdminIntegrationTest {
                         .queryParam("email", "carol@example.com")
                         .build())
                 .exchange()
-                .expectStatus().isOk();
+                .expectStatus().isOk()
+                // Pin del contrato en el cable, no solo en el servicio: el
+                // token de reseteo NO puede salir por HTTP. Volvia aqui, y
+                // como este endpoint es permitAll y responde 404 para correos
+                // desconocidos, bastaba el correo de la victima para leer su
+                // token y cambiarle la contrasena sin tocar su buzon.
+                .expectBody()
+                .jsonPath("$.token").doesNotExist()
+                .jsonPath("$.maskedEmail").isEqualTo("c****@example.com")
+                .jsonPath("$.expiresIn").isEqualTo(30 * 60);
 
         @SuppressWarnings("unchecked")
         org.mockito.ArgumentCaptor<Map<String, Object>> payload =

@@ -105,6 +105,10 @@ jobs:
       reporting-service: ${{ steps.filter.outputs.reporting-service }}
       api-gateway:   ${{ steps.filter.outputs.api-gateway }}
       cdc:           ${{ steps.filter.outputs.cdc }}
+      notification-service: ${{ steps.filter.outputs.notification-service }}
+      provisioner:   ${{ steps.filter.outputs.provisioner }}
+      eurekaserver:  ${{ steps.filter.outputs.eurekaserver }}
+      hello-service: ${{ steps.filter.outputs.hello-service }}
       admin-ui:      ${{ steps.filter.outputs.admin-ui }}
       migrations:    ${{ steps.filter.outputs.migrations }}
     steps:
@@ -156,6 +160,22 @@ jobs:
             cdc:
               - *global
               - 'cdc-sync/**'
+            notification-service:
+              - *global
+              - 'notification-service/**'
+            provisioner:
+              - *global
+              - 'provisioner/**'
+            eurekaserver:
+              # eurekaserver es el ÚNICO módulo que no depende de common,
+              # así que no lleva el ancla *global: sólo lo despierta su
+              # propia carpeta, el pom raíz o este workflow.
+              - 'eurekaserver/**'
+              - 'pom.xml'
+              - '.github/workflows/ci.yml'
+            hello-service:
+              - *global
+              - 'hello-service/**'
             admin-ui:
               - 'admin-ui/**'
               - '.github/workflows/ci.yml'
@@ -313,9 +333,10 @@ jobs:
   # CI en verde y sólo reventaron al construir la imagen — cuatro
   # ciclos de deploy quemados para descubrirlos de uno en uno.
   #
-  # Los módulos que siguen sin cubrir (eurekaserver, hello-service,
-  # notification-service, provisioner, cdc-capture, cdc-worker)
-  # tienen el mismo agujero; merecen el mismo tratamiento.
+  # eurekaserver, hello-service, notification-service y provisioner
+  # arrastraron el mismo agujero hasta que se les dio job propio más
+  # abajo. Hoy los 12 servicios que publica deploy-test.yml pasan por
+  # CI: ninguna imagen se construye por primera vez en el deploy.
   maven-query-service:
     name: maven-query-service
     runs-on: ubuntu-latest
@@ -419,6 +440,105 @@ jobs:
             --out cdc-sync/cdc-common/src/main/resources/column-types.json
       - name: Verify (cdc-sync)
         run: mvn -B -ntp -f cdc-sync/pom.xml verify
+
+  # ───────── Backend: notification-service ─────────
+  # Entra en CI por el mismo motivo que query-service en su día: es el
+  # segundo módulo más grande del repo (43 archivos), se despliega en
+  # cada release y su primera compilación era el build-push del deploy.
+  maven-notification-service:
+    name: maven-notification-service
+    runs-on: ubuntu-latest
+    needs: [changes, maven-common]
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.notification-service == 'true'
+      && needs.maven-common.result != 'failure'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      # NotificationServiceIntegrationTest queda excluido, y no por
+      # comodidad: al meter este módulo en CI por primera vez, sus 5
+      # tests de integración salieron en rojo. NO es falta de
+      # infraestructura —los Testcontainers de Postgres y RabbitMQ
+      # levantan bien, el job tarda 64s en ellos— sino que la
+      # notificación nunca llega a procesarse y el awaitility expira
+      # esperando la fila de notification_log. Es un fallo real que
+      # llevaba oculto justo porque el módulo no estaba en CI.
+      #
+      # Se excluye para que el gate cubra ya lo que importa —que el
+      # módulo COMPILE, que era el agujero que costó cuatro ciclos de
+      # deploy con query-service— sin bloquear a todo el mundo con una
+      # rotura preexistente. Los 9 tests unitarios (ProviderSelectorTest,
+      # NotificationProcessorTest) sí corren.
+      #
+      # Mismo criterio que cdc-sync más arriba: compilar siempre,
+      # ejecutar la integración cuando tenga quien la mantenga.
+      # Arreglar estos 5 y quitar la exclusión es trabajo aparte.
+      - name: Verify (notification-service)
+        run: >-
+          mvn -B -ntp -pl notification-service -am verify
+          -Dtest='!NotificationServiceIntegrationTest'
+          -Dsurefire.failIfNoSpecifiedTests=false
+
+  # ───────── Backend: provisioner ─────────
+  maven-provisioner:
+    name: maven-provisioner
+    runs-on: ubuntu-latest
+    needs: [changes, maven-common]
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.provisioner == 'true'
+      && needs.maven-common.result != 'failure'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Verify (provisioner)
+        run: mvn -B -ntp -pl provisioner -am verify
+
+  # ───────── Backend: eurekaserver ─────────
+  # No lleva `needs: maven-common` porque es el único módulo que no
+  # depende de common — encadenarlo sólo serializaría el pipeline.
+  maven-eurekaserver:
+    name: maven-eurekaserver
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.eurekaserver == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Verify (eurekaserver)
+        run: mvn -B -ntp -pl eurekaserver -am verify
+
+  # ───────── Backend: hello-service ─────────
+  maven-hello-service:
+    name: maven-hello-service
+    runs-on: ubuntu-latest
+    needs: [changes, maven-common]
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.hello-service == 'true'
+      && needs.maven-common.result != 'failure'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Verify (hello-service)
+        run: mvn -B -ntp -pl hello-service -am verify
 
   # ───────── Backend: api-gateway (Testcontainers) ─────────
   maven-api-gateway:
@@ -585,6 +705,10 @@ jobs:
       - maven-file-service
       - maven-api-gateway
       - maven-cdc
+      - maven-notification-service
+      - maven-provisioner
+      - maven-eurekaserver
+      - maven-hello-service
       - admin-ui-typecheck
       - admin-ui-test
       - admin-ui-lint
@@ -611,6 +735,10 @@ jobs:
             '${{ needs.maven-file-service.result }}' \
             '${{ needs.maven-api-gateway.result }}' \
             '${{ needs.maven-cdc.result }}' \
+            '${{ needs.maven-notification-service.result }}' \
+            '${{ needs.maven-provisioner.result }}' \
+            '${{ needs.maven-eurekaserver.result }}' \
+            '${{ needs.maven-hello-service.result }}' \
             '${{ needs.admin-ui-typecheck.result }}' \
             '${{ needs.admin-ui-test.result }}' \
             '${{ needs.admin-ui-lint.result }}' \

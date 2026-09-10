@@ -3,6 +3,7 @@ package com.co.eurekatic.query.write;
 import com.co.eurekatic.common.query.ParamNamespace;
 import com.co.eurekatic.query.catalog.WriteDefinition;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Map;
@@ -95,5 +96,67 @@ class WriteServiceUnitTest {
         assertThat(ParamNamespace.canonicalKeyFor("email", ParamNamespace.BODY))
                 .isEqualTo("BODY.EMAIL");
         assertThat("EMAIL".equalsIgnoreCase("email")).isTrue();
+    }
+
+    // ─── Validación de identificadores del catálogo ──────────────────
+    //
+    // El javadoc de WriteDefinitionRequest prometía que query-service
+    // re-valida tabla y columnas "against an identifier regex". No lo
+    // hacía: buildInsert/buildUpdate concatenaban lo que trajera el
+    // catálogo. Estos tests fijan esa defensa.
+    //
+    // No es un vector abierto al usuario final — estos valores salen
+    // del catálogo, que sólo escribe un admin — así que el fallo se
+    // reporta como 500: el caller no puede corregir nada en su
+    // petición.
+
+    @Test
+    void insertRechazaTablaConSqlInyectado() {
+        WriteDefinition def = new WriteDefinition(
+                1L, "wd-hostil", "INSERT",
+                "users; DROP TABLE users",
+                List.of("id"),
+                List.of("id"));
+
+        assertThatThrownBy(() -> WriteService.buildInsertSqlForTest(def))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("500");
+    }
+
+    @Test
+    void insertRechazaColumnaConEspacios() {
+        WriteDefinition def = new WriteDefinition(
+                1L, "wd-hostil-2", "INSERT",
+                "users",
+                List.of("id", "name = 1, admin"),
+                List.of("id"));
+
+        assertThatThrownBy(() -> WriteService.buildInsertSqlForTest(def))
+                .isInstanceOf(ResponseStatusException.class);
+    }
+
+    @Test
+    void updateRechazaKeyColumnHostil() {
+        WriteDefinition def = new WriteDefinition(
+                1L, "wd-hostil-3", "UPDATE",
+                "users",
+                List.of("id", "name"),
+                List.of("id OR 1=1"));
+
+        assertThatThrownBy(() -> WriteService.buildUpdateSqlForTest(def))
+                .isInstanceOf(ResponseStatusException.class);
+    }
+
+    @Test
+    void aceptaTablaCualificadaPorEsquema() {
+        WriteDefinition def = new WriteDefinition(
+                1L, "wd-ok", "INSERT",
+                "academico_test.tusuario",
+                List.of("pk_tusuario", "correo"),
+                List.of("pk_tusuario"));
+
+        assertThat(WriteService.buildInsertSqlForTest(def)).isEqualTo(
+                "INSERT INTO academico_test.tusuario (pk_tusuario,correo) "
+                        + "VALUES (:pk_tusuario,:correo)");
     }
 }

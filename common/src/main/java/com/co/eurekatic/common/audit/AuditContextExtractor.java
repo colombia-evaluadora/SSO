@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -128,17 +129,77 @@ public final class AuditContextExtractor {
                 requestBodyJson));
     }
 
-    /** Copia {@code source} redactando los valores cuyas keys matchean {@link #SENSITIVE_KEY_PATTERN}. */
+    /**
+     * Profundidad máxima al bajar por el body. Un DTO de negocio no
+     * llega ni de lejos; el tope está para que un mapa con un ciclo
+     * (o un JSON absurdamente anidado) no se lleve el hilo por
+     * delante. Al tocar el fondo se redacta la rama entera: preferimos
+     * perder una rama de la auditoría antes que arriesgarnos a
+     * escribir en claro algo que no hemos podido inspeccionar.
+     */
+    private static final int MAX_PROFUNDIDAD = 12;
+
+    private static final String REDACTADO = "[REDACTED]";
+
+    /**
+     * Copia {@code source} redactando los valores cuyas keys matchean
+     * {@link #SENSITIVE_KEY_PATTERN}.
+     *
+     * <p><b>Baja por los valores anidados.</b> Antes sólo miraba el
+     * primer nivel, lo que bastaba para los bodies ya aplanados del
+     * catálogo ({@code BODY.USUARIO.PASSWORD} → se corta en el primer
+     * punto → {@code USUARIO.PASSWORD} → matchea). Pero
+     * {@code FuncionarioRegistrationService} construye su snapshot con
+     * {@code objectMapper.convertValue(dto, Map.class)}, y ahí un
+     * objeto anidado llega como un {@code Map} dentro del valor: la
+     * key del primer nivel es {@code credenciales}, que no matchea, y
+     * el {@code password} de dentro se serializaba tal cual a
+     * {@code app.request_body} — es decir, a ClickHouse.
+     *
+     * <p>También recorre listas, porque una colección de objetos
+     * (varios contactos, varios usuarios en un alta masiva) esconde el
+     * mismo problema un nivel más abajo.
+     */
     public static Map<String, Object> redact(Map<String, Object> source) {
+        return redactMapa(source, 0);
+    }
+
+    private static Map<String, Object> redactMapa(Map<String, Object> source, int profundidad) {
         Map<String, Object> copy = new LinkedHashMap<>();
         for (Map.Entry<String, Object> e : source.entrySet()) {
             String key = e.getKey();
             int dot = key.indexOf('.');
             String localName = dot >= 0 ? key.substring(dot + 1) : key;
             copy.put(key, SENSITIVE_KEY_PATTERN.matcher(localName).matches()
-                    ? "[REDACTED]" : e.getValue());
+                    ? REDACTADO
+                    : redactValor(e.getValue(), profundidad + 1));
         }
         return copy;
+    }
+
+    /** Redacta recursivamente mapas y listas; cualquier otro valor pasa tal cual. */
+    private static Object redactValor(Object valor, int profundidad) {
+        if (valor == null) {
+            return null;
+        }
+        if (profundidad >= MAX_PROFUNDIDAD) {
+            return REDACTADO;
+        }
+        if (valor instanceof Map<?, ?> mapa) {
+            Map<String, Object> comoStrings = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> e : mapa.entrySet()) {
+                comoStrings.put(String.valueOf(e.getKey()), e.getValue());
+            }
+            return redactMapa(comoStrings, profundidad);
+        }
+        if (valor instanceof Iterable<?> iterable) {
+            List<Object> lista = new ArrayList<>();
+            for (Object item : iterable) {
+                lista.add(redactValor(item, profundidad + 1));
+            }
+            return lista;
+        }
+        return valor;
     }
 
     private static String toJson(Object value) {
