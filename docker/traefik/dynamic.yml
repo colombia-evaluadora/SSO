@@ -1,0 +1,52 @@
+# Configuración dinámica de Traefik (proveedor de FICHERO).
+#
+# ---- Por qué fichero y no el proveedor docker -------------------------------
+#
+# El proveedor docker exige montarle /var/run/docker.sock al contenedor de
+# Traefik. Ese socket es equivalente a root en el host: quien lo controla puede
+# arrancar un contenedor privilegiado y salirse. Dárselo justamente al único
+# proceso expuesto a internet es el peor sitio donde ponerlo.
+#
+# Además, en Docker 29 el proveedor docker de Traefik no arranca: negocia la
+# API 1.24 y el daemon exige >= 1.40 ("client version 1.24 is too old"), y
+# DOCKER_API_VERSION no lo corrige.
+#
+# Aquí sólo hay un backend —el api-gateway, que ya es el único punto de
+# entrada de la aplicación— así que declararlo a mano no cuesta nada y evita
+# las dos cosas.
+#
+# ---- Dónde está el resto de la configuración --------------------------------
+#
+# El dominio y el resolvedor ACME NO están aquí: van en el `command:` del
+# servicio traefik en docker-compose.yml, porque ahí docker compose sí
+# interpola variables de entorno y este fichero no. Por eso el router no
+# lleva regla `Host(...)`: el certificado se pide a nivel de entrypoint
+# (`--entrypoints.websecure.http.tls.domains[0].main`), y este router acepta
+# todo lo que llegue por HTTPS.
+
+http:
+  routers:
+    api-gateway:
+      rule: "PathPrefix(`/`)"
+      entryPoints:
+        - websecure
+      service: api-gateway
+      tls: {}
+
+  services:
+    api-gateway:
+      loadBalancer:
+        servers:
+          # Nombre de servicio del compose; la red por defecto lo resuelve.
+          - url: "http://api-gateway:8080"
+        passHostHeader: true
+
+  middlewares:
+    # El gateway ya resuelve la IP del cliente con ClientIpGlobalFilter
+    # leyendo X-Forwarded-For. Traefik la pone sola, pero conviene dejar
+    # explícito que este proxy es quien la fija: si algún día se encadena
+    # otro proxy delante, este es el sitio donde recortar la cadena.
+    cabeceras-proxy:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"

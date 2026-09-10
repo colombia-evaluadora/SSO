@@ -443,6 +443,95 @@ services:
       retries: 25
       start_period: 200s
 
+  # ───────────────────────────────────────────────────────────────────────
+  # traefik — terminador TLS delante del api-gateway.
+  #
+  # Perfil `tls`: NO arranca con un `docker compose up -d` pelado. El
+  # servidor de pruebas lleva meses sirviendo HTTP plano en :8080 y meterle
+  # un proxy que se apropia del 80 y el 443 sin avisar sería un cambio de
+  # topología a traición. Se enciende añadiendo `tls` a COMPOSE_PROFILES,
+  # que es lo que hace el .env de producción.
+  #
+  # ---- Por qué importa, y no es cosmética ----
+  #
+  # JsonLoginFilter (auth-center) sólo añade el atributo `Secure` a la
+  # cookie de refresco cuando request.isSecure(). Sobre HTTP plano la
+  # cookie de sesión viaja en claro por la red. El código está bien; lo que
+  # faltaba era el TLS.
+  #
+  # ---- El certificado ----
+  #
+  # Let's Encrypt por desafío HTTP-01, que sólo necesita que el 80 esté
+  # abierto y que el dominio resuelva a esta máquina. Sin API de DNS, sin
+  # tokens.
+  #
+  # SSO_TLS_DOMAIN admite un dominio propio o un comodín de DNS del tipo
+  # <ip-con-guiones>.sslip.io, que resuelve solo y no hay que registrar.
+  # Aviso sobre los comodines: sslip.io y nip.io NO están en la Public
+  # Suffix List, así que Let's Encrypt les aplica el límite de 50
+  # certificados por semana COMPARTIDO entre todos sus usuarios del mundo,
+  # y a veces está agotado. Sirven para arrancar; para algo permanente,
+  # un dominio propio (o duckdns.org, que sí está en la PSL y por tanto
+  # tiene límite propio).
+  traefik:
+    profiles: ["tls"]
+    image: traefik:v3.5
+    container_name: sso-traefik
+    restart: unless-stopped
+    mem_limit: 256m
+    mem_reservation: 128m
+    command:
+      # Proveedor de FICHERO, no docker: el proveedor docker exige montar
+      # /var/run/docker.sock, que es root en el host, y dárselo al único
+      # proceso expuesto a internet es justo donde no debe estar. Además en
+      # Docker 29 ni arranca (negocia API 1.24, el daemon exige >= 1.40).
+      - --providers.file.directory=/dynamic
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      # Todo el HTTP se va a HTTPS. El 80 se queda sólo para que ACME
+      # pueda resolver el desafío.
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.web.http.redirections.entrypoint.permanent=true
+      - --entrypoints.websecure.address=:443
+      # El dominio va aquí y no en dynamic.yml porque compose interpola
+      # variables en `command:` y el proveedor de fichero no.
+      - --entrypoints.websecure.http.tls=true
+      - --entrypoints.websecure.http.tls.certresolver=le
+      - --entrypoints.websecure.http.tls.domains[0].main=${SSO_TLS_DOMAIN:?define SSO_TLS_DOMAIN en el .env}
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.le.acme.email=${SSO_TLS_EMAIL:?define SSO_TLS_EMAIL en el .env}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      # Descomentar para probar sin gastar cuota del emisor real. Let's
+      # Encrypt limita los intentos FALLIDOS, no sólo los certificados.
+      # - --certificatesresolvers.le.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
+      - --log.level=${SSO_TLS_LOG_LEVEL:-INFO}
+      - --accesslog=false
+      # Necesario para el healthcheck de abajo: `traefik healthcheck`
+      # consulta este endpoint y sin habilitarlo el contenedor se
+      # reportaría unhealthy para siempre.
+      - --ping=true
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/traefik/dynamic.yml:/dynamic/dynamic.yml:ro
+      # Volumen con nombre, no bind: acme.json guarda la CLAVE PRIVADA del
+      # certificado y Traefik exige que sea 600. Un bind desde el repo
+      # acabaría con el fichero versionado o con permisos que Traefik
+      # rechaza al arrancar.
+      - traefik-acme:/letsencrypt
+    depends_on:
+      api-gateway:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   hello-service:
     # profiles: pure diagnostic/reference service (nothing else
     # depends_on it) — gated behind the `diagnostics` profile so it
@@ -1642,6 +1731,13 @@ services:
       start_period: 60s
 
 volumes:
+  traefik-acme:
+    # Guarda acme.json: la clave privada del certificado y el registro de
+    # la cuenta ACME. Persistir esto NO es opcional — Let's Encrypt limita
+    # a 5 certificados por semana y por conjunto de dominios, así que un
+    # volumen que se pierda en cada redespliegue agota la cuota en dos
+    # días y deja el sitio sin TLS hasta la semana siguiente.
+    name: sso-traefik-acme
   postgres-data:
     # Named volume keeps the database across `docker compose down`
     # but a `docker compose down -v` clears it (handy for dev).
