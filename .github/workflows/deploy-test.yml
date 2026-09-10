@@ -98,12 +98,16 @@
 # coincidan entre entornos es lo que permite que deploy.yml no sepa a qué
 # servidor apunta, y por tanto que exista una sola copia de la lógica.
 #
-# GHCR_PULL_USER / GHCR_PULL_TOKEN se eliminaron: el `docker login` del
-# servidor usa ahora el GITHUB_TOKEN efímero del propio job.
+# Ya NO queda ningún secreto de repositorio. Se eliminaron los ocho:
 #
-# SMTP_ZEPTOMAIL_USER / SMTP_ZEPTOMAIL_PASS siguen siendo de repo a
-# propósito (ver el paso que los añade en deploy.yml): son los mismos en
-# los dos entornos y se rotan con un `gh secret set` suelto.
+#   TEST_SSH_HOST / TEST_SSH_USER  -> SSH_TARGET (del environment)
+#   TEST_SSH_KEY                   -> SSH_KEY    (del environment)
+#   TEST_ENV_FILE                  -> ENV_FILE   (del environment)
+#   GHCR_PULL_USER / _TOKEN        -> GITHUB_TOKEN efímero del job
+#   SMTP_ZEPTOMAIL_USER / _PASS    -> dentro de ENV_FILE, como el resto
+#
+# Lo único que este workflow lee además del environment es el
+# GITHUB_TOKEN, que GitHub inyecta solo en cada run.
 # =============================================================================
 
 name: Deploy test
