@@ -142,8 +142,15 @@ if git merge-tree --write-tree "origin/${MAIN}" "origin/${TEST}" >/dev/null 2>&1
     echo "   Sin conflictos."
 else
     LIMPIO=0
+    # `git merge-tree` sale con 1 cuando hay conflictos (es justo lo que
+    # acabamos de detectar arriba), y bajo `set -o pipefail` ese código
+    # se propaga por TODO el pipeline hasta wc -l — aunque wc -l imprima
+    # bien su cuenta. La asignación `N_CONF="$(...)"` no está exenta de
+    # `set -e` como sí lo está la condición del `if` de arriba, así que
+    # sin el `|| true` el script muere aquí en cuanto hay conflictos, que
+    # es precisamente cuando este bloque tiene que seguir ejecutándose.
     N_CONF="$(git merge-tree --write-tree "origin/${MAIN}" "origin/${TEST}" 2>&1 \
-              | awk '/^[0-7]{6} /{print $4}' | sort -u | wc -l)"
+              | awk '/^[0-7]{6} /{print $4}' | sort -u | wc -l || true)"
     echo "   ${N_CONF} fichero(s) en conflicto."
 fi
 
