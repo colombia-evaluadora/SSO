@@ -10,14 +10,14 @@ topology work end-to-end before the larger migration begins.
 
 | Module | Stack | Purpose |
 |---|---|---|
-| `eurekaserver` | Spring Boot 3.5 + Spring Cloud Netflix Eureka | Service registry. Service-discovery for all 4 modules. |
+| `eurekaserver` | Spring Boot 4.0 + Spring Cloud Netflix Eureka | Service registry. Service-discovery for all 4 modules. |
 | `common` | Plain Java library | `User` and `Role` JPA entities, `UserRepository` / `RoleRepository`, `JwtTokenService` (jjwt 0.12.7), shared DTOs. |
-| `auth-center` | Spring Boot 3.5 servlet (Tomcat) | Login (`POST /login`), `GET /getApiToken`, `GET /getInfoUser`, `GET /getUsersSSO` (ADMIN-only), `POST /auth/refresh`, `POST /auth/logout`. Issues + validates JWTs. Sets the `sso_refresh` httpOnly cookie on login. |
+| `auth-center` | Spring Boot 4.0 servlet (Tomcat) | Login (`POST /login`), `GET /getApiToken`, `GET /getInfoUser`, `GET /getUsersSSO` (ADMIN-only), `POST /auth/refresh`, `POST /auth/logout`. Issues + validates JWTs. Sets the `sso_refresh` httpOnly cookie on login. |
 | `api-gateway` | Spring Cloud Gateway 4 (WebFlux/Netty) | Validates JWTs, injects `X-Authenticated-*` headers, routes `/auth/**` and `/login` to auth-center, and auto-discovers downstream services from Eureka. Also serves the admin-ui SPA at `/admin/**`. |
-| `hello-service` | Spring Boot 3.5 reactive (WebFlux) | Reference downstream service. Exposes `/api/hello` and `/api/whoami`. Reachable via the gateway at `/hello-service/**`. |
+| `hello-service` | Spring Boot 4.0 reactive (WebFlux) | Reference downstream service. Exposes `/api/hello` and `/api/whoami`. Reachable via the gateway at `/hello-service/**`. |
 | `admin-ui` | Vite 5 + React 19 + TS strict + Tailwind | Admin SPA. Built into the api-gateway image (NOT a Maven module). Consumes the 26 sso-admin endpoints. |
 
-Versions: **Java 21**, **Spring Boot 3.5.3**, **Spring Cloud 2025.0.0 ("Northfields")**, **jjwt 0.12.7**, **Node 20** (for the SPA build).
+Versions: **Java 25**, **Spring Boot 4.0.7**, **Spring Cloud 2025.1.2 ("Oakwood")**, **jjwt 0.12.7**, **Node 22** (for the SPA build).
 
 ## Architecture
 
@@ -159,7 +159,7 @@ recreating the bypass. The safer choice is to go forward.
 
 ## Prerequisites
 
-- **Java 21** (`java -version` must show 21.x).
+- **Java 25** (`java -version` must show 25.x).
 - **Maven 3.9+** (the project uses the `spring-boot-starter-parent` BOM).
 - **Postgres 16** — locally or via Docker.
 - *(Optional)* **Docker + Docker Compose** for the one-shot stack.
@@ -448,7 +448,7 @@ cd admin-ui && npm run e2e            # playwright: requires gateway running
 
 ```
 modernize/
-├── pom.xml                       # parent POM — Spring Boot 3.5.3 + Spring Cloud 2025.0.0 BOM
+├── pom.xml                       # parent POM — Spring Boot 4.0.7 + Spring Cloud 2025.1.2 BOM
 ├── docker-compose.yml            # full stack: postgres + eureka + auth-center + gateway + hello + sso-admin + mailhog
 ├── .env.example                  # env template for docker compose
 ├── .dockerignore

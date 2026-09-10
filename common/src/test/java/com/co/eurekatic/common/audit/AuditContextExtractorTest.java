@@ -93,6 +93,79 @@ class AuditContextExtractorTest {
         assertThat(json).contains("[REDACTED]");
     }
 
+    /**
+     * El caso que se escapaba: {@code FuncionarioRegistrationService}
+     * arma su snapshot con {@code convertValue(dto, Map.class)}, así
+     * que un objeto anidado del DTO llega como un Map dentro del
+     * valor. La key de primer nivel ("credenciales") no matchea el
+     * patrón, y antes el password de dentro viajaba en claro hasta
+     * {@code app.request_body} y de ahí a ClickHouse.
+     */
+    @Test
+    void redactsSensitiveKeysNestedInsideObjects() {
+        MockHttpServletRequest req = new MockHttpServletRequest("POST", "/x");
+        bind(req);
+
+        Map<String, Object> body = Map.of(
+                "correo", "alice@example.com",
+                "credenciales", Map.of(
+                        "usuario", "alice",
+                        "password", "hunter2"));
+
+        String json = AuditContextExtractor.fromCurrentRequest(body).get().requestBodyJson();
+
+        assertThat(json).contains("alice@example.com").contains("alice");
+        assertThat(json).doesNotContain("hunter2");
+        assertThat(json).contains("[REDACTED]");
+    }
+
+    @Test
+    void redactsSensitiveKeysInsideLists() {
+        MockHttpServletRequest req = new MockHttpServletRequest("POST", "/x");
+        bind(req);
+
+        Map<String, Object> body = Map.of(
+                "usuarios", java.util.List.of(
+                        Map.of("correo", "a@x.com", "contrasena", "secreta-1"),
+                        Map.of("correo", "b@x.com", "contrasena", "secreta-2")));
+
+        String json = AuditContextExtractor.fromCurrentRequest(body).get().requestBodyJson();
+
+        assertThat(json).contains("a@x.com").contains("b@x.com");
+        assertThat(json).doesNotContain("secreta-1").doesNotContain("secreta-2");
+    }
+
+    @Test
+    void keepsRedactingFlatNamespacedKeys() {
+        // No romper el caso que ya funcionaba: el catálogo aplana los
+        // bodies como BODY.USUARIO.PASSWORD y se corta en el primer punto.
+        MockHttpServletRequest req = new MockHttpServletRequest("POST", "/x");
+        bind(req);
+
+        Map<String, Object> body = Map.of(
+                "BODY.USUARIO.PASSWORD", "hunter2",
+                "BODY.USUARIO.CORREO", "alice@example.com");
+
+        String json = AuditContextExtractor.fromCurrentRequest(body).get().requestBodyJson();
+
+        assertThat(json).doesNotContain("hunter2");
+        assertThat(json).contains("alice@example.com");
+    }
+
+    @Test
+    void nullValuesSurviveRedaction() {
+        MockHttpServletRequest req = new MockHttpServletRequest("POST", "/x");
+        bind(req);
+
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("correo", null);
+        body.put("anidado", java.util.Collections.singletonMap("password", null));
+
+        String json = AuditContextExtractor.fromCurrentRequest(body).get().requestBodyJson();
+
+        assertThat(json).isNotNull();
+    }
+
     @Test
     void emptyBodyYieldsNullRequestBodyJson() {
         MockHttpServletRequest req = new MockHttpServletRequest("POST", "/x");
