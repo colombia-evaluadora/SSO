@@ -1,236 +1,382 @@
 -- ===========================================================================
--- V39 — Modulo de Criterio de Promocion (academico_test).
--- Un criterio por defecto del periodo (FK_TGRADO NULL) que aplica a todos los
--- grados; un override por grado (FK_TGRADO no NULL). POR_DEFECTO se deriva de
--- si FK_TGRADO es NULL. Hijo: TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
--- (XOR asignatura/area).
+-- Periodo de Evaluacion — funciones consolidadas (ultima version)
+-- Generado: 2026-09-04
+--
+-- Migracion real: ejecutada en orden secuencial por Flyway. El bloque de
+-- gate de permisos (fn_periodo_gate_escritura, fn_periodo_puede_ver, etc.)
+-- vive en V36_1__gate_permisos_periodo_academico.sql, que corre antes.
+-- funcion del modulo, el bloque CREATE OR REPLACE tal como quedo en la
+-- migracion mas reciente que lo redefine (las funciones se reescriben con
+-- CREATE OR REPLACE FUNCTION en migraciones posteriores; este archivo evita
+-- tener que rastrear cual version quedo vigente).
+--
+-- Migraciones fuente consultadas:
+--   - V38__evaluation_period_module.sql
+--   - V101__periodo_evaluacion_mensajes_error_con_nombre.sql
+--   - V192__fn_periodo_eval_listar_expone_sede.sql
 -- ===========================================================================
 
+-- Fuente: V101__periodo_evaluacion_mensajes_error_con_nombre.sql
 SET search_path TO academico_test, public;
 
--- Crear/actualizar el criterio (upsert por periodo-default o por grado).
--- Si p_fk_grado es NULL -> default del periodo; si no -> override del grado.
-CREATE OR REPLACE FUNCTION academico_test.fn_criterio_prom_guardar(
-    p_fk_periodo              BIGINT,
-    p_fk_grado               BIGINT      DEFAULT NULL,
-    p_nodo_curricular        nodo_curricular DEFAULT NULL,
-    p_cantidad_nivelar       NUMERIC     DEFAULT NULL,
-    p_asignatura_obligatoria bool_sn     DEFAULT NULL,
-    p_aprobacion_promedio    bool_sn     DEFAULT NULL,
-    p_desempenho_min_general NUMERIC     DEFAULT NULL,
-    p_desempenho_minimo      NUMERIC     DEFAULT NULL,
-    p_max_asig_promedio      NUMERIC     DEFAULT NULL,
-    p_minimo_inasistencias   NUMERIC     DEFAULT NULL,
-    p_max_asig_nivelar_prom  NUMERIC     DEFAULT NULL,
-    -- Areas/asignaturas obligatorias (XOR por elemento). NULL = no tocar;
-    -- [] = limpiar; [{asignaturaId?},{areaId?},...] = reescribir el set.
-    p_obligatorias           jsonb       DEFAULT NULL,
-    p_pk_usuario_solicitante BIGINT      DEFAULT NULL
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_validar(
+    p_fk_periodo bigint,
+    p_fecha_inicio date,
+    p_fecha_fin date,
+    p_porcentaje numeric,
+    p_codigo character varying DEFAULT NULL::character varying,
+    p_nombre character varying DEFAULT NULL::character varying,
+    p_abreviacion character varying DEFAULT NULL::character varying,
+    p_pk_excluir bigint DEFAULT NULL::bigint
 )
-RETURNS BIGINT LANGUAGE plpgsql AS $$
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
-    v_id BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-    d academico_test.TCRITERIO_PROMOCION;
-    it jsonb; v_asig BIGINT; v_area BIGINT;
+    v_pi DATE; v_pf DATE; v_suma NUMERIC;
+    v_nombre_periodo_academico VARCHAR(130);
 BEGIN
-    -- Alcance por rol (como V37): gate grueso + gate fino por establecimiento.
-    IF NOT academico_test.fn_periodo_usuario_puede_gestionar(p_pk_usuario_solicitante) THEN
-        RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para realizar esta accion'
-            USING ERRCODE = '42501';
+    SELECT FECHA_INICIO, FECHA_FIN INTO v_pi, v_pf
+      FROM academico_test.TPERIODO_ACADEMICO
+     WHERE PK_TPERIODO_ACADEMICO = p_fk_periodo AND ACTIVE = TRUE;
+    IF v_pi IS NULL THEN
+        SELECT NOMBRE INTO v_nombre_periodo_academico
+          FROM academico_test.TPERIODO_ACADEMICO WHERE PK_TPERIODO_ACADEMICO = p_fk_periodo;
+        IF v_nombre_periodo_academico IS NOT NULL THEN
+            RAISE EXCEPTION 'El periodo academico "%" esta inactivo', v_nombre_periodo_academico
+                USING ERRCODE = '23503';
+        ELSE
+            RAISE EXCEPTION 'El periodo academico indicado no existe' USING ERRCODE = '23503';
+        END IF;
     END IF;
-    IF p_fk_periodo IS NULL THEN
-        RAISE EXCEPTION 'El periodo academico es obligatorio' USING ERRCODE = '22023';
+    IF p_porcentaje IS NOT NULL AND p_porcentaje < 0 THEN
+        RAISE EXCEPTION 'El porcentaje (%) no puede ser negativo', p_porcentaje USING ERRCODE = '22023';
     END IF;
-    IF NOT academico_test.fn_periodo_usuario_puede_escribir(p_pk_usuario_solicitante, (
-             SELECT s.FK_TESTABLECIMIENTO
-               FROM academico_test.TPERIODO_ACADEMICO pa
-               JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-              WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo)) THEN
-        RAISE EXCEPTION 'El usuario no puede gestionar criterios de promocion de este establecimiento'
-            USING ERRCODE = '42501';
+    IF NULLIF(TRIM(p_codigo),'') IS NOT NULL AND EXISTS (
+        SELECT 1 FROM academico_test.TPERIODO_EVALUACION pe
+         WHERE pe.FK_TPERIODO_ACADEMICO = p_fk_periodo AND pe.ACTIVE = TRUE
+           AND pe.PK_TPERIODO_EVALUACION <> COALESCE(p_pk_excluir, -1)
+           AND UPPER(TRIM(pe.CODIGO)) = UPPER(TRIM(p_codigo))
+    ) THEN
+        RAISE EXCEPTION 'Ya existe un periodo de evaluacion con el codigo % en este periodo academico', p_codigo
+            USING ERRCODE = '23505';
     END IF;
-    -- Ningun valor numerico puede ser negativo.
-    IF p_cantidad_nivelar < 0 OR p_desempenho_min_general < 0 OR p_desempenho_minimo < 0
-       OR p_max_asig_promedio < 0 OR p_minimo_inasistencias < 0 OR p_max_asig_nivelar_prom < 0 THEN
-        RAISE EXCEPTION 'Los valores numericos del criterio de promocion no pueden ser negativos'
+    IF NULLIF(TRIM(p_nombre),'') IS NOT NULL AND EXISTS (
+        SELECT 1 FROM academico_test.TPERIODO_EVALUACION pe
+         WHERE pe.FK_TPERIODO_ACADEMICO = p_fk_periodo AND pe.ACTIVE = TRUE
+           AND pe.PK_TPERIODO_EVALUACION <> COALESCE(p_pk_excluir, -1)
+           AND UPPER(TRIM(pe.NOMBRE)) = UPPER(TRIM(p_nombre))
+    ) THEN
+        RAISE EXCEPTION 'Ya existe un periodo de evaluacion con el nombre % en este periodo academico', p_nombre
+            USING ERRCODE = '23505';
+    END IF;
+    IF NULLIF(TRIM(p_abreviacion),'') IS NOT NULL AND EXISTS (
+        SELECT 1 FROM academico_test.TPERIODO_EVALUACION pe
+         WHERE pe.FK_TPERIODO_ACADEMICO = p_fk_periodo AND pe.ACTIVE = TRUE
+           AND pe.PK_TPERIODO_EVALUACION <> COALESCE(p_pk_excluir, -1)
+           AND UPPER(TRIM(pe.ABREVIACION)) = UPPER(TRIM(p_abreviacion))
+    ) THEN
+        RAISE EXCEPTION 'Ya existe un periodo de evaluacion con la abreviacion % en este periodo academico', p_abreviacion
+            USING ERRCODE = '23505';
+    END IF;
+    IF p_fecha_inicio < v_pi OR p_fecha_fin > v_pf THEN
+        RAISE EXCEPTION 'El periodo de evaluacion (% a %) debe estar dentro del periodo academico (% a %)',
+            p_fecha_inicio, p_fecha_fin, v_pi, v_pf USING ERRCODE = '22023';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TPERIODO_EVALUACION pe
+         WHERE pe.FK_TPERIODO_ACADEMICO = p_fk_periodo AND pe.ACTIVE = TRUE
+           AND pe.PK_TPERIODO_EVALUACION <> COALESCE(p_pk_excluir, -1)
+           AND p_fecha_inicio <= pe.FECHA_FIN AND p_fecha_fin >= pe.FECHA_INICIO
+    ) THEN
+        RAISE EXCEPTION 'El periodo de evaluacion se solapa con otro existente' USING ERRCODE = '22023';
+    END IF;
+    SELECT COALESCE(SUM(pe.PORCENTAJE), 0) INTO v_suma
+      FROM academico_test.TPERIODO_EVALUACION pe
+     WHERE pe.FK_TPERIODO_ACADEMICO = p_fk_periodo AND pe.ACTIVE = TRUE
+       AND pe.PK_TPERIODO_EVALUACION <> COALESCE(p_pk_excluir, -1);
+    IF v_suma + COALESCE(p_porcentaje, 0) > 100 THEN
+        RAISE EXCEPTION 'La suma de pesos (% + %) supera el 100%%', v_suma, COALESCE(p_porcentaje, 0)
             USING ERRCODE = '22023';
     END IF;
+END;
+$function$;
 
-    -- Buscar la fila existente (default del periodo o override del grado).
-    IF p_fk_grado IS NULL THEN
-        SELECT PK_TCRITERIO_PROMOCION INTO v_id FROM academico_test.TCRITERIO_PROMOCION
-         WHERE FK_TPERIODO_ACADEMICO = p_fk_periodo AND FK_TGRADO IS NULL AND ACTIVE = TRUE;
-    ELSE
-        SELECT PK_TCRITERIO_PROMOCION INTO v_id FROM academico_test.TCRITERIO_PROMOCION
-         WHERE FK_TGRADO = p_fk_grado AND ACTIVE = TRUE;
+-- Fuente: V38__evaluation_period_module.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_crear(
+    p_fk_periodo     BIGINT,
+    p_codigo         VARCHAR(30),
+    p_nombre         VARCHAR(130),
+    p_abreviacion    VARCHAR(30),
+    p_fecha_inicio   DATE,
+    p_fecha_fin      DATE,
+    p_fk_estado      BIGINT,
+    p_porcentaje     NUMERIC DEFAULT NULL,
+    p_pk_usuario_solicitante BIGINT DEFAULT NULL
+)
+RETURNS BIGINT LANGUAGE plpgsql AS $$
+DECLARE v_id BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+BEGIN
+    -- CU-86e2w4xdt: capability por el menu PERIODOS_ACADEMICOS + scope. El
+    -- periodo de evaluacion no tiene sede ni jornada propias: las HEREDA de
+    -- su TPERIODO_ACADEMICO padre.
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PERIODOS_ACADEMICOS', 'CREAR',
+        academico_test.fn_periodo_establecimiento(p_fk_periodo),
+        academico_test.fn_periodo_sede(p_fk_periodo),
+        academico_test.fn_periodo_jornada(p_fk_periodo));
+    IF p_fk_periodo IS NULL OR NULLIF(TRIM(p_codigo),'') IS NULL OR NULLIF(TRIM(p_nombre),'') IS NULL
+       OR NULLIF(TRIM(p_abreviacion),'') IS NULL OR p_fecha_inicio IS NULL OR p_fecha_fin IS NULL
+       OR p_fk_estado IS NULL THEN
+        RAISE EXCEPTION 'Faltan campos obligatorios del periodo de evaluacion' USING ERRCODE = '22023';
     END IF;
-
-    IF v_id IS NULL THEN
-        -- Override de un grado: hereda del criterio por defecto del periodo lo que
-        -- no venga en los parametros (red de seguridad ante un guardado parcial).
-        -- Para el default (p_fk_grado NULL), d queda vacio (NULLs) y no altera nada.
-        IF p_fk_grado IS NOT NULL THEN
-            SELECT * INTO d FROM academico_test.TCRITERIO_PROMOCION
-             WHERE FK_TPERIODO_ACADEMICO = p_fk_periodo AND FK_TGRADO IS NULL AND ACTIVE = TRUE;
-        END IF;
-        INSERT INTO academico_test.TCRITERIO_PROMOCION (
-            FK_TPERIODO_ACADEMICO, FK_TGRADO, NODO_CURRICULAR, CANTIDAD_NIVELAR,
-            ASIGNATURA_OBLIGATORIA, APROBACION_PROMEDIO, DESEMPENHO_MINIMO_GENERAL,
-            DESEMPENHO_MINIMO, MAX_ASIG_PROMEDIO, MINIMO_INASISTENCIAS,
-            MAX_ASIG_NIVELAR_PROMOVIDO, POR_DEFECTO, CREATED_BY
-        ) VALUES (
-            p_fk_periodo, p_fk_grado,
-            COALESCE(p_nodo_curricular, d.NODO_CURRICULAR),
-            COALESCE(p_cantidad_nivelar, d.CANTIDAD_NIVELAR, 0),
-            COALESCE(p_asignatura_obligatoria, d.ASIGNATURA_OBLIGATORIA),
-            COALESCE(p_aprobacion_promedio, d.APROBACION_PROMEDIO),
-            COALESCE(p_desempenho_min_general, d.DESEMPENHO_MINIMO_GENERAL),
-            COALESCE(p_desempenho_minimo, d.DESEMPENHO_MINIMO),
-            COALESCE(p_max_asig_promedio, d.MAX_ASIG_PROMEDIO),
-            COALESCE(p_minimo_inasistencias, d.MINIMO_INASISTENCIAS),
-            COALESCE(p_max_asig_nivelar_prom, d.MAX_ASIG_NIVELAR_PROMOVIDO),
-            CASE WHEN p_fk_grado IS NULL THEN 'S' ELSE 'N' END::academico_test.bool_sn, v_audit
-        )
-        RETURNING PK_TCRITERIO_PROMOCION INTO v_id;
-    ELSE
-        UPDATE academico_test.TCRITERIO_PROMOCION SET
-            NODO_CURRICULAR = COALESCE(p_nodo_curricular, NODO_CURRICULAR),
-            CANTIDAD_NIVELAR = COALESCE(p_cantidad_nivelar, CANTIDAD_NIVELAR),
-            ASIGNATURA_OBLIGATORIA = COALESCE(p_asignatura_obligatoria, ASIGNATURA_OBLIGATORIA),
-            APROBACION_PROMEDIO = COALESCE(p_aprobacion_promedio, APROBACION_PROMEDIO),
-            DESEMPENHO_MINIMO_GENERAL = COALESCE(p_desempenho_min_general, DESEMPENHO_MINIMO_GENERAL),
-            DESEMPENHO_MINIMO = COALESCE(p_desempenho_minimo, DESEMPENHO_MINIMO),
-            MAX_ASIG_PROMEDIO = COALESCE(p_max_asig_promedio, MAX_ASIG_PROMEDIO),
-            MINIMO_INASISTENCIAS = COALESCE(p_minimo_inasistencias, MINIMO_INASISTENCIAS),
-            MAX_ASIG_NIVELAR_PROMOVIDO = COALESCE(p_max_asig_nivelar_prom, MAX_ASIG_NIVELAR_PROMOVIDO),
-            MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_TCRITERIO_PROMOCION = v_id;
+    IF p_fecha_fin <= p_fecha_inicio THEN
+        RAISE EXCEPTION 'La fecha fin debe ser posterior a la fecha inicio' USING ERRCODE = '22023';
     END IF;
+    PERFORM academico_test.fn_periodo_eval_validar(p_fk_periodo, p_fecha_inicio, p_fecha_fin, p_porcentaje, p_codigo, p_nombre, p_abreviacion, NULL);
 
-    -- Areas/asignaturas obligatorias (XOR). Reescribe el set del criterio.
-    IF p_obligatorias IS NOT NULL THEN
-        -- Solapamiento: no se puede incluir un area obligatoria y a la vez una
-        -- asignatura que pertenece a esa misma area (la cobertura del area ya la
-        -- abarca). Se valida sobre todo el set antes de tocar nada.
-        IF EXISTS (
-            SELECT 1
-              FROM jsonb_array_elements(p_obligatorias) e
-              JOIN academico_test.TASIGNATURA s
-                ON s.PK_TASIGNATURA = NULLIF(e->>'asignaturaId','')::BIGINT
-             WHERE s.FK_TAREA IN (
-                     SELECT NULLIF(e2->>'areaId','')::BIGINT
-                       FROM jsonb_array_elements(p_obligatorias) e2
-                      WHERE NULLIF(e2->>'areaId','') IS NOT NULL)
-        ) THEN
-            RAISE EXCEPTION 'No se puede incluir un area obligatoria junto con una asignatura de esa misma area'
-                USING ERRCODE = '23505';
-        END IF;
-
-        UPDATE academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
-           SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE FK_TCRITERIO_PROMOCION = v_id AND ACTIVE = TRUE;
-
-        FOR it IN SELECT * FROM jsonb_array_elements(p_obligatorias)
-        LOOP
-            v_asig := NULLIF(it->>'asignaturaId','')::BIGINT;
-            v_area := NULLIF(it->>'areaId','')::BIGINT;
-            IF (v_asig IS NULL) = (v_area IS NULL) THEN
-                RAISE EXCEPTION 'Cada obligatoria debe indicar exactamente una asignatura o una area'
-                    USING ERRCODE = '22023';
-            END IF;
-            IF v_asig IS NOT NULL AND NOT EXISTS (
-                SELECT 1 FROM academico_test.TASIGNATURA s
-                  JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
-                 WHERE s.PK_TASIGNATURA = v_asig AND s.ACTIVE = TRUE
-                   AND a.FK_TPERIODO_ACADEMICO = p_fk_periodo
-            ) THEN
-                RAISE EXCEPTION 'La asignatura % no existe, esta inactiva o no pertenece al periodo', v_asig USING ERRCODE = '23503';
-            END IF;
-            IF v_area IS NOT NULL AND NOT EXISTS (
-                SELECT 1 FROM academico_test.TAREA
-                 WHERE PK_TAREA = v_area AND ACTIVE = TRUE
-                   AND FK_TPERIODO_ACADEMICO = p_fk_periodo
-            ) THEN
-                RAISE EXCEPTION 'El area % no existe, esta inactiva o no pertenece al periodo', v_area USING ERRCODE = '23503';
-            END IF;
-            -- Sin duplicados dentro del set.
-            IF EXISTS (
-                SELECT 1 FROM academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
-                 WHERE FK_TCRITERIO_PROMOCION = v_id AND ACTIVE = TRUE
-                   AND FK_TASIGNATURA IS NOT DISTINCT FROM v_asig
-                   AND FK_TAREA IS NOT DISTINCT FROM v_area
-            ) THEN
-                RAISE EXCEPTION 'Obligatoria duplicada (asignatura % / area %)', v_asig, v_area USING ERRCODE = '23505';
-            END IF;
-            INSERT INTO academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
-                (FK_TCRITERIO_PROMOCION, FK_TASIGNATURA, FK_TAREA, CREATED_BY)
-            VALUES (v_id, v_asig, v_area, v_audit);
-        END LOOP;
-    END IF;
-
+    INSERT INTO academico_test.TPERIODO_EVALUACION
+        (CODIGO, NOMBRE, ABREVIACION, FECHA_INICIO, FECHA_FIN, FK_TLV_ESTADO,
+         FK_TPERIODO_ACADEMICO, PORCENTAJE, CREATED_BY)
+    VALUES (p_codigo, p_nombre, p_abreviacion, p_fecha_inicio, p_fecha_fin, p_fk_estado,
+            p_fk_periodo, p_porcentaje, v_audit)
+    RETURNING PK_TPERIODO_EVALUACION INTO v_id;
     RETURN v_id;
 END;
 $$;
 
--- Lectura: criterio por periodo (default) o por grado (override).
--- DROP porque cambia el RETURNS TABLE (se agrego mandatory_subjects).
-DROP FUNCTION IF EXISTS academico_test.fn_criterio_prom_obtener(BIGINT, BIGINT);
-CREATE OR REPLACE FUNCTION academico_test.fn_criterio_prom_obtener(
-    p_fk_periodo BIGINT DEFAULT NULL,
-    p_fk_grado   BIGINT DEFAULT NULL,
-    p_pk_usuario_solicitante BIGINT DEFAULT NULL
+-- Fuente: V101__periodo_evaluacion_mensajes_error_con_nombre.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_actualizar(
+    p_pk bigint,
+    p_codigo character varying DEFAULT NULL::character varying,
+    p_nombre character varying DEFAULT NULL::character varying,
+    p_abreviacion character varying DEFAULT NULL::character varying,
+    p_fecha_inicio date DEFAULT NULL::date,
+    p_fecha_fin date DEFAULT NULL::date,
+    p_fk_estado bigint DEFAULT NULL::bigint,
+    p_porcentaje numeric DEFAULT NULL::numeric,
+    p_pk_usuario_solicitante bigint DEFAULT NULL::bigint
+)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    r academico_test.TPERIODO_EVALUACION;
+    v_ini DATE; v_fin DATE; v_pct NUMERIC; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
+    v_establecimiento_id BIGINT;
+BEGIN
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast; scope abajo con la
+    -- sede/jornada del periodo academico padre.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, NULL, NULL, NULL, 'EDITAR');
+    SELECT * INTO r FROM academico_test.TPERIODO_EVALUACION WHERE PK_TPERIODO_EVALUACION = p_pk;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No existe el periodo de evaluacion indicado' USING ERRCODE = 'P0002';
+    END IF;
+    IF r.ACTIVE = FALSE THEN
+        RAISE EXCEPTION 'El periodo de evaluacion "%" esta inactivo; no se puede actualizar', r.NOMBRE
+            USING ERRCODE = '22023';
+    END IF;
+    -- Gate fino (CU-86e2w4xdt): capability + scope (EE, sede, jornada) del periodo academico padre.
+    SELECT s.FK_TESTABLECIMIENTO INTO v_establecimiento_id
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE pa.PK_TPERIODO_ACADEMICO = r.FK_TPERIODO_ACADEMICO;
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, v_establecimiento_id,
+        academico_test.fn_periodo_sede(r.FK_TPERIODO_ACADEMICO),
+        academico_test.fn_periodo_jornada(r.FK_TPERIODO_ACADEMICO), 'EDITAR');
+    v_ini := COALESCE(p_fecha_inicio, r.FECHA_INICIO);
+    v_fin := COALESCE(p_fecha_fin, r.FECHA_FIN);
+    v_pct := COALESCE(p_porcentaje, r.PORCENTAJE);
+    IF v_fin <= v_ini THEN
+        RAISE EXCEPTION 'La fecha fin debe ser posterior a la fecha inicio' USING ERRCODE = '22023';
+    END IF;
+    PERFORM academico_test.fn_periodo_eval_validar(r.FK_TPERIODO_ACADEMICO, v_ini, v_fin, v_pct,
+        COALESCE(p_codigo, r.CODIGO), COALESCE(p_nombre, r.NOMBRE), COALESCE(p_abreviacion, r.ABREVIACION), p_pk);
+
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización del periodo de evaluación %s', COALESCE(p_nombre, r.NOMBRE)), v_establecimiento_id);
+
+    UPDATE academico_test.TPERIODO_EVALUACION SET
+        CODIGO = COALESCE(p_codigo, CODIGO), NOMBRE = COALESCE(p_nombre, NOMBRE),
+        ABREVIACION = COALESCE(p_abreviacion, ABREVIACION),
+        FECHA_INICIO = v_ini, FECHA_FIN = v_fin,
+        FK_TLV_ESTADO = COALESCE(p_fk_estado, FK_TLV_ESTADO), PORCENTAJE = v_pct,
+        MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TPERIODO_EVALUACION = p_pk;
+    RETURN p_pk;
+END;
+$function$;
+
+-- Fuente: V101__periodo_evaluacion_mensajes_error_con_nombre.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_soft_delete(
+    p_pk bigint,
+    p_pk_usuario_solicitante bigint
+)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR; v_est BIGINT;
+    v_nombre_periodo_eval VARCHAR(130);
+    v_sede_id    BIGINT;
+    v_jornada_id BIGINT;
+BEGIN
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast.
+    PERFORM academico_test.fn_periodo_gate_escritura(
+        p_pk_usuario_solicitante, NULL, NULL, NULL, 'ELIMINAR');
+    -- Gate fino (CU-86e2w4xdt): capability + scope (EE, sede, jornada) del periodo academico padre.
+    -- Se trae tambien el NOMBRE aqui (antes solo se leia en la rama de error)
+    -- porque la etiqueta de auditoria lo necesita en el camino feliz.
+    SELECT s.FK_TESTABLECIMIENTO, pa.FK_TSEDE, pa.FK_TLV_JORNADA, pe.NOMBRE
+      INTO v_est, v_sede_id, v_jornada_id, v_nombre_periodo_eval
+      FROM academico_test.TPERIODO_EVALUACION pe
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = pe.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE pe.PK_TPERIODO_EVALUACION = p_pk;
+    IF v_est IS NOT NULL THEN
+        PERFORM academico_test.fn_periodo_gate_escritura(
+            p_pk_usuario_solicitante, v_est, v_sede_id, v_jornada_id, 'ELIMINAR');
+    END IF;
+    -- Bloqueo: existen calificaciones (notas) registradas contra este periodo de
+    -- evaluacion. Protege informacion historica (TAREA_NOTA/TASIGNATURA_NOTA no
+    -- dependen de que la matricula siga activa).
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TASIGNATURA_NOTA an
+         WHERE an.FK_TPERIODO_EVALUACION = p_pk AND an.ACTIVE = TRUE
+    ) OR EXISTS (
+        SELECT 1 FROM academico_test.TAREA_NOTA tn
+         WHERE tn.FK_TPERIODO_EVALUACION = p_pk AND tn.ACTIVE = TRUE
+    ) THEN
+        SELECT NOMBRE INTO v_nombre_periodo_eval
+          FROM academico_test.TPERIODO_EVALUACION WHERE PK_TPERIODO_EVALUACION = p_pk;
+        IF v_nombre_periodo_eval IS NOT NULL THEN
+            RAISE EXCEPTION 'No se puede eliminar el periodo de evaluacion "%": existen calificaciones registradas',
+                v_nombre_periodo_eval USING ERRCODE = '23503';
+        ELSE
+            RAISE EXCEPTION 'No se puede eliminar el periodo de evaluacion indicado: existen calificaciones registradas'
+                USING ERRCODE = '23503';
+        END IF;
+    END IF;
+
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación del periodo de evaluación %s', v_nombre_periodo_eval), v_est);
+
+    UPDATE academico_test.TPERIODO_EVALUACION
+       SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TPERIODO_EVALUACION = p_pk AND ACTIVE = TRUE;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n = 0 THEN
+        SELECT NOMBRE INTO v_nombre_periodo_eval
+          FROM academico_test.TPERIODO_EVALUACION WHERE PK_TPERIODO_EVALUACION = p_pk;
+        IF v_nombre_periodo_eval IS NOT NULL THEN
+            RAISE EXCEPTION 'El periodo de evaluacion "%" ya se encuentra inactivo', v_nombre_periodo_eval
+                USING ERRCODE = 'P0002';
+        ELSE
+            RAISE EXCEPTION 'No existe un periodo de evaluacion activo con el PK indicado' USING ERRCODE = 'P0002';
+        END IF;
+    END IF;
+    RETURN p_pk;
+END;
+$function$;
+
+-- Fuente: V192__fn_periodo_eval_listar_expone_sede.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_listar(
+    p_fk_periodo BIGINT,
+    p_filtro     TEXT DEFAULT NULL,
+    p_page_index INT  DEFAULT 0,
+    p_page_size  INT  DEFAULT 10,
+    p_pk_usuario BIGINT DEFAULT NULL,
+    p_sort_by    TEXT DEFAULT NULL,
+    p_sort_dir   TEXT DEFAULT NULL
 )
 RETURNS TABLE (
-    id BIGINT, academic_period_id BIGINT, grade_id BIGINT, curriculum_node nodo_curricular,
-    max_failed_recovery NUMERIC, asignatura_obligatoria bool_sn, apply_average_approval bool_sn,
-    base_percentage NUMERIC, minimum_subject_percentage NUMERIC, max_failed_for_average NUMERIC,
-    absence_percentage NUMERIC, max_leveled_subjects NUMERIC, mandatory_subjects JSONB
+    id BIGINT, codigo VARCHAR, nombre VARCHAR, abreviacion VARCHAR,
+    start_date DATE, end_date DATE, peso NUMERIC, status_id BIGINT, estado VARCHAR, estado_name VARCHAR,
+    academic_period_id BIGINT, sede_id BIGINT, sede_name VARCHAR, total_count BIGINT
+)
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_col TEXT;
+    v_dir TEXT;
+BEGIN
+    v_col := CASE lower(coalesce(p_sort_by, ''))
+        WHEN 'codigo'      THEN 'pe.CODIGO'
+        WHEN 'nombre'      THEN 'pe.NOMBRE'
+        WHEN 'abreviacion' THEN 'pe.ABREVIACION'
+        WHEN 'startdate'   THEN 'pe.FECHA_INICIO'
+        WHEN 'enddate'     THEN 'pe.FECHA_FIN'
+        WHEN 'peso'        THEN 'pe.PORCENTAJE'
+        WHEN 'estado'      THEN 'est.VALOR'
+        ELSE 'pe.FECHA_INICIO'
+    END;
+    v_dir := CASE WHEN lower(coalesce(p_sort_dir, '')) = 'desc' THEN 'DESC' ELSE 'ASC' END;
+
+    RETURN QUERY EXECUTE format($q$
+        SELECT pe.PK_TPERIODO_EVALUACION, pe.CODIGO, pe.NOMBRE, pe.ABREVIACION,
+               pe.FECHA_INICIO, pe.FECHA_FIN, pe.PORCENTAJE, pe.FK_TLV_ESTADO, est.VALOR, est.NOMBRE,
+               pe.FK_TPERIODO_ACADEMICO, s.PK_TSEDE, s.NOMBRE,
+               count(*) OVER()::BIGINT
+          FROM academico_test.TPERIODO_EVALUACION pe
+          JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pe.FK_TLV_ESTADO
+          JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = pe.FK_TPERIODO_ACADEMICO
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+         WHERE pe.FK_TPERIODO_ACADEMICO = $1 AND pe.ACTIVE = TRUE
+           AND ($2 IS NULL OR pe.NOMBRE ILIKE '%%' || $2 || '%%' OR pe.CODIGO ILIKE '%%' || $2 || '%%')
+           AND academico_test.fn_periodo_puede_ver($5, pe.FK_TPERIODO_ACADEMICO)
+         ORDER BY %s %s, pe.PK_TPERIODO_EVALUACION DESC
+         LIMIT NULLIF($4, 0)
+        OFFSET COALESCE($3, 0) * COALESCE(NULLIF($4, 0), 0)
+    $q$, v_col, v_dir)
+    USING p_fk_periodo, NULLIF(TRIM(p_filtro),''), p_page_index, p_page_size, p_pk_usuario;
+END;
+$$;
+
+-- Fuente: V38__evaluation_period_module.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_detalle(
+    p_pk BIGINT, p_pk_usuario BIGINT DEFAULT NULL
+)
+RETURNS TABLE (
+    id BIGINT, codigo VARCHAR, nombre VARCHAR, abreviacion VARCHAR,
+    start_date DATE, end_date DATE, peso NUMERIC, status_id BIGINT, estado VARCHAR, estado_name VARCHAR,
+    academic_period_id BIGINT
 )
 LANGUAGE sql STABLE AS $$
-    SELECT cp.PK_TCRITERIO_PROMOCION, cp.FK_TPERIODO_ACADEMICO, cp.FK_TGRADO,
-           cp.NODO_CURRICULAR, cp.CANTIDAD_NIVELAR, cp.ASIGNATURA_OBLIGATORIA,
-           cp.APROBACION_PROMEDIO, cp.DESEMPENHO_MINIMO_GENERAL, cp.DESEMPENHO_MINIMO,
-           cp.MAX_ASIG_PROMEDIO, cp.MINIMO_INASISTENCIAS, cp.MAX_ASIG_NIVELAR_PROMOVIDO,
-           -- Obligatorias del criterio (XOR asignatura/area). Para una asignatura,
-           -- el area se deriva de TASIGNATURA.FK_TAREA (no se guarda por separado).
-           COALESCE((
-               SELECT jsonb_agg(jsonb_build_object(
-                          'id', o.PK_TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA,
-                          'type', CASE WHEN o.FK_TASIGNATURA IS NOT NULL THEN 'subject' ELSE 'area' END,
-                          'subjectId', o.FK_TASIGNATURA,
-                          'subjectName', s.NOMBRE,
-                          'areaId', COALESCE(o.FK_TAREA, s.FK_TAREA),
-                          'areaName', COALESCE(ar.NOMBRE, sar.NOMBRE))
-                          ORDER BY o.PK_TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA)
-                 FROM academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA o
-                 LEFT JOIN academico_test.TASIGNATURA s ON s.PK_TASIGNATURA = o.FK_TASIGNATURA
-                 LEFT JOIN academico_test.TAREA sar ON sar.PK_TAREA = s.FK_TAREA
-                 LEFT JOIN academico_test.TAREA ar  ON ar.PK_TAREA = o.FK_TAREA
-                WHERE o.FK_TCRITERIO_PROMOCION = cp.PK_TCRITERIO_PROMOCION AND o.ACTIVE = TRUE),
-               '[]'::jsonb)
-      FROM academico_test.TCRITERIO_PROMOCION cp
-     WHERE cp.ACTIVE = TRUE
-       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario_solicitante, cp.FK_TPERIODO_ACADEMICO)
-       AND ( (p_fk_grado IS NOT NULL AND cp.FK_TGRADO = p_fk_grado)
-          OR (p_fk_grado IS NULL AND cp.FK_TPERIODO_ACADEMICO = p_fk_periodo AND cp.FK_TGRADO IS NULL) );
+    SELECT pe.PK_TPERIODO_EVALUACION, pe.CODIGO, pe.NOMBRE, pe.ABREVIACION,
+           pe.FECHA_INICIO, pe.FECHA_FIN, pe.PORCENTAJE, pe.FK_TLV_ESTADO, est.VALOR, est.NOMBRE,
+           pe.FK_TPERIODO_ACADEMICO
+      FROM academico_test.TPERIODO_EVALUACION pe
+      JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pe.FK_TLV_ESTADO
+     WHERE pe.PK_TPERIODO_EVALUACION = p_pk AND pe.ACTIVE = TRUE
+       AND academico_test.fn_periodo_puede_ver(p_pk_usuario, pe.FK_TPERIODO_ACADEMICO);
 $$;
 
--- Las obligatorias (areas/asignaturas) NO tienen funciones propias de
--- agregar/eliminar/listar: el front tiene un unico boton de guardar, asi que
--- fn_criterio_prom_guardar reescribe todo el set via p_obligatorias (con su
--- validacion XOR + pertenencia al periodo), y fn_criterio_prom_obtener las
--- devuelve anidadas en mandatory_subjects. Se dropean por si ya se aplicaron.
-DROP FUNCTION IF EXISTS academico_test.fn_criterio_prom_asig_agregar(BIGINT, BIGINT, BIGINT, BIGINT);
-DROP FUNCTION IF EXISTS academico_test.fn_criterio_prom_asig_eliminar(BIGINT, BIGINT);
-DROP FUNCTION IF EXISTS academico_test.fn_criterio_prom_asig_listar(BIGINT);
-
--- Catalogo de nodos curriculares (dominio nodo_curricular: 'AS'/'AR').
--- key = valor que se guarda; label = texto para el select.
-DROP FUNCTION IF EXISTS academico_test.fn_nodo_curricular_listar();
-CREATE OR REPLACE FUNCTION academico_test.fn_nodo_curricular_listar(
-    p_pk_usuario_solicitante BIGINT DEFAULT NULL
-)
-RETURNS TABLE (key TEXT, label TEXT)
-LANGUAGE sql IMMUTABLE AS $$
-    SELECT * FROM (VALUES ('AS', 'Asignatura'), ('AR', 'Area')) AS t(key, label);
-$$;
+-- Fuente: V38__evaluation_period_module.sql
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_bulk_delete(
+        p_ids BIGINT[], p_pk_usuario_solicitante BIGINT
+    )
+    RETURNS TABLE (id BIGINT, eliminado BOOLEAN, error_code TEXT, error_mensaje TEXT)
+    LANGUAGE plpgsql AS $$
+    DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
+    BEGIN
+        -- CU-86e2w4xdt: capability fail-fast sobre PERIODOS_ACADEMICOS; el
+        -- scope fino por (EE, sede, jornada) lo aplica fn_periodo_eval_soft_delete
+        -- por cada id dentro del bucle.
+        PERFORM academico_test.fn_periodo_gate_escritura(
+            p_pk_usuario_solicitante, NULL, NULL, NULL, 'ELIMINAR');
+        IF p_ids IS NULL THEN RETURN; END IF;
+        FOREACH v_id IN ARRAY p_ids LOOP
+            BEGIN
+                PERFORM academico_test.fn_periodo_eval_soft_delete(v_id, p_pk_usuario_solicitante);
+                id := v_id; eliminado := TRUE; error_code := NULL; error_mensaje := NULL;
+                RETURN NEXT;
+            EXCEPTION WHEN OTHERS THEN
+                GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
+                id := v_id; eliminado := FALSE; error_code := v_state; error_mensaje := v_msg;
+                RETURN NEXT;
+            END;
+        END LOOP;
+        RETURN;
+    END;
+    $$;

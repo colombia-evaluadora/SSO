@@ -6,11 +6,11 @@
 # whole README here — link to it.
 
 # ---- Stack ----------------------------------------------------------------
-- Java 21 (LTS). Spring Boot 3.5.3. Spring Cloud 2025.0.0 ("Northfields").
+- Java 25 (LTS). Spring Boot 4.0.7. Spring Cloud 2025.1.2 ("Oakwood").
 - Multi-module Maven: eurekaserver, common, auth-center, api-gateway, hello-service, **sso-admin** (Phases 1 + 2 of the legacy `sso-service` port: User/Role/Group + Microservice/Endpoint/Route CRUD).
 - jjwt 0.12.7. Lombok 1.18.x. Postgres 16. JUnit 5 + AssertJ + Mockito.
 - Auth: JWT (RS256) validated at the api-gateway (WebFlux); downstream services trust the X-Authenticated-* headers the gateway injects. auth-center holds the RSA private key and is the only issuer; everyone else gets the public key only.
-- **admin-ui** (top-level, NOT a Maven module): Vite 5, React 19, TypeScript 5.6 strict (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`), React Router v7, TanStack Query v5, TailwindCSS v3, Zod. Vitest + @testing-library/react for unit tests, Playwright for E2E. Node 20.
+- **admin-ui** (top-level, NOT a Maven module): Vite 5, React 19, TypeScript 5.6 strict (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`), React Router v7, TanStack Query v5, TailwindCSS v3, Zod. Vitest + @testing-library/react for unit tests, Playwright for E2E. Node 22.
 
 # ---- Module layout --------------------------------------------------------
 - common/        — entities (User, Role), repositories, JwtTokenService, DTOs. Pure library.

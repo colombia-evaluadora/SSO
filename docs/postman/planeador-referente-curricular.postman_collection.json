@@ -1,0 +1,550 @@
+{
+  "info": {
+    "_postman_id": "b7c41f28-3d56-4e90-9a12-5f8e6c3b1d47",
+    "name": "SSO — Planeador: referente curricular por grado y asignatura",
+    "description": "**`GET /api/eval-col/planeador/referente-curricular`** (V278).\n\nDado un **grado** y, opcionalmente, una **asignatura**, devuelve el referente curricular que les corresponde con TODOS sus datos: enunciados y evidencias, tipo de evaluacion y enfoque pedagogico.\n\n## Para que sirve\n\nEl referente **no se elige a mano en ninguna pantalla**: se deriva del grado. Este endpoint hace el recorrido completo en una sola llamada:\n\n```\nTGRADO -> FK_TNIVEL_ENSENANZA -> TREFERENTE_CURRICULAR_NIVEL -> referente\n```\n\nEs el que sirve **mientras se arma la unidad** (y para pintar la actividad antes de que la unidad exista). Cuando la unidad YA existe, el equivalente es `GET /planeador/unidades/:ID/referente` (V255), que ademas marca que enunciados estan ya vinculados a esa unidad.\n\n## Lo que hay que saber para no usarlo mal\n\n**1. Devuelve un ARREGLO, no un objeto.** La relacion referente<->nivel es N:N: un nivel puede tener varios referentes. Forzar \"uno solo\" seria inventar un criterio que el modelo no tiene. El orden ES la preferencia -- primero los acotados al area de la asignatura pedida (`especificidad: 0`, `aplica_a_area: true`), luego los universales (`especificidad: 1`), y dentro de cada grupo la vigencia mas reciente. Mostrar el criterio con esos dos campos en vez de tomar `[0]` a ciegas.\n\n**2. `?asignatura=` filtra por AREA, no es una llave.** Un referente **sin** areas declaradas aplica a **TODAS** (`areas: []` + `aplica_a_area: false`), no a ninguna. Y el area de la asignatura se resuelve por `TASIGNATURA.FK_TAREA_ASIGNATURA` o, si viene vacia (lo normal en las filas sembradas), por la de su `TAREA`.\n\n**3. La respuesta viene envuelta en `{\"rows\": [...]}`**, como todo el query-service.\n\n**4. Las etiquetas de nivel las pone el referente.** `nivel_1_etiqueta` / `nivel_2_etiqueta` son 'Proposito'/'Imprescindible' en preescolar y 'Enunciado'/'Evidencia' en primaria. Rotular con ellas, nunca con literales del front.\n\n## Permisos\n\nEl sistema convencional del Planeador, igual que el resto del modulo: gate **VER sobre PLANEADOR** mas el **alcance territorial por el grado** consultado (`fn_planeador_assert_alcance`, V277). Un docente de nivel 3 solo alcanza los grados de sus sedes. Concedido a `CEVAL-SUPER_ADMINISTRADOR` y `CEVAL-DOCENTE`.\n\nNo usa el menu `REFERENTES_CURRICULARES` (el del catalogo global, hoy solo super admin): un docente recibiria 42501 justo en la pantalla donde arma su unidad.\n\n## Entorno\n\nReutiliza el entorno **SSO — test** (`sso-test.postman_environment.json`): necesita `baseUrl`, `email` y `password`. El login es automatico (script `prerequest` de la coleccion). Los valores por defecto de las variables son los reales del servidor de test.\n\n**Solo lectura:** ninguna peticion de esta coleccion escribe.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Login automatico: si el token vivo ya esta en la variable de",
+          "// coleccion, no vuelve a pedirlo.",
+          "const rutaLogin = '/api/auth/login';",
+          "if (pm.request.url.getPath().endsWith(rutaLogin)) { return; }",
+          "",
+          "function caducado(jwt) {",
+          "    try {",
+          "        const carga = JSON.parse(atob(jwt.split('.')[1]));",
+          "        return !carga.exp || (carga.exp - 30) * 1000 < Date.now();",
+          "    } catch (e) { return true; }",
+          "}",
+          "",
+          "const actual = pm.collectionVariables.get('token');",
+          "if (actual && !caducado(actual)) { return; }",
+          "",
+          "const clave = pm.environment.get('password');",
+          "if (!clave) { throw new Error('Falta `password` en el entorno.'); }",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + rutaLogin,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "        email: pm.environment.get('email'),",
+          "        password: clave",
+          "    }) }",
+          "}, (err, res) => {",
+          "    if (err) { throw new Error('No se pudo contactar con el gateway: ' + err); }",
+          "    if (res.code !== 200) { throw new Error('Login rechazado (' + res.code + ').'); }",
+          "    pm.collectionVariables.set('token', res.json().token);",
+          "});"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "1 — Uso normal",
+      "item": [
+        {
+          "name": "1.1 — Solo grado (el docente aun no escogio asignatura)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "// El motor del query-service SIEMPRE envuelve en {\"rows\":[...]}.",
+                  "const filas = pm.response.json().rows || [];",
+                  "pm.test('devuelve al menos un referente', () => pm.expect(filas).to.not.be.empty);",
+                  "const r = filas[0];",
+                  "",
+                  "// Las DOS banderas que gobiernan que se puede pintar en la actividad.",
+                  "pm.test('trae enfoque y tipo de evaluacion', () => {",
+                  "  pm.expect(r).to.have.property('es_evaluativo');",
+                  "  pm.expect(r.tipo_evaluacion_valor).to.be.oneOf(['CUALITATIVA', 'CUANTITATIVA', 'CUANTITATIVA_CUALITATIVA']);",
+                  "});",
+                  "",
+                  "// La UI rotula con estas, nunca con literales: en preescolar son",
+                  "// 'Proposito'/'Imprescindible', en primaria 'Enunciado'/'Evidencia'.",
+                  "pm.test('trae las etiquetas de nivel del propio referente', () => {",
+                  "  pm.expect(r.nivel_1_etiqueta).to.be.a('string').and.not.empty;",
+                  "  pm.expect(r.nivel_2_etiqueta).to.be.a('string').and.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('el arbol trae evidencias anidadas por enunciado', () => {",
+                  "  pm.expect(r.enunciados).to.be.an('array');",
+                  "  r.enunciados.forEach(e => pm.expect(e, e.texto).to.have.property('evidencias'));",
+                  "});",
+                  "",
+                  "// El ORDEN es la preferencia: acotados al area primero (0), universales",
+                  "// despues (1). Si esto se rompe, tomar filas[0] deja de ser correcto.",
+                  "pm.test('ordenado por especificidad', () => {",
+                  "  const esp = filas.map(x => x.especificidad);",
+                  "  pm.expect(esp).to.deep.equal(esp.slice().sort((a, b) => a - b));",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set('referenteId', String(r.pk_referente_curricular));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/referente-curricular?grado={{gradoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "referente-curricular"
+              ],
+              "query": [
+                {
+                  "key": "grado",
+                  "value": "{{gradoId}}"
+                }
+              ]
+            },
+            "description": "El caso minimo: **solo `?grado=`**. Sin asignatura no se filtra por area, asi que devuelve **todos** los referentes vigentes del nivel de ese grado.\n\nEs lo que pide la pantalla en cuanto el docente escoge el grado, antes de tocar el combo de asignatura.\n\nFijarse en la respuesta guardada: `aplica_a_area: false` y `areas: []` significan que ese referente es **universal** (aplica a todas las areas), no que no aplique a ninguna."
+          },
+          "response": [
+            {
+              "name": "200 — Preescolar (grado 3743)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/referente-curricular?grado=3743",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "eval-col",
+                    "planeador",
+                    "referente-curricular"
+                  ],
+                  "query": [
+                    {
+                      "key": "grado",
+                      "value": "3743"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"rows\": [\n    {\n      \"fk_tgrado\": 3743,\n      \"grado\": \"Pre-Jardin\",\n      \"fk_tnivel_ensenanza\": 1,\n      \"nivel_ensenanza\": \"Preescolar\",\n      \"fk_tasignatura\": null,\n      \"asignatura\": null,\n      \"fk_tarea_asignatura\": null,\n      \"area_asignatura\": null,\n      \"pk_referente_curricular\": 24,\n      \"referente_nombre\": \"Propósitos e Imprescindibles - Educación Inicial\",\n      \"referente_descripcion\": \"Descripcion\",\n      \"enfoque_valor\": \"FORMATIVO\",\n      \"enfoque_nombre\": \"Formativo\",\n      \"es_evaluativo\": false,\n      \"tipo_evaluacion_valor\": \"CUALITATIVA\",\n      \"tipo_evaluacion_nombre\": \"Cualitativa\",\n      \"nivel_1_etiqueta\": \"Propósito\",\n      \"nivel_2_etiqueta\": \"Imprescindible\",\n      \"instrumento\": \"Proyecto pedagógico\",\n      \"instrumento_info_adicional\": null,\n      \"normatividad\": \"Ley 1\",\n      \"anio_vigencia_desde\": 2026,\n      \"anio_vigencia_hasta\": null,\n      \"aplica_a_area\": false,\n      \"especificidad\": 1,\n      \"niveles\": [\n        {\n          \"pk\": 1,\n          \"nombre\": \"Preescolar\"\n        }\n      ],\n      \"areas\": [],\n      \"enunciados\": [\n        {\n          \"pk\": 27,\n          \"texto\": \"Proposito\",\n          \"evidencias\": [\n            {\n              \"pk\": 28,\n              \"texto\": \"Imprescindible\"\n            },\n            {\n              \"pk\": 29,\n              \"texto\": \"No imprescindible\"\n            }\n          ]\n        }\n      ],\n      \"total_count\": 1\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "1.2 — Grado + asignatura (filtra por area)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "// El motor del query-service SIEMPRE envuelve en {\"rows\":[...]}.",
+                  "const filas = pm.response.json().rows || [];",
+                  "pm.test('devuelve al menos un referente', () => pm.expect(filas).to.not.be.empty);",
+                  "const r = filas[0];",
+                  "",
+                  "// Las DOS banderas que gobiernan que se puede pintar en la actividad.",
+                  "pm.test('trae enfoque y tipo de evaluacion', () => {",
+                  "  pm.expect(r).to.have.property('es_evaluativo');",
+                  "  pm.expect(r.tipo_evaluacion_valor).to.be.oneOf(['CUALITATIVA', 'CUANTITATIVA', 'CUANTITATIVA_CUALITATIVA']);",
+                  "});",
+                  "",
+                  "// La UI rotula con estas, nunca con literales: en preescolar son",
+                  "// 'Proposito'/'Imprescindible', en primaria 'Enunciado'/'Evidencia'.",
+                  "pm.test('trae las etiquetas de nivel del propio referente', () => {",
+                  "  pm.expect(r.nivel_1_etiqueta).to.be.a('string').and.not.empty;",
+                  "  pm.expect(r.nivel_2_etiqueta).to.be.a('string').and.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('el arbol trae evidencias anidadas por enunciado', () => {",
+                  "  pm.expect(r.enunciados).to.be.an('array');",
+                  "  r.enunciados.forEach(e => pm.expect(e, e.texto).to.have.property('evidencias'));",
+                  "});",
+                  "",
+                  "// El ORDEN es la preferencia: acotados al area primero (0), universales",
+                  "// despues (1). Si esto se rompe, tomar filas[0] deja de ser correcto.",
+                  "pm.test('ordenado por especificidad', () => {",
+                  "  const esp = filas.map(x => x.especificidad);",
+                  "  pm.expect(esp).to.deep.equal(esp.slice().sort((a, b) => a - b));",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set('referenteId', String(r.pk_referente_curricular));",
+                  "",
+                  "pm.test('resuelve el area contra la que filtro', () => {",
+                  "  pm.expect(r.fk_tasignatura, 'eco de la asignatura pedida').to.not.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/referente-curricular?grado={{gradoId}}&asignatura={{asignaturaId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "referente-curricular"
+              ],
+              "query": [
+                {
+                  "key": "grado",
+                  "value": "{{gradoId}}"
+                },
+                {
+                  "key": "asignatura",
+                  "value": "{{asignaturaId}}"
+                }
+              ]
+            },
+            "description": "Con `?asignatura=` se **filtra por area** y se ordena por especificidad.\n\nSobreviven al filtro dos clases de referente: los **acotados** al area de esa asignatura (`aplica_a_area: true`, `especificidad: 0`, van primero) y los **universales**, los que no declaran ninguna area (`especificidad: 1`).\n\nLa respuesta ademas resuelve `fk_tarea_asignatura` / `area_asignatura`: es el area del catalogo nacional contra la que se filtro, util para depurar cuando el resultado no es el esperado.\n\nMandar una asignatura que **no existe** es 404, no \"sin filtro\": devolver de mas en silencio seria peor."
+          }
+        },
+        {
+          "name": "1.3 — Con ?anio= (vigencia)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "// El motor del query-service SIEMPRE envuelve en {\"rows\":[...]}.",
+                  "const filas = pm.response.json().rows || [];",
+                  "pm.test('devuelve al menos un referente', () => pm.expect(filas).to.not.be.empty);",
+                  "const r = filas[0];",
+                  "",
+                  "// Las DOS banderas que gobiernan que se puede pintar en la actividad.",
+                  "pm.test('trae enfoque y tipo de evaluacion', () => {",
+                  "  pm.expect(r).to.have.property('es_evaluativo');",
+                  "  pm.expect(r.tipo_evaluacion_valor).to.be.oneOf(['CUALITATIVA', 'CUANTITATIVA', 'CUANTITATIVA_CUALITATIVA']);",
+                  "});",
+                  "",
+                  "// La UI rotula con estas, nunca con literales: en preescolar son",
+                  "// 'Proposito'/'Imprescindible', en primaria 'Enunciado'/'Evidencia'.",
+                  "pm.test('trae las etiquetas de nivel del propio referente', () => {",
+                  "  pm.expect(r.nivel_1_etiqueta).to.be.a('string').and.not.empty;",
+                  "  pm.expect(r.nivel_2_etiqueta).to.be.a('string').and.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('el arbol trae evidencias anidadas por enunciado', () => {",
+                  "  pm.expect(r.enunciados).to.be.an('array');",
+                  "  r.enunciados.forEach(e => pm.expect(e, e.texto).to.have.property('evidencias'));",
+                  "});",
+                  "",
+                  "// El ORDEN es la preferencia: acotados al area primero (0), universales",
+                  "// despues (1). Si esto se rompe, tomar filas[0] deja de ser correcto.",
+                  "pm.test('ordenado por especificidad', () => {",
+                  "  const esp = filas.map(x => x.especificidad);",
+                  "  pm.expect(esp).to.deep.equal(esp.slice().sort((a, b) => a - b));",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set('referenteId', String(r.pk_referente_curricular));",
+                  "",
+                  "pm.test('todo lo devuelto cubre el anio pedido', () => {",
+                  "  const anio = Number(pm.request.url.query.get('anio'));",
+                  "  filas.forEach(x => {",
+                  "    pm.expect(x.anio_vigencia_desde, x.referente_nombre).to.be.at.most(anio);",
+                  "    if (x.anio_vigencia_hasta !== null) {",
+                  "      pm.expect(x.anio_vigencia_hasta, x.referente_nombre).to.be.at.least(anio);",
+                  "    }",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/referente-curricular?grado={{gradoId}}&anio=2026",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "referente-curricular"
+              ],
+              "query": [
+                {
+                  "key": "grado",
+                  "value": "{{gradoId}}"
+                },
+                {
+                  "key": "anio",
+                  "value": "2026"
+                }
+              ]
+            },
+            "description": "`?anio=` descarta los referentes cuya vigencia no cubre ese anio. Por defecto es el **anio en curso**, asi que normalmente no hace falta mandarlo.\n\nLa vigencia es `[anio_vigencia_desde, anio_vigencia_hasta]`, y `anio_vigencia_hasta: null` significa **vigente indefinidamente**.\n\nSirve para consultar el referente que aplicaba a un anio lectivo anterior sin tener que desactivar nada."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 — Casos borde (que esperar cuando algo no cuadra)",
+      "item": [
+        {
+          "name": "2.1 — Grado fuera del alcance del usuario → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 por alcance territorial', () => pm.response.to.have.status(403));",
+                  "// Con un usuario nivel 0 (super admin) esta misma peticion da 200."
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/referente-curricular?grado={{gradoAjenoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "referente-curricular"
+              ],
+              "query": [
+                {
+                  "key": "grado",
+                  "value": "{{gradoAjenoId}}"
+                }
+              ]
+            },
+            "description": "Un grado de una sede que el usuario **no alcanza**. Con el docente de prueba (nivel 3, sedes 1651/1655) el grado 1750 es de otra sede: **403**.\n\nNo es un fallo del endpoint; es el alcance territorial de V277 haciendo su trabajo. Con un super admin (nivel 0) la misma peticion responde 200."
+          }
+        },
+        {
+          "name": "2.2 — Grado inexistente → 403 (NO 404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403, no 404: el gate corre antes que la existencia', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/referente-curricular?grado=99999999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "referente-curricular"
+              ],
+              "query": [
+                {
+                  "key": "grado",
+                  "value": "99999999"
+                }
+              ]
+            },
+            "description": "**El detalle que mas confunde de este endpoint.** Un grado que no existe responde **403**, no 404.\n\nEl gate de alcance corre **antes** que la comprobacion de existencia, y es deliberado: al reves, cualquiera que pueda autenticarse podria sondear que `PK_TGRADO` existen y cuales no, que es justo lo que el alcance territorial trata de no filtrar.\n\nEl 404 (`P0002`) queda para el grado que **si** existe y el usuario **si** alcanza, y para una `?asignatura=` inexistente (2.3)."
+          }
+        },
+        {
+          "name": "2.3 — Asignatura inexistente → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 por asignatura inexistente', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/referente-curricular?grado={{gradoId}}&asignatura=99999999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "referente-curricular"
+              ],
+              "query": [
+                {
+                  "key": "grado",
+                  "value": "{{gradoId}}"
+                },
+                {
+                  "key": "asignatura",
+                  "value": "99999999"
+                }
+              ]
+            },
+            "description": "El grado es alcanzable, asi que el gate pasa y se llega a validar la asignatura: **404** (`P0002`).\n\nSe valida a proposito en vez de tratarla como \"sin filtro\": devolver todos los referentes del nivel ante un id malo seria un falso positivo silencioso."
+          }
+        },
+        {
+          "name": "2.4 — Anio sin referentes vigentes → 200 con lista vacia",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().rows || [];",
+                  "pm.test('lista vacia, no error', () => pm.expect(filas).to.be.an('array').and.be.empty);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/referente-curricular?grado={{gradoId}}&anio=1999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "referente-curricular"
+              ],
+              "query": [
+                {
+                  "key": "grado",
+                  "value": "{{gradoId}}"
+                },
+                {
+                  "key": "anio",
+                  "value": "1999"
+                }
+              ]
+            },
+            "description": "Que **no haya** referente vigente no es un error: **200** con `rows: []`.\n\nEl front tiene que saber distinguirlo de un 403/404 -- aqui la respuesta correcta es \"este grado no tiene referente para ese anio\", no un mensaje de error."
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "token",
+      "value": "",
+      "description": "Lo llena solo el script prerequest de la coleccion."
+    },
+    {
+      "key": "gradoId",
+      "value": "3743",
+      "description": "Pre-Jardin (nivel de ensenanza 1, Preescolar). Grado del docente de prueba en el servidor de test."
+    },
+    {
+      "key": "asignaturaId",
+      "value": "4190",
+      "description": "Asignatura del docente de prueba en el servidor de test."
+    },
+    {
+      "key": "gradoAjenoId",
+      "value": "1750",
+      "description": "Grado de una sede que el docente de prueba NO alcanza: sirve para ver el 403 del alcance territorial."
+    },
+    {
+      "key": "referenteId",
+      "value": "",
+      "description": "Lo deja la peticion 1.1 (pk_referente_curricular de la primera fila)."
+    }
+  ]
+}

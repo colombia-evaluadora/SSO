@@ -292,8 +292,19 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/auth-center:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-auth-center
     restart: unless-stopped
-    mem_limit: 640m
-    mem_reservation: 512m
+    # Subido de 640m a 896m el 2026-09-09. En el servidor de pruebas el
+    # contenedor estaba estable en 583MiB — el 91% de los 640m — y es el
+    # único servicio cuya caída deja a TODO el mundo fuera: es quien
+    # firma los tokens. Un pico de logins lo dejaba a un OOM-kill de
+    # distancia, y `restart: unless-stopped` habría hecho el corte
+    # visible (todas las sesiones en curso fallando el refresh).
+    #
+    # mem_limit no reserva nada: sólo pone el techo del cgroup, así que
+    # subirlo no le quita memoria a nadie mientras auth-center no la
+    # use. Lo que sí reserva es mem_reservation, y por eso sube menos
+    # (512m -> 640m): justo por encima del consumo observado.
+    mem_limit: 896m
+    mem_reservation: 640m
     depends_on:
       flyway:
         # Schema must be migrated before auth-center runs ddl-auto=validate
@@ -1624,9 +1635,7 @@ services:
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
     healthcheck:
       # bash y no sh: /dev/tcp es una funcion de bash, dash no la tiene.
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8087; printf 'GET /actuator/health HTTP/1.0
-
-' >&3; grep -q UP <&3"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8087; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 15s
       timeout: 5s
       retries: 10

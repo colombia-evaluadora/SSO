@@ -69,16 +69,18 @@ public class UserController {
     }
 
     /**
-     * Public endpoint (no auth) — the user submits their email
-     * to receive a restore link. Always returns 200 even when
-     * the email is unknown (no enumeration).
-     */
-    /**
-     * Devuelve el token de reseteo en el cuerpo, ademas de enviarlo por
-     * correo — ver la advertencia de seguridad en {@link ForgotPasswordResponse}.
+     * Public endpoint (no auth) — el usuario envia su correo para
+     * recibir el enlace de restauracion.
      *
-     * <p>La respuesta tiene la misma forma exista o no el correo, para no
-     * convertir este endpoint en un enumerador de cuentas.
+     * <p>El token de reseteo <b>no</b> vuelve en el cuerpo: sale solo por
+     * correo. La respuesta trae {@code maskedEmail} + {@code expiresIn} — ver
+     * {@link ForgotPasswordResponse}.
+     *
+     * <p><b>Un correo desconocido responde 404</b> (a pedido del equipo, ver
+     * {@code UserAdminService#forgotPassword}), asi que este endpoint si
+     * permite averiguar que direcciones estan registradas. Los dos javadoc que
+     * habia aqui afirmaban lo contrario — quedaron desactualizados al agregarse
+     * ese 404 y decian que la respuesta era identica en ambos casos.
      */
     @GetMapping("/forgotPassword")
     public ResponseEntity<ForgotPasswordResponse> forgotPassword(

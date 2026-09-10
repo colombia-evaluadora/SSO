@@ -1,6 +1,7 @@
 package com.co.eurekatic.files;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.InvalidDataAccessResourceUsageException;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
@@ -108,6 +109,70 @@ class FileAccessServiceTest {
 
         boolean puede = service(jdbc)
                 .puedeVer(42L, "nadie@example.com", Set.of("CEVAL-AUXILIAR_ADMINISTRATIVO"));
+
+        assertThat(puede).isFalse();
+    }
+
+    /**
+     * Las dos consultas de ownership comparten firma, así que el stub
+     * las distingue por el SQL: la del soporte de asistencia es la
+     * única que menciona {@code tasistencia}.
+     */
+    private static void stubOwnership(NamedParameterJdbcTemplate jdbc, int propias, Object asistencia) {
+        when(jdbc.query(anyString(), any(SqlParameterSource.class), any(RowMapper.class)))
+                .thenReturn(List.of());
+        when(jdbc.queryForObject(anyString(), any(SqlParameterSource.class), eq(Integer.class)))
+                .thenAnswer(inv -> {
+                    String sql = inv.getArgument(0);
+                    if (!sql.contains("tasistencia")) {
+                        return propias;
+                    }
+                    if (asistencia instanceof RuntimeException e) {
+                        throw e;
+                    }
+                    return asistencia;
+                });
+    }
+
+    /**
+     * Un docente sin privilegio global y sin fila propia SÍ ve el
+     * archivo si es el soporte de una asistencia que su gate le deja
+     * ver — el caso que antes daba 404 al abrir el clip de Seguimiento.
+     */
+    @Test
+    void soporteDeAsistenciaVisibleSiElGateLoPermite() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubOwnership(jdbc, 0, 1);
+
+        boolean puede = service(jdbc).puedeVer(42L, "docente@example.com", Set.of("CEVAL-DOCENTE"));
+
+        assertThat(puede).isTrue();
+    }
+
+    /** Si el gate del módulo dice que no, el soporte tampoco se ve. */
+    @Test
+    void soporteDeAsistenciaNoVisibleSiElGateLoNiega() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubOwnership(jdbc, 0, 0);
+
+        boolean puede = service(jdbc).puedeVer(42L, "docente@example.com", Set.of("CEVAL-DOCENTE"));
+
+        assertThat(puede).isFalse();
+    }
+
+    /**
+     * En un entorno sin el módulo de asistencias (o sin los helpers de
+     * permisos que consume) la consulta falla: se pierde SÓLO ese
+     * camino, no el resto de {@code puedeVer} — por eso va aislada y
+     * no como una UNION ALL más dentro de esPropietario.
+     */
+    @Test
+    void siLaFuncionDeAsistenciasNoExisteSePierdeSoloEseCamino() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubOwnership(jdbc, 0,
+                new InvalidDataAccessResourceUsageException("function fn_asistencia_puede_ver does not exist"));
+
+        boolean puede = service(jdbc).puedeVer(42L, "docente@example.com", Set.of("CEVAL-DOCENTE"));
 
         assertThat(puede).isFalse();
     }

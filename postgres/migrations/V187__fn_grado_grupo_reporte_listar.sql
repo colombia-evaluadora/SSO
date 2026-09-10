@@ -49,7 +49,7 @@ LANGUAGE sql STABLE AS $$
         LIMIT 1
  ) plan ON TRUE
      WHERE g.FK_TPERIODO_ACADEMICO = p_fk_periodo AND g.ACTIVE = TRUE
-       AND academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario, p_fk_periodo)
+       AND academico_test.fn_periodo_puede_ver(p_pk_usuario, p_fk_periodo)
        AND (p_fk_grado IS NULL OR CARDINALITY(p_fk_grado) = 0 OR g.PK_TGRADO = ANY(p_fk_grado))
      ORDER BY g.NOMBRE, gr.NOMBRE
      LIMIT NULLIF(p_page_size, 0)

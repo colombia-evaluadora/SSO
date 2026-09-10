@@ -1,0 +1,567 @@
+# =============================================================================
+# deploy.yml — workflow REUTILIZABLE que despliega el stack a un servidor.
+#
+# No se dispara solo: lo invocan `deploy-test.yml` (push a dev -> servidor de
+# pruebas) y `release.yml` (tag v* en main -> servidor de produccion). Toda la
+# logica de despliegue vive AQUI y solo aqui.
+#
+# ---- Por que reutilizable y no dos copias ----------------------------------
+#
+# El cuerpo del despliegue son ~400 lineas de bash afinado: arranque en frio
+# contra redeploy en caliente, gateo por flyway, repair + migrate outOfOrder,
+# re-aplicacion de migraciones con checksum cambiado, smoke check. Duplicarlo
+# para un segundo entorno garantiza que en unos meses las dos copias divergen
+# y la de produccion es la vieja. Ya paso con ci.yml: existe un commit
+# llamado "ci(deploy): sincronizar workflow de test con dev".
+#
+# ---- Secretos: por ENTORNO, no por repositorio -----------------------------
+#
+# Los nombres son IDENTICOS en `test` y en `production`; lo que cambia es el
+# valor. Eso es lo que permite que este fichero no sepa a que servidor apunta:
+#
+#   SSH_TARGET   usuario@host del servidor. Fusiona los antiguos TEST_SSH_USER
+#                y TEST_SSH_HOST, que el workflow ya concatenaba en sus cinco
+#                usos; el unico sitio que necesitaba el host suelto es el
+#                ssh-keyscan, y ahi sale con ${SSH_TARGET#*@}.
+#   SSH_KEY      clave privada OpenSSH, exclusiva para deploy.
+#   ENV_FILE     contenido completo de /opt/sso/.env.
+#
+# Se pueblan con ./scripts/setup-environment-secrets.sh.
+#
+# GHCR_PULL_USER / GHCR_PULL_TOKEN ya no existen: el `docker login` del
+# servidor usa el GITHUB_TOKEN efimero del propio job, que caduca al terminar.
+#
+# ---- Rollback --------------------------------------------------------------
+#
+# Cada deploy publica ademas un tag inmutable por SHA (o el tag de version en
+# un release). En el servidor: editar IMAGE_TAG en /opt/sso/.env y
+# `docker compose up -d`.
+# =============================================================================
+
+name: Deploy (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'GitHub Environment del que salen los secretos (test | production).'
+        required: true
+        type: string
+      ref:
+        description: 'Commit o tag a desplegar. Debe ser el MISMO que construyo las imagenes.'
+        required: true
+        type: string
+      image_tag:
+        description: 'Tag de imagen que el servidor debe correr (test-latest, v1.2.3...). Se fija en IMAGE_TAG del .env remoto.'
+        required: true
+        type: string
+      changed_services:
+        description: >-
+          Array JSON de los servicios cuya imagen cambio, para el redeploy en
+          caliente. En un release va la lista completa: se despliega todo.
+        required: false
+        type: string
+        default: '[]'
+
+# packages: read es lo que habilita que el GITHUB_TOKEN sirva para el
+# `docker login ghcr.io` del servidor. contents: read, para el checkout.
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    name: deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    # El environment aporta DOS cosas, no una: de el salen los secretos, y el
+    # son sus reglas de proteccion. `production` exige revisor y solo admite
+    # tags v*, asi que un release se para aqui hasta que alguien lo aprueba.
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup SSH
+        # SSH_KEY y SSH_TARGET entran como variables de entorno, no
+        # interpoladas dentro del script: una clave privada expandida
+        # en el cuerpo de un `run:` acaba en el fichero temporal que el
+        # runner escribe en disco, y basta un `set -x` de más para que
+        # salga en el log. Como env var no la imprime nadie.
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_TARGET: ${{ secrets.SSH_TARGET }}
+        run: |
+          if [ -z "${SSH_KEY:-}" ] || [ -z "${SSH_TARGET:-}" ]; then
+            echo "::error::Faltan SSH_KEY o SSH_TARGET en el entorno '${{ inputs.environment }}'."
+            echo "Puéblalos con: ./scripts/setup-environment-secrets.sh ${{ inputs.environment }} ..."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # SSH_TARGET es 'usuario@host'; keyscan sólo quiere el host.
+          ssh-keyscan -H "${SSH_TARGET#*@}" >> ~/.ssh/known_hosts
+
+      - name: Sync compose + configs
+        # El compose monta rutas relativas (./postgres/migrations,
+        # ./observability/**, ./docker/**), así que el servidor necesita esos
+        # archivos junto al docker-compose.yml. --delete mantiene
+        # migrations/ y observability/ como espejo del repo; el .env
+        # del servidor NO se toca (vive en /opt/sso y no está en la
+        # lista de origen).
+        env:
+          DEST: ${{ secrets.SSH_TARGET }}
+        run: |
+          ssh -i ~/.ssh/deploy_key "$DEST" "mkdir -p /opt/sso/postgres/migrations /opt/sso/observability /opt/sso/docker /opt/sso/scripts"
+          rsync -az -e "ssh -i ~/.ssh/deploy_key" docker-compose.yml \
+            "$DEST:/opt/sso/docker-compose.yml"
+          # docker-compose.cdc-off.yml lo aplica el wrapper
+          # ./scripts/sso-stack.sh cuando CDC_SYNC_ENABLED=false. Sin
+          # este fichero en el server, el deploy con el flag apagado
+          # cae con "no such file or directory" en `docker compose -f`.
+          rsync -az -e "ssh -i ~/.ssh/deploy_key" docker-compose.cdc-off.yml \
+            "$DEST:/opt/sso/docker-compose.cdc-off.yml"
+          rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" postgres/migrations/ \
+            "$DEST:/opt/sso/postgres/migrations/"
+          rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" observability/ \
+            "$DEST:/opt/sso/observability/"
+          rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" docker/ \
+            "$DEST:/opt/sso/docker/"
+          # El wrapper ./scripts/sso-stack.sh lo invoca el paso "Pull &
+          # restart stack" para que CDC_SYNC_ENABLED / SSO_TELEMETRY_ENABLED
+          # se honren en el deploy. Sin él el deploy cae con exit 127.
+          # `--chmod=u+rwx,go+rx` fuerza 755 en el server: por defecto
+          # rsync conserva los permisos del repo (644), y sin el bit
+          # +x el deploy cae con exit 126 ("permission denied").
+          rsync -az --chmod=u+rwx,go+rx -e "ssh -i ~/.ssh/deploy_key" scripts/ \
+            "$DEST:/opt/sso/scripts/"
+          # Defensa adicional: si el rsync quedó con umask raro, re-fija
+          # el bit de ejecución del wrapper antes de invocarlo. Si ya
+          # está bien, no hace daño.
+          ssh -i ~/.ssh/deploy_key "$DEST" \
+            "chmod 755 /opt/sso/scripts/sso-stack.sh 2>/dev/null || true"
+
+      - name: Deploy .env from GitHub secret
+        # El .env ya no se crea "a mano" en el servidor: vive como
+        # secreto del entorno (ENV_FILE) y se escribe aquí en cada
+        # deploy. Con esto, rotar una credencial es editar el secreto
+        # y re-desplegar — no entrar por SSH — y deja de haber un
+        # fichero en el host que nadie sabe qué contiene ni cuándo
+        # cambió.
+        #
+        # Disciplina de manejo, igual que el token de GHCR de abajo:
+        #   - el contenido viaja por STDIN, nunca en argv ni
+        #     interpolado dentro del script (argv es visible en
+        #     `ps` y se filtraría con `set -x`);
+        #   - `umask 077` para que nazca 600, no 644;
+        #   - se escribe a un temporal y se mueve, así un corte a
+        #     mitad no deja un .env truncado capaz de tumbar el stack
+        #     en el `compose up` siguiente;
+        #   - el log sólo reporta el número de líneas, nunca el
+        #     contenido.
+        env:
+          DEST: ${{ secrets.SSH_TARGET }}
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          if [ -z "${ENV_FILE:-}" ]; then
+            echo "::error::Falta el secreto ENV_FILE del entorno '${{ inputs.environment }}'."
+            echo "Debe contener el .env completo del servidor, incluidas las"
+            echo "variables de V30/V33 (SSO_INTERNAL_TOKEN, GATEWAY_INTERNAL_TOKEN,"
+            echo "QUERY_CATALOG_INTERNAL_TOKEN, QUERY_SERVICE_BASE_URL, …)."
+            exit 1
+          fi
+          printf '%s' "$ENV_FILE" | ssh -i ~/.ssh/deploy_key "$DEST" \
+            'umask 077 && cat > /opt/sso/.env.new && mv /opt/sso/.env.new /opt/sso/.env'
+
+          # IMAGE_TAG lo manda el llamador, NO el secreto. El .env
+          # guardado trae el tag que estuviera vigente cuando se subió, y
+          # en un release eso es justo lo que no queremos: el tag tiene
+          # que ser el de ESTA versión (v1.2.3), no el que había el día
+          # que alguien actualizó el secreto. Dejarlo dentro de ENV_FILE
+          # obligaría a re-subir el secreto entero en cada release.
+          #
+          # Se borra y se re-añade para que la línea exista una sola vez
+          # gane quien gane en el fichero base — misma disciplina que el
+          # bloque de ZeptoMail de abajo.
+          ssh -i ~/.ssh/deploy_key "$DEST" \
+            "sed -i '/^IMAGE_TAG=/d' /opt/sso/.env && \
+             printf '\nIMAGE_TAG=%s\n' '${{ inputs.image_tag }}' >> /opt/sso/.env"
+
+          ssh -i ~/.ssh/deploy_key "$DEST" \
+            'echo ".env desplegado: $(grep -c . /opt/sso/.env) líneas no vacías, permisos $(stat -c %a /opt/sso/.env)"'
+          echo "IMAGE_TAG fijado a '${{ inputs.image_tag }}'"
+
+      - name: Añadir credenciales de ZeptoMail al .env
+        # Estas dos NO van dentro de TEST_ENV_FILE a propósito. Ese
+        # secreto es el .env entero (170+ líneas), y actualizarlo
+        # obliga a reescribirlo completo: los secretos de GitHub son
+        # de sólo escritura, así que nadie puede leer el valor vigente
+        # para añadirle una línea. Rotar el token de ZeptoMail por esa
+        # vía significaría volcar y reconstruir toda la configuración
+        # de producción a ciegas, y un fallo a media reconstrucción
+        # deja el stack sin credenciales.
+        #
+        # Como secretos propios, rotar el token es un `gh secret set`
+        # y el resto del .env no se toca. El append va después de
+        # escribir el fichero, así que sobrevive a que el deploy lo
+        # regenere en cada despliegue.
+        #
+        # Misma disciplina que el paso anterior: el valor viaja por
+        # STDIN, nunca en argv.
+        env:
+          DEST: ${{ secrets.SSH_TARGET }}
+          ZEPTO_USER: ${{ secrets.SMTP_ZEPTOMAIL_USER }}
+          ZEPTO_PASS: ${{ secrets.SMTP_ZEPTOMAIL_PASS }}
+        run: |
+          if [ -z "${ZEPTO_USER:-}" ] || [ -z "${ZEPTO_PASS:-}" ]; then
+            echo "::warning::Sin SMTP_ZEPTOMAIL_USER/PASS; la fila smtp-zeptomail"
+            echo "de provider_config se auto-desactivará y el correo saldrá por el"
+            echo "siguiente proveedor de la lista (smtp-gmail)."
+            exit 0
+          fi
+          # Borrar antes de añadir: TEST_ENV_FILE también puede traer
+          # estas dos variables, y sin el borrado cada despliegue
+          # dejaría el .env con la pareja duplicada. Así estos secretos
+          # son la única fuente de verdad y rotar el token sigue siendo
+          # un `gh secret set`, gane quien gane en el fichero base.
+          ssh -i ~/.ssh/deploy_key "$DEST" 'sed -i "/^SMTP_ZEPTOMAIL_/d" /opt/sso/.env'
+          # El `\n` inicial es deliberado: si el fichero base no acaba
+          # en salto de línea, un append pega la primera variable al
+          # final de la última existente y la corrompe (le pasó a
+          # SMTP_FROM al hacerlo a mano el 2026-08-19). Una línea en
+          # blanco de más en un .env no molesta a nadie.
+          printf '\nSMTP_ZEPTOMAIL_USER=%s\nSMTP_ZEPTOMAIL_PASS=%s\n' "$ZEPTO_USER" "$ZEPTO_PASS" \
+            | ssh -i ~/.ssh/deploy_key "$DEST" \
+              'umask 077 && cat >> /opt/sso/.env'
+          ssh -i ~/.ssh/deploy_key "$DEST" \
+            'echo "ZeptoMail: $(grep -c "^SMTP_ZEPTOMAIL_" /opt/sso/.env) variables añadidas"'
+
+      - name: Pull & restart stack
+        # Cold-cache JVM starts on a 4GB Linode take 60-90s
+        # for the provisioner (the heaviest of the bunch);
+        # the cascade through sso-admin → query-service adds
+        # another 2-3 min. GitHub's default step timeout is
+        # 360 min, but the file was being interpreted as 4 min
+        # by an older runner config; bump explicitly to 15
+        # min so the deploy can wait the full cold-start
+        # window without bailing.
+        timeout-minutes: 15
+        env:
+          DEST: ${{ secrets.SSH_TARGET }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          # Lista de servicios cuya imagen cambió en este deploy (ya
+          # filtrada por el job `changes` contra el diff real). La usa el
+          # redeploy "en caliente" de más abajo para saber qué recrear sin
+          # pasarle el JSON crudo al shell remoto.
+          CHANGED_SERVICES_JSON: ${{ inputs.changed_services }}
+        run: |
+          # Login a GHCR en el servidor con el GITHUB_TOKEN EFÍMERO de este
+          # job (habilitado por `permissions: packages: read` arriba).
+          #
+          # Antes esto usaba GHCR_PULL_TOKEN: un PAT clásico de una cuenta
+          # personal, creado en julio y sin rotar desde entonces, que además
+          # quedaba cacheado indefinidamente en ~/.docker/config.json del
+          # servidor. Es decir, una credencial de larga vida ligada a una
+          # persona, viviendo en disco en la máquina desplegada.
+          #
+          # El GITHUB_TOKEN caduca cuando termina el job, así que no deja
+          # nada permanente en el servidor y no hay PAT que rotar.
+          #
+          # Contrapartida asumida: un `docker compose pull` a mano en el
+          # servidor ya no funciona sin volver a autenticarse. Es deliberado
+          # — los pulls los hace el pipeline.
+          #
+          # El token va por stdin, nunca en argv ni en el heredoc.
+          printf '%s' "$GHCR_TOKEN" | ssh -i ~/.ssh/deploy_key "$DEST" \
+            "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
+
+          # JSON → lista separada por espacios. Los nombres vienen de un
+          # whitelist fijo en el job `changes` (case/add() ahí), así que son
+          # seguros para interpolar en la línea de comando remota de abajo
+          # (sin espacios, sin metacaracteres de shell).
+          CHANGED_SERVICES="$(echo "$CHANGED_SERVICES_JSON" | jq -r 'join(" ")')"
+          echo "Servicios cuya imagen cambió: ${CHANGED_SERVICES:-<ninguno>}"
+
+          # CHANGED_SERVICES viaja como variable de entorno del comando
+          # remoto (no dentro del heredoc, que va comillado a propósito
+          # para que $DEST, $(...) etc. de las líneas de abajo se evalúen
+          # en el servidor y no aquí).
+          ssh -i ~/.ssh/deploy_key "$DEST" "CHANGED_SERVICES='$CHANGED_SERVICES' bash -s" <<'EOF'
+          set -euo pipefail
+          cd /opt/sso
+          # El .env lo acaba de escribir el paso anterior desde el
+          # secreto TEST_ENV_FILE. Si no está, ese paso falló y no
+          # deberíamos haber llegado aquí — el guard se queda como
+          # red de seguridad.
+          test -f .env || { echo "FALTA /opt/sso/.env — el paso 'Deploy .env' no lo escribió"; exit 1; }
+          # Wrapper en vez de `docker compose` directo: aplica los
+          # overrides según .env (CDC_SYNC_ENABLED, SSO_TELEMETRY_ENABLED).
+          # Sin esto, poner CDC_SYNC_ENABLED=false en TEST_ENV_FILE no
+          # apagaría los servicios CDC en el deploy automático — el
+          # override `docker-compose.cdc-off.yml` no se concatenaría.
+          ./scripts/sso-stack.sh pull --quiet
+
+          # ─── Servicios gateados por flyway vs. servicios independientes ───
+          #
+          # Calculado una vez con `docker compose config --format json` +
+          # BFS sobre `depends_on` hasta `flyway` (no a ojo — dos servicios
+          # que "suenan" a que dependen del esquema, file-service y
+          # reporting-service, en realidad NO tienen depends_on:flyway en
+          # docker-compose.yml hoy). Si el grafo de dependencias cambia,
+          # recalcular con ese mismo comando.
+          #
+          #   GATED_SERVICES   → arrastran flyway transitivamente
+          #                       (auth-center/sso-admin lo declaran
+          #                       directo; api-gateway lo hereda de ambos).
+          #   INFRA_SERVICES   → no dependen de flyway. Se levantan
+          #                       siempre primero, gate o no gate.
+          GATED_SERVICES="api-gateway auth-center cdc-capture cdc-pg-slot-init notification-service sso-admin"
+          INFRA_SERVICES="cdc-clickhouse cdc-worker eurekaserver file-service mailhog provisioner rabbitmq redis reporting-service tsesion-web-gc alloy grafana loki mimir tempo"
+
+          # Filtra una lista de servicios contra el grafo ACTIVO de compose
+          # (respeta COMPOSE_PROFILES ya resuelto por sso-stack.sh: si
+          # observability o cdc-sync están apagados en .env, sus servicios
+          # no están en este listado y no los forzamos a arrancar
+          # nombrándolos explícitamente).
+          active_services() { ./scripts/sso-stack.sh config --services 2>/dev/null; }
+          ACTIVE="$(active_services)"
+          filter_active() {
+            local out=""
+            for s in "$@"; do
+              echo "$ACTIVE" | grep -qx "$s" && out="${out:+$out }$s"
+            done
+            echo "$out"
+          }
+
+          INFRA_TO_START="$(filter_active $INFRA_SERVICES)"
+          echo "=== infraestructura sin dependencia de flyway (siempre primero) ==="
+          echo "Servicios: ${INFRA_TO_START:-<ninguno activo>}"
+          if [ -n "$INFRA_TO_START" ]; then
+            ./scripts/sso-stack.sh up -d --remove-orphans $INFRA_TO_START
+          fi
+
+          # Si `compose up` falla, casi siempre es porque flyway salió
+          # con código !=0 y el resto de servicios dependen de
+          # service_completed_successfully (ver docker-compose.yml,
+          # bloque flyway). `compose up` solo imprime "service X didn't
+          # complete successfully: exit 1" sin contexto — el log real
+          # de flyway (credenciales mal, sslmode/channel_binding
+          # incompatible con Neon, error SQL en una migración, etc.)
+          # se pierde si no lo volcamos aquí.
+          #
+          # Antes de claudicar: muchos fallos son por checksum mismatch
+          # (cambios locales en migraciones ya aplicadas en commits
+          # anteriores — típicos cuando un fix de una migración V<n>
+          # previa reescribe el archivo y el servidor todavía conserva
+          # el checksum antiguo en flyway_schema_history). Un
+          # `flyway repair` actualiza los checksums sin tocar datos.
+          #
+          # Pero repair por sí solo no basta cuando el mismatch venía
+          # acompañado de migraciones "resueltas pero no aplicadas" con
+          # version menor a la ya aplicada más alta (mismo patrón que
+          # V62/71/72 detectado en Docker local: un fix reescribe un
+          # V<n> viejo, el checksum se repara, pero flyway sigue
+          # rechazando el migrate porque V<n> quedaría fuera de orden).
+          # Por eso, tras un repair exitoso, se corre un
+          # `flyway -outOfOrder=true migrate` EXPLÍCITO antes de
+          # reintentar `compose up`.
+          up_stack() { ./scripts/sso-stack.sh up -d --remove-orphans; }
+
+          # Lee un valor del .env del servidor sin `source` (los valores
+          # pueden traer espacios/comillas que romperían el shell).
+          _envval() { sed -n "s/^$1=//p" /opt/sso/.env 2>/dev/null | head -1; }
+
+          # Basename de las migraciones cuyo checksum en flyway_schema_history
+          # NO coincide con el archivo del repo. Se captura ANTES del repair:
+          # `flyway repair` realinea ese checksum pero NO vuelve a ejecutar la
+          # migración, así que un cambio hecho DENTRO de un V<n> ya aplicado
+          # (típico: el cuerpo de una función reescrito) se quedaría sin
+          # aplicar en el server. Prioriza el JSON de flyway; si el formato
+          # cambia en una versión futura, cae al parseo de texto.
+          changed_migration_files() {
+            local json files txt v
+            json="$(docker compose run --rm -T flyway validate -outputType=json 2>/dev/null || true)"
+            # `sort -V`: orden por VERSION, no lexico. Importa cuando dos
+            # migraciones editadas redefinen el mismo objeto (p.ej. V40 y V103
+            # ambas crean fn_subject_listar): hay que re-aplicarlas en el
+            # mismo orden que Flyway las aplico, o la ultima gana la version
+            # equivocada.
+            files="$(printf '%s' "$json" | jq -r '
+                      (.invalidMigrations // [])[]
+                      | select(.errorDetails.errorCode == "CHECKSUM_MISMATCH")
+                      | .filepath | sub("^.*/"; "")' 2>/dev/null | sort -V -u || true)"
+            if [ -z "$files" ]; then
+              # Fallback: parsear el texto de `flyway validate`.
+              txt="$(docker compose run --rm flyway validate 2>&1 || true)"
+              for v in $(printf '%s\n' "$txt" \
+                          | grep -iE 'checksum mismatch for migration version' \
+                          | grep -oE '[0-9]+(\.[0-9]+)*' | sort -V -u || true); do
+                ls -1 "/opt/sso/postgres/migrations/" 2>/dev/null \
+                  | grep -E "^V${v}__" | head -1 || true
+              done
+              return 0
+            fi
+            printf '%s\n' "$files" | sed '/^$/d' || true
+          }
+
+          # Re-aplica el SQL crudo de las migraciones cuyos basename se pasan
+          # como argumento, contra la MISMA base que migra flyway
+          # (FLYWAY_URL -> DB_URL -> el contenedor `postgres`/sso-postgres en
+          # este server). Todas las migraciones del repo son idempotentes
+          # (CREATE OR REPLACE / DROP ... IF EXISTS / ADD COLUMN IF NOT
+          # EXISTS), así que re-correr su SQL es seguro. Falla (return 1) si
+          # psql devuelve error — no se enmascara.
+          reapply_migrations() {
+            local pu pdb bn f rc=0
+            pu="$(_envval POSTGRES_USER)"; [ -n "$pu" ]  || pu="$(_envval DB_USER)"
+            pdb="$(_envval POSTGRES_DB)";  [ -n "$pdb" ] || pdb="$(_envval DB_NAME)"
+            if ! docker inspect -f '{{.State.Running}}' sso-postgres >/dev/null 2>&1; then
+              echo "::error::sso-postgres no está corriendo; no puedo re-aplicar: $*"
+              echo "         FLYWAY_URL apunta al contenedor 'postgres' (DB_URL=$(_envval DB_URL));"
+              echo "         re-aplica su SQL a mano (psql -f) y re-lanza el deploy."
+              return 1
+            fi
+            for bn in "$@"; do
+              f="/opt/sso/postgres/migrations/$bn"
+              if [ ! -f "$f" ]; then
+                echo "::warning::$bn no está en postgres/migrations/; se omite"
+                continue
+              fi
+              echo "  -> re-aplicando $bn"
+              if ! docker exec -i sso-postgres psql -U "$pu" -d "$pdb" -v ON_ERROR_STOP=1 -f - < "$f"; then
+                echo "::error::psql falló re-aplicando $bn"
+                rc=1
+              fi
+            done
+            return $rc
+          }
+
+          repair_and_retry() {
+            # Captura la lista ANTES del repair (después ya no hay mismatch).
+            local CHANGED
+            CHANGED="$(changed_migration_files | tr '\n' ' ')"
+            echo "=== migraciones con checksum cambiado: ${CHANGED:-<ninguna>} ==="
+            echo "=== intentando flyway repair ==="
+            if docker compose run --rm flyway repair; then
+              echo "=== flyway repair OK; migrando con -outOfOrder=true ==="
+              if docker compose run --rm flyway -outOfOrder=true migrate; then
+                echo "=== flyway migrate (outOfOrder) OK ==="
+                # DESPUÉS del migrate: así cualquier objeto nuevo del que
+                # dependa una migración editada (p.ej. una columna añadida en
+                # un V<n> nuevo) ya existe cuando se re-aplica su SQL.
+                if [ -n "${CHANGED// /}" ]; then
+                  echo "=== re-aplicando el SQL de las migraciones cambiadas (repair no las re-ejecuta) ==="
+                  if ! reapply_migrations $CHANGED; then
+                    echo "=== falló la re-aplicación de una migración cambiada ==="
+                    docker compose logs --no-color --tail=200 flyway || true
+                    return 1
+                  fi
+                fi
+                echo "=== reintentando compose up ==="
+                if up_stack; then
+                  echo "=== compose up exitoso tras repair + migrate outOfOrder + re-aplicación ==="
+                  return 0
+                fi
+                echo "=== compose up SIGUE fallando tras repair + migrate outOfOrder ==="
+              else
+                echo "=== flyway migrate -outOfOrder=true falló tras repair ==="
+              fi
+            else
+              echo "=== flyway repair también falló (no es un checksum mismatch) ==="
+            fi
+            echo "=== flyway logs (last 200) ==="
+            docker compose logs --no-color --tail=200 flyway || true
+            echo "=== auth-center logs (last 50) ==="
+            docker compose logs --no-color --tail=50 auth-center || true
+            echo "=== compose ps ==="
+            docker compose ps || true
+            return 1
+          }
+
+          # ─── ¿Arranque en frío o redeploy en caliente? ───
+          #
+          # Si ninguno de los servicios gateados por flyway está corriendo,
+          # este stack está arrancando desde cero (o venía completamente
+          # abajo): flyway tiene que migrar ANTES de que compose intente
+          # levantar auth-center/sso-admin/api-gateway/etc., porque su
+          # depends_on:service_completed_successfully así lo exige.
+          #
+          # Si YA hay servicios gateados corriendo, es un redeploy sobre un
+          # stack sano: no hace falta esperar a flyway para recrear sólo
+          # los contenedores cuya imagen cambió — compose `--no-deps` los
+          # reemplaza sin reevaluar su cadena de dependencias (ni siquiera
+          # las de servicio-a-servicio, como api-gateway→auth-center, que
+          # ya están satisfechas porque esos contenedores siguen arriba).
+          # flyway se aplica y valida al final, siempre, antes del smoke
+          # check — ver el bloque de abajo.
+          RUNNING_SERVICES="$(docker compose ps --status running --services 2>/dev/null || true)"
+          RUNNING_GATED=""
+          for s in $GATED_SERVICES; do
+            echo "$RUNNING_SERVICES" | grep -qx "$s" && RUNNING_GATED="${RUNNING_GATED:+$RUNNING_GATED }$s"
+          done
+
+          if [ -z "$RUNNING_GATED" ]; then
+            echo "=== arranque en frío: ningún servicio gateado por flyway está corriendo ==="
+            echo "=== flyway migra ANTES de levantar los servicios que dependen de él ==="
+            if ! up_stack; then
+              echo "=== primer compose up falló ==="
+              repair_and_retry || exit 1
+            fi
+          else
+            echo "=== redeploy en caliente: ya corriendo → $RUNNING_GATED ==="
+            echo "=== se recrean sólo los servicios que cambiaron, SIN esperar a flyway ==="
+            RECREATE="$(filter_active $CHANGED_SERVICES)"
+            if [ -n "$RECREATE" ]; then
+              echo "Recreando: $RECREATE"
+              ./scripts/sso-stack.sh up -d --no-deps --remove-orphans $RECREATE
+            else
+              echo "Ningún servicio de aplicación cambió de imagen; nada que recrear."
+            fi
+          fi
+
+          # ─── flyway al final, siempre (todo el stack ya está arriba) ───
+          #
+          # En el camino frío, flyway ya migró como parte del gate de
+          # arriba — este `migrate` es un no-op que sólo confirma. En el
+          # camino caliente es la primera vez que corre en este deploy: es
+          # el que de verdad aplica las migraciones nuevas contra los
+          # contenedores recién recreados. `validate` después detecta
+          # drift que `migrate` no ve por sí solo (checksums que cambiaron
+          # por un fix posterior, un archivo editado a mano en el
+          # servidor). Si algo falla, repara y reaplica antes del smoke
+          # check de api-gateway.
+          echo "=== flyway: aplicar pendientes + validar ==="
+          if ! docker compose run --rm flyway; then
+            echo "=== flyway migrate falló en la validación final ==="
+            repair_and_retry || exit 1
+          fi
+          if ! docker compose run --rm flyway validate; then
+            echo "=== flyway validate falló tras migrar; ejecutando repair + migrate ==="
+            repair_and_retry || { echo "::error::flyway validate falló y repair + migrate no lo resolvió. Revisar antes de confiar en el deploy."; exit 1; }
+          else
+            echo "flyway validate OK: el esquema del servidor coincide con postgres/migrations."
+          fi
+
+          # Limpia capas de imágenes viejas para no llenar el disco
+          # del Linode con cada deploy.
+          docker image prune -f
+          EOF
+
+      - name: Smoke check (gateway health)
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_TARGET }}" bash -s <<'EOF'
+          set -euo pipefail
+          # El gateway es el último en levantar (depende de auth-center
+          # healthy); 5 min de margen cubre el arranque frío de las JVMs.
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/actuator/health | grep -q UP; then
+              echo "gateway UP"; exit 0
+            fi
+            sleep 10
+          done
+          echo "gateway no respondió UP en 5 min"
+          cd /opt/sso && docker compose ps || true
+          exit 1
+          EOF

@@ -3,23 +3,31 @@ package com.co.eurekatic.ssoadmin.dto;
 /**
  * Respuesta de {@code GET /forgotPassword}.
  *
- * <p><b>Advertencia de seguridad.</b> Devolver el token de reseteo en el
- * cuerpo HTTP permite que cualquiera que pueda llamar a este endpoint tome
- * control de una cuenta ajena: pide el reseteo con el correo de la victima,
- * lee el token de la respuesta y cambia la contrasena sin acceder jamas a ese
- * buzon. El diseno original lo entregaba SOLO por correo, y esa era la razon.
+ * <p><b>El token de reseteo NO viaja aqui.</b> Sale unicamente por correo,
+ * dentro del enlace ({@code /admin/restore-password?token=...}), que es el
+ * unico canal que prueba que quien pide el reseteo controla ese buzon.
  *
- * <p>Se expone a pedido explicito del equipo, para que la pantalla de
- * confirmacion del front pueda mostrar el estado del enlace. Si eso es lo
- * unico que hace falta, la alternativa sin este riesgo es devolver
- * {@code maskedEmail} y {@code expiresIn} SIN el token.
+ * <p>Historia, para que no se vuelva a abrir: entre #67 y este cambio el
+ * token si viajaba en el cuerpo, a pedido del equipo, porque la pantalla de
+ * confirmacion necesitaba correo enmascarado y cuenta regresiva. El riesgo
+ * quedo aceptado por escrito sobre una condicion explicita — que la respuesta
+ * fuera identica existiera o no el correo — para que la sola presencia del
+ * token no delatara que direcciones estaban registradas. Esa condicion se
+ * perdio despues, al agregar el 404 para correos desconocidos, y la
+ * combinacion (endpoint publico + oraculo de existencia + token en el cuerpo)
+ * permitia apropiarse de cualquier cuenta conociendo solo el correo: pedir el
+ * reseteo con la direccion de la victima, leer el token de la respuesta y
+ * cambiar la contrasena sin tocar ese buzon.
  *
- * <p>El token viaja SIEMPRE, exista el correo o no (ver
- * {@code UserAdminService#forgotPassword}): si solo apareciera para correos
- * registrados, la respuesta delataria que direcciones estan dadas de alta.
+ * <p>Este record es la alternativa que el propio #67 dejo anotada: entrega lo
+ * que la pantalla de confirmacion necesita ({@code maskedEmail} para
+ * confirmar a donde se envio, {@code expiresIn} para la cuenta regresiva) sin
+ * entregar la credencial. Con esto, el correo enmascarado ya no obliga a
+ * llamar a {@code /resetTokenStatus} antes de abrir el correo.
  *
- * @param token     token de reseteo de un solo uso
- * @param expiresIn segundos de vida del token
+ * @param maskedEmail correo del destinatario enmascarado ({@code a****@dominio}),
+ *                    para confirmar a donde se envio sin exponer la direccion
+ * @param expiresIn   segundos de vida del enlace enviado por correo
  */
-public record ForgotPasswordResponse(String token, long expiresIn) {
+public record ForgotPasswordResponse(String maskedEmail, long expiresIn) {
 }
