@@ -87,13 +87,19 @@ DIVERGENTES="$(git rev-list --count "origin/${TEST}..origin/${MAIN}")"
 
 echo
 echo "→ Commits en 'test' que no están en 'main' (${PENDIENTES}):"
-git log --oneline "origin/${MAIN}..origin/${TEST}" | head -40
+# `| head -40` bajo `set -o pipefail` mata git-log con SIGPIPE en cuanto
+# head cierra su extremo del pipe tras la línea 40, y pipefail propaga
+# ese 141 como si el script hubiera fallado. Pasó en la promoción real:
+# con 264 commits pendientes el script moría aquí SIEMPRE, antes de
+# simular siquiera el merge. `|| true` en el propio git log basta —
+# head sigue imprimiendo sus 40 líneas antes de cerrar.
+git log --oneline "origin/${MAIN}..origin/${TEST}" 2>&1 | head -40 || true
 [[ "$PENDIENTES" -gt 40 ]] && echo "   ... y $((PENDIENTES - 40)) más"
 
 if [[ "$DIVERGENTES" -gt 0 ]]; then
     echo
     echo "→ AVISO: 'main' tiene ${DIVERGENTES} commit(s) que 'test' no tiene:"
-    git log --oneline "origin/${TEST}..origin/${MAIN}" | sed 's/^/   /'
+    git log --oneline "origin/${TEST}..origin/${MAIN}" 2>&1 | head -40 | sed 's/^/   /' || true
     echo "   Revisa que su contenido ya viajó a test (o ve CONTRIBUTING §3.6.5,"
     echo "   cherry-pick de vuelta) antes de promover."
 fi
