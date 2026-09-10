@@ -116,12 +116,37 @@ public class FuncionarioRegistrationService {
                 saved = userRepository.save(newUser(existingAccountEmail, req, hashed));
             }
         } else {
+            // Persona genuinamente nueva: no hay TUSUARIO activo suyo, ni por
+            // correo ni por documento.
+            //
+            // El correo, en cambio, puede seguir ocupado en public.users por
+            // una cuenta que ya no está en uso, y eso era una disparidad entre
+            // los dos esquemas. En academico_test los índices únicos son
+            // PARCIALES — `(cuenta) WHERE active`, `(tipo_doc, identificacion)
+            // WHERE active` — así que el correo y el documento de un usuario
+            // dado de baja SÍ se pueden reutilizar. public.users, en cambio,
+            // tiene `UNIQUE (email)` sin filtro, y `existsByEmail` no miraba
+            // el estado: reservaba el correo para siempre. El síntoma era un
+            // 409 DUPLICATE_EMAIL al dar de alta a alguien con un correo que
+            // un usuario inactivo tuvo antes — reproducido con
+            // luigimcquinn@yahoo.com, cuyo TUSUARIO estaba inactivo desde
+            // agosto.
+            //
+            // Ahora solo bloquea una cuenta USABLE. isEnabled() es
+            // `enabled && active` (ver User), los dos estados que el SSO
+            // admin usa para dar de baja una cuenta. Si la fila existe pero
+            // no está usable, se reutiliza completa: es la misma identidad de
+            // login — el correo — volviendo a estar en uso, y con
+            // `UNIQUE (email)` insertar una segunda fila no es una opción.
             PasswordPolicy.validate(req.password());
-            if (userRepository.existsByEmail(req.email())) {
+            Optional<User> cuentaPrevia = userRepository.findByEmail(req.email());
+            if (cuentaPrevia.isPresent() && cuentaPrevia.get().isEnabled()) {
                 throw new EmailAlreadyExistsException(req.email());
             }
             hashed = passwordEncoder.encode(req.password());
-            saved = userRepository.save(newUser(req.email(), req, hashed));
+            saved = cuentaPrevia.isPresent()
+                    ? userRepository.save(reutilizarCuentaDeBaja(cuentaPrevia.get(), req, hashed))
+                    : userRepository.save(newUser(req.email(), req, hashed));
         }
 
         // fk_tmunicipio_expedicion ya no se pide aquí (V62): queda NULL
@@ -136,6 +161,42 @@ public class FuncionarioRegistrationService {
         Long pkTusuario = jdbc.queryForObject(
             "SELECT public.fn_get_academico_usuario_id(?)", Long.class, saved.getId());
         return new RegisterResponse(saved.getId(), pkTusuario, pkFuncionario, saved.getEmail());
+    }
+
+    /**
+     * Reutiliza una fila de {@code public.users} que ya no está usable
+     * ({@code enabled && active} en false) para la persona que se está dando
+     * de alta con ese mismo correo. Se reutiliza COMPLETA: el correo es la
+     * identidad de login y vuelve a estar en uso, así que se sobrescriben
+     * nombre y contraseña y se limpia todo el estado del dueño anterior.
+     *
+     * <p>Los roles se vacían a propósito. La cuenta puede arrastrar filas de
+     * {@code public.role_users} de quien la tuvo antes (medido: 7 de las 13
+     * cuentas reutilizables del servidor de test las tienen), y heredarlas
+     * sería una escalada de privilegios silenciosa.
+     * {@code fn_sincronizar_rol_publico} reconcilia esa tabla contra los
+     * {@code TSEDE_USUARIO} activos —hace INSERT y DELETE—, pero solo corre
+     * cuando se le asigna el primer permiso: hasta entonces los roles viejos
+     * seguirían ahí.
+     *
+     * <p>Los tokens también se limpian: un {@code apiToken} o un
+     * {@code tokenRestore} emitidos para el dueño anterior seguirían siendo
+     * válidos contra la cuenta nueva.
+     */
+    private User reutilizarCuentaDeBaja(User cuenta, RegisterUsuarioRequest req, String hashedPwd) {
+        cuenta.setFullName(req.fullName());
+        cuenta.setPassword(hashedPwd);
+        cuenta.setActive(true);
+        cuenta.setEnabled(true);
+        cuenta.setLdap(false);
+        cuenta.setRefreshToken(null);
+        cuenta.setApiToken(null);
+        cuenta.setTokenActivation(null);
+        cuenta.setTokenActivationExpiresAt(null);
+        cuenta.setTokenRestore(null);
+        cuenta.setTokenRestoreExpiresAt(null);
+        cuenta.getRoles().clear();
+        return cuenta;
     }
 
     private User newUser(RegisterUsuarioRequest req, String hashedPwd) {
