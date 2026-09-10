@@ -20,10 +20,18 @@
 #   SSH_KEY      clave privada OpenSSH SOLO para deploy
 #   ENV_FILE     contenido completo de /opt/sso/.env
 #
-# GHCR_PULL_USER / GHCR_PULL_TOKEN NO se crean: el workflow refactorizado
-# usa el GITHUB_TOKEN efímero del propio job para el `docker login` del
-# servidor, así que dejan de hacer falta y no queda ninguna credencial de
-# larga vida en la máquina.
+# Esos TRES son todo lo que el pipeline necesita. No hay secretos de
+# repositorio; lo único que se lee además es el GITHUB_TOKEN que GitHub
+# inyecta solo en cada run.
+#
+#   - GHCR_PULL_USER / GHCR_PULL_TOKEN no se crean: el `docker login` del
+#     servidor usa ese GITHUB_TOKEN efímero, así que no queda ninguna
+#     credencial de larga vida en la máquina.
+#
+#   - SMTP_ZEPTOMAIL_USER / SMTP_ZEPTOMAIL_PASS tampoco: van DENTRO del
+#     .env, y por tanto dentro de ENV_FILE. Rotar el token es editar la
+#     línea en el servidor y volver a correr este script con
+#     --from-server.
 #
 # ─── Uso ─────────────────────────────────────────────────────────────
 #
