@@ -47,6 +47,14 @@
 -- origen. Vincular una huerfana (FK_TUNIDAD IS NULL) sigue funcionando
 -- exactamente igual que antes, sin tocar el parametro.
 --
+-- SEGUNDO FIX (mismo CREATE OR REPLACE): p_ponderacion en unidad
+-- Promediar/Sumatoria pasaba de rechazar la llamada (22023) a IGNORARSE en
+-- silencio -- se anula el parametro apenas se conoce el modo de la unidad,
+-- antes de validar rango/suma. Motivo: obligaba al consumidor del endpoint a
+-- conocer de antemano fn_unidad_calculo_definitiva_modo(unidad) solo para no
+-- romper esta llamada; ahora puede mandar siempre PONDERACION (o no mandarla)
+-- sin que el modo de la unidad determine si el request falla.
+--
 -- Depende de (orden de version de Flyway):
 --   * V218 — TACTIVIDAD.FK_TUNIDAD nullable, FK_TASIGNATURA NOT NULL.
 --   * V223 — TACTIVIDAD.PONDERACION, fn_unidad_actividad_vincular,
@@ -124,24 +132,25 @@ BEGIN
         RAISE EXCEPTION 'La unidad (%) esta inactiva', p_pk_tunidad USING ERRCODE = '22023';
     END IF;
 
+    -- El metodo de calculo de la unidad manda si el % se captura a mano
+    -- (Ponderar), no aplica (Promediar) o lo calcula el sistema (Sumatoria).
+    -- Fix: antes esto RECHAZABA la llamada (22023) si el consumidor mandaba
+    -- p_ponderacion en una unidad Promediar/Sumatoria -- obligaba a conocer
+    -- de antemano el modo de la unidad solo para no romper este endpoint.
+    -- Ahora se ignora en silencio (se anula aqui mismo, antes de validar
+    -- rango/suma): el % en Promediar no aplica y en Sumatoria lo recalcula
+    -- fn_unidad_ponderacion_recalcular_sumatoria a partir de NOTA_MAXIMA.
+    v_modo := academico_test.fn_unidad_calculo_definitiva_modo(p_pk_tunidad);
+    IF v_modo IN ('PROMEDIAR', 'SUMATORIA') THEN
+        p_ponderacion := NULL;
+    END IF;
+
     IF p_ponderacion IS NOT NULL AND (p_ponderacion < 0 OR p_ponderacion > 100) THEN
         RAISE EXCEPTION 'La ponderacion (%) debe estar entre 0 y 100', p_ponderacion USING ERRCODE = '22023';
     END IF;
 
-    -- El metodo de calculo de la unidad manda si el % se captura a mano
-    -- (Ponderar), no aplica (Promediar) o lo calcula el sistema (Sumatoria).
-    v_modo := academico_test.fn_unidad_calculo_definitiva_modo(p_pk_tunidad);
-    IF p_ponderacion IS NOT NULL AND v_modo = 'PROMEDIAR' THEN
-        RAISE EXCEPTION 'La ponderacion no aplica: la unidad (%) promedia sus actividades', p_pk_tunidad
-            USING ERRCODE = '22023';
-    END IF;
-    IF p_ponderacion IS NOT NULL AND v_modo = 'SUMATORIA' THEN
-        RAISE EXCEPTION 'La ponderacion de la unidad (%) se autocalcula: es una unidad de Sumatoria, capture el puntaje de la actividad (NOTA_MAXIMA) en vez del porcentaje', p_pk_tunidad
-            USING ERRCODE = '22023';
-    END IF;
-
     -- Chequeo previo del 100% (error claro antes del trigger). En modo
-    -- Sumatoria/Promediar no se llega aqui (p_ponderacion ya fue rechazada).
+    -- Sumatoria/Promediar no se llega aqui: p_ponderacion ya quedo en NULL.
     IF p_ponderacion IS NOT NULL THEN
         v_suma := academico_test.fn_unidad_ponderacion_asignada(
                       p_pk_tunidad, v_fk_grupo, p_pk_tactividad);
@@ -176,7 +185,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_actividad_vincular(BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN)
-    IS 'Vincula una actividad a una unidad (TACTIVIDAD.FK_TUNIDAD) y fija su PONDERACION (%) dentro de ella. p_ponderacion NULL = no cambiar el peso actual. Valida 0..100 y que la suma por (unidad, grupo de la actividad) no pase de 100 (mismo criterio que el trigger). Fix V244: si la actividad YA estaba vinculada a OTRA unidad, se rechaza (22023) salvo que p_permitir_mover_de_unidad=TRUE -- evita mover una actividad de unidad de forma silenciosa; vincular una huerfana (FK_TUNIDAD IS NULL) no requiere el flag. El metodo de calculo de la unidad (fn_unidad_calculo_definitiva_modo, V73) manda: con Promediar se RECHAZA p_ponderacion (22023, no aplica) y con Sumatoria tambien (el % se autocalcula a partir de NOTA_MAXIMA); en ambos casos la PONDERACION heredada se limpia y, en Sumatoria, se recalcula el bucket destino (y el de origen si la actividad venia de otra unidad) con fn_unidad_ponderacion_recalcular_sumatoria. Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD. V223, editada en V244.';
+    IS 'Vincula una actividad a una unidad (TACTIVIDAD.FK_TUNIDAD) y fija su PONDERACION (%) dentro de ella. p_ponderacion NULL = no cambiar el peso actual. Valida 0..100 y que la suma por (unidad, grupo de la actividad) no pase de 100 (mismo criterio que el trigger). Fix V244: si la actividad YA estaba vinculada a OTRA unidad, se rechaza (22023) salvo que p_permitir_mover_de_unidad=TRUE -- evita mover una actividad de unidad de forma silenciosa; vincular una huerfana (FK_TUNIDAD IS NULL) no requiere el flag. El metodo de calculo de la unidad (fn_unidad_calculo_definitiva_modo, V73) manda si el % aplica: con Promediar y con Sumatoria el p_ponderacion recibido se IGNORA en silencio (se anula antes de validar rango/suma, no se rechaza la llamada) porque en Promediar no aplica y en Sumatoria se autocalcula a partir de NOTA_MAXIMA -- asi el consumidor no necesita conocer de antemano el modo de la unidad para no romper el endpoint. En ambos casos la PONDERACION heredada se limpia y, en Sumatoria, se recalcula el bucket destino (y el de origen si la actividad venia de otra unidad) con fn_unidad_ponderacion_recalcular_sumatoria. Gate EDITAR sobre PLANEADOR. Retorna PK_TACTIVIDAD. V223, editada en V244 (fix mover de unidad) y aqui (p_ponderacion se ignora en vez de rechazarse en Promediar/Sumatoria).';
 
 -- ---------------------------------------------------------------------------
 -- 2. fn_actividad_huerfanas_listar — actividades sin unidad.
