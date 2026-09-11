@@ -20,7 +20,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -232,5 +234,77 @@ class AuditRevertServiceTest {
                 .isInstanceOf(UnsupportedRevertException.class)
                 .hasMessageContaining("DELETE físico");
         verifyNoInteractions(jdbc);
+    }
+
+    // ---- timestamp: epoch de Debezium vs java.sql.Timestamp de Postgres ----
+
+    /**
+     * Caso real de producción: el soft-delete de un periodo académico. Debezium
+     * serializa {@code modified_at} como epoch entero y Postgres lo devuelve
+     * como {@link java.sql.Timestamp}; la comparación textual nunca calzaba y
+     * rechazaba el revert con un conflicto FALSO — los dos valores eran el
+     * mismo instante.
+     */
+    private static AuditLogRow periodoSoftDeleteRow() {
+        return new AuditLogRow(
+                "tperiodo_academico", "u", "3", "req-original",
+                "Eliminación del periodo académico LASTEMIA - 2026 - N",
+                "laura@example.com",
+                // 1789147959241 ms == 2026-09-11 17:32:39.241 UTC
+                "{\"pk_tperiodo_academico\":3,\"active\":false,\"modified_at\":1789147959241}",
+                "{\"pk_tperiodo_academico\":3,\"active\":true,\"modified_at\":1789147900000}");
+    }
+
+    @Test
+    void timestampEpochMatchesPostgresTimestampWithMicrosecondPrecision() {
+        when(clickHouse.findByLsnSeq(5L, 1L)).thenReturn(Optional.of(periodoSoftDeleteRow()));
+        // Postgres guarda microsegundos (.241389); Debezium mandó .241. Mismo
+        // instante, distinta precisión: no puede ser un conflicto.
+        java.sql.Timestamp actual = java.sql.Timestamp.from(
+                java.time.Instant.ofEpochMilli(1789147959241L).plusNanos(389_000L));
+        when(jdbc.queryForObject(contains("SELECT modified_at"), eq(Object.class), eq(3)))
+                .thenReturn(actual);
+        when(jdbc.queryForObject(contains("SELECT active"), eq(Object.class), eq(3)))
+                .thenReturn(false);
+
+        AuditRevertResponse resp = service.preview(5L, 1L);
+
+        assertThat(resp.applied()).isFalse();
+        assertThat(resp.cambios()).extracting(AuditRevertResponse.ColumnRevert::columna)
+                .contains("active", "modified_at");
+    }
+
+    @Test
+    void timestampConflictIsStillDetectedWhenTheInstantReallyDiffers() {
+        when(clickHouse.findByLsnSeq(5L, 1L)).thenReturn(Optional.of(periodoSoftDeleteRow()));
+        // Un minuto después: cambio posterior real, debe seguir rechazándose.
+        java.sql.Timestamp otro = java.sql.Timestamp.from(
+                java.time.Instant.ofEpochMilli(1789147959241L + 60_000L));
+        when(jdbc.queryForObject(contains("SELECT modified_at"), eq(Object.class), eq(3)))
+                .thenReturn(otro);
+        lenient().when(jdbc.queryForObject(contains("SELECT active"), eq(Object.class), eq(3)))
+                .thenReturn(false);
+
+        assertThatThrownBy(() -> service.preview(5L, 1L))
+                .isInstanceOf(RevertConflictException.class)
+                .hasMessageContaining("modified_at");
+    }
+
+    @Test
+    void numericIdsAreNotCrossComparedAsEpochs() {
+        // Dos números plenos se comparan como números: el atajo temporal solo
+        // aplica cuando UNO de los lados es un tipo temporal de JDBC.
+        AuditLogRow row = new AuditLogRow(
+                "area", "u", "42", "req", "etq", "admin@example.com",
+                "{\"pk_area\":42,\"fk_sede\":1789147959241}",
+                "{\"pk_area\":42,\"fk_sede\":1789147900000}");
+        when(clickHouse.findByLsnSeq(6L, 1L)).thenReturn(Optional.of(row));
+        when(jdbc.queryForObject(contains("SELECT fk_sede"), eq(Object.class), eq(42)))
+                .thenReturn(1789147959241L);
+
+        AuditRevertResponse resp = service.preview(6L, 1L);
+
+        assertThat(resp.cambios()).hasSize(1);
+        assertThat(resp.cambios().get(0).columna()).isEqualTo("fk_sede");
     }
 }
