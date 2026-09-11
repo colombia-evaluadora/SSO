@@ -83,7 +83,7 @@ BEGIN
             USING ERRCODE = '23505';
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM academico_test.TMUNICIPIO m
+    IF NOT EXISTS (SELECT 1 FROM pigse.TMUNICIPIO m
                     WHERE m.PK_TMUNICIPIO = p_fk_tmunicipio) THEN
         RAISE EXCEPTION 'El municipio (%) no existe', p_fk_tmunicipio USING ERRCODE = '23503';
     END IF;
@@ -151,7 +151,7 @@ BEGIN
     END IF;
 
     IF p_fk_tmunicipio IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM academico_test.TMUNICIPIO m
+       AND NOT EXISTS (SELECT 1 FROM pigse.TMUNICIPIO m
                         WHERE m.PK_TMUNICIPIO = p_fk_tmunicipio) THEN
         RAISE EXCEPTION 'El municipio (%) no existe', p_fk_tmunicipio USING ERRCODE = '23503';
     END IF;
@@ -278,7 +278,7 @@ BEGIN
 
     SELECT COUNT(*) INTO v_total
       FROM pigse.TENTE e
-      JOIN academico_test.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
+      JOIN pigse.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
      WHERE e.ACTIVE = TRUE
        AND (NULLIF(TRIM(p_search), '') IS NULL
             OR e.NOMBRE ILIKE '%' || p_search || '%'
@@ -305,7 +305,7 @@ BEGIN
                      e.NOMBRE ASC, e.PK_ENTE ASC
                ) AS orden_fila
           FROM pigse.TENTE e
-          JOIN academico_test.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
+          JOIN pigse.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
      LEFT JOIN pigse.TENTE p ON p.PK_ENTE = e.FK_TENTE_PADRE
          WHERE e.ACTIVE = TRUE
            AND (NULLIF(TRIM(p_search), '') IS NULL
@@ -375,7 +375,7 @@ BEGIN
            e.FK_TENTE_PADRE, p.NOMBRE,
            e.CREATED_BY, e.CREATED_AT, e.MODIFIED_BY, e.MODIFIED_AT
       FROM pigse.TENTE e
-      JOIN academico_test.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
+      JOIN pigse.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
  LEFT JOIN pigse.TENTE p ON p.PK_ENTE = e.FK_TENTE_PADRE
      WHERE e.PK_ENTE = p_pk_ente;
 END;
@@ -440,13 +440,13 @@ BEGIN
             USING ERRCODE = '23503';
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM academico_test.TMUNICIPIO m
+    IF NOT EXISTS (SELECT 1 FROM pigse.TMUNICIPIO m
                     WHERE m.PK_TMUNICIPIO = p_fk_tmunicipio) THEN
         RAISE EXCEPTION 'El municipio (%) no existe', p_fk_tmunicipio USING ERRCODE = '23503';
     END IF;
 
     IF p_fk_tpropiedad_juridica IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM academico_test.TPROPIEDAD_JURIDICA pj
+       AND NOT EXISTS (SELECT 1 FROM pigse.TPROPIEDAD_JURIDICA pj
                         WHERE pj.PK_PROPIEDAD_JURIDICA = p_fk_tpropiedad_juridica
                           AND pj.ACTIVE = TRUE) THEN
         RAISE EXCEPTION 'La propiedad juridica (%) no existe o no esta activa', p_fk_tpropiedad_juridica
@@ -454,7 +454,7 @@ BEGIN
     END IF;
 
     IF p_fk_tlista_valor_zona IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR lv
+       AND NOT EXISTS (SELECT 1 FROM pigse.TLISTA_VALOR lv
                         WHERE lv.PK_LISTA_VALOR = p_fk_tlista_valor_zona
                           AND lv.ACTIVE = TRUE) THEN
         RAISE EXCEPTION 'La zona (%) no existe o no esta activa en TLISTA_VALOR', p_fk_tlista_valor_zona
@@ -562,13 +562,13 @@ BEGIN
     END IF;
 
     IF p_fk_tmunicipio IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM academico_test.TMUNICIPIO m
+       AND NOT EXISTS (SELECT 1 FROM pigse.TMUNICIPIO m
                         WHERE m.PK_TMUNICIPIO = p_fk_tmunicipio) THEN
         RAISE EXCEPTION 'El municipio (%) no existe', p_fk_tmunicipio USING ERRCODE = '23503';
     END IF;
 
     IF p_fk_tpropiedad_juridica IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM academico_test.TPROPIEDAD_JURIDICA pj
+       AND NOT EXISTS (SELECT 1 FROM pigse.TPROPIEDAD_JURIDICA pj
                         WHERE pj.PK_PROPIEDAD_JURIDICA = p_fk_tpropiedad_juridica
                           AND pj.ACTIVE = TRUE) THEN
         RAISE EXCEPTION 'La propiedad juridica (%) no existe o no esta activa', p_fk_tpropiedad_juridica
@@ -576,7 +576,7 @@ BEGIN
     END IF;
 
     IF p_fk_tlista_valor_zona IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR lv
+       AND NOT EXISTS (SELECT 1 FROM pigse.TLISTA_VALOR lv
                         WHERE lv.PK_LISTA_VALOR = p_fk_tlista_valor_zona
                           AND lv.ACTIVE = TRUE) THEN
         RAISE EXCEPTION 'La zona (%) no existe o no esta activa en TLISTA_VALOR', p_fk_tlista_valor_zona
@@ -729,7 +729,7 @@ BEGIN
 
     SELECT COUNT(*) INTO v_total
       FROM pigse.TESTABLECIMIENTO e
-      JOIN academico_test.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
+      JOIN pigse.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
      WHERE e.ACTIVE = TRUE
        AND (NULLIF(TRIM(p_search), '') IS NULL
             OR e.NOMBRE ILIKE '%' || p_search || '%'
@@ -765,7 +765,7 @@ BEGIN
                      e.NOMBRE ASC, e.PK_ESTABLECIMIENTO ASC
                ) AS orden_fila
           FROM pigse.TESTABLECIMIENTO e
-          JOIN academico_test.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
+          JOIN pigse.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
      LEFT JOIN LATERAL (
             SELECT en.PK_ENTE, en.NOMBRE
               FROM pigse.TENTE_ESTABLECIMIENTO te
@@ -868,7 +868,7 @@ BEGIN
            ), '[]'::JSONB),
            e.CREATED_BY, e.CREATED_AT, e.MODIFIED_BY, e.MODIFIED_AT
       FROM pigse.TESTABLECIMIENTO e
-      JOIN academico_test.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
+      JOIN pigse.TMUNICIPIO m ON m.PK_TMUNICIPIO = e.FK_TMUNICIPIO
      WHERE e.PK_ESTABLECIMIENTO = p_pk_establecimiento;
 END;
 $$;

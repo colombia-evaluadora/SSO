@@ -230,7 +230,7 @@ DECLARE
     v_fk_establecimiento BIGINT;
     v_pk_doc             BIGINT;
     v_fk_tarchivo_previo BIGINT;
-    v_etnias             academico_test.bool_sn;
+    v_etnias             pigse.bool_sn;
 BEGIN
     IF p_fk_tarchivo IS NULL THEN
         RAISE EXCEPTION 'pigse: p_fk_tarchivo es obligatorio (archivo no subido)';
