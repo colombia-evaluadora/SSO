@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V209 - fn_cat_roles_listar: el super admin del SSO tambien aqui.
+-- V304 - fn_cat_roles_listar: el super admin del SSO tambien aqui.
 --        GET /catalogos/roles devolvia CERO roles al super administrador.
 --
 -- POR QUE ESTA MIGRACION EXISTE
@@ -47,13 +47,28 @@
 --   Para cualquier usuario que no sea super admin del SSO el resultado es
 --   identico al de V121: el CASE cae en el ELSE MIN(rango) de siempre.
 --
--- NUMERACION
---   Ocupa el hueco libre V209, que ademas es POSTERIOR a V121 -- la ultima
---   migracion que define esta funcion. Un numero mas bajo (V136 y los otros
---   huecos por debajo de 121) seria pisado por V121 al reconstruir una base
---   desde cero, y varios de ellos ademas arrastran historial en el servidor
---   de pruebas. V209 esta libre en el repo y sin registrar en ninguno de los
---   dos servidores.
+-- NUMERACION -- HAY DOS DEPENDENCIAS, NO UNA
+--   Esta migracion nacio como V209 y el CI la rechazo:
+--
+--       ERROR: function academico_test.fn_es_super_admin_sso(bigint)
+--              does not exist
+--
+--   El numero se habia elegido mirando solo la funcion que se REDEFINE
+--   (fn_cat_roles_listar, ultima vez en V121), pero olvidando la que se
+--   INVOCA: fn_es_super_admin_sso la crea V302. Sobre los servidores ya
+--   desplegados no se notaba -- la funcion ya existe y la migracion entra
+--   out-of-order sin chistar -- pero al reconstruir una base desde cero
+--   Flyway aplica en orden y V209 corria 93 versiones antes de que esa
+--   funcion existiera.
+--
+--   Asi que el numero debe ser posterior a las DOS:
+--
+--       V121  define fn_cat_roles_listar  (lo que aqui se reemplaza)
+--       V302  define fn_es_super_admin_sso (lo que aqui se llama)
+--
+--   V304 es el primer hueco libre que cumple ambas, esta libre en el repo
+--   y no tiene historial en ninguno de los dos servidores. De paso deja de
+--   ser out-of-order en la practica, al ir por encima del maximo aplicado.
 --
 --   Entra out-of-order en los entornos ya desplegados, que es algo que el
 --   pipeline contempla (-outOfOrder=true + repair en deploy.yml).
@@ -116,7 +131,7 @@ AS $$
           JOIN rango_categoria rc ON rc.valor = lv.VALOR
     ),
     rango_solicitante AS (
-        -- V209 - el super admin del SSO entra con rango 1 aunque no tenga
+        -- V304 - el super admin del SSO entra con rango 1 aunque no tenga
         -- ninguna fila en TSEDE_USUARIO ni sea rector/secretaria de nadie.
         -- Su autoridad es global y no se deriva de filas por sede (ver
         -- cabecera).
@@ -161,4 +176,4 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_cat_roles_listar(BIGINT) IS
-    'V209 - roles que el solicitante puede otorgar, por rango de categoria y peso. El super admin del SSO (fn_es_super_admin_sso) entra con rango 1 sin depender de TSEDE_USUARIO ni de ser rector/secretaria.';
+    'V304 - roles que el solicitante puede otorgar, por rango de categoria y peso. El super admin del SSO (fn_es_super_admin_sso) entra con rango 1 sin depender de TSEDE_USUARIO ni de ser rector/secretaria.';
