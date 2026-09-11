@@ -8,7 +8,7 @@
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-entes-query',
        $q$SELECT * FROM pigse.fn_ente_listar(
-              CAST(:CONTEXT.USER_ID AS BIGINT),
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)),
               CAST(:BODY.FILTERS.SEARCH AS VARCHAR),
               CAST(:BODY.SORTING.ID AS VARCHAR),
               CAST(:BODY.SORTING.DESC AS BOOLEAN),
@@ -24,7 +24,7 @@ SELECT 'pigse-entes-query',
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-entes-buscar-pk',
        $q$SELECT * FROM pigse.fn_ente_buscar_por_pk(
-              CAST(:CONTEXT.USER_ID AS BIGINT), CAST(:PARAM.ID AS BIGINT))$q$,
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)), CAST(:PARAM.ID AS BIGINT))$q$,
        'postgres', m.id_microservice, '/entes/:ID', 'SELECT', 'GET',
        '{"PARAM.ID": "BIGINT!"}'::jsonb
   FROM public.microservice m WHERE m.serviceid = 'pigse'
@@ -33,7 +33,7 @@ SELECT 'pigse-entes-buscar-pk',
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-entes-crear',
        $q$SELECT pigse.fn_ente_crear(
-              CAST(:CONTEXT.USER_ID AS BIGINT),
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)),
               CAST(:BODY.NIT AS VARCHAR),
               CAST(:BODY.NOMBRE AS VARCHAR),
               CAST(:BODY.FK_TMUNICIPIO AS BIGINT),
@@ -48,7 +48,7 @@ SELECT 'pigse-entes-crear',
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-entes-actualizar',
        $q$SELECT pigse.fn_ente_actualizar(
-              CAST(:CONTEXT.USER_ID AS BIGINT),
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)),
               CAST(:PARAM.ID AS BIGINT),
               CAST(:BODY.NIT AS VARCHAR),
               CAST(:BODY.NOMBRE AS VARCHAR),
@@ -65,7 +65,7 @@ SELECT 'pigse-entes-actualizar',
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-entes-eliminar',
        $q$SELECT pigse.fn_ente_soft_delete(
-              CAST(:CONTEXT.USER_ID AS BIGINT), CAST(:PARAM.ID AS BIGINT)) AS eliminado$q$,
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)), CAST(:PARAM.ID AS BIGINT)) AS eliminado$q$,
        'postgres', m.id_microservice, '/entes/:ID', 'SELECT', 'PATCH',
        '{"PARAM.ID": "BIGINT!"}'::jsonb
   FROM public.microservice m WHERE m.serviceid = 'pigse'
@@ -75,7 +75,7 @@ SELECT 'pigse-entes-eliminar',
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-establecimientos-query',
        $q$SELECT * FROM pigse.fn_est_listar(
-              CAST(:CONTEXT.USER_ID AS BIGINT),
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)),
               CAST(:BODY.FILTERS.SEARCH AS VARCHAR),
               CAST(:BODY.FILTERS.ENTES AS BIGINT[]),
               CAST(:BODY.FILTERS.MUNICIPIOS AS VARCHAR[]),
@@ -94,7 +94,7 @@ SELECT 'pigse-establecimientos-query',
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-establecimientos-buscar-pk',
        $q$SELECT * FROM pigse.fn_est_buscar_por_pk(
-              CAST(:CONTEXT.USER_ID AS BIGINT), CAST(:PARAM.ID AS BIGINT))$q$,
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)), CAST(:PARAM.ID AS BIGINT))$q$,
        'postgres', m.id_microservice, '/establecimientos/:ID', 'SELECT', 'GET',
        '{"PARAM.ID": "BIGINT!"}'::jsonb
   FROM public.microservice m WHERE m.serviceid = 'pigse'
@@ -103,7 +103,7 @@ SELECT 'pigse-establecimientos-buscar-pk',
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-establecimientos-crear',
        $q$SELECT pigse.fn_est_crear(
-              CAST(:CONTEXT.USER_ID AS BIGINT),
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)),
               CAST(:BODY.FK_ENTE AS BIGINT),
               CAST(:BODY.NOMBRE AS VARCHAR),
               CAST(:BODY.NIT AS VARCHAR),
@@ -119,7 +119,7 @@ SELECT 'pigse-establecimientos-crear',
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-establecimientos-actualizar',
        $q$SELECT pigse.fn_est_actualizar(
-              CAST(:CONTEXT.USER_ID AS BIGINT),
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)),
               CAST(:PARAM.ID AS BIGINT),
               CAST(:BODY.NOMBRE AS VARCHAR),
               CAST(:BODY.NIT AS VARCHAR),
@@ -135,7 +135,7 @@ SELECT 'pigse-establecimientos-actualizar',
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-establecimientos-eliminar',
        $q$SELECT pigse.fn_est_soft_delete(
-              CAST(:CONTEXT.USER_ID AS BIGINT), CAST(:PARAM.ID AS BIGINT)) AS eliminado$q$,
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)), CAST(:PARAM.ID AS BIGINT)) AS eliminado$q$,
        'postgres', m.id_microservice, '/establecimientos/:ID', 'SELECT', 'PATCH',
        '{"PARAM.ID": "BIGINT!"}'::jsonb
   FROM public.microservice m WHERE m.serviceid = 'pigse'
@@ -145,7 +145,7 @@ SELECT 'pigse-establecimientos-eliminar',
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-funcionarios-query',
        $q$SELECT * FROM pigse.fn_fun_listar(
-              CAST(:CONTEXT.USER_ID AS BIGINT),
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)),
               CAST(:BODY.FILTERS.SEARCH AS VARCHAR),
               CAST(:BODY.FILTERS.ESTABLECIMIENTOS AS BIGINT[]),
               CAST(:BODY.SORTING.ID AS VARCHAR),
@@ -163,7 +163,7 @@ SELECT 'pigse-funcionarios-query',
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-funcionarios-buscar-pk',
        $q$SELECT * FROM pigse.fn_fun_buscar_por_pk(
-              CAST(:CONTEXT.USER_ID AS BIGINT), CAST(:PARAM.ID AS BIGINT))$q$,
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)), CAST(:PARAM.ID AS BIGINT))$q$,
        'postgres', m.id_microservice, '/funcionarios/:ID', 'SELECT', 'GET',
        '{"PARAM.ID": "BIGINT!"}'::jsonb
   FROM public.microservice m WHERE m.serviceid = 'pigse'
@@ -172,24 +172,36 @@ SELECT 'pigse-funcionarios-buscar-pk',
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-funcionarios-crear',
        $q$SELECT pigse.fn_fun_crear(
-              CAST(:CONTEXT.USER_ID AS BIGINT),
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)),
               CAST(:BODY.FK_ESTABLECIMIENTO AS BIGINT),
               CAST(:BODY.CORREO_ELECTRONICO AS VARCHAR),
               CAST(:BODY.IDENTIFICACION AS VARCHAR),
               CAST(:BODY.PRIMER_NOMBRE AS VARCHAR),
-              CAST(:BODY.PRIMER_APELLIDO AS VARCHAR)
+              CAST(:BODY.PRIMER_APELLIDO AS VARCHAR),
+              CAST(:BODY.SEGUNDO_NOMBRE AS VARCHAR),
+              CAST(:BODY.SEGUNDO_APELLIDO AS VARCHAR),
+              CAST(:BODY.TELEFONO AS VARCHAR),
+              CAST(:BODY.FK_TLV_TIPO_DOCUMENTO AS BIGINT),
+              CAST(:BODY.FK_TLV_CARGO AS BIGINT),
+              -- Sin esto el funcionario nace sin rol: no se escribe el puente
+              -- TESTABLECIMIENTO_USUARIO ni se sincroniza public.role_users, y
+              -- fn_mi_establecimiento no lo encuentra despues.
+              CAST(:BODY.FK_ID_ROLE AS BIGINT)
           ) AS pk_funcionario$q$,
        'postgres', m.id_microservice, '/funcionarios', 'SELECT', 'POST',
        '{"BODY.FK_ESTABLECIMIENTO": "BIGINT!", "BODY.CORREO_ELECTRONICO": "VARCHAR!",
          "BODY.IDENTIFICACION": "VARCHAR!", "BODY.PRIMER_NOMBRE": "VARCHAR!",
-         "BODY.PRIMER_APELLIDO": "VARCHAR!"}'::jsonb
+         "BODY.PRIMER_APELLIDO": "VARCHAR!", "BODY.SEGUNDO_NOMBRE": "VARCHAR",
+         "BODY.SEGUNDO_APELLIDO": "VARCHAR", "BODY.TELEFONO": "VARCHAR",
+         "BODY.FK_TLV_TIPO_DOCUMENTO": "BIGINT", "BODY.FK_TLV_CARGO": "BIGINT",
+         "BODY.FK_ID_ROLE": "BIGINT"}'::jsonb
   FROM public.microservice m WHERE m.serviceid = 'pigse'
    AND NOT EXISTS (SELECT 1 FROM public.query WHERE uuid = 'pigse-funcionarios-crear');
 
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-funcionarios-actualizar',
        $q$SELECT pigse.fn_fun_actualizar(
-              CAST(:CONTEXT.USER_ID AS BIGINT),
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)),
               CAST(:PARAM.ID AS BIGINT),
               CAST(:BODY.CORREO_ELECTRONICO AS VARCHAR),
               CAST(:BODY.IDENTIFICACION AS VARCHAR),
@@ -205,11 +217,17 @@ SELECT 'pigse-funcionarios-actualizar',
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-funcionarios-eliminar',
        $q$SELECT pigse.fn_fun_soft_delete(
-              CAST(:CONTEXT.USER_ID AS BIGINT), CAST(:PARAM.ID AS BIGINT)) AS eliminado$q$,
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)), CAST(:PARAM.ID AS BIGINT)) AS eliminado$q$,
        'postgres', m.id_microservice, '/funcionarios/:ID', 'SELECT', 'PATCH',
        '{"PARAM.ID": "BIGINT!"}'::jsonb
   FROM public.microservice m WHERE m.serviceid = 'pigse'
    AND NOT EXISTS (SELECT 1 FROM public.query WHERE uuid = 'pigse-funcionarios-eliminar');
+
+-- OJO :CONTEXT.USER_ID es public.users.id_user, NO pigse.TUSUARIO.PK_TUSUARIO.
+-- Son espacios de id distintos: pasarlo crudo hace que fn_usuario_tiene_rol no
+-- encuentre al solicitante y toda escritura responda 42501. Por eso va envuelto
+-- en public.fn_get_pigse_usuario_id (V261), igual que en los endpoints de
+-- documentos.
 
 -- 4. role_query -- el reparto ESPEJA el gate de V257: un rol con role_query
 -- pero sin permiso en la funcion recibe un 42501 de la base, y al contrario

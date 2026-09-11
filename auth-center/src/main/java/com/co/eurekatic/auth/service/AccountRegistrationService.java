@@ -132,7 +132,9 @@ public class AccountRegistrationService {
         User saved = userRepository.save(user);
 
         // El roster de apps se deriva de role_users x role_app (V151).
-        jdbc.update("SELECT public.fn_sync_app_users(?)", saved.getId());
+        // queryForObject y no update: la funcion se invoca con SELECT y eso
+        // devuelve un resultset, que update() rechaza (SQLSTATE 0100E).
+        jdbc.queryForObject("SELECT public.fn_sync_app_users(?)", Object.class, saved.getId());
         cacheInvalidator.invalidate(saved.getEmail());
 
         if (nueva) {

@@ -215,7 +215,7 @@ INSERT INTO public.query (uuid, query, type, microservice_id, path_template,
                           execution_mode, http_method, param_types)
 SELECT 'pigse-usuarios-ente-crear',
        $q$SELECT pigse.fn_usuario_ente_crear(
-              CAST(:CONTEXT.USER_ID AS BIGINT),
+              public.fn_get_pigse_usuario_id(CAST(:CONTEXT.USER_ID AS BIGINT)),
               CAST(:BODY.FK_TENTE AS BIGINT),
               CAST(:BODY.CORREO_ELECTRONICO AS VARCHAR),
               CAST(:BODY.IDENTIFICACION AS VARCHAR),
