@@ -87,13 +87,19 @@ DIVERGENTES="$(git rev-list --count "origin/${TEST}..origin/${MAIN}")"
 
 echo
 echo "→ Commits en 'test' que no están en 'main' (${PENDIENTES}):"
-git log --oneline "origin/${MAIN}..origin/${TEST}" | head -40
+# `| head -40` bajo `set -o pipefail` mata git-log con SIGPIPE en cuanto
+# head cierra su extremo del pipe tras la línea 40, y pipefail propaga
+# ese 141 como si el script hubiera fallado. Pasó en la promoción real:
+# con 264 commits pendientes el script moría aquí SIEMPRE, antes de
+# simular siquiera el merge. `|| true` en el propio git log basta —
+# head sigue imprimiendo sus 40 líneas antes de cerrar.
+git log --oneline "origin/${MAIN}..origin/${TEST}" 2>&1 | head -40 || true
 [[ "$PENDIENTES" -gt 40 ]] && echo "   ... y $((PENDIENTES - 40)) más"
 
 if [[ "$DIVERGENTES" -gt 0 ]]; then
     echo
     echo "→ AVISO: 'main' tiene ${DIVERGENTES} commit(s) que 'test' no tiene:"
-    git log --oneline "origin/${TEST}..origin/${MAIN}" | sed 's/^/   /'
+    git log --oneline "origin/${TEST}..origin/${MAIN}" 2>&1 | head -40 | sed 's/^/   /' || true
     echo "   Revisa que su contenido ya viajó a test (o ve CONTRIBUTING §3.6.5,"
     echo "   cherry-pick de vuelta) antes de promover."
 fi
@@ -136,8 +142,15 @@ if git merge-tree --write-tree "origin/${MAIN}" "origin/${TEST}" >/dev/null 2>&1
     echo "   Sin conflictos."
 else
     LIMPIO=0
+    # `git merge-tree` sale con 1 cuando hay conflictos (es justo lo que
+    # acabamos de detectar arriba), y bajo `set -o pipefail` ese código
+    # se propaga por TODO el pipeline hasta wc -l — aunque wc -l imprima
+    # bien su cuenta. La asignación `N_CONF="$(...)"` no está exenta de
+    # `set -e` como sí lo está la condición del `if` de arriba, así que
+    # sin el `|| true` el script muere aquí en cuanto hay conflictos, que
+    # es precisamente cuando este bloque tiene que seguir ejecutándose.
     N_CONF="$(git merge-tree --write-tree "origin/${MAIN}" "origin/${TEST}" 2>&1 \
-              | awk '/^[0-7]{6} /{print $4}' | sort -u | wc -l)"
+              | awk '/^[0-7]{6} /{print $4}' | sort -u | wc -l || true)"
     echo "   ${N_CONF} fichero(s) en conflicto."
 fi
 

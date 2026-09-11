@@ -47,6 +47,49 @@ final class ColumnLayout {
      */
     static Map<String, String> resolver(ReportingProperties.Report def,
                                         List<Map<String, Object>> rows) {
+        return resolver(def, rows, null);
+    }
+
+    /**
+     * Igual que {@link #resolver(ReportingProperties.Report, List)}, pero
+     * acotado/reordenado por {@code columnasPedidas} (el {@code columns} del
+     * request -- típicamente las columnas visibles de la tabla del front).
+     *
+     * <p>{@code columnasPedidas} es un FILTRO sobre el catálogo YA
+     * configurado, nunca una fuente nueva de columnas: una clave pedida que
+     * no esté en {@code def.getColumns()} se ignora en silencio, no se
+     * inventa una columna para ella. Sin esta regla, cualquiera con acceso al
+     * reporte podría pedir por este camino un campo interno (un id, un campo
+     * que se dejó fuera del reporte a propósito) que nunca estuvo pensado
+     * para salir impreso.
+     *
+     * <p>Si tras filtrar no queda ninguna columna (todas las pedidas eran
+     * desconocidas, o {@code columnasPedidas} llegó vacía pero no null), se
+     * cae al catálogo completo en vez de generar un reporte sin columnas --
+     * un reporte "de más" es recuperable con otra exportación, uno en blanco
+     * no.
+     */
+    static Map<String, String> resolver(ReportingProperties.Report def,
+                                        List<Map<String, Object>> rows,
+                                        List<String> columnasPedidas) {
+        Map<String, String> todas = resolverTodas(def, rows);
+
+        if (columnasPedidas == null || columnasPedidas.isEmpty()) {
+            return todas;
+        }
+
+        Map<String, String> filtradas = new LinkedHashMap<>();
+        for (String clave : columnasPedidas) {
+            String etiqueta = todas.get(clave);
+            if (etiqueta != null) {
+                filtradas.put(clave, etiqueta);
+            }
+        }
+        return filtradas.isEmpty() ? todas : filtradas;
+    }
+
+    private static Map<String, String> resolverTodas(ReportingProperties.Report def,
+                                                      List<Map<String, Object>> rows) {
         if (def != null && def.getColumns() != null && !def.getColumns().isEmpty()) {
             return def.getColumns();
         }

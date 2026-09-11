@@ -210,6 +210,31 @@ reporting:
         direccion: Direccion
         telefono: Telefono
 
+    # Reporte de Matricula. `columns` es el CATALOGO completo exportable --
+    # el front manda `columns` en el body con las que tenga visibles en su
+    # tabla en ese momento (ver ColumnLayout.resolver), y esta lista es el
+    # whitelist contra el que se filtra: una clave que el front mande y no
+    # este aca se ignora, nunca se agrega una columna nueva por ese camino.
+    # Claves = las mismas que devuelve fn_matricula_listar (V200/V270).
+    matricula:
+      path: /matricula/reporte
+      title: Matricula
+      file-name: matricula
+      columns:
+        document_number: Documento
+        first_name: Nombres
+        last_name: Apellidos
+        institution: Institucion
+        campus: Sede
+        shift: Jornada
+        education_level: Nivel de ensenanza
+        grade: Grado
+        grupo: Grupo
+        enrollment_date: Fecha de matricula
+        guardian: Acudiente
+        status: Estado
+        has_grades: Tiene calificaciones
+
     # E03HU57 -- Reporte de asistencia por grupo. path = fila 'asis-reporte-grupo'
     # (V281): fn_asistencia_listar_seguimiento sin paginar, con GRUPO y el
     # rango de fechas obligatorios. asignatura/actividad quedan como dos

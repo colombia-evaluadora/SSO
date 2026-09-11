@@ -8,28 +8,35 @@ Para el *por qué* de cada decisión de diseño, ver
 [deploy-test-server.md](deploy-test-server.md). Este documento es
 solo la secuencia de acciones.
 
+**Nota de rutas**: el pipeline se dispara con push a **`dev`**, no a
+`test` — `test` y `main` son ramas de promoción (merge commit, sin
+despliegue propio; `main` solo despliega vía tag, a producción — ver
+la nota al final de `deploy-test-server.md`). Si tu checkout local
+solo tiene `main`, el Paso 6 crea `dev` desde ahí.
+
 ---
 
 ## Paso 0 — Prerrequisitos
 
 - [ ] Acceso para crear un Linode (cuenta de Linode/Akamai).
 - [ ] Rol de admin en el repo `colombia-evaluadora/SSO` de GitHub
-      (para crear secretos y aprobar el PR).
+      (para crear el Environment, sus secretos, y aprobar el PR).
+- [ ] `gh` CLI autenticado (`gh auth login --scopes repo,workflow`) —
+      lo usa `scripts/setup-environment-secrets.sh` en el Paso 5.
 - [ ] Un branch de Neon dedicado a pruebas (recomendado, no
       obligatorio) — evita que el ambiente de test pise los datos de
       dev. Créalo desde la consola de Neon: `Branches → Create branch`.
 
 ---
 
-## Paso 1 — Mergear el PR del pipeline
+## Paso 1 — Confirmar que el pipeline está en `dev`
 
-*(En GitHub)*
+*(En GitHub / tu máquina)*
 
-- [ ] Revisar y mergear https://github.com/colombia-evaluadora/SSO/pull/1
-      contra `main`.
-- [ ] Confirmar que `test` sigue apuntando al mismo commit (ya está
-      empujada; no requiere acción si no le has hecho push a nada
-      encima).
+- [ ] Verificar que `.github/workflows/deploy-test.yml`,
+      `.github/workflows/deploy.yml` y `.github/workflows/ci.yml`
+      existen en `dev` (ya están mergeados en el repo actual — no
+      requiere un PR nuevo si partís de `dev` al día).
 
 ---
 
@@ -83,17 +90,22 @@ cat /tmp/deploy_key
 
 - [ ] **Copiar el contenido completo** de `/tmp/deploy_key` (incluye
       `-----BEGIN OPENSSH PRIVATE KEY-----` y el `END`) a un lugar
-      seguro temporal — va al secreto `TEST_SSH_KEY` en el Paso 5.
+      seguro temporal — va al secreto `SSH_KEY` del **Environment**
+      `test` en el Paso 5 (ya no es un secreto de repositorio).
 
 ```bash
 # 6. Borrar la clave del disco del servidor (ya la copiaste)
 rm /tmp/deploy_key /tmp/deploy_key.pub
 
-# 7. Crear el directorio de despliegue
-mkdir -p /opt/sso/postgres/migrations /opt/sso/observability
+# 7. Crear el directorio de despliegue — deploy.yml sincroniza estos
+#    subdirectorios en cada deploy (compose, migraciones, observability,
+#    docker/ y scripts/)
+mkdir -p /opt/sso/postgres/migrations /opt/sso/observability /opt/sso/docker /opt/sso/scripts
 chown -R deploy:deploy /opt/sso
 
-# 8. Firewall — solo SSH y el gateway público
+# 8. Firewall — solo SSH y el gateway público. Si vas a usar el
+#    perfil tls (Traefik + Let's Encrypt) más adelante, abrí también
+#    80/443 — ver deploy-test-server.md §7.
 ufw allow 22/tcp
 ufw allow 8080/tcp
 ufw --force enable
@@ -114,9 +126,14 @@ ssh -i /ruta/local/a/deploy_key deploy@<IP-DEL-LINODE> "echo OK"
 
 ---
 
-## Paso 4 — Configurar el `.env` del servidor
+## Paso 4 — Configurar el `.env` del servidor (primera vez, a mano)
 
 *(Por SSH como `deploy` en el Linode)*
+
+Esto es solo para el **primer** despliegue. Después de este paso el
+`.env` pasa a vivir como el secreto `ENV_FILE` del Environment (Paso
+5) y `deploy.yml` lo reescribe en el servidor en cada deploy — dejás
+de tocarlo por SSH salvo para un rollback puntual de `IMAGE_TAG`.
 
 ```bash
 ssh deploy@<IP-DEL-LINODE>
@@ -161,11 +178,11 @@ IMAGE_TAG=test-latest
 # Fijo — el provisioner deriva el nombre de red de aquí
 COMPOSE_PROJECT_NAME=sso
 
-# NO copies la línea COMPOSE_PROFILES=diagnostics de .env.example —
-# déjala fuera del .env del servidor. Así hello-service (puro
-# diagnóstico, nada depende de él) no arranca ahí y te ahorras
-# ~192-256MB de RAM. Si un futuro merge de .env.example la vuelve a
-# traer, bórrala de nuevo.
+# Perfiles activos (base). NO copies `diagnostics` de .env.example —
+# hello-service y los dos query-service de referencia son solo demos,
+# y en un servidor real te ahorras esa RAM. Sumá `cdc-sync` si
+# necesitás CDC activo, `observability` para el stack LGTM.
+COMPOSE_PROFILES=local-only
 
 # Todo menos el gateway atado a loopback (Docker se salta ufw)
 BIND_IP=127.0.0.1
@@ -195,11 +212,16 @@ SSO_ADMIN_PASSWORD=<password-fuerte>
 # Credenciales de RabbitMQ — no dejar guest/guest. La imagen oficial
 # crea este usuario sola al primer arranque (variable RABBITMQ_DEFAULT_USER/
 # PASS leída por el entrypoint), pero SOLO si el volumen rabbitmq-data
-# está vacío. Deben quedar puestas aquí ANTES del Paso 7 (primer
+# está vacío. Deben quedar puestas aquí ANTES del Paso 8 (primer
 # `docker compose up`) — cambiarlas después de que el volumen ya
 # exista no tiene efecto sin borrar el volumen o usar rabbitmqctl.
 RABBITMQ_USER=...
 RABBITMQ_PASS=...
+
+# Object storage de file-service (Garage, S3-compatible — corre como
+# contenedor propio del compose). Cambiar las claves por defecto.
+S3_ACCESS_KEY=<clave-fuerte>
+S3_SECRET_KEY=<clave-fuerte>
 
 # Pegar aquí los dos valores restantes de `openssl rand -base64 32`
 SSO_SESSION_USER_ROLES_INVALIDATION_SECRET=<pegar-valor-generado>
@@ -214,39 +236,53 @@ chmod 600 /opt/sso/.env
 
 ---
 
-## Paso 5 — Crear los secretos en GitHub
+## Paso 5 — Crear el Environment y sus secretos en GitHub
 
-*(En GitHub: `Settings → Secrets and variables → Actions →
-New repository secret`, dentro del repo `colombia-evaluadora/SSO`)*
+*(En tu máquina, con `gh` autenticado — o en GitHub:
+`Settings → Environments`, dentro del repo `colombia-evaluadora/SSO`)*
 
-| Secreto | Valor | De dónde sale |
+Ya no son secretos de repositorio (`TEST_SSH_HOST`, `TEST_SSH_KEY`,
+`GHCR_PULL_USER`/`_TOKEN` no existen más). Son 3 secretos dentro del
+**Environment** `test`, poblados con el script dedicado — lee el
+`.env` que acabas de dejar corriendo en el Paso 4 y evita
+retipear nada a mano:
+
+```bash
+./scripts/setup-environment-secrets.sh test \
+    --ssh-target deploy@<IP-DEL-LINODE> \
+    --from-server root@<IP-DEL-LINODE>
+```
+
+Esto crea/actualiza:
+
+| Secreto (dentro del environment `test`) | Valor | De dónde sale |
 |---|---|---|
-| `TEST_SSH_HOST` | IP pública del Linode | Paso 2 |
-| `TEST_SSH_USER` | `deploy` | — |
-| `TEST_SSH_KEY` | La clave privada completa | Paso 3.5 |
-| `GHCR_PULL_USER` | Tu username de GitHub | — |
-| `GHCR_PULL_TOKEN` | Personal Access Token (classic), scope **solo** `read:packages` | `Settings → Developer settings → Personal access tokens (classic) → Generate new token` |
+| `SSH_TARGET` | `deploy@<IP-DEL-LINODE>` | Paso 2 |
+| `SSH_KEY` | La clave privada completa | Paso 3.5 |
+| `ENV_FILE` | El `.env` completo del servidor | Leído del server (`--from-server`) |
 
-- [ ] Crear los 5 secretos.
-- [ ] (Opcional, recomendado) Crear el **environment** `test` en
-      `Settings → Environments → New environment`, nombre `test`. Si
-      configuras "required reviewers" ahí, cada deploy pedirá
-      aprobación manual antes de tocar el servidor.
+- [ ] Confirmar en `Settings → Environments → test` que los 3
+      secretos quedaron creados.
+- [ ] (Opcional, recomendado) Activar "required reviewers" en el
+      Environment `test` si querés aprobación manual antes de cada
+      deploy — en `production` esto es obligatorio, no opcional (ver
+      `deploy-test-server.md`, nota final).
 
 ---
 
-## Paso 6 — Activar branch protection sobre `test`
+## Paso 6 — Crear `dev` (si tu checkout solo tiene `main`) y activar branch protection
 
 *(En tu máquina, con `gh` autenticado, o a mano en GitHub)*
 
 ```bash
-./scripts/branch-protection.sh
+git checkout -b dev origin/main   # si `dev` no existe todavía
+git push -u origin dev
 ```
 
-O a mano en `Settings → Branches → Add rule` sobre `test`, con los
-checks requeridos: `maven-common`, `maven-auth-center`,
-`maven-sso-admin`, `maven-api-gateway`, `admin-ui-typecheck`,
-`admin-ui-test`, `admin-ui-lint`, `admin-ui-build`.
+Branch protection sobre `dev` (y `test`/`main`, mismas reglas —
+ver `CONTRIBUTING.md` §1/§3.3): el único check requerido es `ci-ok`,
+que agrega el resultado de los ~20 jobs (muchos condicionales) de
+`ci.yml` con `always()`.
 
 ---
 
@@ -255,13 +291,13 @@ checks requeridos: `maven-common`, `maven-auth-center`,
 *(En tu máquina)*
 
 ```bash
-git checkout test
-git merge main        # trae el commit del pipeline si test no lo tenía
-git push origin test
+git checkout dev
+git push origin dev
 ```
 
-Esto dispara `ci.yml`. Si termina en verde, `deploy-test.yml` arranca
-solo (o pide aprobación si configuraste el environment con reviewers).
+Esto dispara `ci.yml` sobre `dev`. Si termina en verde,
+`deploy-test.yml` arranca solo (o pide aprobación si activaste
+"required reviewers" en el Environment `test`).
 
 - [ ] Ir a la pestaña **Actions** del repo y seguir el run de
       `Deploy test` en tiempo real.
@@ -277,7 +313,8 @@ curl -fsS http://<IP-DEL-LINODE>:8080/actuator/health
 ```
 
 Debe responder con `"status":"UP"`. El propio workflow ya hace este
-chequeo (con reintentos de hasta 5 min) y falla el job si no responde.
+chequeo (con reintentos de hasta 15 min, cubriendo el arranque en frío
+de las JVMs) y falla el job si no responde.
 
 - [ ] Probar login end-to-end:
 
@@ -302,9 +339,15 @@ Y abrir en el navegador local: `http://localhost:3000` (Grafana),
 
 ## Referencia rápida — operación diaria
 
-- **Desplegar de nuevo**: push (o merge) a `test`.
+- **Desplegar de nuevo**: push (o merge) a `dev`.
 - **Re-desplegar sin esperar CI**: `Actions → Deploy test → Run
-  workflow`.
+  workflow` (reconstruye las 12 imágenes siempre, no solo el diff).
+- **Rotar una credencial**: editar el secreto `ENV_FILE` del
+  Environment `test` (por ejemplo con
+  `./scripts/setup-environment-secrets.sh test --from-server ...` tras
+  editar el `.env` en el servidor, o directo desde
+  `Settings → Environments → test`) y re-desplegar — ya no hace falta
+  entrar por SSH para que el cambio llegue.
 - **Rollback**: en el servidor, editar `IMAGE_TAG=test-<sha-corto>` en
   `/opt/sso/.env` (el sha aparece en el nombre del run de GitHub
   Actions o en `docker images` en el servidor), luego:
@@ -313,7 +356,13 @@ Y abrir en el navegador local: `http://localhost:3000` (Grafana),
   ssh deploy@<IP-DEL-LINODE> "cd /opt/sso && docker compose up -d"
   ```
 
+  (Un deploy posterior del pipeline vuelve a escribir el `.env` desde
+  `ENV_FILE` y pisa este cambio manual — es intencional, el rollback
+  es una medida puntual, no permanente.)
 - **Logs**: `ssh deploy@<IP-DEL-LINODE> "cd /opt/sso && docker compose logs -f api-gateway"`
+- **Activar/desactivar CDC**: `CDC_SYNC_ENABLED=true|false` en el
+  `.env` (dentro de `ENV_FILE`) — el wrapper `scripts/sso-stack.sh`
+  aplica `docker-compose.cdc-off.yml` cuando está en `false`.
 - **query-service provisionados desde admin-ui**: no se actualizan
   solos con el deploy — re-provisionarlos manualmente después de un
   cambio a `query-service`.

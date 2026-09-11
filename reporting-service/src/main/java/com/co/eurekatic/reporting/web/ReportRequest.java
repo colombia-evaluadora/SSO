@@ -1,5 +1,6 @@
 package com.co.eurekatic.reporting.web;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -15,9 +16,19 @@ import java.util.Map;
  * @param format  {@code "pdf"} o {@code "excel"}
  * @param filters filtros elegidos; null o vacio = sin filtrar = todo
  * @param sorting {@code {id, desc}} del orden de la tabla; opcional
+ * @param columns claves de columna a incluir, EN ORDEN -- mismo criterio que
+ *                el resto del record: el front manda lo que ya tiene en la
+ *                mano (las columnas visibles de su tabla). Null o vacio =
+ *                todas las declaradas en {@code reporting.reports.<clave>.columns}
+ *                (comportamiento de siempre, sin este campo). Una clave que
+ *                no este en ese mapa configurado se ignora en silencio --
+ *                {@code columns} filtra/reordena el catalogo declarado, no
+ *                agrega columnas nuevas que no estuvieran pensadas para
+ *                exportarse (ver {@code ColumnLayout.resolver}).
  */
 public record ReportRequest(
         String format,
         Map<String, Object> filters,
-        Map<String, Object> sorting) {
+        Map<String, Object> sorting,
+        List<String> columns) {
 }
