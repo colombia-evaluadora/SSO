@@ -338,16 +338,74 @@ public class AuditRevertService {
      * Compara un valor leído de JSON (Jackson: Boolean/Integer/Long/Double/String/null)
      * contra un valor leído por JDBC (Boolean/Number/BigDecimal/String/Timestamp/null).
      * Normaliza a texto para tolerar la diferencia de representación entre ambos
-     * mundos — suficiente para tipos simples (booleanos, números, texto), NO
-     * garantizado para columnas jsonb/array/timestamp con formato ambiguo (ver
-     * limitaciones documentadas en {@code docs/audit-revert-fase2-analisis.md}).
+     * mundos — suficiente para tipos simples (booleanos, números, texto). Las
+     * columnas {@code jsonb}/{@code array} siguen sin comparador dedicado (ver
+     * limitaciones en {@code docs/auditoria/audit-revert-fase2-analisis.md}).
      * Ante la duda, esto falla CERRADO: una comparación que no calza se trata
      * como conflicto (rechaza el revert) en vez de aplicar algo dudoso.
+     *
+     * <p>Los {@code timestamp} SÍ tienen comparador propio desde el arreglo del
+     * falso {@code REVERT_CONFLICT}: Debezium los serializa como epoch entero y
+     * Postgres los devuelve como {@link java.sql.Timestamp}, de modo que la
+     * comparación textual nunca calzaba y rechazaba TODO revert de un UPDATE
+     * (160 de las 162 tablas del esquema tienen {@code modified_at}, y toda
+     * función {@code fn_*_actualizar} la escribe). Ver
+     * {@link #temporalMillis(Object)}.
      */
     private static boolean jsonValuesEqual(Object a, Object b) {
         if (a == null || b == null) return a == null && b == null;
         if (a instanceof Boolean || b instanceof Boolean) return asBoolean(a) == asBoolean(b);
+
+        // Un lado temporal (JDBC) contra el otro numérico (epoch de Debezium).
+        // El XOR es deliberado: si ambos son números se comparan como números
+        // -- un id y un epoch no deben cruzarse nunca por esta vía.
+        if (isTemporal(a) ^ isTemporal(b)) {
+            Long ma = temporalMillis(a);
+            Long mb = temporalMillis(b);
+            if (ma != null && mb != null) return ma.equals(mb);
+        }
+
         return normalizeForCompare(a).equals(normalizeForCompare(b));
+    }
+
+    private static boolean isTemporal(Object v) {
+        return v instanceof java.util.Date
+                || v instanceof java.time.Instant
+                || v instanceof java.time.LocalDateTime
+                || v instanceof java.time.OffsetDateTime;
+    }
+
+    /**
+     * Instante en milisegundos, o {@code null} si el valor no representa uno.
+     *
+     * <p>La comparación se hace en MILISEGUNDOS a propósito: Debezium serializa
+     * con la precisión declarada de la columna, mientras Postgres guarda
+     * microsegundos. Un {@code modified_at} de {@code 17:32:39.241389} viaja
+     * como {@code ...241} y volver a compararlo exacto fallaría por 389
+     * microsegundos. {@link java.sql.Timestamp#getTime()} ya trunca a
+     * milisegundos, así que ambos lados quedan en la misma unidad.
+     *
+     * <p>Para los enteros la unidad se deduce de la magnitud, que es lo único
+     * que llega en el JSON: sin esto, un epoch en microsegundos (columnas
+     * {@code timestamp(6)}) se leería como una fecha del año 58000.
+     */
+    private static Long temporalMillis(Object v) {
+        if (v instanceof java.sql.Timestamp ts) return ts.getTime();
+        if (v instanceof java.util.Date d) return d.getTime();
+        if (v instanceof java.time.Instant i) return i.toEpochMilli();
+        if (v instanceof java.time.LocalDateTime ldt) {
+            return ldt.toInstant(java.time.ZoneOffset.UTC).toEpochMilli();
+        }
+        if (v instanceof java.time.OffsetDateTime odt) return odt.toInstant().toEpochMilli();
+        if (v instanceof Number n && !(v instanceof Double) && !(v instanceof Float)) {
+            long raw = n.longValue();
+            long abs = Math.abs(raw);
+            if (abs >= 1_000_000_000_000_000L) return raw / 1_000L;   // microsegundos
+            if (abs >= 100_000_000_000L)       return raw;            // milisegundos
+            if (abs >= 100_000_000L)           return raw * 1_000L;   // segundos
+            return null;                                              // no es un epoch
+        }
+        return null;
     }
 
     private static String normalizeForCompare(Object v) {
