@@ -332,6 +332,11 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # Contrasena por defecto de POST /register/account. Si no se define,
+      # ese endpoint responde 500 y ningun alta se crea: es preferible a
+      # repartir cuentas con una contrasena conocida.
+      SSO_REGISTRATION_DEFAULT_PASSWORD: ${SSO_REGISTRATION_DEFAULT_PASSWORD:-}
+      SSO_REGISTRATION_PASSWORD_PATTERN: ${SSO_REGISTRATION_PASSWORD_PATTERN:-}
       # Bootstrap admin. Post-V12 the seed key is the email
       # (the legacy SSO_ADMIN_USERNAME is no longer
       # consumed directly; application.yml falls back to it

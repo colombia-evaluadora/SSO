@@ -5,6 +5,9 @@ import com.co.eurekatic.auth.security.CachedUserListService;
 import com.co.eurekatic.auth.security.CachedUserSummaryService;
 import com.co.eurekatic.auth.security.EffectiveRolesResolver;
 import com.co.eurekatic.auth.service.FuncionarioRegistrationService;
+import com.co.eurekatic.auth.service.AccountRegistrationService;
+import com.co.eurekatic.auth.web.dto.RegisterAccountRequest;
+import com.co.eurekatic.auth.web.dto.RegisterAccountResponse;
 import com.co.eurekatic.auth.web.dto.RegisterResponse;
 import com.co.eurekatic.auth.web.dto.RegisterUsuarioRequest;
 import com.co.eurekatic.common.dto.AuthDtos.AppSummary;
@@ -46,13 +49,15 @@ public class AuthController {
     private final CachedAppAccessService cachedAppAccess;
     private final CachedUserListService cachedUserList;
     private final FuncionarioRegistrationService funcionarioRegistrationService;
+    private final AccountRegistrationService accountRegistrationService;
 
     public AuthController(UserRepository userRepository, JwtTokenService jwt,
                            EffectiveRolesResolver effectiveRoles,
                            CachedUserSummaryService cachedUserSummary,
                            CachedAppAccessService cachedAppAccess,
                            CachedUserListService cachedUserList,
-                           FuncionarioRegistrationService funcionarioRegistrationService) {
+                           FuncionarioRegistrationService funcionarioRegistrationService,
+                           AccountRegistrationService accountRegistrationService) {
         this.userRepository = userRepository;
         this.jwt = jwt;
         this.effectiveRoles = effectiveRoles;
@@ -60,6 +65,7 @@ public class AuthController {
         this.cachedAppAccess = cachedAppAccess;
         this.cachedUserList = cachedUserList;
         this.funcionarioRegistrationService = funcionarioRegistrationService;
+        this.accountRegistrationService = accountRegistrationService;
     }
 
     /**
@@ -175,6 +181,21 @@ public class AuthController {
             Authentication auth) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(funcionarioRegistrationService.registerFuncionario(req, auth));
+    }
+
+    /**
+     * Alta de una cuenta del SSO con los roles que se le dan de entrada y la
+     * contraseña por defecto del servidor. El ADMIN del SSO otorga cualquier
+     * rol; el resto, sólo los que {@code public.role_grant} les lista (V260),
+     * de modo que el administrador de una app no pueda crear a alguien por
+     * encima suyo.
+     */
+    @PostMapping("/register/account")
+    public ResponseEntity<RegisterAccountResponse> registerAccount(
+            @Valid @RequestBody RegisterAccountRequest req,
+            Authentication auth) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(accountRegistrationService.register(req, auth));
     }
 
     /* ====================== helpers ====================== */
