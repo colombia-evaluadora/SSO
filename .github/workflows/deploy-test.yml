@@ -121,6 +121,14 @@ on:
 permissions:
   contents: read
   packages: write
+  # `gh run list --workflow deploy-test.yml` del job `changes` (la guarda que
+  # evita re-desplegar un SHA que ya salio) pega a la API de Actions. Con el
+  # repo PUBLICO el GITHUB_TOKEN podia leerla sin declararlo; al pasar a
+  # privado dejo de poder y TODO deploy muere en el primer job con
+  # "HTTP 403: Resource not accessible by integration". Es el mismo cambio de
+  # visibilidad que motivo el `pull-requests: read` de ci.yml (#152), que
+  # cubrio paths-filter pero no esta llamada.
+  actions: read
 
 # Un deploy a la vez; el siguiente espera en cola (no se cancela un
 # deploy a medias — dejaría el stack en estado mixto).

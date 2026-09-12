@@ -1,0 +1,1720 @@
+{
+  "info": {
+    "name": "PIGSE - usuarios, establecimientos, documentos y cumplimiento",
+    "description": "Flujo completo del bloque V256-V263, en el ORDEN en que hay que ejecutarlo.\n\nIDEA CENTRAL - son dos capas y el orden importa:\n  1. La cuenta del SSO (public.users + public.role_users) la crea auth-center.\n  2. La fila de dominio (pigse.tusuario / tfuncionario) la crea una funcion de\n     pigse, que enlaza FK_ID_USER buscando la cuenta POR CORREO.\nSi se invierte el orden, FK_ID_USER queda NULL y el usuario no puede operar:\nfn_usuario_tiene_rol resuelve el permiso por TUSUARIO.FK_ID_USER -> role_users.\n\nCONTRASENA: la pone el servidor, nunca el llamante. Con establecimientoId se\nderiva del DANE (pigse.testablecimiento.CODIGO) inyectado en\nSSO_REGISTRATION_PASSWORD_PATTERN (por defecto 'Pigse.{seed}*'); sin el usa\nSSO_REGISTRATION_DEFAULT_PASSWORD. El DANE crudo no sirve como contrasena:\nPasswordPolicy exige mayuscula, minuscula, digito y caracter especial, y el\nDANE son 12 digitos.\n\nREQUISITOS ANTES DE CORRER:\n  - Migraciones V256-V263 aplicadas.\n  - auth-center reconstruido: /register/account es codigo nuevo.\n  - query-service-pigse reiniciado DESPUES de aplicar V258/V262/V263. Las filas\n    nuevas de public.query no se enrutan hasta que ese contenedor arranca de\n    nuevo (404 por el gateway si no).\n\nORDEN: las carpetas estan numeradas y comparten variables de coleccion. Correr\nde arriba a abajo; 'Run collection' funciona de una pasada.\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "tokenAdminSso",
+      "value": ""
+    },
+    {
+      "key": "tokenAdminPigse",
+      "value": ""
+    },
+    {
+      "key": "tokenRector",
+      "value": ""
+    },
+    {
+      "key": "tokenAux",
+      "value": ""
+    },
+    {
+      "key": "tokenDirector",
+      "value": ""
+    },
+    {
+      "key": "enteId",
+      "value": ""
+    },
+    {
+      "key": "establecimientoId",
+      "value": ""
+    },
+    {
+      "key": "establecimientoEtnoId",
+      "value": ""
+    },
+    {
+      "key": "archivoId",
+      "value": ""
+    },
+    {
+      "key": "rolRectorId",
+      "value": ""
+    },
+    {
+      "key": "rolAuxId",
+      "value": ""
+    },
+    {
+      "key": "rolDirectorId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "0 - Salud y requisitos",
+      "item": [
+        {
+          "name": "Gateway arriba",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ruta de pigse enrutada",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/my-menus",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "my-menus"
+              ]
+            },
+            "description": "Un 404 aqui casi siempre significa que query-service-pigse no se reinicio despues de aplicar las migraciones: las filas nuevas de public.query no se enrutan hasta que el contenedor arranca de nuevo."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 o 404 (404 = falta reiniciar query-service-pigse)', () => pm.expect([200,404]).to.include(pm.response.code));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1 - El ADMIN del SSO crea al administrador de PIGSE",
+      "item": [
+        {
+          "name": "Login ADMIN del SSO",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailAdminSso}}\",\n  \"password\": \"{{passwordAdminSso}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const t = pm.response.json().token;",
+                  "pm.test('trae token', () => pm.expect(t).to.be.a('string').and.not.empty);",
+                  "pm.collectionVariables.set('tokenAdminSso', t);",
+                  "const roles = JSON.parse(atob(t.split('.')[1])).roles || [];",
+                  "console.log('roles en el JWT:', JSON.stringify(roles));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Alta del PIGSE-ADMINISTRADOR",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminSso}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register/account",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register",
+                "account"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailAdminPigse}}\",\n  \"fullName\": \"Ana Maria Pardo\",\n  \"roleNames\": [\n    \"PIGSE-ADMINISTRADOR\"\n  ]\n}"
+            },
+            "description": "Sin establecimientoId: un administrador territorial no pertenece a un EE, asi que recibe SSO_REGISTRATION_DEFAULT_PASSWORD y passwordOrigen sale 'DEFAULT'.\n\nSolo el ADMIN del SSO puede otorgar PIGSE-ADMINISTRADOR: ese rol no esta en public.role_grant para nadie, y el ADMIN tiene bypass."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('passwordOrigen DEFAULT', () => pm.expect(b.passwordOrigen).to.eql('DEFAULT'));",
+                  "pm.test('passwordTemporal', () => pm.expect(b.passwordTemporal).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login del PIGSE-ADMINISTRADOR",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailAdminPigse}}\",\n  \"password\": \"{{passwordAdminPigse}}\"\n}"
+            },
+            "description": "La contrasena es la de SSO_REGISTRATION_DEFAULT_PASSWORD del servidor."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const t = pm.response.json().token;",
+                  "pm.test('trae token', () => pm.expect(t).to.be.a('string').and.not.empty);",
+                  "pm.collectionVariables.set('tokenAdminPigse', t);",
+                  "const roles = JSON.parse(atob(t.split('.')[1])).roles || [];",
+                  "console.log('roles en el JWT:', JSON.stringify(roles));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Provisionar su identidad en pigse",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/usuarios/provisionar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "usuarios",
+                "provisionar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"CORREO_ELECTRONICO\": \"{{emailAdminPigse}}\"\n}"
+            },
+            "description": "PASO IMPRESCINDIBLE Y FACIL DE OLVIDAR. /register/account solo crea la cuenta del SSO. Sin esta llamada no hay fila en pigse.tusuario y TODA operacion de pigse responde 42501, aunque el JWT muestre el rol correcto.\n\nEl seed de V263 solo cubre las cuentas que YA existian al aplicar la migracion; las creadas despues pasan por aqui.\n\nfn_usuario_provisionar no tiene gate de rol a proposito: no otorga nada, solo espeja una identidad que public.role_users ya autorizo. Responde 42501 si el correo no tiene ningun rol PIGSE-*."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 - Ente territorial y establecimientos",
+      "item": [
+        {
+          "name": "Crear ente territorial",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/entes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "entes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"NIT\": \"NIT-SED-001\",\n  \"NOMBRE\": \"Secretaria de Educacion Municipal\",\n  \"FK_TMUNICIPIO\": 1\n}"
+            },
+            "description": "FK_TMUNICIPIO referencia academico_test.tmunicipio: los catalogos geograficos NO se duplican en pigse, son compartidos."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json()[0];",
+                  "if (r) pm.collectionVariables.set('enteId', Object.values(r)[0]);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Crear establecimiento NO etnoeducativo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/establecimientos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "establecimientos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FK_ENTE\": \"{{enteId}}\",\n  \"NOMBRE\": \"IE San Jose\",\n  \"NIT\": \"NIT-EE-001\",\n  \"FK_TMUNICIPIO\": 1,\n  \"CODIGO\": \"105001000111\"\n}"
+            },
+            "description": "CODIGO es el DANE: es lo que el front ordena como 'dane' (V116/V130) y lo que alimenta la contrasena derivada de la carpeta 3.\n\nCODIGO es nullable en el esquema. Un EE sin DANE hace fallar el alta de sus usuarios con un error explicito, en vez de generar algo debil en silencio.\n\nETNIAS decide la regla PEI/PEC (carpeta 4) y hoy se fija por UPDATE: este establecimiento debe quedar con ETNIAS='N'."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json()[0];",
+                  "if (r) pm.collectionVariables.set('establecimientoId', Object.values(r)[0]);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Crear establecimiento etnoeducativo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/establecimientos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "establecimientos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FK_ENTE\": \"{{enteId}}\",\n  \"NOMBRE\": \"IE Embera Chami\",\n  \"NIT\": \"NIT-EE-002\",\n  \"FK_TMUNICIPIO\": 1,\n  \"CODIGO\": \"105001000222\"\n}"
+            },
+            "description": "Debe quedar con ETNIAS='S' para invertir la regla: aplica PEC y el PEI pasa a NO_APLICA. Ver carpeta 4."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json()[0];",
+                  "if (r) pm.collectionVariables.set('establecimientoEtnoId', Object.values(r)[0]);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Listado de establecimientos (contrato intacto)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/establecimientos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "establecimientos"
+              ]
+            },
+            "description": "V262 repunto esta fila de academico_test a pigse.testablecimiento sin cambiar el contrato: sigue devolviendo id / establishmentName / codigo, asi que el front no se toco."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('contrato id/establishmentName/codigo', () => {",
+                  "  const r = pm.response.json()[0]; if (!r) return;",
+                  "  pm.expect(r).to.have.property('establishmentName');",
+                  "  pm.expect(r).to.have.property('codigo');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 - Rector y auxiliar administrativo",
+      "item": [
+        {
+          "name": "Cuenta SSO del rector (contrasena por DANE)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register/account",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register",
+                "account"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailRector}}\",\n  \"fullName\": \"Luz Mora\",\n  \"roleNames\": [\n    \"PIGSE-RECTOR\"\n  ],\n  \"establecimientoId\": \"{{establecimientoId}}\"\n}"
+            },
+            "description": "Con establecimientoId la contrasena se deriva del DANE de ese EE:\n  DANE 105001000111 -> Pigse.105001000111*\nEl servidor la construye; el body NO lleva el DANE, solo el id, para que quien da el alta no pueda inventarse la semilla.\n\nEl PIGSE-ADMINISTRADOR puede otorgar PIGSE-RECTOR porque role_grant (V260) lo lista. Si pidiera 'ADMIN' o 'PIGSE-ADMINISTRADOR' recibiria 403."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('passwordOrigen DANE', () => pm.expect(b.passwordOrigen).to.eql('DANE'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cuenta SSO del auxiliar",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register/account",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register",
+                "account"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailAux}}\",\n  \"fullName\": \"Ivan Ruiz\",\n  \"roleNames\": [\n    \"PIGSE-AUXILIAR_ADMINISTRATIVO\"\n  ],\n  \"establecimientoId\": \"{{establecimientoId}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Alta del rector como funcionario",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/funcionarios",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "funcionarios"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FK_ESTABLECIMIENTO\": \"{{establecimientoId}}\",\n  \"CORREO_ELECTRONICO\": \"{{emailRector}}\",\n  \"IDENTIFICACION\": \"CC-100\",\n  \"PRIMER_NOMBRE\": \"Luz\",\n  \"PRIMER_APELLIDO\": \"Mora\",\n  \"FK_ID_ROLE\": \"{{rolRectorId}}\"\n}"
+            },
+            "description": "Crea pigse.tusuario + pigse.tfuncionario y enlaza FK_ID_USER buscando la cuenta del paso anterior POR CORREO. Con FK_ID_ROLE delega en fn_est_usuario_crear, que escribe el puente testablecimiento_usuario Y public.role_users para que el JWT refleje el rol.\n\nOJO - contradiccion conocida y sin resolver: role_query permite a PIGSE-RECTOR y PIGSE-JEFE_SISTEMA_ESTABLECIMIENTO llamar este endpoint, pero fn_fun_crear solo acepta PIGSE-ADMINISTRADOR y PIGSE-SECRETARIA_TERRITORIAL -> un rector que lo intente recibe 42501 de la base. Aqui lo llama el administrador."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Alta del auxiliar como funcionario",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/funcionarios",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "funcionarios"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FK_ESTABLECIMIENTO\": \"{{establecimientoId}}\",\n  \"CORREO_ELECTRONICO\": \"{{emailAux}}\",\n  \"IDENTIFICACION\": \"CC-200\",\n  \"PRIMER_NOMBRE\": \"Ivan\",\n  \"PRIMER_APELLIDO\": \"Ruiz\",\n  \"FK_ID_ROLE\": \"{{rolAuxId}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login del rector",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailRector}}\",\n  \"password\": \"{{passwordRector}}\"\n}"
+            },
+            "description": "La contrasena es Pigse.<DANE>* -> con el DANE de ejemplo, Pigse.105001000111*"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const t = pm.response.json().token;",
+                  "pm.test('trae token', () => pm.expect(t).to.be.a('string').and.not.empty);",
+                  "pm.collectionVariables.set('tokenRector', t);",
+                  "const roles = JSON.parse(atob(t.split('.')[1])).roles || [];",
+                  "console.log('roles en el JWT:', JSON.stringify(roles));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login del auxiliar",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailAux}}\",\n  \"password\": \"{{passwordAux}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const t = pm.response.json().token;",
+                  "pm.test('trae token', () => pm.expect(t).to.be.a('string').and.not.empty);",
+                  "pm.collectionVariables.set('tokenAux', t);",
+                  "const roles = JSON.parse(atob(t.split('.')[1])).roles || [];",
+                  "console.log('roles en el JWT:', JSON.stringify(roles));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Funcionarios del establecimiento",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/funcionarios/query",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "funcionarios",
+                "query"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FILTERS\": {\n    \"ESTABLECIMIENTOS\": [\n      \"{{establecimientoId}}\"\n    ]\n  },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4 - Carga de documentos y sus restricciones",
+      "item": [
+        {
+          "name": "Subir archivo (file-service)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenRector}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/files/pigse/documentos/upload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "files",
+                "pigse",
+                "documentos",
+                "upload"
+              ]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                },
+                {
+                  "key": "etiqueta",
+                  "value": "PEI",
+                  "type": "text"
+                }
+              ]
+            },
+            "description": "Selecciona un PDF en la pestana Body antes de enviar.\n\nTras V262 el destino es pigse.tarchivo (file_storage_schema = 'pigse'). Los archivos historicos siguen en academico_test.tarchivo y NO se movieron: la vista pigse.v_archivo (V261) lee los metadatos de cualquiera de los dos por pk, y public.file_reference_location sigue siendo la autoridad de donde vive cada blob. Por eso la descarga de lo ya subido no se rompio."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 o 201', () => pm.expect([200,201]).to.include(pm.response.code));",
+                  "const b = pm.response.json();",
+                  "const id = b.archivoId || b.pkTarchivo || b.id;",
+                  "if (id) pm.collectionVariables.set('archivoId', id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PEI en EE no etnoeducativo -> COMPLETO",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenRector}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/documentos/upload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "documentos",
+                "upload"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TIPO\": \"PEI\",\n  \"ARCHIVO\": \"{{archivoId}}\"\n}"
+            },
+            "description": "ETNIAS='N' => aplica PEI. Verificado en local: status COMPLETO."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json()[0];",
+                  "pm.test('status COMPLETO', () => pm.expect(d.status).to.eql('COMPLETO'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PEC en EE no etnoeducativo -> RECHAZADO",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenRector}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/documentos/upload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "documentos",
+                "upload"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TIPO\": \"PEC\",\n  \"ARCHIVO\": \"{{archivoId}}\"\n}"
+            },
+            "description": "Debe fallar. Es el gate que anadio V152 y que V261 replica:\n  SQLSTATE 23514 - 'pigse: PEC no aplica a este establecimiento (no etnoeducativo -- usar PEI)'\nVerificado en local."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('no 2xx: PEC no aplica aqui', () => pm.expect(pm.response.code).to.be.above(299));",
+                  "console.log(pm.response.text());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PMI siempre aplica -> COMPLETO",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenRector}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/documentos/upload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "documentos",
+                "upload"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TIPO\": \"PMI\",\n  \"ARCHIVO\": \"{{archivoId}}\"\n}"
+            },
+            "description": "El PMI no depende de ETNIAS: aplica a todos los establecimientos."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json()[0];",
+                  "pm.test('status COMPLETO', () => pm.expect(d.status).to.eql('COMPLETO'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reemplazar el PEI -> versiona, no duplica",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenRector}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/documentos/upload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "documentos",
+                "upload"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TIPO\": \"PEI\",\n  \"ARCHIVO\": \"{{archivoId}}\"\n}"
+            },
+            "description": "Un segundo upload del mismo tipo hace UPDATE y manda la version anterior a tdocumento_institucional_hist. El unico parcial (fk_testablecimiento, tipo) WHERE active lo garantiza: queda 1 vigente y 1 historico. Verificado en local."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Documentos del rector (su propio EE)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenRector}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/documentos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "documentos"
+              ]
+            },
+            "description": "No recibe el EE por parametro: lo resuelve fn_mi_establecimiento(CONTEXT.EMAIL) contra pigse.testablecimiento_usuario y pigse.tfuncionario, y exige exactamente uno."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('tres tipos', () => pm.expect(pm.response.json()).to.have.lengthOf(3));",
+                  "pm.test('PEC sale NO_APLICA', () => {",
+                  "  const pec = pm.response.json().find(d => d.id === 'PEC');",
+                  "  pm.expect(pec.status).to.eql('NO_APLICA');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "El auxiliar solo lee",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAux}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/documentos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "documentos"
+              ]
+            },
+            "description": "PIGSE-AUXILIAR_ADMINISTRATIVO tiene role_query solo sobre los /query y los GET. Ver carpeta 6 para la matriz completa."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "El auxiliar NO puede subir",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAux}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/documentos/upload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "documentos",
+                "upload"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TIPO\": \"PMI\",\n  \"ARCHIVO\": \"{{archivoId}}\"\n}"
+            },
+            "description": "Debe dar 403 del gateway: el auxiliar no tiene role_query de escritura."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5 - Funcionario de ente territorial y cumplimiento",
+      "item": [
+        {
+          "name": "Cuenta SSO del director de ente",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register/account",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register",
+                "account"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailDirector}}\",\n  \"fullName\": \"Jorge Nieto\",\n  \"roleNames\": [\n    \"PIGSE-DIRECTOR_ENTE_TERRITORIAL\"\n  ]\n}"
+            },
+            "description": "Sin establecimientoId: no pertenece a un EE, asi que la contrasena es la por defecto del servidor."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Alta como usuario de ente territorial",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/usuarios-ente",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "usuarios-ente"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FK_TENTE\": \"{{enteId}}\",\n  \"CORREO_ELECTRONICO\": \"{{emailDirector}}\",\n  \"IDENTIFICACION\": \"CC-300\",\n  \"PRIMER_NOMBRE\": \"Jorge\",\n  \"PRIMER_APELLIDO\": \"Nieto\",\n  \"FK_ID_ROLE\": \"{{rolDirectorId}}\"\n}"
+            },
+            "description": "V263. Esto es lo que fn_fun_crear NO podia hacer: crear la identidad sin exigir establecimiento. Escribe pigse.tusuario + pigse.tente_usuario y sincroniza public.role_users."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login del director de ente",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailDirector}}\",\n  \"password\": \"{{passwordDirector}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const t = pm.response.json().token;",
+                  "pm.test('trae token', () => pm.expect(t).to.be.a('string').and.not.empty);",
+                  "pm.collectionVariables.set('tokenDirector', t);",
+                  "const roles = JSON.parse(atob(t.split('.')[1])).roles || [];",
+                  "console.log('roles en el JWT:', JSON.stringify(roles));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cumplimiento por establecimiento",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenDirector}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/cumplimiento/listar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "cumplimiento",
+                "listar"
+              ]
+            },
+            "description": "Lo que ve el director al entrar. Con el escenario de las carpetas 2-4, verificado en local:\n  IE San Jose      PEI COMPLETO  | PEC NO_APLICA | PMI COMPLETO  | progreso 100\n  IE Embera Chami  PEI NO_APLICA | PEC COMPLETO  | PMI PENDIENTE | progreso 50"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('contrato establishmentName/globalProgress', () => {",
+                  "  const r = pm.response.json()[0]; if (!r) return;",
+                  "  pm.expect(r).to.have.property('establishmentName');",
+                  "  pm.expect(r).to.have.property('globalProgress');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Metricas globales",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenDirector}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/cumplimiento/metricas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "cumplimiento",
+                "metricas"
+              ]
+            },
+            "description": "Devuelve totalEstablishments y un objeto {total, completed, percent} por tipo.\n\nBUG PREEXISTENTE (no introducido por este bloque, reproducido a proposito para no cambiar comportamiento): con ETNIAS NULL, 'listar' reporta PEI y PEC como PENDIENTE, pero 'metricas' los cuenta con total=0. Las dos pantallas no cuadran. Verificado identico en academico_test.fn_pigse_cumplimiento_metricas."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cumplimiento paginado (tablero)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenDirector}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/cumplimiento/query",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "cumplimiento",
+                "query"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FILTERS\": {\n    \"SEARCH\": null,\n    \"PEI\": null,\n    \"PEC\": null,\n    \"PMI\": null\n  },\n  \"SORTING\": {\n    \"ID\": \"establishmentName\",\n    \"DESC\": false\n  },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 10\n}"
+            },
+            "description": "La busqueda es insensible a tildes via translate() - unaccent no esta instalada en esta base. p_page_size se recorta a [1,200]."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6 - Gestion de roles",
+      "description": "GESTION DE ROLES - las tres capas que hay que mover juntas.\n\n1. role_endpoint  -> puede llamar un endpoint de auth-center (AuthCenterAccessManager,\n                     sin bypass para nadie).\n2. role_query     -> puede llamar una query del gateway. 403 si no.\n3. El gate de la funcion PL/pgSQL -> 42501 si el rol no esta en su ARRAY.\n\nUn rol con role_query pero sin permiso en la funcion pasa el gateway y revienta en la\nbase. Al contrario, nunca llega. Las listas se mueven a la vez.\n\n4. role_grant (V260) -> que roles puede OTORGAR cada rol al dar de alta una cuenta.\n   ADMIN del SSO: bypass, otorga cualquiera.\n   PIGSE-ADMINISTRADOR: los 10 roles PIGSE menos el suyo (no puede clonarse).\n\n5. La app NO se pasa como parametro: se deriva. public.fn_sync_app_users recalcula\n   app_users desde role_users x role_app, y los 11 roles PIGSE-* ya estan atados a la\n   app PIGSE (V148 crea 8, V149 anade ADMINISTRADOR, SECRETARIO y\n   SECRETARIA_TERRITORIAL).\n\nPermisos efectivos medidos en local sobre los endpoints de pigse:\n   PIGSE-ADMINISTRADOR                 25\n   PIGSE-SECRETARIA_TERRITORIAL        21\n   PIGSE-DIRECTOR_ENTE_TERRITORIAL     16\n   PIGSE-JEFE_AREA_{CALIDAD,COBERTURA,PLANEACION}  16 cada uno\n   PIGSE-JEFE_SISTEMA_ENTE_TERRITORIAL 16\n   PIGSE-RECTOR                        12\n   PIGSE-JEFE_SISTEMA_ESTABLECIMIENTO   9\n   PIGSE-AUXILIAR_ADMINISTRATIVO        6\n   PIGSE-SECRETARIO                     5\n",
+      "item": [
+        {
+          "name": "Roles del SSO",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminSso}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/role/getRoles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "role",
+                "getRoles"
+              ]
+            },
+            "description": "Los 11 PIGSE-* salen aqui. De aqui se toman los id_role para FK_ID_ROLE."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const rs = pm.response.json();",
+                  "const pick = n => { const r = rs.find(x => (x.name||x.nombre) === n);",
+                  "  return r && (r.idRole || r.id_role || r.id); };",
+                  "pm.collectionVariables.set('rolRectorId', pick('PIGSE-RECTOR'));",
+                  "pm.collectionVariables.set('rolAuxId', pick('PIGSE-AUXILIAR_ADMINISTRATIVO'));",
+                  "pm.collectionVariables.set('rolDirectorId', pick('PIGSE-DIRECTOR_ENTE_TERRITORIAL'));",
+                  "console.log('rolRectorId', pm.collectionVariables.get('rolRectorId'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Roles de un usuario",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminSso}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/user/getRolesByEmail?email={{emailRector}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "user",
+                "getRolesByEmail?email={{emailRector}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Atar un rol a mano",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminSso}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/user/bindUserRole",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "user",
+                "bindUserRole"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": 0,\n  \"roleId\": 0\n}"
+            },
+            "description": "Camino administrativo. Dispara fn_sync_app_users, asi que el roster de apps queda al dia (V151). Rellena los ids antes de enviar."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('sin 5xx', () => pm.expect(pm.response.code).to.be.below(500));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "ESCALADA: el admin de PIGSE intenta crear un ADMIN del SSO",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register/account",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register",
+                "account"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"intruso@x.co\",\n  \"fullName\": \"Intruso\",\n  \"roleNames\": [\n    \"ADMIN\"\n  ]\n}"
+            },
+            "description": "Debe dar 403. 'ADMIN' no esta en role_grant para PIGSE-ADMINISTRADOR, y sin esa tabla dar acceso al endpoint a un administrador de app seria una escalada de privilegios directa."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));",
+                  "pm.test('dice que rol nego', () => pm.expect(pm.response.text()).to.include('ADMIN'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "ESCALADA: el admin de PIGSE intenta clonarse",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdminPigse}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register/account",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register",
+                "account"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"clon@x.co\",\n  \"fullName\": \"Clon\",\n  \"roleNames\": [\n    \"PIGSE-ADMINISTRADOR\"\n  ]\n}"
+            },
+            "description": "Debe dar 403: el seed de V260 excluye PIGSE-ADMINISTRADOR de su propia lista."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "ESCALADA: el rector intenta dar de alta a alguien",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenRector}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register/account",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register",
+                "account"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"otro@x.co\",\n  \"fullName\": \"Otro\",\n  \"roleNames\": [\n    \"PIGSE-RECTOR\"\n  ]\n}"
+            },
+            "description": "Debe dar 403 en la capa 1: PIGSE-RECTOR no tiene role_endpoint sobre /register/account. Solo ADMIN y PIGSE-ADMINISTRADOR lo tienen (V260)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GATE DE BASE: el rector intenta crear un funcionario",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenRector}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pigse/funcionarios",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pigse",
+                "funcionarios"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FK_ESTABLECIMIENTO\": \"{{establecimientoId}}\",\n  \"CORREO_ELECTRONICO\": \"nuevo@sanjose.edu.co\",\n  \"IDENTIFICACION\": \"CC-900\",\n  \"PRIMER_NOMBRE\": \"Nuevo\",\n  \"PRIMER_APELLIDO\": \"Docente\"\n}"
+            },
+            "description": "Contradiccion conocida y PENDIENTE DE DECISION. role_query SI le permite llegar, pero fn_fun_crear solo acepta PIGSE-ADMINISTRADOR y PIGSE-SECRETARIA_TERRITORIAL, asi que la base responde 42501.\n\nHay que mover una de las dos listas: o se amplia el gate de la funcion para que un rector cree funcionarios de su propio EE, o se le quita el role_query."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('falla con 42501/403 - ver descripcion', () => pm.expect(pm.response.code).to.be.above(299));",
+                  "console.log(pm.response.text());"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

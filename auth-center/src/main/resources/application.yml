@@ -110,6 +110,16 @@ sso:
     api-token-ttl-seconds: 86400
     header-name: Authorization
     token-prefix: "Bearer "
+  registration:
+    # Contrasena que recibe toda cuenta creada por POST /register/account.
+    # Sin valor por defecto a proposito: el endpoint falla si no esta puesta,
+    # en vez de repartir cuentas con una constante conocida del codigo.
+    default-password: ${SSO_REGISTRATION_DEFAULT_PASSWORD:}
+    # La contrasena inicial se deriva del DANE del establecimiento cuando el
+    # alta lo indica. El DANE son 12 digitos y PasswordPolicy exige mayuscula,
+    # minuscula, digito y caracter especial: el patron es lo que aporta el
+    # resto. {seed} se sustituye por el DANE.
+    password-pattern: ${SSO_REGISTRATION_PASSWORD_PATTERN:Pigse.{seed}*}
   bootstrap:
     # Seeds a default admin user on first startup so the system is
     # usable out of the box. Idempotent — skips if user already

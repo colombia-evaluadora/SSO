@@ -134,6 +134,7 @@ public class SecurityConfig {
                         // hasAuthority("ADMIN") bypass.
                         .requestMatchers(HttpMethod.POST, "/register/funcionario").access(authCenterAccessManager)
                         .requestMatchers(HttpMethod.POST, "/register/usuario").access(authCenterAccessManager)
+                        .requestMatchers(HttpMethod.POST, "/register/account").access(authCenterAccessManager)
                         // /actuator/prometheus is read by the Grafana Alloy
                         // scraper over the internal docker network. Same
                         // rationale as /actuator/health: scrapers are
