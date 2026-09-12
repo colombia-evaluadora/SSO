@@ -64,6 +64,14 @@ on:
 # para checkout. Los workflows no publican nada al registry en esta fase.
 permissions:
   contents: read
+  # Necesario desde que el repo es privado. En eventos `pull_request`,
+  # dorny/paths-filter resuelve los ficheros cambiados por la API
+  # (listFiles). Mientras el repo fue publico esa lectura no exigia scope
+  # porque el dato era publico; al pasar a privado, sin `pull-requests: read`
+  # el token responde "Resource not accessible by integration", el job
+  # `changes` falla y TODOS los demas quedan en `skipping`, con lo que
+  # `ci-ok` marca la PR en rojo sin haber compilado nada.
+  pull-requests: read
 
 concurrency:
   # Cancela runs obsoletos: si llega un push nuevo al mismo PR mientras
