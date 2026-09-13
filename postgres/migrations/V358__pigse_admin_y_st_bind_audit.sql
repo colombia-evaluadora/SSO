@@ -78,10 +78,13 @@ BEGIN
 
     SELECT count(*) INTO v_orphan
       FROM public.query q
-      LEFT JOIN public.role_query rq ON rq.query_id = q.id_query
-      LEFT JOIN public.role r ON r.id_role = rq.role_id AND r.name IN ('PIGSE-ADMINISTRADOR', 'PIGSE-SECRETARIA_TERRITORIAL')
      WHERE q.microservice_id = (SELECT id_microservice FROM public.microservice WHERE serviceid = 'audit-clickhouse-pigse')
-       AND rq.id_role_query IS NULL;
+       AND NOT EXISTS (
+           SELECT 1 FROM public.role_query rq
+           JOIN public.role r ON r.id_role = rq.role_id
+           WHERE rq.query_id = q.id_query
+             AND r.name IN ('PIGSE-ADMINISTRADOR', 'PIGSE-SECRETARIA_TERRITORIAL')
+       );
 
     RAISE NOTICE 'V358 queries del microservicio PIGSE: total=% binds_admin=% binds_st=%', v_total_q, v_admin, v_st;
 
