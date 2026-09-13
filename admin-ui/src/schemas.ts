@@ -123,7 +123,7 @@ export const microserviceFormSchema = z
 
 export const endpointFormSchema = z.object({
   method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"], {
-    errorMap: () => ({ message: "Método inválido" }),
+    error: "Método inválido",
   }),
   path: z.string().min(1, "Requerido").max(200),
   description: z.string().max(200).default(""),
@@ -597,7 +597,7 @@ export const writeFormSchema = z.object({
     .max(64, "Máximo 64 caracteres")
     .regex(/^[a-zA-Z0-9_-]+$/, "Solo letras, números, guion y guion bajo"),
   writeType: z.enum(["INSERT", "UPDATE"], {
-    errorMap: () => ({ message: "Tipo inválido" }),
+    error: "Tipo inválido",
   }),
   // Empty string from the <select> means "no binding";
   // coerce to null so the backend's
