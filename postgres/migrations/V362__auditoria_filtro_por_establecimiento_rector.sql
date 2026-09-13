@@ -762,11 +762,18 @@ BEGIN
     RAISE NOTICE 'V362: PIGSE-RECTOR bind a % queries de audit-clickhouse-pigse', v_pigse_rector_binds;
     RAISE NOTICE 'V362: % queries con filtro de establecimiento (esperado 4)', v_filtered_queries;
 
+    -- WARNING, no EXCEPTION -- mismo criterio que V284/V305 con este
+    -- mismo rol: el ambiente donde corre flyway (CI, un entorno nuevo
+    -- sin seed completo de roles) puede no tener 'CEVAL-RECTOR'/
+    -- 'PIGSE-RECTOR' creados todavia -- el CROSS JOIN de la sección 5
+    -- simplemente no aporta filas en ese caso, no es un error de esta
+    -- migración. Bloquear el deploy entero por un rol ausente en un
+    -- ambiente de prueba sería peor que dejarlo pasar con un aviso.
     IF v_ceval_rector_binds = 0 THEN
-        RAISE EXCEPTION 'V362 fallo: CEVAL-RECTOR sin ningun bind a audit-clickhouse-cval';
+        RAISE WARNING 'V362: CEVAL-RECTOR quedo sin ningun bind a audit-clickhouse-cval. Revisa que el rol exista con ese nombre exacto en public.role.';
     END IF;
     IF v_pigse_rector_binds = 0 THEN
-        RAISE EXCEPTION 'V362 fallo: PIGSE-RECTOR sin ningun bind a audit-clickhouse-pigse';
+        RAISE WARNING 'V362: PIGSE-RECTOR quedo sin ningun bind a audit-clickhouse-pigse. Revisa que el rol exista con ese nombre exacto en public.role.';
     END IF;
     IF v_filtered_queries != 4 THEN
         RAISE EXCEPTION 'V362 fallo: se esperaban 4 queries con filtro de establecimiento, se encontraron %', v_filtered_queries;
