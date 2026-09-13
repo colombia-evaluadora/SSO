@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # npm (admin-ui). Antes de este archivo, Dependabot corría con la
+  # configuración por defecto de GitHub y abría PRs contra la default
+  # branch (main) -- que es justo la rama donde CI no corre (ci.yml solo
+  # dispara sobre dev), así que ningún bump de dependencia quedaba
+  # validado antes de llegar ahí. target-branch: dev arregla eso: el
+  # flujo normal dev -> test -> main se encarga de promoverlo despues.
+  - package-ecosystem: "npm"
+    directory: "/admin-ui"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+
+  # Maven, reactor multi-modulo. Un solo directorio "/" (el pom raiz)
+  # basta: Dependabot resuelve todos los submodulos del reactor a partir
+  # de ahi, no hace falta una entrada por modulo.
+  - package-ecosystem: "maven"
+    directory: "/"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
