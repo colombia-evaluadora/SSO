@@ -1,0 +1,16 @@
+-- H2 no tiene un tipo nativo "jsonb" (solo "json"), pero
+-- common.entity.Query#paramTypes usa @Column(columnDefinition = "jsonb")
+-- para que Hibernate valide correctamente contra el esquema real de
+-- Postgres (ddl-auto=validate en produccion, ver V49). En los tests con
+-- H2 (ddl-auto=create-drop) ese mismo columnDefinition se copia tal
+-- cual al DDL generado, y H2 no reconoce "jsonb" como palabra de tipo.
+--
+-- Un DOMAIN llamado "jsonb" que sea alias de JSON resuelve el CREATE
+-- TABLE sin tocar la entidad ni el mapeo real. Bumpeado por Spring Boot
+-- 4.1.1 (antes de esa version Hibernate no emitia columnDefinition tal
+-- cual contra H2).
+--
+-- UserRoleMappingTest usa TestJpaConfig, que escanea TODAS las
+-- entidades de common.entity (incluida Query) aunque el test solo
+-- ejercite User/Role -- create-drop crea el esquema completo igual.
+CREATE DOMAIN IF NOT EXISTS jsonb AS JSON;
