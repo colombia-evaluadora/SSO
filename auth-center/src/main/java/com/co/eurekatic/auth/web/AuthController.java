@@ -175,12 +175,39 @@ public class AuthController {
     // V62 — mismo body que /register/usuario (RegisterUsuarioRequest):
     // fkTmunicipioExpedicion dejó de ser parte del alta, se completa
     // después vía fn_fun_actualizar.
+    //
+    // Escribe en academico_test.* -- lo usa el front de Colombia
+    // Evaluadora. Para PIGSE existe /pigse/register/funcionario (V360):
+    // mismo contrato, mismo body, pero escribe en pigse.*. El
+    // diferenciador es la RUTA, no un parámetro ni el rol del caller.
     @PostMapping("/register/funcionario")
     public ResponseEntity<RegisterResponse> registerFuncionario(
             @Valid @RequestBody RegisterUsuarioRequest req,
             Authentication auth) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(funcionarioRegistrationService.registerFuncionario(req, auth));
+    }
+
+    // V360 — equivalente de /register/funcionario para el front de PIGSE:
+    // mismo RegisterUsuarioRequest, misma semántica de negocio (reutiliza
+    // la cuenta de public.users si la persona ya existe por correo o
+    // documento), pero escribe en pigse.TUSUARIO/pigse.TFUNCIONARIO en vez
+    // de academico_test.*. El TFUNCIONARIO queda "pendiente" (sin
+    // establecimiento) hasta que pigse.fn_est_crear lo referencia como
+    // FK_TFUNCIONARIO_RECTOR/SECRETARIA al crear el establecimiento.
+    //
+    // Path bajo /register/pigse/** (no /pigse/register/**) a propósito:
+    // el gateway solo reenvía a auth-center lo que matchea
+    // Path=/api/auth/register/** (StripPrefix=2) -- un /pigse/register/**
+    // no caería en esa regla y el endpoint quedaría inalcanzable sin tocar
+    // api-gateway. Bajo /register/pigse/** reutiliza esa misma regla ya
+    // existente.
+    @PostMapping("/register/pigse/funcionario")
+    public ResponseEntity<RegisterResponse> registerFuncionarioPigse(
+            @Valid @RequestBody RegisterUsuarioRequest req,
+            Authentication auth) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(funcionarioRegistrationService.registerFuncionarioPigse(req, auth));
     }
 
     /**
