@@ -1,5 +1,12 @@
 -- ===========================================================================
--- V354 — Rol propio PIGSE-RESPONSABLE_CARGUE.
+-- V359 — Rol propio PIGSE-RESPONSABLE_CARGUE.
+--
+-- Nota: originalmente numerada V354. Renombrada a V359 por colisión de
+-- versión con V354__sede_no_se_borra_con_periodos_academicos.sql (#153):
+-- ambas PRs calcularon V354 en paralelo contra dev y el checker de
+-- colisiones de CI no las vio juntas hasta la promoción dev -> test.
+-- Esta migración nunca se había aplicado en ningún servidor (no tenía
+-- fila en flyway_schema_history), así que renombrarla es seguro.
 --
 -- CONTEXTO
 --   Se van a dar de alta ~100 cuentas para los 50 establecimientos del ente
@@ -43,7 +50,7 @@
 --   V260 crea public.role_grant y siembra, con un INSERT de una sola vez,
 --   que PIGSE-ADMINISTRADOR puede otorgar todos los roles que EN ESE
 --   MOMENTO estuvieran en role_app para la app PIGSE. Ese seed ya corrio
---   (V260 < V354) y no se re-ejecuta solo: un rol PIGSE creado despues no
+--   (V260 < V359) y no se re-ejecuta solo: un rol PIGSE creado despues no
 --   entra ahi por si mismo. Sin la fila explicita de abajo,
 --   PIGSE-RESPONSABLE_CARGUE quedaria creado pero NINGUN PIGSE-ADMINISTRADOR
 --   podria asignarlo via POST /register/account (AccountRegistrationService
