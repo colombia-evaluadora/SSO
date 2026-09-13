@@ -35,7 +35,7 @@
         -->
         <spring-cloud.version>2025.1.2</spring-cloud.version>
 
-        <jjwt.version>0.12.7</jjwt.version>
+        <jjwt.version>0.13.0</jjwt.version>
         <!--
             BouncyCastle no está gestionado por el BOM de Spring Boot 4.0
             (spring-security-crypto declara Argon2PasswordEncoder pero deja
