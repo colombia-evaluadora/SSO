@@ -10,6 +10,16 @@
 --
 -- Idempotente por WHERE NOT EXISTS sobre esas claves -- nunca ON CONFLICT:
 -- los indices unicos de este repo son parciales (WHERE ACTIVE = true).
+--
+-- Bugfix 2026-09-13: el INSERT a pigse.TFUNCIONARIO no deduplicaba por
+-- usuario -- si academico_test.TFUNCIONARIO tenia varios funcionarios
+-- activos para un mismo FK_TUSUARIO (caso real: 8 usuarios en la data
+-- de test al 2026-09-13), el JOIN producia N filas para el mismo
+-- pu.PK_TUSUARIO y el UNIQUE parcial u_pigse_tfuncionario_usuario
+-- (V256, fk_tusuario WHERE active=true) abortaba el INSERT. Ahora se
+-- usa DISTINCT ON (pu.PK_TUSUARIO) ORDER BY ... f.PK_TFUNCIONARIO
+-- para escoger UNA fila por usuario (la de PK_TFUNCIONARIO mas bajo,
+-- criterio estable). V259 no estaba aplicado al momento del fix.
 
 DO $$
 DECLARE
@@ -138,10 +148,20 @@ GET DIAGNOSTICS v_usr = ROW_COUNT;
 
 -- TFUNCIONARIO: establecimiento via TSEDE_USUARIO -> TSEDE, o el EE donde es
 -- rector/secretaria. Sin establecimiento mapeable, se salta.
+--
+-- DISTINCT ON (pu.PK_TUSUARIO) + ORDER BY ... f.PK_TFUNCIONARIO escoge UNA
+-- fila de academico_test por usuario: hay users con varios funcionarios
+-- activos (8 / 1642 usuarios unicos en test al 2026-09-13) y el UNIQUE
+-- parcial u_pigse_tfuncionario_usuario (fk_tusuario WHERE active=true)
+-- que V256 creo choca contra multiples filas en el mismo INSERT. Sin
+-- el DISTINCT, el INSERT abortaba con duplicate key en (fk_tusuario)=N
+-- en la primera re-aplicacion. Se escoge el PK_TFUNCIONARIO mas bajo
+-- (criterio estable, no se basa en hashes ni orden de insertion).
 INSERT INTO pigse.TFUNCIONARIO (
     FK_TUSUARIO, FK_TESTABLECIMIENTO, FK_TLV_CARGO, FK_TLV_TIPO_VINCULACION,
     FECHA_VINCULACION, TELEFONOS, CREATED_BY, ACTIVE)
-SELECT pu.PK_TUSUARIO, m.pk_est_pigse, f.FK_TLV_CARGO, f.FK_TLV_TIPO_VINCULACION,
+SELECT DISTINCT ON (pu.PK_TUSUARIO)
+       pu.PK_TUSUARIO, m.pk_est_pigse, f.FK_TLV_CARGO, f.FK_TLV_TIPO_VINCULACION,
        f.FECHA_VINCULACION, f.TELEFONOS, 'BACKFILL_V259', TRUE
   FROM tmp_v259_usuarios s
   JOIN pigse.TUSUARIO pu ON lower(TRIM(pu.CORREO_ELECTRONICO)) = s.correo_key
@@ -161,7 +181,8 @@ SELECT pu.PK_TUSUARIO, m.pk_est_pigse, f.FK_TLV_CARGO, f.FK_TLV_TIPO_VINCULACION
                ) orig
           JOIN pigse.TESTABLECIMIENTO pest ON pest.FK_TESTABLECIMIENTO_ORIGEN = orig.pk_origen
        ) m ON m.pk_est_pigse IS NOT NULL
- WHERE NOT EXISTS (SELECT 1 FROM pigse.TFUNCIONARIO p WHERE p.FK_TUSUARIO = pu.PK_TUSUARIO);
+ WHERE NOT EXISTS (SELECT 1 FROM pigse.TFUNCIONARIO p WHERE p.FK_tusuario = pu.PK_TUSUARIO)
+ ORDER BY pu.PK_TUSUARIO, f.PK_TFUNCIONARIO;
 GET DIAGNOSTICS v_fun = ROW_COUNT;
 
 SELECT count(*) INTO v_skip_fun
