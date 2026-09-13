@@ -28,7 +28,7 @@ public class AcademicoJdbcRepository {
     // parámetro tiene DEFAULT NULL en fn_fun_crear y es el último de la
     // firma, así que Postgres lo completa solo cuando se omite. Ya no
     // es responsabilidad del caller aportarlo (ver RegisterUsuarioRequest,
-    // que ahora es también el body de /register/funcionario).
+    // que ahora es también el body de /register/cval/funcionario).
     private static final String SQL_FUN_CREAR = """
             SELECT academico_test.fn_fun_crear(
                 ?::bigint, ?::varchar, ?::varchar, ?::bigint, ?::varchar,

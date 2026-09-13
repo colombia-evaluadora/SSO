@@ -132,8 +132,11 @@ public class SecurityConfig {
                         // role_app binding + role_endpoint binding
                         // (same model as sso-admin). No
                         // hasAuthority("ADMIN") bypass.
-                        .requestMatchers(HttpMethod.POST, "/register/funcionario").access(authCenterAccessManager)
-                        // V360 — equivalente de /register/funcionario para PIGSE (mismo
+                        // V361 — renombrado de /register/funcionario a
+                        // /register/cval/funcionario para quedar simétrico con
+                        // /register/pigse/funcionario (ver public.endpoint UPDATE en V361).
+                        .requestMatchers(HttpMethod.POST, "/register/cval/funcionario").access(authCenterAccessManager)
+                        // V360 — equivalente de /register/cval/funcionario para PIGSE (mismo
                         // gate role_endpoint, ver V360 en postgres/migrations). Path bajo
                         // /register/pigse/** para caer en la regla de gateway existente
                         // (Path=/api/auth/register/**, StripPrefix=2) sin tocar api-gateway.
