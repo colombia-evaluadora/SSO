@@ -656,9 +656,9 @@ BEGIN
         v_pigse_op, v_ceval_op;
 
     IF v_pigse != 0 THEN
-        RAISE NOTICE 'V356 ATENCION: el microservicio CEVAL tiene %% filas con pigse.* que no deberia', v_pigse;
+        RAISE NOTICE 'V356 ATENCION: el microservicio CEVAL tiene % filas con pigse.* que no deberia', v_pigse;
     END IF;
     IF v_ceval_op != 0 THEN
-        RAISE NOTICE 'V356 ATENCION: el microservicio PIGSE tiene %% filas con academico_test.* que no deberia', v_ceval_op;
+        RAISE NOTICE 'V356 ATENCION: el microservicio PIGSE tiene % filas con academico_test.* que no deberia', v_ceval_op;
     END IF;
 END $$;
