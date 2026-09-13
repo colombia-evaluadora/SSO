@@ -269,7 +269,15 @@ jobs:
           # Sin esto, poner CDC_SYNC_ENABLED=false en TEST_ENV_FILE no
           # apagaría los servicios CDC en el deploy automático — el
           # override `docker-compose.cdc-off.yml` no se concatenaría.
-          ./scripts/sso-stack.sh pull --quiet
+          # --ignore-buildable salta garage-init (perfil "storage"):
+          # tiene build: Y image: en docker-compose.yml a propósito
+          # (build local porque la imagen oficial es `scratch`, sin
+          # shell — ver el comentario ahí), y sin este flag `pull`
+          # intenta descargarlo de un registro donde no existe y
+          # aborta con "pull access denied" ANTES de tocar ningún
+          # contenedor real. `docker compose up` sigue construyéndolo
+          # normal si hace falta (docker/garage/Dockerfile.init).
+          ./scripts/sso-stack.sh pull --quiet --ignore-buildable
 
           # `query-service` NO es un servicio de docker-compose.yml (se
           # provisiona en caliente vía Docker Engine API, ver
