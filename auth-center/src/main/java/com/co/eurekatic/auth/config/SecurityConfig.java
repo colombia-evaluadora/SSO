@@ -133,6 +133,11 @@ public class SecurityConfig {
                         // (same model as sso-admin). No
                         // hasAuthority("ADMIN") bypass.
                         .requestMatchers(HttpMethod.POST, "/register/funcionario").access(authCenterAccessManager)
+                        // V360 — equivalente de /register/funcionario para PIGSE (mismo
+                        // gate role_endpoint, ver V360 en postgres/migrations). Path bajo
+                        // /register/pigse/** para caer en la regla de gateway existente
+                        // (Path=/api/auth/register/**, StripPrefix=2) sin tocar api-gateway.
+                        .requestMatchers(HttpMethod.POST, "/register/pigse/funcionario").access(authCenterAccessManager)
                         .requestMatchers(HttpMethod.POST, "/register/usuario").access(authCenterAccessManager)
                         .requestMatchers(HttpMethod.POST, "/register/account").access(authCenterAccessManager)
                         // /actuator/prometheus is read by the Grafana Alloy
