@@ -32,22 +32,42 @@ import java.util.Set;
  *                  por eso un solo campo sirve para los dos nombres —
  *                  ver {@code docs/etiqueta-auditoria-cdc-analisis.md}
  *                  §V-audit-ctx-4.
+ * @param establishment el claim {@code est} — nombre legible (no PK) del
+ *                  establecimiento del que el usuario es rector/secretaria
+ *                  (resuelto UNA vez al login, ver
+ *                  {@code academico_test.fn_mi_establecimiento_para_auditoria} /
+ *                  {@code pigse.fn_mi_establecimiento_para_auditoria}). Nombre
+ *                  y no PK porque es justo lo que ya viaja sin índice dedicado
+ *                  en {@code auditoria.audit_log.contexto} (columna JSON,
+ *                  ver V66 {@code fn_audit_declarar}) — así el filtro de
+ *                  auditoría por establecimiento del rector puede comparar
+ *                  texto contra texto sin tocar el pipeline CDC. {@code null}
+ *                  para quien no administra un único establecimiento (p. ej.
+ *                  super-admin, o alguien con 2+ EE) — ausencia que el
+ *                  filtro de auditoría interpreta como "sin scope, cae al
+ *                  chequeo de rol".
  */
 public record AuthPrincipal(
         String email,
         Long userId,
         Set<String> roles,
         String tokenType,
-        String familyId) {
+        String familyId,
+        String establishment) {
 
-    /** Legacy 3-arg constructor (pre-V29, sin uid). familyId null. */
+    /** Legacy 3-arg constructor (pre-V29, sin uid). familyId/establishment null. */
     public AuthPrincipal(String email, Set<String> roles, String tokenType) {
-        this(email, null, roles, tokenType, null);
+        this(email, null, roles, tokenType, null, null);
     }
 
-    /** V29 4-arg constructor (con uid). familyId null (pre-V-audit-ctx-4). */
+    /** V29 4-arg constructor (con uid). familyId/establishment null (pre-V-audit-ctx-4). */
     public AuthPrincipal(String email, Long userId, Set<String> roles, String tokenType) {
-        this(email, userId, roles, tokenType, null);
+        this(email, userId, roles, tokenType, null, null);
+    }
+
+    /** Pre-establishment 5-arg constructor. establishment null. */
+    public AuthPrincipal(String email, Long userId, Set<String> roles, String tokenType, String familyId) {
+        this(email, userId, roles, tokenType, familyId, null);
     }
 
     public boolean hasRole(String role) {

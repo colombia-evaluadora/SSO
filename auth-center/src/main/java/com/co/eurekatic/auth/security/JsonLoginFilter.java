@@ -59,6 +59,7 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
     private final RefreshTokenStore refreshTokenStore;
     private final EffectiveRolesResolver effectiveRoles;
     private final SessionTrackingService sessionTracking;
+    private final EstablishmentResolver establishmentResolver;
 
     public JsonLoginFilter(AuthenticationManager authenticationManager,
                            JwtTokenService jwt,
@@ -66,7 +67,8 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
                            JwtProperties props,
                            RefreshTokenStore refreshTokenStore,
                            EffectiveRolesResolver effectiveRoles,
-                           SessionTrackingService sessionTracking) {
+                           SessionTrackingService sessionTracking,
+                           EstablishmentResolver establishmentResolver) {
         // Spring Security 7 migration: AntPathRequestMatcher (from
         // spring-security-web 6.x) was removed. The replacement is
         // PathPatternRequestMatcher, built from Spring's PathPatternParser
@@ -82,6 +84,7 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         this.refreshTokenStore = refreshTokenStore;
         this.effectiveRoles = effectiveRoles;
         this.sessionTracking = sessionTracking;
+        this.establishmentResolver = establishmentResolver;
         // We are stateless; do not create or persist HttpSession-bound
         // security contexts across requests.
         setSecurityContextRepository(new org.springframework.security.web.context.NullSecurityContextRepository());
@@ -144,7 +147,13 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         // V-audit-ctx-4: also include the familyId as the `fid`
         // claim so downstream write-sites can merge sesion_id/familia
         // into app.contexto without a Redis lookup.
-        String accessToken = jwt.issueAccessToken(email, uid, familyId, roles);
+        // Filtro de auditoría por establecimiento (rector): resuelto UNA
+        // vez acá, no en cada consulta de auditoría -- ver
+        // EstablishmentResolver y JwtTokenService#issueAccessToken(...,
+        // establishment). null para quien no administra un único EE
+        // (super-admin incluido) -- el claim simplemente se omite.
+        String establishment = establishmentResolver.forUserId(uid);
+        String accessToken = jwt.issueAccessToken(email, uid, familyId, roles, establishment);
 
         // Mint a new refresh token via the store. Each login starts a
         // fresh family so multi-device sessions are independent. If the
