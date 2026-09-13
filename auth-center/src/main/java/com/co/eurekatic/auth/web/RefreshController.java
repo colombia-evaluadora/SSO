@@ -1,6 +1,7 @@
 package com.co.eurekatic.auth.web;
 
 import com.co.eurekatic.auth.security.EffectiveRolesResolver;
+import com.co.eurekatic.auth.security.EstablishmentResolver;
 import com.co.eurekatic.auth.security.JsonLoginFilter;
 import com.co.eurekatic.auth.session.SessionTrackingService;
 import com.co.eurekatic.common.dto.AuthDtos.TokenResponse;
@@ -55,19 +56,22 @@ public class RefreshController {
     private final JwtProperties props;
     private final EffectiveRolesResolver effectiveRoles;
     private final SessionTrackingService sessionTracking;
+    private final EstablishmentResolver establishmentResolver;
 
     public RefreshController(RefreshTokenStore refreshTokenStore,
                               UserRepository userRepository,
                               JwtTokenService jwt,
                               JwtProperties props,
                               EffectiveRolesResolver effectiveRoles,
-                              SessionTrackingService sessionTracking) {
+                              SessionTrackingService sessionTracking,
+                              EstablishmentResolver establishmentResolver) {
         this.refreshTokenStore = refreshTokenStore;
         this.userRepository = userRepository;
         this.jwt = jwt;
         this.props = props;
         this.effectiveRoles = effectiveRoles;
         this.sessionTracking = sessionTracking;
+        this.establishmentResolver = establishmentResolver;
     }
 
     /**
@@ -179,8 +183,14 @@ public class RefreshController {
         // write-sites downstream see the same sesion_id for the
         // whole refresh cycle, no matter which rotated token they
         // arrived with.
+        // Filtro de auditoría por establecimiento: se re-resuelve en
+        // cada refresh (igual que roles) en vez de propagarse desde el
+        // access token viejo -- si el rector cambió de EE (o dejó de
+        // serlo) entre logins, el nuevo token debe reflejarlo, no
+        // arrastrar un claim potencialmente obsoleto.
+        String establishment = establishmentResolver.forUserId(user.getId());
         String accessToken = jwt.issueAccessToken(user.getEmail(), user.getId(),
-                lookup.familyId(), roles);
+                lookup.familyId(), roles, establishment);
 
         // V-audit-ctx-4 (touch-on-refresh): cada refresh exitoso
         // toca last_seen_at de la fila de tracking. Best-effort:

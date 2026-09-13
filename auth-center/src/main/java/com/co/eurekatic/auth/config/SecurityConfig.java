@@ -3,6 +3,7 @@ package com.co.eurekatic.auth.config;
 import com.co.eurekatic.auth.security.AuthCenterAccessManager;
 import com.co.eurekatic.auth.security.AuthCenterEndpointAccessService;
 import com.co.eurekatic.auth.security.EffectiveRolesResolver;
+import com.co.eurekatic.auth.security.EstablishmentResolver;
 import com.co.eurekatic.auth.security.JsonAuthHandlers;
 import com.co.eurekatic.auth.security.JsonLoginFilter;
 import com.co.eurekatic.auth.security.JwtAuthenticationFilter;
@@ -86,11 +87,12 @@ public class SecurityConfig {
             RefreshTokenStore refreshTokenStore,
             EffectiveRolesResolver effectiveRolesResolver,
             AuthCenterAccessManager authCenterAccessManager,
-            SessionTrackingService sessionTracking) throws Exception {
+            SessionTrackingService sessionTracking,
+            EstablishmentResolver establishmentResolver) throws Exception {
 
         JsonLoginFilter loginFilter = new JsonLoginFilter(
                 authenticationManager, jwt, objectMapper, jwtProperties, refreshTokenStore,
-                effectiveRolesResolver, sessionTracking);
+                effectiveRolesResolver, sessionTracking, establishmentResolver);
         JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(jwt, jwtProperties);
 
         return http
