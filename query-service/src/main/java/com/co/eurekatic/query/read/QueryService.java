@@ -862,6 +862,16 @@ public class QueryService {
                 + "}";
         target.put(ParamNamespace.CONTEXT + ".ROLES", rolesCsv);
         target.put(ParamNamespace.CONTEXT + ".ROLES_ARRAY", rolesArray);
+        // V-audit-est — filtro de auditoría por establecimiento (rector).
+        // A diferencia de USER_ID/EMAIL/FAMILIA (omitidos cuando null),
+        // este SIEMPRE se pone -- como ROLES -- con "" de default: las
+        // queries de auditoría que lo usan (audit-clickhouse-cval/-pigse,
+        // ver V362) referencian :CONTEXT.ESTABLISHMENT incondicionalmente
+        // en su WHERE (para el caso super-admin, que nunca tiene EE), y un
+        // placeholder ausente del mapa haría fallar el binding en vez de
+        // simplemente no matchear ninguna fila.
+        target.put(ParamNamespace.CONTEXT + ".ESTABLISHMENT",
+                p.establishment() == null ? "" : p.establishment());
     }
 
     /**
