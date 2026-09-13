@@ -43,7 +43,7 @@
             se fija aquí para que los módulos la hereden sin repetirla.
         -->
         <bouncycastle.version>1.85</bouncycastle.version>
-        <resilience4j.version>2.2.0</resilience4j.version>
+        <resilience4j.version>2.4.0</resilience4j.version>
         <postgresql.version>42.7.4</postgresql.version>
         <testcontainers.version>1.21.4</testcontainers.version>
         <opentelemetry-instrumentation.version>2.21.0-alpha</opentelemetry-instrumentation.version>
