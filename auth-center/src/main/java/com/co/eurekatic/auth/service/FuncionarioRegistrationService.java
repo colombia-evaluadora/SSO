@@ -175,7 +175,7 @@ public class FuncionarioRegistrationService {
      * vez de {@code academico_test.*}. Diferenciador a nivel de RUTA (pedido
      * explicito): este metodo solo se llega desde
      * {@code POST /register/pigse/funcionario}, nunca desde
-     * {@code /register/funcionario} — no hay parametro "app" en el body ni
+     * {@code /register/cval/funcionario} — no hay parametro "app" en el body ni
      * inferencia por rol del caller, es la URL la que decide el esquema.
      *
      * <p>El TFUNCIONARIO que crea siempre queda "pendiente" (sin

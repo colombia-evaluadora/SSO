@@ -478,8 +478,8 @@ springdoc:
         source: springdoc
         gateway-paths: ["/auth/**", "/api/auth/**", "/login", "/getApiToken",
                         "/getInfoUser", "/getUsersSSO", "/googleLogin", "/myApps",
-                        "/register/**", "/register/usuario", "/register/funcionario",
-                        "/internal/cache/**"]
+                        "/register/**", "/register/usuario", "/register/cval/funcionario",
+                        "/register/pigse/funcionario", "/internal/cache/**"]
         tag-prefix: "auth-center"
         description: "Authentication issuer — login, token issuance, user lookup"
       - service-id: sso-admin
