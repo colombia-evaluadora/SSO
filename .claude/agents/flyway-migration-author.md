@@ -55,6 +55,13 @@ migración correctiva). Prioriza reutilizar funciones/DDL ya definidos.
 ```
 
 Corre el historial completo sobre un Postgres 16 limpio y luego reaplica las
-migraciones nuevas/modificadas para probar idempotencia. Reporta:
+migraciones nuevas/modificadas para probar idempotencia.
+
+## Al cerrar
+
+Regenera el informe de análisis (`/migration-analysis`, o
+`python scripts/migration-analysis/analyze_migrations.py`) para comprobar que
+la migración nueva/editada no deja llamadores con la firma vieja ni colisiona
+en numeración. Reporta:
 número asignado y por qué, archivos tocados, resultado de la validación y
 cualquier drift detectado contra el servidor.

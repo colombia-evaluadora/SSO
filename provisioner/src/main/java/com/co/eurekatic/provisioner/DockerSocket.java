@@ -310,7 +310,10 @@ public class DockerSocket {
      */
     public record StartedAtInfo(String containerId, String startedAt) {}
 
-    private List<String> buildEnv(ProvisionRequest req) {
+    // Package-private (no private) para que DockerSocketEnvTest pueda
+    // afirmar qué env vars hereda el contenedor spawneado sin tener
+    // que hablar con un daemon Docker real.
+    List<String> buildEnv(ProvisionRequest req) {
         // The instance id (e.g. query-service-oracle-dev) is
         // what query-service registers with Eureka under. We
         // set spring.application.name via INSTANCE_NAME so
@@ -381,6 +384,17 @@ public class DockerSocket {
         // del contenedor resuelve al propio contenedor, no al
         // colector, y los exporters warn con Connection refused.
         env.add("OTEL_EXPORTER_OTLP_ENDPOINT=" + props.getOtlpEndpoint());
+        // Interruptor de telemetría, propagado con los MISMOS tres
+        // nombres que docker-compose.yml le pasa a los servicios
+        // estáticos (derivados de SSO_TELEMETRY_ENABLED). Sin estas
+        // tres líneas el query-service spawneado caía al default de
+        // Spring Boot para el export de logs (ENCENDIDO) y, con el
+        // perfil `observability` apagado, era el único contenedor del
+        // stack que seguía reintentando contra un Alloy inexistente.
+        String telemetry = Boolean.toString(props.isTelemetryEnabled());
+        env.add("MANAGEMENT_TRACING_EXPORT_ENABLED=" + telemetry);
+        env.add("MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED=" + telemetry);
+        env.add("MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED=" + telemetry);
         return env;
     }
 

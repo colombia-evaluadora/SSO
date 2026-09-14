@@ -204,7 +204,11 @@ BEGIN
          WHERE a.FK_TPERIODO_ACADEMICO = p_fk_periodo AND a.ACTIVE = TRUE
            AND UPPER(TRIM(a.CODIGO)) = UPPER(TRIM(p_abreviacion))
     ) THEN
-        RAISE EXCEPTION 'Ya existe un area con el codigo % en este periodo academico',
+        -- Editado in-place en esta sesion (autorizacion explicita del
+        -- usuario pese a que V40 ya esta commiteada, mismo patron que V46):
+        -- "el codigo" -> "la abreviacion", coincide con el nombre real del
+        -- campo que ve el usuario en el formulario.
+        RAISE EXCEPTION 'Ya existe un area con la abreviacion % en este periodo academico',
             p_abreviacion USING ERRCODE = '23505';
     END IF;
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
@@ -283,7 +287,9 @@ BEGIN
          WHERE a.FK_TPERIODO_ACADEMICO = r.FK_TPERIODO_ACADEMICO AND a.ACTIVE = TRUE
            AND a.PK_TAREA <> p_pk AND UPPER(TRIM(a.CODIGO)) = UPPER(TRIM(v_abrev))
     ) THEN
-        RAISE EXCEPTION 'Ya existe un area con el codigo % en este periodo academico', v_abrev
+        -- Editado in-place en esta sesion (misma nota que fn_area_crear
+        -- arriba): "el codigo" -> "la abreviacion".
+        RAISE EXCEPTION 'Ya existe un area con la abreviacion % en este periodo academico', v_abrev
             USING ERRCODE = '23505';
     END IF;
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
