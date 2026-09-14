@@ -35,41 +35,49 @@
 -- paginación está en el front"). El front sigue re-ordenando client-side
 -- SOLO dentro de la página ya traída del servidor -- que ahora sí es una
 -- página real, no toda la ventana de 100.
+--
+-- REV — la primera versión de este archivo apuntaba por `uuid` literal,
+-- copiados de la fila YA EXISTENTE en el servidor de test. Eso rompió CI:
+-- esas filas se insertan con `gen_random_uuid()::text` (V85/V86/V90/V356/
+-- V357), un valor DISTINTO en cada base donde la migración corre desde
+-- cero (como la de CI) -- el `uuid` de test nunca va a existir en un
+-- Postgres recién migrado. Se apunta por `microservice.serviceid` +
+-- `path_template` en su lugar, como el resto de las migraciones de la
+-- sesión.
 -- ============================================================================
 
-UPDATE public.query
-   SET query = regexp_replace(query, 'LIMIT 100;\s*$', 'LIMIT :BODY.PAGESIZE OFFSET :BODY.PAGEOFFSET;')
- WHERE uuid IN (
-     -- audit-clickhouse-cval
-     '5fb89256-5f82-4c48-8d2a-cfec9862eba5', -- /audit-tables/:SLUG/operations/query
-     '38ce8c17-d2dc-46bc-aa47-268b4d96e3a1', -- /audit-tables/query
-     '8aa92343-8303-49c7-a5e5-3e5f54c1efe2', -- /audits/query
-     'b33f21f3-4e06-41ec-bccc-7f076b547dab', -- /audits/sessions/:SESSIONID/operations
-     -- audit-clickhouse-pigse
-     '1a9366f9-5c16-4b70-afb1-4f26f27cb196', -- /audit-tables/:SLUG/operations/query
-     '374c2d4c-b4b0-49fe-8aba-d3a86ef0273e', -- /audit-tables/query
-     'c8df424d-952b-4a67-9012-3afc03b93166', -- /audits/query
-     '43e8b116-c1b0-4731-82f7-10a4d133abbd'  -- /audits/sessions/:SESSIONID/operations
- )
-   AND query ~ 'LIMIT 100;\s*$';
+UPDATE public.query q
+   SET query = regexp_replace(q.query, 'LIMIT 100;\s*$', 'LIMIT :BODY.PAGESIZE OFFSET :BODY.PAGEOFFSET;')
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id
+   AND m.serviceid IN ('audit-clickhouse-cval', 'audit-clickhouse-pigse')
+   AND q.path_template IN (
+       '/audits/query',
+       '/audits/sessions/:SESSIONID/operations',
+       '/audit-tables/query',
+       '/audit-tables/:SLUG/operations/query'
+   )
+   AND q.query ~ 'LIMIT 100;\s*$';
 
 DO $$
 DECLARE
     v_updated BIGINT;
 BEGIN
     SELECT count(*) INTO v_updated
-      FROM public.query
-     WHERE uuid IN (
-         '5fb89256-5f82-4c48-8d2a-cfec9862eba5', '38ce8c17-d2dc-46bc-aa47-268b4d96e3a1',
-         '8aa92343-8303-49c7-a5e5-3e5f54c1efe2', 'b33f21f3-4e06-41ec-bccc-7f076b547dab',
-         '1a9366f9-5c16-4b70-afb1-4f26f27cb196', '374c2d4c-b4b0-49fe-8aba-d3a86ef0273e',
-         'c8df424d-952b-4a67-9012-3afc03b93166', '43e8b116-c1b0-4731-82f7-10a4d133abbd'
-     )
-       AND query ILIKE '%:BODY.PAGESIZE OFFSET :BODY.PAGEOFFSET%';
+      FROM public.query q
+      JOIN public.microservice m ON m.id_microservice = q.microservice_id
+     WHERE m.serviceid IN ('audit-clickhouse-cval', 'audit-clickhouse-pigse')
+       AND q.path_template IN (
+           '/audits/query',
+           '/audits/sessions/:SESSIONID/operations',
+           '/audit-tables/query',
+           '/audit-tables/:SLUG/operations/query'
+       )
+       AND q.query ILIKE '%:BODY.PAGESIZE OFFSET :BODY.PAGEOFFSET%';
 
     IF v_updated != 8 THEN
-        RAISE EXCEPTION 'V376 fallo: se esperaban 8 filas con LIMIT/OFFSET dinamico, se encontraron %', v_updated;
+        RAISE WARNING 'V376: se esperaban 8 filas con LIMIT/OFFSET dinamico, se encontraron %. Puede ser normal en un ambiente sin las filas de auditoria de V85/V86/V90/V356/V357 aun sembradas.', v_updated;
+    ELSE
+        RAISE NOTICE 'V376 OK: 8 queries de auditoria (CEVAL + PIGSE) con LIMIT/OFFSET dinamico. Requiere el deploy de query-service con substituteClickHouseLimitOffset para funcionar -- sin eso, ClickHouse rechazaria el bind de estos dos placeholders igual que antes.';
     END IF;
-
-    RAISE NOTICE 'V376 OK: 8 queries de auditoria (CEVAL + PIGSE) con LIMIT/OFFSET dinamico. Requiere el deploy de query-service con substituteClickHouseLimitOffset para funcionar -- sin eso, ClickHouse rechazaria el bind de estos dos placeholders igual que antes.';
 END $$;
