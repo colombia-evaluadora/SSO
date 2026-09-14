@@ -32,6 +32,10 @@ mejorar la calidad del trabajo:
 - **Reutilización primero:** priorizar reutilizar código de migraciones ya definidas.
 - **Editar, no duplicar:** si el cambio solicitado corresponde a una migración existente concreta,
   **editar esa migración** en lugar de crear una nueva. Ver la skill `flyway-migrations`.
+- **Informe de análisis:** `/migration-analysis` regenera `docs/auditoria/migraciones-analisis.html`
+  (local, gitignored) con obsoletas, firmas cambiadas, llamadores desalineados y el siguiente
+  `V<n>` libre. Correrlo tras crear o editar migraciones; el agente
+  `migration-analysis-reporter` lo ejecuta y resume el resultado.
 
 ## Servicios Java
 
