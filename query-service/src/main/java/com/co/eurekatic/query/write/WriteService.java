@@ -6,8 +6,11 @@ import com.co.eurekatic.query.catalog.CatalogClient;
 import com.co.eurekatic.query.catalog.WriteDefinition;
 import com.co.eurekatic.query.config.JdbcTemplateRegistry;
 import com.co.eurekatic.query.exception.PostgresErrorMapper;
+import com.co.eurekatic.query.observability.QueryMetrics;
+import com.co.eurekatic.query.resilience.QueryResilience;
 import com.co.eurekatic.query.routing.CatalogResultCacheService;
 import com.co.eurekatic.query.web.WriteRequest;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -66,19 +69,43 @@ public class WriteService {
     private final CatalogClient catalog;
     private final JdbcTemplateRegistry registry;
     private final CatalogResultCacheService resultCache;
+    private final QueryResilience resilience;
+    private final QueryMetrics metrics;
 
     public WriteService(CatalogClient catalog, JdbcTemplateRegistry registry,
-                        CatalogResultCacheService resultCache) {
+                        CatalogResultCacheService resultCache,
+                        QueryResilience resilience, QueryMetrics metrics) {
         this.catalog = catalog;
         this.registry = registry;
         this.resultCache = resultCache;
+        this.resilience = resilience;
+        this.metrics = metrics;
     }
 
     /**
-     * Executes the write. Returns the number of rows
-     * affected (1 for INSERT, 0..N for UPDATE).
+     * Executes the write. Returns the number of rows affected (1 for
+     * INSERT, 0..N for UPDATE).
+     *
+     * <p>Goes through the same bulkhead and the same execution metric as
+     * the read path: a write holds a pooled connection exactly like a read
+     * does, so leaving it uncapped meant the one operation that also takes
+     * row locks was the one with no limit on how many could run at once.
      */
     public int execute(WriteRequest req) {
+        long start = System.nanoTime();
+        try {
+            int rows = doExecute(req);
+            metrics.recordExecution("WRITE", QueryMetrics.Outcome.SUCCESS,
+                    System.nanoTime() - start);
+            return rows;
+        } catch (RuntimeException e) {
+            metrics.recordExecution("WRITE", QueryMetrics.Outcome.FAILURE,
+                    System.nanoTime() - start);
+            throw e;
+        }
+    }
+
+    private int doExecute(WriteRequest req) {
         Authentication auth = currentAuthentication();
         WriteDefinition def = catalog.fetchWrite(bearerToken(auth), req.uuid());
 
@@ -134,16 +161,28 @@ public class WriteService {
             }
         }
         MapSqlParameterSource params = new MapSqlParameterSource(normalizedColumns);
+
+        // Writes always land on the default dialect (WriteDefinition has no
+        // TYPE column), so they share that dialect's bulkhead with the reads
+        // that target it — which is the point: they compete for the same
+        // Hikari pool.
+        var bulkhead = resilience.bulkheadFor("default");
+        if (!bulkhead.tryAcquirePermission()) {
+            throw BulkheadFullException.createBulkheadFullException(bulkhead);
+        }
         int rows;
         try {
             rows = jdbc.update(sql, params);
         } catch (DataAccessException dae) {
             throw PostgresErrorMapper.map(dae);
+        } finally {
+            bulkhead.onComplete();
         }
         log.info("Write uuid={} ({}) affected {} rows", req.uuid(), def.writeType(), rows);
-        // Every WriteService call is a mutation, and a WriteDefinition
-        // has no path template to scope the wipe to, so it invalidates
-        // this instance's whole catalog-get cache.
+        // A WriteDefinition carries a table name but no path template, and
+        // cache entries are tagged by path resource — there is nothing to
+        // match a table against, so the only correct scope is everything
+        // this instance cached.
         resultCache.invalidateAll();
         return rows;
     }
