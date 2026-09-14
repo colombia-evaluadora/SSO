@@ -15,7 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * V60 — Inspección tipada del body de la query.
+ * Inspección tipada del body de la query.
  *
  * <p>El log de producción que motivó este refactor mostraba
  * cuerpos que {@code @RequestBody Map<String,Object>}

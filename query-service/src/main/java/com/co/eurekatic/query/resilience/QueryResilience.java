@@ -20,7 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * V33 — programmatic Resilience4j wiring for the query path.
+ * Programmatic Resilience4j wiring for the query path.
  *
  * <p>Two flavors of protection:
  * <ul>

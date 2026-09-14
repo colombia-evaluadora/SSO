@@ -45,7 +45,7 @@ import java.util.Map;
  * <p>All three require an authenticated principal (the
  * JWT). Per-row authorization happens inside the catalog.
  *
- * <p><b>V29 / V28:</b> caller identity (userId, email, roles)
+ * <p>Caller identity (userId, email, roles)
  * is read by {@link QueryService#execute} directly from the
  * SecurityContextHolder (populated by JwtAuthenticationFilter),
  * NOT from the request body. There is nothing to inject here.
@@ -65,13 +65,9 @@ public class QueryController {
 
     @PostMapping("/query")
     public List<Map<String, Object>> query(@Valid @RequestBody QueryRequest req) {
-        // V31 — SELECT / FUNCTION keep the legacy bare-list
-        // shape so the wire is unchanged for every existing
-        // client. PROCEDURE rows with OUT params also use
-        // this shape; the OUT values are dropped because
-        // the legacy /query endpoint never advertised them.
-        // Callers that need OUT params use /serviceFit or
-        // the path-dispatch controller.
+        // Bare-list shape. PROCEDURE rows with OUT params also use
+        // it and the OUT values are dropped — callers that need
+        // them use /serviceFit or the path-dispatch controller.
         enforceRateLimit();
         return QueryResultEnvelope.rowsOnly(service.execute(req, false));
     }
@@ -85,7 +81,7 @@ public class QueryController {
     /**
      * Paginated variant. The body is the same {@code uuid +
      * params + limit + offset}; the response is wrapped so
-     * the caller knows the row count. V31: also carries
+     * the caller knows the row count. Also carries
      * {@code outParams} when the catalog row declared them.
      */
     @PostMapping("/serviceFit")
@@ -99,7 +95,7 @@ public class QueryController {
     }
 
     /**
-     * V33 — per-principal RPS cap. The limiter is keyed by
+     * Per-principal RPS cap. The limiter is keyed by
      * the JWT subject (email), so a noisy client can't
      * starve a quiet one. Anonymous (public) traffic falls
      * back to a fixed {@code "anonymous"} bucket so the
