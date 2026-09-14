@@ -75,9 +75,18 @@ public class SessionTrackingService {
      * @param idUser {@code public.users.id_user} (puede ser
      *                {@code null} para un login sin claim numérico —
      *                en ese caso tampoco se abre sesión).
+     * @param appName nombre de app derivado del header Origin/Referer
+     *                del login (V377, sesiones reales por app —
+     *                {@link com.co.eurekatic.auth.security.JsonLoginFilter#appNameFromRequest}),
+     *                p.ej. {@code "PIGSE"} / {@code "COLOMBIA-EVALUADORA"}.
+     *                Se resuelve otra vez contra {@code public.app.name}
+     *                acá (case-insensitive) como defensa extra; si es
+     *                {@code null}, vacío o no matchea ningún app
+     *                conocido, la fila queda con {@code app_name} NULL
+     *                en vez de fallar el login.
      */
     @Transactional
-    public void openSession(Long idUser, String familyId, Map<String, Object> requestBodySnapshot) {
+    public void openSession(Long idUser, String familyId, Map<String, Object> requestBodySnapshot, String appName) {
         if (idUser == null) {
             log.debug("Sin id_user numérico para family={} -- no se abre sesión de tracking", shortFamily(familyId));
             return;
@@ -89,15 +98,37 @@ public class SessionTrackingService {
             return;
         }
 
+        String resolvedAppName = resolveAppName(appName);
+        if (appName != null && !appName.isBlank() && resolvedAppName == null) {
+            log.warn("openSession: app='{}' no matchea ningún public.app.name conocido, se guarda NULL", appName);
+        }
+
         applyAuditGucs(pkTusuario, "Inicio de sesión", requestBodySnapshot, familyId);
         // last_seen_at = now() explícito para no depender del DEFAULT
         // (V89 lo creó con DEFAULT now() pero escribirlo acá hace
         // explícito que en el momento del open ambos timestamps son
         // el mismo -- coherente con "acaba de iniciar").
         jdbc.update(
-                "INSERT INTO academico_test.tsesion_web (fk_tusuario, family_id, last_seen_at) "
-                        + "VALUES (?, ?, now())",
-                pkTusuario, familyId);
+                "INSERT INTO academico_test.tsesion_web (fk_tusuario, family_id, last_seen_at, app_name) "
+                        + "VALUES (?, ?, now(), ?)",
+                pkTusuario, familyId, resolvedAppName);
+    }
+
+    /**
+     * Normaliza {@code appName} contra el catálogo real de
+     * {@code public.app.name} (case-insensitive, para no depender de
+     * que el front mande exactamente la misma capitalización que la
+     * fila de {@code app}). Devuelve {@code null} si no hay match o
+     * si {@code appName} viene vacío/blank.
+     */
+    private String resolveAppName(String appName) {
+        if (appName == null || appName.isBlank()) {
+            return null;
+        }
+        return jdbc.query(
+                "SELECT name FROM public.app WHERE upper(name) = upper(?)",
+                rs -> rs.next() ? rs.getString("name") : null,
+                appName.trim());
     }
 
     /**
