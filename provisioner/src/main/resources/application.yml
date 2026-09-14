@@ -62,6 +62,14 @@ docker:
   # el query-service spawneado cae al default localhost:4318 de su
   # application.yml y los exporters warn con Connection refused.
   otlp-endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://alloy:4318}
+  # Interruptor de telemetría propagado a cada query-service
+  # spawneado como MANAGEMENT_TRACING_EXPORT_ENABLED /
+  # MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED /
+  # MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED (ver DockerSocket#buildEnv).
+  # docker-compose.yml lo deriva de SSO_TELEMETRY_ENABLED, igual que
+  # para los servicios estáticos. Default false: sin colector no se
+  # exporta nada.
+  telemetry-enabled: ${DOCKER_TELEMETRY_ENABLED:${SSO_TELEMETRY_ENABLED:false}}
   # V30 — secreto compartido que se propaga a cada query-service
   # spawneado como QUERY_CATALOG_INTERNAL_TOKEN. Mismo valor que
   # SSO_INTERNAL_TOKEN en sso-admin; el .env mantiene los tres
@@ -107,6 +115,16 @@ management:
     resource-attributes:
       service.namespace: sso
       deployment.environment: ${DEPLOY_ENV:dev}
+  logging:
+    export:
+      otlp:
+        # Tercer exporter, el de LOGS (appender Logback OTEL -> Alloy).
+        # Metricas y trazas ya caian a false sin la env var; este era el
+        # unico que se quedaba en el default de Spring Boot (true), asi
+        # que cualquier arranque sin MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED
+        # explicito seguia empujando cada linea de log a un Alloy que no
+        # existe y reintentando en bucle.
+        enabled: ${MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED:false}
   tracing:
     # El interruptor historico de docker-compose (MANAGEMENT_TRACING_EXPORT_ENABLED)
     # no correspondia a ninguna propiedad real -- "management.tracing.enabled"
