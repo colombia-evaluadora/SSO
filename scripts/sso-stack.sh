@@ -26,6 +26,11 @@
 #             si los exporters ya están apagados).
 #             Los exporters OTLP de los nueve servicios Spring también
 #             leen este flag directamente desde su `environment:`.
+#     Acoplamiento en ambos sentidos: si `observability` NO está en
+#             COMPOSE_PROFILES (aunque el flag diga true o no exista),
+#             el wrapper exporta SSO_TELEMETRY_ENABLED=false — sin
+#             Alloy no hay a quién exportar, y dejar los exporters
+#             encendidos sólo genera reintentos en los logs.
 #
 # Si en el futuro aparecen más switches binarios, se añaden aquí como
 # casos adicionales — la lógica general no cambia: si `.env` lo dice
@@ -177,6 +182,37 @@ if [ -n "$FILTER_OUT" ]; then
     export COMPOSE_PROFILES="$FILTERED"
   fi
 fi
+
+# ─── Acoplamiento inverso: sin perfil `observability` → sin exporters ────────
+#
+# El bloque anterior cubre "flag apagado → quitar el perfil". Faltaba
+# la dirección contraria: COMPOSE_PROFILES sin `observability` (el
+# default de .env.example y la postura del servidor de pruebas) pero
+# SSO_TELEMETRY_ENABLED=true o ausente. En ese caso Alloy no existe y
+# los nueve JVM se quedan reintentando cada batch de logs/trazas/
+# métricas contra `alloy:4318` — "Connection refused"/"UnknownHost"
+# en bucle, que es la basura de logs que motivó este bloque.
+#
+# Regla: si el grafo activo NO incluye `observability`, exportamos
+# SSO_TELEMETRY_ENABLED=false hacia compose pase lo que pase en .env.
+# El env exportado gana sobre `.env` en la interpolación de compose,
+# así que los `${SSO_TELEMETRY_ENABLED:-false}` de docker-compose.yml
+# ven el valor calculado aquí. Si quieres exportar a un colector
+# externo sin levantar el stack LGTM, no uses el wrapper (ver
+# .env.example).
+EFFECTIVE_PROFILES="${COMPOSE_PROFILES:-$PROFILES_RAW}"
+has_observability=0
+IFS=',' read -ra EFF_PARTS <<< "$EFFECTIVE_PROFILES"
+for p in "${EFF_PARTS[@]}"; do
+  [ "$(echo "$p" | xargs)" = "observability" ] && has_observability=1 && break
+done
+if [ "$has_observability" = "0" ] && is_truthy "$SSO_TELEMETRY_ENABLED_VAL"; then
+  echo ">> Perfil 'observability' inactivo (COMPOSE_PROFILES=${EFFECTIVE_PROFILES}):"
+  echo "   se fuerza SSO_TELEMETRY_ENABLED=false para que ningún servicio"
+  echo "   intente exportar logs/trazas/métricas a un Alloy que no existe."
+  SSO_TELEMETRY_ENABLED_VAL="false"
+fi
+export SSO_TELEMETRY_ENABLED="$SSO_TELEMETRY_ENABLED_VAL"
 
 # ─── Bajar contenedores huérfanos cuando un perfil se apaga ───────────────────
 #
