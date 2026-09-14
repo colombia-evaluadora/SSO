@@ -14,7 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
- * V33 — admin endpoint that lets sso-admin trigger an
+ * Admin endpoint that lets sso-admin trigger an
  * immediate path-registry refresh after a catalog mutation.
  *
  * <p>The registry already auto-refreshes every

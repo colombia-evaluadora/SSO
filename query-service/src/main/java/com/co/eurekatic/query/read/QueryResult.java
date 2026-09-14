@@ -4,10 +4,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * V31 — envelope for the read-path response.
+ * Envelope for the read-path response.
  *
  * <p>Always carries {@code rows} — a flat list of column →
- * value maps the consumer renders as a table. V31 adds an
+ * value maps the consumer renders as a table — plus an
  * optional {@code outParams} map for PROCEDURE-mode queries
  * that declare OUT params via {@code outParamNames}: each
  * declared placeholder is registered with the JDBC driver
@@ -17,8 +17,8 @@ import java.util.Map;
  *
  * <p>For SELECT-mode and OUT-less procedure calls,
  * {@code outParams} is {@code null} — the controller strips
- * it from the JSON response so legacy clients see the
- * same {@code [row, row, …]} shape they always did.
+ * it from the JSON response so {@code /query} clients keep the
+ * bare {@code [row, row, …]} shape.
  */
 public record QueryResult(List<Map<String, Object>> rows,
                           Map<String, Object> outParams) {

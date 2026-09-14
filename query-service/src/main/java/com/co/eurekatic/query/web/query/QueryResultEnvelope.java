@@ -7,15 +7,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * V31 — wire-shape adapter for read-path responses.
+ * Wire-shape adapter for read-path responses.
  *
- * <p>The legacy {@code /query}, {@code /service}, and
- * {@code /serviceFit} responses were a bare
- * {@code List<Map<String, Object>>} (just the rows). V31
- * keeps that exact wire shape for SELECT / FUNCTION
- * (backwards compatibility) and adds an envelope with
- * {@code outParams} for PROCEDURE-mode queries with
- * declared OUT params.
+ * <p>{@code /query} and {@code /service} answer a bare
+ * {@code List<Map<String, Object>>} (just the rows);
+ * {@code /serviceFit} and the path dispatcher answer an envelope
+ * that also carries {@code outParams} for PROCEDURE-mode queries
+ * with declared OUT params.
  *
  * <p>The path-dispatch controller
  * ({@link com.co.eurekatic.query.web.path.QueryPathController})
@@ -27,9 +25,8 @@ public final class QueryResultEnvelope {
     private QueryResultEnvelope() {}
 
     /**
-     * Backwards-compatible shape: return the rows list
-     * directly. Used by {@code /query} / {@code /service} so
-     * legacy callers see the same JSON they always did.
+     * Bare shape: the rows list directly. Used by {@code /query} /
+     * {@code /service}.
      */
     public static List<Map<String, Object>> rowsOnly(QueryResult result) {
         return result.rows();
