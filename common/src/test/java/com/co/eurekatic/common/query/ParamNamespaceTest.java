@@ -352,4 +352,49 @@ class ParamNamespaceTest {
         assertThat(ParamNamespace.canonicalKeyFor("QUERY.size", ParamNamespace.BODY))
                 .isEqualTo("QUERY.SIZE");
     }
+
+    /* ====================== tope de anidamiento ====================== */
+
+    /** Construye {"a":{"a":{...}}} con {@code levels} niveles de objeto. */
+    private static Map<String, Object> nested(int levels) {
+        Map<String, Object> node = new LinkedHashMap<>();
+        node.put("hoja", 1);
+        for (int i = 0; i < levels - 1; i++) {
+            Map<String, Object> parent = new LinkedHashMap<>();
+            parent.put("a", node);
+            node = parent;
+        }
+        return node;
+    }
+
+    @Test
+    void flattenAcceptsBodiesUpToTheDepthLimit() {
+        Map<String, Object> out = ParamNamespace.flatten(
+                nested(ParamNamespace.MAX_DEPTH), ParamNamespace.BODY);
+
+        assertThat(out).hasSize(1);
+        assertThat(out.keySet().iterator().next()).endsWith(".HOJA");
+    }
+
+    @Test
+    void flattenRejectsBodiesDeeperThanTheLimitInsteadOfOverflowingTheStack() {
+        Map<String, Object> bomb = nested(ParamNamespace.MAX_DEPTH + 1);
+
+        assertThatThrownBy(() -> ParamNamespace.flatten(bomb, ParamNamespace.BODY))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(String.valueOf(ParamNamespace.MAX_DEPTH));
+    }
+
+    @Test
+    void deeplyNestedBodyDoesNotBlowTheStack() {
+        // Jackson admite hasta 1000 niveles por defecto, asi que este es
+        // el cuerpo que un cliente podria mandar de verdad. Antes del tope
+        // la recursion llegaba hasta el fondo; ahora corta con un 400.
+        Map<String, Object> bomb = nested(1000);
+
+        assertThatThrownBy(() -> ParamNamespace.flatten(bomb, ParamNamespace.BODY))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> ParamNamespace.indexCanonicalBody(bomb, ParamNamespace.BODY))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

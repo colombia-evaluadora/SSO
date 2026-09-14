@@ -1,5 +1,6 @@
 package com.co.eurekatic.query.web.write;
 
+import com.co.eurekatic.query.resilience.QueryResilience;
 import com.co.eurekatic.query.write.WriteService;
 import com.co.eurekatic.query.web.WriteRequest;
 import jakarta.validation.Valid;
@@ -19,18 +20,25 @@ import java.util.Map;
  * intentionally do NOT express "must have ADMIN" or "must
  * have WRITE" at the URL pattern — a non-admin role might
  * legitimately have a write definition bound to it.
+ *
+ * <p>Rate limited on the same per-principal bucket as the read paths:
+ * a write costs the database more than a read, so exempting it was
+ * backwards.
  */
 @RestController
 public class WriteController {
 
     private final WriteService service;
+    private final QueryResilience resilience;
 
-    public WriteController(WriteService service) {
+    public WriteController(WriteService service, QueryResilience resilience) {
         this.service = service;
+        this.resilience = resilience;
     }
 
     @PostMapping("/write")
     public Map<String, Object> write(@Valid @RequestBody WriteRequest req) {
+        resilience.enforceRateLimit();
         int rows = service.execute(req);
         return Map.of(
                 "uuid", req.uuid(),

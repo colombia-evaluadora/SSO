@@ -10,7 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 /**
- * V31 — Micrometer instrumentation for the path-template + catalog
+ * Micrometer instrumentation for the path-template + catalog
  * surface. Single bean injected anywhere we need to record
  * counters; the {@link MeterRegistry} is auto-wired by Spring Boot
  * Actuator (the {@code OTLP metrics export} config in

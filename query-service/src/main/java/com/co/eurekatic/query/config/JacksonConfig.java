@@ -6,7 +6,7 @@ import org.springframework.context.annotation.Configuration;
 import tools.jackson.core.StreamReadFeature;
 
 /**
- * V60 — endurecimiento del parseo JSON para el query-service.
+ * Endurecimiento del parseo JSON para el query-service.
  *
  * <p>Spring Boot 4 trae Jackson 3 ({@code tools.jackson.*}) como
  * stack por defecto en el MVC, pero NO expone vía

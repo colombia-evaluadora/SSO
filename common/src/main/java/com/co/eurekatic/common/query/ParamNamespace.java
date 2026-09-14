@@ -130,22 +130,51 @@ public final class ParamNamespace {
     }
 
     /**
+     * Profundidad máxima de anidamiento de un cuerpo JSON.
+     *
+     * <p>El aplanado es recursivo, así que sin tope un cuerpo
+     * suficientemente anidado agota la pila — y Jackson, por defecto,
+     * acepta hasta 1000 niveles. Diez ya es holgado para cualquier
+     * cuerpo real ({@code {"filtros":{"zona":1}}} son dos), y lo que
+     * sobra de ahí no es un cliente legítimo.
+     */
+    public static final int MAX_DEPTH = 10;
+
+    /**
      * Aplana un JSON anidado a rutas con punto, en MAYÚSCULA:
      * {@code {"filtros":{"zona":1}}} → {@code BODY.FILTROS.ZONA=1}.
      *
      * <p>Los arrays se dejan intactos: JDBC sabe bindear una lista
      * a un parámetro, y trocearla por índice produciría nombres
      * que nadie puede escribir en una SQL.
+     *
+     * @throws IllegalArgumentException si el cuerpo supera
+     *         {@link #MAX_DEPTH} niveles de anidamiento.
      */
     public static Map<String, Object> flatten(Map<String, ?> body, String prefix) {
         Map<String, Object> out = new LinkedHashMap<>();
-        flattenInto(out, body, prefix);
+        flattenInto(out, body, prefix, 1);
         return out;
+    }
+
+    /**
+     * Corta la recursión antes de que la pila lo haga. Se mide en
+     * niveles de objeto, no en segmentos de la clave, para que el
+     * mensaje se refiera a lo que el cliente escribió.
+     */
+    static void requireDepth(int depth, String key) {
+        if (depth > MAX_DEPTH) {
+            throw new IllegalArgumentException(
+                    "El cuerpo está anidado más de " + MAX_DEPTH
+                    + " niveles (en '" + key + "'). Aplana la estructura: "
+                    + "un cuerpo así de profundo no se puede bindear a un SQL.");
+        }
     }
 
     private static void flattenInto(Map<String, Object> out,
                                     Map<String, ?> body,
-                                    String prefix) {
+                                    String prefix,
+                                    int depth) {
         // La detección de colisiones es POR NIVEL, no global: dos
         // ramas distintas pueden tener la misma clave sin ambigüedad
         // (BODY.A.X y BODY.B.X son nombres distintos).
@@ -163,9 +192,10 @@ public final class ParamNamespace {
             String key = prefix + "." + upper;
             Object val = e.getValue();
             if (val instanceof Map<?, ?> nested) {
+                requireDepth(depth + 1, key);
                 @SuppressWarnings("unchecked")
                 Map<String, Object> nestedMap = (Map<String, Object>) nested;
-                flattenInto(out, nestedMap, key);
+                flattenInto(out, nestedMap, key, depth + 1);
             } else {
                 out.put(key, val);
             }
@@ -251,7 +281,7 @@ public final class ParamNamespace {
     public static Map<String, Object> indexCanonicalBody(Map<String, ?> body, String namespace) {
         if (body == null || body.isEmpty()) return Map.of();
         Map<String, Object> canonical = new LinkedHashMap<>();
-        indexCanonicalBodyInto(canonical, body, namespace, new LinkedHashMap<>());
+        indexCanonicalBodyInto(canonical, body, namespace, new LinkedHashMap<>(), 1);
         return canonical;
     }
 
@@ -317,7 +347,8 @@ public final class ParamNamespace {
     private static void indexCanonicalBodyInto(Map<String, Object> canonical,
                                                 Map<String, ?> body,
                                                 String namespace,
-                                                Map<String, String> originalByUpper) {
+                                                Map<String, String> originalByUpper,
+                                                int depth) {
         for (Map.Entry<String, ?> e : body.entrySet()) {
             String raw = e.getKey();
             String full = canonicalKeyFor(raw, namespace);
@@ -331,9 +362,10 @@ public final class ParamNamespace {
             }
             Object val = e.getValue();
             if (val instanceof Map<?, ?> nested) {
+                requireDepth(depth + 1, full);
                 @SuppressWarnings("unchecked")
                 Map<String, Object> nestedMap = (Map<String, Object>) nested;
-                indexCanonicalBodyInto(canonical, nestedMap, full, originalByUpper);
+                indexCanonicalBodyInto(canonical, nestedMap, full, originalByUpper, depth + 1);
             } else {
                 canonical.put(full, val);
             }
