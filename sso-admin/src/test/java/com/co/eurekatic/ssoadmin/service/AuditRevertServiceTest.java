@@ -290,6 +290,45 @@ class AuditRevertServiceTest {
                 .hasMessageContaining("modified_at");
     }
 
+    /**
+     * Bug real encontrado en vivo (test.pigse.com, revertir un cambio de
+     * {@code tsede}): {@code preview()} comparaba bien el epoch de
+     * Debezium contra el {@link java.sql.Timestamp} de Postgres (ver los
+     * dos tests de arriba), pero {@code applyRevert} bindeaba
+     * {@code c.revertTo()} SIN convertir — Postgres rechazaba el UPDATE
+     * real con "column is of type timestamp ... but expression is of
+     * type bigint" pese a que el preview nunca detectaba ningún
+     * problema. Este test cubre el {@code revert()} real (no solo el
+     * preview) y verifica que el valor bindeado sea un
+     * {@link java.sql.Timestamp}, no el {@code Long} crudo del JSON.
+     */
+    @Test
+    void revertConvertsEpochToTimestampForTemporalColumnOnRealUpdate() {
+        when(clickHouse.findByLsnSeq(5L, 1L)).thenReturn(Optional.of(periodoSoftDeleteRow()));
+        java.sql.Timestamp actualModifiedAt = java.sql.Timestamp.from(
+                java.time.Instant.ofEpochMilli(1789147959241L).plusNanos(389_000L));
+        when(jdbc.queryForObject(contains("SELECT modified_at"), eq(Object.class), eq(3)))
+                .thenReturn(actualModifiedAt);
+        when(jdbc.queryForObject(contains("SELECT active"), eq(Object.class), eq(3)))
+                .thenReturn(false);
+        when(jdbc.queryForObject(eq("SELECT public.fn_get_academico_usuario_id(?)"), eq(Long.class), eq(7L)))
+                .thenReturn(77L);
+
+        service.revert(5L, 1L, 7L);
+
+        org.mockito.ArgumentCaptor<Object[]> paramsCaptor = org.mockito.ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc).update(anyString(), paramsCaptor.capture());
+        Object[] params = paramsCaptor.getValue();
+
+        assertThat(params).anySatisfy(p -> {
+            assertThat(p).isInstanceOf(java.sql.Timestamp.class);
+            assertThat(((java.sql.Timestamp) p).getTime()).isEqualTo(1789147900000L);
+        });
+        // El epoch crudo (Long) nunca debe llegar tal cual al bind — eso
+        // es exactamente lo que rechazaba Postgres en producción.
+        assertThat(params).noneMatch(p -> p instanceof Long);
+    }
+
     @Test
     void numericIdsAreNotCrossComparedAsEpochs() {
         // Dos números plenos se comparan como números: el atajo temporal solo
