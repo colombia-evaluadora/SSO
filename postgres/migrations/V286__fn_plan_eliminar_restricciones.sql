@@ -1,46 +1,60 @@
 -- ===========================================================================
 -- V286 - endpoint de solo lectura para chequear de antemano si un renglon de
---        TASIGNATURA_PLAN se puede eliminar por completo (hard-delete de la
---        asignatura via fn_subject_soft_delete), sin intentar el borrado real.
+--        TASIGNATURA_PLAN se puede REMOVER del plan (fn_plan_eliminar) y/o
+--        ELIMINAR por completo (fn_subject_soft_delete), sin intentar
+--        ninguno de los dos borrados reales.
 --
 -- POR QUE
---   El dialogo de "Eliminar" del front solo podia chequear una condicion
---   (asignatura usada en el plan de otro grado) de forma client-side. Las
---   demas condiciones (docente asignado, horario configurado, calificaciones
---   registradas) solo se descubrian al intentar el borrado real y recibir el
---   error de fn_plan_eliminar / fn_subject_soft_delete. Esta migracion junta
---   TODAS esas condiciones -- las mismas que ya bloquean el borrado hoy en
---   fn_plan_eliminar (V44) y fn_subject_soft_delete (V40) -- en un solo
---   endpoint de chequeo, sin tocar esas dos funciones de escritura.
+--   El dialogo de "Eliminar"/"Remover" del front solo podia chequear una
+--   condicion (asignatura usada en el plan de otro grado) de forma
+--   client-side. Las demas condiciones (docente asignado, horario
+--   configurado, calificaciones registradas) solo se descubrian al intentar
+--   el borrado real. Esta migracion junta esas condiciones en un solo
+--   endpoint de chequeo, sin tocar las funciones de escritura.
+--
+-- DOS NIVELES DE RESTRICCION, NO UNO (fix de esta sesion, ver mas abajo):
+--   "Remover" (quitar el renglon de ESTE plan) y "Eliminar" (remover + de
+--   paso borrar la asignatura por completo) dependen de conjuntos de
+--   condiciones DISTINTOS, con distinto alcance:
+--
+--   a) Bloquean fn_plan_eliminar en si (V44) -- por lo tanto bloquean TANTO
+--      "Remover" como "Eliminar", porque los dos empiezan quitando el
+--      renglon del plan: docente asignado U horario configurado, pero
+--      SOLO en los grupos DE ESTE GRADO (join via TGRUPO.FK_TGRADO).
+--
+--   b) Bloquean solamente fn_subject_soft_delete (V40) -- por lo tanto
+--      bloquean unicamente "Eliminar" (quitar del plan si funciona igual):
+--      docente asignado U horario configurado, pero en CUALQUIER grupo de
+--      CUALQUIER grado; mas calificaciones registradas; mas la asignatura
+--      usada en el plan de otro grado.
+--
+--   Antes esta funcion solo devolvia puede_eliminar mezclando ambos niveles,
+--   asi que "Remover" (siempre habilitado en el front) parecia disponible
+--   aunque en la practica fn_plan_eliminar la fuera a rechazar igual por (a).
+--   Ahora devuelve puede_remover y puede_eliminar por separado.
 --
 -- NUMERACION
---   Hueco libre V301, verificado contra TODAS las ramas de origin (highest
---   visto: V300). Hermano de V80, que registro en su momento el resto de los
---   endpoints de este modulo (plan-asignaturas / horarios).
+--   Hueco libre verificado contra TODAS las ramas de origin. Hermano de
+--   V80, que registro en su momento el resto de los endpoints de este
+--   modulo (plan-asignaturas / horarios).
 --
--- FIX (misma sesion, editado in-place -- aun no aplicado en ningun ambiente):
---   El chequeo (a) "docente asignado" era global y marcaba falso-positivo en
---   preescolar: el director de grupo se auto-asigna via
---   fn_docente_director_grupo_sync (V285), y fn_plan_eliminar (V44/V285) ya
---   lo desasigna automaticamente antes de chequear el bloqueo real. Ahora,
---   si el grado es preescolar (fn_grado_es_preescolar, V285), se excluyen
---   del chequeo las filas de TDOCENTE_ASIGNATURA donde el funcionario
---   coincide con el director del TGRUPO de esa fila; solo bloquea si queda
---   un docente distinto (asignacion manual real).
+-- FIX PREVIO (misma sesion): el chequeo de docente en preescolar excluye el
+--   director de grupo auto-asignado (fn_docente_director_grupo_sync, V285)
+--   de la cuenta como bloqueo -- fn_plan_eliminar (V44/V285) ya lo
+--   desasigna solo antes de bloquear de verdad. Solo cuenta un docente
+--   DISTINTO al director de ese grupo.
 -- ===========================================================================
-
--- ---------------------------------------------------------------------------
--- Funcion de solo lectura: replica el orden de chequeos de fn_plan_eliminar
--- (docente/horario en grupos del grado) + fn_subject_soft_delete (docente/
--- horario/calificaciones/plan en CUALQUIER grado), excluyendo el propio
--- renglon al chequear "usada en el plan de otro grado".
--- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_plan_eliminar_restricciones(BIGINT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_plan_eliminar_restricciones(
     p_pk BIGINT,
     p_pk_usuario_solicitante BIGINT DEFAULT NULL
 )
-RETURNS TABLE (puede_eliminar BOOLEAN, motivo TEXT, grado_conflicto TEXT)
+RETURNS TABLE (
+    puede_eliminar BOOLEAN,
+    puede_remover BOOLEAN,
+    motivo TEXT,
+    grado_conflicto TEXT
+)
 LANGUAGE plpgsql STABLE AS $$
 DECLARE
     v_asignatura_id   BIGINT;
@@ -59,6 +73,7 @@ BEGIN
     -- pestana mientras el dialogo estaba abierto) no debe tirar 500.
     IF v_asignatura_id IS NULL THEN
         puede_eliminar := FALSE;
+        puede_remover := FALSE;
         motivo := 'No existe un renglón de plan activo con el identificador indicado';
         grado_conflicto := NULL;
         RETURN NEXT;
@@ -69,18 +84,78 @@ BEGIN
     -- del grado, mismo patron que fn_plan_obtener/fn_plan_listar.
     IF NOT academico_test.fn_periodo_puede_ver(p_pk_usuario_solicitante, v_periodo_id) THEN
         puede_eliminar := FALSE;
+        puede_remover := FALSE;
         motivo := 'No tiene permisos para consultar este renglón del plan de estudio';
         grado_conflicto := NULL;
         RETURN NEXT;
         RETURN;
     END IF;
 
-    -- a) Docente asignado (alcance: fn_subject_soft_delete -- cualquier grupo).
-    -- En preescolar el director de grupo se auto-asigna como docente de todas
-    -- las dimensiones de su plan (fn_docente_director_grupo_sync, V285); ese
-    -- caso lo desasigna automaticamente fn_plan_eliminar (V44/V285) antes de
-    -- chequear el bloqueo, asi que aqui no debe contar como conflicto. Solo
-    -- bloquea si queda un docente DISTINTO al director de ese grupo.
+    -- =========================================================================
+    -- NIVEL (a): lo que bloquea fn_plan_eliminar en si -- bloquea TANTO
+    -- Remover como Eliminar. Alcance: solo grupos DE ESTE GRADO.
+    -- =========================================================================
+
+    -- a.1) Docente asignado en un grupo de este grado. En preescolar se
+    -- excluye el director auto-asignado del propio grupo (se desasigna solo
+    -- al eliminar, V285) -- solo cuenta un docente manual distinto.
+    IF academico_test.fn_grado_es_preescolar(v_grado_id) THEN
+        IF EXISTS (
+            SELECT 1
+              FROM academico_test.TDOCENTE_ASIGNATURA da
+              JOIN academico_test.TGRUPO gr ON gr.PK_TGRUPO = da.FK_TGRUPO AND gr.FK_TGRADO = v_grado_id
+             WHERE da.FK_TASIGNATURA = v_asignatura_id AND da.ACTIVE = TRUE
+               AND da.FK_TFUNCIONARIO IS DISTINCT FROM gr.FK_TFUNCIONARIO
+        ) THEN
+            puede_eliminar := FALSE;
+            puede_remover := FALSE;
+            motivo := 'tiene un docente asignado en un grupo de este grado';
+            grado_conflicto := NULL;
+            RETURN NEXT;
+            RETURN;
+        END IF;
+    ELSE
+        IF EXISTS (
+            SELECT 1
+              FROM academico_test.TDOCENTE_ASIGNATURA da
+              JOIN academico_test.TGRUPO gr ON gr.PK_TGRUPO = da.FK_TGRUPO AND gr.FK_TGRADO = v_grado_id
+             WHERE da.FK_TASIGNATURA = v_asignatura_id AND da.ACTIVE = TRUE
+        ) THEN
+            puede_eliminar := FALSE;
+            puede_remover := FALSE;
+            motivo := 'tiene un docente asignado en un grupo de este grado';
+            grado_conflicto := NULL;
+            RETURN NEXT;
+            RETURN;
+        END IF;
+    END IF;
+
+    -- a.2) Horario configurado en un grupo de este grado.
+    IF EXISTS (
+        SELECT 1
+          FROM academico_test.THORARIO h
+          JOIN academico_test.TGRUPO gr ON gr.PK_TGRUPO = h.FK_TGRUPO AND gr.FK_TGRADO = v_grado_id
+         WHERE h.FK_TASIGNATURA = v_asignatura_id AND h.ACTIVE = TRUE
+    ) THEN
+        puede_eliminar := FALSE;
+        puede_remover := FALSE;
+        motivo := 'tiene bloques de horario configurados en un grupo de este grado';
+        grado_conflicto := NULL;
+        RETURN NEXT;
+        RETURN;
+    END IF;
+
+    -- A partir de aca, fn_plan_eliminar no bloquearia: Remover si funciona.
+    puede_remover := TRUE;
+
+    -- =========================================================================
+    -- NIVEL (b): lo que bloquea solo fn_subject_soft_delete -- Remover ya
+    -- quedo habilitado arriba, esto solo decide Eliminar. Alcance: CUALQUIER
+    -- grupo de CUALQUIER grado.
+    -- =========================================================================
+
+    -- b.1) Docente asignado en cualquier grupo (cualquier grado). Mismo
+    -- criterio preescolar que arriba, pero sin restringir el grado.
     IF academico_test.fn_grado_es_preescolar(v_grado_id) THEN
         IF EXISTS (
             SELECT 1
@@ -108,7 +183,7 @@ BEGIN
         END IF;
     END IF;
 
-    -- b) Horario configurado (mismo alcance).
+    -- b.2) Horario configurado (mismo alcance sin restringir grado).
     IF EXISTS (
         SELECT 1 FROM academico_test.THORARIO h
          WHERE h.FK_TASIGNATURA = v_asignatura_id AND h.ACTIVE = TRUE
@@ -120,7 +195,7 @@ BEGIN
         RETURN;
     END IF;
 
-    -- c) Calificaciones registradas.
+    -- b.3) Calificaciones registradas.
     IF EXISTS (
         SELECT 1 FROM academico_test.TASIGNATURA_NOTA an
          WHERE an.FK_TASIGNATURA = v_asignatura_id AND an.ACTIVE = TRUE
@@ -132,7 +207,7 @@ BEGIN
         RETURN;
     END IF;
 
-    -- d) Usada en el plan de otro grado (excluye el propio renglon p_pk).
+    -- b.4) Usada en el plan de otro grado (excluye el propio renglon p_pk).
     SELECT tg.NOMBRE
       INTO v_grado_conflicto
       FROM academico_test.TASIGNATURA_PLAN ap2
