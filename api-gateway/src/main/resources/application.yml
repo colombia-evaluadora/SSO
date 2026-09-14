@@ -574,6 +574,17 @@ management:
       resource-attributes:
         service.namespace: sso
         deployment.environment: ${DEPLOY_ENV:dev}
+    logging:
+      export:
+        otlp:
+          # Tercer exporter, el de LOGS (appender Logback OTEL -> Alloy).
+          # Metricas y trazas ya caian a false sin la env var; este era el
+          # unico que se quedaba en el default de Spring Boot (true), asi
+          # que cualquier arranque sin MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED
+          # explicito (docker run a mano, tests, contenedores spawneados por
+          # el provisioner) seguia empujando cada linea de log a un Alloy que
+          # no existe y reintentando en bucle.
+          enabled: ${MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED:false}
     tracing:
       # El interruptor historico de docker-compose (MANAGEMENT_TRACING_EXPORT_ENABLED)
       # no correspondia a ninguna propiedad real ("management.tracing.export.enabled"
