@@ -64,7 +64,7 @@ public class DataSourceConfig {
             "postgres", "org.postgresql.Driver",
             "oracle", "oracle.jdbc.OracleDriver",
             "sqlserver", "com.microsoft.sqlserver.jdbc.SQLServerDriver",
-            // V-audit-clickhouse — instancias de solo lectura contra
+            // Instancias de solo lectura contra
             // auditoria.audit_log (ClickHouse). Mismo patrón de
             // "instance mode" que ya usa eval-col contra Postgres.
             "clickhouse", "com.clickhouse.jdbc.ClickHouseDriver"

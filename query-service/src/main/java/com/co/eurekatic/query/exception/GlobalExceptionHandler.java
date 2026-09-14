@@ -59,6 +59,23 @@ public class GlobalExceptionHandler {
         this.meters = meters;
     }
 
+    /**
+     * Error de datos ya traducido por {@link PostgresErrorMapper}. Es la
+     * única familia cuyo {@code code} es semántico ({@code FK_NOT_FOUND},
+     * {@code QUERY_DEFINITION}, ...) en vez del status HTTP, para que el
+     * cliente pueda discriminar sin parsear el mensaje.
+     */
+    @ExceptionHandler(DataAccessErrorException.class)
+    public ResponseEntity<Map<String, Object>> handleDataAccessError(DataAccessErrorException ex) {
+        if (ex.getStatusCode().is5xxServerError()) {
+            meters.counter("query.http.errors", "status",
+                    String.valueOf(ex.getStatusCode().value()), "category", ex.code()).increment();
+        }
+        return ResponseEntity.status(ex.getStatusCode()).body(Map.of(
+                "code", ex.code(),
+                "message", ex.getReason() == null ? "Error al ejecutar la consulta" : ex.getReason()));
+    }
+
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<Map<String, Object>> handleResponseStatus(ResponseStatusException ex) {
         // Un 5xx que llega hasta acá (no vía PostgresErrorMapper, que ya
@@ -224,10 +241,11 @@ public class GlobalExceptionHandler {
      * {@code ParamNamespace} rechaza: nombres que no se pueden
      * escribir como bind en el SQL ({@code ?page-size=1}) y pares
      * que sólo se diferencian por la caja
-     * ({@code ?estado=a&ESTADO=b}). Son errores de quien llama, no
+     * ({@code ?estado=a&ESTADO=b}), y los mismatches de tipo que
+     * detecta {@code ParamBinder}. Son errores de quien llama, no
      * del servidor, y el mensaje es justo el que le dice qué
-     * escribir — por eso importa que salgan con 400 y no los trague
-     * la caza-todo de abajo como 500.
+     * escribir — por eso salen con 400 y no los traga la caza-todo
+     * de abajo como 500.
      */
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleIllegal(IllegalArgumentException ex) {
@@ -237,12 +255,11 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * V70 — una o más restricciones de formato declaradas en
-     * {@code QUERY_PARAM_CONSTRAINT} (ver
-     * {@code com.co.eurekatic.common.query.ParamConstraintValidator})
-     * fallaron. Mismo envelope {@code {code, message, fields}} que
-     * {@link #handleArgumentNotValid} usa para Bean Validation — el
-     * admin-ui ya sabe renderizar un error por campo con esa forma.
+     * Una o más restricciones de formato declaradas en
+     * {@code QUERY_PARAM_CONSTRAINT} fallaron. Mismo envelope
+     * {@code {code, message, fields}} que {@link #handleArgumentNotValid}
+     * usa para Bean Validation — el admin-ui ya sabe renderizar un
+     * error por campo con esa forma.
      */
     @ExceptionHandler(ParamConstraintViolationException.class)
     public ResponseEntity<Map<String, Object>> handleParamConstraintViolation(
@@ -368,20 +385,10 @@ public class GlobalExceptionHandler {
 
     /**
      * Missing required {@code @RequestParam} (e.g.
-     * {@code GET /columns?dialect=...&schema=...}
-     * with no {@code table=...}). Spring 7 ships an
-     * opinionated default for this, but our catch-all
-     * {@link #handleAny(Exception)} below catches it first
-     * and returns 500 (despite 400 being the only honest
-     * answer). The admin-ui's {@code useQuery} error
-     * branch treats 400 vs 500 differently — a 500 looks
-     * like the server is on fire and hides the actual
-     * validation message.
-     *
-     * <p>Mapping this explicitly to 400 also matches the
-     * envelope ({@code code="BAD_REQUEST"}) every other
-     * client-input error uses, so the caller can render
-     * a uniform "La columna 'foo' es requerida" toast.
+     * {@code GET /columns?dialect=...&schema=...} with no
+     * {@code table=...}). Mapped explicitly so it shares the
+     * {@code code="BAD_REQUEST"} envelope every other client-input
+     * error uses instead of falling into the 500 catch-all.
      */
     @ExceptionHandler(MissingServletRequestParameterException.class)
     public ResponseEntity<Map<String, Object>> handleMissingParam(MissingServletRequestParameterException ex) {
@@ -391,25 +398,18 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * V33 — verbo no soportado en una ruta que sí existe.
-     *
-     * <p>El dispatcher declara GET, POST y PUT. Un DELETE hace que
-     * Spring lance {@code HttpRequestMethodNotSupportedException}
+     * Verbo no soportado en una ruta que sí existe. El dispatcher
+     * declara GET, POST, PUT y PATCH; un DELETE lo rechaza Spring
      * antes de llegar al controller, así que el 405 que emite el
      * propio dispatcher para "ruta registrada con otro verbo" no
-     * cubre este caso — sin este handler, la caza-todo de abajo lo
-     * convertía en un 500 que sugería un fallo del servidor cuando
-     * el problema era la petición.
-     *
-     * <p>Se devuelve {@code Allow}, que es lo que la especificación
-     * de HTTP exige en un 405 y lo que permite a un cliente
-     * descubrir qué puede usar.
+     * cubre este caso. Se devuelve {@code Allow}, que es lo que la
+     * especificación de HTTP exige en un 405.
      */
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public ResponseEntity<Map<String, Object>> handleMethodNotSupported(
             HttpRequestMethodNotSupportedException ex) {
         String allowed = ex.getSupportedHttpMethods() == null
-                ? "GET, POST, PUT"
+                ? "GET, POST, PUT, PATCH"
                 : ex.getSupportedHttpMethods().stream()
                         .map(Object::toString)
                         .collect(java.util.stream.Collectors.joining(", "));
@@ -465,69 +465,24 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * V32 — Spring's {@link DataAccessException} wrapper
-     * around JDBC exceptions bubbles up here when a
-     * procedure / statement raises a SQL error that
-     * {@link com.co.eurekatic.query.read.QueryService} or
-     * {@link com.co.eurekatic.query.write.WriteService}
-     * didn't catch (e.g. when a controller calls
-     * {@code jdbcTemplate} directly). Translate to the
-     * same {@link PostgresErrorMapper} mapping the
-     * service path uses, so the wire shape is uniform.
+     * {@link DataAccessException} que escapó sin traducir (un
+     * controller que usa {@code jdbcTemplate} directamente). Pasa
+     * por el mismo {@link PostgresErrorMapper} que los servicios,
+     * así el envelope es uniforme.
      */
     @ExceptionHandler(DataAccessException.class)
     public ResponseEntity<Map<String, Object>> handleDataAccess(DataAccessException ex) {
-        SQLException sql = ex.getMostSpecificCause() instanceof SQLException
-                ? (SQLException) ex.getMostSpecificCause()
-                : null;
-        ResponseStatusException mapped;
-        if (sql != null) {
-            mapped = PostgresErrorMapper.map(sql);
-        } else {
-            // Encontrado en vivo contra audit-clickhouse-cval en producción
-            // (2026-09-14): esta rama devolvía "Database error" genérico sin
-            // loguear NADA -- ni siquiera un WARN -- así que la excepción real
-            // quedaba invisible tanto en los logs de query-service como en
-            // cualquier tabla de auditoría. La causa más específica de
-            // DataAccessException, cuando NO es un java.sql.SQLException, es
-            // típicamente una excepción propia del driver (p.ej. el driver v2
-            // de ClickHouse no siempre envuelve sus errores como SQLException
-            // real) que Spring no supo traducir. Se loguea con el tipo y
-            // mensaje de esa causa real para poder diagnosticar la próxima vez
-            // que esto ocurra.
-            Throwable root = ex.getMostSpecificCause();
-            log.error("DataAccessException sin SQLException de causa (root={}): {}",
-                    root == null ? "null" : root.getClass().getName(),
-                    root == null ? ex.getMessage() : root.getMessage(), ex);
-            mapped = new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
-                    "Database error");
-        }
-        return ResponseEntity.status(mapped.getStatusCode()).body(Map.of(
-                "code", mapped.getStatusCode().toString(),
-                "message", mapped.getReason() == null ? "Database error" : mapped.getReason()));
+        return handleDataAccessError(PostgresErrorMapper.map(ex));
     }
 
-    /**
-     * V32 — same shape for raw {@link SQLException}s that
-     * escape a service method (shouldn't happen anymore
-     * after QueryService wraps them in PostgresErrorMapper,
-     * but the catch-all here keeps the wire uniform if
-     * a future code path forgets to translate).
-     */
     @ExceptionHandler(SQLException.class)
     public ResponseEntity<Map<String, Object>> handleSql(SQLException ex) {
-        ResponseStatusException mapped = PostgresErrorMapper.map(ex);
-        return ResponseEntity.status(mapped.getStatusCode()).body(Map.of(
-                "code", mapped.getStatusCode().toString(),
-                "message", mapped.getReason() == null ? "Database error" : mapped.getReason()));
+        return handleDataAccessError(PostgresErrorMapper.map(ex));
     }
 
     /**
-     * V33 — Resilience4j rate limit hit. Return 429 with a
-     * {@code Retry-After} header so the client backs off
-     * for the configured window. The default Resilience4j
-     * timeout is 0 (fail fast) so the client should retry
-     * at most once per {@code query.resilience.rate-limit.window}.
+     * Resilience4j rate limit hit. 429 with {@code Retry-After} so
+     * the client backs off for the configured window.
      */
     @ExceptionHandler(RequestNotPermitted.class)
     public ResponseEntity<Map<String, Object>> handleRateLimit(RequestNotPermitted ex) {
@@ -540,10 +495,10 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * V33 — Resilience4j bulkhead full. Return 503 with a
-     * {@code Retry-After} hint. The bulkhead is per-dialect
-     * so a slow query on one dialect doesn't affect others,
-     * but a hot dialect can still exhaust its own cap.
+     * Resilience4j bulkhead full. 503 with a {@code Retry-After}
+     * hint. The bulkhead is per-dialect so a slow query on one
+     * dialect doesn't affect others, but a hot dialect can still
+     * exhaust its own cap.
      */
     @ExceptionHandler(BulkheadFullException.class)
     public ResponseEntity<Map<String, Object>> handleBulkheadFull(BulkheadFullException ex) {

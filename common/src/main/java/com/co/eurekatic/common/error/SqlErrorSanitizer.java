@@ -48,6 +48,14 @@ import java.util.regex.Pattern;
  * necesita para corregir la petición, y ni el nombre de un campo ni un
  * tipo SQL builtin ({@code bigint}, {@code character varying(130)})
  * identifican tabla o constraint.
+ *
+ * <p><b>4. Un 500 no es un solo error.</b> Lo que antes caía entero en
+ * {@link SqlErrorKind#INTERNAL} se separa en lo que el llamante puede
+ * distinguir sin ver nada de la base: {@link SqlErrorKind#DEFINITION} (el SQL
+ * del catálogo o la función no encajan con el esquema — lo arregla el autor),
+ * {@link SqlErrorKind#TIMEOUT} (la consulta se canceló por tiempo) y
+ * {@link SqlErrorKind#UNAVAILABLE} (conexión, autenticación del servicio,
+ * recursos). Todos ellos publican sólo su texto por defecto.
  */
 public final class SqlErrorSanitizer {
 
@@ -140,23 +148,48 @@ public final class SqlErrorSanitizer {
             if (state == null || state.length() < 2) {
                 continue;
             }
-            return new Sanitized(kindOf(state), state, messageFor(cur, state, kindOf(state)));
+            SqlErrorKind kind = kindOf(state, authorMessage(cur));
+            return new Sanitized(kind, state, messageFor(cur, state, kind));
         }
         return new Sanitized(SqlErrorKind.INTERNAL, null, SqlErrorKind.INTERNAL.defaultMessage());
     }
 
+    /**
+     * {@code 42501} emitido por el motor ({@code permission denied for table
+     * x}, {@code must be owner of ...}): el rol JDBC del servicio no tiene
+     * GRANT sobre un objeto. Es configuración del servidor, no un gate de
+     * negocio — se separa de los {@code RAISE ... ERRCODE '42501'} que sí
+     * escriben las funciones del esquema.
+     */
+    private static final Pattern ENGINE_PERMISSION =
+            Pattern.compile("^(?:permission denied|must be (?:owner|superuser|member))\\b",
+                    Pattern.CASE_INSENSITIVE);
+
     static SqlErrorKind kindOf(String sqlState) {
+        return kindOf(sqlState, null);
+    }
+
+    static SqlErrorKind kindOf(String sqlState, String message) {
         return switch (sqlState) {
             case "P0002" -> SqlErrorKind.NOT_FOUND;
-            case "42501" -> SqlErrorKind.PERMISSION_DENIED;
+            case "42501" -> message != null && ENGINE_PERMISSION.matcher(message).find()
+                    ? SqlErrorKind.DEFINITION
+                    : SqlErrorKind.PERMISSION_DENIED;
             case "23505" -> SqlErrorKind.DUPLICATE;
             case "23502" -> SqlErrorKind.MISSING_REQUIRED;
             case "23503" -> SqlErrorKind.REFERENCE_MISSING;
+            case "23514" -> SqlErrorKind.CHECK_FAILED;
             case "P0001" -> SqlErrorKind.BUSINESS_RULE;
+            case "57014" -> SqlErrorKind.TIMEOUT;
             default -> switch (sqlState.substring(0, 2)) {
                 case "22" -> SqlErrorKind.INVALID_VALUE;
                 case "23" -> SqlErrorKind.CONFLICT;
-                case "08", "40", "53", "57" -> SqlErrorKind.UNAVAILABLE;
+                case "08", "28", "40", "53", "57" -> SqlErrorKind.UNAVAILABLE;
+                // 42 sintaxis/objeto inexistente/firma de función, 0A no
+                // soportado, 3D/3F catálogo o esquema inexistente, 2F/38/39
+                // fallo dentro de una rutina, P0003/P0004 too_many_rows /
+                // assert_failure de PL/pgSQL.
+                case "42", "0A", "3D", "3F", "2F", "38", "39", "P0" -> SqlErrorKind.DEFINITION;
                 default -> SqlErrorKind.INTERNAL;
             };
         };
@@ -184,7 +217,8 @@ public final class SqlErrorSanitizer {
      * ahí sí es lo que el llamante necesita para corregir su body/param.
      */
     private static String messageFor(SQLException ex, String sqlState, SqlErrorKind kind) {
-        if (kind == SqlErrorKind.INTERNAL || kind == SqlErrorKind.UNAVAILABLE) {
+        if (kind == SqlErrorKind.INTERNAL || kind == SqlErrorKind.UNAVAILABLE
+                || kind == SqlErrorKind.DEFINITION || kind == SqlErrorKind.TIMEOUT) {
             return kind.defaultMessage();
         }
         if (sqlState.startsWith("22") && !BUSINESS_DATA_EXCEPTION_STATE.equals(sqlState)) {

@@ -1,6 +1,7 @@
 package com.co.eurekatic.query.web.query;
 
 import com.co.eurekatic.query.read.QueryService;
+import com.co.eurekatic.query.resilience.QueryResilience;
 import com.co.eurekatic.query.web.QueryRequest;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -26,23 +27,30 @@ import java.util.Map;
  * misbinding a sensitive query with publicEnd=false must
  * not have it exposed via {@code /public/service}).
  *
- * <p><b>V29:</b> an optional Bearer token on a public request
+ * <p>An optional Bearer token on a public request
  * still injects caller context (userId/email/roles) into the
  * JDBC params, so a public procedure can opt to log who hit
  * it. Without a token the principal is anonymous → the
  * caller-context named params are NOT bound.
+ *
+ * <p>Rate limited like every other read path. Being the only entry point
+ * that accepts requests with no token, it is the one that most needs the
+ * cap, and it was the only one that did not apply it.
  */
 @RestController
 public class PublicQueryController {
 
     private final QueryService service;
+    private final QueryResilience resilience;
 
-    public PublicQueryController(QueryService service) {
+    public PublicQueryController(QueryService service, QueryResilience resilience) {
         this.service = service;
+        this.resilience = resilience;
     }
 
     @PostMapping("/public/service")
     public List<Map<String, Object>> publicService(@Valid @RequestBody QueryRequest req) {
+        resilience.enforceRateLimit();
         return QueryResultEnvelope.rowsOnly(service.execute(req, true));
     }
 }

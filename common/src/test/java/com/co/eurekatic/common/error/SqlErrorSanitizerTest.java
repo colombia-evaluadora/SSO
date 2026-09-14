@@ -165,13 +165,67 @@ class SqlErrorSanitizerTest {
         }
 
         @Test
-        void columna_inexistente_es_interno_y_no_revela_el_identificador() {
+        void columna_inexistente_es_definicion_y_no_revela_el_identificador() {
             SQLException ex = raise("42703", "column \"fk_testablecimeinto\" does not exist");
 
             SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(ex);
 
-            assertThat(out.kind()).isEqualTo(SqlErrorKind.INTERNAL);
-            assertThat(out.message()).isEqualTo(SqlErrorKind.INTERNAL.defaultMessage());
+            assertThat(out.kind()).isEqualTo(SqlErrorKind.DEFINITION);
+            assertThat(out.message())
+                    .isEqualTo(SqlErrorKind.DEFINITION.defaultMessage())
+                    .doesNotContain("fk_testablecimeinto");
+        }
+
+        @Test
+        void firma_de_funcion_inexistente_es_definicion_sin_revelar_la_firma() {
+            SQLException ex = raise("42883",
+                    "function academico_test.fn_sed_crear(character varying, bigint) does not exist");
+
+            SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(ex);
+
+            assertThat(out.kind()).isEqualTo(SqlErrorKind.DEFINITION);
+            assertThat(out.message()).doesNotContain("fn_sed_crear", "character varying");
+        }
+
+        @Test
+        void check_violation_del_motor_es_valor_invalido_sin_nombrar_la_constraint() {
+            SQLException ex = pg("23514",
+                    "new row for relation \"tsede\" violates check constraint \"ck_tsede_zona\"",
+                    "Failing row contains (1, 9).", "tsede", "ck_tsede_zona");
+
+            SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(ex);
+
+            assertThat(out.kind()).isEqualTo(SqlErrorKind.CHECK_FAILED);
+            assertThat(out.message())
+                    .isEqualTo(SqlErrorKind.CHECK_FAILED.defaultMessage())
+                    .doesNotContain("tsede", "ck_tsede_zona");
+        }
+
+        @Test
+        void statement_timeout_es_timeout_y_no_no_disponible() {
+            SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(
+                    raise("57014", "canceling statement due to statement timeout"));
+
+            assertThat(out.kind()).isEqualTo(SqlErrorKind.TIMEOUT);
+            assertThat(out.message()).isEqualTo(SqlErrorKind.TIMEOUT.defaultMessage());
+        }
+
+        @Test
+        void permission_denied_del_motor_es_configuracion_no_gate_de_negocio() {
+            SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(
+                    raise("42501", "permission denied for table tusuario"));
+
+            assertThat(out.kind()).isEqualTo(SqlErrorKind.DEFINITION);
+            assertThat(out.message()).doesNotContain("tusuario");
+        }
+
+        @Test
+        void fallo_de_autenticacion_del_servicio_es_no_disponible() {
+            SqlErrorSanitizer.Sanitized out = SqlErrorSanitizer.sanitize(
+                    raise("28P01", "password authentication failed for user \"query_service\""));
+
+            assertThat(out.kind()).isEqualTo(SqlErrorKind.UNAVAILABLE);
+            assertThat(out.message()).doesNotContain("query_service");
         }
 
         @Test

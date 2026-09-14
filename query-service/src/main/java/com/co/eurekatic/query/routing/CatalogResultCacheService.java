@@ -26,7 +26,7 @@ import java.util.TreeMap;
 
 /**
  * Redis-backed result cache for {@code GET} rows the catalog author
- * marked {@code cacheable=true} (V65) — see
+ * marked {@code cacheable=true} — see
  * {@code QueryPathController#dispatch}.
  *
  * <p><b>Why this bypasses the {@code @Cacheable}/{@code RedisCacheManager}
@@ -50,7 +50,7 @@ import java.util.TreeMap;
  * {@code publicEnd} row) into the key so two different callers
  * NEVER share an entry.
  *
- * <p><b>V66 — write-triggered invalidation, scoped by resource.</b>
+ * <p><b>Write-triggered invalidation, scoped by resource.</b>
  * A per-row TTL bounds staleness, but a catalog author who wants
  * "always current" (not "current within N seconds") needs writes to
  * actively clear what they might have made stale. There is no
@@ -77,8 +77,8 @@ import java.util.TreeMap;
  * same limitation any path-convention-based cache tagging has
  * without an explicit catalog-authored mapping. {@link #invalidateAll()}
  * remains available as the deliberately-blunt fallback for the one
- * case where there's no path template to key off at all (a legacy
- * {@code /query}/{@code /service} row saved before V27, or any write
+ * case where there's no path template to key off at all (a
+ * {@code /query}/{@code /service} row without one, or any write
  * through {@link com.co.eurekatic.query.write.WriteService}, whose
  * catalog — {@code WriteDefinition} — has no path template concept).
  *
@@ -272,7 +272,7 @@ public class CatalogResultCacheService {
     }
 
     /**
-     * V66 — call this after a successful write whose catalog row
+     * Call this after a successful write whose catalog row
      * carries a {@code pathTemplate} (path-dispatch {@code POST}/
      * {@code PUT}/{@code PATCH}, or a legacy {@code /query} row that
      * happens to have one). Only cache entries under the SAME
