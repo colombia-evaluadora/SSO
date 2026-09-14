@@ -275,8 +275,12 @@ class BodyParseMalformedIntegrationTest {
                 .expectStatus().isOk();
     }
 
+    /**
+     * Una columna que el catálogo no declara se ignora: el INSERT sólo
+     * lleva las declaradas, así que la fila entra sin {@code amount}.
+     */
     @Test
-    void writePathRejectsExtraColumns() throws Exception {
+    void writePathIgnoresExtraColumns() throws Exception {
         when(catalogClient.fetchWrite(any(), eq("wd-strict"))).thenReturn(
                 new WriteDefinition(71L, "wd-strict", "INSERT", "accounts",
                         List.of("ID", "STATUS"), List.of("ID")));
@@ -291,11 +295,11 @@ class BodyParseMalformedIntegrationTest {
                                 "status", "active",
                                 "amount", "1.50"))))
                 .exchange()
-                .expectStatus().isBadRequest()
+                .expectStatus().isOk()
                 .expectBody(byte[].class)
                 .returnResult()
                 .getResponseBody();
         JsonNode node = mapper.readTree(resp);
-        assertThat(node.get("message").asText()).contains("amount");
+        assertThat(node.get("rowsAffected").asInt()).isEqualTo(1);
     }
 }

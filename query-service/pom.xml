@@ -103,7 +103,7 @@
         <dependency>
             <groupId>com.microsoft.sqlserver</groupId>
             <artifactId>mssql-jdbc</artifactId>
-            <version>12.10.0.jre11</version>
+            <version>12.10.2.jre11</version>
         </dependency>
         <!-- V-audit-clickhouse — cuarto dialecto, para instancias
              que sirven auditoria.audit_log de solo lectura (ver
@@ -113,7 +113,7 @@
         <dependency>
             <groupId>com.clickhouse</groupId>
             <artifactId>clickhouse-jdbc</artifactId>
-            <version>0.7.1</version>
+            <version>0.8.6</version>
             <classifier>http</classifier>
         </dependency>
 

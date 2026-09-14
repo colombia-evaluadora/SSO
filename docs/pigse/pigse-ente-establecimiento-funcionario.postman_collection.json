@@ -1,0 +1,410 @@
+{
+  "info": {
+    "_postman_id": "6f2a1e9c-8b4d-4a71-9c3e-2d5f7a0b1c88",
+    "name": "PIGSE — entes / establecimientos / funcionarios (V258)",
+    "description": "Documenta los 15 endpoints CRUD registrados en V258 (`public.query`, microservice `serviceid='pigse'`) contra las funciones de V257 (`pigse.fn_ente_*`, `pigse.fn_est_*`, `pigse.fn_fun_*`).\n\n**Caveat de recarga:** hasta que `query-service-pigse` se reinicie tras aplicar V258, todas estas rutas devuelven 404 a través del gateway (fila nueva en `public.query` sin recargar). La carpeta \"0 — Salud\" incluye una prueba que documenta ese 404 esperado antes del restart; después del restart debe pasar a 200/201.\n\n**Roles (public.role_query, ver V258):**\n- `PIGSE-DIRECTOR_ENTE_TERRITORIAL`, `PIGSE-JEFE_SISTEMA_ENTE_TERRITORIAL`, `PIGSE-JEFE_AREA_PLANEACION`, `PIGSE-JEFE_AREA_COBERTURA`, `PIGSE-JEFE_AREA_CALIDAD`: CRUD completo de `/entes` y `/establecimientos`, solo lectura de `/funcionarios`.\n- `PIGSE-RECTOR`, `PIGSE-JEFE_SISTEMA_ESTABLECIMIENTO`: CRUD completo de `/funcionarios`, solo lectura de `/entes` y `/establecimientos`.\n- `PIGSE-AUXILIAR_ADMINISTRATIVO`: solo lectura de los tres recursos (los `/query` y los `GET :ID`).\n\nDELETE se expone como PATCH (soft delete) — `ck_query_http_method` en `public.query` no admite DELETE (ver nota de V149).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (pm.collectionVariables.get('token')) { return; }",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.collectionVariables.get('baseUrl') + '/api/auth/login',",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: {",
+          "        mode: 'raw',",
+          "        raw: JSON.stringify({",
+          "            email: pm.environment.get('email'),",
+          "            password: pm.environment.get('password')",
+          "        })",
+          "    }",
+          "}, (err, res) => {",
+          "    if (err) { console.error('login automatico fallo', err); return; }",
+          "    const token = res.json().token;",
+          "    if (token) { pm.collectionVariables.set('token', token); }",
+          "});"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "0 — Salud",
+      "item": [
+        {
+          "name": "Gateway arriba",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/actuator/health", "host": ["{{baseUrl}}"], "path": ["actuator", "health"] }
+          },
+          "response": []
+        },
+        {
+          "name": "404 esperado ANTES del restart de query-service-pigse",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 (fila nueva de public.query aun no recargada) o 200 (ya reiniciado)', () => {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"filters\": {},\n  \"pageIndex\": 0,\n  \"pageSize\": 10\n}" },
+            "url": { "raw": "{{baseUrl}}/api/pigse/entes/query", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "entes", "query"] },
+            "description": "Corre esto justo despues de aplicar V258 y antes de reiniciar query-service-pigse: debe dar 404. Despues del restart, debe dar 200."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1 — Entes",
+      "item": [
+        {
+          "name": "POST /entes/query (listar paginado)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('trae rows y totalCount', () => {",
+              "    const body = pm.response.json();",
+              "    pm.expect(body).to.have.property('rows');",
+              "});"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"filters\": {\n    \"search\": \"\"\n  },\n  \"sorting\": {\n    \"id\": \"nombre\",\n    \"desc\": false\n  },\n  \"pageIndex\": 0,\n  \"pageSize\": 20\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/pigse/entes/query", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "entes", "query"] },
+            "description": "Binds: BODY.FILTERS.SEARCH (VARCHAR, opcional), BODY.SORTING.ID (VARCHAR, opcional), BODY.SORTING.DESC (BOOLEAN, opcional), BODY.PAGEINDEX (INTEGER, opcional), BODY.PAGESIZE (INTEGER, opcional). Ninguno obligatorio -- sin filtros trae la primera pagina completa."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /entes/:id",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 o 404 (pk inexistente)', () => pm.expect([200, 404]).to.include(pm.response.code));"
+            ] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/pigse/entes/{{pkEnte}}", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "entes", "{{pkEnte}}"] },
+            "description": "PARAM.ID (BIGINT, obligatorio)."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /entes (crear)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('201 o 200', () => pm.expect([200, 201]).to.include(pm.response.code));"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nit\": \"900123456-1\",\n  \"nombre\": \"Secretaria de Educacion QA\",\n  \"fkTmunicipio\": 1,\n  \"fkTentePadre\": null\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/pigse/entes", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "entes"] },
+            "description": "BODY.NIT (VARCHAR, obligatorio), BODY.NOMBRE (VARCHAR, obligatorio), BODY.FK_TMUNICIPIO (BIGINT, obligatorio, FK a academico_test.tmunicipio), BODY.FK_TENTE_PADRE (BIGINT, opcional, self-FK jerarquico)."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /entes/:id (actualizar)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"nombre\": \"Secretaria de Educacion QA (editado)\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/pigse/entes/{{pkEnte}}", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "entes", "{{pkEnte}}"] },
+            "description": "PARAM.ID obligatorio; BODY.NIT/NOMBRE/FK_TMUNICIPIO/FK_TENTE_PADRE opcionales (patch parcial)."
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH /entes/:id (soft delete)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ] } }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/pigse/entes/{{pkEnte}}", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "entes", "{{pkEnte}}"] },
+            "description": "Expuesto como PATCH y no DELETE: ck_query_http_method no admite DELETE. PARAM.ID obligatorio."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2 — Establecimientos",
+      "item": [
+        {
+          "name": "POST /establecimientos/query (listar paginado)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"filters\": {\n    \"search\": \"\",\n    \"entes\": [],\n    \"municipios\": []\n  },\n  \"sorting\": {\n    \"id\": \"nombre\",\n    \"desc\": false\n  },\n  \"pageIndex\": 0,\n  \"pageSize\": 20\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/pigse/establecimientos/query", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "establecimientos", "query"] },
+            "description": "Binds: BODY.FILTERS.SEARCH (VARCHAR), BODY.FILTERS.ENTES (BIGINT[]), BODY.FILTERS.MUNICIPIOS (BIGINT[]), BODY.SORTING.ID (VARCHAR), BODY.SORTING.DESC (BOOLEAN), BODY.PAGEINDEX (INTEGER), BODY.PAGESIZE (INTEGER). Todos opcionales -- los arrays solo se pueden pasar por body, nunca por query-string."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /establecimientos/:id",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 o 404', () => pm.expect([200, 404]).to.include(pm.response.code));"
+            ] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/pigse/establecimientos/{{pkEstablecimiento}}", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "establecimientos", "{{pkEstablecimiento}}"] },
+            "description": "PARAM.ID (BIGINT, obligatorio)."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /establecimientos (crear)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('201 o 200', () => pm.expect([200, 201]).to.include(pm.response.code));"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fkEnte\": {{pkEnte}},\n  \"nombre\": \"IE QA Test\",\n  \"nit\": \"900987654-2\",\n  \"fkTmunicipio\": 1,\n  \"codigo\": \"111001000001\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/pigse/establecimientos", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "establecimientos"] },
+            "description": "BODY.FK_ENTE (BIGINT, obligatorio), BODY.NOMBRE (VARCHAR, obligatorio), BODY.NIT (VARCHAR, obligatorio), BODY.FK_TMUNICIPIO (BIGINT, obligatorio), BODY.CODIGO (VARCHAR, obligatorio, codigo DANE)."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /establecimientos/:id (actualizar)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"nombre\": \"IE QA Test (editado)\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/pigse/establecimientos/{{pkEstablecimiento}}", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "establecimientos", "{{pkEstablecimiento}}"] },
+            "description": "PARAM.ID obligatorio; BODY.NOMBRE/NIT/FK_TMUNICIPIO/CODIGO opcionales."
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH /establecimientos/:id (soft delete)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ] } }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/pigse/establecimientos/{{pkEstablecimiento}}", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "establecimientos", "{{pkEstablecimiento}}"] },
+            "description": "PARAM.ID obligatorio."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3 — Funcionarios",
+      "item": [
+        {
+          "name": "POST /funcionarios/query (listar paginado)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"filters\": {\n    \"search\": \"\",\n    \"establecimientos\": []\n  },\n  \"sorting\": {\n    \"id\": \"primerApellido\",\n    \"desc\": false\n  },\n  \"pageIndex\": 0,\n  \"pageSize\": 20\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/pigse/funcionarios/query", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "funcionarios", "query"] },
+            "description": "Binds: BODY.FILTERS.SEARCH (VARCHAR), BODY.FILTERS.ESTABLECIMIENTOS (BIGINT[]), BODY.SORTING.ID (VARCHAR), BODY.SORTING.DESC (BOOLEAN), BODY.PAGEINDEX (INTEGER), BODY.PAGESIZE (INTEGER). Todos opcionales."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /funcionarios/:id",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 o 404', () => pm.expect([200, 404]).to.include(pm.response.code));"
+            ] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/pigse/funcionarios/{{pkFuncionario}}", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "funcionarios", "{{pkFuncionario}}"] },
+            "description": "PARAM.ID (BIGINT, obligatorio)."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /funcionarios (crear)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('201 o 200', () => pm.expect([200, 201]).to.include(pm.response.code));"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fkEstablecimiento\": {{pkEstablecimiento}},\n  \"correoElectronico\": \"funcionario.qa@example.com\",\n  \"identificacion\": \"1000123456\",\n  \"primerNombre\": \"Juan\",\n  \"primerApellido\": \"Perez\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/pigse/funcionarios", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "funcionarios"] },
+            "description": "BODY.FK_ESTABLECIMIENTO (BIGINT, obligatorio), BODY.CORREO_ELECTRONICO (VARCHAR, obligatorio, clave natural), BODY.IDENTIFICACION (VARCHAR, obligatorio), BODY.PRIMER_NOMBRE (VARCHAR, obligatorio), BODY.PRIMER_APELLIDO (VARCHAR, obligatorio)."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /funcionarios/:id (actualizar)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"primerNombre\": \"Juan Carlos\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/pigse/funcionarios/{{pkFuncionario}}", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "funcionarios", "{{pkFuncionario}}"] },
+            "description": "PARAM.ID obligatorio; BODY.CORREO_ELECTRONICO/IDENTIFICACION/PRIMER_NOMBRE/PRIMER_APELLIDO opcionales."
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH /funcionarios/:id (soft delete)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ] } }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/pigse/funcionarios/{{pkFuncionario}}", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "funcionarios", "{{pkFuncionario}}"] },
+            "description": "PARAM.ID obligatorio."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4 — Rechazos esperados",
+      "description": "Un 200 aqui es un problema de permisos, no un exito.",
+      "item": [
+        {
+          "name": "Sin credenciales -> 401",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('401', () => pm.response.to.have.status(401));"
+            ] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": { "type": "noauth" },
+            "url": { "raw": "{{baseUrl}}/api/pigse/entes/{{pkEnte}}", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "entes", "{{pkEnte}}"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Rol sin permiso (ej. AUXILIAR_ADMINISTRATIVO en POST /entes) -> 403",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('403 (role_query no incluye este rol para escritura)', () => pm.response.to.have.status(403));"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{tokenAuxiliarAdministrativo}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"nit\": \"900000000-0\",\n  \"nombre\": \"No deberia crearse\",\n  \"fkTmunicipio\": 1\n}" },
+            "url": { "raw": "{{baseUrl}}/api/pigse/entes", "host": ["{{baseUrl}}"], "path": ["api", "pigse", "entes"] },
+            "description": "PIGSE-AUXILIAR_ADMINISTRATIVO solo tiene lectura de /entes (ver V258 role_query). Requiere {{tokenAuxiliarAdministrativo}} obtenido aparte con esas credenciales."
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "{{baseUrl}}", "type": "string" },
+    { "key": "token", "value": "", "type": "string" },
+    { "key": "tokenAuxiliarAdministrativo", "value": "", "type": "string" },
+    { "key": "pkEnte", "value": "1", "type": "string" },
+    { "key": "pkEstablecimiento", "value": "1", "type": "string" },
+    { "key": "pkFuncionario", "value": "1", "type": "string" }
+  ]
+}

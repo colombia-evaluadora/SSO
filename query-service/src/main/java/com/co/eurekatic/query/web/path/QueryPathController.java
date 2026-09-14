@@ -22,7 +22,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * V27 — path-based query dispatcher.
+ * Path-based query dispatcher.
  *
  * <p>The api-gateway strips the per-microservice
  * {@code REQUEST_URI} prefix (e.g. {@code /api/eval-col})
@@ -54,7 +54,7 @@ import java.util.Optional;
  *   <li>{@code :QUERY.X} — query string</li>
  *   <li>{@code :BODY.X.Y} — cuerpo JSON, aplanado con puntos:
  *       {@code {"filtros":{"zona":1}}} → {@code :BODY.FILTROS.ZONA}</li>
- *   <li>{@code :BODY_RAW.X} — cuerpo JSON sin aplanar (V49-bis):
+ *   <li>{@code :BODY_RAW.X} — cuerpo JSON sin aplanar:
  *       cada top-level del body se expone como sub-objeto completo
  *       para que el autor lo pase como JSONB via cast.</li>
  *   <li>{@code :CONTEXT.X} — del JWT verificado</li>
@@ -113,13 +113,7 @@ public class QueryPathController {
         return dispatch(request, "PUT", queryParams, body);
     }
 
-    /**
-     * V50 — PATCH method. Idempotent semantics with partial body
-     * (RFC 5789). Like PUT, it carries a body and matches the
-     * same validation rules — PATCH on a DML row is allowed.
-     * Registered after PUT so Spring's handler mapping resolves
-     * the more specific path templates first.
-     */
+    /** PATCH (RFC 5789): carries a body like PUT and follows the same rules. */
     @PatchMapping("/**")
     public Map<String, Object> dispatchPatch(
             jakarta.servlet.http.HttpServletRequest request,
@@ -157,12 +151,10 @@ public class QueryPathController {
                     "No query registered for path: " + fullPath);
         });
 
-        // V110 — opt-in cache, GET only. registry.match() already
-        // forces cacheable=false for any non-GET row (belt-and-
-        // braces — see QueryPathRegistry#refresh), so the
-        // "GET".equals(method) check here is the second, redundant
-        // guard: a mutating dispatch must NEVER be served from a
-        // stale cache entry, no matter what the catalog says.
+        // Opt-in cache, GET only. registry.match() already forces
+        // cacheable=false for any non-GET row; the "GET".equals(method)
+        // check is the second guard: a mutating dispatch must NEVER be
+        // served from a cache entry, no matter what the catalog says.
         boolean cacheable = "GET".equals(method) && match.cacheable();
         String cacheKey = null;
         if (cacheable) {
@@ -183,15 +175,10 @@ public class QueryPathController {
                 params,
                 /* limit  */ null,
                 /* offset */ null);
-        // publicOk=false: path-based queries are not
-        // anonymous endpoints. A procedure author who
-        // wants anonymous access should set publicEnd=true
-        // AND mark the query without a role binding — same
-        // gate as /query, just with a different URL.
-        //
-        // V31 — path-dispatch always uses the envelope
-        // shape ({rows, outParams}) so callers can rely
-        // on the same JSON shape regardless of mode.
+        // publicOk=false: path-based queries are not anonymous
+        // endpoints — same gate as /query, different URL. The
+        // response is always the envelope ({rows, outParams}) so
+        // callers get the same JSON shape regardless of mode.
         Map<String, Object> result = com.co.eurekatic.query.web.query.QueryResultEnvelope
                 .withOutParams(service.execute(qr, false));
 
@@ -205,11 +192,10 @@ public class QueryPathController {
      * Arma el mapa de binds prefijando cada valor con su origen.
      *
      * <p>Los tres orígenes que controla el llamante viven en
-     * namespaces separados, así que ya no pueden pisarse. Antes un
-     * {@code ?nombre=} machacaba silenciosamente a la variable de
-     * ruta {@code {nombre}} porque ambos escribían la misma clave,
-     * y por tanto una ruta declarada podía secuestrarse desde el
-     * query string.
+     * namespaces separados, así que no pueden pisarse: un
+     * {@code ?nombre=} nunca machaca a la variable de ruta
+     * {@code :NOMBRE}, y una ruta declarada no puede secuestrarse
+     * desde el query string.
      *
      * <p>{@code CONTEXT.*} lo añade {@code QueryService} desde el
      * JWT — deliberadamente fuera de aquí, porque nada que llegue
@@ -234,7 +220,7 @@ public class QueryPathController {
         if (body != null) {
             // Aplanado: BODY.X.Y para acceder a sub-campos escalares.
             params.putAll(ParamNamespace.flatten(body, ParamNamespace.BODY));
-            // V49-bis — sin aplanar: BODY_RAW.X para sub-objetos completos
+            // Sin aplanar: BODY_RAW.X para sub-objetos completos
             // que el autor quiere pasar como JSONB via cast(:BODY_RAW.X as jsonb).
             ParamNamespace.putRaw(params, body);
         }

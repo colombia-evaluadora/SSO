@@ -12,11 +12,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Unit tests for the SQL builders and the strict column
- * shape check (V60-bis — case-insensitive).
- *
- * <p>Same-package so the package-private {@code ForTest}
- * suffixed builders are reachable.
+ * Unit tests for the SQL builders and the case-insensitive column
+ * shape check. Same package so the package-private builders are
+ * reachable without a shim in production code.
  */
 class WriteServiceUnitTest {
 
@@ -28,7 +26,7 @@ class WriteServiceUnitTest {
                 List.of("id", "name", "email"),
                 List.of("id"));
 
-        String sql = WriteService.buildInsertSqlForTest(def);
+        String sql = WriteService.buildInsert(def);
 
         assertThat(sql).isEqualTo(
                 "INSERT INTO users (id,name,email) VALUES (:id,:name,:email)");
@@ -42,7 +40,7 @@ class WriteServiceUnitTest {
                 List.of("id", "name", "email", "updated_at"),
                 List.of("id"));
 
-        String sql = WriteService.buildUpdateSqlForTest(def);
+        String sql = WriteService.buildUpdate(def);
 
         assertThat(sql).isEqualTo(
                 "UPDATE users SET name = :name,email = :email,updated_at = :updated_at "
@@ -57,7 +55,7 @@ class WriteServiceUnitTest {
                 List.of("tenant_id", "order_id", "status"),
                 List.of("tenant_id", "order_id"));
 
-        String sql = WriteService.buildUpdateSqlForTest(def);
+        String sql = WriteService.buildUpdate(def);
 
         assertThat(sql).isEqualTo(
                 "UPDATE orders SET status = :status "
@@ -71,7 +69,7 @@ class WriteServiceUnitTest {
                 "users",
                 List.of("id", "name"),
                 List.of("id"));
-        String sql = WriteService.buildInsertSqlForTest(def);
+        String sql = WriteService.buildInsert(def);
         // Even if a request body tried to inject SQL via
         // the columns map, the SQL only ever contains the
         // catalog's declared list.
@@ -118,7 +116,7 @@ class WriteServiceUnitTest {
                 List.of("id"),
                 List.of("id"));
 
-        assertThatThrownBy(() -> WriteService.buildInsertSqlForTest(def))
+        assertThatThrownBy(() -> WriteService.buildInsert(def))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("500");
     }
@@ -131,7 +129,7 @@ class WriteServiceUnitTest {
                 List.of("id", "name = 1, admin"),
                 List.of("id"));
 
-        assertThatThrownBy(() -> WriteService.buildInsertSqlForTest(def))
+        assertThatThrownBy(() -> WriteService.buildInsert(def))
                 .isInstanceOf(ResponseStatusException.class);
     }
 
@@ -143,7 +141,7 @@ class WriteServiceUnitTest {
                 List.of("id", "name"),
                 List.of("id OR 1=1"));
 
-        assertThatThrownBy(() -> WriteService.buildUpdateSqlForTest(def))
+        assertThatThrownBy(() -> WriteService.buildUpdate(def))
                 .isInstanceOf(ResponseStatusException.class);
     }
 
@@ -155,7 +153,7 @@ class WriteServiceUnitTest {
                 List.of("pk_tusuario", "correo"),
                 List.of("pk_tusuario"));
 
-        assertThat(WriteService.buildInsertSqlForTest(def)).isEqualTo(
+        assertThat(WriteService.buildInsert(def)).isEqualTo(
                 "INSERT INTO academico_test.tusuario (pk_tusuario,correo) "
                         + "VALUES (:pk_tusuario,:correo)");
     }

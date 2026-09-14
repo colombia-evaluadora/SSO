@@ -88,7 +88,7 @@ import static org.springframework.security.test.web.servlet.setup.SecurityMockMv
 // necesita una clave real, no una cadena cualquiera como el
 // secreto HS256 que habia aqui antes.
 @TestPropertySource(locations = "classpath:jwt-test-keys.properties", properties = {
-        "spring.datasource.url=jdbc:h2:mem:sso-admin-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;NON_KEYWORDS=GROUPS;DB_CLOSE_DELAY=-1",
+        "spring.datasource.url=jdbc:h2:mem:sso-admin-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;NON_KEYWORDS=GROUPS,QUERY;INIT=RUNSCRIPT FROM 'classpath:h2-init.sql';DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
         "spring.datasource.password=",

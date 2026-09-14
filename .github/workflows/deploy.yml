@@ -269,7 +269,69 @@ jobs:
           # Sin esto, poner CDC_SYNC_ENABLED=false en TEST_ENV_FILE no
           # apagaría los servicios CDC en el deploy automático — el
           # override `docker-compose.cdc-off.yml` no se concatenaría.
-          ./scripts/sso-stack.sh pull --quiet
+          # --ignore-buildable salta garage-init (perfil "storage"):
+          # tiene build: Y image: en docker-compose.yml a propósito
+          # (build local porque la imagen oficial es `scratch`, sin
+          # shell — ver el comentario ahí), y sin este flag `pull`
+          # intenta descargarlo de un registro donde no existe y
+          # aborta con "pull access denied" ANTES de tocar ningún
+          # contenedor real. `docker compose up` sigue construyéndolo
+          # normal si hace falta (docker/garage/Dockerfile.init).
+          #
+          # BUG real encontrado en vivo (V377, incidente de sesiones
+          # PIGSE/CEVAL mezcladas): --ignore-buildable no solo salta
+          # garage-init -- salta CUALQUIER servicio que declare build:
+          # Y image: a la vez, que es prácticamente TODO servicio propio
+          # de este repo (auth-center, cdc-worker, cdc-capture, etc. --
+          # todos tienen build: para desarrollo local). Resultado: este
+          # `pull` nunca trae la imagen nueva para ninguno de ellos, y
+          # el `compose up -d --no-deps` de más abajo ve la misma imagen
+          # ya cacheada de la vez anterior y no recrea nada -- reporta
+          # "Container ... Running" en vez de "Recreated", en silencio,
+          # sin que el deploy falle ni lo diga. Así quedó corriendo
+          # código de auth-center/cdc-worker viejo por horas pese a un
+          # "deploy to test" en verde. IMAGE_PREFIX_VAL/IMAGE_TAG_VAL se
+          # adelantan acá (antes solo existían más abajo, para
+          # query-service) para poder pullear explícitamente, por fuera
+          # de compose, cada servicio de $CHANGED_SERVICES que SÍ vive
+          # en docker-compose.yml -- el mismo truco que ya se usaba solo
+          # para query-service, generalizado.
+          IMAGE_PREFIX_VAL="$(grep -E '^IMAGE_PREFIX=' .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r')"
+          IMAGE_TAG_VAL="$(grep -E '^IMAGE_TAG=' .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r')"
+          IMAGE_PREFIX_VAL="${IMAGE_PREFIX_VAL:-eurekatic}"
+          IMAGE_TAG_VAL="${IMAGE_TAG_VAL:-1.0.0-SNAPSHOT}"
+
+          ./scripts/sso-stack.sh pull --quiet --ignore-buildable
+
+          for svc in $CHANGED_SERVICES; do
+            if [ "$svc" = "query-service" ]; then
+              continue
+            fi
+            echo "=== pre-pulling ${IMAGE_PREFIX_VAL}/${svc}:${IMAGE_TAG_VAL} (compose ignora este pull por --ignore-buildable, se hace a mano) ==="
+            docker pull "${IMAGE_PREFIX_VAL}/${svc}:${IMAGE_TAG_VAL}"
+          done
+
+          # `query-service` NO es un servicio de docker-compose.yml (se
+          # provisiona en caliente vía Docker Engine API, ver
+          # provisioner/DockerSocket.createAndStart): "compose pull" de
+          # arriba nunca lo toca, y DockerSocket llama directo a
+          # POST /containers/create SIN pull previo — si la imagen no
+          # está ya cacheada en el host, containers/create devuelve
+          # "No such image" (la API cruda de Docker, a diferencia de
+          # `docker run`, no hace pull implícito). Resultado sin este
+          # paso: el primer "Nuevo query service" / "Recrear" contra un
+          # servidor recién desplegado falla siempre, de forma
+          # determinista, porque nadie pulleó la imagen todavía.
+          #
+          # La pulleamos aquí, explícitamente, mientras el login a GHCR
+          # de arriba (GITHUB_TOKEN efímero del job) sigue vigente — es
+          # la única ventana en la que el servidor puede autenticarse
+          # contra el registry. IMAGE_PREFIX/IMAGE_TAG son las mismas
+          # variables que consume DOCKER_IMAGE del servicio `provisioner`
+          # en docker-compose.yml, así que la imagen pulleada aquí es
+          # exactamente la que provisioner le pide a Docker más tarde.
+          echo "=== pre-pulling ${IMAGE_PREFIX_VAL}/query-service:${IMAGE_TAG_VAL} (provisionado on-demand, fuera de docker-compose.yml) ==="
+          docker pull "${IMAGE_PREFIX_VAL}/query-service:${IMAGE_TAG_VAL}"
 
           # ─── Servicios gateados por flyway vs. servicios independientes ───
           #
@@ -516,6 +578,22 @@ jobs:
           # del Linode con cada deploy.
           docker image prune -f
           EOF
+
+      - name: ClickHouse migrations
+        # Flyway (arriba) sólo migra sso-postgres. Los ALTER de
+        # `auditoria.*` (ClickHouse) se venían aplicando A MANO por
+        # ambiente -- V377 documentó ese ALTER como manual, se aplicó en
+        # dev/test y se olvidó en producción: /audits/stats y
+        # /audits/query devolvieron 500 ahí durante días sin que ningún
+        # pipeline lo hubiera podido atrapar (ver postgres/migrations/V391
+        # y docker/clickhouse/migrations/). Este paso corre
+        # scripts/clickhouse-migrate.sh (mismo principio que Flyway:
+        # versionar, trackear lo ya aplicado, fallar fuerte ante drift)
+        # en cada deploy, a todo ambiente, así que un ALTER nuevo nunca
+        # vuelve a quedar aplicado en dev/test y olvidado en producción.
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_TARGET }}" \
+            'cd /opt/sso && ./scripts/clickhouse-migrate.sh'
 
       - name: Smoke check (gateway health)
         run: |

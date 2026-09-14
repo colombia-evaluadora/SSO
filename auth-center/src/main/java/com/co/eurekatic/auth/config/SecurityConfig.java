@@ -3,6 +3,7 @@ package com.co.eurekatic.auth.config;
 import com.co.eurekatic.auth.security.AuthCenterAccessManager;
 import com.co.eurekatic.auth.security.AuthCenterEndpointAccessService;
 import com.co.eurekatic.auth.security.EffectiveRolesResolver;
+import com.co.eurekatic.auth.security.EstablishmentResolver;
 import com.co.eurekatic.auth.security.JsonAuthHandlers;
 import com.co.eurekatic.auth.security.JsonLoginFilter;
 import com.co.eurekatic.auth.security.JwtAuthenticationFilter;
@@ -86,11 +87,12 @@ public class SecurityConfig {
             RefreshTokenStore refreshTokenStore,
             EffectiveRolesResolver effectiveRolesResolver,
             AuthCenterAccessManager authCenterAccessManager,
-            SessionTrackingService sessionTracking) throws Exception {
+            SessionTrackingService sessionTracking,
+            EstablishmentResolver establishmentResolver) throws Exception {
 
         JsonLoginFilter loginFilter = new JsonLoginFilter(
                 authenticationManager, jwt, objectMapper, jwtProperties, refreshTokenStore,
-                effectiveRolesResolver, sessionTracking);
+                effectiveRolesResolver, sessionTracking, establishmentResolver);
         JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(jwt, jwtProperties);
 
         return http
@@ -132,8 +134,17 @@ public class SecurityConfig {
                         // role_app binding + role_endpoint binding
                         // (same model as sso-admin). No
                         // hasAuthority("ADMIN") bypass.
-                        .requestMatchers(HttpMethod.POST, "/register/funcionario").access(authCenterAccessManager)
+                        // V361 — renombrado de /register/funcionario a
+                        // /register/cval/funcionario para quedar simétrico con
+                        // /register/pigse/funcionario (ver public.endpoint UPDATE en V361).
+                        .requestMatchers(HttpMethod.POST, "/register/cval/funcionario").access(authCenterAccessManager)
+                        // V360 — equivalente de /register/cval/funcionario para PIGSE (mismo
+                        // gate role_endpoint, ver V360 en postgres/migrations). Path bajo
+                        // /register/pigse/** para caer en la regla de gateway existente
+                        // (Path=/api/auth/register/**, StripPrefix=2) sin tocar api-gateway.
+                        .requestMatchers(HttpMethod.POST, "/register/pigse/funcionario").access(authCenterAccessManager)
                         .requestMatchers(HttpMethod.POST, "/register/usuario").access(authCenterAccessManager)
+                        .requestMatchers(HttpMethod.POST, "/register/account").access(authCenterAccessManager)
                         // /actuator/prometheus is read by the Grafana Alloy
                         // scraper over the internal docker network. Same
                         // rationale as /actuator/health: scrapers are

@@ -121,9 +121,12 @@ describe("QueryServicesSection", () => {
     expect(screen.getByText("q-pg")).toBeInTheDocument();
 
     // Each row has a StatusBadge (data-state=running) and a
-    // "Ver logs" + "Reiniciar" button.
-    expect(screen.getAllByTestId("status-cell-1")[0]).toHaveTextContent(/UP/);
-    expect(screen.getAllByTestId("status-cell-2")[0]).toHaveTextContent(/UP/);
+    // "Ver logs" + "Reiniciar" button. The badge renders from a
+    // separate per-row status fetch, so it can resolve after the
+    // list itself -- findAllByTestId waits for it instead of
+    // assuming it already landed in the same tick as the list.
+    expect((await screen.findAllByTestId("status-cell-1"))[0]).toHaveTextContent(/UP/);
+    expect((await screen.findAllByTestId("status-cell-2"))[0]).toHaveTextContent(/UP/);
     expect(screen.getByTestId("view-logs-1")).toBeInTheDocument();
     expect(screen.getByTestId("view-logs-2")).toBeInTheDocument();
   });

@@ -59,6 +59,7 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
     private final RefreshTokenStore refreshTokenStore;
     private final EffectiveRolesResolver effectiveRoles;
     private final SessionTrackingService sessionTracking;
+    private final EstablishmentResolver establishmentResolver;
 
     public JsonLoginFilter(AuthenticationManager authenticationManager,
                            JwtTokenService jwt,
@@ -66,7 +67,8 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
                            JwtProperties props,
                            RefreshTokenStore refreshTokenStore,
                            EffectiveRolesResolver effectiveRoles,
-                           SessionTrackingService sessionTracking) {
+                           SessionTrackingService sessionTracking,
+                           EstablishmentResolver establishmentResolver) {
         // Spring Security 7 migration: AntPathRequestMatcher (from
         // spring-security-web 6.x) was removed. The replacement is
         // PathPatternRequestMatcher, built from Spring's PathPatternParser
@@ -82,6 +84,7 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         this.refreshTokenStore = refreshTokenStore;
         this.effectiveRoles = effectiveRoles;
         this.sessionTracking = sessionTracking;
+        this.establishmentResolver = establishmentResolver;
         // We are stateless; do not create or persist HttpSession-bound
         // security contexts across requests.
         setSecurityContextRepository(new org.springframework.security.web.context.NullSecurityContextRepository());
@@ -144,7 +147,13 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         // V-audit-ctx-4: also include the familyId as the `fid`
         // claim so downstream write-sites can merge sesion_id/familia
         // into app.contexto without a Redis lookup.
-        String accessToken = jwt.issueAccessToken(email, uid, familyId, roles);
+        // Filtro de auditoría por establecimiento (rector): resuelto UNA
+        // vez acá, no en cada consulta de auditoría -- ver
+        // EstablishmentResolver y JwtTokenService#issueAccessToken(...,
+        // establishment). null para quien no administra un único EE
+        // (super-admin incluido) -- el claim simplemente se omite.
+        String establishment = establishmentResolver.forUserId(uid);
+        String accessToken = jwt.issueAccessToken(email, uid, familyId, roles, establishment);
 
         // Mint a new refresh token via the store. Each login starts a
         // fresh family so multi-device sessions are independent. If the
@@ -163,7 +172,7 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
             // excepción queda visible en logs con su stacktrace propio
             // en vez de que este catch se la trague en silencio.
             try {
-                sessionTracking.openSession(uid, familyId, Map.of());
+                sessionTracking.openSession(uid, familyId, Map.of(), appNameFromRequest(request));
             } catch (RuntimeException trackingEx) {
                 log.warn("No se pudo abrir sesión de tracking para email={} family={}",
                         email, familyId.substring(0, 8), trackingEx);
@@ -197,6 +206,35 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         response.setCharacterEncoding("UTF-8");
         mapper.writeValue(response.getOutputStream(), new TokenResponse(
                 accessToken, refreshToken, props.accessTokenTtlSeconds()));
+    }
+
+    /**
+     * V377 (sesiones reales por app): deriva a qué app pertenece este
+     * login a partir del {@code Origin} (o {@code Referer} si el
+     * navegador no manda Origin en esta petición) -- ambos ya los
+     * manda el browser en cada request, así que no hace falta tocar
+     * ninguno de los tres fronts ni el contrato de {@code LoginRequest}.
+     * Match por substring del dominio (no exact-match contra
+     * {@code app.launch_url}: PIGSE ni siquiera tiene uno configurado
+     * todavía) -- basta con que el host contenga "pigse" o
+     * "colombiaevaluadora". {@code null} si no matchea ninguno (login
+     * directo contra /admin u otro origen no reconocido) -- esa sesión
+     * simplemente no se podrá filtrar por app, ver V377.
+     */
+    private static String appNameFromRequest(HttpServletRequest request) {
+        String origin = request.getHeader(HttpHeaders.ORIGIN);
+        String host = (origin != null && !origin.isBlank()) ? origin : request.getHeader(HttpHeaders.REFERER);
+        if (host == null || host.isBlank()) {
+            return null;
+        }
+        String lower = host.toLowerCase();
+        if (lower.contains("pigse")) {
+            return "PIGSE";
+        }
+        if (lower.contains("colombiaevaluadora")) {
+            return "COLOMBIA-EVALUADORA";
+        }
+        return null;
     }
 
     /**

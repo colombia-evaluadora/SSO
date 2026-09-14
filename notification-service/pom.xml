@@ -31,7 +31,7 @@
         -->
         <flyway.version>11.14.1</flyway.version>
         <!-- Twilio SDK — 10.9.x is the current line, Java 8+ compatible. -->
-        <twilio.sdk.version>10.9.2</twilio.sdk.version>
+        <twilio.sdk.version>13.0.1</twilio.sdk.version>
         <!-- Firebase Admin SDK for FCM push. 9.9.0 bundles Messaging. -->
         <firebase.admin.version>9.9.0</firebase.admin.version>
     </properties>
