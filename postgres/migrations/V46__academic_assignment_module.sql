@@ -182,7 +182,28 @@ BEGIN
 END;
 $function$;
 
--- Fuente: V109__asignacion_academica_mensajes_error_con_nombre.sql
+-- Fuente: V109__asignacion_academica_mensajes_error_con_nombre.sql, con la
+-- columna bloqueado_preescolar agregada en esta sesion (edicion in-place de
+-- V46 autorizada explicitamente por el usuario pese a estar ya commiteada).
+-- Motivo: en preescolar el director de grupo se auto-asigna como docente de
+-- todas las dimensiones del plan (fn_docente_director_grupo_sync /
+-- fn_docente_grado_directores_sync, V285) y esas asignaciones se recalculan
+-- automaticamente en cada guardado de plan/grupo, asi que no deben poder
+-- quitarse a mano desde el transfer-list de Asignaciones Academicas; el
+-- front usa bloqueado_preescolar para desactivar el boton "quitar" en esas
+-- filas puntuales. fn_grado_es_preescolar (V285) todavia no existe cuando
+-- V46 correria desde cero (V46 < V285 en orden), pero al ser LANGUAGE sql,
+-- CREATE FUNCTION no valida la existencia de objetos referenciados -- solo
+-- se resuelve en tiempo de ejecucion, cuando V285 ya aplico -- asi que no
+-- hace falta reordenar nada.
+--
+-- DROP FUNCTION IF EXISTS es necesario aqui: se esta agregando una columna
+-- al RETURNS TABLE, y Postgres no permite cambiar el tipo de retorno de una
+-- funcion existente via CREATE OR REPLACE FUNCTION (solo permite conservar
+-- exactamente los mismos parametros/tipo de retorno). Los parametros de
+-- entrada no cambian.
+DROP FUNCTION IF EXISTS academico_test.fn_asignacion_pool(BIGINT, TEXT, BOOLEAN, BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_pool(
     p_academic_period_id BIGINT,
     p_filtro             TEXT    DEFAULT NULL,
@@ -191,11 +212,14 @@ CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_pool(
 )
 RETURNS TABLE (
     id TEXT, nombre VARCHAR, grado_grupo TEXT, jornada VARCHAR, jornada_name VARCHAR,
-    funcionario_id BIGINT
+    funcionario_id BIGINT, bloqueado_preescolar BOOLEAN
 )
 LANGUAGE sql STABLE AS $$
     SELECT gr.PK_TGRUPO || ':' || s.PK_TASIGNATURA, s.NOMBRE,
-           g.NOMBRE || ' ' || gr.NOMBRE, jor.VALOR, jor.NOMBRE, da.FK_TFUNCIONARIO
+           g.NOMBRE || ' ' || gr.NOMBRE, jor.VALOR, jor.NOMBRE, da.FK_TFUNCIONARIO,
+           da.FK_TFUNCIONARIO IS NOT NULL
+               AND academico_test.fn_grado_es_preescolar(g.PK_TGRADO)
+               AND da.FK_TFUNCIONARIO = gr.FK_TFUNCIONARIO
       FROM academico_test.TGRADO g
       JOIN academico_test.TGRUPO gr            ON gr.FK_TGRADO = g.PK_TGRADO AND gr.ACTIVE = TRUE
       JOIN academico_test.TPLAN p              ON p.FK_TGRADO = g.PK_TGRADO AND p.ACTIVE = TRUE
