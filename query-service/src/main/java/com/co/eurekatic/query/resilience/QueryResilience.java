@@ -6,6 +6,8 @@ import io.github.resilience4j.bulkhead.BulkheadRegistry;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
+import io.github.resilience4j.ratelimiter.RequestNotPermitted;
+import com.co.eurekatic.common.security.AuthPrincipal;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
@@ -13,6 +15,8 @@ import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -62,17 +66,6 @@ public class QueryResilience {
 
     // Default config values — overridable via application.yml.
     private final int bulkheadMaxConcurrent;
-    /**
-     * INERT with the current semaphore bulkhead — Resilience4j's
-     * {@code BulkheadConfig} has no {@code queueCapacity} (that
-     * knob lives on {@code ThreadPoolBulkheadConfig}). Kept so
-     * the property binds and shows up in the startup log; if we
-     * ever move to a thread-pool bulkhead this is the value to
-     * wire. Overflow behaviour today is governed entirely by
-     * {@link #bulkheadWaitDuration}.
-     */
-    private final int bulkheadMaxQueue;
-    private final Duration bulkheadWaitDuration;
     private final int rateLimitRps;
     private final Duration rateLimitWindow;
 
@@ -87,22 +80,18 @@ public class QueryResilience {
     public QueryResilience(
             MeterRegistry meters,
             @Value("${query.resilience.bulkhead.max-concurrent:20}") int bulkheadMaxConcurrent,
-            @Value("${query.resilience.bulkhead.max-queue:50}") int bulkheadMaxQueue,
-            @Value("${query.resilience.bulkhead.wait-duration:200ms}") Duration bulkheadWaitDuration,
             @Value("${query.resilience.rate-limit.rps:100}") int rateLimitRps,
             @Value("${query.resilience.rate-limit.window:1s}") Duration rateLimitWindow) {
         this.meters = meters;
         this.bulkheadMaxConcurrent = bulkheadMaxConcurrent;
-        this.bulkheadMaxQueue = bulkheadMaxQueue;
-        this.bulkheadWaitDuration = bulkheadWaitDuration;
         this.rateLimitRps = rateLimitRps;
         this.rateLimitWindow = rateLimitWindow;
     }
 
     @PostConstruct
     void publishConfig() {
-        log.info("QueryResilience: bulkhead maxConcurrent={} maxQueue={} waitDuration={}",
-                bulkheadMaxConcurrent, bulkheadMaxQueue, bulkheadWaitDuration);
+        log.info("QueryResilience: bulkhead maxConcurrent={} (fail-fast, no queue)",
+                bulkheadMaxConcurrent);
         log.info("QueryResilience: rateLimit rps={} window={}",
                 rateLimitRps, rateLimitWindow);
     }
@@ -118,16 +107,17 @@ public class QueryResilience {
     }
 
     private Bulkhead buildBulkhead(String dialect) {
-        // NOTE: this is the SEMAPHORE bulkhead (the right choice
-        // for a synchronous MVC controller — no thread handoff).
-        // It has no queue: callers that find no free permit wait
-        // up to maxWaitDuration and then fail fast. `queueCapacity`
-        // belongs to ThreadPoolBulkheadConfig and does not compile
-        // here, so `query.resilience.bulkhead.max-queue` is
-        // currently inert — see the field's javadoc.
+        // SEMAPHORE bulkhead — the right choice for a synchronous MVC
+        // controller, since there is no thread handoff.
+        //
+        // No maxWaitDuration on purpose: QueryService acquires with
+        // tryAcquirePermission(), which never waits, so any value set here
+        // would be ignored. Waiting is also the wrong behaviour for this
+        // service — a caller that has to queue for a JDBC permit is better
+        // told 503 + Retry-After immediately than left holding a Tomcat
+        // thread hoping one frees up.
         BulkheadConfig config = BulkheadConfig.custom()
                 .maxConcurrentCalls(bulkheadMaxConcurrent)
-                .maxWaitDuration(bulkheadWaitDuration)
                 .build();
         Bulkhead bh = BulkheadRegistry.of(config).bulkhead("query-" + dialect, config);
         registerBulkheadMeters(bh, dialect);
@@ -143,6 +133,35 @@ public class QueryResilience {
     public synchronized RateLimiter rateLimiterFor(String principal) {
         return rateLimiters.computeIfAbsent(principal, this::buildRateLimiter);
     }
+
+    /**
+     * Applies the per-principal cap to the request on this thread, keyed by
+     * the JWT subject (email) or, with no principal, by a shared
+     * {@code "anonymous"} bucket.
+     *
+     * <p>Lives here rather than in a controller so every read entry point
+     * gets the same treatment by construction. It didn't, before: the one
+     * endpoint reachable WITHOUT a token ({@code /public/service}) was also
+     * the only one that never called a limiter, so the traffic with no
+     * identity behind it was the traffic with no cap on it.
+     *
+     * @throws RequestNotPermitted when the caller is over its limit;
+     *         {@code GlobalExceptionHandler} maps it to 429 + Retry-After.
+     */
+    public void enforceRateLimit() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String key = (auth != null && auth.getPrincipal() instanceof AuthPrincipal p)
+                ? p.email()
+                : ANONYMOUS_BUCKET;
+        RateLimiter limiter = rateLimiterFor(key);
+        if (!limiter.acquirePermission()) {
+            log.warn("Rate limit exceeded for principal={}", key);
+            throw RequestNotPermitted.createRequestNotPermitted(limiter);
+        }
+    }
+
+    /** Shared bucket for callers with no verified identity. */
+    static final String ANONYMOUS_BUCKET = "anonymous";
 
     private RateLimiter buildRateLimiter(String principal) {
         RateLimiterConfig config = RateLimiterConfig.custom()

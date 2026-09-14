@@ -1,59 +1,41 @@
 package com.co.eurekatic.query.web.query;
 
-import com.co.eurekatic.common.security.AuthPrincipal;
 import com.co.eurekatic.query.read.QueryService;
 import com.co.eurekatic.query.resilience.QueryResilience;
 import com.co.eurekatic.query.web.QueryRequest;
-import io.github.resilience4j.ratelimiter.RateLimiter;
-import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import jakarta.validation.Valid;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpStatus;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Map;
 
 /**
- * Read-path endpoints. Three paths, same body shape, same
- * flow:
+ * Uuid-in-body read endpoints — the surface that pre-dates the path
+ * dispatcher ({@link com.co.eurekatic.query.web.path.QueryPathController}),
+ * which is where production traffic goes today.
  *
  * <ul>
- *   <li>{@code POST /query} — the basic read. Returns rows
- *       as a flat list. Legacy admin UI hits this for
- *       ad-hoc selects.</li>
- *   <li>{@code POST /service} — legacy alias used by the
- *       desktop UI to avoid clashing with the Spring MVC
- *       {@code /query} route. Behaviorally identical to
- *       {@code /query}.</li>
- *   <li>{@code POST /serviceFit} — accepts {@code limit}
- *       and {@code offset} in the body for pagination, and
- *       returns an envelope
- *       ({@code { rows, total }}) instead of a bare list.
- *       The {@code total} count is best-effort: we run the
- *       same query with a {@code COUNT(*)} wrap if the
- *       catalog SQL ends in {@code WHERE ...}; otherwise
- *       we just count the page.</li>
+ *   <li>{@code POST /query} and {@code POST /service} — the same read,
+ *       under two URLs. {@code /query} is what the admin-ui's query tester
+ *       calls; {@code /service} is the alias the desktop UI used to avoid
+ *       clashing with its own {@code /query} route. One handler serves
+ *       both: they were duplicate methods with identical bodies, and two
+ *       copies of a thing is two places for it to drift.</li>
+ *   <li>{@code POST /serviceFit} — same read, wrapped in the
+ *       {@code {rows, outParams?}} envelope the path dispatcher also
+ *       returns, so a caller that needs OUT params has a uuid-in-body
+ *       route to get them.</li>
  * </ul>
  *
- * <p>All three require an authenticated principal (the
- * JWT). Per-row authorization happens inside the catalog.
- *
- * <p>Caller identity (userId, email, roles)
- * is read by {@link QueryService#execute} directly from the
- * SecurityContextHolder (populated by JwtAuthenticationFilter),
- * NOT from the request body. There is nothing to inject here.
+ * <p>All of them require an authenticated principal; per-row authorization
+ * happens inside the catalog. Caller identity (userId, email, roles) is read
+ * by {@link QueryService#execute} from the SecurityContextHolder, never from
+ * the request body — there is nothing to inject here.
  */
 @RestController
 public class QueryController {
-
-    private static final Logger log = LoggerFactory.getLogger(QueryController.class);
 
     private final QueryService service;
     private final QueryResilience resilience;
@@ -63,59 +45,36 @@ public class QueryController {
         this.resilience = resilience;
     }
 
-    @PostMapping("/query")
+    /**
+     * Bare-list shape: {@code [ {col: val}, … ]}. A PROCEDURE row with OUT
+     * params is accepted here too, but its OUT values are dropped — this
+     * shape has no place to put them. Use {@code /serviceFit} for those.
+     */
+    @PostMapping({"/query", "/service"})
     public List<Map<String, Object>> query(@Valid @RequestBody QueryRequest req) {
-        // Bare-list shape. PROCEDURE rows with OUT params also use
-        // it and the OUT values are dropped — callers that need
-        // them use /serviceFit or the path-dispatch controller.
-        enforceRateLimit();
-        return QueryResultEnvelope.rowsOnly(service.execute(req, false));
-    }
-
-    @PostMapping("/service")
-    public List<Map<String, Object>> service(@Valid @RequestBody QueryRequest req) {
-        enforceRateLimit();
+        resilience.enforceRateLimit();
         return QueryResultEnvelope.rowsOnly(service.execute(req, false));
     }
 
     /**
-     * Paginated variant. The body is the same {@code uuid +
-     * params + limit + offset}; the response is wrapped so
-     * the caller knows the row count. Also carries
-     * {@code outParams} when the catalog row declared them.
+     * Envelope shape: {@code {rows, outParams?}} — the same body the path
+     * dispatcher returns, so a consumer can move between the two without
+     * re-learning the response.
+     *
+     * <p>{@code total} is the size of the returned page, not a count of
+     * everything that matched: this endpoint runs the catalog SQL exactly
+     * as written and never wraps it in a {@code COUNT(*)}. Pagination is
+     * the author's to write with {@code :QUERY.SIZE} / {@code :QUERY.OFFSET},
+     * which also leaves them in control of the dialect and the clause
+     * order.
      */
     @PostMapping("/serviceFit")
     public Map<String, Object> serviceFit(@Valid @RequestBody QueryRequest req) {
-        enforceRateLimit();
+        resilience.enforceRateLimit();
         var result = service.execute(req, false);
         Map<String, Object> body = QueryResultEnvelope.withOutParams(result);
         body.put("total", result.rows().size());
         body.put("uuid", req.uuid());
         return body;
-    }
-
-    /**
-     * Per-principal RPS cap. The limiter is keyed by
-     * the JWT subject (email), so a noisy client can't
-     * starve a quiet one. Anonymous (public) traffic falls
-     * back to a fixed {@code "anonymous"} bucket so the
-     * limit still applies — just shared across all
-     * anonymous callers.
-     *
-     * <p>On reject: throws 429 with a {@code Retry-After}
-     * hint. The {@code GlobalExceptionHandler} maps
-     * {@link RequestNotPermitted} → 429 with the right
-     * header.
-     */
-    private void enforceRateLimit() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        String key = (auth != null && auth.getPrincipal() instanceof AuthPrincipal p)
-                ? p.email()
-                : "anonymous";
-        RateLimiter rl = resilience.rateLimiterFor(key);
-        if (!rl.acquirePermission()) {
-            log.warn("Rate limit exceeded for principal={}", key);
-            throw RequestNotPermitted.createRequestNotPermitted(rl);
-        }
     }
 }
