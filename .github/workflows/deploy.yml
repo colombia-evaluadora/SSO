@@ -579,6 +579,22 @@ jobs:
           docker image prune -f
           EOF
 
+      - name: ClickHouse migrations
+        # Flyway (arriba) sólo migra sso-postgres. Los ALTER de
+        # `auditoria.*` (ClickHouse) se venían aplicando A MANO por
+        # ambiente -- V377 documentó ese ALTER como manual, se aplicó en
+        # dev/test y se olvidó en producción: /audits/stats y
+        # /audits/query devolvieron 500 ahí durante días sin que ningún
+        # pipeline lo hubiera podido atrapar (ver postgres/migrations/V391
+        # y docker/clickhouse/migrations/). Este paso corre
+        # scripts/clickhouse-migrate.sh (mismo principio que Flyway:
+        # versionar, trackear lo ya aplicado, fallar fuerte ante drift)
+        # en cada deploy, a todo ambiente, así que un ALTER nuevo nunca
+        # vuelve a quedar aplicado en dev/test y olvidado en producción.
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_TARGET }}" \
+            'cd /opt/sso && ./scripts/clickhouse-migrate.sh'
+
       - name: Smoke check (gateway health)
         run: |
           ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_TARGET }}" bash -s <<'EOF'
