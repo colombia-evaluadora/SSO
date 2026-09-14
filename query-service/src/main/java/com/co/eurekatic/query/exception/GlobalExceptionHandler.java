@@ -61,6 +61,16 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<Map<String, Object>> handleResponseStatus(ResponseStatusException ex) {
+        // Un 5xx que llega hasta acá (no vía PostgresErrorMapper, que ya
+        // loguea el suyo) es, por definición, un caso que ningún otro
+        // handler supo clasificar mejor -- silenciarlo dejaría la misma
+        // caja negra que encontramos en vivo con "Database error" en
+        // handleDataAccess (ver ese comentario). Los 4xx no se loguean:
+        // son rechazos normales de validación, no fallas del servidor.
+        if (ex.getStatusCode().is5xxServerError()) {
+            log.error("ResponseStatusException {} sin clasificar: {}",
+                    ex.getStatusCode(), ex.getReason(), ex);
+        }
         return ResponseEntity.status(ex.getStatusCode()).body(Map.of(
                 "code", ex.getStatusCode().toString(),
                 "message", ex.getReason() == null ? "Error en la solicitud" : ex.getReason()));
@@ -470,10 +480,28 @@ public class GlobalExceptionHandler {
         SQLException sql = ex.getMostSpecificCause() instanceof SQLException
                 ? (SQLException) ex.getMostSpecificCause()
                 : null;
-        ResponseStatusException mapped = sql != null
-                ? PostgresErrorMapper.map(sql)
-                : new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
-                        "Database error");
+        ResponseStatusException mapped;
+        if (sql != null) {
+            mapped = PostgresErrorMapper.map(sql);
+        } else {
+            // Encontrado en vivo contra audit-clickhouse-cval en producción
+            // (2026-09-14): esta rama devolvía "Database error" genérico sin
+            // loguear NADA -- ni siquiera un WARN -- así que la excepción real
+            // quedaba invisible tanto en los logs de query-service como en
+            // cualquier tabla de auditoría. La causa más específica de
+            // DataAccessException, cuando NO es un java.sql.SQLException, es
+            // típicamente una excepción propia del driver (p.ej. el driver v2
+            // de ClickHouse no siempre envuelve sus errores como SQLException
+            // real) que Spring no supo traducir. Se loguea con el tipo y
+            // mensaje de esa causa real para poder diagnosticar la próxima vez
+            // que esto ocurra.
+            Throwable root = ex.getMostSpecificCause();
+            log.error("DataAccessException sin SQLException de causa (root={}): {}",
+                    root == null ? "null" : root.getClass().getName(),
+                    root == null ? ex.getMessage() : root.getMessage(), ex);
+            mapped = new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Database error");
+        }
         return ResponseEntity.status(mapped.getStatusCode()).body(Map.of(
                 "code", mapped.getStatusCode().toString(),
                 "message", mapped.getReason() == null ? "Database error" : mapped.getReason()));
