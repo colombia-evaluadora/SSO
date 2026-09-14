@@ -53,7 +53,19 @@ public final class PostgresErrorMapper {
                 return missingParam(m.group(1));
             }
         }
-        log.error("Fallo de acceso a datos sin SQLException subyacente", dae);
+        // Visto en vivo contra audit-clickhouse-cval en produccion (2026-09-14,
+        // PR #240): este camino devolvia "Database error" sin loguear NADA, ni
+        // siquiera un WARN, asi que la excepcion real quedaba invisible tanto
+        // en los logs de query-service como en el query_log del propio motor.
+        // Cuando la causa mas especifica NO es un java.sql.SQLException suele
+        // ser una excepcion propia del driver que Spring no supo traducir (el
+        // driver v2 de ClickHouse no siempre envuelve sus errores como
+        // SQLException). Se registra el tipo Y el mensaje de esa causa para
+        // poder diagnosticar la proxima vez.
+        Throwable root = dae.getMostSpecificCause();
+        log.error("DataAccessException sin SQLException de causa (root={}): {}",
+                root == null ? "null" : root.getClass().getName(),
+                root == null ? dae.getMessage() : root.getMessage(), dae);
         return new DataAccessErrorException(HttpStatus.INTERNAL_SERVER_ERROR,
                 SqlErrorKind.INTERNAL.code(), SqlErrorKind.INTERNAL.defaultMessage());
     }

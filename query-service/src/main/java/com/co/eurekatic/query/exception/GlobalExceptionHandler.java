@@ -78,6 +78,16 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<Map<String, Object>> handleResponseStatus(ResponseStatusException ex) {
+        // Un 5xx que llega hasta acá (no vía PostgresErrorMapper, que ya
+        // loguea el suyo) es, por definición, un caso que ningún otro
+        // handler supo clasificar mejor -- silenciarlo dejaría la misma
+        // caja negra que encontramos en vivo con "Database error" en
+        // handleDataAccess (ver ese comentario). Los 4xx no se loguean:
+        // son rechazos normales de validación, no fallas del servidor.
+        if (ex.getStatusCode().is5xxServerError()) {
+            log.error("ResponseStatusException {} sin clasificar: {}",
+                    ex.getStatusCode(), ex.getReason(), ex);
+        }
         return ResponseEntity.status(ex.getStatusCode()).body(Map.of(
                 "code", ex.getStatusCode().toString(),
                 "message", ex.getReason() == null ? "Error en la solicitud" : ex.getReason()));
