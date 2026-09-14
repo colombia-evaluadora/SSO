@@ -178,7 +178,7 @@ public class AuditRevertService {
                             + "revertir a ciegas pisaría ese cambio posterior. Revisa manualmente.");
         }
 
-        List<ColumnChange> changes = List.of(new ColumnChange("active", true, false));
+        List<ColumnChange> changes = List.of(new ColumnChange("active", true, false, false));
         return new Plan(row, pkColumn, pkValue, changes);
     }
 
@@ -208,7 +208,7 @@ public class AuditRevertService {
             Object antes = oldRaw.get(col);   // a lo que se revierte
             if (!jsonValuesEqual(despues, antes)) {
                 validateIdentifier(col);
-                changes.add(new ColumnChange(col, despues, antes));
+                changes.add(new ColumnChange(col, despues, antes, false)); // temporal se resuelve abajo con el valor real de Postgres
             }
         }
         if (changes.isEmpty()) {
@@ -216,6 +216,17 @@ public class AuditRevertService {
                     "El cambio original no modificó ninguna columna comparable — nada que revertir.");
         }
 
+        // V-audit-revert-fix — reemplaza `changes` por una versión con
+        // `temporal` resuelto: el valor real de la columna en Postgres
+        // (`current`, vía JDBC) ya nos dice si es una columna temporal o
+        // no, sin necesitar metadata de esquema aparte. `c.revertTo()`
+        // en cambio SIEMPRE llega como el epoch crudo que serializa
+        // Debezium (Long/Integer, nunca un tipo java.time) — bindearlo
+        // tal cual contra una columna `timestamp` hace que Postgres
+        // rechace el UPDATE ("column is of type timestamp ... but
+        // expression is of type bigint"). Con este flag, applyRevert
+        // convierte el epoch a Timestamp antes de bindear.
+        List<ColumnChange> validated = new ArrayList<>();
         for (ColumnChange c : changes) {
             Object current = fetchCurrentColumn(row.tabla(), pkColumn, pkValue, c.column());
             if (!jsonValuesEqual(current, c.expectedCurrent())) {
@@ -225,9 +236,10 @@ public class AuditRevertService {
                                 + " antes de revertir) — revertir a ciegas pisaría ese cambio posterior. "
                                 + "Revisa manualmente.");
             }
+            validated.add(new ColumnChange(c.column(), c.expectedCurrent(), c.revertTo(), isTemporal(current)));
         }
 
-        return new Plan(row, pkColumn, pkValue, changes);
+        return new Plan(row, pkColumn, pkValue, validated);
     }
 
     private void applyRevert(Plan plan, long lsn, long seq, Long actingUserId) {
@@ -292,7 +304,7 @@ public class AuditRevertService {
                 .map(c -> c.column() + " = ?")
                 .collect(Collectors.joining(", "));
         List<Object> params = new ArrayList<>();
-        for (ColumnChange c : plan.changes()) params.add(c.revertTo());
+        for (ColumnChange c : plan.changes()) params.add(toBindValue(c));
         params.add(plan.pkValue());
 
         jdbc.update("UPDATE academico_test." + plan.row.tabla() + " SET " + setClause + " WHERE "
@@ -408,6 +420,25 @@ public class AuditRevertService {
         return null;
     }
 
+    /**
+     * Valor listo para bindear en el UPDATE de {@link #applyRevert}.
+     * {@code c.revertTo()} viene SIEMPRE del JSON crudo (Jackson lo
+     * decodifica como Long/Integer, nunca como un tipo java.time), así
+     * que para una columna que {@link #resolveUpdatePlan} marcó como
+     * {@code temporal} (por el tipo REAL que devolvió JDBC al leer
+     * {@code current}) hay que convertir el epoch a
+     * {@link java.sql.Timestamp} antes de bindear -- si no, Postgres
+     * rechaza el UPDATE ("column is of type timestamp ... but
+     * expression is of type bigint", encontrado en vivo revirtiendo un
+     * cambio en {@code tsede.modified_at}). {@code null} se bindea tal
+     * cual (una columna temporal puede ser nullable).
+     */
+    private static Object toBindValue(ColumnChange c) {
+        if (!c.temporal() || c.revertTo() == null) return c.revertTo();
+        Long millis = temporalMillis(c.revertTo());
+        return millis == null ? c.revertTo() : new java.sql.Timestamp(millis);
+    }
+
     private static String normalizeForCompare(Object v) {
         if (v instanceof BigDecimal bd) return bd.stripTrailingZeros().toPlainString();
         return String.valueOf(v);
@@ -440,7 +471,7 @@ public class AuditRevertService {
     }
 
     /** Una columna a revertir: {@code expectedCurrent} es lo que Postgres debe tener AHORA; {@code revertTo} es a lo que se cambia. */
-    private record ColumnChange(String column, Object expectedCurrent, Object revertTo) {}
+    private record ColumnChange(String column, Object expectedCurrent, Object revertTo, boolean temporal) {}
 
     private record Plan(AuditLogRow row, String pkColumn, Object pkValue, List<ColumnChange> changes) {}
 }
