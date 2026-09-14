@@ -292,6 +292,20 @@ public class QueryService {
                 req.params() == null ? Map.of() : req.params());
         injectContextParams(allParams, auth);
 
+        // V-ch-pag — ClickHouse exige LIMIT/OFFSET literales (setInt en esa
+        // posición falla con "LIMIT expression must be constant with numeric
+        // type", documentado en V85) — a diferencia de Postgres, que sí
+        // bindea LIMIT/OFFSET normalmente cuando viajan como argumento de
+        // una función PL/pgSQL. Para las filas type=clickhouse que
+        // referencien :BODY.PAGESIZE/:BODY.PAGEOFFSET, esto los retira de
+        // allParams (nunca llegan a bind) y los sustituye en el SQL como
+        // enteros literales validados ANTES de que corra el resto del
+        // pipeline (guard de placeholders sin tipo, SqlRewriter, bind).
+        // BODY.PAGEOFFSET es una clave DERIVADA (pageIndex*pageSize) que el
+        // cliente nunca manda — solo existe del lado del catálogo SQL.
+        String clickHouseAdjustedSql = substituteClickHouseLimitOffset(
+                def.query(), def.type(), allParams);
+
         // V49 (defence in depth) — si un placeholder caller-controlled
         // (':PARAM.*' / ':BODY.*') llega al bind sin tipo declarado,
         // ParamBinder cae al auto-derive de Spring, que bindea un String
@@ -372,7 +386,7 @@ public class QueryService {
         // arriba (Jackson, JSONB) o aguas abajo (binder).
         log.info("V49-bind uuid={} paramTypes={} allParamsKeys={}",
                 req.uuid(), def.paramTypes(), allParams.keySet());
-        String originalSql = def.query();
+        String originalSql = clickHouseAdjustedSql;
         String rewrittenSql = SqlRewriter.rewrite(originalSql, def.paramTypes());
         if (!originalSql.equals(rewrittenSql)) {
             log.debug("V49-rewrite uuid={} rewrittenSql={}",
@@ -792,6 +806,74 @@ public class QueryService {
             out.put(e.getKey(), jdbcType);
         }
         return out;
+    }
+
+    /**
+     * V-ch-pag — sustituye {@code :BODY.PAGESIZE}/{@code :BODY.PAGEOFFSET}
+     * por enteros literales cuando {@code dialect} es {@code clickhouse}, y
+     * retira ambas claves de {@code allParams} (mutado in-place) para que
+     * nunca lleguen al bind normal ni disparen el guard de "placeholder sin
+     * tipo declarado".
+     *
+     * <p>{@code BODY.PAGEOFFSET} es una clave DERIVADA — el cliente manda
+     * {@code pageIndex}/{@code pageSize} (que se aplanan a
+     * {@code BODY.PAGEINDEX}/{@code BODY.PAGESIZE}), nunca un offset
+     * directo. Acá se calcula {@code pageIndex * pageSize} y se descarta
+     * {@code BODY.PAGEINDEX} — el autor del catálogo escribe
+     * {@code LIMIT :BODY.PAGESIZE OFFSET :BODY.PAGEOFFSET} en el SQL.
+     *
+     * <p>No-op para cualquier otro dialecto (Postgres sí bindea LIMIT/OFFSET
+     * normalmente vía argumento de función PL/pgSQL) y para SQL que no
+     * referencie ninguno de los dos placeholders.
+     *
+     * @throws ResponseStatusException 400 si el SQL referencia estos
+     *         placeholders pero {@code BODY.PAGESIZE}/{@code BODY.PAGEINDEX}
+     *         no llegaron como enteros no negativos.
+     */
+    private static final java.util.regex.Pattern CH_PAGESIZE_PLACEHOLDER =
+            java.util.regex.Pattern.compile(":BODY\\.PAGESIZE\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.regex.Pattern CH_PAGEOFFSET_PLACEHOLDER =
+            java.util.regex.Pattern.compile(":BODY\\.PAGEOFFSET\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final int CH_PAGE_SIZE_DEFAULT = 20;
+    private static final int CH_PAGE_SIZE_MAX = 200;
+
+    private static String substituteClickHouseLimitOffset(String sql, String dialect,
+            Map<String, Object> allParams) {
+        if (sql == null || sql.isEmpty()) return sql;
+        if (!"clickhouse".equalsIgnoreCase(dialect)) return sql;
+
+        boolean hasSize = CH_PAGESIZE_PLACEHOLDER.matcher(sql).find();
+        boolean hasOffset = CH_PAGEOFFSET_PLACEHOLDER.matcher(sql).find();
+        if (!hasSize && !hasOffset) return sql;
+
+        int pageSize = parseNonNegativeIntOr400(
+                allParams.remove(ParamNamespace.BODY + ".PAGESIZE"), "pageSize", CH_PAGE_SIZE_DEFAULT);
+        int pageIndex = parseNonNegativeIntOr400(
+                allParams.remove(ParamNamespace.BODY + ".PAGEINDEX"), "pageIndex", 0);
+        // Nunca lo manda el cliente, pero si una fila vieja del catálogo lo
+        // declaraba igual, no debe quedar colgado sin bind.
+        allParams.remove(ParamNamespace.BODY + ".PAGEOFFSET");
+
+        pageSize = Math.max(1, Math.min(pageSize, CH_PAGE_SIZE_MAX));
+        long offset = (long) pageIndex * (long) pageSize;
+
+        String result = CH_PAGESIZE_PLACEHOLDER.matcher(sql).replaceAll(String.valueOf(pageSize));
+        result = CH_PAGEOFFSET_PLACEHOLDER.matcher(result).replaceAll(String.valueOf(offset));
+        return result;
+    }
+
+    private static int parseNonNegativeIntOr400(Object value, String fieldName, int fallback) {
+        if (value == null) return fallback;
+        try {
+            int parsed = Integer.parseInt(value.toString().trim());
+            if (parsed < 0) {
+                throw new NumberFormatException("negative");
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    fieldName + " debe ser un entero no negativo");
+        }
     }
 
     /**
