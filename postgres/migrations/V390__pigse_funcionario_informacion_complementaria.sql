@@ -31,9 +31,14 @@
 --    8 campos) nunca se termino de portar a PIGSE -- P2 de la auditoria de
 --    paridad. Los catalogos YA estaban sembrados en pigse.TLISTA_VALOR
 --    (CLASE_FUNCIONARIO, NIVEL_ENSENANZA, ESCALAFON, ULT_NIVEL,
---    FUENTE_DE_RECURSO) y el endpoint generico GET /select/:CATEGORIA ya
---    los sirve sin cambios -- solo faltaban las columnas en
---    pigse.TFUNCIONARIO y los binds en fn_fun_actualizar/fn_fun_buscar_por_pk.
+--    FUENTE_DE_RECURSO, NOMBRE_CARGO, TIPO_VINCULACION) y el endpoint
+--    generico GET /select/:CATEGORIA ya los sirve sin cambios -- solo
+--    faltaban las columnas en pigse.TFUNCIONARIO y los binds en
+--    fn_fun_actualizar/fn_fun_buscar_por_pk. "Cargo funcional" (categoria
+--    NOMBRE_CARGO) es un catalogo DISTINTO del FK_TLV_CARGO ya existente
+--    (categoria CARGO, el que alimentaba el combo "Cargo" que este mismo
+--    commit saca del formulario principal porque "el cargo es el rol") --
+--    por eso se agrega una columna nueva en vez de reusar esa.
 -- ============================================================================
 
 ALTER TABLE pigse.TFUNCIONARIO
@@ -42,6 +47,7 @@ ALTER TABLE pigse.TFUNCIONARIO
     ADD COLUMN IF NOT EXISTS FK_TLV_GRADO_ESCALAFON bigint,
     ADD COLUMN IF NOT EXISTS FK_TLV_NIVEL_EDUCATIVO bigint,
     ADD COLUMN IF NOT EXISTS FK_TLV_FUENTE_RECURSO bigint,
+    ADD COLUMN IF NOT EXISTS FK_TLV_CARGO_FUNCIONAL bigint,
     ADD COLUMN IF NOT EXISTS DIRECCION character varying(130);
 
 DO $$
@@ -65,6 +71,10 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_pigse_tfuncionario_fuente') THEN
         ALTER TABLE pigse.TFUNCIONARIO ADD CONSTRAINT fk_pigse_tfuncionario_fuente
             FOREIGN KEY (FK_TLV_FUENTE_RECURSO) REFERENCES pigse.TLISTA_VALOR(PK_LISTA_VALOR);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_pigse_tfuncionario_cargo_func') THEN
+        ALTER TABLE pigse.TFUNCIONARIO ADD CONSTRAINT fk_pigse_tfuncionario_cargo_func
+            FOREIGN KEY (FK_TLV_CARGO_FUNCIONAL) REFERENCES pigse.TLISTA_VALOR(PK_LISTA_VALOR);
     END IF;
 END $$;
 
@@ -174,6 +184,7 @@ CREATE OR REPLACE FUNCTION pigse.fn_fun_actualizar(
     p_fk_tlv_nivel_educativo bigint DEFAULT NULL::bigint,
     p_fk_tlv_fuente_recurso bigint DEFAULT NULL::bigint,
     p_fk_tlv_tipo_vinculacion bigint DEFAULT NULL::bigint,
+    p_fk_tlv_cargo_funcional bigint DEFAULT NULL::bigint,
     p_direccion character varying DEFAULT NULL::character varying
 )
  RETURNS boolean
@@ -224,6 +235,7 @@ BEGIN
            FK_TLV_NIVEL_EDUCATIVO  = COALESCE(p_fk_tlv_nivel_educativo, FK_TLV_NIVEL_EDUCATIVO),
            FK_TLV_FUENTE_RECURSO   = COALESCE(p_fk_tlv_fuente_recurso, FK_TLV_FUENTE_RECURSO),
            FK_TLV_TIPO_VINCULACION = COALESCE(p_fk_tlv_tipo_vinculacion, FK_TLV_TIPO_VINCULACION),
+           FK_TLV_CARGO_FUNCIONAL = COALESCE(p_fk_tlv_cargo_funcional, FK_TLV_CARGO_FUNCIONAL),
            DIRECCION               = COALESCE(p_direccion, DIRECCION),
            MODIFIED_BY             = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TFUNCIONARIO = p_pk_funcionario;
@@ -252,10 +264,11 @@ UPDATE public.query q
     CAST(:BODY.FKTLVNIVELEDUCATIVO AS BIGINT),
     CAST(:BODY.FKTLVFUENTERECURSO AS BIGINT),
     CAST(:BODY.FKTLVTIPOVINCULACION AS BIGINT),
+    CAST(:BODY.FKTLVCARGOFUNCIONAL AS BIGINT),
     CAST(:BODY.DIRECCION AS VARCHAR)
 ) AS actualizado
 $Q$,
-       param_types = '{"PARAM.ID": "BIGINT!", "BODY.TELEFONO": "VARCHAR", "BODY.FKTLVCARGO": "BIGINT", "BODY.PRIMERNOMBRE": "VARCHAR", "BODY.IDENTIFICACION": "VARCHAR", "BODY.SEGUNDONOMBRE": "VARCHAR", "BODY.PRIMERAPELLIDO": "VARCHAR", "BODY.SEGUNDOAPELLIDO": "VARCHAR", "BODY.CORREOELECTRONICO": "VARCHAR", "BODY.FKESTABLECIMIENTO": "BIGINT", "BODY.FKTLVTIPODOCUMENTO": "BIGINT", "BODY.FKTLVCLASEFUNCIONARIO": "BIGINT", "BODY.FKTLVNIVELENSENANZA": "BIGINT", "BODY.FKTLVGRADOESCALAFON": "BIGINT", "BODY.FKTLVNIVELEDUCATIVO": "BIGINT", "BODY.FKTLVFUENTERECURSO": "BIGINT", "BODY.FKTLVTIPOVINCULACION": "BIGINT", "BODY.DIRECCION": "VARCHAR"}'::jsonb
+       param_types = '{"PARAM.ID": "BIGINT!", "BODY.TELEFONO": "VARCHAR", "BODY.FKTLVCARGO": "BIGINT", "BODY.PRIMERNOMBRE": "VARCHAR", "BODY.IDENTIFICACION": "VARCHAR", "BODY.SEGUNDONOMBRE": "VARCHAR", "BODY.PRIMERAPELLIDO": "VARCHAR", "BODY.SEGUNDOAPELLIDO": "VARCHAR", "BODY.CORREOELECTRONICO": "VARCHAR", "BODY.FKESTABLECIMIENTO": "BIGINT", "BODY.FKTLVTIPODOCUMENTO": "BIGINT", "BODY.FKTLVCLASEFUNCIONARIO": "BIGINT", "BODY.FKTLVNIVELENSENANZA": "BIGINT", "BODY.FKTLVGRADOESCALAFON": "BIGINT", "BODY.FKTLVNIVELEDUCATIVO": "BIGINT", "BODY.FKTLVFUENTERECURSO": "BIGINT", "BODY.FKTLVTIPOVINCULACION": "BIGINT", "BODY.FKTLVCARGOFUNCIONAL": "BIGINT", "BODY.DIRECCION": "VARCHAR"}'::jsonb
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id
    AND m.serviceid = 'pigse'
@@ -280,6 +293,7 @@ CREATE OR REPLACE FUNCTION pigse.fn_fun_buscar_por_pk(p_pk_usuario_solicitante b
     fk_tlv_clase_funcionario bigint, fk_tlv_nivel_ensenanza bigint,
     fk_tlv_grado_escalafon bigint, fk_tlv_nivel_educativo bigint,
     fk_tlv_fuente_recurso bigint, fk_tlv_tipo_vinculacion bigint,
+    fk_tlv_cargo_funcional bigint,
     direccion character varying,
     created_by character varying, created_at timestamp without time zone,
     modified_by character varying, modified_at timestamp without time zone
@@ -326,6 +340,7 @@ BEGIN
            f.FK_TLV_CLASE_FUNCIONARIO, f.FK_TLV_NIVEL_ENSENANZA,
            f.FK_TLV_GRADO_ESCALAFON, f.FK_TLV_NIVEL_EDUCATIVO,
            f.FK_TLV_FUENTE_RECURSO, f.FK_TLV_TIPO_VINCULACION,
+           f.FK_TLV_CARGO_FUNCIONAL,
            f.DIRECCION,
            f.CREATED_BY, f.CREATED_AT, f.MODIFIED_BY, f.MODIFIED_AT
       FROM pigse.TFUNCIONARIO f

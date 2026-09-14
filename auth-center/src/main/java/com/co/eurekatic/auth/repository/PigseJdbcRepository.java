@@ -25,23 +25,30 @@ import java.util.List;
  * {@code academico_test.fn_fun_crear}: no toma fecha de nacimiento, genero,
  * foto ni visado (pigse.TUSUARIO tiene esas columnas pero fn_fun_crear no
  * las puebla hoy -- limitacion preexistente del modulo V257, no algo que
- * este cambio deba resolver). El establecimiento (segundo parametro) llega
- * siempre NULL desde este flujo: registra al futuro rector/secretaria ANTES
- * de que el establecimiento exista ("pendiente", V360); fn_est_crear es
- * quien despues fija FK_TESTABLECIMIENTO al crear el EE con ese PK como
- * FK_TFUNCIONARIO_RECTOR/SECRETARIA.
+ * este cambio deba resolver). El establecimiento (ahora ULTIMO parametro,
+ * opcional desde V390) llega siempre NULL desde este flujo: registra al
+ * futuro rector/secretaria ANTES de que el establecimiento exista
+ * ("pendiente", V360); fn_est_crear es quien despues fija
+ * FK_TESTABLECIMIENTO al crear el EE con ese PK como
+ * FK_TFUNCIONARIO_RECTOR/SECRETARIA. Para un funcionario regular (no
+ * rector/secretaria) el establecimiento se deriva mas adelante de la sede
+ * que se le asigne via permisos (fn_fun_permisos_actualizar, V390) -- nunca
+ * lo fija este flujo de alta.
  */
 @Repository
 public class PigseJdbcRepository {
 
-    // p_pk_usuario_solicitante, p_fk_establecimiento (siempre NULL desde
-    // este flujo), p_correo_electronico, p_identificacion, p_primer_nombre,
-    // p_primer_apellido, p_segundo_nombre, p_segundo_apellido, p_telefono,
-    // p_fk_tlv_tipo_documento, p_fk_tlv_cargo, p_fk_id_role (siempre NULL:
-    // sin establecimiento no hay EE sobre el cual fijar el rol, ver V360).
+    // p_pk_usuario_solicitante, p_correo_electronico, p_identificacion,
+    // p_primer_nombre, p_primer_apellido, p_segundo_nombre,
+    // p_segundo_apellido, p_telefono, p_fk_tlv_tipo_documento,
+    // p_fk_tlv_cargo (siempre NULL: el cargo ya no se pide en ningun
+    // formulario, lo cubre el rol, ver V390), p_fk_establecimiento (siempre
+    // NULL desde este flujo, ver javadoc de la clase). V390 reordeno y
+    // recorto la firma de 12 a 11 parametros (el V370 tenia ademas un
+    // p_fk_id_role al final que ya no existe).
     private static final String SQL_FUN_CREAR = """
             SELECT pigse.fn_fun_crear(
-                ?::bigint, ?::bigint, ?::varchar, ?::varchar, ?::varchar,
+                ?::bigint, ?::varchar, ?::varchar, ?::varchar,
                 ?::varchar, ?::varchar, ?::varchar, ?::varchar, ?::bigint,
                 ?::bigint, ?::bigint)
             """;
@@ -88,7 +95,6 @@ public class PigseJdbcRepository {
     public long callFunCrear(long callerId, RegisterUsuarioRequest u) {
         Long pk = jdbc.queryForObject(SQL_FUN_CREAR, Long.class,
                 callerId,
-                null, // p_fk_establecimiento — pendiente, ver javadoc de la clase
                 // pigse.tusuario.correo_electronico hace las veces de la
                 // CUENTA de academico_test (no hay columna separada): la
                 // identidad de login (r.email()), no el correoElectronico
@@ -101,8 +107,8 @@ public class PigseJdbcRepository {
                 u.segundoApellido(),
                 u.telefono(),
                 u.fkTlvTipoDocumento(),
-                null, // p_fk_tlv_cargo — no lo pide este formulario de alta
-                null  // p_fk_id_role — sin EE no hay rol que fijar (V360)
+                null, // p_fk_tlv_cargo — no lo pide ningun formulario (V390)
+                null  // p_fk_establecimiento — pendiente, ver javadoc de la clase
         );
         if (pk == null) {
             throw new IllegalStateException("pigse.fn_fun_crear returned NULL");
