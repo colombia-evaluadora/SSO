@@ -95,6 +95,48 @@ class QueryServiceUnitTest {
                 .isInstanceOf(ResponseStatusException.class);
     }
 
+    /* ====================== parámetros no definidos ====================== */
+
+    @Test
+    void referencedPlaceholdersIgnoresPgCastsAndKeepsDottedNames() {
+        assertThat(QueryService.referencedPlaceholders(
+                "SELECT * FROM t WHERE a = :BODY.ID::bigint AND b = :query.page AND c = 'x'::text"))
+                .containsExactlyInAnyOrder("BODY.ID", "QUERY.PAGE");
+        assertThat(QueryService.referencedPlaceholders(null)).isEmpty();
+    }
+
+    @Test
+    void dropsCallerParamsNeitherReferencedNorDeclared() {
+        Map<String, Object> params = new java.util.LinkedHashMap<>();
+        params.put("BODY.ID", 1);            // referenced
+        params.put("BODY.NOMBRE", "n");      // declared only
+        params.put("body.extra", "x");       // neither → dropped
+        params.put("BODY_RAW.FILTROS", Map.of("a", 1)); // neither → dropped
+        params.put("QUERY.PAGE", "1");       // neither → dropped
+        params.put("CONTEXT.USER_ID", 9L);   // not caller-controlled → kept
+        params.put("legacy", "v");           // no namespace → kept
+
+        List<String> ignored = QueryService.dropUnreferencedCallerParams(params,
+                QueryService.referencedPlaceholders("SELECT :BODY.ID"),
+                Map.of("BODY.NOMBRE", "TEXT"));
+
+        assertThat(ignored).containsExactly("body.extra", "BODY_RAW.FILTROS", "QUERY.PAGE");
+        assertThat(params.keySet()).containsExactly(
+                "BODY.ID", "BODY.NOMBRE", "CONTEXT.USER_ID", "legacy");
+    }
+
+    @Test
+    void keepsReferencedParamSentInDifferentCase() {
+        Map<String, Object> params = new java.util.LinkedHashMap<>();
+        params.put("body.id", 1);
+
+        List<String> ignored = QueryService.dropUnreferencedCallerParams(params,
+                QueryService.referencedPlaceholders("SELECT :BODY.ID"), null);
+
+        assertThat(ignored).isEmpty();
+        assertThat(params).containsKey("body.id");
+    }
+
     /* ====================== normalizeColumnValue — result-side JDBC type handling ====================== */
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

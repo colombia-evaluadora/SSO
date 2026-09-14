@@ -276,6 +276,97 @@ class QueryServiceIntegrationTest {
                 .expectStatus().is4xxClientError();
     }
 
+    /* ====================== parámetros no definidos ====================== */
+
+    /**
+     * El cliente manda campos que ni el SQL referencia ni el catálogo
+     * declara (el objeto entero de un formulario, por ejemplo). Antes
+     * el guard de "placeholder sin tipo declarado" respondía 400;
+     * ahora se ignoran y la consulta corre con los que sí están
+     * definidos.
+     */
+    @Test
+    void postQueryIgnoresUndefinedBodyParams() throws Exception {
+        when(catalogClient.fetchQuery(any(), eq("q-extra"))).thenReturn(
+                new QueryDefinition(102L, "q-extra",
+                        "SELECT * FROM users WHERE id = :BODY.ID",
+                        "postgres", false, false, null, null, null,
+                        null, "SELECT", null, null,
+                        Map.of("BODY.ID", "BIGINT!")));
+
+        Map<String, Object> params = new java.util.LinkedHashMap<>();
+        params.put("BODY.ID", 2);
+        params.put("BODY.CREATED_AT", "2026-01-01");
+        params.put("BODY.FILTROS.ZONA", 7);
+        params.put("BODY_RAW.FILTROS", Map.of("zona", 7));
+        params.put("QUERY.PAGE", "1");
+        params.put("PARAM.OTRO", "x");
+
+        client.post().uri("/query")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenFor("alice", "USER"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(mapper.writeValueAsBytes(Map.of("uuid", "q-extra", "params", params)))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(byte[].class)
+                .value(jsonBody(arr -> {
+                    assertThat(arr).hasSize(1);
+                    assertThat(arr.get(0).get("name").asText()).isEqualTo("Bob");
+                }));
+    }
+
+    /** Ignorar los sobrantes no relaja la obligatoriedad ({@code '!'}) de los declarados. */
+    @Test
+    void postQueryStillRequiresDeclaredMandatoryParam() throws Exception {
+        when(catalogClient.fetchQuery(any(), eq("q-required"))).thenReturn(
+                new QueryDefinition(103L, "q-required",
+                        "SELECT * FROM users WHERE id = :BODY.ID",
+                        "postgres", false, false, null, null, null,
+                        null, "SELECT", null, null,
+                        Map.of("BODY.ID", "BIGINT!")));
+
+        client.post().uri("/query")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenFor("alice", "USER"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(mapper.writeValueAsBytes(Map.of(
+                        "uuid", "q-required",
+                        "params", Map.of("BODY.OTRO", "x"))))
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody(byte[].class)
+                .value(body -> assertThat(new String(body, java.nio.charset.StandardCharsets.UTF_8))
+                        .contains("BODY.ID").contains("obligatorio"));
+    }
+
+    /**
+     * Fila legada sin {@code paramTypes}: un placeholder que el SQL
+     * referencia y el cliente no mandó dejaba a Spring lanzar
+     * {@code InvalidDataAccessApiUsageException} (sin SQLException
+     * debajo), que salía como 500 "Database error". Es un dato que
+     * falta en la petición: 400 nombrando el placeholder.
+     */
+    @Test
+    void postQueryMissingPlaceholderOnLegacyRowIs400NamingTheParam() throws Exception {
+        when(catalogClient.fetchQuery(any(), eq("q-legacy-missing"))).thenReturn(
+                new QueryDefinition(104L, "q-legacy-missing",
+                        "SELECT * FROM users WHERE id = :id",
+                        "postgres", false, false, null, null, null));
+
+        client.post().uri("/query")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenFor("alice", "USER"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(mapper.writeValueAsBytes(Map.of(
+                        "uuid", "q-legacy-missing",
+                        "params", Map.of("otro", 1))))
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody(byte[].class)
+                .value(jsonBody(node -> {
+                    assertThat(node.get("code").asText()).isEqualTo("VALIDATION_REQUIRED");
+                    assertThat(node.get("message").asText()).contains("'id'");
+                }));
+    }
+
     @Test
     void postServiceFitWrapsRowsInEnvelope() throws Exception {
         // La paginación la escribe el autor en el SQL. Antes el
@@ -364,14 +455,18 @@ class QueryServiceIntegrationTest {
         assertThat(count).isEqualTo(1);
     }
 
+    /**
+     * Una columna que el catálogo no declara se ignora: el SQL se
+     * arma desde la lista declarada, así que la clave extra nunca
+     * llega a la sentencia. Lo que sí sigue siendo obligatorio es
+     * que estén todas las declaradas (ver el test siguiente).
+     */
     @Test
-    void postWriteRejectsUndeclaredColumn() {
+    void postWriteIgnoresUndeclaredColumn() {
         when(catalogClient.fetchWrite(any(), eq("wd-strict"))).thenReturn(
                 new WriteDefinition(2L, "wd-strict", "INSERT", "users",
                         List.of("id", "name"), List.of("id")));
 
-        // Request sends an extra column that the catalog
-        // doesn't declare.
         client.post().uri("/write")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenFor("alice", "USER"))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -382,9 +477,13 @@ class QueryServiceIntegrationTest {
                                 "name", "Eve",
                                 "evil_column", "DROP TABLE users")))
                 .exchange()
-                .expectStatus().isBadRequest()
+                .expectStatus().isOk()
                 .expectBody(byte[].class)
-                .value(body -> assertThat(new String(body)).contains("Columna desconocida"));
+                .value(jsonBody(resp -> assertThat(resp.get("rowsAffected").asInt()).isEqualTo(1)));
+
+        Integer count = jdbcTemplates.get("postgres").getJdbcTemplate()
+                .queryForObject("SELECT count(*) FROM users WHERE id = 99", Integer.class);
+        assertThat(count).isEqualTo(1);
     }
 
 @Test
