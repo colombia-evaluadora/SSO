@@ -371,4 +371,42 @@ class QueryServiceUnitTest {
         // Un solo ';' final — no dos.
         assertThat(wrapped.chars().filter(c -> c == ';').count()).isEqualTo(1);
     }
+
+    /* ====================== CONTEXT.* siempre bindeados ====================== */
+
+    /**
+     * El CTE de auditoria referencia sus placeholders SIN condicion, asi que
+     * cualquiera que falte rompe la sentencia entera con "no value supplied
+     * for the SQL parameter" — una excepcion sin SQLException debajo, que
+     * salia como 500 opaco. Bastaba un POST con cuerpo vacio (sin params del
+     * llamante no habia REQUEST_BODY) o un token sin el claim de sesion.
+     */
+    @Test
+    void injectContextParamsAlwaysBindsEveryPlaceholderTheAuditCteReferences() {
+        for (org.springframework.security.core.Authentication auth :
+                new org.springframework.security.core.Authentication[] { null, anonymousPrincipal() }) {
+            Map<String, Object> params = new java.util.LinkedHashMap<>();
+            QueryService.injectContextParams(params, auth);
+
+            String wrapped = QueryService.wrapWithAuditContext(
+                    "SELECT * FROM academico_test.fn_area_crear(:BODY.NOMBRE)");
+            java.util.Set<String> referenced = QueryService.referencedPlaceholders(wrapped).stream()
+                    .filter(k -> k.startsWith("CONTEXT."))
+                    .collect(java.util.stream.Collectors.toSet());
+
+            assertThat(referenced).isNotEmpty();
+            assertThat(params.keySet())
+                    .describedAs("auth=%s", auth == null ? "anonimo" : "principal sin claims")
+                    .containsAll(referenced);
+        }
+    }
+
+    /** Principal valido pero sin uid/fid/email — un token viejo. */
+    private static org.springframework.security.core.Authentication anonymousPrincipal() {
+        com.co.eurekatic.common.security.AuthPrincipal p =
+                new com.co.eurekatic.common.security.AuthPrincipal(
+                        null, null, java.util.Set.of(), "access", null, null);
+        return new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                p, "token", java.util.List.of());
+    }
 }

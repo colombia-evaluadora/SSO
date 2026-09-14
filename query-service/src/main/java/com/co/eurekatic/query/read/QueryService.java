@@ -639,42 +639,42 @@ public class QueryService {
      * ({@code PARAM.*}, {@code QUERY.*}, {@code BODY.*}) from what it
      * doesn't.
      *
-     * <p>USER_ID/EMAIL/FAMILIA/SESION_ID are optional (older tokens,
-     * anonymous public calls): when absent the placeholder is simply
-     * not added and the procedure author decides what to do with the
-     * absence. ROLES/ROLES_ARRAY/ESTABLISHMENT are always present
-     * (empty when unknown) because queries reference them
-     * unconditionally in their WHERE.
+     * <p>Every {@code CONTEXT.*} key is always present. The identity ones
+     * (USER_ID, EMAIL, FAMILIA, SESION_ID) carry {@code null} when the token
+     * has no such claim or the call is anonymous; the ones queries filter on
+     * (ROLES, ROLES_ARRAY, ESTABLISHMENT) carry an empty value instead, so a
+     * {@code WHERE} against them matches nothing rather than failing.
      */
-    private static void injectContextParams(Map<String, Object> target,
-                                            Authentication auth) {
+    static void injectContextParams(Map<String, Object> target,
+                                    Authentication auth) {
         // Transport data (request id, path, ip...) goes in for every
         // call, authenticated or not.
         injectRequestParams(target);
 
-        if (auth == null || !(auth.getPrincipal() instanceof AuthPrincipal p)) {
-            return;
-        }
-        if (p.userId() != null) {
-            target.put(ParamNamespace.CONTEXT + ".USER_ID", p.userId());
-        }
-        if (p.email() != null) {
-            target.put(ParamNamespace.CONTEXT + ".EMAIL", p.email());
-        }
+        AuthPrincipal p = auth != null && auth.getPrincipal() instanceof AuthPrincipal a ? a : null;
+
+        // Always PRESENT, possibly null. An absent key and a null one are the
+        // same thing to the SQL author (`IS NULL` either way), but not to the
+        // binder: the audit-context CTE references these unconditionally, so
+        // omitting one made the whole statement fail with "no value supplied
+        // for the SQL parameter" — no SQLException underneath, so it used to
+        // surface as an opaque 500. An anonymous caller, a token without the
+        // claim, or simply a POST with an empty body were enough to trigger it.
+        target.put(ParamNamespace.CONTEXT + ".USER_ID", p == null ? null : p.userId());
+        target.put(ParamNamespace.CONTEXT + ".EMAIL", p == null ? null : p.email());
         // family_id IS the session id in this system — one claim, two
         // placeholders so the audit columns can be named either way.
-        if (p.familyId() != null) {
-            target.put(ParamNamespace.CONTEXT + ".FAMILIA", p.familyId());
-            target.put(ParamNamespace.CONTEXT + ".SESION_ID", p.familyId());
-        }
+        target.put(ParamNamespace.CONTEXT + ".FAMILIA", p == null ? null : p.familyId());
+        target.put(ParamNamespace.CONTEXT + ".SESION_ID", p == null ? null : p.familyId());
+
         //   :CONTEXT.ROLES        → "ADMIN,EVALUADOR"  (LIKE en PL/pgSQL)
         //   :CONTEXT.ROLES_ARRAY  → "{ADMIN,EVALUADOR}" (text[] para ANY())
-        String rolesCsv = p.roles() == null || p.roles().isEmpty()
+        String rolesCsv = p == null || p.roles() == null || p.roles().isEmpty()
                 ? "" : String.join(",", p.roles());
         target.put(ParamNamespace.CONTEXT + ".ROLES", rolesCsv);
         target.put(ParamNamespace.CONTEXT + ".ROLES_ARRAY", "{" + rolesCsv + "}");
         target.put(ParamNamespace.CONTEXT + ".ESTABLISHMENT",
-                p.establishment() == null ? "" : p.establishment());
+                p == null || p.establishment() == null ? "" : p.establishment());
     }
 
     /**
@@ -710,12 +710,21 @@ public class QueryService {
      * nothing is added.
      */
     private static void injectRequestParams(Map<String, Object> target) {
+        // Snapshot BEFORE adding our own keys, so REQUEST_BODY only ever
+        // reflects what the caller sent.
+        Map<String, Object> redactedBody = redactSensitiveKeys(target);
+
         if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes sra)) {
+            // No HTTP request bound to this thread (tests, internal calls).
+            // The keys still go in as null: the audit CTE references them
+            // unconditionally, and an absent key fails the whole statement
+            // where a null one is simply "nothing to record".
+            for (String k : AUDIT_REQUEST_KEYS) {
+                target.put(ParamNamespace.CONTEXT + "." + k, null);
+            }
             return;
         }
         var req = sra.getRequest();
-
-        Map<String, Object> redactedBody = redactSensitiveKeys(target);
 
         String requestId = req.getHeader("X-Request-Id");
         if (requestId == null || requestId.isBlank()) {
@@ -738,14 +747,12 @@ public class QueryService {
         if (clientIp == null || clientIp.isBlank()) {
             clientIp = req.getRemoteAddr();
         }
-        if (clientIp != null && !clientIp.isBlank()) {
-            target.put(ParamNamespace.CONTEXT + ".CLIENT_IP", clientIp);
-        }
+        target.put(ParamNamespace.CONTEXT + ".CLIENT_IP",
+                clientIp == null || clientIp.isBlank() ? null : clientIp);
 
         String userAgent = req.getHeader("User-Agent");
-        if (userAgent != null && !userAgent.isBlank()) {
-            target.put(ParamNamespace.CONTEXT + ".USER_AGENT", userAgent);
-        }
+        target.put(ParamNamespace.CONTEXT + ".USER_AGENT",
+                userAgent == null || userAgent.isBlank() ? null : userAgent);
 
         Map<String, String> headers = new LinkedHashMap<>();
         for (String name : HEADER_WHITELIST) {
@@ -754,13 +761,13 @@ public class QueryService {
                 headers.put(name.toLowerCase(Locale.ROOT), value);
             }
         }
-        if (!headers.isEmpty()) {
-            target.put(ParamNamespace.CONTEXT + ".HEADERS", toJson(headers));
-        }
-
-        if (!redactedBody.isEmpty()) {
-            target.put(ParamNamespace.CONTEXT + ".REQUEST_BODY", toJson(redactedBody));
-        }
+        // Null rather than absent, and null rather than "{}": fn_audit_ctx
+        // casts these with ::json, and an empty object is a claim ("no
+        // headers") where null is the truth ("nothing to record").
+        target.put(ParamNamespace.CONTEXT + ".HEADERS",
+                headers.isEmpty() ? null : toJson(headers));
+        target.put(ParamNamespace.CONTEXT + ".REQUEST_BODY",
+                redactedBody.isEmpty() ? null : toJson(redactedBody));
     }
 
     /* ====================== contexto de auditoría ====================== */
@@ -847,6 +854,14 @@ public class QueryService {
      */
     private static final List<String> HEADER_WHITELIST =
             List.of("User-Agent", "Accept-Language", "Referer");
+
+    /**
+     * The transport-derived {@code CONTEXT.*} names. Every one of them is
+     * bound on every call — see {@link #injectRequestParams}.
+     */
+    private static final List<String> AUDIT_REQUEST_KEYS = List.of(
+            "REQUEST_ID", "PATH", "HTTP_METHOD", "CLIENT_IP",
+            "USER_AGENT", "HEADERS", "REQUEST_BODY");
 
     /**
      * Placeholder names that must never reach ClickHouse in plain text
