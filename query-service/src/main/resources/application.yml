@@ -136,8 +136,6 @@ query:
   resilience:
     bulkhead:
       max-concurrent: ${QUERY_BULKHEAD_MAX_CONCURRENT:20}
-      max-queue: ${QUERY_BULKHEAD_MAX_QUEUE:50}
-      wait-duration: ${QUERY_BULKHEAD_WAIT_DURATION:200ms}
     rate-limit:
       rps: ${QUERY_RATE_LIMIT_RPS:100}
       window: ${QUERY_RATE_LIMIT_WINDOW:1s}

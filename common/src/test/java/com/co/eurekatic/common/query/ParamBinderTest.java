@@ -744,4 +744,44 @@ class ParamBinderTest {
             assertThat(src.getValue("BODY.LEGACY")).isNull();
         }
     }
+
+    /* ====================== tope de tamano de array ====================== */
+
+    @Test
+    void acceptsArraysUpToTheLimit() {
+        java.util.List<Long> ok = new java.util.ArrayList<>();
+        for (long i = 0; i < ParamBinder.MAX_ARRAY_LENGTH; i++) ok.add(i);
+
+        MapSqlParameterSource src = ParamBinder.build(
+                java.util.Map.of("BODY.IDS", ok),
+                java.util.Map.of("BODY.IDS", "BIGINT[]"));
+
+        assertThat((String) src.getValue("BODY.IDS")).startsWith("{0,1,2,");
+    }
+
+    @Test
+    void rejectsOversizedArrayInsteadOfBuildingAGiantLiteral() {
+        java.util.List<Long> bomb = new java.util.ArrayList<>();
+        for (long i = 0; i <= ParamBinder.MAX_ARRAY_LENGTH; i++) bomb.add(i);
+
+        assertThatThrownBy(() -> ParamBinder.build(
+                java.util.Map.of("BODY.IDS", bomb),
+                java.util.Map.of("BODY.IDS", "BIGINT[]")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(String.valueOf(ParamBinder.MAX_ARRAY_LENGTH));
+    }
+
+    @Test
+    void rejectsOversizedJsonArrayForAScalarJsonbParam() {
+        java.util.List<java.util.Map<String, Object>> bomb = new java.util.ArrayList<>();
+        for (int i = 0; i <= ParamBinder.MAX_ARRAY_LENGTH; i++) {
+            bomb.add(java.util.Map.of("n", i));
+        }
+
+        assertThatThrownBy(() -> ParamBinder.build(
+                java.util.Map.of("BODY.SCALES", bomb),
+                java.util.Map.of("BODY.SCALES", "JSONB")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(String.valueOf(ParamBinder.MAX_ARRAY_LENGTH));
+    }
 }
