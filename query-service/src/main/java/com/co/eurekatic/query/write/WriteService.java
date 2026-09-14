@@ -223,7 +223,7 @@ public class WriteService {
      * VALUES (:col1, :col2, ...)} statement. The column
      * names are pinned by the catalog definition.
      */
-    private static String buildInsert(WriteDefinition def) {
+    static String buildInsert(WriteDefinition def) {
         validarIdentificadores(def);
         List<String> cols = def.columns();
         StringBuilder colsSql = new StringBuilder();
@@ -240,7 +240,7 @@ public class WriteService {
      * Builds an {@code UPDATE <table> SET col1 = :col1,
      * ... WHERE key1 = :key1 AND key2 = :key2} statement.
      */
-    private static String buildUpdate(WriteDefinition def) {
+    static String buildUpdate(WriteDefinition def) {
         List<String> keyCols = def.keyColumns();
         if (keyCols == null || keyCols.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -284,6 +284,4 @@ public class WriteService {
     /**
      * Helper for tests — exposes the SQL builder output.
      */
-    static String buildInsertSqlForTest(WriteDefinition def) { return buildInsert(def); }
-    static String buildUpdateSqlForTest(WriteDefinition def) { return buildUpdate(def); }
 }
