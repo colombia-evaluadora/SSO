@@ -45,6 +45,7 @@ def compact(model: dict) -> dict:
         "slots": model["slots"],
         "edges": model["edges"],
         "meta": model["meta"],
+        "coverage": model.get("coverage", {}),
     }
 
 
@@ -80,7 +81,8 @@ def chain_label(key: str, ws: list[dict]) -> tuple[str, str]:
         schema, _, name = rest.partition(".")
         return f"Funciones {schema}.*", name or rest
 
-    if typ in ("table", "index", "trigger", "view", "domain", "column"):
+    if typ in ("table", "index", "trigger", "view", "domain", "column",
+               "constraint", "schema", "sequence"):
         schema = rest.split(".")[0]
         return f"DDL {schema}", rest
 
@@ -238,7 +240,8 @@ const byV = v => D.migs.find(m => m.v === v);
 const TYPE_ES = {function:'función', query_row:'fila query', table:'tabla',
   column:'columna', index:'índice', trigger:'trigger', view:'vista',
   domain:'dominio', role:'rol', route:'ruta', endpoint:'endpoint',
-  bind:'bind', data:'datos', dynamic:'DDL dinámico'};
+  bind:'bind', data:'datos', dynamic:'DDL dinámico', schema:'esquema',
+  constraint:'constraint', sequence:'secuencia'};
 const DOT = {live:'●', dead:'✕', 'patch-live':'◐', 'patch-dead':'◌'};
 
 /* ---------- tabs ---------- */
@@ -629,6 +632,21 @@ def build(model: dict) -> str:
     types = sorted({k.split(":")[0] for k in data["chains"]} - {"bind", "data"})
     typeopts = "".join(f'<option value="{t}">{TYPE_LABEL.get(t, t)}</option>' for t in types)
 
+    order = ["function", "query_row", "table", "column", "constraint", "index", "trigger",
+             "view", "domain", "schema", "sequence", "role", "route", "endpoint", "bind",
+             "data", "dynamic"]
+    cov = data["coverage"]
+    coverage_rows = "".join(
+        f'<tr><td><b>{TYPE_LABEL.get(k, k)}</b></td><td class="dim">{TYPE_DESC.get(k, "")}</td>'
+        f'<td class="num">{cov[k]["objects"]}</td><td class="num">{cov[k]["writes"]}</td>'
+        f'<td class="num st-live">{cov[k]["live"] or ""}</td>'
+        f'<td class="num st-patch-live">{cov[k]["patch"] or ""}</td>'
+        f'<td class="num st-dead">{cov[k]["dead"] or ""}</td></tr>'
+        for k in order if k in cov) + "".join(
+        f'<tr><td><b>{TYPE_LABEL.get(k, k)}</b></td><td class="dim">{TYPE_DESC.get(k, "")}</td>'
+        f'<td class="num dim">0</td><td class="num dim">0</td><td></td><td></td><td></td></tr>'
+        for k in order if k not in cov)
+
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
@@ -688,6 +706,7 @@ no mata lo anterior, lo modifica. Regenerá esta página con
   <button class="tab" data-tab="objetos" role="tab" aria-selected="false">Objetos</button>
   <button class="tab" data-tab="matriz" role="tab" aria-selected="false">Matriz</button>
   <button class="tab" data-tab="diagnosticos" role="tab" aria-selected="false">Diagnósticos</button>
+  <button class="tab" data-tab="tipos" role="tab" aria-selected="false">Tipos de cambio</button>
   <button class="tab" data-tab="slots" role="tab" aria-selected="false">Slots</button>
   <button class="tab" data-tab="dependencias" role="tab" aria-selected="false">Dependencias</button>
 </div>
@@ -792,6 +811,19 @@ no mata lo anterior, lo modifica. Regenerá esta página con
   </tr></thead><tbody>{orphan_rows}</tbody></table></div>
 </section>
 
+<section class="panel" id="p-tipos" role="tabpanel" hidden>
+  <h2>Qué tipos de cambio cubre el análisis</h2>
+  <p class="note">Cada fila es una clase de objeto que el analizador reconoce en el SQL, con cuántos
+  objetos distintos vio, cuántas escrituras, y cómo quedaron. Lo que no aparece acá no se está
+  midiendo: <code>GRANT</code>/<code>REVOKE</code>, <code>COMMENT ON</code> (deliberadamente, no
+  cambia el estado) y sentencias que la cobertura marca como sin clasificar.</p>
+  <div class="tablewrap"><table><thead><tr>
+    <th>Tipo</th><th>Qué detecta</th><th style="text-align:right">Objetos</th>
+    <th style="text-align:right">Escrituras</th><th style="text-align:right">Vivas</th>
+    <th style="text-align:right">Parches</th><th style="text-align:right">Muertas</th>
+  </tr></thead><tbody>{coverage_rows}</tbody></table></div>
+</section>
+
 <section class="panel" id="p-slots" role="tabpanel" hidden>
   <h2>Numeración</h2>
   <p class="note">El techo se calcula sobre <b>todas</b> las ramas de <code>origin</code>, no solo
@@ -840,9 +872,13 @@ no mata lo anterior, lo modifica. Regenerá esta página con
 """
 
 
+TYPE_DESC = {'function': 'CREATE [OR REPLACE] FUNCTION / DROP FUNCTION — se encadena por nombre; el cambio de firma se detecta aparte', 'query_row': 'INSERT / UPDATE / DELETE sobre public.query — identidad por uuid o (microservicio, path, método); INSERT = identidad, UPDATE SET query = cuerpo', 'table': 'CREATE TABLE = identidad; ALTER TABLE = parche', 'column': 'ADD COLUMN / DROP COLUMN, como objeto propio tabla.columna', 'constraint': 'ADD CONSTRAINT nombre / DROP CONSTRAINT nombre (también dentro de bloques DO)', 'index': 'CREATE [UNIQUE] INDEX / DROP INDEX', 'trigger': 'CREATE TRIGGER / DROP TRIGGER; los instalados por EXECUTE format() van a DDL dinámico', 'view': 'CREATE [OR REPLACE] [MATERIALIZED] VIEW', 'domain': 'CREATE DOMAIN / CREATE TYPE = identidad; ALTER TYPE / ALTER DOMAIN = parche', 'schema': 'CREATE SCHEMA / DROP SCHEMA', 'sequence': 'CREATE SEQUENCE', 'role': 'INSERT / DELETE sobre public.role, por nombre (PIGSE-*, CEVAL-*, SSO-*, ADMIN)', 'route': 'public.route (menú dinámico), por path o por codigo', 'endpoint': 'public.endpoint, por método + path; un UPDATE de path se ve como escritura nueva', 'bind': 'role_query, role_route, role_endpoint, role_app, app_route, role_users, endpoint_microservice, role_grant, microservice, app — se cuentan, no se encadenan', 'data': 'INSERT / UPDATE / DELETE sobre tablas de dominio (seeds, backfills) — se cuentan, no se encadenan', 'dynamic': 'DDL cuyo objetivo es un %I o una variable de bucle plpgsql — persiste, no se encadena'}
+
+
 TYPE_LABEL = {
     "function": "funciones", "query_row": "filas de public.query", "table": "tablas",
     "column": "columnas", "index": "índices", "trigger": "triggers", "view": "vistas",
     "domain": "dominios", "role": "roles", "route": "rutas", "endpoint": "endpoints",
-    "dynamic": "DDL dinámico",
+    "dynamic": "DDL dinámico", "schema": "esquemas", "constraint": "constraints",
+    "sequence": "secuencias", "bind": "bindings de permisos", "data": "datos / seeds",
 }

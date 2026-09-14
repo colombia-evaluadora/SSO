@@ -19,7 +19,12 @@ techo de versión de **todas** las ramas de `origin` y el informe lo dice.
 
 Cada sentencia se atribuye a un objeto (`function:pigse.fn_sed_listar`,
 `query:uuid:pigse-sedes-crear`, `table:pigse.tsede`, `role:PIGSE-RECTOR`…) y se
-ordenan por versión. Sobre cada objeto conviven dos cadenas:
+ordenan por versión. Tipos reconocidos: funciones, filas de `public.query`,
+tablas, columnas, constraints con nombre, índices, triggers, vistas,
+dominios/tipos, esquemas, secuencias, roles, rutas del menú y endpoints; los
+bindings de permisos, los seeds de datos y el DDL dinámico se cuentan pero no
+se encadenan. La pestaña **Tipos de cambio** del informe muestra esa cobertura
+con números. Sobre cada objeto conviven dos cadenas:
 
 | | qué la mata |
 |---|---|

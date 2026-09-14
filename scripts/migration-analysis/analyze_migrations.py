@@ -145,6 +145,12 @@ RE_DOMAIN = re.compile(r"\bCREATE\s+(?:DOMAIN|TYPE)\s+([\w.\"]+)", re.I)
 RE_ADD_COL = re.compile(
     r"\bADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w\"]+)", re.I)
 RE_DROP_COL = re.compile(r"\bDROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?([\w\"]+)", re.I)
+RE_SCHEMA = re.compile(r"\bCREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w\"]+)", re.I)
+RE_DROP_SCHEMA = re.compile(r"\bDROP\s+SCHEMA\s+(?:IF\s+EXISTS\s+)?([\w\"]+)", re.I)
+RE_SEQUENCE = re.compile(r"\bCREATE\s+SEQUENCE\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w.\"]+)", re.I)
+RE_ADD_CONSTRAINT = re.compile(r"\bADD\s+CONSTRAINT\s+([\w\"]+)", re.I)
+RE_DROP_CONSTRAINT = re.compile(r"\bDROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?([\w\"]+)", re.I)
+RE_ALTER_TYPE = re.compile(r"\bALTER\s+(?:TYPE|DOMAIN)\s+([\w.\"]+)", re.I)
 
 RE_DML = re.compile(
     r"^\s*(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+([\w.\"]+)", re.I)
@@ -403,22 +409,38 @@ def analyze_file(path: Path, version: str) -> Migration:
                 obj_key=f"table:{qname(m.group(2))}",
                 effect="create", kind="create-table", line=st.line))
 
-        for m in RE_ALTER_TABLE.finditer(stmt):
+        # cada ALTER TABLE se analiza sobre SU tramo de texto (hasta el
+        # siguiente ALTER): un bloque DO con varios ALTER no debe repartir
+        # todas las columnas/constraints entre todas las tablas
+        alters = list(RE_ALTER_TABLE.finditer(stmt))
+        for i, m in enumerate(alters):
             tbl = qname(m.group(1))
+            seg_end = alters[i + 1].start() if i + 1 < len(alters) else len(stmt)
+            seg = stmt[m.start():seg_end]
             mig.writes.append(Write(
                 version=version, obj_type="table", obj_key=f"table:{tbl}",
                 effect="patch", kind="alter-table", line=st.line,
-                detail=re.sub(r"\s+", " ", stmt[:90])))
-            for c in RE_ADD_COL.finditer(stmt):
+                detail=re.sub(r"\s+", " ", seg[:90])))
+            for c in RE_ADD_COL.finditer(seg):
                 mig.writes.append(Write(
                     version=version, obj_type="column",
                     obj_key=f"column:{tbl}.{c.group(1).strip('\"').lower()}",
                     effect="create", kind="add-column", line=st.line))
-            for c in RE_DROP_COL.finditer(stmt):
+            for c in RE_DROP_COL.finditer(seg):
                 mig.writes.append(Write(
                     version=version, obj_type="column",
                     obj_key=f"column:{tbl}.{c.group(1).strip('\"').lower()}",
                     effect="delete", kind="drop-column", line=st.line))
+            for c in RE_ADD_CONSTRAINT.finditer(seg):
+                mig.writes.append(Write(
+                    version=version, obj_type="constraint",
+                    obj_key=f"constraint:{tbl}.{c.group(1).strip('\"').lower()}",
+                    effect="create", kind="add-constraint", line=st.line))
+            for c in RE_DROP_CONSTRAINT.finditer(seg):
+                mig.writes.append(Write(
+                    version=version, obj_type="constraint",
+                    obj_key=f"constraint:{tbl}.{c.group(1).strip('\"').lower()}",
+                    effect="delete", kind="drop-constraint", line=st.line))
 
         for m in RE_INDEX.finditer(stmt):
             mig.writes.append(Write(
@@ -455,6 +477,26 @@ def analyze_file(path: Path, version: str) -> Migration:
                 version=version, obj_type="domain",
                 obj_key=f"domain:{qname(m.group(1))}",
                 effect="create", kind="create-domain", line=st.line))
+        for m in RE_ALTER_TYPE.finditer(stmt):
+            mig.writes.append(Write(
+                version=version, obj_type="domain",
+                obj_key=f"domain:{qname(m.group(1))}",
+                effect="patch", kind="alter-type", line=st.line))
+        for m in RE_SCHEMA.finditer(stmt):
+            mig.writes.append(Write(
+                version=version, obj_type="schema",
+                obj_key=f"schema:{qname(m.group(1))}",
+                effect="create", kind="create-schema", line=st.line))
+        for m in RE_DROP_SCHEMA.finditer(stmt):
+            mig.writes.append(Write(
+                version=version, obj_type="schema",
+                obj_key=f"schema:{qname(m.group(1))}",
+                effect="delete", kind="drop-schema", line=st.line))
+        for m in RE_SEQUENCE.finditer(stmt):
+            mig.writes.append(Write(
+                version=version, obj_type="sequence",
+                obj_key=f"sequence:{qname(m.group(1))}",
+                effect="create", kind="create-sequence", line=st.line))
 
         # --- DML sobre el catalogo
         mdml = RE_DML.match(stmt)
@@ -692,8 +734,9 @@ def build_graph(migs: list[Migration]) -> dict[str, list[Write]]:
     return chains
 
 
-COUNTED = ("function", "query_row", "table", "column", "index", "trigger",
-           "view", "domain", "role", "route", "endpoint", "dynamic")
+COUNTED = ("function", "query_row", "table", "column", "constraint", "index",
+           "trigger", "view", "domain", "schema", "sequence", "role", "route",
+           "endpoint", "dynamic")
 
 
 def verdict_for(mig: Migration) -> None:
@@ -1042,7 +1085,26 @@ def main() -> int:
     head = git("rev-parse", "--short", "HEAD").strip()
     branch = git("rev-parse", "--abbrev-ref", "HEAD").strip()
 
+    coverage: dict[str, dict] = {}
+    for mig in migs:
+        for w in mig.writes:
+            if w.effect == "drop":
+                continue
+            c = coverage.setdefault(w.obj_type, {"writes": 0, "live": 0, "dead": 0,
+                                                 "patch": 0, "objects": set()})
+            c["writes"] += 1
+            c["objects"].add(w.obj_key)
+            if w.status in ("live",):
+                c["live"] += 1
+            elif w.status in ("dead", "patch-dead"):
+                c["dead"] += 1
+            elif w.status == "patch-live":
+                c["patch"] += 1
+    for c in coverage.values():
+        c["objects"] = len(c["objects"])
+
     model = {
+        "coverage": coverage,
         "migrations": [asdict(m) for m in migs],
         "chains": {k: [asdict(w) for w in ws] for k, ws in chains.items()
                    if len(ws) > 0},
