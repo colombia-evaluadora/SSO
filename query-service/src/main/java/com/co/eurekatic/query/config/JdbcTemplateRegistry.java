@@ -58,13 +58,4 @@ public class JdbcTemplateRegistry {
         }
         return t;
     }
-
-    /**
-     * Returns the set of configured dialect keys. Used by
-     * the actuator endpoint to expose what this deployment
-     * can serve.
-     */
-    public java.util.Set<String> configuredDialects() {
-        return templates.keySet();
-    }
 }

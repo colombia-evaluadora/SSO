@@ -86,6 +86,34 @@ public final class ParamBinder {
 
     private ParamBinder() {}
 
+    /**
+     * Número máximo de elementos que se aceptan en un array o en un
+     * literal JSON de array.
+     *
+     * <p>{@link #toPgArray} y {@link #toJsonArrayLiteral} copian la lista
+     * entera y la concatenan en un solo {@code String}. Sin tope, un
+     * cuerpo con un array de millones de elementos se convierte en un
+     * literal gigante en memoria, sobre un hilo de petición, antes de que
+     * PostgreSQL llegue siquiera a verlo — y ni el límite de tamaño de
+     * token de Jackson ({@code max-string-length}) ni las restricciones
+     * por campo ({@code ParamConstraint}, que miden texto y números, no
+     * colecciones) lo acotan.
+     *
+     * <p>Un array de parámetros con más de 5000 elementos no es una
+     * consulta, es un volcado: el caso legítimo de esa forma es un IN
+     * masivo, y ése se resuelve pasando el filtro y dejando que el SQL
+     * haga el join.
+     */
+    public static final int MAX_ARRAY_LENGTH = 5000;
+
+    private static void requireArrayLength(int size) {
+        if (size > MAX_ARRAY_LENGTH) {
+            throw new IllegalArgumentException(
+                    "El array tiene " + size + " elementos y el máximo admitido es "
+                    + MAX_ARRAY_LENGTH + ". Acota la lista o filtra del lado del SQL.");
+        }
+    }
+
     public static MapSqlParameterSource build(Map<String, Object> values,
                                               Map<String, String> paramTypes) {
         return buildStrict(values, paramTypes,
@@ -611,9 +639,11 @@ public final class ParamBinder {
         if (val == null) return null;
         List<Object> list;
         if (val instanceof List<?> l) {
+            requireArrayLength(l.size());
             list = new java.util.ArrayList<>(l);
         } else if (val.getClass().isArray()) {
             int len = java.lang.reflect.Array.getLength(val);
+            requireArrayLength(len);
             list = new java.util.ArrayList<>(len);
             for (int i = 0; i < len; i++) {
                 list.add(java.lang.reflect.Array.get(val, i));
@@ -715,6 +745,7 @@ public final class ParamBinder {
      */
     static String toJsonArrayLiteral(List<?> list) {
         if (list == null) return null;
+        requireArrayLength(list.size());
         StringBuilder sb = new StringBuilder("[");
         boolean first = true;
         for (Object item : list) {

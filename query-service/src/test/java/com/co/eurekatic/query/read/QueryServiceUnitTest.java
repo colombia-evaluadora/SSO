@@ -95,6 +95,48 @@ class QueryServiceUnitTest {
                 .isInstanceOf(ResponseStatusException.class);
     }
 
+    /* ====================== parámetros no definidos ====================== */
+
+    @Test
+    void referencedPlaceholdersIgnoresPgCastsAndKeepsDottedNames() {
+        assertThat(QueryService.referencedPlaceholders(
+                "SELECT * FROM t WHERE a = :BODY.ID::bigint AND b = :query.page AND c = 'x'::text"))
+                .containsExactlyInAnyOrder("BODY.ID", "QUERY.PAGE");
+        assertThat(QueryService.referencedPlaceholders(null)).isEmpty();
+    }
+
+    @Test
+    void dropsCallerParamsNeitherReferencedNorDeclared() {
+        Map<String, Object> params = new java.util.LinkedHashMap<>();
+        params.put("BODY.ID", 1);            // referenced
+        params.put("BODY.NOMBRE", "n");      // declared only
+        params.put("body.extra", "x");       // neither → dropped
+        params.put("BODY_RAW.FILTROS", Map.of("a", 1)); // neither → dropped
+        params.put("QUERY.PAGE", "1");       // neither → dropped
+        params.put("CONTEXT.USER_ID", 9L);   // not caller-controlled → kept
+        params.put("legacy", "v");           // no namespace → kept
+
+        List<String> ignored = QueryService.dropUnreferencedCallerParams(params,
+                QueryService.referencedPlaceholders("SELECT :BODY.ID"),
+                Map.of("BODY.NOMBRE", "TEXT"));
+
+        assertThat(ignored).containsExactly("body.extra", "BODY_RAW.FILTROS", "QUERY.PAGE");
+        assertThat(params.keySet()).containsExactly(
+                "BODY.ID", "BODY.NOMBRE", "CONTEXT.USER_ID", "legacy");
+    }
+
+    @Test
+    void keepsReferencedParamSentInDifferentCase() {
+        Map<String, Object> params = new java.util.LinkedHashMap<>();
+        params.put("body.id", 1);
+
+        List<String> ignored = QueryService.dropUnreferencedCallerParams(params,
+                QueryService.referencedPlaceholders("SELECT :BODY.ID"), null);
+
+        assertThat(ignored).isEmpty();
+        assertThat(params).containsKey("body.id");
+    }
+
     /* ====================== normalizeColumnValue — result-side JDBC type handling ====================== */
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -328,5 +370,43 @@ class QueryServiceUnitTest {
 
         // Un solo ';' final — no dos.
         assertThat(wrapped.chars().filter(c -> c == ';').count()).isEqualTo(1);
+    }
+
+    /* ====================== CONTEXT.* siempre bindeados ====================== */
+
+    /**
+     * El CTE de auditoria referencia sus placeholders SIN condicion, asi que
+     * cualquiera que falte rompe la sentencia entera con "no value supplied
+     * for the SQL parameter" — una excepcion sin SQLException debajo, que
+     * salia como 500 opaco. Bastaba un POST con cuerpo vacio (sin params del
+     * llamante no habia REQUEST_BODY) o un token sin el claim de sesion.
+     */
+    @Test
+    void injectContextParamsAlwaysBindsEveryPlaceholderTheAuditCteReferences() {
+        for (org.springframework.security.core.Authentication auth :
+                new org.springframework.security.core.Authentication[] { null, anonymousPrincipal() }) {
+            Map<String, Object> params = new java.util.LinkedHashMap<>();
+            QueryService.injectContextParams(params, auth);
+
+            String wrapped = QueryService.wrapWithAuditContext(
+                    "SELECT * FROM academico_test.fn_area_crear(:BODY.NOMBRE)");
+            java.util.Set<String> referenced = QueryService.referencedPlaceholders(wrapped).stream()
+                    .filter(k -> k.startsWith("CONTEXT."))
+                    .collect(java.util.stream.Collectors.toSet());
+
+            assertThat(referenced).isNotEmpty();
+            assertThat(params.keySet())
+                    .describedAs("auth=%s", auth == null ? "anonimo" : "principal sin claims")
+                    .containsAll(referenced);
+        }
+    }
+
+    /** Principal valido pero sin uid/fid/email — un token viejo. */
+    private static org.springframework.security.core.Authentication anonymousPrincipal() {
+        com.co.eurekatic.common.security.AuthPrincipal p =
+                new com.co.eurekatic.common.security.AuthPrincipal(
+                        null, null, java.util.Set.of(), "access", null, null);
+        return new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                p, "token", java.util.List.of());
     }
 }

@@ -89,7 +89,7 @@ public class SecurityConfig {
                         // Security rule. 403 for non-public uuids
                         // is enforced inside the service.
                         .requestMatchers("/public/service").permitAll()
-                        // V33 — service-to-service surface. sso-admin
+                        // Service-to-service surface. sso-admin
                         // calls POST /internal/path-registry/invalidate
                         // after a catalog mutation, carrying only the
                         // shared X-Internal-Token header (no JWT — it

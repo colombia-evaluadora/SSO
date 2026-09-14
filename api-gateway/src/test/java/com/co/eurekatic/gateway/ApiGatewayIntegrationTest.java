@@ -90,6 +90,42 @@ class ApiGatewayIntegrationTest {
                 .expectStatus().is2xxSuccessful();
     }
 
+    /**
+     * El prefijo /qs/** reenvia TODA la superficie de query-service, y
+     * /internal/** ahi esta permitido porque se asume inalcanzable desde el
+     * borde. Esta prueba es la que sostiene esa suposicion.
+     */
+    @Test
+    void internalPathsAreUnreachableThroughTheEdgeAtAnyDepth() {
+        // Con token valido: el llamante esta autenticado y aun asi se le
+        // niega. Es el caso que importa — el token no es la credencial que
+        // gobierna /internal/**, lo es el X-Internal-Token que solo circula
+        // dentro de la red de docker.
+        String token = jwt.issueAccessToken("alice", new LinkedHashSet<>(Set.of("USER")));
+        for (String path : new String[] {
+                "/internal/path-registry/invalidate",
+                "/qs/internal/path-registry/invalidate",
+                "/api/qs/internal/whoami",
+                "/api/sso-admin/internal/gateway/routes" }) {
+            webTestClient().get().uri(path)
+                    .header("Authorization", "Bearer " + token)
+                    .exchange()
+                    .expectStatus().isForbidden();
+        }
+
+        // Sin token el entry point responde 401 antes de llegar al denyAll;
+        // tampoco pasa, que es lo unico que esta prueba exige.
+        webTestClient().get().uri("/qs/internal/whoami").exchange()
+                .expectStatus().isEqualTo(401);
+    }
+
+    /** "internal" se compara por segmento, no como subcadena. */
+    @Test
+    void pathsThatMerelyContainTheWordInternalAreNotBlanketDenied() {
+        webTestClient().get().uri("/internals").exchange()
+                .expectStatus().isEqualTo(401);
+    }
+
     @Test
     void protectedPathWithoutTokenReturns401() {
         webTestClient().get().uri("/protected").exchange()

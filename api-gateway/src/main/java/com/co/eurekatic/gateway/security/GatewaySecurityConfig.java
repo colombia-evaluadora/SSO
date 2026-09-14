@@ -17,6 +17,7 @@ import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.security.web.server.authentication.HttpStatusServerEntryPoint;
+import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.reactive.CorsConfigurationSource;
 import org.springframework.web.cors.reactive.CorsWebFilter;
@@ -61,6 +62,24 @@ public class GatewaySecurityConfig {
 
     private static final Logger log = LoggerFactory.getLogger(GatewaySecurityConfig.class);
 
+    /**
+     * Matches any request with an {@code internal} path segment, at any
+     * depth: {@code /internal/x}, {@code /qs/internal/x},
+     * {@code /api/sso-admin/internal/x}. Segment equality, not a substring,
+     * so a legitimate path like {@code /internals} or {@code /x/internalize}
+     * is untouched.
+     */
+    private static final ServerWebExchangeMatcher INTERNAL_AT_ANY_DEPTH = exchange ->
+            hasInternalSegment(exchange.getRequest().getPath().value())
+                    ? ServerWebExchangeMatcher.MatchResult.match()
+                    : ServerWebExchangeMatcher.MatchResult.notMatch();
+
+    /** {@code true} when some slash-delimited segment of {@code path} is exactly "internal". */
+    static boolean hasInternalSegment(String path) {
+        String padded = path.endsWith("/") ? path : path + "/";
+        return padded.contains("/internal/");
+    }
+
     @Bean
     @Order(Ordered.HIGHEST_PRECEDENCE)
     public SecurityWebFilterChain securityWebFilterChain(
@@ -91,6 +110,23 @@ public class GatewaySecurityConfig {
                         new HttpStatusServerEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .authorizeExchange(a -> a
                         .pathMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                        // Service-to-service surfaces are reachable only from
+                        // inside the docker network, never through the edge.
+                        // They are gated downstream by X-Internal-Token — a
+                        // shared secret, not a user identity — so a caller
+                        // holding any valid JWT must not reach them just
+                        // because some route forwards the prefix. The
+                        // prefix-stripping aliases do exactly that: /qs/**
+                        // and /api/qs/** forward EVERY query-service path,
+                        // /internal/path-registry/invalidate included.
+                        // query-service's own SecurityConfig permits
+                        // /internal/** on the stated assumption that the edge
+                        // cannot reach it; this is what makes that true.
+                        //
+                        // Matched by segment rather than by pattern because
+                        // PathPattern allows only one "**", so no single
+                        // pattern covers "/internal at any depth".
+                        .matchers(INTERNAL_AT_ANY_DEPTH).denyAll()
                         // Bare root "/" is permitted so the root-redirect
                         // gateway route (see application.yml) can 302 the
                         // user to /admin/ instead of the security chain

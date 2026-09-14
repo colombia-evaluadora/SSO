@@ -6,8 +6,11 @@ import com.co.eurekatic.query.catalog.CatalogClient;
 import com.co.eurekatic.query.catalog.WriteDefinition;
 import com.co.eurekatic.query.config.JdbcTemplateRegistry;
 import com.co.eurekatic.query.exception.PostgresErrorMapper;
+import com.co.eurekatic.query.observability.QueryMetrics;
+import com.co.eurekatic.query.resilience.QueryResilience;
 import com.co.eurekatic.query.routing.CatalogResultCacheService;
 import com.co.eurekatic.query.web.WriteRequest;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -18,8 +21,6 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
-
-import java.sql.SQLException;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -32,10 +33,10 @@ import java.util.Map;
  * <ol>
  *   <li>Resolve the uuid via the catalog (same auth path as
  *       the read side).</li>
- *   <li>Validate the request — the {@code columns} map must
- *       cover EXACTLY the declared column list, no more,
- *       no less. {@code keyColumns} must be present for
- *       UPDATE.</li>
+ *   <li>Validate the request — every declared column must be
+ *       present in the {@code columns} map. Keys the catalog
+ *       doesn't declare are ignored: the SQL is built from the
+ *       declared list, so they never reach the statement.</li>
  *   <li>Build a parameterised statement. We never build SQL
  *       by string-concatenating column names; the catalog's
  *       declared list is the source of truth, and it goes
@@ -68,40 +69,59 @@ public class WriteService {
     private final CatalogClient catalog;
     private final JdbcTemplateRegistry registry;
     private final CatalogResultCacheService resultCache;
+    private final QueryResilience resilience;
+    private final QueryMetrics metrics;
 
     public WriteService(CatalogClient catalog, JdbcTemplateRegistry registry,
-                        CatalogResultCacheService resultCache) {
+                        CatalogResultCacheService resultCache,
+                        QueryResilience resilience, QueryMetrics metrics) {
         this.catalog = catalog;
         this.registry = registry;
         this.resultCache = resultCache;
+        this.resilience = resilience;
+        this.metrics = metrics;
     }
 
     /**
-     * Executes the write. Returns the number of rows
-     * affected (1 for INSERT, 0..N for UPDATE).
+     * Executes the write. Returns the number of rows affected (1 for
+     * INSERT, 0..N for UPDATE).
+     *
+     * <p>Goes through the same bulkhead and the same execution metric as
+     * the read path: a write holds a pooled connection exactly like a read
+     * does, so leaving it uncapped meant the one operation that also takes
+     * row locks was the one with no limit on how many could run at once.
      */
     public int execute(WriteRequest req) {
+        long start = System.nanoTime();
+        try {
+            int rows = doExecute(req);
+            metrics.recordExecution("WRITE", QueryMetrics.Outcome.SUCCESS,
+                    System.nanoTime() - start);
+            return rows;
+        } catch (RuntimeException e) {
+            metrics.recordExecution("WRITE", QueryMetrics.Outcome.FAILURE,
+                    System.nanoTime() - start);
+            throw e;
+        }
+    }
+
+    private int doExecute(WriteRequest req) {
         Authentication auth = currentAuthentication();
         WriteDefinition def = catalog.fetchWrite(bearerToken(auth), req.uuid());
 
-        // 1. Strict shape check — every declared column must
-        //    be present, and no undeclared keys may slip
-        //    through. We iterate the declared list (not the
-        //    request map) so an attacker can't smuggle in
-        //    extra keys that happen to be ignored by the
-        //    INSERT.
-        //
-        //    V60-bis — case-insensitive: el catálogo puede
-        //    declarar la columna en MAYÚSCULAS y el cliente
-        //    mandarla en minúsculas (o viceversa). Miramos
-        //    ambas representaciones antes de rechazar.
+        // 1. Shape check — every declared column must be present
+        //    (case-insensitive: the catalog may declare it in
+        //    MAYÚSCULAS and the client send it in lowercase). Keys
+        //    the catalog doesn't declare are ignored: the SQL below
+        //    is built from def.columns(), never from the request,
+        //    so an extra key can't reach the statement.
         java.util.Set<String> declaredLower = new java.util.HashSet<>();
         for (String c : def.columns()) declaredLower.add(c.toLowerCase(java.util.Locale.ROOT));
-        for (String submitted : req.columns().keySet()) {
-            if (!declaredLower.contains(submitted.toLowerCase(java.util.Locale.ROOT))) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Columna desconocida: " + submitted);
-            }
+        List<String> ignored = req.columns().keySet().stream()
+                .filter(k -> !declaredLower.contains(k.toLowerCase(java.util.Locale.ROOT)))
+                .toList();
+        if (!ignored.isEmpty()) {
+            log.debug("Write uuid={} ignora columnas no declaradas: {}", req.uuid(), ignored);
         }
         for (String declared : def.columns()) {
             boolean present = req.columns().keySet().stream()
@@ -112,17 +132,11 @@ public class WriteService {
             }
         }
 
-        // 2. Build the SQL. Column names come from
-        //    def.columns() (catalog), values come from the
-        //    bound parameter map. The :placeholder tokens
-        //    are derived from the declared column list, NOT
-        //    from the request.
+        // 2. Build the SQL. Column names come from def.columns()
+        //    (catalog), values from the bound parameter map.
+        //    WriteDefinition doesn't carry TYPE, so writes always
+        //    go through the default-configured dialect.
         NamedParameterJdbcTemplate jdbc = registry.resolve(/* type */ null);
-        // Note: WriteDefinition doesn't carry TYPE; we
-        // route via a system-wide default. For v1, writes
-        // always go through the default-configured dialect.
-        // A future iteration would extend WriteDefinition
-        // with a TYPE column.
 
         String sql;
         if (def.isInsert()) {
@@ -134,14 +148,10 @@ public class WriteService {
                     "Tipo de escritura no soportado: " + def.writeType());
         }
 
-        // V60-bis — case-insensitive: el cliente puede
-        // mandar las columnas en MAYÚSCULAS O minúsculas.
-        // El SQL se construye usando los nombres del
-        // catálogo (que el autor suele escribir en MAYÚSCULAS
-        // por convención), así que para que Spring JDBC
-        // matchee el placeholder publicamos DOS copias de
-        // cada valor: la key original del cliente Y la
-        // canónica MAYÚSCULAS.
+        // El SQL usa los nombres del catálogo (normalmente en
+        // MAYÚSCULAS) y Spring JDBC matchea placeholders
+        // case-sensitively, así que cada valor se publica bajo la
+        // key original del cliente Y bajo su forma en MAYÚSCULAS.
         java.util.Map<String, Object> normalizedColumns =
                 new java.util.LinkedHashMap<>(req.columns());
         for (java.util.Map.Entry<String, Object> e : req.columns().entrySet()) {
@@ -151,56 +161,43 @@ public class WriteService {
             }
         }
         MapSqlParameterSource params = new MapSqlParameterSource(normalizedColumns);
+
+        // Writes always land on the default dialect (WriteDefinition has no
+        // TYPE column), so they share that dialect's bulkhead with the reads
+        // that target it — which is the point: they compete for the same
+        // Hikari pool.
+        var bulkhead = resilience.bulkheadFor("default");
+        if (!bulkhead.tryAcquirePermission()) {
+            throw BulkheadFullException.createBulkheadFullException(bulkhead);
+        }
         int rows;
         try {
             rows = jdbc.update(sql, params);
         } catch (DataAccessException dae) {
-            // V32 — translate SQLState to HTTP status. The
-            // common case here is 23505 (unique_violation)
-            // when a re-INSERT happens; we surface that as
-            // 409 Conflict so the admin-ui can show a
-            // "ya existe" toast.
-            SQLException sqlEx = dae.getMostSpecificCause() instanceof SQLException
-                    ? (SQLException) dae.getMostSpecificCause()
-                    : null;
-            if (sqlEx != null) {
-                throw PostgresErrorMapper.map(sqlEx);
-            }
-            throw dae;
+            throw PostgresErrorMapper.map(dae);
+        } finally {
+            bulkhead.onComplete();
         }
         log.info("Write uuid={} ({}) affected {} rows", req.uuid(), def.writeType(), rows);
-        // V66 — every WriteService call is by definition a mutation
-        // (INSERT/UPDATE — see class javadoc), so unlike
-        // QueryService there's no read-only mode to branch on: any
-        // successful write here always invalidates this instance's
-        // catalog-get cache. See CatalogResultCacheService's javadoc
-        // for why this is a full-instance wipe rather than a
-        // targeted one.
+        // A WriteDefinition carries a table name but no path template, and
+        // cache entries are tagged by path resource — there is nothing to
+        // match a table against, so the only correct scope is everything
+        // this instance cached.
         resultCache.invalidateAll();
         return rows;
     }
 
     /**
      * Comprueba que la tabla y las columnas que trae el catálogo son
-     * identificadores SQL antes de interpolarlos.
-     *
-     * <p>La clase promete arriba que "we never build SQL by
-     * string-concatenating column names", y no es del todo cierto:
-     * {@link #buildInsert} y {@link #buildUpdate} sí los concatenan.
-     * Lo que la promesa quiere decir es que no salen de la petición
-     * HTTP, sino del catálogo — y eso sigue siendo verdad. Pero
-     * "viene del catálogo" no es lo mismo que "es seguro
-     * interpolarlo": una fila corrupta, un bug en el formulario que
-     * la crea o un admin de más bastan para meter texto arbitrario
-     * en la sentencia.
-     *
-     * <p>{@code WriteDefinitionRequest} ya documentaba esta
-     * validación como existente ("query-service re-validates it
-     * against an identifier regex before"). No existía. Ahora sí.
+     * identificadores SQL antes de interpolarlos en
+     * {@link #buildInsert} / {@link #buildUpdate}. "Viene del
+     * catálogo" no es lo mismo que "es seguro interpolarlo": una fila
+     * corrupta o un bug en el formulario que la crea bastan para meter
+     * texto arbitrario en la sentencia.
      *
      * <p>Es un 500 y no un 400 a propósito: el caller no controla
      * estos valores, así que no hay nada que pueda corregir en su
-     * petición. Un catálogo mal formado es un fallo del servidor.
+     * petición.
      */
     private static void validarIdentificadores(WriteDefinition def) {
         try {
@@ -226,7 +223,7 @@ public class WriteService {
      * VALUES (:col1, :col2, ...)} statement. The column
      * names are pinned by the catalog definition.
      */
-    private static String buildInsert(WriteDefinition def) {
+    static String buildInsert(WriteDefinition def) {
         validarIdentificadores(def);
         List<String> cols = def.columns();
         StringBuilder colsSql = new StringBuilder();
@@ -243,7 +240,7 @@ public class WriteService {
      * Builds an {@code UPDATE <table> SET col1 = :col1,
      * ... WHERE key1 = :key1 AND key2 = :key2} statement.
      */
-    private static String buildUpdate(WriteDefinition def) {
+    static String buildUpdate(WriteDefinition def) {
         List<String> keyCols = def.keyColumns();
         if (keyCols == null || keyCols.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -287,6 +284,4 @@ public class WriteService {
     /**
      * Helper for tests — exposes the SQL builder output.
      */
-    static String buildInsertSqlForTest(WriteDefinition def) { return buildInsert(def); }
-    static String buildUpdateSqlForTest(WriteDefinition def) { return buildUpdate(def); }
 }
