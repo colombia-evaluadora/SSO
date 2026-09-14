@@ -1,0 +1,10 @@
+# InstanceNameResolver se registra AQUI y no solo en
+# META-INF/spring/org.springframework.boot.env.EnvironmentPostProcessor.imports:
+# el mecanismo de .imports cubre las AutoConfiguration, pero los
+# EnvironmentPostProcessor los sigue cargando SpringFactoriesLoader desde
+# spring.factories. Sin este archivo el post-processor no corre, el servicio se
+# registra en Eureka como "query-service" en vez de
+# "query-service-<QUERY_INSTANCE_NAME>", y el gateway responde 503 a
+# /api/<instancia>/**. Comprobado quitandolo: las cuatro instancias locales
+# colapsaron al mismo nombre de aplicacion.
+org.springframework.boot.env.EnvironmentPostProcessor=com.co.eurekatic.query.config.InstanceNameResolver
