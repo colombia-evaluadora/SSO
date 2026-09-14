@@ -35,17 +35,14 @@
 -- nombre en ambos esquemas (tsede, tusuario, tfuncionario, etc.) --
 -- esas dos quedan SIN tocar en esta migración, a propósito.
 --
--- `tsesion_web` (con o sin prefijo) se excluye explícitamente en ambas:
--- es la tabla de tracking de sesión/login, no una entidad de dominio, y
--- antes de este fix quedaba fuera "por accidente" (nunca matcheaba el
--- `LIKE 'esquema.%'` porque casi siempre llega sin prefijo) -- al
--- aflojar el filtro habría vuelto a colarse como si fuera una operación
--- más, cuando la pantalla ya tiene su propio "Inicio de sesión" en la
--- cabecera de la sesión.
+-- `tsesion_web` (login/logout) se deja VISIBLE a propósito: decisión de
+-- producto confirmada explícitamente (no un descuido) -- la fila "Inicio
+-- de sesión" es la primera entrada útil de la lista de operaciones de
+-- una sesión.
 -- ============================================================================
 
 UPDATE public.query q
-   SET query = replace(q.query, 'tabla LIKE ''academico_test.%''', '(tabla LIKE ''academico_test.%'' OR tabla NOT LIKE ''%.%'') AND tabla NOT IN (''tsesion_web'', ''academico_test.tsesion_web'')')
+   SET query = replace(q.query, 'tabla LIKE ''academico_test.%''', '(tabla LIKE ''academico_test.%'' OR tabla NOT LIKE ''%.%'')')
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id
    AND m.serviceid = 'audit-clickhouse-cval'
@@ -53,7 +50,7 @@ UPDATE public.query q
    AND q.query LIKE '%tabla LIKE ''academico_test.%''%';
 
 UPDATE public.query q
-   SET query = replace(q.query, 'tabla LIKE ''pigse.%''', '(tabla LIKE ''pigse.%'' OR tabla NOT LIKE ''%.%'') AND tabla NOT IN (''tsesion_web'', ''pigse.tsesion_web'')')
+   SET query = replace(q.query, 'tabla LIKE ''pigse.%''', '(tabla LIKE ''pigse.%'' OR tabla NOT LIKE ''%.%'')')
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id
    AND m.serviceid = 'audit-clickhouse-pigse'
