@@ -29,7 +29,7 @@ import java.util.Objects;
  *       happens inside sso-admin.</li>
  *   <li>{@link #fetchPathTemplates} — internal call to
  *       {@code /internal/pathTemplates}, gated by the
- *       {@code X-Internal-Token} header (V30). The header
+ *       {@code X-Internal-Token} header. The header
  *       value is operator-configured (see
  *       {@code query.catalog.internal-token}). When the
  *       token is empty or unset, calls fail closed — better
@@ -49,7 +49,7 @@ public class CatalogClient {
 
     private static final Logger log = LoggerFactory.getLogger(CatalogClient.class);
 
-    /** V30 — shared secret the path-registry uses against
+    /** Shared secret the path-registry uses against
      *  sso-admin's {@code /internal/pathTemplates}. Configured
      *  in {@code query.catalog.internal-token}; must match
      *  sso-admin's {@code sso.internal.token}. */
@@ -110,8 +110,7 @@ public class CatalogClient {
                     .retrieve()
                     .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {
                         throw new ResponseStatusException(
-                                res.getStatusCode(),
-                                "El catálogo rechazó la consulta: " + res.getStatusText());
+                                res.getStatusCode(), catalogRefusalMessage(res.getStatusCode()));
                     })
                     .onStatus(HttpStatusCode::is5xxServerError, (req, res) -> {
                         throw new ResponseStatusException(
@@ -131,6 +130,20 @@ public class CatalogClient {
                     org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
                     "El catálogo de sso-admin no está disponible", e);
         }
+    }
+
+    /**
+     * sso-admin answers 403 both for an unknown uuid and for a caller
+     * with no role bound to it, so the text covers both without
+     * saying which — telling an unauthorized caller "it exists" is
+     * exactly the information the catalog withholds.
+     */
+    private static String catalogRefusalMessage(HttpStatusCode status) {
+        return switch (status.value()) {
+            case 401 -> "Sesión inválida o expirada; vuelve a iniciar sesión";
+            case 403, 404 -> "No tienes acceso a esta consulta, o no existe";
+            default -> "El catálogo rechazó la consulta (" + status.value() + ")";
+        };
     }
 
     /**
@@ -170,7 +183,7 @@ public class CatalogClient {
     }
 
     /**
-     * V27 — fetches every query the bearer is authorized to
+     * Fetches every query the bearer is authorized to
      * see, for the in-memory {@code QueryPathRegistry} to
      * build its path-template → uuid map. Uses the same
      * catalog endpoint the consumer UI uses
@@ -212,7 +225,7 @@ public class CatalogClient {
     }
 
     /**
-     * V30 — fetches every query row whose {@code path_template}
+     * Fetches every query row whose {@code path_template}
      * is non-null, optionally filtered by microservice. Calls
      * the internal {@code /internal/pathTemplates} endpoint,
      * authenticated by the {@code X-Internal-Token} header
@@ -269,7 +282,7 @@ public class CatalogClient {
     }
 
     /**
-     * V32 — internal endpoint that lets a query-service
+     * Internal endpoint that lets a query-service
      * container identify itself to sso-admin by its
      * instance name (set by the provisioner as
      * {@code QUERY_INSTANCE_NAME}). Returns a tiny JSON
