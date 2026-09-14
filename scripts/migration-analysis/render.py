@@ -214,6 +214,9 @@ td.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-num
 .slot.hole{background:none;border:1px dashed var(--live);color:var(--live);font-weight:600}
 .slot.free{border:1px solid var(--live);color:var(--live);font-weight:600;background:none}
 .slot.hl{background:var(--accent);color:#fff}
+.slot.remote{background:none;border:1px solid var(--accent);color:var(--accent)}
+.slotgrid-full{max-height:340px;overflow:auto;padding:6px;border:1px solid var(--rule);
+ border-radius:5px;background:var(--panel)}
 .legend{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:12.5px;color:var(--muted);
  margin:10px 0 14px;align-items:center}
 .legend b{font-weight:600}
@@ -566,17 +569,48 @@ def build(model: dict) -> str:
     hi_from = meta["highlight"][0] or max(1.0, float(meta["range"][1]) - 39)
     hi_to = meta["highlight"][1] or float(meta["range"][1])
 
-    # slots: ventana alrededor del techo + huecos
+    # slots: linea numerica COMPLETA (V1..techo) con los huecos marcados,
+    # y los huecos agrupados en rangos con sus vecinos
     ceiling = slots["ceiling"]
-    window = list(range(max(1, ceiling - 47), ceiling + 5))
     holes = set(slots["holes"])
-    used = {int(float(m["v"])) for m in migs} | {
-        int(float(v)) for v in slots["only_remote"]}
+    remote_only = {int(float(v)) for v in slots["only_remote"]}
+    by_num = {int(float(m["v"])): m for m in migs}
+
+    def slot_cls(n: int) -> tuple[str, str]:
+        if n in holes:
+            return "hole", f"V{n} — libre en todas las ramas"
+        if n in remote_only:
+            return "remote", f"V{n} — no está en este checkout, pero sí en origin"
+        m = by_num.get(n)
+        return "", f"V{n} — {m['n']}" if m else f"V{n}"
+
     slot_html = "".join(
-        f'<span class="slot {"hole" if n in holes else ("free" if n > ceiling else "")}"'
-        f' title="{"libre (hueco)" if n in holes else ("libre" if n > ceiling else "usado")}"'
-        f'>{n}</span>'
-        for n in window)
+        f'<span class="slot {slot_cls(n)[0]}" title="{slot_cls(n)[1]}">{n}</span>'
+        for n in range(1, ceiling + 1)) + "".join(
+        f'<span class="slot free" title="V{n} — libre">{n}</span>'
+        for n in range(ceiling + 1, ceiling + 4))
+
+    # rangos contiguos de huecos
+    ranges: list[tuple[int, int]] = []
+    for n in sorted(holes):
+        if ranges and ranges[-1][1] == n - 1:
+            ranges[-1] = (ranges[-1][0], n)
+        else:
+            ranges.append((n, n))
+
+    def neighbour(n: int, step: int) -> str:
+        k = n + step
+        while 0 < k <= ceiling and k not in by_num:
+            k += step
+        m = by_num.get(k)
+        return f'<span class="m">V{k}</span> <span class="dim">{m["n"][:48]}</span>' if m else "—"
+
+    gap_rows = "".join(
+        f'<tr><td class="m">{"V"+str(a) if a == b else f"V{a}–V{b}"}</td>'
+        f'<td class="num">{b - a + 1}</td>'
+        f'<td>{neighbour(a, -1)}</td><td>{neighbour(b, 1)}</td></tr>'
+        for a, b in ranges) or \
+        '<tr><td colspan="4" class="empty">Sin huecos: la numeración es contigua</td></tr>'
 
     branch_rows = "".join(
         f'<tr><td class="m">{b}</td><td class="m num">V{v}</td></tr>'
@@ -840,12 +874,22 @@ no mata lo anterior, lo modifica. Regenerá esta página con
     <div class="metric"><div class="k">Versiones usadas</div>
       <div class="n">{slots['used_count']}</div><div class="s">de V1 a V{slots['ceiling']}</div></div>
   </div>
-  <h3>Últimos números</h3>
-  <div class="slotgrid">{slot_html}</div>
-  <div class="legend"><span><b>gris</b> usado</span>
-    <span><b class="st-live">borde verde</b> libre</span>
-    <span><b class="st-live">punteado</b> hueco nunca usado</span></div>
-  {"<h3>Huecos libres bajo el techo</h3><p class='m'>" + ", ".join("V"+str(h) for h in slots["holes"]) + "</p>" if slots["holes"] else ""}
+  <h3>Línea numérica V1–V{slots['ceiling']}</h3>
+  <p class="note">Todos los números, en orden. Un hueco es un número que ninguna rama de
+  <code>origin</code> usó nunca: es un slot libre real, pero usarlo rompe la lectura cronológica y
+  Flyway lo aplica <i>out-of-order</i> en los servidores que ya pasaron ese número — sólo con
+  <code>outOfOrder=true</code>. Para una migración nueva usá <b>V{slots['next_free']}</b>.</p>
+  <div class="legend"><span><b>gris</b> usado en este checkout</span>
+    <span><b style="color:var(--accent)">azul</b> sólo en origin (falta hacer pull)</span>
+    <span><b class="st-live">punteado</b> hueco nunca usado</span>
+    <span><b class="st-live">borde verde</b> siguiente libre</span></div>
+  <div class="slotgrid slotgrid-full">{slot_html}</div>
+
+  <h3>Huecos ({len(slots['holes'])} números en {len(ranges)} rangos)</h3>
+  <div class="tablewrap"><table><thead><tr>
+    <th>Rango</th><th style="text-align:right">Tamaño</th><th>Anterior existente</th>
+    <th>Siguiente existente</th></tr></thead><tbody>{gap_rows}</tbody></table></div>
+
   {"<h3>Versiones fraccionarias (out-of-order)</h3><p class='m'>" + ", ".join("V"+d for d in slots["dotted"]) + "</p>" if slots["dotted"] else ""}
   {"<h3>Existen en origin pero no en este checkout</h3><p class='m'>" + ", ".join("V"+v for v in slots["only_remote"]) + "</p>" if slots["only_remote"] else ""}
   <h3>Techo por rama</h3>
