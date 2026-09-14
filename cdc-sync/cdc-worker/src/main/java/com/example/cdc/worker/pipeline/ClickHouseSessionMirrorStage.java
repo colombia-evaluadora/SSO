@@ -87,6 +87,10 @@ public class ClickHouseSessionMirrorStage {
         row.put("ended_at", asDateTimeOrNull(after.get("ended_at")));
         row.put("last_seen_at", asDateTimeOrNull(after.get("last_seen_at")));
         row.put("close_reason", str(after.get("close_reason")));
+        // V377: app_name (nombre de public.app.name resuelto en el login,
+        // o "" para filas que aún no lo tienen -- str() ya default-ea a
+        // "" si after.get(...) devuelve null).
+        row.put("app_name", str(after.get("app_name")));
         // BUG real encontrado revisando esto: antes iba hardcodeado a 0
         // para TODA fila -- con eso argMax(..., lsn) en V90/V92 no
         // puede distinguir "la versión más nueva" de ninguna otra (todas

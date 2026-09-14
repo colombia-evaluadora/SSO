@@ -172,7 +172,7 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
             // excepción queda visible en logs con su stacktrace propio
             // en vez de que este catch se la trague en silencio.
             try {
-                sessionTracking.openSession(uid, familyId, Map.of());
+                sessionTracking.openSession(uid, familyId, Map.of(), appNameFromRequest(request));
             } catch (RuntimeException trackingEx) {
                 log.warn("No se pudo abrir sesión de tracking para email={} family={}",
                         email, familyId.substring(0, 8), trackingEx);
@@ -206,6 +206,35 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         response.setCharacterEncoding("UTF-8");
         mapper.writeValue(response.getOutputStream(), new TokenResponse(
                 accessToken, refreshToken, props.accessTokenTtlSeconds()));
+    }
+
+    /**
+     * V377 (sesiones reales por app): deriva a qué app pertenece este
+     * login a partir del {@code Origin} (o {@code Referer} si el
+     * navegador no manda Origin en esta petición) -- ambos ya los
+     * manda el browser en cada request, así que no hace falta tocar
+     * ninguno de los tres fronts ni el contrato de {@code LoginRequest}.
+     * Match por substring del dominio (no exact-match contra
+     * {@code app.launch_url}: PIGSE ni siquiera tiene uno configurado
+     * todavía) -- basta con que el host contenga "pigse" o
+     * "colombiaevaluadora". {@code null} si no matchea ninguno (login
+     * directo contra /admin u otro origen no reconocido) -- esa sesión
+     * simplemente no se podrá filtrar por app, ver V377.
+     */
+    private static String appNameFromRequest(HttpServletRequest request) {
+        String origin = request.getHeader(HttpHeaders.ORIGIN);
+        String host = (origin != null && !origin.isBlank()) ? origin : request.getHeader(HttpHeaders.REFERER);
+        if (host == null || host.isBlank()) {
+            return null;
+        }
+        String lower = host.toLowerCase();
+        if (lower.contains("pigse")) {
+            return "PIGSE";
+        }
+        if (lower.contains("colombiaevaluadora")) {
+            return "COLOMBIA-EVALUADORA";
+        }
+        return null;
     }
 
     /**
