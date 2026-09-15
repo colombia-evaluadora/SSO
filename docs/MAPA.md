@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 330 migraciones (V1–V406), 501 funciones vivas, 103 endpoints vivos. Ultima generacion: 2026-09-15.
+Estado: 331 migraciones (V1–V406), 505 funciones vivas, 103 endpoints vivos. Ultima generacion: 2026-09-15.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -55,6 +55,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 - [padre](#padre) — 4 funcion(es), 0 endpoint(s)
 - [parent](#parent) — 1 funcion(es), 0 endpoint(s)
 - [periodo](#periodo) — 29 funcion(es), 0 endpoint(s)
+- [personalizar](#personalizar) — 4 funcion(es), 0 endpoint(s)
 - [pigse](#pigse) — 15 funcion(es), 0 endpoint(s)
 - [plan](#plan) — 13 funcion(es), 1 endpoint(s)
 - [planeador](#planeador) — 5 funcion(es), 66 endpoint(s)
@@ -676,6 +677,15 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_periodo_usuario_global` | 1 | V37 | V191 |
 | `academico_test.fn_periodo_usuario_puede_ver` | 2 | V37 | V162, V242, V250, V254, V270, V350… |
 | `academico_test.fn_periodo_usuario_sedes` | 1 | V37 | V191 |
+
+## personalizar
+
+| Funcion | Params | Migracion dueña | La usan |
+|---|---|---|---|
+| `academico_test.fn_personalizar_asignatura_crear` | 2 | V214.3 | — |
+| `academico_test.fn_personalizar_asignatura_eliminar` | 2 | V214.3 | — |
+| `academico_test.fn_personalizar_asignatura_listar` | 3 | V214.3 | — |
+| `academico_test.fn_personalizar_asignatura_pk` | 1 | V214.3 | — |
 
 ## pigse
 
