@@ -1,3 +1,8 @@
+---
+paths:
+  - "common/**"
+---
+
 # Reglas — common
 
 Módulo compartido: entidades JPA, repositorios y utilidades que consumen los

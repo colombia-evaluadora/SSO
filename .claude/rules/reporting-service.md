@@ -1,3 +1,8 @@
+---
+paths:
+  - "reporting-service/**"
+---
+
 # Reglas — reporting-service
 
 Genera los PDF/Excel. No tiene SQL propio: cada reporte es una **clave** en su

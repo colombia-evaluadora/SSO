@@ -1,3 +1,8 @@
+---
+paths:
+  - "sso-admin/**"
+---
+
 # Reglas — sso-admin
 
 Va **acoplado a `common`**: las entidades JPA y los repositorios viven en

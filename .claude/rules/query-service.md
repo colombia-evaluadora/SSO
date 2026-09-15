@@ -1,3 +1,8 @@
+---
+paths:
+  - "query-service/**"
+---
+
 # Reglas — query-service
 
 Este servicio **no tiene los endpoints en el código**: son filas de
