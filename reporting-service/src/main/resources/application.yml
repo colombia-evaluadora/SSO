@@ -51,7 +51,18 @@ eureka:
 reporting:
   # Directo al query-service del catalogo eval-col, no al gateway: ya
   # estamos dentro de la red y dar la vuelta solo suma un salto.
+  #
+  # Es la base POR DEFECTO, no la unica: cada microservicio registrado
+  # tiene su propia instancia de query-service, y un reporte puede fijar
+  # la suya con `base-url` (ver los reportes de Auditoria mas abajo).
   query-service-base-url: ${REPORTING_QUERY_SERVICE_URL:http://query-service-eval-col:8084}
+
+  # La instancia de Auditoria (microservicio audit-clickhouse-cval) se
+  # declara reporte por reporte en `base-url`, con la variable
+  # REPORTING_AUDIT_CVAL_URL. Habla ClickHouse y NO tiene conexion a
+  # Postgres: es un backend distinto, no una ruta mas del de arriba. El
+  # nombre del contenedor lo fija el provisioner como "query-service-" +
+  # instancename (MicroserviceController.containerName).
 
   # Tope duro. V66 quito el LIMIT de las funciones, asi que este es el
   # unico freno que queda entre un filtro mal puesto y un PDF de
@@ -282,6 +293,63 @@ reporting:
         estudiantes_asignados: Asignados
         estudiantes_evaluados: Evaluados
         porcentaje_evaluado: '% evaluado'
+
+    # -----------------------------------------------------------------
+    # Auditoria / Registro de actividad (V402). Los tres viven en OTRA
+    # instancia de query-service -- de ahi el `base-url` propio: el
+    # catalogo de auditoria corre contra ClickHouse y no comparte backend
+    # con los reportes academicos.
+    #
+    # Ninguno expone el JSON crudo de la fila auditada (entityFieldsRaw):
+    # un archivo exportado circula fuera del sistema, y ese volcado trae
+    # la fila entera, datos personales incluidos.
+    # -----------------------------------------------------------------
+
+    # "Sesiones de auditoria" (pestana Por sesion). filters = los mismos
+    # de la pantalla; FILTERS.IDS (CSV de family_id) exporta solo las
+    # sesiones con casilla marcada.
+    auditoria-sesiones:
+      path: /audits/export-all
+      base-url: ${REPORTING_AUDIT_CVAL_URL:http://query-service-audit-clickhouse-cval:8084}
+      title: Sesiones de auditoria
+      file-name: auditoria-sesiones
+      columns:
+        authorName: Autor
+        ip: IP
+        startedAt: Inicio
+        endedAt: Fin
+        status: Estado
+        operationsCount: Operaciones
+
+    # Detalle de UNA tabla: todos los cambios detectados sobre ella.
+    # FILTERS.SLUG es obligatorio (sin el no salen filas) y va en el
+    # cuerpo, no en la ruta.
+    auditoria-tabla-operaciones:
+      path: /audit-tables/operations/export-all
+      base-url: ${REPORTING_AUDIT_CVAL_URL:http://query-service-audit-clickhouse-cval:8084}
+      title: Operaciones por tabla
+      file-name: auditoria-tabla
+      columns:
+        occurredAt: Fecha
+        operation: Operacion
+        authorName: Autor
+        ip: IP
+        entityName: Detalle
+        entityId: Identificador
+
+    # Detalle de UNA sesion de usuario: que cambio esa persona en ella.
+    # FILTERS.SESSIONID es obligatorio, tambien por cuerpo.
+    auditoria-sesion-operaciones:
+      path: /audits/sessions/operations/export-all
+      base-url: ${REPORTING_AUDIT_CVAL_URL:http://query-service-audit-clickhouse-cval:8084}
+      title: Cambios de la sesion
+      file-name: auditoria-sesion
+      columns:
+        occurredAt: Fecha
+        tableSlug: Tabla
+        operation: Operacion
+        entityName: Detalle
+        entityId: Identificador
 
 sso:
   jwt:

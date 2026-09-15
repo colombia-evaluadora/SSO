@@ -1732,6 +1732,13 @@ services:
       # Directo a la instancia del catalogo eval-col: es la que tiene
       # registradas las filas query de reporte (V67).
       REPORTING_QUERY_SERVICE_URL: "${REPORTING_QUERY_SERVICE_URL:-http://query-service-eval-col:8084}"
+      # Instancia de Auditoria (V402): otro catalogo y otro backend
+      # (ClickHouse). No se declara en este compose -- la aprovisiona el
+      # sidecar `provisioner` con el nombre "query-service-" +
+      # instancename, asi que aca solo se apunta a ese nombre de red. Si
+      # esa instancia no esta levantada, los reportes de Auditoria
+      # responden 502 y los academicos siguen funcionando.
+      REPORTING_AUDIT_CVAL_URL: "${REPORTING_AUDIT_CVAL_URL:-http://query-service-audit-clickhouse-cval:8084}"
       REPORTING_MAX_ROWS: "${REPORTING_MAX_ROWS:-50000}"
       # Clave PUBLICA del par RS256: verifica firmas, no acuña tokens,
       # asi que no recibe (ni debe recibir) la privada.
