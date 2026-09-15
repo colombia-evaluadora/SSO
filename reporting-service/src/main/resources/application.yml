@@ -256,6 +256,33 @@ reporting:
         observacion: Observacion
         soporte_nombre: Soporte
 
+    # Planeador -- actividades. path = fila V401 (fn_actividad_listar sin
+    # paginar, mismos filtros y alcance que GET /planeador/actividades). El
+    # front manda en `filters` el mismo objeto del listado (SEARCH, ASIGNATURA,
+    # GRUPO, UNIDAD, TIPO_ACTIVIDAD, INSTRUMENTO, FECHA_DESDE, FECHA_HASTA,
+    # ESTADOS, DIAS_GRACIA, INCLUIR_INACTIVAS, DIA, FUNCIONARIO) + IDS para
+    # "exportar seleccionados". `columns` es el whitelist: las de la tabla del
+    # planeador, sin pk_*/fk_* ni las de navegacion por dia.
+    planeador-actividades:
+      path: /planeador/actividades/export-all
+      title: Actividades del planeador
+      file-name: planeador-actividades
+      columns:
+        titulo: Actividad
+        unidad: Unidad tematica
+        asignatura: Asignatura
+        area: Area
+        grado_grupo: Grado / grupo
+        tipo_actividad: Tipo
+        instrumento_evaluacion: Instrumento
+        fecha_inicio: Inicio
+        fecha_cierre: Cierre
+        estado: Estado
+        ponderacion: Ponderacion
+        estudiantes_asignados: Asignados
+        estudiantes_evaluados: Evaluados
+        porcentaje_evaluado: '% evaluado'
+
 sso:
   jwt:
     # Solo la publica: este servicio verifica firmas, no emite tokens.

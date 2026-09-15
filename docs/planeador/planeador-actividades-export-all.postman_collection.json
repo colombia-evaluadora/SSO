@@ -1,0 +1,517 @@
+{
+  "info": {
+    "_postman_id": "d4e5f6a7-b8c9-4d0e-9f1a-planeador-export-all",
+    "name": "Planeador -- exportar actividades a PDF / Excel",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": {
+      "type": "text/markdown",
+      "content": "Reporte tabular de las actividades del planeador: el boton **Exportar** de la\npantalla (modal \"Elige un formato para exportar las N actividad(es) que\ncoinciden con los filtros activos\").\n\n```\nPOST /api/reportes/planeador-actividades            reporting-service  -> PDF o .xlsx\nPOST /api/eval-col/planeador/actividades/export-all  query-service (V401) -> las filas en JSON\n```\n\nEl front usa **solo el primero**. El reporting-service resuelve la clave\n`planeador-actividades` en su `application.yml`, hace `POST` al segundo con el\nJWT del usuario y convierte las filas al formato pedido. El segundo esta en la\ncoleccion para depurar: ver exactamente que filas van a salir en el archivo.\n\n### El cuerpo: `{ format, filters, sorting, columns? }`\n\n| Campo | Que es |\n|---|---|\n| `format` | `\"pdf\"` o `\"excel\"` (`\"xlsx\"` tambien vale). Sin el campo: PDF. Otro valor: `400`. |\n| `filters` | **el mismo objeto de filtros del listado** `GET /planeador/actividades`, con las mismas claves. Vacio o ausente = todo lo que el usuario puede ver. |\n| `sorting` | `{ \"id\": \"<columna>\", \"desc\": \"true\"\\|\"false\" }`. `id` en la whitelist `fecha_inicio\\|fecha_cierre\\|fecha_creacion\\|titulo\\|ponderacion`; otro valor cae a `fecha_inicio`. |\n| `columns` | opcional: claves de columna a incluir, en orden (las visibles en la tabla). Ausente = todas las del catalogo. Una clave fuera del catalogo se ignora. |\n\n### `filters` -- las claves\n\n| Clave | Tipo | Que filtra |\n|---|---|---|\n| `SEARCH` | texto | buscador unico: titulo/descripcion, nivel de ensenanza de la unidad o nombre del instrumento |\n| `ASIGNATURA` | numero | `FK_TASIGNATURA` |\n| `GRUPO` | numero | `FK_TGRUPO` |\n| `UNIDAD` | numero | `FK_TUNIDAD` |\n| `TIPO_ACTIVIDAD` | numero | `pk_lista_valor` del tipo |\n| `INSTRUMENTO` | numero | `pk_lista_valor` del instrumento de evaluacion |\n| `FECHA_DESDE` / `FECHA_HASTA` | `YYYY-MM-DD` | ventana sobre las fechas de la actividad |\n| `ESTADOS` | **array** de texto | estado derivado: `FINALIZADA`, `VENCIDA`, `PENDIENTE_POR_EVALUAR`, `PROGRAMADA`, `EN_EVALUACION`, `SIN_PROGRAMAR` |\n| `DIAS_GRACIA` | numero | umbral de VENCIDA (default 2) |\n| `INCLUIR_INACTIVAS` | boolean | default `false` |\n| `DIA` | `YYYY-MM-DD` | solo las VIGENTES ese dia (la barra \"Hoy \\| LUNES 14\") |\n| `FUNCIONARIO` | numero | solo las que DICTA ese docente (`FK_TFUNCIONARIO`) |\n| `IDS` | **array** de numeros | \"exportar seleccionados\": lista de `PK_TACTIVIDAD` |\n\nTodos opcionales y se combinan con **AND**. No hay minimo de filtros: el freno\nes el `max-rows` del reporting-service (50000) -> `422` si se supera.\n\n**Los arrays llevan el tipo correcto**: `ESTADOS` strings, `IDS` numeros. El\nbinder valida cada elemento: `\"IDS\": [\"42\"]` responde `400`. Y para un filtro\nque no aplica, **quita la clave** en vez de mandarla vacia (`\"\"` -> `400`).\n\n`ESTADOS` aqui SI es un array JSON. En el `GET` del listado va como CSV\n(`?estados=A,B`, V253) porque por query string no se puede; no copiar ese\nformato al body.\n\n### Que sale en el archivo\n\nMismo gate (`VER` sobre `PLANEADOR`) y mismo **alcance territorial** (V277) que\nel listado: el reporte no puede mostrar una fila que la pantalla no muestre.\n`IDS` se aplica DESPUES del gate, asi que pedir el id de una actividad fuera\nde alcance no la revela -- simplemente no sale.\n\nColumnas del catalogo (claves para `columns`), en este orden:\n\n`titulo`, `unidad`, `asignatura`, `area`, `grado_grupo`, `tipo_actividad`,\n`instrumento_evaluacion`, `fecha_inicio`, `fecha_cierre`, `estado`,\n`ponderacion`, `estudiantes_asignados`, `estudiantes_evaluados`,\n`porcentaje_evaluado`.\n\nEl archivo lleva impresos el usuario y los filtros con que salio, y la\nrespuesta trae `Content-Disposition: attachment; filename=planeador-actividades-YYYYMMDD.pdf|.xlsx`\ny la cabecera `X-Report-Rows` con el numero de filas.\n\n### Roles\n\n\"Quien ve el listado puede exportarlo\": los `role_query` de V401 son una copia\nde los de `GET /planeador/actividades`.\n\n### No confundir con `/planeador/actividades/exportar`\n\nEse (V272/V273) es el JSON de intercambio para reimportar actividades en otro\ngrupo. Este es el reporte para leer/imprimir. Distinto proposito, distinta forma.\n"
+    }
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://172.233.184.248:8080"
+    },
+    {
+      "key": "email",
+      "value": ""
+    },
+    {
+      "key": "password",
+      "value": ""
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "fkTasignatura",
+      "value": "1"
+    },
+    {
+      "key": "fkTgrupo",
+      "value": "1"
+    },
+    {
+      "key": "pkTactividad",
+      "value": "23"
+    }
+  ],
+  "item": [
+    {
+      "name": "0 - Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "description": {
+          "type": "text/markdown",
+          "content": "Guarda el `token`. El usuario necesita permiso **VER** sobre el menu `PLANEADOR`; sin eso `fn_actividad_listar` levanta `42501` y el reporte responde `403`."
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (d.token) { pm.collectionVariables.set('token', d.token); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 - PDF, sin filtros (todo lo visible)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/planeador-actividades",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "planeador-actividades"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"pdf\"\n}"
+        },
+        "description": {
+          "content": "El caso del modal con la busqueda vacia: todas las actividades que el usuario puede ver, ordenadas por `fecha_inicio`.\n\nEn Postman usa **Send and Download** para guardar el archivo.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('content-type', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/pdf'));",
+              "pm.test('attachment', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment'));",
+              "pm.test('X-Report-Rows presente', () => pm.expect(pm.response.headers.get('X-Report-Rows')).to.not.be.undefined);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - Excel con los filtros de la pantalla",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/planeador-actividades",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "planeador-actividades"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"excel\",\n  \"filters\": {\n    \"SEARCH\": \"taller\",\n    \"ASIGNATURA\": \"{{fkTasignatura}}\",\n    \"ESTADOS\": [\n      \"PENDIENTE_POR_EVALUAR\",\n      \"EN_EVALUACION\"\n    ],\n    \"FECHA_DESDE\": \"2026-01-01\",\n    \"FECHA_HASTA\": \"2026-12-31\"\n  },\n  \"sorting\": {\n    \"id\": \"fecha_cierre\",\n    \"desc\": \"true\"\n  }\n}"
+        },
+        "description": {
+          "content": "`filters` es el mismo objeto que el front ya arma para `GET /planeador/actividades`. Fijate que `ESTADOS` es un **array de strings** (en el GET viaja como CSV; aqui no).\n\n`sorting.desc` llega como texto `\"true\"`/`\"false\"`, igual que en los demas reportes.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('content-type', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('spreadsheetml'));",
+              "pm.test('attachment', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment'));",
+              "pm.test('X-Report-Rows presente', () => pm.expect(pm.response.headers.get('X-Report-Rows')).to.not.be.undefined);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 - Exportar SELECCIONADOS (IDS)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/planeador-actividades",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "planeador-actividades"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"pdf\",\n  \"filters\": {\n    \"IDS\": [\n      23,\n      24,\n      25\n    ]\n  }\n}"
+        },
+        "description": {
+          "content": "`IDS` lleva **numeros**, no strings: `[\"23\"]` responde `400`.\n\nEl recorte por `IDS` va DESPUES del gate de alcance: un id fuera de alcance no sale y tampoco falla (a diferencia de `/actividades/exportar`, que rechaza con `42501`).",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('content-type', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/pdf'));",
+              "pm.test('attachment', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment'));",
+              "pm.test('X-Report-Rows presente', () => pm.expect(pm.response.headers.get('X-Report-Rows')).to.not.be.undefined);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 - Solo las columnas visibles de la tabla",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/planeador-actividades",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "planeador-actividades"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"excel\",\n  \"filters\": {\n    \"GRUPO\": \"{{fkTgrupo}}\"\n  },\n  \"columns\": [\n    \"titulo\",\n    \"grado_grupo\",\n    \"estado\",\n    \"fecha_inicio\",\n    \"fecha_cierre\",\n    \"porcentaje_evaluado\"\n  ]\n}"
+        },
+        "description": {
+          "content": "`columns` filtra y reordena el catalogo declarado en `reporting.reports.planeador-actividades.columns`. Una clave que no este ahi (p. ej. `pk_tactividad`) se ignora en silencio: nunca agrega columnas.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('content-type', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('spreadsheetml'));",
+              "pm.test('attachment', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment'));",
+              "pm.test('X-Report-Rows presente', () => pm.expect(pm.response.headers.get('X-Report-Rows')).to.not.be.undefined);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 - Un dia concreto (barra Hoy | LUNES 14)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/planeador-actividades",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "planeador-actividades"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"pdf\",\n  \"filters\": {\n    \"DIA\": \"2026-09-14\"\n  }\n}"
+        },
+        "description": {
+          "content": "Solo las actividades VIGENTES ese dia: la ventana `[fecha_inicio, fecha_cierre]` lo cubre. Una actividad sin fechas no esta en ningun dia.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('content-type', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/pdf'));",
+              "pm.test('attachment', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment'));",
+              "pm.test('X-Report-Rows presente', () => pm.expect(pm.response.headers.get('X-Report-Rows')).to.not.be.undefined);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6 - (depuracion) las filas en JSON, directo al query-service",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/export-all",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "actividades",
+            "export-all"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"filters\": {\n    \"ESTADOS\": [\n      \"FINALIZADA\"\n    ]\n  },\n  \"sorting\": {\n    \"id\": \"titulo\",\n    \"desc\": \"false\"\n  }\n}"
+        },
+        "description": {
+          "content": "Es lo que el reporting-service llama por dentro. Sirve para ver las filas crudas (todas las columnas de `fn_actividad_listar`, incluidas `pk_*`/`fk_*`) antes de que se conviertan a PDF/Excel.\n\nNo lleva `format` ni `columns`: eso lo entiende solo el reporting-service. La respuesta es el sobre `{ rows: [...] }` del query-service.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('rows es array', () => pm.expect(pm.response.json().rows).to.be.an('array'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7 - ERROR: formato no soportado -> 400",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/planeador-actividades",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "planeador-actividades"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"csv\"\n}"
+        },
+        "description": {
+          "content": "Solo `pdf` y `excel`/`xlsx`. El mensaje viaja en el cuerpo (`server.error.include-message: always`).",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8 - ERROR: IDS con strings -> 400",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/planeador-actividades",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "planeador-actividades"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"pdf\",\n  \"filters\": {\n    \"IDS\": [\n      \"23\"\n    ]\n  }\n}"
+        },
+        "description": {
+          "content": "El binder valida cada elemento de `BIGINT[]`. El reporting-service propaga el mensaje del query-service en los 4xx, asi que el motivo se lee en la respuesta.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
