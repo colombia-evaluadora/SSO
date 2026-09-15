@@ -1,44 +1,99 @@
 ---
 name: new-query-endpoint
 description: >-
-  Plantilla para crear un endpoint de query-service: preguntas de aclaración
-  obligatorias (alcance de roles, restricciones por campo) y esqueleto de la
-  colección Postman que debe quedar al final.
+  Crear o modificar un endpoint de query-service: qué preguntar antes, qué fila
+  existente analizar y clonar, el contrato de param_types / role_query /
+  constraints, y la colección Postman que debe quedar al cerrar.
 disable-model-invocation: true
 ---
 
 # new-query-endpoint
 
-Flujo de `CLAUDE.md` para endpoints de `query-service`. Para el trabajo
-completo delega en el agente `query-service-endpoint-builder`; esta skill es
-el guion de arranque.
+Un endpoint de `query-service` es una fila de `public.query`, no código Java: el
+SQL vive en la columna `query` y los permisos en `role_query`. Casi siempre ya
+existe una fila hermana (el listado del mismo dominio, o el mismo endpoint en
+otro microservicio) y el trabajo real es clonarla y cambiar lo justo. Empezar
+desde cero es lo que produce endpoints que divergen del listado en el `WHERE` o
+en el gate.
 
-## 1. Preguntas que NO se saltan
+Para el trabajo completo delega en el agente `query-service-endpoint-builder`;
+esta skill es el guion.
 
-Antes de escribir SQL o migración, confirma con el usuario:
+## 1. Preguntas que no se saltan
 
 | Tema | Qué preguntar |
 |------|---------------|
-| Roles | ¿Qué roles pueden llamarlo? ¿Hay bypass de admin? (`role_query` no lo tiene) |
+| Roles | ¿Qué roles pueden llamarlo? (`role_query` no tiene bypass de admin) |
 | Params | Nombre, tipo, obligatorio/opcional, valor por defecto |
-| Restricción por campo | `query_param_constraint` de cada param: rango / enum / regex / `CONTEXT.*` |
+| Restricción por campo | `query_param_constraint`: rango / enum / regex / `CONTEXT.*` |
 | Respuesta | Columnas expuestas, orden, paginación, filtros |
-| Verbo | `GET` de lectura vs `WriteDefinition` para escritura |
+| Verbo | `GET` de lectura vs. escritura |
 | Negocio | Cualquier regla que cambie el diseño del SQL |
 
-## 2. Implementación
+## 2. Analizar antes de escribir
 
-- SQL con skills `postgresql` / `plpgsql`; registro en `public.query`
-  (+ `query_param_constraint`) vía migración Flyway — número con
-  `/next-migration-number`.
-- Recuerda: fila nueva en `public.query` = 404 por el gateway
-  (`api/<serviceid>/...`) hasta reiniciar `query-service-<serviceid>`.
+```bash
+# ¿existe ya esta ruta? ¿quién la definió?
+python .claude/skills/next-migration-number/deps.py /planeador/actividades
 
-## 3. Postman (obligatorio al cerrar)
+# ¿qué función la sirve y quién más la llama?
+python .claude/skills/next-migration-number/deps.py fn_actividad_listar
+```
+
+Con eso decides tres cosas:
+
+- **Si la ruta ya existe**, no creas otra: editas la migración dueña
+  (`/next-migration-number`). Dos filas con la misma ruta y verbo es una
+  colisión silenciosa.
+- **Qué fila clonar.** El patrón del repo es un `INSERT ... SELECT` que hereda
+  `type`, `action`, `style`, `microservice_id` y `execution_mode` de la fila
+  hermana en lugar de repetir literales, resolviendo el microservicio por
+  `microservice.serviceid` (p. ej. `eval-col`).
+- **Si reusar la función existente o escribir una nueva.** Reusar es lo
+  correcto por defecto: así el reporte y la pantalla no pueden divergir en el
+  `WHERE` ni en el alcance territorial. Si le falta un parámetro, se edita la
+  función (con su `DROP` de firma vieja) antes que duplicarla.
+
+## 3. La fila
+
+- **`param_types`** declara cada bind con su tipo. Los nombres van **exactos y
+  en mayúsculas** (`QUERY.SEARCH`, `BODY.FILTERS.IDS`); el ParamBinder no
+  normaliza camelCase y un bind no declarado se ignora en silencio.
+- **Arrays por query string no existen**: un filtro multivalor en un `GET` viaja
+  como CSV y se parte en SQL (V253). En un `POST` con cuerpo JSON sí puede ser
+  `TEXT[]` / `BIGINT[]`.
+- **`CONTEXT.*`** (`USER_ID`, `HTTP_METHOD`, `REQUEST_ID`, `PATH`) se bindea
+  siempre que aparezca, aunque solo lo use la auditoría.
+- **Idempotencia**: `DELETE FROM public.query WHERE uuid = '...'` antes del
+  `INSERT` (`role_query` cascadea).
+- **`role_query`**: si la regla es "quien ve el listado puede exportarlo",
+  cópialos desde la fila hermana con un `INSERT ... SELECT` en vez de listar
+  roles a mano — así no se desincronizan.
+- **Guarda final**: un `DO $$ ... RAISE EXCEPTION` si la fila no quedó creada.
+  Sin ella, que la fila hermana no exista en esa base se traduce en un 404 en
+  runtime en lugar de un fallo de migración.
+- **Caché**: `cacheable` / `cache_ttl_seconds` solo si la lectura lo tolera;
+  hereda el TTL de la hermana si estás clonando.
+- El `detail` es la documentación que verá el siguiente: una frase con qué hace,
+  los binds y qué endpoint parecido **no** es.
+
+Cabecera y comentarios: mismo presupuesto que en `/next-migration-number`
+(≤ 12 líneas de cabecera, ≤ 20% de comentarios).
+
+## 4. Después de aplicar
+
+Una fila nueva en `public.query` responde **404** por el gateway
+(`api/<serviceid>/...`) hasta reiniciar `query-service-<serviceid>`. Al
+reconstruir para probar, `docker compose up` **no** recrea
+`sso-query-service-eval-col` (se provisiona dinámicamente): hay que recrearlo a
+mano o las pruebas pegan contra la imagen vieja.
+
+## 5. Postman (obligatorio al cerrar)
 
 Con la skill `postman-collection-generator`, genera
-`docs/postman/<nombre>.postman_collection.json`:
+`docs/<dominio>/<nombre>.postman_collection.json`
+(el dominio del endpoint: `docs/planeador/`, `docs/auditoria/`, ...):
 
 - Request de ejemplo con todos los params y su restricción documentada.
-- Respuestas: `200`, `4xx` de validación, y el `404` previo al restart.
-- Usa `docs/postman/sso-test.postman_environment.json` para el base URL.
+- Respuestas: `200`, el `4xx` de validación, y el `404` previo al restart.
+- Base URL desde `docs/deploy/sso-test.postman_environment.json`.
