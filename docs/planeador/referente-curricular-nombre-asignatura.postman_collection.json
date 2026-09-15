@@ -1,8 +1,8 @@
 {
   "info": {
-    "_postman_id": "8248a38b-33db-47f2-be78-679d933178fb",
+    "_postman_id": "c3834612-9456-44ca-bfb4-3a21a10d69ac",
     "name": "SSO — Referente curricular: NOMBRE_ASIGNATURA (V214.3)",
-    "description": "Endpoints tocados por la migracion **V214.3**.\n\n- `TREFERENTE_CURRICULAR.NOMBRE_ASIGNATURA` VARCHAR(150) NOT NULL.\n- `POST /referentes-curriculares` → `BODY.NOMBRE_ASIGNATURA` **obligatorio**.\n- `PATCH /referentes-curriculares/:ID` → `BODY.NOMBRE_ASIGNATURA` opcional (ausente = no tocar, vacio = 400).\n- `POST /referentes-curriculares/query` y `GET /referentes-curriculares/:ID` devuelven `nombre_asignatura`; el `SEARCH` del listado tambien busca sobre el.\n- **Nuevo** `GET /referentes-curriculares/:ID/nombre-asignatura`: resuelve el rotulo segun el acceso del usuario. Gate por capability de menu — basta `VER` en **PLANEADOR**, **ASISTENCIAS** o **PERIODOS_ACADEMICOS**.\n\nEntorno esperado: `SSO — test` (`baseUrl`, `email`, `password`). El bloque 9 borra lo que crea el 1.2, asi que la corrida completa deja la base como estaba.",
+    "description": "Endpoints tocados por la migracion **V214.3**.\n\n- `TREFERENTE_CURRICULAR.NOMBRE_ASIGNATURA` VARCHAR(150) NOT NULL.\n- `POST /referentes-curriculares` → `BODY.NOMBRE_ASIGNATURA` **opcional**: si falta o llega vacio cae al defecto por nivel — **Asignatura**, o **Dimension** cuando el referente es solo de preescolar.\n- `PATCH /referentes-curriculares/:ID` → ausente = no tocar, texto = lo reemplaza, vacio = vuelve al defecto.\n- `POST /referentes-curriculares/query` y `GET /referentes-curriculares/:ID` devuelven `nombre_asignatura`; el `SEARCH` del listado tambien busca sobre el.\n- **Nuevo** `GET /referentes-curriculares/:ID/nombre-asignatura`: resuelve el rotulo segun el acceso del usuario. Gate por capability de menu — basta `VER` en **PLANEADOR**, **ASISTENCIAS** o **PERIODOS_ACADEMICOS**.\n\nEntorno esperado: `SSO — test` (`baseUrl`, `email`, `password`). El bloque 9 borra lo que crea el 1.2, asi que la corrida completa deja la base como estaba.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "event": [
@@ -62,9 +62,19 @@
       "description": "Lo setea 1.2"
     },
     {
+      "key": "referenteDefectoId",
+      "value": "",
+      "description": "Lo setea 1.1"
+    },
+    {
+      "key": "nombreEsperado",
+      "value": "Dimension",
+      "description": "Lo setea 1.8"
+    },
+    {
       "key": "nivelId",
       "value": "990001",
-      "description": "PK_NIVEL_ENSENANZA"
+      "description": "PK_NIVEL_ENSENANZA. Debe ser PREESCOLAR: varias pruebas comprueban que el defecto sea Dimension"
     },
     {
       "key": "enfoqueId",
@@ -124,7 +134,7 @@
       "name": "1 — Crear / editar (NOMBRE_ASIGNATURA)",
       "item": [
         {
-          "name": "1.1 — Crear SIN NOMBRE_ASIGNATURA → 400 (22023)",
+          "name": "1.1 — Crear SIN NOMBRE_ASIGNATURA → toma el defecto por nivel",
           "request": {
             "method": "POST",
             "header": [
@@ -148,7 +158,7 @@
                 "referentes-curriculares"
               ]
             },
-            "description": "V214.3 hace obligatorio `BODY.NOMBRE_ASIGNATURA`. Sin el, `fn_refcurr_crear` lanza 22023 y el gateway responde 400.",
+            "description": "El campo es opcional. Si no viene, `fn_refcurr_nombre_asignatura_default` lo resuelve segun los niveles del referente: **Dimension** si TODOS son preescolar, **Asignatura** en cualquier otro caso. `nivelId` apunta a preescolar, asi que aqui debe quedar `Dimension`.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"NOMBRE\": \"ZZ Postman sin asignatura\",\n  \"DESCRIPCION\": \"Referente de prueba creado por la coleccion\",\n  \"NIVELES_IDS\": [\n    \"{{nivelId}}\"\n  ],\n  \"ENFOQUE_PEDAGOGICO\": \"{{enfoqueId}}\",\n  \"TIPO_EVALUACION\": \"{{tipoEvaluacionId}}\",\n  \"INSTRUMENTO\": \"Rubrica\",\n  \"NORMATIVIDAD\": \"Decreto 1290\",\n  \"ANIO_DESDE\": 2026\n}"
@@ -160,8 +170,46 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('400 por campo obligatorio', () => pm.response.to.have.status(400));",
-                  "pm.test('el mensaje nombra la asignatura', () => pm.expect(pm.response.text().toLowerCase()).to.include('asignatura'));"
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json(); const fila = (j.data || j)[0];",
+                  "pm.collectionVariables.set('referenteDefectoId', fila.pk_referente_curricular_creado);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.1b — Verifica el defecto aplicado",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteDefectoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "{{referenteDefectoId}}"
+              ]
+            },
+            "description": "Comprueba que 1.1 guardo el defecto en vez de fallar."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json(); const fila = (j.data || j)[0];",
+                  "pm.test('defecto de preescolar', () => pm.expect(fila.nombre_asignatura).to.eql('Dimension'));"
                 ]
               }
             }
@@ -379,7 +427,7 @@
           ]
         },
         {
-          "name": "1.7 — PATCH con cadena vacia → 400 (22023)",
+          "name": "1.7 — PATCH con cadena vacia → vuelve al defecto",
           "request": {
             "method": "PATCH",
             "header": [
@@ -404,7 +452,7 @@
                 "{{referenteId}}"
               ]
             },
-            "description": "La columna es NOT NULL: una cadena vacia o solo espacios se rechaza en vez de borrar el valor.",
+            "description": "Mandar el campo vacio NO es un error: devuelve el rotulo al defecto que corresponda a los niveles EFECTIVOS del referente. Este referente es de preescolar, asi que vuelve a `Dimension`.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"NOMBRE_ASIGNATURA\": \"   \"\n}"
@@ -416,7 +464,45 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('400', () => pm.response.to.have.status(400));"
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.8 — Verifica que volvio a Dimension",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "{{referenteId}}"
+              ]
+            },
+            "description": "Comprueba 1.7."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json(); const fila = (j.data || j)[0];",
+                  "pm.test('volvio al defecto', () => pm.expect(fila.nombre_asignatura).to.eql('Dimension'));",
+                  "pm.collectionVariables.set('nombreEsperado', 'Dimension');"
                 ]
               }
             }
@@ -502,7 +588,7 @@
             "description": "`p_search` ahora pega sobre NOMBRE, DESCRIPCION y NOMBRE_ASIGNATURA.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"FILTERS\": {\n    \"SEARCH\": \"Ciencias Naturales\"\n  },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 20\n}"
+              "raw": "{\n  \"FILTERS\": {\n    \"SEARCH\": \"Dimension\"\n  },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 20\n}"
             }
           },
           "event": [
@@ -557,7 +643,7 @@
                 "exec": [
                   "pm.test('200', () => pm.response.to.have.status(200));",
                   "const j = pm.response.json(); const fila = (j.data || j)[0];",
-                  "pm.test('resuelve el nombre', () => pm.expect(fila.nombre_asignatura).to.eql('Ciencias Naturales'));"
+                  "pm.test('resuelve el nombre', () => pm.expect(fila.nombre_asignatura).to.eql(pm.collectionVariables.get('nombreEsperado')));"
                 ]
               }
             }
@@ -695,6 +781,52 @@
                 "exec": [
                   "pm.test('200', () => pm.response.to.have.status(200));",
                   "pm.collectionVariables.unset('referenteId');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "9.2 — Eliminar el referente del defecto (1.1)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteDefectoId}}/eliminar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "{{referenteDefectoId}}",
+                "eliminar"
+              ]
+            },
+            "description": "Baja logica del referente creado en 1.1.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"CONFIRMAR\": true\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.unset('referenteDefectoId');"
                 ]
               }
             }

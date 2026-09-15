@@ -10,7 +10,11 @@
 -- QUE HACE
 --   1. Agrega NOMBRE_ASIGNATURA VARCHAR(150) NOT NULL a TREFERENTE_CURRICULAR.
 --      Es el rotulo con el que se llamara la asignatura en las pantallas que
---      consumen el referente (planeador, asistencias, periodos).
+--      consumen el referente (planeador, asistencias, periodos). NOT NULL en
+--      la tabla, pero NO obligatorio para el caller: si no viene, cae a
+--      fn_refcurr_nombre_asignatura_default -- 'Asignatura', o 'Dimension'
+--      cuando el referente es solo de preescolar, que es como se llama alli.
+--      Mismo patron que NIVEL_1_ETIQUETA / NIVEL_2_ETIQUETA en esta tabla.
 --   2. Rehace fn_refcurr_crear / fn_refcurr_actualizar (nuevo parametro) y
 --      fn_refcurr_listar / fn_refcurr_buscar_por_pk (nueva columna en el
 --      RETURNS TABLE). Las cuatro cambian de FIRMA o de tipo de retorno, asi
@@ -25,8 +29,8 @@
 --
 -- BACKFILL
 --   La columna es NOT NULL sobre una tabla que ya puede tener filas: se
---   agrega NULLable, se rellena con NOMBRE (el unico valor sensato que
---   tenemos) y recien ahi se pone NOT NULL. Idempotente.
+--   agrega NULLable, se rellena aplicando a cada referente el defecto que le
+--   toca segun SUS niveles ACTIVE, y recien ahi se pone NOT NULL. Idempotente.
 --
 -- AUDITORIA
 --   No hace falta tocar el trigger de CDC: TREFERENTE_CURRICULAR ya existia
@@ -41,18 +45,70 @@ SET search_path TO academico_test, public;
 ALTER TABLE academico_test.TREFERENTE_CURRICULAR
   ADD COLUMN IF NOT EXISTS NOMBRE_ASIGNATURA VARCHAR(150);
 
-UPDATE academico_test.TREFERENTE_CURRICULAR
-   SET NOMBRE_ASIGNATURA = NOMBRE
- WHERE NOMBRE_ASIGNATURA IS NULL;
+-- ---------------------------------------------------------------------------
+-- 1.b) fn_refcurr_nombre_asignatura_default -- el valor por defecto.
+-- ---------------------------------------------------------------------------
+-- 'Asignatura' en general; 'Dimension' cuando el referente es de preescolar,
+-- que es como se llama alli a lo que en los demas niveles es una asignatura.
+--
+-- Criterio con niveles mixtos (la relacion es N:N): 'Dimension' SOLO si TODOS
+-- los niveles del referente son preescolar. En cuanto incluye basica o media
+-- cae a 'Asignatura' -- un referente mixto se rotula con el termino que
+-- entienden todos sus niveles.
+--
+-- "Preescolar" se resuelve por NOMBRE (ILIKE), no por CODIGO: mismo criterio
+-- y misma justificacion que V214.2 (el CODIGO no es estable entre entornos,
+-- el NOMBRE 'Preescolar' si).
+--
+-- Un array vacio o NULL (referente sin niveles) cae a 'Asignatura': no hay
+-- con que concluir que sea preescolar.
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_nombre_asignatura_default(
+    p_fk_tnivel_ensenanza_ids BIGINT[]
+)
+RETURNS VARCHAR
+LANGUAGE sql
+STABLE
+AS $$
+    -- Se CUENTA en vez de usar NOT EXISTS sobre el JOIN: un id que no
+    -- resuelve a ninguna fila de TNIVEL_ENSENANZA desaparece en el JOIN, y
+    -- con NOT EXISTS eso se leeria como "no queda ningun no-preescolar" ->
+    -- 'Dimension', que es exactamente al reves de lo que queremos. Exigir
+    -- que la cuenta de preescolares iguale a la de ids pedidos obliga a que
+    -- TODOS existan Y sean preescolar.
+    SELECT CASE
+        WHEN COALESCE(array_length(p_fk_tnivel_ensenanza_ids, 1), 0) = 0 THEN 'Asignatura'
+        WHEN (SELECT count(*) FROM unnest(p_fk_tnivel_ensenanza_ids) ne_id)
+           = (SELECT count(*)
+                FROM unnest(p_fk_tnivel_ensenanza_ids) ne_id
+                JOIN academico_test.TNIVEL_ENSENANZA ne ON ne.PK_NIVEL_ENSENANZA = ne_id
+               WHERE ne.NOMBRE ILIKE 'preescolar%')
+        THEN 'Dimension'
+        ELSE 'Asignatura'
+    END::VARCHAR;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_nombre_asignatura_default(BIGINT[])
+    IS 'V214.3 -- Valor por defecto de TREFERENTE_CURRICULAR.NOMBRE_ASIGNATURA para un conjunto de niveles educativos: ''Dimension'' si TODOS son preescolar (asi se llama alli a la asignatura), ''Asignatura'' en cualquier otro caso, incluido el conjunto vacio o NULL. Preescolar se resuelve por TNIVEL_ENSENANZA.NOMBRE ILIKE ''preescolar%'', no por CODIGO -- mismo criterio que V214.2, porque el CODIGO no es estable entre entornos. Un id que no exista en TNIVEL_ENSENANZA basta para caer a Asignatura: el CASE compara la cuenta de ids preescolar contra la de ids pedidos, asi que exige que TODOS resuelvan Y sean preescolar. Con NOT EXISTS sobre el JOIN daria Dimension, que es al reves.';
+
+-- Backfill: cada referente existente toma el defecto que le corresponda
+-- segun sus propios niveles ACTIVE.
+UPDATE academico_test.TREFERENTE_CURRICULAR rc
+   SET NOMBRE_ASIGNATURA = academico_test.fn_refcurr_nombre_asignatura_default((
+           SELECT array_agg(rcn.FK_TNIVEL_ENSENANZA)
+             FROM academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
+            WHERE rcn.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
+              AND rcn.ACTIVE = TRUE
+       ))
+ WHERE rc.NOMBRE_ASIGNATURA IS NULL;
 
 ALTER TABLE academico_test.TREFERENTE_CURRICULAR
   ALTER COLUMN NOMBRE_ASIGNATURA SET NOT NULL;
 
 COMMENT ON COLUMN academico_test.TREFERENTE_CURRICULAR.NOMBRE_ASIGNATURA
-    IS 'V214.3 -- Nombre con el que se rotula la asignatura de este referente en las pantallas que lo consumen (planeador, asistencias, periodos academicos). Obligatorio. Backfill inicial = NOMBRE del referente.';
+    IS 'V214.3 -- Nombre con el que se rotula la asignatura de este referente en las pantallas que lo consumen (planeador, asistencias, periodos academicos). NOT NULL, pero el caller no esta obligado a enviarlo: si falta o llega vacio se resuelve con fn_refcurr_nombre_asignatura_default (''Asignatura'', o ''Dimension'' si el referente es solo de preescolar). Mismo patron que NIVEL_1_ETIQUETA / NIVEL_2_ETIQUETA. El backfill inicial aplico ese mismo defecto a los referentes ya existentes.';
 
 -- ---------------------------------------------------------------------------
--- 2) fn_refcurr_crear -- nuevo parametro obligatorio p_nombre_asignatura.
+-- 2) fn_refcurr_crear -- nuevo parametro p_nombre_asignatura (opcional).
 --    Cambia la firma: hay que borrar la vieja (si no, las dos conviven y
 --    una llamada con argumentos nombrados queda ambigua -> 42725).
 -- ---------------------------------------------------------------------------
@@ -104,10 +160,9 @@ BEGIN
         RAISE EXCEPTION 'Descripcion/finalidad es obligatoria'
             USING ERRCODE = '22023', HINT = 'p_descripcion no puede ser NULL ni vacio';
     END IF;
-    IF NULLIF(TRIM(p_nombre_asignatura), '') IS NULL THEN
-        RAISE EXCEPTION 'Nombre de la asignatura es obligatorio'
-            USING ERRCODE = '22023', HINT = 'p_nombre_asignatura no puede ser NULL ni vacio';
-    END IF;
+    -- p_nombre_asignatura NO se valida como obligatorio: si falta o llega
+    -- vacio cae al defecto por nivel (ver el INSERT mas abajo), igual que
+    -- p_nivel_1_etiqueta / p_nivel_2_etiqueta.
     -- Nivel educativo: N:N, pero al menos UNO (el formulario lo exige y la
     -- tabla puente no puede quedar vacia -- ver nota en V212).
     IF p_fk_tnivel_ensenanza_ids IS NULL
@@ -197,7 +252,10 @@ BEGIN
         INSTRUMENTO_INFO_ADICIONAL, NORMATIVIDAD, ANIO_VIGENCIA_DESDE,
         ANIO_VIGENCIA_HASTA, ESTADO, CREATED_BY, CREATED_AT, ACTIVE
     ) VALUES (
-        p_nombre, TRIM(p_nombre_asignatura), p_descripcion, p_fk_tlv_enfoque_pedagogico,
+        p_nombre,
+        COALESCE(NULLIF(TRIM(p_nombre_asignatura), ''),
+                 academico_test.fn_refcurr_nombre_asignatura_default(p_fk_tnivel_ensenanza_ids)),
+        p_descripcion, p_fk_tlv_enfoque_pedagogico,
         p_fk_tlv_tipo_evaluacion,
         COALESCE(NULLIF(TRIM(p_nivel_1_etiqueta), ''), 'Enunciado'),
         COALESCE(NULLIF(TRIM(p_nivel_2_etiqueta), ''), 'Evidencia'),
@@ -239,7 +297,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_refcurr_crear(BIGINT, VARCHAR, VARCHAR, BIGINT[], BIGINT, BIGINT, VARCHAR, VARCHAR, INTEGER, VARCHAR, VARCHAR, VARCHAR, INTEGER, VARCHAR, BIGINT[], VARCHAR)
-    IS 'V214.3 -- == V213 mas p_nombre_asignatura, obligatorio de negocio (22023 si falta o viene vacio) aunque en la firma lleve DEFAULT NULL para no reordenar los parametros existentes. Gate CREAR sobre REFERENTES_CURRICULARES.';
+    IS 'V214.3 -- == V213 mas p_nombre_asignatura: si falta o llega vacio se resuelve con fn_refcurr_nombre_asignatura_default sobre los niveles que se estan creando (''Asignatura'', o ''Dimension'' si todos son preescolar), igual que p_nivel_1_etiqueta / p_nivel_2_etiqueta. Se guarda con TRIM. Gate CREAR sobre REFERENTES_CURRICULARES.';
 
 -- ---------------------------------------------------------------------------
 -- 3) fn_refcurr_actualizar -- p_nombre_asignatura opcional (NULL = no tocar).
@@ -307,9 +365,9 @@ BEGIN
         RAISE EXCEPTION 'Nombre del referente no puede quedar vacio' USING ERRCODE = '22023';
     END IF;
 
-    IF p_nombre_asignatura IS NOT NULL AND NULLIF(TRIM(p_nombre_asignatura), '') IS NULL THEN
-        RAISE EXCEPTION 'Nombre de la asignatura no puede quedar vacio' USING ERRCODE = '22023';
-    END IF;
+    -- p_nombre_asignatura: NULL = no tocar. Cadena vacia = NO es un error,
+    -- es "devuelvemelo al defecto" -- se resuelve mas abajo, cuando ya se
+    -- conocen los niveles EFECTIVOS del referente tras el PATCH.
 
     -- Niveles educativos EFECTIVOS: los que llegan en el PATCH, o los que
     -- el referente ya tiene si el parametro no viene. Un array vacio no es
@@ -382,7 +440,15 @@ BEGIN
 
     UPDATE academico_test.TREFERENTE_CURRICULAR
        SET NOMBRE                       = COALESCE(p_nombre, NOMBRE),
-           NOMBRE_ASIGNATURA            = COALESCE(NULLIF(TRIM(p_nombre_asignatura), ''), NOMBRE_ASIGNATURA),
+           -- NULL = conserva; texto = lo toma; vacio = vuelve al defecto que
+           -- corresponda a los niveles EFECTIVOS (v_niveles_efect ya tiene en
+           -- cuenta si el PATCH reemplazo los niveles o no).
+           NOMBRE_ASIGNATURA            = CASE
+               WHEN p_nombre_asignatura IS NULL THEN NOMBRE_ASIGNATURA
+               WHEN NULLIF(TRIM(p_nombre_asignatura), '') IS NULL
+                   THEN academico_test.fn_refcurr_nombre_asignatura_default(v_niveles_efect)
+               ELSE TRIM(p_nombre_asignatura)
+           END,
            DESCRIPCION                  = COALESCE(p_descripcion, DESCRIPCION),
            FK_TLV_ENFOQUE_PEDAGOGICO    = COALESCE(p_fk_tlv_enfoque_pedagogico, FK_TLV_ENFOQUE_PEDAGOGICO),
            FK_TLV_TIPO_EVALUACION       = COALESCE(p_fk_tlv_tipo_evaluacion, FK_TLV_TIPO_EVALUACION),
@@ -474,7 +540,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_refcurr_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT[], BIGINT, BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, INTEGER, INTEGER, VARCHAR, BIGINT[], VARCHAR)
-    IS 'V214.3 -- == V213 mas p_nombre_asignatura: ausente/NULL no toca el valor actual; cadena vacia o solo espacios lanza 22023 (la columna es NOT NULL). Gate EDITAR sobre REFERENTES_CURRICULARES.';
+    IS 'V214.3 -- == V213 mas p_nombre_asignatura, con tres comportamientos: ausente/NULL conserva el valor actual; texto lo reemplaza (con TRIM); cadena vacia o solo espacios NO es error, devuelve el campo al defecto de fn_refcurr_nombre_asignatura_default calculado sobre los niveles EFECTIVOS del referente tras el PATCH (si el PATCH cambio los niveles, el defecto se recalcula con los nuevos). Gate EDITAR sobre REFERENTES_CURRICULARES.';
 
 -- ---------------------------------------------------------------------------
 -- 4) fn_refcurr_listar -- nueva columna nombre_asignatura en el RETURNS TABLE
@@ -722,7 +788,7 @@ COMMENT ON FUNCTION academico_test.fn_refcurr_nombre_asignatura(BIGINT, BIGINT)
 -- Las de crear/actualizar se REEMPLAZAN con UPDATE y no editando V214: esa
 -- migracion ya corrio y su ON CONFLICT no se reejecuta.
 
--- 7.1 refcurr-crear -- + BODY.NOMBRE_ASIGNATURA (obligatorio).
+-- 7.1 refcurr-crear -- + BODY.NOMBRE_ASIGNATURA (opcional, cae al defecto).
 UPDATE public.query
    SET query = $q$SELECT academico_test.fn_refcurr_crear(
     p_pk_usuario_solicitante     => public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
@@ -759,7 +825,7 @@ UPDATE public.query
        "BODY.ESTADO":             "VARCHAR",
        "BODY.AREAS_IDS":          "BIGINT[]"
      }'::jsonb,
-       detail = 'V214.3 -- crea un referente curricular. BODY.NOMBRE_ASIGNATURA es OBLIGATORIO (22023 si falta): es el rotulo con el que se llamara la asignatura en planeador/asistencias/periodos. BODY.NIVELES_IDS obligatorio con al menos un nivel; BODY.AREAS_IDS vacio/ausente = aplica a todas las areas'
+       detail = 'V214.3 -- crea un referente curricular. BODY.NOMBRE_ASIGNATURA es el rotulo con el que se llamara la asignatura en planeador/asistencias/periodos; es OPCIONAL: si no viene (o viene vacio) se resuelve por nivel -- Asignatura, o Dimension si el referente es SOLO de preescolar. BODY.NIVELES_IDS obligatorio con al menos un nivel; BODY.AREAS_IDS vacio/ausente = aplica a todas las areas'
  WHERE uuid = 'refcurr-crear';
 
 -- 7.2 refcurr-actualizar -- + BODY.NOMBRE_ASIGNATURA (ausente = no tocar).
@@ -801,7 +867,7 @@ UPDATE public.query
        "BODY.ESTADO":             "VARCHAR",
        "BODY.AREAS_IDS":          "BIGINT[]"
      }'::jsonb,
-       detail = 'V214.3 -- PATCH parcial de un referente curricular; cada campo ausente preserva su valor actual. BODY.NOMBRE_ASIGNATURA ausente = no tocar, cadena vacia = 22023. BODY.NIVELES_IDS ausente = no tocar los niveles, array = reemplazo completo del set. BODY.AREAS_IDS ausente = no tocar areas, [] = vaciarlas'
+       detail = 'V214.3 -- PATCH parcial de un referente curricular; cada campo ausente preserva su valor actual. BODY.NOMBRE_ASIGNATURA ausente = no tocar, texto = lo reemplaza, cadena vacia = vuelve al defecto por nivel (Asignatura / Dimension). BODY.NIVELES_IDS ausente = no tocar los niveles, array = reemplazo completo del set. BODY.AREAS_IDS ausente = no tocar areas, [] = vaciarlas'
  WHERE uuid = 'refcurr-actualizar';
 
 -- 7.3 refcurr-nombre-asignatura -- endpoint nuevo.
