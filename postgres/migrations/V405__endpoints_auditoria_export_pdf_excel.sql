@@ -1,5 +1,5 @@
 -- ============================================================================
--- V402 -- Exportar Auditoria (Registro de actividad) a PDF y Excel.
+-- V405 -- Exportar Auditoria (Registro de actividad) a PDF y Excel.
 --
 -- Tres filas nuevas en el catalogo del microservicio audit-clickhouse-cval,
 -- una por cada boton "Exportar" de las pantallas de auditoria:
@@ -18,10 +18,10 @@
 -- application.yml) para devolver el PDF o el .xlsx.
 --
 -- ----------------------------------------------------------------------------
--- 1. Por que filas NUEVAS y no reusar los listados (a diferencia de V401)
+-- 1. Por que filas NUEVAS y no reusar los listados (a diferencia de V404)
 -- ----------------------------------------------------------------------------
 -- En el mundo academico el reporte reusa la MISMA funcion del listado con la
--- paginacion en NULL (V124/V130/V401). Aqui no se puede, y la razon es Java,
+-- paginacion en NULL (V124/V130/V404). Aqui no se puede, y la razon es Java,
 -- no SQL:
 --
 --   query-service/src/main/java/com/co/eurekatic/query/read/QueryService.java
@@ -250,7 +250,7 @@ ORDER BY started_at DESC
 LIMIT 50001;
 $Q$,
     'clickhouse', FALSE, FALSE,
-    'V402 -- SESIONES de auditoria SIN PAGINAR, para el reporte PDF/Excel (reporting-service, clave auditoria-sesiones). Mismos filtros y mismo scope por establecimiento que POST /audits/query (V90+V377+V398): el super administrador ve todo y cualquier otro rol solo las sesiones con al menos una operacion etiquetada con SU establecimiento. Filtros BODY.FILTERS.AUTHOR / STATUS (active|closed) / STARTEDFROM / STARTEDTO, mas BODY.FILTERS.IDS (CSV de family_id) para exportar solo las filas seleccionadas en la tabla, que tiene prioridad sobre los demas filtros. Devuelve authorName, ip, startedAt, endedAt, status y operationsCount -- sin totalCount, que es andamiaje de la paginacion del front. Tope de 50001 filas para que el reporting-service pueda responder 422 en vez de truncar en silencio.',
+    'V405 -- SESIONES de auditoria SIN PAGINAR, para el reporte PDF/Excel (reporting-service, clave auditoria-sesiones). Mismos filtros y mismo scope por establecimiento que POST /audits/query (V90+V377+V398): el super administrador ve todo y cualquier otro rol solo las sesiones con al menos una operacion etiquetada con SU establecimiento. Filtros BODY.FILTERS.AUTHOR / STATUS (active|closed) / STARTEDFROM / STARTEDTO, mas BODY.FILTERS.IDS (CSV de family_id) para exportar solo las filas seleccionadas en la tabla, que tiene prioridad sobre los demas filtros. Devuelve authorName, ip, startedAt, endedAt, status y operationsCount -- sin totalCount, que es andamiaje de la paginacion del front. Tope de 50001 filas para que el reporting-service pueda responder 422 en vez de truncar en silencio.',
     CURRENT_TIMESTAMP, m.id_microservice,
     '/audits/export-all', 'SELECT', 'POST',
     '{"BODY.FILTERS.AUTHOR": "Nullable(String)",
@@ -312,7 +312,7 @@ ORDER BY ts DESC
 LIMIT 50001;
 $Q$,
     'clickhouse', FALSE, FALSE,
-    'V402 -- todas las operaciones detectadas sobre UNA tabla, SIN PAGINAR, para el reporte PDF/Excel (reporting-service, clave auditoria-tabla-operaciones). Mismo WHERE, mismo scope por app_name y mismo filtro por establecimiento que POST /audit-tables/:SLUG/operations/query (V381+V362). La tabla se pide en BODY.FILTERS.SLUG (el slug en camelCase de la pantalla, p.ej. tActaGrado) y NO en la ruta, porque el reporting-service solo sabe mandar cuerpo; sin SLUG la consulta devuelve CERO filas, nunca la tabla entera. Filtros BODY.FILTERS.AUTHOR (busca en usuario y en IP), OPERATIONCH (c|u|d), OCCURREDFROM / OCCURREDTO y BODY.FILTERS.IDS (CSV de <lsn>-<seq>) para exportar las filas seleccionadas. Devuelve occurredAt, operation, authorName, ip, entityName y entityId -- NO incluye fila_new_raw/entityFieldsRaw (volcado de la fila completa, con datos personales) ni totalCount.',
+    'V405 -- todas las operaciones detectadas sobre UNA tabla, SIN PAGINAR, para el reporte PDF/Excel (reporting-service, clave auditoria-tabla-operaciones). Mismo WHERE, mismo scope por app_name y mismo filtro por establecimiento que POST /audit-tables/:SLUG/operations/query (V381+V362). La tabla se pide en BODY.FILTERS.SLUG (el slug en camelCase de la pantalla, p.ej. tActaGrado) y NO en la ruta, porque el reporting-service solo sabe mandar cuerpo; sin SLUG la consulta devuelve CERO filas, nunca la tabla entera. Filtros BODY.FILTERS.AUTHOR (busca en usuario y en IP), OPERATIONCH (c|u|d), OCCURREDFROM / OCCURREDTO y BODY.FILTERS.IDS (CSV de <lsn>-<seq>) para exportar las filas seleccionadas. Devuelve occurredAt, operation, authorName, ip, entityName y entityId -- NO incluye fila_new_raw/entityFieldsRaw (volcado de la fila completa, con datos personales) ni totalCount.',
     CURRENT_TIMESTAMP, m.id_microservice,
     '/audit-tables/operations/export-all', 'SELECT', 'POST',
     '{"BODY.FILTERS.SLUG": "Nullable(String)",
@@ -372,7 +372,7 @@ ORDER BY ts DESC
 LIMIT 50001;
 $Q$,
     'clickhouse', FALSE, FALSE,
-    'V402 -- los cambios de UNA sesion de usuario, SIN PAGINAR, para el reporte PDF/Excel (reporting-service, clave auditoria-sesion-operaciones). Mismo WHERE y mismo filtro por establecimiento que POST /audits/sessions/:SESSIONID/operations (V90+V362+V380), incluido el predicado aflojado de V380 que tolera las filas escritas sin prefijo de esquema. La sesion se pide en BODY.FILTERS.SESSIONID (el family_id) y NO en la ruta, porque el reporting-service solo sabe mandar cuerpo; sin SESSIONID la consulta devuelve CERO filas, nunca todas las sesiones. Filtros BODY.FILTERS.TABLESLUG, OPERATIONCH (c|u|d), OCCURREDFROM / OCCURREDTO y BODY.FILTERS.IDS (CSV de <lsn>-<seq>). Devuelve occurredAt, tableSlug, operation, entityName y entityId -- sin totalCount.',
+    'V405 -- los cambios de UNA sesion de usuario, SIN PAGINAR, para el reporte PDF/Excel (reporting-service, clave auditoria-sesion-operaciones). Mismo WHERE y mismo filtro por establecimiento que POST /audits/sessions/:SESSIONID/operations (V90+V362+V380), incluido el predicado aflojado de V380 que tolera las filas escritas sin prefijo de esquema. La sesion se pide en BODY.FILTERS.SESSIONID (el family_id) y NO en la ruta, porque el reporting-service solo sabe mandar cuerpo; sin SESSIONID la consulta devuelve CERO filas, nunca todas las sesiones. Filtros BODY.FILTERS.TABLESLUG, OPERATIONCH (c|u|d), OCCURREDFROM / OCCURREDTO y BODY.FILTERS.IDS (CSV de <lsn>-<seq>). Devuelve occurredAt, tableSlug, operation, entityName y entityId -- sin totalCount.',
     CURRENT_TIMESTAMP, m.id_microservice,
     '/audits/sessions/operations/export-all', 'SELECT', 'POST',
     '{"BODY.FILTERS.SESSIONID": "Nullable(String)",
@@ -423,7 +423,7 @@ BEGIN
                     'audit-cval-sesion-operaciones-export-all-001');
 
     IF v_filas != 3 THEN
-        RAISE EXCEPTION 'V402: se esperaban 3 filas de export de auditoria, hay %. Falta el microservicio audit-clickhouse-cval (V357).', v_filas;
+        RAISE EXCEPTION 'V405: se esperaban 3 filas de export de auditoria, hay %. Falta el microservicio audit-clickhouse-cval (V357).', v_filas;
     END IF;
 
     SELECT string_agg(q.path_template, ', ') INTO v_sin_rol
@@ -434,8 +434,8 @@ BEGIN
        AND NOT EXISTS (SELECT 1 FROM public.role_query rq WHERE rq.query_id = q.id_query);
 
     IF v_sin_rol IS NOT NULL THEN
-        RAISE WARNING 'V402: estos exports quedaron SIN ningun rol (responderan 403 a todos): %. Pasa si el listado del que heredan tampoco tenia role_query en esta base.', v_sin_rol;
+        RAISE WARNING 'V405: estos exports quedaron SIN ningun rol (responderan 403 a todos): %. Pasa si el listado del que heredan tampoco tenia role_query en esta base.', v_sin_rol;
     END IF;
 
-    RAISE NOTICE 'V402 OK: 3 endpoints de exportacion de auditoria en audit-clickhouse-cval, con los roles de sus listados.';
+    RAISE NOTICE 'V405 OK: 3 endpoints de exportacion de auditoria en audit-clickhouse-cval, con los roles de sus listados.';
 END $$;

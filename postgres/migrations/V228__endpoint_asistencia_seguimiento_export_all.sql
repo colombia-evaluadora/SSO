@@ -13,11 +13,11 @@
 -- -----------------------------------------------------------------------------
 -- NUMERACION FUERA DE ORDEN -- LEER ANTES DE DESPLEGAR
 -- -----------------------------------------------------------------------------
--- El techo del repo esta en V400 y el siguiente secuencial seria V403. Se eligio
--- V228 A PROPOSITO, para que este archivo quede fisicamente junto al resto del
--- modulo de Asistencias (V220 dominio, V221 endpoints, V290 reporte por grupo)
--- y no a 170 numeros de distancia. V228 se verifico libre en las 14 ramas de
--- origin.
+-- El techo del repo ronda los V400 y el siguiente secuencial libre estaba muy
+-- por encima. Se eligio V228 A PROPOSITO, para que este archivo quede
+-- fisicamente junto al resto del modulo de Asistencias (V220 dominio, V221
+-- endpoints, V290 reporte por grupo) y no a casi 200 numeros de distancia.
+-- V228 se verifico libre en TODAS las ramas de origin.
 --
 -- Consecuencia operativa: en cualquier base que YA paso de V228 -- y todas las
 -- desplegadas lo estan -- Flyway tiene que aplicarla OUT-OF-ORDER. El
@@ -30,7 +30,7 @@
 -- -----------------------------------------------------------------------------
 -- POR QUE NO HAY FUNCION PL/PGSQL NUEVA NI HUBO QUE EDITAR V220
 -- -----------------------------------------------------------------------------
--- Patron de reporte del repo (V67/V68/V124/V290/V401): un reporte no es una
+-- Patron de reporte del repo (V67/V68/V124/V290/V404): un reporte no es una
 -- funcion nueva, es la MISMA funcion del listado invocada sin paginar detras de
 -- una ruta separada. Asi la pantalla y su exportacion no pueden divergir ni en
 -- el WHERE ni en el alcance por rol (fn_asistencia_puede_ver, V220).
@@ -38,7 +38,7 @@
 -- fn_asistencia_listar_seguimiento YA soporta "sin limite" sin tocarla: su SQL
 -- dice `LIMIT NULLIF($9, 0)`, asi que p_page_size NULL (o 0) deja el LIMIT en
 -- NULL, que en PostgreSQL es "sin clausula" -- lo mismo que V124 encontro en
--- fn_periodo_listar. NO cae en la trampa de V224/V401, donde el LIMIT estaba
+-- fn_periodo_listar. NO cae en la trampa de V224/V404, donde el LIMIT estaba
 -- escrito `GREATEST(p_limite, 1)` y, como GREATEST ignora los NULL,
 -- GREATEST(NULL, 1) = 1 habria exportado UNA sola fila. Aqui no habia nada que
 -- arreglar, asi que V220 se deja intacta (no se toca su checksum).
@@ -72,7 +72,7 @@
 -- BODY.PAGEINDEX / BODY.PAGESIZE NO se declaran: no se puede paginar un reporte
 -- ni por accidente. Se pasan NULL::INTEGER (= sin limite, ver arriba).
 --
--- BODY.FILTERS.IDS -- "exportar seleccionados" (V69/V124/V401). La PK
+-- BODY.FILTERS.IDS -- "exportar seleccionados" (V69/V124/V404). La PK
 -- exportable es pk_tasistencia, que la funcion ya devuelve. El recorte va en un
 -- WHERE POR FUERA de la funcion, DESPUES de que esta aplico su gate, asi que
 -- mandar el id de una fila que el usuario no puede ver no la revela: si la
@@ -103,7 +103,7 @@
 -- -----------------------------------------------------------------------------
 -- ROLES
 -- -----------------------------------------------------------------------------
--- "Quien ve el listado puede exportarlo" (V67/V124/V290/V401): los role_query se
+-- "Quien ve el listado puede exportarlo" (V67/V124/V290/V404): los role_query se
 -- COPIAN con un SELECT de los de 'asis-seguimiento'. No se escribe ni un nombre
 -- de rol a mano -- en bases donde falten roles del dump base, hardcodearlos
 -- seria un no-op silencioso y el endpoint responderia 403 a todo el mundo.
@@ -111,7 +111,7 @@
 -- menu 'ASISTENCIAS' + scope por categoria de rol), que corre DENTRO de la
 -- funcion reusada.
 --
--- Idempotente: DELETE por uuid + INSERT (role_query cascadea), igual que V401.
+-- Idempotente: DELETE por uuid + INSERT (role_query cascadea), igual que V404.
 --
 -- Tras aplicar: el contenedor query-service-eval-col cachea el catalogo -- hay
 -- que REINICIARLO o el gateway sigue respondiendo 404 a la ruta nueva.

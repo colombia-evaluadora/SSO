@@ -2230,7 +2230,7 @@ BEGIN
            d.pk
          -- p_limite NULL = "sin LIMIT" (PostgreSQL trata LIMIT NULL como
          -- ausencia de clausula). Es lo que usa el reporte sin paginar de
-         -- V401 (POST /planeador/actividades/export-all), igual que V130
+         -- V404 (POST /planeador/actividades/export-all), igual que V130
          -- hizo con est/sed/funcionarios. OJO: no vale GREATEST(NULL, 1),
          -- que en PostgreSQL ignora el NULL y devuelve 1 -- exportaria UNA
          -- fila. Para cualquier valor no nulo el comportamiento es el mismo

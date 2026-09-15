@@ -1,5 +1,5 @@
 -- =============================================================================
--- V401 -- Reporte PDF/Excel de las actividades del planeador.
+-- V404 -- Reporte PDF/Excel de las actividades del planeador.
 --
 --   POST /planeador/actividades/export-all  ->  fn_actividad_listar (V224)
 --                                               sin paginar
@@ -90,7 +90,7 @@ SELECT
 WHERE CAST(:BODY.FILTERS.IDS AS BIGINT[]) IS NULL
    OR t.pk_tactividad = ANY(CAST(:BODY.FILTERS.IDS AS BIGINT[]));$q$,
     q.type, FALSE, FALSE,
-    'V401 -- actividades del planeador SIN PAGINAR para el reporte PDF/Excel (reporting-service, clave planeador-actividades). Misma funcion, mismos filtros y mismo gate/alcance que GET /planeador/actividades (fn_actividad_listar, V224), con los binds bajo BODY.FILTERS.* (SEARCH, ASIGNATURA, GRUPO, UNIDAD, TIPO_ACTIVIDAD, INSTRUMENTO, FECHA_DESDE, FECHA_HASTA, ESTADOS[], DIAS_GRACIA, INCLUIR_INACTIVAS, DIA, FUNCIONARIO) + FILTERS.IDS para exportar seleccionados y SORTING.ID/DESC para el orden. Todos opcionales. No es el JSON de intercambio de /planeador/actividades/exportar (V273).',
+    'V404 -- actividades del planeador SIN PAGINAR para el reporte PDF/Excel (reporting-service, clave planeador-actividades). Misma funcion, mismos filtros y mismo gate/alcance que GET /planeador/actividades (fn_actividad_listar, V224), con los binds bajo BODY.FILTERS.* (SEARCH, ASIGNATURA, GRUPO, UNIDAD, TIPO_ACTIVIDAD, INSTRUMENTO, FECHA_DESDE, FECHA_HASTA, ESTADOS[], DIAS_GRACIA, INCLUIR_INACTIVAS, DIA, FUNCIONARIO) + FILTERS.IDS para exportar seleccionados y SORTING.ID/DESC para el orden. Todos opcionales. No es el JSON de intercambio de /planeador/actividades/exportar (V273).',
     q.action, q.style,
     CURRENT_TIMESTAMP, q.microservice_id,
     '/planeador/actividades/export-all',
@@ -138,6 +138,6 @@ DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM public.query
                     WHERE uuid = 'eval-col-planeador-actividades-export-all-001') THEN
-        RAISE EXCEPTION 'V401: no se creo la fila de /planeador/actividades/export-all (falta GET /planeador/actividades en eval-col, V246)';
+        RAISE EXCEPTION 'V404: no se creo la fila de /planeador/actividades/export-all (falta GET /planeador/actividades en eval-col, V246)';
     END IF;
 END $$;
