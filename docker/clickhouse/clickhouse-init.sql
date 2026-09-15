@@ -154,6 +154,10 @@ CREATE TABLE IF NOT EXISTS auditoria.tsesion_web
     -- sesiones previas al fix). Filtra /audits/query por app en vez de
     -- mostrar sesiones de todas las apps a la vez.
     app_name        LowCardinality(String)             CODEC(ZSTD(1)),
+    -- V400: nombre del único establecimiento que el rector/secretaria
+    -- dueño de esta sesión administra, resuelto en el login (mismo
+    -- valor que el claim `est` del JWT). '' para quien no aplica.
+    establecimiento LowCardinality(String)             CODEC(ZSTD(1)),
     INDEX idx_family        family_id                  TYPE bloom_filter GRANULARITY 4,
     INDEX idx_tsesion_fk    fk_tusuario                TYPE bloom_filter GRANULARITY 4,
     INDEX idx_tsesion_last  last_seen_at               TYPE minmax        GRANULARITY 4,

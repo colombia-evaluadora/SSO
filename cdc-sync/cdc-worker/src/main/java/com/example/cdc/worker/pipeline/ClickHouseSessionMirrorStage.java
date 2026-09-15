@@ -91,6 +91,12 @@ public class ClickHouseSessionMirrorStage {
         // o "" para filas que aún no lo tienen -- str() ya default-ea a
         // "" si after.get(...) devuelve null).
         row.put("app_name", str(after.get("app_name")));
+        // V400: establecimiento (nombre del único EE que el rector/
+        // secretaria dueño de esta sesión administra, resuelto en el
+        // login -- ver EstablishmentResolver/SessionTrackingService).
+        // "" para quien no aplica (super-admin, docente, etc.), mismo
+        // criterio que app_name.
+        row.put("establecimiento", str(after.get("establecimiento")));
         // BUG real encontrado revisando esto: antes iba hardcodeado a 0
         // para TODA fila -- con eso argMax(..., lsn) en V90/V92 no
         // puede distinguir "la versión más nueva" de ninguna otra (todas
