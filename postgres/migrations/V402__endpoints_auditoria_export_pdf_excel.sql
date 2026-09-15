@@ -91,6 +91,33 @@
 -- resultado.
 --
 -- ----------------------------------------------------------------------------
+-- 3.b. param_types: "Nullable(String)" y NO "VARCHAR"
+-- ----------------------------------------------------------------------------
+-- No es cosmetico ni una inconsistencia heredada: es la diferencia entre que el
+-- endpoint funcione o devuelva 500 en cuanto FALTE un filtro.
+--
+-- Para un filtro ausente el binder no omite el parametro, lo manda NULL con el
+-- tipo declarado. Con "VARCHAR" el SQL que llega a ClickHouse dice
+--
+--     coalesce(CAST(NULL, 'varchar'), '')
+--
+-- y ClickHouse responde
+--
+--     Code: 70. DB::Exception: Cannot convert NULL to a non-nullable type
+--     (CANNOT_CONVERT_TYPE)
+--
+-- porque 'varchar' mapea a String, que NO admite NULL: hay que decir
+-- Nullable(String) explicitamente. Verificado en vivo -- con "VARCHAR" un
+-- POST /reportes/auditoria-sesiones con el cuerpo {"format":"pdf"} (sin
+-- filtros, el caso MAS comun: el usuario abre la pantalla y exporta) responde
+-- 500 DB_ERROR.
+--
+-- Por eso las filas CVAL de V384 declaran "Nullable(String)" mientras las
+-- gemelas de PIGSE declaran "VARCHAR": esa asimetria del catalogo parece un
+-- descuido pero es justo lo que mantiene vivas a las de CEVAL. Si alguien
+-- "uniformiza" estos tipos a VARCHAR, los tres exports se caen.
+--
+-- ----------------------------------------------------------------------------
 -- 4. Permisos: no se inventa ninguno
 -- ----------------------------------------------------------------------------
 -- El gate de auditoria son DOS capas y las dos se copian tal cual:
@@ -208,7 +235,7 @@ LEFT JOIN auditoria.audit_log audit
 GROUP BY s.family_id, s.started_at, s.ended_at, s.close_reason, s.last_seen_at, s.status
 HAVING (
            coalesce(:BODY.FILTERS.IDS, '') != ''
-           AND has(splitByChar(',', :BODY.FILTERS.IDS), s.family_id)
+           AND has(splitByChar(',', coalesce(:BODY.FILTERS.IDS, '')), s.family_id)
        )
     OR (
            coalesce(:BODY.FILTERS.IDS, '') = ''
@@ -226,11 +253,11 @@ $Q$,
     'V402 -- SESIONES de auditoria SIN PAGINAR, para el reporte PDF/Excel (reporting-service, clave auditoria-sesiones). Mismos filtros y mismo scope por establecimiento que POST /audits/query (V90+V377+V398): el super administrador ve todo y cualquier otro rol solo las sesiones con al menos una operacion etiquetada con SU establecimiento. Filtros BODY.FILTERS.AUTHOR / STATUS (active|closed) / STARTEDFROM / STARTEDTO, mas BODY.FILTERS.IDS (CSV de family_id) para exportar solo las filas seleccionadas en la tabla, que tiene prioridad sobre los demas filtros. Devuelve authorName, ip, startedAt, endedAt, status y operationsCount -- sin totalCount, que es andamiaje de la paginacion del front. Tope de 50001 filas para que el reporting-service pueda responder 422 en vez de truncar en silencio.',
     CURRENT_TIMESTAMP, m.id_microservice,
     '/audits/export-all', 'SELECT', 'POST',
-    '{"BODY.FILTERS.AUTHOR": "VARCHAR",
-      "BODY.FILTERS.STATUS": "VARCHAR",
-      "BODY.FILTERS.STARTEDFROM": "VARCHAR",
-      "BODY.FILTERS.STARTEDTO": "VARCHAR",
-      "BODY.FILTERS.IDS": "VARCHAR"}'::JSONB
+    '{"BODY.FILTERS.AUTHOR": "Nullable(String)",
+      "BODY.FILTERS.STATUS": "Nullable(String)",
+      "BODY.FILTERS.STARTEDFROM": "Nullable(String)",
+      "BODY.FILTERS.STARTEDTO": "Nullable(String)",
+      "BODY.FILTERS.IDS": "Nullable(String)"}'::JSONB
   FROM public.microservice m
  WHERE m.serviceid = 'audit-clickhouse-cval';
 
@@ -276,7 +303,7 @@ WHERE coalesce(:BODY.FILTERS.SLUG, '') != ''
   AND ts >= parseDateTimeBestEffort(if(coalesce(:BODY.FILTERS.OCCURREDFROM, '') = '', '1970-01-01', :BODY.FILTERS.OCCURREDFROM))
   AND ts <= parseDateTimeBestEffort(if(coalesce(:BODY.FILTERS.OCCURREDTO, '') = '', '2999-12-31', :BODY.FILTERS.OCCURREDTO))
   AND (coalesce(:BODY.FILTERS.IDS, '') = ''
-       OR has(splitByChar(',', :BODY.FILTERS.IDS), concat(toString(lsn), '-', toString(seq))))
+       OR has(splitByChar(',', coalesce(:BODY.FILTERS.IDS, '')), concat(toString(lsn), '-', toString(seq))))
   AND (
       position(concat(',', :CONTEXT.ROLES, ','), ',CEVAL-SUPER_ADMINISTRADOR,') > 0
       OR (:CONTEXT.ESTABLISHMENT != '' AND JSONExtractString(contexto, 'establecimiento') = :CONTEXT.ESTABLISHMENT)
@@ -288,12 +315,12 @@ $Q$,
     'V402 -- todas las operaciones detectadas sobre UNA tabla, SIN PAGINAR, para el reporte PDF/Excel (reporting-service, clave auditoria-tabla-operaciones). Mismo WHERE, mismo scope por app_name y mismo filtro por establecimiento que POST /audit-tables/:SLUG/operations/query (V381+V362). La tabla se pide en BODY.FILTERS.SLUG (el slug en camelCase de la pantalla, p.ej. tActaGrado) y NO en la ruta, porque el reporting-service solo sabe mandar cuerpo; sin SLUG la consulta devuelve CERO filas, nunca la tabla entera. Filtros BODY.FILTERS.AUTHOR (busca en usuario y en IP), OPERATIONCH (c|u|d), OCCURREDFROM / OCCURREDTO y BODY.FILTERS.IDS (CSV de <lsn>-<seq>) para exportar las filas seleccionadas. Devuelve occurredAt, operation, authorName, ip, entityName y entityId -- NO incluye fila_new_raw/entityFieldsRaw (volcado de la fila completa, con datos personales) ni totalCount.',
     CURRENT_TIMESTAMP, m.id_microservice,
     '/audit-tables/operations/export-all', 'SELECT', 'POST',
-    '{"BODY.FILTERS.SLUG": "VARCHAR",
-      "BODY.FILTERS.AUTHOR": "VARCHAR",
-      "BODY.FILTERS.OPERATIONCH": "VARCHAR",
-      "BODY.FILTERS.OCCURREDFROM": "VARCHAR",
-      "BODY.FILTERS.OCCURREDTO": "VARCHAR",
-      "BODY.FILTERS.IDS": "VARCHAR"}'::JSONB
+    '{"BODY.FILTERS.SLUG": "Nullable(String)",
+      "BODY.FILTERS.AUTHOR": "Nullable(String)",
+      "BODY.FILTERS.OPERATIONCH": "Nullable(String)",
+      "BODY.FILTERS.OCCURREDFROM": "Nullable(String)",
+      "BODY.FILTERS.OCCURREDTO": "Nullable(String)",
+      "BODY.FILTERS.IDS": "Nullable(String)"}'::JSONB
   FROM public.microservice m
  WHERE m.serviceid = 'audit-clickhouse-cval';
 
@@ -336,7 +363,7 @@ WHERE coalesce(:BODY.FILTERS.SESSIONID, '') != ''
   AND ts >= parseDateTimeBestEffort(if(coalesce(:BODY.FILTERS.OCCURREDFROM, '') = '', '1970-01-01', :BODY.FILTERS.OCCURREDFROM))
   AND ts <= parseDateTimeBestEffort(if(coalesce(:BODY.FILTERS.OCCURREDTO, '') = '', '2999-12-31', :BODY.FILTERS.OCCURREDTO))
   AND (coalesce(:BODY.FILTERS.IDS, '') = ''
-       OR has(splitByChar(',', :BODY.FILTERS.IDS), concat(toString(lsn), '-', toString(seq))))
+       OR has(splitByChar(',', coalesce(:BODY.FILTERS.IDS, '')), concat(toString(lsn), '-', toString(seq))))
   AND (
       position(concat(',', :CONTEXT.ROLES, ','), ',CEVAL-SUPER_ADMINISTRADOR,') > 0
       OR (:CONTEXT.ESTABLISHMENT != '' AND JSONExtractString(contexto, 'establecimiento') = :CONTEXT.ESTABLISHMENT)
@@ -348,12 +375,12 @@ $Q$,
     'V402 -- los cambios de UNA sesion de usuario, SIN PAGINAR, para el reporte PDF/Excel (reporting-service, clave auditoria-sesion-operaciones). Mismo WHERE y mismo filtro por establecimiento que POST /audits/sessions/:SESSIONID/operations (V90+V362+V380), incluido el predicado aflojado de V380 que tolera las filas escritas sin prefijo de esquema. La sesion se pide en BODY.FILTERS.SESSIONID (el family_id) y NO en la ruta, porque el reporting-service solo sabe mandar cuerpo; sin SESSIONID la consulta devuelve CERO filas, nunca todas las sesiones. Filtros BODY.FILTERS.TABLESLUG, OPERATIONCH (c|u|d), OCCURREDFROM / OCCURREDTO y BODY.FILTERS.IDS (CSV de <lsn>-<seq>). Devuelve occurredAt, tableSlug, operation, entityName y entityId -- sin totalCount.',
     CURRENT_TIMESTAMP, m.id_microservice,
     '/audits/sessions/operations/export-all', 'SELECT', 'POST',
-    '{"BODY.FILTERS.SESSIONID": "VARCHAR",
-      "BODY.FILTERS.TABLESLUG": "VARCHAR",
-      "BODY.FILTERS.OPERATIONCH": "VARCHAR",
-      "BODY.FILTERS.OCCURREDFROM": "VARCHAR",
-      "BODY.FILTERS.OCCURREDTO": "VARCHAR",
-      "BODY.FILTERS.IDS": "VARCHAR"}'::JSONB
+    '{"BODY.FILTERS.SESSIONID": "Nullable(String)",
+      "BODY.FILTERS.TABLESLUG": "Nullable(String)",
+      "BODY.FILTERS.OPERATIONCH": "Nullable(String)",
+      "BODY.FILTERS.OCCURREDFROM": "Nullable(String)",
+      "BODY.FILTERS.OCCURREDTO": "Nullable(String)",
+      "BODY.FILTERS.IDS": "Nullable(String)"}'::JSONB
   FROM public.microservice m
  WHERE m.serviceid = 'audit-clickhouse-cval';
 
