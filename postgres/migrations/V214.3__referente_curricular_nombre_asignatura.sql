@@ -1153,3 +1153,38 @@ ON CONFLICT (uuid) DO UPDATE
        path_template = EXCLUDED.path_template, http_method = EXCLUDED.http_method,
        execution_mode = EXCLUDED.execution_mode, microservice_id = EXCLUDED.microservice_id,
        detail = EXCLUDED.detail;
+
+-- ---------------------------------------------------------------------------
+-- 9) role_query -- sin fila aqui el gateway responde 403 y el gate de la
+--    funcion no llega a ejecutarse. Los roles salen de TROL_MENU, para que el
+--    gate del JWT y el de la base no queden desincronizados.
+-- ---------------------------------------------------------------------------
+-- 9.1 Catalogo: solo quien administra referentes (REFERENTES_CURRICULARES ->
+--     SUPER_ADMINISTRADOR), el mismo conjunto que V214 dio al resto del dominio.
+INSERT INTO public.role_query (role_id, query_id)
+SELECT r.id_role, q.id_query
+  FROM public.query q
+  JOIN public.microservice m ON m.id_microservice = q.microservice_id AND m.serviceid = 'eval-col'
+ CROSS JOIN public.role r
+ WHERE r.name = 'CEVAL-SUPER_ADMINISTRADOR'
+   AND q.uuid IN ('personalizar-asignatura-listar', 'personalizar-asignatura-crear',
+                  'personalizar-asignatura-eliminar')
+   AND NOT EXISTS (
+       SELECT 1 FROM public.role_query rq
+        WHERE rq.query_id = q.id_query AND rq.role_id = r.id_role
+   );
+
+-- 9.2 Resolver del rotulo: quien tiene PLANEADOR, ASISTENCIAS o
+--     PERIODOS_ACADEMICOS -- coordinador, docente, rector y super admin.
+INSERT INTO public.role_query (role_id, query_id)
+SELECT r.id_role, q.id_query
+  FROM public.query q
+  JOIN public.microservice m ON m.id_microservice = q.microservice_id AND m.serviceid = 'eval-col'
+ CROSS JOIN public.role r
+ WHERE r.name IN ('CEVAL-COORDINADOR', 'CEVAL-DOCENTE', 'CEVAL-RECTOR',
+                  'CEVAL-SUPER_ADMINISTRADOR', 'SSO-ADMIN')
+   AND q.uuid = 'refcurr-nombre-asignatura'
+   AND NOT EXISTS (
+       SELECT 1 FROM public.role_query rq
+        WHERE rq.query_id = q.id_query AND rq.role_id = r.id_role
+   );
