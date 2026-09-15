@@ -119,7 +119,7 @@ public class SessionTrackingService {
             log.warn("openSession: app='{}' no matchea ningún public.app.name conocido, se guarda NULL", appName);
         }
 
-        applyAuditGucs(pkTusuario, "Inicio de sesión", requestBodySnapshot, familyId);
+        applyAuditGucs(pkTusuario, "Inicio de sesión", requestBodySnapshot, familyId, establishment);
         // last_seen_at = now() explícito para no depender del DEFAULT
         // (V89 lo creó con DEFAULT now() pero escribirlo acá hace
         // explícito que en el momento del open ambos timestamps son
@@ -216,16 +216,19 @@ public class SessionTrackingService {
      */
     @Transactional
     public void closeSession(String familyId, String closeReason) {
-        Long pkTusuario = jdbc.query(
-                "SELECT fk_tusuario FROM academico_test.tsesion_web WHERE family_id = ? AND ended_at IS NULL",
-                rs -> rs.next() ? rs.getObject("fk_tusuario", Long.class) : null,
+        SessionOwner owner = jdbc.query(
+                "SELECT fk_tusuario, establecimiento FROM academico_test.tsesion_web WHERE family_id = ? AND ended_at IS NULL",
+                rs -> rs.next()
+                        ? new SessionOwner(rs.getObject("fk_tusuario", Long.class), rs.getString("establecimiento"))
+                        : null,
                 familyId);
-        if (pkTusuario == null) {
+        if (owner == null) {
             log.debug("Sin sesión abierta para family={} -- closeSession no-op", shortFamily(familyId));
             return;
         }
+        Long pkTusuario = owner.pkTusuario();
 
-        applyAuditGucs(pkTusuario, "Cierre de sesión (" + closeReason + ")", Map.of(), familyId);
+        applyAuditGucs(pkTusuario, "Cierre de sesión (" + closeReason + ")", Map.of(), familyId, owner.establecimiento());
         int updated = jdbc.update(
                 "UPDATE academico_test.tsesion_web SET ended_at = now(), close_reason = ? "
                         + "WHERE family_id = ? AND ended_at IS NULL",
@@ -250,8 +253,22 @@ public class SessionTrackingService {
      * arriba salvo que haya un request HTTP real en el hilo (login/
      * logout sí lo tienen; el reaper no) — el helper ya maneja ese
      * caso devolviendo {@link Optional#empty()} sin lanzar.
+     *
+     * <p>V401 (sesiones): además de sesion_id/familia, funde
+     * {@code establecimiento} (mismo valor ya guardado en la propia
+     * fila de {@code tsesion_web}, ver {@link #openSession}) dentro
+     * de {@code app.contexto} -- sin esto, los eventos de
+     * open/close de sesión (que se auditan solos, vía el trigger
+     * genérico sobre {@code tsesion_web}, igual que cualquier otra
+     * tabla de negocio) nunca quedaban etiquetados con el EE del
+     * rector/secretaria dueño de la sesión, y el filtro por-fila de
+     * {@code /audits/sessions/:id/operations} (V362) los descartaba
+     * a todos -- el rector veía su propio cambio de sede (V401 en
+     * las funciones de sede) pero nunca el evento de "Inicio de
+     * sesión" mismo.
      */
-    private void applyAuditGucs(long pkTusuario, String etiqueta, Map<String, Object> requestBodySnapshot, String familyId) {
+    private void applyAuditGucs(long pkTusuario, String etiqueta, Map<String, Object> requestBodySnapshot,
+                                 String familyId, String establishment) {
         Optional<AuditContext> ctx = AuditContextExtractor.fromCurrentRequest(requestBodySnapshot);
         // V-audit-ctx-4 (sesiones reales): funde sesion_id y familia
         // dentro de app.contexto para que fn_audit_ctx() (V26) los
@@ -264,7 +281,13 @@ public class SessionTrackingService {
         // contrato del trigger.
         String contextoJson = null;
         if (familyId != null && !familyId.isBlank()) {
-            contextoJson = "{\"sesion_id\":\"" + familyId + "\",\"familia\":\"" + familyId + "\"}";
+            StringBuilder json = new StringBuilder()
+                    .append("{\"sesion_id\":\"").append(familyId)
+                    .append("\",\"familia\":\"").append(familyId).append('"');
+            if (establishment != null && !establishment.isBlank()) {
+                json.append(",\"establecimiento\":\"").append(jsonEscape(establishment)).append('"');
+            }
+            contextoJson = json.append('}').toString();
         }
         jdbc.queryForList(
                 "SELECT set_config('app.user_id', COALESCE(academico_test.fn_resolver_actor(?), ?), true), "
@@ -283,6 +306,19 @@ public class SessionTrackingService {
                 ctx.map(AuditContext::clientIp).orElse(null),
                 ctx.map(AuditContext::userAgent).orElse(null),
                 contextoJson);
+    }
+
+    private record SessionOwner(Long pkTusuario, String establecimiento) {
+    }
+
+    /**
+     * Escapa comillas dobles y backslashes -- únicos caracteres que
+     * pueden romper el JSON armado a mano de {@link #applyAuditGucs}
+     * (el nombre de un establecimiento es texto libre de catálogo,
+     * a diferencia de familyId que siempre es un UUID/hex seguro).
+     */
+    private static String jsonEscape(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private static String shortFamily(String familyId) {
