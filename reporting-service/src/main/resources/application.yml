@@ -267,7 +267,7 @@ reporting:
         observacion: Observacion
         soporte_nombre: Soporte
 
-    # Planeador -- actividades. path = fila V401 (fn_actividad_listar sin
+    # Planeador -- actividades. path = fila V404 (fn_actividad_listar sin
     # paginar, mismos filtros y alcance que GET /planeador/actividades). El
     # front manda en `filters` el mismo objeto del listado (SEARCH, ASIGNATURA,
     # GRUPO, UNIDAD, TIPO_ACTIVIDAD, INSTRUMENTO, FECHA_DESDE, FECHA_HASTA,
@@ -294,8 +294,32 @@ reporting:
         estudiantes_evaluados: Evaluados
         porcentaje_evaluado: '% evaluado'
 
+    # Planeador -- unidades tematicas (la otra pestana de la pantalla).
+    # path = fila V406 (fn_unidad_listar sin paginar). Los textos de los
+    # objetivos y contenidos NO salen: la funcion solo devuelve cuantos
+    # hay, y sacarlos seria un reporte maestro-detalle distinto.
+    planeador-unidades:
+      path: /planeador/unidades/export-all
+      title: Unidades tematicas
+      file-name: planeador-unidades
+      columns:
+        nombre: Unidad
+        descripcion: Descripcion
+        asignatura: Asignatura
+        area: Area
+        grado: Grado
+        docente: Docente
+        estado: Estado
+        fecha_inicio: Inicio
+        fecha_fin: Fin
+        calculo_definitiva: Forma de calculo
+        referente_curricular: Referente curricular
+        total_actividades: Actividades
+        total_objetivos: Objetivos
+        total_contenidos: Contenidos
+
     # -----------------------------------------------------------------
-    # Auditoria / Registro de actividad (V402). Los tres viven en OTRA
+    # Auditoria / Registro de actividad (V405). Los tres viven en OTRA
     # instancia de query-service -- de ahi el `base-url` propio: el
     # catalogo de auditoria corre contra ClickHouse y no comparte backend
     # con los reportes academicos.
