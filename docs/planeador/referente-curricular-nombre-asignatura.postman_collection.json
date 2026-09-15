@@ -1,0 +1,706 @@
+{
+  "info": {
+    "_postman_id": "8248a38b-33db-47f2-be78-679d933178fb",
+    "name": "SSO — Referente curricular: NOMBRE_ASIGNATURA (V214.3)",
+    "description": "Endpoints tocados por la migracion **V214.3**.\n\n- `TREFERENTE_CURRICULAR.NOMBRE_ASIGNATURA` VARCHAR(150) NOT NULL.\n- `POST /referentes-curriculares` → `BODY.NOMBRE_ASIGNATURA` **obligatorio**.\n- `PATCH /referentes-curriculares/:ID` → `BODY.NOMBRE_ASIGNATURA` opcional (ausente = no tocar, vacio = 400).\n- `POST /referentes-curriculares/query` y `GET /referentes-curriculares/:ID` devuelven `nombre_asignatura`; el `SEARCH` del listado tambien busca sobre el.\n- **Nuevo** `GET /referentes-curriculares/:ID/nombre-asignatura`: resuelve el rotulo segun el acceso del usuario. Gate por capability de menu — basta `VER` en **PLANEADOR**, **ASISTENCIAS** o **PERIODOS_ACADEMICOS**.\n\nEntorno esperado: `SSO — test` (`baseUrl`, `email`, `password`). El bloque 9 borra lo que crea el 1.2, asi que la corrida completa deja la base como estaba.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Login automatico: si el token vivo ya esta en la variable de",
+          "// coleccion, no vuelve a pedirlo.",
+          "const rutaLogin = '/api/auth/login';",
+          "if (pm.request.url.getPath().endsWith(rutaLogin)) { return; }",
+          "",
+          "function caducado(jwt) {",
+          "    try {",
+          "        const carga = JSON.parse(atob(jwt.split('.')[1]));",
+          "        return !carga.exp || (carga.exp - 30) * 1000 < Date.now();",
+          "    } catch (e) { return true; }",
+          "}",
+          "",
+          "const actual = pm.collectionVariables.get('token');",
+          "if (actual && !caducado(actual)) { return; }",
+          "",
+          "const clave = pm.environment.get('password');",
+          "if (!clave) { throw new Error('Falta `password` en el entorno «SSO — test».'); }",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + rutaLogin,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "        email: pm.environment.get('email'),",
+          "        password: clave",
+          "    }) }",
+          "}, (err, res) => {",
+          "    if (err) { throw new Error('No se pudo contactar con el gateway: ' + err); }",
+          "    if (res.code !== 200) { throw new Error('Login rechazado (' + res.code + '). Revisa `email` y `password`.'); }",
+          "    pm.collectionVariables.set('token', res.json().token);",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "tokenSinVentana",
+      "value": "",
+      "description": "JWT de un usuario SIN VER en PLANEADOR / ASISTENCIAS / PERIODOS_ACADEMICOS. Vacio = se salta la prueba 3.3."
+    },
+    {
+      "key": "referenteId",
+      "value": "",
+      "description": "Lo setea 1.2"
+    },
+    {
+      "key": "nivelId",
+      "value": "990001",
+      "description": "PK_NIVEL_ENSENANZA"
+    },
+    {
+      "key": "enfoqueId",
+      "value": "67",
+      "description": "TLISTA_VALOR CATEGORIA=ENFOQUE_PEDAGOGICO"
+    },
+    {
+      "key": "tipoEvaluacionId",
+      "value": "66",
+      "description": "TLISTA_VALOR CATEGORIA=TIPO_EVALUACION"
+    }
+  ],
+  "item": [
+    {
+      "name": "0 — Login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const token = pm.response.json().token;",
+              "pm.test('devuelve token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+              "pm.collectionVariables.set('token', token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "description": "Login del gateway. El token se reutiliza via el script `prerequest` de la coleccion hasta que caduca."
+      }
+    },
+    {
+      "name": "1 — Crear / editar (NOMBRE_ASIGNATURA)",
+      "item": [
+        {
+          "name": "1.1 — Crear SIN NOMBRE_ASIGNATURA → 400 (22023)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares"
+              ]
+            },
+            "description": "V214.3 hace obligatorio `BODY.NOMBRE_ASIGNATURA`. Sin el, `fn_refcurr_crear` lanza 22023 y el gateway responde 400.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"NOMBRE\": \"ZZ Postman sin asignatura\",\n  \"DESCRIPCION\": \"Referente de prueba creado por la coleccion\",\n  \"NIVELES_IDS\": [\n    \"{{nivelId}}\"\n  ],\n  \"ENFOQUE_PEDAGOGICO\": \"{{enfoqueId}}\",\n  \"TIPO_EVALUACION\": \"{{tipoEvaluacionId}}\",\n  \"INSTRUMENTO\": \"Rubrica\",\n  \"NORMATIVIDAD\": \"Decreto 1290\",\n  \"ANIO_DESDE\": 2026\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 por campo obligatorio', () => pm.response.to.have.status(400));",
+                  "pm.test('el mensaje nombra la asignatura', () => pm.expect(pm.response.text().toLowerCase()).to.include('asignatura'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.2 — Crear CON NOMBRE_ASIGNATURA → 200",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares"
+              ]
+            },
+            "description": "Crea el referente. `NOMBRE_ASIGNATURA` es el rotulo con el que se llamara la asignatura en planeador / asistencias / periodos academicos. Se guarda con TRIM.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"NOMBRE\": \"ZZ Postman DBA\",\n  \"NOMBRE_ASIGNATURA\": \"Matematicas\",\n  \"DESCRIPCION\": \"Referente de prueba creado por la coleccion\",\n  \"NIVELES_IDS\": [\n    \"{{nivelId}}\"\n  ],\n  \"ENFOQUE_PEDAGOGICO\": \"{{enfoqueId}}\",\n  \"TIPO_EVALUACION\": \"{{tipoEvaluacionId}}\",\n  \"INSTRUMENTO\": \"Rubrica\",\n  \"NORMATIVIDAD\": \"Decreto 1290\",\n  \"ANIO_DESDE\": 2026\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json(); const fila = (j.data || j)[0];",
+                  "const pk = fila.pk_referente_curricular_creado;",
+                  "pm.test('devuelve el pk creado', () => pm.expect(pk).to.be.a('number'));",
+                  "pm.collectionVariables.set('referenteId', pk);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.3 — Detalle: trae nombre_asignatura",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "{{referenteId}}"
+              ]
+            },
+            "description": "`GET /referentes-curriculares/:ID` (fn_refcurr_buscar_por_pk) ahora incluye la columna `nombre_asignatura`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json(); const fila = (j.data || j)[0];",
+                  "pm.test('trae nombre_asignatura', () => pm.expect(fila).to.have.property('nombre_asignatura'));",
+                  "pm.test('viene con TRIM', () => pm.expect(fila.nombre_asignatura).to.eql('Matematicas'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.4 — Editar solo NOMBRE_ASIGNATURA",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "{{referenteId}}"
+              ]
+            },
+            "description": "PATCH parcial: mandar solo `NOMBRE_ASIGNATURA` no toca ningun otro campo del referente.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"NOMBRE_ASIGNATURA\": \"Ciencias Naturales\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.5 — PATCH sin el campo NO lo pisa",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "{{referenteId}}"
+              ]
+            },
+            "description": "Omitir `NOMBRE_ASIGNATURA` conserva su valor actual (NULL = no tocar).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"DESCRIPCION\": \"Descripcion cambiada, la asignatura no\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.6 — Verifica que sigue siendo Ciencias Naturales",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "{{referenteId}}"
+              ]
+            },
+            "description": "Comprueba 1.4 + 1.5 de una vez."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json(); const fila = (j.data || j)[0];",
+                  "pm.test('conserva el valor de 1.4', () => pm.expect(fila.nombre_asignatura).to.eql('Ciencias Naturales'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.7 — PATCH con cadena vacia → 400 (22023)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "{{referenteId}}"
+              ]
+            },
+            "description": "La columna es NOT NULL: una cadena vacia o solo espacios se rechaza en vez de borrar el valor.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"NOMBRE_ASIGNATURA\": \"   \"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 — Listado",
+      "item": [
+        {
+          "name": "2.1 — /query devuelve nombre_asignatura",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/query",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "query"
+              ]
+            },
+            "description": "`fn_refcurr_listar` suma la columna `nombre_asignatura` al RETURNS TABLE.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FILTERS\": {},\n  \"SORTING\": {\n    \"ID\": \"nombre\",\n    \"DESC\": false\n  },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 20\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().data || pm.response.json();",
+                  "pm.test('cada fila trae nombre_asignatura', () => filas.forEach(f => pm.expect(f).to.have.property('nombre_asignatura')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.2 — SEARCH busca tambien por nombre_asignatura",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/query",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "query"
+              ]
+            },
+            "description": "`p_search` ahora pega sobre NOMBRE, DESCRIPCION y NOMBRE_ASIGNATURA.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FILTERS\": {\n    \"SEARCH\": \"Ciencias Naturales\"\n  },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 20\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json().data || pm.response.json();",
+                  "pm.test('encuentra el referente por su asignatura', () => pm.expect(filas.length).to.be.above(0));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 — Endpoint nuevo: nombre de la asignatura",
+      "item": [
+        {
+          "name": "3.1 — GET :ID/nombre-asignatura (usuario con la ventana)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteId}}/nombre-asignatura",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "{{referenteId}}",
+                "nombre-asignatura"
+              ]
+            },
+            "description": "Endpoint nuevo de V214.3. Gate por CAPABILITY de menu, no por el del catalogo: basta `VER` en **PLANEADOR**, **ASISTENCIAS** o **PERIODOS_ACADEMICOS** (OR). Un docente que no puede administrar el catalogo de referentes si puede leer como se llama la asignatura."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json(); const fila = (j.data || j)[0];",
+                  "pm.test('resuelve el nombre', () => pm.expect(fila.nombre_asignatura).to.eql('Ciencias Naturales'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.2 — Referente inexistente → 0 filas",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/999999999/nombre-asignatura",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "999999999",
+                "nombre-asignatura"
+              ]
+            },
+            "description": "Un referente que no existe (o esta inactivo) devuelve 0 filas; el front lo trata como 404."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json(); const filas = j.data || j;",
+                  "pm.test('sin filas', () => pm.expect(filas.length).to.eql(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.3 — Usuario sin ninguno de los 3 menus → 403",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenSinVentana}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteId}}/nombre-asignatura",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "{{referenteId}}",
+                "nombre-asignatura"
+              ]
+            },
+            "description": "Requiere `tokenSinVentana`: un JWT de un usuario que NO tiene VER en PLANEADOR ni ASISTENCIAS ni PERIODOS_ACADEMICOS. `fn_refcurr_nombre_asignatura` lanza 42501 -> HTTP 403. Deja `tokenSinVentana` vacio para saltar esta prueba."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('tokenSinVentana')) {",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 por capability de menu', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "9 — Limpieza",
+      "item": [
+        {
+          "name": "9.1 — Eliminar el referente de prueba",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteId}}/eliminar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "{{referenteId}}",
+                "eliminar"
+              ]
+            },
+            "description": "Baja logica en cascada del referente creado en 1.2, para que la corrida quede en cero.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"CONFIRMAR\": true\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.unset('referenteId');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
