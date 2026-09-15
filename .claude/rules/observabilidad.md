@@ -1,3 +1,8 @@
+---
+paths:
+  - "observability/**"
+---
+
 # Reglas — Observabilidad (`observability/`)
 
 Alloy, Grafana, Loki, Mimir y Tempo. Complementan el `CLAUDE.md` raíz.

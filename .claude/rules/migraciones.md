@@ -1,3 +1,10 @@
+---
+paths:
+  - "postgres/**"
+  - "scripts/migration-lint.py"
+  - "scripts/migration-analysis/**"
+---
+
 # Reglas — Postgres y migraciones (`postgres/`)
 
 Aplican a todo `postgres/migrations/`. Complementan el `CLAUDE.md` raíz.

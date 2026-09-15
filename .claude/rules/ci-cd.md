@@ -1,3 +1,10 @@
+---
+paths:
+  - ".github/workflows/**"
+  - ".github/scripts/**"
+  - ".github/*.yml"
+---
+
 # Reglas — CI/CD (`.github/`)
 
 Aplican al tocar workflows, scripts de CI o secretos. Complementan el `CLAUDE.md`
