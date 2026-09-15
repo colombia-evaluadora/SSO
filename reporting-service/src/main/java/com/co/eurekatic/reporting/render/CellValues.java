@@ -25,9 +25,19 @@ final class CellValues {
     static String toText(Object value) {
         return switch (value) {
             case null -> "";
-            case String s -> s;
+            // Las fechas llegan como CADENA, no como objeto de fecha: el
+            // query-service ya las serializo a ISO. Por eso el formateo
+            // tiene que intentarse aqui y no en la rama TemporalAccessor,
+            // que en la practica no se usa nunca.
+            case String s -> {
+                String fecha = Fechas.formatear(s);
+                yield fecha != null ? fecha : s;
+            }
             case Boolean b -> b ? "Si" : "No";
-            case TemporalAccessor t -> t.toString();
+            case TemporalAccessor t -> {
+                String fecha = Fechas.formatear(t.toString());
+                yield fecha != null ? fecha : t.toString();
+            }
             // Una lista se lee mejor separada por comas que con
             // corchetes; se aplica recursivo porque los elementos suelen
             // ser objetos ({nombre: "..."}).

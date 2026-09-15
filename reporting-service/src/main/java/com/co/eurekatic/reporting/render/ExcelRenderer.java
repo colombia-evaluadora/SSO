@@ -59,8 +59,9 @@ public class ExcelRenderer {
     /** Filas vivas en memoria antes de volcar al temporal. */
     private static final int VENTANA_FILAS = 200;
 
+    /** 12 horas con AM/PM y Locale fijo -- ver el javadoc de Fechas. */
     private static final DateTimeFormatter FECHA_HORA =
-            DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+            DateTimeFormatter.ofPattern("dd/MM/yyyy hh:mm a", java.util.Locale.US);
 
     /** Ancho de columna en unidades POI (1/256 de carácter). */
     private static final int UNIDAD = 256;
@@ -103,7 +104,7 @@ public class ExcelRenderer {
 
             escribirTexto(hoja, FILA_TITULO, titulo, estiloTitulo, ultimaColumna);
 
-            String contexto = "Generado el " + LocalDateTime.now().format(FECHA_HORA)
+            String contexto = "Generado el " + Fechas.ahora().format(FECHA_HORA)
                     + "   ·   " + rows.size() + " registro(s)"
                     + (meta != null && meta.usuario() != null && !meta.usuario().isBlank()
                        ? "   ·   por " + meta.usuario() : "");
