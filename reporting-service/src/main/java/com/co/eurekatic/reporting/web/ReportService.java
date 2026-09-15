@@ -62,6 +62,7 @@ public class ReportService {
 
         long inicio = System.currentTimeMillis();
         List<Map<String, Object>> rows = queryService.fetchRows(
+                def.getBaseUrl(),
                 def.getPath(),
                 bearer,
                 request == null ? Map.of() : request.filters(),
