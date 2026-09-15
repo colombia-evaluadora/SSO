@@ -351,6 +351,41 @@ reporting:
         entityName: Detalle
         entityId: Identificador
 
+    # -----------------------------------------------------------------
+    # Asistencia > Seguimiento (V228). path = fila
+    # 'eval-col-asistencias-seguimiento-export-all-001':
+    # fn_asistencia_listar_seguimiento SIN paginar, con los mismos
+    # filtros y el mismo gate que POST /asistencias/query.
+    #
+    # NO confundir con la clave `asistencia` de mas arriba: esa es el
+    # "Reporte de asistencia por grupo" (E03HU57, V290), que exige grupo
+    # y rango de fechas. Esta es el boton de descarga de la pantalla de
+    # Seguimiento y exporta lo que el usuario tenga filtrado, sin
+    # ningun filtro obligatorio.
+    #
+    # `columns` son las de la tabla de la pantalla. grado viene del
+    # LEFT JOIN a v_asistencia_detalle que hace la fila V228 (la funcion
+    # devuelve `grupo`, no `grado`). asignatura y actividad van como dos
+    # columnas separadas y nunca estan llenas a la vez
+    # (CK_TASISTENCIA_CONTEXTO): en preescolar/formativo la fila trae
+    # actividad y la asignatura vacia. soporte_nombre es el nombre del
+    # adjunto de la columna SOPORTE: en PDF/Excel no se puede pintar el
+    # enlace de descarga, asi que se exporta el nombre del archivo.
+    # -----------------------------------------------------------------
+    asistencias:
+      path: /asistencias/export-all
+      title: Seguimiento de asistencia
+      file-name: asistencias-seguimiento
+      columns:
+        estudiante: Estudiante
+        tipo_asistencia: Tipo de asistencia
+        asignatura: Asignatura
+        actividad: Actividad
+        grado: Grado
+        grupo: Grupo
+        fecha: Fecha
+        soporte_nombre: Soporte
+
 sso:
   jwt:
     # Solo la publica: este servicio verifica firmas, no emite tokens.
