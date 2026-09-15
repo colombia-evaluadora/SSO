@@ -1,8 +1,8 @@
 {
   "info": {
-    "_postman_id": "c3834612-9456-44ca-bfb4-3a21a10d69ac",
-    "name": "SSO — Referente curricular: NOMBRE_ASIGNATURA (V214.3)",
-    "description": "Endpoints tocados por la migracion **V214.3**.\n\n- `TREFERENTE_CURRICULAR.NOMBRE_ASIGNATURA` VARCHAR(150) NOT NULL.\n- `POST /referentes-curriculares` → `BODY.NOMBRE_ASIGNATURA` **opcional**: si falta o llega vacio cae al defecto por nivel — **Asignatura**, o **Dimension** cuando el referente es solo de preescolar.\n- `PATCH /referentes-curriculares/:ID` → ausente = no tocar, texto = lo reemplaza, vacio = vuelve al defecto.\n- `POST /referentes-curriculares/query` y `GET /referentes-curriculares/:ID` devuelven `nombre_asignatura`; el `SEARCH` del listado tambien busca sobre el.\n- **Nuevo** `GET /referentes-curriculares/:ID/nombre-asignatura`: resuelve el rotulo segun el acceso del usuario. Gate por capability de menu — basta `VER` en **PLANEADOR**, **ASISTENCIAS** o **PERIODOS_ACADEMICOS**.\n\nEntorno esperado: `SSO — test` (`baseUrl`, `email`, `password`). El bloque 9 borra lo que crea el 1.2, asi que la corrida completa deja la base como estaba.",
+    "_postman_id": "b66f0adf-bdc1-45d1-92f8-4b5a81c9c8e2",
+    "name": "SSO — Referente curricular: PERSONALIZAR_ASIGNATURA (V214.3)",
+    "description": "Endpoints tocados por la migracion **V214.3** (CU-86e385egu).\n\nEl rotulo con el que un referente curricular nombra su asignatura no es texto libre: es una FK a `TLISTA_VALOR`, categoria `PERSONALIZAR_ASIGNATURA`, con tres valores semilla (**Asignatura**, **Dimension**, **Area**) y CRUD propio.\n\n- `GET|POST /referentes-curriculares/personalizar-asignatura` — listar y crear valores.\n- `PATCH /referentes-curriculares/personalizar-asignatura/:ID/eliminar` — baja logica; rechaza los tres basicos y los valores en uso.\n- `POST|PATCH /referentes-curriculares` — `BODY.NOMBRE_ASIGNATURA` es el `PK_LISTA_VALOR`; opcional al crear (cae al defecto por nivel), ausente al editar = no tocar.\n- `GET /referentes-curriculares/:ID/nombre-asignatura` — resuelve el rotulo con gate por menu (PLANEADOR / ASISTENCIAS / PERIODOS_ACADEMICOS).\n\nEl CRUD del catalogo va gateado como el de referentes: CREAR / VER / ELIMINAR sobre **REFERENTES_CURRICULARES**.\n\nEntorno esperado: `SSO — test` (`baseUrl`, `email`, `password`). Los bloques 4 y 9 borran todo lo que crea la corrida, asi que termina en cero.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "event": [
@@ -57,24 +57,34 @@
       "description": "JWT de un usuario SIN VER en PLANEADOR / ASISTENCIAS / PERIODOS_ACADEMICOS. Vacio = se salta la prueba 3.3."
     },
     {
-      "key": "referenteId",
-      "value": "",
-      "description": "Lo setea 1.2"
-    },
-    {
-      "key": "referenteDefectoId",
+      "key": "idAsignatura",
       "value": "",
       "description": "Lo setea 1.1"
     },
     {
-      "key": "nombreEsperado",
-      "value": "Dimension",
-      "description": "Lo setea 1.8"
+      "key": "idDimension",
+      "value": "",
+      "description": "Lo setea 1.1"
+    },
+    {
+      "key": "idModulo",
+      "value": "",
+      "description": "Lo setea 1.2"
+    },
+    {
+      "key": "referenteId",
+      "value": "",
+      "description": "Lo setea 2.3"
+    },
+    {
+      "key": "referenteDefectoId",
+      "value": "",
+      "description": "Lo setea 2.1"
     },
     {
       "key": "nivelId",
       "value": "990001",
-      "description": "PK_NIVEL_ENSENANZA. Debe ser PREESCOLAR: varias pruebas comprueban que el defecto sea Dimension"
+      "description": "PK_NIVEL_ENSENANZA. Debe ser PREESCOLAR: 2.2 comprueba que el defecto sea Dimension"
     },
     {
       "key": "enfoqueId",
@@ -98,7 +108,6 @@
             "exec": [
               "pm.test('200', () => pm.response.to.have.status(200));",
               "const token = pm.response.json().token;",
-              "pm.test('devuelve token', () => pm.expect(token).to.be.a('string').and.not.empty);",
               "pm.collectionVariables.set('token', token);"
             ]
           }
@@ -131,10 +140,192 @@
       }
     },
     {
-      "name": "1 — Crear / editar (NOMBRE_ASIGNATURA)",
+      "name": "1 — Catalogo PERSONALIZAR_ASIGNATURA",
       "item": [
         {
-          "name": "1.1 — Crear SIN NOMBRE_ASIGNATURA → toma el defecto por nivel",
+          "name": "1.1 — Listar los valores",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/personalizar-asignatura",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "personalizar-asignatura"
+              ]
+            },
+            "description": "Valores con los que un referente puede nombrar su asignatura. La migracion siembra tres: **Asignatura**, **Dimension** y **Area**. `es_semilla` los marca (no se pueden eliminar) y `en_uso` dice cuantos referentes vigentes apuntan a cada uno, para que la UI sepa de antemano cual fallaria al borrar."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json(); const filas = j.data || j;",
+                  "const porValor = Object.fromEntries(filas.map(f => [f.valor, f]));",
+                  "pm.test('estan los tres basicos', () => ['Asignatura', 'Dimension', 'Area'].forEach(v => pm.expect(porValor).to.have.property(v)));",
+                  "pm.test('los tres van marcados como semilla', () => ['Asignatura', 'Dimension', 'Area'].forEach(v => pm.expect(porValor[v].es_semilla).to.eql(true)));",
+                  "pm.collectionVariables.set('idAsignatura', porValor['Asignatura'].pk_lista_valor);",
+                  "pm.collectionVariables.set('idDimension', porValor['Dimension'].pk_lista_valor);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.2 — Crear un valor nuevo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/personalizar-asignatura",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "personalizar-asignatura"
+              ]
+            },
+            "description": "Agrega un valor al catalogo. Se guarda con `TRIM`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"VALOR\": \"  ZZ Modulo  \"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json(); const fila = (j.data || j)[0];",
+                  "pm.test('devuelve el pk creado', () => pm.expect(fila.pk_lista_valor_creado).to.be.a('number'));",
+                  "pm.collectionVariables.set('idModulo', fila.pk_lista_valor_creado);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.3 — Duplicado cambiando mayusculas → rechazado",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/personalizar-asignatura",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "personalizar-asignatura"
+              ]
+            },
+            "description": "La unicidad se comprueba sin distinguir mayusculas (23505), que es mas estricto que la `UNIQUE` parcial de `TLISTA_VALOR`: si no, `ZZ Modulo` y `ZZ MODULO` convivirian como dos valores distintos.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"VALOR\": \"ZZ MODULO\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('no lo acepta', () => pm.expect(pm.response.code).to.be.at.least(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.4 — Valor vacio → rechazado",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/personalizar-asignatura",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "personalizar-asignatura"
+              ]
+            },
+            "description": "`VALOR` es obligatorio (22023).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"VALOR\": \"   \"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('no lo acepta', () => pm.expect(pm.response.code).to.be.at.least(400));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 — El referente usa el catalogo",
+      "item": [
+        {
+          "name": "2.1 — Crear SIN NOMBRE_ASIGNATURA → defecto por nivel",
           "request": {
             "method": "POST",
             "header": [
@@ -158,10 +349,10 @@
                 "referentes-curriculares"
               ]
             },
-            "description": "El campo es opcional. Si no viene, `fn_refcurr_nombre_asignatura_default` lo resuelve segun los niveles del referente: **Dimension** si TODOS son preescolar, **Asignatura** en cualquier otro caso. `nivelId` apunta a preescolar, asi que aqui debe quedar `Dimension`.",
+            "description": "El campo es opcional. Si no viene se resuelve por nivel: **Dimension** si TODOS los niveles del referente son preescolar, **Asignatura** en cualquier otro caso. `nivelId` apunta a preescolar.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"NOMBRE\": \"ZZ Postman sin asignatura\",\n  \"DESCRIPCION\": \"Referente de prueba creado por la coleccion\",\n  \"NIVELES_IDS\": [\n    \"{{nivelId}}\"\n  ],\n  \"ENFOQUE_PEDAGOGICO\": \"{{enfoqueId}}\",\n  \"TIPO_EVALUACION\": \"{{tipoEvaluacionId}}\",\n  \"INSTRUMENTO\": \"Rubrica\",\n  \"NORMATIVIDAD\": \"Decreto 1290\",\n  \"ANIO_DESDE\": 2026\n}"
+              "raw": "{\n  \"NOMBRE\": \"ZZ Postman defecto\",\n  \"DESCRIPCION\": \"Referente de prueba de la coleccion\",\n  \"NIVELES_IDS\": [\n    \"{{nivelId}}\"\n  ],\n  \"ENFOQUE_PEDAGOGICO\": \"{{enfoqueId}}\",\n  \"TIPO_EVALUACION\": \"{{tipoEvaluacionId}}\",\n  \"INSTRUMENTO\": \"Rubrica\",\n  \"NORMATIVIDAD\": \"Decreto 1290\",\n  \"ANIO_DESDE\": 2026\n}"
             }
           },
           "event": [
@@ -179,7 +370,7 @@
           ]
         },
         {
-          "name": "1.1b — Verifica el defecto aplicado",
+          "name": "2.2 — Detalle: resolvio a Dimension",
           "request": {
             "method": "GET",
             "header": [
@@ -200,7 +391,7 @@
                 "{{referenteDefectoId}}"
               ]
             },
-            "description": "Comprueba que 1.1 guardo el defecto en vez de fallar."
+            "description": "El detalle devuelve las dos caras del campo: `fk_tlv_nombre_asignatura` (el id, para precargar el select) y `nombre_asignatura` (el texto, para pintar)."
           },
           "event": [
             {
@@ -209,14 +400,15 @@
                 "type": "text/javascript",
                 "exec": [
                   "const j = pm.response.json(); const fila = (j.data || j)[0];",
-                  "pm.test('defecto de preescolar', () => pm.expect(fila.nombre_asignatura).to.eql('Dimension'));"
+                  "pm.test('el texto es Dimension', () => pm.expect(fila.nombre_asignatura).to.eql('Dimension'));",
+                  "pm.test('el id apunta a la fila del catalogo', () => pm.expect(String(fila.fk_tlv_nombre_asignatura)).to.eql(String(pm.collectionVariables.get('idDimension'))));"
                 ]
               }
             }
           ]
         },
         {
-          "name": "1.2 — Crear CON NOMBRE_ASIGNATURA → 200",
+          "name": "2.3 — Crear CON NOMBRE_ASIGNATURA (id del catalogo)",
           "request": {
             "method": "POST",
             "header": [
@@ -240,10 +432,10 @@
                 "referentes-curriculares"
               ]
             },
-            "description": "Crea el referente. `NOMBRE_ASIGNATURA` es el rotulo con el que se llamara la asignatura en planeador / asistencias / periodos academicos. Se guarda con TRIM.",
+            "description": "`NOMBRE_ASIGNATURA` es el `PK_LISTA_VALOR` de un valor de la categoria, no texto libre.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"NOMBRE\": \"ZZ Postman DBA\",\n  \"NOMBRE_ASIGNATURA\": \"Matematicas\",\n  \"DESCRIPCION\": \"Referente de prueba creado por la coleccion\",\n  \"NIVELES_IDS\": [\n    \"{{nivelId}}\"\n  ],\n  \"ENFOQUE_PEDAGOGICO\": \"{{enfoqueId}}\",\n  \"TIPO_EVALUACION\": \"{{tipoEvaluacionId}}\",\n  \"INSTRUMENTO\": \"Rubrica\",\n  \"NORMATIVIDAD\": \"Decreto 1290\",\n  \"ANIO_DESDE\": 2026\n}"
+              "raw": "{\n  \"NOMBRE\": \"ZZ Postman con Modulo\",\n  \"DESCRIPCION\": \"Referente de prueba de la coleccion\",\n  \"NIVELES_IDS\": [\n    \"{{nivelId}}\"\n  ],\n  \"ENFOQUE_PEDAGOGICO\": \"{{enfoqueId}}\",\n  \"TIPO_EVALUACION\": \"{{tipoEvaluacionId}}\",\n  \"INSTRUMENTO\": \"Rubrica\",\n  \"NORMATIVIDAD\": \"Decreto 1290\",\n  \"ANIO_DESDE\": 2026,\n  \"NOMBRE_ASIGNATURA\": \"{{idModulo}}\"\n}"
             }
           },
           "event": [
@@ -254,16 +446,14 @@
                 "exec": [
                   "pm.test('200', () => pm.response.to.have.status(200));",
                   "const j = pm.response.json(); const fila = (j.data || j)[0];",
-                  "const pk = fila.pk_referente_curricular_creado;",
-                  "pm.test('devuelve el pk creado', () => pm.expect(pk).to.be.a('number'));",
-                  "pm.collectionVariables.set('referenteId', pk);"
+                  "pm.collectionVariables.set('referenteId', fila.pk_referente_curricular_creado);"
                 ]
               }
             }
           ]
         },
         {
-          "name": "1.3 — Detalle: trae nombre_asignatura",
+          "name": "2.4 — Detalle: quedo ZZ Modulo",
           "request": {
             "method": "GET",
             "header": [
@@ -284,7 +474,7 @@
                 "{{referenteId}}"
               ]
             },
-            "description": "`GET /referentes-curriculares/:ID` (fn_refcurr_buscar_por_pk) ahora incluye la columna `nombre_asignatura`."
+            "description": "Comprueba 2.3."
           },
           "event": [
             {
@@ -292,17 +482,15 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('200', () => pm.response.to.have.status(200));",
                   "const j = pm.response.json(); const fila = (j.data || j)[0];",
-                  "pm.test('trae nombre_asignatura', () => pm.expect(fila).to.have.property('nombre_asignatura'));",
-                  "pm.test('viene con TRIM', () => pm.expect(fila.nombre_asignatura).to.eql('Matematicas'));"
+                  "pm.test('usa el valor creado en 1.2', () => pm.expect(fila.nombre_asignatura).to.eql('ZZ Modulo'));"
                 ]
               }
             }
           ]
         },
         {
-          "name": "1.4 — Editar solo NOMBRE_ASIGNATURA",
+          "name": "2.5 — PATCH con un id de otra categoria → rechazado",
           "request": {
             "method": "PATCH",
             "header": [
@@ -327,10 +515,10 @@
                 "{{referenteId}}"
               ]
             },
-            "description": "PATCH parcial: mandar solo `NOMBRE_ASIGNATURA` no toca ningun otro campo del referente.",
+            "description": "Manda un `PK_LISTA_VALOR` real pero de la categoria `ENFOQUE_PEDAGOGICO`. La FK sola no lo detectaria (apunta a la misma tabla), asi que la funcion comprueba la categoria a mano: 23503.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"NOMBRE_ASIGNATURA\": \"Ciencias Naturales\"\n}"
+              "raw": "{\n  \"NOMBRE_ASIGNATURA\": \"{{enfoqueId}}\"\n}"
             }
           },
           "event": [
@@ -339,14 +527,14 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('200', () => pm.response.to.have.status(200));"
+                  "pm.test('no lo acepta', () => pm.expect(pm.response.code).to.be.at.least(400));"
                 ]
               }
             }
           ]
         },
         {
-          "name": "1.5 — PATCH sin el campo NO lo pisa",
+          "name": "2.6 — PATCH sin el campo NO lo pisa",
           "request": {
             "method": "PATCH",
             "header": [
@@ -371,7 +559,7 @@
                 "{{referenteId}}"
               ]
             },
-            "description": "Omitir `NOMBRE_ASIGNATURA` conserva su valor actual (NULL = no tocar).",
+            "description": "Omitir `NOMBRE_ASIGNATURA` conserva el valor actual.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"DESCRIPCION\": \"Descripcion cambiada, la asignatura no\"\n}"
@@ -390,131 +578,7 @@
           ]
         },
         {
-          "name": "1.6 — Verifica que sigue siendo Ciencias Naturales",
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{token}}"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "eval-col",
-                "referentes-curriculares",
-                "{{referenteId}}"
-              ]
-            },
-            "description": "Comprueba 1.4 + 1.5 de una vez."
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "const j = pm.response.json(); const fila = (j.data || j)[0];",
-                  "pm.test('conserva el valor de 1.4', () => pm.expect(fila.nombre_asignatura).to.eql('Ciencias Naturales'));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "1.7 — PATCH con cadena vacia → vuelve al defecto",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{token}}"
-              },
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "eval-col",
-                "referentes-curriculares",
-                "{{referenteId}}"
-              ]
-            },
-            "description": "Mandar el campo vacio NO es un error: devuelve el rotulo al defecto que corresponda a los niveles EFECTIVOS del referente. Este referente es de preescolar, asi que vuelve a `Dimension`.",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"NOMBRE_ASIGNATURA\": \"   \"\n}"
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200', () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "1.8 — Verifica que volvio a Dimension",
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{token}}"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "eval-col",
-                "referentes-curriculares",
-                "{{referenteId}}"
-              ]
-            },
-            "description": "Comprueba 1.7."
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "const j = pm.response.json(); const fila = (j.data || j)[0];",
-                  "pm.test('volvio al defecto', () => pm.expect(fila.nombre_asignatura).to.eql('Dimension'));",
-                  "pm.collectionVariables.set('nombreEsperado', 'Dimension');"
-                ]
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "2 — Listado",
-      "item": [
-        {
-          "name": "2.1 — /query devuelve nombre_asignatura",
+          "name": "2.7 — Listado: trae id y texto, y el search pega sobre el rotulo",
           "request": {
             "method": "POST",
             "header": [
@@ -539,10 +603,10 @@
                 "query"
               ]
             },
-            "description": "`fn_refcurr_listar` suma la columna `nombre_asignatura` al RETURNS TABLE.",
+            "description": "`fn_refcurr_listar` devuelve `fk_tlv_nombre_asignatura` + `nombre_asignatura`, y `SEARCH` busca sobre `NOMBRE`, `DESCRIPCION` y ese rotulo.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"FILTERS\": {},\n  \"SORTING\": {\n    \"ID\": \"nombre\",\n    \"DESC\": false\n  },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 20\n}"
+              "raw": "{\n  \"FILTERS\": {\n    \"SEARCH\": \"ZZ Modulo\"\n  },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 20\n}"
             }
           },
           "event": [
@@ -552,54 +616,9 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200', () => pm.response.to.have.status(200));",
-                  "const filas = pm.response.json().data || pm.response.json();",
-                  "pm.test('cada fila trae nombre_asignatura', () => filas.forEach(f => pm.expect(f).to.have.property('nombre_asignatura')));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "2.2 — SEARCH busca tambien por nombre_asignatura",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{token}}"
-              },
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/query",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "eval-col",
-                "referentes-curriculares",
-                "query"
-              ]
-            },
-            "description": "`p_search` ahora pega sobre NOMBRE, DESCRIPCION y NOMBRE_ASIGNATURA.",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"FILTERS\": {\n    \"SEARCH\": \"Dimension\"\n  },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 20\n}"
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200', () => pm.response.to.have.status(200));",
-                  "const filas = pm.response.json().data || pm.response.json();",
-                  "pm.test('encuentra el referente por su asignatura', () => pm.expect(filas.length).to.be.above(0));"
+                  "const j = pm.response.json(); const filas = j.data || j;",
+                  "pm.test('encuentra el referente por su rotulo', () => pm.expect(filas.length).to.be.above(0));",
+                  "pm.test('cada fila trae las dos columnas', () => filas.forEach(f => { pm.expect(f).to.have.property('nombre_asignatura'); pm.expect(f).to.have.property('fk_tlv_nombre_asignatura'); }));"
                 ]
               }
             }
@@ -608,10 +627,10 @@
       ]
     },
     {
-      "name": "3 — Endpoint nuevo: nombre de la asignatura",
+      "name": "3 — Resolver el nombre segun el acceso",
       "item": [
         {
-          "name": "3.1 — GET :ID/nombre-asignatura (usuario con la ventana)",
+          "name": "3.1 — GET :ID/nombre-asignatura",
           "request": {
             "method": "GET",
             "header": [
@@ -633,7 +652,7 @@
                 "nombre-asignatura"
               ]
             },
-            "description": "Endpoint nuevo de V214.3. Gate por CAPABILITY de menu, no por el del catalogo: basta `VER` en **PLANEADOR**, **ASISTENCIAS** o **PERIODOS_ACADEMICOS** (OR). Un docente que no puede administrar el catalogo de referentes si puede leer como se llama la asignatura."
+            "description": "Gate por CAPABILITY de menu, no por el del catalogo: basta `VER` en **PLANEADOR**, **ASISTENCIAS** o **PERIODOS_ACADEMICOS** (OR). Un docente que no administra referentes si puede leer como se llama la asignatura."
           },
           "event": [
             {
@@ -643,7 +662,7 @@
                 "exec": [
                   "pm.test('200', () => pm.response.to.have.status(200));",
                   "const j = pm.response.json(); const fila = (j.data || j)[0];",
-                  "pm.test('resuelve el nombre', () => pm.expect(fila.nombre_asignatura).to.eql(pm.collectionVariables.get('nombreEsperado')));"
+                  "pm.test('devuelve el texto del catalogo', () => pm.expect(fila.nombre_asignatura).to.eql('ZZ Modulo'));"
                 ]
               }
             }
@@ -710,7 +729,7 @@
                 "nombre-asignatura"
               ]
             },
-            "description": "Requiere `tokenSinVentana`: un JWT de un usuario que NO tiene VER en PLANEADOR ni ASISTENCIAS ni PERIODOS_ACADEMICOS. `fn_refcurr_nombre_asignatura` lanza 42501 -> HTTP 403. Deja `tokenSinVentana` vacio para saltar esta prueba."
+            "description": "Requiere `tokenSinVentana`: un JWT de un usuario que NO tiene VER en PLANEADOR ni ASISTENCIAS ni PERIODOS_ACADEMICOS. Deja la variable vacia para saltar esta prueba."
           },
           "event": [
             {
@@ -718,9 +737,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "if (!pm.collectionVariables.get('tokenSinVentana')) {",
-                  "    pm.execution.skipRequest();",
-                  "}"
+                  "if (!pm.collectionVariables.get('tokenSinVentana')) { pm.execution.skipRequest(); }"
                 ]
               }
             },
@@ -738,10 +755,235 @@
       ]
     },
     {
+      "name": "4 — Eliminar valores del catalogo",
+      "item": [
+        {
+          "name": "4.1 — Eliminar un valor EN USO → rechazado",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/personalizar-asignatura/{{idModulo}}/eliminar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "personalizar-asignatura",
+                "{{idModulo}}",
+                "eliminar"
+              ]
+            },
+            "description": "`ZZ Modulo` lo usa el referente de 2.3, asi que no se borra: 23503, diciendo cuantos referentes lo usan.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('no lo acepta', () => pm.expect(pm.response.code).to.be.at.least(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.2 — Eliminar un valor basico → rechazado",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/personalizar-asignatura/{{idAsignatura}}/eliminar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "personalizar-asignatura",
+                "{{idAsignatura}}",
+                "eliminar"
+              ]
+            },
+            "description": "Asignatura / Dimension / Area no se pueden borrar (22023): el valor por defecto de los referentes los resuelve por texto y sin ellos un referente nuevo se quedaria sin rotulo.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('no lo acepta', () => pm.expect(pm.response.code).to.be.at.least(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.3 — Liberar el valor",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{referenteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "{{referenteId}}"
+              ]
+            },
+            "description": "Mueve el referente a `Asignatura` para que `ZZ Modulo` deje de estar en uso.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"NOMBRE_ASIGNATURA\": \"{{idAsignatura}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.4 — Ahora si se elimina",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/personalizar-asignatura/{{idModulo}}/eliminar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "personalizar-asignatura",
+                "{{idModulo}}",
+                "eliminar"
+              ]
+            },
+            "description": "Baja logica. Repetirla no falla: sobre un valor ya inactivo devuelve su pk sin tocar nada.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.5 — Ya no aparece en el listado",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/personalizar-asignatura",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "referentes-curriculares",
+                "personalizar-asignatura"
+              ]
+            },
+            "description": "El listado solo trae los activos salvo que se pida `?INCLUIR_INACTIVOS=true`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json(); const filas = j.data || j;",
+                  "pm.test('ZZ Modulo desaparecio', () => pm.expect(filas.map(f => f.valor)).to.not.include('ZZ Modulo'));",
+                  "pm.collectionVariables.unset('idModulo');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "9 — Limpieza",
       "item": [
         {
-          "name": "9.1 — Eliminar el referente de prueba",
+          "name": "9.1 — Eliminar el referente de 2.3",
           "request": {
             "method": "PATCH",
             "header": [
@@ -767,7 +1009,7 @@
                 "eliminar"
               ]
             },
-            "description": "Baja logica en cascada del referente creado en 1.2, para que la corrida quede en cero.",
+            "description": "Baja logica en cascada.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"CONFIRMAR\": true\n}"
@@ -787,7 +1029,7 @@
           ]
         },
         {
-          "name": "9.2 — Eliminar el referente del defecto (1.1)",
+          "name": "9.2 — Eliminar el referente de 2.1",
           "request": {
             "method": "PATCH",
             "header": [
@@ -813,7 +1055,7 @@
                 "eliminar"
               ]
             },
-            "description": "Baja logica del referente creado en 1.1.",
+            "description": "Baja logica en cascada.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"CONFIRMAR\": true\n}"
