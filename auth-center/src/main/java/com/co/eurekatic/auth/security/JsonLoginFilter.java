@@ -172,7 +172,12 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
             // excepción queda visible en logs con su stacktrace propio
             // en vez de que este catch se la trague en silencio.
             try {
-                sessionTracking.openSession(uid, familyId, Map.of(), appNameFromRequest(request));
+                // V400: mismo `establishment` ya resuelto arriba para el
+                // claim `est` del JWT -- se persiste en la fila de sesión
+                // para que el filtro de auditoría reconozca la sesión
+                // desde el momento del login, no solo cuando ya tiene una
+                // operación escrita etiquetada.
+                sessionTracking.openSession(uid, familyId, Map.of(), appNameFromRequest(request), establishment);
             } catch (RuntimeException trackingEx) {
                 log.warn("No se pudo abrir sesión de tracking para email={} family={}",
                         email, familyId.substring(0, 8), trackingEx);
