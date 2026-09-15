@@ -142,9 +142,14 @@ COMPOSE_PROJECT_NAME=sso
 COMPOSE_PROFILES=local-only
 
 # Switches de alto nivel que el wrapper scripts/sso-stack.sh traduce
-# a profiles/overrides de compose (ver §6 "Operación diaria")
+# a profiles/overrides de compose (ver §6 "Operación diaria").
+# SSO_TELEMETRY_ENABLED va de la mano de `observability` en
+# COMPOSE_PROFILES: sin ese perfil no hay Alloy y el wrapper lo fuerza
+# a false de todos modos (con exporters encendidos y sin colector los
+# servicios reintentan cada batch en bucle y llenan los logs).
+# Ponelo en true SOLO si sumaste `observability` arriba.
 CDC_SYNC_ENABLED=true
-SSO_TELEMETRY_ENABLED=true
+SSO_TELEMETRY_ENABLED=false
 
 # Todos los puertos salvo el gateway atados a loopback (ver nota
 # de seguridad en .env.example — Docker ignora ufw)

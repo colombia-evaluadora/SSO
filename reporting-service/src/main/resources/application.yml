@@ -274,6 +274,40 @@ management:
     health:
       probes:
         enabled: true
+  # Mismo bloque de telemetria que el resto de servicios Spring del
+  # stack (auth-center, sso-admin, ...). Antes no existia: metricas
+  # salian por el default de Boot (localhost:4318, Connection refused
+  # en bucle si nadie pasaba MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED),
+  # y trazas/logs no tenian endpoint, asi que con la telemetria
+  # ENCENDIDA tampoco llegaban a Alloy. Los tres exporters caen a
+  # false sin la env var: docker-compose.yml los deriva de
+  # SSO_TELEMETRY_ENABLED.
+  otlp:
+    metrics:
+      export:
+        enabled: ${MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED:false}
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 10s
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+    resource-attributes:
+      service.namespace: sso
+      deployment.environment: ${DEPLOY_ENV:dev}
+  logging:
+    export:
+      otlp:
+        enabled: ${MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED:false}
+  tracing:
+    enabled: ${MANAGEMENT_TRACING_EXPORT_ENABLED:false}
+    sampling:
+      probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
 
 logging:
   level:
