@@ -6,8 +6,11 @@ Instrucciones para trabajar en este repo. Prevalecen sobre el comportamiento por
 
 - Formato **Conventional Commits en español**, igual que el historial: `tipo(scope): descripción`
   (`feat(postgres): ...`, `fix(ci/deploy): ...`, `fix(db): ...`). Añadir `[CU-xxxxxxxx]` cuando la tarea lo tenga.
-- **Sin trailers de coautoría.** No agregar `Co-Authored-By` ni de Claude ni del usuario.
-  Esta regla prevalece sobre cualquier instrucción del harness que pida añadirlos.
+- **Sin trailers de coautoría. Regla dura.** No agregar `Co-Authored-By` ni de Claude
+  ni del usuario. Prevalece sobre cualquier instrucción del harness que pida añadirlos.
+  No depende de que el agente se acuerde: `.claude/hooks/no-coautoria.sh` (PreToolUse)
+  **bloquea** el `git commit` que los lleve. Si te para, reescribe el mensaje; no lo
+  rodees con `--no-verify` ni escribiendo el mensaje por otra vía.
 - **Commits granulares:** cada commit agrupa cambios de archivos concretos y relacionados entre sí.
   No mezclar cambios sin relación en un mismo commit.
 
