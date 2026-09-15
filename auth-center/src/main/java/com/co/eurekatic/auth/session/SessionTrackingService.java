@@ -84,9 +84,25 @@ public class SessionTrackingService {
      *                {@code null}, vacío o no matchea ningún app
      *                conocido, la fila queda con {@code app_name} NULL
      *                en vez de fallar el login.
+     * @param establishment nombre del único establecimiento que este
+     *                usuario administra como rector/secretaria (mismo
+     *                valor que {@link com.co.eurekatic.auth.security.EstablishmentResolver}
+     *                ya resuelve para el claim {@code est} del JWT — se
+     *                pasa acá para no resolverlo dos veces). {@code null}
+     *                para quien no administra un único EE (super-admin
+     *                incluido) — la fila queda con {@code establecimiento}
+     *                NULL, igual que {@code app_name} cuando no aplica.
+     *                Encontrado en vivo (V400): sin esto, el filtro de
+     *                auditoría por establecimiento (V398) no tenía forma
+     *                de reconocer la PROPIA sesión de un rector recién
+     *                logueado -- solo mostraba sesiones que YA tuvieran
+     *                al menos una operación escrita etiquetada con su EE,
+     *                así que un rector que apenas entra y mira "Sesiones
+     *                de auditoría" no se veía ni a sí mismo.
      */
     @Transactional
-    public void openSession(Long idUser, String familyId, Map<String, Object> requestBodySnapshot, String appName) {
+    public void openSession(Long idUser, String familyId, Map<String, Object> requestBodySnapshot, String appName,
+                             String establishment) {
         if (idUser == null) {
             log.debug("Sin id_user numérico para family={} -- no se abre sesión de tracking", shortFamily(familyId));
             return;
@@ -109,9 +125,9 @@ public class SessionTrackingService {
         // explícito que en el momento del open ambos timestamps son
         // el mismo -- coherente con "acaba de iniciar").
         jdbc.update(
-                "INSERT INTO academico_test.tsesion_web (fk_tusuario, family_id, last_seen_at, app_name) "
-                        + "VALUES (?, ?, now(), ?)",
-                pkTusuario, familyId, resolvedAppName);
+                "INSERT INTO academico_test.tsesion_web (fk_tusuario, family_id, last_seen_at, app_name, establecimiento) "
+                        + "VALUES (?, ?, now(), ?, ?)",
+                pkTusuario, familyId, resolvedAppName, establishment);
     }
 
     /**
