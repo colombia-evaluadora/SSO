@@ -64,6 +64,22 @@ public class ReportingProperties {
          */
         private String path;
 
+        /**
+         * Instancia de query-service donde vive {@link #path}. Opcional:
+         * vacio = {@link ReportingProperties#queryServiceBaseUrl}, que es
+         * el caso de todos los reportes academicos (catalogo eval-col).
+         *
+         * <p>Existe porque el catalogo NO es unico: cada microservicio
+         * registrado tiene su propia instancia de query-service, con su
+         * propio backend. Los reportes de Auditoria salen de
+         * {@code audit-clickhouse-cval}, que habla ClickHouse y ni siquiera
+         * tiene conexion a Postgres — pedirle {@code /audits/query} a la
+         * instancia de eval-col responde 404, no un reporte vacio. Sin este
+         * campo, "exportar" quedaria disponible solo para los dominios que
+         * comparten catalogo con el primero que se implemento.
+         */
+        private String baseUrl;
+
         /** Titulo impreso en el PDF y nombre de la hoja del Excel. */
         private String title;
 
@@ -81,6 +97,9 @@ public class ReportingProperties {
 
         public String getPath() { return path; }
         public void setPath(String v) { this.path = v; }
+
+        public String getBaseUrl() { return baseUrl; }
+        public void setBaseUrl(String v) { this.baseUrl = v; }
 
         public String getTitle() { return title; }
         public void setTitle(String v) { this.title = v; }
