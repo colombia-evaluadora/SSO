@@ -343,24 +343,37 @@ INSERT INTO public.query
      style, cacheable, cache_ttl_seconds)
 SELECT
     'eval-col-roles-menus-list-001',
-    'WITH _auth AS (SELECT academico_test.fn_assert_superadmin(:CONTEXT.USER_ID::BIGINT))
-     SELECT tm.fk_tmenu AS id
+    -- Devuelve el menu asignado con la MISMA forma que espera el body de
+    -- PUT /roles/:ROLEID/menus (contrato JSONB de fn_associate_menus_to_rol,
+    -- V123/V198): { "id": <bigint>, "soloLectura": <bool> }. Asi la pantalla
+    -- de roles relee y reenvia la lista sin transformarla, y al editar un
+    -- permiso ya no se pierde la marca de solo lectura de los demas menus.
+    -- soloLectura sale de TROL_MENU.SOLO_LECTURA (V99): 'SI' => el rol
+    -- concede el menu solo para ver; NULL/'NO' => los 4 permisos.
+    $q$WITH _auth AS (SELECT academico_test.fn_assert_superadmin(:CONTEXT.USER_ID::BIGINT))
+     SELECT tm.fk_tmenu AS id,
+            COALESCE(tm.solo_lectura = 'SI', FALSE) AS "soloLectura"
        FROM academico_test.trol_menu tm, _auth
       WHERE tm.fk_trol = CAST(:PARAM.ROLEID AS BIGINT)
         AND tm.active = TRUE
-      ORDER BY tm.orden_rol NULLS LAST;',
+      ORDER BY tm.orden_rol NULLS LAST;$q$,
     'postgres', false, false,
     m.id_microservice,
     '/roles/:ROLEID/menus', 'SELECT', 'GET',
     '{"PARAM.ROLEID": "BIGINT"}'::jsonb,
     NULL,
-    'roles-permisos: ids de menu asignados a un rol, EN EL ORDEN guardado.',
+    'roles-permisos: menus asignados a un rol (id + soloLectura), EN EL ORDEN guardado. Mismo elemento que espera el body de PUT /roles/:ROLEID/menus.',
     'roles-menus-list', NULL,
     false, 60
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
+-- DO UPDATE (antes DO NOTHING): en los entornos donde la fila ya existe, un
+-- DO NOTHING dejaria la edicion in-place de arriba sin efecto al reejecutar
+-- esta migracion tras el `flyway repair` por checksum cambiado.
 ON CONFLICT (microservice_id, path_template, http_method)
-    WHERE path_template IS NOT NULL DO NOTHING;
+    WHERE path_template IS NOT NULL
+    DO UPDATE SET query  = EXCLUDED.query,
+                  detail = EXCLUDED.detail;
 
 INSERT INTO public.role_query (role_id, query_id)
 SELECT r.id_role, q.id_query
