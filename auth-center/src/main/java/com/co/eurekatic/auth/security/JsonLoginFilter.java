@@ -153,7 +153,11 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         // establishment). null para quien no administra un único EE
         // (super-admin incluido) -- el claim simplemente se omite.
         String establishment = establishmentResolver.forUserId(uid);
-        String accessToken = jwt.issueAccessToken(email, uid, familyId, roles, establishment);
+        // Nombre legible para que el front lo pinte (header, menú de
+        // cuenta) en vez de caer al prefijo del correo -- ver
+        // JwtTokenService#CLAIM_NAME.
+        String name = (principal instanceof User u) ? u.getFullName() : null;
+        String accessToken = jwt.issueAccessToken(email, uid, familyId, roles, establishment, name);
 
         // Mint a new refresh token via the store. Each login starts a
         // fresh family so multi-device sessions are independent. If the
