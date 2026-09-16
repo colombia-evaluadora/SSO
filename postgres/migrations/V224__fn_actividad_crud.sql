@@ -1074,6 +1074,7 @@ BEGIN
 
     -- ----- Sin config: la actividad deja de ser (o nunca fue) de recuperacion.
     IF p_config IS NULL THEN
+        PERFORM academico_test.fn_actividad_recuperacion_revertir(p_pk_usuario_solicitante, p_pk_tactividad);
         UPDATE academico_test.TACTIVIDAD_RECUPERACION
            SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
          WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
@@ -1915,6 +1916,8 @@ BEGIN
        SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
 
+    -- Antes de desactivar la config: deshace lo que la recuperacion escribio (V408).
+    PERFORM academico_test.fn_actividad_recuperacion_revertir(p_pk_usuario_solicitante, p_pk_tactividad);
     UPDATE academico_test.TACTIVIDAD_RECUPERACION
        SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
