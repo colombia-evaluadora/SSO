@@ -1,21 +1,5 @@
--- ===========================================================================
--- Horario — funciones consolidadas (última versión)
--- Generado: 2026-09-04
---
--- Migracion real: ejecutada en orden secuencial por Flyway. El bloque de
--- gate de permisos (fn_periodo_gate_escritura, fn_periodo_puede_ver, etc.)
--- vive en V36_1__gate_permisos_periodo_academico.sql, que corre antes.
--- (sin reformatear), la última versión vigente de cada función del módulo
--- Horario, verificada contra el número de migración más alto que la
--- redefine en postgres/migrations/.
---
--- Migraciones fuente consultadas:
---   V45__schedule_module.sql
---   V81__fix_schedule.sql
---   V108__horario_mensajes_error_con_nombre.sql
--- ===========================================================================
-
--- Fuente: V108__horario_mensajes_error_con_nombre.sql
+-- Horario — funciones consolidadas (última versión). El gate de permisos
+-- (fn_periodo_gate_escritura, fn_periodo_puede_ver, etc.) vive en V36_1.
 SET search_path TO academico_test, public;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_horario_calcular_bloques(
@@ -55,16 +39,14 @@ BEGIN
       FROM academico_test.TPERIODO_ACADEMICO pa
      WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo_academico;
 
-    -- Sin jornada valida (periodo inexistente, sin horas o sin bloques): no
-    -- hay bloques que calcular. Igual que buildSlots() -> [] en el front.
+    -- Sin jornada valida: no hay bloques que calcular. Igual que buildSlots() -> [] en el front.
     IF v_ini_min IS NULL OR v_fin_min IS NULL OR v_fin_min <= v_ini_min
        OR v_bloques IS NULL OR v_bloques <= 0 THEN
         RETURN;
     END IF;
 
-    -- 1. Segmentos de clase = la jornada partida por los descansos activos
-    --    (se ignoran los que caen fuera de [HORA_INICIO, HORA_FIN] o estan
-    --    invertidos; los solapados se fusionan via GREATEST(cursor, fin)).
+    -- Segmentos de clase = jornada partida por los descansos activos (se ignoran los
+    -- invertidos o fuera de rango; los solapados se fusionan via GREATEST(cursor, fin)).
     v_cursor := v_ini_min;
     FOR r IN
         SELECT (EXTRACT(HOUR FROM d.HORA_INICIO)::INT * 60 + EXTRACT(MINUTE FROM d.HORA_INICIO)::INT) AS ini,
@@ -93,15 +75,14 @@ BEGIN
         RETURN;  -- la jornada entera quedo cubierta por descansos
     END IF;
 
-    -- 2. Minutos de clase totales y largo "ideal" de bloque (BLOQUES_POR_DEFECTO
-    --    parejo sobre el total, antes de repartir por segmento).
+    -- Minutos de clase totales y largo "ideal" de bloque, parejo sobre el total,
+    -- antes de repartir por segmento.
     FOR v_seg_idx IN 1..v_n_segs LOOP
         v_teaching_total := v_teaching_total + (v_seg_ends[v_seg_idx] - v_seg_starts[v_seg_idx]);
     END LOOP;
     v_block_minutes := v_teaching_total::NUMERIC / v_bloques;
 
-    -- 3. Reparto de bloques dentro de cada segmento (el ultimo se lleva el
-    --    resto exacto: v_bloques - v_placed).
+    -- El ultimo segmento se lleva el resto exacto (v_bloques - v_placed).
     FOR v_seg_idx IN 1..v_n_segs LOOP
         v_seg_start := v_seg_starts[v_seg_idx];
         v_seg_end   := v_seg_ends[v_seg_idx];
@@ -131,11 +112,8 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_horario_calcular_bloques(BIGINT)
     IS 'Hora de inicio/fin (TIME) de cada NUMERO_BLOQUE (0-based) del periodo academico, partiendo la jornada [HORA_INICIO,HORA_FIN] de TPERIODO_ACADEMICO por los descansos activos de TDESCANSOS. Puerto 1:1 de buildSlots() (front, schedule-data.ts). La consume fn_horario_guardar para persistir THORARIO.HORA_INICIO/HORA_FIN.';
 
--- Fuente: V81__fix_schedule.sql. Indice inseparable del fix de
--- fn_horario_guardar de abajo (V108 lo reconsolida verbatim en su propio
--- archivo, junto al cuerpo de la funcion, por eso se ubica aqui): blinda a
--- nivel de base de datos la garantia "una sola asignatura por grupo+dia+
--- bloque activo", no solo por la logica de la funcion.
+-- Blinda a nivel de base de datos la garantia "una sola asignatura por grupo+dia+
+-- bloque activo", no solo por la logica de fn_horario_guardar.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_horario_activo_por_celda
 ON academico_test.THORARIO (
     FK_TGRUPO,
@@ -144,7 +122,6 @@ ON academico_test.THORARIO (
 )
 WHERE ACTIVE = TRUE;
 
--- Fuente: V108__horario_mensajes_error_con_nombre.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_horario_guardar(
     p_fk_grado bigint,
     p_entries jsonb,
@@ -169,16 +146,7 @@ DECLARE
     v_tmp_nombre   VARCHAR;
     v_tmp_nombre2  VARCHAR;
 BEGIN
-
-    --------------------------------------------------------------------------
-    -- 1. Validar que el período permita escritura
-    --------------------------------------------------------------------------
-
-    --------------------------------------------------------------------------
-    -- 2. Obtener cantidad máxima de bloques del período (se adelanta para
-    --    poder resolver sede+jornada del gate de abajo, CU-86e2w4xdt).
-    --------------------------------------------------------------------------
-
+    -- Se adelanta para poder resolver sede+jornada del gate de abajo.
     SELECT pa.BLOQUES_POR_DEFECTO, g.NOMBRE, pa.PK_TPERIODO_ACADEMICO
       INTO v_max_bloques, v_nombre_grado, v_fk_periodo
       FROM academico_test.TGRADO g
@@ -187,7 +155,6 @@ BEGIN
      WHERE g.PK_TGRADO = p_fk_grado
        AND g.ACTIVE = TRUE;
 
-    -- 1. Autorizacion (CU-86e2w4xdt): gate por (EE, sede, jornada) del periodo del grado.
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante,
         academico_test.fn_periodo_establecimiento(v_fk_periodo),
@@ -204,14 +171,7 @@ BEGIN
         END IF;
     END IF;
 
-
-    --------------------------------------------------------------------------
-    -- 3. Lock por grado
-    --
-    -- Evita que dos transacciones modifiquen simultáneamente
-    -- el horario del mismo grado.
-    --------------------------------------------------------------------------
-
+    -- Evita que dos transacciones modifiquen simultaneamente el horario del mismo grado.
     PERFORM pg_advisory_xact_lock(
         hashtext('horario:' || p_fk_grado::TEXT)
     );
@@ -223,14 +183,7 @@ BEGIN
             SELECT g.FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado))
     );
 
-
-    --------------------------------------------------------------------------
-    -- 4. Crear tabla temporal con el estado deseado
-    --
-    -- Si la función se llama nuevamente dentro de la misma transacción,
-    -- primero eliminamos la tabla temporal anterior.
-    --------------------------------------------------------------------------
-
+    -- Por si la funcion se llama de nuevo dentro de la misma transaccion.
     DROP TABLE IF EXISTS tmp_horario_entries;
 
     CREATE TEMP TABLE tmp_horario_entries (
@@ -240,14 +193,8 @@ BEGIN
         plan_item_id   BIGINT NOT NULL,
         asignatura_id  BIGINT NOT NULL,
 
-        -- Una sola asignatura por grupo + día + bloque
         UNIQUE (grupo_id, dia_id, bloque)
     ) ON COMMIT DROP;
-
-
-    --------------------------------------------------------------------------
-    -- 5. Validar y cargar p_entries en la tabla temporal
-    --------------------------------------------------------------------------
 
     FOR entry IN
         SELECT *
@@ -255,20 +202,10 @@ BEGIN
             COALESCE(p_entries, '[]'::JSONB)
         )
     LOOP
-
-        ----------------------------------------------------------------------
-        -- Obtener valores del JSON
-        ----------------------------------------------------------------------
-
         v_bloque   := (entry->>'bloque')::INT;
         v_grupo    := (entry->>'grupoId')::BIGINT;
         v_dia      := (entry->>'diaId')::BIGINT;
         v_planitem := (entry->>'planItemId')::BIGINT;
-
-
-        ----------------------------------------------------------------------
-        -- Validar campos obligatorios
-        ----------------------------------------------------------------------
 
         IF v_bloque IS NULL
            OR v_grupo IS NULL
@@ -280,11 +217,6 @@ BEGIN
                 USING ERRCODE = '22023';
         END IF;
 
-
-        ----------------------------------------------------------------------
-        -- Validar rango del bloque
-        ----------------------------------------------------------------------
-
         IF v_bloque < 0
            OR v_bloque >= v_max_bloques
         THEN
@@ -294,11 +226,6 @@ BEGIN
                 v_max_bloques - 1
                 USING ERRCODE = '22023';
         END IF;
-
-
-        ----------------------------------------------------------------------
-        -- Validar que el grupo pertenezca al grado y esté activo
-        ----------------------------------------------------------------------
 
         IF NOT EXISTS (
             SELECT 1
@@ -320,11 +247,6 @@ BEGIN
             END IF;
         END IF;
 
-
-        ----------------------------------------------------------------------
-        -- Validar día de la semana
-        ----------------------------------------------------------------------
-
         IF NOT EXISTS (
             SELECT 1
             FROM academico_test.TLISTA_VALOR
@@ -344,11 +266,6 @@ BEGIN
             END IF;
         END IF;
 
-
-        ----------------------------------------------------------------------
-        -- Obtener asignatura a partir del planItem
-        ----------------------------------------------------------------------
-
         SELECT ap.FK_TASIGNATURA
           INTO v_asig
           FROM academico_test.TASIGNATURA_PLAN ap
@@ -358,11 +275,6 @@ BEGIN
          WHERE ap.PK_TASIGNATURA_PLAN = v_planitem
            AND ap.ACTIVE = TRUE
            AND pl.FK_TGRADO = p_fk_grado;
-
-
-        ----------------------------------------------------------------------
-        -- Validar planItem
-        ----------------------------------------------------------------------
 
         IF v_asig IS NULL THEN
             SELECT a.NOMBRE INTO v_tmp_nombre
@@ -379,15 +291,6 @@ BEGIN
                 RAISE EXCEPTION 'El renglon de plan seleccionado no existe' USING ERRCODE = '23503';
             END IF;
         END IF;
-
-
-        ----------------------------------------------------------------------
-        -- Validar duplicado dentro del payload
-        --
-        -- La identidad de una celda es:
-        --
-        -- grupo + día + bloque
-        ----------------------------------------------------------------------
 
         IF EXISTS (
             SELECT 1
@@ -407,11 +310,6 @@ BEGIN
                 USING ERRCODE = '22023';
         END IF;
 
-
-        ----------------------------------------------------------------------
-        -- Guardar entrada validada
-        ----------------------------------------------------------------------
-
         INSERT INTO tmp_horario_entries (
             grupo_id,
             dia_id,
@@ -429,14 +327,7 @@ BEGIN
 
     END LOOP;
 
-
-    --------------------------------------------------------------------------
-    -- 6. DESACTIVAR CELDAS ELIMINADAS
-    --
-    -- Si existe una celda activa en BD pero ya no viene en p_entries,
-    -- significa que el usuario la eliminó.
-    --------------------------------------------------------------------------
-
+    -- Celda activa en BD que ya no viene en p_entries: el usuario la elimino.
     UPDATE academico_test.THORARIO h
        SET ACTIVE      = FALSE,
            MODIFIED_BY = v_audit,
@@ -456,21 +347,8 @@ BEGIN
               AND e.bloque = h.NUMERO_BLOQUE
        );
 
-
-    --------------------------------------------------------------------------
-    -- 7. DESACTIVAR VERSIONES ANTERIORES DE CELDAS MODIFICADAS
-    --
-    -- Ejemplo:
-    --
-    -- BD:
-    -- lunes / bloque 2 / Matemáticas
-    --
-    -- Nuevo payload:
-    -- lunes / bloque 2 / Física
-    --
-    -- Se desactiva Matemáticas.
-    --------------------------------------------------------------------------
-
+    -- Celda existente con distinta asignatura (misma grupo+dia+bloque): se
+    -- desactiva la version anterior antes de insertar la nueva.
     UPDATE academico_test.THORARIO h
        SET ACTIVE      = FALSE,
            MODIFIED_BY = v_audit,
@@ -482,18 +360,7 @@ BEGIN
        AND h.NUMERO_BLOQUE = e.bloque
        AND h.FK_TASIGNATURA <> e.asignatura_id;
 
-
-    --------------------------------------------------------------------------
-    -- 8. INSERTAR CELDAS NUEVAS O MODIFICADAS
-    --
-    -- Las celdas que:
-    --
-    --  - nunca existieron
-    --  - fueron modificadas y la versión anterior acaba de ser desactivada
-    --
-    -- se insertan como ACTIVE=true.
-    --------------------------------------------------------------------------
-
+    -- Celdas nuevas o cuya version anterior acaba de desactivarse arriba.
     INSERT INTO academico_test.THORARIO (
         NUMERO_BLOQUE,
         FK_TLV_DIA_SEMANA,
@@ -508,15 +375,10 @@ BEGIN
         e.dia_id,
         e.grupo_id,
         e.asignatura_id,
-        -- Hora real del bloque (partiendo la jornada del periodo por los
-        -- descansos, fn_horario_calcular_bloques) y NO la de todo el periodo
-        -- academico. THORARIO.HORA_INICIO/FIN son TIMESTAMP (no TIME) y
-        -- Postgres no castea TIME a TIMESTAMP directo -- se combina con
-        -- CURRENT_DATE (solo importa la hora; la fecha es arbitraria pero
-        -- consistente entre inicio y fin para el EXTRACT(EPOCH FROM ...)
-        -- que hace fn_asistencia_calendario). Sin match (periodo sin
-        -- BLOQUES_POR_DEFECTO/horas o bloque fuera del reparto calculado)
-        -- queda NULL: se guarda la celda igual, sin franja horaria derivada.
+        -- HORA_INICIO/FIN son TIMESTAMP (no TIME, que Postgres no castea directo), de ahi el
+        -- CURRENT_DATE +; la fecha es arbitraria pero consistente para el EXTRACT(EPOCH FROM ...)
+        -- que hace fn_asistencia_calendario. Sin match en fn_horario_calcular_bloques queda NULL
+        -- (se guarda la celda igual, sin franja horaria derivada).
         CURRENT_DATE + b.hora_inicio,
         CURRENT_DATE + b.hora_fin,
         v_audit
@@ -531,11 +393,6 @@ BEGIN
           AND h.FK_TLV_DIA_SEMANA = e.dia_id
           AND h.NUMERO_BLOQUE = e.bloque
     );
-
-
-    --------------------------------------------------------------------------
-    -- 9. Retornar cantidad de celdas activas del grado
-    --------------------------------------------------------------------------
 
     SELECT COUNT(*)
       INTO v_count
@@ -552,7 +409,6 @@ BEGIN
 END;
 $$;
 
--- Fuente: V45__schedule_module.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_horario_listar(
     p_fk_grado BIGINT,
     p_fk_grupo BIGINT DEFAULT NULL,   -- filtro opcional por grupo
@@ -579,7 +435,6 @@ LANGUAGE sql STABLE AS $$
      ORDER BY h.FK_TGRUPO, h.FK_TLV_DIA_SEMANA, h.NUMERO_BLOQUE;
 $$;
 
--- Fuente: V45__schedule_module.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_horario_asignaturas(
     p_fk_grado BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
 )
