@@ -1,31 +1,4 @@
--- ===========================================================================
 -- Plan de Estudio — funciones consolidadas (última versión)
--- Generado: 2026-09-04
---
--- Migracion real, aplicada por Flyway en orden secuencial.
--- Su unico proposito es reunir en un solo lugar la version vigente de cada
--- funcion del modulo, ya que con el tiempo varias han sido redefinidas
--- (CREATE OR REPLACE FUNCTION) en migraciones posteriores.
---
--- Migraciones fuente consultadas:
---   - V44__study_plan_module.sql
---   - V107__plan_estudio_mensajes_error_con_nombre.sql
---   - V186__fn_plan_reporte_listar.sql
---   - V195__fn_plan_listar_y_disponibles_exponen_id_y_enfasis.sql
---
--- Verificacion: se corrio
---   grep -rn "FUNCTION academico_test.<nombre>(" postgres/migrations/
--- para cada funcion del modulo; el archivo mas reciente listado arriba es el
--- de mayor numero V en todos los casos, sin discrepancias respecto al mapeo
--- de partida. Nota especial: fn_plan_eliminar aparece definida DOS veces
--- dentro de V107 (una hacia el inicio del archivo, y una segunda mas abajo en
--- una seccion "Consolidado" que el propio V107 agrega para incorporar cambios
--- de V114/V117/V119 de otra rama) -- se tomo la segunda definicion, que es la
--- que queda vigente al final de la ejecucion del archivo (agrega el bloqueo
--- por THORARIO y la cascada de desactivar TPLAN si queda sin renglones).
--- ===========================================================================
-
--- Fuente: V107__plan_estudio_mensajes_error_con_nombre.sql
 SET search_path TO academico_test, public;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_plan_agregar(
@@ -47,7 +20,6 @@ DECLARE
     v_asignatura_nom TEXT; v_lookup TEXT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo del grado.
     SELECT g.FK_TPERIODO_ACADEMICO INTO v_periodo
       FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado;
     PERFORM academico_test.fn_periodo_gate_escritura(
@@ -58,7 +30,6 @@ BEGIN
     IF p_fk_grado IS NULL OR p_fk_asignatura IS NULL THEN
         RAISE EXCEPTION 'Grado y asignatura son obligatorios' USING ERRCODE = '22023';
     END IF;
-    -- Validaciones numericas.
     IF p_numero_hora IS NOT NULL AND p_numero_hora <= 0 THEN
         RAISE EXCEPTION 'La intensidad horaria debe ser mayor a 0' USING ERRCODE = '22023';
     END IF;
@@ -88,9 +59,8 @@ BEGIN
             RAISE EXCEPTION 'La asignatura indicada no existe' USING ERRCODE = '23503';
         END IF;
     END IF;
-    -- Formato de calificacion / criterio de nota son opcionales (NULL = hereda
-    -- del criterio de evaluacion del periodo), pero si vienen deben resolver a
-    -- una fila activa de TLISTA_VALOR de la categoria correcta.
+    -- NULL en formato/criterio = hereda del criterio de evaluacion del periodo; si vienen,
+    -- deben resolver a una fila activa de TLISTA_VALOR de la categoria correcta.
     IF p_fk_formato_calif IS NOT NULL THEN
         SELECT VALOR INTO v_lookup FROM academico_test.TLISTA_VALOR
          WHERE PK_LISTA_VALOR = p_fk_formato_calif AND ACTIVE = TRUE AND CATEGORIA = 'FORMATO_CALIFICACION';
@@ -118,10 +88,8 @@ BEGIN
         END IF;
     END IF;
 
-    -- La etiqueta se declara aca, antes del pg_advisory_xact_lock e incluso del
-    -- posible INSERT INTO TPLAN (creacion del header la primera vez que un
-    -- grado recibe una asignatura) -- si se declarara despues de ese INSERT,
-    -- el trigger BEFORE STATEMENT de auditoria vería esa fila sin etiqueta.
+    -- Declarada antes del posible INSERT INTO TPLAN: si fuera despues, el trigger
+    -- BEFORE STATEMENT de auditoria vería esa fila sin etiqueta.
     PERFORM academico_test.fn_audit_declarar(
         p_pk_usuario_solicitante,
         format('Asignación de %s al plan de estudio del grado %s', v_asignatura_nom, v_grado_nom),
@@ -136,7 +104,6 @@ BEGIN
         VALUES (LEFT(v_grado_nom, 30), 'Plan ' || v_grado_nom, p_fk_grado, v_audit)
         RETURNING PK_TPLAN INTO v_plan_id;
     END IF;
-    -- No permitir la misma asignatura dos veces en el plan del grado.
     IF EXISTS (
         SELECT 1 FROM academico_test.TASIGNATURA_PLAN
          WHERE FK_TPLAN = v_plan_id AND FK_TASIGNATURA = p_fk_asignatura AND ACTIVE = TRUE
@@ -158,9 +125,8 @@ BEGIN
     )
     RETURNING PK_TASIGNATURA_PLAN INTO v_id;
 
-    -- Enlaza el renglon del plan con el criterio de evaluacion POR DEFECTO del
-    -- periodo (PK del criterio = PK del periodo). Los overrides personalizados
-    -- de formato/criterio-nota viven en las columnas de TASIGNATURA_PLAN.
+    -- El criterio de evaluacion por defecto del periodo tiene PK = PK del periodo; los
+    -- overrides de formato/criterio-nota viven en las columnas de TASIGNATURA_PLAN.
     SELECT FK_TPERIODO_ACADEMICO INTO v_periodo FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_grado;
     IF EXISTS (
         SELECT 1 FROM academico_test.TCRITERIO_EVALUACION
@@ -174,7 +140,6 @@ BEGIN
 END;
 $$;
 
--- Fuente: V107__plan_estudio_mensajes_error_con_nombre.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_plan_actualizar(
     p_pk                   BIGINT,
     p_fk_asignatura        BIGINT  DEFAULT NULL,
@@ -194,7 +159,6 @@ DECLARE
     v_asignatura_nom TEXT; v_grado_nom TEXT; v_lookup TEXT;
     v_periodo_id BIGINT;
 BEGIN
-    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo del plan.
     SELECT g.FK_TPERIODO_ACADEMICO INTO v_periodo_id
       FROM academico_test.TASIGNATURA_PLAN ap
       JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
@@ -205,7 +169,6 @@ BEGIN
         academico_test.fn_periodo_establecimiento(v_periodo_id),
         academico_test.fn_periodo_sede(v_periodo_id),
         academico_test.fn_periodo_jornada(v_periodo_id), 'EDITAR');
-    -- Validaciones numericas (solo si vienen).
     IF p_numero_hora IS NOT NULL AND p_numero_hora <= 0 THEN
         RAISE EXCEPTION 'La intensidad horaria debe ser mayor a 0' USING ERRCODE = '22023';
     END IF;
@@ -215,7 +178,6 @@ BEGIN
     IF p_numero_credito IS NOT NULL AND p_numero_credito < 0 THEN
         RAISE EXCEPTION 'El numero de creditos no puede ser negativo' USING ERRCODE = '22023';
     END IF;
-    -- Si se cambia la asignatura: debe existir/activa y no duplicar en el plan.
     IF p_fk_asignatura IS NOT NULL THEN
         SELECT NOMBRE INTO v_asignatura_nom FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_fk_asignatura AND ACTIVE = TRUE;
         IF v_asignatura_nom IS NULL THEN
@@ -236,8 +198,7 @@ BEGIN
                 USING ERRCODE = '23505';
         END IF;
     END IF;
-    -- Formato de calificacion / criterio de nota: mismos checks que en
-    -- fn_plan_agregar (NULL = vuelve a heredar del criterio de evaluacion).
+    -- Mismos checks que fn_plan_agregar (NULL = vuelve a heredar del criterio de evaluacion).
     IF p_fk_formato_calif IS NOT NULL THEN
         SELECT VALOR INTO v_lookup FROM academico_test.TLISTA_VALOR
          WHERE PK_LISTA_VALOR = p_fk_formato_calif AND ACTIVE = TRUE AND CATEGORIA = 'FORMATO_CALIFICACION';
@@ -264,9 +225,7 @@ BEGIN
             END IF;
         END IF;
     END IF;
-    -- v_grado_nom (y v_asignatura_nom si no vino en el patch) no estaban
-    -- resueltos en este punto -- se agrega este lookup solo para la etiqueta,
-    -- mismo patron que ya usa mas abajo el branch de "renglon no encontrado".
+    -- Lookup solo para la etiqueta de auditoria (los campos no llegaron a resolverse arriba).
     IF v_asignatura_nom IS NULL THEN
         SELECT ta.NOMBRE INTO v_asignatura_nom
           FROM academico_test.TASIGNATURA_PLAN ap
@@ -324,10 +283,6 @@ BEGIN
 END;
 $$;
 
--- Fuente: V107__plan_estudio_mensajes_error_con_nombre.sql (segunda
--- definicion en el archivo, dentro de la seccion "Consolidado desde V119" —
--- es la que queda vigente; reemplaza tanto a la primera definicion de este
--- mismo archivo como a la de V44)
 CREATE OR REPLACE FUNCTION academico_test.fn_plan_eliminar(p_pk bigint, p_pk_usuario_solicitante bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -338,7 +293,6 @@ DECLARE
     v_plan_id BIGINT;
     v_periodo_id BIGINT;
 BEGIN
-    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo del plan.
     SELECT g.FK_TPERIODO_ACADEMICO INTO v_periodo_id
       FROM academico_test.TASIGNATURA_PLAN ap
       JOIN academico_test.TPLAN pl ON pl.PK_TPLAN = ap.FK_TPLAN
@@ -374,9 +328,7 @@ BEGIN
             USING ERRCODE = '23503';
     END IF;
     SELECT FK_TPLAN INTO v_plan_id FROM academico_test.TASIGNATURA_PLAN WHERE PK_TASIGNATURA_PLAN = p_pk;
-    -- v_asignatura_nom/v_grado_nom no estaban resueltos en este punto (solo se
-    -- calculan mas abajo si el UPDATE no afecta filas) -- se adelanta aca el
-    -- mismo lookup solo para la etiqueta, sin logica nueva.
+    -- Lookup adelantado solo para la etiqueta de auditoria (se repite mas abajo si el UPDATE no afecta filas).
     SELECT ta.NOMBRE, tg.NOMBRE INTO v_asignatura_nom, v_grado_nom
       FROM academico_test.TASIGNATURA_PLAN ap
       JOIN academico_test.TASIGNATURA ta ON ta.PK_TASIGNATURA = ap.FK_TASIGNATURA
@@ -424,7 +376,6 @@ BEGIN
 END;
 $$;
 
--- Fuente: V107__plan_estudio_mensajes_error_con_nombre.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_plan_soft_delete(p_fk_grado bigint, p_pk_usuario_solicitante bigint)
 RETURNS bigint LANGUAGE plpgsql AS $$
 DECLARE
@@ -432,7 +383,6 @@ DECLARE
     v_grado_nom TEXT;
     v_periodo_id BIGINT;
 BEGIN
-    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo del grado.
     SELECT g.FK_TPERIODO_ACADEMICO INTO v_periodo_id
       FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado;
     PERFORM academico_test.fn_periodo_gate_escritura(
@@ -440,7 +390,7 @@ BEGIN
         academico_test.fn_periodo_establecimiento(v_periodo_id),
         academico_test.fn_periodo_sede(v_periodo_id),
         academico_test.fn_periodo_jornada(v_periodo_id), 'ELIMINAR');
-    -- Nombre del grado (ignorando ACTIVE), reusado en ambos mensajes de abajo.
+    -- Ignora ACTIVE: reusado en ambos mensajes de abajo incluso si el grado esta inactivo.
     SELECT NOMBRE INTO v_grado_nom FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_grado;
     SELECT PK_TPLAN INTO v_pk_plan FROM academico_test.TPLAN
      WHERE FK_TGRADO = p_fk_grado AND ACTIVE = TRUE;
@@ -451,7 +401,6 @@ BEGIN
             RAISE EXCEPTION 'No existe un plan de estudio activo para el grado indicado' USING ERRCODE = 'P0002';
         END IF;
     END IF;
-    -- Bloqueo: algun renglon del plan tiene asignaciones docente activas.
     IF EXISTS (
         SELECT 1
           FROM academico_test.TASIGNATURA_PLAN ap
@@ -470,26 +419,20 @@ BEGIN
             SELECT g.FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_fk_grado))
     );
 
-    -- Enlaces al criterio de evaluacion de los renglones del plan.
     UPDATE academico_test.TCRITERIO_EVALUACION_ASIGNATURA_PLAN
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE ACTIVE = TRUE AND FK_TASIGNATURA_PLAN IN (
          SELECT PK_TASIGNATURA_PLAN FROM academico_test.TASIGNATURA_PLAN
           WHERE FK_TPLAN = v_pk_plan AND ACTIVE = TRUE
      );
-    -- Renglones del plan.
     UPDATE academico_test.TASIGNATURA_PLAN SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE FK_TPLAN = v_pk_plan AND ACTIVE = TRUE;
-    -- Header del plan.
     UPDATE academico_test.TPLAN SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TPLAN = v_pk_plan AND ACTIVE = TRUE;
     RETURN v_pk_plan;
 END;
 $$;
 
--- Fuente: V107__plan_estudio_mensajes_error_con_nombre.sql (funcion nueva,
--- no existia en V44; consolidada desde V114__fn_plan_asignatura_bulk_delete.sql
--- de otra rama)
 CREATE OR REPLACE FUNCTION academico_test.fn_plan_asignatura_bulk_delete(
     p_ids bigint[],
     p_pk_usuario_solicitante bigint
@@ -514,13 +457,12 @@ BEGIN
 END;
 $$;
 
--- Fuente: V195__fn_plan_listar_y_disponibles_exponen_id_y_enfasis.sql
 DROP FUNCTION IF EXISTS academico_test.fn_plan_listar(BIGINT, TEXT, INT, INT, BIGINT, TEXT, TEXT);
 CREATE OR REPLACE FUNCTION academico_test.fn_plan_listar(
     p_fk_grado BIGINT, p_filtro TEXT DEFAULT NULL,
     p_page_index INT DEFAULT 0, p_page_size INT DEFAULT 10,
     p_pk_usuario_solicitante BIGINT DEFAULT NULL,
-    -- Orden: id de columna del front + direccion ('asc'/'desc'), igual que fn_periodo_listar (V37).
+    -- Columna del front (id) + direccion ('asc'/'desc').
     p_sort_by TEXT DEFAULT NULL,
     p_sort_dir TEXT DEFAULT NULL
 )
@@ -563,7 +505,6 @@ BEGIN
                  ON ce.PK_TCRITERIO_EVALUACION = cap.FK_TCRITERIO_EVALUACION AND ce.ACTIVE = TRUE
          WHERE p.FK_TGRADO = $1 AND ap.ACTIVE = TRUE
            AND ($2 IS NULL OR s.NOMBRE ILIKE '%%' || $2 || '%%')
-           -- CU-86e2w4xdt: capability + scope de lectura sobre el periodo del grado.
            AND academico_test.fn_periodo_puede_ver($5, g.FK_TPERIODO_ACADEMICO)
          ORDER BY %s %s, ap.PK_TASIGNATURA_PLAN
          LIMIT NULLIF($4, 0)
@@ -573,7 +514,6 @@ BEGIN
 END;
 $$;
 
--- Fuente: V44__study_plan_module.sql
 DROP FUNCTION IF EXISTS academico_test.fn_plan_obtener(BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_plan_obtener(
     p_pk BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
@@ -600,11 +540,9 @@ LANGUAGE sql STABLE AS $$
       LEFT JOIN academico_test.TCRITERIO_EVALUACION ce
              ON ce.PK_TCRITERIO_EVALUACION = cap.FK_TCRITERIO_EVALUACION AND ce.ACTIVE = TRUE
      WHERE ap.PK_TASIGNATURA_PLAN = p_pk AND ap.ACTIVE = TRUE
-       -- CU-86e2w4xdt: capability + scope de lectura sobre el periodo del grado.
        AND academico_test.fn_periodo_puede_ver(p_pk_usuario_solicitante, g.FK_TPERIODO_ACADEMICO);
 $$;
 
--- Fuente: V195__fn_plan_listar_y_disponibles_exponen_id_y_enfasis.sql
 DROP FUNCTION IF EXISTS academico_test.fn_plan_asignaturas_disponibles_listar(BIGINT, TEXT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_plan_asignaturas_disponibles_listar(
     p_fk_grado BIGINT, p_filtro TEXT DEFAULT NULL,
@@ -623,12 +561,10 @@ LANGUAGE sql STABLE AS $$
              SELECT 1 FROM academico_test.TASIGNATURA_PLAN ap
                JOIN academico_test.TPLAN p ON p.PK_TPLAN = ap.FK_TPLAN
               WHERE p.FK_TGRADO = p_fk_grado AND ap.FK_TASIGNATURA = s.PK_TASIGNATURA AND ap.ACTIVE = TRUE)
-       -- CU-86e2w4xdt: capability + scope de lectura sobre el periodo del grado.
        AND academico_test.fn_periodo_puede_ver(p_pk_usuario_solicitante, g.FK_TPERIODO_ACADEMICO)
      ORDER BY a.NOMBRE, s.NOMBRE;
 $$;
 
--- Fuente: V186__fn_plan_reporte_listar.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_plan_reporte_listar(
     p_fk_periodo      BIGINT,
     p_fk_grado        BIGINT[] DEFAULT NULL,

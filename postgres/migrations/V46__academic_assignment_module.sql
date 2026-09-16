@@ -1,41 +1,4 @@
--- ===========================================================================
 -- Asignación Académica — funciones consolidadas (última versión)
--- Generado: 2026-09-04
---
--- Migracion real, aplicada por Flyway en orden secuencial.
--- Su unico proposito es reunir en un solo lugar la version vigente de cada
--- funcion del modulo, ya que con el tiempo varias han sido redefinidas
--- (CREATE OR REPLACE FUNCTION) en migraciones posteriores.
---
--- Migraciones fuente consultadas:
---   - V46__academic_assignment_module.sql
---   - V109__asignacion_academica_mensajes_error_con_nombre.sql
---   - V135__query_rows_reportes_modulo_academico.sql
---   - V190__fn_asignacion_reporte_listar.sql
---
--- Verificacion: se corrio
---   grep -rn "FUNCTION academico_test.<nombre>(" postgres/migrations/
--- para fn_asignacion_guardar, fn_asignacion_pool, fn_asignacion_docente,
--- fn_asignacion_docente_listar y fn_asignacion_reporte_listar. No aparecio
--- ninguna migracion mas nueva que las listadas arriba.
---
--- DISCREPANCIA encontrada respecto al mapeo original: se indicaba que
--- V109 contiene DOS overloads reales y simultaneos de
--- fn_asignacion_docente_listar (uno ~linea 234, otro ~linea 335, este ultimo
--- con paginacion). Al abrir V109 completo, ambas definiciones tienen
--- EXACTAMENTE la misma firma (mismos 8 parametros y mismos tipos: BIGINT,
--- TEXT, TEXT, BIGINT, INT, INT, TEXT, TEXT en ambos casos) -- no son overloads
--- distintos en el sentido de Postgres, sino la MISMA funcion definida dos
--- veces dentro del mismo archivo. El propio V109 lo dice explicitamente en su
--- comentario (linea ~333): "Reemplaza la definicion de fn_asignacion_docente_listar
--- de mas arriba en este archivo." Ademas la version de la linea 335 corrige un
--- bug de scope de la de la linea 234 (filtra/devuelve TSEDE_USUARIO.TLV_ESTADO,
--- el estado del docente EN LA SEDE del periodo, en vez de TUSUARIO.ESTADO, el
--- estado global de la cuenta). Por lo tanto abajo se incluye UNA sola version
--- vigente (la de la linea ~335), no dos overloads.
--- ===========================================================================
-
--- Fuente: V109__asignacion_academica_mensajes_error_con_nombre.sql
 SET search_path TO academico_test, public;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_guardar(p_academic_period_id bigint, p_fk_funcionario bigint, p_subject_ids text[], p_pk_usuario_solicitante bigint)
@@ -50,7 +13,6 @@ DECLARE
     v_nombre_asig TEXT;
     v_nombre_grupo TEXT;
 BEGIN
-    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo academico.
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante,
         academico_test.fn_periodo_establecimiento(p_academic_period_id),
@@ -91,9 +53,8 @@ BEGIN
 
     PERFORM pg_advisory_xact_lock(hashtext('docasig:' || p_academic_period_id::text || ':' || v_func::text));
 
-    -- v_nombre_periodo/v_nombre_funcionario solo quedaban resueltos en las
-    -- ramas de error de arriba; en el camino exitoso hacen falta para la
-    -- etiqueta, se resuelven aca reusando el mismo lookup.
+    -- Camino exitoso: estos nombres solo se resolvian en las ramas de error de arriba,
+    -- pero hacen falta aca para la etiqueta de auditoria.
     SELECT NOMBRE INTO v_nombre_periodo
       FROM academico_test.TPERIODO_ACADEMICO WHERE PK_TPERIODO_ACADEMICO = p_academic_period_id;
     SELECT TRIM(concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO))
@@ -122,8 +83,6 @@ BEGIN
             v_grupo := split_part(v_pair, ':', 1)::BIGINT;
             v_asig  := split_part(v_pair, ':', 2)::BIGINT;
 
-            -- El par debe ser una combinacion valida del pool: grupo activo del
-            -- periodo, y asignatura activa presente en el plan del grado del grupo.
             IF NOT EXISTS (
                 SELECT 1
                   FROM academico_test.TGRUPO gr
@@ -139,9 +98,8 @@ BEGIN
                     USING ERRCODE = '22023';
             END IF;
 
-            -- A partir de aqui asignatura y grupo estan confirmados activos por el
-            -- chequeo anterior; se resuelven sus nombres para los mensajes de
-            -- conflicto/duplicado de abajo.
+            -- Ya confirmados activos por el chequeo anterior; se resuelven los nombres
+            -- para los mensajes de conflicto/duplicado de abajo.
             SELECT s2.NOMBRE, g2.NOMBRE || ' ' || gr2.NOMBRE
               INTO v_nombre_asig, v_nombre_grupo
               FROM academico_test.TASIGNATURA s2
@@ -149,7 +107,6 @@ BEGIN
               JOIN academico_test.TGRADO g2 ON g2.PK_TGRADO = gr2.FK_TGRADO
              WHERE s2.PK_TASIGNATURA = v_asig;
 
-            -- Conflicto: la materia-grupo ya esta asignada a OTRO docente en el periodo.
             IF EXISTS (
                 SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA
                  WHERE FK_TGRUPO = v_grupo AND FK_TASIGNATURA = v_asig
@@ -160,7 +117,7 @@ BEGIN
                     v_nombre_asig, v_nombre_grupo USING ERRCODE = '23505';
             END IF;
 
-            -- Duplicado dentro del mismo guardado (ya insertado en este loop).
+            -- Detecta duplicados agregados por una vuelta anterior de este mismo loop.
             IF EXISTS (
                 SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA
                  WHERE FK_TGRUPO = v_grupo AND FK_TASIGNATURA = v_asig
@@ -182,45 +139,6 @@ BEGIN
 END;
 $function$;
 
--- Fuente: V109__asignacion_academica_mensajes_error_con_nombre.sql
-CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_pool(
-    p_academic_period_id BIGINT,
-    p_filtro             TEXT    DEFAULT NULL,
-    p_solo_sin_docente   BOOLEAN DEFAULT FALSE,
-    p_pk_usuario         BIGINT  DEFAULT NULL
-)
-RETURNS TABLE (
-    id TEXT, nombre VARCHAR, grado_grupo TEXT, jornada VARCHAR, jornada_name VARCHAR,
-    funcionario_id BIGINT
-)
-LANGUAGE sql STABLE AS $$
-    SELECT gr.PK_TGRUPO || ':' || s.PK_TASIGNATURA, s.NOMBRE,
-           g.NOMBRE || ' ' || gr.NOMBRE, jor.VALOR, jor.NOMBRE, da.FK_TFUNCIONARIO
-      FROM academico_test.TGRADO g
-      JOIN academico_test.TGRUPO gr            ON gr.FK_TGRADO = g.PK_TGRADO AND gr.ACTIVE = TRUE
-      JOIN academico_test.TPLAN p              ON p.FK_TGRADO = g.PK_TGRADO AND p.ACTIVE = TRUE
-      JOIN academico_test.TASIGNATURA_PLAN ap  ON ap.FK_TPLAN = p.PK_TPLAN AND ap.ACTIVE = TRUE
-      JOIN academico_test.TASIGNATURA s        ON s.PK_TASIGNATURA = ap.FK_TASIGNATURA AND s.ACTIVE = TRUE
-      LEFT JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
-      LEFT JOIN academico_test.TDOCENTE_ASIGNATURA da
-             ON da.FK_TGRUPO = gr.PK_TGRUPO AND da.FK_TASIGNATURA = s.PK_TASIGNATURA
-            AND da.FK_TPERIODO_ACADEMICO = p_academic_period_id AND da.ACTIVE = TRUE
-     WHERE g.FK_TPERIODO_ACADEMICO = p_academic_period_id AND g.ACTIVE = TRUE
-       AND academico_test.fn_periodo_puede_ver(p_pk_usuario, p_academic_period_id)
-       AND (NULLIF(TRIM(p_filtro),'') IS NULL
-            OR s.NOMBRE  ILIKE '%' || p_filtro || '%'
-            OR g.NOMBRE  ILIKE '%' || p_filtro || '%'
-            OR gr.NOMBRE ILIKE '%' || p_filtro || '%'
-            OR jor.VALOR ILIKE '%' || p_filtro || '%')
-       -- Se conserva por compatibilidad: TRUE sigue significando "solo
-       -- libres". El front ya no lo manda -- filtra "libre vs. de otro
-       -- docente" con `funcionario_id` en el cliente.
-       AND (NOT COALESCE(p_solo_sin_docente, FALSE) OR da.FK_TFUNCIONARIO IS NULL)
-     ORDER BY g.NOMBRE, gr.NOMBRE, s.NOMBRE;
-$$;
-
--- Fuente: V46__academic_assignment_module.sql
--- Asignaciones vigentes de un docente (por documento) en el periodo.
 CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_docente(
     p_academic_period_id BIGINT, p_fk_funcionario BIGINT,
     p_pk_usuario BIGINT DEFAULT NULL  -- alcance (global / establecimiento)
@@ -234,11 +152,6 @@ LANGUAGE sql STABLE AS $$
        AND academico_test.fn_periodo_puede_ver(p_pk_usuario, p_academic_period_id);
 $$;
 
--- Fuente: V109__asignacion_academica_mensajes_error_con_nombre.sql
--- NOTA: ver discrepancia explicada en el encabezado del archivo -- esta es la
--- UNICA version vigente de fn_asignacion_docente_listar (la definicion previa
--- en el mismo V109, con la misma firma, queda reemplazada por esta; no son
--- dos overloads simultaneos).
 CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_docente_listar(p_academic_period_id bigint, p_estado text DEFAULT NULL::text, p_filtro text DEFAULT NULL::text, p_pk_usuario bigint DEFAULT NULL::bigint, p_page_index integer DEFAULT 0, p_page_size integer DEFAULT 10, p_sort_by text DEFAULT NULL::text, p_sort_dir text DEFAULT NULL::text)
  RETURNS TABLE(funcionario_id bigint, document_number character varying, nombre_completo text, estado text, total_count bigint)
  LANGUAGE plpgsql
@@ -283,7 +196,6 @@ BEGIN
 END;
 $$;
 
--- Fuente: V190__fn_asignacion_reporte_listar.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_reporte_listar(
     p_fk_periodo     BIGINT,
     p_fk_funcionario BIGINT[] DEFAULT NULL,
