@@ -1,3 +1,22 @@
+-- ===========================================================================
+-- Periodo de Evaluacion — funciones consolidadas (ultima version)
+-- Generado: 2026-09-04
+--
+-- Migracion real: ejecutada en orden secuencial por Flyway. El bloque de
+-- gate de permisos (fn_periodo_gate_escritura, fn_periodo_puede_ver, etc.)
+-- vive en V36_1__gate_permisos_periodo_academico.sql, que corre antes.
+-- funcion del modulo, el bloque CREATE OR REPLACE tal como quedo en la
+-- migracion mas reciente que lo redefine (las funciones se reescriben con
+-- CREATE OR REPLACE FUNCTION en migraciones posteriores; este archivo evita
+-- tener que rastrear cual version quedo vigente).
+--
+-- Migraciones fuente consultadas:
+--   - V38__evaluation_period_module.sql
+--   - V101__periodo_evaluacion_mensajes_error_con_nombre.sql
+--   - V192__fn_periodo_eval_listar_expone_sede.sql
+-- ===========================================================================
+
+-- Fuente: V101__periodo_evaluacion_mensajes_error_con_nombre.sql
 SET search_path TO academico_test, public;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_validar(
@@ -83,6 +102,7 @@ BEGIN
 END;
 $function$;
 
+-- Fuente: V38__evaluation_period_module.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_crear(
     p_fk_periodo     BIGINT,
     p_codigo         VARCHAR(30),
@@ -97,8 +117,9 @@ CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_crear(
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE v_id BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
-    -- El periodo de evaluacion no tiene sede ni jornada propias: las hereda
-    -- de su TPERIODO_ACADEMICO padre.
+    -- CU-86e2w4xdt: capability por el menu PERIODOS_ACADEMICOS + scope. El
+    -- periodo de evaluacion no tiene sede ni jornada propias: las HEREDA de
+    -- su TPERIODO_ACADEMICO padre.
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PERIODOS_ACADEMICOS', 'CREAR',
         academico_test.fn_periodo_establecimiento(p_fk_periodo),
@@ -124,6 +145,7 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V101__periodo_evaluacion_mensajes_error_con_nombre.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_actualizar(
     p_pk bigint,
     p_codigo character varying DEFAULT NULL::character varying,
@@ -143,8 +165,8 @@ DECLARE
     v_ini DATE; v_fin DATE; v_pct NUMERIC; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_establecimiento_id BIGINT;
 BEGIN
-    -- Gate fail-fast; el scope se valida abajo con la sede/jornada del
-    -- periodo academico padre.
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast; scope abajo con la
+    -- sede/jornada del periodo academico padre.
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante, NULL, NULL, NULL, 'EDITAR');
     SELECT * INTO r FROM academico_test.TPERIODO_EVALUACION WHERE PK_TPERIODO_EVALUACION = p_pk;
@@ -155,6 +177,7 @@ BEGIN
         RAISE EXCEPTION 'El periodo de evaluacion "%" esta inactivo; no se puede actualizar', r.NOMBRE
             USING ERRCODE = '22023';
     END IF;
+    -- Gate fino (CU-86e2w4xdt): capability + scope (EE, sede, jornada) del periodo academico padre.
     SELECT s.FK_TESTABLECIMIENTO INTO v_establecimiento_id
       FROM academico_test.TPERIODO_ACADEMICO pa
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
@@ -186,6 +209,7 @@ BEGIN
 END;
 $function$;
 
+-- Fuente: V101__periodo_evaluacion_mensajes_error_con_nombre.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_soft_delete(
     p_pk bigint,
     p_pk_usuario_solicitante bigint
@@ -199,8 +223,10 @@ DECLARE
     v_sede_id    BIGINT;
     v_jornada_id BIGINT;
 BEGIN
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast.
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante, NULL, NULL, NULL, 'ELIMINAR');
+    -- Gate fino (CU-86e2w4xdt): capability + scope (EE, sede, jornada) del periodo academico padre.
     -- Se trae tambien el NOMBRE aqui (antes solo se leia en la rama de error)
     -- porque la etiqueta de auditoria lo necesita en el camino feliz.
     SELECT s.FK_TESTABLECIMIENTO, pa.FK_TSEDE, pa.FK_TLV_JORNADA, pe.NOMBRE
@@ -213,8 +239,9 @@ BEGIN
         PERFORM academico_test.fn_periodo_gate_escritura(
             p_pk_usuario_solicitante, v_est, v_sede_id, v_jornada_id, 'ELIMINAR');
     END IF;
-    -- Protege informacion historica: TAREA_NOTA/TASIGNATURA_NOTA no dependen
-    -- de que la matricula siga activa.
+    -- Bloqueo: existen calificaciones (notas) registradas contra este periodo de
+    -- evaluacion. Protege informacion historica (TAREA_NOTA/TASIGNATURA_NOTA no
+    -- dependen de que la matricula siga activa).
     IF EXISTS (
         SELECT 1 FROM academico_test.TASIGNATURA_NOTA an
          WHERE an.FK_TPERIODO_EVALUACION = p_pk AND an.ACTIVE = TRUE
@@ -254,6 +281,7 @@ BEGIN
 END;
 $function$;
 
+-- Fuente: V192__fn_periodo_eval_listar_expone_sede.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_listar(
     p_fk_periodo BIGINT,
     p_filtro     TEXT DEFAULT NULL,
@@ -305,6 +333,7 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V38__evaluation_period_module.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_detalle(
     p_pk BIGINT, p_pk_usuario BIGINT DEFAULT NULL
 )
@@ -323,6 +352,7 @@ LANGUAGE sql STABLE AS $$
        AND academico_test.fn_periodo_puede_ver(p_pk_usuario, pe.FK_TPERIODO_ACADEMICO);
 $$;
 
+-- Fuente: V38__evaluation_period_module.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_bulk_delete(
         p_ids BIGINT[], p_pk_usuario_solicitante BIGINT
     )
@@ -330,8 +360,9 @@ CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_bulk_delete(
     LANGUAGE plpgsql AS $$
     DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
     BEGIN
-        -- Sin objeto concreto aqui: el scope (EE, sede, jornada) de cada id lo
-        -- aplica fn_periodo_eval_soft_delete dentro del bucle.
+        -- CU-86e2w4xdt: capability fail-fast sobre PERIODOS_ACADEMICOS; el
+        -- scope fino por (EE, sede, jornada) lo aplica fn_periodo_eval_soft_delete
+        -- por cada id dentro del bucle.
         PERFORM academico_test.fn_periodo_gate_escritura(
             p_pk_usuario_solicitante, NULL, NULL, NULL, 'ELIMINAR');
         IF p_ids IS NULL THEN RETURN; END IF;

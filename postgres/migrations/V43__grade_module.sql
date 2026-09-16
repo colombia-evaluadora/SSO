@@ -1,4 +1,28 @@
+-- ===========================================================================
 -- Grado/Grupo — funciones consolidadas (última versión)
+-- Generado: 2026-09-04
+--
+-- Migracion real, aplicada por Flyway en orden secuencial.
+-- Su unico proposito es reunir en un solo lugar la version vigente de cada
+-- funcion del modulo, ya que con el tiempo varias han sido redefinidas
+-- (CREATE OR REPLACE FUNCTION) en migraciones posteriores.
+--
+-- Migraciones fuente consultadas:
+--   - V43__grade_module.sql
+--   - V106__grado_mensajes_error_con_nombre.sql
+--   - V135__query_rows_reportes_modulo_academico.sql
+--   - V187__fn_grado_grupo_reporte_listar.sql
+--
+-- Verificacion: se corrio
+--   grep -rn "FUNCTION academico_test.<nombre>(" postgres/migrations/
+-- para cada funcion listada abajo; el archivo fuente citado en cada bloque es
+-- el de numero V mas alto encontrado. No se encontraron migraciones mas
+-- nuevas que las ya conocidas para ninguna de estas funciones.
+-- ===========================================================================
+
+-- ----- GRADO ---------------------------------------------------------------
+
+-- Fuente: V106__grado_mensajes_error_con_nombre.sql
 SET search_path TO academico_test, public;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_grado_crear(
@@ -17,6 +41,7 @@ DECLARE
     v_nombre_sede VARCHAR(130);
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
+    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo del grado.
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante,
         academico_test.fn_periodo_establecimiento(p_fk_periodo),
@@ -24,7 +49,9 @@ BEGIN
         academico_test.fn_periodo_jornada(p_fk_periodo), 'CREAR'
     );
 
-    -- Nombre de sede para la etiqueta de auditoria (el EE ya viaja aparte como contexto de fn_audit_declarar).
+    -- Nombre de la sede del periodo, para que la etiqueta de auditoria diga a
+    -- que sede va dirigida la accion (el EE ya viaja aparte como contexto
+    -- estructurado de fn_audit_declarar). Portado de V107 (antes V106).
     SELECT s.NOMBRE INTO v_nombre_sede
       FROM academico_test.TSEDE s
      WHERE s.PK_TSEDE = academico_test.fn_periodo_sede(p_fk_periodo);
@@ -183,6 +210,7 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V106__grado_mensajes_error_con_nombre.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_grado_actualizar(
     p_pk BIGINT,
     p_fk_nivel BIGINT DEFAULT NULL,
@@ -199,6 +227,7 @@ DECLARE
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_periodo_id BIGINT;
 BEGIN
+    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo del grado.
     SELECT g.FK_TPERIODO_ACADEMICO INTO v_periodo_id
       FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_pk;
     PERFORM academico_test.fn_periodo_gate_escritura(
@@ -207,7 +236,9 @@ BEGIN
         academico_test.fn_periodo_sede(v_periodo_id),
         academico_test.fn_periodo_jornada(v_periodo_id), 'EDITAR');
 
-    -- Nombre de sede para la etiqueta de auditoria (el EE ya viaja aparte como contexto de fn_audit_declarar).
+    -- Nombre de la sede del periodo, para que la etiqueta de auditoria diga a
+    -- que sede va dirigida la accion (el EE ya viaja aparte como contexto
+    -- estructurado de fn_audit_declarar). Portado de V107 (antes V106).
     SELECT s.NOMBRE INTO v_nombre_sede
       FROM academico_test.TSEDE s
      WHERE s.PK_TSEDE = academico_test.fn_periodo_sede(v_periodo_id);
@@ -235,7 +266,9 @@ BEGIN
         END IF;
     END IF;
     v_nombre := COALESCE(p_nombre, r.NOMBRE);
-    -- El codigo no se cambia en edicion (queda el derivado del catalogo al crear).
+    -- El codigo NO se cambia en edicion (queda el derivado del catalogo al crear).
+    -- Si p_tiene_grado_siguiente = FALSE, se limpia el FK; si TRUE o NULL, se
+    -- usa p_fk_grado_siguiente (COALESCE con el actual cuando llega NULL).
     v_fk_sig := CASE WHEN p_tiene_grado_siguiente = FALSE THEN NULL
                      ELSE COALESCE(p_fk_grado_siguiente, r.FK_TLV_GRADO_SIGUIENTE) END;
     IF v_fk_sig IS NOT NULL AND NOT EXISTS (
@@ -275,6 +308,7 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V106__grado_mensajes_error_con_nombre.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_grado_soft_delete(p_pk BIGINT, p_pk_usuario_solicitante BIGINT)
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
@@ -283,6 +317,7 @@ DECLARE
     v_nombre_sede VARCHAR(130);
     v_periodo_id BIGINT;
 BEGIN
+    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo del grado.
     SELECT g.FK_TPERIODO_ACADEMICO INTO v_periodo_id
       FROM academico_test.TGRADO g WHERE g.PK_TGRADO = p_pk;
     PERFORM academico_test.fn_periodo_gate_escritura(
@@ -290,11 +325,16 @@ BEGIN
         academico_test.fn_periodo_establecimiento(v_periodo_id),
         academico_test.fn_periodo_sede(v_periodo_id),
         academico_test.fn_periodo_jornada(v_periodo_id), 'ELIMINAR');
-    -- Si el pk no existe queda NULL, y los mensajes de bloqueo de abajo caen al texto generico via COALESCE.
+    -- Nombre del grado (si el pk no corresponde a ninguna fila, queda NULL y
+    -- los mensajes de bloqueo de abajo caen al texto generico via COALESCE).
     SELECT NOMBRE INTO v_nombre_grado FROM academico_test.TGRADO WHERE PK_TGRADO = p_pk;
+    -- Nombre de la sede del periodo, para que la etiqueta de auditoria diga a
+    -- que sede va dirigida la accion (el EE ya viaja aparte como contexto
+    -- estructurado de fn_audit_declarar). Portado de V107 (antes V106).
     SELECT s.NOMBRE INTO v_nombre_sede
       FROM academico_test.TSEDE s
      WHERE s.PK_TSEDE = academico_test.fn_periodo_sede(v_periodo_id);
+    -- Bloqueo por dependencias (solo filas activas), de lo mas especifico a lo general.
     IF EXISTS (
         SELECT 1 FROM academico_test.TMATRICULA m
           JOIN academico_test.TGRUPO g ON g.PK_TGRUPO = m.FK_TGRUPO AND g.ACTIVE = TRUE
@@ -331,8 +371,8 @@ BEGIN
             SELECT FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO WHERE PK_TGRADO = p_pk))
     );
 
-    -- El criterio de promocion override del grado (POR_DEFECTO='N') y sus obligatorias son
-    -- propiedad del grado: se dan de baja con el.
+    -- Cascade: el criterio de promocion override del grado (POR_DEFECTO='N') y sus
+    -- obligatorias son propiedad del grado, se dan de baja con el.
     UPDATE academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE ACTIVE = TRUE AND FK_TCRITERIO_PROMOCION IN (
@@ -355,6 +395,10 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V106__grado_mensajes_error_con_nombre.sql
+-- Nota: esta version reemplaza a la de V43; el cuerpo se preserva "consolidado
+-- desde V78" segun el comentario original de V106 (misma firma con paginacion
+-- y orden, sin nuevos mensajes de error propios en esta funcion puntual).
 DROP FUNCTION IF EXISTS academico_test.fn_grado_listar(BIGINT, TEXT, INT, INT);
 DROP FUNCTION IF EXISTS academico_test.fn_grado_listar(BIGINT, TEXT, INT, INT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_grado_listar(BIGINT, TEXT, INT, INT, BIGINT, TEXT, TEXT);
@@ -378,8 +422,11 @@ RETURNS TABLE (
     grado_siguiente_name VARCHAR,
     tiene_grado_siguiente BOOLEAN,
     total_count BIGINT,
-    -- Aditivo al final: el select de Grado del alta de matricula necesita el codigo
-    -- numerico para pasarlo a fn_matricula_listar(p_grade), que filtra por g.CODIGO::INT.
+    -- Antes solo se exponia NOMBRE (duplicado en nombre/grado). El select de
+    -- Grado del alta de matricula (Sede -> Jornada -> Grado -> Grupo) necesita
+    -- el codigo numerico para pasarlo a fn_matricula_listar(p_grade), que
+    -- filtra por g.CODIGO::INT. Aditivo, al final del RETURNS TABLE (mismo
+    -- criterio que fn_periodo_eval_listar). Portado de V107 (antes V106).
     codigo INT
 )
 LANGUAGE plpgsql STABLE AS $$
@@ -442,6 +489,9 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V43__grade_module.sql
+-- Un solo grado por id (mismos campos que fn_grado_listar, sin paginacion).
+-- Respeta el alcance por establecimiento via fn_periodo_puede_ver.
 CREATE OR REPLACE FUNCTION academico_test.fn_grado_obtener(
     p_fk_grado BIGINT, p_pk_usuario BIGINT DEFAULT NULL
 )
@@ -458,7 +508,10 @@ LANGUAGE sql STABLE AS $$
        AND academico_test.fn_periodo_puede_ver(p_pk_usuario, g.FK_TPERIODO_ACADEMICO);
 $$;
 
--- Cada id se procesa en su propio bloque BEGIN/EXCEPTION: un fallo no revierte al resto.
+-- Fuente: V43__grade_module.sql
+-- Borrado multiple de grados: intenta cada id; salta los bloqueados.
+-- Devuelve una fila por id: eliminado=TRUE, o FALSE con error_code (SQLSTATE)
+-- y error_mensaje. Cada id en su subtransaccion; un fallo no revierte al resto.
 DROP FUNCTION IF EXISTS academico_test.fn_grado_bulk_delete(BIGINT[], BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_grado_bulk_delete(
     p_ids BIGINT[], p_pk_usuario_solicitante BIGINT
@@ -485,6 +538,9 @@ BEGIN
 END;
 $$;
 
+-- ----- GRUPO ---------------------------------------------------------------
+
+-- Fuente: V106__grado_mensajes_error_con_nombre.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_grupo_crear(
     p_fk_grado BIGINT,
     p_nombre VARCHAR,
@@ -500,7 +556,9 @@ DECLARE
     v_nombre_sede VARCHAR(130);
     v_periodo_id BIGINT;
 BEGIN
-    -- Se resuelven antes del gate porque el scope por sede+jornada los necesita.
+    -- Jornada, sede y periodo desde el grado (el grado debe estar activo);
+    -- se resuelven antes del gate porque el scope de nivel sede+jornada
+    -- (CU-86e2w4xdt) los necesita.
     SELECT pa.PK_TPERIODO_ACADEMICO, pa.FK_TLV_JORNADA, pa.FK_TSEDE
       INTO v_periodo_id, v_jornada, v_sede
       FROM academico_test.TGRADO g JOIN academico_test.TPERIODO_ACADEMICO pa
@@ -511,7 +569,9 @@ BEGIN
         academico_test.fn_periodo_establecimiento(v_periodo_id),
         v_sede, v_jornada, 'CREAR');
 
-    -- Nombre de sede para la etiqueta de auditoria (el EE ya viaja aparte como contexto de fn_audit_declarar).
+    -- Nombre de la sede del periodo, para que la etiqueta de auditoria diga a
+    -- que sede va dirigida la accion (el EE ya viaja aparte como contexto
+    -- estructurado de fn_audit_declarar). Portado de V107 (antes V106).
     SELECT s.NOMBRE INTO v_nombre_sede FROM academico_test.TSEDE s WHERE s.PK_TSEDE = v_sede;
     IF p_fk_grado IS NULL OR NULLIF(TRIM(p_nombre),'') IS NULL OR p_fk_modelo_pedagogico IS NULL
        OR p_capacidad IS NULL THEN
@@ -540,6 +600,7 @@ BEGIN
             RAISE EXCEPTION 'El director seleccionado no existe' USING ERRCODE = '23503';
         END IF;
     END IF;
+    -- El director debe pertenecer a la sede del grado (via su usuario en TSEDE_USUARIO).
     IF p_fk_funcionario IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f.FK_TUSUARIO
@@ -574,6 +635,7 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V106__grado_mensajes_error_con_nombre.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_grupo_actualizar(
     p_pk BIGINT,
     p_nombre VARCHAR DEFAULT NULL,
@@ -590,7 +652,9 @@ DECLARE
     v_nombre_sede VARCHAR(130);
     v_periodo_id BIGINT; v_jornada_grupo BIGINT;
 BEGIN
-    -- La jornada propia del grupo es la autoritativa para el gate, no la del periodo.
+    -- CU-86e2w4xdt: gate por (EE, sede del periodo, jornada PROPIA del grupo
+    -- -- es la autoritativa, no la del periodo, ver fn_grupo_jornada en la
+    -- rama de origen).
     SELECT g.FK_TPERIODO_ACADEMICO, gr.FK_TLV_JORNADA
       INTO v_periodo_id, v_jornada_grupo
       FROM academico_test.TGRUPO gr JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
@@ -601,7 +665,9 @@ BEGIN
         academico_test.fn_periodo_sede(v_periodo_id),
         v_jornada_grupo, 'EDITAR');
 
-    -- Nombre de sede para la etiqueta de auditoria (el EE ya viaja aparte como contexto de fn_audit_declarar).
+    -- Nombre de la sede del periodo, para que la etiqueta de auditoria diga a
+    -- que sede va dirigida la accion (el EE ya viaja aparte como contexto
+    -- estructurado de fn_audit_declarar). Portado de V107 (antes V106).
     SELECT s.NOMBRE INTO v_nombre_sede
       FROM academico_test.TSEDE s
      WHERE s.PK_TSEDE = academico_test.fn_periodo_sede(v_periodo_id);
@@ -630,6 +696,7 @@ BEGIN
             RAISE EXCEPTION 'El director seleccionado no existe' USING ERRCODE = '23503';
         END IF;
     END IF;
+    -- El director debe pertenecer a la sede del grado del grupo (via TSEDE_USUARIO).
     IF p_fk_funcionario IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f.FK_TUSUARIO
@@ -674,6 +741,7 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V106__grado_mensajes_error_con_nombre.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_grupo_soft_delete(p_pk BIGINT, p_pk_usuario_solicitante BIGINT)
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE
@@ -682,7 +750,7 @@ DECLARE
     v_nombre_sede VARCHAR(130);
     v_periodo_id BIGINT; v_jornada_grupo BIGINT;
 BEGIN
-    -- Jornada propia del grupo, no la del periodo.
+    -- CU-86e2w4xdt: gate por (EE, sede del periodo, jornada propia del grupo).
     SELECT g.FK_TPERIODO_ACADEMICO, gr.FK_TLV_JORNADA
       INTO v_periodo_id, v_jornada_grupo
       FROM academico_test.TGRUPO gr JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
@@ -694,10 +762,13 @@ BEGIN
         v_jornada_grupo, 'ELIMINAR');
     SELECT NOMBRE INTO v_nombre_grupo FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_pk;
 
-    -- Nombre de sede para la etiqueta de auditoria (el EE ya viaja aparte como contexto de fn_audit_declarar).
+    -- Nombre de la sede del periodo, para que la etiqueta de auditoria diga a
+    -- que sede va dirigida la accion (el EE ya viaja aparte como contexto
+    -- estructurado de fn_audit_declarar). Portado de V107 (antes V106).
     SELECT s.NOMBRE INTO v_nombre_sede
       FROM academico_test.TSEDE s
      WHERE s.PK_TSEDE = academico_test.fn_periodo_sede(v_periodo_id);
+    -- Bloqueo por dependencias (solo filas activas).
     IF EXISTS (
         SELECT 1 FROM academico_test.TMATRICULA m WHERE m.FK_TGRUPO = p_pk AND m.ACTIVE = TRUE
     ) THEN
@@ -716,8 +787,9 @@ BEGIN
         RAISE EXCEPTION 'No se puede eliminar el grupo "%": existen horarios configurados',
             COALESCE(v_nombre_grupo, p_pk::TEXT) USING ERRCODE = '23503';
     END IF;
-    -- No se limita a matriculas activas: la asistencia queda como registro historico
-    -- aunque el estudiante ya no este matriculado en el grupo.
+    -- Asistencia registrada: protege informacion historica (no se limita a
+    -- matriculas activas, la asistencia queda como registro aunque el estudiante
+    -- ya no este matriculado en el grupo).
     IF EXISTS (
         SELECT 1 FROM academico_test.TASISTENCIA ta
           JOIN academico_test.TMATRICULA m ON m.PK_TMATRICULA = ta.FK_TMATRICULA
@@ -726,6 +798,7 @@ BEGIN
         RAISE EXCEPTION 'No se puede eliminar el grupo "%": existen registros de asistencia asociados',
             COALESCE(v_nombre_grupo, p_pk::TEXT) USING ERRCODE = '23503';
     END IF;
+    -- Procesos academicos activos: calificaciones ya registradas para estudiantes del grupo.
     IF EXISTS (
         SELECT 1 FROM academico_test.TASIGNATURA_NOTA an
           JOIN academico_test.TMATRICULA m ON m.PK_TMATRICULA = an.FK_TMATRICULA
@@ -758,7 +831,9 @@ BEGIN
 END;
 $$;
 
--- Incluye modelo pedagogico y el rol del director en la sede, para reconstruir el formulario.
+-- Fuente: V43__grade_module.sql
+-- Un solo grupo por id (detalle para el formulario de edicion). Incluye el
+-- modelo pedagogico y el rol del director en la sede para reconstruir el form.
 DROP FUNCTION IF EXISTS academico_test.fn_grupo_obtener(BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_grupo_obtener(
     p_pk BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
@@ -790,7 +865,13 @@ LANGUAGE sql STABLE AS $$
              (SELECT g2.FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO g2 WHERE g2.PK_TGRADO = gr.FK_TGRADO));
 $$;
 
--- Delega en fn_grupo_soft_delete por fila y captura la excepcion para devolver resultado parcial.
+-- Fuente: V106__grado_mensajes_error_con_nombre.sql
+-- Consolidado desde V113 (fn_grupo_bulk_delete.sql): eliminar varios grupos
+-- (TGRUPO) de un grado en un solo lote. Mismo patron que
+-- fn_periodo_bulk_delete/fn_escala_valoracion_bulk_delete: delega en
+-- fn_grupo_soft_delete por fila (que ya trae toda la validacion de permisos,
+-- existencia y bloqueo por matriculas/horarios/asignaciones/calificaciones) y
+-- captura la excepcion para un resultado parcial.
 CREATE OR REPLACE FUNCTION academico_test.fn_grupo_bulk_delete(
     p_ids bigint[],
     p_pk_usuario_solicitante bigint
@@ -815,6 +896,7 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V43__grade_module.sql
 DROP FUNCTION IF EXISTS academico_test.fn_grupo_listar(BIGINT, TEXT, INT, INT);
 DROP FUNCTION IF EXISTS academico_test.fn_grupo_listar(BIGINT, TEXT, INT, INT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_grupo_listar(BIGINT, TEXT, INT, INT, BIGINT, TEXT, TEXT);
@@ -822,7 +904,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_grupo_listar(
     p_fk_grado BIGINT, p_filtro TEXT DEFAULT NULL,
     p_page_index INT DEFAULT 0, p_page_size INT DEFAULT 10,
     p_pk_usuario_solicitante BIGINT DEFAULT NULL,
-    -- Columna del front (id) + direccion ('asc'/'desc').
+    -- Orden: id de columna del front + direccion ('asc'/'desc'), igual que fn_periodo_listar (V37).
     p_sort_by TEXT DEFAULT NULL,
     p_sort_dir TEXT DEFAULT NULL
 )
@@ -867,6 +949,10 @@ BEGIN
 END;
 $$;
 
+-- ----- CATALOGOS AUXILIARES --------------------------------------------------
+
+-- Fuente: V43__grade_module.sql
+-- Catalogo de niveles de ensenanza (para el select de nivel del grado).
 DROP FUNCTION IF EXISTS academico_test.fn_nivel_ensenanza_listar();
 CREATE OR REPLACE FUNCTION academico_test.fn_nivel_ensenanza_listar(
     p_pk_usuario_solicitante BIGINT DEFAULT NULL
@@ -879,7 +965,11 @@ LANGUAGE sql STABLE AS $$
      ORDER BY NOMBRE;
 $$;
 
--- DISTINCT porque un usuario puede tener varias filas en TSEDE_USUARIO (por rol/jornada).
+-- Fuente: V43__grade_module.sql
+-- Funcionarios de una sede (para el selector de director del grupo). El vinculo
+-- funcionario-sede es via su usuario en TSEDE_USUARIO. Filtro opcional por
+-- nombre o identificacion. DISTINCT porque un usuario puede tener varias filas
+-- en TSEDE_USUARIO (por rol/jornada).
 -- DROP de firmas previas (con p_fk_rol y sin p_pk_usuario) por si quedaron aplicadas.
 DROP FUNCTION IF EXISTS academico_test.fn_funcionario_sede_listar(BIGINT, BIGINT, TEXT);
 DROP FUNCTION IF EXISTS academico_test.fn_funcionario_sede_listar(BIGINT, TEXT);
@@ -908,6 +998,9 @@ LANGUAGE sql STABLE AS $$
      ORDER BY nombre;
 $$;
 
+-- ----- GRADE CONFIG (/grades/:id/config = horario + criterio de promocion) --
+
+-- Fuente: V43__grade_module.sql
 -- Devuelve { schedule: { entries: [...] }, promotionCriteria: {...} }.
 DROP FUNCTION IF EXISTS academico_test.fn_grade_config_obtener(BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_grade_config_obtener(
@@ -917,11 +1010,12 @@ RETURNS jsonb LANGUAGE plpgsql STABLE AS $$
 DECLARE v_periodo BIGINT; v_entries jsonb; v_prom jsonb; v_req jsonb; c RECORD;
 BEGIN
     SELECT FK_TPERIODO_ACADEMICO INTO v_periodo FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_grado;
+    -- Horario -> entries.
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
              'grupoId', h.grupo_id, 'planItemId', h.plan_item_id,
              'diaId', h.dia_id, 'bloque', h.bloque)), '[]'::jsonb)
       INTO v_entries FROM academico_test.fn_horario_listar(p_fk_grado, NULL, p_pk_usuario_solicitante) h;
-    -- fn_criterio_prom_obtener resuelve el override del grado o el default del periodo.
+    -- Criterio de promocion (override del grado o default del periodo).
     SELECT * INTO c FROM academico_test.fn_criterio_prom_obtener(v_periodo, p_fk_grado, p_pk_usuario_solicitante) LIMIT 1;
     IF c.id IS NOT NULL THEN
         SELECT COALESCE(jsonb_agg(COALESCE(a.subject_id, a.area_id)::text), '[]'::jsonb)
@@ -945,6 +1039,8 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V43__grade_module.sql
+-- Guarda la config: despacha horario y/o criterio de promocion (override del grado).
 CREATE OR REPLACE FUNCTION academico_test.fn_grade_config_guardar(
     p_fk_grado  BIGINT,
     p_schedule  jsonb DEFAULT NULL,
@@ -954,12 +1050,14 @@ CREATE OR REPLACE FUNCTION academico_test.fn_grade_config_guardar(
 RETURNS BIGINT LANGUAGE plpgsql AS $$
 DECLARE v_periodo BIGINT; v_oblig jsonb;
 BEGIN
+    -- Horario (si viene).
     IF p_schedule IS NOT NULL AND p_schedule ? 'entries' THEN
         PERFORM academico_test.fn_horario_guardar(p_fk_grado, p_schedule->'entries', p_pk_usuario_solicitante);
     END IF;
+    -- Criterio de promocion (si viene) — override por grado.
     IF p_promotion IS NOT NULL THEN
         SELECT FK_TPERIODO_ACADEMICO INTO v_periodo FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_grado;
-        -- requiredSubjects llega como array de ids; se remapea a [{asignaturaId}].
+        -- requiredSubjects (ids) -> obligatorias [{asignaturaId}].
         IF p_promotion ? 'requiredSubjects' THEN
             SELECT COALESCE(jsonb_agg(jsonb_build_object('asignaturaId', (x)::bigint)), '[]'::jsonb)
               INTO v_oblig
@@ -986,10 +1084,20 @@ BEGIN
 END;
 $$;
 
--- Reporte "Grados y grupos" (RN-06/RN-07/RN-10): a diferencia de la pantalla de edicion
--- (fn_grado_listar + fn_grupo_listar por separado), esta funcion exporta ambos niveles
--- juntos para TODOS los grados del periodo. LEFT JOIN a TGRUPO para que un grado sin
--- grupos todavia siga apareciendo (RN-06: estructura vigente del periodo).
+-- ----- REPORTE ---------------------------------------------------------------
+
+-- Fuente: V187__fn_grado_grupo_reporte_listar.sql (reemplaza V135__query_rows_reportes_modulo_academico.sql)
+-- Reporte "Grados y grupos" (RN-06/RN-07/RN-10): la pantalla de edicion tiene
+-- DOS funciones separadas -- fn_grado_listar (todos los grados de un
+-- periodo) y fn_grupo_listar (los grupos de UN grado a la vez) -- porque son
+-- dos niveles de un mismo arbol que se editan por separado. El reporte pide
+-- una sola exportacion con grado + numero de grado + nivel de ensenanza +
+-- grupo + jornada + director de grupo + plan de estudio, para TODOS los
+-- grados del periodo (RN-10: "reportes completos de todos los grados").
+--
+-- Un grado sin grupos todavia (recien creado) sigue apareciendo en el
+-- reporte (LEFT JOIN a TGRUPO) -- "estructura academica vigente del periodo"
+-- (RN-06) incluye grados aunque aun no tengan grupos armados.
 CREATE OR REPLACE FUNCTION academico_test.fn_grado_grupo_reporte_listar(
     p_fk_periodo BIGINT,
     p_fk_grado   BIGINT[] DEFAULT NULL,

@@ -1,4 +1,40 @@
+-- ===========================================================================
 -- Escala de Valoración — funciones consolidadas (última versión)
+-- Generado: 2026-09-04
+--
+-- Migracion real, aplicada por Flyway en orden secuencial.
+-- Su unico proposito es reunir en un solo lugar la version vigente de cada
+-- funcion del modulo, ya que con el tiempo varias han sido redefinidas
+-- (CREATE OR REPLACE FUNCTION) en migraciones posteriores.
+--
+-- Migraciones fuente consultadas:
+--   - V41__evaluation_criteria_module.sql
+--   - V42__rating_scale_module.sql
+--   - V97__fn_escala_formato_usa_codigo_valor_correcto.sql
+--   - V105__escala_valoracion_mensajes_error_con_nombre.sql
+--   - V189__fn_escala_listar_filtro_tipo.sql
+--
+-- Verificacion: se corrio
+--   grep -rn "FUNCTION academico_test.<nombre>(" postgres/migrations/
+-- para cada una de las 7 funciones de abajo. Resultado, igual al mapeo
+-- provisto salvo lo anotado:
+--   - fn_escala_guardar_bulk: V42 < V97 < V105 (V105 es la ultima). OK.
+--   - fn_escala_eliminar: V42 < V105 (dos apariciones en V105, lineas ~142 y
+--     ~422; se tomo la ultima/mas abajo). OK.
+--   - fn_escala_nivel_soft_delete: V42 < V105 (dos apariciones en V105,
+--     lineas ~320 y ~563; se tomo la ultima). OK.
+--   - fn_escala_bulk_delete: V42 < V105 (dos apariciones en V105, lineas ~60
+--     y ~471; se tomo la ultima). OK.
+--   - fn_escala_valoracion_bulk_delete: unica aparicion en V105 (~linea 392).
+--     Funcion distinta de fn_escala_bulk_delete, incluida por separado. OK.
+--   - fn_escala_listar: V42 < V97 < V189 (V189 es la ultima). OK.
+--   - fn_escala_propagar: solo V41, sin CREATE OR REPLACE posterior
+--     encontrado en ninguna migracion (hasta V221, la mas alta en el repo
+--     al momento de generar este documento). OK.
+-- No se encontraron redefiniciones adicionales fuera de las ya listadas.
+-- ===========================================================================
+
+-- Fuente: V105__escala_valoracion_mensajes_error_con_nombre.sql
 SET search_path TO academico_test, public;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_escala_guardar_bulk(p_academic_period_id bigint, p_teaching_level_ids bigint[], p_scales jsonb, p_pk_usuario_solicitante bigint)
@@ -18,14 +54,17 @@ DECLARE
     v_icono_nombre TEXT;
     scale jsonb;
 BEGIN
-    -- Gate por rol de nivel sede+jornada (coordinador/docente), no solo por EE.
+    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo academico, para
+    -- control granular por rol de nivel sede+jornada (coordinador/docente).
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante,
         academico_test.fn_periodo_establecimiento(p_academic_period_id),
         academico_test.fn_periodo_sede(p_academic_period_id),
         academico_test.fn_periodo_jornada(p_academic_period_id), 'EDITAR');
 
-    -- Solo CINCO/DIEZ cambian el maximo de la escala; el resto de formatos es 0-100.
+    -- Rango del formato de calificacion del periodo (para % ). El rango base es
+    -- 0-100; solo "CINCO"/"DIEZ" (VALOR) cambian el maximo. El resto (CIEN,
+    -- CARITA, SIMBOLO, LITERAL, ...) es 0-100.
     SELECT lv.VALOR INTO v_fmt
       FROM academico_test.TCRITERIO_EVALUACION ce
       JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = ce.FK_TLV_FORMATO_CALIFICACION
@@ -37,6 +76,7 @@ BEGIN
                ELSE 100
              END;
 
+    -- Validaciones del lote.
     IF (SELECT count(*) FROM jsonb_array_elements(p_scales))
        <> (SELECT count(DISTINCT s->>'nombre') FROM jsonb_array_elements(p_scales) s) THEN
         RAISE EXCEPTION 'El lote trae valoraciones con nombre repetido' USING ERRCODE = '22023';
@@ -56,6 +96,7 @@ BEGIN
         END IF;
     END LOOP;
 
+    -- Por cada nivel (sin repetir).
     v_niveles := ARRAY(SELECT DISTINCT unnest(p_teaching_level_ids));
     FOREACH v_nivel IN ARRAY v_niveles
     LOOP
@@ -79,7 +120,8 @@ BEGIN
         SELECT COALESCE(MAX(ORDEN), 0) INTO v_orden FROM academico_test.TESCALA_VALORACION WHERE FK_TESCALA = v_escala_id;
 
         FOR scale IN SELECT * FROM jsonb_array_elements(p_scales) LOOP
-            -- El front manda el id de TLISTA_VALOR categoria 'TIPO_VALORACION' (Fortaleza/Debilidad).
+            -- Tipo de valoracion: el front manda el id de TLISTA_VALOR
+            -- (categoria 'TIPO_VALORACION', p. ej. Fortaleza/Debilidad).
             v_tipo_id := NULLIF(scale->>'tipoId', '')::BIGINT;
             IF v_tipo_id IS NULL OR NOT EXISTS (
                 SELECT 1 FROM academico_test.TLISTA_VALOR
@@ -98,8 +140,9 @@ BEGIN
                     RAISE EXCEPTION 'El tipo de valoracion indicado no existe o no es valido' USING ERRCODE = '23503';
                 END IF;
             END IF;
-            -- Icono: el front manda id + categoria (GRAFICA_CARITA/GRAFICA_SIMBOLO); se
-            -- resuelve la URL (VALOR) y se guarda en la columna correspondiente.
+            -- Icono: el front manda el id de TLISTA_VALOR y su categoria
+            -- ('GRAFICA_CARITA' o 'GRAFICA_SIMBOLO'). Resolvemos la URL (VALOR) y
+            -- la guardamos en GRAFICA_CARITAS o GRAFICA_SIMBOLO segun corresponda.
             v_icono_id  := NULLIF(scale->>'iconoId', '')::BIGINT;
             v_icono_cat := NULLIF(TRIM(scale->>'iconoCategoria'), '');
             v_carita := NULL; v_simbolo := NULL;
@@ -143,6 +186,7 @@ BEGIN
 END;
 $function$;
 
+-- Fuente: V189__fn_escala_listar_filtro_tipo.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_escala_listar(
     p_academic_period_id bigint,
     p_filtro             text DEFAULT NULL::text,
@@ -208,6 +252,7 @@ BEGIN
 END;
 $function$;
 
+-- Fuente: V105__escala_valoracion_mensajes_error_con_nombre.sql (consolidado desde V120)
 CREATE OR REPLACE FUNCTION academico_test.fn_escala_eliminar(p_pk bigint, p_pk_usuario_solicitante bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -219,6 +264,7 @@ DECLARE
     v_establecimiento_id BIGINT;
     v_periodo_id BIGINT;
 BEGIN
+    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo de la banda.
     SELECT ne.FK_PERIODO_ACADEMICO,
            academico_test.fn_periodo_establecimiento(ne.FK_PERIODO_ACADEMICO)
       INTO v_periodo_id, v_establecimiento_id
@@ -256,6 +302,7 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V105__escala_valoracion_mensajes_error_con_nombre.sql (consolidado desde V121)
 CREATE OR REPLACE FUNCTION academico_test.fn_escala_bulk_delete(p_escala_ids bigint[], p_pk_usuario_solicitante bigint)
  RETURNS TABLE(id bigint, eliminado boolean, error_code text, error_mensaje text)
  LANGUAGE plpgsql
@@ -273,6 +320,7 @@ BEGIN
     IF p_escala_ids IS NULL THEN RETURN; END IF;
     FOREACH v_id IN ARRAY p_escala_ids LOOP
         BEGIN
+            -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo de la escala.
             SELECT ne.FK_PERIODO_ACADEMICO,
                    academico_test.fn_periodo_establecimiento(ne.FK_PERIODO_ACADEMICO)
               INTO v_periodo_id, v_est
@@ -319,7 +367,9 @@ BEGIN
                     v_nombre_escala, v_nombre_periodo USING ERRCODE = '23503';
             END IF;
 
-            -- No delega en fn_escala_eliminar (cascada inline propia): declara auditoria por cada escala del lote.
+            -- Esta funcion tiene su propia cascada inline de UPDATE (no
+            -- delega en fn_escala_eliminar), asi que necesita su propia
+            -- declaracion -- una por escala del lote, igual que V78.
             PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
                 format('Eliminación de la escala %s', v_nombre_escala), v_est);
 
@@ -351,6 +401,7 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V105__escala_valoracion_mensajes_error_con_nombre.sql (consolidado desde V110)
 CREATE OR REPLACE FUNCTION academico_test.fn_escala_valoracion_bulk_delete(
     p_ids bigint[],
     p_pk_usuario_solicitante bigint
@@ -375,6 +426,7 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V105__escala_valoracion_mensajes_error_con_nombre.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_escala_nivel_soft_delete(p_academic_period_id bigint, p_teaching_level_id bigint, p_pk_usuario_solicitante bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -443,6 +495,7 @@ BEGIN
 END;
 $$;
 
+-- Fuente: V41__evaluation_criteria_module.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_escala_propagar(
     p_pk_periodo BIGINT, p_fk_escala_source BIGINT, p_audit VARCHAR
 )
@@ -450,7 +503,7 @@ RETURNS VOID LANGUAGE plpgsql AS $$
 DECLARE
     v_target BIGINT; v_orden INT; v_new_val BIGINT; sb RECORD;
 BEGIN
-    -- Sin bandas activas en el maestro no se propaga, para no vaciar las demas escalas.
+    -- Si el maestro no tiene bandas activas, no propagar (no vaciar las demas).
     IF NOT EXISTS (
         SELECT 1 FROM academico_test.TESCALA_VALORACION
          WHERE FK_TESCALA = p_fk_escala_source AND ACTIVE = TRUE
@@ -463,8 +516,9 @@ BEGIN
          WHERE ne.FK_PERIODO_ACADEMICO = p_pk_periodo AND ne.ACTIVE = TRUE
            AND ne.FK_TESCALA <> p_fk_escala_source
     LOOP
-        -- Bandas ya en uso por criterios de unidad no se tocan: darlas de baja dejaria
-        -- el descriptor apuntando a una banda inactiva sobre datos ya calificados.
+        -- No pisar una escala cuyas bandas ya esten en uso por criterios de
+        -- unidad: darlas de baja dejaria el descriptor apuntando a una banda
+        -- inactiva (perderia consistencia con datos ya calificados).
         IF EXISTS (
             SELECT 1 FROM academico_test.TNIVEL_CRITERIO_UNIDAD ncu
               JOIN academico_test.TESCALA_VALORACION ev2
@@ -473,6 +527,9 @@ BEGIN
         ) THEN
             CONTINUE;
         END IF;
+        -- Baja logica de las bandas activas del destino y de sus valoraciones
+        -- (sin DELETE). Primero las TVALORACION referenciadas por las bandas
+        -- vigentes, luego las bandas mismas.
         UPDATE academico_test.TVALORACION
            SET ACTIVE = FALSE, MODIFIED_BY = p_audit, MODIFIED_AT = CURRENT_TIMESTAMP
          WHERE PK_TVALORACION IN (
@@ -482,7 +539,8 @@ BEGIN
         UPDATE academico_test.TESCALA_VALORACION
            SET ACTIVE = FALSE, MODIFIED_BY = p_audit, MODIFIED_AT = CURRENT_TIMESTAMP
          WHERE FK_TESCALA = v_target AND ACTIVE = TRUE;
-        -- Incluye inactivas para no reusar valores de ORDEN y chocar con U_TESCALA_VALORACION_2.
+        -- ORDEN maximo historico del destino (incluye inactivas) para no reusar
+        -- valores y chocar con U_TESCALA_VALORACION_2.
         SELECT COALESCE(MAX(ORDEN), 0) INTO v_orden
           FROM academico_test.TESCALA_VALORACION WHERE FK_TESCALA = v_target;
         FOR sb IN

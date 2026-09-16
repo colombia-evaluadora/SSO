@@ -1,3 +1,23 @@
+-- ===========================================================================
+-- Criterio de Promoción — funciones consolidadas (última versión)
+-- Generado: 2026-09-04
+--
+-- Migracion real, aplicada por Flyway en orden secuencial.
+-- Su unico proposito es reunir en un solo lugar la version vigente de cada
+-- funcion del modulo, ya que con el tiempo varias han sido redefinidas
+-- (CREATE OR REPLACE FUNCTION) en migraciones posteriores.
+--
+-- Migraciones fuente consultadas:
+--   - V39__promotion_criteria_module.sql
+--   - V102__criterio_promocion_mensajes_error_con_nombre.sql
+--
+-- Verificacion: se corrio
+--   grep -rn "FUNCTION academico_test.<nombre>(" postgres/migrations/
+-- para fn_criterio_prom_guardar, fn_criterio_prom_obtener y
+-- fn_nodo_curricular_listar; ninguna migracion posterior a V102/V39 las toca.
+-- ===========================================================================
+
+-- Fuente: V102__criterio_promocion_mensajes_error_con_nombre.sql
 SET search_path TO academico_test, public;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_criterio_prom_guardar(p_fk_periodo bigint, p_fk_grado bigint DEFAULT NULL::bigint, p_nodo_curricular academico_test.nodo_curricular DEFAULT NULL::character varying, p_cantidad_nivelar numeric DEFAULT NULL::numeric, p_asignatura_obligatoria academico_test.bool_sn DEFAULT NULL::character varying, p_aprobacion_promedio academico_test.bool_sn DEFAULT NULL::character varying, p_desempenho_min_general numeric DEFAULT NULL::numeric, p_desempenho_minimo numeric DEFAULT NULL::numeric, p_max_asig_promedio numeric DEFAULT NULL::numeric, p_minimo_inasistencias numeric DEFAULT NULL::numeric, p_max_asig_nivelar_prom numeric DEFAULT NULL::numeric, p_obligatorias bigint[] DEFAULT NULL::bigint[], p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
@@ -11,8 +31,8 @@ DECLARE
     v_nombre_asig VARCHAR(130); v_nombre_area VARCHAR(130);
     v_nombre_grado VARCHAR(130); v_establecimiento_id BIGINT;
 BEGIN
-    -- Gate fail-fast; el segundo llamado abajo valida scope (EE, sede, jornada)
-    -- del periodo academico.
+    -- Autorizacion (CU-86e2w4xdt): capability fail-fast + scope por (EE, sede,
+    -- jornada) del periodo academico. Wrapper sobre fn_assert_permiso_seccion.
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante, NULL, NULL, NULL, 'EDITAR');
     IF p_fk_periodo IS NULL THEN
@@ -26,12 +46,14 @@ BEGIN
         p_pk_usuario_solicitante, v_establecimiento_id,
         academico_test.fn_periodo_sede(p_fk_periodo),
         academico_test.fn_periodo_jornada(p_fk_periodo), 'EDITAR');
+    -- Ningun valor numerico puede ser negativo.
     IF p_cantidad_nivelar < 0 OR p_desempenho_min_general < 0 OR p_desempenho_minimo < 0
        OR p_max_asig_promedio < 0 OR p_minimo_inasistencias < 0 OR p_max_asig_nivelar_prom < 0 THEN
         RAISE EXCEPTION 'Los valores numericos del criterio de promocion no pueden ser negativos'
             USING ERRCODE = '22023';
     END IF;
 
+    -- Buscar la fila existente (default del periodo o override del grado).
     IF p_fk_grado IS NULL THEN
         SELECT PK_TCRITERIO_PROMOCION INTO v_id FROM academico_test.TCRITERIO_PROMOCION
          WHERE FK_TPERIODO_ACADEMICO = p_fk_periodo AND FK_TGRADO IS NULL AND ACTIVE = TRUE;
@@ -51,9 +73,9 @@ BEGIN
         v_establecimiento_id);
 
     IF v_id IS NULL THEN
-        -- Override de grado: hereda del criterio por defecto del periodo lo que
-        -- no venga en los parametros. Para el default (p_fk_grado NULL), d queda
-        -- vacio y no altera nada.
+        -- Override de un grado: hereda del criterio por defecto del periodo lo que
+        -- no venga en los parametros (red de seguridad ante un guardado parcial).
+        -- Para el default (p_fk_grado NULL), d queda vacio (NULLs) y no altera nada.
         IF p_fk_grado IS NOT NULL THEN
             SELECT * INTO d FROM academico_test.TCRITERIO_PROMOCION
              WHERE FK_TPERIODO_ACADEMICO = p_fk_periodo AND FK_TGRADO IS NULL AND ACTIVE = TRUE;
@@ -92,9 +114,10 @@ BEGIN
          WHERE PK_TCRITERIO_PROMOCION = v_id;
     END IF;
 
-    -- Reescribe el set completo. p_nodo_curricular decide si los ids de
-    -- p_obligatorias son de TASIGNATURA ('AS') o TAREA ('AR'); el lote es de
-    -- un solo tipo, nunca mixto (asi lo arma el front).
+    -- Areas/asignaturas obligatorias. Reescribe el set del criterio.
+    -- p_nodo_curricular decide si los ids de p_obligatorias son de
+    -- TASIGNATURA ('AS') o de TAREA ('AR') -- el lote es de un solo tipo,
+    -- nunca mixto (asi lo arma el front, ver resolve-required-subjects.ts).
     IF p_obligatorias IS NOT NULL THEN
         UPDATE academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
            SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
@@ -139,6 +162,7 @@ BEGIN
                 RAISE EXCEPTION 'nodo_curricular debe ser AS o AR para guardar obligatorias'
                     USING ERRCODE = '22023';
             END IF;
+            -- Sin duplicados dentro del set.
             IF EXISTS (
                 SELECT 1 FROM academico_test.TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA
                  WHERE FK_TCRITERIO_PROMOCION = v_id AND ACTIVE = TRUE
@@ -166,6 +190,7 @@ END;
 $function$
 ;
 
+-- Fuente: V39__promotion_criteria_module.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_criterio_prom_obtener(
     p_fk_periodo BIGINT DEFAULT NULL,
     p_fk_grado   BIGINT DEFAULT NULL,
@@ -182,8 +207,8 @@ LANGUAGE sql STABLE AS $$
            cp.NODO_CURRICULAR, cp.CANTIDAD_NIVELAR, cp.ASIGNATURA_OBLIGATORIA,
            cp.APROBACION_PROMEDIO, cp.DESEMPENHO_MINIMO_GENERAL, cp.DESEMPENHO_MINIMO,
            cp.MAX_ASIG_PROMEDIO, cp.MINIMO_INASISTENCIAS, cp.MAX_ASIG_NIVELAR_PROMOVIDO,
-           -- XOR asignatura/area: para una asignatura, el area se deriva de
-           -- TASIGNATURA.FK_TAREA, no se guarda por separado.
+           -- Obligatorias del criterio (XOR asignatura/area). Para una asignatura,
+           -- el area se deriva de TASIGNATURA.FK_TAREA (no se guarda por separado).
            COALESCE((
                SELECT jsonb_agg(jsonb_build_object(
                           'id', o.PK_TCRITERIO_PROMOCION_ASIGNATURA_OBLIGATORIA,
@@ -206,6 +231,7 @@ LANGUAGE sql STABLE AS $$
           OR (p_fk_grado IS NULL AND cp.FK_TPERIODO_ACADEMICO = p_fk_periodo AND cp.FK_TGRADO IS NULL) );
 $$;
 
+-- Fuente: V39__promotion_criteria_module.sql
 CREATE OR REPLACE FUNCTION academico_test.fn_nodo_curricular_listar(
     p_pk_usuario_solicitante BIGINT DEFAULT NULL
 )
