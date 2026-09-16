@@ -105,7 +105,21 @@
 -- ===========================================================================
 
 
+-- La firma ANTERIOR, de ocho argumentos: esta migracion le quita la
+-- paginacion y el orden, asi que hay que retirarla o quedaria una sobrecarga.
 DROP FUNCTION IF EXISTS academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], VARCHAR, VARCHAR, BOOLEAN, INTEGER, INTEGER);
+
+-- Y la PROPIA. No es redundante con el CREATE OR REPLACE de abajo: migraciones
+-- posteriores (V411, V412) cambian el RETURNS TABLE de esta misma firma, y
+-- CREATE OR REPLACE no puede cambiar un tipo de retorno. Sin este DROP, volver
+-- a ejecutar V335 sobre un esquema que ya tiene esas migraciones falla con
+-- "cannot change return type of existing function" -- que es justo lo que
+-- comprueba el check de idempotencia del pipeline.
+--
+-- La regla general: si una migracion define una funcion con RETURNS TABLE,
+-- debe DROPear su propia firma antes de crearla, porque no controla que forma
+-- tendra esa funcion cuando alguien la re-ejecute.
+DROP FUNCTION IF EXISTS academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], VARCHAR);
 
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_grupo_listar(
