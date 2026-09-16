@@ -23,7 +23,7 @@
     "types": ["node", "vite/client", "vitest/globals", "@testing-library/jest-dom"],
 
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     }
   },
   "include": ["src", "e2e"]
