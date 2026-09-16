@@ -51,7 +51,18 @@ eureka:
 reporting:
   # Directo al query-service del catalogo eval-col, no al gateway: ya
   # estamos dentro de la red y dar la vuelta solo suma un salto.
+  #
+  # Es la base POR DEFECTO, no la unica: cada microservicio registrado
+  # tiene su propia instancia de query-service, y un reporte puede fijar
+  # la suya con `base-url` (ver los reportes de Auditoria mas abajo).
   query-service-base-url: ${REPORTING_QUERY_SERVICE_URL:http://query-service-eval-col:8084}
+
+  # La instancia de Auditoria (microservicio audit-clickhouse-cval) se
+  # declara reporte por reporte en `base-url`, con la variable
+  # REPORTING_AUDIT_CVAL_URL. Habla ClickHouse y NO tiene conexion a
+  # Postgres: es un backend distinto, no una ruta mas del de arriba. El
+  # nombre del contenedor lo fija el provisioner como "query-service-" +
+  # instancename (MicroserviceController.containerName).
 
   # Tope duro. V66 quito el LIMIT de las funciones, asi que este es el
   # unico freno que queda entre un filtro mal puesto y un PDF de
@@ -256,6 +267,149 @@ reporting:
         observacion: Observacion
         soporte_nombre: Soporte
 
+    # Planeador -- actividades. path = fila V404 (fn_actividad_listar sin
+    # paginar, mismos filtros y alcance que GET /planeador/actividades). El
+    # front manda en `filters` el mismo objeto del listado (SEARCH, ASIGNATURA,
+    # GRUPO, UNIDAD, TIPO_ACTIVIDAD, INSTRUMENTO, FECHA_DESDE, FECHA_HASTA,
+    # ESTADOS, DIAS_GRACIA, INCLUIR_INACTIVAS, DIA, FUNCIONARIO) + IDS para
+    # "exportar seleccionados". `columns` es el whitelist: las de la tabla del
+    # planeador, sin pk_*/fk_* ni las de navegacion por dia.
+    planeador-actividades:
+      path: /planeador/actividades/export-all
+      title: Actividades del planeador
+      file-name: planeador-actividades
+      columns:
+        titulo: Actividad
+        unidad: Unidad tematica
+        asignatura: Asignatura
+        area: Area
+        grado_grupo: Grado / grupo
+        tipo_actividad: Tipo
+        instrumento_evaluacion: Instrumento
+        fecha_inicio: Inicio
+        fecha_cierre: Cierre
+        estado: Estado
+        ponderacion: Ponderacion
+        estudiantes_asignados: Asignados
+        estudiantes_evaluados: Evaluados
+        porcentaje_evaluado: '% evaluado'
+
+    # Planeador -- unidades tematicas (la otra pestana de la pantalla).
+    # path = fila V406 (fn_unidad_listar sin paginar). Los textos de los
+    # objetivos y contenidos NO salen: la funcion solo devuelve cuantos
+    # hay, y sacarlos seria un reporte maestro-detalle distinto.
+    planeador-unidades:
+      path: /planeador/unidades/export-all
+      title: Unidades tematicas
+      file-name: planeador-unidades
+      columns:
+        nombre: Unidad
+        descripcion: Descripcion
+        asignatura: Asignatura
+        area: Area
+        grado: Grado
+        docente: Docente
+        estado: Estado
+        fecha_inicio: Inicio
+        fecha_fin: Fin
+        calculo_definitiva: Forma de calculo
+        referente_curricular: Referente curricular
+        total_actividades: Actividades
+        total_objetivos: Objetivos
+        total_contenidos: Contenidos
+
+    # -----------------------------------------------------------------
+    # Auditoria / Registro de actividad (V405). Los tres viven en OTRA
+    # instancia de query-service -- de ahi el `base-url` propio: el
+    # catalogo de auditoria corre contra ClickHouse y no comparte backend
+    # con los reportes academicos.
+    #
+    # Ninguno expone el JSON crudo de la fila auditada (entityFieldsRaw):
+    # un archivo exportado circula fuera del sistema, y ese volcado trae
+    # la fila entera, datos personales incluidos.
+    # -----------------------------------------------------------------
+
+    # "Sesiones de auditoria" (pestana Por sesion). filters = los mismos
+    # de la pantalla; FILTERS.IDS (CSV de family_id) exporta solo las
+    # sesiones con casilla marcada.
+    auditoria-sesiones:
+      path: /audits/export-all
+      base-url: ${REPORTING_AUDIT_CVAL_URL:http://query-service-audit-clickhouse-cval:8084}
+      title: Sesiones de auditoria
+      file-name: auditoria-sesiones
+      columns:
+        authorName: Autor
+        ip: IP
+        startedAt: Inicio
+        endedAt: Fin
+        status: Estado
+        operationsCount: Operaciones
+
+    # Detalle de UNA tabla: todos los cambios detectados sobre ella.
+    # FILTERS.SLUG es obligatorio (sin el no salen filas) y va en el
+    # cuerpo, no en la ruta.
+    auditoria-tabla-operaciones:
+      path: /audit-tables/operations/export-all
+      base-url: ${REPORTING_AUDIT_CVAL_URL:http://query-service-audit-clickhouse-cval:8084}
+      title: Operaciones por tabla
+      file-name: auditoria-tabla
+      columns:
+        occurredAt: Fecha
+        operation: Operacion
+        authorName: Autor
+        ip: IP
+        entityName: Detalle
+        entityId: Identificador
+
+    # Detalle de UNA sesion de usuario: que cambio esa persona en ella.
+    # FILTERS.SESSIONID es obligatorio, tambien por cuerpo.
+    auditoria-sesion-operaciones:
+      path: /audits/sessions/operations/export-all
+      base-url: ${REPORTING_AUDIT_CVAL_URL:http://query-service-audit-clickhouse-cval:8084}
+      title: Cambios de la sesion
+      file-name: auditoria-sesion
+      columns:
+        occurredAt: Fecha
+        tableSlug: Tabla
+        operation: Operacion
+        entityName: Detalle
+        entityId: Identificador
+
+    # -----------------------------------------------------------------
+    # Asistencia > Seguimiento (V228). path = fila
+    # 'eval-col-asistencias-seguimiento-export-all-001':
+    # fn_asistencia_listar_seguimiento SIN paginar, con los mismos
+    # filtros y el mismo gate que POST /asistencias/query.
+    #
+    # NO confundir con la clave `asistencia` de mas arriba: esa es el
+    # "Reporte de asistencia por grupo" (E03HU57, V290), que exige grupo
+    # y rango de fechas. Esta es el boton de descarga de la pantalla de
+    # Seguimiento y exporta lo que el usuario tenga filtrado, sin
+    # ningun filtro obligatorio.
+    #
+    # `columns` son las de la tabla de la pantalla. grado viene del
+    # LEFT JOIN a v_asistencia_detalle que hace la fila V228 (la funcion
+    # devuelve `grupo`, no `grado`). asignatura y actividad van como dos
+    # columnas separadas y nunca estan llenas a la vez
+    # (CK_TASISTENCIA_CONTEXTO): en preescolar/formativo la fila trae
+    # actividad y la asignatura vacia. soporte_nombre es el nombre del
+    # adjunto de la columna SOPORTE: en PDF/Excel no se puede pintar el
+    # enlace de descarga, asi que se exporta el nombre del archivo.
+    # -----------------------------------------------------------------
+    asistencias:
+      path: /asistencias/export-all
+      title: Seguimiento de asistencia
+      file-name: asistencias-seguimiento
+      columns:
+        estudiante: Estudiante
+        tipo_asistencia: Tipo de asistencia
+        asignatura: Asignatura
+        actividad: Actividad
+        grado: Grado
+        grupo: Grupo
+        fecha: Fecha
+        soporte_nombre: Soporte
+
 sso:
   jwt:
     # Solo la publica: este servicio verifica firmas, no emite tokens.
@@ -274,6 +428,40 @@ management:
     health:
       probes:
         enabled: true
+  # Mismo bloque de telemetria que el resto de servicios Spring del
+  # stack (auth-center, sso-admin, ...). Antes no existia: metricas
+  # salian por el default de Boot (localhost:4318, Connection refused
+  # en bucle si nadie pasaba MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED),
+  # y trazas/logs no tenian endpoint, asi que con la telemetria
+  # ENCENDIDA tampoco llegaban a Alloy. Los tres exporters caen a
+  # false sin la env var: docker-compose.yml los deriva de
+  # SSO_TELEMETRY_ENABLED.
+  otlp:
+    metrics:
+      export:
+        enabled: ${MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED:false}
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 10s
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+    resource-attributes:
+      service.namespace: sso
+      deployment.environment: ${DEPLOY_ENV:dev}
+  logging:
+    export:
+      otlp:
+        enabled: ${MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED:false}
+  tracing:
+    enabled: ${MANAGEMENT_TRACING_EXPORT_ENABLED:false}
+    sampling:
+      probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
 
 logging:
   level:

@@ -190,7 +190,7 @@ public class RefreshController {
         // arrastrar un claim potencialmente obsoleto.
         String establishment = establishmentResolver.forUserId(user.getId());
         String accessToken = jwt.issueAccessToken(user.getEmail(), user.getId(),
-                lookup.familyId(), roles, establishment);
+                lookup.familyId(), roles, establishment, user.getFullName());
 
         // V-audit-ctx-4 (touch-on-refresh): cada refresh exitoso
         // toca last_seen_at de la fila de tracking. Best-effort:

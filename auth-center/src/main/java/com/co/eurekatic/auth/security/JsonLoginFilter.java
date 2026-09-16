@@ -153,7 +153,11 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         // establishment). null para quien no administra un único EE
         // (super-admin incluido) -- el claim simplemente se omite.
         String establishment = establishmentResolver.forUserId(uid);
-        String accessToken = jwt.issueAccessToken(email, uid, familyId, roles, establishment);
+        // Nombre legible para que el front lo pinte (header, menú de
+        // cuenta) en vez de caer al prefijo del correo -- ver
+        // JwtTokenService#CLAIM_NAME.
+        String name = (principal instanceof User u) ? u.getFullName() : null;
+        String accessToken = jwt.issueAccessToken(email, uid, familyId, roles, establishment, name);
 
         // Mint a new refresh token via the store. Each login starts a
         // fresh family so multi-device sessions are independent. If the
@@ -172,7 +176,12 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
             // excepción queda visible en logs con su stacktrace propio
             // en vez de que este catch se la trague en silencio.
             try {
-                sessionTracking.openSession(uid, familyId, Map.of(), appNameFromRequest(request));
+                // V400: mismo `establishment` ya resuelto arriba para el
+                // claim `est` del JWT -- se persiste en la fila de sesión
+                // para que el filtro de auditoría reconozca la sesión
+                // desde el momento del login, no solo cuando ya tiene una
+                // operación escrita etiquetada.
+                sessionTracking.openSession(uid, familyId, Map.of(), appNameFromRequest(request), establishment);
             } catch (RuntimeException trackingEx) {
                 log.warn("No se pudo abrir sesión de tracking para email={} family={}",
                         email, familyId.substring(0, 8), trackingEx);

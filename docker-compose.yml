@@ -244,9 +244,9 @@ services:
       # apagado, Alloy no existe y sin esto los nueve servicios
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
-      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8761; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -366,9 +366,9 @@ services:
       # apagado, Alloy no existe y sin esto los nueve servicios
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
-      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8081; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -438,9 +438,9 @@ services:
       # apagado, Alloy no existe y sin esto los nueve servicios
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
-      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -568,9 +568,9 @@ services:
       # apagado, Alloy no existe y sin esto los nueve servicios
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
-      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     # No healthcheck on the public port — the gateway's
     # actuator/health is the canonical signal, and the service
     # itself doesn't expose /actuator/health to the public.
@@ -706,9 +706,9 @@ services:
       # apagado, Alloy no existe y sin esto los nueve servicios
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
-      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       # App-access cache (SsoAdminAppAccessManager /
       # AppAccessService). Same Redis instance + credentials
       # auth-center already uses for refresh tokens.
@@ -863,9 +863,9 @@ services:
       # apagado, Alloy no existe y sin esto los nueve servicios
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
-      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       VONAGE_API_KEY: ${VONAGE_API_KEY:-}
       VONAGE_API_SECRET: ${VONAGE_API_SECRET:-}
       SMTP_GMAIL_USER: ${SMTP_GMAIL_USER:-}
@@ -962,9 +962,9 @@ services:
       # apagado, Alloy no existe y sin esto los nueve servicios
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
-      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       # Eureka + JWT (sólo la pública: verifica, no emite)
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
@@ -1056,9 +1056,9 @@ services:
       # apagado, Alloy no existe y sin esto los nueve servicios
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
-      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8084; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
@@ -1196,9 +1196,17 @@ services:
       # apagado, Alloy no existe y sin esto los nueve servicios
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
-      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      # El mismo interruptor, propagado a cada query-service que el
+      # provisioner crea (DockerSocket#buildEnv lo traduce a los tres
+      # MANAGEMENT_* de arriba). Sin esto los contenedores spawneados
+      # nacían con el default de Spring Boot (export de logs ENCENDIDO)
+      # y eran los únicos del stack que seguían reintentando contra
+      # Alloy con la telemetría apagada. Mismo patrón DOCKER_* de
+      # relaxed-binding que DOCKER_JWT_PUBLIC_KEY.
+      DOCKER_TELEMETRY_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
       # The provisioner image installs curl (it talks to
       # the Docker socket via curl --unix-socket) but not
@@ -1228,13 +1236,18 @@ services:
   # pruebas: 883 MB entre los cinco, con Tempo llevándose 502 — más
   # que auth-center y api-gateway juntos.
   #
-  #   COMPOSE_PROFILES=local-only,observability docker compose up -d
+  #   COMPOSE_PROFILES=local-only,observability SSO_TELEMETRY_ENABLED=true \
+  #     docker compose up -d
   #
-  # Y al apagarlos hay que poner SSO_TELEMETRY_ENABLED=false. El
-  # comentario anterior aquí afirmaba que el exporter "haría no-op con
-  # un warning" — no es cierto: los nueve servicios reintentan contra
-  # Alloy indefinidamente. Es el mismo bucle que dejó cdc-worker sin
-  # ClickHouse, 99 000 líneas de error en dos minutos.
+  # Los exporters OTLP de los servicios Spring van gateados por
+  # SSO_TELEMETRY_ENABLED, con default `false` en este archivo: sin
+  # el perfil `observability` Alloy no existe, y un exporter encendido
+  # contra un host que no resuelve no "hace no-op con un warning" —
+  # reintenta cada batch indefinidamente (el mismo bucle que dejó
+  # cdc-worker sin ClickHouse, 99 000 líneas de error en dos minutos).
+  # Para exportar hay que encender el flag EXPLÍCITAMENTE junto con el
+  # perfil; `scripts/sso-stack.sh` acopla ambas cosas en los dos
+  # sentidos (flag false → sin perfil; sin perfil → flag false).
   # ===========================================================================
   alloy:
     profiles: ["observability"]
@@ -1664,9 +1677,9 @@ services:
       # apagado, Alloy no existe y sin esto los nueve servicios
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
-      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     mem_limit: 512m
     healthcheck:
       # `bash`, no `sh`: /dev/tcp NO es un fichero, es una función del
@@ -1719,14 +1732,21 @@ services:
       # Directo a la instancia del catalogo eval-col: es la que tiene
       # registradas las filas query de reporte (V67).
       REPORTING_QUERY_SERVICE_URL: "${REPORTING_QUERY_SERVICE_URL:-http://query-service-eval-col:8084}"
+      # Instancia de Auditoria (V402): otro catalogo y otro backend
+      # (ClickHouse). No se declara en este compose -- la aprovisiona el
+      # sidecar `provisioner` con el nombre "query-service-" +
+      # instancename, asi que aca solo se apunta a ese nombre de red. Si
+      # esa instancia no esta levantada, los reportes de Auditoria
+      # responden 502 y los academicos siguen funcionando.
+      REPORTING_AUDIT_CVAL_URL: "${REPORTING_AUDIT_CVAL_URL:-http://query-service-audit-clickhouse-cval:8084}"
       REPORTING_MAX_ROWS: "${REPORTING_MAX_ROWS:-50000}"
       # Clave PUBLICA del par RS256: verifica firmas, no acuña tokens,
       # asi que no recibe (ni debe recibir) la privada.
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
-      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
-      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-true}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
       # bash y no sh: /dev/tcp es una funcion de bash, dash no la tiene.
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8087; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
