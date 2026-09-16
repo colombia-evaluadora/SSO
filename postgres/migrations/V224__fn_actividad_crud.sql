@@ -1074,6 +1074,7 @@ BEGIN
 
     -- ----- Sin config: la actividad deja de ser (o nunca fue) de recuperacion.
     IF p_config IS NULL THEN
+        PERFORM academico_test.fn_actividad_recuperacion_revertir(p_pk_usuario_solicitante, p_pk_tactividad);
         UPDATE academico_test.TACTIVIDAD_RECUPERACION
            SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
          WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
@@ -1111,6 +1112,27 @@ BEGIN
         IF NOT EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD
                         WHERE PK_TACTIVIDAD = v_fk_recuperar AND ACTIVE = TRUE) THEN
             RAISE EXCEPTION 'fkActividadRecuperar (%) no existe o no esta activa', v_fk_recuperar USING ERRCODE = '23503';
+        END IF;
+        -- Las tres reglas que hacen consolidable el enlace (V408). Sin ellas
+        -- el SQL aplica igual y la nota sale mal en produccion.
+        IF EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD
+                    WHERE PK_TACTIVIDAD = v_fk_recuperar AND ES_RECUPERACION = 'S') THEN
+            RAISE EXCEPTION 'fkActividadRecuperar (%) ya es una recuperacion: no se encadenan', v_fk_recuperar USING ERRCODE = '22023';
+        END IF;
+        IF EXISTS (SELECT 1
+                     FROM academico_test.TACTIVIDAD orig, academico_test.TACTIVIDAD rec
+                    WHERE orig.PK_TACTIVIDAD = v_fk_recuperar
+                      AND rec.PK_TACTIVIDAD  = p_pk_tactividad
+                      AND orig.FK_TASIGNATURA IS NOT NULL
+                      AND rec.FK_TASIGNATURA  IS NOT NULL
+                      AND orig.FK_TASIGNATURA <> rec.FK_TASIGNATURA) THEN
+            RAISE EXCEPTION 'La recuperacion y la actividad que recupera deben ser de la misma asignatura' USING ERRCODE = '22023';
+        END IF;
+        IF EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_RECUPERACION
+                    WHERE FK_TACTIVIDAD_RECUPERAR = v_fk_recuperar
+                      AND FK_TACTIVIDAD <> p_pk_tactividad
+                      AND ACTIVE = TRUE) THEN
+            RAISE EXCEPTION 'La actividad (%) ya tiene otra recuperacion activa', v_fk_recuperar USING ERRCODE = '23505';
         END IF;
     ELSE  -- NOTA_FINAL
         IF v_fk_recuperar IS NOT NULL THEN
@@ -1167,7 +1189,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_recuperacion_configurar(BIGINT, BIGINT, JSONB)
-    IS 'Punto unico para la config 1:1 de recuperacion (TACTIVIDAD_RECUPERACION). p_config NULL = la actividad NO es de recuperacion (desactiva la fila y pone ES_RECUPERACION=''N''). Con objeto {destino, fkActividadRecuperar?, tipoAplicacion, tipoCalculo, valorPonderacion?}: valida los 3 catalogos (DESTINO_RECUPERACION / TIPO_APLICACION_RECUPERACION / TIPO_CALCULO_RECUPERACION), exige fkActividadRecuperar sii destino=ACTIVIDAD (y != la propia actividad, activa), exige valorPonderacion 0..100 sii tipoCalculo=PONDERADO, marca ES_RECUPERACION=''S'' y hace upsert de la fila. Llamada por fn_actividad_crear/_actualizar. Retorna PK_TACTIVIDAD_RECUPERACION (o NULL). V224.';
+    IS 'Punto unico para la config 1:1 de recuperacion (TACTIVIDAD_RECUPERACION). p_config NULL = la actividad NO es de recuperacion (desactiva la fila y pone ES_RECUPERACION=''N''). Con objeto {destino, fkActividadRecuperar?, tipoAplicacion, tipoCalculo, valorPonderacion?}: valida los 3 catalogos (DESTINO_RECUPERACION / TIPO_APLICACION_RECUPERACION / TIPO_CALCULO_RECUPERACION), exige fkActividadRecuperar sii destino=ACTIVIDAD (y != la propia actividad, activa), exige valorPonderacion 0..100 sii tipoCalculo=PONDERADO, marca ES_RECUPERACION=''S'' y hace upsert de la fila. Con destino=ACTIVIDAD exige ademas las tres condiciones que hacen consolidable el enlace, porque fn_actividad_recuperacion_aplicar (V408) ya no solo guarda la configuracion sino que escribe una nota con ella: la actividad recuperada NO puede ser a su vez una recuperacion (una cadena haria que consolidar la primera invalidara la segunda, y la nota dependeria del orden en que el docente califique); las dos deben ser de la MISMA asignatura cuando ambas la tienen declarada (recuperar Matematicas con una nota de Geometria no es un caso de negocio, es un error de seleccion en el arbol grado/grupo/asignatura de la pantalla); y una actividad no puede tener DOS recuperaciones activas apuntandole (las dos escribirian DEFINITIVA sobre la misma fila y ganaria la ultima calificada, en silencio). Las tres se validan aqui y no al calificar porque el momento de impedirlo es cuando el docente arma la recuperacion, no cuando ya puso notas. Llamada por fn_actividad_crear/_actualizar. Retorna PK_TACTIVIDAD_RECUPERACION (o NULL). V224.';
 
 -- ===========================================================================
 -- (4) ESCRITURA
@@ -1894,6 +1916,8 @@ BEGIN
        SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
 
+    -- Antes de desactivar la config: deshace lo que la recuperacion escribio (V408).
+    PERFORM academico_test.fn_actividad_recuperacion_revertir(p_pk_usuario_solicitante, p_pk_tactividad);
     UPDATE academico_test.TACTIVIDAD_RECUPERACION
        SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
