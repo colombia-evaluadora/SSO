@@ -1,76 +1,113 @@
--- TLISTA_VALOR.ACCION no se usaba para nada en GRAFICA_CARITA/GRAFICA_SIMBOLO
--- (columna libre, sin significado hasta ahora). El picker de iconografia del
--- front (RatingSymbolPicker, dialog-create-rating-scale.tsx) necesita agrupar
--- las caritas por color para mostrarlas en filas -- hoy ese agrupamiento no
--- existe en la data, solo se ve "a ojo" en el orden en que vienen. Se usa
--- ACCION para guardar "<COLOR>_<NOMBRE>_<N>" (p.ej. 'AMARILLO_SUPERIOR_1'):
--- combina el color (confirmado visualmente contra el picker real) con el
--- NOMBRE ya existente de la fila (Alto/Bajo/Basico/Superior) y un consecutivo
--- (1/2) porque cada color tiene dos caritas del mismo NOMBRE. El front arma
--- el orden del picker parseando este campo, no hay ids hardcodeados.
+-- Que hace: deja cada fila GRAFICA_CARITA/GRAFICA_SIMBOLO de TLISTA_VALOR con
+-- su ACCION '<COLOR>_<NOMBRE>[_N]' (p.ej. 'AMARILLO_SUPERIOR_1') y con VALOR
+-- apuntando a la clave S3 real del icono.
 --
--- GET /eval-col/select/:CATEGORIA (fetch-select-category.ts en el front) ya
--- devuelve la columna ACCION tal cual -- no requiere cambios de backend, solo
--- llenar el dato.
---
--- IMPORTANTE al correr esto a mano en pgAdmin/DBeaver: seleccionar TODO el
--- archivo antes de ejecutar (o usar "Execute Script", no "Execute current
--- statement") -- son dos UPDATE, cada uno es una sola sentencia.
+-- Por que aqui: el picker del front (RatingSymbolPicker) agrupa las caritas
+-- por color parseando ACCION; sin ese dato el orden solo se ve "a ojo".
+-- GET /eval-col/select/:CATEGORIA ya devuelve la columna tal cual.
+-- Depende de: TARCHIVO con los iconos subidos (etiqueta graficaCarita /
+-- graficaSimbolo). Estas filas llegan por el dump base, NO por migraciones:
+-- en una base limpia no hay nada que casar y esto actualiza 0 filas sin fallar.
 
-UPDATE academico_test.TLISTA_VALOR
-SET ACCION = CASE PK_LISTA_VALOR
+-- Empareja por NOMBRE DE ARCHIVO, no por PK: keyear por PK_LISTA_VALOR dejo
+-- esta migracion en no-op silencioso en produccion. TARCHIVO.nombre es lo
+-- unico estable entre entornos.
+-- Sin ON COMMIT DROP: el paso de re-aplicacion de deploy.yml corre este
+-- fichero por `psql -f` en autocommit y la temporal no sobreviviria.
+DROP TABLE IF EXISTS v94_icono;
+DROP TABLE IF EXISTS v94_clave;
+CREATE TEMP TABLE v94_icono (categoria text, archivo text, accion text);
 
-       -- AMARILLO (8)
-       WHEN 989 THEN 'AMARILLO_SUPERIOR_1' WHEN 990 THEN 'AMARILLO_ALTO_1'
-       WHEN 993 THEN 'AMARILLO_SUPERIOR_2' WHEN 991 THEN 'AMARILLO_BASICO_1'
-       WHEN 995 THEN 'AMARILLO_BASICO_2' WHEN 992 THEN 'AMARILLO_BAJO_1'
-       WHEN 996 THEN 'AMARILLO_BAJO_2' WHEN 994 THEN 'AMARILLO_ALTO_2'
+INSERT INTO v94_icono (categoria, archivo, accion) VALUES
+  ('GRAFICA_CARITA','s.png'               ,'AMARILLO_SUPERIOR_1'),
+  ('GRAFICA_CARITA','cSuperFeliz.png'     ,'AMARILLO_SUPERIOR_2'),
+  ('GRAFICA_CARITA','cSuperFeliz2.png'    ,'AMARILLO_ALTO_1'),
+  ('GRAFICA_CARITA','cfeliz.png'          ,'AMARILLO_ALTO_2'),
+  ('GRAFICA_CARITA','bs.png'              ,'AMARILLO_BASICO_1'),
+  ('GRAFICA_CARITA','cNormal2.png'        ,'AMARILLO_BASICO_2'),
+  ('GRAFICA_CARITA','bj.png'              ,'AMARILLO_BAJO_1'),
+  ('GRAFICA_CARITA','cTriste2.png'        ,'AMARILLO_BAJO_2'),
+  ('GRAFICA_CARITA','sV.png'              ,'VERDE_SUPERIOR_1'),
+  ('GRAFICA_CARITA','cSuperFelizV.png'    ,'VERDE_SUPERIOR_2'),
+  ('GRAFICA_CARITA','cSuperFeliz2V.png'   ,'VERDE_ALTO_1'),
+  ('GRAFICA_CARITA','cfelizV.png'         ,'VERDE_ALTO_2'),
+  ('GRAFICA_CARITA','bsV.png'             ,'VERDE_BASICO_1'),
+  ('GRAFICA_CARITA','cNormal2V.png'       ,'VERDE_BASICO_2'),
+  ('GRAFICA_CARITA','bjV.png'             ,'VERDE_BAJO_1'),
+  ('GRAFICA_CARITA','cTriste2V.png'       ,'VERDE_BAJO_2'),
+  ('GRAFICA_CARITA','a.png'               ,'CELESTE_SUPERIOR_1'),
+  ('GRAFICA_CARITA','cSuperFelizA.png'    ,'CELESTE_SUPERIOR_2'),
+  ('GRAFICA_CARITA','cfeliz2.png'         ,'CELESTE_ALTO_1'),
+  ('GRAFICA_CARITA','cfelizA.png'         ,'CELESTE_ALTO_2'),
+  ('GRAFICA_CARITA','cNormal.png'         ,'CELESTE_BASICO_1'),
+  ('GRAFICA_CARITA','cNormal2A.png'       ,'CELESTE_BASICO_2'),
+  ('GRAFICA_CARITA','cTriste.png'         ,'CELESTE_BAJO_1'),
+  ('GRAFICA_CARITA','cTriste2A.png'       ,'CELESTE_BAJO_2'),
+  ('GRAFICA_CARITA','sN.png'              ,'NARANJA_SUPERIOR_1'),
+  ('GRAFICA_CARITA','cSuperFelizN.png'    ,'NARANJA_SUPERIOR_2'),
+  ('GRAFICA_CARITA','cSuperFeliz2N.png'   ,'NARANJA_ALTO_1'),
+  ('GRAFICA_CARITA','cfelizN.png'         ,'NARANJA_ALTO_2'),
+  ('GRAFICA_CARITA','bsN.png'             ,'NARANJA_BASICO_1'),
+  ('GRAFICA_CARITA','cNormal2N.png'       ,'NARANJA_BASICO_2'),
+  ('GRAFICA_CARITA','bjN.png'             ,'NARANJA_BAJO_1'),
+  ('GRAFICA_CARITA','cTriste2N.png'       ,'NARANJA_BAJO_2'),
+  ('GRAFICA_CARITA','sR.png'              ,'ROJO_SUPERIOR_1'),
+  ('GRAFICA_CARITA','cSuperFelizR.png'    ,'ROJO_SUPERIOR_2'),
+  ('GRAFICA_CARITA','cSuperFeliz2R.png'   ,'ROJO_ALTO_1'),
+  ('GRAFICA_CARITA','cfelizR.png'         ,'ROJO_ALTO_2'),
+  ('GRAFICA_CARITA','bsR.png'             ,'ROJO_BASICO_1'),
+  ('GRAFICA_CARITA','cNormal2R.png'       ,'ROJO_BASICO_2'),
+  ('GRAFICA_CARITA','bjR.png'             ,'ROJO_BAJO_1'),
+  ('GRAFICA_CARITA','cTriste2R.png'       ,'ROJO_BAJO_2'),
+  ('GRAFICA_SIMBOLO','s.png'              ,'AMARILLO_SUPERIOR'),
+  ('GRAFICA_SIMBOLO','a.png'              ,'CELESTE_ALTO'),
+  ('GRAFICA_SIMBOLO','bs.png'             ,'ROSADO_BASICO'),
+  ('GRAFICA_SIMBOLO','bj.png'             ,'ROJO_BAJO'),
+  ('GRAFICA_SIMBOLO','calA03.png'         ,'MORADO_ACEPTABLE'),
+  ('GRAFICA_SIMBOLO','calD05.png'         ,'ROJO_DEFICIENTE'),
+  ('GRAFICA_SIMBOLO','calE01.png'         ,'VERDE_EXCELENTE'),
+  ('GRAFICA_SIMBOLO','calI04.png'         ,'ROSADO_INSUFICIENTE'),
+  ('GRAFICA_SIMBOLO','calS02.png'         ,'NARANJA_SOBRESALIENTE');
 
-       -- VERDE (8)
-       WHEN 1027 THEN 'VERDE_BAJO_2' WHEN 1022 THEN 'VERDE_BASICO_1'
-       WHEN 1024 THEN 'VERDE_SUPERIOR_2' WHEN 1023 THEN 'VERDE_BAJO_1'
-       WHEN 1025 THEN 'VERDE_ALTO_2' WHEN 1020 THEN 'VERDE_SUPERIOR_1'
-       WHEN 1021 THEN 'VERDE_ALTO_1' WHEN 1026 THEN 'VERDE_BASICO_2'
+-- DISTINCT ON: en test el mismo icono se subio dos veces; las copias son
+-- identicas, sirve cualquiera.
+CREATE TEMP TABLE v94_clave AS
+SELECT DISTINCT ON (i.categoria, i.archivo)
+       i.categoria, i.archivo, i.accion, a.urls3
+  FROM v94_icono i
+  JOIN academico_test.TARCHIVO a
+    ON a.ACTIVE IS TRUE
+   AND a.NOMBRE = i.archivo
+   AND a.ETIQUETA = CASE i.categoria WHEN 'GRAFICA_CARITA' THEN 'graficaCarita'
+                                     ELSE 'graficaSimbolo' END
+ ORDER BY i.categoria, i.archivo, a.PK_TARCHIVO;
 
-       -- CELESTE (8)
-       WHEN 997 THEN 'CELESTE_SUPERIOR_1' WHEN 1028 THEN 'CELESTE_SUPERIOR_2'
-       WHEN 998 THEN 'CELESTE_ALTO_1' WHEN 1001 THEN 'CELESTE_ALTO_2'
-       WHEN 1002 THEN 'CELESTE_BASICO_2' WHEN 1000 THEN 'CELESTE_BAJO_1'
-       WHEN 999 THEN 'CELESTE_BASICO_1' WHEN 1003 THEN 'CELESTE_BAJO_2'
+-- Idempotente: casa la fila con VALOR legacy ('img/caritas/<archivo>') y la
+-- que ya apunta a su clave S3.
+UPDATE academico_test.TLISTA_VALOR lv
+   SET VALOR = k.urls3,
+       ACCION = k.accion,
+       MODIFIED_BY = 'V94_migration', MODIFIED_AT = CURRENT_TIMESTAMP
+  FROM v94_clave k
+ WHERE lv.CATEGORIA = k.categoria
+   AND (split_part(lv.VALOR, '/', 3) = k.archivo OR lv.VALOR = k.urls3)
+   AND (lv.VALOR IS DISTINCT FROM k.urls3 OR lv.ACCION IS DISTINCT FROM k.accion);
 
-       -- NARANJA (8)
-       WHEN 1019 THEN 'NARANJA_BAJO_2' WHEN 1014 THEN 'NARANJA_BASICO_1'
-       WHEN 1017 THEN 'NARANJA_ALTO_2' WHEN 1015 THEN 'NARANJA_BAJO_1'
-       WHEN 1016 THEN 'NARANJA_SUPERIOR_2' WHEN 1012 THEN 'NARANJA_SUPERIOR_1'
-       WHEN 1013 THEN 'NARANJA_ALTO_1' WHEN 1018 THEN 'NARANJA_BASICO_2'
+-- Los 5 simbolos Excelente..Deficiente no vienen en el dump base: hay que
+-- crearlos. El PK se calcula (la tabla no tiene secuencia) y la guardia va por
+-- ACCION, no por PK, para no insertar de nuevo donde ya existen.
+INSERT INTO academico_test.TLISTA_VALOR
+       (PK_LISTA_VALOR, CATEGORIA, NOMBRE, VALOR, ACCION, CREATED_BY, CREATED_AT, ACTIVE)
+SELECT (SELECT max(PK_LISTA_VALOR) FROM academico_test.TLISTA_VALOR)
+         + row_number() OVER (ORDER BY n.accion),
+       'GRAFICA_SIMBOLO', n.nombre, k.urls3, n.accion, 'V94_migration', CURRENT_TIMESTAMP, TRUE
+  FROM (VALUES ('MORADO_ACEPTABLE','Aceptable'), ('ROJO_DEFICIENTE','Deficiente'),
+               ('VERDE_EXCELENTE','Excelente'), ('ROSADO_INSUFICIENTE','Insuficiente'),
+               ('NARANJA_SOBRESALIENTE','Sobresaliente')) AS n(accion, nombre)
+  JOIN v94_clave k ON k.categoria = 'GRAFICA_SIMBOLO' AND k.accion = n.accion
+ WHERE NOT EXISTS (
+         SELECT 1 FROM academico_test.TLISTA_VALOR e
+          WHERE e.CATEGORIA = 'GRAFICA_SIMBOLO' AND e.ACCION = n.accion);
 
-       -- ROJO (8)
-       WHEN 1007 THEN 'ROJO_BAJO_1' WHEN 1006 THEN 'ROJO_BASICO_1'
-       WHEN 1009 THEN 'ROJO_ALTO_2' WHEN 1011 THEN 'ROJO_BAJO_2'
-       WHEN 1008 THEN 'ROJO_SUPERIOR_2' WHEN 1004 THEN 'ROJO_SUPERIOR_1'
-       WHEN 1005 THEN 'ROJO_ALTO_1' WHEN 1010 THEN 'ROJO_BASICO_2'
-
-       ELSE ACCION
-
-END,
-   MODIFIED_BY = 'V94_migration', MODIFIED_AT = CURRENT_TIMESTAMP
- WHERE CATEGORIA = 'GRAFICA_CARITA'
-   AND PK_LISTA_VALOR IN (
-       989, 990, 993, 991, 995, 992, 996, 994,
-       1027, 1022, 1024, 1023, 1025, 1020, 1021, 1026,
-       997, 1028, 998, 1001, 1002, 1000, 999, 1003,
-       1019, 1014, 1017, 1015, 1016, 1012, 1013, 1018,
-       1007, 1006, 1009, 1011, 1008, 1004, 1005, 1010
-   );
-
-UPDATE academico_test.TLISTA_VALOR
-   SET ACCION = CASE PK_LISTA_VALOR
-       WHEN 578 THEN 'CELESTE_ALTO'
-       WHEN 580 THEN 'ROJO_BAJO'
-       WHEN 579 THEN 'ROSADO_BASICO'
-       WHEN 577 THEN 'AMARILLO_SUPERIOR'
-       ELSE ACCION
-   END,
-   MODIFIED_BY = 'V94_migration', MODIFIED_AT = CURRENT_TIMESTAMP
- WHERE CATEGORIA = 'GRAFICA_SIMBOLO'
-   AND PK_LISTA_VALOR IN (578, 580, 579, 577);
+DROP TABLE IF EXISTS v94_icono;
+DROP TABLE IF EXISTS v94_clave;

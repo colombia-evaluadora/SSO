@@ -17,6 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Cliente HTTP contra el query-service.
@@ -37,25 +38,45 @@ public class QueryServiceClient {
 
     private static final Logger log = LoggerFactory.getLogger(QueryServiceClient.class);
 
-    private final RestClient client;
+    /** Base por defecto: la instancia del catalogo academico (eval-col). */
+    private final String baseUrlPorDefecto;
+
+    private final java.time.Duration requestTimeout;
+
+    /**
+     * Un RestClient por instancia de query-service, creado la primera vez
+     * que se pide esa base y reusado despues.
+     *
+     * <p>Se construye uno por base en vez de pasar una URL absoluta a
+     * {@code .uri(...)} para que la base quede fijada en el cliente: asi el
+     * {@code path} de la definicion del reporte no puede, por venir mal
+     * escrito en el yml, apuntar a un host arbitrario.
+     */
+    private final Map<String, RestClient> clientes = new ConcurrentHashMap<>();
 
     public QueryServiceClient(ReportingProperties props) {
-        String baseUrl = Objects.requireNonNull(
+        this.baseUrlPorDefecto = Objects.requireNonNull(
                 props.getQueryServiceBaseUrl(),
                 "reporting.query-service-base-url es obligatorio");
+        this.requestTimeout = props.getRequestTimeout();
+    }
 
-        // Timeouts explicitos: el default de la fabrica simple es "sin
-        // limite", y una consulta sin paginar que se cuelgue dejaria el
-        // hilo del reporte tomado para siempre.
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout((int) java.time.Duration.ofSeconds(10).toMillis());
-        factory.setReadTimeout((int) props.getRequestTimeout().toMillis());
+    private RestClient clientePara(String baseUrl) {
+        String base = (baseUrl == null || baseUrl.isBlank()) ? baseUrlPorDefecto : baseUrl;
+        return clientes.computeIfAbsent(base, b -> {
+            // Timeouts explicitos: el default de la fabrica simple es "sin
+            // limite", y una consulta sin paginar que se cuelgue dejaria el
+            // hilo del reporte tomado para siempre.
+            SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+            factory.setConnectTimeout((int) java.time.Duration.ofSeconds(10).toMillis());
+            factory.setReadTimeout((int) requestTimeout.toMillis());
 
-        this.client = RestClient.builder()
-                .baseUrl(baseUrl)
-                .requestFactory((ClientHttpRequestFactory) factory)
-                .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
-                .build();
+            return RestClient.builder()
+                    .baseUrl(b)
+                    .requestFactory((ClientHttpRequestFactory) factory)
+                    .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
+                    .build();
+        });
     }
 
     /**
@@ -81,13 +102,16 @@ public class QueryServiceClient {
     /**
      * Pide las filas de un endpoint sin paginar.
      *
+     * @param baseUrl    instancia de query-service donde vive {@code path};
+     *                   null o vacio = la instancia por defecto
      * @param path       ruta registrada en {@code public.query} (V67)
      * @param bearer     token del usuario, tal cual llego
      * @param filters    filtros elegidos en pantalla; puede venir vacio,
      *                   y vacio significa "sin filtrar" (o sea: todo)
      * @param sorting    orden elegido en pantalla; puede ser null
      */
-    public List<Map<String, Object>> fetchRows(String path,
+    public List<Map<String, Object>> fetchRows(String baseUrl,
+                                               String path,
                                                String bearer,
                                                Map<String, Object> filters,
                                                Map<String, Object> sorting) {
@@ -104,7 +128,7 @@ public class QueryServiceClient {
 
         Map<String, Object> response;
         try {
-            response = client.post()
+            response = clientePara(baseUrl).post()
                     .uri(path)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer)
                     .contentType(MediaType.APPLICATION_JSON)

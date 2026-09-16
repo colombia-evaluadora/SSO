@@ -78,8 +78,9 @@ public class PdfRenderer {
 
     private static final Logger log = LoggerFactory.getLogger(PdfRenderer.class);
 
+    /** 12 horas con AM/PM y Locale fijo -- ver el javadoc de Fechas. */
     private static final DateTimeFormatter FECHA_HORA =
-            DateTimeFormatter.ofPattern("dd/MM/yyyy 'a las' HH:mm");
+            DateTimeFormatter.ofPattern("dd/MM/yyyy 'a las' hh:mm a", java.util.Locale.US);
 
     private final Map<String, JasperReport> compiladas = new ConcurrentHashMap<>();
 
@@ -116,7 +117,7 @@ public class PdfRenderer {
 
             Map<String, Object> params = new HashMap<>();
             params.put("TITULO", def.getTitle() == null ? clave : def.getTitle());
-            params.put("GENERADO", LocalDateTime.now().format(FECHA_HORA));
+            params.put("GENERADO", Fechas.ahora().format(FECHA_HORA));
             params.put("TOTAL", rows.size());
             params.put("USUARIO", meta == null || meta.usuario() == null ? "" : meta.usuario());
             params.put("FILTROS", meta == null ? "" : meta.filtrosLegibles());

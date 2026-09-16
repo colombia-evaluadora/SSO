@@ -701,8 +701,17 @@ BEGIN
            CASE WHEN     p_orden_asc AND v_key = 'grado'      THEN d.gr_nom   END ASC  NULLS LAST,
            CASE WHEN NOT p_orden_asc AND v_key = 'grado'      THEN d.gr_nom   END DESC NULLS LAST,
            d.pk
-         LIMIT GREATEST(p_limite, 1)
-        OFFSET GREATEST(p_offset, 0)
+         -- p_limite NULL = "sin LIMIT" (PostgreSQL trata LIMIT NULL como
+         -- ausencia de clausula). Es lo que usa el reporte sin paginar de
+         -- V406 (POST /planeador/unidades/export-all), igual que V130 hizo
+         -- con est/sed/funcionarios y V404 con fn_actividad_listar. OJO: no
+         -- vale GREATEST(NULL, 1), que en PostgreSQL ignora el NULL y
+         -- devuelve 1 -- exportaria UNA unidad. Para cualquier valor no nulo
+         -- el comportamiento es el de siempre; la fila de
+         -- GET /planeador/unidades hace COALESCE(:QUERY.SIZE, 20), asi que
+         -- por la pantalla nunca llega NULL.
+         LIMIT CASE WHEN p_limite IS NULL THEN NULL ELSE GREATEST(p_limite, 1) END
+        OFFSET GREATEST(COALESCE(p_offset, 0), 0)
     )
     SELECT u.PK_TUNIDAD,
            u.NOMBRE,
