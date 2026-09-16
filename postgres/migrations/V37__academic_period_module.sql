@@ -797,7 +797,7 @@ RETURNS TABLE (
     jornada_id BIGINT, jornada VARCHAR, jornada_name VARCHAR,
     reserva bool_sn, default_blocks_count BIGINT,
     schedule_start_time TIME, schedule_end_time TIME, descansos JSONB,
-    previous_period_id BIGINT, total_count BIGINT
+    previous_period_id BIGINT, previous_period_name VARCHAR, total_count BIGINT
 )
 LANGUAGE plpgsql STABLE AS $$
 DECLARE
@@ -834,12 +834,13 @@ BEGIN
                     WHERE d.FK_TPERIODO_ACADEMICO = pa.PK_TPERIODO_ACADEMICO
                       AND d.ACTIVE = TRUE
                ), '[]'::jsonb),
-               pa.FK_TPERIODO_ACADEMICO, count(*) OVER()::BIGINT
+               pa.FK_TPERIODO_ACADEMICO, pp.NOMBRE, count(*) OVER()::BIGINT
           FROM academico_test.TPERIODO_ACADEMICO pa
           JOIN academico_test.TSEDE s          ON s.PK_TSEDE = pa.FK_TSEDE
           JOIN academico_test.TANO_LECTIVO al  ON al.PK_ANO_LECTIVO = pa.FK_TANO_LECTIVO
           JOIN academico_test.TLISTA_VALOR est ON est.PK_LISTA_VALOR = pa.FK_TLV_ESTADO
           JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = pa.FK_TLV_JORNADA
+          LEFT JOIN academico_test.TPERIODO_ACADEMICO pp ON pp.PK_TPERIODO_ACADEMICO = pa.FK_TPERIODO_ACADEMICO
          WHERE pa.ACTIVE = TRUE
            AND ($1 IS NULL OR pa.FK_TSEDE = $1)
            AND ($2 IS NULL OR s.NOMBRE ILIKE '%%' || $2 || '%%')
