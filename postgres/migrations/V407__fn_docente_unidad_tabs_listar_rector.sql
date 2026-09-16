@@ -78,6 +78,7 @@ DECLARE
     v_fk_tfuncionario BIGINT;
     v_alcance_total   BOOLEAN;
     v_sedes_lectura   BIGINT[];
+    v_solo_propias    BOOLEAN;
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
@@ -95,6 +96,11 @@ BEGIN
     v_sedes_lectura := ARRAY(
         SELECT sl.sede_id
           FROM academico_test.fn_usuario_sedes_lectura(p_pk_usuario_solicitante) sl);
+
+    -- La rama territorial es de quien ADMINISTRA. Un docente puro puede tener
+    -- sedes de lectura por su categoria de rol y aun asi no administrar nada:
+    -- sin esto le salian pestanas de referentes que no dicta.
+    v_solo_propias := academico_test.fn_usuario_es_docente_puro(p_pk_usuario_solicitante);
 
     -- V407: 0 filas solo si NO es docente activo Y TAMPOCO tiene alcance
     -- territorial alguno -- antes (V281) bastaba con no tener funcionario.
@@ -147,6 +153,7 @@ BEGIN
                  ON s.PK_TSEDE = pa.FK_TSEDE
                 AND s.ACTIVE = TRUE
          WHERE gr.ACTIVE = TRUE
+           AND NOT v_solo_propias
            AND (v_alcance_total OR pa.FK_TSEDE = ANY(v_sedes_lectura))
     ), con_referente AS (
         SELECT a.*,
@@ -194,4 +201,4 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_docente_unidad_tabs_listar(BIGINT)
-    IS 'Las PESTANAS de unidad que le corresponden al usuario autenticado: una por referente curricular de los niveles educativos que dicta (docente) o que administra (rector/secretaria/coordinador/super-admin/territorial, V407). El rotulo NO es fijo ("Unidad tematica"): lo define TREFERENTE_CURRICULAR.INSTRUMENTO del nivel ("Proyecto pedagogico" en Preescolar...). Para un docente los niveles salen de TDOCENTE_ASIGNATURA (igual que V281/V242/V250); para un usuario con alcance territorial (fn_usuario_categoria_rol_nivel/fn_usuario_sedes_lectura, V29, mismo criterio que fn_unidad_listar V216) salen de TODOS los grados de las sedes que alcanza a leer, sin asignatura puntual. Ambas ramas se UNEN: un docente puro no ve cambio de comportamiento (fn_usuario_sedes_lectura le devuelve 0 sedes); un rector ve una pestana por cada enfoque pedagogico presente en su establecimiento aunque no dicte nada. Por cada par se deriva el referente con fn_unidad_referente_aplicable (V216, tolera asignatura NULL) y se agrupa por referente (o por nivel si no hay referente aplicable). 0 filas solo si el usuario no es docente activo Y tampoco tiene ningun alcance territorial. Gate VER sobre PLANEADOR. V407 (reemplaza V281).';
+    IS 'Las PESTANAS de unidad que le corresponden al usuario autenticado: una por referente curricular de los niveles educativos que dicta (docente) o que administra (rector/secretaria/coordinador/super-admin/territorial, V407). El rotulo NO es fijo ("Unidad tematica"): lo define TREFERENTE_CURRICULAR.INSTRUMENTO del nivel ("Proyecto pedagogico" en Preescolar...). Para un docente los niveles salen de TDOCENTE_ASIGNATURA (igual que V281/V242/V250); para un usuario con alcance territorial (fn_usuario_categoria_rol_nivel/fn_usuario_sedes_lectura, V29, mismo criterio que fn_unidad_listar V216) salen de TODOS los grados de las sedes que alcanza a leer, sin asignatura puntual. Ambas ramas se UNEN: la territorial esta explicitamente cerrada para el docente puro (fn_usuario_es_docente_puro, V29), que por su categoria de rol puede tener sedes de lectura sin administrar nada y antes recibia pestanas de referentes que no dicta; un rector ve una pestana por cada enfoque pedagogico presente en su establecimiento aunque no dicte nada. Por cada par se deriva el referente con fn_unidad_referente_aplicable (V216, tolera asignatura NULL) y se agrupa por referente (o por nivel si no hay referente aplicable). 0 filas solo si el usuario no es docente activo Y tampoco tiene ningun alcance territorial. Gate VER sobre PLANEADOR. V407 (reemplaza V281).';
