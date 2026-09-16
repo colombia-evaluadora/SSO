@@ -1,6 +1,5 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.ts";
 
 /* Tailwind's preflight resets margins/padding. We add only what's
    strictly needed beyond it — no global font, no extra reset, no
