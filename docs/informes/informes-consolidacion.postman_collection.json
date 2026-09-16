@@ -1,0 +1,595 @@
+{
+  "info": {
+    "_postman_id": "e1f2a3b4-c5d6-47e8-9f0a-informes-consolidacion",
+    "name": "Informes y consolidacion de calificaciones",
+    "description": {
+      "content": "# Informes y consolidación de calificaciones\n\nGuía del módulo para el front: qué endpoint sirve cada parte de la pantalla, qué\nse manda, qué vuelve y **por qué** funciona así.\n\nSon **11 endpoints**, todos `POST` y todos bajo `/api/eval-col/informes/...`.\n\n```\nPOST /informes/periodos               los checkboxes de periodo\nPOST /informes/grupo                  la tabla principal\nPOST /informes/guardar                consolidar el informe completo\nPOST /informes/planillas-pendientes   alerta ROJA\nPOST /informes/cambios-pendientes     alerta NARANJA\nPOST /informes/historial              el modal de historial\nPOST /informes/planilla               la planilla de una asignatura\nPOST /informes/planilla/guardar       consolidar una sola asignatura\nPOST /informes/observacion/generar    redactar con IA (no persiste)\nPOST /informes/observacion/guardar    persistir lo que el docente aceptó\nPOST /informes/observacion/eliminar   quitar el resumen guardado\n```\n\n---\n\n## Índice\n\n1. [Por qué todos son POST](#1-por-qué-todos-son-post)\n2. [Los dos ejes que gobiernan la respuesta](#2-los-dos-ejes-que-gobiernan-la-respuesta)\n3. [Las tres notas: guardada, proyectada y requerida](#3-las-tres-notas)\n4. [Permisos y errores](#4-permisos-y-errores)\n5. [Referencia de cada endpoint](#5-referencia-de-cada-endpoint)\n6. [Lo que todavía no existe](#6-lo-que-todavía-no-existe)\n\n---\n\n## 1. Por qué todos son POST\n\nCuatro reciben arreglos (`GRUPOS`, `PERIODOS`, `MATRICULAS`). **En este esquema\nno hay un solo endpoint `GET` que pase un arreglo** — se revisó: `param_types`\ncon `[]` aparece únicamente en `POST` y `PUT`, siempre por body.\n\nLos que no llevan arreglos van `POST` igual, por coherencia: los 11 endpoints de\nuna misma pantalla se consumen del mismo modo y no hay que recordar cuál es la\nexcepción. El `execution_mode` sigue siendo `SELECT`, así que los de lectura no\nescriben nada.\n\n### Los arreglos llevan NÚMEROS, no strings\n\n```json\n{ \"GRUPOS\": [11474] }      ← bien\n{ \"GRUPOS\": [\"11474\"] }    ← 400\n```\n\nEl binder valida **cada elemento** del arreglo. Con los escalares (`FK_TGRUPO`,\n`FK_TMATRICULA`…) sí tolera un string que parsee como número, pero **nunca la\ncadena vacía**: si un campo opcional no aplica, **quitá la clave** en vez de\nmandar `\"\"`.\n\n`NULL` o arreglo vacío en un filtro significa **\"todos\"**, no \"ninguno\".\n\n---\n\n## 2. Los dos ejes que gobiernan la respuesta\n\nEsta es la parte que más confunde, y es lo único que hay que entender bien.\n`/informes/grupo` devuelve **una fila por (estudiante, periodo)** y cada fila\ntrae dos columnas que dicen cómo leerla. **Son independientes.**\n\n### `formato` — ¿califica con números?\n\nSale del **criterio de evaluación** por `(asignatura, grado)`:\n\n| Formato configurado | `formato` |\n|---|---|\n| `CIEN` · `CINCO` · `DIEZ` | `\"numerico\"` |\n| `LITERAL` · `SIMBOLO` · `CARITA` | `\"cualitativo\"` |\n| **sin criterio configurado** | `\"cualitativo\"` |\n\nLas dimensiones de preescolar no tienen criterio → salen cualitativas. Esa es la\nvía normal.\n\n### `modo_periodo` — ¿qué significan los números de este periodo?\n\n```\n¿hay alguna nota (guardada o proyectada) en el periodo?\n├─ SÍ  →  \"real\"        las notas son lo que el estudiante SACÓ\n└─ NO  →  ¿el docente dejó observaciones?\n          ├─ SÍ  →  \"real\" + formato \"cualitativo\"    ← preescolar\n          └─ NO  →  ¿alguna asignatura es numérica?\n                    ├─ SÍ  →  \"requerido\"   las notas son lo que NECESITA\n                    └─ NO  →  \"real\" + \"cualitativo\"\n```\n\n### La tabla de decisión del front\n\n| `formato` | `modo_periodo` | Qué renderizar |\n|---|---|---|\n| `cualitativo` | `real` | **Preescolar.** La columna OBSERVACIÓN. Ignorar promedio, puesto, aprobadas |\n| `numerico` | `real` | La tabla normal: negro/gris, promedio, puesto, flechas |\n| `numerico` | `requerido` | Las notas que **faltan**. Sin puesto. `promedio_proyectado` = el mínimo |\n\n> **Nunca decidas mirando si `asignaturas` viene vacío.** En preescolar viene con\n> filas, todas en `null`. La decisión se toma con `formato`.\n\n### Por qué un solo endpoint y no dos\n\nPorque los grupos **mixtos** existen: dimensiones y asignaturas numéricas\nconviviendo. Con dos endpoints el front tendría que saber de antemano a cuál\nllamar, y para el mixto no habría respuesta correcta. Así pregunta una vez y\ncada fila se describe a sí misma.\n\n---\n\n## 3. Las tres notas\n\n| Nota | De dónde sale | Qué significa |\n|---|---|---|\n| **guardada** | `TASIGNATURA_NOTA.DEFINITIVA` | lo consolidado — el **negro** |\n| **proyectada** | recalculada desde las actividades | lo que daría hoy — el **gris** |\n| **requerida** | despeje contra el mínimo del año | lo que le **falta sacar** |\n\n### `estado_nota`, por asignatura\n\n| Valor | Significa |\n|---|---|\n| `sin_nota` | no hay ninguna de las dos |\n| `proyectada` | hay proyección y nunca se consolidó → **gris** |\n| `guardada` | consolidada y la proyección coincide → **negro** |\n| `cambio_propuesto` | consolidada y la proyección **difiere** → negro + gris |\n| `requerido` | la nota que hace falta (solo en `modo_periodo: \"requerido\"`) |\n\n`cambio_propuesto` con `nota_propuesta: null` significa **\"la propuesta es que ya\nno hay nota\"**: el docente dio de baja las actividades que la sustentaban.\n\n### Las flechas las dibuja el front\n\nSe mandan las **dos notas ya homologadas** a la escala del colegio y el front\ncompara. No se manda una columna `tendencia` a propósito: sería duplicar un dato\nderivado, y calcularla sobre porcentajes daría flecha cuando dos porcentajes\ndistintos redondean a la misma nota. **Comparando lo que se dibuja, la flecha\naparece solo si el número cambia a la vista.**\n\n### La nota requerida\n\nCuando un periodo no tiene ninguna calificación, en vez de devolver todo en\n`null` se calcula **cuánto necesita el estudiante ahí para no perder la\nasignatura en el año**:\n\n```\nS = Σ(nota × peso)  de los periodos CON nota\nW = Σ(peso)         de TODOS los periodos del año\nE = Σ(peso)         de los periodos VACÍOS\n\nrequerido = (mínimo × W − S) / E\n```\n\n- El mínimo sale de `TCRITERIO_PROMOCION.DESEMPENHO_MINIMO`.\n- La forma de combinar periodos sale de `TCRITERIO_EVALUACION.FK_TLV_CRITERIO_FINAL`\n  (`1` equitativo, `2` por el % de cada periodo).\n- **Cae a equitativo** si ese criterio no está configurado o si los porcentajes\n  no suman 100. Ponderar con pesos rotos da un número que *parece* preciso y no\n  lo es — y acá ese número le dice a un estudiante cuánto tiene que sacar.\n- Si faltan varios periodos, se responde cuánto sacar en **cada uno** asumiendo\n  lo mismo en todos.\n\nDos banderas acompañan cada valor:\n\n| Bandera | Significa |\n|---|---|\n| `ya_asegurado: true` | el valor salió ≤ 0 — **no necesita nada**, ya le alcanza |\n| `alcanzable: false` | supera el máximo — **ya perdió**, pase lo que pase |\n\nEl valor se devuelve **aunque supere 100**: necesitar 130 sobre 100 *es* la\ninformación, y recortarlo la escondería.\n\n---\n\n## 4. Permisos y errores\n\nTodos los endpoints validan contra el menú **`INFORMES`**:\n\n| Acción | Endpoints |\n|---|---|\n| `VER` | periodos, grupo, planilla, las dos alertas, historial, observacion/generar |\n| `EDITAR` | guardar, planilla/guardar, observacion/guardar |\n| `ELIMINAR` | observacion/eliminar |\n\nAdemás del permiso, cuenta el **alcance**: nivel 0 pasa, nivel 1 (territoriales)\nllega a todos los EE, nivel 2 a los suyos, nivel 3 (docentes) a su **sede y\njornada**.\n\n### Códigos\n\n| SQLSTATE | HTTP | Cuándo |\n|---|---|---|\n| `P0002` | 404 | grupo, asignatura, periodo o matrícula que no existe |\n| `22023` | 400 | periodo de otro año lectivo; arreglo de grupos vacío; observación vacía |\n| `42501` | 403 | sin permiso o fuera de alcance |\n| `23503` | 409 | el grado enviado no es el del grupo |\n\n**En las dos alertas, un grupo fuera de alcance hace fallar la llamada entera**\ncon 403 — no se devuelve el resto en silencio. La alerta afirma hablar de \"los\ngrupos seleccionados\", y una respuesta incompleta que se ve completa es peor que\nun error.\n\n---\n\n## 5. Referencia de cada endpoint\n\n### `POST /informes/periodos`\n\nLos checkboxes de periodo. **Todos los parámetros son opcionales.**\n\n```json\n{ \"ANIO\": 2026, \"FK_TESTABLECIMIENTO\": null, \"FK_TSEDE\": null }\n```\n\nSin nada devuelve el **año en curso** dentro del alcance del usuario, que es lo\nque hace la pantalla al abrirse.\n\n`ANIO` es un **número**, no una FK, porque `TANO_LECTIVO` es por establecimiento\ny \"el año lectivo 2026\" no existe como registro único: 2025 tiene 47 filas para\n47 EE. `FK_TESTABLECIMIENTO` y `FK_TSEDE` solo **acotan**, nunca amplían.\n\nDevuelve `termino` y `en_curso` ya calculados. `termino` es exactamente la\ncondición que usa la alerta roja, así que **no la reimplementes** con otro\ncriterio.\n\nLa sede y la jornada viajan porque dos periodos pueden llamarse igual en sedes\ndistintas del mismo EE.\n\n---\n\n### `POST /informes/grupo`\n\nLa tabla principal. **Una fila por (estudiante, periodo).**\n\n```json\n{ \"FK_TGRUPO\": 11474, \"PERIODOS\": [622, 627], \"SEARCH\": null }\n```\n\n`PERIODOS` vacío o ausente = todos los del periodo académico del grupo.\n`SEARCH` filtra por nombre y documento, **después** de calcular el puesto —\nbuscar a alguien no cambia su posición. **Sin paginación**: se muestra el grupo\nentero, y paginar rompería el puesto.\n\nColumnas clave:\n\n| Campo | |\n|---|---|\n| `modo_periodo`, `formato`, `es_cualitativo` | cómo leer la fila — [sección 2](#2-los-dos-ejes-que-gobiernan-la-respuesta) |\n| `consolidado` | si el periodo ya se congeló |\n| `promedio_guardado` / `promedio_proyectado` | negro / gris, a nivel estudiante |\n| `puesto` | `RANK()` dentro del periodo. Empatados comparten puesto. `null` si no tiene promedio |\n| `asignaturas` | **JSONB con las columnas MAT/LEN/CN…** |\n| `observacion`, `observacion_estado`, `observacion_desactualizada` | el lado cualitativo |\n| `tiene_cambios_propuestos` | para marcar la fila |\n\n**`asignaturas` viene embebido** para que el front no necesite `1 + N` peticiones\npara pintar una tabla:\n\n```json\n[{ \"asignatura\": 4190, \"nombre\": \"MATEMATICAS\", \"abreviacion\": \"MAT\",\n   \"area\": \"MATEMATICAS\", \"orden\": 1,\n   \"nota\": 2.5, \"nota_propuesta\": 2.3,\n   \"estado\": \"cambio_propuesto\", \"es_numerico\": true,\n   \"valoracion\": \"alto\", \"simbolo\": null, \"aprobada\": true }]\n```\n\nEn `modo_periodo: \"requerido\"` las entradas cambian de forma:\n\n```json\n[{ \"asignatura\": 4190, \"nombre\": \"MATEMATICAS\",\n   \"nota\": 34.6, \"porcentaje\": 34.58,\n   \"estado\": \"requerido\", \"ya_asegurado\": false, \"alcanzable\": true }]\n```\n\nY en modo requerido: `puesto` viene `null`, `promedio_proyectado` trae el\n**mínimo del grado**, y `consolidado`/`promedio_guardado`/`aprobadas`/`reprobadas`\nvienen vacíos o en cero.\n\n---\n\n### `POST /informes/guardar`\n\nCongela el informe **completo** — todas las asignaturas del estudiante.\n\n```json\n{ \"FK_TGRUPO\": 11474, \"FK_TPERIODO_EVALUACION\": 622, \"MATRICULAS\": null }\n```\n\n`MATRICULAS` vacío o ausente = todo el grupo. **Un solo periodo por llamada**, a\ndiferencia de los de lectura: guardar es un acto puntual, y aceptar un arreglo\ninvitaría a consolidar varios de un clic sin ver qué se congela.\n\nDevuelve **un informe por estudiante**, no un contador:\n\n| `resultado` en `detalle` | |\n|---|---|\n| `guardada` | primera vez |\n| `actualizada` | había otra — trae `anterior` |\n| `sin_cambio` | ya estaba igual; **no se toca la fila**, para no borrar el `MODIFIED_AT` |\n| `sin_proyeccion` | no hay actividad evaluativa calificada |\n\n**Volver a llamarlo es seguro**: lo que no cambió sale `sin_cambio` y no se\nescribe.\n\n> **Preescolar no usa este endpoint.** Allí todo sale `sin_proyeccion` porque las\n> observaciones se guardan con `CALIFICABLE='N'` y no promedian. Lo que se\n> consolida es el resumen de la IA.\n\n---\n\n### `POST /informes/planillas-pendientes` — alerta **roja**\n\nPlanillas sin **nada** registrado.\n\n```json\n{ \"GRUPOS\": [11474, 11473], \"PERIODOS\": [622] }\n```\n\n`GRUPOS` es **obligatorio** y admite varios. Una fila por\n`(grupo, asignatura, periodo)`.\n\n**Solo considera periodos que YA TERMINARON** (`FECHA_FIN < hoy`). Un periodo en\ncurso no puede tener planillas pendientes: el docente está dentro de su plazo, y\nmarcarlo llenaría la alerta de rojo el primer día de cada periodo.\n\n**Cuenta como calificado cualquier nota *u observación***, para que los docentes\nde preescolar —que dejan comentarios, no números— no salgan como morosos.\n\n`actividades: 0` significa que el docente **ni siquiera armó** las actividades;\nmayor que 0, que las armó y no las calificó.\n\n---\n\n### `POST /informes/cambios-pendientes` — alerta **naranja**\n\nDocentes que cambiaron notas **después** de consolidar. Mismo body que la roja.\n\nUna fila por `(grupo, asignatura, periodo)` — **el periodo va en el grano** porque\nel botón \"Ir\" lleva a la planilla y la planilla carga las actividades *de ese\nperiodo*.\n\n- `SUM(estudiantes_afectados)` → el contador del botón\n- `COUNT(DISTINCT fk_tgrupo)` → el encabezado del panel\n- `fk_tfuncionario` + `fk_tgrupo` + `fk_tasignatura` → la ruta del botón \"Ir\"\n\nEl docente sale de `TDOCENTE_ASIGNATURA` (el asignado a esa asignatura en ese\ngrupo). `docentes_asignados > 1` avisa que la planilla se comparte — hay 397\ncombinaciones con más de un docente.\n\n**Solo cuentan las asignaturas ya consolidadas.** Si el periodo nunca se guardó\nno hay nada que \"aprobar\": la nota simplemente aún no se congeló.\n\n---\n\n### `POST /informes/historial`\n\nEl modal. **Todos los parámetros opcionales**; sin nada devuelve el año en curso.\n\n```json\n{ \"GRUPOS\": null, \"PERIODOS\": null, \"ANIO\": null, \"LIMITE\": 100 }\n```\n\nUna fila por **guardado**, de más reciente a más antiguo. `fecha` viene aparte de\n`momento` para que el front agrupe por día (\"Hoy\", \"Ayer\", \"07/08/2026\") sin\nrecalcularlo.\n\n**El conteo es por estudiante**: un estudiante guardado es un cambio. Guardar un\ncurso de 30 son 30 cambios, no 360 — contar cada calificación daría números\ninutilizables.\n\n`fk_tasignatura: null` = se guardó el **informe completo**; con valor = una sola\nasignatura desde la planilla.\n\n`detalle` trae la lista que se despliega:\n\n```json\n[{ \"matricula\": 223117, \"estudiante\": \"JORGITO SANCHEZ\",\n   \"documento\": \"131312131\", \"promedio\": 77.71, \"asignaturas\": 2 }]\n```\n\n> El `promedio` es **el del momento del guardado** y no se recalcula. Si después\n> alguien vuelve a consolidar, la entrada vieja sigue mostrando lo que mostró\n> entonces. Esa es la diferencia entre un historial y un listado.\n\n**Solo aparecen los días con movimiento**: volver a pulsar guardar sin cambios no\ndeja entrada.\n\n---\n\n### `POST /informes/planilla`\n\nLa planilla a la que llevan las dos alertas.\n\n```json\n{ \"FK_TGRUPO\": 11474, \"FK_TASIGNATURA\": 4190,\n  \"FK_TPERIODO_EVALUACION\": 622, \"SEARCH\": null }\n```\n\nUna fila por estudiante con su definitiva del periodo —guardada y proyectada,\nambas también homologadas— y las actividades embebidas:\n\n```json\n[{ \"orden\": 1, \"pkTactividad\": 23, \"titulo\": \"Taller de fracciones\",\n   \"pkTactividadEstudiante\": 4, \"estado\": \"CALIFICADA\",\n   \"porcentaje\": 75, \"nota\": 3.0, \"valoracion\": \"basico\",\n   \"observacion\": null, \"esEvaluativa\": true, \"ponderacion\": 35,\n   \"notaMaxima\": 100, \"instrumento\": \"RUBRICA\",\n   \"fechaInicio\": \"2026-09-10\", \"fechaCierre\": \"2026-09-15\" }]\n```\n\n`estado` por celda: `CALIFICADA` · `PENDIENTE` · `NO_ASIGNADA` · `NO_CALIFICABLE`.\n`pkTactividadEstudiante` es la llave que el popover necesita para precargar y\nguardar; viene `null` cuando la celda no aplica.\n\n**Todas las filas traen las mismas columnas en el mismo orden**, incluidas las\n`NO_ASIGNADA`, así que el header se arma con las celdas de cualquier fila y no\npuede desalinearse del cuerpo.\n\n#### El buscador: un texto, dos dimensiones\n\n```\nsin buscar        1 fila,  8 columnas\n\"JORG\"  (alumno)  1 fila,  8 columnas   ← filtra filas, conserva columnas\n\"Taller\" (activ.) 1 fila,  1 columna    ← conserva filas, filtra columnas\n\"zzz\"   (nada)    0 filas, 0 columnas\n```\n\nLa dimensión donde **nada coincidió se deja intacta**. Filtrar ambas siempre\nvaciaría la tabla al escribir un nombre, porque ninguna actividad se llama como\nun alumno.\n\n> **No es** `/planeador/planilla/*`, que sirve a la planilla del docente y no se\n> toca. Esta acota por periodo de evaluación, usa la misma proyección que\n> detecta los cambios, y toma su línea base de `TASIGNATURA_NOTA`.\n\n---\n\n### `POST /informes/planilla/guardar`\n\nCongela **una sola asignatura** — el botón \"Aprobar y actualizar consolidado\".\n\n```json\n{ \"FK_TGRUPO\": 11474, \"FK_TASIGNATURA\": 4190,\n  \"FK_TPERIODO_EVALUACION\": 622, \"MATRICULAS\": [223117] }\n```\n\nDevuelve por estudiante el `resultado` (`guardada` · `actualizada` con\n`nota_anterior` · `sin_cambio` · `sin_proyeccion`) **y además** el\n`promedio_periodo`, `aprobadas` y `reprobadas` **ya recalculados**, para\nrefrescar la cabecera sin volver a pedir el listado.\n\n**Convive con `/informes/guardar` sin pisarse**: `TASIGNATURA_NOTA` es por\n`(matrícula, periodo, asignatura)`, y ambos terminan en el mismo recálculo de\nmétricas, así que el promedio del periodo queda coherente sin importar el orden.\nLos dos son idempotentes.\n\nEn `sin_proyeccion` **lo ya guardado no se borra**: quitar un consolidado por una\nausencia no es decisión de un botón de guardar.\n\n---\n\n### Los tres de la observación (preescolar)\n\n**Son tres actos distintos**, y esa separación es lo que sostiene el modelo de\nestados.\n\n#### `POST /informes/observacion/generar` — **no escribe**\n\n```json\n{ \"FK_TMATRICULA\": 222759, \"FK_TPERIODO_EVALUACION\": 622 }\n```\n\nDevuelve `observacion_ia` (el texto) y `observaciones_origen` (cuántas resumió).\nSe puede llamar las veces que haga falta sin dejar rastro.\n\n> ⚠️ **La IA está simulada.** Hoy concatena las observaciones que el docente dejó\n> por actividad, en orden cronológico y prefijadas con el título. **El contrato\n> ya es el definitivo**: cuando llegue el modelo, ni la ruta ni el body cambian.\n\n#### `POST /informes/observacion/guardar` — acá nace la fila\n\n```json\n{ \"FK_TMATRICULA\": 222759, \"FK_TPERIODO_EVALUACION\": 622,\n  \"OBSERVACION\": \"lo que quedó en pantalla\",\n  \"OBSERVACION_IA\": \"el borrador tal como lo recibiste\",\n  \"OBSERVACIONES_ORIGEN\": 3 }\n```\n\nEl estado **se deduce comparando** los dos textos: iguales → `APROBADA`,\ndistintos → `MODIFICADA`. No se manda por parámetro para que no pueda\ncontradecir al texto.\n\n> 🔴 **El front debe reenviar `OBSERVACION_IA` tal como la recibió.** Si no la\n> manda, la función asume que se guardó tal cual y marca `APROBADA` — no puede\n> distinguir \"guardé sin editar\" de \"edité y se me olvidó mandar el original\".\n\n`OBSERVACIONES_ORIGEN` también se reenvía: comparándolo contra cuántas\nobservaciones hay hoy, el listado calcula `observacion_desactualizada` — el\nequivalente cualitativo de `cambio_propuesto`.\n\n**Guardar reemplaza**: el índice único es total sobre `(matrícula, periodo)`, así\nque regenerar y volver a guardar pisa la versión anterior.\n\n#### `POST /informes/observacion/eliminar`\n\n```json\n{ \"FK_TMATRICULA\": 222759, \"FK_TPERIODO_EVALUACION\": 622 }\n```\n\n**Borrado físico**, no baja lógica: el índice único es total, así que una fila\ninactiva seguiría ocupando el lugar e impediría guardar una nueva. Y no hay nada\nque conservar — el resumen se regenera desde las observaciones, que son el dato\noriginal.\n\nDespués de eliminar, `/informes/grupo` vuelve a traer `observacion` y\n`observacion_estado` en `null`, igual que antes de generar por primera vez.\nLlamarlo dos veces responde **404**.\n\n---\n\n## 6. Lo que todavía no existe\n\nPara que nadie lo busque:\n\n| Falta | Nota |\n|---|---|\n| **Rechazar un cambio propuesto** | `cambio_propuesto` se *deriva* comparando, así que no hay dónde anotar \"rechazado\". Hoy la única forma de apagar la alerta es aceptar el valor. Requiere **estado nuevo**, no solo un endpoint |\n| **Generar boletines (PDF)** | no hay endpoint ni clave de reporte |\n| **Exportar la grilla** | ídem |\n| **Botón de IA masivo** | `generar` recibe **una** matrícula; el masivo son N llamadas |\n| **Tooltip \"nota anterior / motivo\"** | `planilla/guardar` devuelve `nota_anterior`, pero la celda del listado no expone el valor previo ni el motivo |\n| **El periodo \"4 / Final\"** | no hay definitiva anual: `TASIGNATURA_DEFINITIVA` y `TAREA_DEFINITIVA` siguen sin escritores |\n\nY de `TCRITERIO_PROMOCION` **solo se usa `DESEMPENHO_MINIMO`**. `NODO_CURRICULAR`,\n`APROBACION_PROMEDIO`, `MINIMO_INASISTENCIAS`, `CANTIDAD_NIVELAR`,\n`MAX_ASIG_PROMEDIO` y `DESEMPENHO_MINIMO_GENERAL` no los lee nadie: toda la\nlógica de nivelación, aprobación por promedio y reprobación por inasistencia\nestá sin implementar. Eso es alcance pendiente, no un defecto — pero es lo que\nsepara \"consolidar periodos\" de \"promover estudiantes\".\n",
+      "type": "text/markdown"
+    },
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://172.233.184.248:8080"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "email",
+      "value": ""
+    },
+    {
+      "key": "password",
+      "value": ""
+    },
+    {
+      "key": "fkTgrupo",
+      "value": "11474"
+    },
+    {
+      "key": "fkTgrupoPreescolar",
+      "value": "11473"
+    },
+    {
+      "key": "fkTasignatura",
+      "value": "4190"
+    },
+    {
+      "key": "fkTperiodoEvaluacion",
+      "value": "622"
+    },
+    {
+      "key": "fkTmatricula",
+      "value": "223117"
+    },
+    {
+      "key": "fkTmatriculaPreescolar",
+      "value": "222759"
+    },
+    {
+      "key": "anio",
+      "value": "2026"
+    },
+    {
+      "key": "observacionIa",
+      "value": ""
+    },
+    {
+      "key": "observacionesOrigen",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "0 - Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "description": {
+          "content": "Guarda el `token` de la respuesta.\n\nEl usuario necesita permiso en el menu **`INFORMES`**: `VER` para las\nlecturas, `EDITAR` para los dos guardados y para guardar la observacion,\n`ELIMINAR` para borrarla. Sin eso las funciones levantan `42501` (403)\nantes de mirar nada mas.\n\nY el permiso del menu es solo la mitad: el **alcance** decide sobre que\nestablecimientos, sedes y jornadas puede operar. Nivel 0 pasa, nivel 1\n(territoriales) llega a todos los EE, nivel 2 a los suyos, y nivel 3\n(docentes, coordinadores de sede) a su **sede y jornada**.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (d.token) { pm.environment.set(\"token\", d.token); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 - Periodos del anio (checkboxes)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/periodos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "periodos"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"ANIO\": {{anio}}\n}"
+        },
+        "description": {
+          "content": "Puebla los checkboxes \"1. Primer periodo / 2. Segundo periodo / ...\".\n\n**Todos los parametros son opcionales.** Mandando `{}` devuelve el ano en\ncurso dentro del alcance del usuario -- que es lo que hace la pantalla al\nabrirse.\n\n`ANIO` es un **numero** (2026), no una FK. `TANO_LECTIVO` es por\nestablecimiento y \"el ano lectivo 2026\" no existe como registro unico:\n2025 tiene 47 filas para 47 EE distintos. Pedir un PK obligaria al front a\nresolver primero cual le toca, que es justo lo que este endpoint le ahorra.\n\n`FK_TESTABLECIMIENTO` y `FK_TSEDE` solo **acotan**, nunca amplian: pedir uno\nque el usuario no alcanza devuelve vacio.\n\n### Dos campos que conviene usar\n\n- **`termino`** -- es exactamente la condicion que usa la alerta roja para\n  decidir si una planilla puede considerarse pendiente. No la\n  reimplementes con otro criterio.\n- **`calificable`** -- resuelto del catalogo (`VALOR = 1`), para no tener\n  que conocer el codigo.\n\nLa sede y la jornada viajan porque dos periodos pueden llamarse igual\n(\"Primer periodo\") en sedes distintas del mismo EE.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "2 - Listado del grupo (la tabla principal)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/grupo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "grupo"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TGRUPO\": {{fkTgrupo}},\n  \"PERIODOS\": [{{fkTperiodoEvaluacion}}],\n  \"SEARCH\": null\n}"
+        },
+        "description": {
+          "content": "El cuerpo de la pantalla. **Una fila por (estudiante, periodo)**: al elegir\ndos periodos, cada estudiante ocupa dos sub-filas.\n\n`PERIODOS` vacio o ausente = todos los del periodo academico del grupo.\n**Sin paginacion** -- se muestra el grupo entero, y paginar romperia el\npuesto, que se calcula sobre el conjunto.\n\n## Las dos columnas que deciden como renderizar\n\n| `formato` | `modo_periodo` | Que pintar |\n|---|---|---|\n| `cualitativo` | `real` | **Preescolar**: la columna OBSERVACION. Ignorar promedio/puesto/aprobadas |\n| `numerico` | `real` | La tabla normal: negro/gris, promedio, puesto, flechas |\n| `numerico` | `requerido` | Las notas que **faltan**. Sin puesto. `promedio_proyectado` = el minimo |\n\n> **Nunca decidas mirando si `asignaturas` viene vacio.** En preescolar viene\n> con filas, todas en `null`. La decision se toma con `formato`.\n\n## `asignaturas` viene EMBEBIDO\n\nSon las columnas MAT / LEN / CN ... de la tabla. Van dentro de cada fila para\nque el front no necesite `1 + N` peticiones para pintar una sola tabla.\n\n```json\n{ \"asignatura\": 4190, \"nombre\": \"MATEMATICAS\", \"abreviacion\": \"MAT\",\n  \"nota\": 2.5, \"nota_propuesta\": 2.3, \"estado\": \"cambio_propuesto\",\n  \"es_numerico\": true, \"valoracion\": \"alto\", \"aprobada\": true }\n```\n\nLas **flechas las dibuja el front** comparando `nota` con `nota_propuesta`,\nlas dos ya homologadas a la escala del colegio. No se manda una columna\n`tendencia`: seria duplicar un dato derivado, y calcularla sobre porcentajes\ndaria flecha cuando dos porcentajes distintos redondean a la misma nota.\n\n`nota_propuesta: null` con estado `cambio_propuesto` significa **\"la\npropuesta es que ya no hay nota\"**: el docente dio de baja las actividades.\n\n## Modo `requerido`\n\nCuando el periodo no tiene NINGUNA calificacion, las entradas cambian de\nforma y traen lo que el estudiante **necesita** sacar para no perder la\nasignatura en el ano:\n\n```json\n{ \"asignatura\": 4190, \"nota\": 34.6, \"porcentaje\": 34.58,\n  \"estado\": \"requerido\", \"ya_asegurado\": false, \"alcanzable\": true }\n```\n\n- `ya_asegurado: true` -- el valor salio <= 0: **no necesita nada**.\n- `alcanzable: false` -- supera el maximo: **ya perdio**, pase lo que pase.\n  El valor se devuelve igual, porque necesitar 130 sobre 100 *es* la\n  informacion.\n\n`SEARCH` filtra por nombre y documento **despues** de calcular el puesto, para\nque buscar a alguien no cambie su posicion.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "3 - Listado de un grupo de PREESCOLAR",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/grupo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "grupo"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TGRUPO\": {{fkTgrupoPreescolar}},\n  \"PERIODOS\": null,\n  \"SEARCH\": null\n}"
+        },
+        "description": {
+          "content": "El mismo endpoint, otra lectura. Devuelve `formato: \"cualitativo\"` y\n`modo_periodo: \"real\"`.\n\nTodo lo numerico viene `null` o en cero -- y **eso es correcto, no un hueco**:\nahi no hay nota que promediar, no hay puesto que calcular y no se aprueba ni\nse reprueba por nota. Las asignaturas caen en `sin_definir`.\n\nLo que vale son tres columnas:\n\n| Columna | |\n|---|---|\n| `observacion` | el texto consolidado |\n| `observacion_estado` | `APROBADA` / `MODIFICADA` / `null` si aun no se guardo |\n| `observacion_desactualizada` | el docente dejo comentarios nuevos despues |\n\nEl resumen es **por estudiante**: se genera de a uno, y la lista muestra sin\nambiguedad quien ya lo tiene y quien no.\n\n### Por que un solo endpoint y no dos\n\nPorque los grupos **mixtos** existen -- dimensiones y asignaturas numericas\nconviviendo. Con dos endpoints el front tendria que saber de antemano a cual\nllamar, y para el mixto no habria respuesta correcta.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "4 - Guardar el informe COMPLETO",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/guardar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "guardar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TGRUPO\": {{fkTgrupo}},\n  \"FK_TPERIODO_EVALUACION\": {{fkTperiodoEvaluacion}},\n  \"MATRICULAS\": null\n}"
+        },
+        "description": {
+          "content": "El paso de **gris a negro**: congela la nota proyectada de cada asignatura.\n\n`MATRICULAS` vacio o ausente = todo el grupo; con lista, solo esos.\n\n**Un solo periodo por llamada**, a diferencia de los endpoints de lectura:\nguardar es un acto puntual sobre un periodo concreto, y aceptar un arreglo\ninvitaria a consolidar varios de un clic sin que el usuario vea que va a\ncongelar.\n\nDevuelve **un informe por estudiante**, no un contador -- guardar 30 y\nresponder \"27\" no dice cuales fueron los otros 3:\n\n| `resultado` en `detalle` | |\n|---|---|\n| `guardada` | primera vez |\n| `actualizada` | habia otra; trae `anterior` |\n| `sin_cambio` | ya estaba igual. **No se toca la fila**, para no borrar el `MODIFIED_AT` que dice cuando se consolido |\n| `sin_proyeccion` | no hay actividad evaluativa calificada |\n\n**Volver a llamarlo es seguro**: lo que no cambio sale `sin_cambio` y no se\nescribe.\n\nDevuelve ademas `promedio`, `aprobadas` y `reprobadas` ya recalculados.\n\n> **Preescolar no usa este endpoint.** Alli todo sale `sin_proyeccion` porque\n> las observaciones se guardan con `CALIFICABLE=N` y no promedian. Lo que se\n> consolida es el resumen de la IA.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "5 - Alerta ROJA: planillas sin calificar",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/planillas-pendientes",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "planillas-pendientes"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"GRUPOS\": [{{fkTgrupo}}, {{fkTgrupoPreescolar}}],\n  \"PERIODOS\": null\n}"
+        },
+        "description": {
+          "content": "\"Docentes con planillas pendientes de calificar\". Una fila por\n**(grupo, asignatura, periodo)** sin NADA registrado.\n\n`GRUPOS` es **obligatorio** y admite varios: la pantalla trabaja con pestanas\ny la alerta habla de todos los seleccionados.\n\n> Un grupo fuera del alcance del usuario hace **fallar la llamada entera**\n> con 403, no devuelve el resto en silencio. La alerta afirma hablar de \"los\n> grupos seleccionados\", y una respuesta incompleta que se ve completa es\n> peor que un error.\n\n## Solo periodos que YA TERMINARON\n\nSe exige `FECHA_FIN < hoy`. Un periodo en curso no puede tener planillas\npendientes: el docente esta dentro de su plazo, y marcarlo llenaria la alerta\nde rojo el primer dia de cada periodo hasta volverla ruido.\n\nEs la diferencia de fondo con la alerta naranja, que no mira fechas: aquella\nse dispara por un **hecho** y vale ocurra cuando ocurra; esta por una\n**omision**, y una omision solo existe vencido el plazo.\n\n## Cuenta como calificado cualquier nota U OBSERVACION\n\nEso es lo que hace que sirva en preescolar: alli el docente no pone numeros,\ndeja comentarios por actividad. Mirar solo la calificacion habria reportado a\ntodos esos docentes como morosos.\n\n`actividades: 0` significa que el docente **ni siquiera armo** las\nactividades; mayor que 0, que las armo y no las califico.\n\n`docentes_asignados > 1` avisa que la planilla se comparte -- hay 397\ncombinaciones (grupo, asignatura) con mas de un docente activo.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "6 - Alerta NARANJA: cambios sin aprobar",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/cambios-pendientes",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "cambios-pendientes"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"GRUPOS\": [{{fkTgrupo}}],\n  \"PERIODOS\": null\n}"
+        },
+        "description": {
+          "content": "\"Docentes con cambios pendientes de aprobacion\": notas que se movieron\n**despues** de que el periodo se consolidara.\n\nUna fila por **(grupo, asignatura, periodo)**. El periodo va en el grano\nporque el boton \"Ir\" lleva a la planilla y **la planilla carga las\nactividades DE ESE periodo**, no todas.\n\n## Como armar el panel\n\n| Dato | De donde |\n|---|---|\n| contador del boton | `SUM(estudiantes_afectados)` |\n| \"Grupos con cambios (3)\" | `COUNT(DISTINCT fk_tgrupo)` |\n| ruta del boton \"Ir\" | `fk_tfuncionario` + `fk_tgrupo` + `fk_tasignatura` + `fk_tperiodo_evaluacion` |\n\n## Solo cuentan las asignaturas YA CONSOLIDADAS\n\nSi el periodo nunca se guardo no hay nada que \"aprobar\": la nota simplemente\naun no se congelo, y eso es el flujo normal, no una alerta.\n\nEl cambio se detecta **por comparacion**, no por registro: se recalcula la\nproyeccion y se compara contra lo guardado. Por eso no existe una tabla de\n\"notas pendientes\" -- seria un tercer lugar donde la misma verdad podria\ndesincronizarse.\n\nEl docente sale de `TDOCENTE_ASIGNATURA` (el asignado a esa asignatura en ese\ngrupo), no de quien digito: en la practica no califica una asignatura alguien\ndistinto de su docente, y la alerta no existe para senalar culpables sino\npara **llevar a la planilla**, que es de la asignatura.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "7 - Historial de guardados (el modal)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/historial",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "historial"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"GRUPOS\": null,\n  \"PERIODOS\": null,\n  \"ANIO\": null,\n  \"LIMITE\": 100\n}"
+        },
+        "description": {
+          "content": "**Todos los parametros son opcionales.** Mandando `{}` devuelve el ano\nlectivo en curso dentro del alcance del usuario, que es lo que hace la\npantalla al abrirse.\n\nSe dejan opcionales -- a diferencia de las dos alertas, donde el grupo es\nobligatorio -- porque aquellas hablan siempre de \"los grupos seleccionados\"\nmientras el historial es una **bitacora** y tiene sentido verla completa.\n\nUna fila por **guardado**, de mas reciente a mas antiguo. `fecha` viene aparte\nde `momento` para que el front agrupe por dia (\"Hoy\", \"Ayer\", \"07/08/2026\")\nsin recalcularlo.\n\n## El conteo es por ESTUDIANTE, no por nota\n\nUn estudiante guardado es un cambio. Guardar un curso de 30 son **30**\ncambios, no 360: contar cada calificacion daria numeros que nadie puede\nverificar ni usar.\n\n`fk_tasignatura: null` = se guardo el **informe completo**; con valor = una\nsola asignatura desde la planilla.\n\n## El detalle que se despliega\n\n```json\n[{ \"matricula\": 223117, \"estudiante\": \"JORGITO SANCHEZ\",\n   \"documento\": \"131312131\", \"promedio\": 77.71, \"asignaturas\": 2 }]\n```\n\n> El `promedio` es **el del momento del guardado** y no se recalcula al\n> consultar. Si despues alguien vuelve a consolidar, la entrada vieja sigue\n> mostrando lo que mostro entonces. Esa es la diferencia entre un historial y\n> un listado.\n\n**Solo aparecen los dias con movimiento**: volver a pulsar guardar sin cambios\nno deja entrada, porque solo se registran guardados que escribieron algo.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "Observacion por IA (preescolar)",
+      "description": {
+        "content": "Los tres actos del resumen de seguimiento. **Son tres endpoints y no uno**\na proposito, y esa separacion es lo que sostiene el modelo de estados.\n\n`generar` **no escribe nada**. Por eso la tabla solo tiene dos estados,\n`APROBADA` y `MODIFICADA`: no existe el momento \"la IA ya escribio pero\nnadie reviso\", y toda fila guardada es, por definicion, un texto que un\nhumano acepto -- lo que la hace publicable en un boletin sin mas preguntas.",
+        "type": "text/markdown"
+      },
+      "item": [
+        {
+          "name": "1 - Generar con IA (NO persiste)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/informes/observacion/generar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "informes",
+                "observacion",
+                "generar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatriculaPreescolar}},\n  \"FK_TPERIODO_EVALUACION\": {{fkTperiodoEvaluacion}}\n}"
+            },
+            "description": {
+              "content": "Redacta el resumen y **lo devuelve sin guardarlo**. Se puede llamar las veces\nque haga falta sin dejar rastro, y si el usuario cierra la pantalla no queda\nnada a medias.\n\nDevuelve dos campos, y **los dos hay que conservarlos** para la siguiente\nllamada:\n\n| Campo | Para que |\n|---|---|\n| `observacion_ia` | el texto. Reenviarlo permite deducir si el docente lo edito |\n| `observaciones_origen` | cuantas observaciones resumio. Permite detectar despues que el resumen quedo viejo |\n\n> ## La IA esta SIMULADA\n>\n> Hoy **concatena** las observaciones que el docente dejo por actividad, en\n> orden cronologico y prefijadas con el titulo de su actividad. Toma **todas**\n> las del estudiante en el periodo, sin filtrar por asignatura, porque en\n> preescolar la evaluacion no es por dimension.\n>\n> **El contrato ya es el definitivo**: cuando llegue el modelo real, ni la\n> ruta ni el body ni la respuesta cambian.\n\nErrores: **404** si no existe la matricula o el periodo; **400** si el periodo\nno es del mismo periodo academico de la matricula, o si **no hay ninguna\nobservacion que resumir**.",
+              "type": "text/markdown"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = pm.response.json();",
+                  "const r = Array.isArray(d) ? d[0] : (d.data ? d.data[0] : d);",
+                  "if (r && r.observacion_ia) {",
+                  "  pm.environment.set(\"observacionIa\", r.observacion_ia);",
+                  "  pm.environment.set(\"observacionesOrigen\", r.observaciones_origen);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2a - Guardar TAL CUAL (queda APROBADA)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/informes/observacion/guardar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "informes",
+                "observacion",
+                "guardar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatriculaPreescolar}},\n  \"FK_TPERIODO_EVALUACION\": {{fkTperiodoEvaluacion}},\n  \"OBSERVACION\": \"{{observacionIa}}\",\n  \"OBSERVACION_IA\": \"{{observacionIa}}\",\n  \"OBSERVACIONES_ORIGEN\": {{observacionesOrigen}}\n}"
+            },
+            "description": {
+              "content": "El usuario dio por bueno el texto de la IA sin tocarlo. Como `OBSERVACION` y\n`OBSERVACION_IA` son iguales, el estado queda **`APROBADA`**.\n\n**Aca nace la fila**: hasta este momento la IA solo habia devuelto un\nborrador.",
+              "type": "text/markdown"
+            }
+          }
+        },
+        {
+          "name": "2b - Guardar EDITADO (queda MODIFICADA)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/informes/observacion/guardar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "informes",
+                "observacion",
+                "guardar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatriculaPreescolar}},\n  \"FK_TPERIODO_EVALUACION\": {{fkTperiodoEvaluacion}},\n  \"OBSERVACION\": \"Texto corregido por la docente.\",\n  \"OBSERVACION_IA\": \"{{observacionIa}}\",\n  \"OBSERVACIONES_ORIGEN\": {{observacionesOrigen}}\n}"
+            },
+            "description": {
+              "content": "El docente cambio el texto. Como difiere del borrador, el estado queda\n**`MODIFICADA`**.\n\n## El estado se DEDUCE, no se manda\n\nSe comparan los dos textos. No hay parametro de estado para que **no pueda\ncontradecir al texto**: si el front mandara `\"APROBADA\"` junto a un texto\neditado, la fila quedaria mintiendo.\n\n> ## El front DEBE reenviar `OBSERVACION_IA`\n>\nSi no la manda, la funcion asume que se guardo tal cual y marca\n**`APROBADA`** -- correcto para un guardar sin edicion, pero **no distingue**\nel caso de \"edite y el front se olvido de mandar el original\". Hay que\nconservar el borrador entre las dos llamadas.\n\n## Guardar REEMPLAZA\n\nEl indice unico es total sobre `(matricula, periodo)`, asi que regenerar y\nvolver a guardar pisa la version anterior. La unica verdad es lo que el\ndocente acepto por ultima vez.\n\n`OBSERVACION_IA` de la fila **no se toca nunca despues**, para poder mostrar\n\"esto propuso la IA / esto dejo el docente\" sin llevar historial.",
+              "type": "text/markdown"
+            }
+          }
+        },
+        {
+          "name": "3 - Eliminar el resumen guardado",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/informes/observacion/eliminar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "informes",
+                "observacion",
+                "eliminar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatriculaPreescolar}},\n  \"FK_TPERIODO_EVALUACION\": {{fkTperiodoEvaluacion}}\n}"
+            },
+            "description": {
+              "content": "Quita el resumen. Devuelve el PK de la fila eliminada.\n\n## El borrado es FISICO, no baja logica\n\nDos razones:\n\n1. el indice unico es **total** sobre `(matricula, periodo)`, asi que una fila\n   inactiva seguiria ocupando el lugar e impediria guardar un resumen nuevo;\n2. no hay nada que conservar -- el resumen **se puede volver a generar** desde\n   las observaciones del docente, que son el dato original.\n\nDespues de eliminar, `/informes/grupo` vuelve a traer `observacion` y\n`observacion_estado` en `null`, exactamente como antes de generar por primera\nvez. Y se puede volver a guardar sin problema.\n\nLlamarlo dos veces responde **404**.\n\nGate `INFORMES/ELIMINAR`, mas exigente que el `EDITAR` de guardar: rehacer un\nresumen es corregir, borrarlo es deshacer.",
+              "type": "text/markdown"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

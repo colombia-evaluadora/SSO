@@ -1,0 +1,219 @@
+{
+  "info": {
+    "_postman_id": "a7b8c9d0-e1f2-43a4-b5c6-informes-planilla",
+    "name": "Informes -- planilla de calificacion",
+    "description": {
+      "content": "# Planilla de calificacion del modulo de informes\n\nLa pantalla a la que llevan **las dos alertas**. Tres endpoints:\n\n```\nPOST /api/eval-col/informes/planilla            listar\nPOST /api/eval-col/informes/planilla/guardar    \"Aprobar y actualizar consolidado\"\nPOST /api/eval-col/informes/grupo               (para volver al informe)\n```\n\n## NO es la planilla del planeador\n\n`/planeador/planilla/columnas` y `/planeador/planilla/calificaciones` ya\nexisten y **no se tocan**: son la planilla del docente calificando dia a dia.\nEsta es otra pantalla y difiere en tres cosas de fondo:\n\n| | Planeador | Informes |\n|---|---|---|\n| acota por | ventana de fechas libre | **periodo de evaluacion** |\n| definitiva proyectada | sin filtro de periodo | la misma que detecta los cambios |\n| linea base de la flecha | `TUNIDAD_NOTA` (que nadie escribe, siempre NULL) | `TASIGNATURA_NOTA` |\n\nCompartir ruta habria obligado a cambiar el contrato de aquella.\n\n## Un solo endpoint, no dos\n\nLa planilla del planeador separa columnas y cuerpo en dos llamadas. Aca las\nactividades viajan **dentro de cada fila**, con su `orden`: el front arma el\nheader con las celdas de cualquier fila -- todas traen las mismas columnas y\nen el mismo orden, incluidas las `NO_ASIGNADA` -- y no hay forma de que header\ny cuerpo se desalineen, porque salen de la misma consulta.\n\n## El criterio de fecha\n\nLas columnas se definen por **fecha de corte**\n(`COALESCE(CIERRE, INICIO, CREACION)` dentro del periodo) y no por el\nsolapamiento que usa el planeador. No son equivalentes: una actividad que\nabre en un periodo y cierra en el siguiente entra en las dos ventanas por\nsolapamiento **pero solo suma al segundo** en la proyeccion, y seria una\ncolumna cuya nota no esta en la definitiva de esa misma pantalla.\n\nAsi columnas y definitiva salen siempre del mismo conjunto de actividades.",
+      "type": "text/markdown"
+    },
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://172.233.184.248:8080"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "email",
+      "value": ""
+    },
+    {
+      "key": "password",
+      "value": ""
+    },
+    {
+      "key": "fkTgrupo",
+      "value": "11474"
+    },
+    {
+      "key": "fkTasignatura",
+      "value": "4190"
+    },
+    {
+      "key": "fkTperiodoEvaluacion",
+      "value": "622"
+    },
+    {
+      "key": "fkTmatricula",
+      "value": "223117"
+    }
+  ],
+  "item": [
+    {
+      "name": "0 - Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "description": {
+          "content": "Guarda el `token` de la respuesta.\n\nEl usuario necesita permiso en el menu **`INFORMES`**: `VER` para las\nlecturas, `EDITAR` para los dos guardados y para guardar la observacion,\n`ELIMINAR` para borrarla. Sin eso las funciones levantan `42501` (403)\nantes de mirar nada mas.\n\nY el permiso del menu es solo la mitad: el **alcance** decide sobre que\nestablecimientos, sedes y jornadas puede operar. Nivel 0 pasa, nivel 1\n(territoriales) llega a todos los EE, nivel 2 a los suyos, y nivel 3\n(docentes, coordinadores de sede) a su **sede y jornada**.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (d.token) { pm.environment.set(\"token\", d.token); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 - Listar la planilla",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/planilla",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "planilla"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TGRUPO\": {{fkTgrupo}},\n  \"FK_TASIGNATURA\": {{fkTasignatura}},\n  \"FK_TPERIODO_EVALUACION\": {{fkTperiodoEvaluacion}},\n  \"SEARCH\": null\n}"
+        },
+        "description": {
+          "content": "Una fila por estudiante con su definitiva del periodo -- **guardada y\nproyectada, ambas tambien homologadas** a la escala del colegio -- y las\nactividades embebidas en `actividades`.\n\n**Sin paginacion.**\n\n## Cada celda\n\n```json\n{ \"orden\": 1, \"pkTactividad\": 23, \"titulo\": \"Taller de fracciones\",\n  \"pkTactividadEstudiante\": 4, \"estado\": \"CALIFICADA\",\n  \"porcentaje\": 75, \"nota\": 3.0, \"valoracion\": \"basico\",\n  \"observacion\": null, \"esEvaluativa\": true, \"ponderacion\": 35,\n  \"notaMaxima\": 100, \"instrumento\": \"RUBRICA\",\n  \"fechaInicio\": \"2026-09-10\", \"fechaCierre\": \"2026-09-15\" }\n```\n\n| `estado` | |\n|---|---|\n| `CALIFICADA` | tiene nota |\n| `PENDIENTE` | asignada y sin calificar |\n| `NO_ASIGNADA` | el estudiante no la tiene asignada |\n| `NO_CALIFICABLE` | `CALIFICABLE = N` (las observaciones de preescolar) |\n\n`pkTactividadEstudiante` es la llave que el popover necesita para precargar y\nguardar. Viene `null` cuando la celda no aplica -- por construccion no se\npuede calificar una actividad que el estudiante no tiene asignada.\n\n## Las flechas de la columna DEFINIT PROY.\n\nSe comparan `definitiva_guardada_homologada` y\n`definitiva_proyectada_homologada`. Las dos vienen en la escala del colegio,\nasi que la flecha se decide **sobre lo que se dibuja**: si dos porcentajes\ndistintos redondean a la misma nota, no sale flecha.\n\n## El buscador: un texto, dos dimensiones\n\n```\nsin buscar          1 fila,  8 columnas\n\"JORG\"   (alumno)   1 fila,  8 columnas   <- filtra filas, conserva columnas\n\"Taller\" (activ.)   1 fila,  1 columna    <- conserva filas, filtra columnas\n\"zzz\"    (nada)     0 filas, 0 columnas\n```\n\nLa dimension donde **nada coincidio se deja intacta**. Filtrar las dos siempre\nvaciaria la tabla al escribir un nombre, porque ninguna actividad se llama\ncomo un alumno.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "2 - Aprobar y actualizar consolidado",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/planilla/guardar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "planilla",
+            "guardar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TGRUPO\": {{fkTgrupo}},\n  \"FK_TASIGNATURA\": {{fkTasignatura}},\n  \"FK_TPERIODO_EVALUACION\": {{fkTperiodoEvaluacion}},\n  \"MATRICULAS\": null\n}"
+        },
+        "description": {
+          "content": "Congela la definitiva de **una sola asignatura**.\n\n`MATRICULAS` vacio o ausente = todos los del grupo; con lista, solo esos\n(el checkbox de una fila o una seleccion multiple).\n\n## Que devuelve\n\n| `resultado` | |\n|---|---|\n| `guardada` | primera vez |\n| `actualizada` | habia otra; `nota_anterior` dice cual |\n| `sin_cambio` | ya estaba igual. No se toca la fila |\n| `sin_proyeccion` | no hay actividad evaluativa calificada |\n\nY ademas `promedio_periodo`, `aprobadas` y `reprobadas` **ya recalculados**,\npara refrescar la cabecera del estudiante sin volver a pedir el listado.\nEsos son del **periodo completo**, no de esta asignatura.\n\n## Convive con `/informes/guardar`\n\n`TASIGNATURA_NOTA` es por `(matricula, periodo, asignatura)`, asi que guardar\nuna asignatura no toca las demas. Y **ambos terminan en el mismo recalculo de\nmetricas**, de modo que el promedio del periodo queda coherente sin importar\nen que orden se usen. Los dos son idempotentes.\n\nUsar este **no deja al otro a medias**: despues, el guardado completo reporta\n`sin_cambio` para esta asignatura y congela el resto.\n\n> En `sin_proyeccion` **lo ya guardado NO se borra**: quitar un consolidado\n> por una ausencia no es decision de un boton de guardar.",
+          "type": "text/markdown"
+        }
+      }
+    },
+    {
+      "name": "3 - Verificar en el informe",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/grupo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "grupo"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TGRUPO\": {{fkTgrupo}},\n  \"PERIODOS\": [{{fkTperiodoEvaluacion}}],\n  \"SEARCH\": null\n}"
+        },
+        "description": {
+          "content": "Despues de guardar desde la planilla, el informe refleja el cambio sin que el\nfront tenga que recordar nada:\n\n| Campo | Que dice |\n|---|---|\n| `consolidado` | `true`: algo se congelo en ese periodo |\n| `estado_nota` (por asignatura) | `guardada` para la que se acaba de congelar, `proyectada` para las demas |\n| `promedio_guardado` vs `promedio_proyectado` | si difieren, queda algo sin consolidar |\n\nUn guardado parcial se ve exactamente asi: la asignatura guardada queda\n`guardada` y el resto sigue `proyectada`.",
+          "type": "text/markdown"
+        }
+      }
+    }
+  ]
+}
