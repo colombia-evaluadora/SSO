@@ -1354,6 +1354,18 @@ BEGIN
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_metodo_valoracion,       'METODO_VALORACION',        'FK_TLV_METODO_VALORACION'); -- sin seed: solo valida existencia+ACTIVE
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_calculo,            'TIPO_CALCULO',             'FK_TLV_TIPO_CALCULO');
 
+    -- 4.a Una actividad no puede quedar evaluativa (ES_EVALUATIVA = 'S') si
+    --     se vincula a una unidad cuyo referente curricular es FORMATIVO:
+    --     ese enfoque valora con observaciones, no con nota. Mismo helper
+    --     que usa la sub-rama de instrumento (4.b) de abajo, aplicado ahora
+    --     al flag ES_EVALUATIVA en si, no solo al instrumento.
+    IF COALESCE(p_es_evaluativa, 'S') = 'S' AND p_fk_tunidad IS NOT NULL
+       AND NOT academico_test.fn_unidad_referente_evaluativo(p_fk_tunidad) THEN
+        RAISE EXCEPTION 'La actividad no puede ser evaluativa: la unidad "%" se rige por un referente curricular Formativo, que valora el aprendizaje con observaciones y no con nota',
+            (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad)
+            USING ERRCODE = '22023';
+    END IF;
+
     -- 4.b Sub-rama "evaluacion" (instrumento de evaluacion, condicion
     --     dinamica "actividad -> evaluacion" de V214.2): solo aplica si la
     --     actividad se vincula a una unidad cuyo referente curricular es
@@ -1618,6 +1630,18 @@ BEGIN
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_evidencia,          'TIPO_EVIDENCIA',         'FK_TLV_TIPO_EVIDENCIA');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_metodo_valoracion,       'METODO_VALORACION',      'FK_TLV_METODO_VALORACION'); -- sin seed: solo valida existencia+ACTIVE
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_calculo,            'TIPO_CALCULO',           'FK_TLV_TIPO_CALCULO');
+
+    -- La actividad no puede quedar evaluativa (v_evaluativa = 'S') si, tras
+    -- el PATCH, termina vinculada a una unidad Formativa: mismo criterio de
+    -- "valor resultante" (v_fk_tunidad / v_evaluativa) que las sub-ramas de
+    -- ponderacion y evaluacion, para cubrir tanto "marcarla evaluativa
+    -- ahora" como "moverla a una unidad Formativa dejandola evaluativa".
+    IF v_evaluativa = 'S' AND v_fk_tunidad IS NOT NULL
+       AND NOT academico_test.fn_unidad_referente_evaluativo(v_fk_tunidad) THEN
+        RAISE EXCEPTION 'La actividad "%" no puede ser evaluativa: la unidad "%" se rige por un referente curricular Formativo, que valora el aprendizaje con observaciones y no con nota', v_titulo,
+            (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = v_fk_tunidad)
+            USING ERRCODE = '22023';
+    END IF;
 
     -- Sub-rama "evaluacion" (instrumento de evaluacion, condicion dinamica
     -- "actividad -> evaluacion" de V214.2): solo aplica si, tras el PATCH, la
