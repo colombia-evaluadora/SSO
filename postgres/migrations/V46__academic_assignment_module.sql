@@ -139,41 +139,6 @@ BEGIN
 END;
 $function$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_pool(
-    p_academic_period_id BIGINT,
-    p_filtro             TEXT    DEFAULT NULL,
-    p_solo_sin_docente   BOOLEAN DEFAULT FALSE,
-    p_pk_usuario         BIGINT  DEFAULT NULL
-)
-RETURNS TABLE (
-    id TEXT, nombre VARCHAR, grado_grupo TEXT, jornada VARCHAR, jornada_name VARCHAR,
-    funcionario_id BIGINT
-)
-LANGUAGE sql STABLE AS $$
-    SELECT gr.PK_TGRUPO || ':' || s.PK_TASIGNATURA, s.NOMBRE,
-           g.NOMBRE || ' ' || gr.NOMBRE, jor.VALOR, jor.NOMBRE, da.FK_TFUNCIONARIO
-      FROM academico_test.TGRADO g
-      JOIN academico_test.TGRUPO gr            ON gr.FK_TGRADO = g.PK_TGRADO AND gr.ACTIVE = TRUE
-      JOIN academico_test.TPLAN p              ON p.FK_TGRADO = g.PK_TGRADO AND p.ACTIVE = TRUE
-      JOIN academico_test.TASIGNATURA_PLAN ap  ON ap.FK_TPLAN = p.PK_TPLAN AND ap.ACTIVE = TRUE
-      JOIN academico_test.TASIGNATURA s        ON s.PK_TASIGNATURA = ap.FK_TASIGNATURA AND s.ACTIVE = TRUE
-      LEFT JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
-      LEFT JOIN academico_test.TDOCENTE_ASIGNATURA da
-             ON da.FK_TGRUPO = gr.PK_TGRUPO AND da.FK_TASIGNATURA = s.PK_TASIGNATURA
-            AND da.FK_TPERIODO_ACADEMICO = p_academic_period_id AND da.ACTIVE = TRUE
-     WHERE g.FK_TPERIODO_ACADEMICO = p_academic_period_id AND g.ACTIVE = TRUE
-       AND academico_test.fn_periodo_puede_ver(p_pk_usuario, p_academic_period_id)
-       AND (NULLIF(TRIM(p_filtro),'') IS NULL
-            OR s.NOMBRE  ILIKE '%' || p_filtro || '%'
-            OR g.NOMBRE  ILIKE '%' || p_filtro || '%'
-            OR gr.NOMBRE ILIKE '%' || p_filtro || '%'
-            OR jor.VALOR ILIKE '%' || p_filtro || '%')
-       -- Se conserva por compatibilidad; el front ya no lo manda (filtra libre/de-otro-docente
-       -- con funcionario_id en el cliente).
-       AND (NOT COALESCE(p_solo_sin_docente, FALSE) OR da.FK_TFUNCIONARIO IS NULL)
-     ORDER BY g.NOMBRE, gr.NOMBRE, s.NOMBRE;
-$$;
-
 CREATE OR REPLACE FUNCTION academico_test.fn_asignacion_docente(
     p_academic_period_id BIGINT, p_fk_funcionario BIGINT,
     p_pk_usuario BIGINT DEFAULT NULL  -- alcance (global / establecimiento)
