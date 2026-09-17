@@ -223,12 +223,14 @@ SELECT
     CAST(:BODY.FK_TMATRICULAS AS BIGINT[]),
     COALESCE(CAST(:BODY.ASIGNAR_TODO_EL_GRUPO AS BOOLEAN), FALSE),
     CAST(:BODY.RECUPERACION AS JSONB),
-    COALESCE(CAST(:BODY.QUITAR_RECUPERACION AS BOOLEAN), FALSE)
+    COALESCE(CAST(:BODY.QUITAR_RECUPERACION AS BOOLEAN), FALSE),
+    CAST(:BODY.EVIDENCIAS AS BIGINT[]),
+    CAST(:BODY.CRITERIOS AS BIGINT[])
 );',
     'postgres', false, false,
     m.id_microservice, '/planeador/actividades/:ID', 'SELECT', 'PUT',
-    '{"PARAM.ID": "BIGINT", "BODY.TITULO": "VARCHAR", "BODY.DESCRIPCION": "VARCHAR", "BODY.FK_TASIGNATURA": "BIGINT", "BODY.FK_TGRUPO": "BIGINT", "BODY.FK_TUNIDAD": "BIGINT", "BODY.PONDERACION": "NUMERIC", "BODY.DESVINCULAR_UNIDAD": "BOOLEAN", "BODY.FK_TLV_TIPO_ACTIVIDAD": "BIGINT", "BODY.FECHA_INICIO": "DATE", "BODY.FECHA_CIERRE": "DATE", "BODY.DURACION_ESTIMADA": "NUMERIC", "BODY.SEMANA_CRONOGRAMA": "VARCHAR", "BODY.FK_TLV_MODALIDAD": "BIGINT", "BODY.MATERIAL_REQUERIDO": "VARCHAR", "BODY.ES_EVALUATIVA": "VARCHAR", "BODY.FK_TLV_INSTRUMENTO_EVALUACION": "BIGINT", "BODY.DESCRIPCION_INSTRUMENTO": "VARCHAR", "BODY.FK_TLV_TIPO_EVIDENCIA": "BIGINT", "BODY.FK_TLV_METODO_VALORACION": "BIGINT", "BODY.FK_TLV_TIPO_CALCULO": "BIGINT", "BODY.INFLUENCIA": "NUMERIC", "BODY.NOTA_MAXIMA": "NUMERIC", "BODY.REQUIERE_ARCHIVO": "VARCHAR", "BODY.REQUIERE_TEXTO": "VARCHAR", "BODY.GENERA_EVIDENCIAS": "VARCHAR", "BODY.REQUIERE_VALIDACION_COORDINADOR": "VARCHAR", "BODY.OBSERVACIONES_DOCENTE": "VARCHAR", "BODY.MATERIALES": "JSONB", "BODY.ADAPTACIONES": "JSONB", "BODY.FK_TMATRICULAS": "BIGINT[]", "BODY.ASIGNAR_TODO_EL_GRUPO": "BOOLEAN", "BODY.RECUPERACION": "JSONB", "BODY.QUITAR_RECUPERACION": "BOOLEAN"}'::jsonb,
-    'V246 -- PATCH parcial de una actividad (fn_actividad_actualizar, V224). :ID = PK_TACTIVIDAD. Cada campo ausente/NULL preserva el valor actual; MATERIALES/ADAPTACIONES/FK_TMATRICULAS: NULL = no tocar, array (incl. vacio) = reemplazo completo. DESVINCULAR_UNIDAD=true es excluyente con FK_TUNIDAD/PONDERACION (unidad/ponderacion se delegan en fn_unidad_actividad_vincular/_ponderacion_set/_desvincular, V223, mismo punto unico de la regla del 100%). QUITAR_RECUPERACION=true es excluyente con RECUPERACION. Revalida fechas, catalogos, unicidad (titulo, unidad, grupo, jerarquia) y las condiciones dinamicas de evaluacion/ponderacion contra los valores RESULTANTES del PATCH (ver campos_disponibles del punto 6). Gate EDITAR sobre PLANEADOR. 404 (P0002) si la actividad no existe; 22023 si esta inactiva.'
+    '{"PARAM.ID": "BIGINT", "BODY.TITULO": "VARCHAR", "BODY.DESCRIPCION": "VARCHAR", "BODY.FK_TASIGNATURA": "BIGINT", "BODY.FK_TGRUPO": "BIGINT", "BODY.FK_TUNIDAD": "BIGINT", "BODY.PONDERACION": "NUMERIC", "BODY.DESVINCULAR_UNIDAD": "BOOLEAN", "BODY.FK_TLV_TIPO_ACTIVIDAD": "BIGINT", "BODY.FECHA_INICIO": "DATE", "BODY.FECHA_CIERRE": "DATE", "BODY.DURACION_ESTIMADA": "NUMERIC", "BODY.SEMANA_CRONOGRAMA": "VARCHAR", "BODY.FK_TLV_MODALIDAD": "BIGINT", "BODY.MATERIAL_REQUERIDO": "VARCHAR", "BODY.ES_EVALUATIVA": "VARCHAR", "BODY.FK_TLV_INSTRUMENTO_EVALUACION": "BIGINT", "BODY.DESCRIPCION_INSTRUMENTO": "VARCHAR", "BODY.FK_TLV_TIPO_EVIDENCIA": "BIGINT", "BODY.FK_TLV_METODO_VALORACION": "BIGINT", "BODY.FK_TLV_TIPO_CALCULO": "BIGINT", "BODY.INFLUENCIA": "NUMERIC", "BODY.NOTA_MAXIMA": "NUMERIC", "BODY.REQUIERE_ARCHIVO": "VARCHAR", "BODY.REQUIERE_TEXTO": "VARCHAR", "BODY.GENERA_EVIDENCIAS": "VARCHAR", "BODY.REQUIERE_VALIDACION_COORDINADOR": "VARCHAR", "BODY.OBSERVACIONES_DOCENTE": "VARCHAR", "BODY.MATERIALES": "JSONB", "BODY.ADAPTACIONES": "JSONB", "BODY.FK_TMATRICULAS": "BIGINT[]", "BODY.ASIGNAR_TODO_EL_GRUPO": "BOOLEAN", "BODY.RECUPERACION": "JSONB", "BODY.QUITAR_RECUPERACION": "BOOLEAN", "BODY.EVIDENCIAS": "BIGINT[]", "BODY.CRITERIOS": "BIGINT[]"}'::jsonb,
+    'V246 -- PATCH parcial de una actividad (fn_actividad_actualizar, V224). :ID = PK_TACTIVIDAD. Cada campo ausente/NULL preserva el valor actual; MATERIALES/ADAPTACIONES/FK_TMATRICULAS: NULL = no tocar, array (incl. vacio) = reemplazo completo. EVIDENCIAS (PKs de TREFERENTE_ENUNCIADO nivel 2) y CRITERIOS (PKs de TCRITERIO_UNIDAD) siguen el mismo contrato: NULL = no tocar, array (incl. vacio) = el set queda exactamente ese (se desactivan las relaciones que ya no vienen y el resto se relaciona/reactiva con fn_actividad_evidencia_relacionar / fn_actividad_criterio_relacionar, V214.1; agregar exige que la actividad tenga unidad). Los pk de esas relaciones se leen en GET /planeador/actividades/:ID (columnas evidencias y criterios). DESVINCULAR_UNIDAD=true es excluyente con FK_TUNIDAD/PONDERACION (unidad/ponderacion se delegan en fn_unidad_actividad_vincular/_ponderacion_set/_desvincular, V223, mismo punto unico de la regla del 100%). QUITAR_RECUPERACION=true es excluyente con RECUPERACION. Revalida fechas, catalogos, unicidad (titulo, unidad, grupo, jerarquia) y las condiciones dinamicas de evaluacion/ponderacion contra los valores RESULTANTES del PATCH (ver campos_disponibles del punto 6). Gate EDITAR sobre PLANEADOR. 404 (P0002) si la actividad no existe; 22023 si esta inactiva.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
@@ -242,6 +244,38 @@ SELECT r.id_role, q.id_query
    AND q.path_template = '/planeador/actividades/:ID'
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
+
+-- La fila del PUT se inserta con ON CONFLICT DO NOTHING: donde ya existe,
+-- editar el INSERT no la actualiza. Se reconcilian query / param_types /
+-- detail aparte, con guarda para que reaplicar la migracion sea un no-op.
+UPDATE public.query q
+   SET query = replace(
+                 q.query,
+                 E'COALESCE(CAST(:BODY.QUITAR_RECUPERACION AS BOOLEAN), FALSE)
+);',
+                 E'COALESCE(CAST(:BODY.QUITAR_RECUPERACION AS BOOLEAN), FALSE),
+    CAST(:BODY.EVIDENCIAS AS BIGINT[]),
+    CAST(:BODY.CRITERIOS AS BIGINT[])
+);'
+               ),
+       param_types = COALESCE(q.param_types, '{}'::jsonb)
+                     || '{"BODY.EVIDENCIAS": "BIGINT[]", "BODY.CRITERIOS": "BIGINT[]"}'::jsonb
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id
+   AND m.serviceid       = 'eval-col'
+   AND q.path_template   = '/planeador/actividades/:ID'
+   AND q.http_method     = 'PUT'
+   AND q.query LIKE '%fn_actividad_actualizar(%'
+   AND q.query NOT LIKE '%:BODY.EVIDENCIAS%';
+
+UPDATE public.query q
+   SET detail = 'V246 -- PATCH parcial de una actividad (fn_actividad_actualizar, V224). :ID = PK_TACTIVIDAD. Cada campo ausente/NULL preserva el valor actual; MATERIALES/ADAPTACIONES/FK_TMATRICULAS: NULL = no tocar, array (incl. vacio) = reemplazo completo. EVIDENCIAS (PKs de TREFERENTE_ENUNCIADO nivel 2) y CRITERIOS (PKs de TCRITERIO_UNIDAD) siguen el mismo contrato: NULL = no tocar, array (incl. vacio) = el set queda exactamente ese (se desactivan las relaciones que ya no vienen y el resto se relaciona/reactiva con fn_actividad_evidencia_relacionar / fn_actividad_criterio_relacionar, V214.1; agregar exige que la actividad tenga unidad). Los pk de esas relaciones se leen en GET /planeador/actividades/:ID (columnas evidencias y criterios). DESVINCULAR_UNIDAD=true es excluyente con FK_TUNIDAD/PONDERACION (unidad/ponderacion se delegan en fn_unidad_actividad_vincular/_ponderacion_set/_desvincular, V223, mismo punto unico de la regla del 100%). QUITAR_RECUPERACION=true es excluyente con RECUPERACION. Revalida fechas, catalogos, unicidad (titulo, unidad, grupo, jerarquia) y las condiciones dinamicas de evaluacion/ponderacion contra los valores RESULTANTES del PATCH (ver campos_disponibles del punto 6). Gate EDITAR sobre PLANEADOR. 404 (P0002) si la actividad no existe; 22023 si esta inactiva.'
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id
+   AND m.serviceid       = 'eval-col'
+   AND q.path_template   = '/planeador/actividades/:ID'
+   AND q.http_method     = 'PUT'
+   AND q.detail IS DISTINCT FROM 'V246 -- PATCH parcial de una actividad (fn_actividad_actualizar, V224). :ID = PK_TACTIVIDAD. Cada campo ausente/NULL preserva el valor actual; MATERIALES/ADAPTACIONES/FK_TMATRICULAS: NULL = no tocar, array (incl. vacio) = reemplazo completo. EVIDENCIAS (PKs de TREFERENTE_ENUNCIADO nivel 2) y CRITERIOS (PKs de TCRITERIO_UNIDAD) siguen el mismo contrato: NULL = no tocar, array (incl. vacio) = el set queda exactamente ese (se desactivan las relaciones que ya no vienen y el resto se relaciona/reactiva con fn_actividad_evidencia_relacionar / fn_actividad_criterio_relacionar, V214.1; agregar exige que la actividad tenga unidad). Los pk de esas relaciones se leen en GET /planeador/actividades/:ID (columnas evidencias y criterios). DESVINCULAR_UNIDAD=true es excluyente con FK_TUNIDAD/PONDERACION (unidad/ponderacion se delegan en fn_unidad_actividad_vincular/_ponderacion_set/_desvincular, V223, mismo punto unico de la regla del 100%). QUITAR_RECUPERACION=true es excluyente con RECUPERACION. Revalida fechas, catalogos, unicidad (titulo, unidad, grupo, jerarquia) y las condiciones dinamicas de evaluacion/ponderacion contra los valores RESULTANTES del PATCH (ver campos_disponibles del punto 6). Gate EDITAR sobre PLANEADOR. 404 (P0002) si la actividad no existe; 22023 si esta inactiva.';
 
 
 -- ===========================================================================

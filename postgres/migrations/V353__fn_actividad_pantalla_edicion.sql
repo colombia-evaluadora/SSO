@@ -54,6 +54,8 @@
 --   },
 --   "materiales": [...],       -- tal cual venia (ya es un array limpio)
 --   "adaptaciones": [...],     -- idem
+--   "evidencias": [...],      -- TACTIVIDAD_EVIDENCIA ya relacionadas
+--   "criterios": [...],       -- TACTIVIDAD_CRITERIO_UNIDAD ya relacionados
 --   "recuperacion": {...} | null,
 --   "instrumento": {
 --     "tipo": {"valor","nombre"},
@@ -176,6 +178,8 @@ BEGIN
         ),
         'materiales',          v_det.materiales,
         'adaptaciones',        v_det.adaptaciones,
+        'evidencias',          v_det.evidencias,
+        'criterios',           v_det.criterios,
         'recuperacion',        v_det.recuperacion,
         'instrumento',         CASE WHEN v_instr.instrumento IS NULL THEN NULL
                                     ELSE jsonb_build_object(
@@ -214,7 +218,7 @@ SELECT
     '/planeador/actividades/:ID/pantalla-edicion', 'SELECT', 'GET',
     '{"PARAM.ID": "BIGINT", "QUERY.DIAS_GRACIA": "INTEGER"}'::jsonb,
     NULL,
-    'V353 -- DTO compuesto para PlaneadorEditarActividadPage: actividad + instrumento en una sola llamada, ya en camelCase y anidado por concepto. Reemplaza, PARA ESA PANTALLA, la cadena GET .../:ID + GET .../:ID/instrumento.',
+    'V353 -- DTO compuesto para PlaneadorEditarActividadPage: actividad + instrumento en una sola llamada, ya en camelCase y anidado por concepto. Reemplaza, PARA ESA PANTALLA, la cadena GET .../:ID + GET .../:ID/instrumento. Incluye ademas evidencias (TACTIVIDAD_EVIDENCIA: [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}]) y criterios (TACTIVIDAD_CRITERIO_UNIDAD: [{pk, fkTcriterioUnidad, descripcion, codigo, orden}]) ya relacionados, para poder pre-marcarlos al reabrir la actividad y para conocer el pk que exigen PATCH /planeador/actividades/evidencias/:ID y PATCH /planeador/actividades/criterios/:ID.',
     NULL,
     NULL,
     false, 60
@@ -237,3 +241,17 @@ SELECT rq.role_id, q_new.id_query
      SELECT 1 FROM public.role_query rq2
       WHERE rq2.query_id = q_new.id_query AND rq2.role_id = rq.role_id
  );
+
+COMMENT ON FUNCTION academico_test.fn_actividad_pantalla_edicion(BIGINT, BIGINT, INT)
+    IS 'DTO compuesto de la pantalla "editar actividad": compone fn_actividad_buscar_por_pk (V224) y fn_actividad_instrumento_obtener en UN JSONB ya en camelCase y anidado por concepto (actividad{...}, materiales, adaptaciones, evidencias, criterios, recuperacion, instrumento, camposDisponibles, unidadConfiguracion), con las banderas S/N convertidas a boolean. No reimplementa ninguna regla: solo reempaqueta. evidencias y criterios son las relaciones ACTIVE que ya tiene la actividad, con el pk DE LA RELACION -- el que exigen fn_actividad_evidencia_quitar / fn_actividad_criterio_quitar (V214.1) --, para que al reabrir la actividad se puedan pre-marcar y quitar. Gate VER (fn_planeador_assert_alcance) una sola vez. P0002 si la actividad no existe. V353.';
+
+-- La fila de arriba se inserta con ON CONFLICT DO NOTHING: donde ya existe,
+-- editar el INSERT no la actualiza. Se reconcilia el detail aparte.
+UPDATE public.query q
+   SET detail = 'V353 -- DTO compuesto para PlaneadorEditarActividadPage: actividad + instrumento en una sola llamada, ya en camelCase y anidado por concepto. Reemplaza, PARA ESA PANTALLA, la cadena GET .../:ID + GET .../:ID/instrumento. Incluye ademas evidencias (TACTIVIDAD_EVIDENCIA: [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}]) y criterios (TACTIVIDAD_CRITERIO_UNIDAD: [{pk, fkTcriterioUnidad, descripcion, codigo, orden}]) ya relacionados, para poder pre-marcarlos al reabrir la actividad y para conocer el pk que exigen PATCH /planeador/actividades/evidencias/:ID y PATCH /planeador/actividades/criterios/:ID.'
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id
+   AND m.serviceid       = 'eval-col'
+   AND q.path_template   = '/planeador/actividades/:ID/pantalla-edicion'
+   AND q.http_method     = 'GET'
+   AND q.detail IS DISTINCT FROM 'V353 -- DTO compuesto para PlaneadorEditarActividadPage: actividad + instrumento en una sola llamada, ya en camelCase y anidado por concepto. Reemplaza, PARA ESA PANTALLA, la cadena GET .../:ID + GET .../:ID/instrumento. Incluye ademas evidencias (TACTIVIDAD_EVIDENCIA: [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}]) y criterios (TACTIVIDAD_CRITERIO_UNIDAD: [{pk, fkTcriterioUnidad, descripcion, codigo, orden}]) ya relacionados, para poder pre-marcarlos al reabrir la actividad y para conocer el pk que exigen PATCH /planeador/actividades/evidencias/:ID y PATCH /planeador/actividades/criterios/:ID.';
