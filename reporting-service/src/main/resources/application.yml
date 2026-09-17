@@ -410,6 +410,52 @@ reporting:
         fecha: Fecha
         soporte_nombre: Soporte
 
+    # -----------------------------------------------------------------
+    # Informes y consolidacion (V420). path = fila
+    # 'eval-col-informes-reporte-001': fn_informe_grupo_reporte, que NO
+    # consulta nada por su cuenta -- llama a la misma
+    # fn_informe_grupo_listar de la pantalla, con los mismos filtros
+    # (FK_TGRUPO, PERIODOS, SEARCH) y el mismo gate, y solo aplana su
+    # columna JSONB de asignaturas.
+    #
+    # El reporte va en formato LARGO: una fila por (estudiante, periodo,
+    # asignatura). La grilla de la pantalla tiene una columna por
+    # asignatura, pero las asignaturas cambian por grado y estas columnas
+    # son fijas, asi que no hay forma de mapearlas una a una.
+    #
+    # Exporta SOLO lo consolidado, y por eso no hay columna que diga si lo
+    # es: la pantalla pinta con la misma forma de numero la nota guardada
+    # (negro), la proyectada (gris) y -- cuando el periodo no tiene ninguna
+    # calificacion -- lo que al estudiante le falta para ganar. Un boletin
+    # solo puede decir la primera; impresas, las otras dos se leen como
+    # calificaciones reales. La funcion las deja fuera.
+    #
+    # `estado` distingue la nota guardada de la guardada CON un cambio
+    # propuesto pendiente. Se imprime la guardada; la columna existe para
+    # que se entienda la diferencia si alguien compara el archivo con la
+    # pantalla.
+    #
+    # asignatura y observacion no estan llenas a la vez: en preescolar la
+    # fila no tiene asignaturas y lo que vale es la observacion.
+    # -----------------------------------------------------------------
+    informes:
+      path: /informes/reporte
+      title: Informe por periodo
+      file-name: informe-periodo
+      columns:
+        estudiante: Estudiante
+        documento: Documento
+        periodo: Periodo
+        asignatura: Asignatura
+        area: Area
+        nota: Nota
+        desempeno: Desempeno
+        estado: Estado
+        aprobada: Aprobada
+        promedio: Promedio del periodo
+        puesto: Puesto
+        observacion: Observacion
+
 sso:
   jwt:
     # Solo la publica: este servicio verifica firmas, no emite tokens.

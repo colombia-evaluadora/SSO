@@ -1,64 +1,21 @@
 -- ===========================================================================
--- V255 — Planeador educativo: el referente curricular de una unidad, con sus
--- enunciados y evidencias, para pintar dinamicamente la unidad y la actividad
--- (CU-86e311xxp).
+-- V255 — Planeador: el referente curricular de UNA unidad y los enunciados
+-- que ESA unidad relaciono (TUNIDAD_ENUNCIADO), con sus evidencias.
 --
--- QUE FALTABA: el Planeador ya sabe RELACIONAR una unidad con enunciados
--- (POST /planeador/unidades/:ID/enunciados, V214.1/V245) y una actividad con
--- evidencias (POST /planeador/actividades/:ID/evidencias), pero no habia
--- forma de LEER el arbol contra el que se marcan esas casillas: que referente
--- le toca a la unidad, que enunciados tiene, que evidencias cuelgan de cada
--- uno, y cuales estan ya relacionados. El front tenia que adivinarlo.
+-- Es lectura de lo relacionado, NO un catalogo: para OFRECER enunciados que
+-- marcar se usa GET /planeador/referente-curricular (V278), que devuelve el
+-- arbol completo del referente sin unidad.
 --
--- El referente NO se elige a mano en la actividad: se deriva del GRADO de la
--- unidad -> TGRADO.FK_TNIVEL_ENSENANZA -> el referente de ese nivel de
--- ensenanza. Esta funcion hace ese recorrido y devuelve el arbol completo en
--- una sola llamada.
+-- Las evidencias salen todas las hijas del enunciado relacionado: no existe
+-- relacion "evidencia marcada por la unidad" -- TACTIVIDAD_EVIDENCIA es por
+-- ACTIVIDAD, no por unidad.
 --
--- -------------------------------------------------------------------------
--- POR QUE NO SE DELEGA EN fn_refenunc_listar / fn_refenunc_evidencias_listar
---
--- Existen (V213, rama CU-86e311xqh, ya aplicadas en el servidor) y seria lo
--- natural para no duplicar la lectura. No se usan a proposito: gatean sobre
--- fn_assert_permiso_seccion(usuario, 'REFERENTES_CURRICULARES', 'VER'), y ese
--- menu -- segun la propia cabecera de V213 -- "en la practica hoy significa
--- solo SUPER_ADMIN porque este seed NO concede el menu a ningun otro rol".
--- Invocarlas desde aqui haria que un DOCENTE recibiera 42501 justo en la
--- pantalla donde tiene que marcar evidencias de SU unidad.
---
--- Tampoco se le concede al docente el menu REFERENTES_CURRICULARES: eso le
--- abriria el catalogo GLOBAL entero (incluido su CRUD), cuando lo que
--- necesita es leer UN referente concreto, el que ya cuelga de una unidad que
--- el puede ver.
---
--- Asi que la lectura se hace aqui, sobre las mismas tablas
--- (TREFERENTE_CURRICULAR / TREFERENTE_ENUNCIADO, con FK_PADRE separando
--- nivel 1 = enunciado y nivel 2 = evidencia -- ver V214.1), pero con el gate
--- del Planeador y ACOTADA a la unidad: el docente nunca ve mas referente que
--- el de la unidad que consulta. Es una lectura derivada, no una puerta al
--- catalogo.
---
--- -------------------------------------------------------------------------
--- LO QUE HACE UTIL LA RESPUESTA (no es solo volcar el arbol):
---
---   * nivel_1_etiqueta / nivel_2_etiqueta -- el referente decide COMO se
---     llaman sus niveles ("Enunciado"/"Evidencia" en Primaria,
---     "Proposito"/"Evidencia" en Preescolar). La UI debe rotular con esto,
---     no con literales.
---   * enfoque (EVALUATIVO / FORMATIVO) y tipo_evaluacion -- las dos reglas
---     que deciden que secciones se habilitan en la actividad (V214.2): sin
---     referente evaluativo no hay seccion de evaluacion, y el tipo filtra
---     que instrumentos aplican.
---   * relacionado_con_unidad + pk_tunidad_enunciado por enunciado -- para
---     pre-marcar las casillas Y para poder desmarcarlas: el PATCH de quitar
---     (V245) pide el PK de la RELACION, no el del enunciado.
---   * evidencias anidadas por enunciado -- la actividad solo puede marcar
---     evidencias de enunciados que la unidad ya relaciono (regla de V214.1),
---     asi que el front necesita el arbol, no dos listas sueltas.
+-- No delega en fn_refenunc_listar (V213): esa gatea sobre el menu
+-- REFERENTES_CURRICULARES, que hoy solo tiene el super admin, y el docente
+-- recibiria 42501 sobre su propia unidad.
 --
 -- Depende de: V214.1 (TUNIDAD_ENUNCIADO, jerarquia de TREFERENTE_ENUNCIADO),
--- V212 (TREFERENTE_CURRICULAR y su catalogo, rama CU-86e311xqh),
--- V216 (menu PLANEADOR + fn_assert_permiso_seccion).
+-- V212 (TREFERENTE_CURRICULAR), V216 (menu PLANEADOR).
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -116,14 +73,15 @@ BEGIN
            tev.NOMBRE,
            rc.NIVEL_1_ETIQUETA,
            rc.NIVEL_2_ETIQUETA,
-           -- Arbol nivel 1 -> nivel 2. Se marca cuales enunciados ya estan
-           -- relacionados con ESTA unidad y con que PK de relacion, que es lo
-           -- que pide el PATCH de quitar (no el PK del enunciado).
+           -- Solo los enunciados que ESTA unidad relaciono (INNER JOIN), con
+           -- el PK de la RELACION, que es lo que pide el PATCH de quitar.
+           -- relacionadoConUnidad queda fijo en true: se conserva la clave
+           -- para no romper el contrato del front.
            COALESCE((
                SELECT jsonb_agg(jsonb_build_object(
                           'pk',                   en.PK_REFERENTE_ENUNCIADO,
                           'texto',                en.TEXTO,
-                          'relacionadoConUnidad', (ue.PK_TUNIDAD_ENUNCIADO IS NOT NULL),
+                          'relacionadoConUnidad', TRUE,
                           'pkTunidadEnunciado',   ue.PK_TUNIDAD_ENUNCIADO,
                           'evidencias', COALESCE((
                               SELECT jsonb_agg(jsonb_build_object(
@@ -135,12 +93,12 @@ BEGIN
                                  AND ev.ACTIVE = TRUE
                           ), '[]'::jsonb))
                           ORDER BY en.PK_REFERENTE_ENUNCIADO)
-                 FROM academico_test.TREFERENTE_ENUNCIADO en
-                 LEFT JOIN academico_test.TUNIDAD_ENUNCIADO ue
-                        ON ue.FK_REFERENTE_ENUNCIADO = en.PK_REFERENTE_ENUNCIADO
-                       AND ue.FK_TUNIDAD = u.PK_TUNIDAD
-                       AND ue.ACTIVE = TRUE
-                WHERE en.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
+                 FROM academico_test.TUNIDAD_ENUNCIADO ue
+                 JOIN academico_test.TREFERENTE_ENUNCIADO en
+                        ON en.PK_REFERENTE_ENUNCIADO = ue.FK_REFERENTE_ENUNCIADO
+                WHERE ue.FK_TUNIDAD = u.PK_TUNIDAD
+                  AND ue.ACTIVE = TRUE
+                  AND en.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
                   AND en.FK_PADRE IS NULL          -- nivel 1
                   AND en.ACTIVE = TRUE
            ), '[]'::jsonb)
@@ -160,7 +118,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_referente_detalle(BIGINT, BIGINT)
-    IS 'Referente curricular de UNA unidad con su arbol de enunciados (nivel 1) y evidencias (nivel 2), para pintar dinamicamente la unidad y la actividad. Devuelve el recorrido completo unidad -> grado -> nivel de ensenanza -> referente, mas: nivel_1_etiqueta / nivel_2_etiqueta (como llama ESE referente a sus niveles -- "Enunciado"/"Evidencia" o "Proposito"/"Evidencia" -- la UI debe rotular con esto, no con literales), enfoque y es_evaluativo + tipo_evaluacion (las dos reglas que deciden que secciones e instrumentos se habilitan en la actividad, V214.2), y por cada enunciado: relacionadoConUnidad y pkTunidadEnunciado (el PK de la RELACION, que es lo que pide el PATCH de quitar, no el del enunciado) con sus evidencias anidadas. NO delega en fn_refenunc_listar/fn_refenunc_evidencias_listar (V213) a proposito: esas gatean sobre el menu REFERENTES_CURRICULARES, que hoy solo tiene el super admin, y un docente recibiria 42501 justo donde debe marcar evidencias de su propia unidad; aqui la lectura va con el gate del Planeador y ACOTADA a la unidad consultada -- lectura derivada, no una puerta al catalogo global. Gate VER sobre PLANEADOR. P0002 si la unidad no existe. Si la unidad no tiene referente, las columnas del referente vienen NULL y enunciados como []. V255.';
+    IS 'Referente curricular de UNA unidad y SOLO los enunciados (nivel 1) que esa unidad relaciono en TUNIDAD_ENUNCIADO, con las evidencias (nivel 2) de esos enunciados. NO es un catalogo: no devuelve los enunciados no relacionados, asi que NO sirve para OFRECER casillas que marcar -- para eso esta GET /planeador/referente-curricular?grado=&asignatura= (fn_refcurr_por_grado_asignatura, V278), que da el arbol completo del referente sin unidad; esta funcion es la vista de lectura de lo ya relacionado. Devuelve el recorrido unidad -> grado -> nivel de ensenanza -> referente, mas: nivel_1_etiqueta / nivel_2_etiqueta (como llama ESE referente a sus niveles -- "Enunciado"/"Evidencia" o "Proposito"/"Evidencia" -- la UI debe rotular con esto, no con literales), enfoque y es_evaluativo + tipo_evaluacion (las dos reglas que deciden que secciones e instrumentos se habilitan en la actividad, V214.2), y por cada enunciado relacionado: relacionadoConUnidad (siempre true; la clave se conserva para no romper el contrato del front) y pkTunidadEnunciado (el PK de la RELACION, que es lo que pide el PATCH de quitar, no el del enunciado) con sus evidencias anidadas. Las evidencias son todas las hijas activas del enunciado: no existe relacion "evidencia marcada por la unidad" -- TACTIVIDAD_EVIDENCIA es por ACTIVIDAD. NO delega en fn_refenunc_listar/fn_refenunc_evidencias_listar (V213) a proposito: esas gatean sobre el menu REFERENTES_CURRICULARES, que hoy solo tiene el super admin, y un docente recibiria 42501 sobre su propia unidad. Gate VER sobre PLANEADOR. P0002 si la unidad no existe. Si la unidad no tiene referente activo o no relaciono ninguno, enunciados viene []. V255.';
 
 -- ===========================================================================
 -- ENDPOINT — GET /planeador/unidades/:ID/referente
@@ -176,7 +134,7 @@ SELECT
     'postgres', false, false,
     m.id_microservice, '/planeador/unidades/:ID/referente', 'SELECT', 'GET',
     '{"PARAM.ID": "BIGINT"}'::jsonb,
-    'V255 -- el referente curricular que le toca a una unidad, con su arbol de enunciados y evidencias. :ID = PK_TUNIDAD. Es la fuente para pintar dinamicamente la unidad y la actividad: el referente NO se elige a mano, se deriva del GRADO de la unidad -> nivel de ensenanza -> referente de ese nivel, y este endpoint hace ese recorrido en una sola llamada. Devuelve: el contexto (unidad, grado, nivel_ensenanza), el referente (nombre, descripcion), enfoque_valor + es_evaluativo y tipo_evaluacion_valor -- las dos reglas que deciden que secciones e instrumentos se habilitan en la actividad (ver GET /planeador/actividades/:ID/configuracion) --, nivel_1_etiqueta y nivel_2_etiqueta (como llama ESE referente a sus niveles: "Enunciado"/"Evidencia" en primaria, "Proposito"/"Evidencia" en preescolar -- rotula con esto, no con literales), y enunciados: [{pk, texto, relacionadoConUnidad, pkTunidadEnunciado, evidencias:[{pk, texto}]}]. relacionadoConUnidad pre-marca las casillas ya vinculadas y pkTunidadEnunciado es el PK que pide PATCH /planeador/unidades/enunciados/:ID para quitarlas (es el de la RELACION, no el del enunciado). Las evidencias vienen anidadas porque una actividad solo puede marcar evidencias de enunciados que la unidad ya relaciono. Si la unidad no tiene referente, esas columnas vienen NULL y enunciados en []. Gate VER sobre PLANEADOR; 404 (P0002) si la unidad no existe.'
+    'V255 -- los enunciados del referente curricular que ESTA unidad relaciono, con sus evidencias. :ID = PK_TUNIDAD. Es LECTURA de lo relacionado, NO un catalogo: solo vienen los enunciados presentes en TUNIDAD_ENUNCIADO. Para OFRECER enunciados que marcar en el formulario usa GET /planeador/referente-curricular?grado=&asignatura= (V278), que devuelve el arbol completo del referente. El referente NO se elige a mano: se deriva del GRADO de la unidad -> nivel de ensenanza -> referente de ese nivel, y este endpoint hace ese recorrido en una sola llamada. Devuelve: el contexto (unidad, grado, nivel_ensenanza), el referente (nombre, descripcion), enfoque_valor + es_evaluativo y tipo_evaluacion_valor -- las dos reglas que deciden que secciones e instrumentos se habilitan en la actividad (ver GET /planeador/actividades/:ID/configuracion) --, nivel_1_etiqueta y nivel_2_etiqueta (como llama ESE referente a sus niveles: "Enunciado"/"Evidencia" en primaria, "Proposito"/"Evidencia" en preescolar -- rotula con esto, no con literales), y enunciados: [{pk, texto, relacionadoConUnidad, pkTunidadEnunciado, evidencias:[{pk, texto}]}]. relacionadoConUnidad viene siempre true (la clave se conserva para no romper el contrato) y pkTunidadEnunciado es el PK que pide PATCH /planeador/unidades/enunciados/:ID para quitar la relacion (es el de la RELACION, no el del enunciado). Las evidencias son todas las hijas activas del enunciado: no hay relacion evidencia<->unidad, TACTIVIDAD_EVIDENCIA es por ACTIVIDAD. Si la unidad no tiene referente activo o no relaciono ningun enunciado, enunciados viene []. Gate VER sobre PLANEADOR; 404 (P0002) si la unidad no existe.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
@@ -189,3 +147,13 @@ SELECT r.id_role, q.id_query
  WHERE m.serviceid = 'eval-col'
    AND q.path_template = '/planeador/unidades/:ID/referente'
 ON CONFLICT DO NOTHING;
+
+-- La fila ya existe en los entornos donde V255 corrio: el INSERT de arriba es
+-- ON CONFLICT DO NOTHING y no la actualiza (patron de V253/V279).
+UPDATE public.query q
+   SET detail = 'V255 -- los enunciados del referente curricular que ESTA unidad relaciono, con sus evidencias. :ID = PK_TUNIDAD. Es LECTURA de lo relacionado, NO un catalogo: solo vienen los enunciados presentes en TUNIDAD_ENUNCIADO. Para OFRECER enunciados que marcar en el formulario usa GET /planeador/referente-curricular?grado=&asignatura= (V278), que devuelve el arbol completo del referente. El referente NO se elige a mano: se deriva del GRADO de la unidad -> nivel de ensenanza -> referente de ese nivel, y este endpoint hace ese recorrido en una sola llamada. Devuelve: el contexto (unidad, grado, nivel_ensenanza), el referente (nombre, descripcion), enfoque_valor + es_evaluativo y tipo_evaluacion_valor -- las dos reglas que deciden que secciones e instrumentos se habilitan en la actividad (ver GET /planeador/actividades/:ID/configuracion) --, nivel_1_etiqueta y nivel_2_etiqueta (como llama ESE referente a sus niveles: "Enunciado"/"Evidencia" en primaria, "Proposito"/"Evidencia" en preescolar -- rotula con esto, no con literales), y enunciados: [{pk, texto, relacionadoConUnidad, pkTunidadEnunciado, evidencias:[{pk, texto}]}]. relacionadoConUnidad viene siempre true (la clave se conserva para no romper el contrato) y pkTunidadEnunciado es el PK que pide PATCH /planeador/unidades/enunciados/:ID para quitar la relacion (es el de la RELACION, no el del enunciado). Las evidencias son todas las hijas activas del enunciado: no hay relacion evidencia<->unidad, TACTIVIDAD_EVIDENCIA es por ACTIVIDAD. Si la unidad no tiene referente activo o no relaciono ningun enunciado, enunciados viene []. Gate VER sobre PLANEADOR; 404 (P0002) si la unidad no existe.'
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id
+   AND m.serviceid       = 'eval-col'
+   AND q.path_template   = '/planeador/unidades/:ID/referente'
+   AND q.http_method     = 'GET';

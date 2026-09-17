@@ -200,6 +200,10 @@ COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar(BIGINT, BIGINT, J
 -- NULL porque nunca habia filas de captura reales para una actividad OTRO
 -- (la fachada nunca las escribia); con (2) si las hay.
 -- ===========================================================================
+-- El RETURNS TABLE gana la columna evidencias: hay que soltar la firma vieja
+-- o CREATE OR REPLACE falla con 42P13.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_obtener(BIGINT, BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_obtener(
     p_pk_usuario_solicitante    BIGINT,
     p_pk_tactividad_estudiante  BIGINT
@@ -209,7 +213,8 @@ RETURNS TABLE (
     calificacion        NUMERIC,
     calificable         CHAR(1),
     observacion         VARCHAR,
-    detalle             JSONB
+    detalle             JSONB,
+    evidencias          JSONB
 )
 LANGUAGE plpgsql
 STABLE
@@ -311,6 +316,22 @@ BEGIN
 
                ELSE NULL
            END
+           ,
+           -- Adjuntos de la observacion (TACTIVIDAD_SOPORTE, V243). Solo los
+           -- que tienen archivo: la tabla admite filas de solo texto.
+           COALESCE((
+               SELECT jsonb_agg(jsonb_build_object(
+                          'pk',     so.PK_TACTIVIDAD_SOPORTE,
+                          'fkTarchivo', so.FK_TARCHIVO,
+                          'nombre', ar.NOMBRE,
+                          'fecha',  so.FECHA)
+                          ORDER BY so.PK_TACTIVIDAD_SOPORTE)
+                 FROM academico_test.TACTIVIDAD_SOPORTE so
+                 LEFT JOIN academico_test.TARCHIVO ar ON ar.PK_TARCHIVO = so.FK_TARCHIVO
+                WHERE so.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
+                  AND so.ACTIVE = TRUE
+                  AND so.FK_TARCHIVO IS NOT NULL
+           ), '[]'::jsonb)
       FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
       JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = ae.FK_TACTIVIDAD
       LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_INSTRUMENTO_EVALUACION
@@ -321,4 +342,4 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_obtener(BIGINT, BIGINT)
-    IS 'Lee la nota de un estudiante para una actividad: instrumento aplicado, CALIFICACION (porcentaje 0-100, SIN homologar a la escala visual del periodo/asignatura — eso es responsabilidad de la capa de lectura/reporte existente, ver cabecera de V227), CALIFICABLE, OBSERVACION y el detalle de captura segun el instrumento (RUBRICA: [{pkCriterio,pkNivel,ponderacion}]; LISTA_COTEJO: [{pkItem,cumplido}]; ESCALA_VALORACION: {pkNivel,valor,ponderacion}; OTRO: si tiene metodo de valoracion configurado (fn_actividad_otro_metodo_valoracion, V240) reutiliza el MISMO formato de detalle de ese metodo (V241); OTRO sin metodo configurado: NULL). Gate VER sobre PLANEADOR. Es el DETALLE de UN estudiante; para la tabla completa de la pantalla use fn_actividad_estudiantes_calificaciones_listar. V227/V241.';
+    IS 'Lee la nota de un estudiante para una actividad: instrumento aplicado, CALIFICACION (porcentaje 0-100, SIN homologar a la escala visual del periodo/asignatura — eso es responsabilidad de la capa de lectura/reporte existente, ver cabecera de V227), CALIFICABLE, OBSERVACION y el detalle de captura segun el instrumento (RUBRICA: [{pkCriterio,pkNivel,ponderacion}]; LISTA_COTEJO: [{pkItem,cumplido}]; ESCALA_VALORACION: {pkNivel,valor,ponderacion}; OTRO: si tiene metodo de valoracion configurado (fn_actividad_otro_metodo_valoracion, V240) reutiliza el MISMO formato de detalle de ese metodo (V241); OTRO sin metodo configurado: NULL). evidencias: [{pk, fkTarchivo, nombre, fecha}] son los archivos adjuntos a la OBSERVACION (TACTIVIDAD_SOPORTE, V243) -- el caso Preescolar/FORMATIVO, donde no hay nota sino texto e imagenes; [] si no hay. NO confundir con TASISTENCIA.FK_SOPORTE_ARCHIVO, que es el soporte de la excusa de inasistencia. Gate VER sobre PLANEADOR. Es el DETALLE de UN estudiante; para la tabla completa de la pantalla use fn_actividad_estudiantes_calificaciones_listar. V227/V241.';
