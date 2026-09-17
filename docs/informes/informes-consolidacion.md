@@ -283,6 +283,20 @@ un error.
 
 ## 5. Referencia de cada endpoint
 
+> **Sobre los ejemplos.** El motor de queries del SSO envuelve **todo** resultado
+> de lectura en `{ "rows": [...] }`, así que eso es lo que llega por HTTP aunque
+> acá se muestre a veces solo la fila. Los ejemplos de respuesta salen de
+> llamadas reales al servidor de test; los tres que no se pudieron ejecutar están
+> marcados como **FORMA** — hoy ningún dato de test los produce (ninguna
+> actividad calificada cae dentro de un periodo de evaluación, así que no hay
+> informes guardados, ni cambios posteriores a un guardado, ni observaciones
+> resumibles). Los nombres de columna de esos tres salen del `RETURNS TABLE` de
+> la función, que es la fuente de verdad.
+>
+> Ojo con un detalle que muerde: la abreviación del periodo se llama
+> **`abreviacion`** en `/informes/periodos` y **`periodo_abreviacion`** en
+> `/informes/grupo`, `/informes/historial` y las dos alertas.
+
 ### `POST /informes/sedes`
 
 Primer select. **Sin cuerpo** (`{}`).
@@ -399,6 +413,57 @@ La sede, la jornada y el establecimiento siguen viajando en cada fila aunque aho
 sean siempre los mismos: así podés rotular la pestaña sin arrastrar lo que eligió
 el usuario.
 
+**Respuesta** (real, 2 de 2 filas)
+
+```json
+{
+  "rows": [
+    {
+      "fk_tperiodo_evaluacion": 625,
+      "codigo": "01",
+      "nombre": "Primer periodo",
+      "abreviacion": "P1",
+      "fecha_inicio": "2026-09-02",
+      "fecha_fin": "2026-09-10",
+      "porcentaje": 1,
+      "estado": "NO Calificable",
+      "calificable": false,
+      "termino": true,
+      "en_curso": false,
+      "fk_tperiodo_academico": 1780,
+      "periodo_academico": "2026 - C",
+      "fk_tsede": 1671,
+      "sede_nombre": "colegio chino",
+      "fk_tlv_jornada": 51900,
+      "jornada": "Completa",
+      "fk_testablecimiento": 890,
+      "anio": 2026
+    },
+    {
+      "fk_tperiodo_evaluacion": 626,
+      "codigo": "P2",
+      "nombre": "Segundo periodo",
+      "abreviacion": "P2",
+      "fecha_inicio": "2026-09-12",
+      "fecha_fin": "2026-09-27",
+      "porcentaje": 1,
+      "estado": "NO Calificable",
+      "calificable": false,
+      "termino": false,
+      "en_curso": true,
+      "fk_tperiodo_academico": 1780,
+      "periodo_academico": "2026 - C",
+      "fk_tsede": 1671,
+      "sede_nombre": "colegio chino",
+      "fk_tlv_jornada": 51900,
+      "jornada": "Completa",
+      "fk_testablecimiento": 890,
+      "anio": 2026
+    }
+  ]
+}
+```
+
 ---
 
 ### `POST /informes/grupo`
@@ -454,6 +519,55 @@ Y en modo requerido: `puesto` viene `null`, `promedio_proyectado` trae el
 **mínimo del grado**, y `consolidado`/`promedio_guardado`/`aprobadas`/`reprobadas`
 vienen vacíos o en cero.
 
+**Respuesta** (real — una fila en `modo_periodo: "requerido"`, que es justo el caso que más cuesta leer)
+
+```json
+{
+  "rows": [
+    {
+      "fk_tmatricula": 223117,
+      "estudiante": "JORGITO SANCHEZ",
+      "documento": "131312131",
+      "fk_tperiodo_evaluacion": 622,
+      "periodo_nombre": "Primer periodo",
+      "periodo_abreviacion": "P1",
+      "periodo_inicio": "2026-09-01",
+      "modo_periodo": "requerido",
+      "formato": "numerico",
+      "es_cualitativo": false,
+      "consolidado": false,
+      "promedio_guardado": null,
+      "promedio_proyectado": 25,
+      "puesto": null,
+      "asignaturas_total": 1,
+      "aprobadas": 0,
+      "reprobadas": 0,
+      "sin_definir": 1,
+      "tiene_cambios_propuestos": false,
+      "asignaturas": [
+        {
+          "area": "MATEMATICAS",
+          "nota": 25,
+          "orden": 1,
+          "estado": "requerido",
+          "nombre": "MATEMATICAS",
+          "alcanzable": true,
+          "asignatura": 4190,
+          "porcentaje": 25,
+          "abreviacion": null,
+          "es_numerico": true,
+          "ya_asegurado": false
+        }
+      ],
+      "observacion": null,
+      "observacion_estado": null,
+      "observacion_desactualizada": null,
+      "total_count": 1
+    }
+  ]
+}
+```
+
 ---
 
 ### `POST /informes/guardar`
@@ -507,6 +621,47 @@ de preescolar —que dejan comentarios, no números— no salgan como morosos.
 `actividades: 0` significa que el docente **ni siquiera armó** las actividades;
 mayor que 0, que las armó y no las calificó.
 
+**Respuesta** (real, 2 de 2 filas)
+
+```json
+{
+  "rows": [
+    {
+      "fk_tgrupo": 11474,
+      "grupo_nombre": "01",
+      "fk_tasignatura": 4191,
+      "asignatura_nombre": "MATEMATICA FINANCIERA",
+      "fk_tfuncionario": 3587701,
+      "fk_tusuario_docente": 197422,
+      "docente": "SANDRO TORRES",
+      "docentes_asignados": 1,
+      "fk_tperiodo_evaluacion": 622,
+      "periodo_nombre": "Primer periodo",
+      "periodo_abreviacion": "P1",
+      "periodo_fin": "2026-09-13",
+      "estudiantes": 1,
+      "actividades": 0
+    },
+    {
+      "fk_tgrupo": 11474,
+      "grupo_nombre": "01",
+      "fk_tasignatura": 4190,
+      "asignatura_nombre": "MATEMATICAS",
+      "fk_tfuncionario": 3587701,
+      "fk_tusuario_docente": 197422,
+      "docente": "SANDRO TORRES",
+      "docentes_asignados": 1,
+      "fk_tperiodo_evaluacion": 622,
+      "periodo_nombre": "Primer periodo",
+      "periodo_abreviacion": "P1",
+      "periodo_fin": "2026-09-13",
+      "estudiantes": 1,
+      "actividades": 1
+    }
+  ]
+}
+```
+
 ---
 
 ### `POST /informes/cambios-pendientes` — alerta **naranja**
@@ -527,6 +682,30 @@ combinaciones con más de un docente.
 
 **Solo cuentan las asignaturas ya consolidadas.** Si el periodo nunca se guardó
 no hay nada que "aprobar": la nota simplemente aún no se congeló.
+
+**Respuesta** — **FORMA**, ningún dato de test produce hoy esta alerta
+
+```json
+{
+  "rows": [
+    {
+      "fk_tgrupo": 11474,
+      "grupo_nombre": "01",
+      "fk_tasignatura": 4190,
+      "asignatura_nombre": "MATEMATICAS",
+      "fk_tperiodo_evaluacion": 622,
+      "periodo_nombre": "Primer periodo",
+      "periodo_abreviacion": "P1",
+      "fk_tfuncionario": 3587743,
+      "fk_tusuario_docente": 197049,
+      "docente": "ALEJANDRO TORO",
+      "docentes_asignados": 1,
+      "estudiantes_afectados": 3,
+      "ultimo_cambio": "2026-09-16T09:12:44"
+    }
+  ]
+}
+```
 
 ---
 
@@ -562,6 +741,39 @@ asignatura desde la planilla.
 
 **Solo aparecen los días con movimiento**: volver a pulsar guardar sin cambios no
 deja entrada.
+
+**Respuesta** — **FORMA**, `TINFORME_GUARDADO` está vacía en test
+
+```json
+{
+  "rows": [
+    {
+      "pk_tinforme_guardado": 41,
+      "fecha": "2026-09-15",
+      "momento": "2026-09-15T16:42:08",
+      "fk_tgrupo": 11474,
+      "grupo_nombre": "01",
+      "fk_tasignatura": null,
+      "asignatura_nombre": null,
+      "origen": "informe",
+      "fk_tperiodo_evaluacion": 622,
+      "periodo_nombre": "Primer periodo",
+      "periodo_abreviacion": "P1",
+      "fk_tusuario": 197798,
+      "guardado_por": "ANA MARIA TORRES",
+      "estudiantes": 27,
+      "detalle": [
+        {
+          "fk_tmatricula": 223117,
+          "estudiante": "JORGITO SANCHEZ",
+          "guardadas": 5,
+          "actualizadas": 0
+        }
+      ]
+    }
+  ]
+}
+```
 
 ---
 
