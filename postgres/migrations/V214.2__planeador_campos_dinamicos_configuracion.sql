@@ -611,9 +611,24 @@ BEGIN
                        'pkTunidadEnunciado', ue.PK_TUNIDAD_ENUNCIADO,
                        'pk',                 en.PK_REFERENTE_ENUNCIADO,
                        'texto',              en.TEXTO,
+                       -- yaRelacionada/pkTactividadEvidencia: sin esto el
+                       -- cliente no tenia forma de saber, al recargar, que
+                       -- evidencias ya estaban vinculadas a ESTA actividad
+                       -- (TACTIVIDAD_EVIDENCIA) -- el checklist siempre
+                       -- volvia sin nada tildado aunque el docente ya
+                       -- hubiera guardado. Mismo patron que pkTunidadEnunciado
+                       -- ya usa para el nivel 1 (unidad<->enunciado).
                        'evidencias', COALESCE((
-                           SELECT jsonb_agg(jsonb_build_object('pk', ev.PK_REFERENTE_ENUNCIADO, 'texto', ev.TEXTO))
+                           SELECT jsonb_agg(jsonb_build_object(
+                                      'pk', ev.PK_REFERENTE_ENUNCIADO,
+                                      'texto', ev.TEXTO,
+                                      'pkTactividadEvidencia', ae.PK_TACTIVIDAD_EVIDENCIA,
+                                      'yaRelacionada', ae.PK_TACTIVIDAD_EVIDENCIA IS NOT NULL))
                              FROM academico_test.TREFERENTE_ENUNCIADO ev
+                             LEFT JOIN academico_test.TACTIVIDAD_EVIDENCIA ae
+                                    ON ae.FK_REFERENTE_ENUNCIADO = ev.PK_REFERENTE_ENUNCIADO
+                                   AND ae.FK_TACTIVIDAD = p_pk_tactividad
+                                   AND ae.ACTIVE = TRUE
                             WHERE ev.FK_PADRE = en.PK_REFERENTE_ENUNCIADO
                               AND ev.ACTIVE = TRUE
                        ), '[]'::jsonb))
@@ -634,7 +649,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_unidad_configuracion(BIGINT, BIGINT)
-    IS 'Snapshot completo de la configuracion de la unidad de una actividad (TACTIVIDAD.FK_TUNIDAD): {tieneUnidad:false} si la actividad no tiene unidad relacionada (opcional desde V218); si la tiene, {tieneUnidad:true, pkTunidad, nombre, descripcion, objetivos:[...], contenidos:[...], referenteCurricular:{...}|null, rubrica:[{pk,orden,descripcion,niveles:[...]}] (misma forma que fn_unidad_criterio_listar de V222), enunciados:[{pkTunidadEnunciado,pk,texto,evidencias:[{pk,texto}]}] (TUNIDAD_ENUNCIADO de V214.1 con sus evidencias hijas de TREFERENTE_ENUNCIADO)}. Gate VER sobre PLANEADOR. V214.2.';
+    IS 'Snapshot completo de la configuracion de la unidad de una actividad (TACTIVIDAD.FK_TUNIDAD): {tieneUnidad:false} si la actividad no tiene unidad relacionada (opcional desde V218); si la tiene, {tieneUnidad:true, pkTunidad, nombre, descripcion, objetivos:[...], contenidos:[...], referenteCurricular:{...}|null, rubrica:[{pk,orden,descripcion,niveles:[...]}] (misma forma que fn_unidad_criterio_listar de V222), enunciados:[{pkTunidadEnunciado,pk,texto,evidencias:[{pk,texto,pkTactividadEvidencia,yaRelacionada}]}] (TUNIDAD_ENUNCIADO de V214.1 con sus evidencias hijas de TREFERENTE_ENUNCIADO; yaRelacionada/pkTactividadEvidencia salen de un LEFT JOIN contra TACTIVIDAD_EVIDENCIA acotado a ESTA actividad -- antes no habia forma de saber que evidencias ya estaban vinculadas al recargar). Gate VER sobre PLANEADOR. V214.2.';
 
 -- ===========================================================================
 -- GUARD "instrumento huerfano" — dos helpers de listado + el trigger que
