@@ -3,9 +3,13 @@
 Guía del módulo para el front: qué endpoint sirve cada parte de la pantalla, qué
 se manda, qué vuelve y **por qué** funciona así.
 
-Son **11 endpoints**, todos `POST` y todos bajo `/api/eval-col/informes/...`.
+Son **15 endpoints**, todos `POST` y todos bajo `/api/eval-col/informes/...`.
 
 ```
+POST /informes/sedes                  select 1 -- la sede
+POST /informes/anos                   select 2 -- el año
+POST /informes/jornadas               select 3 -- la jornada
+POST /informes/grupos-periodo         los grupos de esa combinación
 POST /informes/periodos               los checkboxes de periodo
 POST /informes/grupo                  la tabla principal
 POST /informes/guardar                consolidar el informe completo
@@ -23,6 +27,7 @@ POST /informes/observacion/eliminar   quitar el resumen guardado
 
 ## Índice
 
+0. [La cascada: sede → año → jornada](#0-la-cascada-sede--año--jornada) ← **empezá por acá**
 1. [Por qué todos son POST](#1-por-qué-todos-son-post)
 2. [Los dos ejes que gobiernan la respuesta](#2-los-dos-ejes-que-gobiernan-la-respuesta)
 3. [Las tres notas: guardada, proyectada y requerida](#3-las-tres-notas)
@@ -32,13 +37,80 @@ POST /informes/observacion/eliminar   quitar el resumen guardado
 
 ---
 
+## 0. La cascada: sede → año → jornada
+
+Todo lo demás cuelga de acá, así que va primero.
+
+```
+POST /informes/sedes    {}                                   -> elige SEDE
+POST /informes/anos     {FK_TSEDE}                           -> elige AÑO
+POST /informes/jornadas {FK_TSEDE, ANIO}                     -> elige JORNADA
+      │
+      ├── POST /informes/periodos       {FK_TSEDE, ANIO, FK_TLV_JORNADA}
+      └── POST /informes/grupos-periodo {FK_TSEDE, ANIO, FK_TLV_JORNADA}
+                                              │
+                                              └── POST /informes/grupo {FK_TGRUPO, PERIODOS}
+```
+
+Esos tres valores resuelven **un periodo académico**, y de ese periodo salen los
+periodos de evaluación y los grupos. No hace falta mandar el
+`FK_TPERIODO_ACADEMICO`: el backend lo resuelve con la terna.
+
+### Qué cambió respecto de la versión anterior
+
+| | antes | ahora |
+|---|---|---|
+| `/informes/periodos` | cuerpo opcional; devolvía **todo el año de todas las sedes y jornadas** del alcance | `FK_TSEDE` y `FK_TLV_JORNADA` **obligatorios**; devuelve solo los del periodo académico resuelto |
+| lista de grupos | `GET /planeador/docentes/grupos` | `POST /informes/grupos-periodo` |
+
+Las dos son **rupturas de contrato**: la pantalla no carga con `{}` y la lista de
+grupos cambia de ruta y de forma.
+
+Lo de los grupos no era solo cosmético. `/planeador/docentes/grupos` exige permiso
+del menú **PLANEADOR** (quien tenía `INFORMES` y no `PLANEADOR` no podía abrir la
+pantalla) y además solo devuelve los grupos **donde el docente dicta** — un rector,
+una secretaria o un coordinador no veían ninguno. El endpoint nuevo no filtra por
+quién dicta: qué grupos ve cada quien lo decide el permiso `INFORMES/VER` con su
+alcance.
+
+### Por qué hacía falta
+
+`/informes/periodos` devolvía los periodos de evaluación de todo el año dentro del
+alcance del usuario. Medido en test, alguien con alcance total recibía **8 periodos
+de 5 sedes de 3 establecimientos con solo 4 nombres distintos**: media lista eran
+"Primer periodo" repetidos, indistinguibles salvo por la sede que venía en la fila.
+
+### Detalles que te van a morder
+
+- **El `FK_TPERIODO_ACADEMICO` viene gratis.** `/informes/jornadas` devuelve una
+  fila **por periodo académico**, no por jornada distinta, y cada fila trae su PK.
+  Hoy la terna resuelve siempre uno solo, pero ningún índice lo garantiza (el único
+  `UNIQUE` es `(año, sede, NOMBRE)` y no incluye la jornada) y en el histórico
+  aparecieron 24 casos, varios de colegios por ciclos: `"2015"` y `"2015BH CICLO VI"`,
+  misma sede y jornada. Si alguna vez te llegan dos filas con la **misma** jornada,
+  mostralas las dos con su `periodo_nombre` y avisanos: los endpoints de abajo
+  reciben la terna, no la PK, así que hoy se quedarían con el periodo de fecha más
+  reciente. Pasarles la PK es un cambio chico, pero hay que hacerlo.
+- **El año es un número** (`2026`), no una FK. `TANO_LECTIVO` es por establecimiento:
+  "el año lectivo 2026" no existe como registro único — 2025 tiene 47 filas.
+- **Solo el año en curso y los anteriores.** Hay periodos ya creados para 2027-2029
+  y no se ofrecen: es configuración adelantada.
+- **La jornada del grupo no es la del periodo académico.** De 5.339 grupos activos,
+  5.277 difieren, porque en los años viejos el periodo se creaba como "Completa" y la
+  jornada real vivía en el grupo. Por eso `grupos-periodo` **no** filtra por la
+  jornada del grupo — te la devuelve como columna para que agrupes o rotules.
+- **Elegir una sede ajena es `403`, no una lista vacía.** Desde que la sede y la
+  jornada viajan en el cuerpo, el permiso se valida antes de leer.
+
+---
+
 ## 1. Por qué todos son POST
 
 Cuatro reciben arreglos (`GRUPOS`, `PERIODOS`, `MATRICULAS`). **En este esquema
 no hay un solo endpoint `GET` que pase un arreglo** — se revisó: `param_types`
 con `[]` aparece únicamente en `POST` y `PUT`, siempre por body.
 
-Los que no llevan arreglos van `POST` igual, por coherencia: los 11 endpoints de
+Los que no llevan arreglos van `POST` igual, por coherencia: los 15 endpoints de
 una misma pantalla se consumen del mismo modo y no hay que recordar cuál es la
 excepción. El `execution_mode` sigue siendo `SELECT`, así que los de lectura no
 escriben nada.
@@ -180,13 +252,18 @@ Todos los endpoints validan contra el menú **`INFORMES`**:
 
 | Acción | Endpoints |
 |---|---|
-| `VER` | periodos, grupo, planilla, las dos alertas, historial, observacion/generar |
+| `VER` | sedes, anos, jornadas, grupos-periodo, periodos, grupo, planilla, las dos alertas, historial, observacion/generar |
 | `EDITAR` | guardar, planilla/guardar, observacion/guardar |
 | `ELIMINAR` | observacion/eliminar |
 
 Además del permiso, cuenta el **alcance**: nivel 0 pasa, nivel 1 (territoriales)
 llega a todos los EE, nivel 2 a los suyos, nivel 3 (docentes) a su **sede y
 jornada**.
+
+Los tres selects de la cascada aplican **ese mismo alcance** al armar sus listas,
+así que un rol de nivel 3 ve su sede y una sola jornada en vez de opciones que
+después le responderían 403. Medido: niveles 0 y 1 ven 36 sedes, un nivel 2 ve 4
+y un nivel 3 ve 1.
 
 ### Códigos
 
@@ -206,33 +283,132 @@ un error.
 
 ## 5. Referencia de cada endpoint
 
-### `POST /informes/periodos`
+### `POST /informes/sedes`
 
-Los checkboxes de periodo. **Todos los parámetros son opcionales.**
+Primer select. **Sin cuerpo** (`{}`).
+
+No recibe parámetros a propósito: el alcance sale de quien pregunta, no del body.
+Si se pudiera pedir un establecimiento, se podría sondear cuáles existen mirando
+cuál devuelve vacío.
+
+Devuelve solo sedes **activas, de un EE activo y con al menos un periodo académico**
+del año en curso o anterior — una sede sin periodos no da informes y ofrecerla solo
+lleva a un segundo select vacío. Cada fila trae el establecimiento, porque quien
+alcanza varios necesita distinguir sedes de nombre parecido.
 
 ```json
-{ "ANIO": 2026, "FK_TESTABLECIMIENTO": null, "FK_TSEDE": null }
+{ "fk_tsede": 1671, "sede_nombre": "colegio chino",
+  "fk_testablecimiento": 890, "establecimiento_nombre": "colegio chino" }
 ```
 
-Sin nada devuelve el **año en curso** dentro del alcance del usuario, que es lo
-que hace la pantalla al abrirse.
+---
 
-`ANIO` es un **número**, no una FK, porque `TANO_LECTIVO` es por establecimiento
-y "el año lectivo 2026" no existe como registro único: 2025 tiene 47 filas para
-47 EE. `FK_TESTABLECIMIENTO` y `FK_TSEDE` solo **acotan**, nunca amplían.
+### `POST /informes/anos`
+
+Segundo select.
+
+```json
+{ "FK_TSEDE": 1671 }
+```
+
+Devuelve `{ "anio": 2026, "es_actual": true }`, de mayor a menor. `es_actual` está
+para que preselecciones sin volver a calcular la fecha.
+
+**Solo el año en curso y anteriores.** `FK_TSEDE` acota y nunca amplía; sin él
+devuelve los años de todo el alcance.
+
+---
+
+### `POST /informes/jornadas`
+
+Tercer select.
+
+```json
+{ "FK_TSEDE": 1671, "ANIO": 2026 }
+```
+
+Sin `ANIO` toma el año en curso.
+
+```json
+{ "fk_tlv_jornada": 51900, "jornada_nombre": "Completa",
+  "fk_tperiodo_academico": 1780, "periodo_nombre": "2026 - C",
+  "fecha_inicio": "2026-09-02", "fecha_fin": "2026-12-12", "en_curso": true }
+```
+
+Una fila **por periodo académico**. Mostrá `jornada_nombre`; guardate
+`fk_tperiodo_academico` por si algún día llegan dos filas con la misma jornada
+(ver [sección 0](#0-la-cascada-sede--año--jornada)).
+
+---
+
+### `POST /informes/grupos-periodo`
+
+Los grupos del periodo académico que resuelve la terna. Reemplaza a
+`GET /planeador/docentes/grupos`.
+
+```json
+{ "FK_TSEDE": 1671, "ANIO": 2026, "FK_TLV_JORNADA": 51900, "SEARCH": null }
+```
+
+```json
+{ "grupo_id": 11484, "grupo_codigo": null, "grupo_nombre": "01",
+  "grupo_etiqueta": "-201", "capacidad": 1, "estudiantes": 1,
+  "jornada_id": 51900, "jornada_nombre": "Completa",
+  "grado_id": 3749, "grado_codigo": "-2", "grado_nombre": "Pre-Jardin",
+  "nivel_ensenanza_id": 1, "nivel_ensenanza_nombre": "Preescolar",
+  "director_id": 3587743, "director_nombre": "ALEJANDRO TORO",
+  "fk_tperiodo_academico": 1780 }
+```
+
+- `grupo_etiqueta` viene armada con la misma convención del planeador, para que las
+  dos pantallas rotulen igual. **Los códigos negativos de preescolar son correctos**:
+  grado `-1` + grupo `01` → `-101`, no es un signo perdido.
+- `estudiantes` son las matrículas activas. Un grupo en cero no tiene informe que
+  mostrar, y verlo antes de abrirlo ahorra el viaje.
+- `SEARCH` filtra por nombre y código de grupo, nombre de grado y la etiqueta
+  compuesta — quien escribe "quinto a" lo encuentra aunque ese texto no exista
+  entero en ninguna columna.
+- **No filtra por quién dicta.** Eso lo decide el permiso.
+
+---
+
+### `POST /informes/periodos`
+
+Los checkboxes de periodo, del periodo académico que resuelve la terna.
+
+```json
+{ "FK_TSEDE": 1671, "ANIO": 2026, "FK_TLV_JORNADA": 51900 }
+```
+
+> **Cambió el contrato.** Antes aceptaba `{}` y devolvía todo el año de todas las
+> sedes del alcance. Ahora `FK_TSEDE` y `FK_TLV_JORNADA` son **obligatorios**; sin
+> `ANIO` se toma el año en curso.
+
+`ANIO` es un **número**, no una FK, porque `TANO_LECTIVO` es por establecimiento y
+"el año lectivo 2026" no existe como registro único: 2025 tiene 47 filas para 47 EE.
 
 Devuelve `termino` y `en_curso` ya calculados. `termino` es exactamente la
 condición que usa la alerta roja, así que **no la reimplementes** con otro
-criterio.
+criterio. `calificable` viene resuelto del catálogo.
 
-La sede y la jornada viajan porque dos periodos pueden llamarse igual en sedes
-distintas del mismo EE.
+Errores propios: `403` si no alcanzás esa sede y jornada, `404` (`P0002`) si no hay
+periodo académico para esa combinación — un error explícito en vez de una lista
+vacía que se confunde con "no hay nada configurado".
+
+La sede, la jornada y el establecimiento siguen viajando en cada fila aunque ahora
+sean siempre los mismos: así podés rotular la pestaña sin arrastrar lo que eligió
+el usuario.
 
 ---
 
 ### `POST /informes/grupo`
 
 La tabla principal. **Una fila por (estudiante, periodo).**
+
+`FK_TGRUPO` sale de [`/informes/grupos-periodo`](#post-informesgrupos-periodo) y
+`PERIODOS` de [`/informes/periodos`](#post-informesperiodos). Este endpoint **no
+cambió**: recibe el grupo directo y de él deduce el periodo académico, así que no
+hay ambigüedad que resolver acá.
 
 ```json
 { "FK_TGRUPO": 11474, "PERIODOS": [622, 627], "SEARCH": null }
