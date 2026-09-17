@@ -1,6 +1,7 @@
 -- ===========================================================================
 -- V214.2 — Planeador educativo: campos dinamicos y configuracion agregada
 -- (CU-86e311xxp — G. Academico Back Planeador educativo).
+-- Nota: los bloques criterio/evaluacion/ponderacion los construye V440.
 --
 -- Contexto (diagrama de dependencias del formulario Planeador -- lineas
 -- ROJAS = dependencias dinamicas: dado el valor de un campo condicionante,
@@ -387,6 +388,66 @@ COMMENT ON FUNCTION academico_test.fn_actividad_instrumentos_permitidos(BIGINT, 
 -- fn_actividad_campos_disponibles — condiciones dinamicas 2, 3 y 4
 -- resueltas para una actividad concreta.
 -- ===========================================================================
+-- ===========================================================================
+-- fn_actividad_recuperacion_campos_disponibles — la seccion "Es una
+-- recuperacion" del formulario, con sus tres catalogos.
+--
+-- Vive aqui para que las TRES configuraciones (por actividad V214.2, por
+-- unidad V282 y por contexto V420) den la misma respuesta y los mismos textos.
+-- Depende de DOS gates, no de uno: referente EVALUATIVO y ES_EVALUATIVA='S'
+-- -- fn_actividad_crear/_actualizar rechazan "una actividad de recuperacion
+-- debe ser evaluativa", asi que ofrecer la seccion en una no evaluativa seria
+-- ofrecer algo que la escritura va a rechazar.
+-- ===========================================================================
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_recuperacion_campos_disponibles(
+    p_evaluativo     BOOLEAN,
+    p_es_evaluativa  VARCHAR DEFAULT 'S'
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_ev      VARCHAR := UPPER(TRIM(COALESCE(p_es_evaluativa, 'S')));
+    v_visible BOOLEAN := COALESCE(p_evaluativo, FALSE) AND v_ev <> 'N';
+BEGIN
+    RETURN jsonb_build_object(
+        'visible',   v_visible,
+        'requerido', FALSE,          -- ser de recuperacion siempre es opcional
+        'motivo', CASE
+            WHEN v_ev = 'N' THEN 'La actividad se creara como NO evaluativa; una actividad de recuperacion debe ser evaluativa'
+            WHEN NOT COALESCE(p_evaluativo, FALSE) THEN 'El referente curricular no es EVALUATIVO: no hay nota que recuperar'
+            ELSE 'Opcional: la actividad puede registrarse como recuperacion de otra actividad o de la nota final'
+        END,
+        -- Los PK de TLISTA_VALOR no son estables entre entornos: el front debe
+        -- decidir por VALOR, no por pk.
+        'catalogos', (
+            SELECT jsonb_object_agg(k, v)
+              FROM (SELECT CASE lv.CATEGORIA
+                               WHEN 'DESTINO_RECUPERACION'         THEN 'destino'
+                               WHEN 'TIPO_APLICACION_RECUPERACION' THEN 'tipoAplicacion'
+                               ELSE 'tipoCalculo' END AS k,
+                           jsonb_agg(jsonb_build_object(
+                               'pk', lv.PK_LISTA_VALOR, 'valor', lv.VALOR, 'nombre', lv.NOMBRE)
+                               ORDER BY lv.VALOR) AS v
+                      FROM academico_test.TLISTA_VALOR lv
+                     WHERE lv.CATEGORIA IN ('DESTINO_RECUPERACION',
+                                            'TIPO_APLICACION_RECUPERACION',
+                                            'TIPO_CALCULO_RECUPERACION')
+                       AND lv.ACTIVE = TRUE
+                     GROUP BY lv.CATEGORIA) c),
+        -- Reglas que la escritura (fn_actividad_recuperacion_configurar) exige
+        -- y que el formulario debe reflejar sin tener que descubrirlas por 400.
+        'reglas', jsonb_build_object(
+            'actividadRecuperarRequeridaSi', 'destino = ACTIVIDAD',
+            'valorPonderacionRequeridoSi',   'tipoCalculo = PONDERADO',
+            'valorPonderacionRango',         jsonb_build_object('min', 0, 'max', 100)));
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_recuperacion_campos_disponibles(BOOLEAN, VARCHAR)
+    IS 'La seccion "Es una recuperacion" del formulario de actividad: {visible, requerido, motivo, catalogos:{destino, tipoAplicacion, tipoCalculo}, reglas}. Punto unico para que las TRES configuraciones -- por actividad (fn_actividad_campos_disponibles, V214.2), por unidad (fn_unidad_configuracion_actividad, V282) y por contexto (fn_actividad_configuracion_contexto, V420) -- den la misma respuesta y los mismos textos. visible depende de DOS gates, no solo del referente: referente EVALUATIVO Y ES_EVALUATIVA distinto de N, porque fn_actividad_crear/_actualizar rechazan con 22023 "una actividad de recuperacion debe ser evaluativa" y ofrecer la seccion en una no evaluativa seria ofrecer algo que la escritura rechaza. requerido siempre FALSE: p_recuperacion NULL = actividad normal. Los catalogos salen de TLISTA_VALOR como {pk, valor, nombre} y el front debe decidir por VALOR: los pk no son estables entre entornos. reglas expone las condicionales que valida fn_actividad_recuperacion_configurar (actividad a recuperar obligatoria sii destino = ACTIVIDAD; valorPonderacion obligatorio y 0..100 sii tipoCalculo = PONDERADO) para que el formulario no las descubra a base de 400. V214.2.';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_campos_disponibles(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tactividad            BIGINT
@@ -503,7 +564,9 @@ BEGIN
             END,
             'instrumentosPermitidos', v_instrumentos
         ),
-        'ponderacion', v_ponderacion
+        'ponderacion', v_ponderacion,
+        'recuperacion', academico_test.fn_actividad_recuperacion_campos_disponibles(
+                            v_evaluacion_req, v_es_evaluativa)
     );
 END;
 $$;
