@@ -8,7 +8,7 @@
 -- Aqui se extraen tres helpers por VALORES resueltos y las tres funciones
 -- pasan a componerlos. Los helpers emiten `etiqueta` Y `nombre` (aditivo).
 --
--- Depende de: V214.2, V282, V420, V223, V277, V73.
+-- Depende de: V214.2, V282, V422, V223, V277, V73.
 -- ===========================================================================
 SET search_path TO academico_test, public;
 

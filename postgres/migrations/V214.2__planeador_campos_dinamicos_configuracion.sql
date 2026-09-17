@@ -393,7 +393,7 @@ COMMENT ON FUNCTION academico_test.fn_actividad_instrumentos_permitidos(BIGINT, 
 -- recuperacion" del formulario, con sus tres catalogos.
 --
 -- Vive aqui para que las TRES configuraciones (por actividad V214.2, por
--- unidad V282 y por contexto V420) den la misma respuesta y los mismos textos.
+-- unidad V282 y por contexto V422) den la misma respuesta y los mismos textos.
 -- Depende de DOS gates, no de uno: referente EVALUATIVO y ES_EVALUATIVA='S'
 -- -- fn_actividad_crear/_actualizar rechazan "una actividad de recuperacion
 -- debe ser evaluativa", asi que ofrecer la seccion en una no evaluativa seria
@@ -446,7 +446,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_recuperacion_campos_disponibles(BOOLEAN, VARCHAR)
-    IS 'La seccion "Es una recuperacion" del formulario de actividad: {visible, requerido, motivo, catalogos:{destino, tipoAplicacion, tipoCalculo}, reglas}. Punto unico para que las TRES configuraciones -- por actividad (fn_actividad_campos_disponibles, V214.2), por unidad (fn_unidad_configuracion_actividad, V282) y por contexto (fn_actividad_configuracion_contexto, V420) -- den la misma respuesta y los mismos textos. visible depende de DOS gates, no solo del referente: referente EVALUATIVO Y ES_EVALUATIVA distinto de N, porque fn_actividad_crear/_actualizar rechazan con 22023 "una actividad de recuperacion debe ser evaluativa" y ofrecer la seccion en una no evaluativa seria ofrecer algo que la escritura rechaza. requerido siempre FALSE: p_recuperacion NULL = actividad normal. Los catalogos salen de TLISTA_VALOR como {pk, valor, nombre} y el front debe decidir por VALOR: los pk no son estables entre entornos. reglas expone las condicionales que valida fn_actividad_recuperacion_configurar (actividad a recuperar obligatoria sii destino = ACTIVIDAD; valorPonderacion obligatorio y 0..100 sii tipoCalculo = PONDERADO) para que el formulario no las descubra a base de 400. V214.2.';
+    IS 'La seccion "Es una recuperacion" del formulario de actividad: {visible, requerido, motivo, catalogos:{destino, tipoAplicacion, tipoCalculo}, reglas}. Punto unico para que las TRES configuraciones -- por actividad (fn_actividad_campos_disponibles, V214.2), por unidad (fn_unidad_configuracion_actividad, V282) y por contexto (fn_actividad_configuracion_contexto, V422) -- den la misma respuesta y los mismos textos. visible depende de DOS gates, no solo del referente: referente EVALUATIVO Y ES_EVALUATIVA distinto de N, porque fn_actividad_crear/_actualizar rechazan con 22023 "una actividad de recuperacion debe ser evaluativa" y ofrecer la seccion en una no evaluativa seria ofrecer algo que la escritura rechaza. requerido siempre FALSE: p_recuperacion NULL = actividad normal. Los catalogos salen de TLISTA_VALOR como {pk, valor, nombre} y el front debe decidir por VALOR: los pk no son estables entre entornos. reglas expone las condicionales que valida fn_actividad_recuperacion_configurar (actividad a recuperar obligatoria sii destino = ACTIVIDAD; valorPonderacion obligatorio y 0..100 sii tipoCalculo = PONDERADO) para que el formulario no las descubra a base de 400. V214.2.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_campos_disponibles(
     p_pk_usuario_solicitante   BIGINT,

@@ -31,7 +31,7 @@ nivel de enseñanza y el referente; no se eligen a mano.
 | **Endpoint** | `GET /planeador/estudiantes` |
 | **Entra** | `GRUPO` (obligatorio), `ASIGNATURA`, `ACTIVIDAD`, `SEARCH`, `SIZE`, `OFFSET` |
 | **Sale** | `pk_tmatricula`, `fk_testudiante`, `estudiante`, `fk_tgrupo`, `grupo`, `fk_tgrado`, `grado`, `asignado`, `pk_tactividad_estudiante`, `total_count` |
-| **Función** | `fn_planeador_estudiantes_candidatos_listar` (V420) |
+| **Función** | `fn_planeador_estudiantes_candidatos_listar` (V422) |
 
 - `ASIGNATURA` **no recorta** la lista: todos los matriculados del grupo cursan
   la asignatura. Se valida para que un contexto incoherente falle claro.
@@ -74,7 +74,7 @@ el PK de la **relación**, no el del enunciado.
 |---|---|---|---|
 | **Endpoint** | `GET /planeador/actividades/configuracion` | `GET /planeador/unidades/:ID/configuracion-actividad` | `GET /planeador/actividades/:ID/configuracion` |
 | **Entra** | `GRUPO`, `ASIGNATURA`, `UNIDAD` (opcional), `ES_EVALUATIVA` | `ID`, `ES_EVALUATIVA` | `ID` |
-| **Función** | `fn_actividad_configuracion_contexto` (V420, cuerpo en V440) | `fn_unidad_configuracion_actividad` (V282, cuerpo en V440) | `fn_actividad_campos_disponibles` (V214.2, cuerpo en V440) |
+| **Función** | `fn_actividad_configuracion_contexto` (V422, cuerpo en V440) | `fn_unidad_configuracion_actividad` (V282, cuerpo en V440) | `fn_actividad_campos_disponibles` (V214.2, cuerpo en V440) |
 
 Las tres devuelven el **mismo** `campos_disponibles` desde V440:
 
@@ -98,7 +98,7 @@ Las tres devuelven el **mismo** `campos_disponibles` desde V440:
   debe decidir por **`valor`**: los PK de `TLISTA_VALOR` no son estables entre
   entornos.
 
-Solo el endpoint por contexto (V420) devuelve además **`programacion`**, los
+Solo el endpoint por contexto (V422) devuelve además **`programacion`**, los
 topes de esa sección del formulario:
 
 ```jsonc
@@ -319,7 +319,7 @@ migración posterior reescribió, re-ejecutarlo resucita la versión vieja. Ya p
 en el servidor de test (V29 revirtió V294/V295/V298/V302).
 
 Calculado con `python scripts/migration-reapply-set.py V214.2 V224 V241 V243
-V246 V255 V278 V282 V353 V420 V440 V441`:
+V246 V255 V278 V282 V353 V422 V440 V441`:
 
 ```
 V214.2__planeador_campos_dinamicos_configuracion.sql
@@ -332,7 +332,7 @@ V255__fn_unidad_referente_detalle.sql
 V278__fn_refcurr_por_grado_asignatura.sql
 V282__fn_unidad_configuracion_actividad.sql
 V353__fn_actividad_pantalla_edicion.sql
-V420__planeador_estudiantes_y_configuracion_contexto.sql
+V422__planeador_estudiantes_y_configuracion_contexto.sql
 V440__campos_disponibles_actividad_unificado.sql
 V441__planilla_asistencia_formativa.sql
 ```
@@ -348,9 +348,9 @@ Dos entradas no son obvias y son justo las que rompen si se omiten:
 Y una dependencia que la herramienta **no** detecta, porque es una llamada y no
 una redefinición:
 
-> **V224 y V420 tienen que ir en el mismo despliegue.** `fn_actividad_crear` y
+> **V224 y V422 tienen que ir en el mismo despliegue.** `fn_actividad_crear` y
 > `fn_actividad_actualizar` (V224) llaman a `fn_actividad_programacion_assert`,
-> que define V420. Si el set se parte, crear o editar una actividad responde
+> que define V422. Si el set se parte, crear o editar una actividad responde
 > **42883**. El orden entre ambas da igual: PL/pgSQL resuelve el cuerpo en
 > ejecución, y ninguna migración las invoca en tiempo de migración.
 

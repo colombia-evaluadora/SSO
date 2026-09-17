@@ -1297,7 +1297,7 @@ BEGIN
             p_fecha_cierre, p_fecha_inicio USING ERRCODE = '22023';
     END IF;
 
-    -- Limites de la seccion Programacion (V420): ventana del periodo academico,
+    -- Limites de la seccion Programacion (V422): ventana del periodo academico,
     -- dia habil segun horario, duracion y semana del cronograma. Mismo calculo
     -- que pinta la pantalla, para que el tope no sea solo decorativo.
     PERFORM academico_test.fn_actividad_programacion_assert(
