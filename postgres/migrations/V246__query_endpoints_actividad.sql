@@ -641,12 +641,13 @@ SELECT
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.ID AS BIGINT),
     CAST(:BODY.OBSERVACION AS TEXT),
-    COALESCE(CAST(:BODY.FECHA AS DATE), CURRENT_DATE)
+    COALESCE(CAST(:BODY.FECHA AS DATE), CURRENT_DATE),
+    CAST(:BODY.EVIDENCIAS AS BIGINT[])
 ) AS estudiantes_observados;',
     'postgres', false, false,
     m.id_microservice, '/planeador/actividades/:ID/observar-grupal', 'SELECT', 'POST',
-    '{"PARAM.ID": "BIGINT", "BODY.OBSERVACION": "VARCHAR", "BODY.FECHA": "DATE"}'::jsonb,
-    'V246 -- aplica la MISMA observacion (texto libre) a todos los estudiantes activos de una actividad FORMATIVA (preescolar/"Proyecto Pedagogico"; fn_actividad_observar_grupal, V243). :ID = PK_TACTIVIDAD. BODY.OBSERVACION obligatoria (no vacia); BODY.FECHA opcional (default hoy) para el gate de asistencia. Por cada estudiante exige asistencia valida ese dia; si un estudiante puntual no la tiene se OMITE (no detiene al resto). Guarda OBSERVACION + CALIFICACION=NULL + CALIFICABLE=N. Retorna la cantidad de estudiantes efectivamente observados. Gate EDITAR sobre PLANEADOR. 22023 si la actividad no es FORMATIVA (tiene referente EVALUATIVO o no tiene unidad) -- usar el endpoint de calificar con nota numerica en ese caso; 404 (P0002) si la actividad no existe.'
+    '{"PARAM.ID": "BIGINT", "BODY.OBSERVACION": "VARCHAR", "BODY.FECHA": "DATE", "BODY.EVIDENCIAS": "BIGINT[]"}'::jsonb,
+    'V246 -- aplica la MISMA observacion (texto libre) a todos los estudiantes activos de una actividad FORMATIVA (preescolar/"Proyecto Pedagogico"; fn_actividad_observar_grupal, V243). :ID = PK_TACTIVIDAD. BODY.OBSERVACION obligatoria (no vacia); BODY.FECHA opcional (default hoy) para el gate de asistencia. Por cada estudiante exige asistencia valida ese dia; si un estudiante puntual no la tiene se OMITE (no detiene al resto). Guarda OBSERVACION + CALIFICACION=NULL + CALIFICABLE=N. Retorna la cantidad de estudiantes efectivamente observados. BODY.EVIDENCIAS (BIGINT[] de PK_TARCHIVO, opcional) adjunta las imagenes/archivos de la observacion, con semantica de REEMPLAZO: omitirlo no toca los adjuntos, un array vacio los quita. El binario se sube ANTES por el file-service (POST /api/files/**) y aqui solo viajan los PK. Se guardan en TACTIVIDAD_SOPORTE, que es N:1 y por eso admite VARIAS imagenes por observacion; se leen en GET /planeador/actividades/estudiantes/:ID/nota (columna evidencias). Las evidencias se adjuntan a CADA estudiante observado: en la grupal son las fotos de la sesion, no unas por estudiante. Gate EDITAR sobre PLANEADOR. 22023 si la actividad no es FORMATIVA (tiene referente EVALUATIVO o no tiene unidad) -- usar el endpoint de calificar con nota numerica en ese caso; 404 (P0002) si la actividad no existe.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
@@ -677,11 +678,12 @@ SELECT
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.ID AS BIGINT),
     CAST(:BODY.OBSERVACION AS TEXT),
-    COALESCE(CAST(:BODY.FECHA AS DATE), CURRENT_DATE)
+    COALESCE(CAST(:BODY.FECHA AS DATE), CURRENT_DATE),
+    CAST(:BODY.EVIDENCIAS AS BIGINT[])
 );',
     'postgres', false, false,
     m.id_microservice, '/planeador/actividades/estudiantes/:ID/observar', 'SELECT', 'PUT',
-    '{"PARAM.ID": "BIGINT", "BODY.OBSERVACION": "VARCHAR", "BODY.FECHA": "DATE"}'::jsonb,
+    '{"PARAM.ID": "BIGINT", "BODY.OBSERVACION": "VARCHAR", "BODY.FECHA": "DATE", "BODY.EVIDENCIAS": "BIGINT[]"}'::jsonb,
     'V246 -- comentario particular de UN estudiante para una actividad FORMATIVA (preescolar; fn_actividad_observar_estudiante, V243). :ID = PK_TACTIVIDAD_ESTUDIANTE (NO PK_TACTIVIDAD). Sobreescribe lo que haya dejado la observacion grupal (o una llamada previa) para ese estudiante puntual. BODY.OBSERVACION obligatoria; BODY.FECHA opcional (default hoy). A diferencia de la grupal, PROPAGA el error de asistencia si no la hay (accion puntual). Gate EDITAR sobre PLANEADOR. 22023 si la actividad de ese estudiante no es FORMATIVA o si no hay asistencia valida ese dia; 404 (P0002) si la asignacion actividad-estudiante no existe.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
@@ -822,3 +824,21 @@ SELECT r.id_role, q.id_query
    AND q.path_template = '/planeador/actividades/criterios/:ID'
    AND q.http_method   = 'PATCH'
 ON CONFLICT DO NOTHING;
+
+-- ===========================================================================
+-- Las dos filas de observar ya existen en las bases desplegadas y los INSERT
+-- de arriba son ON CONFLICT DO NOTHING: no habrian anadido BODY.EVIDENCIAS.
+-- Se reconcilian aparte (patron V253/V279). No-op al reaplicar.
+-- ===========================================================================
+UPDATE public.query q
+   SET query       = replace(q.query,
+                             'COALESCE(CAST(:BODY.FECHA AS DATE), CURRENT_DATE)' || chr(10) || ')',
+                             'COALESCE(CAST(:BODY.FECHA AS DATE), CURRENT_DATE),' || chr(10)
+                             || '    CAST(:BODY.EVIDENCIAS AS BIGINT[])' || chr(10) || ')'),
+       param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"BODY.EVIDENCIAS": "BIGINT[]"}'::jsonb
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id
+   AND m.serviceid       = 'eval-col'
+   AND q.path_template IN ('/planeador/actividades/:ID/observar-grupal',
+                           '/planeador/actividades/estudiantes/:ID/observar')
+   AND q.query NOT LIKE '%:BODY.EVIDENCIAS%';
