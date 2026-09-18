@@ -725,6 +725,7 @@ class SsoAdminIntegrationTest {
                         org.mockito.ArgumentMatchers.eq("carol@example.com"),
                         org.mockito.ArgumentMatchers.eq("password-reset"),
                         payload.capture(),
+                        any(),
                         any());
 
         String restoreToken = extractToken(payload.getValue().get("resetLink").toString());

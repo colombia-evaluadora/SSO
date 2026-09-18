@@ -361,6 +361,7 @@ class UserAdminServiceTest {
                 eq("alice@example.com"),
                 eq("password-reset"),
                 payload.capture(),
+                any(),
                 any());
         Map<String, Object> p = payload.getValue();
         assertThat(p.get("resetLink").toString())
@@ -473,7 +474,8 @@ class UserAdminServiceTest {
                 eq("alice@example.com"),
                 eq("password-reset"),
                 payload.capture(),
-                any());
+                any(),
+                eq("COLOMBIA-EVALUADORA"));
         Map<String, Object> p = payload.getValue();
         // Per-app absolute launchUrl wins — restores to the
         // app's own URL, not the SSO console's default.
@@ -500,7 +502,7 @@ class UserAdminServiceTest {
         ArgumentCaptor<Map<String, Object>> payload =
                 ArgumentCaptor.forClass(Map.class);
         verify(events).publish(eq("email"), anyString(), eq("alice@example.com"),
-                eq("password-reset"), payload.capture(), any());
+                eq("password-reset"), payload.capture(), any(), eq("COLOMBIA-EVALUADORA"));
         // Trailing slash on the launchUrl must not produce a
         // double-slash in the composed URL.
         assertThat(payload.getValue().get("resetLink").toString())
@@ -525,7 +527,7 @@ class UserAdminServiceTest {
         ArgumentCaptor<Map<String, Object>> payload =
                 ArgumentCaptor.forClass(Map.class);
         verify(events).publish(eq("email"), anyString(), eq("alice@example.com"),
-                eq("password-reset"), payload.capture(), any());
+                eq("password-reset"), payload.capture(), any(), eq("SSO-ADMIN"));
         // Relative launchUrl is documented as unsupported (the
         // email needs an absolute URL); the service falls back
         // to the SSO's env-driven default instead of trying to
@@ -549,7 +551,7 @@ class UserAdminServiceTest {
         ArgumentCaptor<Map<String, Object>> payload =
                 ArgumentCaptor.forClass(Map.class);
         verify(events).publish(eq("email"), anyString(), eq("alice@example.com"),
-                eq("password-reset"), payload.capture(), any());
+                eq("password-reset"), payload.capture(), any(), eq("GHOST-APP"));
         // Unknown app name — no error, the email still goes out
         // with the default URL.
         assertThat(payload.getValue().get("resetLink").toString())
