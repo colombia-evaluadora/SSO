@@ -25,7 +25,7 @@ hay que regenerarlo a otro tamaño. No lo referencia el correo.
 | Archivo | Píxeles | Se muestra a | Dónde |
 |---|---|---|---|
 | logo.png | 480x132 | 160x44 | cabecera |
-| ilustracion.png | 288x288 | 96x96 | junto al titular |
+| ilustracion.png | 288x288 | 96x96 | sin usar — se quitó del titular |
 | reloj.png | 64x64 | 20x20 / 22x22 | vigencia del enlace y horario del pie |
 | escudo.png | 64x64 | 22x22 | aviso verde |
 | enlace.png | 64x64 | 22x22 | enlace alternativo |
