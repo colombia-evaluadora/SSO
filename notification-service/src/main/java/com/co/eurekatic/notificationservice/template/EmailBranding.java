@@ -53,10 +53,13 @@ public record EmailBranding(
     // escriba y no le responda nadie.
     private static final EmailBranding PIGSE = new EmailBranding(
             "PIGSE",
-            "logo-pigse.png",
+            // Variante en blanco del logo (fills recoloreados desde el SVG
+            // real de PIGSE) — la original es navy/rojo y se volvía
+            // invisible sobre un banner del mismo color.
+            "logo-pigse-white.png",
             "soporte@pigse.com",
+            "#B33837",
             "#ffffff",
-            "#070777",
             "#B33837"
     );
 
