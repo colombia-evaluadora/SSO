@@ -61,6 +61,13 @@ public class TemplateRenderer {
         try {
             Context ctx = new Context();
             ctx.setVariables(message.payload());
+            EmailBranding branding = EmailBranding.forAppName(message.metadata().appName());
+            ctx.setVariable("orgName", branding.orgName());
+            ctx.setVariable("logoFile", branding.logoFile());
+            ctx.setVariable("supportEmail", branding.supportEmail());
+            ctx.setVariable("bannerBg", branding.bannerBg());
+            ctx.setVariable("bannerFg", branding.bannerFg());
+            ctx.setVariable("accentColor", branding.accentColor());
             body = templateEngine.process(templateName, ctx);
         } catch (TemplateInputException ex) {
             throw new TemplateNotFoundException(message.templateId(), message.channel().name());
