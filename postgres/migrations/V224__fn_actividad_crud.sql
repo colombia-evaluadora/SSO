@@ -2535,6 +2535,9 @@ RETURNS TABLE (
     -- lo que exigen fn_actividad_evidencia_quitar / _criterio_quitar (V214.1).
     evidencias                      JSONB,
     criterios                       JSONB,
+    -- Los estudiantes asignados (TACTIVIDAD_ESTUDIANTE ACTIVE), con el pk de
+    -- la asignacion que piden calificar, observar y las adaptaciones.
+    estudiantes                     JSONB,
     recuperacion                    JSONB,
     campos_disponibles              JSONB,
     unidad_configuracion            JSONB,
@@ -2643,6 +2646,25 @@ BEGIN
                    ON cu.PK_TCRITERIO_UNIDAD = cr.FK_TCRITERIO_UNIDAD
                 WHERE cr.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND cr.ACTIVE = TRUE
            ), '[]'::jsonb),
+           COALESCE((
+               SELECT jsonb_agg(jsonb_build_object(
+                          'pkTactividadEstudiante', ae.PK_TACTIVIDAD_ESTUDIANTE,
+                          'pkTmatricula',           ae.FK_TMATRICULA,
+                          'fkTestudiante',          m.FK_TESTUDIANTE,
+                          'estudiante',             NULLIF(TRIM(CONCAT_WS(' ', us.PRIMER_NOMBRE, us.SEGUNDO_NOMBRE,
+                                                                             us.PRIMER_APELLIDO, us.SEGUNDO_APELLIDO)), ''),
+                          'calificacion',           n.CALIFICACION,
+                          'calificable',            n.CALIFICABLE,
+                          'observacion',            n.OBSERVACION)
+                          ORDER BY us.PRIMER_APELLIDO, us.PRIMER_NOMBRE, ae.PK_TACTIVIDAD_ESTUDIANTE)
+                 FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+                 JOIN academico_test.TMATRICULA m    ON m.PK_TMATRICULA = ae.FK_TMATRICULA
+                 JOIN academico_test.TESTUDIANTE es  ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
+                 JOIN academico_test.TUSUARIO us     ON us.PK_TUSUARIO = es.FK_TUSUARIO
+                 LEFT JOIN academico_test.TACTIVIDAD_NOTA n
+                        ON n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE AND n.ACTIVE = TRUE
+                WHERE ae.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND ae.ACTIVE = TRUE
+           ), '[]'::jsonb),
            -- Config de recuperacion (NULL si la actividad no es de recuperacion).
            (SELECT jsonb_build_object(
                        'pk',                    r.PK_TACTIVIDAD_RECUPERACION,
@@ -2694,7 +2716,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_buscar_por_pk(BIGINT, BIGINT, INT)
-    IS 'Detalle completo de una actividad (gate VER): todos los campos de TACTIVIDAD con los nombres de catalogo resueltos, el estado derivado (fn_actividad_estado), el progreso de evaluacion (asignados/evaluados en un solo LATERAL), los materiales de apoyo y las adaptaciones curriculares como JSONB, las evidencias y los criterios ya relacionados (columnas "evidencias" y "criterios", ambas [] cuando no hay ninguno: evidencias = [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}] sobre TACTIVIDAD_EVIDENCIA y criterios = [{pk, fkTcriterioUnidad, descripcion, codigo, orden}] sobre TACTIVIDAD_CRITERIO_UNIDAD, solo filas ACTIVE -- el "pk" de cada elemento es el de la RELACION, que es justo el que exigen fn_actividad_evidencia_quitar / fn_actividad_criterio_quitar de V214.1 y que antes solo se conocia en la respuesta del POST que lo creo), y la config de recuperacion (columna "recuperacion": objeto con destino/tipoAplicacion/tipoCalculo/valorPonderacion + nombres resueltos, o NULL si no es de recuperacion). campos_disponibles = fn_actividad_campos_disponibles (dependencias dinamicas actividad->criterio / actividad->evaluacion, V214.2); unidad_configuracion = fn_actividad_unidad_configuracion (snapshot de la unidad relacionada, o {tieneUnidad:false}, V214.2) -- ambas calculadas solo para esta fila (detalle), no en fn_actividad_listar. SETOF 0 o 1 fila (incluye inactivas). V224.';
+    IS 'estudiantes ([{pkTactividadEstudiante, pkTmatricula, fkTestudiante, estudiante, calificacion, calificable, observacion}]) son los asignados ACTIVE con el pk de la asignacion, que es el que piden calificar, observar y las adaptaciones; con esto el detalle trae todo lo que la actividad tiene relacionado (unidad con referente/rubrica/enunciados en unidad_configuracion, materiales, adaptaciones, evidencias, criterios, recuperacion y estudiantes) en una sola llamada. Detalle completo de una actividad (gate VER): todos los campos de TACTIVIDAD con los nombres de catalogo resueltos, el estado derivado (fn_actividad_estado), el progreso de evaluacion (asignados/evaluados en un solo LATERAL), los materiales de apoyo y las adaptaciones curriculares como JSONB, las evidencias y los criterios ya relacionados (columnas "evidencias" y "criterios", ambas [] cuando no hay ninguno: evidencias = [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}] sobre TACTIVIDAD_EVIDENCIA y criterios = [{pk, fkTcriterioUnidad, descripcion, codigo, orden}] sobre TACTIVIDAD_CRITERIO_UNIDAD, solo filas ACTIVE -- el "pk" de cada elemento es el de la RELACION, que es justo el que exigen fn_actividad_evidencia_quitar / fn_actividad_criterio_quitar de V214.1 y que antes solo se conocia en la respuesta del POST que lo creo), y la config de recuperacion (columna "recuperacion": objeto con destino/tipoAplicacion/tipoCalculo/valorPonderacion + nombres resueltos, o NULL si no es de recuperacion). campos_disponibles = fn_actividad_campos_disponibles (dependencias dinamicas actividad->criterio / actividad->evaluacion, V214.2); unidad_configuracion = fn_actividad_unidad_configuracion (snapshot de la unidad relacionada, o {tieneUnidad:false}, V214.2) -- ambas calculadas solo para esta fila (detalle), no en fn_actividad_listar. SETOF 0 o 1 fila (incluye inactivas). V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_resumen_estados — las tarjetas del Planeador en UNA pasada.
