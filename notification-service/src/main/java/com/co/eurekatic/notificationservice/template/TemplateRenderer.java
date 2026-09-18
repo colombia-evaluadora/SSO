@@ -76,7 +76,8 @@ public class TemplateRenderer {
                 null,
                 message.recipient(),
                 null,
-                List.of()
+                List.of(),
+                message.metadata().appName()
         );
     }
 
@@ -101,7 +102,8 @@ public class TemplateRenderer {
                 body,
                 message.recipient(),
                 null,
-                List.of()
+                List.of(),
+                message.metadata().appName()
         );
     }
 

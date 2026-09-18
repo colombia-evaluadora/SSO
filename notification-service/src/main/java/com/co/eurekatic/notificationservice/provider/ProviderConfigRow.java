@@ -53,6 +53,17 @@ public class ProviderConfigRow {
     @Column(name = "policy", nullable = false, length = 10)
     private Policy policy;
 
+    /**
+     * App this row is scoped to ({@code app.name} in sso-admin, e.g.
+     * {@code "PIGSE"}, {@code "COLOMBIA-EVALUADORA"}) — {@code null} means
+     * "any app" (a generic fallback like smtp-gmail). {@link
+     * com.co.eurekatic.notificationservice.sender.EmailSender} filters the
+     * roster by this before applying priority/failover, so a message
+     * tagged for one app never sends from another app's verified domain.
+     */
+    @Column(name = "app_name", length = 50)
+    private String appName;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "settings", columnDefinition = "jsonb", nullable = false)
     private Map<String, Object> settings;
@@ -71,6 +82,7 @@ public class ProviderConfigRow {
     public int priority() { return priority; }
     public int weight() { return weight; }
     public Policy policy() { return policy; }
+    public String appName() { return appName; }
     public Map<String, Object> settings() { return settings; }
     public Instant updatedAt() { return updatedAt; }
 

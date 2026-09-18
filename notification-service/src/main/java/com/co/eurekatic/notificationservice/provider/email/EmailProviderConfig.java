@@ -72,4 +72,17 @@ public class EmailProviderConfig {
     public ChannelProvider smtpZeptomail(@Lazy ProviderRegistry registry) {
         return new SmtpEmailProvider("smtp-zeptomail", registry);
     }
+
+    /**
+     * Segunda cuenta de ZeptoMail, para la app PIGSE — sembrada por
+     * {@code V4__provider_config_per_app.sql} con {@code app_name =
+     * 'PIGSE'} y {@code enabled = false} hasta que el operador cargue
+     * {@code SMTP_ZEPTOMAIL_PIGSE_USER}/{@code _PASS} en el .env del
+     * servidor y actualice {@code settings.from} al dominio real
+     * verificado en esa cuenta.
+     */
+    @Bean(name = "smtp-zeptomail-pigse")
+    public ChannelProvider smtpZeptomailPigse(@Lazy ProviderRegistry registry) {
+        return new SmtpEmailProvider("smtp-zeptomail-pigse", registry);
+    }
 }
