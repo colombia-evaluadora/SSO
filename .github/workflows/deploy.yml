@@ -333,32 +333,6 @@ jobs:
           echo "=== pre-pulling ${IMAGE_PREFIX_VAL}/query-service:${IMAGE_TAG_VAL} (provisionado on-demand, fuera de docker-compose.yml) ==="
           docker pull "${IMAGE_PREFIX_VAL}/query-service:${IMAGE_TAG_VAL}"
 
-          # `query-service` NO es un servicio de docker-compose.yml (se
-          # provisiona en caliente vía Docker Engine API, ver
-          # provisioner/DockerSocket.createAndStart): "compose pull" de
-          # arriba nunca lo toca, y DockerSocket llama directo a
-          # POST /containers/create SIN pull previo — si la imagen no
-          # está ya cacheada en el host, containers/create devuelve
-          # "No such image" (la API cruda de Docker, a diferencia de
-          # `docker run`, no hace pull implícito). Resultado sin este
-          # paso: el primer "Nuevo query service" / "Recrear" contra un
-          # servidor recién desplegado falla siempre, de forma
-          # determinista, porque nadie pulleó la imagen todavía.
-          #
-          # La pulleamos aquí, explícitamente, mientras el login a GHCR
-          # de arriba (GITHUB_TOKEN efímero del job) sigue vigente — es
-          # la única ventana en la que el servidor puede autenticarse
-          # contra el registry. IMAGE_PREFIX/IMAGE_TAG son las mismas
-          # variables que consume DOCKER_IMAGE del servicio `provisioner`
-          # en docker-compose.yml, así que la imagen pulleada aquí es
-          # exactamente la que provisioner le pide a Docker más tarde.
-          IMAGE_PREFIX_VAL="$(grep -E '^IMAGE_PREFIX=' .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r')"
-          IMAGE_TAG_VAL="$(grep -E '^IMAGE_TAG=' .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r')"
-          IMAGE_PREFIX_VAL="${IMAGE_PREFIX_VAL:-eurekatic}"
-          IMAGE_TAG_VAL="${IMAGE_TAG_VAL:-1.0.0-SNAPSHOT}"
-          echo "=== pre-pulling ${IMAGE_PREFIX_VAL}/query-service:${IMAGE_TAG_VAL} (provisionado on-demand, fuera de docker-compose.yml) ==="
-          docker pull "${IMAGE_PREFIX_VAL}/query-service:${IMAGE_TAG_VAL}"
-
           # ─── Servicios gateados por flyway vs. servicios independientes ───
           #
           # Calculado una vez con `docker compose config --format json` +
