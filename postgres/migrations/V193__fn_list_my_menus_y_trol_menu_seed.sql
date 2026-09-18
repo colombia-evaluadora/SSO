@@ -21,7 +21,7 @@
 --   recorte por rol ES la autorizacion").
 --
 -- ORIGEN DE LOS DATOS
---   Funcion: copiada tal cual desde testv2 (172.233.184.248), verificada
+--   Funcion: copiada tal cual desde testv2 (el servidor de test), verificada
 --   contra pg_get_functiondef.
 --
 --   TROL_MENU: testv2 acumulo 331 asignaciones activas sobre 150+ filas de

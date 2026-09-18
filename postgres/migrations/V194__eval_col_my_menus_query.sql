@@ -12,7 +12,7 @@
 --   path: /my-menus" para cualquier usuario, sin importar rol ni
 --   permisos: el catalogo mismo no conoce la ruta.
 --
---   Copiada de testv2 (172.233.184.248), query uuid 'eval-col-my-menus-001'
+--   Copiada de testv2 (el servidor de test), query uuid 'eval-col-my-menus-001'
 --   (id_query=135 alla), verificada campo a campo.
 --
 -- ROLES

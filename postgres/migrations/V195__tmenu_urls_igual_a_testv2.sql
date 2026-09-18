@@ -1,6 +1,6 @@
 -- ===========================================================================
 -- V195 - corrige las URL de academico_test.tmenu para que coincidan
---        exactamente con testv2 (172.233.184.248), la referencia con las
+--        exactamente con testv2 (el servidor de test), la referencia con las
 --        rutas reales del frontend de Colombia Evaluadora.
 --
 -- POR QUE ESTA MIGRACION EXISTE
