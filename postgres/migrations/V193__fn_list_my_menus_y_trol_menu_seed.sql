@@ -136,7 +136,8 @@ $function$;
 -- son estables entre entornos y TROL no viene en las migraciones: si el
 -- catalogo no esta, el JOIN no devuelve fila y la siembra es no-op). El
 -- CODIGO del menu se compara sin tildes: hay entornos con 'ADMINISTRACIÓN'.
--- WHERE NOT EXISTS por (fk_trol, fk_tmenu): la tabla no tiene UNIQUE.
+-- WHERE NOT EXISTS por (fk_trol, fk_tmenu) sin mirar ACTIVE: una pareja que
+-- alguien desactivo desde la UI de roles no debe revivir con un reapply.
 INSERT INTO academico_test.trol_menu (fk_trol, fk_tmenu, orden_rol, active, created_by, created_at)
 SELECT r.pk_trol, m.pk_tmenu, v.orden_rol, TRUE, 'migracion', CURRENT_TIMESTAMP
 FROM (VALUES
@@ -181,5 +182,5 @@ JOIN LATERAL (
 ) m ON TRUE
 WHERE NOT EXISTS (
     SELECT 1 FROM academico_test.trol_menu tm
-     WHERE tm.fk_trol = r.pk_trol AND tm.fk_tmenu = m.pk_tmenu AND tm.active = TRUE
+     WHERE tm.fk_trol = r.pk_trol AND tm.fk_tmenu = m.pk_tmenu
 );

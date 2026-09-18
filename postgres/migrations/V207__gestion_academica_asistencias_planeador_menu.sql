@@ -94,6 +94,7 @@ BEGIN
     END IF;
 
     -- TROL por CODIGO: no viene en las migraciones, no-op si falta el rol.
+    -- NOT EXISTS sin mirar ACTIVE: no revive parejas desactivadas desde la UI.
     INSERT INTO academico_test.trol_menu (fk_trol, fk_tmenu, orden_rol, active, created_by, created_at)
     SELECT r.pk_trol, x.pk_tmenu, v.orden_rol, TRUE, 'migracion', CURRENT_TIMESTAMP
     FROM (VALUES
@@ -124,6 +125,6 @@ BEGIN
     ) x ON x.pk_tmenu IS NOT NULL
     WHERE NOT EXISTS (
         SELECT 1 FROM academico_test.trol_menu tm
-         WHERE tm.fk_trol = r.pk_trol AND tm.fk_tmenu = x.pk_tmenu AND tm.active = TRUE
+         WHERE tm.fk_trol = r.pk_trol AND tm.fk_tmenu = x.pk_tmenu
     );
 END $$;
