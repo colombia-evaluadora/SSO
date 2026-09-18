@@ -426,7 +426,7 @@ public class UserAdminService {
         payload.put("resetLink", resolveRestoreUrl(token, appName));
         payload.put("ttlMinutes", RESTORE_TTL_SECONDS / 60);
         events.publish("email", String.valueOf(u.getId()), u.getEmail(),
-                "password-reset", payload, null);
+                "password-reset", payload, null, appName);
 
         return new ForgotPasswordResponse(maskEmail(u.getEmail()), RESTORE_TTL_SECONDS);
     }
