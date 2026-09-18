@@ -91,7 +91,7 @@ RETURNS TABLE (
     titulo            VARCHAR,
     fk_tgrupo         BIGINT,
     grupo             VARCHAR,
-    -- grado_grupo es lo que va en la celda del calendario ("601"). Sin esto
+    -- grado_grupo identifica el curso ("601"); la celda pinta `etiqueta`. Sin esto
     -- la UI no tenia de donde sacarlo y estaba pintando el pk_tactividad
     -- ("34 | MATEMA..."), que al docente no le dice nada. Unica definicion
     -- de la etiqueta: fn_grado_grupo_etiqueta (V224).
@@ -102,7 +102,11 @@ RETURNS TABLE (
     fk_tasignatura    BIGINT,
     asignatura        VARCHAR,
     area              VARCHAR,
-    estado            VARCHAR
+    estado            VARCHAR,
+    -- Lo que va en la CELDA del calendario: grado/grupo + titulo de la
+    -- actividad. La UI pintaba la asignatura; el dia se identifica por
+    -- la actividad, no por la materia.
+    etiqueta          VARCHAR
 )
 LANGUAGE plpgsql
 STABLE
@@ -150,7 +154,9 @@ BEGIN
            a.FK_TASIGNATURA,
            asig.NOMBRE,
            ar.NOMBRE,
-           academico_test.fn_actividad_estado(a.FECHA_INICIO, a.FECHA_CIERRE, a.FECHA_CALIFICADO, v_hoy, p_dias_gracia)
+           academico_test.fn_actividad_estado(a.FECHA_INICIO, a.FECHA_CIERRE, a.FECHA_CALIFICADO, v_hoy, p_dias_gracia),
+           (COALESCE(academico_test.fn_grado_grupo_etiqueta(gr.NOMBRE, gr.CODIGO, g.NOMBRE) || ' · ', '')
+            || a.TITULO)::VARCHAR
       FROM academico_test.TACTIVIDAD a
       JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
       LEFT JOIN academico_test.TAREA ar    ON ar.PK_TAREA = asig.FK_TAREA
@@ -206,7 +212,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_calendario(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT, BIGINT)
-    IS 'Actividades de un rango de fechas para la grilla mensual del Planeador: fecha (dia de anclaje ya resuelto = COALESCE(FECHA_INICIO, FECHA_CIERRE), para agrupar por dia sin recalcular), fecha_inicio y fecha_cierre crudas (V251, el front pinta el tramo), titulo, grupo, asignatura, area y estado derivado. Rango OBLIGATORIO y sin paginacion: un mes calendario no es un volumen grande, por eso no se pagina (evita el atajo del front de pedir size=500 y filtrar en el cliente). V251: el rango filtra por SOLAPAMIENTO con [FECHA_INICIO, FECHA_CIERRE] -- misma semantica que fn_actividad_listar -- para que una actividad que cruza el mes aparezca en su grilla; y p_fk_tfuncionario (al final de la firma) acota al docente que DICTA la actividad via TDOCENTE_ASIGNATURA, no al autor de la unidad. Entra por idx_tactividad_asignatura_fechas / idx_tactividad_grupo_fechas. Gate VER sobre PLANEADOR. V224/V251.';
+    IS 'etiqueta = grado/grupo + titulo ("601 · Debate"): es lo que va en la CELDA del calendario -- la UI pintaba la asignatura, y el dia se identifica por la actividad y su curso, no por la materia. Actividades de un rango de fechas para la grilla mensual del Planeador: fecha (dia de anclaje ya resuelto = COALESCE(FECHA_INICIO, FECHA_CIERRE), para agrupar por dia sin recalcular), fecha_inicio y fecha_cierre crudas (V251, el front pinta el tramo), titulo, grupo, asignatura, area y estado derivado. Rango OBLIGATORIO y sin paginacion: un mes calendario no es un volumen grande, por eso no se pagina (evita el atajo del front de pedir size=500 y filtrar en el cliente). V251: el rango filtra por SOLAPAMIENTO con [FECHA_INICIO, FECHA_CIERRE] -- misma semantica que fn_actividad_listar -- para que una actividad que cruza el mes aparezca en su grilla; y p_fk_tfuncionario (al final de la firma) acota al docente que DICTA la actividad via TDOCENTE_ASIGNATURA, no al autor de la unidad. Entra por idx_tactividad_asignatura_fechas / idx_tactividad_grupo_fechas. Gate VER sobre PLANEADOR. V224/V251.';
 
 -- ===========================================================================
 -- (2) fn_actividad_calendario_docente — wrapper "mi calendario".
@@ -228,7 +234,7 @@ RETURNS TABLE (
     titulo            VARCHAR,
     fk_tgrupo         BIGINT,
     grupo             VARCHAR,
-    -- grado_grupo es lo que va en la celda del calendario ("601"). Sin esto
+    -- grado_grupo identifica el curso ("601"); la celda pinta `etiqueta`. Sin esto
     -- la UI no tenia de donde sacarlo y estaba pintando el pk_tactividad
     -- ("34 | MATEMA..."), que al docente no le dice nada. Unica definicion
     -- de la etiqueta: fn_grado_grupo_etiqueta (V224).
@@ -239,7 +245,11 @@ RETURNS TABLE (
     fk_tasignatura    BIGINT,
     asignatura        VARCHAR,
     area              VARCHAR,
-    estado            VARCHAR
+    estado            VARCHAR,
+    -- Lo que va en la CELDA del calendario: grado/grupo + titulo de la
+    -- actividad. La UI pintaba la asignatura; el dia se identifica por
+    -- la actividad, no por la materia.
+    etiqueta          VARCHAR
 )
 LANGUAGE plpgsql
 STABLE
@@ -270,7 +280,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_calendario_docente(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT)
-    IS 'Devuelve grado_grupo (fn_grado_grupo_etiqueta, V224) ademas de grupo: es la etiqueta que va en la celda del calendario -- sin ella la UI pintaba el pk_tactividad. Grilla mensual "mi calendario" del docente autenticado: mismas columnas y reglas que fn_actividad_calendario, SIEMPRE acotada a su propio FK_TFUNCIONARIO (fn_funcionario_actual) -- nunca editable por el cliente. Si el usuario autenticado no es un docente activo devuelve 0 filas (guard explicito: delegar con NULL significaria "sin filtro" y expondria el calendario completo). Completa el trio del tablero del docente junto a fn_actividad_resumen_estados_docente (tarjetas) y fn_actividad_listar_docente (listado), los tres sobre la misma derivacion de estado (fn_actividad_estado). Gate VER sobre PLANEADOR. V251.';
+    IS 'Devuelve grado_grupo (fn_grado_grupo_etiqueta, V224) ademas de grupo: es la etiqueta que va en la celda del calendario -- sin ella la UI pintaba el pk_tactividad. etiqueta = grado/grupo + titulo ("601 · Debate"): es lo que va en la CELDA del calendario -- la UI pintaba la asignatura, y el dia se identifica por la actividad y su curso, no por la materia. Grilla mensual "mi calendario" del docente autenticado: mismas columnas y reglas que fn_actividad_calendario, SIEMPRE acotada a su propio FK_TFUNCIONARIO (fn_funcionario_actual) -- nunca editable por el cliente. Si el usuario autenticado no es un docente activo devuelve 0 filas (guard explicito: delegar con NULL significaria "sin filtro" y expondria el calendario completo). Completa el trio del tablero del docente junto a fn_actividad_resumen_estados_docente (tarjetas) y fn_actividad_listar_docente (listado), los tres sobre la misma derivacion de estado (fn_actividad_estado). Gate VER sobre PLANEADOR. V251.';
 
 -- ===========================================================================
 -- (3) ENDPOINT — GET /planeador/actividades/calendario
@@ -291,7 +301,7 @@ SELECT
     'postgres', false, false,
     m.id_microservice, '/planeador/actividades/calendario', 'SELECT', 'GET',
     '{"QUERY.FECHA_DESDE": "DATE", "QUERY.FECHA_HASTA": "DATE", "QUERY.ASIGNATURA": "BIGINT", "QUERY.GRUPO": "BIGINT", "QUERY.UNIDAD": "BIGINT", "QUERY.DIAS_GRACIA": "INT"}'::jsonb,
-    'V251 -- grilla mensual del calendario del Planeador para el DOCENTE autenticado (fn_actividad_calendario_docente, V251). ?FECHA_DESDE= y ?FECHA_HASTA= son OBLIGATORIOS (22023 si falta alguno, o si hasta < desde) y acotan por SOLAPAMIENTO con [fecha_inicio, fecha_cierre]: una actividad que cruza el mes aparece en su grilla. SIN paginacion -- un mes nunca es un volumen grande, por eso NO hay que mandar ?size=/?offset= aqui (sustituye el atajo del front de pedir el listado completo con size=500 y filtrar el mes en el cliente). Cada fila trae: fecha (dia de anclaje ya resuelto, para agrupar por dia sin recalcular), fecha_inicio, fecha_cierre, pk_tactividad, titulo, fk_tgrupo + grupo, fk_tasignatura + asignatura, area y estado DERIVADO (mismo fn_actividad_estado del tablero y del listado, con ?DIAS_GRACIA= default 2). El docente se resuelve del token y NO es un parametro: nadie pinta el calendario de otro docente por esta ruta; si el usuario no es docente activo, 0 filas. Filtros opcionales ?asignatura=, ?grupo=, ?unidad=. Gate VER sobre PLANEADOR.'
+    'V251 -- grilla mensual del calendario del Planeador para el DOCENTE autenticado (fn_actividad_calendario_docente, V251). ?FECHA_DESDE= y ?FECHA_HASTA= son OBLIGATORIOS (22023 si falta alguno, o si hasta < desde) y acotan por SOLAPAMIENTO con [fecha_inicio, fecha_cierre]: una actividad que cruza el mes aparece en su grilla. SIN paginacion -- un mes nunca es un volumen grande, por eso NO hay que mandar ?size=/?offset= aqui (sustituye el atajo del front de pedir el listado completo con size=500 y filtrar el mes en el cliente). Cada fila trae: fecha (dia de anclaje ya resuelto, para agrupar por dia sin recalcular), fecha_inicio, fecha_cierre, pk_tactividad, titulo, fk_tgrupo + grupo, fk_tasignatura + asignatura, area, estado DERIVADO (mismo fn_actividad_estado del tablero y del listado, con ?DIAS_GRACIA= default 2) y etiqueta: el texto que va en la CELDA del calendario, grado/grupo + titulo de la actividad ("601 · Debate"). La celda NO debe pintar la asignatura: el dia se identifica por la actividad y su curso, no por la materia; la asignatura va en el detalle lateral. El docente se resuelve del token y NO es un parametro: nadie pinta el calendario de otro docente por esta ruta; si el usuario no es docente activo, 0 filas. Filtros opcionales ?asignatura=, ?grupo=, ?unidad=. Gate VER sobre PLANEADOR.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
@@ -304,3 +314,14 @@ SELECT r.id_role, q.id_query
  WHERE m.serviceid = 'eval-col'
    AND q.path_template = '/planeador/actividades/calendario'
 ON CONFLICT DO NOTHING;
+
+-- La fila ya existe en las bases desplegadas y el INSERT es ON CONFLICT DO
+-- NOTHING: se reconcilia el detail aparte (patron V253/V279). No-op al reaplicar.
+UPDATE public.query q
+   SET detail = 'V251 -- grilla mensual del calendario del Planeador para el DOCENTE autenticado (fn_actividad_calendario_docente, V251). ?FECHA_DESDE= y ?FECHA_HASTA= son OBLIGATORIOS (22023 si falta alguno, o si hasta < desde) y acotan por SOLAPAMIENTO con [fecha_inicio, fecha_cierre]: una actividad que cruza el mes aparece en su grilla. SIN paginacion -- un mes nunca es un volumen grande, por eso NO hay que mandar ?size=/?offset= aqui (sustituye el atajo del front de pedir el listado completo con size=500 y filtrar el mes en el cliente). Cada fila trae: fecha (dia de anclaje ya resuelto, para agrupar por dia sin recalcular), fecha_inicio, fecha_cierre, pk_tactividad, titulo, fk_tgrupo + grupo, fk_tasignatura + asignatura, area, estado DERIVADO (mismo fn_actividad_estado del tablero y del listado, con ?DIAS_GRACIA= default 2) y etiqueta: el texto que va en la CELDA del calendario, grado/grupo + titulo de la actividad ("601 · Debate"). La celda NO debe pintar la asignatura: el dia se identifica por la actividad y su curso, no por la materia; la asignatura va en el detalle lateral. El docente se resuelve del token y NO es un parametro: nadie pinta el calendario de otro docente por esta ruta; si el usuario no es docente activo, 0 filas. Filtros opcionales ?asignatura=, ?grupo=, ?unidad=. Gate VER sobre PLANEADOR.'
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id
+   AND m.serviceid       = 'eval-col'
+   AND q.path_template   = '/planeador/actividades/calendario'
+   AND q.http_method     = 'GET'
+   AND q.detail IS DISTINCT FROM 'V251 -- grilla mensual del calendario del Planeador para el DOCENTE autenticado (fn_actividad_calendario_docente, V251). ?FECHA_DESDE= y ?FECHA_HASTA= son OBLIGATORIOS (22023 si falta alguno, o si hasta < desde) y acotan por SOLAPAMIENTO con [fecha_inicio, fecha_cierre]: una actividad que cruza el mes aparece en su grilla. SIN paginacion -- un mes nunca es un volumen grande, por eso NO hay que mandar ?size=/?offset= aqui (sustituye el atajo del front de pedir el listado completo con size=500 y filtrar el mes en el cliente). Cada fila trae: fecha (dia de anclaje ya resuelto, para agrupar por dia sin recalcular), fecha_inicio, fecha_cierre, pk_tactividad, titulo, fk_tgrupo + grupo, fk_tasignatura + asignatura, area, estado DERIVADO (mismo fn_actividad_estado del tablero y del listado, con ?DIAS_GRACIA= default 2) y etiqueta: el texto que va en la CELDA del calendario, grado/grupo + titulo de la actividad ("601 · Debate"). La celda NO debe pintar la asignatura: el dia se identifica por la actividad y su curso, no por la materia; la asignatura va en el detalle lateral. El docente se resuelve del token y NO es un parametro: nadie pinta el calendario de otro docente por esta ruta; si el usuario no es docente activo, 0 filas. Filtros opcionales ?asignatura=, ?grupo=, ?unidad=. Gate VER sobre PLANEADOR.';
