@@ -158,7 +158,7 @@ class NotificationProcessorTest {
                 new Recipient("u-1", "user@example.com"),
                 "welcome",
                 Map.of("displayName", "Ada"),
-                new Metadata("test", "corr-1", Instant.now())
+                new Metadata("test", "corr-1", Instant.now(), null)
         );
     }
 
@@ -170,7 +170,8 @@ class NotificationProcessorTest {
                 null,
                 msg.recipient(),
                 null,
-                java.util.List.of()
+                java.util.List.of(),
+                msg.metadata().appName()
         );
     }
 

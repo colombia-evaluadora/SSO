@@ -54,7 +54,7 @@ nivel de enseñanza y el referente; no se eligen a mano.
 |---|---|---|
 | **Endpoint** | `GET /planeador/referente-curricular` | `GET /planeador/unidades/:ID/referente` |
 | **Entra** | `GRADO` (obligatorio), `ASIGNATURA`, `ANIO` | `ID` = PK_TUNIDAD |
-| **Sale** | Arreglo de referentes ordenado por especificidad, cada uno con `enunciados:[{pk, texto, fkReferenteCurricularArea, area, evidencias:[…]}]` | Contexto + referente + etiquetas + `enunciados` **solo los relacionados** |
+| **Sale** | Arreglo de referentes ordenado por **prioridad** (0 lista el área, 1 sin áreas, 2 otras áreas — las áreas son preferencia, no exclusión, igual que la derivación), cada uno con `enunciados:[{pk, texto, fkReferenteCurricularArea, area, evidencias:[…]}]` | Contexto + referente + etiquetas + `enunciados` **solo los relacionados** |
 | **Función** | `fn_refcurr_por_grado_asignatura` (V278) | `fn_unidad_referente_detalle` (V255) |
 
 > **Cambio de contrato de esta rama.** V255 ya **no** devuelve el catálogo
@@ -168,9 +168,13 @@ valorPonderacion}`: `fkActividadRecuperar` obligatorio sii `destino=ACTIVIDAD`;
 
 ### Detalle
 
-`GET /planeador/actividades/:ID` → `fn_actividad_buscar_por_pk`: 52 columnas,
+`GET /planeador/actividades/:ID` → `fn_actividad_buscar_por_pk`: 53 columnas,
 incluidas `materiales`, `adaptaciones`, `recuperacion`, **`evidencias`**,
-**`criterios`**, `campos_disponibles`, `unidad_configuracion`.
+**`criterios`**, **`estudiantes`**, `campos_disponibles` y `unidad_configuracion`
+(la unidad completa: referente, objetivos, contenidos, rúbrica y enunciados con
+sus evidencias). Es decir, **todo lo que la actividad tiene relacionado en una
+sola llamada**. `estudiantes` = `[{pkTactividadEstudiante, pkTmatricula,
+fkTestudiante, estudiante, calificacion, calificable, observacion}]`.
 
 `GET /planeador/actividades/:ID/pantalla-edicion` devuelve el mismo contenido ya
 compuesto como un solo JSONB, con `esRecuperacion`, `recuperacion`, `evidencias`
