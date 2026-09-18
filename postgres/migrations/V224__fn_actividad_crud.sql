@@ -1296,6 +1296,13 @@ BEGIN
         RAISE EXCEPTION 'La fecha de cierre (%) no puede ser anterior a la de inicio (%)',
             p_fecha_cierre, p_fecha_inicio USING ERRCODE = '22023';
     END IF;
+
+    -- Limites de la seccion Programacion (V422): ventana del periodo academico,
+    -- dia habil segun horario, duracion y semana del cronograma. Mismo calculo
+    -- que pinta la pantalla, para que el tope no sea solo decorativo.
+    PERFORM academico_test.fn_actividad_programacion_assert(
+        p_fk_tgrupo, p_fk_tasignatura, p_fecha_inicio, p_fecha_cierre,
+        p_duracion_estimada, p_semana_cronograma);
     -- Las banderas S/N ya son academico_test.bool_sn: el dominio (CHECK IN
     -- ('S','N')) las valida al vuelo, no hace falta un chequeo manual aqui.
 
@@ -1494,6 +1501,9 @@ COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, B
 -- la firma anterior antes del CREATE OR REPLACE.
 -- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN);
+-- Firma sin p_evidencias / p_criterios: dos argumentos nuevos son un overload
+-- nuevo, no un reemplazo.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_actualizar(
     p_pk_usuario_solicitante            BIGINT,
     p_pk_tactividad                     BIGINT,
@@ -1532,7 +1542,11 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_actualizar(
     -- NULL = no tocar la recuperacion. Objeto = configurarla. Para QUITARLA
     -- (volver la actividad a normal) usar p_quitar_recuperacion = TRUE.
     p_recuperacion                      JSONB         DEFAULT NULL,
-    p_quitar_recuperacion               BOOLEAN       DEFAULT FALSE
+    p_quitar_recuperacion               BOOLEAN       DEFAULT FALSE,
+    -- Mismo contrato que p_materiales / p_adaptaciones: NULL = no tocar,
+    -- array (incl. vacio) = el set queda EXACTAMENTE ese.
+    p_evidencias                        BIGINT[]      DEFAULT NULL,
+    p_criterios                         BIGINT[]      DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -1614,6 +1628,16 @@ BEGIN
         RAISE EXCEPTION 'La fecha de cierre (%) no puede ser anterior a la de inicio (%)',
             v_cierre, v_inicio USING ERRCODE = '22023';
     END IF;
+
+    -- Mismos limites que en el alta, pero sobre los valores RESULTANTES: un
+    -- PATCH que solo mueve el grupo puede dejar fuera de rango unas fechas que
+    -- no venian en el body.
+    PERFORM academico_test.fn_actividad_programacion_assert(
+        v_grupo,
+        COALESCE(p_fk_tasignatura, v_actual.FK_TASIGNATURA),
+        v_inicio, v_cierre,
+        COALESCE(p_duracion_estimada, v_actual.DURACION_ESTIMADA),
+        COALESCE(NULLIF(TRIM(p_semana_cronograma), ''), v_actual.SEMANA_CRONOGRAMA));
 
     IF p_fk_tasignatura IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA
                     WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
@@ -1753,12 +1777,50 @@ BEGIN
                     p_pk_usuario_solicitante, p_pk_tactividad, p_recuperacion);
     END IF;
 
+    -- Evidencias / criterios: reemplazo del set. Primero se desactiva lo que
+    -- ya no viene y despues se relaciona el resto con los helpers de V214.1,
+    -- que son los duenos de la regla de negocio (evidencia de nivel 2 cuyo
+    -- enunciado padre este en la unidad; criterio de la rubrica de esa unidad)
+    -- y reactivan la fila existente en vez de duplicarla. Quitar se permite
+    -- siempre; agregar exige unidad, igual que en fn_actividad_crear.
+    IF p_evidencias IS NOT NULL THEN
+        UPDATE academico_test.TACTIVIDAD_EVIDENCIA
+           SET ACTIVE = FALSE,
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+               MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_TACTIVIDAD = p_pk_tactividad
+           AND ACTIVE = TRUE
+           AND FK_REFERENTE_ENUNCIADO <> ALL(
+                   ARRAY(SELECT x FROM unnest(p_evidencias) x WHERE x IS NOT NULL));
+
+        PERFORM academico_test.fn_actividad_evidencia_relacionar(
+                    p_pk_usuario_solicitante, p_pk_tactividad, ev)
+           FROM unnest(p_evidencias) AS ev
+          WHERE ev IS NOT NULL;
+    END IF;
+
+    IF p_criterios IS NOT NULL THEN
+        UPDATE academico_test.TACTIVIDAD_CRITERIO_UNIDAD
+           SET ACTIVE = FALSE,
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+               MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_TACTIVIDAD = p_pk_tactividad
+           AND ACTIVE = TRUE
+           AND FK_TCRITERIO_UNIDAD <> ALL(
+                   ARRAY(SELECT x FROM unnest(p_criterios) x WHERE x IS NOT NULL));
+
+        PERFORM academico_test.fn_actividad_criterio_relacionar(
+                    p_pk_usuario_solicitante, p_pk_tactividad, cr)
+           FROM unnest(p_criterios) AS cr
+          WHERE cr IS NOT NULL;
+    END IF;
+
     RETURN p_pk_tactividad;
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN)
-    IS 'PATCH parcial de una actividad (gate EDITAR sobre PLANEADOR): cada parametro NULL preserva el valor actual. Unidad/ponderacion se delegan en fn_unidad_actividad_vincular / _ponderacion_set / _desvincular (V223) para que la regla del 100% viva en un solo sitio; p_desvincular_unidad=TRUE es excluyente con p_fk_tunidad/p_ponderacion. Recuperacion: p_recuperacion (objeto) la configura via fn_actividad_recuperacion_configurar, p_quitar_recuperacion=TRUE la elimina (vuelve la actividad a normal); son excluyentes y NULL/FALSE no la tocan. p_materiales / p_adaptaciones / p_fk_tmatriculas NULL = no tocar, array = reemplazo completo. Revalida fechas, catalogos y unicidad (titulo, unidad, grupo, jerarquia). El FK_TLV_INSTRUMENTO_EVALUACION resultante (nuevo o heredado) solo se admite si la unidad resultante (nueva, heredada, o NULL si p_desvincular_unidad) tiene referente curricular EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V214.2); en otro caso lanza 22023. PONDERACION (condicion dinamica "actividad -> ponderacion" de V214.2, evaluada contra los valores RESULTANTES): se rechaza p_ponderacion (22023) si la actividad queda NO evaluativa (ES_EVALUATIVA resultante = ''N''), si la unidad resultante PROMEDIA, o si calcula por SUMATORIA -- ahi el docente envia p_nota_maxima y el % lo autocalcula fn_unidad_ponderacion_recalcular_sumatoria (V223), que se invoca SIEMPRE al final sobre el bucket resultante (y sobre el de origen si cambio la unidad o el grupo), porque editar el puntaje de una actividad cambia el % de todas las de su (unidad, grupo). Retorna PK_TACTIVIDAD. V224.';
+COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN, BIGINT[], BIGINT[])
+    IS 'PATCH parcial de una actividad (gate EDITAR sobre PLANEADOR): cada parametro NULL preserva el valor actual. Unidad/ponderacion se delegan en fn_unidad_actividad_vincular / _ponderacion_set / _desvincular (V223) para que la regla del 100% viva en un solo sitio; p_desvincular_unidad=TRUE es excluyente con p_fk_tunidad/p_ponderacion. Recuperacion: p_recuperacion (objeto) la configura via fn_actividad_recuperacion_configurar, p_quitar_recuperacion=TRUE la elimina (vuelve la actividad a normal); son excluyentes y NULL/FALSE no la tocan. p_materiales / p_adaptaciones / p_fk_tmatriculas NULL = no tocar, array = reemplazo completo. p_evidencias (PKs de TREFERENTE_ENUNCIADO nivel 2) y p_criterios (PKs de TCRITERIO_UNIDAD) siguen el MISMO contrato: NULL = no tocar, array (incl. vacio) = el set queda exactamente ese -- se desactivan (ACTIVE=FALSE) las relaciones que ya no vienen y el resto se relaciona/reactiva con fn_actividad_evidencia_relacionar / fn_actividad_criterio_relacionar (V214.1), duenos unicos de la regla de negocio (la evidencia debe ser nivel 2 y su enunciado padre estar ya relacionado con la unidad de la actividad; el criterio debe pertenecer a la rubrica de esa misma unidad). QUITAR siempre se puede; AGREGAR exige que la actividad tenga unidad, igual que en fn_actividad_crear. Revalida fechas, catalogos y unicidad (titulo, unidad, grupo, jerarquia). El FK_TLV_INSTRUMENTO_EVALUACION resultante (nuevo o heredado) solo se admite si la unidad resultante (nueva, heredada, o NULL si p_desvincular_unidad) tiene referente curricular EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V214.2); en otro caso lanza 22023. PONDERACION (condicion dinamica "actividad -> ponderacion" de V214.2, evaluada contra los valores RESULTANTES): se rechaza p_ponderacion (22023) si la actividad queda NO evaluativa (ES_EVALUATIVA resultante = ''N''), si la unidad resultante PROMEDIA, o si calcula por SUMATORIA -- ahi el docente envia p_nota_maxima y el % lo autocalcula fn_unidad_ponderacion_recalcular_sumatoria (V223), que se invoca SIEMPRE al final sobre el bucket resultante (y sobre el de origen si cambio la unidad o el grupo), porque editar el puntaje de una actividad cambia el % de todas las de su (unidad, grupo). Retorna PK_TACTIVIDAD. V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_eliminar — soft delete en cascada.
@@ -2078,6 +2140,7 @@ RETURNS TABLE (
     ponderacion                     NUMERIC,
     influencia                      NUMERIC,
     es_evaluativa                   VARCHAR,
+    es_recuperacion                 VARCHAR,
     fecha_inicio                    DATE,
     fecha_cierre                    DATE,
     fecha_calificado                DATE,
@@ -2330,6 +2393,7 @@ BEGIN
            a.PONDERACION,
            a.INFLUENCIA,
            a.ES_EVALUATIVA::VARCHAR,
+            a.ES_RECUPERACION::VARCHAR,
            a.FECHA_INICIO,
            a.FECHA_CIERRE,
            a.FECHA_CALIFICADO,
@@ -2466,6 +2530,11 @@ RETURNS TABLE (
     estudiantes_evaluados           BIGINT,
     materiales                      JSONB,
     adaptaciones                    JSONB,
+    -- Evidencias (TACTIVIDAD_EVIDENCIA) y criterios (TACTIVIDAD_CRITERIO_UNIDAD)
+    -- ya relacionados: el "pk" de cada elemento es el de la RELACION, que es
+    -- lo que exigen fn_actividad_evidencia_quitar / _criterio_quitar (V214.1).
+    evidencias                      JSONB,
+    criterios                       JSONB,
     recuperacion                    JSONB,
     campos_disponibles              JSONB,
     unidad_configuracion            JSONB,
@@ -2546,6 +2615,34 @@ BEGIN
                  LEFT JOIN academico_test.TLISTA_VALOR lap ON lap.PK_LISTA_VALOR = ad.FK_TLV_APLICA_A
                 WHERE ad.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND ad.ACTIVE = TRUE
            ), '[]'::jsonb),
+           COALESCE((
+               SELECT jsonb_agg(jsonb_build_object(
+                          'pk',                   ev.PK_TACTIVIDAD_EVIDENCIA,
+                          'fkReferenteEnunciado', ev.FK_REFERENTE_ENUNCIADO,
+                          'texto',                re.TEXTO,
+                          'fkPadre',              re.FK_PADRE,
+                          'textoPadre',           rep.TEXTO)
+                          ORDER BY re.FK_PADRE, ev.PK_TACTIVIDAD_EVIDENCIA)
+                 FROM academico_test.TACTIVIDAD_EVIDENCIA ev
+                 JOIN academico_test.TREFERENTE_ENUNCIADO re
+                   ON re.PK_REFERENTE_ENUNCIADO = ev.FK_REFERENTE_ENUNCIADO
+                 LEFT JOIN academico_test.TREFERENTE_ENUNCIADO rep
+                   ON rep.PK_REFERENTE_ENUNCIADO = re.FK_PADRE
+                WHERE ev.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND ev.ACTIVE = TRUE
+           ), '[]'::jsonb),
+           COALESCE((
+               SELECT jsonb_agg(jsonb_build_object(
+                          'pk',                cr.PK_TACTIVIDAD_CRITERIO_UNIDAD,
+                          'fkTcriterioUnidad', cr.FK_TCRITERIO_UNIDAD,
+                          'descripcion',       cu.DESCRIPCION,
+                          'codigo',            cu.CODIGO,
+                          'orden',             cu.ORDEN)
+                          ORDER BY cu.ORDEN, cr.PK_TACTIVIDAD_CRITERIO_UNIDAD)
+                 FROM academico_test.TACTIVIDAD_CRITERIO_UNIDAD cr
+                 JOIN academico_test.TCRITERIO_UNIDAD cu
+                   ON cu.PK_TCRITERIO_UNIDAD = cr.FK_TCRITERIO_UNIDAD
+                WHERE cr.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND cr.ACTIVE = TRUE
+           ), '[]'::jsonb),
            -- Config de recuperacion (NULL si la actividad no es de recuperacion).
            (SELECT jsonb_build_object(
                        'pk',                    r.PK_TACTIVIDAD_RECUPERACION,
@@ -2597,7 +2694,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_buscar_por_pk(BIGINT, BIGINT, INT)
-    IS 'Detalle completo de una actividad (gate VER): todos los campos de TACTIVIDAD con los nombres de catalogo resueltos, el estado derivado (fn_actividad_estado), el progreso de evaluacion (asignados/evaluados en un solo LATERAL), los materiales de apoyo y las adaptaciones curriculares como JSONB, y la config de recuperacion (columna "recuperacion": objeto con destino/tipoAplicacion/tipoCalculo/valorPonderacion + nombres resueltos, o NULL si no es de recuperacion). campos_disponibles = fn_actividad_campos_disponibles (dependencias dinamicas actividad->criterio / actividad->evaluacion, V214.2); unidad_configuracion = fn_actividad_unidad_configuracion (snapshot de la unidad relacionada, o {tieneUnidad:false}, V214.2) -- ambas calculadas solo para esta fila (detalle), no en fn_actividad_listar. SETOF 0 o 1 fila (incluye inactivas). V224.';
+    IS 'Detalle completo de una actividad (gate VER): todos los campos de TACTIVIDAD con los nombres de catalogo resueltos, el estado derivado (fn_actividad_estado), el progreso de evaluacion (asignados/evaluados en un solo LATERAL), los materiales de apoyo y las adaptaciones curriculares como JSONB, las evidencias y los criterios ya relacionados (columnas "evidencias" y "criterios", ambas [] cuando no hay ninguno: evidencias = [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}] sobre TACTIVIDAD_EVIDENCIA y criterios = [{pk, fkTcriterioUnidad, descripcion, codigo, orden}] sobre TACTIVIDAD_CRITERIO_UNIDAD, solo filas ACTIVE -- el "pk" de cada elemento es el de la RELACION, que es justo el que exigen fn_actividad_evidencia_quitar / fn_actividad_criterio_quitar de V214.1 y que antes solo se conocia en la respuesta del POST que lo creo), y la config de recuperacion (columna "recuperacion": objeto con destino/tipoAplicacion/tipoCalculo/valorPonderacion + nombres resueltos, o NULL si no es de recuperacion). campos_disponibles = fn_actividad_campos_disponibles (dependencias dinamicas actividad->criterio / actividad->evaluacion, V214.2); unidad_configuracion = fn_actividad_unidad_configuracion (snapshot de la unidad relacionada, o {tieneUnidad:false}, V214.2) -- ambas calculadas solo para esta fila (detalle), no en fn_actividad_listar. SETOF 0 o 1 fila (incluye inactivas). V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_resumen_estados — las tarjetas del Planeador en UNA pasada.
@@ -3032,6 +3129,7 @@ RETURNS TABLE (
     ponderacion                     NUMERIC,
     influencia                      NUMERIC,
     es_evaluativa                   VARCHAR,
+    es_recuperacion                 VARCHAR,
     fecha_inicio                    DATE,
     fecha_cierre                    DATE,
     fecha_calificado                DATE,

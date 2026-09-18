@@ -1,0 +1,628 @@
+{
+  "info": {
+    "_postman_id": "3f9a2c6e-1d84-4b0a-9e5e-6b8f2a7c40e1",
+    "name": "SSO — Planeador educativo: Instrumentos por tipo (flujo completo)",
+    "description": "Colección de EJEMPLO end-to-end para el ciclo completo de un instrumento de evaluación en el módulo Planeador: **1)** consultar qué instrumentos permite la unidad según su referente curricular, **2)** crear una actividad de cada tipo de instrumento, **3)** definir la estructura del instrumento y **4)** consultarla de vuelta. No reemplaza a `planeador-actividad.postman_collection.json` (CRUD completo de actividad, LOTE 2 / V246) ni a `planeador-instrumentos.postman_collection.json` (definir/calificar, LOTE 3 / V247) — combina ambas para mostrar el flujo real de punta a punta con los **4 tipos de instrumento** (`RUBRICA`, `LISTA_COTEJO`, `ESCALA_VALORACION` numérica y cualitativa) más `OTRO`.\n\n---\n\n## Por qué el filtrado de instrumentos permitidos no es un endpoint aparte\n\nNo existe un endpoint standalone `GET .../instrumentos-permitidos`. El catálogo filtrado se expone **embebido** en dos lugares que ya existían (decisión documentada en V246):\n\n- `GET /api/eval-col/planeador/actividades/:ID/configuracion` → `campos_disponibles.evaluacion.instrumentosPermitidos`\n- `GET /api/eval-col/planeador/actividades/:ID` → mismo campo dentro de `campos_disponibles`\n\nAmbos llaman a `academico_test.fn_actividad_instrumentos_permitidos(usuario, pk_tactividad)` (V214.2), que resuelve el tipo de evaluación del referente curricular de la unidad de la actividad (`TACTIVIDAD.FK_TUNIDAD → TUNIDAD.FK_REFERENTE_CURRICULAR → TREFERENTE_CURRICULAR.FK_TLV_TIPO_EVALUACION`, categoría `TIPO_EVALUACION` de V212) y filtra el catálogo `TLISTA_VALOR CATEGORIA='INSTRUMENTO_EVALUACION'` con `fn_instrumento_permitido_por_tipo_evaluacion`:\n\n| Tipo de evaluación del referente | Instrumentos permitidos |\n| --- | --- |\n| `CUALITATIVA` | `RUBRICA`, `LISTA_COTEJO` (+ `OTRO`) |\n| `CUANTITATIVA` | `ESCALA_VALORACION` (+ `OTRO`) |\n| `CUANTITATIVA_CUALITATIVA` / sin referente evaluativo definido | los 4 |\n| — | si la unidad no tiene referente, o el referente es `FORMATIVO`, la lista viene vacía (`evaluacion.visible = false`) |\n\n**Por eso el paso 0 de cada bloque de esta colección es leer `.../configuracion` de la actividad recién creada** antes de definir el instrumento: confirma que el tipo elegido está realmente permitido para el referente de su unidad, en vez de asumirlo.\n\n---\n\n## Formato de los bodies (motor `query-service`)\n\n1. **Keys del body en MAYÚSCULAS, sin prefijo `BODY.`** — deben coincidir exactamente con `param_types` de la fila en `public.query` (`TITULO`, `FK_TASIGNATURA`, `DEFINICION`, ...). `camelCase` es rechazado por el binder.\n2. **Parámetros `JSONB` (`MATERIALES`, `ADAPTACIONES`, `DEFINICION`, `CALIFICACION`) se mandan como STRING JSON serializado y escapado**, no como objeto/array nativo anidado — el binder no soporta placeholders anidados. Todos los ejemplos de esta colección ya vienen en ese formato.\n3. `p_pk_usuario_solicitante` siempre se resuelve de `:CONTEXT.USER_ID` — nunca se manda en el body.\n\n---\n\n**Antes de empezar**\n\n1. Entorno **SSO — test**: define `email`/`password` de un usuario con rol `CEVAL-SUPER_ADMINISTRADOR` (único rol sincronizado a `role_query` en este repo).\n2. Ajusta `asignaturaId`, `tipoActividadId`, `jerarquiaId`, `grupoId` a datos válidos.\n3. Necesitas **4 unidades** ya creadas, cada una con un referente curricular del tipo de evaluación correspondiente (`unidadCualitativaId`, `unidadCuantitativaId`, `unidadMixtaId` para el bloque OTRO). Si no las tienes, usa la colección `planeador-referente-curricular` / `planeador-unidad` para crearlas, o ajusta el tipo de evaluación de una unidad existente antes de correr cada bloque.\n4. Corre los bloques en orden: cada uno crea su propia actividad y encadena `configuración → definir → obtener`.\n\nEl **login es automático** (mismo script que el resto de colecciones de Planeador): pide token antes de cada petición y lo reutiliza hasta que caduca (1 h).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Login automático antes de CADA petición: si el token vivo ya",
+          "// está en la variable de colección, no hace nada.",
+          "const rutaLogin = '/api/auth/login';",
+          "if (pm.request.url.getPath().endsWith(rutaLogin)) { return; }",
+          "",
+          "function caducado(jwt) {",
+          "    try {",
+          "        const carga = JSON.parse(atob(jwt.split('.')[1]));",
+          "        return !carga.exp || (carga.exp - 30) * 1000 < Date.now();",
+          "    } catch (e) { return true; }",
+          "}",
+          "",
+          "const actual = pm.collectionVariables.get('token');",
+          "if (actual && !caducado(actual)) { return; }",
+          "",
+          "const clave = pm.environment.get('password');",
+          "if (!clave) { throw new Error('Falta `password` en el entorno «SSO — test».'); }",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + rutaLogin,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "        email: pm.environment.get('email'),",
+          "        password: clave",
+          "    }) }",
+          "}, (err, res) => {",
+          "    if (err) { throw new Error('No se pudo contactar con el gateway: ' + err); }",
+          "    if (res.code !== 200) { throw new Error('Login rechazado (' + res.code + '). Revisa `email` y `password`.'); }",
+          "    pm.collectionVariables.set('token', res.json().token);",
+          "    console.log('token renovado automáticamente');",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "token", "value": "" },
+    { "key": "asignaturaId", "value": "1" },
+    { "key": "tipoActividadId", "value": "1" },
+    { "key": "jerarquiaId", "value": "439" },
+    { "key": "grupoId", "value": "1" },
+    { "key": "unidadCualitativaId", "value": "1", "description": "PK_TUNIDAD con referente curricular tipo evaluacion=CUALITATIVA (permite RUBRICA/LISTA_COTEJO)" },
+    { "key": "unidadCuantitativaId", "value": "2", "description": "PK_TUNIDAD con referente curricular tipo evaluacion=CUANTITATIVA (permite ESCALA_VALORACION)" },
+    { "key": "unidadMixtaId", "value": "3", "description": "PK_TUNIDAD con referente CUANTITATIVA_CUALITATIVA o sin tipo definido (permite los 4 instrumentos, usada para OTRO)" },
+    { "key": "actividadRubricaId", "value": "", "description": "se autocompleta en 1.1" },
+    { "key": "actividadCotejoId", "value": "", "description": "se autocompleta en 2.1" },
+    { "key": "actividadEscalaNumId", "value": "", "description": "se autocompleta en 3.1" },
+    { "key": "actividadEscalaCualId", "value": "", "description": "se autocompleta en 4.1" },
+    { "key": "actividadOtroId", "value": "", "description": "se autocompleta en 5.1" },
+    { "key": "tipoEscalaNumericaId", "value": "501", "description": "PK_TLISTA_VALOR categoria TIPO_ESCALA valor NUMERICA (ajustar al entorno)" },
+    { "key": "tipoEscalaCualitativaId", "value": "502", "description": "PK_TLISTA_VALOR categoria TIPO_ESCALA valor CUALITATIVA (ajustar al entorno)" },
+    { "key": "tipoEvidenciaOtroId", "value": "601", "description": "PK_TLISTA_VALOR categoria TIPO_EVIDENCIA_OTRO (ej. ENLACE, ajustar al entorno)" },
+    { "key": "metodoValoracionOtroId", "value": "1", "description": "PK_TLISTA_VALOR categoria INSTRUMENTO_EVALUACION restringido a RUBRICA|LISTA_COTEJO|ESCALA_VALORACION (nunca OTRO)" }
+  ],
+  "item": [
+    {
+      "name": "0 — Login (ver la respuesta)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const token = pm.response.json().token;",
+              "pm.test('devuelve token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+              "pm.collectionVariables.set('token', token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}" },
+        "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] }
+      }
+    },
+    {
+      "name": "1 — RUBRICA (unidad con referente CUALITATIVA)",
+      "item": [
+        {
+          "name": "1.1 — POST crear actividad evaluativa en unidad cualitativa",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().rows;",
+                  "pm.test('devuelve PK_TACTIVIDAD', () => pm.expect(rows).to.be.an('array').with.length.above(0));",
+                  "if (rows && rows.length) { pm.collectionVariables.set('actividadRubricaId', Object.values(rows[0])[0]); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TITULO\": \"Sustentacion oral — argumentacion\",\n  \"FK_TASIGNATURA\": {{asignaturaId}},\n  \"FK_TLV_TIPO_ACTIVIDAD\": {{tipoActividadId}},\n  \"FK_TLV_JERARQUIA\": {{jerarquiaId}},\n  \"DESCRIPCION\": \"Sustentacion oral evaluada con rubrica\",\n  \"FK_TGRUPO\": {{grupoId}},\n  \"FK_TUNIDAD\": {{unidadCualitativaId}},\n  \"ES_EVALUATIVA\": \"S\",\n  \"FECHA_INICIO\": \"2026-09-10\",\n  \"FECHA_CIERRE\": \"2026-09-20\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades"]
+            },
+            "description": "`fn_actividad_crear` (V224). La unidad `{{unidadCualitativaId}}` debe tener un referente curricular con tipo de evaluacion CUALITATIVA para que el paso 1.2 muestre RUBRICA y LISTA_COTEJO como permitidos."
+          }
+        },
+        {
+          "name": "1.2 — GET configuracion (instrumentosPermitidos por el referente)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const permitidos = pm.response.json().rows[0].campos_disponibles.evaluacion.instrumentosPermitidos.map(i => i.valor);",
+                  "pm.test('RUBRICA esta permitida por el referente CUALITATIVA', () => pm.expect(permitidos).to.include('RUBRICA'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadRubricaId}}/configuracion",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadRubricaId}}", "configuracion"]
+            },
+            "description": "Antes de definir el instrumento, se confirma que `RUBRICA` viene en `campos_disponibles.evaluacion.instrumentosPermitidos` — resultado de `fn_actividad_instrumentos_permitidos` (V214.2) filtrando por el tipo de evaluacion del referente curricular de la unidad (`unidad_configuracion.referenteCurricular.tipoEvaluacion`)."
+          },
+          "response": [
+            {
+              "name": "200 — referente CUALITATIVA: RUBRICA y LISTA_COTEJO permitidos",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadRubricaId}}/configuracion" } },
+              "status": "OK", "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [\n    {\n      \"campos_disponibles\": {\n        \"evaluacion\": {\n          \"visible\": true, \"requerido\": true,\n          \"motivo\": \"El referente curricular de la unidad de la actividad es EVALUATIVO\",\n          \"instrumentosPermitidos\": [\n            { \"pk\": 1, \"valor\": \"RUBRICA\", \"etiqueta\": \"Rubrica\" },\n            { \"pk\": 2, \"valor\": \"LISTA_COTEJO\", \"etiqueta\": \"Lista de cotejo\" },\n            { \"pk\": 5, \"valor\": \"OTRO\", \"etiqueta\": \"Otro\" }\n          ]\n        }\n      },\n      \"unidad_configuracion\": {\n        \"tieneUnidad\": true, \"pkTunidad\": 1,\n        \"referenteCurricular\": { \"pk\": 10, \"nombre\": \"Estandares MEN\", \"enfoquePedagogico\": \"EVALUATIVO\", \"tipoEvaluacion\": \"CUALITATIVA\", \"tipoEvaluacionNombre\": \"Cualitativa\" }\n      }\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "1.3 — PUT definir instrumento RUBRICA",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "pm.test('instrumento aplicado es RUBRICA', () => pm.expect(pm.response.json().rows[0].instrumento_aplicado).to.eql('RUBRICA'));"] } }],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"DEFINICION\": \"[{\\\"nombre\\\":\\\"Argumentacion\\\",\\\"descripcion\\\":\\\"Sustenta con evidencia\\\",\\\"niveles\\\":[{\\\"etiqueta\\\":\\\"Excelente\\\",\\\"descripcion\\\":\\\"Argumenta con solidez\\\",\\\"ponderacion\\\":5},{\\\"etiqueta\\\":\\\"Bueno\\\",\\\"descripcion\\\":\\\"Argumenta parcialmente\\\",\\\"ponderacion\\\":3},{\\\"etiqueta\\\":\\\"Bajo\\\",\\\"descripcion\\\":\\\"No argumenta\\\",\\\"ponderacion\\\":1}]},{\\\"nombre\\\":\\\"Fluidez verbal\\\",\\\"niveles\\\":[{\\\"etiqueta\\\":\\\"Alta\\\",\\\"ponderacion\\\":5},{\\\"etiqueta\\\":\\\"Baja\\\",\\\"ponderacion\\\":2}]}]\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadRubricaId}}/instrumento",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadRubricaId}}", "instrumento"]
+            },
+            "description": "`fn_actividad_instrumento_definir` (V226) despachando a `fn_actividad_rubrica_definir` porque `TACTIVIDAD.FK_TLV_INSTRUMENTO_EVALUACION = RUBRICA`. Requiere que la actividad se haya creado (o actualizado) con `FK_TLV_INSTRUMENTO_EVALUACION` apuntando a RUBRICA — ajustar `PUT /planeador/actividades/:ID` si 1.1 no lo fijo."
+          }
+        },
+        {
+          "name": "1.4 — GET obtener instrumento RUBRICA definido",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "pm.test('trae 2 criterios', () => pm.expect(pm.response.json().rows[0].definicion).to.be.an('array').with.length(2));"] } }],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadRubricaId}}/instrumento",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadRubricaId}}", "instrumento"]
+            },
+            "description": "`fn_actividad_instrumento_obtener` (V226): confirma la rubrica recien definida, con `pk`/`orden` asignados por Postgres a cada criterio y nivel."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 — LISTA_COTEJO (unidad con referente CUALITATIVA)",
+      "item": [
+        {
+          "name": "2.1 — POST crear actividad evaluativa (lista de cotejo)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().rows;",
+                  "if (rows && rows.length) { pm.collectionVariables.set('actividadCotejoId', Object.values(rows[0])[0]); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TITULO\": \"Entrega de cuaderno de campo\",\n  \"FK_TASIGNATURA\": {{asignaturaId}},\n  \"FK_TLV_TIPO_ACTIVIDAD\": {{tipoActividadId}},\n  \"FK_TLV_JERARQUIA\": {{jerarquiaId}},\n  \"DESCRIPCION\": \"Verificacion de entregables con lista de cotejo\",\n  \"FK_TGRUPO\": {{grupoId}},\n  \"FK_TUNIDAD\": {{unidadCualitativaId}},\n  \"ES_EVALUATIVA\": \"S\",\n  \"FECHA_INICIO\": \"2026-09-10\",\n  \"FECHA_CIERRE\": \"2026-09-20\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades"]
+            },
+            "description": "Misma unidad CUALITATIVA que el bloque 1: LISTA_COTEJO tambien esta permitida."
+          }
+        },
+        {
+          "name": "2.2 — GET configuracion (confirma LISTA_COTEJO permitida)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "const permitidos = pm.response.json().rows[0].campos_disponibles.evaluacion.instrumentosPermitidos.map(i => i.valor);", "pm.test('LISTA_COTEJO permitida', () => pm.expect(permitidos).to.include('LISTA_COTEJO'));"] } }],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadCotejoId}}/configuracion",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadCotejoId}}", "configuracion"]
+            }
+          }
+        },
+        {
+          "name": "2.3 — PUT definir instrumento LISTA_COTEJO",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "pm.test('instrumento aplicado es LISTA_COTEJO', () => pm.expect(pm.response.json().rows[0].instrumento_aplicado).to.eql('LISTA_COTEJO'));"] } }],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"DEFINICION\": \"[{\\\"descripcion\\\":\\\"Entrega puntual\\\",\\\"ponderacion\\\":20},{\\\"descripcion\\\":\\\"Registros completos\\\",\\\"ponderacion\\\":40},{\\\"descripcion\\\":\\\"Ortografia y redaccion\\\",\\\"ponderacion\\\":20},{\\\"descripcion\\\":\\\"Ilustraciones pertinentes\\\",\\\"ponderacion\\\":20}]\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadCotejoId}}/instrumento",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadCotejoId}}", "instrumento"]
+            },
+            "description": "`ponderacion` es OPCIONAL por item en LISTA_COTEJO (a diferencia de RUBRICA donde es obligatoria); aqui se manda en todos por claridad del ejemplo."
+          }
+        },
+        {
+          "name": "2.4 — GET obtener instrumento LISTA_COTEJO definido",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "pm.test('trae 4 items', () => pm.expect(pm.response.json().rows[0].definicion).to.be.an('array').with.length(4));"] } }],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadCotejoId}}/instrumento",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadCotejoId}}", "instrumento"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 — ESCALA_VALORACION numerica (unidad con referente CUANTITATIVA)",
+      "item": [
+        {
+          "name": "3.1 — POST crear actividad evaluativa (escala numerica)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().rows;",
+                  "if (rows && rows.length) { pm.collectionVariables.set('actividadEscalaNumId', Object.values(rows[0])[0]); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TITULO\": \"Prueba escrita — operaciones basicas\",\n  \"FK_TASIGNATURA\": {{asignaturaId}},\n  \"FK_TLV_TIPO_ACTIVIDAD\": {{tipoActividadId}},\n  \"FK_TLV_JERARQUIA\": {{jerarquiaId}},\n  \"DESCRIPCION\": \"Prueba objetiva calificada con escala numerica 1-5\",\n  \"FK_TGRUPO\": {{grupoId}},\n  \"FK_TUNIDAD\": {{unidadCuantitativaId}},\n  \"ES_EVALUATIVA\": \"S\",\n  \"FECHA_INICIO\": \"2026-09-10\",\n  \"FECHA_CIERRE\": \"2026-09-20\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades"]
+            },
+            "description": "Unidad `{{unidadCuantitativaId}}` con referente tipo evaluacion CUANTITATIVA: solo ESCALA_VALORACION (y OTRO) deberian venir permitidos."
+          }
+        },
+        {
+          "name": "3.2 — GET configuracion (confirma ESCALA_VALORACION permitida, RUBRICA/COTEJO no)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "const permitidos = pm.response.json().rows[0].campos_disponibles.evaluacion.instrumentosPermitidos.map(i => i.valor);", "pm.test('ESCALA_VALORACION permitida', () => pm.expect(permitidos).to.include('ESCALA_VALORACION'));", "pm.test('RUBRICA NO permitida en referente CUANTITATIVA', () => pm.expect(permitidos).to.not.include('RUBRICA'));"] } }],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadEscalaNumId}}/configuracion",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadEscalaNumId}}", "configuracion"]
+            },
+            "description": "Este es el caso que evidencia el filtro real: un referente CUANTITATIVA excluye RUBRICA y LISTA_COTEJO del catalogo devuelto (`fn_instrumento_permitido_por_tipo_evaluacion`, V214.2), a diferencia de los bloques 1 y 2."
+          },
+          "response": [
+            {
+              "name": "200 — referente CUANTITATIVA: solo ESCALA_VALORACION y OTRO",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadEscalaNumId}}/configuracion" } },
+              "status": "OK", "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [\n    {\n      \"campos_disponibles\": {\n        \"evaluacion\": {\n          \"visible\": true, \"requerido\": true,\n          \"instrumentosPermitidos\": [\n            { \"pk\": 3, \"valor\": \"ESCALA_VALORACION\", \"etiqueta\": \"Escala de valoracion\" },\n            { \"pk\": 5, \"valor\": \"OTRO\", \"etiqueta\": \"Otro\" }\n          ]\n        }\n      },\n      \"unidad_configuracion\": { \"tieneUnidad\": true, \"referenteCurricular\": { \"tipoEvaluacion\": \"CUANTITATIVA\", \"tipoEvaluacionNombre\": \"Cuantitativa\" } }\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "3.3 — PUT definir instrumento ESCALA_VALORACION (NUMERICA)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "pm.test('instrumento aplicado es ESCALA_VALORACION', () => pm.expect(pm.response.json().rows[0].instrumento_aplicado).to.eql('ESCALA_VALORACION'));"] } }],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"DEFINICION\": \"{\\\"tipoEscala\\\":{{tipoEscalaNumericaId}},\\\"criteriosGenerales\\\":\\\"Precision y procedimiento correcto\\\",\\\"valorMin\\\":1,\\\"valorMax\\\":5,\\\"interpretacionRangos\\\":\\\"1-2 insuficiente, 3 aceptable, 4-5 sobresaliente\\\"}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadEscalaNumId}}/instrumento",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadEscalaNumId}}", "instrumento"]
+            },
+            "description": "`tipoEscala` debe ser el PK de `TLISTA_VALOR` categoria `TIPO_ESCALA` cuyo VALOR es `NUMERICA` — ajustar `{{tipoEscalaNumericaId}}` al entorno real. Sin `niveles`: la variante NUMERICA se califica con `valorNumerico`, no con `pkNivel` (ver `planeador-instrumentos` para el flujo de calificar)."
+          }
+        },
+        {
+          "name": "3.4 — GET obtener instrumento ESCALA_VALORACION (NUMERICA) definido",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadEscalaNumId}}/instrumento",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadEscalaNumId}}", "instrumento"]
+            }
+          },
+          "response": [
+            {
+              "name": "200 — NUMERICA",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadEscalaNumId}}/instrumento" } },
+              "status": "OK", "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ {\n    \"instrumento\": \"ESCALA_VALORACION\", \"instrumento_nombre\": \"Escala de valoracion\",\n    \"definicion\": { \"pk\": 1, \"tipoEscala\": \"NUMERICA\", \"criteriosGenerales\": \"Precision y procedimiento correcto\", \"valorMin\": 1, \"valorMax\": 5, \"interpretacionRangos\": \"1-2 insuficiente, 3 aceptable, 4-5 sobresaliente\" }\n  } ]\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4 — ESCALA_VALORACION cualitativa (unidad con referente CUANTITATIVA)",
+      "item": [
+        {
+          "name": "4.1 — POST crear actividad evaluativa (escala cualitativa)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().rows;",
+                  "if (rows && rows.length) { pm.collectionVariables.set('actividadEscalaCualId', Object.values(rows[0])[0]); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TITULO\": \"Taller practico — resolucion guiada\",\n  \"FK_TASIGNATURA\": {{asignaturaId}},\n  \"FK_TLV_TIPO_ACTIVIDAD\": {{tipoActividadId}},\n  \"FK_TLV_JERARQUIA\": {{jerarquiaId}},\n  \"DESCRIPCION\": \"Taller calificado con escala de valoracion cualitativa\",\n  \"FK_TGRUPO\": {{grupoId}},\n  \"FK_TUNIDAD\": {{unidadCuantitativaId}},\n  \"ES_EVALUATIVA\": \"S\",\n  \"FECHA_INICIO\": \"2026-09-10\",\n  \"FECHA_CIERRE\": \"2026-09-20\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades"]
+            },
+            "description": "ESCALA_VALORACION admite las 2 variantes (NUMERICA/CUALITATIVA) bajo el mismo referente CUANTITATIVA — la variante la decide `tipoEscala` en el body de 4.2, no el referente de la unidad."
+          }
+        },
+        {
+          "name": "4.2 — PUT definir instrumento ESCALA_VALORACION (CUALITATIVA)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "pm.test('instrumento aplicado es ESCALA_VALORACION', () => pm.expect(pm.response.json().rows[0].instrumento_aplicado).to.eql('ESCALA_VALORACION'));"] } }],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"DEFINICION\": \"{\\\"tipoEscala\\\":{{tipoEscalaCualitativaId}},\\\"criteriosGenerales\\\":\\\"Autonomia y correccion del procedimiento\\\",\\\"niveles\\\":[{\\\"etiqueta\\\":\\\"Alto\\\",\\\"descripcion\\\":\\\"Resuelve sin ayuda\\\",\\\"ponderacion\\\":5},{\\\"etiqueta\\\":\\\"Medio\\\",\\\"descripcion\\\":\\\"Resuelve con ayuda puntual\\\",\\\"ponderacion\\\":3},{\\\"etiqueta\\\":\\\"Bajo\\\",\\\"descripcion\\\":\\\"Requiere guia constante\\\",\\\"ponderacion\\\":1}]}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadEscalaCualId}}/instrumento",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadEscalaCualId}}", "instrumento"]
+            },
+            "description": "`tipoEscala` = PK de `TLISTA_VALOR` categoria TIPO_ESCALA valor CUALITATIVA. Variante CUALITATIVA usa `niveles` (como RUBRICA) en vez de `valorMin`/`valorMax`; se califica despues con `pkNivel`."
+          }
+        },
+        {
+          "name": "4.3 — GET obtener instrumento ESCALA_VALORACION (CUALITATIVA) definido",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadEscalaCualId}}/instrumento",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadEscalaCualId}}", "instrumento"]
+            }
+          },
+          "response": [
+            {
+              "name": "200 — CUALITATIVA",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadEscalaCualId}}/instrumento" } },
+              "status": "OK", "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ {\n    \"instrumento\": \"ESCALA_VALORACION\", \"instrumento_nombre\": \"Escala de valoracion\",\n    \"definicion\": { \"pk\": 2, \"tipoEscala\": \"CUALITATIVA\", \"criteriosGenerales\": \"Autonomia y correccion del procedimiento\", \"niveles\": [ { \"pk\": 1, \"etiqueta\": \"Alto\", \"descripcion\": \"Resuelve sin ayuda\", \"ponderacion\": 5 }, { \"pk\": 2, \"etiqueta\": \"Medio\", \"descripcion\": \"Resuelve con ayuda puntual\", \"ponderacion\": 3 }, { \"pk\": 3, \"etiqueta\": \"Bajo\", \"descripcion\": \"Requiere guia constante\", \"ponderacion\": 1 } ] }\n  } ]\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5 — OTRO (delega en un metodo de valoracion; unidad con referente mixto)",
+      "item": [
+        {
+          "name": "5.1 — POST crear actividad evaluativa (OTRO)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().rows;",
+                  "if (rows && rows.length) { pm.collectionVariables.set('actividadOtroId', Object.values(rows[0])[0]); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"TITULO\": \"Portafolio digital del periodo\",\n  \"FK_TASIGNATURA\": {{asignaturaId}},\n  \"FK_TLV_TIPO_ACTIVIDAD\": {{tipoActividadId}},\n  \"FK_TLV_JERARQUIA\": {{jerarquiaId}},\n  \"DESCRIPCION\": \"Evidencia de tipo OTRO: enlace externo valorado con lista de cotejo\",\n  \"FK_TGRUPO\": {{grupoId}},\n  \"FK_TUNIDAD\": {{unidadMixtaId}},\n  \"ES_EVALUATIVA\": \"S\",\n  \"FECHA_INICIO\": \"2026-09-10\",\n  \"FECHA_CIERRE\": \"2026-09-20\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades"]
+            },
+            "description": "Se usa `{{unidadMixtaId}}` (referente CUANTITATIVA_CUALITATIVA o sin tipo definido) porque OTRO siempre pasa el filtro mientras el referente sea evaluativo, sin importar el tipo — este bloque lo demuestra con el caso mas permisivo."
+          }
+        },
+        {
+          "name": "5.2 — GET configuracion (los 4 instrumentos, incluido OTRO)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "const permitidos = pm.response.json().rows[0].campos_disponibles.evaluacion.instrumentosPermitidos.map(i => i.valor);", "pm.test('OTRO permitido', () => pm.expect(permitidos).to.include('OTRO'));"] } }],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadOtroId}}/configuracion",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadOtroId}}", "configuracion"]
+            }
+          }
+        },
+        {
+          "name": "5.3 — PUT definir instrumento OTRO (delega en LISTA_COTEJO)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "pm.test('instrumento aplicado es OTRO', () => pm.expect(pm.response.json().rows[0].instrumento_aplicado).to.eql('OTRO'));"] } }],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"DEFINICION\": \"{\\\"tipoEvidencia\\\":{{tipoEvidenciaOtroId}},\\\"metodoValoracion\\\":{{metodoValoracionOtroId}},\\\"definicion\\\":{\\\"descripcion_placeholder\\\":\\\"reemplazar por el payload real del metodo elegido (rubrica/cotejo/escala), ver 1.3/2.3/3.3/4.2\\\"}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadOtroId}}/instrumento",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadOtroId}}", "instrumento"]
+            },
+            "description": "`fn_actividad_instrumento_definir` delega en `fn_actividad_otro_definir` (V240) porque `FK_TLV_INSTRUMENTO_EVALUACION = OTRO`. `tipoEvidencia` = PK de TLISTA_VALOR categoria TIPO_EVIDENCIA_OTRO (ARCHIVO|ENLACE|OBSERVACION_DIRECTA|REGISTRO_CAMPO). `metodoValoracion` = PK de TLISTA_VALOR categoria INSTRUMENTO_EVALUACION, restringido a RUBRICA|LISTA_COTEJO|ESCALA_VALORACION (nunca OTRO — rechazo 22023 si se manda OTRO ahi). `definicion` interno debe tener la MISMA forma que el body directo del metodo elegido (array para RUBRICA/LISTA_COTEJO, objeto para ESCALA_VALORACION) — el placeholder de este ejemplo debe reemplazarse por un payload real antes de correr contra un ambiente."
+          }
+        },
+        {
+          "name": "5.4 — GET obtener instrumento OTRO definido",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadOtroId}}/instrumento",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadOtroId}}", "instrumento"]
+            }
+          },
+          "response": [
+            {
+              "name": "200 — OTRO",
+              "originalRequest": { "method": "GET", "url": { "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadOtroId}}/instrumento" } },
+              "status": "OK", "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"rows\": [ {\n    \"instrumento\": \"OTRO\", \"instrumento_nombre\": \"Otro\",\n    \"definicion\": {\n      \"pk\": 1,\n      \"tipoEvidencia\": \"ENLACE\", \"tipoEvidenciaNombre\": \"Enlace\",\n      \"metodoValoracion\": \"LISTA_COTEJO\", \"metodoValoracionNombre\": \"Lista de cotejo\", \"metodoValoracionValor\": 2,\n      \"definicion\": [ { \"pk\": 1, \"descripcion\": \"...\", \"ponderacion\": 20 } ]\n    }\n  } ]\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Rechazos esperados (transversales al filtrado por referente)",
+      "item": [
+        {
+          "name": "PUT definir RUBRICA sobre actividad cuyo instrumento vigente es distinto → 400 (22023)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('400', () => pm.response.to.have.status(400));", "pm.test('sqlState 22023', () => pm.expect(pm.response.json().sqlState).to.eql('22023'));"] } }],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"DEFINICION\": \"[{\\\"nombre\\\":\\\"x\\\",\\\"niveles\\\":[{\\\"etiqueta\\\":\\\"a\\\",\\\"ponderacion\\\":1}]}]\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadEscalaNumId}}/instrumento",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadEscalaNumId}}", "instrumento"]
+            },
+            "description": "Se manda un body de RUBRICA contra `actividadEscalaNumId` (cuyo instrumento vigente es ESCALA_VALORACION): `fn_actividad_instrumento_definir` rechaza porque el instrumento del body no coincide con `TACTIVIDAD.FK_TLV_INSTRUMENTO_EVALUACION`."
+          }
+        },
+        {
+          "name": "PUT definir OTRO con metodoValoracion=OTRO → 400 (22023, ciclo no permitido)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('400', () => pm.response.to.have.status(400));"] } }],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"DEFINICION\": \"{\\\"tipoEvidencia\\\":{{tipoEvidenciaOtroId}},\\\"metodoValoracion\\\":5,\\\"definicion\\\":{}}\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadOtroId}}/instrumento",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "{{actividadOtroId}}", "instrumento"]
+            },
+            "description": "`metodoValoracion` no puede apuntar al PK de OTRO (aqui `5`, ajustar al PK real del entorno) — `fn_actividad_otro_definir` (V240) lo rechaza para evitar que OTRO delegue en si mismo."
+          }
+        },
+        {
+          "name": "GET configuracion de actividad sin unidad → evaluacion.visible=false, instrumentosPermitidos=[]",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('200', () => pm.response.to.have.status(200));", "const ev = pm.response.json().rows[0].campos_disponibles.evaluacion;", "pm.test('visible=false y sin instrumentos', () => { pm.expect(ev.visible).to.eql(false); pm.expect(ev.instrumentosPermitidos).to.be.an('array').that.is.empty; });"] } }],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/huerfanas?asignatura={{asignaturaId}}&pagina=1&size=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "eval-col", "planeador", "actividades", "huerfanas"],
+              "query": [{ "key": "asignatura", "value": "{{asignaturaId}}" }, { "key": "pagina", "value": "1" }, { "key": "size", "value": "1" }]
+            },
+            "description": "Ejecuta este GET a `.../huerfanas` primero para obtener un `pk_tactividad` real sin unidad de tu entorno; luego llama `GET /planeador/actividades/:ID/configuracion` con ese PK a mano (no encadenado aqui para no depender de que existan huerfanas) y verifica que `evaluacion.instrumentosPermitidos` viene vacio: sin unidad no hay referente curricular que consultar."
+          }
+        }
+      ]
+    }
+  ]
+}
