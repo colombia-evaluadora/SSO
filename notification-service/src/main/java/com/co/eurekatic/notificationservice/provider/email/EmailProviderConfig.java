@@ -15,6 +15,17 @@ import org.springframework.context.annotation.Lazy;
  * {@code /actuator/providers} is enough to make it live,
  * no bean edit needed.
  *
+ * <p><b>These beans are legacy, not required anymore.</b>
+ * {@link ProviderRegistry#refresh()} now builds a {@link
+ * SmtpEmailProvider} on the fly for any {@code impl = SMTP} row that
+ * has no matching bean here — a NEW account (e.g. a third app's
+ * ZeptoMail token) only needs an INSERT into {@code provider_config}
+ * + its env vars + the {@code docker-compose.yml} wiring, no Java
+ * change or redeploy. The four beans below stay only because they
+ * already existed before that fallback was added; nothing breaks by
+ * removing them (the dynamic path would just pick them up instead),
+ * but there's no reason to churn a working bean either.
+ *
  * <p>{@code smtp-mailhog} (see {@code V2__seed_smtp_mailhog.sql})
  * is the dev-visibility fallback: no {@code username_env}/
  * {@code password_env} in its settings, so it needs no
@@ -63,26 +74,19 @@ public class EmailProviderConfig {
      * las cuentas — lo que identifica la cuenta es la contraseña, que es
      * el token. No es una errata en el {@code .env}.
      *
-     * <p>El nombre del bean tiene que coincidir EXACTO con el
-     * {@code provider_key} de la fila: {@link ProviderRegistry#refresh()}
-     * las casa por ese nombre y descarta con un WARN las filas sin bean.
-     * Por eso dar de alta un proveedor nuevo no es solo un INSERT.
+     * <p>Este bean sigue existiendo por historia, no por necesidad: desde
+     * que {@link ProviderRegistry#dynamicSmtpProvider} existe, una fila
+     * {@code impl = SMTP} sin bean ya no se descarta — se construye sola.
+     * Ver el {@code smtp-zeptomail-pigse} sembrado por V4, que nunca tuvo
+     * uno.
      */
     @Bean(name = "smtp-zeptomail")
     public ChannelProvider smtpZeptomail(@Lazy ProviderRegistry registry) {
         return new SmtpEmailProvider("smtp-zeptomail", registry);
     }
 
-    /**
-     * Segunda cuenta de ZeptoMail, para la app PIGSE — sembrada por
-     * {@code V4__provider_config_per_app.sql} con {@code app_name =
-     * 'PIGSE'} y {@code enabled = false} hasta que el operador cargue
-     * {@code SMTP_ZEPTOMAIL_PIGSE_USER}/{@code _PASS} en el .env del
-     * servidor y actualice {@code settings.from} al dominio real
-     * verificado en esa cuenta.
-     */
-    @Bean(name = "smtp-zeptomail-pigse")
-    public ChannelProvider smtpZeptomailPigse(@Lazy ProviderRegistry registry) {
-        return new SmtpEmailProvider("smtp-zeptomail-pigse", registry);
-    }
+    // `smtp-zeptomail-pigse` (V4__provider_config_per_app.sql, app_name =
+    // 'PIGSE') deliberately has NO bean here — it's the first row that
+    // proves `ProviderRegistry.dynamicSmtpProvider()` works: enabling it
+    // in the DB + its env vars + docker-compose is enough, no bean/redeploy.
 }
