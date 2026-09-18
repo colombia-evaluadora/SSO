@@ -877,6 +877,13 @@ services:
       # smtp-zeptomail de provider_config se auto-desactiva.
       SMTP_ZEPTOMAIL_USER: ${SMTP_ZEPTOMAIL_USER:-}
       SMTP_ZEPTOMAIL_PASS: ${SMTP_ZEPTOMAIL_PASS:-}
+      # Segunda cuenta de ZeptoMail, para la app PIGSE (provider_config
+      # row smtp-zeptomail-pigse, app_name='PIGSE', V4/V6). Mismo motivo
+      # que las dos de arriba: sin estas dos, esa fila se auto-desactiva
+      # y un correo de PIGSE cae al proveedor genérico que siga vivo
+      # (o, en un ambiente sin ninguno real configurado, a mailhog).
+      SMTP_ZEPTOMAIL_PIGSE_USER: ${SMTP_ZEPTOMAIL_PIGSE_USER:-}
+      SMTP_ZEPTOMAIL_PIGSE_PASS: ${SMTP_ZEPTOMAIL_PIGSE_PASS:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAILJS_SERVICE_ID: ${EMAILJS_SERVICE_ID:-}
       EMAILJS_PUBLIC_KEY: ${EMAILJS_PUBLIC_KEY:-}
