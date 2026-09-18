@@ -1,6 +1,7 @@
 -- ===========================================================================
 -- V282 — Planeador: la configuracion de la actividad ANTES de crearla, a
 -- partir de la unidad escogida (CU-86e311xxp).
+-- Nota: los bloques criterio/evaluacion/ponderacion los construye V440.
 --
 -- EL HUECO DEL FLUJO. El flujo de creacion es:
 --
@@ -17,11 +18,18 @@
 -- necesita la pantalla.
 --
 -- Lo que SI se podia pedir antes de crear:
---   * el arbol de enunciados y evidencias -> GET /planeador/unidades/:ID/referente
---     (V255), que ademas marca cuales relaciono la unidad;
+--   * el CATALOGO de enunciados y evidencias que se pueden marcar ->
+--     GET /planeador/referente-curricular?grado=&asignatura= (V278). OJO: NO
+--     sirve GET /planeador/unidades/:ID/referente, que desde V255 devuelve
+--     solo los enunciados que la unidad YA relaciono, no el arbol completo;
 --   * los campos de la UNIDAD -> GET /planeador/unidades/:ID (campos_disponibles).
 -- Lo que faltaba es lo de la ACTIVIDAD: criterio / evaluacion (con sus
 -- instrumentosPermitidos) / ponderacion.
+--
+-- ESTA FUNCION EXIGE UNA UNIDAD. Para la actividad que todavia no pertenece a
+-- ninguna, usar fn_actividad_configuracion_contexto (V422), que resuelve lo
+-- mismo desde (grupo, asignatura) y ademas devuelve los limites de la seccion
+-- Programacion.
 --
 -- -------------------------------------------------------------------------
 -- POR QUE SE PUEDE RESOLVER SIN LA ACTIVIDAD
@@ -164,13 +172,15 @@ BEGIN
                 END,
                 'tipoEvaluacion', v_tipo,
                 'instrumentosPermitidos', v_instrumentos),
-            'ponderacion', v_ponderacion)
+            'ponderacion', v_ponderacion,
+            'recuperacion', academico_test.fn_actividad_recuperacion_campos_disponibles(
+                                COALESCE(v_evaluativo, FALSE), v_es_evaluativa))
     );
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_configuracion_actividad(BIGINT, BIGINT, VARCHAR)
-    IS 'La configuracion del formulario de NUEVA ACTIVIDAD a partir de la unidad escogida, es decir ANTES de que la actividad exista. Cubre el hueco del flujo: GET /planeador/actividades/:ID/configuracion (V214.2) responde lo mismo pero exige un PK_TACTIVIDAD, y en el formulario de creacion la actividad todavia no esta creada -- no habia forma de saber que secciones pintar ni que instrumentos ofrecer hasta despues de guardar. Se puede resolver sin la actividad porque las tres respuestas de fn_actividad_campos_disponibles se derivan de la UNIDAD (criterio: nivel de ensenanza de su grado; evaluacion: referente EVALUATIVO y su TIPO_EVALUACION; ponderacion: metodo de calculo de la unidad); el unico dato propio de la actividad es ES_EVALUATIVA, que en el formulario lo esta eligiendo el usuario y aqui entra como p_es_evaluativa (default ''S''). NO reimplementa las reglas: compone los helpers que ya existen y ya son por unidad -- fn_unidad_referente_evaluativo, fn_unidad_referente_tipo_evaluacion, fn_instrumento_permitido_por_tipo_evaluacion (V214.2) y fn_unidad_calculo_definitiva_modo (V223) --, y conserva la forma del JSON y los textos de motivo de la version por actividad para que el front use el mismo codigo de render antes y despues de crear. Preescolar se detecta por NOMBRE del nivel (ILIKE ''preescolar%''), no por PK, igual que V214.2: los pks de TNIVEL_ENSENANZA no son estables entre bases. El ARBOL de enunciados y evidencias no se duplica aqui: para eso esta GET /planeador/unidades/:ID/referente (V255), que ademas marca cuales relaciono la unidad. Gate VER sobre PLANEADOR + alcance por la unidad. P0002 si la unidad no existe o esta inactiva. V282.';
+    IS 'La configuracion del formulario de NUEVA ACTIVIDAD a partir de la unidad escogida, es decir ANTES de que la actividad exista. Cubre el hueco del flujo: GET /planeador/actividades/:ID/configuracion (V214.2) responde lo mismo pero exige un PK_TACTIVIDAD, y en el formulario de creacion la actividad todavia no esta creada -- no habia forma de saber que secciones pintar ni que instrumentos ofrecer hasta despues de guardar. Se puede resolver sin la actividad porque las tres respuestas de fn_actividad_campos_disponibles se derivan de la UNIDAD (criterio: nivel de ensenanza de su grado; evaluacion: referente EVALUATIVO y su TIPO_EVALUACION; ponderacion: metodo de calculo de la unidad); el unico dato propio de la actividad es ES_EVALUATIVA, que en el formulario lo esta eligiendo el usuario y aqui entra como p_es_evaluativa (default ''S''). NO reimplementa las reglas: compone los helpers que ya existen y ya son por unidad -- fn_unidad_referente_evaluativo, fn_unidad_referente_tipo_evaluacion, fn_instrumento_permitido_por_tipo_evaluacion (V214.2) y fn_unidad_calculo_definitiva_modo (V223) --, y conserva la forma del JSON y los textos de motivo de la version por actividad para que el front use el mismo codigo de render antes y despues de crear. Preescolar se detecta por NOMBRE del nivel (ILIKE ''preescolar%''), no por PK, igual que V214.2: los pks de TNIVEL_ENSENANZA no son estables entre bases. El ARBOL de enunciados y evidencias no se duplica aqui: el CATALOGO a ofrecer esta en GET /planeador/referente-curricular (V278) y los que la unidad YA relaciono en GET /planeador/unidades/:ID/referente (V255, que desde su ultima version devuelve SOLO los relacionados, no el arbol completo). Para una actividad sin unidad, la configuracion equivalente la da fn_actividad_configuracion_contexto (V422). Gate VER sobre PLANEADOR + alcance por la unidad. P0002 si la unidad no existe o esta inactiva. V282.';
 
 -- ===========================================================================
 -- ENDPOINT — GET /planeador/unidades/:ID/configuracion-actividad?ES_EVALUATIVA=
@@ -187,7 +197,7 @@ SELECT
     'postgres', false, false,
     m.id_microservice, '/planeador/unidades/:ID/configuracion-actividad', 'SELECT', 'GET',
     '{"PARAM.ID": "BIGINT", "QUERY.ES_EVALUATIVA": "VARCHAR"}'::jsonb,
-    'V282 -- que pintar en el formulario de NUEVA ACTIVIDAD para la unidad escogida, ANTES de crearla. :ID = PK_TUNIDAD. Es el paso que faltaba del flujo: GET /planeador/actividades/:ID/configuracion devuelve lo mismo pero pide el PK de una actividad que en el formulario de creacion todavia no existe. Devuelve campos_disponibles con la MISMA forma y los mismos textos de motivo que la version por actividad, para reutilizar el codigo de render: criterio {visible, requerido, motivo} (visible=false solo en Preescolar), evaluacion {visible, requerido, motivo, tipoEvaluacion, instrumentosPermitidos:[{pk,valor,nombre}]} (segun el referente de la unidad y su TIPO_EVALUACION) y ponderacion {visible, requerido, modo, campo?, autocalculado?, motivo} (segun el metodo de calculo de la unidad: Ponderar -> PORCENTAJE sobre PONDERACION; Sumatoria -> PUNTAJE sobre NOTA_MAXIMA y autocalculado; Promediar o sin metodo -> no visible). ?ES_EVALUATIVA=S|N (default S) es lo unico que no sale de la unidad: lo que el usuario acaba de marcar en el formulario; con N la seccion de evaluacion y la ponderacion se apagan. El ARBOL de enunciados y evidencias NO viene aqui para no duplicarlo: pedirlo a GET /planeador/unidades/:ID/referente, que ademas marca cuales relaciono la unidad (relacionadoConUnidad) y trae las etiquetas de nivel. Gate VER sobre PLANEADOR + alcance por la unidad; 404 (P0002) si la unidad no existe o esta inactiva.'
+    'V282 -- que pintar en el formulario de NUEVA ACTIVIDAD para la unidad escogida, ANTES de crearla. :ID = PK_TUNIDAD. Es el paso que faltaba del flujo: GET /planeador/actividades/:ID/configuracion devuelve lo mismo pero pide el PK de una actividad que en el formulario de creacion todavia no existe. Devuelve campos_disponibles con la MISMA forma y los mismos textos de motivo que la version por actividad, para reutilizar el codigo de render: criterio {visible, requerido, motivo} (visible=false solo en Preescolar), evaluacion {visible, requerido, motivo, tipoEvaluacion, instrumentosPermitidos:[{pk,valor,nombre}]} (segun el referente de la unidad y su TIPO_EVALUACION) y ponderacion {visible, requerido, modo, campo?, autocalculado?, motivo} (segun el metodo de calculo de la unidad: Ponderar -> PORCENTAJE sobre PONDERACION; Sumatoria -> PUNTAJE sobre NOTA_MAXIMA y autocalculado; Promediar o sin metodo -> no visible). ?ES_EVALUATIVA=S|N (default S) es lo unico que no sale de la unidad: lo que el usuario acaba de marcar en el formulario; con N la seccion de evaluacion y la ponderacion se apagan. El ARBOL de enunciados y evidencias NO viene aqui para no duplicarlo: el CATALOGO a ofrecer se pide a GET /planeador/referente-curricular?grado=&asignatura= (V278) y los que la unidad YA relaciono a GET /planeador/unidades/:ID/referente (que desde su ultima version devuelve SOLO los relacionados). Si la actividad aun no tiene unidad, usar GET /planeador/actividades/configuracion?grupo=&asignatura= (V422), que ademas trae los limites de la seccion Programacion. Gate VER sobre PLANEADOR + alcance por la unidad; 404 (P0002) si la unidad no existe o esta inactiva.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
@@ -201,3 +211,14 @@ SELECT r.id_role, q.id_query
    AND q.path_template = '/planeador/unidades/:ID/configuracion-actividad'
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
+
+-- El INSERT de arriba es ON CONFLICT DO NOTHING: en las bases donde la fila ya
+-- existe no habria actualizado el detail. Se reconcilia aparte (V253/V279).
+UPDATE public.query q
+   SET detail = 'V282 -- que pintar en el formulario de NUEVA ACTIVIDAD para la unidad escogida, ANTES de crearla. :ID = PK_TUNIDAD. Es el paso que faltaba del flujo: GET /planeador/actividades/:ID/configuracion devuelve lo mismo pero pide el PK de una actividad que en el formulario de creacion todavia no existe. Devuelve campos_disponibles con la MISMA forma y los mismos textos de motivo que la version por actividad, para reutilizar el codigo de render: criterio {visible, requerido, motivo} (visible=false solo en Preescolar), evaluacion {visible, requerido, motivo, tipoEvaluacion, instrumentosPermitidos:[{pk,valor,nombre}]} (segun el referente de la unidad y su TIPO_EVALUACION) y ponderacion {visible, requerido, modo, campo?, autocalculado?, motivo} (segun el metodo de calculo de la unidad: Ponderar -> PORCENTAJE sobre PONDERACION; Sumatoria -> PUNTAJE sobre NOTA_MAXIMA y autocalculado; Promediar o sin metodo -> no visible). ?ES_EVALUATIVA=S|N (default S) es lo unico que no sale de la unidad: lo que el usuario acaba de marcar en el formulario; con N la seccion de evaluacion y la ponderacion se apagan. El ARBOL de enunciados y evidencias NO viene aqui para no duplicarlo: el CATALOGO a ofrecer se pide a GET /planeador/referente-curricular?grado=&asignatura= (V278) y los que la unidad YA relaciono a GET /planeador/unidades/:ID/referente (que desde su ultima version devuelve SOLO los relacionados). Si la actividad aun no tiene unidad, usar GET /planeador/actividades/configuracion?grupo=&asignatura= (V422), que ademas trae los limites de la seccion Programacion. Gate VER sobre PLANEADOR + alcance por la unidad; 404 (P0002) si la unidad no existe o esta inactiva.'
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id
+   AND m.serviceid       = 'eval-col'
+   AND q.path_template   = '/planeador/unidades/:ID/configuracion-actividad'
+   AND q.http_method     = 'GET'
+   AND q.detail IS DISTINCT FROM 'V282 -- que pintar en el formulario de NUEVA ACTIVIDAD para la unidad escogida, ANTES de crearla. :ID = PK_TUNIDAD. Es el paso que faltaba del flujo: GET /planeador/actividades/:ID/configuracion devuelve lo mismo pero pide el PK de una actividad que en el formulario de creacion todavia no existe. Devuelve campos_disponibles con la MISMA forma y los mismos textos de motivo que la version por actividad, para reutilizar el codigo de render: criterio {visible, requerido, motivo} (visible=false solo en Preescolar), evaluacion {visible, requerido, motivo, tipoEvaluacion, instrumentosPermitidos:[{pk,valor,nombre}]} (segun el referente de la unidad y su TIPO_EVALUACION) y ponderacion {visible, requerido, modo, campo?, autocalculado?, motivo} (segun el metodo de calculo de la unidad: Ponderar -> PORCENTAJE sobre PONDERACION; Sumatoria -> PUNTAJE sobre NOTA_MAXIMA y autocalculado; Promediar o sin metodo -> no visible). ?ES_EVALUATIVA=S|N (default S) es lo unico que no sale de la unidad: lo que el usuario acaba de marcar en el formulario; con N la seccion de evaluacion y la ponderacion se apagan. El ARBOL de enunciados y evidencias NO viene aqui para no duplicarlo: el CATALOGO a ofrecer se pide a GET /planeador/referente-curricular?grado=&asignatura= (V278) y los que la unidad YA relaciono a GET /planeador/unidades/:ID/referente (que desde su ultima version devuelve SOLO los relacionados). Si la actividad aun no tiene unidad, usar GET /planeador/actividades/configuracion?grupo=&asignatura= (V422), que ademas trae los limites de la seccion Programacion. Gate VER sobre PLANEADOR + alcance por la unidad; 404 (P0002) si la unidad no existe o esta inactiva.';
