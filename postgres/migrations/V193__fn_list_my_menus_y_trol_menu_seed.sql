@@ -45,9 +45,9 @@
 --     865 -> 15 (Matricula)                    897 -> 16 (Referentes Curriculares)
 --     903 -> 17 (Planeador)
 --
---   TROL.pk_trol SI es estable entre entornos (a diferencia de
---   TLISTA_VALOR/CATEGORIA_ROL): mismo codigo Oracle en ambos, verificado
---   fila por fila contra testv2 antes de escribir esto.
+--   Ni TROL ni TMENU se siembran en las migraciones (llegan por el dump
+--   base) y los pk de TMENU cambian por entorno, asi que la siembra
+--   resuelve ambos por CODIGO y es no-op donde el catalogo no exista.
 --
 -- NUMERACION
 --   Hueco libre V193, verificado contra TODAS las ramas de origin.
@@ -132,31 +132,54 @@ BEGIN
 END;
 $function$;
 
--- Siembra TROL_MENU. WHERE NOT EXISTS por (fk_trol, fk_tmenu): no hay
--- UNIQUE en la tabla (solo pk_trol_menu identity), así que el guard es
--- manual para que re-aplicar esto no duplique filas.
+-- Siembra TROL_MENU resolviendo rol y menu por CODIGO (los pk de TMENU no
+-- son estables entre entornos y TROL no viene en las migraciones: si el
+-- catalogo no esta, el JOIN no devuelve fila y la siembra es no-op). El
+-- CODIGO del menu se compara sin tildes: hay entornos con 'ADMINISTRACIÓN'.
+-- WHERE NOT EXISTS por (fk_trol, fk_tmenu): la tabla no tiene UNIQUE.
 INSERT INTO academico_test.trol_menu (fk_trol, fk_tmenu, orden_rol, active, created_by, created_at)
-SELECT v.fk_trol, v.fk_tmenu, v.orden_rol, TRUE, 'migracion', CURRENT_TIMESTAMP
+SELECT r.pk_trol, m.pk_tmenu, v.orden_rol, TRUE, 'migracion', CURRENT_TIMESTAMP
 FROM (VALUES
-    (1, 1, 4),  (1, 2, 1),  (1, 4, 9),  (1, 14, 11), (1, 10, 3),
-    (1, 8, 8),  (1, 7, 7),  (1, 9, 2),  (1, 15, 12), (1, 5, 5),
-    (1, 13, 10),(1, 6, 6),
-    (2, 1, 1),  (2, 4, 6),  (2, 8, 5),  (2, 7, NULL),(2, 15, 7),
-    (2, 5, NULL),(2, 6, NULL),
-    (3, 1, 1),  (3, 4, 6),  (3, 8, 5),  (3, 7, NULL),(3, 15, 7),
-    (3, 5, NULL),(3, 6, NULL),
-    (7, 1, 8),  (7, 2, 5),  (7, 4, 1),  (7, 14, 3),  (7, 10, 7),
-    (7, 8, 12), (7, 7, 11), (7, 9, 6),  (7, 15, 4),  (7, 5, 9),
-    (7, 13, 2), (7, 6, 10),
-    (8, 1, 1),  (8, 8, 5),  (8, 7, NULL),(8, 15, NULL),(8, 5, NULL),
-    (8, 6, NULL),
-    (9, 1, 1),  (9, 8, 5),  (9, 7, NULL),(9, 15, NULL),(9, 5, 2),
-    (9, 6, NULL),
-    (11, 7, NULL),(11, 6, NULL),
-    (14, 1, 4), (14, 6, 5),
-    (16, 1, 3), (16, 2, 2), (16, 3, 6), (16, 4, 1)
-) AS v(fk_trol, fk_tmenu, orden_rol)
+    ('SUPER_ADMINISTRADOR', 'ESTABLECIMIENTO_EDUCATIVO', 4),  ('SUPER_ADMINISTRADOR', 'ADMINISTRACION', 1),
+    ('SUPER_ADMINISTRADOR', 'COBERTURA_EDUCATIVA', 9),        ('SUPER_ADMINISTRADOR', 'INSCRITOS', 11),
+    ('SUPER_ADMINISTRADOR', 'CONFIG_ROLES_MENUS', 3),         ('SUPER_ADMINISTRADOR', 'PERIODOS_ACADEMICOS', 8),
+    ('SUPER_ADMINISTRADOR', 'FUNCIONARIOS', 7),               ('SUPER_ADMINISTRADOR', 'REGISTRO_ACTIVIDAD', 2),
+    ('SUPER_ADMINISTRADOR', 'MATRICULA', 12),                 ('SUPER_ADMINISTRADOR', 'ESTABLECIMIENTO', 5),
+    ('SUPER_ADMINISTRADOR', 'PRE_MATRICULA', 10),             ('SUPER_ADMINISTRADOR', 'SEDES_EDUCATIVAS', 6),
+    ('DIRECTOR_ENTE_TERRITORIAL', 'ESTABLECIMIENTO_EDUCATIVO', 1), ('DIRECTOR_ENTE_TERRITORIAL', 'COBERTURA_EDUCATIVA', 6),
+    ('DIRECTOR_ENTE_TERRITORIAL', 'PERIODOS_ACADEMICOS', 5),       ('DIRECTOR_ENTE_TERRITORIAL', 'FUNCIONARIOS', NULL),
+    ('DIRECTOR_ENTE_TERRITORIAL', 'MATRICULA', 7),                 ('DIRECTOR_ENTE_TERRITORIAL', 'ESTABLECIMIENTO', NULL),
+    ('DIRECTOR_ENTE_TERRITORIAL', 'SEDES_EDUCATIVAS', NULL),
+    ('JEFE_SISTEMA_ENTE_TERRITORIAL', 'ESTABLECIMIENTO_EDUCATIVO', 1), ('JEFE_SISTEMA_ENTE_TERRITORIAL', 'COBERTURA_EDUCATIVA', 6),
+    ('JEFE_SISTEMA_ENTE_TERRITORIAL', 'PERIODOS_ACADEMICOS', 5),       ('JEFE_SISTEMA_ENTE_TERRITORIAL', 'FUNCIONARIOS', NULL),
+    ('JEFE_SISTEMA_ENTE_TERRITORIAL', 'MATRICULA', 7),                 ('JEFE_SISTEMA_ENTE_TERRITORIAL', 'ESTABLECIMIENTO', NULL),
+    ('JEFE_SISTEMA_ENTE_TERRITORIAL', 'SEDES_EDUCATIVAS', NULL),
+    ('RECTOR', 'ESTABLECIMIENTO_EDUCATIVO', 8),  ('RECTOR', 'ADMINISTRACION', 5),      ('RECTOR', 'COBERTURA_EDUCATIVA', 1),
+    ('RECTOR', 'INSCRITOS', 3),                  ('RECTOR', 'CONFIG_ROLES_MENUS', 7),  ('RECTOR', 'PERIODOS_ACADEMICOS', 12),
+    ('RECTOR', 'FUNCIONARIOS', 11),              ('RECTOR', 'REGISTRO_ACTIVIDAD', 6),  ('RECTOR', 'MATRICULA', 4),
+    ('RECTOR', 'ESTABLECIMIENTO', 9),            ('RECTOR', 'PRE_MATRICULA', 2),       ('RECTOR', 'SEDES_EDUCATIVAS', 10),
+    ('JEFE_SISTEMA_ESTABLECIMIENTO', 'ESTABLECIMIENTO_EDUCATIVO', 1), ('JEFE_SISTEMA_ESTABLECIMIENTO', 'PERIODOS_ACADEMICOS', 5),
+    ('JEFE_SISTEMA_ESTABLECIMIENTO', 'FUNCIONARIOS', NULL),           ('JEFE_SISTEMA_ESTABLECIMIENTO', 'MATRICULA', NULL),
+    ('JEFE_SISTEMA_ESTABLECIMIENTO', 'ESTABLECIMIENTO', NULL),        ('JEFE_SISTEMA_ESTABLECIMIENTO', 'SEDES_EDUCATIVAS', NULL),
+    ('AUXILIAR_ADMINISTRATIVO', 'ESTABLECIMIENTO_EDUCATIVO', 1), ('AUXILIAR_ADMINISTRATIVO', 'PERIODOS_ACADEMICOS', 5),
+    ('AUXILIAR_ADMINISTRATIVO', 'FUNCIONARIOS', NULL),           ('AUXILIAR_ADMINISTRATIVO', 'MATRICULA', NULL),
+    ('AUXILIAR_ADMINISTRATIVO', 'ESTABLECIMIENTO', 2),           ('AUXILIAR_ADMINISTRATIVO', 'SEDES_EDUCATIVAS', NULL),
+    ('COORDINADOR', 'FUNCIONARIOS', NULL),       ('COORDINADOR', 'SEDES_EDUCATIVAS', NULL),
+    ('DOCENTE', 'ESTABLECIMIENTO_EDUCATIVO', 4), ('DOCENTE', 'SEDES_EDUCATIVAS', 5),
+    ('ACUDIENTE', 'ESTABLECIMIENTO_EDUCATIVO', 3), ('ACUDIENTE', 'ADMINISTRACION', 2),
+    ('ACUDIENTE', 'USUARIOS', 6),                  ('ACUDIENTE', 'COBERTURA_EDUCATIVA', 1)
+) AS v(rol_codigo, menu_codigo, orden_rol)
+JOIN academico_test.trol r
+  ON r.codigo = v.rol_codigo AND r.active = TRUE
+JOIN LATERAL (
+    SELECT m.pk_tmenu
+      FROM academico_test.tmenu m
+     WHERE UPPER(TRANSLATE(m.codigo, 'ÁÉÍÓÚ', 'AEIOU')) = v.menu_codigo
+       AND m.active = TRUE
+     ORDER BY m.pk_tmenu
+     LIMIT 1
+) m ON TRUE
 WHERE NOT EXISTS (
     SELECT 1 FROM academico_test.trol_menu tm
-     WHERE tm.fk_trol = v.fk_trol AND tm.fk_tmenu = v.fk_tmenu AND tm.active = TRUE
+     WHERE tm.fk_trol = r.pk_trol AND tm.fk_tmenu = m.pk_tmenu AND tm.active = TRUE
 );

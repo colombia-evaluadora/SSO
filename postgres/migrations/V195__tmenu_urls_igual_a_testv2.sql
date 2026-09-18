@@ -26,56 +26,58 @@
 --   original) antes de escribir el nuevo. Si alguien ya editó una de
 --   estas URLs a mano después de esa siembra, esta migración no la pisa
 --   en silencio.
+-- Cada UPDATE exige nombre + url vieja: identifica la fila sin depender del
+-- pk (no estable entre entornos) y es no-op una vez corregida.
 -- ===========================================================================
 
 UPDATE academico_test.tmenu SET url = '/app/establecimiento-educativo/general'
- WHERE pk_tmenu = 1 AND nombre = 'Establecimiento Educativo'
+ WHERE nombre = 'Establecimiento Educativo'
    AND url = '/establecimiento-educativo/establecimiento';
 
 UPDATE academico_test.tmenu SET url = '/app/registro-de-actividad/sesiones'
- WHERE pk_tmenu = 2 AND nombre = 'Administración'
+ WHERE nombre = 'Administración'
    AND url = '/administracion/registro-actividad';
 
 UPDATE academico_test.tmenu SET url = NULL
- WHERE pk_tmenu = 3 AND nombre = 'Usuarios'
+ WHERE nombre = 'Usuarios'
    AND url = '/usuarios/equipo';
 
 UPDATE academico_test.tmenu SET url = NULL
- WHERE pk_tmenu = 4 AND nombre = 'Cobertura Educativa'
+ WHERE nombre = 'Cobertura Educativa'
    AND url = '/cobertura-educativa/pre-matricula';
 
 UPDATE academico_test.tmenu SET url = '/app/establecimiento-educativo/general'
- WHERE pk_tmenu = 5 AND nombre = 'Establecimiento'
+ WHERE nombre = 'Establecimiento'
    AND url = '/establecimiento-educativo/establecimiento';
 
 UPDATE academico_test.tmenu SET url = '/app/establecimiento-educativo/sedes'
- WHERE pk_tmenu = 6 AND nombre = 'Sedes Educativas'
+ WHERE nombre = 'Sedes Educativas'
    AND url = '/establecimiento-educativo/sedes';
 
 UPDATE academico_test.tmenu SET url = '/app/establecimiento-educativo/funcionarios'
- WHERE pk_tmenu = 7 AND nombre = 'Funcionarios'
+ WHERE nombre = 'Funcionarios'
    AND url = '/establecimiento-educativo/funcionarios';
 
 UPDATE academico_test.tmenu SET url = '/app/establecimiento-educativo/periodos'
- WHERE pk_tmenu = 8 AND nombre = 'Periodos Académicos'
+ WHERE nombre = 'Periodos Académicos'
    AND url = '/establecimiento-educativo/periodos-academicos';
 
 UPDATE academico_test.tmenu SET url = '/app/registro-de-actividad/sesiones'
- WHERE pk_tmenu = 9 AND nombre = 'Registro de actividad'
+ WHERE nombre = 'Registro de actividad'
    AND url = '/administracion/registro-actividad';
 
 UPDATE academico_test.tmenu SET url = '/app/administracion/roles-menus'
- WHERE pk_tmenu = 10 AND nombre = 'Configuración de roles y menús'
+ WHERE nombre = 'Configuración de roles y menús'
    AND url = '/administracion/roles-menus';
 
 UPDATE academico_test.tmenu SET url = '/app/cobertura/pre-matricula'
- WHERE pk_tmenu = 13 AND nombre = 'Pre-Matrícula'
+ WHERE nombre = 'Pre-Matrícula'
    AND url = '/cobertura-educativa/pre-matricula';
 
 UPDATE academico_test.tmenu SET url = '/app/cobertura/inscritos'
- WHERE pk_tmenu = 14 AND nombre = 'Inscritos'
+ WHERE nombre = 'Inscritos'
    AND url = '/cobertura-educativa/inscritos';
 
 UPDATE academico_test.tmenu SET url = '/app/cobertura/matricula'
- WHERE pk_tmenu = 15 AND nombre = 'Matrícula'
+ WHERE nombre = 'Matrícula'
    AND url = '/cobertura-educativa/matricula';
