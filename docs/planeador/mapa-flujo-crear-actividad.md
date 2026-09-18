@@ -73,8 +73,8 @@ el PK de la **relación**, no el del enunciado.
 | | Sin unidad todavía | Con unidad | Con la actividad ya creada |
 |---|---|---|---|
 | **Endpoint** | `GET /planeador/actividades/configuracion` | `GET /planeador/unidades/:ID/configuracion-actividad` | `GET /planeador/actividades/:ID/configuracion` |
-| **Entra** | `GRUPO`, `ASIGNATURA`, `UNIDAD` (opcional), `ES_EVALUATIVA` | `ID`, `ES_EVALUATIVA` | `ID` |
-| **Función** | `fn_actividad_configuracion_contexto` (V422, cuerpo en V440) | `fn_unidad_configuracion_actividad` (V282, cuerpo en V440) | `fn_actividad_campos_disponibles` (V214.2, cuerpo en V440) |
+| **Entra** | `GRUPO`, `ASIGNATURA`, `UNIDAD` (opcional), `ES_SUMATIVO` (default `S`) | `ID`, `ES_SUMATIVO` (default `S`) | `ID` |
+| **Función** | `fn_actividad_configuracion_contexto` (V422, cuerpo en V458) | `fn_unidad_configuracion_actividad` (V282, cuerpo en V458) | `fn_actividad_campos_disponibles` (V214.2, cuerpo en V458) |
 
 Las tres devuelven el **mismo** `campos_disponibles` desde V440:
 
@@ -82,7 +82,8 @@ Las tres devuelven el **mismo** `campos_disponibles` desde V440:
 "campos_disponibles": {
   "criterio":     {"visible":…, "requerido":false, "motivo":"…"},
   "evaluacion":   {"visible":…, "requerido":…, "motivo":"…", "tipoEvaluacion":"…",
-                   "instrumentosPermitidos":[{"pk":…,"valor":"RUBRICA","etiqueta":"Rúbrica","nombre":"Rúbrica"}]},
+                   "instrumentosPermitidos":[{"pk":…,"valor":"RUBRICA","etiqueta":"Rúbrica","nombre":"Rúbrica","variantes":[],"campos":null},
+                                           {"pk":…,"valor":"OTRO","…":"…","campos":{"tipoEvidencia":{…},"metodoValoracion":{…},"definicion":{…},"descripcionInstrumento":{…},"requiereArchivo":{…},"requiereTexto":{…}}}]},
   "ponderacion":  {"visible":…, "requerido":…, "modo":"PORCENTAJE|PUNTAJE", "campo":"PONDERACION|NOTA_MAXIMA",
                    "autocalculado":…, "motivo":"…"},
   "recuperacion": {"visible":…, "requerido":false, "motivo":"…",
@@ -93,8 +94,17 @@ Las tres devuelven el **mismo** `campos_disponibles` desde V440:
 
 - `instrumentosPermitidos` emite **`etiqueta` y `nombre`** con el mismo texto y un
   único orden alfabético. Antes cambiaba de clave y de orden según el endpoint.
+- `ES_SUMATIVO` (antes `ES_EVALUATIVA`; V458) solo apaga `recuperacion` y
+  `ponderacion` con `N` (`ponderacion` viene con `valor: 0`: la actividad pesa
+  cero frente a su unidad y no se envía `PONDERACION`); `evaluacion` e `instrumentosPermitidos` salen del
+  referente igual que con `S`. Si no se envía, se responde como `S`.
+- La entrada `OTRO` de `instrumentosPermitidos` trae `campos`: `tipoEvidencia`
+  (catálogo `TIPO_EVIDENCIA_OTRO`), `metodoValoracion` (los demás instrumentos
+  que admite el referente, con `variantes` de escala), `definicion`,
+  `descripcionInstrumento`, `requiereArchivo`, `requiereTexto`. Ver
+  [instrumentos-por-tipo-evaluacion.md](instrumentos-por-tipo-evaluacion.md) §3.
 - `recuperacion` depende de **dos** gates: referente `EVALUATIVO` **y**
-  `ES_EVALUATIVA <> 'N'`. Los catálogos van como `{pk, valor, nombre}` y el front
+  `ES_SUMATIVO <> 'N'`. Los catálogos van como `{pk, valor, nombre}` y el front
   debe decidir por **`valor`**: los PK de `TLISTA_VALOR` no son estables entre
   entornos.
 
