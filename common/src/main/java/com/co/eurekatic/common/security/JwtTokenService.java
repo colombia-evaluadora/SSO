@@ -57,6 +57,25 @@ public class JwtTokenService {
      * desconocida" en auditoría.
      */
     private static final String CLAIM_FAMILY_ID = "fid";
+    /**
+     * Filtro de auditoría por establecimiento (rector) — nombre legible
+     * del EE que el usuario administra en solitario, resuelto una vez al
+     * login/refresh (ver {@link AuthPrincipal#establishment()}). Omitido
+     * cuando es null (super-admin, o quien no administra un único EE) —
+     * mismo criterio que {@code uid}/{@code fid}.
+     */
+    private static final String CLAIM_ESTABLISHMENT = "est";
+    /**
+     * Nombre legible del usuario ({@code public.users.full_name}), para
+     * que el front pueda pintarlo (header, menú de cuenta) sin caer al
+     * prefijo del correo (`user@dominio.com` → `user`) -- ese fallback
+     * es lo único que el front tenía hasta ahora porque ningún claim
+     * traía el nombre. Igual que {@code est}/{@code fid}: se omite
+     * cuando no hay nombre que emitir (fila con {@code full_name} nulo o
+     * vacío), y el front sigue tolerando su ausencia con el mismo
+     * fallback de siempre.
+     */
+    private static final String CLAIM_NAME = "name";
 
     private final JwtProperties props;
     /**
@@ -197,7 +216,7 @@ public class JwtTokenService {
      * originating session without a Redis lookup.
      */
     public String issueAccessToken(String email, Long userId, Set<String> roles) {
-        return build(email, userId, null, roles, "access", props.accessTokenTtlSeconds());
+        return build(email, userId, null, roles, null, null, "access", props.accessTokenTtlSeconds());
     }
 
     /**
@@ -209,7 +228,36 @@ public class JwtTokenService {
      * sin {@code fid} (legacy-compatible).
      */
     public String issueAccessToken(String email, Long userId, String familyId, Set<String> roles) {
-        return build(email, userId, familyId, roles, "access", props.accessTokenTtlSeconds());
+        return build(email, userId, familyId, roles, null, null, "access", props.accessTokenTtlSeconds());
+    }
+
+    /**
+     * Overload que además emite el claim {@code est} (nombre del
+     * establecimiento del que el usuario es rector/secretaria — ver
+     * {@link AuthPrincipal#establishment()}), usado por el filtro de
+     * auditoría por establecimiento. {@code JsonLoginFilter} y
+     * {@code RefreshController} lo llaman con el valor resuelto por
+     * {@code EstablishmentResolver}; el resto del código sigue
+     * llamando a un overload sin {@code establishment} y obtiene un
+     * token sin ese claim (legacy-compatible, el filtro lo trata
+     * como "sin establecimiento").
+     */
+    public String issueAccessToken(String email, Long userId, String familyId, Set<String> roles,
+                                   String establishment) {
+        return build(email, userId, familyId, roles, establishment, null, "access", props.accessTokenTtlSeconds());
+    }
+
+    /**
+     * Overload que además emite el claim {@code name} (nombre legible
+     * del usuario, ver {@link #CLAIM_NAME}). {@code JsonLoginFilter} y
+     * {@code RefreshController} lo llaman con {@code User.getFullName()};
+     * el resto del código sigue llamando a un overload sin {@code name}
+     * y obtiene un token sin ese claim (legacy-compatible, el front cae
+     * al fallback de siempre).
+     */
+    public String issueAccessToken(String email, Long userId, String familyId, Set<String> roles,
+                                   String establishment, String name) {
+        return build(email, userId, familyId, roles, establishment, name, "access", props.accessTokenTtlSeconds());
     }
 
     /**
@@ -218,7 +266,7 @@ public class JwtTokenService {
      * can distinguish them and apply different rate limits / cache TTLs.
      */
     public String issueApiToken(String email, Long userId, Set<String> roles) {
-        return build(email, userId, null, roles, "api", props.apiTokenTtlSeconds());
+        return build(email, userId, null, roles, null, null, "api", props.apiTokenTtlSeconds());
     }
 
     /**
@@ -237,7 +285,7 @@ public class JwtTokenService {
     }
 
     private String build(String email, Long userId, String familyId,
-                         Set<String> roles, String tokenType, long ttlSeconds) {
+                         Set<String> roles, String establishment, String name, String tokenType, long ttlSeconds) {
         Instant now = Instant.now();
         var builder = Jwts.builder()
                 .subject(email)
@@ -261,6 +309,18 @@ public class JwtTokenService {
         // familyId=null y los downstream lo toleran.
         if (familyId != null) {
             builder.claim(CLAIM_FAMILY_ID, familyId);
+        }
+        // Mismo criterio que fid: ausente cuando el caller no
+        // administra un único establecimiento (super-admin, 2+ EE,
+        // o simplemente no resuelto — ver EstablishmentResolver).
+        if (establishment != null && !establishment.isBlank()) {
+            builder.claim(CLAIM_ESTABLISHMENT, establishment);
+        }
+        // Mismo criterio que est/fid: ausente cuando no hay nombre que
+        // emitir (full_name nulo/vacío) -- el front cae a su fallback
+        // de siempre (prefijo del correo).
+        if (name != null && !name.isBlank()) {
+            builder.claim(CLAIM_NAME, name);
         }
 
         Key signingKey = signingKey();
@@ -353,8 +413,9 @@ public class JwtTokenService {
 
         Long userId = extractUserId(claims);
         String familyId = extractFamilyId(claims);
+        String establishment = extractEstablishment(claims);
 
-        return new AuthPrincipal(claims.getSubject(), userId, roles, tokenType, familyId);
+        return new AuthPrincipal(claims.getSubject(), userId, roles, tokenType, familyId, establishment);
     }
 
     /**
@@ -398,6 +459,21 @@ public class JwtTokenService {
      */
     private static String extractFamilyId(Claims claims) {
         Object raw = claims.get(CLAIM_FAMILY_ID);
+        if (raw == null) {
+            return null;
+        }
+        String s = raw.toString();
+        return s.isBlank() ? null : s;
+    }
+
+    /**
+     * Extrae el claim {@code est} (nombre del establecimiento del
+     * rector/secretaria, ver {@link AuthPrincipal#establishment()}).
+     * Mismo criterio de tolerancia que {@code fid}: ausente en tokens
+     * pre-existentes, o para cualquier usuario sin un único EE.
+     */
+    private static String extractEstablishment(Claims claims) {
+        Object raw = claims.get(CLAIM_ESTABLISHMENT);
         if (raw == null) {
             return null;
         }

@@ -3,6 +3,7 @@ package com.co.eurekatic.reporting.web;
 import com.co.eurekatic.reporting.config.ReportingProperties;
 import com.co.eurekatic.reporting.data.QueryServiceClient;
 import com.co.eurekatic.reporting.render.ExcelRenderer;
+import com.co.eurekatic.reporting.render.Fechas;
 import com.co.eurekatic.reporting.render.ReportMeta;
 import com.co.eurekatic.reporting.render.PdfRenderer;
 import org.slf4j.Logger;
@@ -62,6 +63,7 @@ public class ReportService {
 
         long inicio = System.currentTimeMillis();
         List<Map<String, Object>> rows = queryService.fetchRows(
+                def.getBaseUrl(),
                 def.getPath(),
                 bearer,
                 request == null ? Map.of() : request.filters(),
@@ -85,13 +87,17 @@ public class ReportService {
         // de una sola sede".
         ReportMeta meta = new ReportMeta(usuario, request == null ? null : request.filters());
 
+        List<String> columnas = request == null ? null : request.columns();
         byte[] content = switch (formato) {
-            case PDF -> pdf.render(clave, def, rows, meta);
-            case EXCEL -> excel.render(clave, def, rows, meta);
+            case PDF -> pdf.render(clave, def, rows, meta, columnas);
+            case EXCEL -> excel.render(clave, def, rows, meta, columnas);
         };
 
         String base = def.getFileName() == null ? clave : def.getFileName();
-        String nombre = base + "-" + LocalDate.now().format(SUFIJO) + formato.extension;
+        // En hora de Colombia, no del JVM: un reporte pedido a las 8 de la
+        // noche en Bogota son las 01:00 UTC del dia siguiente, y el archivo
+        // saldria fechado manana.
+        String nombre = base + "-" + Fechas.ahora().format(SUFIJO) + formato.extension;
 
         log.info("Reporte '{}' generado: {} filas, {} bytes, {} ms",
                 clave, rows.size(), content.length, System.currentTimeMillis() - inicio);

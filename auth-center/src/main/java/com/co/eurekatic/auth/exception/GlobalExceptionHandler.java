@@ -114,9 +114,10 @@ public class GlobalExceptionHandler {
             case PERMISSION_DENIED -> HttpStatus.FORBIDDEN;
             case DUPLICATE, CONFLICT -> HttpStatus.CONFLICT;
             case MISSING_REQUIRED, BUSINESS_RULE -> HttpStatus.BAD_REQUEST;
-            case REFERENCE_MISSING, INVALID_VALUE -> HttpStatus.UNPROCESSABLE_ENTITY;
+            case REFERENCE_MISSING, INVALID_VALUE, CHECK_FAILED -> HttpStatus.UNPROCESSABLE_ENTITY;
+            case TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
             case UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
-            case INTERNAL -> HttpStatus.INTERNAL_SERVER_ERROR;
+            case DEFINITION, INTERNAL -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
     }
 

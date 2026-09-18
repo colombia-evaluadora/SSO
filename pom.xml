@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.0.7</version>
+        <version>4.1.1</version>
         <relativePath/>
     </parent>
 
@@ -33,9 +33,9 @@
             2025.1.x patch (2025.1.2) which lines up with
             spring-cloud-build 5.0.2 / spring-cloud-netflix 5.0.2.
         -->
-        <spring-cloud.version>2025.1.2</spring-cloud.version>
+        <spring-cloud.version>2025.1.3</spring-cloud.version>
 
-        <jjwt.version>0.12.7</jjwt.version>
+        <jjwt.version>0.13.0</jjwt.version>
         <!--
             BouncyCastle no está gestionado por el BOM de Spring Boot 4.0
             (spring-security-crypto declara Argon2PasswordEncoder pero deja
@@ -43,10 +43,25 @@
             se fija aquí para que los módulos la hereden sin repetirla.
         -->
         <bouncycastle.version>1.85</bouncycastle.version>
-        <resilience4j.version>2.2.0</resilience4j.version>
+        <resilience4j.version>2.4.0</resilience4j.version>
         <postgresql.version>42.7.4</postgresql.version>
         <testcontainers.version>1.21.4</testcontainers.version>
-        <opentelemetry-instrumentation.version>2.21.0-alpha</opentelemetry-instrumentation.version>
+        <!--
+            2.28.0-alpha es la version del proyecto opentelemetry-java-
+            instrumentation que empareja exacto con el opentelemetry-api
+            1.62.0 que gestiona spring-boot-starter-parent 4.1.1 (ver
+            spring-boot-dependencies-4.1.1.pom: <opentelemetry.version>).
+            La 2.21.0-alpha (heredada de cuando el parent era 4.0.7,
+            que gestionaba opentelemetry-api 1.55.0) queda desalineada
+            en 4.1.1: arrastra un opentelemetry-api-incubator mas nuevo
+            en su propio arbol transitivo y rompe con
+            NoSuchMethodError en DeclarativeConfigProperties.get(String)
+            al construir el ObservationRegistry/Tracer en cualquier
+            modulo que dependa de common (query-service, eurekaserver,
+            provisioner). Confirmado version-por-version contra el pom
+            de opentelemetry-logback-appender-1.0 en Maven Central.
+        -->
+        <opentelemetry-instrumentation.version>2.28.0-alpha</opentelemetry-instrumentation.version>
         <!--
             springdoc-openapi provides the OpenAPI 3 spec and Swagger UI.
             Pinned here because common (line 113) and api-gateway (line 100)
@@ -57,7 +72,7 @@
             with spring-cloud-gateway 5.0.2 — keeping 2.8.x until
             that settles.
         -->
-        <springdoc-openapi.version>2.8.6</springdoc-openapi.version>
+        <springdoc-openapi.version>3.1.1</springdoc-openapi.version>
     </properties>
 
     <dependencyManagement>

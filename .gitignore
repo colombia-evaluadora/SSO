@@ -63,9 +63,17 @@ skills-lock*
 
 # .claude/ y .agents/ se ignoran completos, EXCEPTO:
 #   - los subagentes del repo (.claude/agents/)
+#   - los comandos del repo (.claude/commands/)
+#   - los hooks del repo (.claude/hooks/); settings.json NO se comparte, asi que
+#     cada quien los registra en su settings local (ver .claude/hooks/README.md)
+#   - las reglas por seccion (.claude/rules/), con paths: para cargarse solo al
+#     tocar su area
 #   - un conjunto explícito de skills (su fuente: SKILL.md + recursos)
 .claude/*
 !.claude/agents/
+!.claude/commands/
+!.claude/hooks/
+!.claude/rules/
 !.claude/skills/
 .claude/skills/*
 # Skills externas versionadas (ver skills-lock.json)
@@ -84,4 +92,5 @@ skills-lock*
 !.claude/skills/server-status/
 !.claude/skills/new-query-endpoint/
 
-
+**/__pycache__/
+**/migraciones-analisis.*

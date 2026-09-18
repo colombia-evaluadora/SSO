@@ -572,6 +572,58 @@ COMMENT ON FUNCTION academico_test.fn_refcurr_actualizar(BIGINT, BIGINT, VARCHAR
     IS 'PATCH parcial de TREFERENTE_CURRICULAR (gate EDITAR, solo SUPER_ADMIN por defecto): cada parametro NULL preserva el valor actual. p_fk_tnivel_ensenanza_ids NULL = no tocar los niveles educativos; array = reemplazo completo del set en TREFERENTE_CURRICULAR_NIVEL, nunca vacio (22023: el referente conserva al menos un nivel). p_fk_tarea_asignatura_ids NULL = no tocar areas; ARRAY[]::BIGINT[] = vaciarlas (vuelve a "aplica a todas"); cualquier otro array = reemplazo completo del set, bloqueado (23503) si intenta quitar un area con enunciados activos amarrados.';
 
 -- ===========================================================================
+-- fn_refcurr_uso_assert — bloquea la baja de un referente o de un enunciado
+-- que ya esta en uso por unidades o actividades. Sin puerta de confirmacion.
+-- ===========================================================================
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_uso_assert(
+    p_pk_referente_curricular BIGINT,
+    p_pk_referente_enunciado  BIGINT DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_unidades    BIGINT;
+    v_actividades BIGINT;
+    v_que         TEXT;
+BEGIN
+    WITH enunciados AS (
+        SELECT e.PK_REFERENTE_ENUNCIADO
+          FROM academico_test.TREFERENTE_ENUNCIADO e
+         WHERE (p_pk_referente_enunciado IS NULL AND e.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular)
+            OR e.PK_REFERENTE_ENUNCIADO = p_pk_referente_enunciado
+            OR e.FK_PADRE = p_pk_referente_enunciado
+    )
+    SELECT
+        (SELECT COUNT(DISTINCT u.PK_TUNIDAD)
+           FROM academico_test.TUNIDAD u
+          WHERE u.ACTIVE = TRUE
+            AND ((p_pk_referente_enunciado IS NULL AND u.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular)
+                 OR EXISTS (SELECT 1 FROM academico_test.TUNIDAD_ENUNCIADO ue
+                             JOIN enunciados en ON en.PK_REFERENTE_ENUNCIADO = ue.FK_REFERENTE_ENUNCIADO
+                            WHERE ue.FK_TUNIDAD = u.PK_TUNIDAD AND ue.ACTIVE = TRUE))),
+        (SELECT COUNT(DISTINCT a.PK_TACTIVIDAD)
+           FROM academico_test.TACTIVIDAD a
+           JOIN academico_test.TACTIVIDAD_EVIDENCIA ae ON ae.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND ae.ACTIVE = TRUE
+           JOIN enunciados en ON en.PK_REFERENTE_ENUNCIADO = ae.FK_REFERENTE_ENUNCIADO
+          WHERE a.ACTIVE = TRUE)
+      INTO v_unidades, v_actividades;
+
+    IF v_unidades > 0 OR v_actividades > 0 THEN
+        v_que := CASE WHEN p_pk_referente_enunciado IS NULL THEN 'el referente curricular' ELSE 'el enunciado' END;
+        RAISE EXCEPTION 'No se puede eliminar %: esta siendo usado en % unidad(es) y % actividad(es)',
+              v_que, v_unidades, v_actividades
+            USING ERRCODE = '23503',
+                  HINT = 'Retire primero el referente de esas unidades y actividades';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_uso_assert(BIGINT, BIGINT)
+    IS 'Guarda de uso previa a la baja de un referente curricular (solo primer argumento) o de un enunciado/evidencia (segundo argumento). Cuenta las UNIDADES activas que citan el referente (TUNIDAD.FK_REFERENTE_CURRICULAR) o alguno de sus enunciados (TUNIDAD_ENUNCIADO, V214.1) y las ACTIVIDADES activas que amarran alguna de sus evidencias (TACTIVIDAD_EVIDENCIA, V214.1); para un enunciado se cuentan el y sus evidencias hijas. Si hay alguna, lanza 23503 con el conteo y NO existe forma de confirmar para saltarsela: p_confirmar_cascada de fn_refcurr_eliminar solo cubre el contenido propio del referente (enunciados y evidencias), nunca el trabajo de los docentes que cuelga de el, porque una unidad o una actividad que apunta a un referente inactivo se rompe en silencio en el Planeador. Solo mira filas ACTIVE en las tres tablas: lo ya dado de baja no retiene nada. Helper interno, no gatea; lo invocan fn_refcurr_eliminar y fn_refenunc_eliminar.';
+
+-- ===========================================================================
 -- fn_refcurr_eliminar — soft delete en cascada, con confirmacion explicita.
 -- ===========================================================================
 -- Gana un tercer parametro (p_confirmar_cascada): CREATE OR REPLACE dejaria
@@ -613,6 +665,9 @@ BEGIN
         RAISE EXCEPTION 'El referente curricular "%" ya se encuentra inactivo', v_nombre_actual
             USING ERRCODE = '22023';
     END IF;
+
+    -- En uso por unidades o actividades: se bloquea, sin confirmacion posible.
+    PERFORM academico_test.fn_refcurr_uso_assert(p_pk_referente_curricular);
 
     -- Regla 10: un referente con contenido vivo no se da de baja "de paso".
     -- Simetrico a la regla 7 (quitar un area con enunciados amarrados): el
@@ -677,7 +732,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_refcurr_eliminar(BIGINT, BIGINT, BOOLEAN)
-    IS 'Soft delete (ACTIVE=FALSE) de un TREFERENTE_CURRICULAR (gate ELIMINAR, solo SUPER_ADMIN por defecto). Si el referente tiene enunciados o evidencias vigentes exige p_confirmar_cascada = TRUE; sin esa confirmacion lanza 23503 sin tocar ninguna fila (simetrico a la regla 7 de las areas). Confirmada, la baja es en cascada: evidencias (nivel 2) -> enunciados (nivel 1) -> TREFERENTE_CURRICULAR_AREA -> TREFERENTE_CURRICULAR_NIVEL -> el referente. No toca TUNIDAD.FK_REFERENTE_CURRICULAR (unidades que citaban este referente simplemente quedan apuntando a un referente inactivo; es responsabilidad del caller/UI avisar).';
+    IS 'Soft delete (ACTIVE=FALSE) de un TREFERENTE_CURRICULAR (gate ELIMINAR, solo SUPER_ADMIN por defecto). Si el referente tiene enunciados o evidencias vigentes exige p_confirmar_cascada = TRUE; sin esa confirmacion lanza 23503 sin tocar ninguna fila (simetrico a la regla 7 de las areas). Confirmada, la baja es en cascada: evidencias (nivel 2) -> enunciados (nivel 1) -> TREFERENTE_CURRICULAR_AREA -> TREFERENTE_CURRICULAR_NIVEL -> el referente. ANTES de todo eso, fn_refcurr_uso_assert bloquea con 23503 si alguna unidad activa cita el referente o uno de sus enunciados, o alguna actividad activa amarra una de sus evidencias: ese bloqueo no se puede confirmar, porque lo que colgaria de un referente inactivo es trabajo de los docentes, no contenido del referente.';
 
 -- ===========================================================================
 -- fn_refcurr_listar — pagina con filtros/orden (pantalla listado).
@@ -1146,6 +1201,9 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
+    -- En uso por unidades o actividades: se bloquea (mismo guard del referente).
+    PERFORM academico_test.fn_refcurr_uso_assert(v_actual.FK_REFERENTE_CURRICULAR, p_pk_referente_enunciado);
+
     IF v_actual.FK_PADRE IS NULL THEN
         -- Es un enunciado (nivel 1): cascada a sus evidencias activas.
         UPDATE academico_test.TREFERENTE_ENUNCIADO
@@ -1167,7 +1225,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_refenunc_eliminar(BIGINT, BIGINT)
-    IS 'Soft delete (ACTIVE=FALSE) de un enunciado o evidencia (gate ELIMINAR, solo SUPER_ADMIN por defecto). Si es un enunciado (FK_PADRE IS NULL), en cascada da de baja tambien sus evidencias (FK_PADRE = este pk) ACTIVE. Si es una evidencia, solo se da de baja ella misma.';
+    IS 'Soft delete (ACTIVE=FALSE) de un enunciado o evidencia (gate ELIMINAR, solo SUPER_ADMIN por defecto). Si es un enunciado (FK_PADRE IS NULL), en cascada da de baja tambien sus evidencias (FK_PADRE = este pk) ACTIVE. Si es una evidencia, solo se da de baja ella misma. En ambos casos fn_refcurr_uso_assert bloquea antes con 23503 si el enunciado (o alguna de sus evidencias) esta amarrado a una unidad o actividad activa.';
 
 -- ===========================================================================
 -- fn_refenunc_listar — enunciados (nivel 1) de un referente (panel izquierdo).

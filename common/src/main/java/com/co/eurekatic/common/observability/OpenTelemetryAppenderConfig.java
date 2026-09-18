@@ -6,8 +6,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
 
 /**
@@ -31,25 +31,43 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass(OpenTelemetryAppender.class)
-// Matcheamos `management.tracing.export.enabled` (que el compose
-// deriva de SSO_TELEMETRY_ENABLED) en vez de inventar un nombre
-// propio, así un solo flag gobierna toda la cadena de telemetría.
-// El `matchIfMissing = true` preserva el comportamiento histórico
-// de servicios que no setean el flag — antes de V35, el bean
-// OpenTelemetry siempre existía (auto-creado por Spring Boot).
-@ConditionalOnProperty(name = "management.tracing.export.enabled", havingValue = "true", matchIfMissing = true)
 public class OpenTelemetryAppenderConfig implements InitializingBean {
 
     private static final Logger log = LoggerFactory.getLogger(OpenTelemetryAppenderConfig.class);
 
     private final ObjectProvider<OpenTelemetry> openTelemetry;
+    private final boolean logExportEnabled;
 
-    public OpenTelemetryAppenderConfig(ObjectProvider<OpenTelemetry> openTelemetry) {
+    // Leemos `management.logging.export.otlp.enabled` (que el compose
+    // deriva de SSO_TELEMETRY_ENABLED, y que cada application.yml deja
+    // en false si la env var no viene) en vez de inventar un nombre
+    // propio: es LA propiedad que gobierna el exporter OTLP de logs en
+    // Spring Boot, así que el appender y el exporter se encienden y
+    // apagan juntos. Antes se gateaba por el flag de TRAZAS, que no es
+    // el que decide si los logs viajan a Alloy.
+    public OpenTelemetryAppenderConfig(
+            ObjectProvider<OpenTelemetry> openTelemetry,
+            @Value("${management.logging.export.otlp.enabled:true}") boolean logExportEnabled) {
         this.openTelemetry = openTelemetry;
+        this.logExportEnabled = logExportEnabled;
     }
 
     @Override
     public void afterPropertiesSet() {
+        // El appender OTEL está declarado siempre en logback-spring.xml
+        // (Logback no puede condicionarlo sin Janino) y, mientras nadie
+        // llame a install(), va acumulando eventos en memoria a la espera
+        // de un OpenTelemetry que en este caso nunca llegaría. Con la
+        // telemetría apagada lo apuntamos explícitamente al no-op: vacía
+        // ese buffer, no retiene nada más y no hay exporter detrás, así
+        // que ningún log intenta salir hacia Alloy.
+        if (!logExportEnabled) {
+            OpenTelemetryAppender.install(OpenTelemetry.noop());
+            log.info("Export OTLP de logs deshabilitado "
+                    + "(management.logging.export.otlp.enabled=false); "
+                    + "el appender OTEL queda en no-op y los logs salen sólo por CONSOLE.");
+            return;
+        }
         // El bean OpenTelemetry sólo existe si el servicio incluye
         // el starter OTel Y un exporter está habilitado. Con
         // ObjectProvider evitamos que la ausencia del bean bloquee
@@ -59,8 +77,9 @@ public class OpenTelemetryAppenderConfig implements InitializingBean {
         // nunca tuvo observabilidad.
         OpenTelemetry ot = openTelemetry.getIfAvailable();
         if (ot == null) {
+            OpenTelemetryAppender.install(OpenTelemetry.noop());
             log.warn("OpenTelemetry bean no disponible; el appender OTEL "
-                    + "queda sin instalar y los logs salen sólo por CONSOLE.");
+                    + "queda en no-op y los logs salen sólo por CONSOLE.");
             return;
         }
         // Idempotent at runtime per JVM (the static install is a

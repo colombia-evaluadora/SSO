@@ -42,6 +42,20 @@ public class NotificationEventPublisher {
     }
 
     /**
+     * Publish a notification event, with no app context (see the overload
+     * below) — kept for the flows that don't know which app triggered
+     * them (activation, roles, deactivate/reactivate today).
+     */
+    public void publish(String channel,
+                        String userId,
+                        String address,
+                        String templateId,
+                        Map<String, Object> payload,
+                        String correlationId) {
+        publish(channel, userId, address, templateId, payload, correlationId, null);
+    }
+
+    /**
      * Publish a notification event.
      *
      * @param channel     {@code "sms"} / {@code "email"} / {@code "push"}
@@ -54,18 +68,29 @@ public class NotificationEventPublisher {
      *                    {@code templates/<channel>/}.
      * @param payload     variables merged into the template.
      * @param correlationId caller's trace id (may be {@code null}).
+     * @param appName     {@code app.name} of the app that triggered this
+     *                    notification ({@code "PIGSE"}, {@code
+     *                    "COLOMBIA-EVALUADORA"}), or {@code null} when the
+     *                    caller doesn't have that context. EMAIL uses it
+     *                    to pick the {@code provider_config} row scoped
+     *                    to that app (its own verified ZeptoMail domain)
+     *                    instead of the global fallback roster — see
+     *                    {@code notification-service}'s {@code
+     *                    EmailSender}.
      */
     public void publish(String channel,
                         String userId,
                         String address,
                         String templateId,
                         Map<String, Object> payload,
-                        String correlationId) {
+                        String correlationId,
+                        String appName) {
         UUID notificationId = UUID.randomUUID();
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("source", "sso-admin");
         metadata.put("correlationId", correlationId);
         metadata.put("timestamp", Instant.now().toString());
+        metadata.put("appName", appName);
 
         Map<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("notificationId", notificationId.toString());

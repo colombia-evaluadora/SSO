@@ -196,6 +196,55 @@ COMMENT ON FUNCTION academico_test.fn_usuario_categoria_rol_nivel(BIGINT)
     IS 'Nivel jerarquico (0 = mas alto) de la categoria de rol MAS ALTA que tiene el usuario entre sus TSEDE_USUARIO ACTIVE (multi-rol -> MIN del nivel). Devuelve NULL si el usuario no tiene ningun rol activo. Mismo criterio "solo ACTIVE" que fn_usuario_permisos_menu (V185), sin filtrar ademas por TLV_ESTADO. 0 = SUPER_ADMIN (bypass), 1 = territorial (todos los EE), 2 = establecimiento, 3 = sedes (sede+jornada), 4 = estudiantes/familia.';
 
 -- ---------------------------------------------------------------------------
+-- 2.b) fn_usuario_es_docente_puro — el usuario no administra nada, asi que
+--      dentro de su alcance solo le corresponde SU propio contenido.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_es_docente_puro(
+    p_pk_tusuario  BIGINT
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_nivel  INT;
+    v_peso   INT;
+BEGIN
+    SELECT MIN(academico_test.fn_rol_categoria_nivel(su.FK_TROL))
+      INTO v_nivel
+      FROM academico_test.TSEDE_USUARIO su
+     WHERE su.FK_TUSUARIO = p_pk_tusuario
+       AND su.ACTIVE      = TRUE;
+
+    -- Sin rol activo -> fail-closed (solo lo propio, que para un usuario sin
+    -- funcionario es nada).
+    IF v_nivel IS NULL OR v_nivel >= 4 THEN
+        RETURN TRUE;
+    END IF;
+    IF v_nivel <= 2 THEN
+        RETURN FALSE;
+    END IF;
+
+    -- Nivel 3 (ADMINISTRATIVOS_SEDES) mete en la MISMA categoria al
+    -- coordinador (peso 1), al jefe de area (2) y al director de grupo (3)
+    -- junto al docente (4): dentro de la categoria solo PESO_CATEGORIA los
+    -- separa, por eso el nivel por si solo no alcanza aqui.
+    SELECT MIN(COALESCE(r.PESO_CATEGORIA, 4))
+      INTO v_peso
+      FROM academico_test.TSEDE_USUARIO su
+      JOIN academico_test.TROL r ON r.PK_TROL = su.FK_TROL
+     WHERE su.FK_TUSUARIO = p_pk_tusuario
+       AND su.ACTIVE      = TRUE
+       AND academico_test.fn_rol_categoria_nivel(su.FK_TROL) = 3;
+
+    RETURN COALESCE(v_peso, 4) >= 4;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_usuario_es_docente_puro(BIGINT)
+    IS 'TRUE cuando el usuario NO tiene alcance administrativo y por tanto solo le corresponde su propio contenido (sus unidades, las actividades que dicta), aunque su rol le de alcance territorial de LECTURA sobre una sede. Resuelve el caso que fn_usuario_categoria_rol_nivel no puede: DOCENTE y PSICO_ORIENTADOR comparten la categoria ADMINISTRATIVOS_SEDES (nivel 3) con COORDINADOR, JEFE_AREA y DIRECTOR_GRUPO, que si administran; dentro de esa categoria solo TROL.PESO_CATEGORIA (V120) los distingue, y los dos primeros son peso 4. Multi-rol -> gana el rol mas alto: basta un rol de nivel <= 2 (rector, secretaria, territorial, super admin) o un peso < 4 dentro del nivel 3 para que devuelva FALSE. Fail-closed: usuario sin ningun rol activo, sin categoria o con peso NULL -> TRUE. Pensado para acompanar a fn_usuario_sedes_lectura, no para reemplazarla: la sede sigue acotando QUE se ve, y esta funcion decide si ademas se acota a lo propio.';
+
+-- ---------------------------------------------------------------------------
 -- 3) fn_usuario_ee_accesibles — establecimientos que alcanza el usuario.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_usuario_ee_accesibles(

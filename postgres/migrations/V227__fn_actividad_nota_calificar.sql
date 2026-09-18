@@ -786,6 +786,10 @@ BEGIN
            MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
 
+    -- Consolida la recuperacion sobre su destino, si esta actividad lo es (V408).
+    PERFORM academico_test.fn_actividad_recuperacion_aplicar(
+                p_pk_usuario_solicitante, p_pk_tactividad_estudiante);
+
     RETURN v_pct_final;
 END;
 $$;
@@ -937,6 +941,10 @@ BEGIN
                SET CALIFICACION = v_pct, CALIFICABLE = 'S',
                    MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
              WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
+
+        -- Consolida la recuperacion sobre su destino, si esta actividad lo es (V408).
+        PERFORM academico_test.fn_actividad_recuperacion_aplicar(
+                    p_pk_usuario_solicitante, v_pk_est);
         END IF;
 
         pk_tactividad_estudiante := v_pk_est;
@@ -1049,6 +1057,10 @@ BEGIN
        SET CALIFICACION = v_pct_final, CALIFICABLE = 'S',
            MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
+
+    -- Consolida la recuperacion sobre su destino, si esta actividad lo es (V408).
+    PERFORM academico_test.fn_actividad_recuperacion_aplicar(
+                p_pk_usuario_solicitante, p_pk_tactividad_estudiante);
 
     RETURN v_pct_final;
 END;
@@ -1182,6 +1194,10 @@ BEGIN
            SET CALIFICACION = v_pct, CALIFICABLE = 'S',
                MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
          WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
+
+        -- Consolida la recuperacion sobre su destino, si esta actividad lo es (V408).
+        PERFORM academico_test.fn_actividad_recuperacion_aplicar(
+                    p_pk_usuario_solicitante, v_pk_est);
 
         pk_tactividad_estudiante := v_pk_est;
         items_totales            := v_total_items;
@@ -1332,6 +1348,10 @@ BEGIN
        SET CALIFICACION = v_pct_final, CALIFICABLE = 'S',
            MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
+
+    -- Consolida la recuperacion sobre su destino, si esta actividad lo es (V408).
+    PERFORM academico_test.fn_actividad_recuperacion_aplicar(
+                p_pk_usuario_solicitante, p_pk_tactividad_estudiante);
 
     RETURN v_pct_final;
 END;
@@ -1510,6 +1530,10 @@ BEGIN
        SET CALIFICACION = v_pct_final, CALIFICABLE = 'S',
            MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
+
+    -- Consolida la recuperacion sobre su destino, si esta actividad lo es (V408).
+    PERFORM academico_test.fn_actividad_recuperacion_aplicar(
+                p_pk_usuario_solicitante, p_pk_tactividad_estudiante);
 
     RETURN v_pct_final;
 END;

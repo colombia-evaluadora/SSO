@@ -1074,6 +1074,7 @@ BEGIN
 
     -- ----- Sin config: la actividad deja de ser (o nunca fue) de recuperacion.
     IF p_config IS NULL THEN
+        PERFORM academico_test.fn_actividad_recuperacion_revertir(p_pk_usuario_solicitante, p_pk_tactividad);
         UPDATE academico_test.TACTIVIDAD_RECUPERACION
            SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
          WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
@@ -1111,6 +1112,27 @@ BEGIN
         IF NOT EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD
                         WHERE PK_TACTIVIDAD = v_fk_recuperar AND ACTIVE = TRUE) THEN
             RAISE EXCEPTION 'fkActividadRecuperar (%) no existe o no esta activa', v_fk_recuperar USING ERRCODE = '23503';
+        END IF;
+        -- Las tres reglas que hacen consolidable el enlace (V408). Sin ellas
+        -- el SQL aplica igual y la nota sale mal en produccion.
+        IF EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD
+                    WHERE PK_TACTIVIDAD = v_fk_recuperar AND ES_RECUPERACION = 'S') THEN
+            RAISE EXCEPTION 'fkActividadRecuperar (%) ya es una recuperacion: no se encadenan', v_fk_recuperar USING ERRCODE = '22023';
+        END IF;
+        IF EXISTS (SELECT 1
+                     FROM academico_test.TACTIVIDAD orig, academico_test.TACTIVIDAD rec
+                    WHERE orig.PK_TACTIVIDAD = v_fk_recuperar
+                      AND rec.PK_TACTIVIDAD  = p_pk_tactividad
+                      AND orig.FK_TASIGNATURA IS NOT NULL
+                      AND rec.FK_TASIGNATURA  IS NOT NULL
+                      AND orig.FK_TASIGNATURA <> rec.FK_TASIGNATURA) THEN
+            RAISE EXCEPTION 'La recuperacion y la actividad que recupera deben ser de la misma asignatura' USING ERRCODE = '22023';
+        END IF;
+        IF EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_RECUPERACION
+                    WHERE FK_TACTIVIDAD_RECUPERAR = v_fk_recuperar
+                      AND FK_TACTIVIDAD <> p_pk_tactividad
+                      AND ACTIVE = TRUE) THEN
+            RAISE EXCEPTION 'La actividad (%) ya tiene otra recuperacion activa', v_fk_recuperar USING ERRCODE = '23505';
         END IF;
     ELSE  -- NOTA_FINAL
         IF v_fk_recuperar IS NOT NULL THEN
@@ -1167,7 +1189,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_recuperacion_configurar(BIGINT, BIGINT, JSONB)
-    IS 'Punto unico para la config 1:1 de recuperacion (TACTIVIDAD_RECUPERACION). p_config NULL = la actividad NO es de recuperacion (desactiva la fila y pone ES_RECUPERACION=''N''). Con objeto {destino, fkActividadRecuperar?, tipoAplicacion, tipoCalculo, valorPonderacion?}: valida los 3 catalogos (DESTINO_RECUPERACION / TIPO_APLICACION_RECUPERACION / TIPO_CALCULO_RECUPERACION), exige fkActividadRecuperar sii destino=ACTIVIDAD (y != la propia actividad, activa), exige valorPonderacion 0..100 sii tipoCalculo=PONDERADO, marca ES_RECUPERACION=''S'' y hace upsert de la fila. Llamada por fn_actividad_crear/_actualizar. Retorna PK_TACTIVIDAD_RECUPERACION (o NULL). V224.';
+    IS 'Punto unico para la config 1:1 de recuperacion (TACTIVIDAD_RECUPERACION). p_config NULL = la actividad NO es de recuperacion (desactiva la fila y pone ES_RECUPERACION=''N''). Con objeto {destino, fkActividadRecuperar?, tipoAplicacion, tipoCalculo, valorPonderacion?}: valida los 3 catalogos (DESTINO_RECUPERACION / TIPO_APLICACION_RECUPERACION / TIPO_CALCULO_RECUPERACION), exige fkActividadRecuperar sii destino=ACTIVIDAD (y != la propia actividad, activa), exige valorPonderacion 0..100 sii tipoCalculo=PONDERADO, marca ES_RECUPERACION=''S'' y hace upsert de la fila. Con destino=ACTIVIDAD exige ademas las tres condiciones que hacen consolidable el enlace, porque fn_actividad_recuperacion_aplicar (V408) ya no solo guarda la configuracion sino que escribe una nota con ella: la actividad recuperada NO puede ser a su vez una recuperacion (una cadena haria que consolidar la primera invalidara la segunda, y la nota dependeria del orden en que el docente califique); las dos deben ser de la MISMA asignatura cuando ambas la tienen declarada (recuperar Matematicas con una nota de Geometria no es un caso de negocio, es un error de seleccion en el arbol grado/grupo/asignatura de la pantalla); y una actividad no puede tener DOS recuperaciones activas apuntandole (las dos escribirian DEFINITIVA sobre la misma fila y ganaria la ultima calificada, en silencio). Las tres se validan aqui y no al calificar porque el momento de impedirlo es cuando el docente arma la recuperacion, no cuando ya puso notas. Llamada por fn_actividad_crear/_actualizar. Retorna PK_TACTIVIDAD_RECUPERACION (o NULL). V224.';
 
 -- ===========================================================================
 -- (4) ESCRITURA
@@ -1274,6 +1296,13 @@ BEGIN
         RAISE EXCEPTION 'La fecha de cierre (%) no puede ser anterior a la de inicio (%)',
             p_fecha_cierre, p_fecha_inicio USING ERRCODE = '22023';
     END IF;
+
+    -- Limites de la seccion Programacion (V422): ventana del periodo academico,
+    -- dia habil segun horario, duracion y semana del cronograma. Mismo calculo
+    -- que pinta la pantalla, para que el tope no sea solo decorativo.
+    PERFORM academico_test.fn_actividad_programacion_assert(
+        p_fk_tgrupo, p_fk_tasignatura, p_fecha_inicio, p_fecha_cierre,
+        p_duracion_estimada, p_semana_cronograma);
     -- Las banderas S/N ya son academico_test.bool_sn: el dominio (CHECK IN
     -- ('S','N')) las valida al vuelo, no hace falta un chequeo manual aqui.
 
@@ -1331,6 +1360,18 @@ BEGIN
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_evidencia,          'TIPO_EVIDENCIA',           'FK_TLV_TIPO_EVIDENCIA');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_metodo_valoracion,       'METODO_VALORACION',        'FK_TLV_METODO_VALORACION'); -- sin seed: solo valida existencia+ACTIVE
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_calculo,            'TIPO_CALCULO',             'FK_TLV_TIPO_CALCULO');
+
+    -- 4.a Una actividad no puede quedar evaluativa (ES_EVALUATIVA = 'S') si
+    --     se vincula a una unidad cuyo referente curricular es FORMATIVO:
+    --     ese enfoque valora con observaciones, no con nota. Mismo helper
+    --     que usa la sub-rama de instrumento (4.b) de abajo, aplicado ahora
+    --     al flag ES_EVALUATIVA en si, no solo al instrumento.
+    IF COALESCE(p_es_evaluativa, 'S') = 'S' AND p_fk_tunidad IS NOT NULL
+       AND NOT academico_test.fn_unidad_referente_evaluativo(p_fk_tunidad) THEN
+        RAISE EXCEPTION 'La actividad no puede ser evaluativa: la unidad "%" se rige por un referente curricular Formativo, que valora el aprendizaje con observaciones y no con nota',
+            (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad)
+            USING ERRCODE = '22023';
+    END IF;
 
     -- 4.b Sub-rama "evaluacion" (instrumento de evaluacion, condicion
     --     dinamica "actividad -> evaluacion" de V214.2): solo aplica si la
@@ -1460,6 +1501,9 @@ COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, B
 -- la firma anterior antes del CREATE OR REPLACE.
 -- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN);
+-- Firma sin p_evidencias / p_criterios: dos argumentos nuevos son un overload
+-- nuevo, no un reemplazo.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_actualizar(
     p_pk_usuario_solicitante            BIGINT,
     p_pk_tactividad                     BIGINT,
@@ -1498,7 +1542,11 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_actualizar(
     -- NULL = no tocar la recuperacion. Objeto = configurarla. Para QUITARLA
     -- (volver la actividad a normal) usar p_quitar_recuperacion = TRUE.
     p_recuperacion                      JSONB         DEFAULT NULL,
-    p_quitar_recuperacion               BOOLEAN       DEFAULT FALSE
+    p_quitar_recuperacion               BOOLEAN       DEFAULT FALSE,
+    -- Mismo contrato que p_materiales / p_adaptaciones: NULL = no tocar,
+    -- array (incl. vacio) = el set queda EXACTAMENTE ese.
+    p_evidencias                        BIGINT[]      DEFAULT NULL,
+    p_criterios                         BIGINT[]      DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -1581,6 +1629,16 @@ BEGIN
             v_cierre, v_inicio USING ERRCODE = '22023';
     END IF;
 
+    -- Mismos limites que en el alta, pero sobre los valores RESULTANTES: un
+    -- PATCH que solo mueve el grupo puede dejar fuera de rango unas fechas que
+    -- no venian en el body.
+    PERFORM academico_test.fn_actividad_programacion_assert(
+        v_grupo,
+        COALESCE(p_fk_tasignatura, v_actual.FK_TASIGNATURA),
+        v_inicio, v_cierre,
+        COALESCE(p_duracion_estimada, v_actual.DURACION_ESTIMADA),
+        COALESCE(NULLIF(TRIM(p_semana_cronograma), ''), v_actual.SEMANA_CRONOGRAMA));
+
     IF p_fk_tasignatura IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA
                     WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
         RAISE EXCEPTION 'La asignatura seleccionada no esta disponible' USING ERRCODE = '23503';
@@ -1596,6 +1654,18 @@ BEGIN
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_evidencia,          'TIPO_EVIDENCIA',         'FK_TLV_TIPO_EVIDENCIA');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_metodo_valoracion,       'METODO_VALORACION',      'FK_TLV_METODO_VALORACION'); -- sin seed: solo valida existencia+ACTIVE
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_calculo,            'TIPO_CALCULO',           'FK_TLV_TIPO_CALCULO');
+
+    -- La actividad no puede quedar evaluativa (v_evaluativa = 'S') si, tras
+    -- el PATCH, termina vinculada a una unidad Formativa: mismo criterio de
+    -- "valor resultante" (v_fk_tunidad / v_evaluativa) que las sub-ramas de
+    -- ponderacion y evaluacion, para cubrir tanto "marcarla evaluativa
+    -- ahora" como "moverla a una unidad Formativa dejandola evaluativa".
+    IF v_evaluativa = 'S' AND v_fk_tunidad IS NOT NULL
+       AND NOT academico_test.fn_unidad_referente_evaluativo(v_fk_tunidad) THEN
+        RAISE EXCEPTION 'La actividad "%" no puede ser evaluativa: la unidad "%" se rige por un referente curricular Formativo, que valora el aprendizaje con observaciones y no con nota', v_titulo,
+            (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = v_fk_tunidad)
+            USING ERRCODE = '22023';
+    END IF;
 
     -- Sub-rama "evaluacion" (instrumento de evaluacion, condicion dinamica
     -- "actividad -> evaluacion" de V214.2): solo aplica si, tras el PATCH, la
@@ -1707,12 +1777,50 @@ BEGIN
                     p_pk_usuario_solicitante, p_pk_tactividad, p_recuperacion);
     END IF;
 
+    -- Evidencias / criterios: reemplazo del set. Primero se desactiva lo que
+    -- ya no viene y despues se relaciona el resto con los helpers de V214.1,
+    -- que son los duenos de la regla de negocio (evidencia de nivel 2 cuyo
+    -- enunciado padre este en la unidad; criterio de la rubrica de esa unidad)
+    -- y reactivan la fila existente en vez de duplicarla. Quitar se permite
+    -- siempre; agregar exige unidad, igual que en fn_actividad_crear.
+    IF p_evidencias IS NOT NULL THEN
+        UPDATE academico_test.TACTIVIDAD_EVIDENCIA
+           SET ACTIVE = FALSE,
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+               MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_TACTIVIDAD = p_pk_tactividad
+           AND ACTIVE = TRUE
+           AND FK_REFERENTE_ENUNCIADO <> ALL(
+                   ARRAY(SELECT x FROM unnest(p_evidencias) x WHERE x IS NOT NULL));
+
+        PERFORM academico_test.fn_actividad_evidencia_relacionar(
+                    p_pk_usuario_solicitante, p_pk_tactividad, ev)
+           FROM unnest(p_evidencias) AS ev
+          WHERE ev IS NOT NULL;
+    END IF;
+
+    IF p_criterios IS NOT NULL THEN
+        UPDATE academico_test.TACTIVIDAD_CRITERIO_UNIDAD
+           SET ACTIVE = FALSE,
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+               MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_TACTIVIDAD = p_pk_tactividad
+           AND ACTIVE = TRUE
+           AND FK_TCRITERIO_UNIDAD <> ALL(
+                   ARRAY(SELECT x FROM unnest(p_criterios) x WHERE x IS NOT NULL));
+
+        PERFORM academico_test.fn_actividad_criterio_relacionar(
+                    p_pk_usuario_solicitante, p_pk_tactividad, cr)
+           FROM unnest(p_criterios) AS cr
+          WHERE cr IS NOT NULL;
+    END IF;
+
     RETURN p_pk_tactividad;
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN)
-    IS 'PATCH parcial de una actividad (gate EDITAR sobre PLANEADOR): cada parametro NULL preserva el valor actual. Unidad/ponderacion se delegan en fn_unidad_actividad_vincular / _ponderacion_set / _desvincular (V223) para que la regla del 100% viva en un solo sitio; p_desvincular_unidad=TRUE es excluyente con p_fk_tunidad/p_ponderacion. Recuperacion: p_recuperacion (objeto) la configura via fn_actividad_recuperacion_configurar, p_quitar_recuperacion=TRUE la elimina (vuelve la actividad a normal); son excluyentes y NULL/FALSE no la tocan. p_materiales / p_adaptaciones / p_fk_tmatriculas NULL = no tocar, array = reemplazo completo. Revalida fechas, catalogos y unicidad (titulo, unidad, grupo, jerarquia). El FK_TLV_INSTRUMENTO_EVALUACION resultante (nuevo o heredado) solo se admite si la unidad resultante (nueva, heredada, o NULL si p_desvincular_unidad) tiene referente curricular EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V214.2); en otro caso lanza 22023. PONDERACION (condicion dinamica "actividad -> ponderacion" de V214.2, evaluada contra los valores RESULTANTES): se rechaza p_ponderacion (22023) si la actividad queda NO evaluativa (ES_EVALUATIVA resultante = ''N''), si la unidad resultante PROMEDIA, o si calcula por SUMATORIA -- ahi el docente envia p_nota_maxima y el % lo autocalcula fn_unidad_ponderacion_recalcular_sumatoria (V223), que se invoca SIEMPRE al final sobre el bucket resultante (y sobre el de origen si cambio la unidad o el grupo), porque editar el puntaje de una actividad cambia el % de todas las de su (unidad, grupo). Retorna PK_TACTIVIDAD. V224.';
+COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN, BIGINT[], BIGINT[])
+    IS 'PATCH parcial de una actividad (gate EDITAR sobre PLANEADOR): cada parametro NULL preserva el valor actual. Unidad/ponderacion se delegan en fn_unidad_actividad_vincular / _ponderacion_set / _desvincular (V223) para que la regla del 100% viva en un solo sitio; p_desvincular_unidad=TRUE es excluyente con p_fk_tunidad/p_ponderacion. Recuperacion: p_recuperacion (objeto) la configura via fn_actividad_recuperacion_configurar, p_quitar_recuperacion=TRUE la elimina (vuelve la actividad a normal); son excluyentes y NULL/FALSE no la tocan. p_materiales / p_adaptaciones / p_fk_tmatriculas NULL = no tocar, array = reemplazo completo. p_evidencias (PKs de TREFERENTE_ENUNCIADO nivel 2) y p_criterios (PKs de TCRITERIO_UNIDAD) siguen el MISMO contrato: NULL = no tocar, array (incl. vacio) = el set queda exactamente ese -- se desactivan (ACTIVE=FALSE) las relaciones que ya no vienen y el resto se relaciona/reactiva con fn_actividad_evidencia_relacionar / fn_actividad_criterio_relacionar (V214.1), duenos unicos de la regla de negocio (la evidencia debe ser nivel 2 y su enunciado padre estar ya relacionado con la unidad de la actividad; el criterio debe pertenecer a la rubrica de esa misma unidad). QUITAR siempre se puede; AGREGAR exige que la actividad tenga unidad, igual que en fn_actividad_crear. Revalida fechas, catalogos y unicidad (titulo, unidad, grupo, jerarquia). El FK_TLV_INSTRUMENTO_EVALUACION resultante (nuevo o heredado) solo se admite si la unidad resultante (nueva, heredada, o NULL si p_desvincular_unidad) tiene referente curricular EVALUATIVO (fn_unidad_referente_evaluativo, condicion dinamica "actividad -> evaluacion" de V214.2); en otro caso lanza 22023. PONDERACION (condicion dinamica "actividad -> ponderacion" de V214.2, evaluada contra los valores RESULTANTES): se rechaza p_ponderacion (22023) si la actividad queda NO evaluativa (ES_EVALUATIVA resultante = ''N''), si la unidad resultante PROMEDIA, o si calcula por SUMATORIA -- ahi el docente envia p_nota_maxima y el % lo autocalcula fn_unidad_ponderacion_recalcular_sumatoria (V223), que se invoca SIEMPRE al final sobre el bucket resultante (y sobre el de origen si cambio la unidad o el grupo), porque editar el puntaje de una actividad cambia el % de todas las de su (unidad, grupo). Retorna PK_TACTIVIDAD. V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_eliminar — soft delete en cascada.
@@ -1894,6 +2002,8 @@ BEGIN
        SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
 
+    -- Antes de desactivar la config: deshace lo que la recuperacion escribio (V408).
+    PERFORM academico_test.fn_actividad_recuperacion_revertir(p_pk_usuario_solicitante, p_pk_tactividad);
     UPDATE academico_test.TACTIVIDAD_RECUPERACION
        SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
@@ -2030,6 +2140,7 @@ RETURNS TABLE (
     ponderacion                     NUMERIC,
     influencia                      NUMERIC,
     es_evaluativa                   VARCHAR,
+    es_recuperacion                 VARCHAR,
     fecha_inicio                    DATE,
     fecha_cierre                    DATE,
     fecha_calificado                DATE,
@@ -2054,12 +2165,20 @@ AS $$
 DECLARE
     v_sedes_lectura BIGINT[];
     v_alcance_total BOOLEAN;
+    v_solo_propias  BOOLEAN;
+    v_fk_tfuncionario BIGINT;
     v_hoy  DATE := CURRENT_DATE;
     v_key  VARCHAR;
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
     );
+
+    -- Un docente puro NO administra su sede: dentro de ella solo le tocan las
+    -- actividades que DICTA (mas las huerfanas que creo el). Rector y
+    -- coordinador conservan intacto su alcance territorial.
+    v_solo_propias    := academico_test.fn_usuario_es_docente_puro(p_pk_usuario_solicitante);
+    v_fk_tfuncionario := academico_test.fn_funcionario_actual(p_pk_usuario_solicitante);
 
     -- Alcance de LECTURA (V277). El criterio no se elige aqui: ya lo define el
     -- sistema de rol/menu, via fn_usuario_sedes_lectura -- nivel 0/1 todas las
@@ -2143,6 +2262,19 @@ BEGIN
                        AND da.FK_TASIGNATURA = a.FK_TASIGNATURA
                        AND da.FK_TFUNCIONARIO = p_fk_tfuncionario
                        AND da.ACTIVE = TRUE))
+           -- Mismo cruce por TDOCENTE_ASIGNATURA de arriba, pero forzado por
+           -- el rol en vez de por parametro: el endpoint general manda NULL
+           -- en p_fk_tfuncionario, asi que sin esto el docente veia las
+           -- actividades de toda su sede. Se le conservan sus huerfanas
+           -- (sin grupo ni unidad), que no cruzan por TDOCENTE_ASIGNATURA.
+           AND (NOT v_solo_propias
+                OR EXISTS (SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+                            WHERE da.FK_TGRUPO       = a.FK_TGRUPO
+                              AND da.FK_TASIGNATURA  = a.FK_TASIGNATURA
+                              AND da.FK_TFUNCIONARIO = v_fk_tfuncionario
+                              AND da.ACTIVE = TRUE)
+                OR (a.FK_TGRUPO IS NULL AND a.FK_TUNIDAD IS NULL
+                    AND a.CREATED_BY = p_pk_usuario_solicitante::VARCHAR))
            AND (p_fk_tlv_tipo_actividad IS NULL OR a.FK_TLV_TIPO_ACTIVIDAD = p_fk_tlv_tipo_actividad)
            AND (p_fk_tlv_instrumento    IS NULL OR a.FK_TLV_INSTRUMENTO_EVALUACION = p_fk_tlv_instrumento)
            -- Ventana de fechas: solapamiento con [desde, hasta].
@@ -2228,8 +2360,16 @@ BEGIN
            CASE WHEN     p_orden_asc AND v_key = 'ponderacion'    THEN d.pond   END ASC  NULLS LAST,
            CASE WHEN NOT p_orden_asc AND v_key = 'ponderacion'    THEN d.pond   END DESC NULLS LAST,
            d.pk
-         LIMIT GREATEST(p_limite, 1)
-        OFFSET GREATEST(p_offset, 0)
+         -- p_limite NULL = "sin LIMIT" (PostgreSQL trata LIMIT NULL como
+         -- ausencia de clausula). Es lo que usa el reporte sin paginar de
+         -- V404 (POST /planeador/actividades/export-all), igual que V130
+         -- hizo con est/sed/funcionarios. OJO: no vale GREATEST(NULL, 1),
+         -- que en PostgreSQL ignora el NULL y devuelve 1 -- exportaria UNA
+         -- fila. Para cualquier valor no nulo el comportamiento es el mismo
+         -- de siempre; la fila de GET /planeador/actividades (V246) hace
+         -- COALESCE(:QUERY.SIZE, 20), asi que por ahi nunca llega NULL.
+         LIMIT CASE WHEN p_limite IS NULL THEN NULL ELSE GREATEST(p_limite, 1) END
+        OFFSET GREATEST(COALESCE(p_offset, 0), 0)
     )
     SELECT a.PK_TACTIVIDAD,
            a.TITULO,
@@ -2253,6 +2393,7 @@ BEGIN
            a.PONDERACION,
            a.INFLUENCIA,
            a.ES_EVALUATIVA::VARCHAR,
+            a.ES_RECUPERACION::VARCHAR,
            a.FECHA_INICIO,
            a.FECHA_CIERRE,
            a.FECHA_CALIFICADO,
@@ -2321,7 +2462,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT, DATE)
-    IS 'Pagina de actividades del Planeador (gate VER). p_dia es el PAGINADO POR DIA ACTIVO (la barra "Hoy | MARTES 16 | < >" del tablero): deja solo las actividades VIGENTES ese dia -- las que lo CUBREN con su ventana [FECHA_INICIO, FECHA_CIERRE], no las que empiezan o cierran exactamente ese dia, para que una actividad de tres dias aparezca en los tres --, con la misma tolerancia a un extremo faltante que fn_actividad_estado; una actividad sin ninguna fecha no esta en ningun dia y no aparece en esta vista. NULL = sin paginado por dia. Devuelve ademas dia / dia_anterior / dia_siguiente para las flechas: son el dia ocupado mas cercano a cada lado bajo los MISMOS filtros, SALTANDO los dias vacios (sin eso las flechas avanzarian de a un dia sobre semanas sin nada), y NULL cuando no hay mas dias por ese lado. Se calculan sobre el universo SIN el filtro por dia -- si mirasen la pagina no verian nada fuera del dia actual --, por eso el filtro vive en un CTE (universo) del que salen tanto la pagina como la navegacion, sin escribirlo dos veces. DIA VACIO: cuando se pide p_dia y ese dia no tiene ninguna actividad, se devuelve UNA fila con las columnas de la actividad en NULL, total_count = 0 y las flechas informadas -- sin ella el cliente se quedaria sin con que SALIR de un dia vacio. Se reconoce por total_count = 0 (o pk_tactividad NULL). Sin p_dia el comportamiento no cambia en nada: una pagina vacia sigue siendo 0 filas. Filtros indexados: asignatura, grupo, unidad, tipo, instrumento y ventana de fechas. p_search es el buscador unico "nombre, nivel educativo o instrumento": matchea (a) TITULO+DESCRIPCION con la expresion identica a la de idx_tactividad_busqueda_trgm, (b) el NOMBRE del nivel de ensenanza de la actividad (via FK_TUNIDAD -> TUNIDAD.FK_TGRADO -> TGRADO.FK_TNIVEL_ENSENANZA -> TNIVEL_ENSENANZA; solo aplica si la actividad tiene unidad) y (c) el NOMBRE del instrumento (TLISTA_VALOR de FK_TLV_INSTRUMENTO_EVALUACION). HONESTIDAD DE RENDIMIENTO: solo (a) puede entrar por el indice trigram; (b) y (c) son un post-filtro por EXISTS NO indexado sobre catalogos pequeños que, al ir en OR, impide el Bitmap Index Scan puro del trigram cuando p_search viene informado -- se evalua dentro del mismo CTE base ya acotado por los demas filtros y por LIMIT/OFFSET, nunca sobre un seq scan del universo sin filtrar. p_estados filtra por el estado DERIVADO (fn_actividad_estado) con p_dias_gracia (default 2). p_fk_tfuncionario (V250, al final de la firma para no romper la llamada posicional ya registrada de V246) filtra por el docente que DICTA la actividad -- NO el autor de la unidad (TUNIDAD.FK_TFUNCIONARIO puede ser otro docente o un coordinador): se resuelve via TDOCENTE_ASIGNATURA (V46, mismo vinculo que fn_docente_grupos_listar/V242) cruzando por (FK_TGRUPO, FK_TASIGNATURA) de la actividad, EXISTS -- actividades sin FK_TGRUPO (p.ej. un "Criterio") quedan fuera cuando se usa este filtro. Orden (whitelist): fecha_inicio|fecha_cierre|fecha_creacion|titulo|ponderacion, cualquier otro valor cae a fecha_inicio. Devuelve nombres resueltos (asignatura, area, unidad, grupo, tipo, instrumento), el GRADO de la actividad -- del grupo, o de su unidad cuando no tiene grupo -- con fk_tgrado / grado / grado_codigo y la etiqueta compuesta grado_grupo (fn_grado_grupo_etiqueta: CODIGO del grado + grupo, ''6''+''01'' -> ''601''; si el nombre del grupo ya trae el codigo del grado se devuelve tal cual, ''803M'', para no producir ''8803M''), el estado derivado y el progreso de evaluacion (asignados/evaluados/%). Optimizacion: el CTE base pagina tocando solo TACTIVIDAD y los joins + el LATERAL de progreso corren unicamente contra las filas de la pagina. total_count via COUNT(*) OVER(). V224/V250.';
+    IS 'ALCANCE: la sede acota QUE se ve (fn_usuario_sedes_lectura, V29) y, ademas, a un docente puro (fn_usuario_es_docente_puro, V29) se le acota a las actividades que DICTA (cruce por TDOCENTE_ASIGNATURA, mismo criterio que fn_actividad_listar_docente) mas las huerfanas que creo el. Sin ese segundo recorte veia las de toda su sede: el endpoint general GET /planeador/actividades pasa NULL en p_fk_tfuncionario, asi que el filtro por parametro nunca se activaba por esa ruta. Rector, secretaria y coordinador conservan intacto el alcance territorial. Pagina de actividades del Planeador (gate VER). p_dia es el PAGINADO POR DIA ACTIVO (la barra "Hoy | MARTES 16 | < >" del tablero): deja solo las actividades VIGENTES ese dia -- las que lo CUBREN con su ventana [FECHA_INICIO, FECHA_CIERRE], no las que empiezan o cierran exactamente ese dia, para que una actividad de tres dias aparezca en los tres --, con la misma tolerancia a un extremo faltante que fn_actividad_estado; una actividad sin ninguna fecha no esta en ningun dia y no aparece en esta vista. NULL = sin paginado por dia. Devuelve ademas dia / dia_anterior / dia_siguiente para las flechas: son el dia ocupado mas cercano a cada lado bajo los MISMOS filtros, SALTANDO los dias vacios (sin eso las flechas avanzarian de a un dia sobre semanas sin nada), y NULL cuando no hay mas dias por ese lado. Se calculan sobre el universo SIN el filtro por dia -- si mirasen la pagina no verian nada fuera del dia actual --, por eso el filtro vive en un CTE (universo) del que salen tanto la pagina como la navegacion, sin escribirlo dos veces. DIA VACIO: cuando se pide p_dia y ese dia no tiene ninguna actividad, se devuelve UNA fila con las columnas de la actividad en NULL, total_count = 0 y las flechas informadas -- sin ella el cliente se quedaria sin con que SALIR de un dia vacio. Se reconoce por total_count = 0 (o pk_tactividad NULL). Sin p_dia el comportamiento no cambia en nada: una pagina vacia sigue siendo 0 filas. Filtros indexados: asignatura, grupo, unidad, tipo, instrumento y ventana de fechas. p_search es el buscador unico "nombre, nivel educativo o instrumento": matchea (a) TITULO+DESCRIPCION con la expresion identica a la de idx_tactividad_busqueda_trgm, (b) el NOMBRE del nivel de ensenanza de la actividad (via FK_TUNIDAD -> TUNIDAD.FK_TGRADO -> TGRADO.FK_TNIVEL_ENSENANZA -> TNIVEL_ENSENANZA; solo aplica si la actividad tiene unidad) y (c) el NOMBRE del instrumento (TLISTA_VALOR de FK_TLV_INSTRUMENTO_EVALUACION). HONESTIDAD DE RENDIMIENTO: solo (a) puede entrar por el indice trigram; (b) y (c) son un post-filtro por EXISTS NO indexado sobre catalogos pequeños que, al ir en OR, impide el Bitmap Index Scan puro del trigram cuando p_search viene informado -- se evalua dentro del mismo CTE base ya acotado por los demas filtros y por LIMIT/OFFSET, nunca sobre un seq scan del universo sin filtrar. p_estados filtra por el estado DERIVADO (fn_actividad_estado) con p_dias_gracia (default 2). p_fk_tfuncionario (V250, al final de la firma para no romper la llamada posicional ya registrada de V246) filtra por el docente que DICTA la actividad -- NO el autor de la unidad (TUNIDAD.FK_TFUNCIONARIO puede ser otro docente o un coordinador): se resuelve via TDOCENTE_ASIGNATURA (V46, mismo vinculo que fn_docente_grupos_listar/V242) cruzando por (FK_TGRUPO, FK_TASIGNATURA) de la actividad, EXISTS -- actividades sin FK_TGRUPO (p.ej. un "Criterio") quedan fuera cuando se usa este filtro. Orden (whitelist): fecha_inicio|fecha_cierre|fecha_creacion|titulo|ponderacion, cualquier otro valor cae a fecha_inicio. Devuelve nombres resueltos (asignatura, area, unidad, grupo, tipo, instrumento), el GRADO de la actividad -- del grupo, o de su unidad cuando no tiene grupo -- con fk_tgrado / grado / grado_codigo y la etiqueta compuesta grado_grupo (fn_grado_grupo_etiqueta: CODIGO del grado + grupo, ''6''+''01'' -> ''601''; si el nombre del grupo ya trae el codigo del grado se devuelve tal cual, ''803M'', para no producir ''8803M''), el estado derivado y el progreso de evaluacion (asignados/evaluados/%). Optimizacion: el CTE base pagina tocando solo TACTIVIDAD y los joins + el LATERAL de progreso corren unicamente contra las filas de la pagina. total_count via COUNT(*) OVER(). V224/V250.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_buscar_por_pk — detalle completo (una fila).
@@ -2389,6 +2530,11 @@ RETURNS TABLE (
     estudiantes_evaluados           BIGINT,
     materiales                      JSONB,
     adaptaciones                    JSONB,
+    -- Evidencias (TACTIVIDAD_EVIDENCIA) y criterios (TACTIVIDAD_CRITERIO_UNIDAD)
+    -- ya relacionados: el "pk" de cada elemento es el de la RELACION, que es
+    -- lo que exigen fn_actividad_evidencia_quitar / _criterio_quitar (V214.1).
+    evidencias                      JSONB,
+    criterios                       JSONB,
     recuperacion                    JSONB,
     campos_disponibles              JSONB,
     unidad_configuracion            JSONB,
@@ -2469,6 +2615,34 @@ BEGIN
                  LEFT JOIN academico_test.TLISTA_VALOR lap ON lap.PK_LISTA_VALOR = ad.FK_TLV_APLICA_A
                 WHERE ad.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND ad.ACTIVE = TRUE
            ), '[]'::jsonb),
+           COALESCE((
+               SELECT jsonb_agg(jsonb_build_object(
+                          'pk',                   ev.PK_TACTIVIDAD_EVIDENCIA,
+                          'fkReferenteEnunciado', ev.FK_REFERENTE_ENUNCIADO,
+                          'texto',                re.TEXTO,
+                          'fkPadre',              re.FK_PADRE,
+                          'textoPadre',           rep.TEXTO)
+                          ORDER BY re.FK_PADRE, ev.PK_TACTIVIDAD_EVIDENCIA)
+                 FROM academico_test.TACTIVIDAD_EVIDENCIA ev
+                 JOIN academico_test.TREFERENTE_ENUNCIADO re
+                   ON re.PK_REFERENTE_ENUNCIADO = ev.FK_REFERENTE_ENUNCIADO
+                 LEFT JOIN academico_test.TREFERENTE_ENUNCIADO rep
+                   ON rep.PK_REFERENTE_ENUNCIADO = re.FK_PADRE
+                WHERE ev.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND ev.ACTIVE = TRUE
+           ), '[]'::jsonb),
+           COALESCE((
+               SELECT jsonb_agg(jsonb_build_object(
+                          'pk',                cr.PK_TACTIVIDAD_CRITERIO_UNIDAD,
+                          'fkTcriterioUnidad', cr.FK_TCRITERIO_UNIDAD,
+                          'descripcion',       cu.DESCRIPCION,
+                          'codigo',            cu.CODIGO,
+                          'orden',             cu.ORDEN)
+                          ORDER BY cu.ORDEN, cr.PK_TACTIVIDAD_CRITERIO_UNIDAD)
+                 FROM academico_test.TACTIVIDAD_CRITERIO_UNIDAD cr
+                 JOIN academico_test.TCRITERIO_UNIDAD cu
+                   ON cu.PK_TCRITERIO_UNIDAD = cr.FK_TCRITERIO_UNIDAD
+                WHERE cr.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND cr.ACTIVE = TRUE
+           ), '[]'::jsonb),
            -- Config de recuperacion (NULL si la actividad no es de recuperacion).
            (SELECT jsonb_build_object(
                        'pk',                    r.PK_TACTIVIDAD_RECUPERACION,
@@ -2520,7 +2694,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_buscar_por_pk(BIGINT, BIGINT, INT)
-    IS 'Detalle completo de una actividad (gate VER): todos los campos de TACTIVIDAD con los nombres de catalogo resueltos, el estado derivado (fn_actividad_estado), el progreso de evaluacion (asignados/evaluados en un solo LATERAL), los materiales de apoyo y las adaptaciones curriculares como JSONB, y la config de recuperacion (columna "recuperacion": objeto con destino/tipoAplicacion/tipoCalculo/valorPonderacion + nombres resueltos, o NULL si no es de recuperacion). campos_disponibles = fn_actividad_campos_disponibles (dependencias dinamicas actividad->criterio / actividad->evaluacion, V214.2); unidad_configuracion = fn_actividad_unidad_configuracion (snapshot de la unidad relacionada, o {tieneUnidad:false}, V214.2) -- ambas calculadas solo para esta fila (detalle), no en fn_actividad_listar. SETOF 0 o 1 fila (incluye inactivas). V224.';
+    IS 'Detalle completo de una actividad (gate VER): todos los campos de TACTIVIDAD con los nombres de catalogo resueltos, el estado derivado (fn_actividad_estado), el progreso de evaluacion (asignados/evaluados en un solo LATERAL), los materiales de apoyo y las adaptaciones curriculares como JSONB, las evidencias y los criterios ya relacionados (columnas "evidencias" y "criterios", ambas [] cuando no hay ninguno: evidencias = [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}] sobre TACTIVIDAD_EVIDENCIA y criterios = [{pk, fkTcriterioUnidad, descripcion, codigo, orden}] sobre TACTIVIDAD_CRITERIO_UNIDAD, solo filas ACTIVE -- el "pk" de cada elemento es el de la RELACION, que es justo el que exigen fn_actividad_evidencia_quitar / fn_actividad_criterio_quitar de V214.1 y que antes solo se conocia en la respuesta del POST que lo creo), y la config de recuperacion (columna "recuperacion": objeto con destino/tipoAplicacion/tipoCalculo/valorPonderacion + nombres resueltos, o NULL si no es de recuperacion). campos_disponibles = fn_actividad_campos_disponibles (dependencias dinamicas actividad->criterio / actividad->evaluacion, V214.2); unidad_configuracion = fn_actividad_unidad_configuracion (snapshot de la unidad relacionada, o {tieneUnidad:false}, V214.2) -- ambas calculadas solo para esta fila (detalle), no en fn_actividad_listar. SETOF 0 o 1 fila (incluye inactivas). V224.';
 
 -- ---------------------------------------------------------------------------
 -- fn_actividad_resumen_estados — las tarjetas del Planeador en UNA pasada.
@@ -2955,6 +3129,7 @@ RETURNS TABLE (
     ponderacion                     NUMERIC,
     influencia                      NUMERIC,
     es_evaluativa                   VARCHAR,
+    es_recuperacion                 VARCHAR,
     fecha_inicio                    DATE,
     fecha_cierre                    DATE,
     fecha_calificado                DATE,

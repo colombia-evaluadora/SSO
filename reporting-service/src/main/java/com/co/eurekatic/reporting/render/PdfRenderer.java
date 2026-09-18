@@ -78,8 +78,9 @@ public class PdfRenderer {
 
     private static final Logger log = LoggerFactory.getLogger(PdfRenderer.class);
 
+    /** 12 horas con AM/PM y Locale fijo -- ver el javadoc de Fechas. */
     private static final DateTimeFormatter FECHA_HORA =
-            DateTimeFormatter.ofPattern("dd/MM/yyyy 'a las' HH:mm");
+            DateTimeFormatter.ofPattern("dd/MM/yyyy 'a las' hh:mm a", java.util.Locale.US);
 
     private final Map<String, JasperReport> compiladas = new ConcurrentHashMap<>();
 
@@ -87,20 +88,36 @@ public class PdfRenderer {
                          ReportingProperties.Report def,
                          List<Map<String, Object>> rows,
                          ReportMeta meta) {
+        return render(clave, def, rows, meta, null);
+    }
+
+    /** @param columnasPedidas claves a incluir, en orden; null/vacio = todas las configuradas (ver ColumnLayout.resolver). */
+    public byte[] render(String clave,
+                         ReportingProperties.Report def,
+                         List<Map<String, Object>> rows,
+                         ReportMeta meta,
+                         List<String> columnasPedidas) {
         try {
-            Map<String, String> columnas = ColumnLayout.resolver(def, rows);
+            Map<String, String> columnas = ColumnLayout.resolver(def, rows, columnasPedidas);
             int[] anchos = ColumnLayout.anchos(columnas, rows, usableWidth());
 
-            // El ancho entra en la clave del cache: dos ejecuciones del mismo
-            // reporte con datos distintos pueden merecer repartos distintos, y
-            // reutilizar el diseño viejo dejaria las columnas mal cortadas.
-            String cacheKey = clave + "#" + java.util.Arrays.toString(anchos);
+            // El ancho SOLO no alcanza como clave de cache: dos subconjuntos
+            // de columnas distintos pueden coincidir en cantidad y en el
+            // reparto de puntos (p.ej. dos columnas de 8 caracteres c/u caen
+            // en el mismo ancho aunque sean campos distintos), y ahi el hit
+            // de cache reutilizaria un diseño compilado con los campos/
+            // encabezados de OTRO subconjunto -- un PDF con el ancho bien
+            // pero el contenido de otra exportación. Las claves (no las
+            // etiquetas: dos reportes con la misma columna pero traducida
+            // distinto no deberian generar entradas de cache separadas)
+            // entran a la clave junto con el ancho.
+            String cacheKey = clave + "#" + columnas.keySet() + "#" + java.util.Arrays.toString(anchos);
             JasperReport report = compiladas.computeIfAbsent(
                     cacheKey, k -> compilar(clave, columnas, anchos));
 
             Map<String, Object> params = new HashMap<>();
             params.put("TITULO", def.getTitle() == null ? clave : def.getTitle());
-            params.put("GENERADO", LocalDateTime.now().format(FECHA_HORA));
+            params.put("GENERADO", Fechas.ahora().format(FECHA_HORA));
             params.put("TOTAL", rows.size());
             params.put("USUARIO", meta == null || meta.usuario() == null ? "" : meta.usuario());
             params.put("FILTROS", meta == null ? "" : meta.filtrosLegibles());

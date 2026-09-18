@@ -1,0 +1,513 @@
+{
+  "info": {
+    "_postman_id": "e7f8a9b0-c1d2-4e3f-8a9b-auditoria-export",
+    "name": "Auditoria -- exportar a PDF / Excel",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": {
+      "type": "text/markdown",
+      "content": "Los tres botones **Exportar** de Registro de actividad (V405).\n\n```\nPOST /api/reportes/auditoria-sesiones             Sesiones de auditoria\nPOST /api/reportes/auditoria-tabla-operaciones    Cambios de UNA tabla\nPOST /api/reportes/auditoria-sesion-operaciones   Cambios de UNA sesion\n```\n\nLos tres los sirve el **reporting-service**, que resuelve la clave en su\n`application.yml`, pide las filas al query-service de auditoria con el JWT de\nquien exporta, y devuelve el binario.\n\n### Cuerpo: `{ format, filters, sorting, columns? }`\n\n`format` es `\"pdf\"` o `\"excel\"` (`\"xlsx\"` vale). Sin el campo: PDF.\n`filters` son los mismos de cada pantalla. `columns` (opcional) filtra y\nreordena las columnas del catalogo; una clave que no este declarada se ignora.\n\n### Esto NO es el mismo query-service que el resto\n\nEl catalogo de auditoria vive en `audit-clickhouse-cval`, una instancia\ndistinta que habla **ClickHouse** y ni siquiera tiene conexion a Postgres. Por\neso estos tres reportes declaran `base-url` propio en el reporting-service. Si\nesa instancia esta caida, estos tres dan `502` y los reportes academicos\nsiguen funcionando.\n\n### Por que hay filas de catalogo nuevas y no se reusa el listado\n\nEn los reportes academicos el export reusa la funcion del listado con la\npaginacion en NULL. Aqui no se puede: ClickHouse exige que `LIMIT`/`OFFSET`\nsean constantes en el texto SQL, asi que query-service los sustituye por\nliterales (V376) **y los clampa**:\n\n```java\nprivate static final int CH_PAGE_SIZE_MAX = 200;\npageSize = Math.max(1, Math.min(pageSize, CH_PAGE_SIZE_MAX));\n```\n\nPedir `pageSize: 999999` a un listado de auditoria devuelve **200 filas, en\nsilencio**. Las filas de export no mencionan esos placeholders, asi que no\npasan por el clamp.\n\n### El tope y el 422\n\nCada consulta lleva `LIMIT 50001` y el reporting-service corta en 50000: si\nllegan 50001 responde **422** pidiendo mas filtros, en vez de entregar un\nreporte truncado que parece completo. El `50001` (y no `50000`) es lo que\npermite que ese 422 pueda dispararse.\n\n### Permisos: no se invento ninguno\n\nCada export heredo los `role_query` de su listado (hoy\n`CEVAL-SUPER_ADMINISTRADOR` y `CEVAL-RECTOR`). Ademas, el filtro de fila de\nV362/V398 va **dentro** del SQL: el super administrador ve todo y cualquier\notro rol solo lo etiquetado con SU establecimiento. Es decir, dos usuarios con\npermiso para exportar obtienen archivos distintos, y eso es intencional.\n\n### Lo que NO sale en el archivo\n\n`entityFieldsRaw` (el JSON crudo de la fila auditada) queda fuera de los tres.\nUn archivo exportado circula fuera del sistema y ese volcado trae la fila\nentera, datos personales incluidos.\n\n### PIGSE\n\nFuera de alcance: `audit-clickhouse-pigse` tiene las filas gemelas pero no\nrecibio exports en V405.\n"
+    }
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://172.233.184.248:8080"
+    },
+    {
+      "key": "email",
+      "value": ""
+    },
+    {
+      "key": "password",
+      "value": ""
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "sessionId",
+      "value": ""
+    },
+    {
+      "key": "tableSlug",
+      "value": "tActaGrado"
+    }
+  ],
+  "item": [
+    {
+      "name": "0 - Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "description": {
+          "type": "text/markdown",
+          "content": "Guarda el `token`.\n\nEl rol importa **dos veces**: decide si el endpoint responde (`role_query`, sin fila = 403) y decide **que filas trae** (el filtro de establecimiento va dentro del SQL). Un `CEVAL-RECTOR` obtiene un archivo mas corto que un `CEVAL-SUPER_ADMINISTRADOR`, con los mismos filtros."
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (d.token) { pm.collectionVariables.set('token', d.token); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 - Sesiones: PDF con los filtros de la pantalla",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/auditoria-sesiones",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "auditoria-sesiones"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"pdf\",\n  \"filters\": {\n    \"AUTHOR\": \"Roberto\",\n    \"STATUS\": \"closed\",\n    \"STARTEDFROM\": \"2026-09-01\",\n    \"STARTEDTO\": \"2026-09-15\"\n  }\n}"
+        },
+        "description": {
+          "content": "La pestana **Por sesion**.\n\n| Filtro | Que hace |\n|---|---|\n| `AUTHOR` | subcadena, sin distinguir mayusculas, sobre el usuario |\n| `STATUS` | `active` o `closed` |\n| `STARTEDFROM` / `STARTEDTO` | rango sobre el inicio de la sesion |\n\nColumnas: Autor, IP, Inicio, Fin, Estado, Operaciones.\n\nUsa **Send and Download** para guardar el archivo.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('content-type', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/pdf'));",
+              "pm.test('attachment', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment'));",
+              "pm.test('X-Report-Rows', () => pm.expect(pm.response.headers.get('X-Report-Rows')).to.not.be.undefined);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - Sesiones: Excel de las SELECCIONADAS",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/auditoria-sesiones",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "auditoria-sesiones"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"excel\",\n  \"filters\": {\n    \"IDS\": \"{{sessionId}}\"\n  }\n}"
+        },
+        "description": {
+          "content": "Las casillas marcadas en la tabla.\n\n`IDS` es una **cadena CSV** de `family_id`, no un array JSON:\n\n```json\n{ \"IDS\": \"abc123,def456\" }\n```\n\nEs el idioma que ya usa V384 para lo mismo (`has(splitByChar(',', :BODY.IDS), ...)`), porque en ClickHouse es la forma natural de recibir una lista por bind.\n\nCuando `IDS` viene, **tiene prioridad**: los demas filtros se ignoran, igual que en `/audits/stats`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('content-type', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('spreadsheetml'));",
+              "pm.test('attachment', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment'));",
+              "pm.test('X-Report-Rows', () => pm.expect(pm.response.headers.get('X-Report-Rows')).to.not.be.undefined);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 - Una TABLA: todos sus cambios (PDF)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/auditoria-tabla-operaciones",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "auditoria-tabla-operaciones"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"pdf\",\n  \"filters\": {\n    \"SLUG\": \"{{tableSlug}}\",\n    \"OCCURREDFROM\": \"2026-09-01\",\n    \"OCCURREDTO\": \"2026-09-15\"\n  }\n}"
+        },
+        "description": {
+          "content": "El detalle al que se entra desde **Por tablas** -> una tabla.\n\n`SLUG` es **obligatorio** y va en el cuerpo, no en la ruta (el listado equivalente si lo lleva en la ruta: `/audit-tables/:SLUG/operations/query`). El reporting-service solo sabe mandar cuerpo, no construir rutas.\n\n**Sin `SLUG` el reporte sale VACIO, no completo.** Es deliberado: ClickHouse no tiene `RAISE`, asi que no se puede fallar con un mensaje desde el SQL, y entre \"cero filas\" y \"el audit_log entero\" la unica opcion segura es cero.\n\nEl slug es el camelCase de la pantalla y se convierte a nombre de tabla dentro de la consulta: `tActaGrado` -> `tacta_grado`, `tSesionWeb` -> `tsesion_web`.\n\nFiltros: `AUTHOR` (busca en usuario **y** en IP), `OPERATIONCH` (`c`/`u`/`d`), `OCCURREDFROM`/`OCCURREDTO`, `IDS` (CSV de `<lsn>-<seq>`).",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('content-type', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/pdf'));",
+              "pm.test('attachment', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment'));",
+              "pm.test('X-Report-Rows', () => pm.expect(pm.response.headers.get('X-Report-Rows')).to.not.be.undefined);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 - Una tabla: solo los UPDATE (Excel)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/auditoria-tabla-operaciones",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "auditoria-tabla-operaciones"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"excel\",\n  \"filters\": {\n    \"SLUG\": \"{{tableSlug}}\",\n    \"OPERATIONCH\": \"u\"\n  }\n}"
+        },
+        "description": {
+          "content": "`OPERATIONCH` usa la letra de Debezium, no la etiqueta: `c` = INSERT, `u` = UPDATE, `d` = DELETE. La columna exportada si trae la etiqueta legible.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('content-type', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('spreadsheetml'));",
+              "pm.test('attachment', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment'));",
+              "pm.test('X-Report-Rows', () => pm.expect(pm.response.headers.get('X-Report-Rows')).to.not.be.undefined);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 - Una SESION: sus cambios (PDF)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/auditoria-sesion-operaciones",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "auditoria-sesion-operaciones"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"pdf\",\n  \"filters\": {\n    \"SESSIONID\": \"{{sessionId}}\"\n  }\n}"
+        },
+        "description": {
+          "content": "La tabla del detalle de una sesion (TABLA / OPERACION / DETALLE / FECHA).\n\n`SESSIONID` es el `family_id` de la sesion, **obligatorio** y por cuerpo, con la misma regla que `SLUG`: sin el, cero filas.\n\nIncluye a proposito las filas de `tsesion_web` (Inicio/Cierre de sesion): es decision de producto desde V380 -- \"Inicio de sesion\" es la primera entrada util de la lista.\n\nFiltros adicionales: `TABLESLUG`, `OPERATIONCH`, `OCCURREDFROM`/`OCCURREDTO`, `IDS`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('content-type', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/pdf'));",
+              "pm.test('attachment', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment'));",
+              "pm.test('X-Report-Rows', () => pm.expect(pm.response.headers.get('X-Report-Rows')).to.not.be.undefined);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6 - Sesion: solo una tabla, columnas recortadas",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/auditoria-sesion-operaciones",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "auditoria-sesion-operaciones"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"excel\",\n  \"filters\": {\n    \"SESSIONID\": \"{{sessionId}}\",\n    \"TABLESLUG\": \"academico_test.tgrado\"\n  },\n  \"columns\": [\n    \"occurredAt\",\n    \"operation\",\n    \"entityName\"\n  ]\n}"
+        },
+        "description": {
+          "content": "`TABLESLUG` aqui compara contra el valor **tal cual esta guardado** en `audit_log.tabla`, que normalmente lleva el esquema (`academico_test.tgrado`) -- no es el slug camelCase del otro endpoint.\n\n`columns` recorta y reordena; una clave que no este en el catalogo se ignora en silencio.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('content-type', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('spreadsheetml'));",
+              "pm.test('attachment', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment'));",
+              "pm.test('X-Report-Rows', () => pm.expect(pm.response.headers.get('X-Report-Rows')).to.not.be.undefined);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7 - ERROR: formato no soportado -> 400",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/auditoria-sesiones",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "auditoria-sesiones"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"csv\"\n}"
+        },
+        "description": {
+          "content": "Solo `pdf` y `excel`/`xlsx`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8 - Tope: 422 cuando hay demasiadas filas",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/reportes/auditoria-tabla-operaciones",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "reportes",
+            "auditoria-tabla-operaciones"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"format\": \"excel\",\n  \"filters\": {\n    \"SLUG\": \"tSesionWeb\"\n  }\n}"
+        },
+        "description": {
+          "content": "Sobre una tabla con mucha actividad y sin rango de fechas, el resultado puede pasar de 50000 filas: el reporting-service responde **422** pidiendo acotar, en vez de entregar un archivo truncado.\n\nNo es un fallo: es el comportamiento buscado. Si sale 200, es que esa tabla cabe en el tope.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 o 422', () => pm.expect([200, 422]).to.include(pm.response.code));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

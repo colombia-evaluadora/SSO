@@ -58,6 +58,22 @@ public class ProvisionerProperties {
      *  el propio contenedor, no el host ni la red compose. */
     private String otlpEndpoint = "http://alloy:4318";
 
+    /** Interruptor de telemetría que se propaga a cada
+     *  query-service spawneado como los tres flags
+     *  {@code MANAGEMENT_TRACING_EXPORT_ENABLED} /
+     *  {@code MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED} /
+     *  {@code MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED} — los
+     *  mismos que docker-compose.yml deriva de
+     *  {@code SSO_TELEMETRY_ENABLED} para los servicios
+     *  estáticos. Antes sólo viajaba el endpoint: el contenedor
+     *  nuevo nacía con el default de Spring Boot (export de
+     *  logs ENCENDIDO) y, con el perfil `observability`
+     *  apagado, era el único del stack que seguía reintentando
+     *  contra un Alloy inexistente. Default {@code false}
+     *  (fail-safe): sin colector no se exporta nada. Se
+     *  enciende con {@code DOCKER_TELEMETRY_ENABLED=true}. */
+    private boolean telemetryEnabled = false;
+
     /** V30 — secreto compartido que el query-service spawneado usa
      *  para llamar a /internal/pathTemplates en sso-admin (lo envía
      *  como cabecera X-Internal-Token). Se inyecta al contenedor
@@ -127,6 +143,8 @@ public class ProvisionerProperties {
     public void setJwtPublicKey(String jwtPublicKey) { this.jwtPublicKey = jwtPublicKey; }
     public String getOtlpEndpoint() { return otlpEndpoint; }
     public void setOtlpEndpoint(String otlpEndpoint) { this.otlpEndpoint = otlpEndpoint; }
+    public boolean isTelemetryEnabled() { return telemetryEnabled; }
+    public void setTelemetryEnabled(boolean telemetryEnabled) { this.telemetryEnabled = telemetryEnabled; }
     public String getCatalogInternalToken() { return catalogInternalToken; }
     public void setCatalogInternalToken(String catalogInternalToken) { this.catalogInternalToken = catalogInternalToken; }
     public String getCatalogBaseUrl() { return catalogBaseUrl; }

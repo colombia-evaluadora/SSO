@@ -59,8 +59,9 @@ public class ExcelRenderer {
     /** Filas vivas en memoria antes de volcar al temporal. */
     private static final int VENTANA_FILAS = 200;
 
+    /** 12 horas con AM/PM y Locale fijo -- ver el javadoc de Fechas. */
     private static final DateTimeFormatter FECHA_HORA =
-            DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+            DateTimeFormatter.ofPattern("dd/MM/yyyy hh:mm a", java.util.Locale.US);
 
     /** Ancho de columna en unidades POI (1/256 de carácter). */
     private static final int UNIDAD = 256;
@@ -75,8 +76,17 @@ public class ExcelRenderer {
                          ReportingProperties.Report def,
                          List<Map<String, Object>> rows,
                          ReportMeta meta) {
+        return render(clave, def, rows, meta, null);
+    }
 
-        Map<String, String> columnas = ColumnLayout.resolver(def, rows);
+    /** @param columnas claves a incluir, en orden; null/vacio = todas las configuradas (ver ColumnLayout.resolver). */
+    public byte[] render(String clave,
+                         ReportingProperties.Report def,
+                         List<Map<String, Object>> rows,
+                         ReportMeta meta,
+                         List<String> columnasPedidas) {
+
+        Map<String, String> columnas = ColumnLayout.resolver(def, rows, columnasPedidas);
         String titulo = def == null || def.getTitle() == null ? clave : def.getTitle();
 
         try (SXSSFWorkbook wb = new SXSSFWorkbook(VENTANA_FILAS);
@@ -94,7 +104,7 @@ public class ExcelRenderer {
 
             escribirTexto(hoja, FILA_TITULO, titulo, estiloTitulo, ultimaColumna);
 
-            String contexto = "Generado el " + LocalDateTime.now().format(FECHA_HORA)
+            String contexto = "Generado el " + Fechas.ahora().format(FECHA_HORA)
                     + "   ·   " + rows.size() + " registro(s)"
                     + (meta != null && meta.usuario() != null && !meta.usuario().isBlank()
                        ? "   ·   por " + meta.usuario() : "");

@@ -10,8 +10,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+
 /**
- * EMAIL orchestrator — same shape as {@link SmsSender}.
+ * EMAIL orchestrator — same shape as {@link SmsSender}, plus
+ * app-scoped provider filtering (SMS/PUSH don't need this yet:
+ * only EMAIL has two accounts tied to two different apps' verified
+ * domains).
  */
 @Component
 public class EmailSender implements NotificationSender {
@@ -29,7 +34,7 @@ public class EmailSender implements NotificationSender {
 
     @Override
     public String send(RenderedNotification rendered) {
-        var providers = registry.providersFor(Channel.EMAIL);
+        var providers = providersFor(rendered.appName());
         if (providers.isEmpty()) {
             throw new ProviderException("No EMAIL providers configured");
         }
@@ -56,5 +61,32 @@ public class EmailSender implements NotificationSender {
         throw last != null
                 ? last
                 : new ProviderException("All EMAIL providers exhausted");
+    }
+
+    /**
+     * The full EMAIL roster, filtered to rows scoped to {@code appName}
+     * plus the app-agnostic ones ({@code ProviderConfigRow.appName() ==
+     * null}, e.g. a generic Gmail fallback) — never a DIFFERENT app's row,
+     * so a PIGSE password-reset can't silently go out under Colombia
+     * Evaluadora's verified domain (or vice versa) just because that
+     * account happened to be healthy.
+     *
+     * <p>{@code appName == null} (most producers don't set one) skips the
+     * filter entirely — same roster as before this feature existed.
+     *
+     * <p>Falls back to the unfiltered roster if the filter would leave
+     * NOTHING (e.g. no row is scoped for this app yet and every row
+     * happens to be app-scoped for some other app) — the old
+     * priority/failover behavior is a safer default than refusing to send
+     * a notification outright over a routing rule that isn't complete
+     * yet.
+     */
+    private List<ProviderRegistry.RegisteredProvider> providersFor(String appName) {
+        var all = registry.providersFor(Channel.EMAIL);
+        if (appName == null) return all;
+        var scoped = all.stream()
+                .filter(rp -> rp.row().appName() == null || appName.equalsIgnoreCase(rp.row().appName()))
+                .toList();
+        return scoped.isEmpty() ? all : scoped;
     }
 }

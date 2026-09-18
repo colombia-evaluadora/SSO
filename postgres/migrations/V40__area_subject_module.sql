@@ -1,50 +1,10 @@
--- =============================================================================
--- Área/Asignatura — funciones consolidadas (última versión vigente de cada
--- función del módulo Área (TAREA) / Asignatura (TASIGNATURA) / Énfasis
--- (TENFASIS)), resultado de fusionar las redefiniciones que se acumularon
--- en migraciones sucesivas.
---
--- Migraciones fuente consultadas (orden de aplicación):
---   V40__area_subject_module.sql
---   V103__area_asignatura_mensajes_error_con_nombre.sql
---   V135__query_rows_reportes_modulo_academico.sql (superada por V188, no incluida)
---   V188__fn_area_subject_reporte_listar.sql
---   V193__fn_subject_guardar_bulk_matchea_solo_por_id.sql
---   V194__fn_subject_periodo_listar_expone_enfasis_nombre.sql
---
--- Los helpers de gate de PERIODO (fn_periodo_establecimiento, fn_periodo_sede,
--- fn_periodo_jornada, fn_periodo_gate_escritura, fn_periodo_puede_ver) se
--- movieron a V29__helpers_permisos_capability_scope.sql: V37 (Periodo
--- Académico) los necesita y corre antes que este archivo.
---
--- Los helpers de gate de MATRICULA (fn_grupo_*, fn_matricula_grupo,
--- fn_matricula_gate_escritura, fn_matricula_puede_ver) SI viven aqui:
--- dependen de TGRUPO/TGRADO/TMATRICULA, no solo de TPERIODO_ACADEMICO/
--- TSEDE, asi que no pueden bajar a V29. Ver la seccion inmediatamente
--- posterior a SET search_path.
--- =============================================================================
-
 SET search_path TO academico_test, public;
 
 
--- ---------------------------------------------------------------------------
--- Helpers de alcance de MATRICULA (CU-86e2w4xdt). La matricula cuelga de un
--- grupo (TMATRICULA.FK_TGRUPO -> TGRUPO.FK_TGRADO -> TGRADO.FK_TPERIODO_ACADEMICO),
--- y de ahi hereda sede+jornada+EE igual que las areas/asignaturas del periodo.
--- Se colocan aqui (V40) para que el modulo de matricula (V159-V168, V200),
--- muy posterior, los tenga disponibles. Referencian solo tablas de V22
--- (TMATRICULA/TGRUPO/TGRADO), asi que son LANGUAGE sql sin problema.
---   fn_grupo_periodo(grupo)         -> periodo academico del grupo.
---   fn_grupo_jornada(grupo)         -> TGRUPO.FK_TLV_JORNADA (la del grupo, no
---                                      la del periodo: es la autoritativa para
---                                      esa matricula, ver u_tgrupo_1).
---   fn_grupo_establecimiento(grupo) -> EE dueño (grupo -> grado -> periodo -> sede).
---   fn_matricula_grupo(matricula)   -> TMATRICULA.FK_TGRUPO.
---   fn_matricula_gate_escritura(usuario, grupo [, accion]) -> gate de la
---     seccion Matricula: wrapper de una linea sobre fn_assert_permiso_seccion
---     (V29), menu 'MATRICULA'. Mismo modelo capability + scope que
---     fn_periodo_gate_escritura. Con p_fk_tgrupo NULL solo exige capability.
--- ---------------------------------------------------------------------------
+-- La matricula cuelga de un grupo (TMATRICULA -> TGRUPO -> TGRADO ->
+-- TPERIODO_ACADEMICO), del que hereda sede/jornada/EE. fn_grupo_jornada usa
+-- TGRUPO.FK_TLV_JORNADA (la del grupo, no la del periodo): es la autoritativa
+-- para esa matricula (ver u_tgrupo_1).
 CREATE OR REPLACE FUNCTION academico_test.fn_grupo_periodo(p_fk_tgrupo BIGINT)
 RETURNS BIGINT LANGUAGE sql STABLE AS $$
     SELECT g.FK_TPERIODO_ACADEMICO
@@ -93,21 +53,9 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_matricula_gate_escritura(BIGINT, BIGINT, VARCHAR)
     IS 'Gate de ESCRITURA de la seccion Matricula (estudiante/acudiente al ligarlos, matricula, socioeconomico, archivos, matricula directa). Wrapper de una linea sobre fn_assert_permiso_seccion (V29), menu ''MATRICULA''. Mismo modelo que fn_periodo_gate_escritura: CAPABILITY dinamica (TROL_MENU concede / TUSUARIO_ROL_PERMISO recorta) + SCOPE por categoria de rol (nivel 1 territorial = todos los EE; nivel 2 = fn_usuario_ee_accesibles; nivel 3 = par (sede, jornada) del grupo en fn_usuario_sedes_jornadas_accesibles) + BYPASS del SUPER_ADMIN. El scope se resuelve por el grupo: TMATRICULA -> TGRUPO -> TGRADO -> TPERIODO_ACADEMICO. Con p_fk_tgrupo NULL las tres coordenadas quedan NULL y solo se exige capability (altas de persona sin sede todavia).';
 
--- fn_matricula_puede_ver: version BOOLEAN del gate, para el WHERE del LISTADO
--- de matricula (fn_matricula_listar, V200) -- reemplaza a
--- fn_periodo_usuario_puede_ver. Misma decision de capability + scope que
--- fn_matricula_gate_escritura pero SIN lanzar: devuelve TRUE/FALSE por fila.
--- Reusa los mismos helpers de V29 (fn_usuario_categoria_rol_nivel,
--- fn_usuario_puede_en_menu, fn_usuario_ee_accesibles,
--- fn_usuario_sedes_jornadas_accesibles) que consume fn_assert_permiso_seccion;
--- no captura excepciones (evita una subtransaccion por fila en el listado).
---   p_pk_usuario NULL  -> TRUE (llamada interna sin scoping).
---   categoria nivel 0  -> TRUE (SUPER_ADMIN, bypass; no se le exige capability).
---   sin capability VER  -> FALSE.
---   nivel 1 territorial -> TRUE (todos los EE).
---   nivel 2            -> EE del grupo en fn_usuario_ee_accesibles.
---   nivel 3            -> par (sede, jornada) del grupo en fn_usuario_sedes_jornadas_accesibles.
---   nivel 4 / sin categoria -> FALSE (fail-closed).
+-- Version BOOLEAN del gate para el WHERE del listado de matricula (reemplaza
+-- a fn_periodo_usuario_puede_ver). No lanza excepciones: evita una
+-- subtransaccion por fila.
 CREATE OR REPLACE FUNCTION academico_test.fn_matricula_puede_ver(
     p_pk_usuario  BIGINT,
     p_fk_tgrupo   BIGINT
@@ -153,11 +101,6 @@ COMMENT ON FUNCTION academico_test.fn_matricula_puede_ver(BIGINT, BIGINT)
     IS 'Version BOOLEAN de fn_matricula_gate_escritura para el WHERE de fn_matricula_listar (V200): capability ''VER'' sobre el menu MATRICULA + scope por categoria de rol, resuelto por el grupo. p_pk_usuario NULL o SUPER_ADMIN => TRUE. Reemplaza a fn_periodo_usuario_puede_ver en el listado de matricula. No lanza (no subtransaccion por fila).';
 
 
--- =============================================================================
--- ÁREA (TAREA)
--- =============================================================================
-
--- Fuente: V103__area_asignatura_mensajes_error_con_nombre.sql (reemplaza V40)
 CREATE OR REPLACE FUNCTION academico_test.fn_area_crear(p_fk_periodo bigint, p_fk_area_asignatura bigint, p_nombre_interno character varying, p_abreviacion character varying, p_orden_reportes numeric DEFAULT 0, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -168,9 +111,8 @@ DECLARE
     v_establecimiento_id BIGINT;
 BEGIN
     v_establecimiento_id := academico_test.fn_periodo_establecimiento(p_fk_periodo);
-    -- CU-86e2w4xdt: pasa (sede, jornada) del periodo para que un rol de
-    -- nivel sede+jornada (coordinador/docente) con el menu concedido pueda
-    -- actuar DENTRO de su (sede, jornada). Sin ellos era fallo seguro (deny).
+    -- Pasa (sede, jornada) del periodo para que un rol de nivel sede+jornada
+    -- pueda actuar dentro de su ambito; sin ellos era fallo seguro (deny).
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante, v_establecimiento_id,
         academico_test.fn_periodo_sede(p_fk_periodo),
@@ -204,7 +146,7 @@ BEGIN
          WHERE a.FK_TPERIODO_ACADEMICO = p_fk_periodo AND a.ACTIVE = TRUE
            AND UPPER(TRIM(a.CODIGO)) = UPPER(TRIM(p_abreviacion))
     ) THEN
-        RAISE EXCEPTION 'Ya existe un area con el codigo % en este periodo academico',
+        RAISE EXCEPTION 'Ya existe un area con la abreviacion % en este periodo academico',
             p_abreviacion USING ERRCODE = '23505';
     END IF;
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
@@ -218,7 +160,6 @@ BEGIN
 END;
 $function$;
 
--- Fuente: V103__area_asignatura_mensajes_error_con_nombre.sql (reemplaza V40)
 CREATE OR REPLACE FUNCTION academico_test.fn_area_actualizar(p_pk bigint, p_fk_area_asignatura bigint DEFAULT NULL::bigint, p_nombre_interno character varying DEFAULT NULL::character varying, p_abreviacion character varying DEFAULT NULL::character varying, p_orden_reportes numeric DEFAULT NULL::numeric, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -232,7 +173,6 @@ DECLARE
     v_establecimiento_id BIGINT;
     v_periodo_id BIGINT;
 BEGIN
-    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo del area.
     SELECT a.FK_TPERIODO_ACADEMICO,
            academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
       INTO v_periodo_id, v_establecimiento_id
@@ -283,7 +223,7 @@ BEGIN
          WHERE a.FK_TPERIODO_ACADEMICO = r.FK_TPERIODO_ACADEMICO AND a.ACTIVE = TRUE
            AND a.PK_TAREA <> p_pk AND UPPER(TRIM(a.CODIGO)) = UPPER(TRIM(v_abrev))
     ) THEN
-        RAISE EXCEPTION 'Ya existe un area con el codigo % en este periodo academico', v_abrev
+        RAISE EXCEPTION 'Ya existe un area con la abreviacion % en este periodo academico', v_abrev
             USING ERRCODE = '23505';
     END IF;
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
@@ -299,12 +239,6 @@ BEGIN
 END;
 $function$;
 
--- Fuente: V103__area_asignatura_mensajes_error_con_nombre.sql (reemplaza V40).
--- Dentro de V103 la función aparece definida DOS VECES (línea ~192 y línea
--- ~1194, esta última agregada por el bloque de "consolidación" del propio
--- archivo, que incorpora el bloqueo por TAREA_NOTA y por criterio de
--- promoción tomado de V122). Se toma la ÚLTIMA (más abajo en el archivo) por
--- ser la que queda vigente tras correr V103 completo.
 CREATE OR REPLACE FUNCTION academico_test.fn_area_soft_delete(p_pk bigint, p_pk_usuario_solicitante bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -315,7 +249,6 @@ DECLARE
     v_establecimiento_id BIGINT;
     v_periodo_id BIGINT;
 BEGIN
-    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo del area.
     SELECT a.FK_TPERIODO_ACADEMICO,
            academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
       INTO v_periodo_id, v_establecimiento_id
@@ -360,15 +293,13 @@ BEGIN
 END;
 $$;
 
--- Fuente: V40__area_subject_module.sql (sin override posterior)
 DROP FUNCTION IF EXISTS academico_test.fn_area_listar(BIGINT, TEXT, INT, INT);
 DROP FUNCTION IF EXISTS academico_test.fn_area_listar(BIGINT, TEXT, INT, INT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_area_listar(BIGINT, TEXT, INT, INT, BIGINT, TEXT, TEXT);
 CREATE OR REPLACE FUNCTION academico_test.fn_area_listar(
     p_fk_periodo BIGINT, p_nombre_interno TEXT DEFAULT NULL,
     p_page_index INT DEFAULT 0, p_page_size INT DEFAULT 10,
-    p_pk_usuario BIGINT DEFAULT NULL,  -- alcance (global / establecimiento)
-    -- Orden: id de columna del front + direccion ('asc'/'desc'), igual que fn_periodo_listar (V37).
+    p_pk_usuario BIGINT DEFAULT NULL,
     p_sort_by TEXT DEFAULT NULL,
     p_sort_dir TEXT DEFAULT NULL
 )
@@ -402,9 +333,6 @@ BEGIN
 END;
 $$;
 
--- Fuente: V40__area_subject_module.sql (sin override posterior).
--- Reenvía el error de fn_area_soft_delete via GET STACKED DIAGNOSTICS: no
--- tiene RAISE propio con ID, por eso V103 no lo tocó.
 DROP FUNCTION IF EXISTS academico_test.fn_area_bulk_delete(BIGINT[], BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_area_bulk_delete(
     p_ids BIGINT[], p_pk_usuario_solicitante BIGINT
@@ -432,15 +360,6 @@ END;
 $$;
 
 
--- =============================================================================
--- ÉNFASIS (TENFASIS)
--- =============================================================================
-
--- Fuente: V103__area_asignatura_mensajes_error_con_nombre.sql (reemplaza V40).
--- Este bloque en particular no es un fix de mensajes de error: es la versión
--- tomada de V64 (fix_enfasis_resolver_otro_constant), que corrige
--- c_especialidad_otro de 7 a 2. No tiene RAISE con ID, por eso no aplica la
--- regla de mensajes con nombre.
 CREATE OR REPLACE FUNCTION academico_test.fn_enfasis_resolver(
     p_fk_establecimiento BIGINT,
     p_nombre VARCHAR,
@@ -452,10 +371,9 @@ DECLARE
     v_id BIGINT;
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_next INT;
-    -- Especialidad "Otro" para enfasis creados al vuelo. Ver comentario de
-    -- migracion V64: 2 es el valor consistente con los datos existentes,
-    -- no el PK real de la fila "Otro" (4) ni el valor previo (7,
-    -- "Agropecuario").
+    -- Especialidad "Otro" para enfasis creados al vuelo. 2 es el valor
+    -- consistente con los datos existentes, no el PK real de la fila "Otro"
+    -- (4) ni el valor previo (7, "Agropecuario").
     c_especialidad_otro CONSTANT BIGINT := 2;
 BEGIN
     PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, p_fk_establecimiento);
@@ -463,11 +381,10 @@ BEGIN
      WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento AND ACTIVE = TRUE
        AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(p_nombre));
     IF v_id IS NULL THEN
-        -- CODIGO autonumerico por establecimiento cuando el caller no lo manda.
-        -- Antes se usaba LEFT(p_nombre, 30), que choca con la unicidad de
-        -- CODIGO en cuanto dos enfasis comparten los primeros 30 caracteres.
-        -- El advisory lock serializa el MAX()+1 entre transacciones concurrentes
-        -- del mismo establecimiento. Portado de V107 (antes V103).
+        -- CODIGO autonumerico por establecimiento cuando el caller no lo manda
+        -- (antes se usaba LEFT(p_nombre, 30), que choca con la unicidad de
+        -- CODIGO si dos enfasis comparten los primeros 30 caracteres). El
+        -- advisory lock serializa el MAX()+1 entre transacciones concurrentes.
         IF p_codigo IS NULL THEN
             PERFORM pg_advisory_xact_lock(hashtext('tenfasis:' || p_fk_establecimiento::text));
             SELECT COALESCE(MAX(CODIGO::int), -1) + 1 INTO v_next
@@ -482,14 +399,13 @@ BEGIN
 END;
 $function$;
 
--- Fuente: V103__area_asignatura_mensajes_error_con_nombre.sql (reemplaza V40)
 DROP FUNCTION IF EXISTS academico_test.fn_enfasis_desde_seleccion(BIGINT, BIGINT, VARCHAR);
 CREATE OR REPLACE FUNCTION academico_test.fn_enfasis_desde_seleccion(p_fk_periodo bigint, p_id bigint, p_audit character varying)
  RETURNS bigint
  LANGUAGE plpgsql
 AS $function$
 DECLARE
-    v_est    BIGINT;          -- establecimiento del periodo (periodo -> sede -> establecimiento)
+    v_est    BIGINT;
     v_enf    BIGINT;
     v_nombre VARCHAR(130);
     v_next   INT;
@@ -497,7 +413,6 @@ DECLARE
     v_nombre_cualquiera VARCHAR(130);
 BEGIN
     IF p_id IS NULL THEN RETURN NULL; END IF;
-    -- Resolver establecimiento a partir del periodo (periodo -> sede -> establecimiento).
     SELECT s.FK_TESTABLECIMIENTO INTO v_est
       FROM academico_test.TPERIODO_ACADEMICO pa
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
@@ -512,11 +427,9 @@ BEGIN
             RAISE EXCEPTION 'El periodo academico seleccionado no existe' USING ERRCODE = 'P0002';
         END IF;
     END IF;
-    -- 1) ¿Ya es un enfasis del establecimiento?
     SELECT PK_TENFASIS INTO v_enf FROM academico_test.TENFASIS
      WHERE PK_TENFASIS = p_id AND ACTIVE = TRUE AND FK_TESTABLECIMIENTO = v_est;
     IF v_enf IS NOT NULL THEN RETURN v_enf; END IF;
-    -- 2) ¿Es una especialidad global activa? -> resolver-o-crear enfasis con su nombre.
     SELECT NOMBRE INTO v_nombre FROM academico_test.TESPECIALIDAD
      WHERE PK_ESPECIALIDAD = p_id AND ACTIVE = TRUE;
     IF v_nombre IS NULL THEN
@@ -535,18 +448,14 @@ BEGIN
             RAISE EXCEPTION 'La especialidad/enfasis seleccionada no existe' USING ERRCODE = '22023';
         END IF;
     END IF;
-    -- Serializar la creacion por establecimiento (codigo incremental sin choques).
     PERFORM pg_advisory_xact_lock(hashtext('tenfasis:' || v_est::text));
-    -- Reusar el enfasis ya creado para esta especialidad en el establecimiento
-    -- (misma especialidad + mismo nombre): si vuelve a elegirse, no se crea otro.
+    -- Reusa el enfasis ya creado para esta especialidad + nombre en el
+    -- establecimiento: si vuelve a elegirse, no se crea otro.
     SELECT PK_TENFASIS INTO v_enf FROM academico_test.TENFASIS
      WHERE FK_TESPECIALIDAD = p_id AND FK_TESTABLECIMIENTO = v_est AND ACTIVE = TRUE
        AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(v_nombre))
      LIMIT 1;
     IF v_enf IS NOT NULL THEN RETURN v_enf; END IF;
-    -- Crear: FK_TESPECIALIDAD = la especialidad elegida; NOMBRE = el de la
-    -- especialidad; CODIGO incremental (00000, 00001, ...) por establecimiento,
-    -- calculado entre los codigos puramente numericos existentes.
     SELECT COALESCE(MAX(CODIGO::int), -1) + 1 INTO v_next
       FROM academico_test.TENFASIS
      WHERE FK_TESTABLECIMIENTO = v_est AND CODIGO ~ '^[0-9]+$';
@@ -557,11 +466,7 @@ BEGIN
 END;
 $function$;
 
--- Fuente: V103__area_asignatura_mensajes_error_con_nombre.sql (reemplaza V40).
--- Overload 1 de 2 (firma: p_pk, p_nombre, p_codigo, p_fk_especialidad,
--- p_pk_usuario_solicitante — 5 parámetros, permite editar CODIGO y
--- FK_TESPECIALIDAD). Confirmado con pg_get_functiondef que ambos oids
--- (39287/39335) son overloads vigentes simultáneos con firmas distintas.
+-- Overload 1 de 2 (5 parametros, permite editar CODIGO y FK_TESPECIALIDAD).
 CREATE OR REPLACE FUNCTION academico_test.fn_enfasis_actualizar(p_pk bigint, p_nombre character varying DEFAULT NULL::character varying, p_codigo character varying DEFAULT NULL::character varying, p_fk_especialidad bigint DEFAULT NULL::bigint, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -629,9 +534,7 @@ BEGIN
 END;
 $function$;
 
--- Fuente: V103__area_asignatura_mensajes_error_con_nombre.sql (reemplaza V40).
--- Overload 2 de 2 (firma: p_pk, p_nombre, p_pk_usuario_solicitante — 3
--- parámetros, solo permite editar NOMBRE; no tiene p_fk_especialidad).
+-- Overload 2 de 2 (3 parametros, solo permite editar NOMBRE).
 CREATE OR REPLACE FUNCTION academico_test.fn_enfasis_actualizar(p_pk bigint, p_nombre character varying DEFAULT NULL::character varying, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -697,7 +600,6 @@ BEGIN
 END;
 $function$;
 
--- Fuente: V103__area_asignatura_mensajes_error_con_nombre.sql (reemplaza V40)
 CREATE OR REPLACE FUNCTION academico_test.fn_enfasis_soft_delete(p_pk bigint, p_pk_usuario_solicitante bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -737,11 +639,6 @@ END;
 $function$;
 
 
--- =============================================================================
--- ASIGNATURA (TASIGNATURA)
--- =============================================================================
-
--- Fuente: V103__area_asignatura_mensajes_error_con_nombre.sql (reemplaza V40)
 CREATE OR REPLACE FUNCTION academico_test.fn_subject_crear(p_fk_area bigint, p_fk_area_asignatura bigint, p_nombre_interno character varying, p_abreviacion character varying, p_fk_enfasis bigint DEFAULT 2, p_color character varying DEFAULT NULL::character varying, p_orden_reportes numeric DEFAULT 0, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -751,7 +648,6 @@ DECLARE
     v_nombre_area VARCHAR(130);
     v_nombre_aa VARCHAR(130);
 BEGIN
-    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo del area.
     SELECT a.FK_TPERIODO_ACADEMICO INTO v_periodo
       FROM academico_test.TAREA a WHERE a.PK_TAREA = p_fk_area;
     PERFORM academico_test.fn_periodo_gate_escritura(
@@ -763,7 +659,6 @@ BEGIN
        OR NULLIF(TRIM(p_abreviacion),'') IS NULL THEN
         RAISE EXCEPTION 'Faltan campos obligatorios de la asignatura' USING ERRCODE = '22023';
     END IF;
-    -- Periodo y establecimiento del area (via periodo -> sede). Valida que el area exista.
     SELECT a.FK_TPERIODO_ACADEMICO, s.FK_TESTABLECIMIENTO INTO v_periodo, v_est
       FROM academico_test.TAREA a
       JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = a.FK_TPERIODO_ACADEMICO
@@ -792,9 +687,8 @@ BEGIN
     IF p_color IS NOT NULL AND p_color !~ '^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$' THEN
         RAISE EXCEPTION 'El color (%) debe ser un HEX valido, p.ej. #FFAA00', p_color USING ERRCODE = '22023';
     END IF;
-    -- Especialidad/enfasis (opcional): resolver la seleccion del combo. Si es una
-    -- especialidad global, se crea (o reusa) un enfasis del establecimiento con su
-    -- info; si ya es un enfasis, se usa tal cual. Deja p_fk_enfasis = PK_TENFASIS.
+    -- Si es una especialidad global, crea/reusa un enfasis del establecimiento;
+    -- si ya es un enfasis, se usa tal cual. Deja p_fk_enfasis = PK_TENFASIS.
     p_fk_enfasis := academico_test.fn_enfasis_desde_seleccion(v_periodo, p_fk_enfasis, v_audit);
     IF EXISTS (
         SELECT 1 FROM academico_test.TASIGNATURA s
@@ -823,7 +717,6 @@ BEGIN
 END;
 $function$;
 
--- Fuente: V103__area_asignatura_mensajes_error_con_nombre.sql (reemplaza V40)
 CREATE OR REPLACE FUNCTION academico_test.fn_subject_actualizar(p_pk bigint, p_fk_area_asignatura bigint DEFAULT NULL::bigint, p_nombre_interno character varying DEFAULT NULL::character varying, p_abreviacion character varying DEFAULT NULL::character varying, p_fk_enfasis bigint DEFAULT NULL::bigint, p_color character varying DEFAULT NULL::character varying, p_orden_reportes numeric DEFAULT NULL::numeric, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -837,7 +730,6 @@ DECLARE
     v_establecimiento_id BIGINT;
     v_periodo_id BIGINT;
 BEGIN
-    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo de la asignatura.
     SELECT a.FK_TPERIODO_ACADEMICO,
            academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
       INTO v_periodo_id, v_establecimiento_id
@@ -879,9 +771,6 @@ BEGIN
     END IF;
     v_nombre  := COALESCE(p_nombre_interno, r.NOMBRE);
     v_codigo  := COALESCE(p_abreviacion, r.CODIGO);
-    -- Especialidad/enfasis (si viene): resolver la seleccion del combo contra el
-    -- establecimiento del area. Especialidad global -> crea/reusa enfasis; enfasis
-    -- -> tal cual. Si no viene, conserva el actual.
     IF p_fk_enfasis IS NOT NULL THEN
         SELECT a.FK_TPERIODO_ACADEMICO, s.FK_TESTABLECIMIENTO INTO v_periodo, v_est
           FROM academico_test.TAREA a
@@ -923,11 +812,6 @@ BEGIN
 END;
 $function$;
 
--- Fuente: V103__area_asignatura_mensajes_error_con_nombre.sql (reemplaza V40).
--- Dentro de V103 la función aparece definida DOS VECES (línea ~393 y línea
--- ~1132, esta última agregada por el bloque de "consolidación" del propio
--- archivo, tomada de V116, que suma el bloqueo por plan de estudio). Se toma
--- la ÚLTIMA (más abajo en el archivo).
 CREATE OR REPLACE FUNCTION academico_test.fn_subject_soft_delete(p_pk bigint, p_pk_usuario_solicitante bigint)
  RETURNS bigint
  LANGUAGE plpgsql
@@ -938,7 +822,6 @@ DECLARE
     v_establecimiento_id BIGINT;
     v_periodo_id BIGINT;
 BEGIN
-    -- CU-86e2w4xdt: gate por (EE, sede, jornada) del periodo de la asignatura.
     SELECT a.FK_TPERIODO_ACADEMICO,
            academico_test.fn_periodo_establecimiento(a.FK_TPERIODO_ACADEMICO)
       INTO v_periodo_id, v_establecimiento_id
@@ -993,17 +876,6 @@ BEGIN
 END;
 $$;
 
--- Fuente: V103__area_asignatura_mensajes_error_con_nombre.sql (reemplaza V40).
--- NOTA / DISCREPANCIA vs. el mapeo original: fn_subject_listar(bigint,
--- bigint) aparece TRES veces en V103 (línea ~603 heredada de V40 vía
--- CREATE OR REPLACE directo, línea ~909 y línea ~1115), pero las tres tienen
--- LA MISMA firma de parámetros (p_fk_area bigint, p_pk_usuario_solicitante
--- bigint DEFAULT NULL) — NO son overloads reales (un overload requiere tipos
--- de parámetro distintos). Cada aparición solo cambia el RETURNS TABLE
--- (agrega/quita la columna enfasis_nombre), por eso el archivo antepone un
--- DROP FUNCTION antes de cada redefinición. Se incluye únicamente la ÚLTIMA
--- (línea ~1115, tomada de V112 fn_subject_listar_devuelve_enfasis_nombre),
--- que es la única que queda vigente al correr V103 completo.
 DROP FUNCTION IF EXISTS academico_test.fn_subject_listar(bigint, bigint);
 CREATE OR REPLACE FUNCTION academico_test.fn_subject_listar(p_fk_area bigint, p_pk_usuario_solicitante bigint DEFAULT NULL::bigint)
  RETURNS TABLE(id bigint, abreviacion character varying, nombre_interno character varying, asignatura_general_id bigint, enfasis_id bigint, enfasis_nombre character varying, color character varying, orden_reportes numeric)
@@ -1016,22 +888,10 @@ AS $$
       JOIN academico_test.TAREA a ON a.PK_TAREA = s.FK_TAREA
       LEFT JOIN academico_test.TENFASIS e ON e.PK_TENFASIS = s.FK_TENFASIS AND e.ACTIVE = TRUE
      WHERE s.FK_TAREA = p_fk_area AND s.ACTIVE = TRUE
-       -- CU-86e2w4xdt: capability + scope de lectura sobre el periodo del area.
        AND academico_test.fn_periodo_puede_ver(p_pk_usuario_solicitante, a.FK_TPERIODO_ACADEMICO)
      ORDER BY s.ORDEN_REPORTE, s.NOMBRE;
 $$;
 
--- Fuente: V193__fn_subject_guardar_bulk_matchea_solo_por_id.sql (reemplaza
--- tanto V40 como las dos redefiniciones internas de V103).
--- OJO: dentro de V103 esta función llegó a incluir (via su bloque de
--- "consolidación" tomado de V118/V122) un loop de bloqueo por dependencias
--- (docente/horario/plan/calificaciones) sobre las asignaturas "huerfanas" y
--- una llamada a fn_audit_declarar. La versión de V193 aquí abajo -- que es la
--- que efectivamente corre después, al ser la migración con mayor número de
--- versión -- NO incluye ese loop de bloqueo ni fn_audit_declarar; solo agrega
--- el fix de matching exclusivo por `id` (vs. fallback por nombre) descrito en
--- su propio comentario. Se deja constancia por si el bloqueo por
--- dependencias en el reemplazo masivo se consideraba vigente.
 CREATE OR REPLACE FUNCTION academico_test.fn_subject_guardar_bulk(p_fk_area bigint, p_asignaturas jsonb, p_pk_usuario_solicitante bigint)
  RETURNS integer
  LANGUAGE plpgsql
@@ -1045,10 +905,8 @@ DECLARE
     v_nombre_area VARCHAR(130);
     v_nombre_aa VARCHAR(130);
 BEGIN
-    -- Autorizacion (CU-86e2w4xdt): capability fail-fast.
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante, NULL, NULL, NULL, 'EDITAR');
-    -- Periodo y establecimiento del area (valida que el area exista/activa).
     SELECT a.FK_TPERIODO_ACADEMICO, s.FK_TESTABLECIMIENTO INTO v_periodo, v_est
       FROM academico_test.TAREA a
       JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = a.FK_TPERIODO_ACADEMICO
@@ -1062,19 +920,15 @@ BEGIN
             RAISE EXCEPTION 'El area seleccionada no existe' USING ERRCODE = '23503';
         END IF;
     END IF;
-    -- Gate fino (CU-86e2w4xdt): capability + scope (EE, sede, jornada) del periodo del area.
     PERFORM academico_test.fn_periodo_gate_escritura(
         p_pk_usuario_solicitante, v_est,
         academico_test.fn_periodo_sede(v_periodo),
         academico_test.fn_periodo_jornada(v_periodo), 'EDITAR');
 
-    -- Reemplazo: baja logica de las asignaturas del area que NO vienen en el set.
-    -- El set se identifica por `id` (PK), no por NOMBRE: el nombre de una
-    -- asignatura no es unico dentro del area, asi que matchear por nombre daba
-    -- de baja filas que si venian en el payload (y conservaba otras que no).
-    -- Desde V111 el front manda el PK real de cada asignatura que edita; los
-    -- items sin `id` son altas nuevas y por tanto no protegen a nadie de la
-    -- baja logica. Portado de V107 (antes V193).
+    -- Reemplazo: baja logica de las asignaturas del area que NO vienen en el
+    -- set. El set se identifica por `id` (PK), no por NOMBRE: el nombre de
+    -- una asignatura no es unico dentro del area, asi que matchear por
+    -- nombre daba de baja filas que si venian en el payload.
     UPDATE academico_test.TASIGNATURA t
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE t.FK_TAREA = p_fk_area AND t.ACTIVE = TRUE
@@ -1113,11 +967,9 @@ BEGIN
                 RAISE EXCEPTION 'La asignatura general seleccionada no existe' USING ERRCODE = '23503';
             END IF;
         END IF;
-        -- Especialidad: si el nombre corresponde a una ESPECIALIDAD global del
-        -- catalogo, se resuelve preservandola (crea/reusa enfasis con su
-        -- FK_TESPECIALIDAD y codigo incremental, via fn_enfasis_desde_seleccion).
-        -- Si es un nombre nuevo (no del catalogo global), cae al resolver por
-        -- nombre (enfasis con especialidad "Otro").
+        -- Si el nombre corresponde a una ESPECIALIDAD global del catalogo, se
+        -- preserva (crea/reusa enfasis con su FK_TESPECIALIDAD); si no, cae al
+        -- resolver por nombre (enfasis con especialidad "Otro").
         v_enf := NULL;
         IF v_enf_name IS NOT NULL THEN
             SELECT PK_ESPECIALIDAD INTO v_esp FROM academico_test.TESPECIALIDAD
@@ -1129,12 +981,9 @@ BEGIN
             END IF;
         END IF;
 
-        -- Match: solo por PK explicito (id) cuando el item lo trae y
-        -- pertenece a una asignatura activa del area -- edicion de una fila
-        -- existente. Si no trae id (o no matchea), es alta nueva: SIEMPRE
-        -- INSERT. Ya no se cae a buscar por nombre -- el nombre no es unico
-        -- y dos altas nuevas del mismo payload pueden compartir nombre
-        -- legitimamente (misma asignatura para especialidades distintas).
+        -- Match solo por PK explicito (id): sin id (o si no matchea), es alta
+        -- nueva. No se cae a buscar por nombre porque el nombre no es unico y
+        -- dos altas nuevas del mismo payload pueden compartirlo legitimamente.
         v_id := NULLIF(TRIM(it->>'id'),'')::bigint;
         IF v_id IS NOT NULL AND NOT EXISTS (
             SELECT 1 FROM academico_test.TASIGNATURA
@@ -1142,7 +991,6 @@ BEGIN
         ) THEN
             v_id := NULL;
         END IF;
-        -- Codigo unico en el area (excluyendo la fila que se va a actualizar).
         IF EXISTS (
             SELECT 1 FROM academico_test.TASIGNATURA s
              WHERE s.FK_TAREA = p_fk_area AND s.ACTIVE = TRUE
@@ -1173,15 +1021,13 @@ BEGIN
 END;
 $function$;
 
--- Fuente: V194__fn_subject_periodo_listar_expone_enfasis_nombre.sql (reemplaza V40)
 DROP FUNCTION IF EXISTS academico_test.fn_subject_periodo_listar(BIGINT, TEXT, INT, INT, BIGINT, TEXT, TEXT);
 CREATE OR REPLACE FUNCTION academico_test.fn_subject_periodo_listar(
     p_fk_periodo BIGINT,
     p_filtro     TEXT DEFAULT NULL,
     p_page_index INT  DEFAULT 0,
     p_page_size  INT  DEFAULT 10,
-    p_pk_usuario BIGINT DEFAULT NULL,  -- alcance (global / establecimiento)
-    -- Orden: id de columna del front + direccion ('asc'/'desc'), igual que fn_periodo_listar (V37).
+    p_pk_usuario BIGINT DEFAULT NULL,
     p_sort_by    TEXT DEFAULT NULL,
     p_sort_dir   TEXT DEFAULT NULL
 )
@@ -1222,14 +1068,8 @@ END;
 $$;
 
 
--- =============================================================================
--- CATÁLOGOS PARA SELECTS
--- =============================================================================
-
--- Fuente: V103__area_asignatura_mensajes_error_con_nombre.sql (reemplaza V40).
--- Tomada de V76 (fix_especialidad_enfasis_listar_oculta_espejos): excluye los
--- TENFASIS "espejo" (mismo nombre que la TESPECIALIDAD a la que apuntan,
--- creados por fn_enfasis_desde_seleccion) del listado del selector.
+-- Excluye los TENFASIS "espejo" (mismo nombre que la TESPECIALIDAD a la que
+-- apuntan, creados por fn_enfasis_desde_seleccion) del listado del selector.
 DROP FUNCTION IF EXISTS academico_test.fn_especialidad_enfasis_listar(BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_especialidad_enfasis_listar(
     p_fk_establecimiento BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
@@ -1248,11 +1088,9 @@ LANGUAGE sql STABLE AS $$
             WHERE esp.PK_ESPECIALIDAD = en.FK_TESPECIALIDAD
               AND UPPER(TRIM(esp.NOMBRE)) = UPPER(TRIM(en.NOMBRE))
        )
-       -- CU-86e2w4xdt: los enfasis SI son propios de un establecimiento (a
-       -- diferencia de las especialidades, catalogo global de arriba);
-       -- capability + scope de LECTURA sobre ese EE (fn_usuario_ee_lectura,
-       -- mas amplio que el de escritura: un nivel 3 SI ve -solo lectura- el
-       -- EE de sus sedes).
+       -- Los enfasis SI son propios de un establecimiento (a diferencia de
+       -- las especialidades, catalogo global de arriba); usa fn_usuario_ee_lectura
+       -- (mas amplio que el de escritura: un nivel 3 ve en lectura el EE de sus sedes).
        AND (
            p_pk_usuario_solicitante IS NULL
            OR academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante) = 0
@@ -1267,7 +1105,6 @@ LANGUAGE sql STABLE AS $$
      ORDER BY 4, 2;
 $$;
 
--- Fuente: V40__area_subject_module.sql (sin override posterior)
 DROP FUNCTION IF EXISTS academico_test.fn_area_asignatura_listar();
 CREATE OR REPLACE FUNCTION academico_test.fn_area_asignatura_listar(
     p_pk_usuario_solicitante BIGINT DEFAULT NULL
@@ -1280,7 +1117,6 @@ LANGUAGE sql STABLE AS $$
      ORDER BY NOMBRE;
 $$;
 
--- Fuente: V40__area_subject_module.sql (sin override posterior)
 DROP FUNCTION IF EXISTS academico_test.fn_periodo_asignaturas_listar(BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_periodo_areas_asignaturas_listar(BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_areas_asignaturas_listar(
@@ -1300,18 +1136,11 @@ LANGUAGE sql STABLE AS $$
                '[]'::jsonb)
       FROM academico_test.TAREA a
      WHERE a.FK_TPERIODO_ACADEMICO = p_fk_periodo AND a.ACTIVE = TRUE
-       -- CU-86e2w4xdt: capability + scope de lectura sobre el periodo.
        AND academico_test.fn_periodo_puede_ver(p_pk_usuario_solicitante, p_fk_periodo)
      ORDER BY a.ORDEN_REPORTE, a.NOMBRE;
 $$;
 
 
--- =============================================================================
--- REPORTE
--- =============================================================================
-
--- Fuente: V188__fn_area_subject_reporte_listar.sql (reemplaza
--- V135__query_rows_reportes_modulo_academico.sql)
 CREATE OR REPLACE FUNCTION academico_test.fn_area_subject_reporte_listar(
     p_fk_periodo         BIGINT,
     p_fk_area            BIGINT[] DEFAULT NULL,

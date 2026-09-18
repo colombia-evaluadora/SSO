@@ -5,6 +5,9 @@ import com.co.eurekatic.auth.security.CachedUserListService;
 import com.co.eurekatic.auth.security.CachedUserSummaryService;
 import com.co.eurekatic.auth.security.EffectiveRolesResolver;
 import com.co.eurekatic.auth.service.FuncionarioRegistrationService;
+import com.co.eurekatic.auth.service.AccountRegistrationService;
+import com.co.eurekatic.auth.web.dto.RegisterAccountRequest;
+import com.co.eurekatic.auth.web.dto.RegisterAccountResponse;
 import com.co.eurekatic.auth.web.dto.RegisterResponse;
 import com.co.eurekatic.auth.web.dto.RegisterUsuarioRequest;
 import com.co.eurekatic.common.dto.AuthDtos.AppSummary;
@@ -46,13 +49,15 @@ public class AuthController {
     private final CachedAppAccessService cachedAppAccess;
     private final CachedUserListService cachedUserList;
     private final FuncionarioRegistrationService funcionarioRegistrationService;
+    private final AccountRegistrationService accountRegistrationService;
 
     public AuthController(UserRepository userRepository, JwtTokenService jwt,
                            EffectiveRolesResolver effectiveRoles,
                            CachedUserSummaryService cachedUserSummary,
                            CachedAppAccessService cachedAppAccess,
                            CachedUserListService cachedUserList,
-                           FuncionarioRegistrationService funcionarioRegistrationService) {
+                           FuncionarioRegistrationService funcionarioRegistrationService,
+                           AccountRegistrationService accountRegistrationService) {
         this.userRepository = userRepository;
         this.jwt = jwt;
         this.effectiveRoles = effectiveRoles;
@@ -60,6 +65,7 @@ public class AuthController {
         this.cachedAppAccess = cachedAppAccess;
         this.cachedUserList = cachedUserList;
         this.funcionarioRegistrationService = funcionarioRegistrationService;
+        this.accountRegistrationService = accountRegistrationService;
     }
 
     /**
@@ -169,12 +175,60 @@ public class AuthController {
     // V62 — mismo body que /register/usuario (RegisterUsuarioRequest):
     // fkTmunicipioExpedicion dejó de ser parte del alta, se completa
     // después vía fn_fun_actualizar.
-    @PostMapping("/register/funcionario")
+    //
+    // V361 — renombrado de /register/funcionario a /register/cval/funcionario
+    // (UPDATE en public.endpoint, ver V361: role_endpoint y
+    // endpoint_microservice quedan intactos, cuelgan de endpoint_id no del
+    // path). Antes de V361 este endpoint no tenía marca de app en la ruta,
+    // a diferencia de /register/pigse/funcionario -- asimetría confusa que
+    // motivó el cambio. Escribe en academico_test.* -- lo usa el front de
+    // Colombia Evaluadora. Para PIGSE existe /register/pigse/funcionario
+    // (V360): mismo contrato, mismo body, pero escribe en pigse.*. El
+    // diferenciador es la RUTA, no un parámetro ni el rol del caller.
+    @PostMapping("/register/cval/funcionario")
     public ResponseEntity<RegisterResponse> registerFuncionario(
             @Valid @RequestBody RegisterUsuarioRequest req,
             Authentication auth) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(funcionarioRegistrationService.registerFuncionario(req, auth));
+    }
+
+    // V360 — equivalente de /register/cval/funcionario para el front de
+    // PIGSE: mismo RegisterUsuarioRequest, misma semántica de negocio
+    // (reutiliza la cuenta de public.users si la persona ya existe por
+    // correo o documento), pero escribe en pigse.TUSUARIO/pigse.TFUNCIONARIO
+    // en vez de academico_test.*. El TFUNCIONARIO queda "pendiente" (sin
+    // establecimiento) hasta que pigse.fn_est_crear lo referencia como
+    // FK_TFUNCIONARIO_RECTOR/SECRETARIA al crear el establecimiento.
+    //
+    // Path bajo /register/pigse/** (no /pigse/register/**) a propósito:
+    // el gateway solo reenvía a auth-center lo que matchea
+    // Path=/api/auth/register/** (StripPrefix=2) -- un /pigse/register/**
+    // no caería en esa regla y el endpoint quedaría inalcanzable sin tocar
+    // api-gateway. Bajo /register/pigse/** reutiliza esa misma regla ya
+    // existente. Mismo motivo por el que /register/cval/funcionario (arriba)
+    // no quedó como /cval/register/funcionario.
+    @PostMapping("/register/pigse/funcionario")
+    public ResponseEntity<RegisterResponse> registerFuncionarioPigse(
+            @Valid @RequestBody RegisterUsuarioRequest req,
+            Authentication auth) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(funcionarioRegistrationService.registerFuncionarioPigse(req, auth));
+    }
+
+    /**
+     * Alta de una cuenta del SSO con los roles que se le dan de entrada y la
+     * contraseña por defecto del servidor. El ADMIN del SSO otorga cualquier
+     * rol; el resto, sólo los que {@code public.role_grant} les lista (V260),
+     * de modo que el administrador de una app no pueda crear a alguien por
+     * encima suyo.
+     */
+    @PostMapping("/register/account")
+    public ResponseEntity<RegisterAccountResponse> registerAccount(
+            @Valid @RequestBody RegisterAccountRequest req,
+            Authentication auth) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(accountRegistrationService.register(req, auth));
     }
 
     /* ====================== helpers ====================== */

@@ -200,11 +200,101 @@ COMMENT ON FUNCTION academico_test.fn_actividad_nota_asistencia_assert_preescola
 --     CALIFICABLE=''N'').
 -- ===========================================================================
 
+-- ===========================================================================
+-- EVIDENCIAS DE LA OBSERVACION (varias imagenes por observacion)
+--
+-- La observacion vive en TACTIVIDAD_NOTA.OBSERVACION, que es una sola fila por
+-- estudiante-actividad y no tiene FK_TARCHIVO. Los adjuntos van a
+-- TACTIVIDAD_SOPORTE (DDL en V22), que ya cuelga de TACTIVIDAD_ESTUDIANTE con
+-- ON DELETE CASCADE y es N:1: la cardinalidad que pide "varias fotos". Estaba
+-- sin usar -- solo la limpiaba fn_actividad_eliminar --, no se crea tabla nueva.
+--
+-- OJO: TASISTENCIA.FK_SOPORTE_ARCHIVO (el fk_soporte_archivo que devuelve
+-- fn_actividad_estudiantes_calificaciones_listar) es el soporte de la EXCUSA de
+-- inasistencia, no una evidencia de la observacion. Son cosas distintas.
+-- ===========================================================================
+
+-- Sin esto, mandar dos veces el mismo archivo crea dos filas vivas.
+CREATE UNIQUE INDEX IF NOT EXISTS un_tactividad_soporte_archivo
+    ON academico_test.TACTIVIDAD_SOPORTE (fk_tactividad_estudiante, fk_tarchivo)
+ WHERE active = true AND fk_tarchivo IS NOT NULL;
+
+COMMENT ON INDEX academico_test.un_tactividad_soporte_archivo
+    IS 'Un archivo no puede estar adjunto dos veces a la misma fila de TACTIVIDAD_ESTUDIANTE. Parcial (solo ACTIVE) para que el borrado logico libere la combinacion, mismo patron que V65/V71. V243.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_observacion_evidencias_set(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad_estudiante BIGINT,
+    p_evidencias               BIGINT[],
+    p_fecha                    DATE DEFAULT CURRENT_DATE
+)
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_set    BIGINT[];
+    v_total  INT;
+BEGIN
+    IF p_evidencias IS NULL THEN
+        RETURN NULL;                  -- NULL = no tocar los adjuntos
+    END IF;
+
+    -- Se descartan los NULL del array antes de nada: con un NULL dentro,
+    -- "<> ALL" no desactivaria nada y el reemplazo quedaria a medias.
+    v_set := ARRAY(SELECT x FROM unnest(p_evidencias) x WHERE x IS NOT NULL);
+
+    IF EXISTS (SELECT 1 FROM unnest(v_set) a
+                WHERE NOT EXISTS (SELECT 1 FROM academico_test.TARCHIVO
+                                   WHERE PK_TARCHIVO = a)) THEN
+        RAISE EXCEPTION 'Uno o mas archivos de la observacion no existen'
+            USING ERRCODE = '23503';
+    END IF;
+
+    UPDATE academico_test.TACTIVIDAD_SOPORTE
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+           MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante
+       AND ACTIVE = TRUE
+       AND FK_TARCHIVO IS NOT NULL
+       AND FK_TARCHIVO <> ALL(v_set);
+
+    UPDATE academico_test.TACTIVIDAD_SOPORTE so
+       SET ACTIVE = TRUE, FECHA = p_fecha,
+           MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+      FROM unnest(v_set) a
+     WHERE so.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante
+       AND so.FK_TARCHIVO = a
+       AND so.ACTIVE = FALSE;
+
+    INSERT INTO academico_test.TACTIVIDAD_SOPORTE (
+        FK_TACTIVIDAD_ESTUDIANTE, FK_TARCHIVO, FECHA, CREATED_BY, CREATED_AT, ACTIVE)
+    SELECT DISTINCT p_pk_tactividad_estudiante, a, p_fecha,
+           p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
+      FROM unnest(v_set) a
+     WHERE NOT EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_SOPORTE so
+                        WHERE so.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante
+                          AND so.FK_TARCHIVO = a);
+
+    SELECT COUNT(*) INTO v_total
+      FROM academico_test.TACTIVIDAD_SOPORTE
+     WHERE FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante
+       AND ACTIVE = TRUE AND FK_TARCHIVO IS NOT NULL;
+
+    RETURN v_total;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_observacion_evidencias_set(BIGINT, BIGINT, BIGINT[], DATE)
+    IS 'Fija los archivos adjuntos a la observacion de UN estudiante, con semantica de REEMPLAZO: el set queda exactamente el que se envia (los que ya no vienen se desactivan, los que vuelven se reactivan). NULL = no tocar nada y devuelve NULL; un array VACIO deja la observacion sin adjuntos. Los archivos se guardan en TACTIVIDAD_SOPORTE (V22), que cuelga de TACTIVIDAD_ESTUDIANTE y es N:1 -- por eso soporta varias imagenes por observacion, cosa que TACTIVIDAD_NOTA no podria: es una sola fila por estudiante-actividad y no tiene FK_TARCHIVO. El binario NO pasa por aqui: lo sube antes el file-service (V35) y a esta funcion solo llega el PK_TARCHIVO, el mismo patron de fn_actividad_adaptacion_reemplazar. 23503 si algun archivo no existe. Retorna el total de adjuntos vivos tras la operacion. NO confundir con TASISTENCIA.FK_SOPORTE_ARCHIVO, que es el soporte de la excusa de inasistencia. V243.';
+
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_observar_grupal(BIGINT, BIGINT, TEXT, DATE);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_observar_grupal(
     p_pk_usuario_solicitante BIGINT,
     p_pk_tactividad          BIGINT,
     p_observacion            TEXT,
-    p_fecha                  DATE DEFAULT CURRENT_DATE
+    p_fecha                  DATE DEFAULT CURRENT_DATE,
+    p_evidencias             BIGINT[] DEFAULT NULL
 )
 RETURNS INT
 LANGUAGE plpgsql
@@ -253,6 +343,11 @@ BEGIN
                MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
          WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
 
+        -- Las mismas evidencias para cada observado: en la grupal el docente
+        -- adjunta las fotos de la sesion, no unas por estudiante.
+        PERFORM academico_test.fn_actividad_observacion_evidencias_set(
+            p_pk_usuario_solicitante, v_pk_ae, p_evidencias, p_fecha);
+
         v_observados := v_observados + 1;
     END LOOP;
 
@@ -260,14 +355,17 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_observar_grupal(BIGINT, BIGINT, TEXT, DATE)
+COMMENT ON FUNCTION academico_test.fn_actividad_observar_grupal(BIGINT, BIGINT, TEXT, DATE, BIGINT[])
     IS 'Aplica la MISMA observacion (texto libre) a todos los TACTIVIDAD_ESTUDIANTE activos de una actividad FORMATIVA (preescolar/"Proyecto Pedagogico", fn_actividad_es_formativa=TRUE; 22023 si no lo es). Por cada estudiante exige asistencia valida ese dia (fn_actividad_nota_asistencia_assert_preescolar); si un estudiante puntual no la tiene (sin registro o injustificada) se OMITE con un RAISE WARNING y se continua con el resto -- no se detiene la observacion grupal por un estudiante. Guarda OBSERVACION=p_observacion, CALIFICACION=NULL, CALIFICABLE=''N'' via fn_actividad_nota_get_or_create + UPDATE. Retorna la cantidad de estudiantes efectivamente observados (puede ser menor al total del grupo). Gate EDITAR sobre PLANEADOR. V243.';
+
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_observar_estudiante(BIGINT, BIGINT, TEXT, DATE);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_observar_estudiante(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tactividad_estudiante BIGINT,
     p_observacion              TEXT,
-    p_fecha                    DATE DEFAULT CURRENT_DATE
+    p_fecha                    DATE DEFAULT CURRENT_DATE,
+    p_evidencias               BIGINT[] DEFAULT NULL
 )
 RETURNS VOID
 LANGUAGE plpgsql
@@ -302,10 +400,13 @@ BEGIN
        SET OBSERVACION = p_observacion, CALIFICACION = NULL, CALIFICABLE = 'N',
            MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
+
+    PERFORM academico_test.fn_actividad_observacion_evidencias_set(
+        p_pk_usuario_solicitante, p_pk_tactividad_estudiante, p_evidencias, p_fecha);
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_observar_estudiante(BIGINT, BIGINT, TEXT, DATE)
+COMMENT ON FUNCTION academico_test.fn_actividad_observar_estudiante(BIGINT, BIGINT, TEXT, DATE, BIGINT[])
     IS 'Comentario particular de UN estudiante para una actividad FORMATIVA (preescolar; 22023 si la actividad no lo es). Sobreescribe lo que haya dejado fn_actividad_observar_grupal (o una llamada previa) para ESE estudiante puntual: mismo get-or-create (fn_actividad_nota_get_or_create) + UPDATE. Exige asistencia valida ese dia (fn_actividad_nota_asistencia_assert_preescolar) y, a diferencia de la version grupal, PROPAGA el error si no la hay -- es una accion puntual, quien la invoca debe saber de inmediato por que fallo. Guarda OBSERVACION=p_observacion, CALIFICACION=NULL, CALIFICABLE=''N''. Gate EDITAR sobre PLANEADOR. V243.';
 
 -- ===========================================================================
