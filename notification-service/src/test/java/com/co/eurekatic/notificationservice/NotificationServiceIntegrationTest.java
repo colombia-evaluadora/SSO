@@ -113,7 +113,7 @@ class NotificationServiceIntegrationTest extends AbstractIntegrationTest {
                 new Recipient(null, "test@example.com"),
                 "", // <-- blank templateId violates @NotBlank
                 Map.of("foo", "bar"),
-                new Metadata("test", "corr-1", Instant.now())
+                new Metadata("test", "corr-1", Instant.now(), null)
         );
         rabbitTemplate.convertAndSend("notifications", "email", bad);
 
@@ -168,7 +168,7 @@ class NotificationServiceIntegrationTest extends AbstractIntegrationTest {
                         "loginLink", "https://app.example.com/login",
                         "notificationId", id.toString()
                 ),
-                new Metadata("integration-test", "corr-" + id, Instant.now())
+                new Metadata("integration-test", "corr-" + id, Instant.now(), null)
         );
         rabbitTemplate.convertAndSend("notifications", "email", msg);
     }
