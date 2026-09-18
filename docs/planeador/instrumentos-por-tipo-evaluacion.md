@@ -66,8 +66,8 @@ desde dónde se resuelve el referente.
 
 | Momento | Endpoint | Entra |
 |---|---|---|
-| Sin unidad, antes de crear | `GET /planeador/actividades/configuracion` | `GRUPO`, `ASIGNATURA`, `UNIDAD` (opc.), `ES_EVALUATIVA` |
-| Con unidad, antes de crear | `GET /planeador/unidades/:ID/configuracion-actividad` | `ID` = PK_TUNIDAD, `ES_EVALUATIVA` |
+| Sin unidad, antes de crear | `GET /planeador/actividades/configuracion` | `GRUPO`, `ASIGNATURA`, `UNIDAD` (opc.), `ES_SUMATIVO` (default `S`) |
+| Con unidad, antes de crear | `GET /planeador/unidades/:ID/configuracion-actividad` | `ID` = PK_TUNIDAD, `ES_SUMATIVO` (default `S`) |
 | Actividad ya creada | `GET /planeador/actividades/:ID/configuracion` | `ID` = PK_TACTIVIDAD |
 
 Salida (bloque `campos_disponibles.evaluacion`):
@@ -81,15 +81,30 @@ Salida (bloque `campos_disponibles.evaluacion`):
     {"pk": 247, "valor": "ESCALA_VALORACION", "etiqueta": "Escala de valoración", "nombre": "Escala de valoración",
      "variantes": [{"pk": 278, "valor": "CUALITATIVA", "nombre": "Cualitativa"}]},
     {"pk": 270, "valor": "LISTA_COTEJO", "etiqueta": "Lista de cotejo", "nombre": "Lista de cotejo", "variantes": []},
-    {"pk": 269, "valor": "OTRO", "etiqueta": "Otro (personalizado)", "nombre": "Otro (personalizado)", "variantes": []},
+    {"pk": 269, "valor": "OTRO", "etiqueta": "Otro (personalizado)", "nombre": "Otro (personalizado)", "variantes": [],
+     "campos": {
+       "tipoEvidencia":    {"requerido": true, "catalogo": [{"pk": 271, "valor": "ARCHIVO", "nombre": "Archivo"}, …]},
+       "metodoValoracion": {"requerido": true, "catalogo": [
+           {"pk": 247, "valor": "ESCALA_VALORACION", "nombre": "Escala de valoración", "variantes": [{"pk": 278, "valor": "CUALITATIVA", "nombre": "Cualitativa"}]},
+           {"pk": 270, "valor": "LISTA_COTEJO", "nombre": "Lista de cotejo", "variantes": []},
+           {"pk": 262, "valor": "RUBRICA", "nombre": "Rúbrica", "variantes": []}]},
+       "definicion":       {"requerido": true, "formaPorMetodo": {"RUBRICA": "…", "LISTA_COTEJO": "…", "ESCALA_VALORACION": "…"}},
+       "descripcionInstrumento": {"requerido": false, "campo": "DESCRIPCION_INSTRUMENTO", "maxLength": 4000},
+       "requiereArchivo":  {"requerido": false, "campo": "REQUIERE_ARCHIVO", "valores": ["S","N"], "default": "N"},
+       "requiereTexto":    {"requerido": false, "campo": "REQUIERE_TEXTO",   "valores": ["S","N"], "default": "N"}}},
     {"pk": 262, "valor": "RUBRICA", "etiqueta": "Rúbrica", "nombre": "Rúbrica", "variantes": []}
   ]
 }
 ```
 
 - `variantes` solo trae contenido en `ESCALA_VALORACION`; en el resto es `[]`.
-- `visible=false` cuando el referente es FORMATIVO, no hay referente, o
-  `ES_EVALUATIVA=N`. Entonces `instrumentosPermitidos` es `[]`.
+- `campos` solo viene en `OTRO` (V458); en el resto es `null`. Su
+  `metodoValoracion.catalogo` es el **mismo relistado** de instrumentos que
+  admite el referente, sin `OTRO`: la regla que `fn_actividad_otro_definir`
+  aplica al delegar en `fn_actividad_*_definir`.
+- `visible=false` cuando el referente es FORMATIVO o no hay referente. Entonces
+  `instrumentosPermitidos` es `[]`. `ES_SUMATIVO=N` **no** apaga esta sección
+  (solo `recuperacion` y `ponderacion`).
 - **Los `pk` no son estables entre entornos.** El front decide por `valor` y
   manda el `pk` que recibió de este mismo servidor. Es la causa más común de
   409 al crear ("instrumento no pertenece a la categoría").
@@ -183,6 +198,8 @@ definirla `NUMERICA` **rechaza** con el mensaje de V226; definirla `CUALITATIVA`
 |---|---|
 | `fn_instrumento_permitido_por_tipo_evaluacion` | **V453** (antes V214.2) |
 | `fn_escala_variantes_permitidas` | **V453** (nueva) |
-| `fn_actividad_instrumentos_campos_disponibles` | **V453** (antes V440) |
+| `fn_actividad_instrumentos_campos_disponibles` | **V458** (antes V453) — añade `campos` en OTRO |
+| `fn_actividad_otro_campos_disponibles` | **V458** (nueva) |
+| `fn_actividad_configuracion_contexto` / `fn_unidad_configuracion_actividad` | **V458** (antes V440) — `p_es_sumativo` |
 | `fn_actividad_escala_definir` | V226 — no cambia; ya tenía la regla por variante |
 | `fn_actividad_instrumentos_permitidos` (sin ruta) | V214.2 — hereda el cambio por llamar a la primera |

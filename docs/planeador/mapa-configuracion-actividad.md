@@ -62,10 +62,10 @@ solo si no hay ninguno activo para ese nivel.
 
 | | |
 |---|---|
-| **Función** | `fn_unidad_configuracion_actividad(usuario, pk_tunidad, es_evaluativa='S')` — V282, cuerpo en V440 (#319) |
-| **Entra** | `ID` = PK_TUNIDAD, `ES_EVALUATIVA` = `S`/`N` (lo que el usuario acaba de marcar) |
-| **Sale** | `{pkTunidad, unidad, nivelEnsenanza, esEvaluativaConsultada, campos_disponibles:{criterio, evaluacion, ponderacion, recuperacion}}` |
-| **De dónde sale cada bloque** | `criterio` ← nivel del grado de la unidad (Preescolar apaga) · `evaluacion` ← `fn_unidad_referente_evaluativo` + `fn_unidad_referente_tipo_evaluacion` · `ponderacion` ← `fn_unidad_calculo_definitiva_modo` · `recuperacion` ← evaluativo **y** `ES_EVALUATIVA≠N` |
+| **Función** | `fn_unidad_configuracion_actividad(usuario, pk_tunidad, es_sumativo='S')` — V282, cuerpo en V458 |
+| **Entra** | `ID` = PK_TUNIDAD, `ES_SUMATIVO` = `S`/`N` (lo que el usuario acaba de marcar; sin enviarlo, `S`) |
+| **Sale** | `{pkTunidad, unidad, nivelEnsenanza, esSumativoConsultado, campos_disponibles:{criterio, evaluacion, ponderacion, recuperacion}}` |
+| **De dónde sale cada bloque** | `criterio` ← nivel del grado de la unidad (Preescolar apaga) · `evaluacion` ← `fn_unidad_referente_evaluativo` + `fn_unidad_referente_tipo_evaluacion` · `ponderacion` ← `fn_unidad_calculo_definitiva_modo` · `recuperacion` ← evaluativo **y** `ES_SUMATIVO≠N`. Con `N` **solo** se apagan `recuperacion` y `ponderacion`; `evaluacion` sale del referente igual que con `S` (V458) |
 
 ### Sin unidad — hoy en `dev` **no hay endpoint**
 
@@ -141,7 +141,7 @@ Es la versión *post-creación* del §2.
 
 ```
 1. El usuario elige GRUPO y ASIGNATURA
-2. (opcional) elige UNIDAD  ──► GET /unidades/:ID/configuracion-actividad?ES_EVALUATIVA=
+2. (opcional) elige UNIDAD  ──► GET /unidades/:ID/configuracion-actividad?ES_SUMATIVO=
                                 └─ sin unidad: en dev no hay nada; en #319, GET /actividades/configuracion
 3. La respuesta dice qué pintar: evaluacion.instrumentosPermitidos, recuperacion.catalogos, criterio, ponderacion
 4. POST /actividades con los pk que salieron de (3)  ──► nunca pk copiados de otro entorno
