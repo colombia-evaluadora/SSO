@@ -1,6 +1,7 @@
 package com.co.eurekatic.notificationservice.provider;
 
 import com.co.eurekatic.notificationservice.domain.Channel;
+import com.co.eurekatic.notificationservice.provider.email.SmtpEmailProvider;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.slf4j.Logger;
@@ -31,7 +32,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>Orders the rows via {@link ProviderSelector}
  *       (priority / weighted).</li>
  *   <li>Matches each row to its {@link ChannelProvider} bean
- *       (via {@code providerKey}).</li>
+ *       (via {@code providerKey}) — or, for an {@code impl = SMTP}
+ *       row with no bean, builds one on the fly (see {@link
+ *       #dynamicSmtpProvider}).</li>
  *   <li>Calls {@link ChannelProvider#isConfigured()} — a
  *       missing env var removes the row from the active
  *       list with a single WARN (never throws, never blocks
@@ -67,6 +70,13 @@ public class ProviderRegistry {
     // first refresh or after any prior failed check.
     private final Map<String, Map<String, Object>> settingsByKey = new ConcurrentHashMap<>();
     private volatile Instant lastLoadedAt = Instant.EPOCH;
+    // Un `SmtpEmailProvider` por cada provider_key de impl=SMTP que no
+    // tiene un @Bean fijo (ver EmailProviderConfig) — SmtpEmailProvider
+    // no necesita nada más que su providerKey (todo lo demás sale de
+    // `settingsFor()`), así que una cuenta SMTP nueva (INSERT + env vars
+    // + docker-compose) queda viva sin tocar código Java ni redeploy.
+    // Cacheado para no crear un JavaMailSender nuevo en cada refresh().
+    private final Map<String, ChannelProvider> dynamicSmtpProviders = new ConcurrentHashMap<>();
 
     public ProviderRegistry(ProviderConfigRepository repo,
                             List<ChannelProvider> providers,
@@ -102,6 +112,9 @@ public class ProviderRegistry {
             List<RegisteredProvider> live = new ArrayList<>();
             for (ProviderConfigRow row : ordered) {
                 ChannelProvider bean = byKey.get(row.providerKey());
+                if (bean == null) {
+                    bean = dynamicSmtpProvider(row);
+                }
                 if (bean == null) {
                     log.warn("[{}] provider_key '{}' (impl={}) has no bean — skipping",
                             channel, row.providerKey(), row.impl());
@@ -143,6 +156,20 @@ public class ProviderRegistry {
 
     public List<RegisteredProvider> providersFor(Channel channel) {
         return roster.getOrDefault(channel, List.of());
+    }
+
+    /**
+     * Only {@code impl = SMTP} is generic enough to build without a
+     * hand-wired bean — host/port/from/credentials all come from
+     * {@code settings} (see {@link SmtpEmailProvider}). RESEND/EMAILJS/
+     * TWILIO/VONAGE/FCM each need their own SDK client, so a new account
+     * on THOSE still needs a real {@code @Bean} — this fallback doesn't
+     * try to guess a generic implementation for them.
+     */
+    private ChannelProvider dynamicSmtpProvider(ProviderConfigRow row) {
+        if (!"SMTP".equals(row.impl())) return null;
+        return dynamicSmtpProviders.computeIfAbsent(
+                row.providerKey(), key -> new SmtpEmailProvider(key, this));
     }
 
     public Instant lastLoadedAt() {
