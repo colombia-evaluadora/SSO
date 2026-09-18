@@ -25,7 +25,7 @@ hay que regenerarlo a otro tamaño. No lo referencia el correo.
 | Archivo | Píxeles | Se muestra a | Dónde |
 |---|---|---|---|
 | logo.png | 480x132 | 160x44 | cabecera |
-| ilustracion.png | 288x288 | 96x96 | junto al titular |
+| ilustracion.png | 288x288 | 96x96 | sin usar — se quitó del titular |
 | reloj.png | 64x64 | 20x20 / 22x22 | vigencia del enlace y horario del pie |
 | escudo.png | 64x64 | 22x22 | aviso verde |
 | enlace.png | 64x64 | 22x22 | enlace alternativo |
@@ -33,6 +33,14 @@ hay que regenerarlo a otro tamaño. No lo referencia el correo.
 | sobre.png | 64x64 | 22x22 | pie |
 | telefono.png | 64x64 | 22x22 | pie |
 | check.png | 64x64 | 15x15 | sin usar (ver abajo) |
+| logo-pigse.png | 600x165 | 200x55 | cabecera (branding PIGSE, sin usar tras banner rojo — ver abajo) |
+| logo-pigse-white.png | 600x165 | 200x55 | cabecera (branding PIGSE) |
+
+`logo-pigse.png` (navy/rojo, para fondo claro) y `logo-pigse-white.png`
+(mismo trazo recoloreado a blanco, para el banner rojo `#B33837` de
+PIGSE) salen del SVG real de `front_pigse/src/assets/logo.svg`. Solo la
+variante blanca está en uso — la navy queda por si el banner de PIGSE
+cambia a un fondo claro más adelante.
 
 `check.png` se genero para los marcadores del timeline, pero ahi se usa la
 entidad `&#10003;`: Gmail bloquea las imagenes por defecto hasta que el
