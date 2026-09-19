@@ -5,7 +5,7 @@ cada caso: `ES_SUMATIVO`, la ponderación según el método de la unidad, los
 instrumentos de evaluación con sus variantes, y cómo llega el instrumento ya
 definido en el detalle.
 
-Estado: `dev` + V458 (rama `feat/planeador-configuracion-actividad-es-sumativo`).
+Estado: `dev` (V458) + V459 (rama `feat/planeador-recuperacion-dinamica`).
 
 Regla que aplica a **todo** este documento: los `pk` de catálogo
 (`TLISTA_VALOR`) **no son estables entre entornos**. El front decide por
@@ -17,7 +17,7 @@ Regla que aplica a **todo** este documento: los `pk` de catálogo
 
 | Momento | Endpoint | Entra | Función |
 |---|---|---|---|
-| Antes de crear, sin unidad (o con ella) | `GET /planeador/actividades/configuracion` | `GRUPO`, `ASIGNATURA` (obligatorios), `UNIDAD` (opcional), `ES_SUMATIVO` (opcional) | `fn_actividad_configuracion_contexto` |
+| Antes de crear, sin unidad (o con ella) | `GET /planeador/actividades/configuracion` | `GRUPO`, `ASIGNATURA` (obligatorios), `UNIDAD`, `ES_SUMATIVO`, `RECUPERAR`, `ACTIVIDAD_RECUPERAR` (opcionales) | `fn_actividad_configuracion_contexto` |
 | Antes de crear, con unidad | `GET /planeador/unidades/:ID/configuracion-actividad` | `:ID` = PK_TUNIDAD, `ES_SUMATIVO` (opcional) | `fn_unidad_configuracion_actividad` |
 | Actividad ya creada | `GET /planeador/actividades/:ID/configuracion` | `:ID` = PK_TACTIVIDAD | `fn_actividad_campos_disponibles` |
 | Detalle plano | `GET /planeador/actividades/:ID` | `:ID` = PK_TACTIVIDAD | `fn_actividad_buscar_por_pk` |
@@ -119,6 +119,7 @@ significa **no pintar la sección**; `motivo` es un texto listo para tooltip.
 | Caso | `visible` / `requerido` | `instrumentosPermitidos` |
 |---|---|---|
 | Referente **EVALUATIVO** | `true` / `true` | los que admite `tipoEvaluacion` (§4) |
+| **Nivel Preescolar** (Prejardín, Jardín, Transición) | `false` / `false` — "El nivel Preescolar se rige por un referente formativo: no hay evaluacion con nota ni recuperacion" | `[]` (aunque el referente diga EVALUATIVO) |
 | Referente FORMATIVO | `false` / `false` | `[]` |
 | Sin referente (ni de unidad ni aplicable a grado+asignatura) | `false` / `false` | `[]` |
 | `ES_SUMATIVO=N` | **no cambia nada aquí** (desde V458) | igual que con `S` |
@@ -157,6 +158,7 @@ Qué enviar en el `POST /planeador/actividades` según `modo`:
 "recuperacion": {
   "visible": true, "requerido": false,
   "motivo": "Opcional: la actividad puede registrarse como recuperacion de otra actividad o de la nota final",
+  "recuperarConsultado": "N",                 // lo que se interpretó de ?RECUPERAR=
   "catalogos": {
     "destino":        [{"pk": 260, "valor": "ACTIVIDAD",  "nombre": "Recuperar una actividad"}, {"pk": 263, "valor": "NOTA_FINAL", "nombre": "Recuperar la nota final"}],
     "tipoAplicacion": [{"pk": 256, "valor": "COMPUTAR",   "nombre": "Computar con la nota anterior"}, {"pk": 271, "valor": "REEMPLAZAR", "nombre": "Reemplazar la nota anterior"}],
@@ -164,20 +166,114 @@ Qué enviar en el `POST /planeador/actividades` según `modo`:
   },
   "reglas": {
     "actividadRecuperarRequeridaSi": "destino = ACTIVIDAD",
-    "valorPonderacionRequeridoSi":   "tipoCalculo = PONDERADO",
-    "valorPonderacionRango":         {"min": 0, "max": 100}
-  }
+    "actividadRecuperableSi":        "ES_EVALUATIVA = S y ES_RECUPERACION = N y sin otra recuperacion activa",
+    "tipoCalculoRequeridoSi":        "tipoAplicacion = COMPUTAR",
+    "tipoCalculoOcultoSi":           "tipoAplicacion = REEMPLAZAR",
+    "valorPonderacionRequeridoSi":   "tipoAplicacion = COMPUTAR y tipoCalculo = PONDERADO",
+    "valorPonderacionRango":         {"min": 0, "max": 100},
+    "estudiantesPorDefecto":         "los asignados a la actividad origen; se envian en FK_TMATRICULAS los que quedan marcados"
+  },
+  "actividadesRecuperables": null,            // §3.4.2
+  "origen": null                              // §3.4.3
 }
 ```
 
+#### 3.4.1 Cuándo se muestra
+
 | Caso | `visible` | `motivo` |
 |---|---|---|
-| Referente EVALUATIVO y `ES_SUMATIVO` ≠ `N` | `true` | Opcional |
+| Referente EVALUATIVO, `ES_SUMATIVO` ≠ `N`, nivel ≠ Preescolar | `true` | Opcional |
+| Nivel Preescolar | `false` | "El nivel Preescolar se rige por un referente formativo: no hay nota que recuperar" |
 | `ES_SUMATIVO=N` | `false` | "La actividad se creara como NO sumativa; una actividad de recuperacion debe ser sumativa" |
 | Referente no EVALUATIVO / sin referente | `false` | "El referente curricular no es EVALUATIVO: no hay nota que recuperar" |
 
-Los catálogos y las reglas vienen siempre, aunque `visible=false`. El body
-`RECUPERACION` del POST debe viajar **serializado como string**.
+Los catálogos y las reglas vienen siempre, aunque `visible=false`.
+
+#### 3.4.2 `?RECUPERAR=S` — "¿Qué desea recuperar?"
+
+Cuando el docente marca la casilla, el front vuelve a pedir la configuración con
+`RECUPERAR=S` y recibe en `actividadesRecuperables` **solo** las actividades
+que se pueden recuperar en ese contexto: sumativas (`ES_EVALUATIVA=S`), que no
+son a su vez recuperación, activas, sin otra recuperación activa apuntándoles,
+de la misma asignatura y del mismo grupo (o sin grupo pero de una unidad del
+mismo grado). Orden: fecha de inicio descendente.
+
+```jsonc
+"actividadesRecuperables": [
+  {"pk": 970001, "titulo": "Quiz de centenas", "fkTgrupo": 990201, "fkTunidad": 970001, "unidad": "Centenas",
+   "fechaInicio": "2026-08-26", "fechaCierre": "2026-08-31", "estudiantesAsignados": 25}
+]
+```
+
+Sin `RECUPERAR=S` (o con la sección no visible) viene `null`. `[]` significa
+que no hay nada recuperable.
+
+#### 3.4.3 `?ACTIVIDAD_RECUPERAR=<pk>` — herencia y estudiantes
+
+Al elegir la actividad del selector, el front pide de nuevo la configuración
+con `ACTIVIDAD_RECUPERAR=<pk>` y recibe `origen`:
+
+```jsonc
+"origen": {
+  "pkActividad": 970001,
+  "tituloBase": "Quiz de centenas",
+  "tituloSugerido": "Recuperacion - Quiz de centenas",
+  "fkTgrado": 990501, "grado": "G1 MANANA",
+  "fkTgrupo": 990201, "grupo": "A",
+  "fkTasignatura": 970001, "asignatura": "SEGUIMIENTO Y VALORACION",
+  "fkTunidad": 970001, "unidad": "Centenas",
+  "camposHeredados": ["FK_TGRUPO", "FK_TASIGNATURA", "FK_TUNIDAD"],   // el formulario los completa e inhabilita
+  "estudiantes": [
+    {"pkTmatricula": 990301, "pkTactividadEstudiante": 12, "fkTestudiante": 990401,
+     "estudiante": "Ana Pérez", "notaPrevia": 62.50, "seleccionado": true}
+  ]
+}
+```
+
+- `estudiantes` son **todos** los asignados a la actividad origen, con
+  `seleccionado: true`. El docente desmarca los que no la necesitan y el POST
+  lleva en `FK_TMATRICULAS` los `pkTmatricula` que quedaron marcados.
+- `notaPrevia` es `COALESCE(DEFINITIVA, CALIFICACION)` de esa actividad; `null`
+  si aún no tiene nota.
+- Errores: 404 (P0002) si la actividad no existe o está inactiva; 422 (22023)
+  si no es sumativa, si ya es una recuperación o si es de otra asignatura.
+
+`GET /planeador/actividades/:ID/configuracion` de una actividad que **ya es**
+recuperación devuelve `origen` con su actividad recuperada y
+`actividadesRecuperables` (sin ella misma), para repintar el selector al editar.
+
+#### 3.4.4 "¿Cómo se aplicará la nota?" — qué enviar en `RECUPERACION`
+
+El body `RECUPERACION` del POST/PATCH (serializado como string):
+
+| `tipoAplicacion` | `tipoCalculo` | `valorPonderacion` | Resultado al calificar |
+|---|---|---|---|
+| `REEMPLAZAR` | **no enviar** (se ignora; el back guarda PROMEDIADO por la columna NOT NULL) | **no enviar** (22023 si viene) | la nota de la recuperación sustituye a la anterior |
+| `COMPUTAR` + `PROMEDIADO` | obligatorio | no enviar | promedio simple de las dos |
+| `COMPUTAR` + `PONDERADO` | obligatorio | obligatorio 0–100 (peso de **la recuperación**; el resto va a la nota anterior) | `rec × p/100 + anterior × (100−p)/100` |
+
+`destino = ACTIVIDAD` exige `fkActividadRecuperar` (el `pk` elegido en §3.4.2);
+`destino = NOTA_FINAL` lo prohíbe. Sin nota previa en `COMPUTAR` manda la
+política institucional (`FK_TLV_DESEMPENO_SIN_CALIF`).
+
+#### 3.4.5 Nota previa y tendencia en planillas e informes
+
+El back **no** manda una columna "tendencia" por celda (decisión documentada en
+V344/V450: sería un dato derivado y sobre porcentajes daría flecha cuando dos
+valores redondean igual). Lo que sí manda, por celda de
+`GET /planeador/planilla/calificaciones`:
+
+```jsonc
+{"calificacion": 62.50, "recuperacion": 80.00, "definitiva": 80.00, "nota": 80.00, …}
+```
+
+- `calificacion` = nota previa (gris/opaca); `definitiva` = la nota tras la
+  recuperación (resaltada); `recuperacion` = lo que sacó en la recuperación.
+- Flecha: verde arriba si `definitiva > calificacion`, roja abajo si
+  `definitiva < calificacion`, ninguna si `definitiva` es `null` (no hubo
+  recuperación aplicada).
+- En informes, `fn_informe_estudiante_asignaturas` y `fn_informe_planilla_listar`
+  traen `NOTA_GUARDADA` y `NOTA_PROYECTADA` con el mismo criterio.
 
 ### 3.5 Resumen de `ES_SUMATIVO`
 
@@ -185,6 +281,7 @@ Los catálogos y las reglas vienen siempre, aunque `visible=false`. El body
 |---|---|---|---|---|
 | no enviado / `S` | según nivel y unidad | según referente | según método de la unidad | según referente |
 | `N` | según nivel y unidad | **igual que con S** | `visible=false`, `valor: 0` | `visible=false` |
+| cualquiera, nivel **Preescolar** | `visible=false` | `visible=false` | según método de la unidad | `visible=false` |
 
 En el `POST /planeador/actividades` el flag sigue llamándose `ES_EVALUATIVA`
 (`S`/`N`, default `S`): es la columna `TACTIVIDAD.ES_EVALUATIVA`. Solo cambió
@@ -400,10 +497,12 @@ exactamente como lo haría con ese instrumento.
 
 | Pieza | Migración |
 |---|---|
-| `fn_actividad_configuracion_contexto`, `fn_unidad_configuracion_actividad`, `fn_actividad_campos_disponibles` (cuerpos) | V458 |
+| `fn_actividad_configuracion_contexto`, `fn_unidad_configuracion_actividad`, `fn_actividad_campos_disponibles` (cuerpos) | V459 (antes V458) |
 | `fn_actividad_instrumentos_campos_disponibles` (`variantes` + `campos`), `fn_actividad_otro_campos_disponibles` | V458 |
-| `fn_actividad_ponderacion_campos_disponibles`, `fn_actividad_recuperacion_campos_disponibles`, `fn_actividad_criterio_campos_disponibles` | V458 / V458 / V440 |
+| `fn_actividad_ponderacion_campos_disponibles`, `fn_actividad_recuperacion_campos_disponibles`, `fn_actividad_criterio_campos_disponibles` | V458 / V459 / V440 |
 | `fn_instrumento_permitido_por_tipo_evaluacion`, `fn_escala_variantes_permitidas` | V453 |
 | `fn_actividad_programacion_limites` | V422 |
 | `fn_actividad_pantalla_edicion`, `fn_actividad_buscar_por_pk` | V452 |
 | `fn_actividad_instrumento_obtener` / `_definir`, `TACTIVIDAD_OTRO` | V226 / V240 |
+| `fn_actividad_recuperacion_configurar` (writer: REEMPLAZAR sin tipoCálculo, origen sumativa) | V459 (antes V224) |
+| `fn_recuperacion_combinar`, `fn_actividad_recuperacion_aplicar` | V408 |
