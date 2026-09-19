@@ -5,7 +5,7 @@ cada caso: `ES_SUMATIVO`, la ponderación según el método de la unidad, los
 instrumentos de evaluación con sus variantes, y cómo llega el instrumento ya
 definido en el detalle.
 
-Estado: `dev` (V458) + V459 (rama `feat/planeador-recuperacion-dinamica`).
+Estado: `dev` (V458) + V459/V460 (rama `feat/planeador-recuperacion-dinamica`).
 
 Regla que aplica a **todo** este documento: los `pk` de catálogo
 (`TLISTA_VALOR`) **no son estables entre entornos**. El front decide por
@@ -65,26 +65,47 @@ devuelve **solo** `campos_disponibles`.
 ### 2.1 `programacion` — límites de la sección Programación
 
 Los límites que la pantalla debe usar como `min`/`max` en vez de dejar los
-campos libres. Salen del **periodo académico del grado** y del **horario**
-del (grupo, asignatura). Cuando falta el dato base no se inventa un tope: el
-valor viene `null` y `motivo` dice por qué.
+campos libres. Salen del **periodo académico del grado** y del **horario del
+docente con ese grupo** (`THORARIO` del grupo + asignatura). Cuando falta el
+dato base no se inventa un tope: el valor viene `null` y `motivo` dice por qué.
 
 ```jsonc
 "programacion": {
   "periodoAcademico": {"pk": 990501, "nombre": "…", "fechaInicio": "2026-01-01", "fechaFin": "2026-12-01", "semanas": 48},  // null sin periodo
-  "intensidadHoraria": {"bloquesPorSemana": 0, "diasHabiles": [{"valor": 2, "nombre": "Lunes"}, …], "motivo": "…"},
-  "fechaInicio":      {"min": "2026-01-01", "max": "2026-12-01", "diasHabiles": [2, 4], "motivo": "…"},
-  "fechaCierre":      {"min": "2026-01-01", "max": "2026-12-01", "diasHabiles": [2, 4], "motivo": "…"},
+  "intensidadHoraria": {
+    "bloquesPorSemana": 3, "minutosPorBloque": 51.67, "minutosPorSemana": 155.00,
+    "diasHabiles": [{"valor": 2, "nombre": "Lunes"}, {"valor": 4, "nombre": "Miércoles"}],
+    "horario": [                                   // días y HORAS en que el docente dicta la asignatura al grupo
+      {"valor": 2, "nombre": "Lunes", "bloques": [{"numero": 0, "horaInicio": "07:00:00", "horaFin": "07:50:00", "minutos": 50.00},
+                                                   {"numero": 1, "horaInicio": "07:50:00", "horaFin": "08:40:00", "minutos": 50.00}]},
+      {"valor": 4, "nombre": "Miércoles", "bloques": [{"numero": 0, "horaInicio": "07:00:00", "horaFin": "07:55:00", "minutos": 55.00}]}
+    ],
+    "motivo": "…"},
+  "fechaInicio":      {"min": "2026-01-05", "max": "2026-11-30", "diasHabiles": [2, 4], "motivo": "…"},
+  "fechaCierre":      {"min": "2026-01-05", "max": "2026-11-30", "diasHabiles": [2, 4], "motivo": "…"},
   "semanaCronograma": {"min": 1, "max": 48, "motivo": "…"},
-  "duracionEstimada": {"min": 1, "max": null, "unidad": "BLOQUES", "motivo": "…"}
+  "duracionEstimada": {"min": 1, "max": 7440.00, "unidad": "MINUTOS", "paso": 51.67, "motivo": "…"}
 }
 ```
 
+**La duración se expresa y se valida en MINUTOS** (V460; antes bloques):
+`max = semanas × minutosPorSemana`, donde los minutos de cada bloque salen de
+`HORA_INICIO/HORA_FIN` del horario o, si faltan, del bloque del periodo
+académico. `paso` es el promedio de minutos por bloque, útil como incremento
+del control.
+
 | Caso | Efecto |
 |---|---|
-| Grado sin periodo académico | `periodoAcademico: null`; `fechaInicio/fechaCierre.min/max: null`; `semanaCronograma.min/max: null`; `duracionEstimada.max: null` |
-| Periodo pero sin horario para la asignatura | Fechas acotadas solo por el periodo, `diasHabiles: []`, `bloquesPorSemana: 0`, `duracionEstimada.max: null` |
-| Periodo y horario | Fechas acotadas al primer y último día del periodo en que se dicta la asignatura; `diasHabiles` = valores de `DIA_SEMANA` (**Domingo = 1**, Lunes = 2…); `duracionEstimada.max = semanas × bloquesPorSemana` |
+| Grado sin periodo académico | `periodoAcademico: null`; `fechaInicio/fechaCierre.min/max: null`; `semanaCronograma.max: null`; `duracionEstimada.max: null` |
+| Periodo pero sin horario para la asignatura | Fechas acotadas solo por el periodo, `diasHabiles: []`, `horario: []`, `bloquesPorSemana: 0`, `duracionEstimada.max: null`; el back **no** exige día con clase |
+| Horario con algún bloque sin horas (y periodo sin `BLOQUES_POR_DEFECTO`) | `minutosPorSemana: null`, `duracionEstimada.max: null`; los días sí se validan |
+| Periodo y horario completo | Fechas acotadas al primer y último día con clase; `diasHabiles` = valores de `DIA_SEMANA` (**Domingo = 1**, Lunes = 2…); `duracionEstimada.max` en minutos |
+
+Qué valida el back al crear/actualizar (`fn_actividad_programacion_assert`, 22023):
+
+- `FECHA_INICIO` **y** `FECHA_CIERRE` dentro del periodo y, si hay horario, **ambas** en un día con clase (`diasHabiles`). Las horas no se validan porque las fechas de `TACTIVIDAD` son `DATE`; el front las habilita con `horario`.
+- `DURACION_ESTIMADA`: nunca negativa (también hay `CHECK` en la tabla), mínimo 1 minuto, máximo `duracionEstimada.max` cuando existe.
+- `SEMANA_CRONOGRAMA`: texto; cada número que contenga entre 1 y `semanas`; se rechaza cualquier número negativo (`"-3"`).
 
 ---
 
@@ -497,11 +518,12 @@ exactamente como lo haría con ese instrumento.
 
 | Pieza | Migración |
 |---|---|
-| `fn_actividad_configuracion_contexto`, `fn_unidad_configuracion_actividad`, `fn_actividad_campos_disponibles` (cuerpos) | V459 (antes V458) |
+| `fn_actividad_configuracion_contexto` (cuerpo) | V460 (antes V459) |
+| `fn_unidad_configuracion_actividad`, `fn_actividad_campos_disponibles` (cuerpos) | V459 (antes V458) |
 | `fn_actividad_instrumentos_campos_disponibles` (`variantes` + `campos`), `fn_actividad_otro_campos_disponibles` | V458 |
 | `fn_actividad_ponderacion_campos_disponibles`, `fn_actividad_recuperacion_campos_disponibles`, `fn_actividad_criterio_campos_disponibles` | V458 / V459 / V440 |
 | `fn_instrumento_permitido_por_tipo_evaluacion`, `fn_escala_variantes_permitidas` | V453 |
-| `fn_actividad_programacion_limites` | V422 |
+| `fn_actividad_programacion_limites`, `fn_actividad_programacion_assert` (minutos, días de inicio y cierre, sin negativos) | V460 (antes V422) |
 | `fn_actividad_pantalla_edicion`, `fn_actividad_buscar_por_pk` | V452 |
 | `fn_actividad_instrumento_obtener` / `_definir`, `TACTIVIDAD_OTRO` | V226 / V240 |
 | `fn_actividad_recuperacion_configurar` (writer: REEMPLAZAR sin tipoCálculo, origen sumativa) | V459 (antes V224) |
