@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 383 migraciones (V1–V460), 572 funciones vivas, 104 endpoints vivos. Ultima generacion: 2026-09-19.
+Estado: 384 migraciones (V1–V461), 575 funciones vivas, 104 endpoints vivos. Ultima generacion: 2026-09-20.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -13,7 +13,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 - [(transversal)](#transversal) — 14 funcion(es), 0 endpoint(s)
 - [academico](#academico) — 1 funcion(es), 0 endpoint(s)
-- [actividad](#actividad) — 81 funcion(es), 0 endpoint(s)
+- [actividad](#actividad) — 84 funcion(es), 0 endpoint(s)
 - [anio](#anio) — 1 funcion(es), 0 endpoint(s)
 - [app](#app) — 1 funcion(es), 0 endpoint(s)
 - [area](#area) — 7 funcion(es), 0 endpoint(s)
@@ -139,10 +139,10 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_disponibles_listar` | 5 | V223 | V246 |
 | `academico_test.fn_actividad_eliminar` | 2 | V224 | V246 |
 | `academico_test.fn_actividad_en_periodo_eval` | 2 | V332 | V333, V334, V335, V338, V344, V410… |
-| `academico_test.fn_actividad_es_formativa` | 1 | V243 | V441, V450, V454 |
+| `academico_test.fn_actividad_es_formativa` | 1 | V243 | V441, V450, V454, V461 |
 | `academico_test.fn_actividad_escala_definir` | 3 | V226 | V240, V274, V340 |
 | `academico_test.fn_actividad_estado` | 5 | V224 | V251, V452, V454 |
-| `academico_test.fn_actividad_estudiante_actividad` | 1 | V227 | V241, V243 |
+| `academico_test.fn_actividad_estudiante_actividad` | 1 | V227 | V241, V243, V461 |
 | `academico_test.fn_actividad_estudiantes_asignar` | 4 | V224 | V422 |
 | `academico_test.fn_actividad_estudiantes_calificaciones_listar` | 4 | V450 | V247 |
 | `academico_test.fn_actividad_estudiantes_set` | 4 | V422 | — |
@@ -170,7 +170,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_matriculas_grupo_listar` | 2 | V421 | — |
 | `academico_test.fn_actividad_nota_ajustar_por_criterio` | 2 | V227 | V408 |
 | `academico_test.fn_actividad_nota_asistencia_assert` | 2 | V227 | — |
-| `academico_test.fn_actividad_nota_asistencia_assert_preescolar` | 2 | V450 | — |
+| `academico_test.fn_actividad_nota_asistencia_assert_preescolar` | 2 | V450 | V461 |
 | `academico_test.fn_actividad_nota_calificar` | 4 | V243 | V247 |
 | `academico_test.fn_actividad_nota_calificar_cotejo` | 4 | V227 | V241, V243 |
 | `academico_test.fn_actividad_nota_calificar_cotejo_bulk` | 6 | V227 | V247 |
@@ -184,6 +184,9 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_nota_obtener` | 2 | V241 | V247 |
 | `academico_test.fn_actividad_nota_rubrica_recalcular` | 1 | V227 | — |
 | `academico_test.fn_actividad_observacion_evidencias_set` | 4 | V243 | — |
+| `academico_test.fn_actividad_observacion_soporte_agregar` | 4 | V461 | — |
+| `academico_test.fn_actividad_observacion_soporte_quitar` | 3 | V461 | — |
+| `academico_test.fn_actividad_observacion_soportes_listar` | 2 | V461 | — |
 | `academico_test.fn_actividad_observar_estudiante` | 5 | V243 | V246 |
 | `academico_test.fn_actividad_observar_grupal` | 5 | V243 | V246 |
 | `academico_test.fn_actividad_otro_campos_disponibles` | 1 | V458 | — |
