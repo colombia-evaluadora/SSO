@@ -1,0 +1,470 @@
+{
+  "info": {
+    "name": "Planeador - Soportes de la observacion (preescolar) V461",
+    "description": "Agregar, quitar y listar archivos de soporte de la observacion de un estudiante de preescolar en una actividad, uno a uno (recurso propio sobre TACTIVIDAD_SOPORTE, V461). Complementa `BODY.EVIDENCIAS` del `PUT .../observar`, que reemplaza el set completo.\n\nFlujo: subir el binario al file-service -> `POST .../soportes` con el PK_TARCHIVO -> `GET .../soportes` -> `PUT .../soportes/:ID` para quitar.\n\nVariables: `actividadEstudianteId` = PK_TACTIVIDAD_ESTUDIANTE (de `GET /planeador/actividades/:ID`, `estudiantes[].pkTactividadEstudiante`); `tarchivoId` = PK_TARCHIVO devuelto por el file-service; `soporteId` se rellena solo con la respuesta del POST/GET.\n\nEntorno: `docs/deploy/sso-test.postman_environment.json` (`baseUrl`, `email`, `password`). Una fila nueva de `public.query` responde 404 hasta reiniciar `query-service-eval-col`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Login automático antes de CADA petición: si el token vivo ya",
+          "// está en la variable de colección, no hace nada.",
+          "const rutaLogin = '/api/auth/login';",
+          "if (pm.request.url.getPath().endsWith(rutaLogin)) { return; }",
+          "",
+          "function caducado(jwt) {",
+          "    try {",
+          "        const carga = JSON.parse(atob(jwt.split('.')[1]));",
+          "        return !carga.exp || (carga.exp - 30) * 1000 < Date.now();",
+          "    } catch (e) { return true; }",
+          "}",
+          "",
+          "const actual = pm.collectionVariables.get('token');",
+          "if (actual && !caducado(actual)) { return; }",
+          "",
+          "const clave = pm.environment.get('password');",
+          "if (!clave) { throw new Error('Falta `password` en el entorno «SSO — test».'); }",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + rutaLogin,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "        email: pm.environment.get('email'),",
+          "        password: clave",
+          "    }) }",
+          "}, (err, res) => {",
+          "    if (err) { throw new Error('No se pudo contactar con el gateway: ' + err); }",
+          "    if (res.code !== 200) { throw new Error('Login rechazado (' + res.code + '). Revisa `email` y `password`.'); }",
+          "    pm.collectionVariables.set('token', res.json().token);",
+          "    console.log('token renovado automáticamente');",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "actividadEstudianteId",
+      "value": "1"
+    },
+    {
+      "key": "tarchivoId",
+      "value": "1"
+    },
+    {
+      "key": "soporteId",
+      "value": "1"
+    }
+  ],
+  "item": [
+    {
+      "name": "0 — Login (ver la respuesta)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const token = pm.response.json().token;",
+              "pm.test('devuelve token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+              "pm.collectionVariables.set('token', token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Soportes de la observacion",
+      "item": [
+        {
+          "name": "1 - GET soportes de la observacion",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().rows || pm.response.json();",
+                  "pm.test('cada fila trae pk_tactividad_soporte y fk_tarchivo', () => rows.forEach(r => { pm.expect(r).to.have.property('pk_tactividad_soporte'); pm.expect(r).to.have.property('fk_tarchivo'); }));",
+                  "if (rows.length) pm.collectionVariables.set('soporteId', rows[0].pk_tactividad_soporte);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{actividadEstudianteId}}/soportes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "estudiantes",
+                "{{actividadEstudianteId}}",
+                "soportes"
+              ]
+            },
+            "description": "Archivos de soporte ACTIVE adjuntos a la observacion de UN estudiante en una actividad de preescolar (`fn_actividad_observacion_soportes_listar`, V461). `:ID` = PK_TACTIVIDAD_ESTUDIANTE (sale de `GET /planeador/actividades/:ID` como `estudiantes[].pkTactividadEstudiante`), NO PK_TACTIVIDAD. Sin parametros de query. Gate VER sobre PLANEADOR + alcance por la actividad. Roles: CEVAL-DOCENTE, CEVAL-SUPER_ADMINISTRADOR, CEVAL-RECTOR, CEVAL-JEFE_SISTEMA_ESTABLECIMIENTO."
+          },
+          "response": [
+            {
+              "name": "200 - lista",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"rows\": [\n    {\n      \"pk_tactividad_soporte\": 11,\n      \"fk_tarchivo\": 36,\n      \"nombre\": \"foto1.jpg\",\n      \"urls3\": \"s3://bucket/foto1.jpg\",\n      \"peso\": 100,\n      \"etiqueta\": null,\n      \"fecha\": \"2026-06-22\",\n      \"created_at\": \"2026-09-20T10:00:00\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "404 - asignacion inexistente (P0002)",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/999999/soportes"
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"No se encontro la asignacion actividad-estudiante solicitada\"\n}"
+            },
+            {
+              "name": "403 - fuera de alcance (42501)",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"...\"\n}"
+            },
+            {
+              "name": "404 - antes de reiniciar query-service-eval-col",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Not Found\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "2 - POST agregar UN soporte",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().rows || pm.response.json();",
+                  "const pk = Array.isArray(rows) ? rows[0].pk_tactividad_soporte : rows.pk_tactividad_soporte;",
+                  "pm.test('devuelve pk_tactividad_soporte', () => pm.expect(pk).to.be.a('number'));",
+                  "pm.collectionVariables.set('soporteId', pk);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FK_TARCHIVO\": {{tarchivoId}},\n  \"FECHA\": \"2026-06-22\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{actividadEstudianteId}}/soportes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "estudiantes",
+                "{{actividadEstudianteId}}",
+                "soportes"
+              ]
+            },
+            "description": "Adjunta UN archivo a la observacion sin tocar los demas (`fn_actividad_observacion_soporte_agregar`, V461). `BODY.FK_TARCHIVO` (BIGINT, obligatorio): el PK que devolvio el file-service al subir el binario (`POST /api/files/**`); debe existir y estar ACTIVE. `BODY.FECHA` (DATE, opcional, default hoy): fecha con asistencia valida del estudiante, misma regla que `PUT .../observar` (usar la columna `fecha` que devuelve la planilla / `fn_actividad_asistencia_fecha_resolver`). Idempotente: repetir el mismo archivo devuelve el mismo pk; uno retirado se reactiva. Gate EDITAR sobre PLANEADOR. Roles: CEVAL-DOCENTE, CEVAL-SUPER_ADMINISTRADOR."
+          },
+          "response": [
+            {
+              "name": "200 - pk del soporte",
+              "originalRequest": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"rows\": [\n    { \"pk_tactividad_soporte\": 11 }\n  ]\n}"
+            },
+            {
+              "name": "400 - actividad EVALUATIVA o sin asistencia (22023)",
+              "originalRequest": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"No se puede observar: no hay asistencia registrada para esta actividad el 2026-01-01\"\n}"
+            },
+            {
+              "name": "409 - archivo inexistente o inactivo (23503)",
+              "originalRequest": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"El archivo 999999 no existe o esta inactivo\"\n}"
+            },
+            {
+              "name": "403 - fuera de alcance (42501)",
+              "originalRequest": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"...\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "3 - PUT quitar UN soporte",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FECHA\": \"2026-06-22\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/soportes/{{soporteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "estudiantes",
+                "soportes",
+                "{{soporteId}}"
+              ]
+            },
+            "description": "Baja logica de UN soporte por su PK_TACTIVIDAD_SOPORTE (`fn_actividad_observacion_soporte_quitar`, V461): el pk que devuelven el GET y el POST, NO el PK_TARCHIVO. Es PUT porque `public.query` no admite DELETE. `BODY.FECHA` (DATE, opcional, default hoy) para el gate de asistencia. El binario no se borra del file-service. Gate EDITAR sobre PLANEADOR. Roles: CEVAL-DOCENTE, CEVAL-SUPER_ADMINISTRADOR."
+          },
+          "response": [
+            {
+              "name": "200 - pk retirado",
+              "originalRequest": {
+                "method": "PUT",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/soportes/11"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"rows\": [\n    { \"pk_tactividad_soporte\": 11 }\n  ]\n}"
+            },
+            {
+              "name": "404 - soporte inexistente o ya retirado (P0002)",
+              "originalRequest": {
+                "method": "PUT",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/soportes/11"
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"No se encontro el soporte de observacion solicitado (o ya fue retirado)\"\n}"
+            },
+            {
+              "name": "400 - sin asistencia valida en FECHA (22023)",
+              "originalRequest": {
+                "method": "PUT",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/soportes/11"
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"No se puede observar: no hay asistencia registrada para esta actividad el 2026-01-01\"\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
