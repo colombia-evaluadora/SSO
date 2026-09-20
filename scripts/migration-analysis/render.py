@@ -27,7 +27,8 @@ def compact(model: dict) -> dict:
 
     chains = {}
     for key, ws in model["chains"].items():
-        steps = [[w["version"], w["effect"], w["status"], w["kind"]]
+        steps = [[w["version"], w["effect"], w["status"], w["kind"], w["line"],
+                  w["killed_by"], w["note"] or w["detail"][:100]]
                  for w in ws if w["effect"] != "drop"]
         if not steps:
             continue
@@ -44,6 +45,10 @@ def compact(model: dict) -> dict:
         "orphans": model["orphans"],
         "slots": model["slots"],
         "edges": model["edges"],
+        "uses": [[u["from"], u["to"], u["v"], u["line"], u["kind"],
+                  u["file"] if u["kind"] == "java" else ""]
+                 for u in model.get("uses", [])],
+        "unparsed": model.get("unparsed", []),
         "meta": model["meta"],
         "coverage": model.get("coverage", {}),
     }
@@ -82,8 +87,8 @@ def chain_label(key: str, ws: list[dict]) -> tuple[str, str]:
         return f"Funciones {schema}.*", name or rest
 
     if typ in ("table", "index", "trigger", "view", "domain", "column",
-               "constraint", "schema", "sequence"):
-        schema = rest.split(".")[0]
+               "constraint", "schema", "sequence", "extension", "publication"):
+        schema = rest.split(".")[0] if "." in rest else "public"
         return f"DDL {schema}", rest
 
     if typ in ("role", "route", "endpoint"):
@@ -223,6 +228,24 @@ td.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-num
 .note{color:var(--muted);font-size:12.5px;max-width:88ch}
 .empty{padding:22px;color:var(--muted);text-align:center;font-size:13px}
 mark{background:rgba(29,92,143,.18);color:inherit;border-radius:2px}
+/* detalle de objeto */
+.hist{display:grid;grid-template-columns:auto auto 1fr auto;gap:4px 10px;font-size:12.5px;
+ align-items:baseline}
+.hist .m{white-space:nowrap}
+.uselist{display:flex;flex-direction:column;gap:3px;font-size:12.5px}
+.use{display:grid;grid-template-columns:1fr auto;gap:8px;padding:4px 7px;border-radius:4px;
+ background:var(--sunk);align-items:baseline}
+.use .who{font-family:var(--mono);word-break:break-all}
+.use .who.none{color:var(--muted);font-family:var(--sans);font-style:italic}
+.use .at{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap}
+.objlink{appearance:none;background:none;border:0;padding:0;font:inherit;color:var(--accent);
+ cursor:pointer;text-align:left;word-break:break-all}
+.objlink:hover{text-decoration:underline}
+.sect{display:flex;align-items:baseline;gap:8px}
+.sect .n{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.same{color:var(--accent);font-size:10.5px;font-family:var(--mono);border:1px solid currentColor;
+ border-radius:8px;padding:0 5px;margin-left:4px}
+.kindtag{font-size:10.5px;color:var(--muted);font-family:var(--mono)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 """
 
@@ -244,7 +267,18 @@ const TYPE_ES = {function:'función', query_row:'fila query', table:'tabla',
   column:'columna', index:'índice', trigger:'trigger', view:'vista',
   domain:'dominio', role:'rol', route:'ruta', endpoint:'endpoint',
   bind:'bind', data:'datos', dynamic:'DDL dinámico', schema:'esquema',
-  constraint:'constraint', sequence:'secuencia'};
+  constraint:'constraint', sequence:'secuencia', extension:'extensión',
+  publication:'publicación', scratch:'temporal', query_bulk:'query masivo'};
+const KIND_ES = {create:'crea', replace:'redefine', 'create-table':'crea tabla',
+  'alter-table':'altera', 'add-column':'añade columna', 'drop-column':'quita columna',
+  'add-constraint':'añade constraint', 'drop-constraint':'quita constraint',
+  'create-index':'crea índice', 'drop-index':'quita índice', 'create-trigger':'crea trigger',
+  'drop-trigger':'quita trigger', 'create-view':'define vista', 'drop-view':'quita vista',
+  'drop-table':'borra tabla', insert:'inserta', delete:'borra', 'update-body':'reescribe cuerpo',
+  'update-patch':'parchea cuerpo', 'update-meta':'cambia metadatos',
+  'update-body-values':'reescribe cuerpo', 'create-domain':'crea tipo', 'alter-type':'altera tipo'};
+const kindEs = k => { const b = k.replace(' (DO)',''); return (KIND_ES[b]||b) + (k.endsWith('(DO)')?' (DO)':''); };
+const objLabel = key => (D.chains[key]?.l) || key.slice(key.indexOf(':')+1);
 const DOT = {live:'●', dead:'✕', 'patch-live':'◐', 'patch-dead':'◌'};
 
 /* ---------- tabs ---------- */
@@ -329,8 +363,8 @@ function selectMig(v) {
     <div class="wlist">${ws.map(w => `
       <div class="w">
         <span class="dot st-${w[3]}">${DOT[w[3]]||'·'}</span>
-        <span class="id">${esc(w[1].replace(/^[a-z_]+:/,''))}
-          <span class="tag">${TYPE_ES[w[0]]||w[0]} · ${esc(w[2])}</span></span>
+        <span class="id">${D.chains[w[1]]?`<button class="objlink" data-obj="${esc(w[1])}">${esc(objLabel(w[1]))}</button>`:esc(w[1].replace(/^[a-z_]+:/,''))}
+          <span class="tag">${TYPE_ES[w[0]]||w[0]} · ${esc(kindEs(w[2]))} · L${w[5]}</span></span>
         <span class="tag">${w[4]?`→ <button class="node n-dead" data-goto="${w[4]}"
           >V${w[4]}</button>`:(w[3]==='live'?'vive':w[3]==='patch-live'?'parche vivo':'')}</span>
       </div>`).join('') || '<div class="empty">sin objetos rastreables</div>'}</div>`;
@@ -344,15 +378,27 @@ function wireGoto(root) {
     selectMig(b.dataset.goto);
     $(`#migbody tr[data-v="${b.dataset.goto}"]`)?.scrollIntoView({block:'center'});
   }));
+  $$('[data-obj]', root).forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    $('.tab[data-tab="objetos"]').click();
+    selectObj(b.dataset.obj);
+  }));
 }
 
 /* ---------- objetos ---------- */
-let objQ = '', objType = '';
+let objQ = '', objType = '', selObj = null;
 const chainEntries = Object.entries(D.chains)
   .map(([k, c]) => ({ key:k, type:c.t, id:k.slice(k.indexOf(':')+1),
                       label:c.l, group:c.g, steps:c.s }))
-  .filter(o => !['bind','data','dynamic'].includes(o.type))
+  .filter(o => !['bind','data','dynamic','scratch','query_bulk'].includes(o.type))
   .sort((a,b) => b.steps.length - a.steps.length || a.id.localeCompare(b.id));
+// índices de uso: quién usa a X / qué usa X
+const usedBy = new Map(), usesOf = new Map();
+D.uses.forEach(u => {
+  if (!usedBy.has(u[1])) usedBy.set(u[1], []);
+  usedBy.get(u[1]).push(u);
+  if (u[0]) { if (!usesOf.has(u[0])) usesOf.set(u[0], []); usesOf.get(u[0]).push(u); }
+});
 
 $('#objsearch').addEventListener('input', e => { objQ = e.target.value.trim(); renderObjs(); });
 $('#objtype').addEventListener('change', e => { objType = e.target.value; renderObjs(); });
@@ -369,18 +415,89 @@ function renderObjs() {
     (!onlyRew || o.steps.filter(s => s[1] !== 'patch').length > 1) &&
     (!q || o.id.toLowerCase().includes(q) || o.label.toLowerCase().includes(q)));
   $('#objcount').textContent = `${rows.length} objetos`;
-  $('#objbody').innerHTML = rows.slice(0, 600).map(o => `
-    <tr>
+  $('#objbody').innerHTML = rows.slice(0, 800).map(o => `
+    <tr class="clickable ${selObj===o.key?'sel':''}" data-key="${esc(o.key)}">
       <td class="dim">${TYPE_ES[o.type]||o.type}</td>
       <td class="m" title="${esc(o.key)}">${hl(o.label, objQ)}</td>
       <td><div class="chain">${o.steps.map((s,i) => `${i?'<span class="arrow">→</span>':''}
         <button class="node n-${s[2]}" data-goto="${s[0]}"
-         title="${esc(s[3])} · ${esc(s[2])}">V${s[0]}</button>`).join('')}</div></td>
-    </tr>`).join('') || '<tr><td colspan="3" class="empty">Sin resultados</td></tr>';
-  if (rows.length > 600)
+         title="${esc(kindEs(s[3]))} · ${esc(s[2])} · L${s[4]}">V${s[0]}</button>`).join('')}</div></td>
+      <td class="num dim">${(usedBy.get(o.key)||[]).length||''}</td>
+    </tr>`).join('') || '<tr><td colspan="4" class="empty">Sin resultados</td></tr>';
+  if (rows.length > 800)
     $('#objbody').insertAdjacentHTML('beforeend',
-      `<tr><td colspan="3" class="empty">… ${rows.length-600} más; afiná la búsqueda</td></tr>`);
+      `<tr><td colspan="4" class="empty">… ${rows.length-800} más; afiná la búsqueda</td></tr>`);
+  $$('#objbody tr[data-key]').forEach(tr =>
+    tr.addEventListener('click', () => selectObj(tr.dataset.key)));
   wireGoto($('#objbody'));
+}
+
+const STATUS_ES = {live:'vive', dead:'reescrita', 'patch-live':'parche vigente',
+  'patch-dead':'parche reescrito', drop:'drop'};
+
+function useRow(u, own) {
+  const who = u[4] === 'java'
+    ? `<span class="who">${esc(u[5])}</span>`
+    : u[0]
+      ? `<span class="who"><button class="objlink" data-obj="${esc(u[0])}">${esc(objLabel(u[0]))}</button>
+         <span class="kindtag">${TYPE_ES[u[0].split(':')[0]]||''}</span></span>`
+      : `<span class="who none">sentencia suelta de la migración</span>`;
+  const at = u[4] === 'java' ? `L${u[3]}`
+    : `<button class="node n-live" data-goto="${u[2]}">V${u[2]}</button> L${u[3]}`;
+  return `<div class="use">${who}<span class="at">${own.has(u[2])?'<span class="same">misma</span>':''}
+    ${u[4]==='ref'?'<span class="kindtag">ref</span> ':''}${at}</span></div>`;
+}
+
+function selectObj(key) {
+  selObj = key;
+  const c = D.chains[key];
+  if (!c) return;
+  renderObjs();
+  $(`#objbody tr[data-key="${CSS.escape(key)}"]`)?.scrollIntoView({block:'nearest'});
+  const own = new Set(c.s.map(s => s[0]));
+  const ub = usedBy.get(key) || [], uo = usesOf.get(key) || [];
+  const same = ub.filter(u => own.has(u[2])), other = ub.filter(u => !own.has(u[2]) && u[4] !== 'java');
+  const java = ub.filter(u => u[4] === 'java');
+  const rewriters = [...new Set(c.s.slice(1).filter(s => s[1] !== 'patch').map(s => s[0]))];
+  const byMig = arr => {
+    const g = new Map();
+    arr.forEach(u => { const k = u[2]; if (!g.has(k)) g.set(k, []); g.get(k).push(u); });
+    return [...g.entries()].sort((a,b) => +b[0] - +a[0]);
+  };
+  const usesList = arr => arr.length ? `<div class="uselist">${
+    byMig(arr).map(([v, us]) => us.map(u => useRow(u, own)).join('')).join('')}</div>`
+    : '<div class="empty" style="padding:8px">nadie</div>';
+  const uoKeys = new Map();
+  uo.forEach(u => { if (!uoKeys.has(u[1])) uoKeys.set(u[1], u); });
+
+  $('#objdetail').innerHTML = `
+    <h4>${esc(c.l)}</h4>
+    <div class="sub">${TYPE_ES[c.t]||c.t} · <span class="dim">${esc(key)}</span></div>
+    <dl class="kv">
+      <dt>escrituras</dt><dd>${c.s.length} en ${own.size} migraciones</dd>
+      <dt>reescrita por</dt><dd>${rewriters.length ? rewriters.map(v =>
+        `<button class="node n-live" data-goto="${v}">V${v}</button>`).join(' ') : '<span class="dim">nunca</span>'}</dd>
+      <dt>usada por</dt><dd>${ub.length} sitios · ${same.length} en sus migraciones · ${other.length} en otras${java.length?` · ${java.length} Java`:''}</dd>
+    </dl>
+    <h3>Historial</h3>
+    <div class="hist">${c.s.map(s => `
+      <span class="dot st-${s[2]}">${DOT[s[2]]||'·'}</span>
+      <span class="m"><button class="node n-${s[2]}" data-goto="${s[0]}">V${s[0]}</button></span>
+      <span>${esc(kindEs(s[3]))}${s[6]?` <span class="dim">— ${esc(s[6])}</span>`:''}</span>
+      <span class="m dim">L${s[4]}${s[5]?` → V${s[5]}`:` · ${STATUS_ES[s[2]]||s[2]}`}</span>`).join('')}
+    </div>
+    <h3 class="sect">Usada en sus mismas migraciones <span class="n">${same.length}</span></h3>
+    ${usesList(same)}
+    <h3 class="sect">Usada en otras migraciones <span class="n">${other.length}</span></h3>
+    ${usesList(other)}
+    ${java.length?`<h3 class="sect">Llamada desde Java <span class="n">${java.length}</span></h3>${usesList(java)}`:''}
+    <h3 class="sect">Usa <span class="n">${uoKeys.size}</span></h3>
+    ${uoKeys.size ? `<div class="uselist">${[...uoKeys.values()].map(u => `
+      <div class="use"><span class="who"><button class="objlink" data-obj="${esc(u[1])}">${esc(objLabel(u[1]))}</button>
+        <span class="kindtag">${TYPE_ES[u[1].split(':')[0]]||''}</span></span>
+        <span class="at">${u[4]==='ref'?'ref':'llamada'} · V${u[2]} L${u[3]}</span></div>`).join('')}</div>`
+      : '<div class="empty" style="padding:8px">no referencia otros objetos conocidos</div>'}`;
+  wireGoto($('#objdetail'));
 }
 
 /* ---------- matriz ---------- */
@@ -663,12 +780,14 @@ def build(model: dict) -> str:
         f'<button class="chipbtn" data-verdict="{v}" aria-pressed="false">'
         f'{v} <span class="dim">{counts[v]}</span></button>' for v in VERDICTS)
 
-    types = sorted({k.split(":")[0] for k in data["chains"]} - {"bind", "data"})
+    types = sorted({("query_row" if k.startswith("query:") else k.split(":")[0])
+                    for k in data["chains"]}
+                   - {"bind", "data", "dynamic", "scratch", "query_bulk"})
     typeopts = "".join(f'<option value="{t}">{TYPE_LABEL.get(t, t)}</option>' for t in types)
 
-    order = ["function", "query_row", "table", "column", "constraint", "index", "trigger",
-             "view", "domain", "schema", "sequence", "role", "route", "endpoint", "bind",
-             "data", "dynamic"]
+    order = ["function", "query_row", "query_bulk", "table", "column", "constraint", "index",
+             "trigger", "view", "domain", "schema", "sequence", "extension", "publication",
+             "role", "route", "endpoint", "bind", "data", "dynamic", "scratch"]
     cov = data["coverage"]
     coverage_rows = "".join(
         f'<tr><td><b>{TYPE_LABEL.get(k, k)}</b></td><td class="dim">{TYPE_DESC.get(k, "")}</td>'
@@ -680,6 +799,12 @@ def build(model: dict) -> str:
         f'<tr><td><b>{TYPE_LABEL.get(k, k)}</b></td><td class="dim">{TYPE_DESC.get(k, "")}</td>'
         f'<td class="num dim">0</td><td class="num dim">0</td><td></td><td></td><td></td></tr>'
         for k in order if k not in cov)
+
+    unparsed_rows = "".join(
+        f'<tr><td class="m"><button class="node n-live" data-goto="{u["version"]}">V{u["version"]}</button></td>'
+        f'<td class="num">{u["line"]}</td><td class="m dim">{u["head"]}</td></tr>'
+        for u in data["unparsed"]) or \
+        '<tr><td colspan="3" class="empty">Todas las sentencias quedaron clasificadas</td></tr>'
 
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
@@ -784,9 +909,17 @@ no mata lo anterior, lo modifica. Regenerá esta página con
     <button class="chipbtn" id="objrew" aria-pressed="true">solo reescritos</button>
     <span class="count" id="objcount"></span>
   </div>
-  <div class="tablewrap"><table><thead><tr>
-    <th>Tipo</th><th>Objeto</th><th>Cadena de escrituras</th>
-  </tr></thead><tbody id="objbody"></tbody></table></div>
+  <p class="note">Cada fila es un elemento (función, tabla, fila de <code>public.query</code>…).
+  Al elegirlo: qué migraciones lo reescribieron, línea por línea, y qué otros elementos lo usan —
+  separando los de sus propias migraciones de los de otras. <b>ref</b> = referencia a tabla/vista;
+  sin marca = llamada a función.</p>
+  <div class="split">
+    <div class="tablewrap"><table><thead><tr>
+      <th>Tipo</th><th>Objeto</th><th>Cadena de escrituras</th><th style="text-align:right">Usos</th>
+    </tr></thead><tbody id="objbody"></tbody></table></div>
+    <aside class="detail" id="objdetail"><div class="empty">Elegí un objeto para ver quién lo
+      reescribió y quién lo usa.</div></aside>
+  </div>
 </section>
 
 <section class="panel" id="p-matriz" role="tabpanel" hidden>
@@ -856,6 +989,10 @@ no mata lo anterior, lo modifica. Regenerá esta página con
     <th style="text-align:right">Escrituras</th><th style="text-align:right">Vivas</th>
     <th style="text-align:right">Parches</th><th style="text-align:right">Muertas</th>
   </tr></thead><tbody>{coverage_rows}</tbody></table></div>
+  <h3>Sentencias sin clasificar ({len(data['unparsed'])})</h3>
+  <div class="tablewrap"><table><thead><tr>
+    <th>Migración</th><th>Línea</th><th>Sentencia</th>
+  </tr></thead><tbody>{unparsed_rows}</tbody></table></div>
 </section>
 
 <section class="panel" id="p-slots" role="tabpanel" hidden>
@@ -925,4 +1062,12 @@ TYPE_LABEL = {
     "domain": "dominios", "role": "roles", "route": "rutas", "endpoint": "endpoints",
     "dynamic": "DDL dinámico", "schema": "esquemas", "constraint": "constraints",
     "sequence": "secuencias", "bind": "bindings de permisos", "data": "datos / seeds",
+    "extension": "extensiones", "publication": "publicaciones CDC",
+    "scratch": "objetos temporales", "query_bulk": "UPDATE masivo de public.query",
 }
+TYPE_DESC.update({
+    "extension": "CREATE / DROP EXTENSION",
+    "publication": "CREATE / ALTER / DROP PUBLICATION (CDC); ALTER = parche",
+    "scratch": "CREATE TEMP TABLE / TEMP VIEW y sus DROP: viven solo durante la migración — se cuentan, no se encadenan",
+    "query_bulk": "UPDATE de public.query por patrón (LIKE, IS NULL, JOIN): toca filas que no se pueden nombrar — persiste, no se encadena",
+})
