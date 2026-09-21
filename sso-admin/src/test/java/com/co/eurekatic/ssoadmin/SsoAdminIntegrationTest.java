@@ -569,6 +569,7 @@ class SsoAdminIntegrationTest {
                         org.mockito.ArgumentMatchers.eq("alice@example.com"),
                         org.mockito.ArgumentMatchers.eq("account-activation"),
                         any(),
+                        any(),
                         any());
     }
 
