@@ -3,7 +3,7 @@
 -- Hoy solo se fijan por REEMPLAZO (BODY.EVIDENCIAS del PUT observar, V243) y
 -- se leen dentro del detalle de nota (V241). Recurso propio:
 --   GET  /planeador/actividades/estudiantes/:ID/soportes  (listar)
---   POST /planeador/actividades/estudiantes/:ID/soportes  (agregar UNO)
+--   POST /planeador/actividades/estudiantes/:ID/soportes  (agregar UNO; FILE)
 --   PUT  /planeador/actividades/estudiantes/soportes/:ID  (quitar UNO; sin DELETE)
 -- Mismas reglas que el PUT observar: gate EDITAR de PLANEADOR, actividad
 -- FORMATIVA y asistencia valida en FECHA. Depende de V243, V277 y V450.
@@ -92,9 +92,13 @@ BEGIN
         RAISE EXCEPTION 'p_fk_tarchivo es obligatorio' USING ERRCODE = '22023';
     END IF;
 
+    -- Existencia, NO ACTIVE: file-service reserva la fila de TARCHIVO
+    -- inactiva y solo la activa cuando el catalogo responde 2xx, es decir
+    -- despues de esta funcion. Exigir ACTIVE aqui rompe la subida en un
+    -- solo paso (mismo fallo que arrastraba fn_fun_actualizar).
     IF NOT EXISTS (SELECT 1 FROM academico_test.TARCHIVO
-                    WHERE PK_TARCHIVO = p_fk_tarchivo AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'El archivo % no existe o esta inactivo', p_fk_tarchivo
+                    WHERE PK_TARCHIVO = p_fk_tarchivo) THEN
+        RAISE EXCEPTION 'El archivo % no existe', p_fk_tarchivo
             USING ERRCODE = '23503';
     END IF;
 
@@ -136,7 +140,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_observacion_soporte_agregar(BIGINT, BIGINT, BIGINT, DATE)
-    IS 'Adjunta UN archivo (PK_TARCHIVO, ya subido por el file-service) a la observacion de UN estudiante en una actividad FORMATIVA, sin tocar los demas adjuntos -- a diferencia de fn_actividad_observacion_evidencias_set (V243), que reemplaza el set completo. Si el archivo ya estaba adjunto devuelve el mismo pk (idempotente); si estaba dado de baja lo reactiva. Mismas reglas que fn_actividad_observar_estudiante: gate EDITAR sobre PLANEADOR + alcance por la actividad, 22023 si la actividad no es FORMATIVA o si no hay asistencia valida en p_fecha (fn_actividad_nota_asistencia_assert_preescolar, V450), 23503 si el archivo no existe o esta inactivo, P0002 si la asignacion actividad-estudiante no existe. Retorna PK_TACTIVIDAD_SOPORTE.';
+    IS 'Adjunta UN archivo (PK_TARCHIVO, ya subido por el file-service) a la observacion de UN estudiante en una actividad FORMATIVA, sin tocar los demas adjuntos -- a diferencia de fn_actividad_observacion_evidencias_set (V243), que reemplaza el set completo. Si el archivo ya estaba adjunto devuelve el mismo pk (idempotente); si estaba dado de baja lo reactiva. Mismas reglas que fn_actividad_observar_estudiante: gate EDITAR sobre PLANEADOR + alcance por la actividad, 22023 si la actividad no es FORMATIVA o si no hay asistencia valida en p_fecha (fn_actividad_nota_asistencia_assert_preescolar, V450), 23503 si el archivo no existe -- se comprueba la EXISTENCIA y no ACTIVE, porque file-service reserva la fila de TARCHIVO inactiva y la activa recien cuando el catalogo responde 2xx --, P0002 si la asignacion actividad-estudiante no existe. Retorna PK_TACTIVIDAD_SOPORTE.';
 
 -- ---------------------------------------------------------------------------
 -- 3) Quitar UNO (baja logica)
@@ -236,8 +240,8 @@ SELECT
 ) AS pk_tactividad_soporte;',
     'postgres', false, false,
     m.id_microservice, '/planeador/actividades/estudiantes/:ID/soportes', 'SELECT', 'POST',
-    '{"PARAM.ID": "BIGINT", "BODY.FK_TARCHIVO": "BIGINT", "BODY.FECHA": "DATE"}'::jsonb,
-    'V461 -- adjunta UN archivo a la observacion de UN estudiante en una actividad FORMATIVA (preescolar; fn_actividad_observacion_soporte_agregar) sin tocar los demas adjuntos -- a diferencia de BODY.EVIDENCIAS del PUT observar, que reemplaza el set completo. :ID = PK_TACTIVIDAD_ESTUDIANTE. BODY.FK_TARCHIVO obligatorio: el PK que devolvio el file-service al subir el binario (POST /api/files/**). BODY.FECHA opcional (default hoy) para el gate de asistencia, misma regla que el PUT observar. Devuelve pk_tactividad_soporte; si el archivo ya estaba adjunto devuelve el mismo pk (idempotente). Gate EDITAR sobre PLANEADOR + alcance por la actividad. 22023 si la actividad no es FORMATIVA o no hay asistencia valida ese dia; 23503 si el archivo no existe o esta inactivo; 404 (P0002) si la asignacion no existe.'
+    '{"PARAM.ID": "BIGINT", "BODY.FK_TARCHIVO": "FILE:actividad", "BODY.FECHA": "DATE"}'::jsonb,
+    'V461 -- adjunta UN archivo a la observacion de UN estudiante en una actividad FORMATIVA (preescolar; fn_actividad_observacion_soporte_agregar) sin tocar los demas adjuntos -- a diferencia de BODY.EVIDENCIAS del PUT observar, que reemplaza el set completo. :ID = PK_TACTIVIDAD_ESTUDIANTE. BODY.FK_TARCHIVO esta declarado FILE:actividad, asi que hay DOS formas de llamarlo. (1) Un solo paso, la normal: multipart a POST /api/files/eval-col/planeador/actividades/estudiantes/:ID/soportes con el binario en el campo FK_TARCHIVO y FECHA como campo de texto; file-service sube a S3, reserva la fila de TARCHIVO, la reemplaza por su pk y reenvia aca como JSON. (2) JSON directo a este path con un PK_TARCHIVO que ya exista. La carpeta S3 es actividad/<pk>.<ext>, la misma de los materiales de actividad. BODY.FECHA opcional (default hoy) para el gate de asistencia, misma regla que el PUT observar. Devuelve pk_tactividad_soporte; si el archivo ya estaba adjunto devuelve el mismo pk (idempotente). Gate EDITAR sobre PLANEADOR + alcance por la actividad, y para la via multipart ademas el binding role_endpoint POST /files/**. 22023 si la actividad no es FORMATIVA o no hay asistencia valida ese dia; 23503 si el archivo no existe; 404 (P0002) si la asignacion no existe.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
