@@ -72,6 +72,29 @@ reporting:
   # Un reporte completo tarda mucho mas que una pagina de 10 filas.
   request-timeout: ${REPORTING_REQUEST_TIMEOUT:3m}
 
+  # De donde se bajan las imagenes que van DENTRO de un reporte (el fondo del
+  # boletin, la foto del estudiante, las evidencias). Directo al servicio y no
+  # al gateway, por el mismo criterio que query-service-base-url.
+  file-service-base-url: ${REPORTING_FILE_SERVICE_URL:http://file-service:8086}
+
+  # Secreto compartido con file-service (files.internal-token). Se usa
+  # X-Internal-Token y NO el JWT del usuario a proposito: FileAccessService
+  # solo reconoce como propias las fotos de perfil y los soportes, asi que con
+  # el token del usuario la foto de matricula y el fondo darian 404 y el
+  # boletin saldria mudo. La autorizacion ya ocurrio una capa antes -- la
+  # funcion PL/pgSQL aplico el gate con alcance y solo devolvio los
+  # estudiantes que ese usuario alcanza. Vacio = el reporte sale sin imagenes.
+  file-internal-token: ${REPORTING_FILE_INTERNAL_TOKEN:}
+
+  # Mucho menor que el de una consulta: una foto que tarda medio minuto es una
+  # foto que no vamos a esperar.
+  file-request-timeout: ${REPORTING_FILE_REQUEST_TIMEOUT:20s}
+
+  # Tope POR IMAGEN. El PDF se exporta entero en memoria, asi que una imagen
+  # desmedida multiplicada por las paginas de un grupo es un OOM. Al superarlo
+  # se omite esa imagen, no el reporte.
+  max-image-bytes: ${REPORTING_MAX_IMAGE_BYTES:4194304}
+
   # ---------------------------------------------------------------
   # Catalogo de reportes. `path` es el path_template de la fila
   # public.query creada en V67 — la que llama a fn_X_listar con las
@@ -455,6 +478,81 @@ reporting:
         promedio: Promedio del periodo
         puesto: Puesto
         observacion: Observacion
+
+    # -----------------------------------------------------------------
+    # Boletin de preescolar (V466). path = fila
+    # 'eval-col-informes-boletin-preescolar-001':
+    # fn_informe_boletin_preescolar, que delega gate y alcance en la
+    # misma fn_informe_grupo_listar de la pantalla.
+    #
+    # ES EL PRIMER REPORTE CON PLANTILLA PROPIA. A diferencia de los
+    # demas, el diseño NO lo arma PdfRenderer a partir de `columns`:
+    # lo define reportes/boletin-preescolar.jrxml, que se toma por
+    # convencion de nombre (la clave). Aqui `columns` no describe una
+    # grilla -- describe QUE CAMPOS LLEGAN a la plantilla, porque el
+    # render recorta la fila a las columnas declaradas y lo que no este
+    # en esta lista no existe para el .jrxml. Las etiquetas quedan sin
+    # uso, pero se escriben igual: son la unica documentacion de que
+    # significa cada campo.
+    #
+    # `formats: [pdf]` porque un boletin no es una grilla: en Excel
+    # seria una fila ilegible por estudiante. Pedirlo asi da 400.
+    #
+    # `image-fields` son las columnas cuyo valor es un PK_TARCHIVO y que
+    # la plantilla pinta como imagen. Sin declararlas llegarian como el
+    # texto del numero y los huecos saldrian vacios.
+    # -----------------------------------------------------------------
+    boletin-preescolar:
+      path: /informes/boletin-preescolar
+      title: Boletin de preescolar
+      file-name: boletin-preescolar
+      formats:
+        - pdf
+      image-fields:
+        - fondo_archivo
+        - foto_archivo
+        - evidencia1_archivo
+        - evidencia2_archivo
+        - evidencia3_archivo
+        - evidencia4_archivo
+        - evidencia5_archivo
+        - evidencia6_archivo
+      columns:
+        ee_nombre: Establecimiento
+        ee_dane: Dane
+        ee_nit: Nit
+        ciudad: Ciudad
+        sede_nombre: Sede
+        nivel_ensenanza: Nivel
+        grado_nombre: Grado
+        grupo_etiqueta: Grupo
+        periodo_nombre: Periodo
+        anio: Año
+        fondo_archivo: Fondo
+        estudiante: Estudiante
+        documento: Documento
+        foto_archivo: Foto
+        observacion: Seguimiento y valoracion
+        observacion_estado: Estado de la observacion
+        evidencia1_titulo: Evidencia 1
+        evidencia1_fecha: Fecha evidencia 1
+        evidencia1_archivo: Foto evidencia 1
+        evidencia2_titulo: Evidencia 2
+        evidencia2_fecha: Fecha evidencia 2
+        evidencia2_archivo: Foto evidencia 2
+        evidencia3_titulo: Evidencia 3
+        evidencia3_fecha: Fecha evidencia 3
+        evidencia3_archivo: Foto evidencia 3
+        evidencia4_titulo: Evidencia 4
+        evidencia4_fecha: Fecha evidencia 4
+        evidencia4_archivo: Foto evidencia 4
+        evidencia5_titulo: Evidencia 5
+        evidencia5_fecha: Fecha evidencia 5
+        evidencia5_archivo: Foto evidencia 5
+        evidencia6_titulo: Evidencia 6
+        evidencia6_fecha: Fecha evidencia 6
+        evidencia6_archivo: Foto evidencia 6
+        rector_nombre: Rector
 
 sso:
   jwt:

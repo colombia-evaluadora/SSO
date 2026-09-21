@@ -1745,6 +1745,15 @@ services:
       # responden 502 y los academicos siguen funcionando.
       REPORTING_AUDIT_CVAL_URL: "${REPORTING_AUDIT_CVAL_URL:-http://query-service-audit-clickhouse-cval:8084}"
       REPORTING_MAX_ROWS: "${REPORTING_MAX_ROWS:-50000}"
+      # De donde baja las imagenes que van DENTRO de un reporte: el fondo
+      # del boletin, la foto del estudiante y las evidencias (V465/V466).
+      REPORTING_FILE_SERVICE_URL: "${REPORTING_FILE_SERVICE_URL:-http://file-service:8086}"
+      # El MISMO secreto que file-service espera en files.internal-token, por
+      # eso reusa FILES_INTERNAL_TOKEN como valor por defecto: son los dos
+      # extremos de la misma puerta y desincronizarlos deja el boletin sin
+      # imagenes, sin error visible. Vacio = no se bajan imagenes.
+      REPORTING_FILE_INTERNAL_TOKEN: "${REPORTING_FILE_INTERNAL_TOKEN:-${FILES_INTERNAL_TOKEN:-}}"
+      REPORTING_MAX_IMAGE_BYTES: "${REPORTING_MAX_IMAGE_BYTES:-4194304}"
       # Clave PUBLICA del par RS256: verifica firmas, no acuña tokens,
       # asi que no recibe (ni debe recibir) la privada.
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}

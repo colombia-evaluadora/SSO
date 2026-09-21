@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Boletin de preescolar: UNA PAGINA POR ESTUDIANTE.
+
+  DOS COSAS QUE PARECEN ERRORES Y NO LO SON, medidas contra JasperReports
+  7.0.8 antes de escribir esta plantilla:
+
+    1. NO lleva xmlns ni schemaLocation. Con el namespace que trae cualquier
+       ejemplo de la version 6, Jasper 7 responde "Unable to load report" sin
+       decir por que.
+    2. Los elementos de la banda son <element kind="..."> y no <staticText>,
+       <textField> o <image>. JR7 unifico la sintaxis; la vieja falla con
+       "Unrecognized field" contra JRDesignBand.
+
+  Pagina Oficio (613x894, el tamaño de los fondos institucionales) y margenes
+  en cero, porque el fondo se imprime a sangre.
+
+  TODO el contenido vive en la banda `detail`, incluida la imagen de fondo. La
+  banda `background` no ve los campos del detalle, asi que desde ahi el fondo
+  no podria cambiar por establecimiento, que es justo lo que permite V465.
+
+  (Ojo con los comentarios: XML prohibe dos guiones seguidos dentro de uno, y
+  Jasper responde a eso con el mismo "Unable to load report" de siempre.)
+
+  splitType="Prevent" mas una banda de la altura exacta de la pagina es lo que
+  garantiza una pagina por estudiante: no cabe dos veces.
+
+  La fuente se nombra en CADA elemento a proposito. El estilo por defecto con
+  DejaVu Sans solo existe en el diseño programatico de PdfRenderer, y sin el
+  reaparece el separado de letras en los acentos. El embebido en el PDF lo
+  resuelve la extension de fuentes (fonts/dejavu.xml), no cada elemento.
+
+  Los cinco parametros se declaran porque PdfRenderer los manda siempre; esta
+  plantilla no los pinta: el encabezado sale de los datos, no del catalogo.
+-->
+<jasperReport name="boletin-preescolar"
+              pageWidth="613" pageHeight="894" columnWidth="613"
+              leftMargin="0" rightMargin="0" topMargin="0" bottomMargin="0"
+              whenNoDataType="NoPages">
+
+	<parameter name="TITULO" class="java.lang.String"/>
+	<parameter name="GENERADO" class="java.lang.String"/>
+	<parameter name="TOTAL" class="java.lang.Integer"/>
+	<parameter name="USUARIO" class="java.lang.String"/>
+	<parameter name="FILTROS" class="java.lang.String"/>
+
+	<field name="ee_nombre" class="java.lang.String"/>
+	<field name="ee_dane" class="java.lang.String"/>
+	<field name="ee_nit" class="java.lang.String"/>
+	<field name="ciudad" class="java.lang.String"/>
+	<field name="sede_nombre" class="java.lang.String"/>
+	<field name="nivel_ensenanza" class="java.lang.String"/>
+	<field name="grado_nombre" class="java.lang.String"/>
+	<field name="grupo_etiqueta" class="java.lang.String"/>
+	<field name="periodo_nombre" class="java.lang.String"/>
+	<field name="anio" class="java.lang.String"/>
+	<field name="estudiante" class="java.lang.String"/>
+	<field name="documento" class="java.lang.String"/>
+	<field name="observacion" class="java.lang.String"/>
+	<field name="observacion_estado" class="java.lang.String"/>
+	<field name="rector_nombre" class="java.lang.String"/>
+	<field name="evidencia1_titulo" class="java.lang.String"/>
+	<field name="evidencia2_titulo" class="java.lang.String"/>
+	<field name="evidencia3_titulo" class="java.lang.String"/>
+	<field name="evidencia4_titulo" class="java.lang.String"/>
+	<field name="evidencia5_titulo" class="java.lang.String"/>
+	<field name="evidencia6_titulo" class="java.lang.String"/>
+	<field name="evidencia1_fecha" class="java.lang.String"/>
+	<field name="evidencia2_fecha" class="java.lang.String"/>
+	<field name="evidencia3_fecha" class="java.lang.String"/>
+	<field name="evidencia4_fecha" class="java.lang.String"/>
+	<field name="evidencia5_fecha" class="java.lang.String"/>
+	<field name="evidencia6_fecha" class="java.lang.String"/>
+	<field name="fondo_archivo" class="java.io.InputStream"/>
+	<field name="foto_archivo" class="java.io.InputStream"/>
+	<field name="evidencia1_archivo" class="java.io.InputStream"/>
+	<field name="evidencia2_archivo" class="java.io.InputStream"/>
+	<field name="evidencia3_archivo" class="java.io.InputStream"/>
+	<field name="evidencia4_archivo" class="java.io.InputStream"/>
+	<field name="evidencia5_archivo" class="java.io.InputStream"/>
+	<field name="evidencia6_archivo" class="java.io.InputStream"/>
+
+	<detail>
+		<band height="894" splitType="Prevent">
+			<element kind="image" x="0" y="0" width="613" height="894" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[$F{fondo_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="40" y="115" width="360" height="34" fontName="DejaVu Sans" fontSize="14" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="StretchHeight">
+				<expression><![CDATA[$F{ee_nombre}]]></expression>
+			</element>
+			<element kind="textField" x="40" y="151" width="360" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+				<expression><![CDATA["Dane: " + $F{ee_dane} + "   -   Nit: " + $F{ee_nit}]]></expression>
+			</element>
+			<element kind="textField" x="40" y="164" width="360" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+				<expression><![CDATA[$F{ciudad}]]></expression>
+			</element>
+			<element kind="textField" x="400" y="151" width="173" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<expression><![CDATA[$F{periodo_nombre} + " - " + $F{anio}]]></expression>
+			</element>
+			<element kind="rectangle" x="40" y="185" width="80" height="94" backcolor="#E8EEF7" mode="Opaque">
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="41" y="186" width="78" height="92" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[$F{foto_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="132" y="188" width="441" height="20" fontName="DejaVu Sans" fontSize="13" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<expression><![CDATA[$F{estudiante}]]></expression>
+			</element>
+			<element kind="textField" x="132" y="210" width="441" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+				<expression><![CDATA["Documento: " + $F{documento}]]></expression>
+			</element>
+			<element kind="staticText" x="132" y="232" width="170" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
+				<text><![CDATA[Sede]]></text>
+			</element>
+			<element kind="textField" x="132" y="244" width="170" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<expression><![CDATA[$F{sede_nombre}]]></expression>
+			</element>
+			<element kind="staticText" x="308" y="232" width="90" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
+				<text><![CDATA[Nivel]]></text>
+			</element>
+			<element kind="textField" x="308" y="244" width="90" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<expression><![CDATA[$F{nivel_ensenanza}]]></expression>
+			</element>
+			<element kind="staticText" x="404" y="232" width="85" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
+				<text><![CDATA[Grado]]></text>
+			</element>
+			<element kind="textField" x="404" y="244" width="85" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<expression><![CDATA[$F{grado_nombre}]]></expression>
+			</element>
+			<element kind="staticText" x="495" y="232" width="78" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
+				<text><![CDATA[Grupo]]></text>
+			</element>
+			<element kind="textField" x="495" y="244" width="78" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<expression><![CDATA[$F{grupo_etiqueta}]]></expression>
+			</element>
+			<element kind="rectangle" x="40" y="285" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6">
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="staticText" x="52" y="285" width="400" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+				<text><![CDATA[SEGUIMIENTO Y VALORACION]]></text>
+			</element>
+			<element kind="textField" x="40" y="315" width="533" height="165" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Justified" vTextAlign="Top">
+				<expression><![CDATA[$F{observacion} == null || $F{observacion}.trim().isEmpty() ? "Sin observaciones registradas para este periodo." : $F{observacion}]]></expression>
+			</element>
+			<element kind="rectangle" x="40" y="487" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6">
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="staticText" x="52" y="487" width="400" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+				<text><![CDATA[EVIDENCIAS DE APRENDIZAJE]]></text>
+			</element>
+			<element kind="rectangle" x="40" y="517" width="169" height="130" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="44" y="521" width="161" height="88" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[$F{evidencia1_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="612" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<expression><![CDATA[$F{evidencia1_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="633" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<expression><![CDATA[$F{evidencia1_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="221" y="517" width="169" height="130" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="225" y="521" width="161" height="88" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[$F{evidencia2_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="227" y="612" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<expression><![CDATA[$F{evidencia2_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="227" y="633" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<expression><![CDATA[$F{evidencia2_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="402" y="517" width="169" height="130" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="406" y="521" width="161" height="88" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[$F{evidencia3_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="408" y="612" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<expression><![CDATA[$F{evidencia3_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="408" y="633" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<expression><![CDATA[$F{evidencia3_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="40" y="655" width="169" height="130" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="44" y="659" width="161" height="88" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[$F{evidencia4_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="750" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<expression><![CDATA[$F{evidencia4_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="771" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<expression><![CDATA[$F{evidencia4_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="221" y="655" width="169" height="130" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="225" y="659" width="161" height="88" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[$F{evidencia5_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="227" y="750" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<expression><![CDATA[$F{evidencia5_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="227" y="771" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<expression><![CDATA[$F{evidencia5_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="402" y="655" width="169" height="130" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="406" y="659" width="161" height="88" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[$F{evidencia6_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="408" y="750" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<expression><![CDATA[$F{evidencia6_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="408" y="771" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<expression><![CDATA[$F{evidencia6_fecha}]]></expression>
+			</element>
+			<element kind="line" x="207" y="812" width="200" height="1" forecolor="#16305C"/>
+			<element kind="textField" x="157" y="816" width="300" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<expression><![CDATA[$F{rector_nombre}]]></expression>
+			</element>
+			<element kind="staticText" x="157" y="828" width="300" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+				<text><![CDATA[Rector(a)]]></text>
+			</element>
+		</band>
+	</detail>
+</jasperReport>
