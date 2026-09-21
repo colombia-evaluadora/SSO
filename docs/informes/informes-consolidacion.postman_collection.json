@@ -1165,6 +1165,265 @@
       ]
     },
     {
+      "name": "12 - Evidencias de un periodo (preescolar)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/evidencias",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "evidencias"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatricula}},\n  \"FK_TPERIODO_EVALUACION\": {{fkTperiodoEvaluacion}}\n}"
+        },
+        "description": {
+          "content": "Las imagenes adjuntas a las observaciones de un estudiante en un periodo. FK_TPERIODO_EVALUACION nulo = TODO el año, que es lo que necesita la fila Final. Para mostrar cada una, su fk_tarchivo va a POST /files/view-token/{id}. NO es GET /planeador/actividades/estudiantes/:ID/soportes: aquel tiene gate PLANEADOR/VER y se pide por actividad, no por periodo. La CUENTA ya viene en la columna evidencias de /informes/grupo, asi que no hace falta llamar aca solo para saber si hay que dibujar la seccion.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "13 - Evidencias de TODO el año (la fila Final)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/evidencias",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "evidencias"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatricula}},\n  \"FK_TPERIODO_EVALUACION\": null\n}"
+        },
+        "description": {
+          "content": "Lo mismo que el anterior pero sin acotar el periodo: las evidencias de todo el año lectivo. Es lo que muestra la fila Final.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "14a - Fila Final: GENERAR el borrador del año",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/observacion/final",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "observacion",
+            "final"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatricula}}\n}"
+        },
+        "description": {
+          "content": "Los resumenes de periodo YA CONSOLIDADOS del estudiante, encadenados en orden y prefijados con el nombre de cada periodo. NO es /informes/observacion/generar, que concatena las observaciones por ACTIVIDAD dentro de un periodo: eso es materia prima y se revisa antes de guardar; esto es texto que alguien ya aprobo. NO ESCRIBE y no hay como guardarlo -- el Final no es un periodo real --, asi que se calcula al mirarlo igual que su nota. Devuelve siempre una fila; con null y 0 si el estudiante no tiene ningun resumen guardado. Es la misma informacion que ya trae la fila Final de /informes/grupo.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "14b - Fila Final: GUARDAR (tal cual = APROBADA)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/observacion/final/guardar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "observacion",
+            "final",
+            "guardar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatricula}},\n  \"OBSERVACION\": \"{{observacionIa}}\",\n  \"OBSERVACION_IA\": \"{{observacionIa}}\",\n  \"PERIODOS_ORIGEN\": {{observacionesOrigen}}\n}"
+        },
+        "description": {
+          "content": "Guarda el comentario del AÑO en TESTUDIANTE_ANIO_OBSERVACION, cuya llave es solo la matricula. Reemplaza. El ESTADO no se pide: sale de comparar OBSERVACION contra OBSERVACION_IA, asi que mandando los dos iguales -- el borrador tal como lo devolvio 14a -- la fila queda APROBADA. PERIODOS_ORIGEN es cuantos resumenes de periodo consolidados habia al generar; si no lo mandas se cuentan al guardar. Gate INFORMES/EDITAR.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "14c - Fila Final: GUARDAR EDITADO (queda MODIFICADA)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/observacion/final/guardar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "observacion",
+            "final",
+            "guardar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatricula}},\n  \"OBSERVACION\": \"Texto del año corregido a mano por la docente.\"\n}"
+        },
+        "description": {
+          "content": "Lo mismo pero sin reenviar el borrador, que es lo que pasa al reabrir el panel y editar. La funcion conserva el OBSERVACION_IA que ya estaba guardado en vez de asumir que el texto nuevo es el de la IA, asi que la fila queda MODIFICADA -- si lo asumiera, editar quedaria registrado como aprobado sin cambios. Y como tampoco llega PERIODOS_ORIGEN, se cuenta al guardar, para que la marca de desactualizado no quede mintiendo.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "14d - Fila Final: ELIMINAR",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/observacion/final/eliminar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "observacion",
+            "final",
+            "eliminar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatricula}}\n}"
+        },
+        "description": {
+          "content": "Quita el comentario del AÑO. Borrado FISICO y no baja logica: el indice unico es total sobre la matricula, de modo que una fila inactiva seguiria ocupando el lugar e impediria guardar una nueva; y no hay nada que conservar, porque el texto se regenera desde los resumenes de periodo. Despues, la fila Final de /informes/grupo vuelve a traer observacion en null. Gate INFORMES/ELIMINAR -- mas exigente que el EDITAR de guardar. Llamarlo dos veces responde 404.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
       "name": "Observacion por IA (preescolar)",
       "description": {
         "content": "Los tres actos del resumen de seguimiento. **Son tres endpoints y no uno**\na proposito, y esa separacion es lo que sostiene el modelo de estados.\n\n`generar` **no escribe nada**. Por eso la tabla solo tiene dos estados,\n`APROBADA` y `MODIFICADA`: no existe el momento \"la IA ya escribio pero\nnadie reviso\", y toda fila guardada es, por definicion, un texto que un\nhumano acepto -- lo que la hace publicable en un boletin sin mas preguntas.",
