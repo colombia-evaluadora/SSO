@@ -1,0 +1,25 @@
+# Identidades canonicas: las mismas cinco personas firmaron con ocho pares
+# nombre/correo distintos (portatil sin configurar, commits desde la web de
+# GitHub, correo corporativo vs personal). Sin este fichero, `git shortlog`,
+# `git blame` y el informe de migraciones cuentan a "Jorge Sanchez" y a
+# "Jorge Luis Sanchez" como dos personas.
+#
+# Formato: Nombre canonico <correo canonico> <correo a unificar>
+
+Cristian Gonzalez Franco <cristiandavidgf@gmail.com>
+Cristian Gonzalez Franco <cristiandavidgf@gmail.com> <cristian.gonzalez@example.com>
+Cristian Gonzalez Franco <cristiandavidgf@gmail.com> <cristian.gonzalez.franco@gmail.com>
+Cristian Gonzalez Franco <cristiandavidgf@gmail.com> <97616425+cristian10gf@users.noreply.github.com>
+
+Jorge Luis Sanchez <jorge.sanchez@solinces.com>
+Jorge Luis Sanchez <jorge.sanchez@solinces.com> <jorgeluissanchezbarreneche@gmail.com>
+Jorge Luis Sanchez <jorge.sanchez@solinces.com> <50006106+jorgeluissanchez@users.noreply.github.com>
+
+Yovany Zhu Ye <yzhu@uninorte.edu.co>
+Yovany Zhu Ye <yzhu@uninorte.edu.co> <123845628+yzhuye@users.noreply.github.com>
+
+sandrotg <tsandro@uninorte.edu.co>
+sandrotg <tsandro@uninorte.edu.co> <99270109+sandrotg@users.noreply.github.com>
+
+Daniel Jose Romero Martinez <djromer@gmail.com>
+Daniel Jose Romero Martinez <djromer@gmail.com> <99485690+djromerom@users.noreply.github.com>

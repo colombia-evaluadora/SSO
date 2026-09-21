@@ -62,6 +62,64 @@ y se separa entre "sus mismas migraciones" y "otras". Una sentencia suelta
 (un `UPDATE` sin definir nada) se atribuye a la migración. El JSON lo expone
 como `uses`: `{from, to, v, line, file, kind: call|ref|java}`.
 
+## Cuántas líneas sobran
+
+La pestaña **Líneas** reparte las 127k líneas del corpus en *sin efecto* /
+*vigentes* / *sin encadenar*, con el desglose por archivo. Cada sentencia
+reclama su tramo desde el `;` anterior (así que arrastra su comentario de
+cabecera, que es lo que de verdad se borraría) y el tramo sólo cuenta como
+sin efecto si **ninguna** de sus escrituras sigue viva: en un bloque `DO`
+que toca varios objetos, basta uno vigente para conservarlo.
+
+Ese número **no es una lista de borrado**: borrar una migración ya aplicada
+rompe el checksum de Flyway en el servidor. Es lo que colapsaría en un squash
+y lo que no hace falta leer al depurar.
+
+## Presupuesto de comentarios
+
+La pestaña **Líneas y comentarios** mide también el presupuesto de CLAUDE.md
+(cabecera de ≤12 líneas, ≤20% de comentario) con el **mismo criterio que
+`scripts/migration-lint.py`**: líneas que empiezan con `--`, y fuera de
+presupuesto sólo si pasa el 20% *y* tiene más de 20 líneas de comentario. Así
+el informe y el linter no pueden contradecirse. La escala es de tres niveles
+—dentro / 20-40% / >40%— porque con un solo umbral quedaban 249 de 384
+archivos en rojo y el color dejaba de avisar.
+
+## Autoría
+
+La pestaña **Autoría** dice de quién es cada migración —quien hizo el **primer**
+commit que la creó— y quién la tocó después, en orden, con `+`/`−` líneas por
+commit. Distingue tres aportes que no conviene mezclar: **crear**, **editar la
+de otro** (lo que obliga a `flyway repair` donde ya se había aplicado) y
+**volver sobre la propia**. Al elegir una persona se ven sus aportes: qué creó,
+en qué estado quedó (veredictos), qué objetos, su % de comentario, su actividad
+por mes y la lista de lo que editó de otros. El selector de la pestaña
+Migraciones filtra por persona.
+
+Las identidades se unifican con `.mailmap`, en la raíz del repo: las mismas
+cinco personas firmaron con ocho pares nombre/correo distintos, y sin eso
+«Jorge Sanchez» y «Jorge Luis Sanchez» cuentan como dos. Ese fichero también
+arregla `git shortlog` y `git blame`.
+
+Límite del dato: sale de `git log` sobre la rama actual. Una rama integrada con
+*squash* deja un solo commit, así que quien lo firmó figura como autor aunque el
+trabajo fuese de otro, y un rebase reescribe las fechas.
+
+## Cómo se navega
+
+- Cada migración trae un **mapa del archivo**: una franja por tramo de líneas,
+  coloreada por estado (vigente / sin efecto / comentario / sin encadenar). Es
+  lo que deja ver de un golpe que media migración ya no hace nada.
+- Barras de presupuesto (líneas, sin efecto, comentarios, cabecera) y los
+  objetos escritos **agrupados por tipo**, con el recuento vivo/muerto.
+- Dependencias en los dos sentidos, con el número de objetos de cada arista:
+  *usa objetos creados en* (si esa migración cambia una firma, esta hay que
+  revisarla) y *sus objetos los usa* (las que romperían si esta cambia).
+- Las cabeceras de la tabla ordenan; `/` enfoca el buscador y `Esc` lo limpia.
+- El hash guarda la selección (`#migraciones/51`,
+  `#objetos/function:academico_test.fn_fun_actualizar`), así que un enlace abre
+  la página ya posicionada.
+
 ## Precisión
 
 El informe muestra su propia cobertura: cuántas sentencias no logró clasificar.

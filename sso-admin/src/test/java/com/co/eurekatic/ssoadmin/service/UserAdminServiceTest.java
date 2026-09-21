@@ -346,7 +346,7 @@ class UserAdminServiceTest {
         // La respuesta confirma a donde se envio y cuanto dura, sin entregar
         // la credencial: el token solo viaja en el enlace del correo.
         assertThat(res.maskedEmail()).isEqualTo("a****@example.com");
-        assertThat(res.expiresIn()).isEqualTo(30 * 60);
+        assertThat(res.expiresIn()).isEqualTo(2 * 24 * 60 * 60);
 
         // Restore-token must be issued, and the password-reset event
         // is published via NotificationEventPublisher with the token
@@ -419,7 +419,7 @@ class UserAdminServiceTest {
 
         assertThat(res.status()).isEqualTo("valid");
         assertThat(res.expiresIn()).isBetween(1L, 600L);
-        assertThat(res.ttlSeconds()).isEqualTo(30 * 60);
+        assertThat(res.ttlSeconds()).isEqualTo(2 * 24 * 60 * 60);
         // El correo alcanza para reconocerlo, no para leerlo entero.
         assertThat(res.maskedEmail()).isEqualTo("a****@example.com");
         assertThat(res.issuedAt()).isNotNull();
