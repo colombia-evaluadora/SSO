@@ -85,6 +85,26 @@ el informe y el linter no pueden contradecirse. La escala es de tres niveles
 —dentro / 20-40% / >40%— porque con un solo umbral quedaban 249 de 384
 archivos en rojo y el color dejaba de avisar.
 
+## Autoría
+
+La pestaña **Autoría** dice de quién es cada migración —quien hizo el **primer**
+commit que la creó— y quién la tocó después, en orden, con `+`/`−` líneas por
+commit. Distingue tres aportes que no conviene mezclar: **crear**, **editar la
+de otro** (lo que obliga a `flyway repair` donde ya se había aplicado) y
+**volver sobre la propia**. Al elegir una persona se ven sus aportes: qué creó,
+en qué estado quedó (veredictos), qué objetos, su % de comentario, su actividad
+por mes y la lista de lo que editó de otros. El selector de la pestaña
+Migraciones filtra por persona.
+
+Las identidades se unifican con `.mailmap`, en la raíz del repo: las mismas
+cinco personas firmaron con ocho pares nombre/correo distintos, y sin eso
+«Jorge Sanchez» y «Jorge Luis Sanchez» cuentan como dos. Ese fichero también
+arregla `git shortlog` y `git blame`.
+
+Límite del dato: sale de `git log` sobre la rama actual. Una rama integrada con
+*squash* deja un solo commit, así que quien lo firmó figura como autor aunque el
+trabajo fuese de otro, y un rebase reescribe las fechas.
+
 ## Cómo se navega
 
 - Cada migración trae un **mapa del archivo**: una franja por tramo de líneas,

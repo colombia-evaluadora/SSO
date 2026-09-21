@@ -52,10 +52,33 @@ def compact(model: dict) -> dict:
                   u["file"] if u["kind"] == "java" else ""]
                  for u in model.get("uses", [])],
         "unparsed": model.get("unparsed", []),
+        "auth": compact_authors(model.get("authors", {})),
         "meta": model["meta"],
         "coverage": model.get("coverage", {}),
     }
 
+
+
+def compact_authors(a: dict) -> dict:
+    """Las personas se referencian por indice: 900 toques con el nombre repetido
+    engordan el HTML sin dar nada."""
+    if not a or not a.get("people"):
+        return {"names": [], "people": [], "byv": {}}
+    names = [pr["name"] for pr in a["people"]]
+    idx = {n: i for i, n in enumerate(names)}
+    return {
+        "names": names,
+        "people": [{"i": idx[pr["name"]], "cr": pr["created"], "ed": pr["edited"],
+                    "rt": pr["retouched"], "c": pr["commits"],
+                    "a": pr["added"], "d": pr["deleted"],
+                    "f": pr["first"][:10], "l": pr["last"][:10]}
+                   for pr in a["people"]],
+        "byv": {v: [idx[i["owner"]],
+                    [[t[0], idx[t[1]], t[2][:10], t[3], t[4], t[5]]
+                     for t in i["touches"]]]
+                for v, i in a["by_version"].items()},
+        "commits": a.get("commits", 0),
+    }
 
 
 GROUP_RANK = {"public.query": 0, "Funciones": 1, "DDL": 2, "Catálogo": 3,
@@ -312,6 +335,33 @@ th.sortable[aria-sort="descending"]::after{content:'▼'}
 th.sortable[aria-sort="ascending"]::after{content:'▲'}
 kbd{font-family:var(--mono);font-size:10.5px;border:1px solid var(--rule);border-radius:3px;
  padding:0 4px;background:var(--sunk);color:var(--muted)}
+/* autoria */
+.who-ini{display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;
+ border-radius:50%;background:var(--sunk);border:1px solid var(--rule);font-family:var(--mono);
+ font-size:9.5px;font-weight:600;color:var(--muted);flex:none}
+.flow{display:flex;flex-direction:column;gap:0;margin:2px 0 10px}
+.flowrow{display:grid;grid-template-columns:19px 1fr;gap:9px;padding:0}
+.flowrow .rail{display:flex;flex-direction:column;align-items:center;gap:2px}
+.flowrow .rail .line{flex:1;width:1px;background:var(--rule);min-height:8px}
+.flowrow:last-child .rail .line{background:none}
+.flowbody{padding:0 0 10px;font-size:12px;min-width:0}
+.flowbody .top{display:flex;flex-wrap:wrap;gap:3px 8px;align-items:baseline}
+.flowbody .nm{font-weight:600}
+.flowbody .dt,.flowbody .sha{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.flowbody .subj{color:var(--muted);font-size:11.5px;word-break:break-word}
+.flowbody .delta{font-family:var(--mono);font-size:11px}
+.add{color:var(--live)} .del{color:var(--dead)}
+.tag-new{font-size:10px;font-family:var(--mono);color:var(--accent);
+ border:1px solid currentColor;border-radius:8px;padding:0 5px}
+.f-cr{fill:var(--accent)} .f-ed{fill:var(--resid)} .f-rt{fill:var(--faint)}
+.lg-cr{background:var(--accent)} .lg-ed{background:var(--resid)} .lg-rt{background:var(--faint)}
+tr.person{cursor:pointer}
+.statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:9px;
+ margin:0 0 14px}
+.stat{background:var(--sunk);border-radius:5px;padding:9px 11px}
+.stat .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.stat .n{font-family:var(--mono);font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}
+.stat .s{font-size:11px;color:var(--muted)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 """
 
@@ -332,6 +382,20 @@ const byV = v => D.migs.find(m => m.v === v);
 const fmt = n => n.toLocaleString('en-US');
 const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
 const MAP_ES = {l:'vigente', d:'sin efecto', c:'comentario', o:'sin encadenar', b:'en blanco'};
+const A = D.auth || {names:[], people:[], byv:{}};
+const whoName = i => A.names[i] || '?';
+const shortName = i => {
+  const p = whoName(i).split(' ');
+  return p.length > 1 ? `${p[0]} ${p[1][0]}.` : p[0];
+};
+const initials = i => {
+  const p = whoName(i).split(' ').filter(Boolean);
+  return ((p[0]?.[0] || '?') + (p[1]?.[0] || '')).toUpperCase();
+};
+const ownerOf = v => A.byv[v]?.[0];
+const touchesOf = v => A.byv[v]?.[1] || [];
+const handsOf = v => new Set(touchesOf(v).map(t => t[1]));
+const ini = i => `<span class="who-ini" title="${esc(whoName(i))}">${initials(i)}</span>`;
 
 /* El mapa viene comprimido por tramos ("84c1b269l…"): una letra por línea. */
 const parseMap = s => [...String(s||'').matchAll(/(\d+)([ldcbo])/g)].map(m => [m[2], +m[1]]);
@@ -379,6 +443,8 @@ const KIND_ES = {create:'crea', replace:'redefine', 'create-table':'crea tabla',
 const kindEs = k => { const b = k.replace(' (DO)',''); return (KIND_ES[b]||b) + (k.endsWith('(DO)')?' (DO)':''); };
 const objLabel = key => (D.chains[key]?.l) || key.slice(key.indexOf(':')+1);
 const DOT = {live:'●', dead:'✕', 'patch-live':'◐', 'patch-dead':'◌'};
+const VERD = ['obsoleta','residual','parcial','viva','solo-binds','sin-cambios'];
+const minus = n => n ? `−${fmt(n)}` : '0';
 
 /* ---------- tabs ---------- */
 let curTab = 'migraciones';
@@ -424,10 +490,11 @@ document.addEventListener('keydown', e => {
 
 /* ---------- migraciones ---------- */
 let migFilter = new Set(), migQ = '', selected = null;
-let migSort = {k: 'v', dir: 1};
+let migSort = {k: 'v', dir: 1}, migAuthor = '';
 const MIG_KEY = {
   v: m => +m.v, n: m => m.n, vd: m => m.vd, lw: m => m.lw, dw: m => m.dw,
   l: m => m.l, dl: m => m.dl, cp: m => m.cp,
+  au: m => whoName(ownerOf(m.v) ?? -1),
 };
 
 $$('#vfilters .chipbtn').forEach(b => b.addEventListener('click', () => {
@@ -437,12 +504,14 @@ $$('#vfilters .chipbtn').forEach(b => b.addEventListener('click', () => {
   renderMigs();
 }));
 $('#migsearch').addEventListener('input', e => { migQ = e.target.value.trim(); renderMigs(); });
+$('#migauthor').addEventListener('change', e => { migAuthor = e.target.value; renderMigs(); });
 
 function migRows() {
   const q = migQ.toLowerCase().replace(/^v/, '');
   const f = MIG_KEY[migSort.k];
   return D.migs.filter(m =>
     (!migFilter.size || migFilter.has(m.vd)) &&
+    (migAuthor === '' || handsOf(m.v).has(+migAuthor)) &&
     (!q || m.v.includes(q) || m.n.toLowerCase().includes(q) ||
       m.w.some(w => w[1].toLowerCase().includes(q))))
     .sort((a, b) => {
@@ -474,8 +543,13 @@ function renderMigs() {
       <td class="num st-dead">${m.dl?fmt(m.dl):''}</td>
       <td class="num ${CM_CLS[cmLevel(m)]}"
         title="${m.cl} de ${m.l} líneas son comentario — ${CM_ES[cmLevel(m)]}">${m.cp}%</td>
+      <td class="m" style="white-space:nowrap">${ownerOf(m.v)!=null
+        ? `${esc(shortName(ownerOf(m.v)))}${handsOf(m.v).size>1
+            ? ` <span class="dim" title="${esc([...handsOf(m.v)].map(whoName).join(' → '))}"
+                >+${handsOf(m.v).size-1}</span>` : ''}`
+        : '<span class="dim">—</span>'}</td>
     </tr>`).join('') ||
-    '<tr><td colspan="8" class="empty">Sin resultados</td></tr>';
+    '<tr><td colspan="9" class="empty">Sin resultados</td></tr>';
   $$('#migbody tr[data-v]').forEach(tr =>
     tr.addEventListener('click', () => selectMig(tr.dataset.v)));
 }
@@ -562,9 +636,35 @@ function selectMig(v) {
         data-goto="${r}">V${r}</button>`), 'referencias documentadas, no verificadas')}
     ${dep('Mencionada por', usedBy.map(r =>
       `<button class="node n-live" data-goto="${r}">V${r}</button>`), '')}
+    ${flowHtml(m.v)}
     <h3 class="sect">Objetos escritos <span class="n">${ws.length}</span></h3>
     ${grpHtml || '<div class="empty">sin objetos rastreables</div>'}`;
   wireGoto($('#migdetail'));
+}
+
+/* El flujo: quien la creó y quien la tocó después, en orden. En este repo las
+   migraciones se editan in-place, así que esta lista es la que explica un
+   checksum cambiado en un servidor. */
+function flowHtml(v) {
+  const ts = touchesOf(v);
+  if (!ts.length) return `<h3 class="sect">Flujo de cambios</h3>
+    <div class="empty" style="padding:8px">sin historial en git (¿sin commitear?)</div>`;
+  const hands = handsOf(v);
+  return `<h3 class="sect">Flujo de cambios <span class="n">${ts.length} commits ·
+    ${hands.size} ${hands.size === 1 ? 'persona' : 'personas'}</span></h3>
+    <div class="flow">${ts.map((t, i) => `
+      <div class="flowrow">
+        <div class="rail">${ini(t[1])}<div class="line"></div></div>
+        <div class="flowbody">
+          <div class="top"><span class="nm">${esc(shortName(t[1]))}</span>
+            ${i === 0 ? '<span class="tag-new">creó</span>' : ''}
+            <span class="dt">${t[2]}</span>
+            <span class="delta"><span class="add">+${fmt(t[4])}</span>
+              <span class="del">${minus(t[5])}</span></span>
+            <span class="sha">${t[0]}</span></div>
+          <div class="subj">${esc(t[3])}</div>
+        </div>
+      </div>`).join('')}</div>`;
 }
 
 function wireGoto(root) {
@@ -1001,12 +1101,138 @@ $('#lnpart').addEventListener('click', e => {
   renderRank(); renderLnTable();
 });
 
+/* ---------- autoría ---------- */
+let selPerson = null;
+
+function renderAuthors() {
+  if (!A.people.length) {
+    $('#aubody').innerHTML = '<tr><td colspan="8" class="empty">git no disponible</td></tr>';
+    return;
+  }
+  const max = Math.max(...A.people.map(p => p.cr.length + p.ed.length + p.rt.length));
+  const W = 1000, RH = 30, LW = 190, TOP = 26;
+  const H = TOP + A.people.length * RH + 6;
+  const plot = W - LW - 120;
+  const out = [`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Aportes por persona:
+    migraciones creadas, editadas de otros y reeditadas.">`];
+  A.people.forEach((p, i) => {
+    const y = TOP + i * RH;
+    const segs = [[p.cr.length, 'f-cr', 'creó'], [p.ed.length, 'f-ed', 'editó de otros'],
+                  [p.rt.length, 'f-rt', 'reeditó propias']];
+    let x = LW;
+    out.push(`<text x="0" y="${y + 15}" class="f-lbl">${esc(shortName(p.i))}</text>`);
+    segs.forEach(([n, cls, lbl]) => {
+      const w = (n / max) * plot;
+      if (n) out.push(`<rect x="${x}" y="${y + 4}" width="${Math.max(0, w - 2)}" height="16"
+        rx="3" class="${cls}"><title>${esc(whoName(p.i))}: ${n} ${lbl}</title></rect>`);
+      if (w > 26) out.push(`<text x="${x + 5}" y="${y + 16}" class="f-val"
+        style="fill:var(--panel)">${n}</text>`);
+      x += w;
+    });
+    out.push(`<text x="${x + 7}" y="${y + 16}" class="f-lbl">${p.cr.length} · ${p.ed.length}
+      · ${p.rt.length}</text>`);
+  });
+  out.push('</svg>');
+  $('#auchart').innerHTML = out.join('');
+
+  $('#aubody').innerHTML = A.people.map(p => `
+    <tr class="person ${selPerson === p.i ? 'sel' : ''}" data-p="${p.i}">
+      <td>${ini(p.i)} ${esc(whoName(p.i))}</td>
+      <td class="num">${p.cr.length}</td>
+      <td class="num">${p.ed.length || ''}</td>
+      <td class="num dim">${p.rt.length || ''}</td>
+      <td class="num dim">${p.c}</td>
+      <td class="num add">+${fmt(p.a)}</td>
+      <td class="num ${p.d?'del':'dim'}">${minus(p.d)}</td>
+      <td class="m dim">${p.f} → ${p.l}</td>
+    </tr>`).join('');
+  $$('#aubody tr[data-p]').forEach(tr =>
+    tr.addEventListener('click', () => selectPerson(+tr.dataset.p)));
+  if (selPerson == null) selectPerson(A.people[0].i);
+}
+
+/* Estadísticas de una persona: qué creó, en qué estado quedó y qué tocó de
+   otros. Todo se deriva de las migraciones, no de un recuento aparte. */
+function selectPerson(i) {
+  selPerson = i;
+  $$('#aubody tr[data-p]').forEach(tr =>
+    tr.classList.toggle('sel', +tr.dataset.p === i));
+  const p = A.people.find(x => x.i === i);
+  const mine = p.cr.map(byV).filter(Boolean);
+  const sum = (a, f) => a.reduce((n, m) => n + f(m), 0);
+  const lines = sum(mine, m => m.l), dead = sum(mine, m => m.dl);
+  const cl = sum(mine, m => m.cl);
+  const vd = {};
+  mine.forEach(m => { vd[m.vd] = (vd[m.vd] || 0) + 1; });
+  const objs = {};
+  mine.forEach(m => m.w.forEach(w => {
+    if (['bind','data','dynamic','scratch','query_bulk'].includes(w[0])) return;
+    objs[w[0]] = (objs[w[0]] || 0) + 1;
+  }));
+  const months = {};
+  Object.entries(A.byv).forEach(([v, [, ts]]) => ts.forEach(t => {
+    if (t[1] === i) months[t[2].slice(0, 7)] = (months[t[2].slice(0, 7)] || 0) + 1;
+  }));
+  const mk = Object.keys(months).sort();
+
+  const link = v => `<button class="node n-${byV(v).vd==='obsoleta'?'dead':'live'}"
+    data-goto="${v}">V${v}</button>`;
+
+  $('#audetail').innerHTML = `
+    <h4>${ini(i)} ${esc(whoName(i))}</h4>
+    <div class="sub">${p.c} commits sobre migraciones · ${p.f} → ${p.l}</div>
+    <div class="statgrid">
+      <div class="stat"><div class="k">Creó</div><div class="n">${p.cr.length}</div>
+        <div class="s">${fmt(lines)} líneas</div></div>
+      <div class="stat"><div class="k">Sin efecto</div>
+        <div class="n st-dead">${pct(dead, lines)}%</div>
+        <div class="s">${fmt(dead)} de sus líneas</div></div>
+      <div class="stat"><div class="k">Comentario</div><div class="n">${pct(cl, lines)}%</div>
+        <div class="s">${fmt(cl)} líneas</div></div>
+      <div class="stat"><div class="k">Editó de otros</div><div class="n">${p.ed.length}</div>
+        <div class="s">reeditó ${p.rt.length} propias</div></div>
+      <div class="stat"><div class="k">Líneas escritas</div>
+        <div class="n add">+${fmt(p.a)}</div><div class="s">${minus(p.d)} borradas</div></div>
+    </div>
+    <h3>Cómo quedó lo que creó</h3>
+    <div class="chain" style="gap:6px">${VERD.filter(v => vd[v]).map(v =>
+      `<span class="pill p-${v}">${v} ${vd[v]}</span>`).join('')}</div>
+    <h3>Objetos que creó</h3>
+    <div class="chain" style="gap:6px">${Object.entries(objs)
+      .sort((a, b) => b[1] - a[1]).map(([t, n]) =>
+      `<span class="pill" style="color:var(--muted)">${TYPE_ES[t] || t} ${n}</span>`)
+      .join('') || '<span class="dim">ninguno</span>'}</div>
+    ${mk.length > 1 ? `<h3>Actividad por mes</h3>
+      <svg viewBox="0 0 ${mk.length * 34} 56" class="fig" style="background:none;border:0;
+        box-shadow:none;padding:0;height:56px;width:100%" role="img"
+        aria-label="Commits sobre migraciones por mes">${(() => {
+        const mx = Math.max(...Object.values(months));
+        return mk.map((k, j) => {
+          const h = (months[k] / mx) * 32;
+          return `<rect x="${j * 34 + 4}" y="${38 - h}" width="24" height="${h}" rx="2"
+            class="f-cr"><title>${k}: ${months[k]} commits</title></rect>
+            <text x="${j * 34 + 16}" y="${52}" class="f-lbl" text-anchor="middle"
+            >${k.slice(5)}</text>`;
+        }).join('');
+      })()}</svg>` : ''}
+    <h3 class="sect">Migraciones que creó <span class="n">${p.cr.length}</span></h3>
+    <div class="chain">${p.cr.slice(-60).reverse().map(link).join('')}
+      ${p.cr.length > 60 ? '<span class="dim">… las 60 más recientes</span>' : ''}</div>
+    ${p.ed.length ? `<h3 class="sect">Editó de otros <span class="n">${p.ed.length}</span></h3>
+      <div class="chain">${p.ed.map(v => `${link(v)}<span class="dim" style="font-size:11px"
+        >de ${esc(shortName(ownerOf(v)))}</span>`).join(' ')}</div>` : ''}
+    ${p.rt.length ? `<h3 class="sect">Volvió sobre propias <span class="n">${p.rt.length}</span></h3>
+      <div class="chain">${p.rt.map(link).join('')}</div>` : ''}`;
+  wireGoto($('#audetail'));
+}
+
 /* ---------- init ---------- */
 renderMigs();
 renderObjs();
 renderMatrix();
 renderLines();
 renderComments();
+renderAuthors();
 wireGoto(document);
 if (!deepLink()) selectMig((D.migs.find(m => m.vd === 'obsoleta') || D.migs[0]).v);
 window.addEventListener('hashchange', deepLink);
@@ -1177,6 +1403,15 @@ def build(model: dict) -> str:
 
     parcial_files = sum(1 for m in migs if m["dl"] and m["vd"] in ("parcial", "residual"))
 
+    auth = data.get("auth", {})
+    n_people = len(auth.get("people", []))
+    multi_hands = sum(1 for _v, (_o, ts) in auth.get("byv", {}).items()
+                      if len({t[1] for t in ts}) > 1)
+    n_migs = meta["count"]
+    author_opts = "".join(
+        f'<option value="{pr["i"]}">{auth["names"][pr["i"]]} ({len(pr["cr"])})</option>'
+        for pr in auth.get("people", []))
+
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
@@ -1226,6 +1461,9 @@ no mata lo anterior, lo modifica. Regenerá esta página con
     <div class="n dead">{meta['dead_lines']:,}</div>
     <div class="s">{round(100 * meta['dead_lines'] / max(1, meta['total_lines']))}% de
       {meta['total_lines']:,} líneas de migración</div></div>
+  <div class="metric"><div class="k">Manos</div>
+    <div class="n">{n_people}</div>
+    <div class="s">{multi_hands} migraciones tocadas por más de una persona</div></div>
   <div class="metric"><div class="k">Comentarios</div>
     <div class="n">{round(100 * meta['comment_lines'] / max(1, meta['total_lines']))}%</div>
     <div class="s">{meta['over_comment_budget']} migraciones sobre el 20%
@@ -1246,6 +1484,7 @@ no mata lo anterior, lo modifica. Regenerá esta página con
   <button class="tab" data-tab="obsoletas" role="tab" aria-selected="false">Obsoletas</button>
   <button class="tab" data-tab="objetos" role="tab" aria-selected="false">Objetos</button>
   <button class="tab" data-tab="lineas" role="tab" aria-selected="false">Líneas y comentarios</button>
+  <button class="tab" data-tab="autoria" role="tab" aria-selected="false">Autoría</button>
   <button class="tab" data-tab="matriz" role="tab" aria-selected="false">Matriz</button>
   <button class="tab" data-tab="diagnosticos" role="tab" aria-selected="false">Diagnósticos</button>
   <button class="tab" data-tab="tipos" role="tab" aria-selected="false">Tipos de cambio</button>
@@ -1258,6 +1497,9 @@ no mata lo anterior, lo modifica. Regenerá esta página con
     <input type="search" id="migsearch" placeholder="buscar versión, nombre u objeto…  (/)"
       aria-label="Buscar migración">
     <span id="vfilters">{vfilters}</span>
+    <select id="migauthor" aria-label="Filtrar por persona">
+      <option value="">cualquier persona</option>{author_opts}
+    </select>
     <span class="count" id="migcount"></span>
   </div>
   <div class="split">
@@ -1275,6 +1517,7 @@ no mata lo anterior, lo modifica. Regenerá esta página con
           title="Líneas cuyo efecto fue reescrito después">Sin efecto</th>
         <th class="sortable" data-k="cp" style="text-align:right"
           title="% de líneas de comentario; el presupuesto del repo es 20%">Coment.</th>
+        <th class="sortable" data-k="au" title="Quien la creó; +n = manos que la tocaron después">Autor</th>
       </tr></thead><tbody id="migbody"></tbody></table>
     </div>
     <aside class="detail" id="migdetail"></aside>
@@ -1391,6 +1634,48 @@ no mata lo anterior, lo modifica. Regenerá esta página con
     <th style="text-align:right" title="Presupuesto: 12 líneas">Cabecera</th>
     <th style="text-align:right">Sin efecto</th>
   </tr></thead><tbody id="cmbody"></tbody></table></div>
+</section>
+
+<section class="panel" id="p-autoria" role="tabpanel" hidden>
+  <p class="note">De quién es cada migración —quien hizo el <b>primer</b> commit que la
+  creó— y quién la tocó después. Las identidades se unifican con <code>.mailmap</code>:
+  las mismas {n_people} personas firmaron con ocho pares nombre/correo distintos, y sin
+  eso «Jorge Sanchez» y «Jorge Luis Sanchez» contarían como dos.
+  {multi_hands} migraciones pasaron por más de una mano; ahí es donde un checksum
+  cambiado sorprende a otro servidor.</p>
+  <p class="note"><b>Límite del dato:</b> sale de <code>git log</code> sobre la rama actual.
+  Una rama integrada con <i>squash</i> deja un solo commit, así que quien lo firmó figura
+  como autor aunque el trabajo fuese de otro; y un rebase reescribe las fechas. Para lo
+  fino, <code>git log --follow</code> sobre el archivo.</p>
+
+  <figure class="fig">
+    <figcaption><b>Aportes por persona.</b> Crear una migración, editar la de otro y volver
+    sobre la propia son tres cosas distintas: la segunda es la que obliga a un
+    <code>flyway repair</code> donde ya se había aplicado.</figcaption>
+    <div class="maplegend" style="margin:0 0 8px">
+      <span><i class="lg-cr"></i>creó</span>
+      <span><i class="lg-ed"></i>editó de otros</span>
+      <span><i class="lg-rt"></i>reeditó propias</span>
+    </div>
+    <div id="auchart"></div>
+  </figure>
+
+  <div class="split">
+    <div class="tablewrap"><table><thead><tr>
+      <th>Persona</th><th style="text-align:right">Creó</th>
+      <th style="text-align:right" title="Migraciones de otra persona que tocó">De otros</th>
+      <th style="text-align:right" title="Migraciones propias que volvió a editar">Reeditó</th>
+      <th style="text-align:right">Commits</th>
+      <th style="text-align:right">Líneas +</th><th style="text-align:right">Líneas −</th>
+      <th>Actividad</th>
+    </tr></thead><tbody id="aubody"></tbody></table></div>
+    <aside class="detail" id="audetail"></aside>
+  </div>
+  <p class="note" style="margin-top:12px">Las líneas <code>+</code>/<code>−</code> son las
+  del <code>git log --numstat</code> sobre <code>postgres/migrations/</code>, así que una
+  migración reescrita entera cuenta dos veces: una al crearla y otra al reemplazarla.
+  «Creó» sí es exclusivo —una migración tiene un solo primer commit—, y por eso las cinco
+  cifras de «creó» suman las {n_migs} migraciones del repo.</p>
 </section>
 
 <section class="panel" id="p-matriz" role="tabpanel" hidden>
