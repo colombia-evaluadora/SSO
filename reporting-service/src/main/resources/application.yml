@@ -430,10 +430,14 @@ reporting:
     # solo puede decir la primera; impresas, las otras dos se leen como
     # calificaciones reales. La funcion las deja fuera.
     #
-    # `estado` distingue la nota guardada de la guardada CON un cambio
-    # propuesto pendiente. Se imprime la guardada; la columna existe para
-    # que se entienda la diferencia si alguien compara el archivo con la
-    # pantalla.
+    # NO lleva columna `estado`, y la funcion SI la devuelve: se deja fuera
+    # a proposito. Despues del filtro casi todas las filas dicen "Guardada"
+    # -- es lo unico que el boletin imprime --, asi que era una columna que
+    # ocupaba ancho para repetir lo mismo. Se pierde el matiz de la nota
+    # guardada CON un cambio propuesto pendiente; el numero impreso es el
+    # mismo igual, y quien necesite ese detalle lo tiene en la pantalla y en
+    # el descargar (informes-tabla). Si alguien la repone "por simetria" con
+    # ese otro reporte, esta es la razon de que no este.
     #
     # asignatura y observacion no estan llenas a la vez: en preescolar la
     # fila no tiene asignaturas y lo que vale es la observacion.
@@ -450,11 +454,50 @@ reporting:
         area: Area
         nota: Nota
         desempeno: Desempeno
+        aprobada: Aprobada
+        promedio: Promedio del periodo
+        puesto: Puesto
+        observacion: Observacion
+        evidencias: Evidencias
+
+    # -----------------------------------------------------------------
+    # informes-tabla: EL DESCARGAR, que no es el boletin.
+    #
+    # 'eval-col-informes-tabla-001': fn_informe_grupo_tabla, que llama a
+    # la misma fn_informe_grupo_listar de la pantalla y NO filtra nada.
+    #
+    # La diferencia con 'informes' es toda la gracia y es deliberada. El
+    # boletin imprime solo lo consolidado, porque una proyeccion o una
+    # nota requerida, fuera del sistema, se leen como calificaciones
+    # reales. Esto otro es "bajame lo que estoy viendo": salen tambien la
+    # proyectada, la requerida y la que no tiene nota, y cada una viene
+    # dicha con todas las letras en la columna estado, mas una columna
+    # consolidado que dice si ese periodo ya se congelo. Un volcado que
+    # esconde la mitad de la tabla no sirve para revisar; uno que no
+    # distingue una nota guardada de una proyeccion es peor todavia.
+    #
+    # evidencias trae la CUENTA de imagenes de la fila, no las imagenes:
+    # este servicio arma una tabla de texto desde este mismo mapa.
+    # -----------------------------------------------------------------
+    informes-tabla:
+      path: /informes/tabla
+      title: Informe por periodo (tabla completa)
+      file-name: informe-tabla
+      columns:
+        estudiante: Estudiante
+        documento: Documento
+        periodo: Periodo
+        consolidado: Consolidado
+        asignatura: Asignatura
+        area: Area
+        nota: Nota
+        desempeno: Desempeno
         estado: Estado
         aprobada: Aprobada
         promedio: Promedio del periodo
         puesto: Puesto
         observacion: Observacion
+        evidencias: Evidencias
 
 sso:
   jwt:
