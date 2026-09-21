@@ -120,10 +120,23 @@ BEGIN
     -- verifica igual, porque este parametro es un BIGINT como cualquier otro
     -- y nada impide que llegue uno inventado si alguien arma la peticion a
     -- mano contra el query-service.
+    --
+    -- SIN "AND ACTIVE = TRUE" a proposito, a diferencia de otros chequeos de
+    -- FK de este archivo: file-service SIEMPRE crea la fila de TARCHIVO con
+    -- ACTIVE = FALSE (ArchivoRepository, "Reserva la fila ANTES de subir a
+    -- S3") y recien la activa DESPUES de recibir un 2xx de ESTA MISMA
+    -- llamada (ReenvioController#reenviar, "Solo ahora se sabe que la
+    -- operacion completa salio bien"). Exigir ACTIVE = TRUE aca es una
+    -- condicion que nunca se puede cumplir -- el archivo esta, por diseno,
+    -- siempre inactivo en el momento exacto en que esta funcion corre.
+    -- Confirmado en produccion: toda subida de un material tipo Archivo
+    -- fallaba con "El archivo % no existe o esta inactivo". Mismo criterio
+    -- que ya usan las funciones hermanas de este mismo patron "subir y
+    -- devolver el id" (fn_matricula_archivo_crear, V201; el soporte de
+    -- asistencia, V221), que no chequean ACTIVE en este paso.
     IF NOT EXISTS (SELECT 1 FROM academico_test.TARCHIVO t
-                    WHERE t.PK_TARCHIVO = p_fk_tarchivo
-                      AND t.ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'El archivo % no existe o esta inactivo', p_fk_tarchivo
+                    WHERE t.PK_TARCHIVO = p_fk_tarchivo) THEN
+        RAISE EXCEPTION 'El archivo % no existe', p_fk_tarchivo
             USING ERRCODE = '23503';
     END IF;
 
