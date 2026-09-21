@@ -28,10 +28,10 @@ import java.util.UUID;
 @Service
 public class TokenService {
 
-    /** Matches the "ttlMinutes": 60 sent in the activation email payload. */
-    static final long ACTIVATION_TTL_MINUTES = 60;
-    /** Matches the "ttlMinutes": 30 sent in the restore-password email payload. */
-    static final long RESTORE_TTL_MINUTES = 30;
+    /** Matches the "ttlMinutes": 2880 sent in the activation email payload. */
+    static final long ACTIVATION_TTL_MINUTES = 2 * 24 * 60;
+    /** Matches the "ttlMinutes": 2880 sent in the restore-password email payload. */
+    static final long RESTORE_TTL_MINUTES = 2 * 24 * 60;
 
     private final UserRepository userRepository;
 
