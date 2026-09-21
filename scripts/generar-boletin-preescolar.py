@@ -17,11 +17,11 @@ def _pos(x, y, w, h):
 
 
 def txt(x, y, w, h, expr, size=9, bold=False, align='Left', color=AZUL,
-        blank=True, stretch=False):
+        blank=True, stretch=False, valign='Top'):
     attrs = [_pos(x, y, w, h),
              'fontName="%s"' % FUENTE, 'fontSize="%d"' % size,
              'forecolor="%s"' % color, 'hTextAlign="%s"' % align,
-             'vTextAlign="Top"']
+             'vTextAlign="%s"' % valign]
     if bold:
         attrs.append('bold="true"')
     if blank:
@@ -94,10 +94,18 @@ for etiqueta, campo, cx, cw in [('Sede',  '$F{sede_nombre}',     132, 170),
     P.append(static(cx, 232, cw, 11, etiqueta, size=7, color=GRIS))
     P.append(txt(cx, 244, cw, 12, campo, size=8, bold=True))
 
-# Seguimiento y valoracion.
+# Seguimiento y valoracion. EL TITULO NO ES FIJO: es el nombre del area o la
+# asignatura que se esta tratando ("Seguimiento y valoracion", "Comunicacion y
+# exploracion"), que en preescolar cambia por institucion. Solo cuando el
+# estudiante no tiene ninguna asignatura se cae a un rotulo generico, para que
+# la barra no salga vacia.
 P.append(rect(40, 285, 533, 22, AZUL, radius=6))
-P.append(static(52, 285, 400, 22, 'SEGUIMIENTO Y VALORACION',
-                size=10, bold=True, color=BLANCO))
+P.append(txt(52, 285, 380, 22,
+             '$F{asignatura_nombre} == null || $F{asignatura_nombre}.trim().isEmpty() '
+             '? "SEGUIMIENTO Y VALORACION" : $F{asignatura_nombre}.toUpperCase()',
+             size=10, bold=True, color=BLANCO, blank=False, valign='Middle'))
+P.append(txt(440, 285, 121, 22, '$F{area_nombre}',
+             size=7, align='Right', color=BLANCO, valign='Middle'))
 # Alto FIJO y no estirable: la rejilla de abajo esta posicionada en absoluto,
 # asi que un parrafo que crezca se le encimaria. 175pt son unas 18 lineas a 9pt
 # -- de sobra para el resumen de un periodo.
@@ -133,7 +141,8 @@ P.append(static(157, 828, 300, 11, 'Rector(a)', size=7, align='Center', color=GR
 
 campos = ['ee_nombre', 'ee_dane', 'ee_nit', 'ciudad', 'sede_nombre', 'nivel_ensenanza',
           'grado_nombre', 'grupo_etiqueta', 'periodo_nombre', 'anio', 'estudiante',
-          'documento', 'observacion', 'observacion_estado', 'rector_nombre']
+          'documento', 'asignatura_nombre', 'area_nombre',
+          'observacion', 'observacion_estado', 'rector_nombre']
 campos += ['evidencia%d_titulo' % i for i in range(1, 7)]
 # Las fechas se declaran como TEXTO: el datasource las entrega ya
 # formateadas por CellValues, no como objetos de fecha.
@@ -146,7 +155,11 @@ decl += ''.join('\t<field name="%s" class="java.io.InputStream"/>\n' % c
 
 cabecera = """<?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Boletin de preescolar: UNA PAGINA POR ESTUDIANTE.
+  Boletin de preescolar: UNA PAGINA POR (ESTUDIANTE, ASIGNATURA).
+
+  El titulo del bloque de seguimiento NO es un rotulo fijo: sale de
+  asignatura_nombre. Un estudiante que cursa dos dimensiones recibe dos
+  paginas, cada una con su titulo y con sus propias evidencias.
 
   DOS COSAS QUE PARECEN ERRORES Y NO LO SON, medidas contra JasperReports
   7.0.8 antes de escribir esta plantilla:

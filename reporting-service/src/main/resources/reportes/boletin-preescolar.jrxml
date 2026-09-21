@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Boletin de preescolar: UNA PAGINA POR ESTUDIANTE.
+  Boletin de preescolar: UNA PAGINA POR (ESTUDIANTE, ASIGNATURA).
+
+  El titulo del bloque de seguimiento NO es un rotulo fijo: sale de
+  asignatura_nombre. Un estudiante que cursa dos dimensiones recibe dos
+  paginas, cada una con su titulo y con sus propias evidencias.
 
   DOS COSAS QUE PARECEN ERRORES Y NO LO SON, medidas contra JasperReports
   7.0.8 antes de escribir esta plantilla:
@@ -56,6 +60,8 @@
 	<field name="anio" class="java.lang.String"/>
 	<field name="estudiante" class="java.lang.String"/>
 	<field name="documento" class="java.lang.String"/>
+	<field name="asignatura_nombre" class="java.lang.String"/>
+	<field name="area_nombre" class="java.lang.String"/>
 	<field name="observacion" class="java.lang.String"/>
 	<field name="observacion_estado" class="java.lang.String"/>
 	<field name="rector_nombre" class="java.lang.String"/>
@@ -136,8 +142,11 @@
 			<element kind="rectangle" x="40" y="285" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6">
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="staticText" x="52" y="285" width="400" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
-				<text><![CDATA[SEGUIMIENTO Y VALORACION]]></text>
+			<element kind="textField" x="52" y="285" width="380" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+				<expression><![CDATA[$F{asignatura_nombre} == null || $F{asignatura_nombre}.trim().isEmpty() ? "SEGUIMIENTO Y VALORACION" : $F{asignatura_nombre}.toUpperCase()]]></expression>
+			</element>
+			<element kind="textField" x="440" y="285" width="121" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#FFFFFF" hTextAlign="Right" vTextAlign="Middle" blankWhenNull="true">
+				<expression><![CDATA[$F{area_nombre}]]></expression>
 			</element>
 			<element kind="textField" x="40" y="315" width="533" height="165" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Justified" vTextAlign="Top">
 				<expression><![CDATA[$F{observacion} == null || $F{observacion}.trim().isEmpty() ? "Sin observaciones registradas para este periodo." : $F{observacion}]]></expression>

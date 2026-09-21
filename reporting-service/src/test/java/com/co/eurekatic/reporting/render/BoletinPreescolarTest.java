@@ -34,7 +34,8 @@ class BoletinPreescolarTest {
     private static final List<String> CAMPOS = List.of(
             "ee_nombre", "ee_dane", "ee_nit", "ciudad", "sede_nombre", "nivel_ensenanza",
             "grado_nombre", "grupo_etiqueta", "periodo_nombre", "anio", "fondo_archivo",
-            "estudiante", "documento", "foto_archivo", "observacion", "observacion_estado",
+            "estudiante", "documento", "foto_archivo",
+            "asignatura_nombre", "area_nombre", "observacion", "observacion_estado",
             "evidencia1_titulo", "evidencia1_fecha", "evidencia1_archivo",
             "evidencia2_titulo", "evidencia2_fecha", "evidencia2_archivo",
             "evidencia3_titulo", "evidencia3_fecha", "evidencia3_archivo",
@@ -79,6 +80,9 @@ class BoletinPreescolarTest {
         f.put("estudiante", estudiante);
         f.put("documento", "1234567890");
         f.put("foto_archivo", 901L);
+        // El titulo del bloque no es fijo: es la dimension que se esta tratando.
+        f.put("asignatura_nombre", "Comunicacion y exploracion");
+        f.put("area_nombre", "Dimensiones");
         f.put("observacion", conObservacion
                 ? "Durante este segundo periodo, el estudiante ha demostrado avances "
                   + "significativos en su desarrollo integral, expresandose con libertad a "
@@ -161,6 +165,9 @@ class BoletinPreescolarTest {
         Map<String, Object> vacia = fila("ESTUDIANTE SIN NADA", false, 0);
         vacia.put("fondo_archivo", null);
         vacia.put("foto_archivo", null);
+        // Sin asignatura tampoco: el titulo cae al rotulo generico.
+        vacia.put("asignatura_nombre", null);
+        vacia.put("area_nombre", null);
 
         byte[] pdf = new PdfRenderer().render(
                 "boletin-preescolar", definicion(), List.of(vacia),

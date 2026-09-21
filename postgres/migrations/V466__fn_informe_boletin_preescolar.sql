@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V466 - El boletin de preescolar: una fila = un estudiante = una pagina.
+-- V466 - El boletin de preescolar: una fila = (estudiante, asignatura).
 --   fn_informe_boletin_preescolar
 --   POST /informes/boletin-preescolar   lo que consume reporting-service
 --
@@ -37,6 +37,9 @@ RETURNS TABLE(
     estudiante           VARCHAR,
     documento            VARCHAR,
     foto_archivo         BIGINT,
+    -- La asignatura que titula el bloque. No es un rotulo fijo.
+    asignatura_nombre    VARCHAR,
+    area_nombre          VARCHAR,
     -- Seguimiento y valoracion
     observacion          TEXT,
     observacion_estado   VARCHAR,
@@ -65,10 +68,11 @@ RETURNS TABLE(
 LANGUAGE sql
 STABLE
 AS $function$
-    WITH filas AS (
+    WITH base AS (
         -- La MISMA funcion de la pantalla. Aqui no se decide nada de permisos.
         SELECT l.fk_tmatricula, l.estudiante, l.documento,
-               l.periodo_nombre, l.observacion, l.observacion_estado
+               l.periodo_nombre, l.observacion, l.observacion_estado,
+               l.asignaturas
           FROM academico_test.fn_informe_grupo_listar(
                    p_pk_usuario_solicitante,
                    p_fk_tgrupo,
@@ -78,6 +82,22 @@ AS $function$
            AND (p_fk_tmatriculas IS NULL
                 OR CARDINALITY(p_fk_tmatriculas) = 0
                 OR l.fk_tmatricula = ANY (p_fk_tmatriculas))
+    ),
+    -- Una fila por (estudiante, asignatura). El LATERAL va con LEFT y ON TRUE
+    -- a proposito: un estudiante sin ninguna asignatura tiene que conservar su
+    -- pagina, con el titulo vacio, en vez de desaparecer del boletin -- es
+    -- exactamente el fallo que V430 tuvo que corregir en el reporte tabular.
+    filas AS (
+        SELECT b.fk_tmatricula, b.estudiante, b.documento, b.periodo_nombre,
+               b.observacion, b.observacion_estado,
+               asg.asignatura  AS fk_tasignatura,
+               asg.nombre      AS asignatura_nombre,
+               asg.area        AS area_nombre,
+               COALESCE(asg.orden, 1) AS orden_asignatura
+          FROM base b
+          LEFT JOIN LATERAL JSONB_TO_RECORDSET(b.asignaturas)
+               AS asg(asignatura BIGINT, nombre VARCHAR, area VARCHAR, orden INTEGER)
+            ON TRUE
     ),
     -- El encabezado es UNO para todo el grupo: se resuelve una vez y se
     -- multiplica con un CROSS JOIN, en vez de repetir los seis JOIN por
@@ -124,19 +144,31 @@ AS $function$
     -- Una fila por (estudiante, actividad observada) con su primera foto.
     -- La consulta de actividades es la misma que resume V332; lo que se
     -- agrega es el soporte.
+    -- LA FECHA DE LA TARJETA ES LA DEL SOPORTE, NO LA DE LA ACTIVIDAD: lo que
+    -- se rotula bajo la foto es cuando se subio esa foto. Una actividad de
+    -- marzo puede recibir una evidencia en mayo, y fechar la imagen con la
+    -- actividad seria decir que la foto es de marzo.
+    soportes AS (
+        SELECT so.FK_TACTIVIDAD_ESTUDIANTE,
+               so.FK_TARCHIVO,
+               COALESCE(so.FECHA, so.CREATED_AT::DATE) AS fecha_carga,
+               ROW_NUMBER() OVER (PARTITION BY so.FK_TACTIVIDAD_ESTUDIANTE
+                                      ORDER BY so.PK_TACTIVIDAD_SOPORTE) AS n
+          FROM academico_test.TACTIVIDAD_SOPORTE so
+         WHERE so.ACTIVE = TRUE
+           AND so.FK_TARCHIVO IS NOT NULL
+    ),
     evidencias AS (
         SELECT ae.FK_TMATRICULA,
+               a.FK_TASIGNATURA,
                a.TITULO AS titulo,
-               COALESCE(a.FECHA_CIERRE, a.FECHA_INICIO, a.FECHA_CREACION::DATE) AS fecha,
                -- Una foto por tarjeta: la primera. El tope de tres por
                -- actividad es del formulario de carga, no de aqui.
-               (SELECT MIN(so.FK_TARCHIVO)
-                  FROM academico_test.TACTIVIDAD_SOPORTE so
-                 WHERE so.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
-                   AND so.ACTIVE = TRUE
-                   AND so.FK_TARCHIVO IS NOT NULL) AS fk_tarchivo,
-               ROW_NUMBER() OVER (PARTITION BY ae.FK_TMATRICULA
-                                      ORDER BY COALESCE(a.FECHA_CIERRE, a.FECHA_INICIO,
+               s1.FK_TARCHIVO  AS fk_tarchivo,
+               s1.fecha_carga  AS fecha,
+               ROW_NUMBER() OVER (PARTITION BY ae.FK_TMATRICULA, a.FK_TASIGNATURA
+                                      ORDER BY COALESCE(s1.fecha_carga,
+                                                        a.FECHA_CIERRE, a.FECHA_INICIO,
                                                         a.FECHA_CREACION::DATE),
                                                a.PK_TACTIVIDAD) AS orden
           FROM academico_test.TACTIVIDAD a
@@ -146,6 +178,9 @@ AS $function$
           JOIN academico_test.TACTIVIDAD_NOTA n
             ON n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
            AND n.ACTIVE = TRUE
+          LEFT JOIN soportes s1
+                 ON s1.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
+                AND s1.n = 1
          WHERE a.ACTIVE = TRUE
            AND COALESCE(TRIM(n.OBSERVACION), '') <> ''
            AND academico_test.fn_actividad_en_periodo_eval(a.PK_TACTIVIDAD,
@@ -174,6 +209,7 @@ AS $function$
            c.nivel_ensenanza, c.grado_nombre, c.grupo_etiqueta,
            f.periodo_nombre, c.anio, c.fondo_archivo,
            f.estudiante, f.documento, fo.fk_tarchivo,
+           f.asignatura_nombre, f.area_nombre,
            f.observacion, f.observacion_estado,
            e1.titulo, e1.fecha, e1.fk_tarchivo,
            e2.titulo, e2.fecha, e2.fk_tarchivo,
@@ -186,13 +222,25 @@ AS $function$
       CROSS JOIN cabecera c
       LEFT JOIN foto   fo ON fo.FK_TMATRICULA = f.fk_tmatricula
       LEFT JOIN rector re ON re.pk_ee = c.pk_ee
-      LEFT JOIN evidencias e1 ON e1.FK_TMATRICULA = f.fk_tmatricula AND e1.orden = 1
-      LEFT JOIN evidencias e2 ON e2.FK_TMATRICULA = f.fk_tmatricula AND e2.orden = 2
-      LEFT JOIN evidencias e3 ON e3.FK_TMATRICULA = f.fk_tmatricula AND e3.orden = 3
-      LEFT JOIN evidencias e4 ON e4.FK_TMATRICULA = f.fk_tmatricula AND e4.orden = 4
-      LEFT JOIN evidencias e5 ON e5.FK_TMATRICULA = f.fk_tmatricula AND e5.orden = 5
-      LEFT JOIN evidencias e6 ON e6.FK_TMATRICULA = f.fk_tmatricula AND e6.orden = 6
-     ORDER BY f.estudiante;
+      LEFT JOIN evidencias e1 ON e1.FK_TMATRICULA  = f.fk_tmatricula
+                              AND e1.FK_TASIGNATURA = f.fk_tasignatura
+                              AND e1.orden          = 1
+      LEFT JOIN evidencias e2 ON e2.FK_TMATRICULA  = f.fk_tmatricula
+                              AND e2.FK_TASIGNATURA = f.fk_tasignatura
+                              AND e2.orden          = 2
+      LEFT JOIN evidencias e3 ON e3.FK_TMATRICULA  = f.fk_tmatricula
+                              AND e3.FK_TASIGNATURA = f.fk_tasignatura
+                              AND e3.orden          = 3
+      LEFT JOIN evidencias e4 ON e4.FK_TMATRICULA  = f.fk_tmatricula
+                              AND e4.FK_TASIGNATURA = f.fk_tasignatura
+                              AND e4.orden          = 4
+      LEFT JOIN evidencias e5 ON e5.FK_TMATRICULA  = f.fk_tmatricula
+                              AND e5.FK_TASIGNATURA = f.fk_tasignatura
+                              AND e5.orden          = 5
+      LEFT JOIN evidencias e6 ON e6.FK_TMATRICULA  = f.fk_tmatricula
+                              AND e6.FK_TASIGNATURA = f.fk_tasignatura
+                              AND e6.orden          = 6
+     ORDER BY f.estudiante, f.orden_asignatura, f.asignatura_nombre;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_informe_boletin_preescolar(BIGINT, BIGINT, BIGINT, BIGINT[])
