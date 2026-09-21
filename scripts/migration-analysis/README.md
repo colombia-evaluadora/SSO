@@ -62,6 +62,44 @@ y se separa entre "sus mismas migraciones" y "otras". Una sentencia suelta
 (un `UPDATE` sin definir nada) se atribuye a la migración. El JSON lo expone
 como `uses`: `{from, to, v, line, file, kind: call|ref|java}`.
 
+## Cuántas líneas sobran
+
+La pestaña **Líneas** reparte las 127k líneas del corpus en *sin efecto* /
+*vigentes* / *sin encadenar*, con el desglose por archivo. Cada sentencia
+reclama su tramo desde el `;` anterior (así que arrastra su comentario de
+cabecera, que es lo que de verdad se borraría) y el tramo sólo cuenta como
+sin efecto si **ninguna** de sus escrituras sigue viva: en un bloque `DO`
+que toca varios objetos, basta uno vigente para conservarlo.
+
+Ese número **no es una lista de borrado**: borrar una migración ya aplicada
+rompe el checksum de Flyway en el servidor. Es lo que colapsaría en un squash
+y lo que no hace falta leer al depurar.
+
+## Presupuesto de comentarios
+
+La pestaña **Líneas y comentarios** mide también el presupuesto de CLAUDE.md
+(cabecera de ≤12 líneas, ≤20% de comentario) con el **mismo criterio que
+`scripts/migration-lint.py`**: líneas que empiezan con `--`, y fuera de
+presupuesto sólo si pasa el 20% *y* tiene más de 20 líneas de comentario. Así
+el informe y el linter no pueden contradecirse. La escala es de tres niveles
+—dentro / 20-40% / >40%— porque con un solo umbral quedaban 249 de 384
+archivos en rojo y el color dejaba de avisar.
+
+## Cómo se navega
+
+- Cada migración trae un **mapa del archivo**: una franja por tramo de líneas,
+  coloreada por estado (vigente / sin efecto / comentario / sin encadenar). Es
+  lo que deja ver de un golpe que media migración ya no hace nada.
+- Barras de presupuesto (líneas, sin efecto, comentarios, cabecera) y los
+  objetos escritos **agrupados por tipo**, con el recuento vivo/muerto.
+- Dependencias en los dos sentidos, con el número de objetos de cada arista:
+  *usa objetos creados en* (si esa migración cambia una firma, esta hay que
+  revisarla) y *sus objetos los usa* (las que romperían si esta cambia).
+- Las cabeceras de la tabla ordenan; `/` enfoca el buscador y `Esc` lo limpia.
+- El hash guarda la selección (`#migraciones/51`,
+  `#objetos/function:academico_test.fn_fun_actualizar`), así que un enlace abre
+  la página ya posicionada.
+
 ## Precisión
 
 El informe muestra su propia cobertura: cuántas sentencias no logró clasificar.

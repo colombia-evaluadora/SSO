@@ -17,6 +17,9 @@ def compact(model: dict) -> dict:
         migs.append({
             "v": m["version"], "n": m["name"], "p": m["path"],
             "l": m["lines"], "vd": m["verdict"],
+            "dl": m["dead_lines"], "ll": m["live_lines"], "ol": m["other_lines"],
+            "cl": m["comment_lines"], "cp": m["comment_pct"], "hl": m["header_lines"],
+            "map": m["linemap"], "st2": m["total_statements"],
             "lw": m["live_writes"], "dw": m["dead_writes"],
             "u": m["unparsed"], "st": m["total_statements"],
             "cr": m["comment_refs"],
@@ -246,6 +249,69 @@ mark{background:rgba(29,92,143,.18);color:inherit;border-radius:2px}
 .same{color:var(--accent);font-size:10.5px;font-family:var(--mono);border:1px solid currentColor;
  border-radius:8px;padding:0 5px;margin-left:4px}
 .kindtag{font-size:10.5px;color:var(--muted);font-family:var(--mono)}
+/* graficas */
+.fig{background:var(--panel);border:1px solid var(--rule);border-radius:5px;
+ box-shadow:var(--shadow);padding:16px 18px;margin:0 0 16px}
+.fig figcaption{font-size:12.5px;color:var(--muted);margin:0 0 12px;max-width:90ch}
+.fig figcaption b{color:var(--ink);font-weight:600}
+.fig svg{display:block;width:100%;height:auto;overflow:visible}
+.fig text{font-family:var(--mono);fill:var(--ink)}
+.f-lbl{font-size:11px;fill:var(--muted)}
+.f-val{font-size:11.5px;fill:var(--ink);font-variant-numeric:tabular-nums}
+.f-dead{fill:var(--dead)} .f-live{fill:var(--live)} .f-other{fill:var(--faint)}
+.f-bar-dead{fill:var(--dead);opacity:.85} .f-bar-dead:hover{opacity:1}
+.f-bar-ok{fill:var(--accent);opacity:.75} .f-bar-ok:hover{opacity:1}
+.f-bar-mid{fill:var(--resid);opacity:.85} .f-bar-mid:hover{opacity:1}
+.f-axis{stroke:var(--rule);stroke-width:1}
+.f-tick{font-size:10px;fill:var(--faint)}
+.lnhero{display:flex;flex-wrap:wrap;gap:6px 26px;align-items:baseline;margin:0 0 14px}
+.lnhero .big{font-family:var(--mono);font-size:44px;font-weight:600;line-height:1;
+ color:var(--dead);font-variant-numeric:tabular-nums}
+.lnhero .of{font-family:var(--mono);font-size:13px;color:var(--muted)}
+.minibar{display:inline-block;width:52px;height:6px;border-radius:3px;background:var(--sunk);
+ vertical-align:middle;margin-right:6px;overflow:hidden}
+.minibar i{display:block;height:100%;background:var(--dead);border-radius:3px}
+/* mapa del archivo */
+.fmap{width:100%;height:26px;display:block;border-radius:3px;overflow:hidden;
+ background:var(--sunk);shape-rendering:crispEdges}
+.fmap-l{fill:var(--live)} .fmap-d{fill:var(--dead)}
+.fmap-c{fill:var(--accent);opacity:.42} .fmap-o{fill:var(--faint)}
+.fmap-b{fill:var(--sunk)}
+.fmap rect:hover{opacity:1;stroke:var(--ink);stroke-width:.6}
+.maplegend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:11px;color:var(--muted);
+ margin:6px 0 0}
+.maplegend span{display:inline-flex;align-items:center;gap:5px}
+.maplegend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+.lg-l{background:var(--live)} .lg-d{background:var(--dead)}
+.lg-c{background:var(--accent);opacity:.42} .lg-o{background:var(--faint)}
+/* barras de presupuesto */
+.budget{display:grid;grid-template-columns:auto 1fr auto;gap:3px 9px;align-items:center;
+ font-size:12px;margin:2px 0 12px}
+.budget .t{color:var(--muted);white-space:nowrap}
+.budget .track{height:7px;border-radius:4px;background:var(--sunk);overflow:hidden;
+ display:flex;gap:1px}
+.budget .track i{display:block;height:100%}
+.budget .v{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.budget .over{color:var(--dead);font-weight:600}
+/* agrupacion de objetos */
+details.grp{border-top:1px solid var(--rule)}
+details.grp>summary{cursor:pointer;padding:6px 2px;font-size:12.5px;display:flex;
+ gap:8px;align-items:baseline;list-style:none}
+details.grp>summary::-webkit-details-marker{display:none}
+details.grp>summary::before{content:'▸';color:var(--faint);font-size:10px}
+details.grp[open]>summary::before{content:'▾'}
+details.grp>summary b{font-weight:600}
+details.grp>summary .c{color:var(--muted);font-family:var(--mono);font-size:11px;
+ margin-left:auto}
+/* cabeceras ordenables */
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--ink)}
+th.sortable[aria-sort]{color:var(--ink)}
+th.sortable::after{content:'';font-size:9px;margin-left:4px;color:var(--faint)}
+th.sortable[aria-sort="descending"]::after{content:'▼'}
+th.sortable[aria-sort="ascending"]::after{content:'▲'}
+kbd{font-family:var(--mono);font-size:10.5px;border:1px solid var(--rule);border-radius:3px;
+ padding:0 4px;background:var(--sunk);color:var(--muted)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 """
 
@@ -263,6 +329,39 @@ const hl = (s, q) => {
         '<mark>$1</mark>'); } catch { return t; }
 };
 const byV = v => D.migs.find(m => m.v === v);
+const fmt = n => n.toLocaleString('en-US');
+const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
+const MAP_ES = {l:'vigente', d:'sin efecto', c:'comentario', o:'sin encadenar', b:'en blanco'};
+
+/* El mapa viene comprimido por tramos ("84c1b269l…"): una letra por línea. */
+const parseMap = s => [...String(s||'').matchAll(/(\d+)([ldcbo])/g)].map(m => [m[2], +m[1]]);
+
+function fileMap(m) {
+  const runs = parseMap(m.map);
+  if (!runs.length) return '';
+  const total = runs.reduce((a, r) => a + r[1], 0);
+  let at = 1;
+  const rects = runs.map(([c, n]) => {
+    const r = `<rect x="${at - 1}" y="0" width="${n}" height="10" class="fmap-${c}"><title>L${at}${
+      n > 1 ? '–L' + (at + n - 1) : ''} · ${MAP_ES[c]}${n > 1 ? ` (${n} líneas)` : ''}</title></rect>`;
+    at += n;
+    return r;
+  }).join('');
+  const present = [...new Set(runs.map(r => r[0]))];
+  const leg = ['l','d','c','o'].filter(c => present.includes(c)).map(c =>
+    `<span><i class="lg-${c}"></i>${MAP_ES[c]}</span>`).join('');
+  return `<svg class="fmap" viewBox="0 0 ${total} 10" preserveAspectRatio="none"
+    role="img" aria-label="Mapa de las ${total} líneas del archivo por estado">${rects}</svg>
+    <div class="maplegend">${leg}<span class="dim">cada franja es un tramo de líneas, en orden</span></div>`;
+}
+
+function budgetBar(label, parts, value, over) {
+  const tot = parts.reduce((a, p) => a + p[0], 0) || 1;
+  const bars = parts.filter(p => p[0] > 0).map(p =>
+    `<i style="width:${100 * p[0] / tot}%;background:var(--${p[1]})" title="${p[2]}"></i>`).join('');
+  return `<span class="t">${label}</span><span class="track">${bars}</span>
+    <span class="v${over ? ' over' : ''}">${value}</span>`;
+}
 const TYPE_ES = {function:'función', query_row:'fila query', table:'tabla',
   column:'columna', index:'índice', trigger:'trigger', view:'vista',
   domain:'dominio', role:'rol', route:'ruta', endpoint:'endpoint',
@@ -282,16 +381,54 @@ const objLabel = key => (D.chains[key]?.l) || key.slice(key.indexOf(':')+1);
 const DOT = {live:'●', dead:'✕', 'patch-live':'◐', 'patch-dead':'◌'};
 
 /* ---------- tabs ---------- */
-$$('.tab').forEach(t => t.addEventListener('click', () => {
+let curTab = 'migraciones';
+function showTab(name, keepHash) {
+  const t = $(`.tab[data-tab="${name}"]`);
+  if (!t) return;
+  curTab = name;
   $$('.tab').forEach(x => x.setAttribute('aria-selected', String(x === t)));
-  $$('.panel').forEach(p => p.hidden = p.id !== 'p-' + t.dataset.tab);
-  location.hash = t.dataset.tab;
-}));
-const initial = location.hash.slice(1);
-if (initial && $(`.tab[data-tab="${initial}"]`)) $(`.tab[data-tab="${initial}"]`).click();
+  $$('.panel').forEach(p => p.hidden = p.id !== 'p-' + name);
+  if (!keepHash) location.hash = name;
+}
+$$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
+
+/* El hash lleva también la selección, así que un enlace a V51 o a una función
+   abre la página ya posicionada: #migraciones/51, #objetos/function:… */
+function deepLink() {
+  const [tab, ...rest] = decodeURIComponent(location.hash.slice(1)).split('/');
+  const arg = rest.join('/');
+  if (!$(`.tab[data-tab="${tab}"]`)) return false;
+  showTab(tab, true);
+  if (tab === 'migraciones' && arg && byV(arg)) selectMig(arg);
+  else if (tab === 'objetos' && arg && D.chains[arg]) {
+    $('#objrew').setAttribute('aria-pressed', 'false');
+    selectObj(arg);
+  } else {
+    // un hash sin selección (#migraciones) no debe dejar el panel vacío
+    if (!selected) selectMig((D.migs.find(m => m.vd === 'obsoleta') || D.migs[0]).v);
+  }
+  return true;
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === '/' && !/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) {
+    e.preventDefault();
+    ({migraciones:'#migsearch', objetos:'#objsearch'}[curTab]
+      ? $({migraciones:'#migsearch', objetos:'#objsearch'}[curTab]).focus() : 0);
+  } else if (e.key === 'Escape' && /^INPUT$/.test(e.target.tagName)) {
+    e.target.value = '';
+    e.target.dispatchEvent(new Event('input'));
+    e.target.blur();
+  }
+});
 
 /* ---------- migraciones ---------- */
 let migFilter = new Set(), migQ = '', selected = null;
+let migSort = {k: 'v', dir: 1};
+const MIG_KEY = {
+  v: m => +m.v, n: m => m.n, vd: m => m.vd, lw: m => m.lw, dw: m => m.dw,
+  l: m => m.l, dl: m => m.dl, cp: m => m.cp,
+};
 
 $$('#vfilters .chipbtn').forEach(b => b.addEventListener('click', () => {
   const v = b.dataset.verdict;
@@ -302,12 +439,26 @@ $$('#vfilters .chipbtn').forEach(b => b.addEventListener('click', () => {
 $('#migsearch').addEventListener('input', e => { migQ = e.target.value.trim(); renderMigs(); });
 
 function migRows() {
-  const q = migQ.toLowerCase();
+  const q = migQ.toLowerCase().replace(/^v/, '');
+  const f = MIG_KEY[migSort.k];
   return D.migs.filter(m =>
     (!migFilter.size || migFilter.has(m.vd)) &&
     (!q || m.v.includes(q) || m.n.toLowerCase().includes(q) ||
-      m.w.some(w => w[1].toLowerCase().includes(q))));
+      m.w.some(w => w[1].toLowerCase().includes(q))))
+    .sort((a, b) => {
+      const x = f(a), y = f(b);
+      const c = typeof x === 'string' ? x.localeCompare(y) : x - y;
+      return c * migSort.dir || +a.v - +b.v;
+    });
 }
+
+$$('#migtable th.sortable').forEach(th => th.addEventListener('click', () => {
+  const k = th.dataset.k;
+  migSort = {k, dir: migSort.k === k ? -migSort.dir : (k === 'n' || k === 'vd' ? 1 : -1)};
+  $$('#migtable th.sortable').forEach(x => x.removeAttribute('aria-sort'));
+  th.setAttribute('aria-sort', migSort.dir > 0 ? 'ascending' : 'descending');
+  renderMigs();
+}));
 
 function renderMigs() {
   const rows = migRows();
@@ -319,9 +470,12 @@ function renderMigs() {
       <td><span class="pill p-${m.vd}">${m.vd}</span></td>
       <td class="num st-live">${m.lw||''}</td>
       <td class="num st-dead">${m.dw||''}</td>
-      <td class="num dim">${m.l}</td>
+      <td class="num dim">${fmt(m.l)}</td>
+      <td class="num st-dead">${m.dl?fmt(m.dl):''}</td>
+      <td class="num ${CM_CLS[cmLevel(m)]}"
+        title="${m.cl} de ${m.l} líneas son comentario — ${CM_ES[cmLevel(m)]}">${m.cp}%</td>
     </tr>`).join('') ||
-    '<tr><td colspan="6" class="empty">Sin resultados</td></tr>';
+    '<tr><td colspan="8" class="empty">Sin resultados</td></tr>';
   $$('#migbody tr[data-v]').forEach(tr =>
     tr.addEventListener('click', () => selectMig(tr.dataset.v)));
 }
@@ -329,6 +483,7 @@ function renderMigs() {
 function selectMig(v) {
   selected = v;
   renderMigs();
+  if (curTab === 'migraciones') history.replaceState(null, '', '#migraciones/' + v);
   const m = byV(v);
   const refs = m.cr.filter(byV);
   const usedBy = D.migs.filter(x => x.cr.includes(v)).map(x => x.v);
@@ -337,37 +492,78 @@ function selectMig(v) {
   const order = {live:0, 'patch-live':1, dead:2, 'patch-dead':3};
   const ws = [...m.w].sort((a,b) => (order[a[3]]??9)-(order[b[3]]??9));
 
+  // los objetos se agrupan por tipo: 40 escrituras en una lista plana no se leen
+  const groups = new Map();
+  ws.forEach(w => {
+    const k = w[0];
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(w);
+  });
+  const grpHtml = [...groups.entries()].map(([t, items], i) => {
+    const nLive = items.filter(w => w[3] === 'live' || w[3] === 'patch-live').length;
+    return `<details class="grp" ${i < 2 ? 'open' : ''}>
+      <summary><b>${TYPE_ES[t] || t}</b>
+        <span class="dim">${items.length}</span>
+        <span class="c"><span class="st-live">${nLive}</span>/<span class="st-dead">${
+          items.length - nLive}</span></span></summary>
+      <div class="wlist">${items.map(w => `
+        <div class="w">
+          <span class="dot st-${w[3]}">${DOT[w[3]]||'·'}</span>
+          <span class="id">${D.chains[w[1]]?`<button class="objlink" data-obj="${esc(w[1])}">${esc(objLabel(w[1]))}</button>`:esc(w[1].replace(/^[a-z_]+:/,''))}
+            <span class="tag">${esc(kindEs(w[2]))} · L${w[5]}</span></span>
+          <span class="tag">${w[4]?`→ <button class="node n-dead" data-goto="${w[4]}"
+            >V${w[4]}</button>`:(w[3]==='live'?'vive':w[3]==='patch-live'?'parche vivo':'')}</span>
+        </div>`).join('')}</div></details>`;
+  }).join('');
+
+  const dep = (title, items, hint) => items.length
+    ? `<h3 class="sect">${title} <span class="n">${items.length}</span></h3>
+       <div class="chain" title="${hint}">${items.join('')}</div>` : '';
+  const overC = m.cp > 20 && m.cl > 20, overH = m.hl > 14;
+
   $('#migdetail').innerHTML = `
-    <h4>V${esc(m.v)}</h4>
+    <h4>V${esc(m.v)} <span class="pill p-${m.vd}">${m.vd}</span></h4>
     <div class="sub">${esc(m.n)}<br><span class="dim">${esc(m.p)}</span></div>
+    ${fileMap(m)}
+    <div class="budget" style="margin-top:12px">
+      ${budgetBar('líneas', [[m.dl,'dead','sin efecto'],[m.ll,'live','vigentes'],
+        [m.ol,'faint','sin encadenar']],
+        `${fmt(m.l)}`)}
+      ${budgetBar('sin efecto', [[m.dl,'dead','sin efecto'],[m.l-m.dl,'rule','resto']],
+        `${fmt(m.dl)} · ${pct(m.dl,m.l)}%`, m.dl > 0)}
+      ${budgetBar('comentarios', [[m.cp,CM_VAR[cmLevel(m)],'comentario'],
+        [Math.max(0,100-m.cp),'rule','código']],
+        `${fmt(m.cl)} · ${m.cp}%`, overC)}
+      ${budgetBar('cabecera', [[Math.min(m.hl,30),CM_VAR[hdLevel(m)],'cabecera'],
+        [Math.max(0,30-m.hl),'rule','presupuesto']],
+        `${m.hl} líneas`, overH)}
+    </div>
+    <p class="note" style="font-size:11.5px;margin:-4px 0 12px">
+      ${overC||overH ? `<span class="st-dead">Fuera de presupuesto</span>: el repo pide ≤20% de
+        comentario y cabecera de ≤12 líneas${overC?` (va ${m.cp}%)`:''}${overH?`, cabecera de ${m.hl}`:''}.`
+        : `Dentro del presupuesto del repo (≤20% comentario, cabecera ≤12).`}
+      ${m.u?`<span class="st-dead"> · ${m.u} sentencias sin clasificar.</span>`:''}
+    </p>
     <dl class="kv">
-      <dt>veredicto</dt><dd><span class="pill p-${m.vd}">${m.vd}</span></dd>
       <dt>escrituras</dt><dd><span class="st-live">${m.lw} vivas</span> ·
         <span class="st-dead">${m.dw} muertas</span></dd>
-      <dt>sentencias</dt><dd>${m.st}${m.u?` <span class="dim">(${m.u} sin clasificar)</span>`:''}</dd>
-      <dt>líneas</dt><dd>${m.l}</dd>
+      <dt>sentencias</dt><dd>${m.st2}</dd>
     </dl>
-    ${refs.length?`<h3>Menciona en comentarios</h3><div class="chain">${
-      refs.map(r=>`<button class="node n-${byV(r).vd==='obsoleta'?'dead':'live'}"
-        data-goto="${r}">V${r}</button>`).join('')}</div>`:''}
-    ${usedBy.length?`<h3>Mencionada por</h3><div class="chain">${
-      usedBy.map(r=>`<button class="node n-live" data-goto="${r}">V${r}</button>`)
-      .join('')}</div>`:''}
-    ${eOut.length?`<h3>Usa objetos de</h3><div class="chain">${eOut.map(e=>
+    ${dep('Usa objetos creados en', eOut.map(e =>
       `<button class="node n-live" data-goto="${e.to}" title="${esc(e.objs.join(', '))}"
-       >V${e.to} <span class="dim">(${e.objs.length})</span></button>`).join('')}</div>`:''}
-    ${eIn.length?`<h3>Objetos suyos usados por</h3><div class="chain">${eIn.map(e=>
+       >V${e.to} <span class="dim">${e.objs.length}</span></button>`),
+      'si esa migración cambia una firma, esta es la que hay que revisar')}
+    ${dep('Sus objetos los usa', eIn.map(e =>
       `<button class="node n-live" data-goto="${e.from}" title="${esc(e.objs.join(', '))}"
-       >V${e.from}</button>`).join('')}</div>`:''}
-    <h3>Objetos escritos (${ws.length})</h3>
-    <div class="wlist">${ws.map(w => `
-      <div class="w">
-        <span class="dot st-${w[3]}">${DOT[w[3]]||'·'}</span>
-        <span class="id">${D.chains[w[1]]?`<button class="objlink" data-obj="${esc(w[1])}">${esc(objLabel(w[1]))}</button>`:esc(w[1].replace(/^[a-z_]+:/,''))}
-          <span class="tag">${TYPE_ES[w[0]]||w[0]} · ${esc(kindEs(w[2]))} · L${w[5]}</span></span>
-        <span class="tag">${w[4]?`→ <button class="node n-dead" data-goto="${w[4]}"
-          >V${w[4]}</button>`:(w[3]==='live'?'vive':w[3]==='patch-live'?'parche vivo':'')}</span>
-      </div>`).join('') || '<div class="empty">sin objetos rastreables</div>'}</div>`;
+       >V${e.from} <span class="dim">${e.objs.length}</span></button>`),
+      'migraciones que romperían si esta cambia una firma')}
+    ${dep('Menciona en comentarios', refs.map(r =>
+      `<button class="node n-${byV(r).vd==='obsoleta'?'dead':'live'}"
+        data-goto="${r}">V${r}</button>`), 'referencias documentadas, no verificadas')}
+    ${dep('Mencionada por', usedBy.map(r =>
+      `<button class="node n-live" data-goto="${r}">V${r}</button>`), '')}
+    <h3 class="sect">Objetos escritos <span class="n">${ws.length}</span></h3>
+    ${grpHtml || '<div class="empty">sin objetos rastreables</div>'}`;
   wireGoto($('#migdetail'));
 }
 
@@ -453,6 +649,7 @@ function selectObj(key) {
   const c = D.chains[key];
   if (!c) return;
   renderObjs();
+  if (curTab === 'objetos') history.replaceState(null, '', '#objetos/' + encodeURIComponent(key));
   $(`#objbody tr[data-key="${CSS.escape(key)}"]`)?.scrollIntoView({block:'nearest'});
   const own = new Set(c.s.map(s => s[0]));
   const ub = usedBy.get(key) || [], uo = usesOf.get(key) || [];
@@ -634,13 +831,185 @@ function renderMatrix() {
   renderMatrix();
 }));
 
+/* ---------- líneas ---------- */
+const LN_SORT = {
+  dl: (a, b) => b.dl - a.dl || +b.v - +a.v,
+  pc: (a, b) => pct(b.dl, b.l) - pct(a.dl, a.l) || b.dl - a.dl,
+  v:  (a, b) => +b.v - +a.v,
+};
+
+function lnRows() {
+  const onlyPart = $('#lnpart').getAttribute('aria-pressed') === 'true';
+  return D.migs
+    .filter(m => m.dl > 0 && (!onlyPart || m.vd === 'parcial' || m.vd === 'residual'))
+    .sort(LN_SORT[$('#lnsort').value]);
+}
+
+/* Composición del corpus: una sola barra apilada. Cada segmento lleva su propia
+   etiqueta con glifo debajo — el color nunca es el único portador del dato. */
+function renderStack() {
+  const t = D.meta.total_lines, d = D.meta.dead_lines, l = D.meta.live_lines,
+        o = D.meta.other_lines;
+  const W = 1000, H = 42, GAP = 2;
+  const segs = [
+    {n: d, c: 'f-dead',  g: '✕', t: 'sin efecto', d: 'reescritas o borradas por una migración posterior'},
+    {n: l, c: 'f-live',  g: '●', t: 'vigentes',   d: 'describen el estado actual de la base'},
+    {n: o, c: 'f-other', g: '·', t: 'sin encadenar', d: 'binds de permisos, seeds, COMMENT ON, cabeceras'},
+  ];
+  let x = 0;
+  const bars = [], labs = [];
+  segs.forEach((s, i) => {
+    const w = t ? (s.n / t) * W : 0;
+    bars.push(`<rect x="${x}" y="0" width="${Math.max(0, w - (i < segs.length-1 ? GAP : 0))}"
+      height="${H}" rx="3" class="${s.c}"><title>${fmt(s.n)} líneas ${s.t} — ${s.d}</title></rect>`);
+    const lx = Math.min(x, W - 150);
+    labs.push(`<text x="${lx}" y="${H + 20}" class="f-val"><tspan class="${s.c}">${s.g}</tspan>
+      ${fmt(s.n)}</text><text x="${lx}" y="${H + 35}" class="f-lbl">${s.t} · ${pct(s.n, t)}%</text>`);
+    x += w;
+  });
+  $('#lnstack').innerHTML = `<svg viewBox="0 0 ${W} ${H + 42}" role="img"
+    aria-label="De ${fmt(t)} líneas de migración, ${fmt(d)} (${pct(d,t)}%) quedaron sin efecto,
+    ${fmt(l)} siguen vigentes y ${fmt(o)} no se encadenan.">${bars.join('')}${labs.join('')}</svg>`;
+}
+
+/* Ranking: una sola serie, un solo tono, valor al final de cada barra. */
+function renderRank() {
+  const n = +$('#lntop').value;
+  const rows = lnRows().slice(0, n);
+  if (!rows.length) { $('#lnrank').innerHTML = '<div class="empty">Sin migraciones que recortar</div>'; return; }
+  const RH = 21, LW = 210, VW = 96, W = 1000, TOP = 18;
+  const max = Math.max(...rows.map(m => m.dl));
+  const plot = W - LW - VW;
+  const H = TOP + rows.length * RH + 8;
+  const out = [`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Migraciones ordenadas por
+    líneas sin efecto; V${rows[0].v} encabeza con ${fmt(rows[0].dl)} líneas.">`];
+  [0, .25, .5, .75, 1].forEach(f => {
+    const x = LW + plot * f;
+    out.push(`<line x1="${x}" y1="${TOP - 6}" x2="${x}" y2="${H - 6}" class="f-axis"
+      opacity="${f ? .5 : 1}"/><text x="${x}" y="${TOP - 10}" class="f-tick"
+      text-anchor="middle">${fmt(Math.round(max * f))}</text>`);
+  });
+  rows.forEach((m, i) => {
+    const y = TOP + i * RH, w = max ? (m.dl / max) * plot : 0;
+    out.push(`<text x="0" y="${y + 14}" class="f-lbl">V${m.v}
+      <tspan fill="currentColor" opacity=".75">${esc(m.n.slice(0, 26))}</tspan></text>`);
+    out.push(`<rect x="${LW}" y="${y + 3}" width="${Math.max(1, w)}" height="${RH - 8}" rx="3"
+      class="f-bar-dead"><title>V${m.v} ${esc(m.n)} — ${fmt(m.dl)} de ${fmt(m.l)} líneas
+      sin efecto (${pct(m.dl, m.l)}%), veredicto ${m.vd}</title></rect>`);
+    out.push(`<text x="${LW + w + 8}" y="${y + 14}" class="f-val">${fmt(m.dl)}
+      <tspan class="f-lbl">${pct(m.dl, m.l)}%</tspan></text>`);
+  });
+  out.push('</svg>');
+  $('#lnrank').innerHTML = out.join('');
+}
+
+function renderLnTable() {
+  const rows = lnRows();
+  const tot = rows.reduce((a, m) => a + m.dl, 0);
+  $('#lncount').textContent = `${rows.length} archivos · ${fmt(tot)} líneas`;
+  $('#lnbody').innerHTML = rows.map(m => `
+    <tr class="clickable" data-v="${m.v}">
+      <td class="m"><button class="node n-${m.vd==='obsoleta'?'dead':'live'}"
+        data-goto="${m.v}">V${m.v}</button></td>
+      <td>${esc(m.n)}</td>
+      <td><span class="pill p-${m.vd}">${m.vd}</span></td>
+      <td class="num dim">${fmt(m.l)}</td>
+      <td class="num st-dead">${fmt(m.dl)}</td>
+      <td class="num"><span class="minibar"><i style="width:${pct(m.dl, m.l)}%"></i></span>
+        <span class="dim">${pct(m.dl, m.l)}%</span></td>
+      <td class="num st-live">${fmt(m.ll)}</td>
+      <td class="num dim">${fmt(m.ol)}</td>
+    </tr>`).join('') || '<tr><td colspan="8" class="empty">Sin resultados</td></tr>';
+  wireGoto($('#lnbody'));
+}
+
+function renderLines() { renderStack(); renderRank(); renderLnTable(); }
+
+/* ---------- comentarios ----------
+   El presupuesto del repo (CLAUDE.md, y scripts/migration-lint.py lo verifica):
+   ≤20% de líneas de comentario y cabecera de ≤12. Se usa el MISMO criterio que
+   el linter —líneas que empiezan con `--`, umbral 20% con más de 20 líneas—
+   para que el informe no pueda contradecirlo. */
+const overBudget = m => m.cp > 20 && m.cl > 20;
+const cmLevel = m => !overBudget(m) ? 0 : m.cp > 40 ? 2 : 1;
+const CM_CLS = ['dim', 'st-patch-live', 'st-dead'];
+const CM_VAR = ['accent', 'resid', 'dead'];
+const CM_ES = ['dentro del presupuesto', 'sobre el presupuesto (20–40%)',
+               'muy por encima (>40%)'];
+const hdLevel = m => m.hl <= 14 ? 0 : m.hl > 30 ? 2 : 1;
+
+function renderComments() {
+  const B = 10, buckets = Array.from({length: 10}, () => []);
+  D.migs.forEach(m => buckets[Math.min(9, Math.floor(m.cp / B))].push(m));
+  const W = 1000, H = 150, PAD = 28, BW = (W - 40) / 10;
+  const max = Math.max(...buckets.map(b => b.length), 1);
+  const out = [`<svg viewBox="0 0 ${W} ${H + 34}" role="img" aria-label="Distribución del
+    porcentaje de comentario por migración; ${D.migs.filter(overBudget).length} pasan el 20%.">`];
+  buckets.forEach((b, i) => {
+    const x = 20 + i * BW, h = (b.length / max) * H;
+    const cls = i < 2 ? 'f-bar-ok' : i < 4 ? 'f-bar-mid' : 'f-bar-dead';
+    out.push(`<rect x="${x + 2}" y="${PAD + H - h}" width="${BW - 4}" height="${h}" rx="3"
+      class="${cls}"><title>${b.length} migraciones con ${i * B}–${i * B + B - 1}% de
+      comentario — ${i < 2 ? 'dentro del presupuesto' : i < 4 ? 'sobre el presupuesto'
+      : 'muy por encima'}</title></rect>`);
+    if (b.length) out.push(`<text x="${x + BW/2}" y="${PAD + H - h - 5}" class="f-val"
+      text-anchor="middle">${b.length}</text>`);
+    out.push(`<text x="${x + BW/2}" y="${PAD + H + 15}" class="f-lbl"
+      text-anchor="middle">${i * B}%</text>`);
+  });
+  const tx = 20 + 2 * BW;
+  out.push(`<line x1="${tx}" y1="${PAD - 12}" x2="${tx}" y2="${PAD + H + 2}" class="f-axis"
+    stroke-dasharray="3 3"/><text x="${tx + 6}" y="${PAD - 14}" class="f-lbl">presupuesto 20%
+    → ${D.migs.filter(overBudget).length} migraciones lo pasan</text>`);
+  out.push(`<line x1="20" y1="${PAD + H + 2}" x2="${W - 20}" y2="${PAD + H + 2}" class="f-axis"/>`);
+  out.push('</svg>');
+  $('#cmhist').innerHTML = out.join('');
+  renderCmTable();
+}
+
+function renderCmTable() {
+  const only = $('#cmover').getAttribute('aria-pressed') === 'true';
+  const rows = D.migs.filter(m => !only || overBudget(m) || m.hl > 14)
+    .sort((a, b) => b.cp - a.cp || b.cl - a.cl);
+  $('#cmcount').textContent = `${rows.length} archivos`;
+  $('#cmbody').innerHTML = rows.slice(0, 120).map(m => `
+    <tr class="clickable">
+      <td class="m"><button class="node n-${m.vd==='obsoleta'?'dead':'live'}"
+        data-goto="${m.v}">V${m.v}</button></td>
+      <td>${esc(m.n)}</td>
+      <td class="num dim">${fmt(m.l)}</td>
+      <td class="num">${fmt(m.cl)}</td>
+      <td class="num ${CM_CLS[cmLevel(m)]}" title="${CM_ES[cmLevel(m)]}">
+        <span class="minibar"><i style="width:${Math.min(100,m.cp)}%;background:var(--${
+          CM_VAR[cmLevel(m)]})"></i></span> ${m.cp}%</td>
+      <td class="num ${CM_CLS[hdLevel(m)]}"
+        title="presupuesto 12 líneas${m.hl>14?`; va ${m.hl}`:''}">${m.hl}</td>
+      <td class="num st-dead">${m.dl?fmt(m.dl):''}</td>
+    </tr>`).join('') || '<tr><td colspan="7" class="empty">Todo dentro del presupuesto</td></tr>';
+  if (rows.length > 120) $('#cmbody').insertAdjacentHTML('beforeend',
+    `<tr><td colspan="7" class="empty">… ${rows.length-120} más</td></tr>`);
+  wireGoto($('#cmbody'));
+}
+$('#cmover').addEventListener('click', e => {
+  e.target.setAttribute('aria-pressed', e.target.getAttribute('aria-pressed') !== 'true');
+  renderCmTable();
+});
+$('#lnsort').addEventListener('change', () => { renderRank(); renderLnTable(); });
+$('#lntop').addEventListener('change', renderRank);
+$('#lnpart').addEventListener('click', e => {
+  e.target.setAttribute('aria-pressed', e.target.getAttribute('aria-pressed') !== 'true');
+  renderRank(); renderLnTable();
+});
+
 /* ---------- init ---------- */
 renderMigs();
 renderObjs();
 renderMatrix();
-const firstObs = D.migs.find(m => m.vd === 'obsoleta');
-if (firstObs) selectMig(firstObs.v);
+renderLines();
+renderComments();
 wireGoto(document);
+if (!deepLink()) selectMig((D.migs.find(m => m.vd === 'obsoleta') || D.migs[0]).v);
+window.addEventListener('hashchange', deepLink);
 """
 
 MATRIX_CSS = """
@@ -771,7 +1140,7 @@ def build(model: dict) -> str:
     obsolete_rows = "".join(
         f'<tr class="clickable"><td class="m"><button class="node n-dead" data-goto="{m["v"]}"'
         f'>V{m["v"]}</button></td><td>{m["n"]}</td>'
-        f'<td class="num dim">{m["l"]}</td><td class="num st-dead">{m["dw"]}</td>'
+        f'<td class="num dim">{m["l"]}</td><td class="num st-dead">{m["dl"]:,}</td>'
         f'<td class="m dim">{", ".join(sorted({w[4] for w in m["w"] if w[4]}, key=float)[:6])}</td></tr>'
         for m in migs if m["vd"] == "obsoleta") or \
         '<tr><td colspan="5" class="empty">Ninguna migración quedó obsoleta</td></tr>'
@@ -806,6 +1175,8 @@ def build(model: dict) -> str:
         for u in data["unparsed"]) or \
         '<tr><td colspan="3" class="empty">Todas las sentencias quedaron clasificadas</td></tr>'
 
+    parcial_files = sum(1 for m in migs if m["dl"] and m["vd"] in ("parcial", "residual"))
+
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
@@ -826,6 +1197,9 @@ def build(model: dict) -> str:
   <span class="meta">{meta['count']} archivos · V{meta['range'][0]}–V{meta['range'][1]} ·
    rama {meta['branch'] or '?'} @ {meta['head'] or '?'} · generado {stamp}</span>
 </header>
+<p class="note" style="font-size:12px"><kbd>/</kbd> busca · <kbd>Esc</kbd> limpia ·
+  las cabeceras de la tabla ordenan · el enlace de la barra de direcciones guarda la
+migración u objeto abierto, así que se puede compartir.</p>
 <p class="note">Una migración está <b>obsoleta</b> cuando todo lo que escribió fue reescrito,
 borrado o reemplazado por una migración posterior: su texto ya no describe el estado actual de la
 base. Un <b>parche</b> (<code>replace()</code>, <code>ALTER</code>, cambio de <code>param_types</code>)
@@ -848,6 +1222,14 @@ no mata lo anterior, lo modifica. Regenerá esta página con
   <div class="metric"><div class="k">Vivas</div>
     <div class="n live">{counts['viva']}</div>
     <div class="s">nada reescrito</div></div>
+  <div class="metric"><div class="k">Líneas sin efecto</div>
+    <div class="n dead">{meta['dead_lines']:,}</div>
+    <div class="s">{round(100 * meta['dead_lines'] / max(1, meta['total_lines']))}% de
+      {meta['total_lines']:,} líneas de migración</div></div>
+  <div class="metric"><div class="k">Comentarios</div>
+    <div class="n">{round(100 * meta['comment_lines'] / max(1, meta['total_lines']))}%</div>
+    <div class="s">{meta['over_comment_budget']} migraciones sobre el 20%
+      · {meta['over_header_budget']} con cabecera de más de 14</div></div>
   <div class="metric"><div class="k">Huecos libres</div>
     <div class="n">{len(slots['holes'])}</div>
     <div class="s">números nunca usados bajo el techo</div></div>
@@ -863,6 +1245,7 @@ no mata lo anterior, lo modifica. Regenerá esta página con
   <button class="tab" data-tab="migraciones" role="tab" aria-selected="true">Migraciones</button>
   <button class="tab" data-tab="obsoletas" role="tab" aria-selected="false">Obsoletas</button>
   <button class="tab" data-tab="objetos" role="tab" aria-selected="false">Objetos</button>
+  <button class="tab" data-tab="lineas" role="tab" aria-selected="false">Líneas y comentarios</button>
   <button class="tab" data-tab="matriz" role="tab" aria-selected="false">Matriz</button>
   <button class="tab" data-tab="diagnosticos" role="tab" aria-selected="false">Diagnósticos</button>
   <button class="tab" data-tab="tipos" role="tab" aria-selected="false">Tipos de cambio</button>
@@ -872,17 +1255,26 @@ no mata lo anterior, lo modifica. Regenerá esta página con
 
 <section class="panel" id="p-migraciones" role="tabpanel">
   <div class="controls">
-    <input type="search" id="migsearch" placeholder="buscar versión, nombre u objeto…"
+    <input type="search" id="migsearch" placeholder="buscar versión, nombre u objeto…  (/)"
       aria-label="Buscar migración">
     <span id="vfilters">{vfilters}</span>
     <span class="count" id="migcount"></span>
   </div>
   <div class="split">
     <div class="tablewrap">
-      <table><thead><tr>
-        <th class="m">Versión</th><th>Nombre</th><th>Veredicto</th>
-        <th style="text-align:right">Vivas</th><th style="text-align:right">Muertas</th>
-        <th style="text-align:right">Líneas</th>
+      <table id="migtable"><thead><tr>
+        <th class="m sortable" data-k="v" aria-sort="ascending">Versión</th>
+        <th class="sortable" data-k="n">Nombre</th>
+        <th class="sortable" data-k="vd">Veredicto</th>
+        <th class="sortable" data-k="lw" style="text-align:right"
+          title="Escrituras que siguen describiendo el estado actual">Vivas</th>
+        <th class="sortable" data-k="dw" style="text-align:right"
+          title="Escrituras reescritas o borradas después">Muertas</th>
+        <th class="sortable" data-k="l" style="text-align:right">Líneas</th>
+        <th class="sortable" data-k="dl" style="text-align:right"
+          title="Líneas cuyo efecto fue reescrito después">Sin efecto</th>
+        <th class="sortable" data-k="cp" style="text-align:right"
+          title="% de líneas de comentario; el presupuesto del repo es 20%">Coment.</th>
       </tr></thead><tbody id="migbody"></tbody></table>
     </div>
     <aside class="detail" id="migdetail"></aside>
@@ -895,7 +1287,7 @@ no mata lo anterior, lo modifica. Regenerá esta página con
   sí son texto que no hace falta leer al depurar, y lo primero que colapsa en un futuro squash.</p>
   <div class="tablewrap"><table><thead><tr>
     <th class="m">Versión</th><th>Nombre</th><th style="text-align:right">Líneas</th>
-    <th style="text-align:right">Escrituras muertas</th><th>Reescrita por</th>
+    <th style="text-align:right">Sin efecto</th><th>Reescrita por</th>
   </tr></thead><tbody>{obsolete_rows}</tbody></table></div>
 </section>
 
@@ -920,6 +1312,85 @@ no mata lo anterior, lo modifica. Regenerá esta página con
     <aside class="detail" id="objdetail"><div class="empty">Elegí un objeto para ver quién lo
       reescribió y quién lo usa.</div></aside>
   </div>
+</section>
+
+<section class="panel" id="p-lineas" role="tabpanel" hidden>
+  <div class="lnhero">
+    <span class="big">{meta['dead_lines']:,}</span>
+    <span class="of">líneas sin efecto · {round(100 * meta['dead_lines'] / max(1, meta['total_lines']))}%
+      de {meta['total_lines']:,} · {parcial_files} archivos parcialmente reescritos</span>
+  </div>
+  <p class="note"><b>Qué significa «se deben eliminar»:</b> son las líneas cuyo efecto ya fue
+  reescrito, borrado o reemplazado por una migración posterior. <b>No se pueden borrar del
+  repo</b> —rompería el checksum de Flyway en los servidores que ya aplicaron el archivo—: son
+  lo que colapsaría en un squash, y lo que no hace falta leer al depurar. Una línea cuenta como
+  sin efecto sólo si <i>ninguna</i> escritura de su sentencia sigue viva: en un bloque
+  <code>DO</code> que toca varios objetos, basta uno vigente para que el tramo se conserve.</p>
+
+  <figure class="fig">
+    <figcaption><b>Composición del corpus.</b> Cada sentencia reclama su tramo de líneas —
+    incluido el comentario de cabecera que la precede, que es lo que de verdad se borraría.</figcaption>
+    <div id="lnstack"></div>
+  </figure>
+
+  <div class="controls">
+    <label class="dim">ordenar por
+      <select id="lnsort" aria-label="Ordenar por">
+        <option value="dl">líneas sin efecto</option>
+        <option value="pc">% del archivo</option>
+        <option value="v">versión</option>
+      </select></label>
+    <label class="dim">mostrar
+      <select id="lntop" aria-label="Cuántas barras">
+        <option value="15">top 15</option>
+        <option value="25" selected>top 25</option>
+        <option value="50">top 50</option>
+      </select></label>
+    <button class="chipbtn" id="lnpart" aria-pressed="true">sólo parcialmente reescritas</button>
+    <span class="count" id="lncount"></span>
+  </div>
+
+  <figure class="fig">
+    <figcaption><b>Por archivo.</b> Cuántas líneas de cada migración quedaron sin efecto.
+    El porcentaje al lado de cada barra es sobre el propio archivo: una migración corta al
+    90% está casi entera obsoleta aunque su barra sea chica.</figcaption>
+    <div id="lnrank"></div>
+  </figure>
+
+  <div class="tablewrap"><table><thead><tr>
+    <th class="m">Versión</th><th>Nombre</th><th>Veredicto</th>
+    <th style="text-align:right">Líneas</th><th style="text-align:right">Sin efecto</th>
+    <th style="text-align:right">% del archivo</th><th style="text-align:right">Vigentes</th>
+    <th style="text-align:right">Sin encadenar</th>
+  </tr></thead><tbody id="lnbody"></tbody></table></div>
+
+  <h2 id="comentarios">Presupuesto de comentarios</h2>
+  <p class="note">El repo pide cabecera de <b>≤12 líneas</b> y <b>≤20%</b> de líneas de
+  comentario: la narración de la investigación va al commit o al PR, porque dentro del
+  <code>.sql</code> queda mintiendo en cuanto se edite. Se mide con el mismo criterio que
+  <code>scripts/migration-lint.py</code> —líneas que empiezan con <code>--</code>, y se marca
+  fuera de presupuesto sólo si pasa el 20% <i>y</i> tiene más de 20 líneas de comentario—, así
+  que el informe y el linter no pueden contradecirse.</p>
+  <figure class="fig">
+    <figcaption><b>Distribución.</b> Cuántas migraciones caen en cada decil de comentario.
+    Las migraciones muy cortas se van arriba con facilidad: 22 líneas de cabecera sobre 26
+    son el 85%.</figcaption>
+    <div id="cmhist"></div>
+  </figure>
+  <div class="controls">
+    <button class="chipbtn" id="cmover" aria-pressed="true">sólo fuera de presupuesto</button>
+    <span class="legend" style="margin:0;gap:12px">
+      <span><b class="dim">gris</b> dentro</span>
+      <span><b class="st-patch-live">ámbar</b> 20–40%</span>
+      <span><b class="st-dead">rojo</b> &gt;40%</span></span>
+    <span class="count" id="cmcount"></span>
+  </div>
+  <div class="tablewrap"><table><thead><tr>
+    <th class="m">Versión</th><th>Nombre</th><th style="text-align:right">Líneas</th>
+    <th style="text-align:right">Comentario</th><th style="text-align:right">%</th>
+    <th style="text-align:right" title="Presupuesto: 12 líneas">Cabecera</th>
+    <th style="text-align:right">Sin efecto</th>
+  </tr></thead><tbody id="cmbody"></tbody></table></div>
 </section>
 
 <section class="panel" id="p-matriz" role="tabpanel" hidden>
