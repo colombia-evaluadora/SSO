@@ -72,11 +72,15 @@ class EmailTemplatesTest {
         assertThat(html).contains("Colombia Evaluadora");
         assertThat(html).contains("https://ejemplo.test/logo.png");
 
-        // El plazo que anuncia el texto tiene que ser el real, no uno
-        // heredado del diseño. Si alguien cambia RESTORE_TTL_MINUTES,
-        // este assert obliga a mirar también la plantilla.
+        // El texto del plazo es fijo, no ${ttlMinutes} — esta plantilla
+        // FreeMarker es la de `EmailService`, un camino MUERTO
+        // (`sendRestorePasswordEmail` ya no lo llama nadie: el correo real
+        // sale por notification-service, ver `UserAdminService#forgotPassword`
+        // y `verify(emailService, never())...` en `UserAdminServiceTest`).
+        // Igual se redacta en días, no en minutos sueltos, para que no
+        // vuelva a hablar de "2880 minutos" si algún día se revive.
         assertThat(TokenService.RESTORE_TTL_MINUTES).isEqualTo(2 * 24 * 60);
-        assertThat(html).contains("2880 minutos");
+        assertThat(html).contains("2 días");
 
         // Los acentos sobreviven al renderizado: el correo se envía
         // como UTF-8 y el fichero está en UTF-8, pero basta con que
