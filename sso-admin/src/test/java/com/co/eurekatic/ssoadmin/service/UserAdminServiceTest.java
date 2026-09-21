@@ -497,7 +497,15 @@ class UserAdminServiceTest {
     @Test
     void createAccountUsesAppLaunchUrlForActivationLinkWhenAppMatches() {
         when(userRepository.existsByEmail(ALICE_EMAIL)).thenReturn(false);
-        when(tokenService.issueActivationToken(any(User.class))).thenReturn("atok");
+        // issueActivationToken's real implementation stamps the token onto
+        // the user as a side effect (that's what publishActivationEmail
+        // later reads via user.getTokenActivation()) — thenReturn alone
+        // leaves the field null, since a mock never runs the real body.
+        when(tokenService.issueActivationToken(any(User.class))).thenAnswer(inv -> {
+            User u = inv.getArgument(0);
+            u.setTokenActivation("atok");
+            return "atok";
+        });
         when(userRepository.save(any(User.class))).thenAnswer(inv -> {
             User u = inv.getArgument(0);
             u.setId(7L);
