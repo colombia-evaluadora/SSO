@@ -80,8 +80,9 @@ class BoletinPreescolarTest {
         f.put("estudiante", estudiante);
         f.put("documento", "1234567890");
         f.put("foto_archivo", 901L);
-        // El titulo del bloque no es fijo: es la dimension que se esta tratando.
-        f.put("asignatura_nombre", "Comunicacion y exploracion");
+        // El titulo del bloque no es fijo, y no es UNA asignatura: es la lista
+        // de las que el estudiante cursa, unidas en una linea (V468).
+        f.put("asignatura_nombre", "Comunicacion y exploracion, Valores, Corporalidad");
         f.put("area_nombre", "Dimensiones");
         f.put("observacion", conObservacion
                 ? "Durante este segundo periodo, el estudiante ha demostrado avances "
