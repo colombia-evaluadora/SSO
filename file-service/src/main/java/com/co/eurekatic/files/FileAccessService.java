@@ -34,6 +34,9 @@ import java.util.Set;
  *       (actividades, matrículas...) queda fuera de este
  *       segundo camino hasta que se necesite — añadir un caso es
  *       una cláusula más en {@link #esPropietario}, no un rediseño.</li>
+ *   <li><b>Soporte de observación</b> — ver
+ *       {@link #esSoporteDeObservacionVisible}. Mismo patrón y
+ *       misma razón de aislamiento que el soporte de asistencia.</li>
  *   <li><b>Soporte de asistencia</b> — ver
  *       {@link #esSoporteDeAsistenciaVisible}. Va aparte de
  *       {@link #esPropietario} a propósito (no es una quinta
@@ -76,7 +79,8 @@ public class FileAccessService {
             return true;
         }
         return esPropietario(archivoId, email)
-                || esSoporteDeAsistenciaVisible(archivoId, email);
+                || esSoporteDeAsistenciaVisible(archivoId, email)
+                || esSoporteDeObservacionVisible(archivoId, email);
     }
 
     /**
@@ -247,6 +251,71 @@ public class FileAccessService {
             // Entorno sin el módulo de asistencias (o sin los helpers de
             // permisos que consume): se pierde este camino, no el resto.
             log.debug("no se pudo evaluar el soporte de asistencia para el archivo id={}: {}",
+                    archivoId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * ¿Es este archivo una EVIDENCIA adjunta a la observación de un
+     * estudiante ({@code TACTIVIDAD_SOPORTE.FK_TARCHIVO}, V243/V461)?
+     * Cuarto camino de {@link #puedeVer}, y el mismo agujero que ya
+     * se había tapado para la asistencia: el docente subía el soporte
+     * de la observación sin problema —{@code POST
+     * /planeador/actividades/estudiantes/:ID/soportes} declara {@code
+     * BODY.FK_TARCHIVO} como {@code FILE:actividad} y el registro
+     * queda bien— pero al abrirlo recibía 404, porque ni {@link
+     * #esPropietario} ni {@link #esSoporteDeAsistenciaVisible}
+     * conocen esta tabla y {@code CEVAL-DOCENTE} no tiene el binding
+     * {@code role_endpoint GET /files/view/{archivoId}}. Es decir: se
+     * podían cargar evidencias que nadie podía volver a ver.
+     *
+     * <p>Darle ese binding al rol docente sería una escalada de
+     * privilegio —es global, "ve CUALQUIER archivo" (ver {@link
+     * #esPrivilegiado})—, así que se autoriza archivo por archivo,
+     * igual que con el soporte de asistencia.
+     *
+     * <p>El permiso NO se reimplementa aquí: se delega en {@code
+     * fn_planeador_alcanza(usuario, 'VER', ..., pk_tactividad)}
+     * (V277), la forma BOOLEAN del mismo gate —capability por menú
+     * {@code PLANEADOR} + alcance territorial— que usa {@code
+     * fn_actividad_observacion_soportes_listar} para decidir si
+     * puedes LISTAR esas evidencias. Quien puede listarlas puede
+     * abrirlas: una sola definición de alcance, sin scope propio de
+     * file-service.
+     *
+     * <p>Consulta propia y con {@code catch} por la misma razón que
+     * {@link #esSoporteDeAsistenciaVisible}: PostgreSQL resuelve los
+     * nombres al PLANIFICAR, así que en un entorno sin el módulo del
+     * Planeador esta rama se pierde sola en vez de tumbar las demás.
+     */
+    private boolean esSoporteDeObservacionVisible(long archivoId, String email) {
+        if (email == null || email.isBlank()) {
+            return false;
+        }
+        try {
+            Integer encontrado = jdbc.queryForObject("""
+                    SELECT count(*)
+                      FROM %1$s.tactividad_soporte so
+                      JOIN %1$s.tactividad_estudiante ae
+                        ON ae.pk_tactividad_estudiante = so.fk_tactividad_estudiante
+                      JOIN %1$s.tusuario u ON lower(u.cuenta) = lower(:email)
+                     WHERE so.fk_tarchivo = :archivoId
+                       AND so.active
+                       AND ae.active
+                       AND u.active
+                       AND %1$s.fn_planeador_alcanza(
+                               u.pk_tusuario, 'VER', NULL, NULL, NULL, ae.fk_tactividad)
+                    """.formatted(schema),
+                    new MapSqlParameterSource()
+                            .addValue("archivoId", archivoId)
+                            .addValue("email", email),
+                    Integer.class);
+            return encontrado != null && encontrado > 0;
+        } catch (DataAccessException e) {
+            // Entorno sin el modulo del Planeador (o sin los helpers de
+            // alcance que consume): se pierde este camino, no el resto.
+            log.debug("no se pudo evaluar el soporte de observacion para el archivo id={}: {}",
                     archivoId, e.getMessage());
             return false;
         }
