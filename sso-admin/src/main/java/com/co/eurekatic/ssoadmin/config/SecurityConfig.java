@@ -123,9 +123,10 @@ public class SecurityConfig {
                         // Portar el token ES la autorizacion, igual que en
                         // `restorePassword`.
                         .requestMatchers("/activateAccount", "/restorePassword",
-                                "/forgotPassword", "/resetTokenStatus",
+                                "/forgotPassword", "/resetTokenStatus", "/activationTokenStatus",
                                 "/user/activateAccount", "/user/restorePassword",
-                                "/user/forgotPassword", "/user/resetTokenStatus").permitAll()
+                                "/user/forgotPassword", "/user/resetTokenStatus",
+                                "/user/activationTokenStatus").permitAll()
                         // Health probes + Grafana Alloy scrape endpoint. Same trust
                         // boundary argument: the scraper lives on the
                         // internal docker network, not on the LAN.

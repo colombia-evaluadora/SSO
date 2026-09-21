@@ -116,6 +116,16 @@ public class UserController {
         return service.resetTokenStatus(token);
     }
 
+    /**
+     * Public endpoint (no auth) — estado del enlace de activación, para la
+     * pantalla donde el usuario recién creado arma su contraseña inicial.
+     * Mismo contrato y mismo motivo que {@link #resetTokenStatus}.
+     */
+    @GetMapping("/activationTokenStatus")
+    public ResetTokenStatusResponse activationTokenStatus(@RequestParam String token) {
+        return service.activationTokenStatus(token);
+    }
+
     @GetMapping("/getUsers")
     public List<UserResponse> getUsers() {
         return service.getUsers();

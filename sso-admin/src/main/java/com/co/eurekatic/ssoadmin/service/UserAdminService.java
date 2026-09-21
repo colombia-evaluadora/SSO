@@ -98,6 +98,7 @@ public class UserAdminService {
     // En segundos porque es lo que consume el front para el contador de la
     // pantalla de aviso.
     private static final long RESTORE_TTL_SECONDS = TokenService.RESTORE_TTL_MINUTES * 60;
+    private static final long ACTIVATION_TTL_SECONDS = TokenService.ACTIVATION_TTL_MINUTES * 60;
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -191,7 +192,7 @@ public class UserAdminService {
 
         tokenService.issueActivationToken(user);
         User saved = userRepository.save(user);
-        publishActivationEmail(saved, req.appName());
+        publishActivationEmail(saved, req.appName() != null ? req.appName() : resolveAppName(saved));
         // Roles were just attached — drop the (currently empty)
         // cache entry so the activation flow sees them on first
         // login. Until activation the user is enabled=false and
@@ -223,7 +224,7 @@ public class UserAdminService {
         }
         tokenService.issueActivationToken(user);
         User saved = userRepository.save(user);
-        publishActivationEmail(saved, appName);
+        publishActivationEmail(saved, appName != null ? appName : resolveAppName(saved));
         log.info("Resent activation email for user '{}'", saved.getEmail());
     }
 
@@ -232,10 +233,39 @@ public class UserAdminService {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("displayName", user.getFullName() == null ? user.getEmail() : user.getFullName());
         payload.put("email", user.getEmail());
-        payload.put("activationLink", emailProps.activationUrl() + "?token=" + token);
+        payload.put("activationLink", resolveActivationUrl(token, appName));
         payload.put("ttlMinutes", TokenService.ACTIVATION_TTL_MINUTES);
         events.publish("email", String.valueOf(user.getId()), user.getEmail(),
                 "account-activation", payload, null, appName);
+    }
+
+    /**
+     * Same app-aware resolution as {@link #resolveRestoreUrl}: an
+     * {@code appName} whose {@code App.launchUrl} is absolute sends the user
+     * to that app's OWN {@code /activate} page instead of the generic
+     * {@code sso-admin}-hosted one, so PIGSE staff land on pigse.com and
+     * Colombia Evaluadora staff land on productionv2.colombiaevaluadora.com.
+     */
+    private String resolveActivationUrl(String token, String appName) {
+        String query = "?token=" + token;
+
+        if (appName != null && !appName.isBlank()) {
+            App app = appRepository.findByName(appName).orElse(null);
+            if (app != null && app.getLaunchUrl() != null && !app.getLaunchUrl().isBlank()) {
+                String launchUrl = app.getLaunchUrl().trim();
+                boolean isAbsolute = launchUrl.startsWith("http://") || launchUrl.startsWith("https://");
+                if (isAbsolute) {
+                    String base = launchUrl.endsWith("/")
+                            ? launchUrl.substring(0, launchUrl.length() - 1)
+                            : launchUrl;
+                    return base + "/activate" + query;
+                }
+                log.warn("App '{}' has a non-absolute launchUrl '{}'; falling back to default activationUrl",
+                        appName, launchUrl);
+            }
+        }
+
+        return emailProps.activationUrl() + query;
     }
 
     /**
@@ -363,7 +393,7 @@ public class UserAdminService {
         payload.put("displayName", saved.getFullName() == null ? saved.getEmail() : saved.getFullName());
         payload.put("email", saved.getEmail());
         events.publish("email", String.valueOf(saved.getId()), saved.getEmail(),
-                "account-activated", payload, null);
+                "account-activated", payload, null, resolveAppName(saved));
     }
 
     /**
@@ -383,7 +413,7 @@ public class UserAdminService {
         payload.put("displayName", saved.getFullName() == null ? saved.getEmail() : saved.getFullName());
         payload.put("email", saved.getEmail());
         events.publish("email", String.valueOf(saved.getId()), saved.getEmail(),
-                "password-changed", payload, null);
+                "password-changed", payload, null, resolveAppName(saved));
     }
 
     /**
@@ -477,6 +507,42 @@ public class UserAdminService {
                 restante > 0 ? "valid" : "expired",
                 Math.max(restante, 0),
                 RESTORE_TTL_SECONDS,
+                maskEmail(u.getEmail()),
+                emitidoEn);
+    }
+
+    /**
+     * Estado de un enlace de activacion, para la pantalla que arma la
+     * contrasena inicial de una cuenta recien creada. Mismo contrato y misma
+     * razon de ser que {@link #resetTokenStatus}, sobre la pareja de
+     * columnas {@code tokenActivation}/{@code tokenActivationExpiresAt} en
+     * vez de {@code tokenRestore}.
+     */
+    @Transactional(readOnly = true)
+    public ResetTokenStatusResponse activationTokenStatus(String token) {
+        Optional<User> encontrado = (token == null || token.isBlank())
+                ? Optional.empty()
+                : userRepository.findByTokenActivation(token);
+
+        if (encontrado.isEmpty()) {
+            return new ResetTokenStatusResponse("invalid", 0, ACTIVATION_TTL_SECONDS, null, null);
+        }
+
+        User u = encontrado.get();
+        Instant expiraEn = u.getTokenActivationExpiresAt();
+
+        if (expiraEn == null) {
+            return new ResetTokenStatusResponse("expired", 0, ACTIVATION_TTL_SECONDS,
+                    maskEmail(u.getEmail()), null);
+        }
+
+        long emitidoEn = expiraEn.minusSeconds(ACTIVATION_TTL_SECONDS).toEpochMilli();
+        long restante = Duration.between(Instant.now(), expiraEn).toSeconds();
+
+        return new ResetTokenStatusResponse(
+                restante > 0 ? "valid" : "expired",
+                Math.max(restante, 0),
+                ACTIVATION_TTL_SECONDS,
                 maskEmail(u.getEmail()),
                 emitidoEn);
     }
@@ -665,7 +731,7 @@ public class UserAdminService {
         payload.put("email", user.getEmail());
         payload.put("roleName", roleName);
         events.publish("email", String.valueOf(user.getId()), user.getEmail(),
-                "role-assigned", payload, null);
+                "role-assigned", payload, null, resolveAppNameFromRole(roleName));
     }
 
     private void publishRoleRevoked(User user, String roleName) {
@@ -674,7 +740,7 @@ public class UserAdminService {
         payload.put("email", user.getEmail());
         payload.put("roleName", roleName);
         events.publish("email", String.valueOf(user.getId()), user.getEmail(),
-                "role-revoked", payload, null);
+                "role-revoked", payload, null, resolveAppNameFromRole(roleName));
     }
 
     private void publishAccountDeactivated(User user, String reason) {
@@ -683,7 +749,7 @@ public class UserAdminService {
         payload.put("email", user.getEmail());
         payload.put("reason", reason);
         events.publish("email", String.valueOf(user.getId()), user.getEmail(),
-                "account-deactivated", payload, null);
+                "account-deactivated", payload, null, resolveAppName(user));
     }
 
     private void publishAccountReactivated(User user) {
@@ -691,6 +757,31 @@ public class UserAdminService {
         payload.put("displayName", user.getFullName() == null ? user.getEmail() : user.getFullName());
         payload.put("email", user.getEmail());
         events.publish("email", String.valueOf(user.getId()), user.getEmail(),
-                "account-reactivated", payload, null);
+                "account-reactivated", payload, null, resolveAppName(user));
+    }
+
+    /**
+     * Best-effort {@code appName} for a notification when the caller didn't
+     * already have one on hand (e.g. {@link #activateAccount}, whose only
+     * input is a bare token) — read off the user's OWN role set, since role
+     * names already carry the app as their prefix ({@code PIGSE-*},
+     * {@code CEVAL-*}). Only {@code PIGSE} has its own branding today (see
+     * {@code EmailBranding} in notification-service); {@code null} falls
+     * back to the default look, so a user with no PIGSE role (or several
+     * roles from different apps, picked in declaration order) keeps the
+     * exact same email it got before this method existed.
+     */
+    private static String resolveAppName(User user) {
+        return user.getRoles().stream()
+                .map(Role::getName)
+                .map(UserAdminService::resolveAppNameFromRole)
+                .filter(app -> app != null)
+                .findFirst()
+                .orElse(null);
+    }
+
+    /** Same convention as {@link #resolveAppName}, for a single role name. */
+    private static String resolveAppNameFromRole(String roleName) {
+        return roleName != null && roleName.startsWith("PIGSE-") ? "PIGSE" : null;
     }
 }
