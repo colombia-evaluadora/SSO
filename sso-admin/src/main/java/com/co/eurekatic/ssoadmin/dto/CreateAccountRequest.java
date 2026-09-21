@@ -24,5 +24,15 @@ public record CreateAccountRequest(
         @NotBlank @Size(max = 200) String fullName,
         @NotBlank @Email @Size(max = 200) String email,
         /** Roles to grant. Empty list → no roles. */
-        List<@NotBlank String> roleNames
+        List<@NotBlank String> roleNames,
+        /**
+         * {@code app.name} of the app this account is for ({@code "PIGSE"},
+         * {@code "COLOMBIA-EVALUADORA"}), or {@code null}. Threaded into the
+         * activation email so it picks the right branding/sender — same
+         * {@code appName} that {@code GET /forgotPassword?app=} already
+         * takes for the restore-password email. Optional: an unbranded
+         * admin call (or one that doesn't know the app yet) still works,
+         * it just falls back to the default branding.
+         */
+        String appName
 ) {}

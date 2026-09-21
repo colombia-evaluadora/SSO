@@ -129,8 +129,9 @@ public class UserController {
      */
     @PostMapping("/resendActivation/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void resendActivation(@PathVariable Long id) {
-        service.resendActivation(id);
+    public void resendActivation(@PathVariable Long id,
+                                  @RequestParam(value = "app", required = false) String app) {
+        service.resendActivation(id, app);
     }
 
     /**

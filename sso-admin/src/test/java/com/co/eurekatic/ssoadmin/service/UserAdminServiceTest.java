@@ -97,7 +97,7 @@ class UserAdminServiceTest {
         when(userRepository.existsByEmail(ALICE_EMAIL)).thenReturn(true);
 
         CreateAccountRequest req = new CreateAccountRequest(
-                "Alice", ALICE_EMAIL, List.of());
+                "Alice", ALICE_EMAIL, List.of(), null);
 
         assertThatThrownBy(() -> service.createAccount(req))
                 .isInstanceOf(UserDuplicateException.class)
@@ -111,7 +111,7 @@ class UserAdminServiceTest {
         // existsByEmail call, so a strict stub on the repository
         // would trip UnnecessaryStubbingException.
         CreateAccountRequest req = new CreateAccountRequest(
-                "Alice", "not-an-email", List.of());
+                "Alice", "not-an-email", List.of(), null);
 
         assertThatThrownBy(() -> service.createAccount(req))
                 .isInstanceOf(EmailInvalidException.class);
@@ -128,7 +128,7 @@ class UserAdminServiceTest {
         });
 
         CreateAccountRequest req = new CreateAccountRequest(
-                "Alice Example", ALICE_EMAIL, List.of("ADMIN"));
+                "Alice Example", ALICE_EMAIL, List.of("ADMIN"), null);
 
         when(roleRepository.findByName("ADMIN")).thenReturn(Optional.of(adminRole));
 
@@ -155,6 +155,7 @@ class UserAdminServiceTest {
                 eq(ALICE_EMAIL),
                 eq("account-activation"),
                 any(),
+                any(),
                 any());
     }
 
@@ -165,7 +166,7 @@ class UserAdminServiceTest {
         when(userRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         CreateAccountRequest req = new CreateAccountRequest(
-                "Alice", ALICE_EMAIL, List.of());
+                "Alice", ALICE_EMAIL, List.of(), null);
 
         UserResponse resp = service.createAccount(req);
 
@@ -190,7 +191,7 @@ class UserAdminServiceTest {
         });
 
         CreateAccountRequest req = new CreateAccountRequest(
-                "Alice", ALICE_EMAIL, List.of());
+                "Alice", ALICE_EMAIL, List.of(), null);
 
         service.createAccount(req);
 

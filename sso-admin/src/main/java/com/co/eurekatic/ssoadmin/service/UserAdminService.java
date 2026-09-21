@@ -191,7 +191,7 @@ public class UserAdminService {
 
         tokenService.issueActivationToken(user);
         User saved = userRepository.save(user);
-        publishActivationEmail(saved);
+        publishActivationEmail(saved, req.appName());
         // Roles were just attached — drop the (currently empty)
         // cache entry so the activation flow sees them on first
         // login. Until activation the user is enabled=false and
@@ -215,7 +215,7 @@ public class UserAdminService {
      * pattern as {@link #forgotPassword}.
      */
     @Transactional
-    public void resendActivation(Long userId) {
+    public void resendActivation(Long userId, String appName) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new NotFoundException("User", userId));
         if (user.getStatus() != UserStatus.PENDING_ACTIVATION) {
@@ -223,11 +223,11 @@ public class UserAdminService {
         }
         tokenService.issueActivationToken(user);
         User saved = userRepository.save(user);
-        publishActivationEmail(saved);
+        publishActivationEmail(saved, appName);
         log.info("Resent activation email for user '{}'", saved.getEmail());
     }
 
-    private void publishActivationEmail(User user) {
+    private void publishActivationEmail(User user, String appName) {
         String token = user.getTokenActivation();
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("displayName", user.getFullName() == null ? user.getEmail() : user.getFullName());
@@ -235,7 +235,7 @@ public class UserAdminService {
         payload.put("activationLink", emailProps.activationUrl() + "?token=" + token);
         payload.put("ttlMinutes", TokenService.ACTIVATION_TTL_MINUTES);
         events.publish("email", String.valueOf(user.getId()), user.getEmail(),
-                "account-activation", payload, null);
+                "account-activation", payload, null, appName);
     }
 
     /**
