@@ -1,0 +1,100 @@
+-- ===========================================================================
+-- V432 - Informes tardaba 4 minutos por una estimacion de filas equivocada.
+--
+--   fn_nota_homologar             ROWS 1000 -> ROWS 1
+--   fn_asignatura_tipo_evaluacion ROWS 1000 -> ROWS 1
+--
+--   No cambia una sola linea de logica. Son dos ALTER FUNCTION que corrigen
+--   lo que estas funciones le DECLARAN al planificador.
+--
+--
+-- EL SINTOMA
+--   fn_informe_grupo_listar tardaba 247 segundos en un grupo de 30
+--   estudiantes con 4 periodos. Y no por volumen: en esa base
+--   TASIGNATURA_NOTA esta vacia, TACTIVIDAD tiene 58 filas y
+--   TACTIVIDAD_ESTUDIANTE 296. Una llamada a
+--   fn_informe_estudiante_asignaturas que devolvia CERO filas tardaba 1,4 s,
+--   repetidamente, con el plan ya cacheado.
+--
+--
+-- LA CAUSA
+--   El EXPLAIN de esa consulta, devolviendo cero filas, termina asi:
+--
+--     JIT:
+--       Functions: 102
+--       Timing: Generation 8.9 ms, Inlining 78.6 ms, Optimization 570.6 ms,
+--               Emission 407.4 ms, Total 1065.5 ms
+--     Execution Time: 1091.175 ms
+--
+--   Mil sesenta y cinco de los mil noventa milisegundos son COMPILAR. El
+--   trabajo real es ~0. Postgres decide compilar cuando el costo estimado
+--   supera jit_above_cost (100000) y, peor, optimizar e inlinear cuando pasa
+--   jit_optimize_above_cost / jit_inline_above_cost (500000 cada uno). El
+--   costo estimado de esa consulta era:
+--
+--     Nested Loop Left Join  (cost=47.94..6120200598.21 rows=8000000000 ...)
+--
+--   Ocho mil millones de filas estimadas. Reales: cero.
+--
+--   De donde salen. Una funcion que devuelve conjunto le declara al
+--   planificador cuantas filas devuelve, con ROWS. Si no se dice nada,
+--   Postgres asume 1000 -- y ese era el caso de las dos. En el cuerpo de
+--   fn_informe_estudiante_asignaturas hay TRES laterales sobre ellas
+--   (fn_asignatura_tipo_evaluacion, y fn_nota_homologar dos veces, para la
+--   nota y para la proyectada), asi que el estimado se multiplica:
+--   8 filas x 1000 x 1000 x 1000 = 8e9.
+--
+--   El costo desmedido no cambiaba el plan -- los nodos son los correctos --
+--   pero disparaba el compilador JIT en CADA llamada. Y el listado llama a
+--   fn_informe_estudiante_asignaturas una vez por estudiante y a
+--   fn_informe_periodo_requerido una vez por (estudiante, periodo): 30 + 120
+--   compilaciones de un segundo cada una. De ahi los cuatro minutos.
+--
+--
+-- EL ARREGLO
+--   Declarar la verdad: las dos devuelven EXACTAMENTE UNA FILA.
+--   fn_asignatura_tipo_evaluacion resuelve el tipo de evaluacion de un par
+--   (asignatura, grado) y fn_nota_homologar convierte UN valor a la escala
+--   del colegio. Se verifico midiendo el maximo de filas devueltas sobre
+--   todas las combinaciones de la base, incluida la nota NULL: 1 en ambas.
+--
+--   Medido, mismo grupo de 30 estudiantes, CON el JIT encendido:
+--
+--     costo de la consulta interna   6.120.200.598  ->  196
+--     fn_informe_estudiante_asignaturas    1.556 ms ->  ~0 ms
+--     fn_informe_periodo_requerido         1.649 ms ->  ~0 ms
+--     fn_informe_grupo_listar            247.077 ms ->  569 ms
+--
+--   (Los "~0 ms" son la latencia de red del cliente; el trabajo en el
+--   servidor es menor.)
+--
+--
+-- POR QUE NO SE APAGA EL JIT Y YA
+--   Apagarlo -- SET jit = off, o ALTER FUNCTION ... SET jit = 'off' -- da el
+--   mismo numero (640 ms medidos) y es un parche legitimo. Pero tapa el
+--   problema en vez de arreglarlo: la estimacion seguiria mintiendo, y una
+--   estimacion de ocho mil millones de filas es lo primero que hace elegir un
+--   plan malo el dia que estas tablas tengan datos de verdad. Corregir ROWS
+--   arregla la causa, y de paso el JIT vuelve a decidir con informacion
+--   correcta en vez de quedar prohibido para siempre.
+--
+--
+-- ALCANCE Y RIESGO
+--   ROWS es SOLO una estimacion para el planificador: no limita ni valida
+--   nada, asi que no puede cambiar ningun resultado. Lo unico que cambia son
+--   los planes, y cambian hacia una estimacion MAS parecida a la realidad.
+--
+--   fn_nota_homologar la usan tambien otros modulos (planeador, planillas).
+--   Los alcanza el mismo arreglo, y en la misma direccion.
+--
+--   Si aparece otra pantalla lenta sin explicacion, el diagnostico es este:
+--   EXPLAIN (ANALYZE) y mirar el bloque JIT. Si "Timing / Total" se parece al
+--   "Execution Time", el tiempo se va en compilar, y hay que buscar que
+--   estimacion esta inflada.
+--
+-- Idempotente: ALTER FUNCTION es declarativo, se puede repetir.
+-- ===========================================================================
+
+ALTER FUNCTION academico_test.fn_nota_homologar(NUMERIC, BIGINT, BIGINT) ROWS 1;
+
+ALTER FUNCTION academico_test.fn_asignatura_tipo_evaluacion(BIGINT, BIGINT) ROWS 1;
