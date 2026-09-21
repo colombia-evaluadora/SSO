@@ -1,0 +1,624 @@
+{
+  "info": {
+    "name": "Planeador - Soportes de la observacion (preescolar) V461",
+    "description": "Agregar, quitar y listar archivos de soporte de la observacion de un estudiante de preescolar en una actividad, uno a uno (TACTIVIDAD_SOPORTE, V461). Complementa `BODY.EVIDENCIAS` del `PUT .../observar`, que reemplaza el set completo.\n\n## Como se sube el archivo\n\nEn UNA peticion multipart a `POST {{baseUrl}}/api/files/eval-col/planeador/actividades/estudiantes/:ID/soportes` (peticion 1). No existe un endpoint aparte de \"subir y devolver el pk\": el propio endpoint de negocio esta declarado como destino de archivos (`\"BODY.FK_TARCHIVO\": \"FILE:actividad\"` en `param_types`), y `file-service` hace de intermediario:\n\n```\nPOST /api/files/eval-col/planeador/.../soportes   (multipart, campo FK_TARCHIVO = binario)\n  |- sube el binario a S3 como actividad/<pk>.<ext>\n  |- reserva la fila en TARCHIVO (active = false)\n  |- reenvia POST /api/eval-col/planeador/.../soportes  (JSON, FK_TARCHIVO = <pk>)\n  '- si el catalogo responde 2xx, activa la fila de TARCHIVO\n```\n\nPor eso `fn_actividad_observacion_soporte_agregar` comprueba que el `TARCHIVO` **exista**, no que este ACTIVE: cuando corre, la fila todavia es una reserva inactiva.\n\nSi el `PK_TARCHIVO` ya existe, se puede llamar al endpoint con JSON normal (peticion 2).\n\n## Variables\n\n- `actividadEstudianteId` = PK_TACTIVIDAD_ESTUDIANTE (de `GET /planeador/actividades/:ID`, `estudiantes[].pkTactividadEstudiante`)\n- `tarchivoId` = un PK_TARCHIVO ya existente, solo para la peticion 2\n- `soporteId` se rellena solo con la respuesta del POST o del GET\n\nEntorno: `docs/deploy/sso-test.postman_environment.json` (`baseUrl`, `email`, `password`). Una fila nueva de `public.query` responde 404 hasta reiniciar `query-service-eval-col`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Login automático antes de CADA petición: si el token vivo ya",
+          "// está en la variable de colección, no hace nada.",
+          "const rutaLogin = '/api/auth/login';",
+          "if (pm.request.url.getPath().endsWith(rutaLogin)) { return; }",
+          "",
+          "function caducado(jwt) {",
+          "    try {",
+          "        const carga = JSON.parse(atob(jwt.split('.')[1]));",
+          "        return !carga.exp || (carga.exp - 30) * 1000 < Date.now();",
+          "    } catch (e) { return true; }",
+          "}",
+          "",
+          "const actual = pm.collectionVariables.get('token');",
+          "if (actual && !caducado(actual)) { return; }",
+          "",
+          "const clave = pm.environment.get('password');",
+          "if (!clave) { throw new Error('Falta `password` en el entorno «SSO — test».'); }",
+          "",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + rutaLogin,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "        email: pm.environment.get('email'),",
+          "        password: clave",
+          "    }) }",
+          "}, (err, res) => {",
+          "    if (err) { throw new Error('No se pudo contactar con el gateway: ' + err); }",
+          "    if (res.code !== 200) { throw new Error('Login rechazado (' + res.code + '). Revisa `email` y `password`.'); }",
+          "    pm.collectionVariables.set('token', res.json().token);",
+          "    console.log('token renovado automáticamente');",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "actividadEstudianteId",
+      "value": "1"
+    },
+    {
+      "key": "tarchivoId",
+      "value": "1"
+    },
+    {
+      "key": "soporteId",
+      "value": "1"
+    }
+  ],
+  "item": [
+    {
+      "name": "0 — Login (ver la respuesta)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const token = pm.response.json().token;",
+              "pm.test('devuelve token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+              "pm.collectionVariables.set('token', token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Soportes de la observacion",
+      "item": [
+        {
+          "name": "1 - POST subir y adjuntar UN soporte (multipart, via file-service)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const cuerpo = pm.response.json();",
+                  "const fila = Array.isArray(cuerpo.rows) ? cuerpo.rows[0] : cuerpo;",
+                  "pm.test('devuelve pk_tactividad_soporte', () => pm.expect(fila.pk_tactividad_soporte).to.be.a('number'));",
+                  "pm.collectionVariables.set('soporteId', fila.pk_tactividad_soporte);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "FK_TARCHIVO",
+                  "type": "file",
+                  "src": [],
+                  "description": "El BINARIO (foto, PDF...). El nombre del campo es el del placeholder declarado FILE:actividad en param_types; file-service lo sustituye por el pk_tarchivo que reserva."
+                },
+                {
+                  "key": "FECHA",
+                  "value": "2026-06-22",
+                  "type": "text",
+                  "description": "Opcional (default hoy). Fecha con asistencia valida del estudiante, misma regla que PUT .../observar."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/files/eval-col/planeador/actividades/estudiantes/{{actividadEstudianteId}}/soportes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "files",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "estudiantes",
+                "{{actividadEstudianteId}}",
+                "soportes"
+              ]
+            },
+            "description": "**La forma correcta de subir el archivo: una sola peticion multipart.**\n\nVa a `/api/files/...`, NO a `/api/eval-col/...`. Ese primer segmento es el microservicio `file-service`, que es quien intercepta el multipart (`ReenvioController`): sube el binario a S3, reserva la fila en `TARCHIVO`, reemplaza el campo por su `pk_tarchivo` y reenvia la peticion como JSON al mismo path del catalogo (`POST /planeador/actividades/estudiantes/:ID/soportes`). Recien cuando el catalogo responde 2xx, file-service **activa** la fila de `TARCHIVO`.\n\nEl resto del path despues de `/files/` es `<serviceid>/<path_template>`: por eso lleva `eval-col`.\n\n**El campo del archivo tiene que llamarse `FK_TARCHIVO`**, igual que el placeholder declarado `\"BODY.FK_TARCHIVO\": \"FILE:actividad\"` en `param_types` (V461). Con `param_types` tipado, file-service rechaza con 400 cualquier campo binario que no este declarado. La clasificacion `actividad` es el prefijo de la clave S3 (`actividad/<pk>.<ext>`), la misma carpeta de los materiales de actividad.\n\n**Adjunta un archivo real en `FK_TARCHIVO` antes de correr la peticion** — Postman no puede traer uno de fabrica y `src: []` queda vacio al importar.\n\nPermisos: ademas del gate EDITAR del Planeador hace falta el binding `role_endpoint POST /files/**` (CEVAL-DOCENTE y CEVAL-SUPER_ADMINISTRADOR lo tienen).\n\nNo mandes `Content-Type` a mano: Postman lo pone con su propio `boundary`."
+          },
+          "response": [
+            {
+              "name": "200 - subido y adjuntado",
+              "originalRequest": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/files/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"rows\": [\n    { \"pk_tactividad_soporte\": 11 }\n  ]\n}"
+            },
+            {
+              "name": "400 - campo binario no declarado",
+              "originalRequest": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/files/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "El campo 'ARCHIVO' no esta declarado como archivo para esta ruta."
+            },
+            {
+              "name": "400 - sin asistencia valida en FECHA (22023)",
+              "originalRequest": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/files/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"No se puede observar: no hay asistencia registrada para esta actividad el 2026-01-01\"\n}"
+            },
+            {
+              "name": "401 - sin Bearer valido",
+              "originalRequest": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/files/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": ""
+            },
+            {
+              "name": "403 - sin binding role_endpoint POST /files/**",
+              "originalRequest": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/files/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": ""
+            },
+            {
+              "name": "404 - destino no registrado en el catalogo",
+              "originalRequest": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/files/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "2 - POST adjuntar un archivo YA subido (JSON, sin file-service)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FK_TARCHIVO\": {{tarchivoId}},\n  \"FECHA\": \"2026-06-22\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{actividadEstudianteId}}/soportes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "estudiantes",
+                "{{actividadEstudianteId}}",
+                "soportes"
+              ]
+            },
+            "description": "Variante para cuando el `PK_TARCHIVO` **ya existe** (por ejemplo, reutilizar una foto ya subida): JSON directo al catalogo, sin pasar por file-service. `FILE` se bindea como `BIGINT`, asi que el mismo endpoint acepta las dos formas.\n\nAqui no hay binario: si el archivo todavia no esta en S3, usa la peticion 1."
+          },
+          "response": [
+            {
+              "name": "200 - pk del soporte",
+              "originalRequest": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"rows\": [\n    { \"pk_tactividad_soporte\": 11 }\n  ]\n}"
+            },
+            {
+              "name": "409 - el archivo no existe (23503)",
+              "originalRequest": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"El archivo 999999 no existe\"\n}"
+            },
+            {
+              "name": "400 - actividad EVALUATIVA o sin asistencia (22023)",
+              "originalRequest": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"No se puede observar: no hay asistencia registrada para esta actividad el 2026-01-01\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "3 - GET soportes de la observacion",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().rows || pm.response.json();",
+                  "pm.test('cada fila trae pk_tactividad_soporte y fk_tarchivo', () => rows.forEach(r => { pm.expect(r).to.have.property('pk_tactividad_soporte'); pm.expect(r).to.have.property('fk_tarchivo'); }));",
+                  "if (rows.length) pm.collectionVariables.set('soporteId', rows[0].pk_tactividad_soporte);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{actividadEstudianteId}}/soportes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "estudiantes",
+                "{{actividadEstudianteId}}",
+                "soportes"
+              ]
+            },
+            "description": "Archivos de soporte ACTIVE adjuntos a la observacion de UN estudiante en una actividad de preescolar (`fn_actividad_observacion_soportes_listar`, V461). `:ID` = PK_TACTIVIDAD_ESTUDIANTE (de `GET /planeador/actividades/:ID`, `estudiantes[].pkTactividadEstudiante`), NO PK_TACTIVIDAD.\n\nTrae `urls3`; para descargar el binario se usa el `GET /api/files/download/{archivoId}` del file-service con el `fk_tarchivo`.\n\nGate VER + alcance por la actividad. Roles: CEVAL-DOCENTE, CEVAL-SUPER_ADMINISTRADOR, CEVAL-RECTOR, CEVAL-JEFE_SISTEMA_ESTABLECIMIENTO."
+          },
+          "response": [
+            {
+              "name": "200 - lista",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"rows\": [\n    {\n      \"pk_tactividad_soporte\": 11,\n      \"fk_tarchivo\": 36,\n      \"nombre\": \"foto1.jpg\",\n      \"urls3\": \"actividad/36.jpg\",\n      \"peso\": 100,\n      \"etiqueta\": null,\n      \"fecha\": \"2026-06-22\",\n      \"created_at\": \"2026-09-21T10:00:00\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "404 - asignacion inexistente (P0002)",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/999999/soportes"
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"No se encontro la asignacion actividad-estudiante solicitada\"\n}"
+            },
+            {
+              "name": "403 - fuera de alcance (42501)",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"...\"\n}"
+            },
+            {
+              "name": "404 - antes de reiniciar query-service-eval-col",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/1419/soportes"
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Not Found\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "4 - PUT quitar UN soporte",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"FECHA\": \"2026-06-22\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/soportes/{{soporteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "actividades",
+                "estudiantes",
+                "soportes",
+                "{{soporteId}}"
+              ]
+            },
+            "description": "Baja logica de UN soporte por su PK_TACTIVIDAD_SOPORTE (`fn_actividad_observacion_soporte_quitar`, V461): el pk que devuelven el GET y el POST, NO el PK_TARCHIVO. Es PUT porque `public.query` no admite DELETE. `BODY.FECHA` opcional (default hoy) para el gate de asistencia.\n\nEl binario NO se borra de S3 ni la fila de `TARCHIVO`: solo se desactiva la relacion. Roles: CEVAL-DOCENTE, CEVAL-SUPER_ADMINISTRADOR."
+          },
+          "response": [
+            {
+              "name": "200 - pk retirado",
+              "originalRequest": {
+                "method": "PUT",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/soportes/11"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"rows\": [\n    { \"pk_tactividad_soporte\": 11 }\n  ]\n}"
+            },
+            {
+              "name": "404 - soporte inexistente o ya retirado (P0002)",
+              "originalRequest": {
+                "method": "PUT",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/soportes/11"
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"No se encontro el soporte de observacion solicitado (o ya fue retirado)\"\n}"
+            },
+            {
+              "name": "400 - sin asistencia valida en FECHA (22023)",
+              "originalRequest": {
+                "method": "PUT",
+                "url": {
+                  "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/soportes/11"
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"No se puede observar: no hay asistencia registrada para esta actividad el 2026-01-01\"\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

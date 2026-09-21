@@ -21,9 +21,10 @@ Cada sentencia se atribuye a un objeto (`function:pigse.fn_sed_listar`,
 `query:uuid:pigse-sedes-crear`, `table:pigse.tsede`, `role:PIGSE-RECTOR`…) y se
 ordenan por versión. Tipos reconocidos: funciones, filas de `public.query`,
 tablas, columnas, constraints con nombre, índices, triggers, vistas,
-dominios/tipos, esquemas, secuencias, roles, rutas del menú y endpoints; los
-bindings de permisos, los seeds de datos y el DDL dinámico se cuentan pero no
-se encadenan. La pestaña **Tipos de cambio** del informe muestra esa cobertura
+dominios/tipos, esquemas, secuencias, extensiones, publicaciones CDC, roles,
+rutas del menú y endpoints; los bindings de permisos, los seeds de datos, el
+DDL dinámico, los objetos `TEMP` de una migración y los `UPDATE` masivos de
+`public.query` por patrón se cuentan pero no se encadenan. La pestaña **Tipos de cambio** del informe muestra esa cobertura
 con números. Sobre cada objeto conviven dos cadenas:
 
 | | qué la mata |
@@ -50,6 +51,16 @@ texto ya no describe el estado actual al depurar, y qué colapsaría en un squas
 | `sqlscan.py` | Parte el SQL en sentencias respetando literales, `$$ … $$` y comentarios. Todo lo demás depende de esto: un grep a secas matchea dentro de cuerpos de función y de comentarios. |
 | `analyze_migrations.py` | Extractores, grafo de reescritura, firmas, llamadores, slots, dependencias. |
 | `render.py` | Emite el HTML (CSS y JS propios, datos embebidos, sin CDN). |
+
+## Por elemento
+
+La pestaña **Objetos** responde, para cada elemento, qué migraciones lo
+reescribieron (con línea y quién mató a cada escritura) y quién lo usa: cada
+llamada a función o referencia a tabla/vista se atribuye al elemento que la
+contiene (la función que se define, la fila de `public.query` que se inserta)
+y se separa entre "sus mismas migraciones" y "otras". Una sentencia suelta
+(un `UPDATE` sin definir nada) se atribuye a la migración. El JSON lo expone
+como `uses`: `{from, to, v, line, file, kind: call|ref|java}`.
 
 ## Precisión
 
