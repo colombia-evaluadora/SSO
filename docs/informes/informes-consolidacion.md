@@ -169,6 +169,8 @@ vía normal.
 | `cualitativo` | `real` | **Preescolar.** La columna OBSERVACIÓN. Ignorar promedio, puesto, aprobadas |
 | `numerico` | `real` | La tabla normal: negro/gris, promedio, puesto, flechas |
 | `numerico` | `requerido` | Las notas que **faltan**. Sin puesto. `promedio_proyectado` = el mínimo |
+| `numerico` | `final` | La nota del **año**. Se pide con `INCLUIR_FINAL` — [abajo](#la-fila-final) |
+| `cualitativo` | `final` | La misma fila, vacía: no se promedian observaciones |
 
 > **Nunca decidas mirando si `asignaturas` viene vacío.** En preescolar viene con
 > filas, todas en `null`. La decisión se toma con `formato`.
@@ -476,7 +478,7 @@ cambió**: recibe el grupo directo y de él deduce el periodo académico, así q
 hay ambigüedad que resolver acá.
 
 ```json
-{ "FK_TGRUPO": 11474, "PERIODOS": [622, 627], "SEARCH": null }
+{ "FK_TGRUPO": 11474, "PERIODOS": [622, 627], "SEARCH": null, "INCLUIR_FINAL": false }
 ```
 
 `PERIODOS` vacío o ausente = todos los del periodo académico del grupo.
@@ -518,6 +520,41 @@ En `modo_periodo: "requerido"` las entradas cambian de forma:
 Y en modo requerido: `puesto` viene `null`, `promedio_proyectado` trae el
 **mínimo del grado**, y `consolidado`/`promedio_guardado`/`aprobadas`/`reprobadas`
 vienen vacíos o en cero.
+
+#### La fila Final
+
+Con `INCLUIR_FINAL: true` cada estudiante recibe **una fila más** con la nota
+del año. No sale de ninguna tabla: se calcula al responder.
+
+```json
+{ "fk_tperiodo_evaluacion": -1, "periodo_nombre": "Final",
+  "periodo_abreviacion": "FIN", "modo_periodo": "final",
+  "consolidado": false, "promedio_guardado": 71.25, "puesto": 3 }
+```
+
+`-1` es un **centinela, no un PK**: no lo uses para pedir nada. Sirve como
+clave de React y para distinguir la fila; lo que la identifica de verdad es
+`modo_periodo: "final"`. Sus asignaturas llegan con `estado: "final"`, que es
+un estado nuevo — píntalo como una nota normal, **no** en gris: no es una
+proyección.
+
+Tres cosas que sorprenden si no se saben:
+
+1. **Se calcula sobre TODOS los periodos del año, no sobre `PERIODOS`.** El
+   filtro de periodos es de vista. Un final que cambia según lo que esté
+   desmarcado no es un final.
+2. **Un periodo sin nota guardada vale cero**, y el divisor es el total de
+   periodos del año. Consecuencia real: a mitad de año casi todo el mundo
+   pierde. El Final no es una proyección de cómo va a terminar.
+3. **El promedio general es el promedio de las asignaturas de esa misma
+   fila**, no el de los promedios de cada periodo.
+
+El puesto se recalcula sobre ese promedio. `observacion` viene siempre en
+`null`: el Final no es un periodo, no tiene actividades que resumir, y la
+pantalla no debe ofrecer generarla ahí.
+
+En un grupo **cualitativo** la fila llega igual pero vacía — sin asignaturas,
+sin promedio y sin puesto —, para que no se lea como que faltó cargar algo.
 
 **Respuesta** (real — una fila en `modo_periodo: "requerido"`, que es justo el caso que más cuesta leer)
 
