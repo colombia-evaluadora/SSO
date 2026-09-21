@@ -114,23 +114,34 @@ class FileAccessServiceTest {
     }
 
     /**
-     * Las dos consultas de ownership comparten firma, así que el stub
+     * Las tres consultas de ownership comparten firma, así que el stub
      * las distingue por el SQL: la del soporte de asistencia es la
-     * única que menciona {@code tasistencia}.
+     * única que menciona {@code tasistencia} y la del soporte de
+     * observación la única que menciona {@code tactividad_soporte}.
      */
     private static void stubOwnership(NamedParameterJdbcTemplate jdbc, int propias, Object asistencia) {
+        stubOwnership(jdbc, propias, asistencia, 0);
+    }
+
+    private static void stubOwnership(NamedParameterJdbcTemplate jdbc,
+                                      int propias, Object asistencia, Object observacion) {
         when(jdbc.query(anyString(), any(SqlParameterSource.class), any(RowMapper.class)))
                 .thenReturn(List.of());
         when(jdbc.queryForObject(anyString(), any(SqlParameterSource.class), eq(Integer.class)))
                 .thenAnswer(inv -> {
                     String sql = inv.getArgument(0);
-                    if (!sql.contains("tasistencia")) {
-                        return propias;
+                    Object valor;
+                    if (sql.contains("tasistencia")) {
+                        valor = asistencia;
+                    } else if (sql.contains("tactividad_soporte")) {
+                        valor = observacion;
+                    } else {
+                        valor = propias;
                     }
-                    if (asistencia instanceof RuntimeException e) {
+                    if (valor instanceof RuntimeException e) {
                         throw e;
                     }
-                    return asistencia;
+                    return valor;
                 });
     }
 
@@ -154,6 +165,50 @@ class FileAccessServiceTest {
     void soporteDeAsistenciaNoVisibleSiElGateLoNiega() {
         var jdbc = mock(NamedParameterJdbcTemplate.class);
         stubOwnership(jdbc, 0, 0);
+
+        boolean puede = service(jdbc).puedeVer(42L, "docente@example.com", Set.of("CEVAL-DOCENTE"));
+
+        assertThat(puede).isFalse();
+    }
+
+    /**
+     * El caso reportado: el docente sube la evidencia de la
+     * observación de un estudiante y al abrirla recibe 404. No es
+     * propietario del archivo, no es soporte de asistencia y {@code
+     * CEVAL-DOCENTE} no tiene el binding global de {@code
+     * /files/view} — hacía falta el cuarto camino.
+     */
+    @Test
+    void soporteDeObservacionVisibleSiElGateDelPlaneadorLoPermite() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubOwnership(jdbc, 0, 0, 1);
+
+        boolean puede = service(jdbc).puedeVer(42L, "docente@example.com", Set.of("CEVAL-DOCENTE"));
+
+        assertThat(puede).isTrue();
+    }
+
+    /**
+     * El alcance no se reimplementa en file-service: si {@code
+     * fn_planeador_alcanza} dice que no, la evidencia tampoco se ve.
+     */
+    @Test
+    void soporteDeObservacionNoVisibleSiElGateDelPlaneadorLoNiega() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubOwnership(jdbc, 0, 0, 0);
+
+        boolean puede = service(jdbc).puedeVer(42L, "docente@example.com", Set.of("CEVAL-DOCENTE"));
+
+        assertThat(puede).isFalse();
+    }
+
+    /** Mismo aislamiento que la rama de asistencias: un entorno sin el
+     *  Planeador pierde este camino, no los otros tres. */
+    @Test
+    void siLaFuncionDelPlaneadorNoExisteSePierdeSoloEseCamino() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        stubOwnership(jdbc, 0, 0,
+                new InvalidDataAccessResourceUsageException("function fn_planeador_alcanza does not exist"));
 
         boolean puede = service(jdbc).puedeVer(42L, "docente@example.com", Set.of("CEVAL-DOCENTE"));
 
