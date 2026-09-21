@@ -1,6 +1,7 @@
 package com.co.eurekatic.reporting.web;
 
 import com.co.eurekatic.reporting.config.ReportingProperties;
+import com.co.eurekatic.reporting.data.FileServiceClient;
 import com.co.eurekatic.reporting.data.QueryServiceClient;
 import com.co.eurekatic.reporting.render.ExcelRenderer;
 import com.co.eurekatic.reporting.render.Fechas;
@@ -31,15 +32,18 @@ public class ReportService {
 
     private final ReportingProperties props;
     private final QueryServiceClient queryService;
+    private final FileServiceClient fileService;
     private final PdfRenderer pdf;
     private final ExcelRenderer excel;
 
     public ReportService(ReportingProperties props,
                          QueryServiceClient queryService,
+                         FileServiceClient fileService,
                          PdfRenderer pdf,
                          ExcelRenderer excel) {
         this.props = props;
         this.queryService = queryService;
+        this.fileService = fileService;
         this.pdf = pdf;
         this.excel = excel;
     }
@@ -60,6 +64,18 @@ public class ReportService {
         }
 
         Formato formato = Formato.parse(request == null ? null : request.format());
+
+        // Un reporte puede declarar que no todos los formatos le aplican. Un
+        // boletin en Excel seria una fila ilegible por estudiante: mejor un
+        // 400 que diga por que, que un archivo que nadie puede usar.
+        List<String> admitidos = def.getFormats();
+        if (admitidos != null && !admitidos.isEmpty()
+                && admitidos.stream().noneMatch(f -> f.equalsIgnoreCase(formato.name()))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "El reporte '" + clave + "' no se puede exportar en "
+                    + formato.name().toLowerCase(Locale.ROOT)
+                    + ". Formatos disponibles: " + String.join(", ", admitidos) + ".");
+        }
 
         long inicio = System.currentTimeMillis();
         List<Map<String, Object>> rows = queryService.fetchRows(
@@ -88,8 +104,14 @@ public class ReportService {
         ReportMeta meta = new ReportMeta(usuario, request == null ? null : request.filters());
 
         List<String> columnas = request == null ? null : request.columns();
+        // La sesion de descargas vive lo que vive el reporte: los bytes de las
+        // imagenes se sueltan con el, no se quedan en el proceso.
+        FileServiceClient.Sesion imagenes =
+                def.getImageFields() == null || def.getImageFields().isEmpty()
+                        ? null
+                        : fileService.nuevaSesion();
         byte[] content = switch (formato) {
-            case PDF -> pdf.render(clave, def, rows, meta, columnas);
+            case PDF -> pdf.render(clave, def, rows, meta, columnas, imagenes);
             case EXCEL -> excel.render(clave, def, rows, meta, columnas);
         };
 
