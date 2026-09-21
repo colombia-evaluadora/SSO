@@ -77,6 +77,7 @@ class Write:
     status: str = ""          # live | dead | patch-live | patch-dead
     killed_by: str = ""
     note: str = ""
+    span: list = field(default_factory=list)   # [primera, ultima] linea de la sentencia
 
 
 @dataclass
@@ -91,6 +92,13 @@ class Migration:
     unparsed: int = 0
     unparsed_stmts: list[dict] = field(default_factory=list)
     total_statements: int = 0
+    dead_lines: int = 0
+    live_lines: int = 0
+    other_lines: int = 0
+    comment_lines: int = 0
+    header_lines: int = 0
+    comment_pct: int = 0
+    linemap: str = ""        # RLE: "12l40d3c" -> 12 vivas, 40 muertas, 3 comentario
     comment_refs: list[str] = field(default_factory=list)
     verdict: str = ""
     live_writes: int = 0
@@ -393,6 +401,16 @@ def analyze_file(path: Path, version: str) -> Migration:
         lines=text.count("\n") + 1,
         bytes=len(text.encode("utf-8")),
     )
+
+    raw_lines = text.splitlines()
+    mig.comment_lines = sum(1 for l in raw_lines if l.lstrip().startswith("--"))
+    mig.comment_pct = 100 * mig.comment_lines // max(len(raw_lines), 1)
+    for l in raw_lines:
+        st_ = l.strip()
+        if st_.startswith("--") or not st_:
+            mig.header_lines += 1
+        else:
+            break
 
     # referencias documentadas en comentarios
     for cm in re.finditer(r"--[^\n]*", text):
@@ -707,6 +725,12 @@ def analyze_file(path: Path, version: str) -> Migration:
                     w.effect = "create"
                     w.detail = w.detail or "objetivo resuelto en tiempo de ejecucion"
 
+        # El tramo arranca justo despues del `;` anterior, asi que incluye el
+        # comentario de cabecera del bloque: es lo que de verdad se borraria.
+        span = [st.line, min(mig.lines, st.line + st.raw.count("\n"))]
+        for w in mig.writes[before:]:
+            w.span = list(span)
+
         if (len(mig.writes) == before and len(mig.unparsed_stmts) == flagged
                 and not head.startswith(("COMMENT", "DO", "SET", "SELECT"))):
             _unparsed(mig, st)
@@ -859,6 +883,47 @@ def build_graph(migs: list[Migration]) -> dict[str, list[Write]]:
 COUNTED = ("function", "query_row", "table", "column", "constraint", "index",
            "trigger", "view", "domain", "schema", "sequence", "role", "route",
            "endpoint", "dynamic", "extension", "publication", "scratch", "query_bulk")
+
+
+def line_budget(mig: Migration, text: str) -> None:
+    """
+    Reparte las lineas del archivo en muertas / vivas / resto.
+
+    Se cuenta por numero de linea (no sumando tramos) porque un bloque DO
+    puede escribir varios objetos con distinta suerte: si una sola escritura
+    del tramo sigue viva, el tramo NO se puede borrar. El "resto" son las
+    lineas que ninguna escritura encadenable reclama: binds de permisos,
+    seeds, `COMMENT ON`, `SET`, `GRANT` y las cabeceras entre sentencias.
+    """
+    dead: set[int] = set()
+    live: set[int] = set()
+    for w in mig.writes:
+        if w.effect == "drop" or not w.span or w.obj_type not in COUNTED:
+            continue
+        rng = range(w.span[0], w.span[1] + 1)
+        if w.status in ("live", "patch-live"):
+            live.update(rng)
+        elif w.status in ("dead", "patch-dead"):
+            dead.update(rng)
+    dead -= live
+    mig.dead_lines = len(dead)
+    mig.live_lines = len(live)
+    mig.other_lines = max(0, mig.lines - len(dead) - len(live))
+
+    # Mapa del archivo: una letra por linea, comprimido por tramos. Es lo que
+    # deja ver de un golpe que la mitad de una migracion ya no hace nada.
+    comment = {i for i, l in enumerate(text.splitlines(), 1)
+               if l.lstrip().startswith("--")}
+    blank = {i for i, l in enumerate(text.splitlines(), 1) if not l.strip()}
+    runs: list[list] = []
+    for i in range(1, mig.lines + 1):
+        c = ("l" if i in live else "d" if i in dead
+             else "c" if i in comment else "b" if i in blank else "o")
+        if runs and runs[-1][0] == c:
+            runs[-1][1] += 1
+        else:
+            runs.append([c, 1])
+    mig.linemap = "".join(f"{n}{c}" for c, n in runs)
 
 
 def verdict_for(mig: Migration) -> None:
@@ -1299,6 +1364,8 @@ def main() -> int:
     chains = build_graph(migs)
     for mig in migs:
         verdict_for(mig)
+        line_budget(mig, (REPO / mig.path).read_text(
+            encoding="utf-8", errors="replace"))
 
     callsites = collect_sql_callsites(migs) + collect_java_callsites()
     resolve_callsites(callsites, chains)
@@ -1350,6 +1417,13 @@ def main() -> int:
             "range": [migs[0].version, migs[-1].version],
             "highlight": [args.vfrom, args.vto],
             "total_lines": sum(m.lines for m in migs),
+            "dead_lines": sum(m.dead_lines for m in migs),
+            "live_lines": sum(m.live_lines for m in migs),
+            "other_lines": sum(m.other_lines for m in migs),
+            "comment_lines": sum(m.comment_lines for m in migs),
+            "over_comment_budget": sum(1 for m in migs
+                                       if m.comment_pct > 20 and m.comment_lines > 20),
+            "over_header_budget": sum(1 for m in migs if m.header_lines > 14),
             "unparsed": sum(m.unparsed for m in migs),
             "statements": sum(m.total_statements for m in migs),
         },
@@ -1372,6 +1446,9 @@ def main() -> int:
           f"solo-binds={v['solo-binds']}  sin-cambios={v['sin-cambios']}")
     print(f"  proximo slot libre: V{slots['next_free']}  "
           f"(techo V{slots['ceiling']} en {slots['branch_count']} ramas)")
+    dl = sum(m.dead_lines for m in migs)
+    print(f"  lineas sin efecto: {dl:,} de {sum(m.lines for m in migs):,} "
+          f"({round(100 * dl / max(1, sum(m.lines for m in migs)))}%)")
     print(f"  firmas cambiadas={len(changes)}  llamadas desalineadas={len(issues)}  "
           f"huerfanas={len(orphans)}")
     print(f"HTML  -> {args.out}")
