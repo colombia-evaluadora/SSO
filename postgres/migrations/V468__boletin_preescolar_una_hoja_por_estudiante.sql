@@ -1,13 +1,14 @@
 -- ===========================================================================
--- V468 - El boletin vuelve a ser UNA HOJA POR ESTUDIANTE.
---   fn_informe_boletin_preescolar   mismo contrato, otro grano
+-- V468 - El boletin: UNA HOJA POR ESTUDIANTE, con las asignaturas del PLAN.
+--   fn_informe_boletin_preescolar   mismo contrato, otro grano y otra fuente
 --
 -- V466 daba una pagina por (estudiante, asignatura) y repetia el MISMO
 -- parrafo bajo cada titulo, porque la observacion aprobada se guarda por
--- (matricula, periodo). Ahora: una hoja, los nombres juntos en una linea y
--- las evidencias mas recientes de todas las materias. Detalle en el COMMENT.
+-- (matricula, periodo). Ahora: una hoja, los nombres de las asignaturas
+-- juntos en una linea y las evidencias mas recientes de todas las materias.
+-- Los nombres salen del PLAN DE ESTUDIO y no del listado. El porque de las
+-- tres decisiones, en el COMMENT.
 --
--- Migracion nueva y no edicion de V466: V466 ya esta en test y en produccion.
 -- Depende de: V466. Idempotente: CREATE OR REPLACE, mismo tipo de retorno.
 -- ===========================================================================
 
@@ -74,22 +75,49 @@ AS $function$
                 OR CARDINALITY(p_fk_tmatriculas) = 0
                 OR l.fk_tmatricula = ANY (p_fk_tmatriculas))
     ),
-    -- UNA fila por estudiante. Las asignaturas se juntan en una linea en el
-    -- orden del plan; DISTINCT sobre el area porque varias dimensiones suelen
-    -- compartirla y repetirla no aporta.
+    -- LAS ASIGNATURAS SALEN DEL PLAN DE ESTUDIO, NO DEL LISTADO.
+    --
+    --   El JSONB de fn_informe_grupo_listar solo trae las asignaturas con
+    --   nota guardada o con actividades asignadas: es deliberado (V334) para
+    --   que la tabla de la pantalla no se llene de columnas vacias. Pero un
+    --   boletin tiene que decir QUE CURSA el estudiante, no que le
+    --   calificaron, y en preescolar es normal llegar a mitad de periodo sin
+    --   una sola actividad. Con el JSONB, ese boletin salia sin titulo.
+    --
+    --   La propia cabecera de V334 lo anticipa: "si hace falta el plan
+    --   completo, es un LEFT JOIN desde el plan contra esta funcion, no al
+    --   reves". Esto es ese LEFT JOIN.
+    --
+    --   El orden es el de PK_TASIGNATURA_PLAN --como se fueron agregando al
+    --   plan-- porque TASIGNATURA_PLAN no tiene columna de orden; el nombre
+    --   desempata para que dos corridas den siempre lo mismo.
+    plan_asignaturas AS (
+        SELECT m.PK_TMATRICULA AS fk_tmatricula,
+               STRING_AGG(DISTINCT TRIM(a.NOMBRE), ', ')::VARCHAR AS asignatura_nombre,
+               STRING_AGG(DISTINCT TRIM(ar.NOMBRE), ', ')::VARCHAR AS area_nombre
+          FROM academico_test.TMATRICULA m
+          JOIN academico_test.TGRUPO gr ON gr.PK_TGRUPO = m.FK_TGRUPO
+          JOIN academico_test.TPLAN pl
+            ON pl.FK_TGRADO = gr.FK_TGRADO AND pl.ACTIVE = TRUE
+          JOIN academico_test.TASIGNATURA_PLAN ap
+            ON ap.FK_TPLAN = pl.PK_TPLAN AND ap.ACTIVE = TRUE
+          JOIN academico_test.TASIGNATURA a
+            ON a.PK_TASIGNATURA = ap.FK_TASIGNATURA AND a.ACTIVE = TRUE
+          LEFT JOIN academico_test.TAREA ar
+                 ON ar.PK_TAREA = a.FK_TAREA AND ar.ACTIVE = TRUE
+         WHERE m.PK_TMATRICULA IN (SELECT b.fk_tmatricula FROM base b)
+           AND NULLIF(TRIM(a.NOMBRE), '') IS NOT NULL
+         GROUP BY m.PK_TMATRICULA
+    ),
+    -- UNA fila por estudiante. El LEFT conserva la pagina de quien no tenga
+    -- plan configurado: sale con el titulo vacio, no desaparece.
     filas AS (
         SELECT b.fk_tmatricula, b.estudiante, b.documento, b.periodo_nombre,
                b.observacion, b.observacion_estado,
-               (SELECT STRING_AGG(x.nombre, ', ' ORDER BY x.orden, x.nombre)
-                  FROM JSONB_TO_RECORDSET(b.asignaturas)
-                       AS x(nombre VARCHAR, orden INTEGER)
-                 WHERE NULLIF(TRIM(x.nombre), '') IS NOT NULL)::VARCHAR
-                   AS asignatura_nombre,
-               (SELECT STRING_AGG(DISTINCT TRIM(y.area), ', ')
-                  FROM JSONB_TO_RECORDSET(b.asignaturas) AS y(area VARCHAR)
-                 WHERE NULLIF(TRIM(y.area), '') IS NOT NULL)::VARCHAR
-                   AS area_nombre
+               pa.asignatura_nombre,
+               pa.area_nombre
           FROM base b
+          LEFT JOIN plan_asignaturas pa ON pa.fk_tmatricula = b.fk_tmatricula
     ),
     cabecera AS (
         SELECT ee.NOMBRE  AS ee_nombre,
@@ -211,4 +239,4 @@ AS $function$
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_informe_boletin_preescolar(BIGINT, BIGINT, BIGINT, BIGINT[])
-    IS 'El boletin de preescolar de un grupo en un periodo: UNA FILA POR ESTUDIANTE, que es una pagina del PDF. V466 daba una pagina por (estudiante, asignatura) y repetia el mismo parrafo bajo cada titulo, porque la observacion aprobada se guarda por (matricula, periodo) y no por asignatura; repetido en varias hojas ese texto se lee como un error, asi que se volvio a una hoja. ASIGNATURA_NOMBRE ya no es una asignatura sino la LISTA de las que el estudiante cursa, unidas en una linea y en el orden del plan; AREA_NOMBRE son sus areas sin repetir. No se inventa una observacion por asignatura porque no existe: se reviso el esquema entero y lo unico que cuelga de una asignatura es materia prima sin revisar (TACTIVIDAD_NOTA.OBSERVACION y las de rubrica, escala y cotejo), mientras que lo aprobado por un humano es TESTUDIANTE_PERIODO_OBSERVACION (matricula, periodo) y TESTUDIANTE_ANIO_OBSERVACION (matricula), ninguna con asignatura. Un boletin publica lo que alguien acepto. Si algun dia hace falta un texto aprobado POR asignatura, el hueco natural es TASIGNATURA_NOTA, que ya tiene el grano exacto y hoy no tiene columna de texto. Las EVIDENCIAS son las de TODAS las materias, ordenadas por fecha de carga DESCENDENTE para que las seis ranuras muestren lo ultimo y no lo primero. Conserva de V466 el gate delegado en fn_informe_grupo_listar, que solo salgan estudiantes cualitativos, que un estudiante sin observacion conserve su pagina, y que las imagenes viajen como PK_TARCHIVO. Mismo tipo de retorno que V466, asi que CREATE OR REPLACE basta. V468.';
+    IS 'El boletin de preescolar de un grupo en un periodo: UNA FILA POR ESTUDIANTE, que es una pagina del PDF. V466 daba una pagina por (estudiante, asignatura) y repetia el mismo parrafo bajo cada titulo, porque la observacion aprobada se guarda por (matricula, periodo) y no por asignatura; repetido en varias hojas ese texto se lee como un error, asi que se volvio a una hoja. ASIGNATURA_NOMBRE ya no es una asignatura sino la LISTA de las que el estudiante cursa, unidas en una linea; AREA_NOMBRE son sus areas sin repetir. AMBAS SALEN DEL PLAN DE ESTUDIO (TASIGNATURA_PLAN del grado) y no del JSONB del listado: ese arreglo solo trae asignaturas con nota o con actividades --deliberado en V334, para que la tabla de la pantalla no se llene de columnas vacias--, y un boletin tiene que decir que CURSA el estudiante, no que le calificaron. En preescolar es normal llegar a mitad de periodo sin una sola actividad, y con el JSONB ese boletin salia sin titulo (medido en test con una estudiante que cursa SEGUIMIENTOS1 y VALORES). La propia cabecera de V334 lo anticipa: si hace falta el plan completo, es un LEFT JOIN desde el plan contra esa funcion. No se inventa una observacion por asignatura porque no existe: se reviso el esquema entero y lo unico que cuelga de una asignatura es materia prima sin revisar (TACTIVIDAD_NOTA.OBSERVACION y las de rubrica, escala y cotejo), mientras que lo aprobado por un humano es TESTUDIANTE_PERIODO_OBSERVACION (matricula, periodo) y TESTUDIANTE_ANIO_OBSERVACION (matricula), ninguna con asignatura. Un boletin publica lo que alguien acepto. Si algun dia hace falta un texto aprobado POR asignatura, el hueco natural es TASIGNATURA_NOTA, que ya tiene el grano exacto y hoy no tiene columna de texto. Las EVIDENCIAS son las de TODAS las materias, ordenadas por fecha de carga DESCENDENTE para que las seis ranuras muestren lo ultimo y no lo primero. Conserva de V466 el gate delegado en fn_informe_grupo_listar, que solo salgan estudiantes cualitativos, que un estudiante sin observacion conserve su pagina, y que las imagenes viajen como PK_TARCHIVO. Mismo tipo de retorno que V466, asi que CREATE OR REPLACE basta. V468.';
