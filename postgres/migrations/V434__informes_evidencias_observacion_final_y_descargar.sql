@@ -221,7 +221,15 @@ COMMENT ON FUNCTION academico_test.fn_informe_periodo_evidencias_listar(BIGINT, 
 
 -- ---------------------------------------------------------------------------
 -- 2. La observacion del Final: los resumenes YA consolidados, encadenados.
+--
+--    El DROP previo no es decorativo: CREATE OR REPLACE no puede cambiar el
+--    tipo de retorno de una funcion que ya existe, y una migracion posterior
+--    puede haberle cambiado los nombres de las columnas de salida. Sin esto,
+--    re-aplicar esta migracion sobre un esquema que ya avanzo falla con
+--    "cannot change return type of existing function".
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_estudiante_final_observacion(BIGINT, BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_estudiante_final_observacion(
     p_pk_usuario_solicitante BIGINT,
     p_fk_tmatricula          BIGINT
