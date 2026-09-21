@@ -97,7 +97,7 @@ class UserAdminServiceTest {
         when(userRepository.existsByEmail(ALICE_EMAIL)).thenReturn(true);
 
         CreateAccountRequest req = new CreateAccountRequest(
-                "Alice", ALICE_EMAIL, List.of());
+                "Alice", ALICE_EMAIL, List.of(), null);
 
         assertThatThrownBy(() -> service.createAccount(req))
                 .isInstanceOf(UserDuplicateException.class)
@@ -111,7 +111,7 @@ class UserAdminServiceTest {
         // existsByEmail call, so a strict stub on the repository
         // would trip UnnecessaryStubbingException.
         CreateAccountRequest req = new CreateAccountRequest(
-                "Alice", "not-an-email", List.of());
+                "Alice", "not-an-email", List.of(), null);
 
         assertThatThrownBy(() -> service.createAccount(req))
                 .isInstanceOf(EmailInvalidException.class);
@@ -128,7 +128,7 @@ class UserAdminServiceTest {
         });
 
         CreateAccountRequest req = new CreateAccountRequest(
-                "Alice Example", ALICE_EMAIL, List.of("ADMIN"));
+                "Alice Example", ALICE_EMAIL, List.of("ADMIN"), null);
 
         when(roleRepository.findByName("ADMIN")).thenReturn(Optional.of(adminRole));
 
@@ -155,6 +155,7 @@ class UserAdminServiceTest {
                 eq(ALICE_EMAIL),
                 eq("account-activation"),
                 any(),
+                any(),
                 any());
     }
 
@@ -165,7 +166,7 @@ class UserAdminServiceTest {
         when(userRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         CreateAccountRequest req = new CreateAccountRequest(
-                "Alice", ALICE_EMAIL, List.of());
+                "Alice", ALICE_EMAIL, List.of(), null);
 
         UserResponse resp = service.createAccount(req);
 
@@ -190,7 +191,7 @@ class UserAdminServiceTest {
         });
 
         CreateAccountRequest req = new CreateAccountRequest(
-                "Alice", ALICE_EMAIL, List.of());
+                "Alice", ALICE_EMAIL, List.of(), null);
 
         service.createAccount(req);
 
@@ -448,6 +449,86 @@ class UserAdminServiceTest {
 
         // Sin vencimiento no se puede afirmar que siga vivo: gana el lado seguro.
         assertThat(service.resetTokenStatus("sinvto").status()).isEqualTo("expired");
+    }
+
+    /* ==================== activationTokenStatus ==================== */
+
+    @Test
+    void activationTokenStatusIsInvalidWhenTokenUnknown() {
+        when(userRepository.findByTokenActivation("nope")).thenReturn(java.util.Optional.empty());
+
+        var res = service.activationTokenStatus("nope");
+
+        assertThat(res.status()).isEqualTo("invalid");
+        assertThat(res.expiresIn()).isZero();
+        assertThat(res.maskedEmail()).isNull();
+        assertThat(res.issuedAt()).isNull();
+    }
+
+    @Test
+    void activationTokenStatusIsValidAndMasksEmailWhenLive() {
+        User u = new User();
+        u.setEmail("alice@example.com");
+        u.setTokenActivationExpiresAt(java.time.Instant.now().plusSeconds(600));
+        when(userRepository.findByTokenActivation("atok")).thenReturn(java.util.Optional.of(u));
+
+        var res = service.activationTokenStatus("atok");
+
+        assertThat(res.status()).isEqualTo("valid");
+        assertThat(res.expiresIn()).isBetween(1L, 600L);
+        assertThat(res.ttlSeconds()).isEqualTo(2 * 24 * 60 * 60);
+        assertThat(res.maskedEmail()).isEqualTo("a****@example.com");
+        assertThat(res.issuedAt()).isNotNull();
+    }
+
+    @Test
+    void activationTokenStatusIsExpiredWhenPastExpiry() {
+        User u = new User();
+        u.setEmail("alice@example.com");
+        u.setTokenActivationExpiresAt(java.time.Instant.now().minusSeconds(60));
+        when(userRepository.findByTokenActivation("old")).thenReturn(java.util.Optional.of(u));
+
+        var res = service.activationTokenStatus("old");
+
+        assertThat(res.status()).isEqualTo("expired");
+        assertThat(res.expiresIn()).isZero();
+    }
+
+    @Test
+    void createAccountUsesAppLaunchUrlForActivationLinkWhenAppMatches() {
+        when(userRepository.existsByEmail(ALICE_EMAIL)).thenReturn(false);
+        // issueActivationToken's real implementation stamps the token onto
+        // the user as a side effect (that's what publishActivationEmail
+        // later reads via user.getTokenActivation()) — thenReturn alone
+        // leaves the field null, since a mock never runs the real body.
+        when(tokenService.issueActivationToken(any(User.class))).thenAnswer(inv -> {
+            User u = inv.getArgument(0);
+            u.setTokenActivation("atok");
+            return "atok";
+        });
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> {
+            User u = inv.getArgument(0);
+            u.setId(7L);
+            return u;
+        });
+        com.co.eurekatic.common.entity.App app = new com.co.eurekatic.common.entity.App();
+        app.setName("PIGSE");
+        app.setLaunchUrl("https://pigse.example.com");
+        when(appRepository.findByName("PIGSE")).thenReturn(Optional.of(app));
+
+        CreateAccountRequest req = new CreateAccountRequest(
+                "Alice", ALICE_EMAIL, List.of(), "PIGSE");
+
+        service.createAccount(req);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> payload =
+                ArgumentCaptor.forClass(Map.class);
+        verify(events).publish(
+                eq("email"), anyString(), eq(ALICE_EMAIL), eq("account-activation"),
+                payload.capture(), any(), eq("PIGSE"));
+        assertThat(payload.getValue().get("activationLink").toString())
+                .isEqualTo("https://pigse.example.com/activate?token=atok");
     }
 
     @Test

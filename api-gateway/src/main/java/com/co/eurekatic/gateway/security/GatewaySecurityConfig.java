@@ -182,10 +182,12 @@ public class GatewaySecurityConfig {
                                 "/api/sso-admin/restorePassword",
                                 "/api/sso-admin/forgotPassword",
                                 "/api/sso-admin/resetTokenStatus",
+                                "/api/sso-admin/activationTokenStatus",
                                 "/api/sso-admin/user/activateAccount",
                                 "/api/sso-admin/user/restorePassword",
                                 "/api/sso-admin/user/forgotPassword",
-                                "/api/sso-admin/user/resetTokenStatus").permitAll()
+                                "/api/sso-admin/user/resetTokenStatus",
+                                "/api/sso-admin/user/activationTokenStatus").permitAll()
                         .pathMatchers("/auth/login").permitAll()
                         .pathMatchers("/api/auth/login").permitAll()
                         .pathMatchers("/api/auth/refresh", "/api/auth/logout").permitAll()
