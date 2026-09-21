@@ -90,9 +90,14 @@ public class UserAdminService {
     private static final Pattern EMAIL_REGEX =
             Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
 
-    // Espeja RESTORE_TTL_MINUTES de TokenService (30 min). En segundos porque
-    // es lo que consume el front para el contador de la pantalla de aviso.
-    private static final long RESTORE_TTL_SECONDS = 30 * 60;
+    // Deriva de TokenService.RESTORE_TTL_MINUTES en vez de duplicar el
+    // numero: las dos SIEMPRE tienen que coincidir (una fija el vencimiento
+    // real del token, la otra es lo que el correo/el front le muestran al
+    // usuario) — un numero aparte es un desfase esperando a pasar la
+    // proxima vez que alguien cambie uno de los dos sin acordarse del otro.
+    // En segundos porque es lo que consume el front para el contador de la
+    // pantalla de aviso.
+    private static final long RESTORE_TTL_SECONDS = TokenService.RESTORE_TTL_MINUTES * 60;
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;

@@ -713,7 +713,7 @@ class SsoAdminIntegrationTest {
                 .expectBody()
                 .jsonPath("$.token").doesNotExist()
                 .jsonPath("$.maskedEmail").isEqualTo("c****@example.com")
-                .jsonPath("$.expiresIn").isEqualTo(30 * 60);
+                .jsonPath("$.expiresIn").isEqualTo(2 * 24 * 60 * 60);
 
         @SuppressWarnings("unchecked")
         org.mockito.ArgumentCaptor<Map<String, Object>> payload =
