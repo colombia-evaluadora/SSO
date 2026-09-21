@@ -1249,6 +1249,117 @@ def orphan_functions(chains: dict[str, list[Write]],
 
 
 # ---------------------------------------------------------------------------
+# Autoria
+# ---------------------------------------------------------------------------
+
+NL, SEP, TAB = chr(10), chr(31), chr(9)
+
+
+def rename_target(path: str) -> str:
+    """
+    Lado derecho de un rename tal como lo imprime `--numstat -M`:
+    `a => b` y tambien `dir/{viejo => nuevo}.sql`.
+    """
+    if "=>" not in path:
+        return path
+    m = re.match(r"^(.*)\{(.*) => (.*)\}(.*)$", path)
+    if m:
+        return f"{m.group(1)}{m.group(3)}{m.group(4)}"
+    return path.split("=>")[-1].strip()
+
+
+def authorship(versions: set[str]) -> dict:
+    """
+    Quien creo cada migracion y quien la toco despues, en orden.
+
+    Se indexa por la VERSION del nombre de archivo, no por la ruta: renombrar
+    la parte descriptiva (`V214.3__algo` -> `V214.3__otra_cosa`) es la misma
+    migracion, y asi el historial no se parte en dos.
+
+    Las identidades se unifican con `.mailmap` (git lo aplica en %aN): las
+    mismas cinco personas firmaron con ocho pares nombre/correo distintos.
+    """
+    raw = git("log", "--format=%x00%h%x1f%aN%x1f%aI%x1f%s", "--numstat", "-M",
+              "--reverse", "--", "postgres/migrations/")
+    touches: dict[str, list] = defaultdict(list)
+    commits = 0
+
+    for block in raw.split(chr(0)):
+        if not block.strip():
+            continue
+        head, _, rest = block.partition(NL)
+        parts = head.split(SEP)
+        if len(parts) < 4:
+            continue
+        sha, who, when, subject = parts[0], parts[1], parts[2], parts[3]
+        commits += 1
+        for line in rest.splitlines():
+            bits = line.split(TAB)
+            if len(bits) != 3:
+                continue
+            added, deleted, path = bits
+            m = FILE_RE.match(Path(rename_target(path)).name)
+            if not m or m.group(1) not in versions:
+                continue
+            touches[m.group(1)].append([
+                sha, who, when, subject[:90],
+                int(added) if added.isdigit() else 0,
+                int(deleted) if deleted.isdigit() else 0,
+            ])
+
+    by_version: dict[str, dict] = {}
+    for v, ts in touches.items():
+        ts.sort(key=lambda t: t[2])
+        by_version[v] = {"owner": ts[0][1], "touches": ts}
+
+    # Tres aportes distintos, y conviene no mezclarlos: crear una migracion,
+    # editar la de otro (lo que en este repo obliga a repair de checksum) y
+    # volver sobre la propia.
+    people: dict[str, dict] = {}
+
+    def person(name: str, when: str) -> dict:
+        pr = people.setdefault(name, {
+            "name": name, "created": [], "edited": [], "retouched": [],
+            "commits": set(), "added": 0, "deleted": 0,
+            "first": when, "last": when,
+        })
+        pr["first"] = min(pr["first"], when)
+        pr["last"] = max(pr["last"], when)
+        return pr
+
+    for v, info in by_version.items():
+        owner = info["owner"]
+        for i, (sha, who, when, _subject, added, deleted) in enumerate(info["touches"]):
+            pr = person(who, when)
+            pr["commits"].add(sha)
+            pr["added"] += added
+            pr["deleted"] += deleted
+            if i == 0:
+                pr["created"].append(v)
+            elif who == owner:
+                if v not in pr["retouched"]:
+                    pr["retouched"].append(v)
+            elif v not in pr["edited"]:
+                pr["edited"].append(v)
+
+    out = []
+    for pr in people.values():
+        out.append({**pr, "commits": len(pr["commits"]),
+                    "created": sorted(pr["created"], key=float),
+                    "edited": sorted(pr["edited"], key=float),
+                    "retouched": sorted(pr["retouched"], key=float)})
+    out.sort(key=lambda d: -len(d["created"]))
+
+    return {
+        "people": out,
+        "by_version": by_version,
+        "commits": commits,
+        "uncommitted": sorted(versions - set(by_version), key=float),
+        "git": bool(raw.strip()),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Slots de version
 # ---------------------------------------------------------------------------
 
@@ -1372,6 +1483,7 @@ def main() -> int:
     changes, issues = signature_report(chains, callsites)
     orphans = orphan_functions(chains, callsites)
     slots = slot_report({v for v, _ in files}, use_git=not args.no_git)
+    authors = authorship({v for v, _ in files})
     edges = usage_edges(migs, chains, callsites)
     refs = collect_table_refs(migs, chains)
     uses = element_uses(callsites, refs)
@@ -1408,6 +1520,7 @@ def main() -> int:
         "slots": slots,
         "edges": edges,
         "uses": uses,
+        "authors": authors,
         "unparsed": [{"version": m.version, "file": m.path, **u}
                      for m in migs for u in m.unparsed_stmts],
         "meta": {
@@ -1449,6 +1562,13 @@ def main() -> int:
     dl = sum(m.dead_lines for m in migs)
     print(f"  lineas sin efecto: {dl:,} de {sum(m.lines for m in migs):,} "
           f"({round(100 * dl / max(1, sum(m.lines for m in migs)))}%)")
+    if authors["people"]:
+        top = ", ".join(f"{pr['name'].split()[0]} {len(pr['created'])}"
+                        for pr in authors["people"][:5])
+        multi = sum(1 for i in authors["by_version"].values()
+                    if len({t[1] for t in i["touches"]}) > 1)
+        print(f"  autoria: {len(authors['people'])} personas ({top}); "
+              f"{multi} migraciones tocadas por mas de una")
     print(f"  firmas cambiadas={len(changes)}  llamadas desalineadas={len(issues)}  "
           f"huerfanas={len(orphans)}")
     print(f"HTML  -> {args.out}")
