@@ -40,17 +40,16 @@ AS $$
       JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = p_pk_tactividad
      WHERE s.FK_TMATRICULA = p_fk_tmatricula
        AND s.ACTIVE = TRUE
+       AND s.FECHA <= CURRENT_DATE
        AND (a.FECHA_INICIO IS NULL OR s.FECHA >= a.FECHA_INICIO)
        AND (a.FECHA_CIERRE IS NULL OR s.FECHA <= a.FECHA_CIERRE)
        AND academico_test.fn_actividad_asistencia_valida(p_fk_tmatricula, p_pk_tactividad, s.FECHA)
-     ORDER BY (s.FECHA <= CURRENT_DATE) DESC,
-              CASE WHEN s.FECHA <= CURRENT_DATE THEN s.FECHA END DESC NULLS LAST,
-              s.FECHA
+     ORDER BY s.FECHA DESC
      LIMIT 1;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_asistencia_fecha_resolver(BIGINT, BIGINT)
-    IS 'La fecha que hay que mandar en BODY.FECHA para calificar u observar a ESE estudiante en ESA actividad: la primera, dentro de la ventana [FECHA_INICIO, FECHA_CIERRE] de la actividad (extremo NULL = abierto), que fn_actividad_asistencia_valida acepta. Desempate: la mas reciente <= hoy y, si no hay ninguna pasada, la primera futura de la ventana. NULL = no hay ninguna, o sea que la celda no es calificable/observable todavia y cualquier intento devolveria 22023. Definida EN TERMINOS del predicado para que la lectura y el gate no puedan desincronizarse. V450.';
+    IS 'La fecha que hay que mandar en BODY.FECHA para calificar u observar a ESE estudiante en ESA actividad: la mas reciente, dentro de la ventana [FECHA_INICIO, FECHA_CIERRE] de la actividad (extremo NULL = abierto), que fn_actividad_asistencia_valida acepta -- solo fechas <= hoy; sin ninguna, NULL. NULL = no hay ninguna pasada o de hoy que habilite, o sea que la celda no es calificable/observable todavia y cualquier intento devolveria 22023. Ya NO cae a una fecha futura de la ventana (bug: la pantalla de marcar mostraba "sin asistencia" para hoy y el gate igual dejaba guardar via esa fecha futura). Definida EN TERMINOS del predicado para que la lectura y el gate no puedan desincronizarse. V450.';
 
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_asistencia_assert_preescolar(

@@ -89,6 +89,7 @@ class Migration:
     bytes: int
     writes: list[Write] = field(default_factory=list)
     unparsed: int = 0
+    unparsed_stmts: list[dict] = field(default_factory=list)
     total_statements: int = 0
     comment_refs: list[str] = field(default_factory=list)
     verdict: str = ""
@@ -129,7 +130,15 @@ RE_FUNC = re.compile(
 RE_DROP_FUNC = re.compile(
     r"\bDROP\s+FUNCTION\s+(IF\s+EXISTS\s+)?([\w.\"]+)\s*\(", re.I)
 RE_TABLE = re.compile(
-    r"\bCREATE\s+(?:UNLOGGED\s+)?TABLE\s+(IF\s+NOT\s+EXISTS\s+)?([\w.\"]+)", re.I)
+    r"\bCREATE\s+(?:(TEMP|TEMPORARY)\s+)?(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w.\"]+)", re.I)
+RE_DROP_TABLE = re.compile(r"\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([\w.\"]+)", re.I)
+RE_DROP_VIEW = re.compile(
+    r"\bDROP\s+(?:MATERIALIZED\s+)?VIEW\s+(?:IF\s+EXISTS\s+)?([\w.\"]+)", re.I)
+RE_EXTENSION = re.compile(r"\b(CREATE|DROP)\s+EXTENSION\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?([\w\"]+)", re.I)
+RE_PUBLICATION = re.compile(
+    r"\b(CREATE|DROP|ALTER)\s+PUBLICATION\s+(?:IF\s+EXISTS\s+)?([\w\"]+)", re.I)
+RE_EVENT_TRIGGER = re.compile(
+    r"\b(CREATE|DROP)\s+EVENT\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?([\w\"]+)", re.I)
 RE_ALTER_TABLE = re.compile(
     r"\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?([\w.\"]+)", re.I)
 RE_INDEX = re.compile(
@@ -140,7 +149,7 @@ RE_TRIGGER = re.compile(r"\bCREATE\s+(?:OR\s+REPLACE\s+)?TRIGGER\s+(\w+)\s", re.
 RE_DROP_TRIGGER = re.compile(
     r"\bDROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?(\w+)\s+ON\s+([\w.\"]+)", re.I)
 RE_VIEW = re.compile(
-    r"\bCREATE\s+(OR\s+REPLACE\s+)?(?:MATERIALIZED\s+)?VIEW\s+([\w.\"]+)", re.I)
+    r"\bCREATE\s+(OR\s+REPLACE\s+)?(?:(TEMP|TEMPORARY)\s+)?(?:MATERIALIZED\s+)?VIEW\s+([\w.\"]+)", re.I)
 RE_DOMAIN = re.compile(r"\bCREATE\s+(?:DOMAIN|TYPE)\s+([\w.\"]+)", re.I)
 RE_ADD_COL = re.compile(
     r"\bADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w\"]+)", re.I)
@@ -200,9 +209,11 @@ def extract_columns_and_values(stmt: str) -> dict[str, str]:
             for c in split_top_level(stmt[open_pos + 1:close])]
 
     rest = stmt[close + 1:]
-    mv = re.search(r"\bVALUES\s*\(", rest, re.I)
-    if mv:
-        vopen = mv.end() - 1
+    # VALUES de nivel superior: los cuerpos de query del catalogo traen su
+    # propio `VALUES (` adentro de la cadena (V129)
+    vpos = find_top_level(rest, r"\bVALUES\s*\(")
+    if vpos != -1:
+        vopen = rest.index("(", vpos)
         vclose = match_paren(rest, vopen)
         vals = split_top_level(rest[vopen + 1:vclose])
     else:
@@ -297,6 +308,47 @@ def query_row_keys(stmt: str) -> tuple[list[str], dict]:
     return keys, meta
 
 
+def values_rows(stmt: str) -> list[dict[str, str]]:
+    """
+    Tuplas de `FROM (VALUES (...), (...)) AS v(col1, col2, ...)` mapeadas
+    a {col: literal}. Vacio si no hay alias con columnas.
+    """
+    m = re.search(r"\(\s*VALUES\s*\(", stmt, re.I)
+    if not m:
+        return []
+    outer_open = m.start()
+    outer_close = match_paren(stmt, outer_open)
+    tail = stmt[outer_close + 1:]
+    ma = re.match(r"\s*(?:AS\s+)?\w+\s*\(([^)]*)\)", tail, re.I)
+    if not ma:
+        return []
+    cols = [c.strip().strip('"').lower() for c in ma.group(1).split(",")]
+    inner = stmt[outer_open + 1:outer_close]
+    inner = re.sub(r"^\s*VALUES\s*", "", inner, flags=re.I)
+    rows: list[dict[str, str]] = []
+    for tup in split_top_level(inner):
+        if not tup.startswith("("):
+            continue
+        vals = split_top_level(tup[1:match_paren(tup, 0)])
+        if len(vals) == len(cols):
+            rows.append({c: (unquote(v) or v) for c, v in zip(cols, vals)})
+    return rows
+
+
+def query_row_keys_from(row: dict[str, str], services: list[str]) -> tuple[list[str], dict]:
+    """Claves de una fila de public.query dada como {col: valor}."""
+    uuids = [row["uuid"]] if row.get("uuid") else []
+    paths = [row["path_template"]] if row.get("path_template") else []
+    methods = [row["http_method"].upper()] if row.get("http_method") else []
+    keys = [f"query:uuid:{u}" for u in uuids]
+    route_keys = [f"query:route:{svc}|{p}|{h}"
+                  for svc in services for p in paths for h in (methods or ["?"])]
+    keys += route_keys
+    alias = len(uuids) == 1 and len(route_keys) == 1
+    return keys, {"uuids": uuids, "paths": paths, "methods": methods,
+                  "services": services, "alias": alias}
+
+
 def dml_effect(stmt: str, head: str) -> tuple[str, str]:
     """(effect, kind) para un INSERT/UPDATE/DELETE sobre public.query."""
     if head.startswith("INSERT"):
@@ -326,6 +378,11 @@ ROLE_NAME_RE = re.compile(r"^(?:PIGSE|CEVAL|SSO|ADMIN)[A-Z0-9_\-]*$")
 PATHISH_RE = re.compile(r"^/?[a-z0-9][a-z0-9\-]*(?:/[a-z0-9\-:]+)+$|^/[a-z0-9\-]+$", re.I)
 
 
+def _unparsed(mig: "Migration", st: Statement) -> None:
+    mig.unparsed += 1
+    mig.unparsed_stmts.append({"line": st.line, "head": st.head[:110]})
+
+
 def analyze_file(path: Path, version: str) -> Migration:
     text = path.read_text(encoding="utf-8", errors="replace")
     mig = Migration(
@@ -344,10 +401,15 @@ def analyze_file(path: Path, version: str) -> Migration:
                 mig.comment_refs.append(v)
     mig.comment_refs = sorted(set(mig.comment_refs), key=float)
 
+    # objetos TEMP: existen solo durante la migracion (V94_ICONO, V305_ROLES);
+    # se cuentan pero no se encadenan con nada
+    scratch: set[str] = set()
+
     for st in split_statements(text):
         stmt, head = st.text, st.head
         mig.total_statements += 1
         before = len(mig.writes)
+        flagged = len(mig.unparsed_stmts)
 
         if head.startswith("COMMENT ON"):
             continue
@@ -404,10 +466,42 @@ def analyze_file(path: Path, version: str) -> Migration:
 
         # --- DDL
         for m in RE_TABLE.finditer(stmt):
+            if m.group(1):
+                scratch.add(qname(m.group(2)))
             mig.writes.append(Write(
                 version=version, obj_type="table",
                 obj_key=f"table:{qname(m.group(2))}",
                 effect="create", kind="create-table", line=st.line))
+        for m in RE_DROP_TABLE.finditer(stmt):
+            mig.writes.append(Write(
+                version=version, obj_type="table",
+                obj_key=f"table:{qname(m.group(1))}",
+                effect="delete", kind="drop-table", line=st.line))
+        for m in RE_DROP_VIEW.finditer(stmt):
+            mig.writes.append(Write(
+                version=version, obj_type="view",
+                obj_key=f"view:{qname(m.group(1))}",
+                effect="delete", kind="drop-view", line=st.line))
+        for m in RE_EXTENSION.finditer(stmt):
+            mig.writes.append(Write(
+                version=version, obj_type="extension",
+                obj_key=f"extension:{qname(m.group(2))}",
+                effect="delete" if m.group(1).upper() == "DROP" else "create",
+                kind=f"{m.group(1).lower()}-extension", line=st.line))
+        for m in RE_PUBLICATION.finditer(stmt):
+            verb = m.group(1).upper()
+            mig.writes.append(Write(
+                version=version, obj_type="publication",
+                obj_key=f"publication:{qname(m.group(2))}",
+                effect={"CREATE": "create", "DROP": "delete", "ALTER": "patch"}[verb],
+                kind=f"{verb.lower()}-publication", line=st.line,
+                detail=re.sub(r"\s+", " ", stmt[m.start():m.start() + 90])))
+        for m in RE_EVENT_TRIGGER.finditer(stmt):
+            mig.writes.append(Write(
+                version=version, obj_type="trigger",
+                obj_key=f"trigger:event.{qname(m.group(2))}",
+                effect="delete" if m.group(1).upper() == "DROP" else "create",
+                kind=f"{m.group(1).lower()}-event-trigger", line=st.line))
 
         # cada ALTER TABLE se analiza sobre SU tramo de texto (hasta el
         # siguiente ALTER): un bloque DO con varios ALTER no debe repartir
@@ -468,9 +562,11 @@ def analyze_file(path: Path, version: str) -> Migration:
                 effect="delete", kind="drop-trigger", line=st.line))
 
         for m in RE_VIEW.finditer(stmt):
+            if m.group(2):
+                scratch.add(qname(m.group(3)))
             mig.writes.append(Write(
                 version=version, obj_type="view",
-                obj_key=f"view:{qname(m.group(2))}",
+                obj_key=f"view:{qname(m.group(3))}",
                 effect="full", kind="create-view", line=st.line))
         for m in RE_DOMAIN.finditer(stmt):
             mig.writes.append(Write(
@@ -506,6 +602,7 @@ def analyze_file(path: Path, version: str) -> Migration:
 
             if target == "query":
                 keys, meta = query_row_keys(stmt)
+                rows = values_rows(stmt) if not keys else []
                 if keys:
                     for k in keys:
                         mig.writes.append(Write(
@@ -513,8 +610,26 @@ def analyze_file(path: Path, version: str) -> Migration:
                             effect=effect, kind=kind, line=st.line,
                             detail=" ".join(meta["paths"][:2]) or (meta["uuids"] or [""])[0],
                             extra={"all_keys": keys, **meta}))
+                elif rows:
+                    # UPDATE q SET query = v.nueva FROM (VALUES (...)) AS v(uuid, path, ...)
+                    # (V262): cada tupla es una fila concreta del catalogo
+                    svcs = find_all_values(stmt, "serviceid") or ["?"]
+                    for row in rows:
+                        rkeys, rmeta = query_row_keys_from(row, svcs)
+                        for k in rkeys:
+                            mig.writes.append(Write(
+                                version=version, obj_type="query_row", obj_key=k,
+                                effect=effect, kind=kind + "-values", line=st.line,
+                                detail=" ".join(rmeta["paths"][:1]) or (rmeta["uuids"] or [""])[0],
+                                extra={"all_keys": rkeys, **rmeta}))
                 else:
-                    mig.unparsed += 1
+                    # UPDATE por patron (`WHERE query LIKE '%x%'`, `WHERE microservice_id
+                    # IS NULL`): toca N filas que no se pueden nombrar. Persiste, no se encadena.
+                    mig.writes.append(Write(
+                        version=version, obj_type="query_bulk",
+                        obj_key=f"query_bulk:V{version}:{st.line}",
+                        effect="create", kind=kind + "-bulk", line=st.line,
+                        detail=re.sub(r"\s+", " ", stmt[:110])))
 
             elif target == "role":
                 names = [l for l in literals(stmt) if ROLE_NAME_RE.match(l)]
@@ -524,7 +639,7 @@ def analyze_file(path: Path, version: str) -> Migration:
                         effect="delete" if head.startswith("DELETE") else effect,
                         kind=kind, line=st.line, detail=nm))
                 if not names:
-                    mig.unparsed += 1
+                    _unparsed(mig, st)
 
             elif target == "route":
                 paths = [l for l in literals(stmt) if PATHISH_RE.match(l)]
@@ -536,7 +651,7 @@ def analyze_file(path: Path, version: str) -> Migration:
                         effect="delete" if head.startswith("DELETE") else effect,
                         kind=kind, line=st.line, detail=p))
                 if not keyvals:
-                    mig.unparsed += 1
+                    _unparsed(mig, st)
 
             elif target == "endpoint":
                 paths = [l for l in literals(stmt) if l.startswith("/")]
@@ -550,7 +665,7 @@ def analyze_file(path: Path, version: str) -> Migration:
                             effect="delete" if head.startswith("DELETE") else effect,
                             kind=kind, line=st.line, detail=f"{meth} {p}"))
                 else:
-                    mig.unparsed += 1
+                    _unparsed(mig, st)
 
             elif target == "microservice":
                 m_set = re.search(r"\bSET\b(.*?)(?:\bWHERE\b|$)", stmt, re.I | re.S)
@@ -592,9 +707,16 @@ def analyze_file(path: Path, version: str) -> Migration:
                     w.effect = "create"
                     w.detail = w.detail or "objetivo resuelto en tiempo de ejecucion"
 
-        if len(mig.writes) == before and not head.startswith(("COMMENT", "DO", "SET", "SELECT")):
-            mig.unparsed += 1
+        if (len(mig.writes) == before and len(mig.unparsed_stmts) == flagged
+                and not head.startswith(("COMMENT", "DO", "SET", "SELECT"))):
+            _unparsed(mig, st)
 
+    for w in mig.writes:
+        if w.obj_type in ("table", "view") and w.obj_key.split(":", 1)[1] in scratch:
+            w.obj_type = "scratch"
+            w.obj_key = f"scratch:V{version}:{w.obj_key.split(':', 1)[1]}"
+            w.effect = "create"
+            w.detail = w.detail or "objeto temporal de la propia migracion"
     return mig
 
 
@@ -736,7 +858,7 @@ def build_graph(migs: list[Migration]) -> dict[str, list[Write]]:
 
 COUNTED = ("function", "query_row", "table", "column", "constraint", "index",
            "trigger", "view", "domain", "schema", "sequence", "role", "route",
-           "endpoint", "dynamic")
+           "endpoint", "dynamic", "extension", "publication", "scratch", "query_bulk")
 
 
 def verdict_for(mig: Migration) -> None:
@@ -782,10 +904,14 @@ def collect_sql_callsites(migs: list[Migration]) -> list[dict]:
         marks = sorted((((w.line), ("stale-body" if w.note else w.status))
                         for w in mig.writes if w.status),
                        key=lambda t: t[0])
+        by_line: dict[int, list[Write]] = defaultdict(list)
+        for w in mig.writes:
+            by_line[w.line].append(w)
 
         for st in split_statements(text):
             if st.head.startswith("COMMENT ON"):
                 continue
+            holder = enclosing_key(by_line.get(st.line, []))
             for m in RE_CALL.finditer(st.text):
                 bare = m.group(2).lower()
                 fn = f"{m.group(1).lower()}.{bare}" if m.group(1) else ""
@@ -821,9 +947,108 @@ def collect_sql_callsites(migs: list[Migration]) -> list[dict]:
                 sites.append({
                     "fn": fn, "bare": bare, "args": n, "version": mig.version,
                     "line": line, "where": "sql", "file": mig.path,
-                    "status": status,
+                    "status": status, "in": holder,
                 })
     return sites
+
+
+HOLDER_RANK = {"function": 0, "trigger": 1, "view": 2, "query_row": 3, "index": 4,
+               "constraint": 5, "table": 6, "column": 7}
+
+
+def enclosing_key(ws: list[Write]) -> str:
+    """
+    Clave del elemento que contiene una sentencia: la funcion que se esta
+    definiendo, la fila de public.query que se inserta, la vista... Una
+    sentencia que no define nada (un UPDATE suelto) queda sin contenedor y
+    la referencia se atribuye a la migracion.
+    """
+    cands = [w for w in ws if w.effect != "drop" and w.obj_type in HOLDER_RANK]
+    if not cands:
+        return ""
+    cands.sort(key=lambda w: HOLDER_RANK[w.obj_type])
+    return cands[0].obj_key
+
+
+RE_TABLE_REF = re.compile(
+    r"\b(?:FROM|JOIN|INTO|UPDATE|ON|TABLE|REFERENCES|ONLY)\s+"
+    r"(?:(academico_test|pigse|public)\.)?([a-z_][\w]*)\b", re.I)
+
+
+def collect_table_refs(migs: list[Migration], chains: dict[str, list[Write]]) -> list[dict]:
+    """
+    Referencias a tablas/vistas conocidas desde cada sentencia (FROM t, JOIN
+    t, INSERT INTO t, UPDATE t, REFERENCES t). Sin calificar se resuelven
+    solo si el nombre existe en un unico esquema.
+    """
+    known: dict[str, str] = {}
+    index: dict[str, list[str]] = defaultdict(list)
+    for key in chains:
+        typ, _, rest = key.partition(":")
+        if typ in ("table", "view"):
+            known[rest] = key
+            index[rest.split(".")[-1]].append(key)
+
+    refs: list[dict] = []
+    for mig in migs:
+        text = strip_comments((REPO / mig.path).read_text(encoding="utf-8", errors="replace"),
+                              deep=True)
+        by_line: dict[int, list[Write]] = defaultdict(list)
+        for w in mig.writes:
+            by_line[w.line].append(w)
+        for st in split_statements(text):
+            if st.head.startswith("COMMENT ON"):
+                continue
+            holder = enclosing_key(by_line.get(st.line, []))
+            own = {w.obj_key for w in by_line.get(st.line, [])}
+            seen: set[str] = set()
+            for m in RE_TABLE_REF.finditer(st.text):
+                if m.group(1):
+                    key = known.get(f"{m.group(1).lower()}.{m.group(2).lower()}")
+                else:
+                    cands = index.get(m.group(2).lower(), [])
+                    key = cands[0] if len(cands) == 1 else None
+                if not key or key in seen or key in own or key == holder:
+                    continue
+                seen.add(key)
+                refs.append({
+                    "from": holder, "to": key, "version": mig.version,
+                    "line": st.line + st.text.count("\n", 0, m.start()),
+                    "file": mig.path, "kind": "ref",
+                })
+    return refs
+
+
+def element_uses(callsites: list[dict], refs: list[dict]) -> list[dict]:
+    """
+    Aristas elemento -> elemento: quien usa que. `from` vacio = la sentencia
+    no define nada (la migracion en si). Es lo que responde "dado X, que lo
+    usa en su misma migracion y en otras".
+    """
+    out: list[dict] = []
+    seen: set[tuple] = set()
+    for cs in callsites:
+        if not cs.get("fn"):
+            continue
+        to = f"function:{cs['fn']}"
+        frm = cs.get("in", "") if cs["where"] == "sql" else f"java:{cs['file']}"
+        if frm == to:
+            continue
+        k = (frm, to, cs["version"], cs["line"], cs["file"])
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append({"from": frm, "to": to, "v": cs["version"], "line": cs["line"],
+                    "file": cs["file"], "kind": "java" if cs["where"] == "java" else "call",
+                    "args": cs["args"]})
+    for r in refs:
+        k = (r["from"], r["to"], r["version"], r["line"], r["file"])
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append({"from": r["from"], "to": r["to"], "v": r["version"],
+                    "line": r["line"], "file": r["file"], "kind": "ref"})
+    return out
 
 
 def collect_java_callsites() -> list[dict]:
@@ -1081,6 +1306,8 @@ def main() -> int:
     orphans = orphan_functions(chains, callsites)
     slots = slot_report({v for v, _ in files}, use_git=not args.no_git)
     edges = usage_edges(migs, chains, callsites)
+    refs = collect_table_refs(migs, chains)
+    uses = element_uses(callsites, refs)
 
     head = git("rev-parse", "--short", "HEAD").strip()
     branch = git("rev-parse", "--abbrev-ref", "HEAD").strip()
@@ -1113,6 +1340,9 @@ def main() -> int:
         "orphans": orphans,
         "slots": slots,
         "edges": edges,
+        "uses": uses,
+        "unparsed": [{"version": m.version, "file": m.path, **u}
+                     for m in migs for u in m.unparsed_stmts],
         "meta": {
             "repo": REPO.name,
             "head": head, "branch": branch,
