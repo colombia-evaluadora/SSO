@@ -39,6 +39,28 @@ Si el cambio solicitado corresponde a una migración concreta ya existente,
 servidor y modificarlo rompa el checksum — en ese caso avisa y propón una
 migración correctiva). Prioriza reutilizar funciones/DDL ya definidos.
 
+## Anatomía de una función de endpoint
+
+Una función de endpoint es un **wrapper delgado**: valida permisos y delega en
+una función `_interno` **sin gate**, que un trigger, otro endpoint, un reporte o
+una exportación pueden reutilizar sin volver a pedir permisos.
+
+- El gate (`fn_assert_permiso_seccion`, `fn_*_gate_escritura`,
+  `fn_planeador_assert_alcance`) va **solo en el wrapper**, al principio.
+- El núcleo no recibe el usuario solicitante salvo para auditoría: si lo necesita
+  para decidir qué devuelve, eso es scope y se resuelve en el wrapper.
+- Nombre del núcleo con sufijo `_interno` (precedente:
+  `fn_matricula_config_crear_interno`, V159, reutilizado desde un trigger y desde
+  V180/V181/V182). El `COMMENT` del wrapper empieza por la ruta HTTP; el del
+  núcleo por `INTERNO:` y dice quién lo reutiliza.
+- Antes de escribir un núcleo, busca con `deps.py` si ya existe uno que sirva.
+- Un reporte o una exportación **no crean función propia**: llaman al mismo
+  núcleo que la pantalla.
+- Si ya vas a editar una función con el gate en línea, pártela en wrapper +
+  núcleo en esa misma migración. No hay refactor masivo.
+
+Detalle y motivación en `.claude/rules/migraciones.md`.
+
 ## Requisitos de toda migración
 
 - **Idempotente**: `CREATE ... IF NOT EXISTS`, `INSERT ... ON CONFLICT`

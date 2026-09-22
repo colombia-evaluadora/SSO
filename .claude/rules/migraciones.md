@@ -36,6 +36,43 @@ nuevo cuando el objeto no existe o la funcionalidad convive con la vieja.
 | Saber qué quedó obsoleto tras editar | agente `migration-analysis-reporter` |
 | El servidor no se comporta como el repo | agente `server-drift-detector` |
 
+## Anatomía de una función de endpoint
+
+Una función de endpoint es un **wrapper delgado**: valida permisos y delega. La
+lógica vive en un **núcleo sin gate**, que otro endpoint, un trigger, un reporte
+o una exportación pueden reutilizar sin volver a pedir permisos.
+
+```sql
+-- wrapper: el único que sabe de permisos
+CREATE OR REPLACE FUNCTION fn_matricula_config_crear(p_pk_usuario BIGINT, ...)
+...
+  PERFORM academico_test.fn_assert_permiso_seccion(p_pk_usuario, 'MATRICULA', 'CREAR', ...);
+  RETURN academico_test.fn_matricula_config_crear_interno(...);
+```
+
+- **El gate va solo en el wrapper**: una llamada a `fn_assert_permiso_seccion` /
+  `fn_*_gate_escritura` / `fn_planeador_assert_alcance` al principio, y delegar.
+- **El núcleo no recibe `p_pk_usuario_solicitante`** salvo para auditoría. Si lo
+  necesita para decidir *qué* devuelve, eso es scope: se resuelve en el wrapper
+  y se le pasa ya resuelto como filtro.
+- **Nombre del núcleo: sufijo `_interno`** (precedente vivo:
+  `fn_matricula_config_crear_interno`, V159). No `_core` ni `_impl`.
+- **`COMMENT ON FUNCTION`:** el wrapper empieza por la ruta HTTP; el núcleo
+  empieza por `INTERNO:` y nombra quién lo reutiliza.
+- **Antes de escribir un núcleo, busca uno que sirva** con `deps.py`. Reutilizar
+  es el objetivo, no un efecto secundario.
+- **Reportes y exportaciones no crean función propia:** llaman al mismo núcleo
+  que la pantalla. Una `fn_*_reporte_listar` aparte diverge de su `fn_*_listar`
+  en cuanto una de las dos se toca (pasó con V186-V190).
+- **Refactor incremental:** si ya vas a editar una función que lleva el gate en
+  línea, pártela en wrapper + núcleo **en esa misma migración**. No hay refactor
+  masivo de las funciones existentes.
+
+Por qué: cuando el gate va dentro de la lógica, la lógica no se puede reutilizar.
+La cabecera de `V130__listar_sin_paginar_para_reportes.sql` lo dice — se descartó
+crear funciones de reporte porque "duplicaría el WHERE y el gate de autorización
+de cada listado", y hubo que meter `p_page_size NULL` a la función existente.
+
 ## Restricciones
 
 - **Numeración contra TODAS las ramas de `origin`.** Dos ramas que numeran a la

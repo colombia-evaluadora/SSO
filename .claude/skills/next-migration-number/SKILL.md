@@ -83,6 +83,13 @@ hubo que corregir fallaron por uno de estos, no por SQL malo:
   (`fn_assert_permiso_seccion`), y si aplica alcance territorial (V277). Un
   endpoint sin gate explícito es un bug de seguridad, no una omisión.
   Los CODIGO de menú van **sin tildes** y se comparan exactos (ver V396).
+- **Qué parte es núcleo reutilizable** — el gate va en un wrapper delgado que
+  delega en una función `_interno` **sin permisos**, para que un trigger, otro
+  endpoint o un reporte puedan llamarla. Antes de escribir el núcleo, busca con
+  `deps.py` si ya existe uno que sirva. Detalle en `.claude/rules/migraciones.md`
+  § Anatomía de una función de endpoint; precedente vivo:
+  `fn_matricula_config_crear_interno` (V159), reutilizado desde un trigger y
+  desde V180/V181/V182.
 - **Idempotencia** — `IF NOT EXISTS`, `DROP ... IF EXISTS`, borrar por `uuid`
   antes de insertar. `INSERT ... ON CONFLICT DO NOTHING` **no** actualiza una
   fila existente: si editas una migración que sembró datos, hace falta un

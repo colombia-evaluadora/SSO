@@ -72,6 +72,9 @@ como hook al editar una migración.
   difieren entre el servidor de test y un Postgres limpio, y el catálogo de
   `TROL` no está en las migraciones (llega por el dump base), así que todo seed
   por `TROL.CODIGO` es no-op silencioso en CI.
+- **El gate va en el wrapper, la lógica en un núcleo `_interno` sin permisos.**
+  Una función de endpoint valida y delega; el núcleo se reutiliza desde triggers,
+  reportes y otros endpoints. Con el gate dentro, la lógica se acaba duplicando.
 - **Todo endpoint lleva gate de permisos explícito.** Sin gate es un bug de
   seguridad, no una omisión.
 - **Validar siempre contra el Postgres local** (`sso-postgres`), nunca contra
