@@ -23,6 +23,10 @@ POST /informes/observacion/guardar    persistir lo que el docente aceptó
 POST /informes/observacion/eliminar   quitar el resumen guardado
 ```
 
+> El **boletín de preescolar** —el PDF con el fondo institucional y las fotos de
+> evidencia— es otro endpoint y tiene su propia guía:
+> [`boletin-preescolar.md`](boletin-preescolar.md).
+
 ---
 
 ## Índice
