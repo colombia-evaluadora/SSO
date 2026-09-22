@@ -21,7 +21,7 @@ sin generar un archivo, y es el que el reporting-service consume por dentro.
 ## Índice
 
 1. [El PDF](#1-el-pdf)
-2. [Una página por (estudiante, asignatura)](#2-una-página-por-estudiante-asignatura) ← **leé esto**
+2. [Qué lleva cada página](#2-qué-lleva-cada-página) ← **leé esto**
 3. [Los datos en JSON](#3-los-datos-en-json)
 4. [Permisos y errores](#4-permisos-y-errores)
 5. [Requisitos de entorno](#5-requisitos-de-entorno)
@@ -85,32 +85,33 @@ entender.
 
 ---
 
-## 2. Una página por (estudiante, asignatura)
+## 2. Qué lleva cada página
 
-No es una página por estudiante. El título del bloque de seguimiento **no es un
-rótulo fijo**: es el nombre del área o dimensión que se está tratando
-—«Seguimiento y valoración», «Comunicación y exploración»—, que en preescolar
-cambia por institución.
+**Una página por estudiante.** El título del bloque de seguimiento **no es un
+rótulo fijo**: son los nombres de las dimensiones que el estudiante cursa,
+unidos en una sola línea y en el orden del plan —«Comunicación y exploración,
+Valores»—, que en preescolar cambian por institución.
 
-Un estudiante que cursa dos dimensiones recibe **dos páginas**, cada una con su
-título y con **sus** evidencias: las actividades de esa asignatura y no las de la
-otra. Por eso `X-Report-Rows` puede ser mayor que la cantidad de estudiantes.
+**No hay una observación por asignatura, y no es un olvido.** Se buscó en todo
+el esquema: lo único que cuelga de una asignatura es materia prima sin revisar
+(`TACTIVIDAD_NOTA.OBSERVACION` y las de rúbrica, escala y cotejo). Lo aprobado
+por un humano es `TESTUDIANTE_PERIODO_OBSERVACION` —por (matrícula, periodo)— y
+`TESTUDIANTE_ANIO_OBSERVACION` —por matrícula—, y ninguna lleva asignatura. Un
+boletín publica lo que alguien aceptó, así que se imprime ese párrafo **una sola
+vez**. Si algún día hace falta un texto aprobado *por* asignatura, el hueco
+natural es `TASIGNATURA_NOTA`, que ya tiene el grano exacto y hoy no tiene
+columna de texto.
 
-**El párrafo de seguimiento se repite en ambas páginas.** La observación del
-periodo se guarda por (matrícula, periodo) y **sin asignatura**, deliberadamente,
-porque en preescolar no se evalúa por dimensión. Lo que cambia entre páginas es
-el título y la rejilla, no el texto.
-
-### Qué lleva cada página
+### Los bloques
 
 | Bloque | De dónde sale |
 |---|---|
 | Encabezado institucional | nombre, DANE, NIT y ciudad del establecimiento |
 | Foto del estudiante | `TMATRICULA_ARCHIVO`, tipo `ARCHIVO_MATRICULA` = `05` |
 | Sede · Nivel · Grado · Grupo · Periodo | el grupo y su periodo académico |
-| Título del bloque | la asignatura/dimensión (ver arriba) |
-| Seguimiento y valoración | la observación del periodo que el docente aprobó |
-| Evidencias (hasta **6**) | las actividades del periodo con observación escrita, con su primera foto adjunta |
+| Título del bloque | las dimensiones que cursa, en una línea (ver arriba) |
+| Seguimiento y valoración | la observación del periodo que el docente aprobó, una sola vez |
+| Evidencias (hasta **6**) | las **más recientes** de **todas** las materias: actividades del periodo con observación escrita, con su primera foto adjunta |
 | Firma | el rector del establecimiento |
 
 **La fecha de cada foto es la de su carga**, no la de la actividad. Una actividad
