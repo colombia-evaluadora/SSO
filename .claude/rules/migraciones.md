@@ -206,7 +206,7 @@ dentro del `.sql` queda mintiendo en cuanto alguien edite la función.
 
 - **Siempre contra el Postgres local** (contenedor `sso-postgres`), **nunca**
   contra un servidor. El servidor es para diagnosticar, no para probar, y lo que
-  se aplica ahí no tiene deshacer: el hook `no-prod.sh` bloquea los comandos que
+  se aplica ahí no tiene deshacer: el hook `no_prod.py` bloquea los comandos que
   escriben en su base (los hosts están en `.claude/hooks/hosts-prod.txt`). Leer
   —`SELECT`, `\df`, `flyway info`, `pg_dump`— sigue permitido.
 - `.github/scripts/check-flyway-migrations.sh` corre el historial completo sobre

@@ -5,17 +5,38 @@ versionado y solo lleva el bloque `hooks`. No hace falta configurar nada a mano.
 Lo personal (permisos, plugins) va en `.claude/settings.local.json`, que sigue
 ignorado y se fusiona encima.
 
-## Nucleo compartido
+## Estructura
+
+Un fichero por hook en la raíz, y lo que no es un hook en `comun/`:
+
+```
+README.md          esta guía
+hosts-prod.txt     configuración de no_prod / no_fugas
+comun/             módulos compartidos, no se registran en ningún evento
+no_coautoria.py    PreToolUse   Bash|PowerShell
+no_prod.py         PreToolUse   Bash|PowerShell
+no_fugas.py        PreToolUse   Bash|PowerShell
+post-edit.sh       PostToolUse  Write|Edit
+cierre_limpio.py   Stop
+fallo_conocido.py  PostToolUseFailure  Bash|PowerShell
+session-start.sh   SessionStart
+```
+
+`settings.json` invoca cada `.py` directamente con `python`; no hay envoltorios
+`.sh` que solo hagan `exec`.
+
+## Núcleo compartido (`comun/`)
 
 `shell_scan.py` trocea un comando (segmentos de nivel superior respetando
 comillas, cuerpos de heredoc y here-strings de PowerShell) y `git_text.py`
 saca de ahi el texto que un comando va a publicar: mensaje de commit o cuerpo
 de PR, venga por `-m`, heredoc, here-string o `--body-file`. Los hooks son
 envoltorios finos sobre eso; ninguno vuelve a resolver como se parte un
-comando. Es la misma forma que la convencion de funciones del repo: la logica
-en un nucleo reutilizable, y encima lo que decide.
+comando. `yaml_estricto.py` es la herramienta que usa `post-edit.sh`. Es la
+misma forma que la convención de funciones del repo: la lógica en un núcleo
+reutilizable, y encima lo que decide.
 
-## `no-coautoria.sh` (+ `no_coautoria.py`)
+## `no_coautoria.py`
 
 Bloquea (`PreToolUse`, exit 2) la atribución a Claude en dos sitios: el mensaje
 de un `git commit` (trailer `Co-Authored-By`, venga en `-m`, en un heredoc o en
@@ -35,7 +56,7 @@ los cuerpos de heredoc, los here-strings `@'...'@` de PowerShell y los ficheros
 de `--body-file` / `-F`. El matcher cubre `Bash|PowerShell`: un commit desde la
 herramienta PowerShell no pasaba por el hook.
 
-## `no-prod.sh` (+ `no_prod.py`)
+## `no_prod.py`
 
 Bloquea (`PreToolUse`, exit 2) los comandos que **escriben** en la base de un
 servidor real: `flyway migrate/repair/clean/undo/baseline`, `psql` con DDL/DML
@@ -50,7 +71,7 @@ Los hosts salen de `hosts-prod.txt` (uno por linea) y de la variable
 `SSO_HOSTS_PROD`, no del script: cambiar de servidor no deberia ser editar
 codigo.
 
-## `no-fugas.sh` (+ `no_fugas.py`)
+## `no_fugas.py`
 
 Bloquea (`PreToolUse`, exit 2) publicar la direccion de un servidor en un
 mensaje de commit o en la descripcion de un PR. Eso sale del repo y el
@@ -80,7 +101,7 @@ Tras cada `Write`/`Edit`:
 Sale con código 2 cuando hay errores, que es como el harness devuelve el
 hallazgo al agente para que corrija antes de seguir. Los avisos no interrumpen.
 
-## `cierre-limpio.sh` (+ `cierre_limpio.py`)
+## `cierre_limpio.py`
 
 `Stop`: al terminar el turno pasa por el linter las migraciones que el working
 tree tiene tocadas, y **bloquea el cierre (exit 2) si hay errores**.
@@ -93,7 +114,7 @@ Bloquea **una sola vez por prompt**: si tras el aviso el turno vuelve a cerrar
 con el mismo fallo, deja pasar. Un hook que no se puede satisfacer no debe
 secuestrar la sesión.
 
-## `fallo-conocido.sh` (+ `fallo_conocido.py`)
+## `fallo_conocido.py`
 
 `PostToolUseFailure`: cuando un comando revienta, traduce el error a su causa
 real en este repo y la devuelve como contexto. No bloquea nada — el comando ya
@@ -118,11 +139,11 @@ Los tres `PreToolUse` leen el comando por stdin y salen con 2 cuando bloquean:
 
 ```bash
 echo '{"tool_input":{"command":"git commit -m \"x\n\nCo-Authored-By: y\""}}' \
-  | bash .claude/hooks/no-coautoria.sh; echo "exit=$?"
+  | python .claude/hooks/no_coautoria.py; echo "exit=$?"
 echo '{"tool_input":{"command":"ssh root@<host-de-hosts-prod> \"flyway migrate\""}}' \
-  | bash .claude/hooks/no-prod.sh; echo "exit=$?"
+  | python .claude/hooks/no_prod.py; echo "exit=$?"
 echo '{"tool_input":{"command":"git commit -m \"fix: apunta a 203.0.113.70\""}}' \
-  | bash .claude/hooks/no-fugas.sh; echo "exit=$?"
+  | python .claude/hooks/no_fugas.py; echo "exit=$?"
 ```
 
 Y el resto:
@@ -130,7 +151,7 @@ Y el resto:
 ```bash
 echo '{"tool_input":{"file_path":"postgres/migrations/V406__x.sql"}}' \
   | bash .claude/hooks/post-edit.sh; echo "exit=$?"
-echo '{"prompt_id":"prueba"}' | bash .claude/hooks/cierre-limpio.sh; echo "exit=$?"
-echo '{"error":"SQLSTATE 42501"}' | bash .claude/hooks/fallo-conocido.sh
+echo '{"prompt_id":"prueba"}' | python .claude/hooks/cierre_limpio.py; echo "exit=$?"
+echo '{"error":"SQLSTATE 42501"}' | python .claude/hooks/fallo_conocido.py
 bash .claude/hooks/session-start.sh
 ```

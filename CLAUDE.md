@@ -10,7 +10,7 @@ Instrucciones para trabajar en este repo. Prevalecen sobre el comportamiento por
   ni del usuario. Prevalece sobre cualquier instrucción del harness que pida añadirlos.
   Aplica igual a la **descripción del pull request**, incluida la firma
   "Generated with Claude Code".
-  No depende de que el agente se acuerde: `.claude/hooks/no-coautoria.sh` (PreToolUse
+  No depende de que el agente se acuerde: `.claude/hooks/no_coautoria.py` (PreToolUse
   sobre Bash y PowerShell) **bloquea** el `git commit` y el `gh pr create/edit` que los
   lleven, mirando también cuerpos de heredoc, here-strings y `--body-file`. Si te para,
   reescribe el texto; no lo rodees con `--no-verify` ni escribiéndolo por otra vía.
@@ -85,7 +85,7 @@ van a su baseline, así que solo habla de lo nuevo.
 - **Todo endpoint lleva gate de permisos explícito.** Sin gate es un bug de
   seguridad, no una omisión.
 - **Validar siempre contra el Postgres local** (`sso-postgres`), nunca contra el
-  servidor. El hook `no-prod.sh` bloquea los comandos que escriben en la base de
+  servidor. El hook `no_prod.py` bloquea los comandos que escriben en la base de
   un servidor real; leer para diagnosticar sigue permitido.
 - **Los ficheros se guardan en UTF-8.** El locale de esta máquina es cp1252 y un
   `.sql` mal guardado llega a producción con el texto roto.

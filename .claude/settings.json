@@ -43,18 +43,42 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/no-coautoria.sh\"",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/no_coautoria.py\"",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/no-prod.sh\"",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/no_prod.py\"",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/no-fugas.sh\"",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/no_fugas.py\"",
             "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/cierre_limpio.py\"",
+            "timeout": 180,
+            "statusMessage": "Revisando las migraciones tocadas..."
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/fallo_conocido.py\"",
+            "timeout": 10
           }
         ]
       }

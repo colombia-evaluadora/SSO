@@ -29,7 +29,7 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "comun"))
 from git_text import publicado  # noqa: E402
 
 # El trailer al principio de una linea real, o de una escapada (`\n` literal

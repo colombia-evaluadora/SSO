@@ -152,6 +152,6 @@ busca la historia.
    `/migration-analysis`) para confirmar que no dejaste llamadores con la firma
    vieja ni colisión de número.
 2. Valida contra el Postgres **local** (`sso-postgres`), nunca contra un
-   servidor; el hook `no-prod.sh` bloquea lo segundo.
+   servidor; el hook `no_prod.py` bloquea lo segundo.
 3. Reporta: número asignado y por qué ese y no otro, archivos editados vs.
    creados, dependencias detectadas y cualquier drift contra el servidor.

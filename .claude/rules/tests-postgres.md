@@ -63,7 +63,7 @@ done | grep -E "^==|FALLA"
 ```
 
 Contra el contenedor `sso-postgres`, nunca contra un servidor: el hook
-`no-prod.sh` bloquea lo segundo.
+`no_prod.py` bloquea lo segundo.
 
 ## Un caso que falla a propósito
 

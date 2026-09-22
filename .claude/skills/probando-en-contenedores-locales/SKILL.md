@@ -80,5 +80,5 @@ tiempo de respuesta: en local todo es rápido y un MISS parece un HIT.
 
 ## Y lo que no se hace aquí
 
-Nada de esto se valida contra un servidor real. El hook `no-prod.sh` lo
+Nada de esto se valida contra un servidor real. El hook `no_prod.py` lo
 bloquea, y la razón está en `CLAUDE.md`: allí no hay deshacer.

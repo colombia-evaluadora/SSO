@@ -39,7 +39,7 @@ esac
 #    el servicio en el arranque (paso con el application.yml de reporting).
 case "$file" in
   *.yml|*.yaml)
-    if ! out=$(python "$REPO/.claude/hooks/yaml_estricto.py" "$file" 2>&1); then
+    if ! out=$(python "$REPO/.claude/hooks/comun/yaml_estricto.py" "$file" 2>&1); then
       echo "YAML con clave duplicada en $(basename "$file"):" >&2
       echo "$out" >&2
       echo "PyYAML se queda con la ultima definicion sin avisar; en el servidor" >&2
