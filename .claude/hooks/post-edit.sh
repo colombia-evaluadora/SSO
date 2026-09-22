@@ -34,6 +34,20 @@ case "$file" in
     fi ;;
 esac
 
+# 2. YAML con claves duplicadas. PyYAML se queda con la ultima y no avisa, asi
+#    que un merge que concatena dos bloques hermanos pasa la revision y tumba
+#    el servicio en el arranque (paso con el application.yml de reporting).
+case "$file" in
+  *.yml|*.yaml)
+    if ! out=$(python "$REPO/.claude/hooks/yaml_estricto.py" "$file" 2>&1); then
+      echo "YAML con clave duplicada en $(basename "$file"):" >&2
+      echo "$out" >&2
+      echo "PyYAML se queda con la ultima definicion sin avisar; en el servidor" >&2
+      echo "el servicio no arranca. Une los bloques en uno solo." >&2
+      exit 2
+    fi ;;
+esac
+
 # 2. Invariantes de migracion.
 case "$file" in
   *postgres/migrations/*.sql) ;;
