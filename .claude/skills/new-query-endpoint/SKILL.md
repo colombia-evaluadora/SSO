@@ -1,9 +1,12 @@
 ---
 name: new-query-endpoint
 description: >-
-  Crear o modificar un endpoint de query-service: qué preguntar antes, qué fila
-  existente analizar y clonar, el contrato de param_types / role_query /
-  constraints, y la colección Postman que debe quedar al cerrar.
+  Define un endpoint de query-service como fila de public.query: qué preguntar
+  antes (alcance de roles, restricciones por campo), qué fila existente clonar,
+  el contrato de param_types / role_query / query_param_constraint, y la
+  colección Postman que debe quedar al cerrar. Usar cuando se pida crear o
+  modificar un endpoint de query-service, o cuando uno provisionado devuelva
+  404, 400 por parámetros o 42501.
 disable-model-invocation: true
 ---
 

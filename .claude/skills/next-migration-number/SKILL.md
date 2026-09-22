@@ -4,9 +4,10 @@ description: >-
   Decide el archivo de migración Flyway a tocar: si el cambio pertenece a una
   migración que ya existe (editar) o necesita un V<n> nuevo, calculado contra
   TODAS las ramas de origin. Incluye el análisis de dependencias entre
-  migraciones y el checklist de qué debe definir una migración. Usar antes de
-  escribir cualquier cosa en postgres/migrations/.
-disable-model-invocation: true
+  migraciones y el checklist de qué debe definir una migración, incluida la
+  separación wrapper con gate / núcleo `_interno` reutilizable. Usar siempre
+  antes de crear o editar cualquier fichero de postgres/migrations/, y para
+  averiguar qué migración define hoy una función o un endpoint.
 ---
 
 # next-migration-number

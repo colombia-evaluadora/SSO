@@ -32,8 +32,10 @@ mejorar la calidad del trabajo:
 | Microservicios / gateway / discovery / config | `spring-cloud-basics` |
 | docker-compose, redes, volúmenes, orquestación | `docker-compose-orchestration` |
 
-Comandos propios: `/next-migration-number`, `/new-query-endpoint`,
-`/migration-lint`, `/migration-analysis`, `/pre-pr`, `/server-status`.
+Propias del repo, invocables con `/`: las skills `/next-migration-number`
+(además se carga sola al tocar migraciones), `/new-query-endpoint` y
+`/server-status`; y los comandos `/migration-lint`, `/migration-analysis`
+y `/pre-pr`.
 
 ## Reglas por sección
 

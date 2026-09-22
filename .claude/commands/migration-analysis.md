@@ -1,7 +1,7 @@
 ---
 description: Regenera docs/auditoria/migraciones-analisis.html con scripts/migration-analysis
-argument-hint: [--from N --to M] [--open] [--json modelo.json]
-allowed-tools: Bash(git fetch:*), Bash(python scripts/migration-analysis/analyze_migrations.py:*), Read
+argument-hint: '[--from N --to M] [--open] [--json modelo.json]'
+allowed-tools: 'Bash(git fetch:*), Bash(python scripts/migration-analysis/analyze_migrations.py:*), Read'
 ---
 
 Regenera el informe HTML del análisis de migraciones Flyway
