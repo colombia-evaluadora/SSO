@@ -156,29 +156,43 @@ AS $function$
          WHERE ma.ACTIVE = TRUE
          GROUP BY ma.FK_TMATRICULA
     ),
-    -- La fecha de la tarjeta es la del SOPORTE y no la de la actividad: lo que
-    -- se rotula bajo la foto es cuando se subio esa foto.
+    -- UNA FILA POR FOTO, NO POR ACTIVIDAD. Sin esto una actividad con dos
+    -- imagenes aportaba una sola y el resto no se imprimia nunca (medido: una
+    -- estudiante con 7 fotos veia 1).
+    --
+    -- SOLO IMAGENES. Un soporte puede ser un PDF -- de hecho en el servidor
+    -- de test la mayoria lo son -- y Jasper no sabe pintarlo: con
+    -- onErrorType="Blank" la tarjeta sale en blanco, que es peor que no
+    -- estar, porque ocupa una de las seis ranuras. Se filtra por extension
+    -- del NOMBRE y, si no la tiene, por la de la clave S3.
+    --
+    -- La fecha es la del SOPORTE y no la de la actividad: lo que se rotula
+    -- bajo la foto es cuando se subio esa foto.
     soportes AS (
         SELECT so.FK_TACTIVIDAD_ESTUDIANTE,
+               so.PK_TACTIVIDAD_SOPORTE,
                so.FK_TARCHIVO,
-               COALESCE(so.FECHA, so.CREATED_AT::DATE) AS fecha_carga,
-               ROW_NUMBER() OVER (PARTITION BY so.FK_TACTIVIDAD_ESTUDIANTE
-                                      ORDER BY so.PK_TACTIVIDAD_SOPORTE) AS n
+               COALESCE(so.FECHA, so.CREATED_AT::DATE) AS fecha_carga
           FROM academico_test.TACTIVIDAD_SOPORTE so
+          JOIN academico_test.TARCHIVO ar
+            ON ar.PK_TARCHIVO = so.FK_TARCHIVO
          WHERE so.ACTIVE = TRUE
-           AND so.FK_TARCHIVO IS NOT NULL
+           AND LOWER(COALESCE(SUBSTRING(ar.NOMBRE FROM '\.([^.]+)$'),
+                              SUBSTRING(ar.URLS3  FROM '\.([^.]+)$'),
+                              '')) IN ('jpg', 'jpeg', 'png', 'gif', 'bmp')
     ),
-    -- Todas las materias juntas, LAS MAS RECIENTES PRIMERO.
+    -- Todas las materias juntas, LAS MAS RECIENTES PRIMERO. JOIN y no LEFT
+    -- JOIN: una actividad observada SIN imagen no es una evidencia y no puede
+    -- gastar una ranura -- antes empujaba fuera del boletin a fotos que si
+    -- existian.
     evidencias AS (
         SELECT ae.FK_TMATRICULA,
                a.TITULO        AS titulo,
                s1.FK_TARCHIVO  AS fk_tarchivo,
                s1.fecha_carga  AS fecha,
                ROW_NUMBER() OVER (PARTITION BY ae.FK_TMATRICULA
-                                      ORDER BY COALESCE(s1.fecha_carga,
-                                                        a.FECHA_CIERRE, a.FECHA_INICIO,
-                                                        a.FECHA_CREACION::DATE) DESC,
-                                               a.PK_TACTIVIDAD DESC) AS orden
+                                      ORDER BY s1.fecha_carga DESC,
+                                               s1.PK_TACTIVIDAD_SOPORTE DESC) AS orden
           FROM academico_test.TACTIVIDAD a
           JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae
             ON ae.FK_TACTIVIDAD = a.PK_TACTIVIDAD
@@ -186,9 +200,8 @@ AS $function$
           JOIN academico_test.TACTIVIDAD_NOTA n
             ON n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
            AND n.ACTIVE = TRUE
-          LEFT JOIN soportes s1
-                 ON s1.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
-                AND s1.n = 1
+          JOIN soportes s1
+            ON s1.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
          WHERE a.ACTIVE = TRUE
            AND COALESCE(TRIM(n.OBSERVACION), '') <> ''
            AND academico_test.fn_actividad_en_periodo_eval(a.PK_TACTIVIDAD,
@@ -239,4 +252,4 @@ AS $function$
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_informe_boletin_preescolar(BIGINT, BIGINT, BIGINT, BIGINT[])
-    IS 'El boletin de preescolar de un grupo en un periodo: UNA FILA POR ESTUDIANTE, que es una pagina del PDF. V466 daba una pagina por (estudiante, asignatura) y repetia el mismo parrafo bajo cada titulo, porque la observacion aprobada se guarda por (matricula, periodo) y no por asignatura; repetido en varias hojas ese texto se lee como un error, asi que se volvio a una hoja. ASIGNATURA_NOMBRE ya no es una asignatura sino la LISTA de las que el estudiante cursa, unidas en una linea; AREA_NOMBRE son sus areas sin repetir. AMBAS SALEN DEL PLAN DE ESTUDIO (TASIGNATURA_PLAN del grado) y no del JSONB del listado: ese arreglo solo trae asignaturas con nota o con actividades --deliberado en V334, para que la tabla de la pantalla no se llene de columnas vacias--, y un boletin tiene que decir que CURSA el estudiante, no que le calificaron. En preescolar es normal llegar a mitad de periodo sin una sola actividad, y con el JSONB ese boletin salia sin titulo (medido en test con una estudiante que cursa SEGUIMIENTOS1 y VALORES). La propia cabecera de V334 lo anticipa: si hace falta el plan completo, es un LEFT JOIN desde el plan contra esa funcion. No se inventa una observacion por asignatura porque no existe: se reviso el esquema entero y lo unico que cuelga de una asignatura es materia prima sin revisar (TACTIVIDAD_NOTA.OBSERVACION y las de rubrica, escala y cotejo), mientras que lo aprobado por un humano es TESTUDIANTE_PERIODO_OBSERVACION (matricula, periodo) y TESTUDIANTE_ANIO_OBSERVACION (matricula), ninguna con asignatura. Un boletin publica lo que alguien acepto. Si algun dia hace falta un texto aprobado POR asignatura, el hueco natural es TASIGNATURA_NOTA, que ya tiene el grano exacto y hoy no tiene columna de texto. Las EVIDENCIAS son las de TODAS las materias, ordenadas por fecha de carga DESCENDENTE para que las seis ranuras muestren lo ultimo y no lo primero. Conserva de V466 el gate delegado en fn_informe_grupo_listar, que solo salgan estudiantes cualitativos, que un estudiante sin observacion conserve su pagina, y que las imagenes viajen como PK_TARCHIVO. Mismo tipo de retorno que V466, asi que CREATE OR REPLACE basta. V468.';
+    IS 'El boletin de preescolar de un grupo en un periodo: UNA FILA POR ESTUDIANTE, que es una pagina del PDF. V466 daba una pagina por (estudiante, asignatura) y repetia el mismo parrafo bajo cada titulo, porque la observacion aprobada se guarda por (matricula, periodo) y no por asignatura; repetido en varias hojas ese texto se lee como un error, asi que se volvio a una hoja. ASIGNATURA_NOMBRE ya no es una asignatura sino la LISTA de las que el estudiante cursa, unidas en una linea; AREA_NOMBRE son sus areas sin repetir. AMBAS SALEN DEL PLAN DE ESTUDIO (TASIGNATURA_PLAN del grado) y no del JSONB del listado: ese arreglo solo trae asignaturas con nota o con actividades --deliberado en V334, para que la tabla de la pantalla no se llene de columnas vacias--, y un boletin tiene que decir que CURSA el estudiante, no que le calificaron. En preescolar es normal llegar a mitad de periodo sin una sola actividad, y con el JSONB ese boletin salia sin titulo (medido en test con una estudiante que cursa SEGUIMIENTOS1 y VALORES). La propia cabecera de V334 lo anticipa: si hace falta el plan completo, es un LEFT JOIN desde el plan contra esa funcion. No se inventa una observacion por asignatura porque no existe: se reviso el esquema entero y lo unico que cuelga de una asignatura es materia prima sin revisar (TACTIVIDAD_NOTA.OBSERVACION y las de rubrica, escala y cotejo), mientras que lo aprobado por un humano es TESTUDIANTE_PERIODO_OBSERVACION (matricula, periodo) y TESTUDIANTE_ANIO_OBSERVACION (matricula), ninguna con asignatura. Un boletin publica lo que alguien acepto. Si algun dia hace falta un texto aprobado POR asignatura, el hueco natural es TASIGNATURA_NOTA, que ya tiene el grano exacto y hoy no tiene columna de texto. Las EVIDENCIAS son las de TODAS las materias, ordenadas por fecha de carga DESCENDENTE para que las seis ranuras muestren lo ultimo y no lo primero. Hay UNA TARJETA POR FOTO y no por actividad: una actividad con dos imagenes ocupa dos ranuras, porque antes aportaba una sola y el resto no se imprimia nunca (medido: una estudiante con 7 fotos veia 1). Solo entran archivos de IMAGEN --jpg, jpeg, png, gif, bmp, por la extension del nombre o de la clave S3--: un soporte puede ser un PDF, y de hecho en el servidor de test la mayoria lo son, y Jasper no sabe pintarlo; con onErrorType Blank la tarjeta saldria vacia ocupando una ranura, que es peor que no estar. Y el JOIN con los soportes no es LEFT: una actividad observada SIN imagen no es una evidencia y antes empujaba fuera del boletin a fotos que si existian. Conserva de V466 el gate delegado en fn_informe_grupo_listar, que solo salgan estudiantes cualitativos, que un estudiante sin observacion conserve su pagina, y que las imagenes viajen como PK_TARCHIVO. Mismo tipo de retorno que V466, asi que CREATE OR REPLACE basta. V468.';
