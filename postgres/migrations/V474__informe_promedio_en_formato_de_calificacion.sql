@@ -97,6 +97,12 @@ COMMENT ON FUNCTION academico_test.fn_promedio_homologar(NUMERIC, BIGINT)
 --    la del proyectado). Se recrea entero y no con CREATE OR REPLACE porque
 --    cambia el tipo de retorno.
 -- ---------------------------------------------------------------------------
+-- Las DOS firmas: V439 volvio a la de 4 argumentos, asi que en toda base que
+-- haya pasado por V439 esa es la viva. Recrear la de 5 sin dropearla deja las
+-- dos, y como p_incluir_final tiene DEFAULT, la llamada de 4 argumentos que
+-- hace la fila de public.query matchea con ambas: 42725 ambiguous_function,
+-- que el query-service traduce a QUERY_DEFINITION.
+DROP FUNCTION IF EXISTS academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], VARCHAR);
 DROP FUNCTION IF EXISTS academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], VARCHAR, BOOLEAN);
 
 
