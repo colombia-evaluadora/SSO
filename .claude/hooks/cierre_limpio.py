@@ -21,7 +21,9 @@ por su cuenta tras varios bloqueos seguidos.)
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -30,6 +32,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 YA_BLOQUEO = Path(tempfile.gettempdir()) / "sso-cierre-limpio"
 GENERADOR_MAPA = REPO / "scripts" / "generar-mapa.py"
+VEREDICTO_MAPA = Path(tempfile.gettempdir()) / "sso-mapa-veredicto.json"
 
 
 def migraciones_tocadas() -> list[str]:
@@ -50,23 +53,95 @@ def migraciones_tocadas() -> list[str]:
     return rutas
 
 
+def huella_migraciones() -> str:
+    """Identidad barata del directorio: nombre, tamano y mtime de cada .sql."""
+    h = hashlib.sha256()
+    for p in sorted((REPO / "postgres" / "migrations").glob("*.sql")):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        h.update(f"{p.name}|{st.st_size}|{int(st.st_mtime)}\n".encode())
+    try:
+        h.update(str((REPO / "docs" / "MAPA.md").stat().st_mtime_ns).encode())
+    except OSError:
+        pass
+    return h.hexdigest()
+
+
+def desfase_por_cabecera() -> str | None:
+    """El caso mas comun -- una migracion nueva -- se ve en la cabecera del
+    propio mapa, que dice cuantas hay y hasta que version. Comprobarlo cuesta
+    leer 4 lineas, frente a los ~14s de recalcular el modelo entero."""
+    try:
+        cabecera = (REPO / "docs" / "MAPA.md").read_text(encoding="utf-8")[:600]
+    except OSError:
+        return None
+    m = re.search(r"Estado:\s*(\d+)\s+migraciones\s*\(V1[–—-]V([\d.]+)\)", cabecera)
+    if not m:
+        return None
+
+    ficheros = list((REPO / "postgres" / "migrations").glob("V*.sql"))
+    if not ficheros:
+        return None
+    versiones = []
+    for p in ficheros:
+        v = re.match(r"V(\d+(?:\.\d+)*)", p.name)
+        if v:
+            versiones.append(v.group(1))
+    if not versiones:
+        return None
+    tope = max(versiones, key=lambda v: [int(x) for x in v.split(".")])
+
+    if int(m.group(1)) == len(ficheros) and m.group(2) == tope:
+        return None
+    return (f"docs/MAPA.md esta desactualizado: dice {m.group(1)} migraciones "
+            f"hasta V{m.group(2)} y hay {len(ficheros)} hasta V{tope}. "
+            f"Corre python scripts/generar-mapa.py")
+
+
 def mapa_desactualizado() -> str | None:
     """`docs/MAPA.md` es el indice que las reglas mandan consultar antes de
     hacer grep; si miente, manda a editar la migracion equivocada. El generador
     trae `--check` justo para esto y no estaba enganchado a nada: V475 y V476
     entraron en dev sin regenerarlo y nadie se entero.
 
-    Cuesta ~14s, asi que solo se pregunta cuando se tocaron migraciones."""
+    La comprobacion de verdad cuesta ~14s porque `--check` fuerza recalcular el
+    modelo del analizador (generar-mapa.py: `load_model(refresh or check)`), y
+    eso esta bien para CI. Aqui se paga UNA vez por cambio, no una por turno: si
+    ni las migraciones ni el mapa se han tocado desde la ultima comprobacion, se
+    reutiliza su veredicto. Un turno que no toca migraciones ni llega aqui."""
     if not GENERADOR_MAPA.exists():
         return None
+
+    barato = desfase_por_cabecera()
+    if barato:
+        return barato
+
+    huella = huella_migraciones()
+    try:
+        previo = json.loads(VEREDICTO_MAPA.read_text(encoding="utf-8"))
+        if previo.get("huella") == huella:
+            return previo.get("motivo") or None
+    except (OSError, ValueError):
+        pass
+
     try:
         r = subprocess.run([sys.executable, str(GENERADOR_MAPA), "--check"],
                            cwd=REPO, capture_output=True, text=True, timeout=120)
     except (subprocess.SubprocessError, OSError):
         return None
-    if r.returncode == 0:
-        return None
-    return ((r.stdout or "") + (r.stderr or "")).strip() or "docs/MAPA.md esta desactualizado"
+
+    motivo = None
+    if r.returncode != 0:
+        motivo = (((r.stdout or "") + (r.stderr or "")).strip()
+                  or "docs/MAPA.md esta desactualizado")
+    try:
+        VEREDICTO_MAPA.write_text(json.dumps({"huella": huella, "motivo": motivo}),
+                                  encoding="utf-8")
+    except OSError:
+        pass
+    return motivo
 
 
 def main() -> int:

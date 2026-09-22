@@ -139,9 +139,21 @@ Bloquea **una sola vez por prompt**: si tras el aviso el turno vuelve a cerrar
 con el mismo fallo, deja pasar. Un hook que no se puede satisfacer no debe
 secuestrar la sesión.
 
-Coste: nada si no tocaste migraciones (0,2 s) y nada si el linter bloquea
-—corta antes—. Los ~14 s del mapa solo se pagan cuando hay migraciones tocadas
-y están limpias.
+**Coste**, que es lo que decide si un hook así se puede tener:
+
+| Situación | Cuesta |
+|---|---|
+| No tocaste migraciones | 0,2 s — ni siquiera mira |
+| El linter bloquea | 0,3 s — corta antes de preguntar por el mapa |
+| Migración **nueva** | 0,3 s — la cabecera del mapa dice cuántas hay y hasta qué `V<n>`; si no cuadra, ya está la respuesta |
+| Migración editada, primera vez | ~11 s — la comprobación de verdad |
+| Lo mismo, sin cambios desde entonces | 0,4 s — reusa el veredicto |
+
+Los ~11 s son de `--check`, que fuerza recalcular el modelo del analizador
+(`generar-mapa.py`: `load_model(refresh or check)`). Eso está bien para CI y
+mal para un hook, así que aquí se paga **una vez por cambio, no una por turno**:
+se guarda el veredicto junto a una huella del directorio de migraciones y del
+propio `MAPA.md`.
 
 ## `fallo_conocido.py`
 
