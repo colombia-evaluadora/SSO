@@ -37,6 +37,12 @@ import java.util.Set;
  *   <li><b>Soporte de observación</b> — ver
  *       {@link #esSoporteDeObservacionVisible}. Mismo patrón y
  *       misma razón de aislamiento que el soporte de asistencia.</li>
+ *   <li><b>Material o adaptación de actividad</b> — ver
+ *       {@link #esMaterialOAdaptacionDeActividadVisible}. Mismo
+ *       patrón, mismo gate ({@code fn_planeador_alcanza}) y mismo
+ *       aislamiento que el soporte de observación — cubre los otros
+ *       dos huecos de la misma familia de tablas ({@code
+ *       TACTIVIDAD_MATERIAL}/{@code TACTIVIDAD_ADAPTACION}).</li>
  *   <li><b>Soporte de asistencia</b> — ver
  *       {@link #esSoporteDeAsistenciaVisible}. Va aparte de
  *       {@link #esPropietario} a propósito (no es una quinta
@@ -80,7 +86,8 @@ public class FileAccessService {
         }
         return esPropietario(archivoId, email)
                 || esSoporteDeAsistenciaVisible(archivoId, email)
-                || esSoporteDeObservacionVisible(archivoId, email);
+                || esSoporteDeObservacionVisible(archivoId, email)
+                || esMaterialOAdaptacionDeActividadVisible(archivoId, email);
     }
 
     /**
@@ -316,6 +323,74 @@ public class FileAccessService {
             // Entorno sin el modulo del Planeador (o sin los helpers de
             // alcance que consume): se pierde este camino, no el resto.
             log.debug("no se pudo evaluar el soporte de observacion para el archivo id={}: {}",
+                    archivoId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * ¿Es este archivo un MATERIAL de apoyo ({@code
+     * TACTIVIDAD_MATERIAL.FK_TARCHIVO}, V426/V427) o una ADAPTACIÓN
+     * curricular ({@code TACTIVIDAD_ADAPTACION.FK_TARCHIVO}, V470) de
+     * una actividad que el llamante puede ver? Quinto camino de
+     * {@link #puedeVer}, mismo agujero (y misma familia de tablas)
+     * que ya se había tapado para el soporte de observación: el
+     * docente podía SUBIR el archivo sin problema —{@code POST
+     * /planeador/actividades/:ID/materiales/archivo} (V426) y
+     * {@code POST /planeador/actividades/:ID/adaptaciones/archivo}
+     * (V470) declaran su campo como {@code FILE:actividad} y el
+     * registro queda bien— pero al abrirlo recibía 404, porque ni
+     * {@link #esPropietario} ni {@link #esSoporteDeAsistenciaVisible}
+     * ni {@link #esSoporteDeObservacionVisible} conocen estas dos
+     * tablas. Confirmado en producción: archivo activo en {@code
+     * TARCHIVO} y aun así {@code view-token} devolvía 404.
+     *
+     * <p>Ambas tablas cuelgan directo de {@code FK_TACTIVIDAD} (sin
+     * tabla intermedia, a diferencia de {@code TACTIVIDAD_SOPORTE}),
+     * así que una sola consulta con dos {@code UNION ALL} basta.
+     *
+     * <p>El permiso NO se reimplementa aquí: se delega en {@code
+     * fn_planeador_alcanza(usuario, 'VER', ..., pk_tactividad)},
+     * igual que {@link #esSoporteDeObservacionVisible} — misma razón
+     * (quien puede ver la actividad puede ver sus materiales y
+     * adaptaciones) y mismo aislamiento con {@code catch} (la función
+     * puede no estar aplicada en un entorno dado).
+     */
+    private boolean esMaterialOAdaptacionDeActividadVisible(long archivoId, String email) {
+        if (email == null || email.isBlank()) {
+            return false;
+        }
+        try {
+            Integer encontrado = jdbc.queryForObject("""
+                    SELECT count(*) FROM (
+                        SELECT 1
+                          FROM %1$s.tactividad_material tm
+                          JOIN %1$s.tusuario u ON lower(u.cuenta) = lower(:email)
+                         WHERE tm.fk_tarchivo = :archivoId
+                           AND tm.active
+                           AND u.active
+                           AND %1$s.fn_planeador_alcanza(
+                                   u.pk_tusuario, 'VER', NULL, NULL, NULL, tm.fk_tactividad)
+                        UNION ALL
+                        SELECT 1
+                          FROM %1$s.tactividad_adaptacion ta
+                          JOIN %1$s.tusuario u ON lower(u.cuenta) = lower(:email)
+                         WHERE ta.fk_tarchivo = :archivoId
+                           AND ta.active
+                           AND u.active
+                           AND %1$s.fn_planeador_alcanza(
+                                   u.pk_tusuario, 'VER', NULL, NULL, NULL, ta.fk_tactividad)
+                    ) visibles
+                    """.formatted(schema),
+                    new MapSqlParameterSource()
+                            .addValue("archivoId", archivoId)
+                            .addValue("email", email),
+                    Integer.class);
+            return encontrado != null && encontrado > 0;
+        } catch (DataAccessException e) {
+            // Entorno sin el módulo del Planeador (o sin los helpers de
+            // alcance que consume): se pierde este camino, no el resto.
+            log.debug("no se pudo evaluar el material/adaptacion de actividad para el archivo id={}: {}",
                     archivoId, e.getMessage());
             return false;
         }
