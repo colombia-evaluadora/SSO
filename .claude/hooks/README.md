@@ -35,12 +35,6 @@ los cuerpos de heredoc, los here-strings `@'...'@` de PowerShell y los ficheros
 de `--body-file` / `-F`. El matcher cubre `Bash|PowerShell`: un commit desde la
 herramienta PowerShell no pasaba por el hook.
 
-La batería cubre las dos direcciones — lo que debe bloquear y lo que no:
-
-```bash
-python .claude/hooks/test_no_coautoria.py
-```
-
 ## `no-prod.sh` (+ `no_prod.py`)
 
 Bloquea (`PreToolUse`, exit 2) los comandos que **escriben** en la base de un
@@ -93,6 +87,19 @@ A propósito **no** hace `git fetch`: el número libre real contra todas las ram
 lo da `.claude/skills/next-migration-number/scan.sh`, que tarda bastante más.
 
 ## Probarlos a mano
+
+Los tres `PreToolUse` leen el comando por stdin y salen con 2 cuando bloquean:
+
+```bash
+echo '{"tool_input":{"command":"git commit -m \"x\n\nCo-Authored-By: y\""}}' \
+  | bash .claude/hooks/no-coautoria.sh; echo "exit=$?"
+echo '{"tool_input":{"command":"ssh root@<host-de-hosts-prod> \"flyway migrate\""}}' \
+  | bash .claude/hooks/no-prod.sh; echo "exit=$?"
+echo '{"tool_input":{"command":"git commit -m \"fix: apunta a 203.0.113.70\""}}' \
+  | bash .claude/hooks/no-fugas.sh; echo "exit=$?"
+```
+
+Y los otros dos, por fichero:
 
 ```bash
 echo '{"tool_input":{"file_path":"postgres/migrations/V406__x.sql"}}' \
