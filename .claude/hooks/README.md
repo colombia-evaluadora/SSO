@@ -121,16 +121,27 @@ y de eso se ocupa `cierre_limpio.py` al cerrar el turno.
 
 ## `cierre_limpio.py`
 
-`Stop`: al terminar el turno pasa por el linter las migraciones que el working
-tree tiene tocadas, y **bloquea el cierre (exit 2) si hay errores**.
+`Stop`: al terminar el turno, y **solo si el working tree tiene migraciones
+tocadas**, hace dos cosas.
 
-Existe porque `post-edit.sh` solo cubre `Write`/`Edit`: una migración editada
-desde Bash —un `sed -i`, un heredoc, un script de Python— no dispara aquel hook
-y hoy se iba sin revisar. Los avisos se imprimen pero no interrumpen.
+1. **El linter de invariantes**, que **bloquea el cierre (exit 2) si hay
+   errores**. Existe porque `migration_lint.py` solo cubre `Write`/`Edit`: una
+   migración editada desde Bash —un `sed -i`, un heredoc, un script de Python—
+   no dispara aquel hook y se iba sin revisar. Los avisos se imprimen pero no
+   interrumpen.
+2. **`docs/MAPA.md` desfasado**, que solo **avisa**. El índice es lo que la
+   regla de `postgres/**` manda consultar antes de hacer grep, así que
+   desactualizado manda a editar la migración que no es. El generador ya traía
+   `--check` para esto y no estaba enganchado a nada: `V475` y `V476` entraron
+   en `dev` sin regenerarlo y nadie se enteró.
 
 Bloquea **una sola vez por prompt**: si tras el aviso el turno vuelve a cerrar
 con el mismo fallo, deja pasar. Un hook que no se puede satisfacer no debe
 secuestrar la sesión.
+
+Coste: nada si no tocaste migraciones (0,2 s) y nada si el linter bloquea
+—corta antes—. Los ~14 s del mapa solo se pagan cuando hay migraciones tocadas
+y están limpias.
 
 ## `fallo_conocido.py`
 

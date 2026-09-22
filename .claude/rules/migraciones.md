@@ -223,6 +223,7 @@ dentro del `.sql` queda mintiendo en cuanto alguien edite la función.
 python scripts/migration-lint.py --all        # sin errores nuevos
 python scripts/migration-analysis/analyze_migrations.py
 python scripts/generar-mapa.py                # si cambiaron funciones o endpoints
+python scripts/generar-mapa.py --check        # lo comprueba sin reescribir (lo corre el hook Stop)
 ```
 
 El lint corre además como hook al editar cualquier `.sql` de este directorio.

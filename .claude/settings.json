@@ -71,8 +71,8 @@
           {
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/cierre_limpio.py\"",
-            "timeout": 180,
-            "statusMessage": "Revisando las migraciones tocadas..."
+            "timeout": 240,
+            "statusMessage": "Revisando migraciones y el mapa..."
           }
         ]
       }
