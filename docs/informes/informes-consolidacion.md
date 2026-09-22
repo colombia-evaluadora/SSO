@@ -173,7 +173,7 @@ vía normal.
 | `cualitativo` | `real` | **Preescolar.** La columna OBSERVACIÓN. Ignorar promedio, puesto, aprobadas |
 | `numerico` | `real` | La tabla normal: negro/gris, promedio, puesto, flechas |
 | `numerico` | `requerido` | Las notas que **faltan**. Sin puesto. `promedio_proyectado` = el mínimo |
-| `numerico` | `final` | La nota del **año**. Se pide con `INCLUIR_FINAL` — [abajo](#la-fila-final) |
+| `numerico` | `final` | La nota del **año**. Se pide con `-1` en `PERIODOS` — [abajo](#la-fila-final) |
 | `cualitativo` | `final` | La misma fila, vacía: no se promedian observaciones |
 
 > **Nunca decidas mirando si `asignaturas` viene vacío.** En preescolar viene con
@@ -482,7 +482,7 @@ cambió**: recibe el grupo directo y de él deduce el periodo académico, así q
 hay ambigüedad que resolver acá.
 
 ```json
-{ "FK_TGRUPO": 11474, "PERIODOS": [622, 627], "SEARCH": null, "INCLUIR_FINAL": false }
+{ "FK_TGRUPO": 11474, "PERIODOS": [622, 627], "SEARCH": null }
 ```
 
 `PERIODOS` vacío o ausente = todos los del periodo académico del grupo.
@@ -528,8 +528,23 @@ vienen vacíos o en cero.
 
 #### La fila Final
 
-Con `INCLUIR_FINAL: true` cada estudiante recibe **una fila más** con la nota
-del año. No sale de ninguna tabla: se calcula al responder.
+El Final **es un id más de `PERIODOS`**: el `-1`, el mismo centinela con el
+que la fila viaja de vuelta. No hay bandera aparte.
+
+| `PERIODOS` | qué devuelve |
+|---|---|
+| `null` o `[]` | todos los períodos reales, **sin** Final |
+| `[622, 627]` | esos dos, sin Final |
+| `[622, -1]` | ese período **y** el Final |
+| `[-1]` | **solo** el Final |
+
+La última fila es la que motivó el cambio: con una bandera aparte era
+imposible, porque un arreglo vacío significa *todos*, así que no había forma
+de decir «ninguno». Con el `-1` sale sin ningún caso especial — no coincide
+con ningún período real, así que el filtro se queda vacío solo.
+
+Cada estudiante recibe entonces **una fila más** con la nota del año, que no
+sale de ninguna tabla: se calcula al responder.
 
 ```json
 { "fk_tperiodo_evaluacion": -1, "periodo_nombre": "Final",
@@ -1076,8 +1091,9 @@ columna `estado` (`Guardada`, `Proyectada (sin consolidar)`,
 columna `consolidado`.
 
 Filtros del boletín (`BODY.FILTERS`): `FK_TGRUPO`, `PERIODOS`, `SEARCH`,
-`INCLUIR_FINAL` y `MATRICULAS` — un boletín es de un estudiante; vacío o ausente
-sigue siendo el grupo entero. El descargar toma los mismos menos `MATRICULAS`.
+y `MATRICULAS` — un boletín es de un estudiante; vacío o ausente sigue siendo
+el grupo entero. El descargar toma los mismos menos `MATRICULAS`. En ambos, el
+Final se pide igual que en el listado: `-1` dentro de `PERIODOS`.
 
 En ambos, `evidencias` trae **la cuenta** de imágenes, no las imágenes:
 `reporting-service` arma una tabla de texto desde su `application.yml`, y una
