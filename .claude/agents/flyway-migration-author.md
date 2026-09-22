@@ -69,7 +69,7 @@ Detalle y motivación en `.claude/rules/migraciones.md`.
 - **Sin auto-referencias** al propio número de versión en el cuerpo.
 - Mensajes de error de funciones: con nombre legible, no solo el PK.
 
-## Validación (local, nunca contra 172.233.184.248)
+## Validación (local, nunca contra un servidor)
 
 ```bash
 # Postgres local del compose: contenedor sso-postgres, sincronizado por Flyway.

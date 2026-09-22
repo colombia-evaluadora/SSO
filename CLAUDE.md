@@ -31,6 +31,9 @@ mejorar la calidad del trabajo:
 | Servicios Java / Spring Boot | `java-spring-boot`, `java-springboot` |
 | Microservicios / gateway / discovery / config | `spring-cloud-basics` |
 | docker-compose, redes, volúmenes, orquestación | `docker-compose-orchestration` |
+| Probar un cambio en los contenedores locales | `probando-en-contenedores-locales` |
+| Editar una migración que un servidor ya aplicó | `reaplicando-migraciones` |
+| Colección Postman de un endpoint | `documentando-con-postman` |
 
 Propias del repo, invocables con `/`: las skills `/next-migration-number`
 (además se carga sola al tocar migraciones), `/new-query-endpoint` y
@@ -52,6 +55,7 @@ glob, así que no gastan contexto en las demás sesiones.
 | Reportes PDF/Excel | `.claude/rules/reporting-service.md` | `reporting-service/**` |
 | Controllers de administración | `.claude/rules/sso-admin.md` | `sso-admin/**` |
 | Entidades compartidas | `.claude/rules/common.md` | `common/**` |
+| Suites SQL de verificación | `.claude/rules/tests-postgres.md` | `postgres/tests/**` |
 
 Una regla **sin** `paths:` se cargaría en todas las sesiones: si añades una,
 dale su glob.
@@ -59,8 +63,9 @@ dale su glob.
 ## Invariantes del dominio
 
 Reglas que se violan en silencio: el SQL aplica sin error y el fallo aparece en
-producción. `scripts/migration-lint.py` verifica las cinco primeras y corre solo
-como hook al editar una migración.
+producción. `scripts/migration-lint.py` verifica casi todas y corre solo como
+hook al editar una migración; las que ya están incumplidas en el código viejo
+van a su baseline, así que solo habla de lo nuevo.
 
 - **`ON CONFLICT DO NOTHING` no actualiza.** Editar una migración que sembró una
   fila no cambia la fila existente; hace falta `DELETE` por `uuid` antes del
@@ -79,8 +84,9 @@ como hook al editar una migración.
   reportes y otros endpoints. Con el gate dentro, la lógica se acaba duplicando.
 - **Todo endpoint lleva gate de permisos explícito.** Sin gate es un bug de
   seguridad, no una omisión.
-- **Validar siempre contra el Postgres local** (`sso-postgres`), nunca contra
-  172.233.184.248.
+- **Validar siempre contra el Postgres local** (`sso-postgres`), nunca contra el
+  servidor. El hook `no-prod.sh` bloquea los comandos que escriben en la base de
+  un servidor real; leer para diagnosticar sigue permitido.
 - **Los ficheros se guardan en UTF-8.** El locale de esta máquina es cp1252 y un
   `.sql` mal guardado llega a producción con el texto roto.
 
@@ -126,8 +132,10 @@ Antes de buscar con grep:
 
 - Antes de crear el endpoint, **preguntar**: alcance de los roles, restricciones específicas por
   campo, y cualquier otro apartado que ayude a clarificar los requisitos.
-- Al finalizar, dejar una **colección Postman** (skill `postman-collection-generator`) que documente
-  el uso del endpoint.
+- Al finalizar, dejar una **colección Postman** que documente el uso del endpoint:
+  skill `documentando-con-postman` para la convención de este repo (login que
+  encadena el token, corrida que queda en cero), `postman-collection-generator`
+  para generarla desde rutas.
 
 ## Cambios o análisis del servidor
 

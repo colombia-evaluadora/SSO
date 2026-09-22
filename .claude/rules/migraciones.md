@@ -100,7 +100,10 @@ de cada listado", y hubo que meter `p_page_size NULL` a la función existente.
 ## Validación
 
 - **Siempre contra el Postgres local** (contenedor `sso-postgres`), **nunca**
-  contra 172.233.184.248. El servidor es para diagnosticar, no para probar.
+  contra un servidor. El servidor es para diagnosticar, no para probar, y lo que
+  se aplica ahí no tiene deshacer: el hook `no-prod.sh` bloquea los comandos que
+  escriben en su base (los hosts están en `.claude/hooks/hosts-prod.txt`). Leer
+  —`SELECT`, `\df`, `flyway info`, `pg_dump`— sigue permitido.
 - `.github/scripts/check-flyway-migrations.sh` corre el historial completo sobre
   un Postgres limpio y luego reaplica lo nuevo, que es la prueba de idempotencia.
 
