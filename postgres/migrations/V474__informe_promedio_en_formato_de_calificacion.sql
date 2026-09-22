@@ -92,26 +92,25 @@ COMMENT ON FUNCTION academico_test.fn_promedio_homologar(NUMERIC, BIGINT)
 
 
 -- ---------------------------------------------------------------------------
--- 2. El listado. Mismo cuerpo de V431 con el promedio homologado a la salida
---    y cuatro columnas nuevas al final (la valoracion del promedio guardado y
---    la del proyectado). Se recrea entero y no con CREATE OR REPLACE porque
---    cambia el tipo de retorno.
+-- 2. El listado. Cuerpo de V439 -- el vivo, con el Final como -1 en PERIODOS
+--    y la columna EVIDENCIAS de V434 -- con el promedio homologado a la
+--    salida y cinco columnas nuevas al final. Se recrea entero y no con
+--    CREATE OR REPLACE porque cambia el tipo de retorno.
 -- ---------------------------------------------------------------------------
--- Las DOS firmas: V439 volvio a la de 4 argumentos, asi que en toda base que
--- haya pasado por V439 esa es la viva. Recrear la de 5 sin dropearla deja las
--- dos, y como p_incluir_final tiene DEFAULT, la llamada de 4 argumentos que
--- hace la fila de public.query matchea con ambas: 42725 ambiguous_function,
--- que el query-service traduce a QUERY_DEFINITION.
-DROP FUNCTION IF EXISTS academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], VARCHAR);
+-- Se recrea la firma de CUATRO argumentos, que es la que dejo V439: el Final
+-- se pide metiendo -1 en PERIODOS, no con un p_incluir_final. La de CINCO se
+-- dropea porque una version anterior de esta misma migracion la creo por
+-- error, partiendo del cuerpo de V431; donde eso ya se aplico hay que
+-- barrerla o la llamada de 4 argumentos queda ambigua (42725).
 DROP FUNCTION IF EXISTS academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], VARCHAR, BOOLEAN);
+DROP FUNCTION IF EXISTS academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], VARCHAR);
 
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_grupo_listar(
     p_pk_usuario_solicitante BIGINT,
     p_fk_tgrupo              BIGINT,
     p_fk_periodos_evaluacion BIGINT[] DEFAULT NULL,
-    p_search                 VARCHAR  DEFAULT NULL,
-    p_incluir_final          BOOLEAN  DEFAULT FALSE
+    p_search                 VARCHAR  DEFAULT NULL
 )
 RETURNS TABLE(
     fk_tmatricula              BIGINT,
@@ -137,6 +136,7 @@ RETURNS TABLE(
     observacion                TEXT,
     observacion_estado         VARCHAR,
     observacion_desactualizada BOOLEAN,
+    evidencias                 BIGINT,
     total_count                BIGINT,
     -- V474 -- la banda de la escala del criterio general en la que cae cada
     -- promedio. En un formato no numerico es LO UNICO que hay que mostrar,
@@ -158,8 +158,9 @@ DECLARE
     v_fk_ee       BIGINT;
     v_fk_peraca   BIGINT;
     v_fk_grado    BIGINT;
-    v_minimo      NUMERIC;
-    v_n_periodos  INTEGER;
+    v_minimo         NUMERIC;
+    v_n_periodos     INTEGER;
+    v_incluir_final  BOOLEAN;
 BEGIN
     SELECT s.PK_TSEDE, gr.FK_TLV_JORNADA, s.FK_TESTABLECIMIENTO,
            gd.FK_TPERIODO_ACADEMICO, gd.PK_TGRADO
@@ -184,9 +185,16 @@ BEGIN
 
     v_minimo := academico_test.fn_grado_desempeno_minimo(v_fk_grado);
 
-    -- El divisor del Final. Sale del AÑO, no del filtro: ver (1) y (2) en la
-    -- cabecera. Si por lo que sea no hubiera ninguno, el NULLIF de mas abajo
-    -- evita la division por cero y el Final queda en NULL.
+    -- *** V439 *** El Final ya no es un parametro aparte: es un id mas de la
+    -- lista de periodos, el mismo -1 con el que la fila viaja. Que sea un
+    -- elemento y no una bandera es lo que permite pedir "solo el Final":
+    -- ARRAY[-1] no matchea ningun periodo real, asi que la CTE de periodos
+    -- queda vacia sin que haya que inventar un segundo significado para el
+    -- arreglo vacio. NULL o vacio siguen siendo TODOS los periodos reales,
+    -- sin Final, exactamente como antes.
+    v_incluir_final := p_fk_periodos_evaluacion IS NOT NULL
+                      AND (-1) = ANY (p_fk_periodos_evaluacion);
+
     SELECT COUNT(*)
       INTO v_n_periodos
       FROM academico_test.TPERIODO_EVALUACION pe
@@ -243,6 +251,25 @@ BEGIN
           FROM estudiantes e
           CROSS JOIN periodos p
     ),
+    evidencias_periodo AS (
+        SELECT e.pk AS mat,
+               p.pk AS pe,
+               (SELECT COUNT(*)
+                  FROM academico_test.TACTIVIDAD_SOPORTE so
+                  JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae3
+                    ON ae3.PK_TACTIVIDAD_ESTUDIANTE = so.FK_TACTIVIDAD_ESTUDIANTE
+                   AND ae3.FK_TMATRICULA = e.pk
+                   AND ae3.ACTIVE = TRUE
+                  JOIN academico_test.TACTIVIDAD a4
+                    ON a4.PK_TACTIVIDAD = ae3.FK_TACTIVIDAD
+                   AND a4.ACTIVE = TRUE
+                 WHERE so.ACTIVE = TRUE
+                   AND so.FK_TARCHIVO IS NOT NULL
+                   AND academico_test.fn_actividad_en_periodo_eval(a4.PK_TACTIVIDAD, p.pk) = TRUE
+               ) AS n
+          FROM estudiantes e
+          CROSS JOIN periodos p
+    ),
     por_periodo AS (
         SELECT e.pk   AS mat,
                e.nombre,
@@ -255,13 +282,7 @@ BEGIN
                                 IS NOT NULL), FALSE)             AS tiene_notas,
                COUNT(d.fk_tasignatura)                           AS calc_total,
                AVG(d.nota_guardada)                              AS calc_prom_guardado,
-               -- Para el PUESTO: la posicion OFICIAL de hoy, sobre lo
-               -- consolidado cuando existe.
                AVG(COALESCE(d.nota_guardada, d.nota_proyectada)) AS calc_prom_visible,
-               -- Para el GRIS: lo que daria si se reconsolidara AHORA. La
-               -- COALESCE va al reves -- prefiere la PROYECCION -- y cae a lo
-               -- guardado solo cuando no hay proyeccion, que es el caso de la
-               -- asignatura cuyas actividades se dieron de baja.
                AVG(COALESCE(d.nota_proyectada, d.nota_guardada)) AS calc_prom_proyectado,
                COUNT(*) FILTER (WHERE d.aprobada IS TRUE)        AS calc_aprob,
                COUNT(*) FILTER (WHERE d.aprobada IS FALSE)       AS calc_reprob,
@@ -300,9 +321,12 @@ BEGIN
          GROUP BY e.pk, e.nombre, e.doc, p.pk, p.nombre, p.abrev, p.inicio
     ),
     base AS (
-        SELECT pp.*, COALESCE(ob.n, 0) AS obs_hoy
+        SELECT pp.*,
+               COALESCE(ob.n, 0) AS obs_hoy,
+               COALESCE(ev.n, 0) AS evid
           FROM por_periodo pp
-          LEFT JOIN observaciones ob ON ob.mat = pp.mat AND ob.pe = pp.pe
+          LEFT JOIN observaciones      ob ON ob.mat = pp.mat AND ob.pe = pp.pe
+          LEFT JOIN evidencias_periodo ev ON ev.mat = pp.mat AND ev.pe = pp.pe
     ),
     requeridos AS (
         SELECT b.mat,
@@ -336,14 +360,10 @@ BEGIN
     ),
     resuelto AS (
         SELECT b.*,
-               -- V428 -- el MODO depende solo de si hay notas.
                (NOT b.tiene_notas
                 AND COALESCE(rq.hay_numerico, FALSE))  AS es_requerido,
                rq.total AS req_total,
                rq.asigs AS req_asigs,
-               -- V428 -- el TIPO lo resuelve fn_asignatura_tipo_evaluacion
-               -- (referente -> plan -> criterio) por (asignatura, grado), sin
-               -- mirar que se cargo.
                COALESCE(rq.hay_numerico, b.hay_numerico) AS es_num_final
           FROM base b
           LEFT JOIN requeridos rq ON rq.mat = b.mat AND rq.pe = b.pe
@@ -375,10 +395,6 @@ BEGIN
     ),
     con_puesto AS (
         SELECT cm.*,
-               -- NULLS LAST: sin esto, en DESC los NULL van PRIMERO y cada
-               -- estudiante sin promedio le corre el puesto a los demas. El
-               -- CASE oculta el puesto de esos estudiantes pero NO renumera a
-               -- los otros, porque RANK() ya corrio sobre toda la particion.
                CASE WHEN cm.es_requerido OR cm.calc_prom_visible IS NULL THEN NULL
                     ELSE RANK() OVER (PARTITION BY cm.pe
                                           ORDER BY cm.calc_prom_visible DESC NULLS LAST)
@@ -387,17 +403,12 @@ BEGIN
     ),
 
     -- =======================================================================
-    -- V431 -- la fila Final. Todo lo que sigue solo se evalua si el usuario
-    -- marco el checkbox: `estudiantes_final` filtra por el parametro ANTES de
-    -- la lateral, de modo que sin Final el CROSS JOIN LATERAL no corre para
-    -- ningun estudiante y esta rama no cuesta nada.
+    -- La fila Final (V431).
     -- =======================================================================
     estudiantes_final AS (
-        SELECT e.* FROM estudiantes e WHERE COALESCE(p_incluir_final, FALSE)
+        SELECT e.* FROM estudiantes e WHERE v_incluir_final
     ),
     detalle_ano AS (
-        -- Periodos NULL: el AÑO COMPLETO, sin el filtro de la pantalla. Ver
-        -- (1) en la cabecera. El gate lo vuelve a aplicar esta llamada.
         SELECT e.pk AS mat, d.*
           FROM estudiantes_final e
           CROSS JOIN LATERAL academico_test.fn_informe_estudiante_asignaturas(
@@ -412,8 +423,6 @@ BEGIN
                MAX(asg.ORDEN_REPORTE)                   AS orden,
                COALESCE(BOOL_OR(d.es_numerico), FALSE)  AS es_numerico,
                MAX(d.desempeno_minimo)                  AS minimo,
-               -- (2) El periodo sin nota guardada suma CERO y el divisor
-               -- sigue siendo el año entero. La proyectada no entra.
                SUM(COALESCE(d.nota_guardada, 0)) / NULLIF(v_n_periodos, 0) AS nota
           FROM detalle_ano d
           JOIN academico_test.TASIGNATURA asg ON asg.PK_TASIGNATURA = d.fk_tasignatura
@@ -431,8 +440,6 @@ BEGIN
                COUNT(*) FILTER (
                    WHERE fa.nota IS NULL
                       OR COALESCE(fa.minimo, v_minimo) IS NULL)            AS sindef,
-               -- (3) El general es el promedio de las asignaturas de esta
-               -- misma fila, no el de los promedios de cada periodo.
                ROUND(AVG(fa.nota), 2)                   AS promedio,
                JSONB_AGG(
                    JSONB_BUILD_OBJECT(
@@ -442,9 +449,6 @@ BEGIN
                        'area',        fa.area,
                        'orden',       fa.orden,
                        'nota',        h.nota_homologada,
-                       -- 'final' y no 'guardada': la celda no la guardo
-                       -- nadie, y quien lea el JSON tiene que poder
-                       -- distinguirlo sin mirar de que fila viene.
                        'estado',      'final',
                        'es_numerico', fa.es_numerico,
                        'valoracion',  h.valoracion_nombre,
@@ -462,10 +466,47 @@ BEGIN
                         fa.nota, fa.asig, v_fk_grado) h ON TRUE
          GROUP BY fa.mat
     ),
+    -- *** V435 *** Cuantos resumenes de periodo hay HOY. Es lo que se compara
+    -- contra PERIODOS_ORIGEN para saber si el texto del año quedo viejo: lo
+    -- que lo envejece es que se cierre un periodo nuevo, no que el docente
+    -- escriba una observacion mas.
+    final_periodos_hoy AS (
+        SELECT e.pk AS mat,
+               (SELECT COUNT(*)
+                  FROM academico_test.TESTUDIANTE_PERIODO_OBSERVACION ob2
+                  JOIN academico_test.TPERIODO_EVALUACION pe3
+                    ON pe3.PK_TPERIODO_EVALUACION = ob2.FK_TPERIODO_EVALUACION
+                   AND pe3.ACTIVE = TRUE
+                   AND pe3.FK_TPERIODO_ACADEMICO = v_fk_peraca
+                 WHERE ob2.FK_TMATRICULA = e.pk
+                   AND ob2.ACTIVE = TRUE
+                   AND NULLIF(TRIM(COALESCE(ob2.OBSERVACION, '')), '') IS NOT NULL
+               ) AS n
+          FROM estudiantes_final e
+    ),
+    final_evidencias AS (
+        SELECT e.pk AS mat,
+               (SELECT COUNT(*)
+                  FROM academico_test.TACTIVIDAD_SOPORTE so
+                  JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae5
+                    ON ae5.PK_TACTIVIDAD_ESTUDIANTE = so.FK_TACTIVIDAD_ESTUDIANTE
+                   AND ae5.FK_TMATRICULA = e.pk
+                   AND ae5.ACTIVE = TRUE
+                  JOIN academico_test.TACTIVIDAD a6
+                    ON a6.PK_TACTIVIDAD = ae5.FK_TACTIVIDAD
+                   AND a6.ACTIVE = TRUE
+                 WHERE so.ACTIVE = TRUE
+                   AND so.FK_TARCHIVO IS NOT NULL
+                   AND EXISTS (SELECT 1
+                                 FROM academico_test.TPERIODO_EVALUACION pe2
+                                WHERE pe2.ACTIVE = TRUE
+                                  AND pe2.FK_TPERIODO_ACADEMICO = v_fk_peraca
+                                  AND academico_test.fn_actividad_en_periodo_eval(
+                                          a6.PK_TACTIVIDAD, pe2.PK_TPERIODO_EVALUACION) = TRUE)
+               ) AS n
+          FROM estudiantes_final e
+    ),
     final_fila AS (
-        -- LEFT: el estudiante sin una sola asignatura en el año igual recibe
-        -- su fila Final, vacia. Desaparecer solo a algunos se lee como un
-        -- error de carga.
         SELECT e.pk AS mat,
                e.nombre,
                e.doc,
@@ -475,14 +516,28 @@ BEGIN
                COALESCE(fg.reprob, 0)           AS reprob,
                COALESCE(fg.sindef, 0)           AS sindef,
                fg.promedio,
-               COALESCE(fg.asigs, '[]'::JSONB)  AS asigs
+               COALESCE(fg.asigs, '[]'::JSONB)  AS asigs,
+               -- *** V435 *** Lo GUARDADO, no el concatenado. El concatenado
+               -- pasa a ser el borrador que devuelve generar, asi que la fila
+               -- arranca vacia como los periodos hasta que alguien lo acepte.
+               ao.OBSERVACION                   AS obs,
+               lva.VALOR                        AS obs_estado,
+               CASE WHEN ao.PK_TESTUDIANTE_ANIO_OBSERVACION IS NULL THEN NULL
+                    ELSE COALESCE(fph.n, 0) > COALESCE(ao.PERIODOS_ORIGEN, 0)
+               END                              AS obs_vieja,
+               COALESCE(fe.n, 0)                AS evid
           FROM estudiantes_final e
-          LEFT JOIN final_agregado fg ON fg.mat = e.pk
+          LEFT JOIN final_agregado     fg  ON fg.mat  = e.pk
+          LEFT JOIN final_evidencias   fe  ON fe.mat  = e.pk
+          LEFT JOIN final_periodos_hoy fph ON fph.mat = e.pk
+          LEFT JOIN academico_test.TESTUDIANTE_ANIO_OBSERVACION ao
+                 ON ao.FK_TMATRICULA = e.pk
+                AND ao.ACTIVE = TRUE
+          LEFT JOIN academico_test.TLISTA_VALOR lva
+                 ON lva.PK_LISTA_VALOR = ao.FK_TLV_ESTADO_OBSERVACION
     ),
     final_puesto AS (
         SELECT ff.*,
-               -- Mismo criterio que el puesto de un periodo: sin promedio no
-               -- hay puesto, y preescolar nunca lo tiene.
                CASE WHEN ff.hay_numerico IS TRUE AND ff.promedio IS NOT NULL
                     THEN RANK() OVER (ORDER BY ff.promedio DESC NULLS LAST)
                END AS pos
@@ -506,7 +561,6 @@ BEGIN
                                          AS o_consolidado,
                CASE WHEN cp.es_requerido THEN NULL ELSE cp.prom_guardado END
                                          AS o_prom_guardado,
-               -- El gris sale del agregado que PREFIERE la proyeccion.
                CASE WHEN cp.es_requerido THEN v_minimo
                     ELSE ROUND(cp.calc_prom_proyectado, 2) END
                                          AS o_prom_proyectado,
@@ -522,7 +576,8 @@ BEGIN
                                          AS o_asigs,
                cp.obs                    AS o_obs,
                cp.obs_estado             AS o_obs_estado,
-               cp.obs_vieja              AS o_obs_vieja
+               cp.obs_vieja              AS o_obs_vieja,
+               cp.evid::BIGINT           AS o_evidencias
           FROM con_puesto cp
 
         UNION ALL
@@ -530,7 +585,6 @@ BEGIN
         SELECT fp.mat,
                fp.nombre,
                fp.doc,
-               -- Centinela, no un PK. Ver "COMO VIAJA LA FILA".
                (-1)::BIGINT,
                'Final'::VARCHAR,
                'FIN'::VARCHAR,
@@ -538,10 +592,7 @@ BEGIN
                'final'::VARCHAR,
                CASE WHEN fp.hay_numerico THEN 'numerico' ELSE 'cualitativo' END::VARCHAR,
                NOT fp.hay_numerico,
-               -- No esta consolidada y no lo va a estar: no hay fila en
-               -- TINFORME_PERIODO_MATRICULA para un periodo que no existe.
                FALSE,
-               -- Preescolar no promedia observaciones: la fila sale vacia.
                CASE WHEN fp.hay_numerico THEN fp.promedio END,
                CASE WHEN fp.hay_numerico THEN fp.promedio END,
                fp.pos,
@@ -551,11 +602,10 @@ BEGIN
                CASE WHEN fp.hay_numerico THEN fp.sindef ELSE 0 END::BIGINT,
                FALSE,
                CASE WHEN fp.hay_numerico THEN fp.asigs ELSE '[]'::JSONB END,
-               -- Sin observacion, y el front no ofrece generarla: el Final no
-               -- es un periodo y no hay actividades suyas que resumir.
-               NULL::TEXT,
-               NULL::VARCHAR,
-               NULL::BOOLEAN
+               fp.obs,
+               fp.obs_estado,
+               fp.obs_vieja,
+               fp.evid::BIGINT
           FROM final_puesto fp
     )
     SELECT s.o_mat,
@@ -573,7 +623,7 @@ BEGIN
            -- formato del criterio general del periodo academico, el mismo
            -- criterio con el que la pantalla pinta cada asignatura. En un
            -- formato no numerico estos dos vienen NULL y lo que vale es la
-           -- valoracion, cuatro columnas mas abajo.
+           -- valoracion, al final de la fila.
            hg.promedio,
            hp.promedio,
            s.o_puesto,
@@ -586,6 +636,7 @@ BEGIN
            s.o_obs,
            s.o_obs_estado,
            s.o_obs_vieja,
+           s.o_evidencias,
            COUNT(*) OVER ()::BIGINT,
            hg.valoracion_nombre,
            hg.valoracion_simbolo,
@@ -602,15 +653,13 @@ BEGIN
      WHERE NULLIF(TRIM(COALESCE(p_search, '')), '') IS NULL
         OR s.o_nombre ILIKE '%' || TRIM(p_search) || '%'
         OR s.o_doc    ILIKE '%' || TRIM(p_search) || '%'
-     -- La fila Final tiene fecha 9999-12-31 justamente para caer al final del
-     -- bloque de su estudiante sin un ORDER BY especial.
      ORDER BY s.o_nombre NULLS LAST, s.o_mat, s.o_pe_inicio;
 END;
 $function$;
 
 
-COMMENT ON FUNCTION academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], VARCHAR, BOOLEAN)
-    IS 'Listado principal de informes: una fila por (estudiante, periodo) del grupo, con promedio, puesto, aprobadas/reprobadas y las asignaturas en JSONB. p_incluir_final (V431): con TRUE, cada estudiante recibe ademas una fila con la nota FINAL del año -- fk_tperiodo_evaluacion = -1 (centinela, no un PK), periodo_nombre "Final", modo_periodo "final", consolidado FALSE y cada asignatura con estado "final". No se guarda en ninguna parte: se calcula al vuelo. Tres reglas: (1) se calcula sobre TODOS los periodos activos del periodo academico, NO sobre los que el usuario tenga marcados, porque el filtro de periodos es de vista y un final que cambia segun lo que este desmarcado no es un final; (2) el periodo sin nota GUARDADA vale CERO y el divisor es el total de periodos del año, de modo que a mitad de año el Final se lee como incompleto en vez de como un promedio cerrado; (3) el promedio general es el promedio de las notas finales por asignatura, para que la fila cierre consigo misma. En un grupo cualitativo (preescolar) no hay nada que promediar: la fila aparece vacia, sin observacion y sin puesto. V474: PROMEDIO_GUARDADO y PROMEDIO_PROYECTADO ya NO salen en porcentaje -- se homologan con fn_promedio_homologar al formato del criterio de evaluacion GENERAL del periodo academico, que es el mismo formato con el que se pintan las asignaturas de la fila; antes la columna PR mostraba 70,0 al lado de asignaturas en 3,3. En un formato no numerico los dos vienen NULL y lo que vale son PROMEDIO_VALORACION / PROMEDIO_SIMBOLO (y sus gemelas del proyectado); sin criterio configurado se sigue devolviendo el porcentaje crudo. PROMEDIO_FORMATO dice con cual se homologo. Esto cubre tambien el promedio de la fila Final y la nota requerida que viaja en PROMEDIO_PROYECTADO cuando el modo es "requerido", porque la conversion esta en un solo punto de la salida. El PUESTO se sigue calculando sobre el porcentaje: la conversion es monotona y redondear antes de ordenar crearia empates que no existen. V335, V411, V412, V428, V431, V474.';
+COMMENT ON FUNCTION academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], VARCHAR)
+    IS 'Listado principal de informes: una fila por (estudiante, periodo) del grupo. EL FINAL SE PIDE METIENDO -1 EN PERIODOS (V439), que es el mismo centinela con el que esa fila viaja en FK_TPERIODO_EVALUACION; antes era el parametro p_incluir_final, que se retira. El cambio no es cosmetico: como -1 no matchea ningun periodo real, ARRAY[-1] deja la CTE de periodos vacia y por fin se puede pedir SOLO el Final -- con la bandera era imposible, porque un arreglo vacio significa (y sigue significando) TODOS los periodos reales, de modo que no habia forma de decir "ninguno". La fila Final llega con FK_TPERIODO_EVALUACION = -1, modo_periodo "final", consolidado false y asignaturas con estado "final"; su nota se calcula al vuelo sobre TODOS los periodos del año, el periodo sin nota guardada vale cero y el promedio general sale de esas mismas asignaturas (V431). EVIDENCIAS cuenta las imagenes adjuntas a observaciones de la fila, y en el Final las del año (V434). Su observacion es la que este GUARDADA en TESTUDIANTE_ANIO_OBSERVACION, con su estado y su marca de desactualizado, que se dispara cuando se CONSOLIDA UN PERIODO NUEVO y no cuando el docente escribe una observacion mas (V435). V335, V411, V412, V428, V431, V434, V435, V439. V474: PROMEDIO_GUARDADO y PROMEDIO_PROYECTADO ya NO salen en porcentaje -- se homologan con fn_promedio_homologar al formato del criterio de evaluacion GENERAL del periodo academico, el mismo con el que se pintan las asignaturas de la fila; antes la columna PR mostraba 70,0 al lado de asignaturas en 3,3. En un formato no numerico los dos vienen NULL y lo que vale son PROMEDIO_VALORACION / PROMEDIO_SIMBOLO y sus gemelas del proyectado; sin criterio configurado se sigue devolviendo el porcentaje crudo. PROMEDIO_FORMATO dice con cual se homologo. Cubre tambien el promedio de la fila Final y la nota requerida que viaja en PROMEDIO_PROYECTADO, porque la conversion esta en un solo punto de la salida. El PUESTO se sigue calculando sobre el porcentaje: la conversion es monotona y redondear antes de ordenar crearia empates que no existen.';
 
 
 -- ---------------------------------------------------------------------------
@@ -619,7 +668,7 @@ COMMENT ON FUNCTION academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGIN
 --    desde V342 y su INSERT original es ON CONFLICT DO NOTHING.
 -- ---------------------------------------------------------------------------
 UPDATE public.query q
-   SET detail = 'Listado principal de informes: una fila por (estudiante, periodo) del grupo, con promedio, puesto, aprobadas/reprobadas y las asignaturas embebidas en JSONB (nota homologada y nota_propuesta cuando hay cambio). La columna FORMATO dice si la fila se lee como numerica o cualitativa (preescolar); en el caso cualitativo lo que vale es OBSERVACION. PERIODOS vacio o ausente = todos los del periodo academico del grupo. Sin paginacion: la pantalla muestra el grupo entero y paginar romperia el puesto. SEARCH filtra por nombre y documento DESPUES de calcular el puesto. INCLUIR_FINAL (V431, opcional, por defecto false) agrega a cada estudiante una fila mas con la nota FINAL del año: llega con FK_TPERIODO_EVALUACION = -1 -- un centinela, no un PK --, PERIODO_NOMBRE "Final", MODO_PERIODO "final", CONSOLIDADO false y cada asignatura con ESTADO "final". Se calcula al vuelo sobre TODOS los periodos del año, no sobre los de PERIODOS, y un periodo sin nota guardada vale cero. En preescolar la fila llega vacia y sin observacion. V474: PROMEDIO_GUARDADO y PROMEDIO_PROYECTADO llegan en el FORMATO DE CALIFICACION del criterio de evaluacion general del periodo academico (3,3 sobre cinco), no en el porcentaje guardado. Si ese formato no es numerico llegan NULL y lo que se pinta son PROMEDIO_VALORACION / PROMEDIO_SIMBOLO y PROMEDIO_PROYECTADO_VALORACION / PROMEDIO_PROYECTADO_SIMBOLO; sin criterio configurado se recibe el porcentaje crudo. PROMEDIO_FORMATO (CINCO/DIEZ/CIEN/LITERAL/SIMBOLO/CARITA) dice con cual se homologo.'
+   SET detail = 'Listado principal de informes: una fila por (estudiante, periodo) del grupo, con promedio, puesto, aprobadas/reprobadas, la cuenta de EVIDENCIAS y las asignaturas embebidas en JSONB. FORMATO dice si la fila se lee como numerica o cualitativa (preescolar); en el caso cualitativo lo que vale es OBSERVACION. EL FINAL SE PIDE METIENDO -1 EN PERIODOS (V439; antes era el bind INCLUIR_FINAL, que ya no existe): PERIODOS nulo o vacio = todos los periodos reales sin Final, [622,-1] = ese periodo y el Final, [-1] = SOLO el Final. Esa ultima combinacion es la que motiva el cambio: con la bandera era imposible, porque un arreglo vacio significa TODOS. La fila Final llega con FK_TPERIODO_EVALUACION = -1 -- un centinela, no un PK --, MODO_PERIODO "final", CONSOLIDADO false y cada asignatura con ESTADO "final"; se calcula al vuelo sobre todos los periodos del año y un periodo sin nota guardada vale cero. Sin paginacion: paginar romperia el puesto. SEARCH filtra por nombre y documento DESPUES de calcular el puesto. V474: PROMEDIO_GUARDADO y PROMEDIO_PROYECTADO llegan en el FORMATO DE CALIFICACION del criterio de evaluacion general del periodo academico (3,3 sobre cinco), no en el porcentaje guardado. Si ese formato no es numerico llegan NULL y lo que se pinta son PROMEDIO_VALORACION / PROMEDIO_SIMBOLO y PROMEDIO_PROYECTADO_VALORACION / PROMEDIO_PROYECTADO_SIMBOLO; sin criterio configurado se recibe el porcentaje crudo. PROMEDIO_FORMATO (CINCO/DIEZ/CIEN/LITERAL/SIMBOLO/CARITA) dice con cual se homologo. El PUESTO se sigue calculando sobre el porcentaje.'
   FROM public.microservice m
  WHERE q.microservice_id = m.id_microservice
    AND m.serviceid       = 'eval-col'
