@@ -15,8 +15,15 @@ import java.util.stream.Collectors;
  *
  * @param usuario correo de quien lo genero, o null si no se pudo resolver
  * @param filtros los filtros tal como llegaron del front
+ * @param resumen la linea de filtros ya escrita por el front, o null para
+ *                armarla a partir de {@code filtros}
  */
-public record ReportMeta(String usuario, Map<String, Object> filtros) {
+public record ReportMeta(String usuario, Map<String, Object> filtros, String resumen) {
+
+    /** Sin resumen propio: el membrete se arma de los filtros, como siempre. */
+    public ReportMeta(String usuario, Map<String, Object> filtros) {
+        this(usuario, filtros, null);
+    }
 
     /** Etiquetas legibles de los filtros que hoy manda el front. */
     private static final Map<String, String> ETIQUETAS = Map.ofEntries(
@@ -49,6 +56,15 @@ public record ReportMeta(String usuario, Map<String, Object> filtros) {
      * "Filtros aplicados:" colgando sin nada detras.
      */
     public String filtrosLegibles() {
+        // El resumen del front gana cuando viene: el tiene los NOMBRES que se
+        // ven en pantalla, y aca solo hay ids, que impresos no dicen nada.
+        // Tambien es su forma de dejar fuera un filtro que es de la mecanica
+        // y no del contenido. No se mezcla con lo de abajo a proposito: media
+        // linea escrita y media deducida seria peor que cualquiera de las dos.
+        if (resumen != null && !resumen.isBlank()) {
+            return resumen.trim();
+        }
+
         if (filtros == null || filtros.isEmpty()) {
             return "";
         }
