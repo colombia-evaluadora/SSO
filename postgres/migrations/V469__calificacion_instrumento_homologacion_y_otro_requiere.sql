@@ -171,6 +171,13 @@ BEGIN
            AND ee.FK_TACTIVIDAD_ESCALA_NIVEL IS NULL
            AND COALESCE(e.VALOR_MIN, 0) <> 0 AND COALESCE(e.VALOR_MAX, 0) > 0
     LOOP
+        -- Un valor fuera del rango VIGENTE es una escala redefinida despues de
+        -- calificar: no hay con que recalcularlo, se deja y se avisa.
+        IF r.VALOR IS NULL OR r.VALOR > r.VALOR_MAX OR r.VALOR < 0 THEN
+            RAISE NOTICE 'V469: nota % con valor % fuera del rango vigente (max %), sin recalcular',
+                r.PK_TACTIVIDAD_NOTA, r.VALOR, r.VALOR_MAX;
+            CONTINUE;
+        END IF;
         v_pct := academico_test.fn_actividad_nota_ajustar_por_criterio(
                      r.FK_TACTIVIDAD, ROUND(r.VALOR / r.VALOR_MAX * 100, 2));
         IF v_pct IS DISTINCT FROM r.CALIFICACION THEN
