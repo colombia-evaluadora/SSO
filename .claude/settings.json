@@ -22,6 +22,12 @@
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/post-edit.sh\"",
             "timeout": 120
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/migration_lint.py\"",
+            "timeout": 180,
+            "statusMessage": "Invariantes de la migracion..."
           }
         ]
       }

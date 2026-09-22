@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# PostToolUse (Write|Edit): codificacion + lint de invariantes del fichero tocado.
+# PostToolUse (Write|Edit): salud del fichero recien escrito.
 #
-# Solo actua sobre postgres/migrations/*.sql. Devuelve el hallazgo por stderr
-# con exit 2 cuando hay ERRORES, que es como el harness se lo hace llegar al
-# agente para que corrija antes de seguir. Los avisos salen por stdout y no
-# interrumpen.
+# Dos comprobaciones que no dependen de que fichero sea: codificacion, y claves
+# duplicadas si es YAML. Las invariantes de migracion son otro hook
+# (migration_lint.py), para que cada uno diga una sola cosa.
+#
+# Exit 2 cuando hay un error, que es como el harness se lo hace llegar al agente
+# para que corrija antes de seguir.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -48,25 +50,4 @@ case "$file" in
     fi ;;
 esac
 
-# 2. Invariantes de migracion.
-case "$file" in
-  *postgres/migrations/*.sql) ;;
-  *) exit 0 ;;
-esac
-
-out=$(python "$REPO/scripts/migration-lint.py" "$file" --quiet-ok 2>&1)
-code=$?
-
-[ -z "$out" ] && exit 0
-
-if [ $code -ne 0 ]; then
-  echo "migration-lint encontro invariantes rotas en $(basename "$file"):" >&2
-  echo "$out" >&2
-  echo "" >&2
-  echo "Corrigelas antes de continuar. Si en este caso concreto la regla no" >&2
-  echo "aplica, dilo explicitamente y sigue; no la silencies en el script." >&2
-  exit 2
-fi
-
-echo "$out"
 exit 0

@@ -33,7 +33,8 @@ nuevo cuando el objeto no existe o la funcionalidad convive con la vieja.
 | Versionado y patrones Flyway | skill `flyway-migrations` |
 | SQL portado desde Oracle | skill `reviewing-oracle-to-postgres-migration` |
 | Endpoint de `query-service` | `/new-query-endpoint` + agente `query-service-endpoint-builder` |
-| Saber qué quedó obsoleto tras editar | agente `migration-analysis-reporter` |
+| Qué quedó obsoleto, firmas y llamadores | skill `analizando-migraciones` |
+| Regenerar el informe HTML y resumirlo | agente `migration-analysis-reporter` |
 | El servidor no se comporta como el repo | agente `server-drift-detector` |
 
 ## Anatomía de una función de endpoint

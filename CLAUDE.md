@@ -33,6 +33,7 @@ mejorar la calidad del trabajo:
 | docker-compose, redes, volúmenes, orquestación | `docker-compose-orchestration` |
 | Probar un cambio en los contenedores locales | `probando-en-contenedores-locales` |
 | Editar una migración que un servidor ya aplicó | `reaplicando-migraciones` |
+| Qué quedó obsoleto / firmas / siguiente V<n> | `analizando-migraciones` |
 | Colección Postman de un endpoint | `documentando-con-postman` |
 
 Propias del repo, invocables con `/`: las skills `/next-migration-number`

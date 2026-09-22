@@ -91,6 +91,7 @@ skills-lock*
 !.claude/skills/reviewing-oracle-to-postgres-migration/
 # Skills propias del repo
 !.claude/skills/next-migration-number/
+!.claude/skills/analizando-migraciones/
 !.claude/skills/probando-en-contenedores-locales/
 !.claude/skills/reaplicando-migraciones/
 !.claude/skills/documentando-con-postman/

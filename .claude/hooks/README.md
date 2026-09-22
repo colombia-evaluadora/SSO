@@ -16,6 +16,7 @@ no_coautoria.py    PreToolUse   Bash|PowerShell
 no_prod.py         PreToolUse   Bash|PowerShell
 no_fugas.py        PreToolUse   Bash|PowerShell
 post-edit.sh       PostToolUse  Write|Edit
+migration_lint.py  PostToolUse  Write|Edit
 cierre_limpio.py   Stop
 fallo_conocido.py  PostToolUseFailure  Bash|PowerShell
 session-start.sh   SessionStart
@@ -91,21 +92,32 @@ digito (`1.2.3.4`, `Boot 4.1.1.1`) no cuentan.
 
 ## `post-edit.sh`
 
-Tras cada `Write`/`Edit`:
+Salud del fichero recién escrito, sea el que sea:
 
 1. **Codificación.** Busca secuencias tipo `Ã©` / `â€“` en `.sql`, `.md`, `.json`,
    `.java`, `.yml`. El locale de las máquinas de este equipo es cp1252 y un
    fichero mal guardado llega a producción con el texto roto.
 2. **YAML con claves duplicadas.** Un `.yml`/`.yaml` se carga con un loader
-   estricto (`yaml_estricto.py`). PyYAML se queda con la última definición sin
-   avisar, así que un merge que concatena dos bloques hermanos pasa la revisión
-   y tumba el servicio al arrancar — pasó con el `application.yml` de
+   estricto (`comun/yaml_estricto.py`). PyYAML se queda con la última definición
+   sin avisar, así que un merge que concatena dos bloques hermanos pasa la
+   revisión y tumba el servicio al arrancar — pasó con el `application.yml` de
    reporting-service.
-3. **Invariantes de migración.** Si el fichero está en `postgres/migrations/`,
-   corre `scripts/migration-lint.py` sobre él.
 
-Sale con código 2 cuando hay errores, que es como el harness devuelve el
-hallazgo al agente para que corrija antes de seguir. Los avisos no interrumpen.
+Sale con código 2 cuando hay un error.
+
+## `migration_lint.py`
+
+`PostToolUse` sobre `Write`/`Edit`: pasa `scripts/migration-lint.py` a la
+migración recién editada. Cada una de sus reglas corresponde a una regresión que
+ya ocurrió; no valida SQL —para eso está el Postgres local— sino las
+convenciones que se violan en silencio.
+
+Exit 2 con los **errores**; los avisos salen por stdout y no interrumpen, porque
+el baseline ya se encarga de que solo hablen de lo nuevo.
+
+Era el punto 3 de `post-edit.sh`. Va aparte para que cada hook diga una sola
+cosa, y porque tiene una pareja: lo editado desde Bash no dispara `Write|Edit`,
+y de eso se ocupa `cierre_limpio.py` al cerrar el turno.
 
 ## `cierre_limpio.py`
 

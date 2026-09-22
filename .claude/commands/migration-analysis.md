@@ -25,5 +25,6 @@ Pasos:
 5. Si el script avisa que no pudo usar `git`/`origin`, decirlo explícitamente:
    el techo de versión no es fiable, remitir a `/next-migration-number`.
 
-Referencia de veredictos y límites del análisis:
-`scripts/migration-analysis/README.md`.
+Cómo se leen los veredictos, cuándo basta `deps.py` en vez del informe entero y
+por qué una migración obsoleta no se borra: skill `analizando-migraciones`.
+Referencia completa: `scripts/migration-analysis/README.md`.
