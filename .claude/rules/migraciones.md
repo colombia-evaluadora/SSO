@@ -204,11 +204,15 @@ dentro del `.sql` queda mintiendo en cuanto alguien edite la función.
 
 ## Validación
 
-- **Siempre contra el Postgres local** (contenedor `sso-postgres`), **nunca**
-  contra un servidor. El servidor es para diagnosticar, no para probar, y lo que
-  se aplica ahí no tiene deshacer: el hook `no_prod.py` bloquea los comandos que
-  escriben en su base (los hosts están en `.claude/hooks/hosts-prod.txt`). Leer
-  —`SELECT`, `\df`, `flyway info`, `pg_dump`— sigue permitido.
+- **Probar el SQL es a petición.** No se levanta una base ni se aplica nada
+  para comprobar una migración salvo que el usuario lo pida; escribirla bien y
+  pasar el linter es el trabajo por defecto.
+- **Si se prueba, contra el Postgres local** (contenedor `sso-postgres`), nunca
+  contra un servidor: lo que se aplica ahí no tiene deshacer. El hook
+  `no_prod.py` bloquea todo comando que escriba en una base que no sea la local
+  —lo decide por lista blanca, así que el repo no guarda la dirección de ningún
+  servidor—. Leer para diagnosticar (`SELECT`, meta-comandos, `flyway info`,
+  `pg_dump`) sigue permitido.
 - `.github/scripts/check-flyway-migrations.sh` corre el historial completo sobre
   un Postgres limpio y luego reaplica lo nuevo, que es la prueba de idempotencia.
 

@@ -1,23 +1,29 @@
-r"""Impide escribir en la base de datos de un servidor real.
+r"""Impide escribir en una base de datos que no sea la local.
 
-`CLAUDE.md` y `.claude/rules/migraciones.md` lo dicen -- "validar siempre
-contra el Postgres local (sso-postgres), nunca contra el servidor" -- pero
-eso es contexto, no configuracion. Un PreToolUse lo impide decida lo que
-decida el modelo, y a diferencia del SQL, aplicar algo mal a produccion no
-tiene deshacer.
+`CLAUDE.md` y `.claude/rules/migraciones.md` lo dicen -- "validar siempre contra
+el Postgres local (sso-postgres), nunca contra el servidor" -- pero eso es
+contexto, no configuracion. Un PreToolUse lo impide decida lo que decida el
+modelo, y a diferencia del SQL, aplicar algo mal a un servidor no tiene deshacer.
 
-Lo que NO bloquea, a proposito: diagnosticar. El agente `server-drift-detector`
-necesita leer del servidor (SELECT, \df, pg_dump, docker ps/logs) para comparar
-firmas y checksums contra el repo; ahi esta medio trabajo del repo. Solo se para
-lo que ESCRIBE: flyway migrate/repair/clean, psql con DDL/DML, y aplicar un
-fichero `.sql` entero.
+El criterio es una lista BLANCA de destinos locales, no una lista negra de
+servidores. Asi el repo no guarda la direccion de ningun servidor -- que no
+tiene por que estar aqui -- y ademas falla del lado seguro: un servidor nuevo
+del que este hook no ha oido hablar queda bloqueado por defecto, en vez de
+colarse por no estar en una lista.
+
+Lo que NO bloquea, a proposito: leer. El agente `server-drift-detector` necesita
+consultar el servidor (SELECT, meta-comandos, pg_dump) para comparar firmas y
+checksums contra el repo; ahi esta medio trabajo del repo. Solo se para lo que
+ESCRIBE: flyway migrate/repair/clean, psql con DDL/DML, y aplicar un `.sql`.
+
+Limitacion conocida: un tunel SSH (`psql -h localhost -p 5435` apuntando a una
+base remota) se ve local y pasa. No hay forma de distinguirlo desde el comando.
 
 Exit 2 => la llamada no se ejecuta y el motivo vuelve al agente.
 """
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -25,31 +31,52 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent / "comun"))
 from shell_scan import cabeza, heredocs, herestrings, segments, sin_cuerpos  # noqa: E402
 
-HOSTS_FILE = Path(__file__).resolve().parent / "hosts-prod.txt"
+# Destinos que SI son la base local de desarrollo.
+LOCALES = {
+    "localhost", "127.0.0.1", "::1", "0.0.0.0",
+    "sso-postgres", "postgres", "db", "host.docker.internal",
+}
 
 # Herramientas que hablan con la base.
 PSQL = re.compile(r"\bpsql\b", re.I)
-# Flyway en modo escritura. `info`/`validate` solo leen.
+# Flyway en modo escritura. `info` / `validate` solo leen.
 FLYWAY_ESCRIBE = re.compile(r"\bflyway\b[^\n]*\b(migrate|repair|clean|undo|baseline)\b", re.I)
-# SQL que cambia algo. `SELECT` y los meta-comandos de psql (\d, \df) no estan.
+# SQL que cambia algo. `SELECT` y los meta-comandos de psql no estan.
 MUTA = re.compile(r"\b(CREATE|ALTER|DROP|INSERT\s+INTO|UPDATE\s+[\w.\"]+\s+SET|DELETE\s+FROM"
                   r"|TRUNCATE|GRANT|REVOKE|REFRESH\s+MATERIALIZED|CALL)\b|DO\s*\$\$", re.I)
-# Aplicar un fichero entero: no se sabe que lleva dentro, y aplicar SQL a un
-# servidor real es justo el acto que la regla prohibe.
+# Aplicar un fichero entero: no se sabe que lleva dentro.
 APLICA_FICHERO = re.compile(r"(?:-f|--file)[=\s]+\S+\.sql\b", re.I)
 
+# Como se nombra un destino en la linea de comando.
+SSH = re.compile(r"^(?:\w+=\S+\s+)*(?:sudo\s+)?ssh\b", re.I)
+# El segmento tiene que estar invocando la herramienta para que su `-h` cuente.
+HERRAMIENTA = re.compile(r"\b(psql|flyway|pg_dump|pg_restore)\b", re.I)
+HOST_OPCION = re.compile(r"(?:--host[=\s]+|(?<![\w-])-h\s+|PGHOST=)([\w.:-]+)", re.I)
+HOST_URL = re.compile(r"postgres(?:ql)?://(?:[^@/\s]*@)?([\w.-]+)", re.I)
+HOST_KV = re.compile(r"\bhost=([\w.-]+)", re.I)
 
-def hosts() -> list[str]:
-    fuera = []
-    try:
-        for linea in HOSTS_FILE.read_text(encoding="utf-8").splitlines():
-            linea = linea.split("#", 1)[0].strip()
-            if linea:
-                fuera.append(linea)
-    except OSError:
-        pass
-    fuera += [h.strip() for h in os.environ.get("SSO_HOSTS_PROD", "").split(",") if h.strip()]
-    return fuera
+
+def es_local(host: str) -> bool:
+    return host.split(":")[0].lower() in LOCALES
+
+
+def destino_remoto(estructura: str) -> str | None:
+    """Devuelve como se nombro el destino remoto, o None si todo es local.
+
+    Las opciones de host se buscan SOLO en el segmento que invoca la
+    herramienta: un `-h algo` suelto en un texto cualquiera del comando -- una
+    etiqueta, un patron de grep -- no es un destino."""
+    for seg in segments(estructura):
+        cab = cabeza(seg)
+        if SSH.match(cab):
+            return "una sesion ssh"
+        if not HERRAMIENTA.search(cab):
+            continue
+        for patron in (HOST_OPCION, HOST_URL, HOST_KV):
+            for host in patron.findall(seg):
+                if not es_local(host):
+                    return host
+    return None
 
 
 def main() -> int:
@@ -61,19 +88,15 @@ def main() -> int:
     if not cmd:
         return 0
 
-    conocidos = hosts()
-    presentes = [h for h in conocidos if h.lower() in cmd.lower()]
-    if not presentes:
-        return 0
-
     estructura = sin_cuerpos(cmd)
-    cuerpos = heredocs(cmd) + herestrings(cmd)
-    # Un `psql <<EOF` reparte la herramienta y el SQL entre estructura y cuerpo.
-    habla_con_la_base = PSQL.search(estructura) or FLYWAY_ESCRIBE.search(estructura)
-    if not habla_con_la_base:
+    if not (PSQL.search(estructura) or FLYWAY_ESCRIBE.search(estructura)):
         return 0
 
-    sql = "\n".join(cuerpos + [s for s in segments(estructura)])
+    remoto = destino_remoto(estructura)
+    if not remoto:
+        return 0  # la base local: adelante
+
+    sql = "\n".join(heredocs(cmd) + herestrings(cmd) + list(segments(estructura)))
     if FLYWAY_ESCRIBE.search(estructura):
         motivo = "corre flyway en modo escritura"
     elif APLICA_FICHERO.search(estructura):
@@ -81,15 +104,16 @@ def main() -> int:
     elif MUTA.search(sql):
         motivo = "manda SQL que escribe (DDL/DML)"
     else:
-        return 0  # lectura: diagnosticar es justo para lo que sirve el servidor
+        return 0  # leer de un servidor es justo para lo que sirve
 
     sys.stderr.write(
-        f"BLOQUEADO: el comando apunta a {presentes[0]} y {motivo}.\n\n"
+        f"BLOQUEADO: el comando {motivo} contra un destino que no es la base "
+        f"local ({remoto}).\n\n"
         'CLAUDE.md: "Validar siempre contra el Postgres local (sso-postgres),\n'
-        "nunca contra el servidor." + '"' + " El servidor es para diagnosticar, no\n"
-        "para probar, y lo que se aplica ahi no tiene deshacer.\n\n"
-        "Valida contra el contenedor `sso-postgres`. Leer del servidor (SELECT,\n"
-        "\\df, pg_dump, docker ps/logs) sigue permitido: eso no se bloquea.\n")
+        'nunca contra el servidor." El servidor es para diagnosticar, no para\n'
+        "probar, y lo que se aplica ahi no tiene deshacer.\n\n"
+        "Valida contra `sso-postgres`. Leer del servidor -- SELECT, meta-comandos,\n"
+        "pg_dump, docker ps/logs -- sigue permitido: eso no se bloquea.\n")
     return 2
 
 

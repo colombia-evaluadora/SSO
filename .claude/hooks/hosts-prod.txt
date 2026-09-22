@@ -1,9 +1,0 @@
-# Hosts cuya base de datos NO se toca desde una sesion de trabajo.
-# Uno por linea; `#` comenta. Se puede ampliar sin tocar el hook con la
-# variable de entorno SSO_HOSTS_PROD (separada por comas).
-#
-# La IP vive aqui y no dentro del script para poder cambiarla sin editar
-# codigo; ya aparece en CLAUDE.md y en .claude/rules/migraciones.md por la
-# misma razon (la regla de no publicarla es para PRs y commits, no para la
-# configuracion interna del repo).
-172.233.184.248

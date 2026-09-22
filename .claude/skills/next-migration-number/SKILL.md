@@ -151,7 +151,8 @@ busca la historia.
 1. `python scripts/migration-analysis/analyze_migrations.py` (o
    `/migration-analysis`) para confirmar que no dejaste llamadores con la firma
    vieja ni colisión de número.
-2. Valida contra el Postgres **local** (`sso-postgres`), nunca contra un
-   servidor; el hook `no_prod.py` bloquea lo segundo.
+2. Si el usuario pide probarla, contra el Postgres **local**
+   (`sso-postgres`); nunca contra un servidor, que el hook `no_prod.py`
+   bloquea. Sin esa petición, no se prueba: basta con el linter.
 3. Reporta: número asignado y por qué ese y no otro, archivos editados vs.
    creados, dependencias detectadas y cualquier drift contra el servidor.

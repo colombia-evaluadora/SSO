@@ -18,15 +18,12 @@ Exit 2 => la llamada no se ejecuta y el motivo vuelve al agente.
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "comun"))
 from git_text import publicado  # noqa: E402
-
-HOSTS_FILE = Path(__file__).resolve().parent / "hosts-prod.txt"
 
 # Cualquier IPv4 que no sea local ni privada: 127.x, 10.x, 192.168.x y
 # 172.16-31.x son de desarrollo y aparecen legitimamente en un commit.
@@ -47,19 +44,6 @@ def parece_ip(ip: str) -> bool:
     return not all(len(o) == 1 for o in partes)
 
 
-def hosts_configurados() -> list[str]:
-    fuera = []
-    try:
-        for linea in HOSTS_FILE.read_text(encoding="utf-8").splitlines():
-            linea = linea.split("#", 1)[0].strip()
-            if linea:
-                fuera.append(linea)
-    except OSError:
-        pass
-    fuera += [h.strip() for h in os.environ.get("SSO_HOSTS_PROD", "").split(",") if h.strip()]
-    return fuera
-
-
 def main() -> int:
     try:
         data = json.load(sys.stdin)
@@ -73,8 +57,7 @@ def main() -> int:
     if not (commit or pr):
         return 0
 
-    hallazgos = [h for h in hosts_configurados() if h.lower() in texto.lower()]
-    hallazgos += [ip for ip in IPV4.findall(texto) if parece_ip(ip)]
+    hallazgos = [ip for ip in IPV4.findall(texto) if parece_ip(ip)]
     hallazgos += HOST_INFRA.findall(texto)
     if not hallazgos:
         return 0

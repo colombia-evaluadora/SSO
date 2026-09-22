@@ -11,7 +11,6 @@ Un fichero por hook en la raíz, y lo que no es un hook en `comun/`:
 
 ```
 README.md          esta guía
-hosts-prod.txt     configuración de no_prod / no_fugas
 comun/             módulos compartidos, no se registran en ningún evento
 no_coautoria.py    PreToolUse   Bash|PowerShell
 no_prod.py         PreToolUse   Bash|PowerShell
@@ -67,9 +66,17 @@ info`, `pg_dump`, `docker ps/logs` siguen pasando — el agente
 `server-drift-detector` vive de eso. Y todo lo que apunte al Postgres local no
 lo mira siquiera.
 
-Los hosts salen de `hosts-prod.txt` (uno por linea) y de la variable
-`SSO_HOSTS_PROD`, no del script: cambiar de servidor no deberia ser editar
-codigo.
+**El repo no guarda la direccion de ningun servidor.** El criterio es una lista
+blanca de destinos locales (`sso-postgres`, `localhost`, `127.0.0.1`, ...): lo
+que no sea uno de esos es remoto. Ademas de no almacenar nada, falla del lado
+seguro — un servidor nuevo queda bloqueado por no estar en la lista, en vez de
+colarse por no estar en una lista negra.
+
+Las opciones de host solo cuentan en el segmento que invoca la herramienta, para
+que un `-h` suelto en el texto de un comando no se confunda con un destino.
+
+Limitacion conocida: un tunel SSH (`psql -h localhost -p 5435` contra una base
+remota) se ve local y pasa. No hay forma de distinguirlo desde el comando.
 
 ## `no_fugas.py`
 
@@ -78,8 +85,7 @@ mensaje de commit o en la descripcion de un PR. Eso sale del repo y el
 historial no se reescribe; en un commit el servidor se nombra por su papel
 ("el servidor de test", "produccion").
 
-Dentro del repo esas direcciones si viven (`CLAUDE.md`, las reglas, el propio
-`hosts-prod.txt`): el hook solo mira el texto que se publica. Las IP privadas
+No hay lista que consultar: se reconoce por la forma. Las IP privadas
 (127.x, 10.x, 192.168.x, 172.16-31.x) y las versiones de cuatro numeros de un
 digito (`1.2.3.4`, `Boot 4.1.1.1`) no cuentan.
 
@@ -140,7 +146,7 @@ Los tres `PreToolUse` leen el comando por stdin y salen con 2 cuando bloquean:
 ```bash
 echo '{"tool_input":{"command":"git commit -m \"x\n\nCo-Authored-By: y\""}}' \
   | python .claude/hooks/no_coautoria.py; echo "exit=$?"
-echo '{"tool_input":{"command":"ssh root@<host-de-hosts-prod> \"flyway migrate\""}}' \
+echo '{"tool_input":{"command":"ssh root@un.servidor \"flyway migrate\""}}' \
   | python .claude/hooks/no_prod.py; echo "exit=$?"
 echo '{"tool_input":{"command":"git commit -m \"fix: apunta a 203.0.113.70\""}}' \
   | python .claude/hooks/no_fugas.py; echo "exit=$?"

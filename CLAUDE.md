@@ -84,9 +84,11 @@ van a su baseline, así que solo habla de lo nuevo.
   reportes y otros endpoints. Con el gate dentro, la lógica se acaba duplicando.
 - **Todo endpoint lleva gate de permisos explícito.** Sin gate es un bug de
   seguridad, no una omisión.
-- **Validar siempre contra el Postgres local** (`sso-postgres`), nunca contra el
-  servidor. El hook `no_prod.py` bloquea los comandos que escriben en la base de
-  un servidor real; leer para diagnosticar sigue permitido.
+- **Probar el SQL es a petición, no por defecto.** Si el usuario pide validarlo,
+  se hace contra el Postgres local (`sso-postgres`). Contra un servidor no: lo
+  que se aplica ahí no tiene deshacer, y el hook `no_prod.py` bloquea los
+  comandos que escriben en una base que no sea la local. Leer de un servidor
+  para diagnosticar sigue permitido.
 - **Los ficheros se guardan en UTF-8.** El locale de esta máquina es cp1252 y un
   `.sql` mal guardado llega a producción con el texto roto.
 
