@@ -64,8 +64,9 @@ skills-lock*
 # .claude/ y .agents/ se ignoran completos, EXCEPTO:
 #   - los subagentes del repo (.claude/agents/)
 #   - los comandos del repo (.claude/commands/)
-#   - los hooks del repo (.claude/hooks/); settings.json NO se comparte, asi que
-#     cada quien los registra en su settings local (ver .claude/hooks/README.md)
+#   - los hooks del repo (.claude/hooks/) y su registro en .claude/settings.json,
+#     que solo lleva el bloque "hooks" del equipo. Lo personal (permisos,
+#     plugins) va en .claude/settings.local.json, que sigue ignorado.
 #   - las reglas por seccion (.claude/rules/), con paths: para cargarse solo al
 #     tocar su area
 #   - un conjunto explícito de skills (su fuente: SKILL.md + recursos)
@@ -73,6 +74,7 @@ skills-lock*
 !.claude/agents/
 !.claude/commands/
 !.claude/hooks/
+!.claude/settings.json
 !.claude/rules/
 !.claude/skills/
 .claude/skills/*

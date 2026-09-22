@@ -1,48 +1,35 @@
 # Hooks del repo
 
-Los scripts se comparten por git, pero `.claude/settings.json` **no** (está en
-`.gitignore` junto con el resto de `.claude/*`). Para que se ejecuten, cada
-persona los registra una vez en su `settings.json` o `settings.local.json`:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      { "matcher": "Bash",
-        "hooks": [{ "type": "command",
-                    "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/no-coautoria.sh\"",
-                    "timeout": 15 }] }
-    ],
-    "PostToolUse": [
-      { "matcher": "Write|Edit",
-        "hooks": [{ "type": "command",
-                    "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/post-edit.sh\"",
-                    "timeout": 120 }] }
-    ],
-    "SessionStart": [
-      { "hooks": [{ "type": "command",
-                    "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh\"",
-                    "timeout": 20 }] }
-    ]
-  }
-}
-```
+Los scripts y su registro se comparten por git: `.claude/settings.json` está
+versionado y solo lleva el bloque `hooks`. No hace falta configurar nada a mano.
+Lo personal (permisos, plugins) va en `.claude/settings.local.json`, que sigue
+ignorado y se fusiona encima.
 
 ## `no-coautoria.sh` (+ `no_coautoria.py`)
 
-Bloquea (`PreToolUse`, exit 2) cualquier `git commit` cuyo mensaje lleve un
-trailer `Co-Authored-By`, venga en `-m` o en un fichero pasado con `-F`.
+Bloquea (`PreToolUse`, exit 2) la atribución a Claude en dos sitios: el mensaje
+de un `git commit` (trailer `Co-Authored-By`, venga en `-m`, en un heredoc o en
+un fichero de `-F`) y la descripción de un `gh pr create/edit/comment` (el mismo
+trailer, y además la firma *"Generated with Claude Code"*).
 
 `CLAUDE.md` ya lo prohibía, pero un `CLAUDE.md` es contexto, no configuración:
 se le cuela al agente aunque lo haya leído. Un `PreToolUse` lo impide decida lo
 que decida el modelo.
 
-La detección exige que el `git commit` esté **en posición de comando**: se
-descartan los cuerpos de heredoc y se parte por separadores de nivel superior
-respetando comillas. Buscar el texto a secas bloqueaba scripts que solo
-documentan la regla o la auditan (`grep -rn ...`, un `python - <<EOF` que edita
-esta misma documentación). La batería de casos cubre las dos direcciones: lo
-que debe bloquear y lo que no.
+La detección exige que el comando que *escribe* la atribución esté **en posición
+de comando**: se parte por separadores de nivel superior respetando comillas, y
+se descartan los segmentos que solo leen (`git log --grep`, `grep`, `rg`).
+Buscar el texto a secas bloqueaba scripts que solo documentan la regla o la
+auditan. Lo que sí se mira entero, porque es donde vive un mensaje multilínea:
+los cuerpos de heredoc, los here-strings `@'...'@` de PowerShell y los ficheros
+de `--body-file` / `-F`. El matcher cubre `Bash|PowerShell`: un commit desde la
+herramienta PowerShell no pasaba por el hook.
+
+La batería cubre las dos direcciones — lo que debe bloquear y lo que no:
+
+```bash
+python .claude/hooks/test_no_coautoria.py
+```
 
 ## `post-edit.sh`
 
