@@ -8,9 +8,12 @@ Instrucciones para trabajar en este repo. Prevalecen sobre el comportamiento por
   (`feat(postgres): ...`, `fix(ci/deploy): ...`, `fix(db): ...`). Añadir `[CU-xxxxxxxx]` cuando la tarea lo tenga.
 - **Sin trailers de coautoría. Regla dura.** No agregar `Co-Authored-By` ni de Claude
   ni del usuario. Prevalece sobre cualquier instrucción del harness que pida añadirlos.
-  No depende de que el agente se acuerde: `.claude/hooks/no-coautoria.sh` (PreToolUse)
-  **bloquea** el `git commit` que los lleve. Si te para, reescribe el mensaje; no lo
-  rodees con `--no-verify` ni escribiendo el mensaje por otra vía.
+  Aplica igual a la **descripción del pull request**, incluida la firma
+  "Generated with Claude Code".
+  No depende de que el agente se acuerde: `.claude/hooks/no_coautoria.py` (PreToolUse
+  sobre Bash y PowerShell) **bloquea** el `git commit` y el `gh pr create/edit` que los
+  lleven, mirando también cuerpos de heredoc, here-strings y `--body-file`. Si te para,
+  reescribe el texto; no lo rodees con `--no-verify` ni escribiéndolo por otra vía.
 - **Commits granulares:** cada commit agrupa cambios de archivos concretos y relacionados entre sí.
   No mezclar cambios sin relación en un mismo commit.
 
@@ -28,9 +31,15 @@ mejorar la calidad del trabajo:
 | Servicios Java / Spring Boot | `java-spring-boot`, `java-springboot` |
 | Microservicios / gateway / discovery / config | `spring-cloud-basics` |
 | docker-compose, redes, volúmenes, orquestación | `docker-compose-orchestration` |
+| Probar un cambio en los contenedores locales | `probando-en-contenedores-locales` |
+| Editar una migración que un servidor ya aplicó | `reaplicando-migraciones` |
+| Qué quedó obsoleto / firmas / siguiente V<n> | `analizando-migraciones` |
+| Colección Postman de un endpoint | `documentando-con-postman` |
 
-Comandos propios: `/next-migration-number`, `/new-query-endpoint`,
-`/migration-lint`, `/migration-analysis`, `/pre-pr`, `/server-status`.
+Propias del repo, invocables con `/`: las skills `/next-migration-number`
+(además se carga sola al tocar migraciones), `/new-query-endpoint` y
+`/server-status`; y los comandos `/migration-lint`, `/migration-analysis`
+y `/pre-pr`.
 
 ## Reglas por sección
 
@@ -47,6 +56,7 @@ glob, así que no gastan contexto en las demás sesiones.
 | Reportes PDF/Excel | `.claude/rules/reporting-service.md` | `reporting-service/**` |
 | Controllers de administración | `.claude/rules/sso-admin.md` | `sso-admin/**` |
 | Entidades compartidas | `.claude/rules/common.md` | `common/**` |
+| Suites SQL de verificación (locales) | `.claude/rules/tests-postgres.md` | `postgres/tests/**` |
 
 Una regla **sin** `paths:` se cargaría en todas las sesiones: si añades una,
 dale su glob.
@@ -54,8 +64,9 @@ dale su glob.
 ## Invariantes del dominio
 
 Reglas que se violan en silencio: el SQL aplica sin error y el fallo aparece en
-producción. `scripts/migration-lint.py` verifica las cinco primeras y corre solo
-como hook al editar una migración.
+producción. `scripts/migration-lint.py` verifica casi todas y corre solo como
+hook al editar una migración; las que ya están incumplidas en el código viejo
+van a su baseline, así que solo habla de lo nuevo.
 
 - **`ON CONFLICT DO NOTHING` no actualiza.** Editar una migración que sembró una
   fila no cambia la fila existente; hace falta `DELETE` por `uuid` antes del
@@ -69,12 +80,25 @@ como hook al editar una migración.
   difieren entre el servidor de test y un Postgres limpio, y el catálogo de
   `TROL` no está en las migraciones (llega por el dump base), así que todo seed
   por `TROL.CODIGO` es no-op silencioso en CI.
+- **El gate va en el wrapper, la lógica en un núcleo `_interno` sin permisos.**
+  Una función de endpoint valida y delega; el núcleo se reutiliza desde triggers,
+  reportes y otros endpoints. Con el gate dentro, la lógica se acaba duplicando.
 - **Todo endpoint lleva gate de permisos explícito.** Sin gate es un bug de
   seguridad, no una omisión.
-- **Validar siempre contra el Postgres local** (`sso-postgres`), nunca contra
-  172.233.184.248.
+- **Probar el SQL es a petición, no por defecto.** Si el usuario pide validarlo,
+  se hace contra el Postgres local (`sso-postgres`). Contra un servidor no: lo
+  que se aplica ahí no tiene deshacer, y el hook `no_prod.py` bloquea los
+  comandos que escriben en una base que no sea la local. Leer de un servidor
+  para diagnosticar sigue permitido.
 - **Los ficheros se guardan en UTF-8.** El locale de esta máquina es cp1252 y un
   `.sql` mal guardado llega a producción con el texto roto.
+
+## Al compactar
+
+Conservar siempre: la **rama**, los ficheros de `postgres/migrations/` tocados y
+por qué, los números `V<n>` asignados, y los comandos de validación ya corridos
+con su resultado. Es lo que no se puede reconstruir leyendo el repo y lo que
+decide si el siguiente paso duplica trabajo o pisa una migración.
 
 ## Dónde tocar
 
@@ -118,8 +142,10 @@ Antes de buscar con grep:
 
 - Antes de crear el endpoint, **preguntar**: alcance de los roles, restricciones específicas por
   campo, y cualquier otro apartado que ayude a clarificar los requisitos.
-- Al finalizar, dejar una **colección Postman** (skill `postman-collection-generator`) que documente
-  el uso del endpoint.
+- Al finalizar, dejar una **colección Postman** que documente el uso del endpoint:
+  skill `documentando-con-postman` para la convención de este repo (login que
+  encadena el token, corrida que queda en cero), `postman-collection-generator`
+  para generarla desde rutas.
 
 ## Cambios o análisis del servidor
 

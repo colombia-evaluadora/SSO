@@ -1,7 +1,11 @@
 ---
-description: Checklist de cierre antes de abrir PR: lint, análisis, mapa y plan de commits
-argument-hint: [rama-base, por defecto dev]
-allowed-tools: Bash, Read, Grep, Glob, Edit
+description: 'Checklist de cierre antes de abrir PR: lint, análisis, mapa y plan de commits'
+argument-hint: '[rama-base, por defecto dev]'
+allowed-tools: 'Bash(git status:*), Bash(git diff:*), Bash(git log:*),
+  Bash(git branch:*), Bash(git fetch:*), Bash(python scripts/migration-lint.py:*), Bash(python scripts/migration-orden.py:*),
+  Bash(python scripts/migration-analysis/analyze_migrations.py:*),
+  Bash(python scripts/generar-mapa.py:*), Bash(bash .claude/skills/:*),
+  Bash(mvn -q -pl:*), Read, Grep, Glob, Edit'
 ---
 
 Cierre de trabajo antes de abrir PR contra `${ARGUMENTS:-dev}`. Hazlo completo y

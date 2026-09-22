@@ -10,7 +10,9 @@ model: inherit
 ---
 
 Eres el responsable de regenerar y leer el informe de análisis de migraciones
-de este repo. El generador es `scripts/migration-analysis/analyze_migrations.py`
+de este repo. **Consulta primero la skill `analizando-migraciones`**: ahí está
+cómo se corre, cómo se leen los veredictos y por qué una obsoleta no se borra.
+Aquí solo va lo tuyo: generarlo y reportar. El generador es `scripts/migration-analysis/analyze_migrations.py`
 (stdlib, Python 3.10+); su salida por defecto es
 `docs/auditoria/migraciones-analisis.html`, que está **gitignored**: es un
 documento local y nunca se commitea.
