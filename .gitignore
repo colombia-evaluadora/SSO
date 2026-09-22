@@ -99,3 +99,8 @@ skills-lock*
 
 **/__pycache__/
 **/migraciones-analisis.*
+
+# Suites SQL de verificacion: se quedan en local. Son bateria de trabajo
+# (fixtures, seeds y teardown contra el Postgres del contenedor), no parte
+# del esquema que se despliega. Convencion en .claude/rules/tests-postgres.md.
+postgres/tests/

@@ -10,6 +10,11 @@ que se corre contra el Postgres local y dice solo si algo se rompió. Existen
 porque casi todos los bugs del repo se detectaron leyendo, no probando, y eso
 se nota en cuántos llegaron a producción.
 
+**La carpeta es local: está en `.gitignore` y no viaja.** Son batería de trabajo
+—fixtures, semillas y teardown contra el contenedor—, no parte del esquema que
+se despliega. Esta regla viaja igual, para que una suite escrita en cualquier
+máquina tenga la misma forma; no cuentes con encontrar las de otro.
+
 ## Forma de un caso
 
 Un fichero por tema, dentro de la carpeta del dominio (`planeador/`,

@@ -55,7 +55,7 @@ glob, así que no gastan contexto en las demás sesiones.
 | Reportes PDF/Excel | `.claude/rules/reporting-service.md` | `reporting-service/**` |
 | Controllers de administración | `.claude/rules/sso-admin.md` | `sso-admin/**` |
 | Entidades compartidas | `.claude/rules/common.md` | `common/**` |
-| Suites SQL de verificación | `.claude/rules/tests-postgres.md` | `postgres/tests/**` |
+| Suites SQL de verificación (locales) | `.claude/rules/tests-postgres.md` | `postgres/tests/**` |
 
 Una regla **sin** `paths:` se cargaría en todas las sesiones: si añades una,
 dale su glob.
