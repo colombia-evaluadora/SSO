@@ -80,6 +80,32 @@ Tras cada `Write`/`Edit`:
 Sale con código 2 cuando hay errores, que es como el harness devuelve el
 hallazgo al agente para que corrija antes de seguir. Los avisos no interrumpen.
 
+## `cierre-limpio.sh` (+ `cierre_limpio.py`)
+
+`Stop`: al terminar el turno pasa por el linter las migraciones que el working
+tree tiene tocadas, y **bloquea el cierre (exit 2) si hay errores**.
+
+Existe porque `post-edit.sh` solo cubre `Write`/`Edit`: una migración editada
+desde Bash —un `sed -i`, un heredoc, un script de Python— no dispara aquel hook
+y hoy se iba sin revisar. Los avisos se imprimen pero no interrumpen.
+
+Bloquea **una sola vez por prompt**: si tras el aviso el turno vuelve a cerrar
+con el mismo fallo, deja pasar. Un hook que no se puede satisfacer no debe
+secuestrar la sesión.
+
+## `fallo-conocido.sh` (+ `fallo_conocido.py`)
+
+`PostToolUseFailure`: cuando un comando revienta, traduce el error a su causa
+real en este repo y la devuelve como contexto. No bloquea nada — el comando ya
+falló.
+
+Cubre lo que ya se investigó una vez: `42501` (tildes en el CODIGO del menú,
+alcance no pasado, falta la fila en `role_query`), `23503` (tiene dependientes →
+409), `23505` (los UNIQUE parciales `WHERE active = true` de V65), `42725` (dos
+sobrecargas vivas), los `UnicodeDecodeError` de cp1252, el `Could not resolve
+dependencies` de Maven multi-módulo, el checksum de Flyway y el 404 de una fila
+nueva de `public.query`.
+
 ## `session-start.sh`
 
 Imprime rama, techo local de migraciones y si hay migraciones sin commitear.
@@ -99,10 +125,12 @@ echo '{"tool_input":{"command":"git commit -m \"fix: apunta a 203.0.113.70\""}}'
   | bash .claude/hooks/no-fugas.sh; echo "exit=$?"
 ```
 
-Y los otros dos, por fichero:
+Y el resto:
 
 ```bash
 echo '{"tool_input":{"file_path":"postgres/migrations/V406__x.sql"}}' \
   | bash .claude/hooks/post-edit.sh; echo "exit=$?"
+echo '{"prompt_id":"prueba"}' | bash .claude/hooks/cierre-limpio.sh; echo "exit=$?"
+echo '{"error":"SQLSTATE 42501"}' | bash .claude/hooks/fallo-conocido.sh
 bash .claude/hooks/session-start.sh
 ```

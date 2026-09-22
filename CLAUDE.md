@@ -90,6 +90,13 @@ van a su baseline, así que solo habla de lo nuevo.
 - **Los ficheros se guardan en UTF-8.** El locale de esta máquina es cp1252 y un
   `.sql` mal guardado llega a producción con el texto roto.
 
+## Al compactar
+
+Conservar siempre: la **rama**, los ficheros de `postgres/migrations/` tocados y
+por qué, los números `V<n>` asignados, y los comandos de validación ya corridos
+con su resultado. Es lo que no se puede reconstruir leyendo el repo y lo que
+decide si el siguiente paso duplica trabajo o pisa una migración.
+
 ## Dónde tocar
 
 Antes de buscar con grep:
