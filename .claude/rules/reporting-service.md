@@ -19,10 +19,14 @@ Genera los PDF/Excel. No tiene SQL propio: cada reporte es una **clave** en su
 
 ## Restricciones
 
-- **Un reporte reusa la MISMA función del listado**, con los mismos filtros y el
-  mismo gate, solo que sin paginar. Escribir una `fn_*_reporte` aparte hace que
-  el reporte y la pantalla diverjan en el `WHERE` o en el alcance territorial, y
-  entonces el usuario exporta filas que no puede ver.
+- **Un reporte llama al MISMO núcleo que el listado**, con los mismos filtros y
+  el mismo gate, solo que sin paginar. Escribir una `fn_*_reporte` aparte hace
+  que el reporte y la pantalla diverjan en el `WHERE` o en el alcance
+  territorial, y entonces el usuario exporta filas que no puede ver — ya pasó
+  con V186-V190. Si la función del listado lleva el gate en línea y por eso no
+  se puede reutilizar, la salida es partirla en wrapper + núcleo `_interno`
+  (ver `.claude/rules/migraciones.md` § Anatomía de una función de endpoint),
+  no clonar la consulta.
 - **"Sin paginar" es `LIMIT NULL`, no un número grande.** Cuidado con
   `GREATEST(p_limite, 1)`: `GREATEST(NULL, 1) = 1` en PostgreSQL, así que pasar
   NULL a una función escrita así exporta **una** fila. El freno real es
