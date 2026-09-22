@@ -57,6 +57,7 @@ SEVERITY = {
     "GATE-EN-LINEA": "aviso",
     "WRAPPER-GORDO": "aviso",
     "FN-REPORTE-DUPLICADA": "aviso",
+    "BORRADO-SIN-GUARDA": "aviso",
 }
 
 GATE_FNS = (
@@ -337,6 +338,25 @@ def rule_fn_reporte_duplicada(path: Path, stmts: list, conocidas: set[str],
                                f"wrapper + `_interno` si hace falta"))
 
 
+BORRA = re.compile(r"^fn_.*_(eliminar|soft_delete|borrar|dar_de_baja)(_bulk|_interno)?$", re.I)
+# "tiene dependientes": el 23503 que el gateway traduce a 409, o una validacion
+# reutilizable que lo lanza por dentro.
+GUARDA = re.compile(r"23503|\bfn_\w*_validar_\w+\s*\(", re.I)
+
+
+def rule_borrado_sin_guarda(path: Path, stmts: list, out: list[Finding]) -> None:
+    """Un borrado logico no rompe nada: deja la informacion viva e inalcanzable.
+    Dar de baja sedes sin mirar que colgaba dejo 58.945 matriculas activas
+    colgando de sedes que ya no existian (V354)."""
+    for st, short in _funciones_creadas(stmts):
+        if not BORRA.match(short) or GUARDA.search(st.text):
+            continue
+        out.append(Finding(path, st.line, "BORRADO-SIN-GUARDA",
+                           f"{short}(): borra sin rechazar por dependientes (23503) ni llamar a una "
+                           f"fn_*_validar_*. Recorre que cuelga y decide explicitamente que bloquea "
+                           f"y que se arrastra (ver V354)"))
+
+
 def rule_auto_referencia(path: Path, raw: str, out: list[Finding]) -> None:
     """Una funcion no debe nombrar su propio V<n>: sobrevive a la migracion."""
     m = re.match(r"V(\d+)", path.name)
@@ -378,6 +398,7 @@ def lint_file(path: Path, arities: dict[str, set[int]]) -> list[Finding]:
     rule_auto_referencia(path, raw, out)
     rule_gate_en_linea(path, stmts, out)
     rule_wrapper_gordo(path, stmts, out)
+    rule_borrado_sin_guarda(path, stmts, out)
     conocidas = {n.rsplit(".", 1)[-1].lower() for n in arities}
     conocidas |= {short for _, short in _funciones_creadas(stmts)}
     rule_fn_reporte_duplicada(path, stmts, conocidas, out)
