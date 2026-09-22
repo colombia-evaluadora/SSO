@@ -82,6 +82,14 @@ def cambiadas(base: str) -> dict[str, str]:
     return fuera
 
 
+def fichero_de(version: str) -> str:
+    """El .sql de esa version. Se nombra el fichero y no la linea porque el
+    modelo no siempre la conoce: una escritura pisada suele traer line=1."""
+    for p in MIGRATIONS.glob(f"V{version}__*.sql"):
+        return p.name
+    return f"V{version}__*.sql"
+
+
 def modelo(refresh: bool) -> dict:
     destino = Path(tempfile.gettempdir()) / "sso-migrations-orden.json"
     if refresh or not destino.exists():
@@ -107,7 +115,7 @@ def hallazgos(model: dict, objetivo: dict[str, str]) -> list[dict]:
                 "version": v,
                 "estado": objetivo[v],
                 "objeto": clave,
-                "linea": w.get("line"),
+                "fichero": fichero_de(v),
                 "pisada_por": matador,
                 "define_hoy": vivo,
             })
@@ -155,8 +163,8 @@ def main() -> int:
           "POSTERIOR redefine el mismo objeto.\n")
     for h in malas:
         etiqueta = {"A": " (nueva)", "M": " (editada)"}.get(h["estado"], "")
-        print(f"  V{h['version']}{etiqueta}  "
-              f"{h['objeto']}  linea {h['linea']}")
+        print(f"  {h['fichero']}{etiqueta}")
+        print(f"      objeto: {h['objeto']}")
         detalle = f"      lo redefine V{h['pisada_por']}"
         if h["define_hoy"] and h["define_hoy"] != h["pisada_por"]:
             detalle += f", y hoy lo define V{h['define_hoy']}"
