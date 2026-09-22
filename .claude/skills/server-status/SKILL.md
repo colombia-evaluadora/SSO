@@ -15,8 +15,9 @@ antes de tocar nada.
 
 ## Paso 1 — pedir el SSH
 
-Pregunta al usuario el comando exacto (host, usuario, puerto, llave). No
-asumas `root@172.233.184.248`; puede ser otro entorno.
+Pregunta al usuario el comando exacto (host, usuario, puerto, llave). No asumas
+el del último entorno que viste: puede ser otro, y el repo no guarda ninguna
+dirección de servidor.
 
 ## Paso 2 — levantar estado (solo lectura)
 

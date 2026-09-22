@@ -212,6 +212,26 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 2
+      - name: Orden de las migraciones
+        # Una migración cuyo objeto lo redefine una versión POSTERIOR no puede
+        # funcionar, y falla de dos formas distintas según el entorno:
+        #
+        #   * base limpia → Flyway aplica en orden de versión y la posterior
+        #     gana, así que el cambio se pierde sin un solo error;
+        #   * servidor que ya pasó de esa versión → la nueva entra out-of-order
+        #     y corre la ÚLTIMA, así que gana ella y revierte lo posterior
+        #     (pasó con V29 en el PR #311, que revivió V294/V295/V298/V302).
+        #
+        # Los dos entornos quedan distintos, que es lo peor que puede pasar con
+        # una migración, y ninguna de las dos cosas da error por sí sola: de ahí
+        # que se compruebe aquí. Usa el mismo grafo de reescritura que
+        # `docs/MAPA.md` y el análisis de migraciones, no una heurística aparte.
+        #
+        # Misma base que `pick` (HEAD~1, con fetch-depth: 2). En
+        # workflow_dispatch no aplica: no hay diff, se redespliega lo que ya
+        # estaba.
+        if: github.event_name != 'workflow_dispatch'
+        run: python scripts/migration-orden.py --base HEAD~1
       - name: Check SHA not yet deployed
         # Para `workflow_dispatch` no aplica: el usuario ya sabe que
         # está re-desplegando, y saltarse el guard permite precisamente
