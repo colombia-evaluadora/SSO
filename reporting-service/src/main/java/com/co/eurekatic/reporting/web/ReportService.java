@@ -101,7 +101,10 @@ public class ReportService {
         // circula por correo y sobrevive al contexto donde se genero, asi que
         // sin esa linea nadie puede distinguir "el padron completo" de "los
         // de una sola sede".
-        ReportMeta meta = new ReportMeta(usuario, request == null ? null : request.filters());
+        ReportMeta meta = new ReportMeta(
+                usuario,
+                request == null ? null : request.filters(),
+                request == null ? null : request.filtersLabel());
 
         List<String> columnas = request == null ? null : request.columns();
         // La sesion de descargas vive lo que vive el reporte: los bytes de las
