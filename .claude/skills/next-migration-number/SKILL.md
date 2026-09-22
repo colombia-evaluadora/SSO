@@ -91,6 +91,20 @@ hubo que corregir fallaron por uno de estos, no por SQL malo:
   § Anatomía de una función de endpoint; precedente vivo:
   `fn_matricula_config_crear_interno` (V159), reutilizado desde un trigger y
   desde V180/V181/V182.
+- **Alcance, no solo permiso** — qué establecimiento / sede / jornada acota la
+  operación. `fn_assert_permiso_seccion` los recibe como parámetros: omitirlos
+  no es "sin restricción", es no comprobarlos. El nivel del rol sale de
+  `CATEGORIA_ROL` (0 super admin … 4 estudiantes, fail-closed a 4).
+- **Qué validaciones comparte con el resto del CRUD** — cada regla en su
+  `fn_<dominio>_validar_<regla>` reutilizable (familia `fn_matricula_validar_*`,
+  V162), no repetida en `_crear`, `_actualizar` y `_eliminar`.
+- **Qué cuelga de lo que se borra** — antes de un `_eliminar` / `_soft_delete`,
+  recorrer las relaciones y decidir qué bloquea (23503 → 409) y qué se arrastra.
+  Un borrado lógico sin esa pregunta deja la información viva e inalcanzable
+  (V354: 58 945 matrículas). Orden: existencia → estado → gate → dependencias.
+- **Forma de la consulta si es un listado** — filtrar antes de agregar; un
+  agregado que no menciona ningún parámetro de filtro se materializa entero
+  (V112: 11,5 s → 83 ms).
 - **Idempotencia** — `IF NOT EXISTS`, `DROP ... IF EXISTS`, borrar por `uuid`
   antes de insertar. `INSERT ... ON CONFLICT DO NOTHING` **no** actualiza una
   fila existente: si editas una migración que sembró datos, hace falta un

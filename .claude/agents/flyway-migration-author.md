@@ -59,6 +59,31 @@ una exportación pueden reutilizar sin volver a pedir permisos.
 - Si ya vas a editar una función con el gate en línea, pártela en wrapper +
   núcleo en esa misma migración. No hay refactor masivo.
 
+Y la misma idea una capa más abajo: cada regla de negocio en su
+`fn_<dominio>_validar_<regla>` que lanza o no hace nada, invocada con `PERFORM`
+desde `_crear`, `_actualizar` y `_eliminar` (precedente: la familia
+`fn_matricula_validar_*` de V162). Escrita en línea, corregir una regla es
+encontrar sus N copias.
+
+## Antes de escribir la consulta
+
+- **Permisos y alcance son dos cosas.** `fn_assert_permiso_seccion` recibe
+  establecimiento, sede y jornada: omitirlos no es "sin restricción", es no
+  comprobarla. El nivel sale de `CATEGORIA_ROL` (0 super admin … 4 estudiantes),
+  se resuelve por texto y cae a 4 si no se reconoce. En un listado el alcance se
+  filtra con la variante booleana, no se pregunta.
+- **Filtrar antes de agregar.** Un agregado que no depende de la página se
+  materializa entero: `fn_usu_empleados_listar` tardaba 11,5 s para 100 filas por
+  agregar sobre 126 704 usuarios antes de poder filtrar (V112 → 83 ms). El
+  agregado por fila va como subconsulta correlacionada o `LEFT JOIN LATERAL`.
+- **Antes de borrar, mira qué cuelga.** Recorre las relaciones hacia abajo y
+  decide explícitamente qué bloquea (23503 → 409) y qué se arrastra. Dar de baja
+  sedes sin mirar dejó 58 945 matrículas activas inalcanzables (V354). Orden de
+  errores: existencia → estado → gate → dependencias.
+- **Comentarios solo de lo que no se deduce del SQL:** una regla de negocio, una
+  trampa de PostgreSQL, una guarda cuya ausencia no se notaría. La investigación
+  va al commit o al PR.
+
 Detalle y motivación en `.claude/rules/migraciones.md`.
 
 ## Requisitos de toda migración
