@@ -1,12 +1,12 @@
 -- ===========================================================================
--- V443 - Quien solo tiene grupos a cargo, ve solo sus grupos.
+-- V489 - Quien solo tiene grupos a cargo, ve solo sus grupos.
 --
 --   fn_rol_alcance_sede             ¿este rol da la sede entera?
 --   fn_usuario_solo_sus_grupos      la pregunta de si/no, sobre TODOS sus roles
 --   fn_usuario_grupos_dirigidos     los grupos de los que es director
 --   fn_informe_assert_grupo_propio  el recorte, en un solo lugar
 --
---   (los puntos de entrada se enganchan en V444)
+--   (los puntos de entrada se enganchan en V490)
 --
 --   SIN CAMBIOS DE ESQUEMA: se lee TROL.CODIGO, que ya existe.
 --
@@ -116,7 +116,7 @@ AS $function$
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_rol_alcance_sede(BIGINT)
-    IS 'TRUE cuando el rol alcanza la SEDE ENTERA (o mas) y no solo los grupos que la persona dirige. Los niveles 0, 1 y 2 lo son por definicion -- ya alcanzan el establecimiento o mas --, y dentro del nivel 3 se nombran por CODIGO los que si: COORDINADOR, JEFE_AREA y PSICO_ORIENTADOR. Hace falta nombrarlos porque el nivel no los distingue: Docente, Coordinador, Director de grupo, Psico-orientador y Jefe de Area son todos ADMINISTRATIVOS_SEDES, y PESO_CATEGORIA tampoco sirve porque Psico-orientador comparte peso con Docente. LA LISTA ES BLANCA A PROPOSITO: un rol de nivel 3 que nadie agregue queda del lado angosto -- vera solo sus grupos --, de modo que olvidarse da MENOS acceso y no mas. Es la unica forma en que una lista escrita a mano es defendible en algo que decide permisos. V443.';
+    IS 'TRUE cuando el rol alcanza la SEDE ENTERA (o mas) y no solo los grupos que la persona dirige. Los niveles 0, 1 y 2 lo son por definicion -- ya alcanzan el establecimiento o mas --, y dentro del nivel 3 se nombran por CODIGO los que si: COORDINADOR, JEFE_AREA y PSICO_ORIENTADOR. Hace falta nombrarlos porque el nivel no los distingue: Docente, Coordinador, Director de grupo, Psico-orientador y Jefe de Area son todos ADMINISTRATIVOS_SEDES, y PESO_CATEGORIA tampoco sirve porque Psico-orientador comparte peso con Docente. LA LISTA ES BLANCA A PROPOSITO: un rol de nivel 3 que nadie agregue queda del lado angosto -- vera solo sus grupos --, de modo que olvidarse da MENOS acceso y no mas. Es la unica forma en que una lista escrita a mano es defendible en algo que decide permisos. V489.';
 
 
 -- ---------------------------------------------------------------------------
@@ -141,7 +141,7 @@ AS $function$
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_usuario_solo_sus_grupos(BIGINT)
-    IS 'TRUE cuando NINGUNO de los roles activos del usuario alcanza la sede entera, o sea cuando solo puede ver los grupos que dirige. Se miran TODOS los roles y no el de menor nivel: hay usuarios con dos, y quedarse con uno le recortaria el alcance a quien ademas tiene un cargo mas amplio -- basta un rol que si de la sede para verla completa. Sin roles activos devuelve FALSE, porque ese usuario no pasa el gate de capability igual y decir TRUE lo dejaria con "sus grupos" sin tener ninguno. V443.';
+    IS 'TRUE cuando NINGUNO de los roles activos del usuario alcanza la sede entera, o sea cuando solo puede ver los grupos que dirige. Se miran TODOS los roles y no el de menor nivel: hay usuarios con dos, y quedarse con uno le recortaria el alcance a quien ademas tiene un cargo mas amplio -- basta un rol que si de la sede para verla completa. Sin roles activos devuelve FALSE, porque ese usuario no pasa el gate de capability igual y decir TRUE lo dejaria con "sus grupos" sin tener ninguno. V489.';
 
 
 -- ---------------------------------------------------------------------------
@@ -165,7 +165,7 @@ AS $function$
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_usuario_grupos_dirigidos(BIGINT)
-    IS 'Los grupos activos de los que el usuario es DIRECTOR (TGRUPO.FK_TFUNCIONARIO), que es lo que la pantalla de informes muestra en la columna "director". NO incluye los grupos donde solo dicta: eso es asignacion academica y es otra pregunta -- ademas de que habria que decidir si ve el informe completo del grupo o solo su asignatura. Se consulta por FK_TUSUARIO y no por un pk de funcionario concreto: hoy TFUNCIONARIO es una fila por persona (V51 REV5), pero si algun dia hubiera mas de una salen todas en vez de perderse una parte en silencio. ROWS 20 y no el 1000 por defecto: nadie dirige mil grupos, y ese estimado inflado es el que en V432 disparaba compilaciones JIT de un segundo en consultas que no las necesitaban. V443.';
+    IS 'Los grupos activos de los que el usuario es DIRECTOR (TGRUPO.FK_TFUNCIONARIO), que es lo que la pantalla de informes muestra en la columna "director". NO incluye los grupos donde solo dicta: eso es asignacion academica y es otra pregunta -- ademas de que habria que decidir si ve el informe completo del grupo o solo su asignatura. Se consulta por FK_TUSUARIO y no por un pk de funcionario concreto: hoy TFUNCIONARIO es una fila por persona (V51 REV5), pero si algun dia hubiera mas de una salen todas en vez de perderse una parte en silencio. ROWS 20 y no el 1000 por defecto: nadie dirige mil grupos, y ese estimado inflado es el que en V432 disparaba compilaciones JIT de un segundo en consultas que no las necesitaban. V489.';
 
 
 -- ---------------------------------------------------------------------------
@@ -213,4 +213,4 @@ END;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_informe_assert_grupo_propio(BIGINT, BIGINT)
-    IS 'Recorta el acceso al grupo, DESPUES de que el gate territorial ya decidio. No repite fn_assert_permiso_seccion a proposito: todos los puntos de entrada de informes ya lo llaman, y repetirlo aqui seria resolver dos veces la sede y la jornada del grupo en cada llamada -- en un listado, una vez por estudiante. Solo actua cuando fn_usuario_solo_sus_grupos dice que el usuario no alcanza la sede entera; para todos los demas es un no-op. Falla con 42501 y no devolviendo vacio, porque pedir por id el informe de un grupo ajeno no es "no hay datos" sino no tener permiso; en el LISTADO de grupos, en cambio, se filtran las filas, que ahi si es la respuesta correcta. Un grupo NULL no hace nada: el caller ya valido su existencia. V443.';
+    IS 'Recorta el acceso al grupo, DESPUES de que el gate territorial ya decidio. No repite fn_assert_permiso_seccion a proposito: todos los puntos de entrada de informes ya lo llaman, y repetirlo aqui seria resolver dos veces la sede y la jornada del grupo en cada llamada -- en un listado, una vez por estudiante. Solo actua cuando fn_usuario_solo_sus_grupos dice que el usuario no alcanza la sede entera; para todos los demas es un no-op. Falla con 42501 y no devolviendo vacio, porque pedir por id el informe de un grupo ajeno no es "no hay datos" sino no tener permiso; en el LISTADO de grupos, en cambio, se filtran las filas, que ahi si es la respuesta correcta. Un grupo NULL no hace nada: el caller ya valido su existencia. V489.';

@@ -1,7 +1,7 @@
 -- ===========================================================================
--- V444 - Se engancha el recorte por grupo en los puntos de entrada.
+-- V490 - Se engancha el recorte por grupo en los puntos de entrada.
 --
---   V443 definio la regla (fn_informe_assert_grupo_propio) pero nadie la
+--   V489 definio la regla (fn_informe_assert_grupo_propio) pero nadie la
 --   llamaba. Aqui se llama, y con eso empieza a aplicar.
 --
 --
@@ -87,7 +87,7 @@ BEGIN
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
 
-    -- V444 -- el recorte por grupo, DESPUES del gate de arriba. Para
+    -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, p_fk_tgrupo);
@@ -632,7 +632,7 @@ BEGIN
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
 
-    -- V444 -- el recorte por grupo, DESPUES del gate de arriba. Para
+    -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, p_fk_tgrupo);
@@ -907,7 +907,7 @@ BEGIN
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
 
-    -- V444 -- el recorte por grupo, DESPUES del gate de arriba. Para
+    -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, p_fk_tgrupo);
@@ -1093,7 +1093,7 @@ BEGIN
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
 
-    -- V444 -- el recorte por grupo, DESPUES del gate de arriba. Para
+    -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, p_fk_tgrupo);
@@ -1223,7 +1223,7 @@ BEGIN
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
 
-    -- V444 -- el recorte por grupo, DESPUES del gate de arriba. Para
+    -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, academico_test.fn_matricula_grupo(p_fk_tmatricula));
@@ -1339,7 +1339,7 @@ BEGIN
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
 
-    -- V444 -- el recorte por grupo, DESPUES del gate de arriba. Para
+    -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, academico_test.fn_matricula_grupo(p_fk_tmatricula));
@@ -1453,7 +1453,7 @@ BEGIN
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
 
-    -- V444 -- el recorte por grupo, DESPUES del gate de arriba. Para
+    -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, academico_test.fn_matricula_grupo(p_fk_tmatricula));
@@ -1579,7 +1579,7 @@ BEGIN
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
 
-    -- V444 -- el recorte por grupo, DESPUES del gate de arriba. Para
+    -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, academico_test.fn_matricula_grupo(p_fk_tmatricula));
@@ -1634,7 +1634,7 @@ BEGIN
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
 
-    -- V444 -- el recorte por grupo, DESPUES del gate de arriba. Para
+    -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, academico_test.fn_matricula_grupo(p_fk_tmatricula));
@@ -1711,7 +1711,7 @@ BEGIN
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
 
-    -- V444 -- el recorte por grupo, DESPUES del gate de arriba. Para
+    -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, academico_test.fn_matricula_grupo(p_fk_tmatricula));
@@ -1822,7 +1822,7 @@ BEGIN
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
 
-    -- V444 -- el recorte por grupo, DESPUES del gate de arriba. Para
+    -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, academico_test.fn_matricula_grupo(p_fk_tmatricula));
@@ -1904,7 +1904,7 @@ BEGIN
              ON u.PK_TUSUARIO = f.FK_TUSUARIO
      WHERE gr.ACTIVE = TRUE
        AND g.FK_TPERIODO_ACADEMICO = v_periodo
-       -- V444 -- aca se FILTRA en vez de fallar: la pregunta es "cuales
+       -- V490 -- aca se FILTRA en vez de fallar: la pregunta es "cuales
        -- puedo ver", y la respuesta correcta es la lista corta. Para quien
        -- alcanza la sede entera la condicion es TRUE y no cambia nada.
        AND (NOT academico_test.fn_usuario_solo_sus_grupos(p_pk_usuario_solicitante)

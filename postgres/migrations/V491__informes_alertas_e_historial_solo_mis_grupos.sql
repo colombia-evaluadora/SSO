@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V445 - Las alertas y el historial dejan de mostrar grupos ajenos.
+-- V491 - Las alertas y el historial dejan de mostrar grupos ajenos.
 --
 --   fn_informe_planillas_pendientes   la alerta roja
 --   fn_informe_cambios_pendientes     la alerta naranja
@@ -7,7 +7,7 @@
 --
 --
 -- QUE FALTABA
---   V444 dejo estas tres fuera a proposito: reciben un ARREGLO de grupos y
+--   V490 dejo estas tres fuera a proposito: reciben un ARREGLO de grupos y
 --   son agregados, no accesos -- devuelven alertas y registros de lo que ya
 --   paso, no los datos del informe --, asi que no abrian nada que el
 --   usuario no pudiera pedir por otro lado.
@@ -17,8 +17,8 @@
 --   seguridad que se cierra, es una pantalla que deja de mentir.
 --
 --
--- SE DESCARTA, NO SE FALLA -- Y NO ES LO MISMO QUE EN V444
---   En V444 pedir por id un grupo ajeno responde 42501, porque ahi el
+-- SE DESCARTA, NO SE FALLA -- Y NO ES LO MISMO QUE EN V490
+--   En V490 pedir por id un grupo ajeno responde 42501, porque ahi el
 --   usuario eligio ese grupo: es una peticion equivocada y decirlo es lo
 --   correcto.
 --
@@ -45,7 +45,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_informe_planillas_pendientes(p_pk_u
 AS $function$
 DECLARE
     r_g          RECORD;
-    -- V445 -- los grupos que de verdad se van a consultar: los pedidos
+    -- V491 -- los grupos que de verdad se van a consultar: los pedidos
     -- menos los que el usuario no puede ver por no dirigirlos.
     v_grupos     BIGINT[] := ARRAY[]::BIGINT[];
     v_solo_mios  BOOLEAN;
@@ -83,7 +83,7 @@ BEGIN
             v_fk_ee, v_fk_sede, v_fk_jornada
         );
 
-        -- V445 -- el recorte por grupo DESCARTA en silencio, no falla.
+        -- V491 -- el recorte por grupo DESCARTA en silencio, no falla.
         -- Es la diferencia con el gate de arriba y es deliberada: pedir
         -- un grupo de otra sede es un error de quien llama, pero pedir
         -- uno de la propia sede que no se dirige es lo que hace el front
@@ -229,7 +229,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_informe_cambios_pendientes(p_pk_usu
 AS $function$
 DECLARE
     r_g          RECORD;
-    -- V445 -- los grupos que de verdad se van a consultar: los pedidos
+    -- V491 -- los grupos que de verdad se van a consultar: los pedidos
     -- menos los que el usuario no puede ver por no dirigirlos.
     v_grupos     BIGINT[] := ARRAY[]::BIGINT[];
     v_solo_mios  BOOLEAN;
@@ -267,7 +267,7 @@ BEGIN
             v_fk_ee, v_fk_sede, v_fk_jornada
         );
 
-        -- V445 -- el recorte por grupo DESCARTA en silencio, no falla.
+        -- V491 -- el recorte por grupo DESCARTA en silencio, no falla.
         -- Es la diferencia con el gate de arriba y es deliberada: pedir
         -- un grupo de otra sede es un error de quien llama, pero pedir
         -- uno de la propia sede que no se dirige es lo que hace el front
@@ -449,7 +449,7 @@ BEGIN
                    FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario_solicitante) ee
                   WHERE ee.establecimiento_id = s.FK_TESTABLECIMIENTO
                )
-            -- V445 -- faltaba la rama de NIVEL 3. fn_usuario_ee_accesibles
+            -- V491 -- faltaba la rama de NIVEL 3. fn_usuario_ee_accesibles
             -- devuelve CERO establecimientos para ellos -- su alcance es por
             -- (sede, jornada) --, asi que sin esto el historial salia VACIO
             -- para todo docente, coordinador y psico-orientador, incluso
@@ -466,7 +466,7 @@ BEGIN
        AND (p_fk_tgrupos IS NULL
             OR CARDINALITY(p_fk_tgrupos) = 0
             OR ig.FK_TGRUPO = ANY (p_fk_tgrupos))
-       -- V445 -- y ademas, quien solo alcanza sus grupos ve solo los
+       -- V491 -- y ademas, quien solo alcanza sus grupos ve solo los
        -- suyos. Aca se filtra en vez de fallar por lo mismo que en las
        -- alertas: el historial se pide con las pestañas abiertas, no con
        -- un grupo que el usuario eligio a mano.
