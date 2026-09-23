@@ -312,6 +312,19 @@ spring:
               filters:
                 - StripPrefix=1
                 - AddResponseHeader=X-Source, api-gateway
+            # ─── ai-control-service ───
+            # POST /api/ai/observaciones/{periodo|anio}. Estatica por la
+            # misma razon que reportes: StripPrefix=1 deja /ai/..., que es
+            # donde escucha el controlador. El servicio reenvia este JWT al
+            # query-service, asi que el gate PL/pgSQL decide igual que en la
+            # pantalla.
+            - id: api-ai-control-service
+              uri: lb://ai-control-service
+              predicates:
+                - Path=/api/ai/**
+              filters:
+                - StripPrefix=1
+                - AddResponseHeader=X-Source, api-gateway
             # ─── OpenAPI / Swagger UI: deliberately NO routes ───
             # There used to be five `forward:` routes here
             # (openapi-ui-self, openapi-spec-self,
