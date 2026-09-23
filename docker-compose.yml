@@ -1769,6 +1769,63 @@ services:
       retries: 10
       start_period: 60s
 
+  # Endpoints de IA (Spring AI contra una API compatible con OpenAI; NVIDIA
+  # NIM por defecto). Igual que reporting-service, no tiene base de datos:
+  # lee y guarda por el query-service con el JWT del usuario.
+  ai-control-service:
+    build:
+      context: .
+      dockerfile: ai-control-service/Dockerfile
+    image: ${IMAGE_PREFIX:-eurekatic}/ai-control-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
+    container_name: sso-ai-control-service
+    restart: unless-stopped
+    # tini como PID 1 para reapear los hijos del healthcheck (ver
+    # reporting-service).
+    init: true
+    mem_limit: 512m
+    mem_reservation: 256m
+    depends_on:
+      eurekaserver:
+        condition: service_started
+      # Cache de resumenes. El servicio tolera que falte (genera sin cache),
+      # pero arrancar despues evita una ronda de warnings al primer request.
+      redis:
+        condition: service_healthy
+    environment:
+      EUREKA_URL: "http://eurekaserver:8761/eureka"
+      AI_QUERY_SERVICE_URL: "${AI_QUERY_SERVICE_URL:-http://query-service-eval-col:8084}"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # Proveedor. Sin AI_API_KEY el servicio arranca pero cada generacion
+      # responde 502.
+      AI_BASE_URL: "${AI_BASE_URL:-https://integrate.api.nvidia.com/v1}"
+      AI_API_KEY: "${AI_API_KEY:-}"
+      AI_MODEL: "${AI_MODEL:-moonshotai/kimi-k2.5}"
+      AI_MAX_TOKENS: "${AI_MAX_TOKENS:-1500}"
+      AI_TEMPERATURE: "${AI_TEMPERATURE:-0.6}"
+      AI_TOP_P: "${AI_TOP_P:-0.95}"
+      AI_TIMEOUT: "${AI_TIMEOUT:-60s}"
+      AI_MAX_RETRIES: "${AI_MAX_RETRIES:-1}"
+      AI_EXTRA_BODY_JSON: '${AI_EXTRA_BODY_JSON:-{"chat_template_kwargs":{"thinking":false}}}'
+      # Calibracion del servicio.
+      AI_MAX_PALABRAS: "${AI_MAX_PALABRAS:-250}"
+      AI_PROMPT_VERSION: "${AI_PROMPT_VERSION:-v1}"
+      AI_CACHE_TTL: "${AI_CACHE_TTL:-7d}"
+      AI_RATE_LIMIT_PER_MIN: "${AI_RATE_LIMIT_PER_MIN:-35}"
+      AI_MAX_CONCURRENT: "${AI_MAX_CONCURRENT:-4}"
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8088; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
 volumes:
   traefik-acme:
     # Guarda acme.json: la clave privada del certificado y el registro de
