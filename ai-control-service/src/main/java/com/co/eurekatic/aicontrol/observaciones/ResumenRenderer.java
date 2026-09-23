@@ -35,7 +35,11 @@ public final class ResumenRenderer {
     private static void parrafo(StringBuilder sb, String texto) {
         if (blank(texto)) return;
         if (!sb.isEmpty()) sb.append("\n\n");
-        sb.append(texto.trim());
+        String t = texto.trim();
+        sb.append(t);
+        // El modelo a veces cierra las descripciones sin punto.
+        char fin = t.charAt(t.length() - 1);
+        if (fin != '.' && fin != '!' && fin != '?') sb.append('.');
     }
 
     private static void lista(StringBuilder sb, String titulo, List<String> items) {

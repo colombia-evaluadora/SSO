@@ -55,7 +55,10 @@ spring:
       api-key: ${AI_API_KEY:}
       # En Spring AI 2 los reintentos y el timeout los aplica el SDK de
       # OpenAI; spring.ai.retry.* ya no afecta a este starter.
-      timeout: ${AI_TIMEOUT:60s}
+      # 120s y no 60s: en el plan gratuito de NVIDIA la espera en cola hasta
+      # el primer token llego a ~110s en pruebas reales (2026-09-23), y mas
+      # de 2 minutos ya no sirve en pantalla: se responde 504.
+      timeout: ${AI_TIMEOUT:120s}
       max-retries: ${AI_MAX_RETRIES:1}
       chat:
         model: ${AI_MODEL:nvidia/nemotron-3.5-lightning-30b-a3b}
@@ -95,7 +98,7 @@ sso:
     # (Nemotron enable_thinking, Kimi thinking).
     extra-body-json: '${AI_EXTRA_BODY_JSON:{"chat_template_kwargs":{"enable_thinking":false}}}'
     max-palabras: ${AI_MAX_PALABRAS:250}
-    prompt-version: ${AI_PROMPT_VERSION:v1}
+    prompt-version: ${AI_PROMPT_VERSION:v2}
     cache-ttl: ${AI_CACHE_TTL:7d}
     rate-limit-per-min: ${AI_RATE_LIMIT_PER_MIN:35}
     rate-limit-timeout: ${AI_RATE_LIMIT_TIMEOUT:20s}

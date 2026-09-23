@@ -7,7 +7,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
@@ -36,8 +35,6 @@ public class GeneradorResumen {
     private final ModeloInvoker invoker;
     private final ResumenCache cache;
     private final AiProperties props;
-    private final BeanOutputConverter<ResumenEstructurado> conversor =
-            new BeanOutputConverter<>(ResumenEstructurado.class);
     private final Resource userPrompt = new ClassPathResource("prompts/user-fuentes.st");
     private final String calibracion;
 
@@ -72,7 +69,7 @@ public class GeneradorResumen {
             ChatResponse respuesta = invoker.invocar(() -> llamar(tipo, material));
             String crudo = contenido(respuesta);
             try {
-                ResumenEstructurado estructura = conversor.convert(crudo);
+                ResumenEstructurado estructura = SalidaModelo.parsear(crudo);
                 String texto = ResumenRenderer.render(estructura);
                 if (texto.isBlank()) {
                     throw new IllegalArgumentException("resumen vacio");
@@ -99,7 +96,7 @@ public class GeneradorResumen {
                         .param("marcador", Anonimizador.MARCADOR))
                 .user(u -> u.text(userPrompt)
                         .param("observaciones", material)
-                        .param("formato", conversor.getFormat()))
+                        .param("formato", SalidaModelo.FORMATO))
                 .call()
                 .chatResponse();
     }

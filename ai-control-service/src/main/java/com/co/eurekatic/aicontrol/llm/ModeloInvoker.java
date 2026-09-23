@@ -60,9 +60,30 @@ public class ModeloInvoker {
         } catch (ResponseStatusException e) {
             throw e;
         } catch (RuntimeException e) {
+            if (esTimeout(e)) {
+                log.warn("El modelo no respondio dentro del timeout: {}", e.toString());
+                throw new ResponseStatusException(HttpStatus.GATEWAY_TIMEOUT,
+                        "El proveedor de IA tardó demasiado en responder. Intente de nuevo en unos minutos.");
+            }
             log.error("Fallo la llamada al modelo: {}", e.toString());
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                     "El proveedor de IA devolvió un error. Intente de nuevo.");
         }
+    }
+
+    /**
+     * El SDK de OpenAI envuelve el timeout en un OpenAIIoException generico;
+     * la causa real (SocketTimeoutException, o InterruptedIOException de
+     * OkHttp) queda en la cadena.
+     */
+    public static boolean esTimeout(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof java.io.InterruptedIOException
+                    || t instanceof java.util.concurrent.TimeoutException) {
+                return true;
+            }
+            if (t.getCause() == t) break;
+        }
+        return false;
     }
 }

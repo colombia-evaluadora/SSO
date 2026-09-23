@@ -15,7 +15,7 @@ Endpoints de IA del ecosistema. Hoy tiene uno por cada resumen de observaciones 
 2. **Guarda contra sobrescritura.** Si el texto guardado está `MODIFICADA` y el cuerpo no trae `SOBRESCRIBIR=true`, responde **409** sin llamar al modelo.
 3. **Anonimiza.** El nombre del estudiante se reemplaza por `[ESTUDIANTE]`, también dentro de las observaciones. Al proveedor no le llega ningún identificador.
 4. **Cache.** La clave es el SHA-256 de las fuentes, el modelo, la calibración y `AI_PROMPT_VERSION`. Si las observaciones no cambiaron, se reutiliza el texto sin llamar al proveedor.
-5. **Modelo.** El prompt de sistema está en `prompts/system-periodo.st` y la salida es estructurada (`ResumenEstructurado`). `ResumenRenderer` la convierte en texto plano. Si el JSON viene mal formado, se reintenta una vez; si vuelve a fallar, responde 502.
+5. **Modelo.** El prompt de sistema está en `prompts/system-periodo.st` y la salida es estructurada (`ResumenEstructurado`). La instrucción de formato es un ejemplo con la forma exacta (`SalidaModelo.FORMATO`), no el JSON Schema crudo: Nemotron copiaba el schema y metía los datos dentro de `properties` en 1 de cada 4 llamadas. El parseo además desenvuelve `properties` y quita las cercas de markdown. `ResumenRenderer` lo convierte en texto plano. Si el JSON no es válido, se reintenta una vez; si vuelve a fallar, responde 502.
 6. **Guarda.** Llama a `POST /informes/observacion/guardar` (gate `INFORMES/EDITAR`) con `OBSERVACION = OBSERVACION_IA` y `OBSERVACIONES_ORIGEN`. El texto nace `APROBADA` y pasa a `MODIFICADA` cuando el docente lo edita.
 
 `/anio` sigue el mismo flujo con `/informes/observacion/final/fuentes` y `/final/guardar`. Parte de los resúmenes de periodo ya guardados (`PERIODOS_ORIGEN`).
@@ -28,6 +28,7 @@ Endpoints de IA del ecosistema. Hoy tiene uno por cada resumen de observaciones 
 | 409 | El texto guardado fue modificado por el docente y no se envió `SOBRESCRIBIR` |
 | 429 | Se agotó el cupo por minuto (`AI_RATE_LIMIT_PER_MIN`) o la concurrencia (`AI_MAX_CONCURRENT`). Trae `Retry-After` |
 | 502 | El proveedor devolvió un error, o el modelo no produjo un JSON válido en 2 intentos |
+| 504 | El proveedor no respondió dentro de `AI_TIMEOUT` (típico de la cola del plan gratuito) |
 | 503 | Circuito abierto: el proveedor viene fallando y no se le llama durante `AI_CIRCUIT_OPEN_WAIT` |
 
 ## Configuración
@@ -42,8 +43,8 @@ Todas las variables están en `.env.example`, sección `ai-control-service`. Las
 | `AI_MAX_TOKENS` | 1500 | NVIDIA lo exige |
 | `AI_TEMPERATURE` / `AI_TOP_P` | 0.6 / 0.95 | NVIDIA recomienda 1.0 / 0.95; se baja la temperatura para que el tono y el JSON salgan estables entre estudiantes |
 | `AI_EXTRA_BODY_JSON` | `{"chat_template_kwargs":{"enable_thinking":false}}` | Va como JSON para que los booleanos lleguen como booleanos. Poner `{}` con modelos que no lo entiendan |
-| `AI_TIMEOUT` / `AI_MAX_RETRIES` | 60s / 1 | Los aplica el SDK de OpenAI. `spring.ai.retry.*` ya no afecta a este starter |
-| `AI_PROMPT_VERSION` | v1 | Subirla al editar un prompt invalida la cache |
+| `AI_TIMEOUT` / `AI_MAX_RETRIES` | 120s / 1 | Los aplica el SDK de OpenAI (`spring.ai.retry.*` ya no afecta a este starter). 120s por la cola del plan gratuito, ver *Latencia medida*; pasado ese tiempo responde 504 |
+| `AI_PROMPT_VERSION` | v2 | Subirla al editar un prompt invalida la cache |
 | `AI_CACHE_TTL` | 7d | `0s` la desactiva |
 
 ## Elección del modelo
@@ -54,13 +55,31 @@ La elección se hizo sobre el catálogo *preview* de build.nvidia.com (endpoints
 |---|---|---|
 | **`nvidia/nemotron-3.5-lightning-30b-a3b`** (elegido) | 3B de 30B | El más rápido de los generalistas: NVIDIA declara hasta 4x la velocidad de salida de modelos de su tamaño. Español soportado oficialmente y salida estructurada soportada. Su razonamiento viene **encendido** y se apaga con `enable_thinking: false` |
 | `deepseek-ai/deepseek-v4.1-flash` | 8B prefill, 16B decode, de 552B | Más conocimiento y mejor redacción previsible, pero varias veces más cómputo por token. La ficha no documenta cómo apagar el razonamiento, solo cómo graduarlo (`reasoning_effort` de 1 a 100). Es la alternativa si la redacción de Nemotron no convence |
-| `google/gemma-4-31b-it` | 31B denso | Muy buen multilingüe, pero denso (más lento) y su ficha dice que la salida estructurada **no** está soportada |
+| `google/gemma-4-31b-it` | 31B denso | Muy buen multilingüe. Su ficha dice que no soporta salida estructurada nativa, pero el servicio pide el JSON en el prompt y lo parsea él mismo, así que funciona igual (probado). Más lento de punta a punta en la medición real |
 | `glm-5-3-flash` | 18B de 320B | Multimodal; más pesado que Nemotron sin ventaja para texto corto |
 | `gpt-oss-20b` | MoE pequeño | Orientado a razonamiento matemático; el español no es su fuerte |
 
 Para cambiar a DeepSeek: `AI_MODEL=deepseek-ai/deepseek-v4.1-flash` y `AI_EXTRA_BODY_JSON={}`, o `{"reasoning_effort":1}` si el endpoint lo acepta. No hace falta tocar `AI_PROMPT_VERSION`: la clave de cache ya incluye el modelo y su calibración.
 
-**Cambiar de proveedor:** cualquier API compatible con OpenAI (vLLM, Ollama, OpenRouter, OpenAI) funciona cambiando solo `AI_BASE_URL`, `AI_API_KEY` y `AI_MODEL`. Si el modelo no entiende el `chat_template_kwargs`, poner `AI_EXTRA_BODY_JSON={}`.
+### Latencia medida (2026-09-23, plan gratuito)
+
+Son mediciones de punta a punta a través del gateway: fuentes, modelo y guardado, con la cache apagada y el mismo estudiante (3 observaciones, unos 500 tokens de salida).
+
+| Modelo | Muestras | Mediana |
+|---|---|---|
+| Nemotron 3.5 Lightning | 7,6 · 11,5 · 20 · 55 s | ~16 s |
+| Gemma 4 31B | 25 · 41 · 50 s | ~41 s |
+
+Casi toda la variación es cola del endpoint compartido: el primer token tardó entre 30 y 114 s en las pruebas directas, y la generación en sí es corta. En 2 de 7 llamadas la petición superó los ~120 s y se cortó. Por eso `AI_TIMEOUT` es 120 s y el corte se informa como 504, no como error del modelo. En producción conviene un endpoint dedicado o de pago: el mismo modelo en un NIM propio o en otro proveedor baja a pocos segundos sin tocar código.
+
+## Cambiar de proveedor
+
+El código habla con el modelo solo a través del `ChatClient` de Spring AI, que es agnóstico del proveedor. La salida estructurada, el renderizado, la anonimización, la cache y la resiliencia no dependen de quién responda.
+
+| Destino | Qué cambia |
+|---|---|
+| Cualquier API compatible con OpenAI: NVIDIA, OpenAI, Groq, Together, Fireworks, OpenRouter, DeepSeek, Mistral, vLLM/Ollama/NIM propio. También Gemini y Claude por sus endpoints compatibles con OpenAI | **Solo variables de entorno**: `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` y `AI_EXTRA_BODY_JSON` (`{}` si el modelo no entiende `chat_template_kwargs`) |
+| Un proveedor por su API nativa (Anthropic, Gemini/Vertex, Bedrock, Azure) | Cambiar el starter en el `pom.xml` (p. ej. `spring-ai-starter-model-anthropic`) y las propiedades `spring.ai.openai.*` por las del proveedor. En Java solo cambia `ChatClientConfig`, que es la única clase que importa algo de OpenAI (`OpenAiChatOptions`, para el `extra_body`) |
 
 ## Privacidad
 
