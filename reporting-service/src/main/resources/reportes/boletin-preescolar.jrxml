@@ -88,20 +88,35 @@
 			<expression><![CDATA[$F{fondo_archivo}]]></expression>
 		</element>
 	</background>
-	<pageHeader height="180" splitType="Prevent">
-			<element kind="textField" x="40" y="115" width="360" height="34" fontName="DejaVu Sans" fontSize="14" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+	<pageHeader height="126" splitType="Prevent">
+			<element kind="textField" x="40" y="6" width="260" height="29" fontName="DejaVu Sans" fontSize="13" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+			<printWhenExpression><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.claro($F{fondo_archivo}, 0.065, 0.009, 0.424, 0.056)]]></printWhenExpression>
 			<expression><![CDATA[$F{ee_nombre}]]></expression>
 		</element>
-		<element kind="textField" x="40" y="151" width="360" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+		<element kind="textField" x="40" y="6" width="260" height="29" fontName="DejaVu Sans" fontSize="13" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+			<printWhenExpression><![CDATA[!com.co.eurekatic.reporting.render.TonoFondo.claro($F{fondo_archivo}, 0.065, 0.009, 0.424, 0.056)]]></printWhenExpression>
+			<expression><![CDATA[$F{ee_nombre}]]></expression>
+		</element>
+		<element kind="textField" x="40" y="35" width="260" height="10" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+			<printWhenExpression><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.claro($F{fondo_archivo}, 0.065, 0.009, 0.424, 0.056)]]></printWhenExpression>
 			<expression><![CDATA["Dane: " + $F{ee_dane} + "   -   Nit: " + $F{ee_nit}]]></expression>
 		</element>
-		<element kind="textField" x="40" y="164" width="360" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+		<element kind="textField" x="40" y="35" width="260" height="10" fontName="DejaVu Sans" fontSize="7" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+			<printWhenExpression><![CDATA[!com.co.eurekatic.reporting.render.TonoFondo.claro($F{fondo_archivo}, 0.065, 0.009, 0.424, 0.056)]]></printWhenExpression>
+			<expression><![CDATA["Dane: " + $F{ee_dane} + "   -   Nit: " + $F{ee_nit}]]></expression>
+		</element>
+		<element kind="textField" x="40" y="45" width="260" height="10" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+			<printWhenExpression><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.claro($F{fondo_archivo}, 0.065, 0.009, 0.424, 0.056)]]></printWhenExpression>
 			<expression><![CDATA[$F{ciudad}]]></expression>
 		</element>
-		<element kind="textField" x="400" y="115" width="173" height="12" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+		<element kind="textField" x="40" y="45" width="260" height="10" fontName="DejaVu Sans" fontSize="7" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+			<printWhenExpression><![CDATA[!com.co.eurekatic.reporting.render.TonoFondo.claro($F{fondo_archivo}, 0.065, 0.009, 0.424, 0.056)]]></printWhenExpression>
+			<expression><![CDATA[$F{ciudad}]]></expression>
+		</element>
+		<element kind="textField" x="400" y="110" width="173" height="12" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 			<expression><![CDATA["Expedido: " + $P{GENERADO}]]></expression>
 		</element>
-		<element kind="textField" x="400" y="151" width="173" height="25" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" bold="true" blankWhenNull="true">
+		<element kind="textField" x="40" y="110" width="360" height="12" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
 			<printWhenExpression><![CDATA[$V{PAGE_NUMBER} > 1]]></printWhenExpression>
 			<expression><![CDATA[$F{estudiante} + " (continuacion)"]]></expression>
 		</element>

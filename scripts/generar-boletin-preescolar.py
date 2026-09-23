@@ -98,20 +98,36 @@ def banda(alto, elementos, split='Prevent', when=None):
 FONDO = [img(0, 0, 613, 894, '$F{fondo_archivo}', scale='FillFrame', cache=True)]
 
 # ------------------------------------------------------------- cabecera
-# Se repite en cada hoja. Empieza en y=115: los fondos traen una banda grafica
-# en la cabecera (la de boletinOficio llega a los 97pt).
-CABECERA = [
-    txt(X0, 115, 360, 34, '$F{ee_nombre}', size=14, bold=True, extra='textAdjust="ScaleFont"'),
-    txt(X0, 151, 360, 12, '"Dane: " + $F{ee_dane} + "   -   Nit: " + $F{ee_nit}',
-        size=8, color=GRIS),
-    txt(X0, 164, 360, 12, '$F{ciudad}', size=8, color=GRIS),
-    txt(400, 115, 173, 12, '"Expedido: " + $P{GENERADO}', size=7, align='Right', color=GRIS),
-    # En las hojas de continuacion no se repite el bloque del estudiante,
-    # pero hay que poder saber de quien es la hoja suelta.
-    txt(400, 151, 173, 25, '$F{estudiante} + " (continuacion)"', size=7, bold=True,
-        align='Right', color=GRIS, when='$V{PAGE_NUMBER} > 1'),
-]
-ALTO_CABECERA = 180
+# Se repite en cada hoja. El colegio va DENTRO de la franja superior del
+# fondo: en los 14 fondos ocupa y=0..60 y deja libre x=40..300 antes de la
+# diagonal. El color de esa franja cambia por fondo (dorado, rojo, azul,
+# verde, gris), asi que cada texto va dos veces, oscuro y blanco, y
+# TonoFondo mide la franja para imprimir solo el que contrasta.
+CLARO = ('com.co.eurekatic.reporting.render.TonoFondo.claro('
+         '$F{fondo_archivo}, 0.065, 0.009, 0.424, 0.056)')
+
+
+def en_franja(x, y, w, h, expr, **kw):
+    return [txt(x, y, w, h, expr, color=AZUL, when=CLARO, **kw),
+            txt(x, y, w, h, expr, color=BLANCO, when='!' + CLARO, **kw)]
+
+
+CABECERA = (
+    en_franja(X0, 6, 260, 29, '$F{ee_nombre}', size=13, bold=True,
+              extra='textAdjust="ScaleFont"', valign='Middle')
+    + en_franja(X0, 35, 260, 10, '"Dane: " + $F{ee_dane} + "   -   Nit: " + $F{ee_nit}',
+                size=7)
+    + en_franja(X0, 45, 260, 10, '$F{ciudad}', size=7)
+    + [
+        txt(400, 110, 173, 12, '"Expedido: " + $P{GENERADO}', size=7, align='Right',
+            color=GRIS),
+        # En las hojas de continuacion no se repite el bloque del estudiante,
+        # pero hay que poder saber de quien es la hoja suelta.
+        txt(X0, 110, 360, 12, '$F{estudiante} + " (continuacion)"', size=7, bold=True,
+            color=GRIS, when='$V{PAGE_NUMBER} > 1'),
+    ])
+# Debajo de la banda oscura del fondo, que llega a y=105.
+ALTO_CABECERA = 126
 
 # ------------------------------------------------------ datos del estudiante
 DATOS = [
