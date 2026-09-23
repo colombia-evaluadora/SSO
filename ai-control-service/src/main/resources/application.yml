@@ -58,7 +58,7 @@ spring:
       timeout: ${AI_TIMEOUT:60s}
       max-retries: ${AI_MAX_RETRIES:1}
       chat:
-        model: ${AI_MODEL:moonshotai/kimi-k2.5}
+        model: ${AI_MODEL:nvidia/nemotron-3.5-lightning-30b-a3b}
         # NVIDIA responde error de servidor si falta max-tokens.
         max-tokens: ${AI_MAX_TOKENS:1500}
         temperature: ${AI_TEMPERATURE:0.6}
@@ -90,8 +90,10 @@ sso:
     query-service-base-url: ${AI_QUERY_SERVICE_URL:http://query-service-eval-col:8084}
     request-timeout: ${AI_QUERY_TIMEOUT:30s}
     # Campos del proveedor fuera del estandar OpenAI. El default apaga el
-    # modo razonamiento de Kimi K2.5: mas rapido y sin <think> en la salida.
-    extra-body-json: '${AI_EXTRA_BODY_JSON:{"chat_template_kwargs":{"thinking":false}}}'
+    # razonamiento de Nemotron 3.5 Lightning, que viene encendido: mas rapido
+    # y sin <think> en la salida. Cada familia usa su propia clave
+    # (Nemotron enable_thinking, Kimi thinking).
+    extra-body-json: '${AI_EXTRA_BODY_JSON:{"chat_template_kwargs":{"enable_thinking":false}}}'
     max-palabras: ${AI_MAX_PALABRAS:250}
     prompt-version: ${AI_PROMPT_VERSION:v1}
     cache-ttl: ${AI_CACHE_TTL:7d}

@@ -38,13 +38,27 @@ Todas las variables están en `.env.example`, sección `ai-control-service`. Las
 |---|---|---|
 | `AI_BASE_URL` | `https://integrate.api.nvidia.com/v1` | El SDK de Spring AI 2 necesita el `/v1`, aunque la doc de Spring AI sobre NVIDIA lo omite |
 | `AI_API_KEY` | vacía | `nvapi-...`, en build.nvidia.com → abrir el modelo → *Get API Key* |
-| `AI_MODEL` | `moonshotai/kimi-k2.5` | Id `publisher/modelo` del catálogo de build.nvidia.com |
+| `AI_MODEL` | `nvidia/nemotron-3.5-lightning-30b-a3b` | Id `publisher/modelo` del catálogo de build.nvidia.com. Ver *Elección del modelo* |
 | `AI_MAX_TOKENS` | 1500 | NVIDIA lo exige |
-| `AI_TEMPERATURE` / `AI_TOP_P` | 0.6 / 0.95 | Los que recomienda NVIDIA para Kimi K2.5 en modo *instant* |
-| `AI_EXTRA_BODY_JSON` | `{"chat_template_kwargs":{"thinking":false}}` | Va como JSON para que los booleanos lleguen como booleanos. Poner `{}` con modelos que no lo entiendan |
+| `AI_TEMPERATURE` / `AI_TOP_P` | 0.6 / 0.95 | NVIDIA recomienda 1.0 / 0.95; se baja la temperatura para que el tono y el JSON salgan estables entre estudiantes |
+| `AI_EXTRA_BODY_JSON` | `{"chat_template_kwargs":{"enable_thinking":false}}` | Va como JSON para que los booleanos lleguen como booleanos. Poner `{}` con modelos que no lo entiendan |
 | `AI_TIMEOUT` / `AI_MAX_RETRIES` | 60s / 1 | Los aplica el SDK de OpenAI. `spring.ai.retry.*` ya no afecta a este starter |
 | `AI_PROMPT_VERSION` | v1 | Subirla al editar un prompt invalida la cache |
 | `AI_CACHE_TTL` | 7d | `0s` la desactiva |
+
+## Elección del modelo
+
+La elección se hizo sobre el catálogo *preview* de build.nvidia.com (endpoints gratuitos) en septiembre de 2026. Kimi K2.5 ya no está en esa lista. La tarea es corta y no necesita razonar: consolidar entre 5 y 40 observaciones en unas 250 palabras de español formal, con salida JSON. Por eso pesa más la velocidad que la capacidad bruta.
+
+| Modelo | Activos | Por qué sí o no |
+|---|---|---|
+| **`nvidia/nemotron-3.5-lightning-30b-a3b`** (elegido) | 3B de 30B | El más rápido de los generalistas: NVIDIA declara hasta 4x la velocidad de salida de modelos de su tamaño. Español soportado oficialmente y salida estructurada soportada. Su razonamiento viene **encendido** y se apaga con `enable_thinking: false` |
+| `deepseek-ai/deepseek-v4.1-flash` | 8B prefill, 16B decode, de 552B | Más conocimiento y mejor redacción previsible, pero varias veces más cómputo por token. La ficha no documenta cómo apagar el razonamiento, solo cómo graduarlo (`reasoning_effort` de 1 a 100). Es la alternativa si la redacción de Nemotron no convence |
+| `google/gemma-4-31b-it` | 31B denso | Muy buen multilingüe, pero denso (más lento) y su ficha dice que la salida estructurada **no** está soportada |
+| `glm-5-3-flash` | 18B de 320B | Multimodal; más pesado que Nemotron sin ventaja para texto corto |
+| `gpt-oss-20b` | MoE pequeño | Orientado a razonamiento matemático; el español no es su fuerte |
+
+Para cambiar a DeepSeek: `AI_MODEL=deepseek-ai/deepseek-v4.1-flash` y `AI_EXTRA_BODY_JSON={}`, o `{"reasoning_effort":1}` si el endpoint lo acepta. No hace falta tocar `AI_PROMPT_VERSION`: la clave de cache ya incluye el modelo y su calibración.
 
 **Cambiar de proveedor:** cualquier API compatible con OpenAI (vLLM, Ollama, OpenRouter, OpenAI) funciona cambiando solo `AI_BASE_URL`, `AI_API_KEY` y `AI_MODEL`. Si el modelo no entiende el `chat_template_kwargs`, poner `AI_EXTRA_BODY_JSON={}`.
 
