@@ -88,7 +88,7 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           # Los 12 servicios que compone el stack. Misma lista que el
           # TODOS= de deploy-test.yml; aquí van todos, siempre.
-          echo 'services=["eurekaserver","auth-center","api-gateway","sso-admin","query-service","file-service","reporting-service","provisioner","notification-service","hello-service","cdc-capture","cdc-worker"]' >> "$GITHUB_OUTPUT"
+          echo 'services=["eurekaserver","auth-center","api-gateway","sso-admin","query-service","file-service","reporting-service","ai-control-service","provisioner","notification-service","hello-service","cdc-capture","cdc-worker"]' >> "$GITHUB_OUTPUT"
           echo "Publicando $TAG"
 
   # ───────── Construir y publicar las 12 imágenes ─────────
@@ -107,6 +107,7 @@ jobs:
           - query-service
           - file-service
           - reporting-service
+          - ai-control-service
           - provisioner
           - notification-service
           - hello-service
