@@ -1,61 +1,3 @@
--- ===========================================================================
--- V285 - Auto-sincronizacion director de grupo <-> docente en preescolar
---
--- POR QUE ESTA MIGRACION EXISTE
---   En preescolar el director de grupo dicta TODAS las dimensiones de su
---   grupo -- no hay otros profesores por asignatura como en los demas
---   niveles. Hasta ahora esa regla vivia como un workaround del front
---   (front_colombia_evaluadora, sync-director-assignments.ts): despues de
---   guardar un item de plan de estudio, guardar/editar un grupo, o
---   eliminar/quitar un item de plan, el front hacia 3-4 llamadas HTTP
---   encadenadas para recalcular TDOCENTE_ASIGNATURA a mano. Eso no es
---   atomico (si la ultima llamada fallaba, el plan/grupo quedaba guardado
---   pero el docente sin sincronizar, solo logueado en consola) y obliga a
---   cualquier otro cliente (import, otro front) a reimplementar la regla.
---
---   Esta migracion mueve la logica a la misma transaccion de
---   fn_grupo_crear / fn_grupo_actualizar / fn_plan_agregar /
---   fn_plan_actualizar / fn_plan_eliminar, sin cambiar sus firmas
---   publicas (mismos parametros, mismos DEFAULT) -- el catalogo de
---   query-service no necesita tocarse.
---
--- QUE HACE (3 funciones nuevas)
---   fn_grado_es_preescolar(grado)       -- TNIVEL_ENSENANZA.NOMBRE ILIKE
---                                            '%preescolar%'
---   fn_docente_director_grupo_sync(...) -- recalcula el CONJUNTO COMPLETO
---                                            de TDOCENTE_ASIGNATURA de UN
---                                            funcionario en TODO el periodo
---                                            (no solo el grado que disparo
---                                            el cambio) -- necesario porque
---                                            un director puede tener grupos
---                                            en varios grados y el guardado
---                                            de asignaciones es replace-all
---                                            por funcionario+periodo (ver
---                                            fn_asignacion_guardar).
---   fn_docente_grado_directores_sync(...) -- llama la anterior para cada
---                                            director distinto que tenga
---                                            un grupo activo en un grado.
---
--- CONFLICTO: asignatura-grupo ya tiene OTRO docente asignado a mano
---   Decision de producto (confirmada explicitamente): NO se bloquea el
---   guardado del grupo/plan por esto. Se omite esa pareja puntual (se
---   cuenta en v_skipped, hoy no se expone al caller -- el llamado es
---   PERFORM) y se sigue con el resto. En preescolar esto solo deberia
---   pasar por datos manuales previos a esta regla; en los demas niveles
---   la funcion nunca se invoca (fn_grado_es_preescolar = FALSE).
---
--- fn_plan_eliminar: el des-asignar pasa ANTES de los dos chequeos
---   existentes de bloqueo (TDOCENTE_ASIGNATURA / THORARIO), excluyendo la
---   asignatura que se esta quitando. Asi, si el UNICO docente que tenia
---   esa asignatura-grupo era el director (auto-asignado), el chequeo de
---   bloqueo ya no la encuentra y el borrado procede. Si habia un docente
---   MANUAL distinto (no el director), esa fila no se toca -- sigue
---   existiendo y el chequeo de bloqueo existente sigue disparando el
---   mismo mensaje de siempre, sin cambios.
---
--- Idempotente: CREATE OR REPLACE, mismas firmas publicas.
--- ===========================================================================
-
 CREATE OR REPLACE FUNCTION academico_test.fn_grado_es_preescolar(p_fk_grado BIGINT)
 RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
     SELECT EXISTS (
@@ -70,17 +12,6 @@ COMMENT ON FUNCTION academico_test.fn_grado_es_preescolar IS
     'TRUE si el nivel de ensenanza del grado contiene "preescolar" (case-insensitive). '
     'Gate para la auto-sincronizacion director de grupo -> docente (V301).';
 
--- Recalcula TODAS las TDOCENTE_ASIGNATURA activas de p_fk_funcionario en
--- p_academic_period_id, a partir de los grupos que dirige (TGRUPO.FK_TFUNCIONARIO)
--- y el plan de estudio del grado de cada uno. p_excluir_asignatura permite
--- quitar una asignatura puntual del recalculo (usado por fn_plan_eliminar,
--- que llama esto ANTES de desactivar el renglon del plan -- si no se
--- excluyera, el JOIN via TASIGNATURA_PLAN.ACTIVE = TRUE ya la incluiria de
--- todos modos porque el renglon todavia no se desactivo en ese punto).
--- Replace-all igual que fn_asignacion_guardar (misma pareja funcionario +
--- periodo no puede tener dos conjuntos distintos de asignaciones activas a
--- la vez), pero SIN raise en conflicto: la pareja se omite (v_skipped) y se
--- sigue -- ver nota de "CONFLICTO" en el header de esta migracion.
 CREATE OR REPLACE FUNCTION academico_test.fn_docente_director_grupo_sync(
     p_fk_funcionario BIGINT,
     p_academic_period_id BIGINT,
@@ -181,6 +112,94 @@ COMMENT ON FUNCTION academico_test.fn_docente_grado_directores_sync IS
     'grupo activo en un grado. Ver V301.';
 
 -- ---------------------------------------------------------------------------
+-- fn_grupo_director_rol_sync_interno: nucleo sin gate (lo llaman fn_grupo_
+-- crear / fn_grupo_actualizar, que ya gatearon GRUPOS mas arriba). Da de alta
+-- el rol DIRECTOR_GRUPO (TSEDE_USUARIO) al funcionario recien asignado como
+-- director si aun no lo tiene activo en esa sede+jornada, y se lo quita al
+-- director anterior SOLO si ya no dirige ningun otro grupo activo (puede
+-- dirigir varios). No usa fn_sede_usuario_crear/_soft_delete: esas llevan su
+-- propio gate de FUNCIONARIOS-EDITAR (V111), que un COORDINADOR gestionando
+-- grupos no tiene por que tener -- el INSERT/UPDATE de TSEDE_USUARIO ya
+-- dispara el trigger de V301 que resincroniza public.role_users solo.
+-- Resuelve el rol por CODIGO, no por PK (V120.1: TROL llega por dump base).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_grupo_director_rol_sync_interno(
+    p_fk_funcionario_anterior BIGINT,
+    p_fk_funcionario_nuevo BIGINT,
+    p_fk_sede BIGINT,
+    p_fk_jornada BIGINT,
+    p_pk_usuario_solicitante BIGINT
+)
+RETURNS VOID LANGUAGE plpgsql AS $$
+DECLARE
+    v_pk_trol BIGINT;
+    v_pk_tusuario BIGINT;
+    v_pk_tsede_usuario BIGINT;
+    v_orden NUMERIC;
+BEGIN
+    IF p_fk_funcionario_nuevo IS NOT DISTINCT FROM p_fk_funcionario_anterior THEN
+        RETURN;
+    END IF;
+
+    SELECT PK_TROL INTO v_pk_trol
+      FROM academico_test.TROL
+     WHERE UPPER(TRIM(CODIGO)) = 'DIRECTOR_GRUPO' AND ACTIVE = TRUE;
+    IF v_pk_trol IS NULL THEN
+        RETURN; -- catalogo no sembrado en este entorno: no bloquea el guardado del grupo
+    END IF;
+
+    -- Alta: el nuevo director recibe el rol si no lo tiene ya activo aqui.
+    IF p_fk_funcionario_nuevo IS NOT NULL THEN
+        SELECT FK_TUSUARIO INTO v_pk_tusuario
+          FROM academico_test.TFUNCIONARIO WHERE PK_TFUNCIONARIO = p_fk_funcionario_nuevo;
+        IF v_pk_tusuario IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TSEDE_USUARIO
+             WHERE FK_TUSUARIO = v_pk_tusuario AND FK_TROL = v_pk_trol
+               AND FK_TSEDE = p_fk_sede AND FK_TLV_JORNADA = p_fk_jornada AND ACTIVE = TRUE
+        ) THEN
+            -- UK_TSEDE_USUARIO_2 (sede, rol, usuario, orden) cubre tambien
+            -- los inactivos: MAX sin filtrar por ACTIVE evita chocar con uno
+            -- dado de baja antes.
+            SELECT COALESCE(MAX(ORDEN), 0) + 1 INTO v_orden
+              FROM academico_test.TSEDE_USUARIO WHERE FK_TUSUARIO = v_pk_tusuario;
+            INSERT INTO academico_test.TSEDE_USUARIO (
+                FK_TSEDE, FK_TROL, FK_TUSUARIO, FK_TLV_JORNADA, ORDEN,
+                TLV_ESTADO, PREDETERMINADO, CREATED_BY, CREATED_AT, ACTIVE
+            ) VALUES (
+                p_fk_sede, v_pk_trol, v_pk_tusuario, p_fk_jornada, v_orden,
+                'ACTIVO', 0, p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
+            );
+        END IF;
+    END IF;
+
+    -- Baja: al anterior se le quita el rol solo si ya no dirige otro grupo.
+    IF p_fk_funcionario_anterior IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM academico_test.TGRUPO
+         WHERE FK_TFUNCIONARIO = p_fk_funcionario_anterior AND ACTIVE = TRUE
+    ) THEN
+        SELECT FK_TUSUARIO INTO v_pk_tusuario
+          FROM academico_test.TFUNCIONARIO WHERE PK_TFUNCIONARIO = p_fk_funcionario_anterior;
+        IF v_pk_tusuario IS NOT NULL THEN
+            SELECT PK_TSEDE_USUARIO INTO v_pk_tsede_usuario
+              FROM academico_test.TSEDE_USUARIO
+             WHERE FK_TUSUARIO = v_pk_tusuario AND FK_TROL = v_pk_trol
+               AND FK_TSEDE = p_fk_sede AND FK_TLV_JORNADA = p_fk_jornada AND ACTIVE = TRUE
+             LIMIT 1;
+            IF v_pk_tsede_usuario IS NOT NULL THEN
+                UPDATE academico_test.TSEDE_USUARIO
+                   SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+                       MODIFIED_AT = CURRENT_TIMESTAMP
+                 WHERE PK_TSEDE_USUARIO = v_pk_tsede_usuario;
+            END IF;
+        END IF;
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_grupo_director_rol_sync_interno IS
+    'INTERNO: llamado por fn_grupo_crear y fn_grupo_actualizar. Sincroniza el rol DIRECTOR_GRUPO (TSEDE_USUARIO) del funcionario asignado/desasignado como director de un grupo. Sin gate propio -- el caller ya valida GRUPOS.';
+
+-- ---------------------------------------------------------------------------
 -- fn_grupo_crear: hook al final, justo antes del RETURN. Mismo cuerpo que
 -- V43, solo agrega el PERFORM del sync cuando el grado es preescolar y el
 -- grupo nace con director asignado.
@@ -276,9 +295,12 @@ BEGIN
     VALUES (p_nombre, p_fk_grado, v_jornada, p_fk_modelo_pedagogico, p_capacidad, p_fk_funcionario, v_audit)
     RETURNING PK_TGRUPO INTO v_id;
 
-    -- V301: preescolar -- el director recien asignado dicta todas las
-    -- dimensiones del plan de este grado (y de sus otros grupos, si dirige
-    -- mas de uno).
+    -- El director recien asignado recibe el rol DIRECTOR_GRUPO (TSEDE_USUARIO),
+    -- ademas del/los rol(es) que ya tenga (p.ej. DOCENTE). Sin director previo
+    -- que sincronizar: el grupo nace.
+    PERFORM academico_test.fn_grupo_director_rol_sync_interno(
+        NULL, p_fk_funcionario, v_sede, v_jornada, p_pk_usuario_solicitante);
+
     IF p_fk_funcionario IS NOT NULL AND academico_test.fn_grado_es_preescolar(p_fk_grado) THEN
         PERFORM academico_test.fn_docente_director_grupo_sync(
             p_fk_funcionario, v_periodo_id, NULL, p_pk_usuario_solicitante);
@@ -288,13 +310,9 @@ BEGIN
 END;
 $$;
 
--- ---------------------------------------------------------------------------
--- fn_grupo_actualizar: hook al final, antes del RETURN. Sincroniza al
--- director ANTERIOR (r.FK_TFUNCIONARIO, capturado antes del UPDATE -- para
--- que pierda las asignaciones de este grupo si ya no es el director) y al
--- NUEVO (p_fk_funcionario, si cambio) -- mismo patron que el front tenia en
--- dialog-create-grade-group.tsx.
--- ---------------------------------------------------------------------------
+
+DROP FUNCTION IF EXISTS academico_test.fn_grupo_actualizar(BIGINT, VARCHAR, BIGINT, NUMERIC, BIGINT, BIGINT, BOOLEAN);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_grupo_actualizar(
     p_pk BIGINT,
     p_nombre VARCHAR DEFAULT NULL,
@@ -310,10 +328,8 @@ DECLARE
     v_tmp_nombre VARCHAR(130); v_nombre_director VARCHAR(200);
     v_nombre_sede VARCHAR(130);
     v_periodo_id BIGINT; v_jornada_grupo BIGINT;
+    v_fk_funcionario_final BIGINT; v_fk_sede_grupo BIGINT;
 BEGIN
-    -- CU-86e2w4xdt: gate por (EE, sede del periodo, jornada PROPIA del grupo
-    -- -- es la autoritativa, no la del periodo, ver fn_grupo_jornada en la
-    -- rama de origen).
     SELECT g.FK_TPERIODO_ACADEMICO, gr.FK_TLV_JORNADA
       INTO v_periodo_id, v_jornada_grupo
       FROM academico_test.TGRUPO gr JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
@@ -324,9 +340,6 @@ BEGIN
         academico_test.fn_periodo_sede(v_periodo_id),
         v_jornada_grupo, 'EDITAR');
 
-    -- Nombre de la sede del periodo, para que la etiqueta de auditoria diga a
-    -- que sede va dirigida la accion (el EE ya viaja aparte como contexto
-    -- estructurado de fn_audit_declarar). Portado de V107 (antes V106).
     SELECT s.NOMBRE INTO v_nombre_sede
       FROM academico_test.TSEDE s
      WHERE s.PK_TSEDE = academico_test.fn_periodo_sede(v_periodo_id);
@@ -389,24 +402,28 @@ BEGIN
             SELECT g.FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO g WHERE g.PK_TGRADO = r.FK_TGRADO))
     );
 
+    v_fk_funcionario_final := COALESCE(p_fk_funcionario, r.FK_TFUNCIONARIO);
+
     UPDATE academico_test.TGRUPO SET
         NOMBRE = v_nombre,
         FK_TLV_MODELO_PEDAGOGICO = COALESCE(p_fk_modelo_pedagogico, FK_TLV_MODELO_PEDAGOGICO),
         CAPACIDAD = COALESCE(p_capacidad, CAPACIDAD),
-        FK_TFUNCIONARIO = COALESCE(p_fk_funcionario, FK_TFUNCIONARIO),
+        FK_TFUNCIONARIO = v_fk_funcionario_final,
         MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TGRUPO = p_pk;
 
-    -- V301: preescolar -- sincroniza al director anterior (pierde lo de
-    -- este grupo si ya no lo dirige) y al nuevo (si cambio), en ese orden.
+    v_fk_sede_grupo := academico_test.fn_periodo_sede(v_periodo_id);
+    PERFORM academico_test.fn_grupo_director_rol_sync_interno(
+        r.FK_TFUNCIONARIO, v_fk_funcionario_final, v_fk_sede_grupo, v_jornada_grupo, p_pk_usuario_solicitante);
+
     IF academico_test.fn_grado_es_preescolar(r.FK_TGRADO) THEN
         IF r.FK_TFUNCIONARIO IS NOT NULL THEN
             PERFORM academico_test.fn_docente_director_grupo_sync(
                 r.FK_TFUNCIONARIO, v_periodo_id, NULL, p_pk_usuario_solicitante);
         END IF;
-        IF p_fk_funcionario IS NOT NULL AND p_fk_funcionario IS DISTINCT FROM r.FK_TFUNCIONARIO THEN
+        IF v_fk_funcionario_final IS NOT NULL AND v_fk_funcionario_final IS DISTINCT FROM r.FK_TFUNCIONARIO THEN
             PERFORM academico_test.fn_docente_director_grupo_sync(
-                p_fk_funcionario, v_periodo_id, NULL, p_pk_usuario_solicitante);
+                v_fk_funcionario_final, v_periodo_id, NULL, p_pk_usuario_solicitante);
         END IF;
     END IF;
 
@@ -414,13 +431,6 @@ BEGIN
 END;
 $$;
 
--- ---------------------------------------------------------------------------
--- fn_plan_agregar: hook antes del RETURN, despues de insertar el renglon del
--- plan (y su criterio de evaluacion). Sincroniza a TODOS los directores del
--- grado -- la nueva asignatura recien entra al plan, asi que puede afectar
--- a mas de un director si el grado tiene varios grupos con distinto
--- director.
--- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_plan_agregar(
     p_fk_grado             BIGINT,
     p_fk_asignatura        BIGINT,
@@ -481,9 +491,6 @@ BEGIN
             RAISE EXCEPTION 'La asignatura indicada no existe' USING ERRCODE = '23503';
         END IF;
     END IF;
-    -- Formato de calificacion / criterio de nota son opcionales (NULL = hereda
-    -- del criterio de evaluacion del periodo), pero si vienen deben resolver a
-    -- una fila activa de TLISTA_VALOR de la categoria correcta.
     IF p_fk_formato_calif IS NOT NULL THEN
         SELECT VALOR INTO v_lookup FROM academico_test.TLISTA_VALOR
          WHERE PK_LISTA_VALOR = p_fk_formato_calif AND ACTIVE = TRUE AND CATEGORIA = 'FORMATO_CALIFICACION';
@@ -511,10 +518,6 @@ BEGIN
         END IF;
     END IF;
 
-    -- La etiqueta se declara aca, antes del pg_advisory_xact_lock e incluso del
-    -- posible INSERT INTO TPLAN (creacion del header la primera vez que un
-    -- grado recibe una asignatura) -- si se declarara despues de ese INSERT,
-    -- el trigger BEFORE STATEMENT de auditoria vería esa fila sin etiqueta.
     PERFORM academico_test.fn_audit_declarar(
         p_pk_usuario_solicitante,
         format('Asignación de %s al plan de estudio del grado %s', v_asignatura_nom, v_grado_nom),
@@ -529,7 +532,6 @@ BEGIN
         VALUES (LEFT(v_grado_nom, 30), 'Plan ' || v_grado_nom, p_fk_grado, v_audit)
         RETURNING PK_TPLAN INTO v_plan_id;
     END IF;
-    -- No permitir la misma asignatura dos veces en el plan del grado.
     IF EXISTS (
         SELECT 1 FROM academico_test.TASIGNATURA_PLAN
          WHERE FK_TPLAN = v_plan_id AND FK_TASIGNATURA = p_fk_asignatura AND ACTIVE = TRUE
@@ -551,9 +553,6 @@ BEGIN
     )
     RETURNING PK_TASIGNATURA_PLAN INTO v_id;
 
-    -- Enlaza el renglon del plan con el criterio de evaluacion POR DEFECTO del
-    -- periodo (PK del criterio = PK del periodo). Los overrides personalizados
-    -- de formato/criterio-nota viven en las columnas de TASIGNATURA_PLAN.
     SELECT FK_TPERIODO_ACADEMICO INTO v_periodo FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_grado;
     IF EXISTS (
         SELECT 1 FROM academico_test.TCRITERIO_EVALUACION
@@ -564,8 +563,6 @@ BEGIN
         VALUES (v_periodo, v_id, NULL, 'S', v_audit);
     END IF;
 
-    -- V301: preescolar -- la asignatura recien agregada al plan tambien debe
-    -- quedar dictada por el/los director(es) de grupo de este grado.
     IF academico_test.fn_grado_es_preescolar(p_fk_grado) THEN
         PERFORM academico_test.fn_docente_grado_directores_sync(
             p_fk_grado, NULL, p_pk_usuario_solicitante);
@@ -769,13 +766,6 @@ BEGIN
         academico_test.fn_periodo_sede(v_periodo_id),
         academico_test.fn_periodo_jornada(v_periodo_id), 'ELIMINAR');
 
-    -- V301: preescolar -- desasigna al/los director(es) de esta asignatura
-    -- puntual ANTES de los chequeos de bloqueo de abajo, para que un docente
-    -- auto-asignado (el director) no impida el borrado. Si lo que bloquea es
-    -- un docente MANUAL distinto, esa fila no se toca (fn_docente_director_
-    -- grupo_sync solo recalcula al/los funcionario(s) que dirigen un grupo,
-    -- nunca pisa la asignacion de otro funcionario) y el chequeo de abajo
-    -- sigue disparando igual que siempre.
     IF academico_test.fn_grado_es_preescolar(v_grado_id) THEN
         PERFORM academico_test.fn_docente_grado_directores_sync(
             v_grado_id, v_asignatura_id, p_pk_usuario_solicitante);
@@ -806,9 +796,6 @@ BEGIN
             USING ERRCODE = '23503';
     END IF;
     SELECT FK_TPLAN INTO v_plan_id FROM academico_test.TASIGNATURA_PLAN WHERE PK_TASIGNATURA_PLAN = p_pk;
-    -- v_asignatura_nom/v_grado_nom no estaban resueltos en este punto (solo se
-    -- calculan mas abajo si el UPDATE no afecta filas) -- se adelanta aca el
-    -- mismo lookup solo para la etiqueta, sin logica nueva.
     SELECT ta.NOMBRE, tg.NOMBRE INTO v_asignatura_nom, v_grado_nom
       FROM academico_test.TASIGNATURA_PLAN ap
       JOIN academico_test.TASIGNATURA ta ON ta.PK_TASIGNATURA = ap.FK_TASIGNATURA
