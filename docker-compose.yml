@@ -1769,8 +1769,8 @@ services:
       retries: 10
       start_period: 60s
 
-  # Endpoints de IA (Spring AI contra una API compatible con OpenAI; NVIDIA
-  # NIM por defecto). Igual que reporting-service, no tiene base de datos:
+  # Endpoints de IA (Spring AI contra una API compatible con OpenAI; MiniMax
+  # por defecto). Igual que reporting-service, no tiene base de datos:
   # lee y guarda por el query-service con el JWT del usuario.
   ai-control-service:
     build:
@@ -1799,15 +1799,15 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       # Proveedor. Sin AI_API_KEY el servicio arranca pero cada generacion
       # responde 502.
-      AI_BASE_URL: "${AI_BASE_URL:-https://integrate.api.nvidia.com/v1}"
+      AI_BASE_URL: "${AI_BASE_URL:-https://api.minimax.io/v1}"
       AI_API_KEY: "${AI_API_KEY:-}"
-      AI_MODEL: "${AI_MODEL:-nvidia/nemotron-3.5-lightning-30b-a3b}"
+      AI_MODEL: "${AI_MODEL:-MiniMax-M3}"
       AI_MAX_TOKENS: "${AI_MAX_TOKENS:-1500}"
       AI_TEMPERATURE: "${AI_TEMPERATURE:-0.6}"
       AI_TOP_P: "${AI_TOP_P:-0.95}"
-      AI_TIMEOUT: "${AI_TIMEOUT:-120s}"
+      AI_TIMEOUT: "${AI_TIMEOUT:-60s}"
       AI_MAX_RETRIES: "${AI_MAX_RETRIES:-1}"
-      AI_EXTRA_BODY_JSON: '${AI_EXTRA_BODY_JSON:-{"chat_template_kwargs":{"enable_thinking":false}}}'
+      AI_EXTRA_BODY_JSON: '${AI_EXTRA_BODY_JSON:-{"thinking":{"type":"disabled"}}}'
       # Calibracion del servicio.
       AI_MAX_PALABRAS: "${AI_MAX_PALABRAS:-250}"
       AI_PROMPT_VERSION: "${AI_PROMPT_VERSION:-v2}"

@@ -67,7 +67,7 @@ class ObservacionEndpointTest {
                         "sintesis", "Felicitaciones a [ESTUDIANTE]."));
                 responder(ex, JSON.writeValueAsString(Map.of(
                         "id", "cmpl-1", "object", "chat.completion", "created", 1,
-                        "model", "nvidia/nemotron-3.5-lightning-30b-a3b",
+                        "model", "MiniMax-M3",
                         "choices", java.util.List.of(Map.of("index", 0, "finish_reason", "stop",
                                 "message", Map.of("role", "assistant", "content", contenido))),
                         "usage", Map.of("prompt_tokens", 120, "completion_tokens", 80, "total_tokens", 200))));
@@ -142,10 +142,9 @@ class ObservacionEndpointTest {
         assertThat(RECIBIDO.get("auth")).isEqualTo("Bearer " + token);
 
         JsonNode llm = JSON.readTree(RECIBIDO.get("llm"));
-        assertThat(llm.path("model").asString()).isEqualTo("nvidia/nemotron-3.5-lightning-30b-a3b");
+        assertThat(llm.path("model").asString()).isEqualTo("MiniMax-M3");
         assertThat(llm.path("max_tokens").asInt()).isEqualTo(1500);
-        assertThat(llm.path("chat_template_kwargs").path("enable_thinking").isBoolean()).isTrue();
-        assertThat(llm.path("chat_template_kwargs").path("enable_thinking").asBoolean()).isFalse();
+        assertThat(llm.path("thinking").path("type").asString()).isEqualTo("disabled");
         assertThat(RECIBIDO.get("llm")).doesNotContain("Sofía").contains("[ESTUDIANTE] narra el cuento");
 
         JsonNode guardar = JSON.readTree(RECIBIDO.get("guardar"));

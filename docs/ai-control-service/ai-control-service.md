@@ -7,6 +7,7 @@ Endpoints de IA del ecosistema. Hoy tiene uno por cada resumen de observaciones 
 | Puerto | 8088 (sin publicar; se entra por el gateway) |
 | Ruta en el gateway | `/api/ai/**` → `lb://ai-control-service`, `StripPrefix=1` |
 | Stack | Spring Boot 4.1, Spring AI 2.0.1 (`spring-ai-starter-model-openai`), Resilience4j, Redis |
+| Proveedor por defecto | MiniMax, modelo `MiniMax-M3`, sin razonamiento (cambiable por variables, ver *Cambiar de proveedor*) |
 | Base de datos | Ninguna. Lee y guarda por query-service con el JWT del usuario |
 
 ## Flujo de `POST /api/ai/observaciones/periodo`
@@ -37,17 +38,44 @@ Todas las variables están en `.env.example`, sección `ai-control-service`. Las
 
 | Variable | Default | Nota |
 |---|---|---|
-| `AI_BASE_URL` | `https://integrate.api.nvidia.com/v1` | El SDK de Spring AI 2 necesita el `/v1`, aunque la doc de Spring AI sobre NVIDIA lo omite |
-| `AI_API_KEY` | vacía | `nvapi-...`, en build.nvidia.com → abrir el modelo → *Get API Key* |
-| `AI_MODEL` | `nvidia/nemotron-3.5-lightning-30b-a3b` | Id `publisher/modelo` del catálogo de build.nvidia.com. Ver *Elección del modelo* |
-| `AI_MAX_TOKENS` | 1500 | NVIDIA lo exige |
-| `AI_TEMPERATURE` / `AI_TOP_P` | 0.6 / 0.95 | NVIDIA recomienda 1.0 / 0.95; se baja la temperatura para que el tono y el JSON salgan estables entre estudiantes |
-| `AI_EXTRA_BODY_JSON` | `{"chat_template_kwargs":{"enable_thinking":false}}` | Va como JSON para que los booleanos lleguen como booleanos. Poner `{}` con modelos que no lo entiendan |
-| `AI_TIMEOUT` / `AI_MAX_RETRIES` | 120s / 1 | Los aplica el SDK de OpenAI (`spring.ai.retry.*` ya no afecta a este starter). 120s por la cola del plan gratuito, ver *Latencia medida*; pasado ese tiempo responde 504 |
+| `AI_BASE_URL` | `https://api.minimax.io/v1` | El SDK de Spring AI 2 necesita el `/v1` en la base, sea cual sea el proveedor |
+| `AI_API_KEY` | vacía | MiniMax: `sk-...` en platform.minimax.io. NVIDIA: `nvapi-...` en build.nvidia.com |
+| `AI_MODEL` | `MiniMax-M3` | Id del modelo en el proveedor |
+| `AI_MAX_TOKENS` | 1500 | Explícito: NVIDIA lo exige y acota el costo en todos |
+| `AI_TEMPERATURE` / `AI_TOP_P` | 0.6 / 0.95 | Temperatura baja para que el tono y el JSON salgan estables entre estudiantes. MiniMax acepta temperature en (0, 1] |
+| `AI_EXTRA_BODY_JSON` | `{"thinking":{"type":"disabled"}}` | Apaga el razonamiento de MiniMax-M3. Va como JSON para conservar los tipos. Cada proveedor tiene su clave (ver abajo); `{}` si no aplica |
+| `AI_TIMEOUT` / `AI_MAX_RETRIES` | 60s / 1 | Los aplica el SDK de OpenAI (`spring.ai.retry.*` ya no afecta a este starter). Pasado el timeout responde 504. Con el plan gratuito de NVIDIA hace falta 120s |
 | `AI_PROMPT_VERSION` | v2 | Subirla al editar un prompt invalida la cache |
 | `AI_CACHE_TTL` | 7d | `0s` la desactiva |
 
-## Elección del modelo
+## Proveedor actual: MiniMax
+
+`MiniMax-M3` en `https://api.minimax.io/v1`. Su razonamiento viene **encendido**: sin apagarlo, dos tercios de los tokens de salida eran pensamiento dentro de `<think>...</think>` en el propio `content`, y la respuesta tardaba el doble. Se apaga con `{"thinking":{"type":"disabled"}}` (verificado: sin `<think>` y sin `reasoning_tokens`). Suele devolver el JSON dentro de una cerca markdown, que el parseo quita.
+
+Medición directa contra la API (2026-09-23), mismas 3 observaciones:
+
+| Configuración | Tiempo | Tokens de salida |
+|---|---|---|
+| Razonamiento encendido | 9,1 s | 965 (646 de razonamiento) |
+| `thinking: disabled` | 4,3 – 5,1 s | ~325 |
+
+Frente al plan gratuito de NVIDIA (mediana ~16 s y cortes a los 120 s, ver abajo), es la opción predecible para uso en pantalla.
+
+**Datos:** MiniMax es un proveedor externo. Al modelo no se le envía el nombre ni ningún identificador del estudiante (ver *Privacidad*), pero sí el texto de las observaciones. Conviene revisar sus condiciones de retención de datos antes de producción.
+
+### Clave de razonamiento por proveedor
+
+| Proveedor / modelo | `AI_EXTRA_BODY_JSON` |
+|---|---|
+| MiniMax-M3 | `{"thinking":{"type":"disabled"}}` |
+| NVIDIA Nemotron 3.5 Lightning | `{"chat_template_kwargs":{"enable_thinking":false}}` |
+| Modelos sin razonamiento, u OpenAI | `{}` |
+
+## Alternativa gratuita: NVIDIA NIM
+
+Probada antes de pasar a MiniMax. Configuración: `AI_BASE_URL=https://integrate.api.nvidia.com/v1`, `AI_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b`, `AI_EXTRA_BODY_JSON={"chat_template_kwargs":{"enable_thinking":false}}` y `AI_TIMEOUT=120s`.
+
+### Elección del modelo en NVIDIA
 
 La elección se hizo sobre el catálogo *preview* de build.nvidia.com (endpoints gratuitos) en septiembre de 2026. Kimi K2.5 ya no está en esa lista. La tarea es corta y no necesita razonar: consolidar entre 5 y 40 observaciones en unas 250 palabras de español formal, con salida JSON. Por eso pesa más la velocidad que la capacidad bruta.
 
@@ -70,7 +98,7 @@ Son mediciones de punta a punta a través del gateway: fuentes, modelo y guardad
 | Nemotron 3.5 Lightning | 7,6 · 11,5 · 20 · 55 s | ~16 s |
 | Gemma 4 31B | 25 · 41 · 50 s | ~41 s |
 
-Casi toda la variación es cola del endpoint compartido: el primer token tardó entre 30 y 114 s en las pruebas directas, y la generación en sí es corta. En 2 de 7 llamadas la petición superó los ~120 s y se cortó. Por eso `AI_TIMEOUT` es 120 s y el corte se informa como 504, no como error del modelo. En producción conviene un endpoint dedicado o de pago: el mismo modelo en un NIM propio o en otro proveedor baja a pocos segundos sin tocar código.
+Casi toda la variación es cola del endpoint compartido: el primer token tardó entre 30 y 114 s en las pruebas directas, y la generación en sí es corta. En 2 de 7 llamadas la petición superó los ~120 s y se cortó. Por eso con NVIDIA `AI_TIMEOUT` debe ser 120 s. El corte se informa como 504, no como error del modelo. En producción conviene un endpoint dedicado o de pago: el mismo modelo en un NIM propio o en otro proveedor baja a pocos segundos sin tocar código.
 
 ## Cambiar de proveedor
 

@@ -38,9 +38,9 @@ spring:
       timeout: 2s
 
   ai:
-    # El starter OpenAI trae embeddings, imagen, audio y moderacion. NVIDIA
-    # solo expone chat por esta API: los demas se apagan para que no se
-    # creen clientes que nadie usa.
+    # El starter OpenAI trae embeddings, imagen, audio y moderacion. Aqui
+    # solo se usa chat: los demas se apagan para que no se creen clientes
+    # que nadie usa.
     model:
       embedding: none
       image: none
@@ -49,20 +49,19 @@ spring:
         transcription: none
       moderation: none
     openai:
-      # Cualquier API compatible con OpenAI. NVIDIA NIM: build.nvidia.com,
-      # claves nvapi-...
-      base-url: ${AI_BASE_URL:https://integrate.api.nvidia.com/v1}
+      # Cualquier API compatible con OpenAI. Por defecto MiniMax; la base
+      # lleva /v1 porque el SDK de OpenAI que usa Spring AI 2 no lo agrega.
+      base-url: ${AI_BASE_URL:https://api.minimax.io/v1}
       api-key: ${AI_API_KEY:}
       # En Spring AI 2 los reintentos y el timeout los aplica el SDK de
       # OpenAI; spring.ai.retry.* ya no afecta a este starter.
-      # 120s y no 60s: en el plan gratuito de NVIDIA la espera en cola hasta
-      # el primer token llego a ~110s en pruebas reales (2026-09-23), y mas
-      # de 2 minutos ya no sirve en pantalla: se responde 504.
-      timeout: ${AI_TIMEOUT:120s}
+      # Pasado el timeout se responde 504. Con el plan gratuito de NVIDIA
+      # hace falta 120s (cola de hasta ~110s hasta el primer token).
+      timeout: ${AI_TIMEOUT:60s}
       max-retries: ${AI_MAX_RETRIES:1}
       chat:
-        model: ${AI_MODEL:nvidia/nemotron-3.5-lightning-30b-a3b}
-        # NVIDIA responde error de servidor si falta max-tokens.
+        model: ${AI_MODEL:MiniMax-M3}
+        # Explicito: NVIDIA responde error si falta, y acota el costo en todos.
         max-tokens: ${AI_MAX_TOKENS:1500}
         temperature: ${AI_TEMPERATURE:0.6}
         top-p: ${AI_TOP_P:0.95}
@@ -93,10 +92,10 @@ sso:
     query-service-base-url: ${AI_QUERY_SERVICE_URL:http://query-service-eval-col:8084}
     request-timeout: ${AI_QUERY_TIMEOUT:30s}
     # Campos del proveedor fuera del estandar OpenAI. El default apaga el
-    # razonamiento de Nemotron 3.5 Lightning, que viene encendido: mas rapido
-    # y sin <think> en la salida. Cada familia usa su propia clave
-    # (Nemotron enable_thinking, Kimi thinking).
-    extra-body-json: '${AI_EXTRA_BODY_JSON:{"chat_template_kwargs":{"enable_thinking":false}}}'
+    # razonamiento de MiniMax-M3, que viene encendido. Cada proveedor usa su
+    # propia clave: MiniMax thinking.type, Nemotron (NVIDIA)
+    # chat_template_kwargs.enable_thinking.
+    extra-body-json: '${AI_EXTRA_BODY_JSON:{"thinking":{"type":"disabled"}}}'
     max-palabras: ${AI_MAX_PALABRAS:250}
     prompt-version: ${AI_PROMPT_VERSION:v2}
     cache-ttl: ${AI_CACHE_TTL:7d}
