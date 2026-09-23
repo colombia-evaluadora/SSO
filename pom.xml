@@ -73,6 +73,8 @@
             that settles.
         -->
         <springdoc-openapi.version>3.1.1</springdoc-openapi.version>
+        <!-- Spring AI 2.x es la linea para Spring Boot 4 / Framework 7. -->
+        <spring-ai.version>2.0.1</spring-ai.version>
     </properties>
 
     <dependencyManagement>
@@ -81,6 +83,13 @@
                 <groupId>org.springframework.cloud</groupId>
                 <artifactId>spring-cloud-dependencies</artifactId>
                 <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -157,5 +166,6 @@
         <module>notification-service</module>
         <module>file-service</module>
         <module>reporting-service</module>
+        <module>ai-control-service</module>
     </modules>
 </project>

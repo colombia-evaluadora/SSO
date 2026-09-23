@@ -1,0 +1,124 @@
+# ai-control-service
+
+Endpoints de IA del ecosistema. Hoy tiene uno por cada resumen de observaciones de preescolar. Los dos reemplazan la concatenación que hacían `fn_estudiante_periodo_observacion_generar` (V332) y `fn_estudiante_final_observacion` (V435) por un informe redactado por un modelo de lenguaje, y lo guardan.
+
+| | |
+|---|---|
+| Puerto | 8088 (sin publicar; se entra por el gateway) |
+| Ruta en el gateway | `/api/ai/**` → `lb://ai-control-service`, `StripPrefix=1` |
+| Stack | Spring Boot 4.1, Spring AI 2.0.1 (`spring-ai-starter-model-openai`), Resilience4j, Redis |
+| Proveedor por defecto | MiniMax, modelo `MiniMax-M3`, sin razonamiento (cambiable por variables, ver *Cambiar de proveedor*) |
+| Base de datos | Ninguna. Lee y guarda por query-service con el JWT del usuario |
+
+## Flujo de `POST /api/ai/observaciones/periodo`
+
+1. **Fuentes.** Llama a `POST /informes/observacion/fuentes` (V486), que usa el gate `INFORMES/VER`. Devuelve una fila por observación del docente, el primer nombre del estudiante y el estado del resumen ya guardado.
+2. **Guarda contra sobrescritura.** Si el texto guardado está `MODIFICADA` y el cuerpo no trae `SOBRESCRIBIR=true`, responde **409** sin llamar al modelo.
+3. **Anonimiza.** El nombre del estudiante se reemplaza por `[ESTUDIANTE]`, también dentro de las observaciones. Al proveedor no le llega ningún identificador.
+4. **Cache.** La clave es el SHA-256 de las fuentes, el modelo, la calibración y `AI_PROMPT_VERSION`. Si las observaciones no cambiaron, se reutiliza el texto sin llamar al proveedor.
+5. **Modelo.** El prompt de sistema está en `prompts/system-periodo.st` y la salida es estructurada (`ResumenEstructurado`). La instrucción de formato es un ejemplo con la forma exacta (`SalidaModelo.FORMATO`), no el JSON Schema crudo: Nemotron copiaba el schema y metía los datos dentro de `properties` en 1 de cada 4 llamadas. El parseo además desenvuelve `properties` y quita las cercas de markdown. `ResumenRenderer` lo convierte en texto plano. Si el JSON no es válido, se reintenta una vez; si vuelve a fallar, responde 502.
+6. **Guarda.** Llama a `POST /informes/observacion/guardar` (gate `INFORMES/EDITAR`) con `OBSERVACION = OBSERVACION_IA` y `OBSERVACIONES_ORIGEN`. El texto nace `APROBADA` y pasa a `MODIFICADA` cuando el docente lo edita.
+
+`/anio` sigue el mismo flujo con `/informes/observacion/final/fuentes` y `/final/guardar`. Parte de los resúmenes de periodo ya guardados (`PERIODOS_ORIGEN`).
+
+## Errores
+
+| Status | Cuándo |
+|---|---|
+| 400 / 403 / 404 | Los devuelve query-service: sin observaciones o periodo de otro año; sin permiso o fuera de alcance; matrícula inexistente |
+| 409 | El texto guardado fue modificado por el docente y no se envió `SOBRESCRIBIR` |
+| 429 | Se agotó el cupo por minuto (`AI_RATE_LIMIT_PER_MIN`) o la concurrencia (`AI_MAX_CONCURRENT`). Trae `Retry-After` |
+| 502 | El proveedor devolvió un error, o el modelo no produjo un JSON válido en 2 intentos |
+| 504 | El proveedor no respondió dentro de `AI_TIMEOUT` (típico de la cola del plan gratuito) |
+| 503 | Circuito abierto: el proveedor viene fallando y no se le llama durante `AI_CIRCUIT_OPEN_WAIT` |
+
+## Configuración
+
+Todas las variables están en `.env.example`, sección `ai-control-service`. Las del proveedor pasan a `spring.ai.openai.*`:
+
+| Variable | Default | Nota |
+|---|---|---|
+| `AI_BASE_URL` | `https://api.minimax.io/v1` | El SDK de Spring AI 2 necesita el `/v1` en la base, sea cual sea el proveedor |
+| `AI_API_KEY` | vacía | MiniMax: `sk-...` en platform.minimax.io. NVIDIA: `nvapi-...` en build.nvidia.com |
+| `AI_MODEL` | `MiniMax-M3` | Id del modelo en el proveedor |
+| `AI_MAX_TOKENS` | 1500 | Explícito: NVIDIA lo exige y acota el costo en todos |
+| `AI_TEMPERATURE` / `AI_TOP_P` | 0.6 / 0.95 | Temperatura baja para que el tono y el JSON salgan estables entre estudiantes. MiniMax acepta temperature en (0, 1] |
+| `AI_EXTRA_BODY_JSON` | `{"thinking":{"type":"disabled"}}` | Apaga el razonamiento de MiniMax-M3. Va como JSON para conservar los tipos. Cada proveedor tiene su clave (ver abajo); `{}` si no aplica |
+| `AI_TIMEOUT` / `AI_MAX_RETRIES` | 60s / 1 | Los aplica el SDK de OpenAI (`spring.ai.retry.*` ya no afecta a este starter). Pasado el timeout responde 504. Con el plan gratuito de NVIDIA hace falta 120s |
+| `AI_PROMPT_VERSION` | v2 | Subirla al editar un prompt invalida la cache |
+| `AI_CACHE_TTL` | 7d | `0s` la desactiva |
+
+## Proveedor actual: MiniMax
+
+`MiniMax-M3` en `https://api.minimax.io/v1`. Su razonamiento viene **encendido**: sin apagarlo, dos tercios de los tokens de salida eran pensamiento dentro de `<think>...</think>` en el propio `content`, y la respuesta tardaba el doble. Se apaga con `{"thinking":{"type":"disabled"}}` (verificado: sin `<think>` y sin `reasoning_tokens`). Suele devolver el JSON dentro de una cerca markdown, que el parseo quita.
+
+Medición directa contra la API (2026-09-23), mismas 3 observaciones:
+
+| Configuración | Tiempo | Tokens de salida |
+|---|---|---|
+| Razonamiento encendido | 9,1 s | 965 (646 de razonamiento) |
+| `thinking: disabled` | 4,3 – 5,1 s | ~325 |
+
+Frente al plan gratuito de NVIDIA (mediana ~16 s y cortes a los 120 s, ver abajo), es la opción predecible para uso en pantalla.
+
+**Datos:** MiniMax es un proveedor externo. Al modelo no se le envía el nombre ni ningún identificador del estudiante (ver *Privacidad*), pero sí el texto de las observaciones. Conviene revisar sus condiciones de retención de datos antes de producción.
+
+### Clave de razonamiento por proveedor
+
+| Proveedor / modelo | `AI_EXTRA_BODY_JSON` |
+|---|---|
+| MiniMax-M3 | `{"thinking":{"type":"disabled"}}` |
+| NVIDIA Nemotron 3.5 Lightning | `{"chat_template_kwargs":{"enable_thinking":false}}` |
+| Modelos sin razonamiento, u OpenAI | `{}` |
+
+## Alternativa gratuita: NVIDIA NIM
+
+Probada antes de pasar a MiniMax. Configuración: `AI_BASE_URL=https://integrate.api.nvidia.com/v1`, `AI_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b`, `AI_EXTRA_BODY_JSON={"chat_template_kwargs":{"enable_thinking":false}}` y `AI_TIMEOUT=120s`.
+
+### Elección del modelo en NVIDIA
+
+La elección se hizo sobre el catálogo *preview* de build.nvidia.com (endpoints gratuitos) en septiembre de 2026. Kimi K2.5 ya no está en esa lista. La tarea es corta y no necesita razonar: consolidar entre 5 y 40 observaciones en unas 250 palabras de español formal, con salida JSON. Por eso pesa más la velocidad que la capacidad bruta.
+
+| Modelo | Activos | Por qué sí o no |
+|---|---|---|
+| **`nvidia/nemotron-3.5-lightning-30b-a3b`** (elegido) | 3B de 30B | El más rápido de los generalistas: NVIDIA declara hasta 4x la velocidad de salida de modelos de su tamaño. Español soportado oficialmente y salida estructurada soportada. Su razonamiento viene **encendido** y se apaga con `enable_thinking: false` |
+| `deepseek-ai/deepseek-v4.1-flash` | 8B prefill, 16B decode, de 552B | Más conocimiento y mejor redacción previsible, pero varias veces más cómputo por token. La ficha no documenta cómo apagar el razonamiento, solo cómo graduarlo (`reasoning_effort` de 1 a 100). Es la alternativa si la redacción de Nemotron no convence |
+| `google/gemma-4-31b-it` | 31B denso | Muy buen multilingüe. Su ficha dice que no soporta salida estructurada nativa, pero el servicio pide el JSON en el prompt y lo parsea él mismo, así que funciona igual (probado). Más lento de punta a punta en la medición real |
+| `glm-5-3-flash` | 18B de 320B | Multimodal; más pesado que Nemotron sin ventaja para texto corto |
+| `gpt-oss-20b` | MoE pequeño | Orientado a razonamiento matemático; el español no es su fuerte |
+
+Para cambiar a DeepSeek: `AI_MODEL=deepseek-ai/deepseek-v4.1-flash` y `AI_EXTRA_BODY_JSON={}`, o `{"reasoning_effort":1}` si el endpoint lo acepta. No hace falta tocar `AI_PROMPT_VERSION`: la clave de cache ya incluye el modelo y su calibración.
+
+### Latencia medida (2026-09-23, plan gratuito)
+
+Son mediciones de punta a punta a través del gateway: fuentes, modelo y guardado, con la cache apagada y el mismo estudiante (3 observaciones, unos 500 tokens de salida).
+
+| Modelo | Muestras | Mediana |
+|---|---|---|
+| Nemotron 3.5 Lightning | 7,6 · 11,5 · 20 · 55 s | ~16 s |
+| Gemma 4 31B | 25 · 41 · 50 s | ~41 s |
+
+Casi toda la variación es cola del endpoint compartido: el primer token tardó entre 30 y 114 s en las pruebas directas, y la generación en sí es corta. En 2 de 7 llamadas la petición superó los ~120 s y se cortó. Por eso con NVIDIA `AI_TIMEOUT` debe ser 120 s. El corte se informa como 504, no como error del modelo. En producción conviene un endpoint dedicado o de pago: el mismo modelo en un NIM propio o en otro proveedor baja a pocos segundos sin tocar código.
+
+## Cambiar de proveedor
+
+El código habla con el modelo solo a través del `ChatClient` de Spring AI, que es agnóstico del proveedor. La salida estructurada, el renderizado, la anonimización, la cache y la resiliencia no dependen de quién responda.
+
+| Destino | Qué cambia |
+|---|---|
+| Cualquier API compatible con OpenAI: NVIDIA, OpenAI, Groq, Together, Fireworks, OpenRouter, DeepSeek, Mistral, vLLM/Ollama/NIM propio. También Gemini y Claude por sus endpoints compatibles con OpenAI | **Solo variables de entorno**: `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` y `AI_EXTRA_BODY_JSON` (`{}` si el modelo no entiende `chat_template_kwargs`) |
+| Un proveedor por su API nativa (Anthropic, Gemini/Vertex, Bedrock, Azure) | Cambiar el starter en el `pom.xml` (p. ej. `spring-ai-starter-model-anthropic`) y las propiedades `spring.ai.openai.*` por las del proveedor. En Java solo cambia `ChatClientConfig`, que es la única clase que importa algo de OpenAI (`OpenAiChatOptions`, para el `extra_body`) |
+
+## Privacidad
+
+Las observaciones son de menores y el proveedor es externo.
+
+- Al modelo no se le envía ningún nombre ni identificador (`Anonimizador`).
+- `spring.ai.chat.observations.log-prompt` y `log-completion` están apagados.
+- Los logs del servicio no escriben el contenido de las respuestas.
+- La cache guarda el texto con el marcador, nunca con el nombre.
+
+## Pruebas
+
+- `mvn -pl ai-control-service -am verify`: los tests unitarios, más `ObservacionEndpointTest`, que levanta el contexto completo contra un `HttpServer` local que imita a NVIDIA y a query-service. No gasta cuota ni necesita secretos.
+- Colección Postman [observaciones-ia.postman_collection.json](observaciones-ia.postman_collection.json): cubre el flujo completo contra el entorno (generar, 409 tras editar, `SOBRESCRIBIR`, año, y limpieza al final).

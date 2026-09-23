@@ -1,0 +1,600 @@
+{
+  "info": {
+    "_postman_id": "a1c0de00-5a1e-4c1a-9e00-ai-observaciones",
+    "name": "ai-control-service - Resumenes de observaciones con IA",
+    "description": {
+      "content": "# ai-control-service: resúmenes de observaciones con IA\n\nReemplaza la concatenación de `/informes/observacion/generar` y `/informes/observacion/final` por un\ninforme redactado por un modelo de lenguaje (MiniMax-M3 por defecto; cualquier API compatible con OpenAI), y lo **guarda**.\n\n| Pantalla | Endpoint |\n|---|---|\n| Botón \"Generar con IA\" del periodo | `POST /api/ai/observaciones/periodo` |\n| Botón \"Generar con IA\" de la fila Final | `POST /api/ai/observaciones/anio` |\n\nCuerpo con los mismos nombres de query-service (`FK_TMATRICULA`, `FK_TPERIODO_EVALUACION`) más\n`SOBRESCRIBIR` (opcional, `false` por defecto). Respuesta:\n`{ observacion, origen, estado, modelo, tokensEntrada, tokensSalida, duracionMs, desdeCache }`.\n\n**Datos de prueba:** use un estudiante de prueba. La limpieza (pasos 8 y 9) borra los textos guardados\nde esa matrícula, incluidos los que existieran antes de correr la colección.\n\n```bash\nnewman run docs/ai-control-service/observaciones-ia.postman_collection.json \\\n  -e docs/deploy/sso-test.postman_environment.json\n```\n",
+      "type": "text/markdown"
+    },
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0 - Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "description": {
+          "content": "Guarda el `token`. El usuario necesita el menú **INFORMES** con `VER` (fuentes) y `EDITAR` (guardar), con alcance sobre la sede y jornada del estudiante.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const d = pm.response.json();",
+              "if (d.token) { pm.collectionVariables.set('token', d.token); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 - Fuentes del periodo",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/observacion/fuentes",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "observacion",
+            "fuentes"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": \"{{fkTmatricula}}\",\n  \"FK_TPERIODO_EVALUACION\": \"{{fkTperiodoEvaluacion}}\"\n}"
+        },
+        "description": {
+          "content": "Lo que la IA va a resumir: una fila por observación del docente (fecha, actividad, asignatura, observacion) más el primer nombre del estudiante y el estado del resumen ya guardado. 400 si el periodo no tiene observaciones.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const rows = pm.response.json().rows;",
+              "pm.test('hay observaciones', () => pm.expect(rows.length).to.be.above(0));",
+              "pm.collectionVariables.set('observacionesOrigen', rows.length);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - Generar resumen del periodo (IA)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/ai/observaciones/periodo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "ai",
+            "observaciones",
+            "periodo"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": \"{{fkTmatricula}}\",\n  \"FK_TPERIODO_EVALUACION\": \"{{fkTperiodoEvaluacion}}\"\n}"
+        },
+        "description": {
+          "content": "Lee las fuentes, redacta con el modelo y **guarda** con `OBSERVACION = OBSERVACION_IA`, así que nace APROBADA. `desdeCache=true` si las observaciones no cambiaron desde la última generación. Errores: 409 si el texto guardado fue modificado por el docente (ver paso 4), 429 con `Retry-After` si se agotó el cupo por minuto, 502/503 si el proveedor falla.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const d = pm.response.json();",
+              "pm.test('queda APROBADA', () => pm.expect(d.estado).to.eql('APROBADA'));",
+              "pm.test('origen = fuentes', () => pm.expect(d.origen).to.eql(Number(pm.collectionVariables.get('observacionesOrigen'))));",
+              "pm.test('sin marcador', () => pm.expect(d.observacion).to.not.include('[ESTUDIANTE]'));",
+              "pm.collectionVariables.set('observacionIa', d.observacion);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 - El docente edita el resumen",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/observacion/guardar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "observacion",
+            "guardar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": \"{{fkTmatricula}}\",\n  \"FK_TPERIODO_EVALUACION\": \"{{fkTperiodoEvaluacion}}\",\n  \"OBSERVACION\": \"{{observacionIa}} Texto agregado por el docente.\",\n  \"OBSERVACION_IA\": \"{{observacionIa}}\",\n  \"OBSERVACIONES_ORIGEN\": \"{{observacionesOrigen}}\"\n}"
+        },
+        "description": {
+          "content": "Simula la edición desde la pantalla: el texto difiere del borrador, así que queda MODIFICADA.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 - Regenerar sin sobrescribir: 409",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/ai/observaciones/periodo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "ai",
+            "observaciones",
+            "periodo"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": \"{{fkTmatricula}}\",\n  \"FK_TPERIODO_EVALUACION\": \"{{fkTperiodoEvaluacion}}\"\n}"
+        },
+        "description": {
+          "content": "No pisa lo que redactó el docente y no gasta cuota del proveedor: responde 409 antes de llamar al modelo.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('409', () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 - Regenerar con SOBRESCRIBIR",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/ai/observaciones/periodo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "ai",
+            "observaciones",
+            "periodo"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": \"{{fkTmatricula}}\",\n  \"FK_TPERIODO_EVALUACION\": \"{{fkTperiodoEvaluacion}}\",\n  \"SOBRESCRIBIR\": true\n}"
+        },
+        "description": {
+          "content": "Confirmación explícita del usuario: reemplaza el texto del docente.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('vuelve a APROBADA', () => pm.expect(pm.response.json().estado).to.eql('APROBADA'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6 - Fuentes del año",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/observacion/final/fuentes",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "observacion",
+            "final",
+            "fuentes"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": \"{{fkTmatricula}}\"\n}"
+        },
+        "description": {
+          "content": "Una fila por resumen de periodo guardado. 400 si todavía no hay ninguno.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('al menos un periodo', () => pm.expect(pm.response.json().rows.length).to.be.above(0));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7 - Generar consolidado del año (IA)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/ai/observaciones/anio",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "ai",
+            "observaciones",
+            "anio"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": \"{{fkTmatricula}}\",\n  \"SOBRESCRIBIR\": true\n}"
+        },
+        "description": {
+          "content": "Consolida la evolución del año a partir de los resúmenes de periodo y lo guarda en la fila Final.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('queda APROBADA', () => pm.expect(pm.response.json().estado).to.eql('APROBADA'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8 - Limpieza: eliminar el texto del año",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/observacion/final/eliminar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "observacion",
+            "final",
+            "eliminar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": \"{{fkTmatricula}}\"\n}"
+        },
+        "description": {
+          "content": "Deja la corrida en cero. Con la variable de entorno `MANUAL` definida se saltan este paso y el siguiente, para revisar los textos a mano.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.environment.get('MANUAL')) { pm.execution.skipRequest(); }"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "9 - Limpieza: eliminar el resumen del periodo",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/observacion/eliminar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "observacion",
+            "eliminar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": \"{{fkTmatricula}}\",\n  \"FK_TPERIODO_EVALUACION\": \"{{fkTperiodoEvaluacion}}\"\n}"
+        },
+        "description": {
+          "content": "",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.environment.get('MANUAL')) { pm.execution.skipRequest(); }"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "email",
+      "value": "docente@colegio.edu.co"
+    },
+    {
+      "key": "password",
+      "value": ""
+    },
+    {
+      "key": "fkTmatricula",
+      "value": "990001"
+    },
+    {
+      "key": "fkTperiodoEvaluacion",
+      "value": "970001"
+    },
+    {
+      "key": "observacionIa",
+      "value": ""
+    },
+    {
+      "key": "observacionesOrigen",
+      "value": ""
+    }
+  ]
+}
