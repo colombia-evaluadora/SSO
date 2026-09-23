@@ -194,6 +194,63 @@ class BoletinPreescolarTest {
         assertEquals(1, paginas(pdf));
     }
 
+    @Test
+    void unaObservacionLargaSigueEnLaHojaSiguiente() throws Exception {
+        // Antes el parrafo tenia alto fijo y lo que no cabia se perdia. Ahora
+        // sigue en otra hoja del MISMO boletin, con su "Pagina N de M".
+        Map<String, Object> larga = fila("ESTUDIANTE CON MUCHO QUE CONTAR", true, 6);
+        larga.put("observacion", String.join(" ", java.util.Collections.nCopies(60,
+                "Participa con entusiasmo en actividades de construccion y transformacion,"
+                + " mostrando atencion y concentracion en la manipulacion de materiales.")));
+        // El titulo largo de la captura original se cortaba en una linea.
+        larga.put("asignatura_nombre", "Comunicacion y lenguaje, Expresion corporal y artistica,"
+                + " Exploracion del medio natural y social, Desarrollo personal y social");
+        List<Map<String, Object>> rows = List.of(larga, fila("OTRO ESTUDIANTE", true, 1));
+
+        byte[] pdf = new PdfRenderer().render(
+                "boletin-preescolar", definicion(), rows, new ReportMeta("test", Map.of()),
+                null, pk -> jpegOVacio(pk));
+        volcar("boletin-larga", pdf);
+
+        // El largo ocupa al menos dos hojas; el corto, una sola hoja propia.
+        assertTrue(paginas(pdf) >= 3, "la observacion larga no paso a otra hoja: " + paginas(pdf));
+    }
+
+    @Test
+    void cadaCantidadDeEvidenciasCompila() throws Exception {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (int n = 0; n <= 6; n++) {
+            rows.add(fila("ESTUDIANTE CON " + n + " EVIDENCIAS", true, n));
+        }
+        byte[] pdf = new PdfRenderer().render(
+                "boletin-preescolar", definicion(), rows, new ReportMeta("test", Map.of()),
+                null, pk -> jpegOVacio(pk));
+        volcar("boletin-evidencias", pdf);
+        assertEquals(7, paginas(pdf), "una hoja por estudiante");
+    }
+
+    private static byte[] jpegOVacio(Long pk) {
+        try {
+            if (pk == null) {
+                return null;
+            }
+            if (pk == 900L) {
+                return jpeg(613, 894, new Color(0xF5, 0xF0, 0xE0));
+            }
+            return jpeg(400, 300, new Color((int) (pk * 37 % 200), 120, 180));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Deja el PDF en BOLETIN_PDF_DIR para mirarlo; sin la variable no escribe nada. */
+    private static void volcar(String nombre, byte[] pdf) throws Exception {
+        String dir = System.getenv("BOLETIN_PDF_DIR");
+        if (dir != null && !dir.isBlank()) {
+            java.nio.file.Files.write(java.nio.file.Path.of(dir, nombre + ".pdf"), pdf);
+        }
+    }
+
     /** Cuenta las paginas sin traer una libreria de PDF: los objetos /Type /Page. */
     private static int paginas(byte[] pdf) {
         String texto = new String(pdf, java.nio.charset.StandardCharsets.ISO_8859_1);
