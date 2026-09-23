@@ -30,9 +30,9 @@ public record Fuentes(List<Pieza> piezas, String estudiante, String estadoGuarda
         for (Map<String, Object> f : filas) {
             piezas.add(switch (tipo) {
                 case PERIODO -> new Pieza(str(f, "actividad"), str(f, "asignatura"),
-                        str(f, "fecha"), str(f, "observacion"));
+                        fecha(f, "fecha"), str(f, "observacion"));
                 case ANIO -> new Pieza(str(f, "periodo"), null,
-                        rango(str(f, "fecha_inicio"), str(f, "fecha_fin")), str(f, "observacion"));
+                        rango(fecha(f, "fecha_inicio"), fecha(f, "fecha_fin")), str(f, "observacion"));
             });
         }
         Map<String, Object> primera = filas.isEmpty() ? Map.of() : filas.getFirst();
@@ -42,6 +42,15 @@ public record Fuentes(List<Pieza> piezas, String estudiante, String estadoGuarda
     private static String rango(String desde, String hasta) {
         if (desde == null) return hasta;
         return hasta == null ? desde : desde + " a " + hasta;
+    }
+
+    /**
+     * query-service serializa los DATE como timestamp ISO
+     * ({@code 2026-08-31T00:00:00.000Z}); al modelo le basta el dia.
+     */
+    private static String fecha(Map<String, Object> fila, String columna) {
+        String s = str(fila, columna);
+        return s != null && s.length() > 10 && s.charAt(10) == 'T' ? s.substring(0, 10) : s;
     }
 
     /** El query-service puede devolver las columnas en mayusculas o minusculas. */

@@ -41,7 +41,7 @@ class ResumenRendererTest {
     @Test
     void serializaSinElNombreDelEstudiante() {
         Fuentes f = Fuentes.desdeFilas(TipoResumen.PERIODO, List.of(
-                Map.of("fecha", "2026-08-31", "actividad", "Cuento", "asignatura", "Dimension comunicativa",
+                Map.of("fecha", "2026-08-31T00:00:00.000Z", "actividad", "Cuento", "asignatura", "Dimension comunicativa",
                         "observacion", "Sofia narra el cuento", "estudiante", "Sofia")));
 
         String material = GeneradorResumen.serializar(TipoResumen.PERIODO, f);
