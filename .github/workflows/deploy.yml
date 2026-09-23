@@ -348,7 +348,7 @@ jobs:
           #   INFRA_SERVICES   → no dependen de flyway. Se levantan
           #                       siempre primero, gate o no gate.
           GATED_SERVICES="api-gateway auth-center cdc-capture cdc-pg-slot-init notification-service sso-admin"
-          INFRA_SERVICES="cdc-clickhouse cdc-worker eurekaserver file-service mailhog provisioner rabbitmq redis reporting-service tsesion-web-gc alloy grafana loki mimir tempo"
+          INFRA_SERVICES="cdc-clickhouse cdc-worker eurekaserver file-service mailhog provisioner rabbitmq redis reporting-service ai-control-service tsesion-web-gc alloy grafana loki mimir tempo"
 
           # Filtra una lista de servicios contra el grafo ACTIVO de compose
           # (respeta COMPOSE_PROFILES ya resuelto por sso-stack.sh: si

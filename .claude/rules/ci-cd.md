@@ -31,7 +31,7 @@ Un workflow nuevo o con cambios en permisos, triggers o acciones de terceros
   en segundos por la política de rama del environment `production`. Si alguien
   pide "desplegar a prod", lo que hace falta es un tag.
 - **`deploy-test.yml` reconstruye solo lo que cambió; `release.yml` reconstruye
-  los 12 servicios.** Es deliberado: en `dev` importa la velocidad, en un release
+  los 13 servicios.** Es deliberado: en `dev` importa la velocidad, en un release
   la reproducibilidad. No "optimices" el release para que reutilice imágenes.
 - **El paso de `flyway repair` re-ejecuta el SQL de las migraciones cuyo checksum
   cambió**, porque `repair` por sí solo solo realinea el historial. Si tocas ese
