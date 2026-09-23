@@ -1,0 +1,153 @@
+server:
+  # 8088 — los ocupados: 8080 gateway, 8081 auth-center, 8082 hello,
+  # 8083 sso-admin, 8084 query-service, 8085 notification, 8086 file,
+  # 8087 reporting.
+  port: ${PORT:8088}
+  shutdown: graceful
+
+spring:
+  application:
+    name: ai-control-service
+  main:
+    banner-mode: off
+  # La llamada al modelo tarda segundos y es bloqueante: un hilo virtual por
+  # request la sostiene sin agotar el pool de Tomcat.
+  threads:
+    virtual:
+      enabled: true
+
+  # Sin base de datos: los datos llegan por HTTP desde el query-service.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceTransactionManagerAutoConfiguration
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
+  web:
+    error:
+      include-message: always
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2s
+
+  ai:
+    # El starter OpenAI trae embeddings, imagen, audio y moderacion. NVIDIA
+    # solo expone chat por esta API: los demas se apagan para que no se
+    # creen clientes que nadie usa.
+    model:
+      embedding: none
+      image: none
+      audio:
+        speech: none
+        transcription: none
+      moderation: none
+    openai:
+      # Cualquier API compatible con OpenAI. NVIDIA NIM: build.nvidia.com,
+      # claves nvapi-...
+      base-url: ${AI_BASE_URL:https://integrate.api.nvidia.com/v1}
+      api-key: ${AI_API_KEY:}
+      # En Spring AI 2 los reintentos y el timeout los aplica el SDK de
+      # OpenAI; spring.ai.retry.* ya no afecta a este starter.
+      timeout: ${AI_TIMEOUT:60s}
+      max-retries: ${AI_MAX_RETRIES:1}
+      chat:
+        model: ${AI_MODEL:moonshotai/kimi-k2.5}
+        # NVIDIA responde error de servidor si falta max-tokens.
+        max-tokens: ${AI_MAX_TOKENS:1500}
+        temperature: ${AI_TEMPERATURE:0.6}
+        top-p: ${AI_TOP_P:0.95}
+    chat:
+      # Nunca loguear prompt ni respuesta: son observaciones de menores.
+      observations:
+        log-prompt: false
+        log-completion: false
+      client:
+        observations:
+          log-prompt: false
+          log-completion: false
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka}
+    healthcheck:
+      enabled: false
+  instance:
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
+
+sso:
+  ai:
+    # Directo al query-service del catalogo eval-col, no al gateway.
+    query-service-base-url: ${AI_QUERY_SERVICE_URL:http://query-service-eval-col:8084}
+    request-timeout: ${AI_QUERY_TIMEOUT:30s}
+    # Campos del proveedor fuera del estandar OpenAI. El default apaga el
+    # modo razonamiento de Kimi K2.5: mas rapido y sin <think> en la salida.
+    extra-body-json: '${AI_EXTRA_BODY_JSON:{"chat_template_kwargs":{"thinking":false}}}'
+    max-palabras: ${AI_MAX_PALABRAS:250}
+    prompt-version: ${AI_PROMPT_VERSION:v1}
+    cache-ttl: ${AI_CACHE_TTL:7d}
+    rate-limit-per-min: ${AI_RATE_LIMIT_PER_MIN:35}
+    rate-limit-timeout: ${AI_RATE_LIMIT_TIMEOUT:20s}
+    max-concurrent: ${AI_MAX_CONCURRENT:4}
+    circuit-failure-rate: ${AI_CIRCUIT_FAILURE_RATE:50}
+    circuit-open-wait: ${AI_CIRCUIT_OPEN_WAIT:60s}
+  jwt:
+    # Solo la publica: este servicio verifica firmas, no emite tokens.
+    public-key: ${JWT_PUBLIC_KEY}
+    issuer: sso-postgres
+    header-name: Authorization
+    token-prefix: "Bearer "
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  # Redis es una cache opcional: su caida no debe tumbar el health y sacar
+  # la instancia de Eureka.
+  health:
+    redis:
+      enabled: false
+  otlp:
+    metrics:
+      export:
+        enabled: ${MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED:false}
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 10s
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+    resource-attributes:
+      service.namespace: sso
+      deployment.environment: ${DEPLOY_ENV:dev}
+  logging:
+    export:
+      otlp:
+        enabled: ${MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED:false}
+  tracing:
+    enabled: ${MANAGEMENT_TRACING_EXPORT_ENABLED:false}
+    sampling:
+      probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
+
+logging:
+  level:
+    com.co.eurekatic.aicontrol: ${AI_LOG_LEVEL:INFO}
