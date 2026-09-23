@@ -3,13 +3,6 @@ server:
   # 8083 sso-admin, 8084 query-service, 8085 notification, 8086 file.
   port: ${PORT:8087}
   shutdown: graceful
-  error:
-    # Sin esto el `reason` de un ResponseStatusException NO viaja al cliente:
-    # el cuerpo sale con timestamp/status/error/path y nada mas, y diagnosticar
-    # un 400 obliga a entrar al servidor a leer logs. Lo que se propaga es
-    # deliberado (ver QueryServiceClient): en 4xx el mensaje del query-service,
-    # que ya viene saneado; en 5xx uno generico.
-    include-message: always
 
 spring:
   application:
@@ -36,6 +29,9 @@ spring:
       fail-on-unknown-properties: false
     parser:
       max-string-length: 20971520
+  web:
+    error:
+      include-message: always
 
 eureka:
   client:
@@ -71,6 +67,29 @@ reporting:
 
   # Un reporte completo tarda mucho mas que una pagina de 10 filas.
   request-timeout: ${REPORTING_REQUEST_TIMEOUT:3m}
+
+  # De donde se bajan las imagenes que van DENTRO de un reporte (el fondo del
+  # boletin, la foto del estudiante, las evidencias). Directo al servicio y no
+  # al gateway, por el mismo criterio que query-service-base-url.
+  file-service-base-url: ${REPORTING_FILE_SERVICE_URL:http://file-service:8086}
+
+  # Secreto compartido con file-service (files.internal-token). Se usa
+  # X-Internal-Token y NO el JWT del usuario a proposito: FileAccessService
+  # solo reconoce como propias las fotos de perfil y los soportes, asi que con
+  # el token del usuario la foto de matricula y el fondo darian 404 y el
+  # boletin saldria mudo. La autorizacion ya ocurrio una capa antes -- la
+  # funcion PL/pgSQL aplico el gate con alcance y solo devolvio los
+  # estudiantes que ese usuario alcanza. Vacio = el reporte sale sin imagenes.
+  file-internal-token: ${REPORTING_FILE_INTERNAL_TOKEN:}
+
+  # Mucho menor que el de una consulta: una foto que tarda medio minuto es una
+  # foto que no vamos a esperar.
+  file-request-timeout: ${REPORTING_FILE_REQUEST_TIMEOUT:20s}
+
+  # Tope POR IMAGEN. El PDF se exporta entero en memoria, asi que una imagen
+  # desmedida multiplicada por las paginas de un grupo es un OOM. Al superarlo
+  # se omite esa imagen, no el reporte.
+  max-image-bytes: ${REPORTING_MAX_IMAGE_BYTES:4194304}
 
   # ---------------------------------------------------------------
   # Catalogo de reportes. `path` es el path_template de la fila
@@ -430,10 +449,14 @@ reporting:
     # solo puede decir la primera; impresas, las otras dos se leen como
     # calificaciones reales. La funcion las deja fuera.
     #
-    # `estado` distingue la nota guardada de la guardada CON un cambio
-    # propuesto pendiente. Se imprime la guardada; la columna existe para
-    # que se entienda la diferencia si alguien compara el archivo con la
-    # pantalla.
+    # NO lleva columna `estado`, y la funcion SI la devuelve: se deja fuera
+    # a proposito. Despues del filtro casi todas las filas dicen "Guardada"
+    # -- es lo unico que el boletin imprime --, asi que era una columna que
+    # ocupaba ancho para repetir lo mismo. Se pierde el matiz de la nota
+    # guardada CON un cambio propuesto pendiente; el numero impreso es el
+    # mismo igual, y quien necesite ese detalle lo tiene en la pantalla y en
+    # el descargar (informes-tabla). Si alguien la repone "por simetria" con
+    # ese otro reporte, esta es la razon de que no este.
     #
     # asignatura y observacion no estan llenas a la vez: en preescolar la
     # fila no tiene asignaturas y lo que vale es la observacion.
@@ -450,11 +473,127 @@ reporting:
         area: Area
         nota: Nota
         desempeno: Desempeno
+        aprobada: Aprobada
+        promedio: Promedio del periodo
+        puesto: Puesto
+        observacion: Observacion
+        evidencias: Evidencias
+
+    # -----------------------------------------------------------------
+    # informes-tabla: EL DESCARGAR, que no es el boletin.
+    #
+    # 'eval-col-informes-tabla-001': fn_informe_grupo_tabla, que llama a
+    # la misma fn_informe_grupo_listar de la pantalla y NO filtra nada.
+    #
+    # La diferencia con 'informes' es toda la gracia y es deliberada. El
+    # boletin imprime solo lo consolidado, porque una proyeccion o una
+    # nota requerida, fuera del sistema, se leen como calificaciones
+    # reales. Esto otro es "bajame lo que estoy viendo": salen tambien la
+    # proyectada, la requerida y la que no tiene nota, y cada una viene
+    # dicha con todas las letras en la columna estado, mas una columna
+    # consolidado que dice si ese periodo ya se congelo. Un volcado que
+    # esconde la mitad de la tabla no sirve para revisar; uno que no
+    # distingue una nota guardada de una proyeccion es peor todavia.
+    #
+    # evidencias trae la CUENTA de imagenes de la fila, no las imagenes:
+    # este servicio arma una tabla de texto desde este mismo mapa.
+    # -----------------------------------------------------------------
+    informes-tabla:
+      path: /informes/tabla
+      title: Informe por periodo (tabla completa)
+      file-name: informe-tabla
+      columns:
+        estudiante: Estudiante
+        documento: Documento
+        periodo: Periodo
+        consolidado: Consolidado
+        asignatura: Asignatura
+        area: Area
+        nota: Nota
+        desempeno: Desempeno
         estado: Estado
         aprobada: Aprobada
         promedio: Promedio del periodo
         puesto: Puesto
         observacion: Observacion
+        evidencias: Evidencias
+
+    # -----------------------------------------------------------------
+    # Boletin de preescolar (V466). path = fila
+    # 'eval-col-informes-boletin-preescolar-001':
+    # fn_informe_boletin_preescolar, que delega gate y alcance en la
+    # misma fn_informe_grupo_listar de la pantalla.
+    #
+    # ES EL PRIMER REPORTE CON PLANTILLA PROPIA. A diferencia de los
+    # demas, el diseño NO lo arma PdfRenderer a partir de `columns`:
+    # lo define reportes/boletin-preescolar.jrxml, que se toma por
+    # convencion de nombre (la clave). Aqui `columns` no describe una
+    # grilla -- describe QUE CAMPOS LLEGAN a la plantilla, porque el
+    # render recorta la fila a las columnas declaradas y lo que no este
+    # en esta lista no existe para el .jrxml. Las etiquetas quedan sin
+    # uso, pero se escriben igual: son la unica documentacion de que
+    # significa cada campo.
+    #
+    # `formats: [pdf]` porque un boletin no es una grilla: en Excel
+    # seria una fila ilegible por estudiante. Pedirlo asi da 400.
+    #
+    # `image-fields` son las columnas cuyo valor es un PK_TARCHIVO y que
+    # la plantilla pinta como imagen. Sin declararlas llegarian como el
+    # texto del numero y los huecos saldrian vacios.
+    # -----------------------------------------------------------------
+    boletin-preescolar:
+      path: /informes/boletin-preescolar
+      title: Boletin de preescolar
+      file-name: boletin-preescolar
+      formats:
+        - pdf
+      image-fields:
+        - fondo_archivo
+        - foto_archivo
+        - evidencia1_archivo
+        - evidencia2_archivo
+        - evidencia3_archivo
+        - evidencia4_archivo
+        - evidencia5_archivo
+        - evidencia6_archivo
+      columns:
+        ee_nombre: Establecimiento
+        ee_dane: Dane
+        ee_nit: Nit
+        ciudad: Ciudad
+        sede_nombre: Sede
+        nivel_ensenanza: Nivel
+        grado_nombre: Grado
+        grupo_etiqueta: Grupo
+        periodo_nombre: Periodo
+        anio: Año
+        fondo_archivo: Fondo
+        estudiante: Estudiante
+        documento: Documento
+        foto_archivo: Foto
+        asignatura_nombre: Asignatura o dimension
+        area_nombre: Area
+        observacion: Seguimiento y valoracion
+        observacion_estado: Estado de la observacion
+        evidencia1_titulo: Evidencia 1
+        evidencia1_fecha: Fecha evidencia 1
+        evidencia1_archivo: Foto evidencia 1
+        evidencia2_titulo: Evidencia 2
+        evidencia2_fecha: Fecha evidencia 2
+        evidencia2_archivo: Foto evidencia 2
+        evidencia3_titulo: Evidencia 3
+        evidencia3_fecha: Fecha evidencia 3
+        evidencia3_archivo: Foto evidencia 3
+        evidencia4_titulo: Evidencia 4
+        evidencia4_fecha: Fecha evidencia 4
+        evidencia4_archivo: Foto evidencia 4
+        evidencia5_titulo: Evidencia 5
+        evidencia5_fecha: Fecha evidencia 5
+        evidencia5_archivo: Foto evidencia 5
+        evidencia6_titulo: Evidencia 6
+        evidencia6_fecha: Fecha evidencia 6
+        evidencia6_archivo: Foto evidencia 6
+        rector_nombre: Rector
 
 sso:
   jwt:
@@ -505,9 +644,10 @@ management:
       otlp:
         enabled: ${MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED:false}
   tracing:
-    enabled: ${MANAGEMENT_TRACING_EXPORT_ENABLED:false}
     sampling:
       probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
+    export:
+      enabled: ${MANAGEMENT_TRACING_EXPORT_ENABLED:false}
 
 logging:
   level:

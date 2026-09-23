@@ -627,7 +627,7 @@
               "language": "json"
             }
           },
-          "raw": "{\n  \"FK_TGRUPO\": {{fkTgrupo}},\n  \"PERIODOS\": [{{fkTperiodoEvaluacion}}],\n  \"SEARCH\": null,\n  \"INCLUIR_FINAL\": false\n}"
+          "raw": "{\n  \"FK_TGRUPO\": {{fkTgrupo}},\n  \"PERIODOS\": [{{fkTperiodoEvaluacion}}],\n  \"SEARCH\": null\n}"
         },
         "description": {
           "content": "El cuerpo de la pantalla. **Una fila por (estudiante, periodo)**: al elegir\ndos periodos, cada estudiante ocupa dos sub-filas.\n\n`PERIODOS` vacio o ausente = todos los del periodo academico del grupo.\n**Sin paginacion** -- se muestra el grupo entero, y paginar romperia el\npuesto, que se calcula sobre el conjunto.\n\n## Las dos columnas que deciden como renderizar\n\n| `formato` | `modo_periodo` | Que pintar |\n|---|---|---|\n| `cualitativo` | `real` | **Preescolar**: la columna OBSERVACION. Ignorar promedio/puesto/aprobadas |\n| `numerico` | `real` | La tabla normal: negro/gris, promedio, puesto, flechas |\n| `numerico` | `requerido` | Las notas que **faltan**. Sin puesto. `promedio_proyectado` = el minimo |\n\n> **Nunca decidas mirando si `asignaturas` viene vacio.** En preescolar viene\n> con filas, todas en `null`. La decision se toma con `formato`.\n\n## `asignaturas` viene EMBEBIDO\n\nSon las columnas MAT / LEN / CN ... de la tabla. Van dentro de cada fila para\nque el front no necesite `1 + N` peticiones para pintar una sola tabla.\n\n```json\n{ \"asignatura\": 4190, \"nombre\": \"MATEMATICAS\", \"abreviacion\": \"MAT\",\n  \"nota\": 2.5, \"nota_propuesta\": 2.3, \"estado\": \"cambio_propuesto\",\n  \"es_numerico\": true, \"valoracion\": \"alto\", \"aprobada\": true }\n```\n\nLas **flechas las dibuja el front** comparando `nota` con `nota_propuesta`,\nlas dos ya homologadas a la escala del colegio. No se manda una columna\n`tendencia`: seria duplicar un dato derivado, y calcularla sobre porcentajes\ndaria flecha cuando dos porcentajes distintos redondean a la misma nota.\n\n`nota_propuesta: null` con estado `cambio_propuesto` significa **\"la\npropuesta es que ya no hay nota\"**: el docente dio de baja las actividades.\n\n## Modo `requerido`\n\nCuando el periodo no tiene NINGUNA calificacion, las entradas cambian de\nforma y traen lo que el estudiante **necesita** sacar para no perder la\nasignatura en el ano:\n\n```json\n{ \"asignatura\": 4190, \"nota\": 34.6, \"porcentaje\": 34.58,\n  \"estado\": \"requerido\", \"ya_asegurado\": false, \"alcanzable\": true }\n```\n\n- `ya_asegurado: true` -- el valor salio <= 0: **no necesita nada**.\n- `alcanzable: false` -- supera el maximo: **ya perdio**, pase lo que pase.\n  El valor se devuelve igual, porque necesitar 130 sobre 100 *es* la\n  informacion.\n\n`SEARCH` filtra por nombre y documento **despues** de calcular el puesto, para\nque buscar a alguien no cambie su posicion.",
@@ -668,7 +668,7 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"FK_TGRUPO\": {{fkTgrupo}},\n  \"PERIODOS\": [{{fkTperiodoEvaluacion}}],\n  \"SEARCH\": null,\n  \"INCLUIR_FINAL\": false\n}"
+              "raw": "{\n  \"FK_TGRUPO\": {{fkTgrupo}},\n  \"PERIODOS\": [{{fkTperiodoEvaluacion}}],\n  \"SEARCH\": null\n}"
             },
             "description": {
               "content": "El cuerpo de la pantalla. **Una fila por (estudiante, periodo)**: al elegir\ndos periodos, cada estudiante ocupa dos sub-filas.\n\n`PERIODOS` vacio o ausente = todos los del periodo academico del grupo.\n**Sin paginacion** -- se muestra el grupo entero, y paginar romperia el\npuesto, que se calcula sobre el conjunto.\n\n## Las dos columnas que deciden como renderizar\n\n| `formato` | `modo_periodo` | Que pintar |\n|---|---|---|\n| `cualitativo` | `real` | **Preescolar**: la columna OBSERVACION. Ignorar promedio/puesto/aprobadas |\n| `numerico` | `real` | La tabla normal: negro/gris, promedio, puesto, flechas |\n| `numerico` | `requerido` | Las notas que **faltan**. Sin puesto. `promedio_proyectado` = el minimo |\n\n> **Nunca decidas mirando si `asignaturas` viene vacio.** En preescolar viene\n> con filas, todas en `null`. La decision se toma con `formato`.\n\n## `asignaturas` viene EMBEBIDO\n\nSon las columnas MAT / LEN / CN ... de la tabla. Van dentro de cada fila para\nque el front no necesite `1 + N` peticiones para pintar una sola tabla.\n\n```json\n{ \"asignatura\": 4190, \"nombre\": \"MATEMATICAS\", \"abreviacion\": \"MAT\",\n  \"nota\": 2.5, \"nota_propuesta\": 2.3, \"estado\": \"cambio_propuesto\",\n  \"es_numerico\": true, \"valoracion\": \"alto\", \"aprobada\": true }\n```\n\nLas **flechas las dibuja el front** comparando `nota` con `nota_propuesta`,\nlas dos ya homologadas a la escala del colegio. No se manda una columna\n`tendencia`: seria duplicar un dato derivado, y calcularla sobre porcentajes\ndaria flecha cuando dos porcentajes distintos redondean a la misma nota.\n\n`nota_propuesta: null` con estado `cambio_propuesto` significa **\"la\npropuesta es que ya no hay nota\"**: el docente dio de baja las actividades.\n\n## Modo `requerido`\n\nCuando el periodo no tiene NINGUNA calificacion, las entradas cambian de\nforma y traen lo que el estudiante **necesita** sacar para no perder la\nasignatura en el ano:\n\n```json\n{ \"asignatura\": 4190, \"nota\": 34.6, \"porcentaje\": 34.58,\n  \"estado\": \"requerido\", \"ya_asegurado\": false, \"alcanzable\": true }\n```\n\n- `ya_asegurado: true` -- el valor salio <= 0: **no necesita nada**.\n- `alcanzable: false` -- supera el maximo: **ya perdio**, pase lo que pase.\n  El valor se devuelve igual, porque necesitar 130 sobre 100 *es* la\n  informacion.\n\n`SEARCH` filtra por nombre y documento **despues** de calcular el puesto, para\nque buscar a alguien no cambie su posicion.",
@@ -722,7 +722,7 @@
               "language": "json"
             }
           },
-          "raw": "{\n  \"FK_TGRUPO\": {{fkTgrupoPreescolar}},\n  \"PERIODOS\": null,\n  \"SEARCH\": null,\n  \"INCLUIR_FINAL\": false\n}"
+          "raw": "{\n  \"FK_TGRUPO\": {{fkTgrupoPreescolar}},\n  \"PERIODOS\": null,\n  \"SEARCH\": null\n}"
         },
         "description": {
           "content": "El mismo endpoint, otra lectura. Devuelve `formato: \"cualitativo\"` y\n`modo_periodo: \"real\"`.\n\nTodo lo numerico viene `null` o en cero -- y **eso es correcto, no un hueco**:\nahi no hay nota que promediar, no hay puesto que calcular y no se aprueba ni\nse reprueba por nota. Las asignaturas caen en `sin_definir`.\n\nLo que vale son tres columnas:\n\n| Columna | |\n|---|---|\n| `observacion` | el texto consolidado |\n| `observacion_estado` | `APROBADA` / `MODIFICADA` / `null` si aun no se guardo |\n| `observacion_desactualizada` | el docente dejo comentarios nuevos despues |\n\nEl resumen es **por estudiante**: se genera de a uno, y la lista muestra sin\nambiguedad quien ya lo tiene y quien no.\n\n### Por que un solo endpoint y no dos\n\nPorque los grupos **mixtos** existen -- dimensiones y asignaturas numericas\nconviviendo. Con dos endpoints el front tendria que saber de antemano a cual\nllamar, y para el mixto no habria respuesta correcta.",
@@ -763,7 +763,7 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"FK_TGRUPO\": {{fkTgrupoPreescolar}},\n  \"PERIODOS\": null,\n  \"SEARCH\": null,\n  \"INCLUIR_FINAL\": false\n}"
+              "raw": "{\n  \"FK_TGRUPO\": {{fkTgrupoPreescolar}},\n  \"PERIODOS\": null,\n  \"SEARCH\": null\n}"
             },
             "description": {
               "content": "El mismo endpoint, otra lectura. Devuelve `formato: \"cualitativo\"` y\n`modo_periodo: \"real\"`.\n\nTodo lo numerico viene `null` o en cero -- y **eso es correcto, no un hueco**:\nahi no hay nota que promediar, no hay puesto que calcular y no se aprueba ni\nse reprueba por nota. Las asignaturas caen en `sin_definir`.\n\nLo que vale son tres columnas:\n\n| Columna | |\n|---|---|\n| `observacion` | el texto consolidado |\n| `observacion_estado` | `APROBADA` / `MODIFICADA` / `null` si aun no se guardo |\n| `observacion_desactualizada` | el docente dejo comentarios nuevos despues |\n\nEl resumen es **por estudiante**: se genera de a uno, y la lista muestra sin\nambiguedad quien ya lo tiene y quien no.\n\n### Por que un solo endpoint y no dos\n\nPorque los grupos **mixtos** existen -- dimensiones y asignaturas numericas\nconviviendo. Con dos endpoints el front tendria que saber de antemano a cual\nllamar, y para el mixto no habria respuesta correcta.",
@@ -1163,6 +1163,265 @@
           "body": "{\n  \"rows\": [\n    {\n      \"pk_tinforme_guardado\": 41,\n      \"fecha\": \"2026-09-15\",\n      \"momento\": \"2026-09-15T16:42:08\",\n      \"fk_tgrupo\": 11474,\n      \"grupo_nombre\": \"01\",\n      \"fk_tasignatura\": null,\n      \"asignatura_nombre\": null,\n      \"origen\": \"informe\",\n      \"fk_tperiodo_evaluacion\": 622,\n      \"periodo_nombre\": \"Primer periodo\",\n      \"periodo_abreviacion\": \"P1\",\n      \"fk_tusuario\": 197798,\n      \"guardado_por\": \"ANA MARIA TORRES\",\n      \"estudiantes\": 27,\n      \"detalle\": [\n        {\n          \"fk_tmatricula\": 223117,\n          \"estudiante\": \"JORGITO SANCHEZ\",\n          \"guardadas\": 5,\n          \"actualizadas\": 0\n        }\n      ]\n    }\n  ]\n}"
         }
       ]
+    },
+    {
+      "name": "12 - Evidencias de un periodo (preescolar)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/evidencias",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "evidencias"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatricula}},\n  \"FK_TPERIODO_EVALUACION\": {{fkTperiodoEvaluacion}}\n}"
+        },
+        "description": {
+          "content": "Las imagenes adjuntas a las observaciones de un estudiante en un periodo. FK_TPERIODO_EVALUACION nulo = TODO el año, que es lo que necesita la fila Final. Para mostrar cada una, su fk_tarchivo va a POST /files/view-token/{id}. NO es GET /planeador/actividades/estudiantes/:ID/soportes: aquel tiene gate PLANEADOR/VER y se pide por actividad, no por periodo. La CUENTA ya viene en la columna evidencias de /informes/grupo, asi que no hace falta llamar aca solo para saber si hay que dibujar la seccion.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "13 - Evidencias de TODO el año (la fila Final)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/evidencias",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "evidencias"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatricula}},\n  \"FK_TPERIODO_EVALUACION\": null\n}"
+        },
+        "description": {
+          "content": "Lo mismo que el anterior pero sin acotar el periodo: las evidencias de todo el año lectivo. Es lo que muestra la fila Final.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "14a - Fila Final: GENERAR el borrador del año",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/observacion/final",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "observacion",
+            "final"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatricula}}\n}"
+        },
+        "description": {
+          "content": "Los resumenes de periodo YA CONSOLIDADOS del estudiante, encadenados en orden y prefijados con el nombre de cada periodo. NO es /informes/observacion/generar, que concatena las observaciones por ACTIVIDAD dentro de un periodo: eso es materia prima y se revisa antes de guardar; esto es texto que alguien ya aprobo. NO ESCRIBE y no hay como guardarlo -- el Final no es un periodo real --, asi que se calcula al mirarlo igual que su nota. Devuelve siempre una fila; con null y 0 si el estudiante no tiene ningun resumen guardado. Es la misma informacion que ya trae la fila Final de /informes/grupo.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "14b - Fila Final: GUARDAR (tal cual = APROBADA)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/observacion/final/guardar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "observacion",
+            "final",
+            "guardar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatricula}},\n  \"OBSERVACION\": \"{{observacionIa}}\",\n  \"OBSERVACION_IA\": \"{{observacionIa}}\",\n  \"PERIODOS_ORIGEN\": {{observacionesOrigen}}\n}"
+        },
+        "description": {
+          "content": "Guarda el comentario del AÑO en TESTUDIANTE_ANIO_OBSERVACION, cuya llave es solo la matricula. Reemplaza. El ESTADO no se pide: sale de comparar OBSERVACION contra OBSERVACION_IA, asi que mandando los dos iguales -- el borrador tal como lo devolvio 14a -- la fila queda APROBADA. PERIODOS_ORIGEN es cuantos resumenes de periodo consolidados habia al generar; si no lo mandas se cuentan al guardar. Gate INFORMES/EDITAR.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "14c - Fila Final: GUARDAR EDITADO (queda MODIFICADA)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/observacion/final/guardar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "observacion",
+            "final",
+            "guardar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatricula}},\n  \"OBSERVACION\": \"Texto del año corregido a mano por la docente.\"\n}"
+        },
+        "description": {
+          "content": "Lo mismo pero sin reenviar el borrador, que es lo que pasa al reabrir el panel y editar. La funcion conserva el OBSERVACION_IA que ya estaba guardado en vez de asumir que el texto nuevo es el de la IA, asi que la fila queda MODIFICADA -- si lo asumiera, editar quedaria registrado como aprobado sin cambios. Y como tampoco llega PERIODOS_ORIGEN, se cuenta al guardar, para que la marca de desactualizado no quede mintiendo.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "14d - Fila Final: ELIMINAR",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/informes/observacion/final/eliminar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "informes",
+            "observacion",
+            "final",
+            "eliminar"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"FK_TMATRICULA\": {{fkTmatricula}}\n}"
+        },
+        "description": {
+          "content": "Quita el comentario del AÑO. Borrado FISICO y no baja logica: el indice unico es total sobre la matricula, de modo que una fila inactiva seguiria ocupando el lugar e impediria guardar una nueva; y no hay nada que conservar, porque el texto se regenera desde los resumenes de periodo. Despues, la fila Final de /informes/grupo vuelve a traer observacion en null. Gate INFORMES/ELIMINAR -- mas exigente que el EDITAR de guardar. Llamarlo dos veces responde 404.",
+          "type": "text/markdown"
+        }
+      },
+      "response": []
     },
     {
       "name": "Observacion por IA (preescolar)",

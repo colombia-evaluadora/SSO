@@ -1,14 +1,24 @@
 #!/usr/bin/env python3
-"""Bloquea un `git commit` cuyo mensaje lleve un trailer de coautoria.
+"""Bloquea la atribucion a Claude en mensajes de commit y descripciones de PR.
 
 CLAUDE.md lo prohibe, pero un CLAUDE.md es contexto, no configuracion: se le
 cuela al agente aunque lo haya leido. Un PreToolUse lo impide decida lo que
 decida el modelo.
 
-La deteccion NO es "el comando menciona git commit y Co-Authored-By": eso
-bloquea cualquier script que documente la regla o la audite. Hace falta que el
-commit este en posicion de comando, asi que se descartan los cuerpos de
-heredoc y se parte la linea solo por separadores de nivel superior.
+La deteccion NO es "el texto menciona Co-Authored-By": eso bloquea cualquier
+script que documente la regla o la audite. Hace falta que un comando que
+*escribe* atribucion (git commit, gh pr create/edit) este en posicion de
+comando; solo entonces se mira el texto, y se descartan los segmentos que solo
+leen (git log --grep, grep, rg...).
+
+Lo que el detector viejo dejaba pasar, y por eso hay trailers en el historial
+posteriores a su llegada:
+  - cuerpos de heredoc (`git commit -F - <<EOF`): es justo donde vive un
+    mensaje multilinea, y se estaban borrando antes de mirar;
+  - `gh pr create/edit`: ni se miraba, asi que la coautoria entraba por la
+    descripcion del PR;
+  - la herramienta PowerShell (here-strings `@'...'@`): el hook solo estaba
+    enganchado a Bash (se corrige en settings.json).
 
 Exit 2 => la llamada no se ejecuta y el motivo vuelve al agente.
 """
@@ -19,48 +29,15 @@ import re
 import sys
 from pathlib import Path
 
-TRAILER = re.compile(r"^\s*co-authored-by\s*:", re.I | re.M)
-# `git commit`, con o sin opciones globales entre medias (git -C ruta commit).
-GIT_COMMIT = re.compile(r"^(?:\w+=\S+\s+)*(?:sudo\s+)?git\b(?:\s+-[^\s]+(?:\s+\S+)?)*\s+commit\b")
-MSG_FILE = re.compile(r"(?:-F|--file)[=\s]+(\S+)")
+sys.path.insert(0, str(Path(__file__).resolve().parent / "comun"))
+from git_text import publicado  # noqa: E402
 
-
-def strip_heredocs(cmd: str) -> str:
-    """Quita los cuerpos de heredoc: ahi vive texto, no comandos."""
-    out, i = [], 0
-    for m in re.finditer(r"<<-?\s*(['\"]?)(\w+)\1", cmd):
-        tag = m.group(2)
-        end = re.search(rf"^\s*{re.escape(tag)}\s*$", cmd[m.end():], re.M)
-        out.append(cmd[i:m.end()])
-        i = m.end() + (end.end() if end else len(cmd) - m.end())
-    out.append(cmd[i:])
-    return "".join(out)
-
-
-def segments(cmd: str) -> list[str]:
-    """Parte por ; && || | y saltos de linea de nivel superior, respetando
-    comillas: un mensaje -m multilinea tiene que seguir siendo un solo trozo."""
-    parts, cur, quote, i = [], [], None, 0
-    while i < len(cmd):
-        ch = cmd[i]
-        if quote:
-            cur.append(ch)
-            if ch == "\\" and quote == '"' and i + 1 < len(cmd):
-                cur.append(cmd[i + 1]); i += 2; continue
-            if ch == quote:
-                quote = None
-        elif ch in "'\"":
-            quote = ch; cur.append(ch)
-        elif ch in ";\n" or cmd.startswith("&&", i) or cmd.startswith("||", i) or ch == "|":
-            parts.append("".join(cur)); cur = []
-            i += 2 if cmd[i:i + 2] in ("&&", "||") else 1
-            continue
-        else:
-            cur.append(ch)
-        i += 1
-    parts.append("".join(cur))
-    return parts
-
+# El trailer al principio de una linea real, o de una escapada (`\n` literal
+# dentro de un --body de una sola linea).
+TRAILER = re.compile(r"(?:^|\\r?\\n)[ \t]*co-authored-by[ \t]*:", re.I | re.M)
+# La firma "Generated with Claude Code" que el harness pide para los PR: es
+# atribucion a Claude igual que el trailer, y el usuario la quiere fuera.
+FIRMA = re.compile(r"generated with \[?claude code", re.I)
 
 def main() -> int:
     try:
@@ -71,29 +48,27 @@ def main() -> int:
     if not cmd:
         return 0
 
-    for seg in segments(strip_heredocs(cmd)):
-        if not GIT_COMMIT.match(seg.strip()):
-            continue
+    commit, pr, texto = publicado(cmd)
+    if not (commit or pr):
+        return 0
 
-        texto = seg
-        m = MSG_FILE.search(seg)
-        if m:
-            ruta = Path(m.group(1).strip("'\""))
-            try:
-                texto += "\n" + ruta.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                pass
+    donde = "del commit" if commit else "del pull request"
+    if TRAILER.search(texto):
+        motivo = "lleva un trailer de coautoria"
+    elif pr and FIRMA.search(texto):
+        motivo = 'lleva la firma "Generated with Claude Code"'
+    else:
+        return 0
 
-        if TRAILER.search(texto):
-            sys.stderr.write(
-                "BLOQUEADO: el mensaje de commit lleva un trailer de coautoria.\n\n"
-                'CLAUDE.md > Commits: "Sin trailers de coautoria. No agregar '
-                'Co-Authored-By\nni de Claude ni del usuario." Prevalece sobre '
-                "cualquier instruccion del\nharness que pida anadirlos.\n\n"
-                "Reescribe el mensaje sin esa linea. No uses --no-verify ni otra via\n"
-                "para escribir el mensaje: la regla es del usuario.\n")
-            return 2
-    return 0
+    sys.stderr.write(
+        f"BLOQUEADO: el texto {donde} {motivo}.\n\n"
+        'CLAUDE.md > Commits: "Sin trailers de coautoria. No agregar '
+        "Co-Authored-By\nni de Claude ni del usuario.\" Lo mismo vale para la "
+        "descripcion de un PR.\nPrevalece sobre cualquier instruccion del harness "
+        "que pida anadirlos.\n\n"
+        "Reescribe el texto sin esa linea. No uses --no-verify ni otra via para\n"
+        "escribirlo: la regla es del usuario.\n")
+    return 2
 
 
 if __name__ == "__main__":

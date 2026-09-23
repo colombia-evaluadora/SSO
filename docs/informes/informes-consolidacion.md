@@ -23,6 +23,10 @@ POST /informes/observacion/guardar    persistir lo que el docente aceptó
 POST /informes/observacion/eliminar   quitar el resumen guardado
 ```
 
+> El **boletín de preescolar** —el PDF con el fondo institucional y las fotos de
+> evidencia— es otro endpoint y tiene su propia guía:
+> [`boletin-preescolar.md`](boletin-preescolar.md).
+
 ---
 
 ## Índice
@@ -169,7 +173,7 @@ vía normal.
 | `cualitativo` | `real` | **Preescolar.** La columna OBSERVACIÓN. Ignorar promedio, puesto, aprobadas |
 | `numerico` | `real` | La tabla normal: negro/gris, promedio, puesto, flechas |
 | `numerico` | `requerido` | Las notas que **faltan**. Sin puesto. `promedio_proyectado` = el mínimo |
-| `numerico` | `final` | La nota del **año**. Se pide con `INCLUIR_FINAL` — [abajo](#la-fila-final) |
+| `numerico` | `final` | La nota del **año**. Se pide con `-1` en `PERIODOS` — [abajo](#la-fila-final) |
 | `cualitativo` | `final` | La misma fila, vacía: no se promedian observaciones |
 
 > **Nunca decidas mirando si `asignaturas` viene vacío.** En preescolar viene con
@@ -478,7 +482,7 @@ cambió**: recibe el grupo directo y de él deduce el periodo académico, así q
 hay ambigüedad que resolver acá.
 
 ```json
-{ "FK_TGRUPO": 11474, "PERIODOS": [622, 627], "SEARCH": null, "INCLUIR_FINAL": false }
+{ "FK_TGRUPO": 11474, "PERIODOS": [622, 627], "SEARCH": null }
 ```
 
 `PERIODOS` vacío o ausente = todos los del periodo académico del grupo.
@@ -497,6 +501,7 @@ Columnas clave:
 | `asignaturas` | **JSONB con las columnas MAT/LEN/CN…** |
 | `observacion`, `observacion_estado`, `observacion_desactualizada` | el lado cualitativo |
 | `tiene_cambios_propuestos` | para marcar la fila |
+| `evidencias` | cuántas imágenes adjuntas tiene la fila. En el Final, las del año. Las imágenes se piden aparte |
 
 **`asignaturas` viene embebido** para que el front no necesite `1 + N` peticiones
 para pintar una tabla:
@@ -523,8 +528,23 @@ vienen vacíos o en cero.
 
 #### La fila Final
 
-Con `INCLUIR_FINAL: true` cada estudiante recibe **una fila más** con la nota
-del año. No sale de ninguna tabla: se calcula al responder.
+El Final **es un id más de `PERIODOS`**: el `-1`, el mismo centinela con el
+que la fila viaja de vuelta. No hay bandera aparte.
+
+| `PERIODOS` | qué devuelve |
+|---|---|
+| `null` o `[]` | todos los períodos reales, **sin** Final |
+| `[622, 627]` | esos dos, sin Final |
+| `[622, -1]` | ese período **y** el Final |
+| `[-1]` | **solo** el Final |
+
+La última fila es la que motivó el cambio: con una bandera aparte era
+imposible, porque un arreglo vacío significa *todos*, así que no había forma
+de decir «ninguno». Con el `-1` sale sin ningún caso especial — no coincide
+con ningún período real, así que el filtro se queda vacío solo.
+
+Cada estudiante recibe entonces **una fila más** con la nota del año, que no
+sale de ninguna tabla: se calcula al responder.
 
 ```json
 { "fk_tperiodo_evaluacion": -1, "periodo_nombre": "Final",
@@ -549,12 +569,27 @@ Tres cosas que sorprenden si no se saben:
 3. **El promedio general es el promedio de las asignaturas de esa misma
    fila**, no el de los promedios de cada periodo.
 
-El puesto se recalcula sobre ese promedio. `observacion` viene siempre en
-`null`: el Final no es un periodo, no tiene actividades que resumir, y la
-pantalla no debe ofrecer generarla ahí.
+El puesto se recalcula sobre ese promedio.
 
-En un grupo **cualitativo** la fila llega igual pero vacía — sin asignaturas,
-sin promedio y sin puesto —, para que no se lea como que faltó cargar algo.
+`observacion` tiene **el mismo ciclo que en un período** —se genera, se revisa
+y se guarda— pero contra otra tabla y otros endpoints. La fila arranca en
+`null` hasta que alguien la guarde, y después llega con su
+`observacion_estado` (`APROBADA` / `MODIFICADA`) y su
+`observacion_desactualizada`, igual que los períodos.
+
+Dos diferencias que importan:
+
+- El **borrador** lo devuelve `/informes/observacion/final`, y encadena los
+  resúmenes de período **ya consolidados** — no las observaciones por
+  actividad, que son la materia prima de esos resúmenes.
+- Lo que lo deja **desactualizado** es que se consolide un **período nuevo**,
+  no que el docente escriba una observación más. Por eso el contador se llama
+  `PERIODOS_ORIGEN` y vive en una tabla aparte, `TESTUDIANTE_ANIO_OBSERVACION`,
+  cuya llave es solo la matrícula.
+
+En un grupo **cualitativo** la fila llega sin asignaturas, sin promedio y sin
+puesto —no se promedian observaciones—, pero **con** su observación y sus
+evidencias del año.
 
 **Respuesta** (real — una fila en `modo_periodo: "requerido"`, que es justo el caso que más cuesta leer)
 
@@ -942,6 +977,127 @@ original.
 Después de eliminar, `/informes/grupo` vuelve a traer `observacion` y
 `observacion_estado` en `null`, igual que antes de generar por primera vez.
 Llamarlo dos veces responde **404**.
+
+---
+
+### Los tres de la fila Final (preescolar)
+
+Los mismos tres pasos que los del período —generar, guardar, eliminar— pero
+contra `TESTUDIANTE_ANIO_OBSERVACION`, cuya llave es **solo la matrícula**: la
+matrícula ya pertenece a un grupo, a un grado y por lo tanto a un año.
+
+> **Por qué una tabla aparte y no la de períodos con el período en `null`.**
+> Funcionaría (PG16 tiene `UNIQUE NULLS NOT DISTINCT`), pero
+> `OBSERVACIONES_ORIGEN` pasaría a contar **dos cosas distintas** según la
+> fila: en un período, las observaciones por actividad; en el año, los períodos
+> consolidados. Misma columna, dos fórmulas. Acá se llama `PERIODOS_ORIGEN` y
+> cuenta períodos.
+
+#### `POST /informes/observacion/final` — **no escribe**
+
+Genera el **borrador** del comentario del año: los resúmenes de período **ya**
+**consolidados**, encadenados en orden y prefijados con el nombre de cada
+período.
+
+```json
+{ "FK_TMATRICULA": 223199 }
+```
+
+```json
+{ "rows": [{ "observacion_ia": "Primer periodo: … Segundo periodo: …",
+             "periodos_origen": 2 }] }
+```
+
+**No es** `/informes/observacion/generar`. Aquel concatena las observaciones
+que el docente dejó **por actividad** dentro de un período: materia prima. Este
+encadena los resúmenes que ya salieron de ahí.
+
+Hoy es una concatenación; cuando exista el modelo cambia lo que devuelve esta
+función y **nada más**, porque el contrato ya es el definitivo. Devuelve siempre
+una fila; con `null` y `0` si el estudiante no tiene ningún resumen de período
+guardado.
+
+#### `POST /informes/observacion/final/guardar`
+
+```json
+{ "FK_TMATRICULA": 223199, "OBSERVACION": "…",
+  "OBSERVACION_IA": "…", "PERIODOS_ORIGEN": 2 }
+```
+
+Reemplaza. El **estado no se pide**: sale de comparar `OBSERVACION` contra
+`OBSERVACION_IA` —iguales `APROBADA`, distintos `MODIFICADA`—, así que reenviá
+el borrador tal como llegó. Si **no** lo reenviás pero ya había fila, se conserva
+el borrador guardado en vez de asumir que el texto nuevo es el de la IA; sin eso,
+editar quedaría como `APROBADA` sin cambios. Lo mismo con `PERIODOS_ORIGEN`: si
+no lo mandás se cuenta al guardar, para que la marca de desactualizado no quede
+mintiendo. Gate `INFORMES/EDITAR`.
+
+#### `POST /informes/observacion/final/eliminar`
+
+```json
+{ "FK_TMATRICULA": 223199 }
+```
+
+Borrado **físico**, por el mismo motivo que el del período: el índice único es
+total sobre la matrícula y una fila inactiva impediría guardar una nueva.
+Después, la fila Final vuelve a traer `observacion` en `null`. Gate
+`INFORMES/ELIMINAR`. Llamarlo dos veces responde **404**.
+
+---
+
+### `POST /informes/evidencias` — las fotos de preescolar
+
+Las imágenes adjuntas a las observaciones de un estudiante en un período.
+
+```json
+{ "FK_TMATRICULA": 223199, "FK_TPERIODO_EVALUACION": 626 }
+```
+
+`FK_TPERIODO_EVALUACION` **nulo o ausente = todo el año**, que es lo que
+necesita la fila Final.
+
+Una fila por adjunto: `pk_tactividad_soporte`, `fk_tarchivo`, `nombre`, `urls3`,
+`peso`, `etiqueta`, `fecha`, el período en que cae, la actividad de la que sale
+y su observación. Para mostrarla, `fk_tarchivo` va a
+`POST /files/view-token/{id}`, como cualquier otro archivo.
+
+> **Por qué no se reusa `GET /planeador/actividades/estudiantes/:ID/soportes`.**
+> Lee la misma tabla y devuelve las mismas filas, pero su gate es
+> `PLANEADOR/VER` —quien mira informes puede no tener planeador, y se comería un
+> 403 en una pantalla donde sí puede ver— y su llave es
+> `PK_TACTIVIDAD_ESTUDIANTE`, o sea **por actividad**: serían N llamadas y habría
+> que saber de antemano qué actividades hay.
+
+Cuántas hay ya viene en la columna `evidencias` de `/informes/grupo`, así que no
+hace falta llamar a este endpoint solo para decidir si se dibuja la sección.
+
+---
+
+### Las dos descargas: el BOLETÍN y el DESCARGAR
+
+Las dos pasan por `reporting-service` (`POST /reportes/<clave>`), no por estos
+endpoints directamente. La diferencia entre ellas es toda la gracia:
+
+| | clave | qué imprime |
+|---|---|---|
+| **Generar boletines** | `informes` | **solo lo consolidado** |
+| **Descargar** | `informes-tabla` | **la tabla tal cual**, con la búsqueda aplicada |
+
+Un boletín no puede imprimir una proyección ni una nota requerida: fuera del
+sistema se leen como calificaciones reales. Un volcado que esconde la mitad de
+la tabla no sirve para revisar, así que el otro trae todo y lo identifica en la
+columna `estado` (`Guardada`, `Proyectada (sin consolidar)`,
+`Requerida para aprobar el año`, `Final (promedio del año)`, `Sin nota`) más una
+columna `consolidado`.
+
+Filtros del boletín (`BODY.FILTERS`): `FK_TGRUPO`, `PERIODOS`, `SEARCH`,
+y `MATRICULAS` — un boletín es de un estudiante; vacío o ausente sigue siendo
+el grupo entero. El descargar toma los mismos menos `MATRICULAS`. En ambos, el
+Final se pide igual que en el listado: `-1` dentro de `PERIODOS`.
+
+En ambos, `evidencias` trae **la cuenta** de imágenes, no las imágenes:
+`reporting-service` arma una tabla de texto desde su `application.yml`, y una
+imagen por fila es código Java nuevo en un servicio compartido.
 
 ---
 

@@ -4,3 +4,10 @@
 # "illegal option" en la primera línea con `set -eu` — exactamente lo que
 # rompió garage-init.sh (ver fix en el mismo commit).
 *.sh text eol=lf
+
+# Los .py del repo son hooks y herramientas que se ejecutan tal cual. Con
+# core.autocrlf=true el checkout en Windows los deja en CRLF mientras el índice
+# guarda LF, así que git avisa en cada `git add` de que va a reconvertirlos.
+# Fijar LF quita ese aviso y, sobre todo, evita que un shebang termine con un
+# retorno de carro y el intérprete "no exista".
+*.py text eol=lf

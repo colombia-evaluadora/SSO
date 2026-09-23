@@ -97,6 +97,19 @@ public class PdfRenderer {
                          List<Map<String, Object>> rows,
                          ReportMeta meta,
                          List<String> columnasPedidas) {
+        return render(clave, def, rows, meta, columnasPedidas, null);
+    }
+
+    /**
+     * Variante con descargas de imagen. {@code imagenes} nulo = reporte sin
+     * imagenes, que es el camino tabular de siempre.
+     */
+    public byte[] render(String clave,
+                         ReportingProperties.Report def,
+                         List<Map<String, Object>> rows,
+                         ReportMeta meta,
+                         List<String> columnasPedidas,
+                         Imagenes imagenes) {
         try {
             Map<String, String> columnas = ColumnLayout.resolver(def, rows, columnasPedidas);
             int[] anchos = ColumnLayout.anchos(columnas, rows, usableWidth());
@@ -123,7 +136,8 @@ public class PdfRenderer {
             params.put("FILTROS", meta == null ? "" : meta.filtrosLegibles());
 
             JasperPrint print = JasperFillManager.fillReport(
-                    report, params, new JRMapCollectionDataSource(normalizar(rows, columnas)));
+                    report, params,
+                    new JRMapCollectionDataSource(normalizar(rows, columnas, def, imagenes)));
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             JRPdfExporter exporter = new JRPdfExporter();
@@ -149,9 +163,20 @@ public class PdfRenderer {
      * como JSON (roles, sedes), y un objeto anidado impreso de una celda sale
      * como su {@code toString()} de Java. Convertirlo acá deja el mismo texto
      * en el PDF y en el Excel.
+     *
+     * <p>La excepción son las columnas declaradas como {@code image-fields}:
+     * ahí el valor es un {@code PK_TARCHIVO} y lo que la plantilla necesita
+     * son los bytes de la imagen. Aplanarlas dejaría el texto "1234" donde
+     * debería ir una foto, así que se cambian por el binario ya descargado.
      */
     private List<Map<String, ?>> normalizar(List<Map<String, Object>> rows,
-                                            Map<String, String> columnas) {
+                                            Map<String, String> columnas,
+                                            ReportingProperties.Report def,
+                                            Imagenes imagenes) {
+        java.util.Set<String> imagen =
+                (imagenes == null || def == null || def.getImageFields() == null)
+                        ? java.util.Set.of()
+                        : new java.util.HashSet<>(def.getImageFields());
         // Bucle y no stream: el cast de Map<String,Object> a Map<String,?>
         // dentro del map() hace que se infiera List<Map<String,capture-of-?>>,
         // que no es asignable a List<Map<String,?>>.
@@ -159,11 +184,35 @@ public class PdfRenderer {
         for (Map<String, Object> row : rows) {
             Map<String, Object> limpia = new LinkedHashMap<>();
             for (String col : columnas.keySet()) {
-                limpia.put(col, CellValues.toText(row.get(col)));
+                if (imagen.contains(col)) {
+                    // InputStream y no byte[]: es el tipo que Jasper acepta
+                    // en una imageExpression sin ambigüedad. null cuando no
+                    // hay foto o la descarga falló -- el hueco sale vacío y
+                    // el boletín del curso sigue saliendo.
+                    byte[] datos = imagenes.bytes(aLong(row.get(col)));
+                    limpia.put(col, datos == null ? null : new java.io.ByteArrayInputStream(datos));
+                } else {
+                    limpia.put(col, CellValues.toText(row.get(col)));
+                }
             }
             out.add(limpia);
         }
         return out;
+    }
+
+    /** El pk de un TARCHIVO tal como lo devuelve el JSON: Integer, Long o texto. */
+    private static Long aLong(Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Number n) {
+            return n.longValue();
+        }
+        try {
+            return Long.valueOf(v.toString().trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private JasperReport compilar(String clave, Map<String, String> columnas, int[] anchos) {

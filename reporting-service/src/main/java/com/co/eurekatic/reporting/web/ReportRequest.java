@@ -25,10 +25,20 @@ import java.util.Map;
  *                {@code columns} filtra/reordena el catalogo declarado, no
  *                agrega columnas nuevas que no estuvieran pensadas para
  *                exportarse (ver {@code ColumnLayout.resolver}).
+ * @param filtersLabel el resumen de filtros YA ESCRITO para el membrete,
+ *                opcional. {@code filters} son los binds de la consulta, asi
+ *                que ahi los filtros son ids: impresos salen "Fk Tgrupo:
+ *                11474" en vez de "Grupo: 5°01", que es lo unico que el
+ *                lector del archivo puede interpretar. El front tiene los
+ *                nombres en pantalla, asi que manda la linea hecha. Cuando
+ *                viene en blanco o no viene, el membrete se arma como
+ *                siempre a partir de {@code filters} -- ningun reporte
+ *                existente cambia por esto.
  */
 public record ReportRequest(
         String format,
         Map<String, Object> filters,
         Map<String, Object> sorting,
-        List<String> columns) {
+        List<String> columns,
+        String filtersLabel) {
 }

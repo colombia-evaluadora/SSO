@@ -54,12 +54,26 @@ SEVERITY = {
     "MOJIBAKE": "error",
     "COMENTARIOS": "aviso",
     "CABECERA": "aviso",
+    "GATE-EN-LINEA": "aviso",
+    "WRAPPER-GORDO": "aviso",
+    "FN-REPORTE-DUPLICADA": "aviso",
+    "BORRADO-SIN-GUARDA": "aviso",
 }
 
 GATE_FNS = (
     "fn_assert_permiso_seccion", "fn_usuario_puede_en_menu", "fn_menu_grupo_de",
     "fn_menu_codigo_canonico", "fn_planeador_assert_alcance",
 )
+
+# Una funcion que ES el gate puede lanzar 42501; una de negocio, no.
+ES_GATE = re.compile(r"^fn_(assert_|puede_)|_gate_|_puede_|_alcanza$|^fn_planeador_alcanza$", re.I)
+# Cualquier helper de permisos, no solo los de GATE_FNS (que existen para
+# GATE-TILDES porque reciben un CODIGO de menu literal).
+LLAMA_A_GATE = re.compile(r"\bfn_(assert_\w+|\w*_gate_\w+|planeador_assert_alcance|"
+                          r"puede_afectar_\w+|usuario_puede_en_menu)\s*\(", re.I)
+LANZA_42501 = re.compile(r"42501")
+# `UPDATE x SET` y no `UPDATE\b`: si no, cuenta los ON CONFLICT DO UPDATE.
+ESCRITURA = re.compile(r"\b(?:INSERT\s+INTO|UPDATE\s+[\w.\"]+\s+SET|DELETE\s+FROM)\b", re.I)
 
 
 class Finding:
@@ -267,6 +281,82 @@ def rule_seed_por_codigo(path: Path, stmts: list, out: list[Finding]) -> None:
                                "los 16 roles reales vienen del dump base -> no-op silencioso en CI"))
 
 
+def _funciones_creadas(stmts: list):
+    """(statement, nombre corto) de cada CREATE FUNCTION del archivo."""
+    for st in stmts:
+        m = re.search(r"CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([\w.]+)\s*\(", st.text, re.I)
+        if m:
+            yield st, m.group(1).rsplit(".", 1)[-1].lower()
+
+
+def rule_gate_en_linea(path: Path, stmts: list, out: list[Finding]) -> None:
+    """El gate escrito a mano dentro de la logica de negocio no se puede
+    reutilizar: el dia que otro contexto necesite esa logica, se duplica.
+    El gate va en un wrapper que delega en un nucleo `_interno` sin permisos."""
+    for st, short in _funciones_creadas(stmts):
+        if ES_GATE.search(short):
+            continue  # es el helper de permisos, su trabajo es lanzar 42501
+        if not LANZA_42501.search(st.text) or LLAMA_A_GATE.search(st.text):
+            continue
+        out.append(Finding(path, st.line, "GATE-EN-LINEA",
+                           f"{short}(): lanza 42501 a mano en vez de llamar a un helper de permisos. "
+                           f"El gate va en un wrapper que delega en un nucleo `_interno` reutilizable "
+                           f"(ver .claude/rules/migraciones.md)"))
+
+
+def rule_wrapper_gordo(path: Path, stmts: list, out: list[Finding]) -> None:
+    """Un wrapper valida y delega. Si ademas lleva la logica dentro, esa logica
+    queda atrapada detras del gate y no la puede reusar ni un trigger ni un
+    reporte."""
+    for st, short in _funciones_creadas(stmts):
+        if ES_GATE.search(short) or short.endswith("_interno"):
+            continue
+        if not LLAMA_A_GATE.search(st.text):
+            continue
+        if re.search(r"\bfn_\w+_interno\s*\(", st.text, re.I):
+            continue  # ya delega
+        escrituras = len(ESCRITURA.findall(st.text))
+        if escrituras >= 3:
+            out.append(Finding(path, st.line, "WRAPPER-GORDO",
+                               f"{short}(): {escrituras} escrituras despues del gate. Candidata a partirse "
+                               f"en wrapper (permisos) + nucleo `{short}_interno` (logica reutilizable)"))
+
+
+def rule_fn_reporte_duplicada(path: Path, stmts: list, conocidas: set[str],
+                              out: list[Finding]) -> None:
+    """Un reporte llama al mismo nucleo que la pantalla. Una funcion aparte
+    diverge del listado en cuanto una de las dos se toca (paso con V186-V190)."""
+    for st, short in _funciones_creadas(stmts):
+        m = re.match(r"(fn_.+?)_(?:reporte_\w+|exportar)$", short)
+        if not m:
+            continue
+        listar = f"{m.group(1)}_listar"
+        if listar in conocidas:
+            out.append(Finding(path, st.line, "FN-REPORTE-DUPLICADA",
+                               f"{short}() duplica a {listar}(): el reporte y la pantalla divergiran en el "
+                               f"WHERE o en el alcance. Reusa el nucleo del listado, partiendolo en "
+                               f"wrapper + `_interno` si hace falta"))
+
+
+BORRA = re.compile(r"^fn_.*_(eliminar|soft_delete|borrar|dar_de_baja)(_bulk|_interno)?$", re.I)
+# "tiene dependientes": el 23503 que el gateway traduce a 409, o una validacion
+# reutilizable que lo lanza por dentro.
+GUARDA = re.compile(r"23503|\bfn_\w*_validar_\w+\s*\(", re.I)
+
+
+def rule_borrado_sin_guarda(path: Path, stmts: list, out: list[Finding]) -> None:
+    """Un borrado logico no rompe nada: deja la informacion viva e inalcanzable.
+    Dar de baja sedes sin mirar que colgaba dejo 58.945 matriculas activas
+    colgando de sedes que ya no existian (V354)."""
+    for st, short in _funciones_creadas(stmts):
+        if not BORRA.match(short) or GUARDA.search(st.text):
+            continue
+        out.append(Finding(path, st.line, "BORRADO-SIN-GUARDA",
+                           f"{short}(): borra sin rechazar por dependientes (23503) ni llamar a una "
+                           f"fn_*_validar_*. Recorre que cuelga y decide explicitamente que bloquea "
+                           f"y que se arrastra (ver V354)"))
+
+
 def rule_auto_referencia(path: Path, raw: str, out: list[Finding]) -> None:
     """Una funcion no debe nombrar su propio V<n>: sobrevive a la migracion."""
     m = re.match(r"V(\d+)", path.name)
@@ -306,6 +396,12 @@ def lint_file(path: Path, arities: dict[str, set[int]]) -> list[Finding]:
     rule_pk_catalogo(path, stmts, out)
     rule_seed_por_codigo(path, stmts, out)
     rule_auto_referencia(path, raw, out)
+    rule_gate_en_linea(path, stmts, out)
+    rule_wrapper_gordo(path, stmts, out)
+    rule_borrado_sin_guarda(path, stmts, out)
+    conocidas = {n.rsplit(".", 1)[-1].lower() for n in arities}
+    conocidas |= {short for _, short in _funciones_creadas(stmts)}
+    rule_fn_reporte_duplicada(path, stmts, conocidas, out)
     return out
 
 

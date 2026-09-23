@@ -1,7 +1,7 @@
 ---
 description: Lint de invariantes sobre las migraciones (reglas de regresiones reales)
-argument-hint: [archivo.sql | --all | --from N] [--no-baseline]
-allowed-tools: Bash(python scripts/migration-lint.py:*), Read, Edit
+argument-hint: '[archivo.sql | --all | --from N] [--no-baseline]'
+allowed-tools: 'Bash(python scripts/migration-lint.py:*), Read, Edit'
 ---
 
 Corre `python scripts/migration-lint.py $ARGUMENTS` (sin argumentos: `--all`).
