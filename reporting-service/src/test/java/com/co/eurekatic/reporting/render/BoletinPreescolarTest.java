@@ -35,14 +35,14 @@ class BoletinPreescolarTest {
             "ee_nombre", "ee_dane", "ee_nit", "ciudad", "sede_nombre", "nivel_ensenanza",
             "grado_nombre", "grupo_etiqueta", "periodo_nombre", "anio", "fondo_archivo",
             "estudiante", "documento", "foto_archivo",
-            "asignatura_nombre", "area_nombre", "observacion", "observacion_estado",
+            "asignatura_nombre", "observacion", "observacion_estado",
             "evidencia1_titulo", "evidencia1_fecha", "evidencia1_archivo",
             "evidencia2_titulo", "evidencia2_fecha", "evidencia2_archivo",
             "evidencia3_titulo", "evidencia3_fecha", "evidencia3_archivo",
             "evidencia4_titulo", "evidencia4_fecha", "evidencia4_archivo",
             "evidencia5_titulo", "evidencia5_fecha", "evidencia5_archivo",
             "evidencia6_titulo", "evidencia6_fecha", "evidencia6_archivo",
-            "rector_nombre");
+            "rector_nombre", "rector_documento");
 
     private static final List<String> IMAGENES = List.of(
             "fondo_archivo", "foto_archivo",
@@ -83,7 +83,6 @@ class BoletinPreescolarTest {
         // El titulo del bloque no es fijo, y no es UNA asignatura: es la lista
         // de las que el estudiante cursa, unidas en una linea (V468).
         f.put("asignatura_nombre", "Comunicacion y exploracion, Valores, Corporalidad");
-        f.put("area_nombre", "Dimensiones");
         f.put("observacion", conObservacion
                 ? "Durante este segundo periodo, el estudiante ha demostrado avances "
                   + "significativos en su desarrollo integral, expresandose con libertad a "
@@ -101,6 +100,7 @@ class BoletinPreescolarTest {
             f.put("evidencia" + i + "_archivo", hay && i != 3 ? (long) (910 + i) : null);
         }
         f.put("rector_nombre", "Payares Herazo Alejandra");
+        f.put("rector_documento", "CC: 45123456");
         return f;
     }
 
@@ -168,7 +168,6 @@ class BoletinPreescolarTest {
         vacia.put("foto_archivo", null);
         // Sin asignatura tampoco: el titulo cae al rotulo generico.
         vacia.put("asignatura_nombre", null);
-        vacia.put("area_nombre", null);
 
         byte[] pdf = new PdfRenderer().render(
                 "boletin-preescolar", definicion(), List.of(vacia),
