@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 429 migraciones (V1–V497), 632 funciones vivas, 109 endpoints vivos. Ultima generacion: 2026-09-24.
+Estado: 431 migraciones (V1–V498), 643 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-24.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -11,7 +11,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 ## Indice
 
-- [(transversal)](#transversal) — 14 funcion(es), 0 endpoint(s)
+- [(transversal)](#transversal) — 15 funcion(es), 0 endpoint(s)
 - [academico](#academico) — 1 funcion(es), 0 endpoint(s)
 - [actividad](#actividad) — 113 funcion(es), 0 endpoint(s)
 - [anio](#anio) — 1 funcion(es), 0 endpoint(s)
@@ -48,7 +48,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 - [instrumento](#instrumento) — 3 funcion(es), 0 endpoint(s)
 - [jornada](#jornada) — 1 funcion(es), 0 endpoint(s)
 - [matricula](#matricula) — 48 funcion(es), 0 endpoint(s)
-- [menu](#menu) — 2 funcion(es), 5 endpoint(s)
+- [menu](#menu) — 5 funcion(es), 5 endpoint(s)
 - [mi](#mi) — 3 funcion(es), 0 endpoint(s)
 - [microservice](#microservice) — 1 funcion(es), 0 endpoint(s)
 - [nivel](#nivel) — 1 funcion(es), 0 endpoint(s)
@@ -73,7 +73,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 - [referente](#referente) — 2 funcion(es), 0 endpoint(s)
 - [reorder](#reorder) — 1 funcion(es), 0 endpoint(s)
 - [resolver](#resolver) — 3 funcion(es), 0 endpoint(s)
-- [rol](#rol) — 3 funcion(es), 0 endpoint(s)
+- [rol](#rol) — 7 funcion(es), 0 endpoint(s)
 - [role](#role) — 1 funcion(es), 4 endpoint(s)
 - [sed](#sed) — 17 funcion(es), 0 endpoint(s)
 - [sede](#sede) — 6 funcion(es), 0 endpoint(s)
@@ -85,14 +85,14 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 - [tg](#tg) — 2 funcion(es), 0 endpoint(s)
 - [tr](#tr) — 1 funcion(es), 0 endpoint(s)
 - [trg](#trg) — 1 funcion(es), 0 endpoint(s)
-- [trol](#trol) — 3 funcion(es), 0 endpoint(s)
+- [trol](#trol) — 4 funcion(es), 0 endpoint(s)
 - [tsede](#tsede) — 1 funcion(es), 0 endpoint(s)
 - [tunidad](#tunidad) — 1 funcion(es), 0 endpoint(s)
 - [tusuario](#tusuario) — 1 funcion(es), 0 endpoint(s)
 - [unidad](#unidad) — 39 funcion(es), 0 endpoint(s)
 - [user](#user) — 2 funcion(es), 0 endpoint(s)
 - [usu](#usu) — 9 funcion(es), 0 endpoint(s)
-- [usuario](#usuario) — 20 funcion(es), 2 endpoint(s)
+- [usuario](#usuario) — 22 funcion(es), 3 endpoint(s)
 - [validar](#validar) — 1 funcion(es), 0 endpoint(s)
 
 ## (transversal)
@@ -107,6 +107,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_cdc_evento_tabla_nueva` | 0 | V283 | — |
 | `academico_test.fn_delete_menu` | 2 | V115 | V126 |
 | `academico_test.fn_list_menu_possibilities_for_rol` | 2 | V113 | — |
+| `academico_test.fn_menu_catalogo_listar_interno` | 0 | V498 | — |
 | `academico_test.fn_menu_codigo_canonico` | 1 | V396 | — |
 | `academico_test.fn_menu_grupo_de` | 1 | V396 | — |
 | `academico_test.fn_upsert_menu` | 11 | V113 | V126 |
@@ -343,7 +344,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_list_available_menus` | 1 | V115 | V119 |
+| `academico_test.fn_list_available_menus` | 1 | V498 | V119 |
 
 ## cat
 
@@ -409,7 +410,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Endpoint | Verbo | Migraciones que la tocan | Funciones que invocan (aprox.) |
 |---|---|---|---|
-| `/documentos/todos/query` | POST | V368, V374 | `fn_documentos_listar_todos` (V368), `fn_documentos_listar_todos_paginado` (V374) |
+| `/documentos/todos/query` | POST | V495 | — |
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
@@ -716,8 +717,11 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_associate_menus_to_rol` | 5 | V123 | V129, V198 |
+| `academico_test.fn_associate_menus_to_rol` | 5 | V498 | V129, V198 |
 | `academico_test.fn_dissociate_menus_from_rol` | 3 | V113 | — |
+| `academico_test.fn_menus_reordenar_interno` | 2 | V498 | — |
+| `academico_test.fn_menus_validar_hermanos` | 1 | V498 | — |
+| `academico_test.fn_menus_validar_lista` | 2 | V498 | — |
 
 ## mi
 
@@ -1030,7 +1034,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_reorder_menus` | 2 | V113 | V126 |
+| `academico_test.fn_reorder_menus` | 3 | V498 | V126, V498 |
 
 ## resolver
 
@@ -1046,6 +1050,10 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 |---|---|---|---|
 | `academico_test.fn_rol_alcance_sede` | 1 | V489 | — |
 | `academico_test.fn_rol_categoria_nivel` | 1 | V29 | V51, V294, V295, V297, V298, V300… |
+| `academico_test.fn_rol_menus_asignar_interno` | 4 | V498 | — |
+| `academico_test.fn_rol_menus_listar` | 2 | V498 | — |
+| `academico_test.fn_rol_menus_listar_interno` | 1 | V498 | — |
+| `academico_test.fn_rol_menus_validar_jerarquia` | 1 | V498 | — |
 | `pigse.fn_rol_categoria_nivel` | 1 | V370 | V390 |
 
 ## role
@@ -1122,7 +1130,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_assert_superadmin` | 1 | V113 | V113, V115, V119, V123 |
+| `academico_test.fn_assert_superadmin` | 1 | V113 | V113, V115, V119, V123, V498 |
 
 ## tactividad
 
@@ -1158,6 +1166,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_add_trol` | 4 | V113 | V119 |
 | `academico_test.fn_list_trol_names_for_superadmin` | 1 | V59 | — |
 | `academico_test.fn_sync_trol_to_public_role` | 0 | V113 | V113 |
+| `academico_test.fn_trol_validar_activo` | 1 | V498 | — |
 
 ## tsede
 
@@ -1247,6 +1256,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | Endpoint | Verbo | Migraciones que la tocan | Funciones que invocan (aprox.) |
 |---|---|---|---|
 | `/usuarios/:PK_TUSUARIO/permisos-menu` | GET | V185 | — |
+| `/usuarios/actividad/query` | POST | V495 | — |
 | `/usuarios/autocompletar-por-documento` | GET | V366 | `fn_usuario_tiene_rol` (V257), `fn_get_pigse_usuario_id` (V261) |
 
 | Funcion | Params | Migracion dueña | La usan |
@@ -1271,6 +1281,8 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `pigse.fn_usuario_puede_en_menu` | 3 | V370 | V373 |
 | `pigse.fn_usuario_sedes_jornadas_accesibles` | 1 | V370 | V390 |
 | `pigse.fn_usuario_tiene_rol` | 2 | V257 | V263, V360, V362, V366, V369, V387… |
+| `pigse.fn_usuarios_actividad_listar` | 8 | V495 | — |
+| `pigse.fn_usuarios_actividad_listar_interno` | 7 | V495 | — |
 
 ## validar
 
