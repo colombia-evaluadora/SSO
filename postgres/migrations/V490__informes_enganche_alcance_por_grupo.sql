@@ -1274,6 +1274,22 @@ END;
 $function$
 ;
 
+COMMENT ON FUNCTION academico_test.fn_informe_periodo_evidencias_listar(BIGINT, BIGINT, BIGINT)
+    IS 'Las evidencias (archivos adjuntos a la observacion, con o sin texto) de UN estudiante en un periodo, para la pantalla de informes; con FK_TPERIODO_EVALUACION nulo, las de TODO el año (fila Final). Lee la misma TACTIVIDAD_SOPORTE que GET /planeador/actividades/estudiantes/:ID/soportes pero no lo reusa: aquel pide PLANEADOR/VER y va por actividad, aca es por (estudiante, periodo). Cada evidencia trae el periodo en que cae (por fechas, fn_actividad_en_periodo_eval) (es_favorito lo agrega la query de POST /informes/evidencias, para no cambiar el tipo de retorno). Gate INFORMES/VER sobre EE/sede/jornada de la matricula + recorte por grupo propio; 404 si la matricula no existe.';
+
+-- es_favorito va en la query y no en RETURNS TABLE: cambiar el tipo de retorno
+-- exige DROP, y reaplicar una version anterior de este archivo fallaria.
+UPDATE public.query q
+   SET query = 'SELECT e.*, so.ES_FAVORITO AS es_favorito
+  FROM academico_test.fn_informe_periodo_evidencias_listar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:BODY.FK_TMATRICULA AS BIGINT),
+    CAST(:BODY.FK_TPERIODO_EVALUACION AS BIGINT)
+  ) e
+  JOIN academico_test.TACTIVIDAD_SOPORTE so
+    ON so.PK_TACTIVIDAD_SOPORTE = e.pk_tactividad_soporte;'
+ WHERE q.uuid = 'eval-col-informes-evidencias-001';
+
 -- ---------------------------------------------------------------------------
 -- fn_estudiante_periodo_observacion_generar
 -- ---------------------------------------------------------------------------
