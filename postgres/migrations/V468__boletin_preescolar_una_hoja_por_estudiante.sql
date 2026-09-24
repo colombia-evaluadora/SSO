@@ -9,7 +9,7 @@
 -- Los nombres salen del PLAN DE ESTUDIO y no del listado. El porque de las
 -- tres decisiones, en el COMMENT.
 --
--- Depende de: V466. Idempotente: CREATE OR REPLACE, mismo tipo de retorno.
+-- Depende de: V466, V461 (ES_FAVORITO). Idempotente: CREATE OR REPLACE, mismo tipo de retorno.
 -- ===========================================================================
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_boletin_preescolar(
@@ -172,6 +172,7 @@ AS $function$
         SELECT so.FK_TACTIVIDAD_ESTUDIANTE,
                so.PK_TACTIVIDAD_SOPORTE,
                so.FK_TARCHIVO,
+               so.ES_FAVORITO,
                COALESCE(so.FECHA, so.CREATED_AT::DATE) AS fecha_carga
           FROM academico_test.TACTIVIDAD_SOPORTE so
           JOIN academico_test.TARCHIVO ar
@@ -190,20 +191,20 @@ AS $function$
                a.TITULO        AS titulo,
                s1.FK_TARCHIVO  AS fk_tarchivo,
                s1.fecha_carga  AS fecha,
+               -- Las favoritas primero: son las que el docente eligio mostrar.
                ROW_NUMBER() OVER (PARTITION BY ae.FK_TMATRICULA
-                                      ORDER BY s1.fecha_carga DESC,
+                                      ORDER BY s1.ES_FAVORITO DESC,
+                                               s1.fecha_carga DESC,
                                                s1.PK_TACTIVIDAD_SOPORTE DESC) AS orden
           FROM academico_test.TACTIVIDAD a
           JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae
             ON ae.FK_TACTIVIDAD = a.PK_TACTIVIDAD
            AND ae.ACTIVE = TRUE
-          JOIN academico_test.TACTIVIDAD_NOTA n
-            ON n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
-           AND n.ACTIVE = TRUE
+          -- Sin exigir texto en TACTIVIDAD_NOTA: una observacion puede ser
+          -- solo evidencias y sus fotos tambien van al boletin.
           JOIN soportes s1
             ON s1.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
          WHERE a.ACTIVE = TRUE
-           AND COALESCE(TRIM(n.OBSERVACION), '') <> ''
            AND academico_test.fn_actividad_en_periodo_eval(a.PK_TACTIVIDAD,
                                                            p_fk_tperiodo_evaluacion)
            AND ae.FK_TMATRICULA IN (SELECT f.fk_tmatricula FROM filas f)
