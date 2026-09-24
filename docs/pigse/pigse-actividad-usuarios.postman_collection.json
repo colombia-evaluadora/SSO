@@ -64,9 +64,9 @@
             "exec": [
               "pm.test('200', () => pm.response.to.have.status(200));",
               "const r = pm.response.json();",
-              "const page = Array.isArray(r) ? r[0] : r;",
-              "pm.test('forma paginada', () => { pm.expect(page).to.have.property('rows'); pm.expect(page).to.have.property('total_count'); });",
-              "const rows = typeof page.rows === 'string' ? JSON.parse(page.rows) : page.rows;",
+              "const page = r.rows[0];",
+              "pm.test('forma paginada', () => { pm.expect(page).to.include.keys('rows', 'total_count', 'page_count', 'page_index', 'page_size'); });",
+              "const rows = page.rows;",
               "pm.test('filas con estado valido', () => rows.forEach(f => pm.expect(['EN_LINEA','DESCONECTADO','SIN_INGRESO']).to.include(f.estado)));",
               "if (rows.length && rows[0].establecimientoId) { pm.collectionVariables.set('establecimientoId', rows[0].establecimientoId); }"
             ]
@@ -109,7 +109,7 @@
         },
         "description": {
           "type": "text/markdown",
-          "content": "Una fila por **(establecimiento, usuario PIGSE activo)**. Sin filtro territorial: los 6 roles ven todo PIGSE.\n\nCampos: `establecimientoId`, `establecimientoCodigo`, `establecimientoNombre` (NULL para usuarios territoriales sin EE), `usuarioId` (pigse.tusuario), `nombre`, `identificacion`, `correo`, `roles` (CSV de roles PIGSE), `ultimoLogin`, `ultimaActividad`, `enLinea`, `estado`.\n\n`estado`: `EN_LINEA` = sesion abierta con actividad en los ultimos 30 min (misma regla que /audits/query); `DESCONECTADO` = inicio sesion alguna vez; `SIN_INGRESO` = ninguna sesion registrada.\n\nParams: `pageIndex` (>=0, default 0), `pageSize` (1-200, default 10), `sorting.id` (`establecimientoNombre` | `nombre` | `ultimoLogin` | `ultimaActividad` | `estado`), `sorting.desc`, `filters.search` (nombre, documento, correo, nombre o codigo del EE; sin tildes), `filters.establecimientoId`, `filters.estado`.\n\nLa actividad sale de `academico_test.tsesion_web.fk_id_user` (V495): solo cuenta sesiones iniciadas despues del deploy de V495 + auth-center. Las sesiones se borran 40 dias despues de cerrarse (GC), asi que un usuario inactivo por mas tiempo vuelve a `SIN_INGRESO`.\n\nRecien aplicada la migracion la ruta responde **404** por el gateway hasta reiniciar `query-service-pigse`."
+          "content": "Una fila por **(establecimiento, usuario PIGSE activo)**. Sin filtro territorial: los 6 roles ven todo PIGSE.\n\nCampos: `establecimientoId`, `establecimientoCodigo`, `establecimientoNombre` (NULL para usuarios territoriales sin EE), `usuarioId` (pigse.tusuario), `nombre`, `identificacion`, `correo`, `roles` (CSV de roles PIGSE), `ultimoLogin`, `ultimaActividad`, `enLinea`, `estado`.\n\n`estado`: `EN_LINEA` = sesion abierta con actividad en los ultimos 30 min (misma regla que /audits/query); `DESCONECTADO` = inicio sesion alguna vez; `SIN_INGRESO` = ninguna sesion registrada.\n\nParams: `pageIndex` (>=0, default 0), `pageSize` (1-200, default 10), `sorting.id` (`establecimientoNombre` | `nombre` | `ultimoLogin` | `ultimaActividad` | `estado`), `sorting.desc`, `filters.search` (nombre, documento, correo, nombre o codigo del EE; sin tildes), `filters.establecimientoId`, `filters.estado`.\n\nLa actividad sale de `academico_test.tsesion_web.fk_id_user` (V495): solo cuenta sesiones iniciadas despues del deploy de V495 + auth-center. Las sesiones se borran 40 dias despues de cerrarse (GC), asi que un usuario inactivo por mas tiempo vuelve a `SIN_INGRESO`.\n\nRecien aplicada la migracion la ruta responde **404** por el gateway hasta reiniciar `query-service-pigse`.\n\nRespuesta: `{\"rows\":[{\"rows\":[...filas], \"total_count\":35, \"page_count\":2, \"page_index\":0, \"page_size\":20}]}` (query-service envuelve la fila unica de la funcion)."
         }
       }
     },
@@ -122,8 +122,8 @@
             "type": "text/javascript",
             "exec": [
               "pm.test('200', () => pm.response.to.have.status(200));",
-              "const r = pm.response.json(); const page = Array.isArray(r) ? r[0] : r;",
-              "const rows = typeof page.rows === 'string' ? JSON.parse(page.rows) : page.rows;",
+              "const r = pm.response.json(); const page = r.rows[0];",
+              "const rows = page.rows;",
               "pm.test('solo EN_LINEA del EE', () => rows.forEach(f => { pm.expect(f.estado).to.eql('EN_LINEA'); pm.expect(String(f.establecimientoId)).to.eql(String(pm.collectionVariables.get('establecimientoId'))); }));"
             ]
           }
@@ -165,7 +165,7 @@
         },
         "description": {
           "type": "text/markdown",
-          "content": "Usa el `establecimientoId` que dejo la peticion 1. Ordena por ultima actividad descendente."
+          "content": "Usa el `establecimientoId` que dejo la peticion 1. Ordena por ultima actividad descendente. `establecimientoId` vacio (`\"\"`) responde 400: omitir el campo o mandar `null` para no filtrar."
         }
       }
     },
