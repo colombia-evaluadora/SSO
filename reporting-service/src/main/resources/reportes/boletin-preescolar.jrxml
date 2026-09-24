@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Boletin de preescolar: UNA PAGINA POR (ESTUDIANTE, ASIGNATURA).
+  Boletin de preescolar: UN BOLETIN POR ESTUDIANTE, de una o mas hojas.
 
-  El titulo del bloque de seguimiento NO es un rotulo fijo: sale de
-  asignatura_nombre. Un estudiante que cursa dos dimensiones recibe dos
-  paginas, cada una con su titulo y con sus propias evidencias.
+  El boletin es un grupo por estudiante (hoja nueva y numeracion propia) con
+  bandas de detalle que fluyen: datos, titulo, observacion, evidencias y
+  firma. La observacion se parte entre hojas; las demas bandas no se parten y
+  pasan enteras a la siguiente si no caben. Fondo y cabecera se repiten en
+  cada hoja, y el pie dice "Pagina N de M" del boletin.
 
   DOS COSAS QUE PARECEN ERRORES Y NO LO SON, medidas contra JasperReports
   7.0.8 antes de escribir esta plantilla:
@@ -19,23 +21,15 @@
   Pagina Oficio (613x894, el tamaño de los fondos institucionales) y margenes
   en cero, porque el fondo se imprime a sangre.
 
-  TODO el contenido vive en la banda `detail`, incluida la imagen de fondo. La
-  banda `background` no ve los campos del detalle, asi que desde ahi el fondo
-  no podria cambiar por establecimiento, que es justo lo que permite V465.
-
   (Ojo con los comentarios: XML prohibe dos guiones seguidos dentro de uno, y
   Jasper responde a eso con el mismo "Unable to load report" de siempre.)
 
-  splitType="Prevent" mas una banda de la altura exacta de la pagina es lo que
-  garantiza una pagina por estudiante: no cabe dos veces.
-
   La fuente se nombra en CADA elemento a proposito. El estilo por defecto con
   DejaVu Sans solo existe en el diseño programatico de PdfRenderer, y sin el
-  reaparece el separado de letras en los acentos. El embebido en el PDF lo
-  resuelve la extension de fuentes (fonts/dejavu.xml), no cada elemento.
+  reaparece el separado de letras en los acentos.
 
-  Los cinco parametros se declaran porque PdfRenderer los manda siempre; esta
-  plantilla no los pinta: el encabezado sale de los datos, no del catalogo.
+  Generada por scripts/generar-boletin-preescolar.py: editar el script, no
+  este archivo.
 -->
 <jasperReport name="boletin-preescolar"
               pageWidth="613" pageHeight="894" columnWidth="613"
@@ -85,157 +79,495 @@
 	<field name="evidencia4_archivo" class="java.io.InputStream"/>
 	<field name="evidencia5_archivo" class="java.io.InputStream"/>
 	<field name="evidencia6_archivo" class="java.io.InputStream"/>
+	<group name="boletin" startNewPage="true" resetPageNumber="true">
+		<expression><![CDATA[$F{documento} + "|" + $F{estudiante}]]></expression>
+	</group>
 
+	<background height="894" splitType="Prevent">
+			<element kind="image" x="0" y="0" width="613" height="894" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank" usingCache="true">
+			<expression><![CDATA[$F{fondo_archivo}]]></expression>
+		</element>
+	</background>
+	<pageHeader height="126" splitType="Prevent">
+			<element kind="textField" x="40" y="6" width="260" height="29" fontName="DejaVu Sans" fontSize="13" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+			<printWhenExpression><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.claro($F{fondo_archivo}, 0.065, 0.009, 0.424, 0.056)]]></printWhenExpression>
+			<expression><![CDATA[$F{ee_nombre}]]></expression>
+		</element>
+		<element kind="textField" x="40" y="6" width="260" height="29" fontName="DejaVu Sans" fontSize="13" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+			<printWhenExpression><![CDATA[!com.co.eurekatic.reporting.render.TonoFondo.claro($F{fondo_archivo}, 0.065, 0.009, 0.424, 0.056)]]></printWhenExpression>
+			<expression><![CDATA[$F{ee_nombre}]]></expression>
+		</element>
+		<element kind="textField" x="40" y="35" width="260" height="10" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+			<printWhenExpression><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.claro($F{fondo_archivo}, 0.065, 0.009, 0.424, 0.056)]]></printWhenExpression>
+			<expression><![CDATA["Dane: " + $F{ee_dane} + "   -   Nit: " + $F{ee_nit}]]></expression>
+		</element>
+		<element kind="textField" x="40" y="35" width="260" height="10" fontName="DejaVu Sans" fontSize="7" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+			<printWhenExpression><![CDATA[!com.co.eurekatic.reporting.render.TonoFondo.claro($F{fondo_archivo}, 0.065, 0.009, 0.424, 0.056)]]></printWhenExpression>
+			<expression><![CDATA["Dane: " + $F{ee_dane} + "   -   Nit: " + $F{ee_nit}]]></expression>
+		</element>
+		<element kind="textField" x="40" y="45" width="260" height="10" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+			<printWhenExpression><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.claro($F{fondo_archivo}, 0.065, 0.009, 0.424, 0.056)]]></printWhenExpression>
+			<expression><![CDATA[$F{ciudad}]]></expression>
+		</element>
+		<element kind="textField" x="40" y="45" width="260" height="10" fontName="DejaVu Sans" fontSize="7" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+			<printWhenExpression><![CDATA[!com.co.eurekatic.reporting.render.TonoFondo.claro($F{fondo_archivo}, 0.065, 0.009, 0.424, 0.056)]]></printWhenExpression>
+			<expression><![CDATA[$F{ciudad}]]></expression>
+		</element>
+		<element kind="textField" x="400" y="110" width="173" height="12" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+			<expression><![CDATA["Expedido: " + $P{GENERADO}]]></expression>
+		</element>
+		<element kind="textField" x="40" y="110" width="360" height="12" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+			<printWhenExpression><![CDATA[$V{PAGE_NUMBER} > 1]]></printWhenExpression>
+			<expression><![CDATA[$F{estudiante} + " (continuacion)"]]></expression>
+		</element>
+	</pageHeader>
 	<detail>
-		<band height="894" splitType="Prevent">
-			<element kind="image" x="0" y="0" width="613" height="894" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{fondo_archivo}]]></expression>
-			</element>
-			<element kind="textField" x="40" y="115" width="360" height="34" fontName="DejaVu Sans" fontSize="14" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="StretchHeight">
-				<expression><![CDATA[$F{ee_nombre}]]></expression>
-			</element>
-			<element kind="textField" x="40" y="151" width="360" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
-				<expression><![CDATA["Dane: " + $F{ee_dane} + "   -   Nit: " + $F{ee_nit}]]></expression>
-			</element>
-			<element kind="textField" x="40" y="164" width="360" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
-				<expression><![CDATA[$F{ciudad}]]></expression>
-			</element>
-			<element kind="textField" x="400" y="151" width="173" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
-				<expression><![CDATA[$F{periodo_nombre} + " - " + $F{anio}]]></expression>
-			</element>
-			<element kind="rectangle" x="40" y="185" width="80" height="94" backcolor="#E8EEF7" mode="Opaque">
+		<band height="104" splitType="Prevent">
+			<element kind="rectangle" x="40" y="2" width="80" height="96" backcolor="#E8EEF7" mode="Opaque">
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="41" y="186" width="78" height="92" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+			<element kind="image" x="41" y="3" width="78" height="94" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
 				<expression><![CDATA[$F{foto_archivo}]]></expression>
 			</element>
-			<element kind="textField" x="132" y="188" width="441" height="20" fontName="DejaVu Sans" fontSize="13" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+			<element kind="textField" x="132" y="2" width="441" height="20" fontName="DejaVu Sans" fontSize="13" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
 				<expression><![CDATA[$F{estudiante}]]></expression>
 			</element>
-			<element kind="textField" x="132" y="210" width="441" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+			<element kind="textField" x="132" y="22" width="441" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
 				<expression><![CDATA["Documento: " + $F{documento}]]></expression>
 			</element>
-			<element kind="staticText" x="132" y="232" width="170" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
+			<element kind="rectangle" x="132" y="38" width="441" height="34" backcolor="#E8EEF7" mode="Opaque" radius="6">
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="staticText" x="140" y="41" width="170" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
 				<text><![CDATA[Sede]]></text>
 			</element>
-			<element kind="textField" x="132" y="244" width="170" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+			<element kind="textField" x="140" y="53" width="170" height="16" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
 				<expression><![CDATA[$F{sede_nombre}]]></expression>
 			</element>
-			<element kind="staticText" x="308" y="232" width="90" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
+			<element kind="staticText" x="314" y="41" width="86" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
 				<text><![CDATA[Nivel]]></text>
 			</element>
-			<element kind="textField" x="308" y="244" width="90" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+			<element kind="textField" x="314" y="53" width="86" height="16" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
 				<expression><![CDATA[$F{nivel_ensenanza}]]></expression>
 			</element>
-			<element kind="staticText" x="404" y="232" width="85" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
+			<element kind="staticText" x="404" y="41" width="84" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
 				<text><![CDATA[Grado]]></text>
 			</element>
-			<element kind="textField" x="404" y="244" width="85" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+			<element kind="textField" x="404" y="53" width="84" height="16" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
 				<expression><![CDATA[$F{grado_nombre}]]></expression>
 			</element>
-			<element kind="staticText" x="495" y="232" width="78" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
+			<element kind="staticText" x="492" y="41" width="76" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
 				<text><![CDATA[Grupo]]></text>
 			</element>
-			<element kind="textField" x="495" y="244" width="78" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+			<element kind="textField" x="492" y="53" width="76" height="16" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
 				<expression><![CDATA[$F{grupo_etiqueta}]]></expression>
 			</element>
-			<element kind="rectangle" x="40" y="285" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6">
+			<element kind="rectangle" x="132" y="78" width="250" height="20" backcolor="#E8EEF7" mode="Opaque" radius="6">
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="textField" x="52" y="285" width="380" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+			<element kind="staticText" x="140" y="78" width="45" height="20" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true">
+				<text><![CDATA[Periodo:]]></text>
+			</element>
+			<element kind="textField" x="185" y="78" width="192" height="20" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" blankWhenNull="true">
+				<expression><![CDATA[$F{anio} + " - " + $F{periodo_nombre}]]></expression>
+			</element>
+		</band>
+		<band height="28" splitType="Stretch">
+			<element kind="rectangle" x="40" y="0" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6" stretchType="ContainerHeight">
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="textField" x="52" y="0" width="509" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true" textAdjust="StretchHeight">
 				<expression><![CDATA[$F{asignatura_nombre} == null || $F{asignatura_nombre}.trim().isEmpty() ? "SEGUIMIENTO Y VALORACION" : $F{asignatura_nombre}.toUpperCase()]]></expression>
+				<box topPadding="5" bottomPadding="5"/>
 			</element>
-			<element kind="textField" x="440" y="285" width="121" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#FFFFFF" hTextAlign="Right" vTextAlign="Middle" blankWhenNull="true">
-				<expression><![CDATA[$F{area_nombre}]]></expression>
+		</band>
+		<band height="16" splitType="Stretch">
+			<printWhenExpression><![CDATA[$F{area_nombre} != null && !$F{area_nombre}.trim().isEmpty()]]></printWhenExpression>
+			<element kind="textField" x="44" y="2" width="525" height="12" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true" textAdjust="StretchHeight">
+				<expression><![CDATA["Areas: " + $F{area_nombre}]]></expression>
 			</element>
-			<element kind="textField" x="40" y="315" width="533" height="165" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Justified" vTextAlign="Top">
+		</band>
+		<band height="34" splitType="Stretch">
+			<element kind="textField" x="40" y="4" width="533" height="22" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Justified" vTextAlign="Top" textAdjust="StretchHeight">
 				<expression><![CDATA[$F{observacion} == null || $F{observacion}.trim().isEmpty() ? "Sin observaciones registradas para este periodo." : $F{observacion}]]></expression>
+				<box topPadding="8" leftPadding="10" bottomPadding="8" rightPadding="10">
+					<pen lineWidth="0.75" lineColor="#9FB3D1"/>
+				</box>
 			</element>
-			<element kind="rectangle" x="40" y="487" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6">
+		</band>
+		<band height="288" splitType="Prevent">
+			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) > 0]]></printWhenExpression>
+			<element kind="rectangle" x="40" y="0" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6">
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="staticText" x="52" y="487" width="400" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+			<element kind="staticText" x="52" y="0" width="400" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
 				<text><![CDATA[EVIDENCIAS DE APRENDIZAJE]]></text>
 			</element>
-			<element kind="rectangle" x="40" y="517" width="169" height="130" backcolor="#F2F6FC" mode="Opaque" radius="6">
+			<element kind="rectangle" x="126" y="30" width="360" height="250" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 1]]></printWhenExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="44" y="521" width="161" height="88" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+			<element kind="image" x="130" y="34" width="352" height="206" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 1]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia1_archivo}]]></expression>
 			</element>
-			<element kind="textField" x="46" y="612" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+			<element kind="textField" x="132" y="240" width="348" height="26" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 1]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia1_titulo}]]></expression>
 			</element>
-			<element kind="textField" x="46" y="633" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+			<element kind="textField" x="132" y="267" width="348" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 1]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia1_fecha}]]></expression>
 			</element>
-			<element kind="rectangle" x="221" y="517" width="169" height="130" backcolor="#F2F6FC" mode="Opaque" radius="6">
+			<element kind="rectangle" x="40" y="30" width="260" height="250" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 2]]></printWhenExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="225" y="521" width="161" height="88" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+			<element kind="image" x="44" y="34" width="252" height="206" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 2]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="240" width="248" height="26" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 2]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="267" width="248" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 2]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="312" y="30" width="260" height="250" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 2]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="316" y="34" width="252" height="206" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 2]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia2_archivo}]]></expression>
 			</element>
-			<element kind="textField" x="227" y="612" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+			<element kind="textField" x="318" y="240" width="248" height="26" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 2]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia2_titulo}]]></expression>
 			</element>
-			<element kind="textField" x="227" y="633" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+			<element kind="textField" x="318" y="267" width="248" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 2]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia2_fecha}]]></expression>
 			</element>
-			<element kind="rectangle" x="402" y="517" width="169" height="130" backcolor="#F2F6FC" mode="Opaque" radius="6">
+			<element kind="rectangle" x="40" y="30" width="260" height="250" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 3]]></printWhenExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="406" y="521" width="161" height="88" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+			<element kind="image" x="44" y="34" width="252" height="206" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 3]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="240" width="248" height="26" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 3]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="267" width="248" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 3]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="312" y="30" width="260" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 3]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="316" y="34" width="252" height="77" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 3]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia2_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="318" y="111" width="248" height="26" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 3]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia2_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="318" y="138" width="248" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 3]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia2_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="312" y="159" width="260" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 3]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="316" y="163" width="252" height="77" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 3]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia3_archivo}]]></expression>
 			</element>
-			<element kind="textField" x="408" y="612" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+			<element kind="textField" x="318" y="240" width="248" height="26" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 3]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia3_titulo}]]></expression>
 			</element>
-			<element kind="textField" x="408" y="633" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+			<element kind="textField" x="318" y="267" width="248" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 3]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia3_fecha}]]></expression>
 			</element>
-			<element kind="rectangle" x="40" y="655" width="169" height="130" backcolor="#F2F6FC" mode="Opaque" radius="6">
+			<element kind="rectangle" x="40" y="30" width="260" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="44" y="659" width="161" height="88" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+			<element kind="image" x="44" y="34" width="252" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="115" width="248" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="138" width="248" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="312" y="30" width="260" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="316" y="34" width="252" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia2_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="318" y="115" width="248" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia2_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="318" y="138" width="248" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia2_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="40" y="159" width="260" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="44" y="163" width="252" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia3_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="244" width="248" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia3_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="267" width="248" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia3_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="312" y="159" width="260" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="316" y="163" width="252" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia4_archivo}]]></expression>
 			</element>
-			<element kind="textField" x="46" y="750" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+			<element kind="textField" x="318" y="244" width="248" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia4_titulo}]]></expression>
 			</element>
-			<element kind="textField" x="46" y="771" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+			<element kind="textField" x="318" y="267" width="248" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia4_fecha}]]></expression>
 			</element>
-			<element kind="rectangle" x="221" y="655" width="169" height="130" backcolor="#F2F6FC" mode="Opaque" radius="6">
+			<element kind="rectangle" x="40" y="30" width="169" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="225" y="659" width="161" height="88" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+			<element kind="image" x="44" y="34" width="161" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="115" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="138" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="221" y="30" width="169" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="225" y="34" width="161" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia2_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="227" y="115" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia2_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="227" y="138" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia2_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="402" y="30" width="169" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="406" y="34" width="161" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia3_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="408" y="115" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia3_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="408" y="138" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia3_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="131" y="159" width="169" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="135" y="163" width="161" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia4_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="137" y="244" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia4_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="137" y="267" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia4_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="312" y="159" width="169" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="316" y="163" width="161" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia5_archivo}]]></expression>
 			</element>
-			<element kind="textField" x="227" y="750" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+			<element kind="textField" x="318" y="244" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia5_titulo}]]></expression>
 			</element>
-			<element kind="textField" x="227" y="771" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+			<element kind="textField" x="318" y="267" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia5_fecha}]]></expression>
 			</element>
-			<element kind="rectangle" x="402" y="655" width="169" height="130" backcolor="#F2F6FC" mode="Opaque" radius="6">
+			<element kind="rectangle" x="40" y="30" width="169" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="406" y="659" width="161" height="88" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+			<element kind="image" x="44" y="34" width="161" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="115" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="138" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia1_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="221" y="30" width="169" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="225" y="34" width="161" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia2_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="227" y="115" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia2_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="227" y="138" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia2_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="402" y="30" width="169" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="406" y="34" width="161" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia3_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="408" y="115" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia3_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="408" y="138" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia3_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="40" y="159" width="169" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="44" y="163" width="161" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia4_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="244" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia4_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="46" y="267" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia4_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="221" y="159" width="169" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="225" y="163" width="161" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia5_archivo}]]></expression>
+			</element>
+			<element kind="textField" x="227" y="244" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia5_titulo}]]></expression>
+			</element>
+			<element kind="textField" x="227" y="267" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<expression><![CDATA[$F{evidencia5_fecha}]]></expression>
+			</element>
+			<element kind="rectangle" x="402" y="159" width="169" height="121" backcolor="#F2F6FC" mode="Opaque" radius="6">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="image" x="406" y="163" width="161" height="81" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia6_archivo}]]></expression>
 			</element>
-			<element kind="textField" x="408" y="750" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+			<element kind="textField" x="408" y="244" width="157" height="22" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia6_titulo}]]></expression>
 			</element>
-			<element kind="textField" x="408" y="771" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+			<element kind="textField" x="408" y="267" width="157" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+				<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
 				<expression><![CDATA[$F{evidencia6_fecha}]]></expression>
 			</element>
-			<element kind="line" x="207" y="812" width="200" height="1" forecolor="#16305C"/>
-			<element kind="textField" x="157" y="816" width="300" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
+		</band>
+		<band height="50" splitType="Prevent">
+			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 0]]></printWhenExpression>
+			<element kind="rectangle" x="40" y="0" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6">
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="staticText" x="52" y="0" width="400" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+				<text><![CDATA[EVIDENCIAS DE APRENDIZAJE]]></text>
+			</element>
+			<element kind="staticText" x="40" y="26" width="533" height="18" fontName="DejaVu Sans" fontSize="8" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+				<text><![CDATA[Sin evidencias fotograficas registradas en este periodo.]]></text>
+			</element>
+		</band>
+		<band height="62" splitType="Prevent">
+			<element kind="line" x="207" y="32" width="200" height="1" forecolor="#16305C"/>
+			<element kind="textField" x="157" y="35" width="300" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
 				<expression><![CDATA[$F{rector_nombre}]]></expression>
 			</element>
-			<element kind="staticText" x="157" y="828" width="300" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+			<element kind="staticText" x="157" y="47" width="300" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
 				<text><![CDATA[Rector(a)]]></text>
 			</element>
 		</band>
 	</detail>
+	<pageFooter height="60" splitType="Prevent">
+			<element kind="textField" x="206" y="14" width="100" height="10" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
+			<expression><![CDATA["Pagina " + $V{PAGE_NUMBER}]]></expression>
+		</element>
+		<element kind="textField" x="306" y="14" width="100" height="10" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true" evaluationTime="Group" evaluationGroup="boletin">
+			<expression><![CDATA[" de " + $V{PAGE_NUMBER}]]></expression>
+		</element>
+	</pageFooter>
 </jasperReport>
