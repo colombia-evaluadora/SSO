@@ -1,0 +1,297 @@
+{
+  "info": {
+    "name": "PIGSE - Actividad de usuarios por establecimiento",
+    "description": "`POST /api/pigse/usuarios/actividad/query` (V495). Solo lectura: no crea nada, la corrida no deja rastro.\n\nCorrer: `newman run docs/pigse/pigse-actividad-usuarios.postman_collection.json -e docs/deploy/sso-test.postman_environment.json --env-var email=... --env-var password=...`",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0 - Login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('login 200', () => pm.response.to.have.status(200));",
+              "const d = pm.response.json();",
+              "if (d.token) { pm.collectionVariables.set('token', d.token); }"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "description": {
+          "type": "text/markdown",
+          "content": "Guarda el `token`. El usuario del entorno debe tener uno de: `PIGSE-SECRETARIA_TERRITORIAL`, `PIGSE-SECRETARIO`, `PIGSE-JEFE_AREA_CALIDAD`, `PIGSE-JEFE_AREA_PLANEACION`, `PIGSE-JEFE_AREA_COBERTURA`, `PIGSE-ADMINISTRADOR`. Otro rol: 403 (sin fila en `role_query`, y el gate PL/pgSQL responde 42501 igual)."
+        }
+      }
+    },
+    {
+      "name": "1 - Listar actividad (todo PIGSE)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "const page = r.rows[0];",
+              "pm.test('forma paginada', () => { pm.expect(page).to.include.keys('rows', 'total_count', 'page_count', 'page_index', 'page_size'); });",
+              "const rows = page.rows;",
+              "pm.test('filas con estado valido', () => rows.forEach(f => pm.expect(['EN_LINEA','DESCONECTADO','SIN_INGRESO']).to.include(f.estado)));",
+              "if (rows.length && rows[0].establecimientoId) { pm.collectionVariables.set('establecimientoId', rows[0].establecimientoId); }"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/pigse/usuarios/actividad/query",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pigse",
+            "usuarios",
+            "actividad",
+            "query"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"pageIndex\": 0,\n  \"pageSize\": 20,\n  \"sorting\": {\n    \"id\": \"establecimientoNombre\",\n    \"desc\": false\n  },\n  \"filters\": {\n    \"search\": \"\",\n    \"establecimientoId\": null,\n    \"estado\": \"\"\n  }\n}"
+        },
+        "description": {
+          "type": "text/markdown",
+          "content": "Una fila por **(establecimiento, usuario PIGSE activo)**. Sin filtro territorial: los 6 roles ven todo PIGSE.\n\nCampos: `establecimientoId`, `establecimientoCodigo`, `establecimientoNombre` (NULL para usuarios territoriales sin EE), `usuarioId` (pigse.tusuario), `nombre`, `identificacion`, `correo`, `roles` (CSV de roles PIGSE), `ultimoLogin`, `ultimaActividad`, `enLinea`, `estado`.\n\n`estado`: `EN_LINEA` = sesion abierta con actividad en los ultimos 30 min (misma regla que /audits/query); `DESCONECTADO` = inicio sesion alguna vez; `SIN_INGRESO` = ninguna sesion registrada.\n\nParams: `pageIndex` (>=0, default 0), `pageSize` (1-200, default 10), `sorting.id` (`establecimientoNombre` | `nombre` | `ultimoLogin` | `ultimaActividad` | `estado`), `sorting.desc`, `filters.search` (nombre, documento, correo, nombre o codigo del EE; sin tildes), `filters.establecimientoId`, `filters.estado`.\n\nLa actividad sale de `academico_test.tsesion_web.fk_id_user` (V495): solo cuenta sesiones iniciadas despues del deploy de V495 + auth-center. Las sesiones se borran 40 dias despues de cerrarse (GC), asi que un usuario inactivo por mas tiempo vuelve a `SIN_INGRESO`.\n\nRecien aplicada la migracion la ruta responde **404** por el gateway hasta reiniciar `query-service-pigse`.\n\nRespuesta: `{\"rows\":[{\"rows\":[...filas], \"total_count\":35, \"page_count\":2, \"page_index\":0, \"page_size\":20}]}` (query-service envuelve la fila unica de la funcion)."
+        }
+      }
+    },
+    {
+      "name": "2 - Filtrar por establecimiento y en linea",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json(); const page = r.rows[0];",
+              "const rows = page.rows;",
+              "pm.test('solo EN_LINEA del EE', () => rows.forEach(f => { pm.expect(f.estado).to.eql('EN_LINEA'); pm.expect(String(f.establecimientoId)).to.eql(String(pm.collectionVariables.get('establecimientoId'))); }));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/pigse/usuarios/actividad/query",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pigse",
+            "usuarios",
+            "actividad",
+            "query"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"pageIndex\": 0,\n  \"pageSize\": 50,\n  \"sorting\": {\n    \"id\": \"ultimaActividad\",\n    \"desc\": true\n  },\n  \"filters\": {\n    \"establecimientoId\": \"{{establecimientoId}}\",\n    \"estado\": \"EN_LINEA\"\n  }\n}"
+        },
+        "description": {
+          "type": "text/markdown",
+          "content": "Usa el `establecimientoId` que dejo la peticion 1. Ordena por ultima actividad descendente. `establecimientoId` vacio (`\"\"`) responde 400: omitir el campo o mandar `null` para no filtrar."
+        }
+      }
+    },
+    {
+      "name": "3 - Estado invalido (400)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400 INVALID_VALUE', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/pigse/usuarios/actividad/query",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pigse",
+            "usuarios",
+            "actividad",
+            "query"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"pageIndex\": 0,\n  \"pageSize\": 10,\n  \"filters\": {\n    \"estado\": \"ACTIVO\"\n  }\n}"
+        },
+        "description": {
+          "type": "text/markdown",
+          "content": "`filters.estado` fuera de `EN_LINEA` | `DESCONECTADO` | `SIN_INGRESO` -> SQLSTATE 22023 -> 400 `INVALID_VALUE`. Igual con un `sorting.id` desconocido."
+        }
+      }
+    },
+    {
+      "name": "4 - Sin token (401)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('401', () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/pigse/usuarios/actividad/query",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pigse",
+            "usuarios",
+            "actividad",
+            "query"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"pageIndex\": 0,\n  \"pageSize\": 10\n}"
+        },
+        "description": {
+          "type": "text/markdown",
+          "content": "Sin `Authorization`: el gateway corta antes de llegar al query-service. Con token de un rol no autorizado la respuesta es **403** `FORBIDDEN`."
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "email",
+      "value": ""
+    },
+    {
+      "key": "password",
+      "value": ""
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "establecimientoId",
+      "value": ""
+    }
+  ]
+}
