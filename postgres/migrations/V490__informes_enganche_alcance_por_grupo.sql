@@ -1187,10 +1187,11 @@ $function$
 ;
 
 -- ---------------------------------------------------------------------------
--- fn_informe_periodo_evidencias_listar
+-- fn_informe_periodo_evidencias_listar (+ es_favorito: el tipo de retorno cambia)
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_informe_periodo_evidencias_listar(bigint, bigint, bigint);
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_periodo_evidencias_listar(p_pk_usuario_solicitante bigint, p_fk_tmatricula bigint, p_fk_tperiodo_evaluacion bigint DEFAULT NULL::bigint)
- RETURNS TABLE(pk_tactividad_soporte bigint, fk_tarchivo bigint, nombre character varying, urls3 character varying, peso bigint, etiqueta character varying, fecha date, fk_tperiodo_evaluacion bigint, periodo_nombre character varying, fk_tactividad bigint, actividad_titulo character varying, observacion character varying)
+ RETURNS TABLE(pk_tactividad_soporte bigint, fk_tarchivo bigint, nombre character varying, urls3 character varying, peso bigint, etiqueta character varying, fecha date, fk_tperiodo_evaluacion bigint, periodo_nombre character varying, fk_tactividad bigint, actividad_titulo character varying, observacion character varying, es_favorito boolean)
  LANGUAGE plpgsql
  STABLE
 AS $function$
@@ -1252,7 +1253,8 @@ BEGIN
            p.nombre,
            a.PK_TACTIVIDAD,
            a.TITULO,
-           so.OBSERVACION
+           so.OBSERVACION,
+           so.ES_FAVORITO
       FROM academico_test.TACTIVIDAD_SOPORTE so
       JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae
         ON ae.PK_TACTIVIDAD_ESTUDIANTE = so.FK_TACTIVIDAD_ESTUDIANTE
@@ -1273,6 +1275,9 @@ BEGIN
 END;
 $function$
 ;
+
+COMMENT ON FUNCTION academico_test.fn_informe_periodo_evidencias_listar(BIGINT, BIGINT, BIGINT)
+    IS 'Las evidencias (archivos adjuntos a la observacion, con o sin texto) de UN estudiante en un periodo, para la pantalla de informes; con FK_TPERIODO_EVALUACION nulo, las de TODO el año (fila Final). Lee la misma TACTIVIDAD_SOPORTE que GET /planeador/actividades/estudiantes/:ID/soportes pero no lo reusa: aquel pide PLANEADOR/VER y va por actividad, aca es por (estudiante, periodo). Cada evidencia trae el periodo en que cae (por fechas, fn_actividad_en_periodo_eval) y es_favorito, la evidencia destacada de su observacion. Gate INFORMES/VER sobre EE/sede/jornada de la matricula + recorte por grupo propio; 404 si la matricula no existe.';
 
 -- ---------------------------------------------------------------------------
 -- fn_estudiante_periodo_observacion_generar
