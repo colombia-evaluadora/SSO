@@ -26,7 +26,10 @@ public class DebeziumEngineConfig {
         props.setProperty("snapshot.mode", "initial");
         props.setProperty("heartbeat.interval.ms", "5000");
         props.setProperty("tombstones.on.delete", "false");
-        props.setProperty("decimal.handling.mode", "precise");
+        // "string", no "precise": precise emite NUMERIC como bytes base64 del entero sin
+        // escalar (12.34 -> "BNI=") y la escala solo viaja en el schema, que se descarta
+        // abajo (schemas.enable=false). JsonTypedRowBuilder ya parsea el texto decimal.
+        props.setProperty("decimal.handling.mode", "string");
         props.setProperty("time.precision.mode", "connect");
         // Explicito, no el default implicito: AmqpPublisher.parseAuditContext()
         // Base64-decodifica el "content" de cada mensaje logico (pg_logical_emit_message,

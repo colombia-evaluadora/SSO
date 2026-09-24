@@ -4,13 +4,11 @@
 -- se deriva del grado del grupo y la asignatura), pero dejo la sub-rama del
 -- instrumento con el "IF unidad IS NULL THEN RAISE" heredado de V224: una
 -- actividad podia quedar evaluativa y a la vez sin poder decir con que se
--- evalua, y desvincularle la unidad fallaba sin salida. Aqui se cierra en los
--- helpers (contexto_tipo_evaluacion, referente_tipo_evaluacion,
--- evaluacion_requerida), en el nuevo nucleo fn_actividad_instrumento_contexto_assert
--- que comparten el alta y el PATCH, y en campos_disponibles (que ademas
--- deriva el nivel del grupo para no abrirle el instrumento a Preescolar).
--- Depende de: V214.2, V224, V451, V476 (cuyas copias de crear/actualizar/
--- campos_disponibles se reemplazan aqui).
+-- evalua. Se cierra en los helpers, en fn_actividad_instrumento_contexto_assert
+-- y en campos_disponibles (que deriva el nivel para apagar Preescolar).
+-- Crear/editar se parten en wrapper (gate + auditoria) y nucleo _interno con
+-- reglas fn_actividad_validar_*; una actividad vive en UN periodo de evaluacion.
+-- Depende de: V66, V214.2, V224, V277, V451, V460, V476.
 -- ===========================================================================
 SET search_path TO academico_test, public;
 
@@ -136,12 +134,284 @@ COMMENT ON FUNCTION academico_test.fn_actividad_instrumento_contexto_assert(BIGI
     IS 'Nucleo (sin gate de permisos) de la condicion dinamica "actividad -> evaluacion": aborta con 22023 si se configura un instrumento de evaluacion en un contexto cuyo referente curricular es Formativo. No-op si no hay instrumento. El contexto lo decide fn_actividad_contexto_evaluativo (V476): con unidad manda la unidad, sin ella el referente se deriva del (grado del grupo, asignatura) -- por eso NO tener unidad ya no es motivo de rechazo, que era el bug: V476 dejaba crear una actividad evaluativa sin unidad pero esta rama seguia exigiendola, y un PATCH que desvinculaba la unidad de una actividad con instrumento heredado fallaba sin salida. p_titulo solo adorna el mensaje. Lo invocan fn_actividad_crear y fn_actividad_actualizar, que ya gatearon CREAR/EDITAR sobre PLANEADOR. V479.';
 
 -- ---------------------------------------------------------------------------
--- 3) Escritura y lectura: copias de V476 con la sub-rama del instrumento
---    delegada en el assert, y el nivel de Preescolar derivado del grupo
---    cuando la actividad no tiene unidad. Misma firma: CREATE OR REPLACE.
 -- ---------------------------------------------------------------------------
+-- 1) Ancla territorial de la actividad: mismo reparto que el alcance, el
+--    grado sale del grupo y, sin grupo, de la unidad.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_grado(
+    p_fk_tgrupo  BIGINT,
+    p_fk_tunidad BIGINT
+)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(
+        (SELECT gr.FK_TGRADO FROM academico_test.TGRUPO gr
+          WHERE gr.PK_TGRUPO = p_fk_tgrupo AND gr.ACTIVE),
+        (SELECT u.FK_TGRADO FROM academico_test.TUNIDAD u
+          WHERE u.PK_TUNIDAD = p_fk_tunidad AND u.ACTIVE));
+$$;
+COMMENT ON FUNCTION academico_test.fn_actividad_grado(BIGINT, BIGINT)
+    IS 'INTERNO: grado de una actividad (del grupo o, sin grupo, de la unidad). Lo usan fn_actividad_sede y fn_actividad_validar_periodo_evaluacion_unico. NULL para la actividad huerfana.';
 
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_crear(
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_sede(
+    p_fk_tgrupo  BIGINT,
+    p_fk_tunidad BIGINT
+)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT pa.FK_TSEDE
+      FROM academico_test.TGRADO g
+      JOIN academico_test.TPERIODO_ACADEMICO pa
+        ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+     WHERE g.PK_TGRADO = academico_test.fn_actividad_grado(p_fk_tgrupo, p_fk_tunidad);
+$$;
+COMMENT ON FUNCTION academico_test.fn_actividad_sede(BIGINT, BIGINT)
+    IS 'INTERNO: sede de una actividad, para la etiqueta de auditoria de fn_actividad_crear/_actualizar. NULL si no tiene ancla.';
+
+-- ---------------------------------------------------------------------------
+-- 2) Reglas. Cada una lanza o no hace nada; las comparten alta y PATCH, que
+--    se las pasan con los valores RESULTANTES.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_fechas_orden(
+    p_fecha_inicio DATE,
+    p_fecha_cierre DATE
+)
+RETURNS VOID
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+BEGIN
+    IF p_fecha_inicio IS NOT NULL AND p_fecha_cierre IS NOT NULL
+       AND p_fecha_cierre < p_fecha_inicio THEN
+        RAISE EXCEPTION 'La fecha de cierre (%) no puede ser anterior a la de inicio (%)',
+            p_fecha_cierre, p_fecha_inicio USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_periodo_evaluacion_unico(
+    p_fk_tgrupo    BIGINT,
+    p_fk_tunidad   BIGINT,
+    p_fecha_inicio DATE,
+    p_fecha_cierre DATE
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_total    INT;
+    v_periodos TEXT;
+    v_primero  RECORD;
+BEGIN
+    IF p_fecha_inicio IS NULL OR p_fecha_cierre IS NULL THEN
+        RETURN;
+    END IF;
+
+    -- Se cuentan los periodos que SOLAPAN el rango, no solo los que contienen
+    -- sus extremos: un cierre que cae en el hueco entre dos cortes tambien
+    -- sale del periodo en que empezo.
+    SELECT count(*),
+           string_agg(format('%s (%s a %s)', pe.NOMBRE, pe.FECHA_INICIO, pe.FECHA_FIN),
+                      ', ' ORDER BY pe.FECHA_INICIO)
+      INTO v_total, v_periodos
+      FROM academico_test.TGRADO g
+      JOIN academico_test.TPERIODO_EVALUACION pe
+        ON pe.FK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+       AND pe.ACTIVE = TRUE
+     WHERE g.PK_TGRADO = academico_test.fn_actividad_grado(p_fk_tgrupo, p_fk_tunidad)
+       AND pe.FECHA_INICIO <= p_fecha_cierre
+       AND pe.FECHA_FIN    >= p_fecha_inicio;
+
+    IF v_total > 1 THEN
+        SELECT pe.NOMBRE, pe.FECHA_FIN INTO v_primero
+          FROM academico_test.TGRADO g
+          JOIN academico_test.TPERIODO_EVALUACION pe
+            ON pe.FK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+           AND pe.ACTIVE = TRUE
+         WHERE g.PK_TGRADO = academico_test.fn_actividad_grado(p_fk_tgrupo, p_fk_tunidad)
+           AND pe.FECHA_INICIO <= p_fecha_cierre
+           AND pe.FECHA_FIN    >= p_fecha_inicio
+         ORDER BY pe.FECHA_INICIO
+         LIMIT 1;
+
+        RAISE EXCEPTION 'La actividad no puede abarcar varios periodos de evaluacion: del % al % pasa por %',
+            p_fecha_inicio, p_fecha_cierre, v_periodos
+            USING ERRCODE = '22023',
+                  HINT    = format('Si empieza en %s, la fecha de cierre debe ser a mas tardar el %s',
+                                   v_primero.NOMBRE, v_primero.FECHA_FIN);
+    END IF;
+END;
+$$;
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_periodo_evaluacion_unico(BIGINT, BIGINT, DATE, DATE)
+    IS 'INTERNO: 22023 si [fecha_inicio, fecha_cierre] solapa mas de un periodo de evaluacion activo del periodo academico del grado de la actividad. La nota de una actividad se imputa a un solo periodo (fn_actividad_periodo_evaluacion), asi que no puede repartirse entre dos. Sin alguna de las fechas o sin ancla no aplica. Lo usan fn_actividad_crear_interno y fn_actividad_actualizar_interno.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_referencias_activas(
+    p_fk_tasignatura BIGINT,
+    p_fk_tgrupo      BIGINT,
+    p_fk_tunidad     BIGINT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF p_fk_tasignatura IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA
+                    WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
+        RAISE EXCEPTION 'La asignatura seleccionada no esta disponible' USING ERRCODE = '23503';
+    END IF;
+    IF p_fk_tgrupo IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TGRUPO
+                    WHERE PK_TGRUPO = p_fk_tgrupo AND ACTIVE = TRUE) THEN
+        RAISE EXCEPTION 'El grupo seleccionado no esta disponible' USING ERRCODE = '23503';
+    END IF;
+    IF p_fk_tunidad IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TUNIDAD
+                    WHERE PK_TUNIDAD = p_fk_tunidad AND ACTIVE = TRUE) THEN
+        RAISE EXCEPTION 'La unidad seleccionada no esta disponible' USING ERRCODE = '23503';
+    END IF;
+END;
+$$;
+
+-- Evaluativa en contexto Formativo: el enfoque valora con observaciones, y un
+-- 'S' dejaba la actividad calificable contra su referente.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_evaluativa_contexto(
+    p_es_evaluativa  academico_test.bool_sn,
+    p_ctx_evaluativo BOOLEAN,
+    p_fk_tunidad     BIGINT,
+    p_titulo         VARCHAR
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF p_es_evaluativa = 'S' AND NOT p_ctx_evaluativo THEN
+        IF p_fk_tunidad IS NOT NULL THEN
+            RAISE EXCEPTION 'La actividad "%" no puede ser evaluativa: la unidad "%" se rige por un referente curricular Formativo, que valora el aprendizaje con observaciones y no con nota', p_titulo,
+                (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad)
+                USING ERRCODE = '22023';
+        END IF;
+        RAISE EXCEPTION 'La actividad "%" no puede ser evaluativa: el referente curricular que le corresponde a su grado y asignatura es Formativo, y valora el aprendizaje con observaciones y no con nota', p_titulo
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+-- El metodo de calculo de la unidad decide si el % se captura a mano
+-- (Ponderar), no aplica (Promediar) o sale de NOTA_MAXIMA (Sumatoria).
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_ponderacion(
+    p_ponderacion   NUMERIC,
+    p_fk_tunidad    BIGINT,
+    p_es_evaluativa academico_test.bool_sn,
+    p_titulo        VARCHAR
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_modo VARCHAR;
+BEGIN
+    IF p_ponderacion IS NULL THEN
+        RETURN;
+    END IF;
+    IF p_ponderacion < 0 OR p_ponderacion > 100 THEN
+        RAISE EXCEPTION 'La ponderacion (%) debe estar entre 0 y 100', p_ponderacion USING ERRCODE = '22023';
+    END IF;
+    IF p_fk_tunidad IS NULL THEN
+        RAISE EXCEPTION 'La ponderacion solo aplica cuando la actividad se vincula a una unidad'
+            USING ERRCODE = '22023';
+    END IF;
+    IF p_es_evaluativa = 'N' THEN
+        RAISE EXCEPTION 'La ponderacion no aplica: la actividad "%" no es evaluativa', p_titulo
+            USING ERRCODE = '22023';
+    END IF;
+
+    v_modo := academico_test.fn_unidad_calculo_definitiva_modo(p_fk_tunidad);
+    IF v_modo = 'PROMEDIAR' THEN
+        RAISE EXCEPTION 'La unidad "%" promedia sus actividades, asi que la actividad no lleva peso (%%)',
+            (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad)
+            USING ERRCODE = '22023';
+    ELSIF v_modo = 'SUMATORIA' THEN
+        RAISE EXCEPTION 'La unidad "%" suma los puntajes de sus actividades: indica el puntaje maximo de la actividad en vez del peso (%%), que se calcula solo',
+            (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad)
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+-- Backstop de U_TACTIVIDAD_1: con FK_TUNIDAD/FK_TGRUPO NULL el UNIQUE no
+-- garantiza nada (NULL nunca colisiona).
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_titulo_unico(
+    p_titulo           VARCHAR,
+    p_fk_tunidad       BIGINT,
+    p_fk_tgrupo        BIGINT,
+    p_fk_tlv_jerarquia BIGINT,
+    p_excluir_pk       BIGINT DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM academico_test.TACTIVIDAD
+         WHERE UPPER(TRIM(TITULO)) = UPPER(TRIM(p_titulo))
+           AND FK_TUNIDAD       IS NOT DISTINCT FROM p_fk_tunidad
+           AND FK_TGRUPO        IS NOT DISTINCT FROM p_fk_tgrupo
+           AND FK_TLV_JERARQUIA = p_fk_tlv_jerarquia
+           AND ACTIVE = TRUE
+           AND PK_TACTIVIDAD IS DISTINCT FROM p_excluir_pk
+    ) THEN
+        RAISE EXCEPTION 'Ya existe una actividad activa "%" para esa unidad, grupo y jerarquia', p_titulo
+            USING ERRCODE = '23505';
+    END IF;
+END;
+$$;
+
+-- Todas las reglas de coherencia, en el orden en que responden al cliente.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_coherencia(
+    p_titulo            VARCHAR,
+    p_fk_tasignatura    BIGINT,
+    p_fk_tgrupo         BIGINT,
+    p_fk_tunidad        BIGINT,
+    p_ponderacion       NUMERIC,
+    p_es_evaluativa     academico_test.bool_sn,
+    p_ctx_evaluativo    BOOLEAN,
+    p_es_recuperacion   BOOLEAN,
+    p_fecha_inicio      DATE,
+    p_fecha_cierre      DATE,
+    p_duracion_estimada NUMERIC,
+    p_semana_cronograma VARCHAR
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    PERFORM academico_test.fn_actividad_validar_fechas_orden(p_fecha_inicio, p_fecha_cierre);
+    PERFORM academico_test.fn_actividad_programacion_assert(
+        p_fk_tgrupo, p_fk_tasignatura, p_fecha_inicio, p_fecha_cierre,
+        p_duracion_estimada, p_semana_cronograma);
+    PERFORM academico_test.fn_actividad_validar_periodo_evaluacion_unico(
+        p_fk_tgrupo, p_fk_tunidad, p_fecha_inicio, p_fecha_cierre);
+    PERFORM academico_test.fn_actividad_validar_ponderacion(
+        p_ponderacion, p_fk_tunidad, p_es_evaluativa, p_titulo);
+    IF p_es_recuperacion AND p_es_evaluativa = 'N' THEN
+        RAISE EXCEPTION 'Una actividad de recuperacion debe ser evaluativa' USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_coherencia(VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, academico_test.bool_sn, BOOLEAN, BOOLEAN, DATE, DATE, NUMERIC, VARCHAR)
+    IS 'INTERNO: reglas de coherencia de una actividad sobre sus valores RESULTANTES (orden de fechas, programacion, un solo periodo de evaluacion, ponderacion, recuperacion evaluativa). Compartida por fn_actividad_crear_interno y fn_actividad_actualizar_interno; una regla nueva se agrega aqui y aplica a las dos.';
+
+-- ---------------------------------------------------------------------------
+-- 3) Alta: nucleo sin gate + wrapper con gate y etiqueta de auditoria.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_crear_interno(
     p_pk_usuario_solicitante            BIGINT,
     p_titulo                            VARCHAR(250),
     p_fk_tasignatura                    BIGINT,
@@ -157,8 +427,6 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_crear(
     p_semana_cronograma                 VARCHAR(50)   DEFAULT NULL,
     p_fk_tlv_modalidad                  BIGINT        DEFAULT NULL,
     p_material_requerido                VARCHAR(4000) DEFAULT NULL,
-    -- DEFAULT NULL (antes 'S'): quien no manda el dato quiere el valor que
-    -- le corresponde a su referente, y ese lo resuelve v_evaluativa abajo.
     p_es_evaluativa                     academico_test.bool_sn DEFAULT NULL,
     p_fk_tlv_instrumento_evaluacion     BIGINT        DEFAULT NULL,
     p_descripcion_instrumento           VARCHAR(4000) DEFAULT NULL,
@@ -176,20 +444,8 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_crear(
     p_adaptaciones                      JSONB         DEFAULT NULL,
     p_fk_tmatriculas                    BIGINT[]      DEFAULT NULL,
     p_asignar_todo_el_grupo             BOOLEAN       DEFAULT FALSE,
-    -- NULL = actividad normal. Objeto = actividad de recuperacion:
-    -- {destino, fkActividadRecuperar?, tipoAplicacion, tipoCalculo, valorPonderacion?}
     p_recuperacion                      JSONB         DEFAULT NULL,
-    -- PK_REFERENTE_ENUNCIADO (nivel 2 / evidencia) que esta actividad
-    -- sustenta. Solo tiene sentido si la actividad tiene unidad (p_fk_tunidad)
-    -- y cada evidencia cuelga de un enunciado ya relacionado con esa unidad
-    -- (TUNIDAD_ENUNCIADO) -- fn_actividad_evidencia_relacionar (V214.1) valida
-    -- todo eso, aborta el CREATE si alguna no cumple.
     p_evidencias                        BIGINT[]      DEFAULT NULL,
-    -- PK_TCRITERIO_UNIDAD de la rubrica de la unidad que esta actividad
-    -- evalua. Solo tiene sentido si la actividad tiene unidad; cada criterio
-    -- debe pertenecer a la rubrica de ESA unidad --
-    -- fn_actividad_criterio_relacionar (V214.1) lo valida, aborta el CREATE
-    -- si alguno no cumple.
     p_criterios                         BIGINT[]      DEFAULT NULL
 )
 RETURNS BIGINT
@@ -200,15 +456,6 @@ DECLARE
     v_ctx_evaluativo BOOLEAN;
     v_evaluativa     academico_test.bool_sn;
 BEGIN
-    PERFORM academico_test.fn_planeador_assert_alcance(
-        p_pk_usuario_solicitante, 'CREAR', p_fk_tgrupo, NULL, p_fk_tunidad,
-        NULL,
-        -- Sin grupo NI unidad la actividad nace huerfana: no tiene sede contra
-        -- la que comprobar alcance, y vincularla despues si lo comprueba.
-        p_permitir_sin_ancla => TRUE
-    );
-
-    -- 1. Obligatorios.
     IF NULLIF(TRIM(p_titulo), '') IS NULL THEN
         RAISE EXCEPTION 'El nombre de la actividad es obligatorio'
             USING ERRCODE = '22023', HINT = 'p_titulo no puede ser NULL ni vacio';
@@ -223,127 +470,38 @@ BEGIN
         RAISE EXCEPTION 'La jerarquia (FK_TLV_JERARQUIA) es obligatoria' USING ERRCODE = '22023';
     END IF;
 
-    -- 2. Coherencia de fechas y banderas S/N.
-    IF p_fecha_inicio IS NOT NULL AND p_fecha_cierre IS NOT NULL
-       AND p_fecha_cierre < p_fecha_inicio THEN
-        RAISE EXCEPTION 'La fecha de cierre (%) no puede ser anterior a la de inicio (%)',
-            p_fecha_cierre, p_fecha_inicio USING ERRCODE = '22023';
-    END IF;
+    PERFORM academico_test.fn_actividad_validar_referencias_activas(
+        p_fk_tasignatura, p_fk_tgrupo, p_fk_tunidad);
 
-    -- Limites de la seccion Programacion (V422): ventana del periodo academico,
-    -- dia habil segun horario, duracion y semana del cronograma. Mismo calculo
-    -- que pinta la pantalla, para que el tope no sea solo decorativo.
-    PERFORM academico_test.fn_actividad_programacion_assert(
-        p_fk_tgrupo, p_fk_tasignatura, p_fecha_inicio, p_fecha_cierre,
-        p_duracion_estimada, p_semana_cronograma);
-    -- Las banderas S/N ya son academico_test.bool_sn: el dominio (CHECK IN
-    -- ('S','N')) las valida al vuelo, no hace falta un chequeo manual aqui.
-
-    -- 3. FKs propias.
-    IF NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA
-                    WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'La asignatura seleccionada no esta disponible' USING ERRCODE = '23503';
-    END IF;
-    IF p_fk_tgrupo IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TGRUPO
-                    WHERE PK_TGRUPO = p_fk_tgrupo AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'El grupo seleccionado no esta disponible' USING ERRCODE = '23503';
-    END IF;
-    IF p_fk_tunidad IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TUNIDAD
-                    WHERE PK_TUNIDAD = p_fk_tunidad AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'La unidad seleccionada no esta disponible' USING ERRCODE = '23503';
-    END IF;
-    IF p_ponderacion IS NOT NULL AND (p_ponderacion < 0 OR p_ponderacion > 100) THEN
-        RAISE EXCEPTION 'La ponderacion (%) debe estar entre 0 y 100', p_ponderacion USING ERRCODE = '22023';
-    END IF;
-    IF p_ponderacion IS NOT NULL AND p_fk_tunidad IS NULL THEN
-        RAISE EXCEPTION 'La ponderacion solo aplica cuando la actividad se vincula a una unidad'
-            USING ERRCODE = '22023';
-    END IF;
-    -- ES_EVALUATIVA resultante. Con referente FORMATIVO el valor por
-    -- defecto es 'N' (no 'S'): el enfoque valora con observaciones, y un
-    -- 'S' silencioso dejaba la actividad calificable contra su referente.
-    -- Todos los gates de abajo miran ya v_evaluativa, no el parametro.
+    -- Sin valor enviado, ES_EVALUATIVA es la que le corresponde al referente.
     v_ctx_evaluativo := academico_test.fn_actividad_contexto_evaluativo(
                             p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad);
     v_evaluativa     := COALESCE(p_es_evaluativa,
                             CASE WHEN v_ctx_evaluativo THEN 'S' ELSE 'N' END);
 
-    -- Condicion dinamica "actividad -> ponderacion" (V214.2, bloque
-    -- 'ponderacion'), gate (a): sin evaluacion no hay peso que repartir.
-    IF p_ponderacion IS NOT NULL AND v_evaluativa = 'N' THEN
-        RAISE EXCEPTION 'La ponderacion no aplica: la actividad no es evaluativa (p_es_evaluativa = ''N'')'
-            USING ERRCODE = '22023';
-    END IF;
-    -- Gate (b): el metodo de calculo de la unidad (V73) decide si el % se
-    -- captura a mano (Ponderar), no aplica (Promediar) o lo autocalcula el
-    -- sistema a partir de NOTA_MAXIMA (Sumatoria). fn_unidad_calculo_definitiva_modo
-    -- y el recalculo viven en V223, punto unico de la regla.
-    IF p_ponderacion IS NOT NULL AND p_fk_tunidad IS NOT NULL THEN
-        IF academico_test.fn_unidad_calculo_definitiva_modo(p_fk_tunidad) = 'PROMEDIAR' THEN
-            RAISE EXCEPTION 'La ponderacion no aplica: la unidad (%) promedia sus actividades', p_fk_tunidad
-                USING ERRCODE = '22023';
-        ELSIF academico_test.fn_unidad_calculo_definitiva_modo(p_fk_tunidad) = 'SUMATORIA' THEN
-            RAISE EXCEPTION 'La ponderacion de la unidad (%) se autocalcula: es una unidad de Sumatoria, envie el puntaje de la actividad (p_nota_maxima) en vez del porcentaje', p_fk_tunidad
-                USING ERRCODE = '22023';
-        END IF;
-    END IF;
-    -- Una actividad de recuperacion recupera una NOTA: tiene que ser evaluativa.
-    IF p_recuperacion IS NOT NULL AND v_evaluativa = 'N' THEN
-        RAISE EXCEPTION 'Una actividad de recuperacion debe ser evaluativa (p_es_evaluativa = ''S'')'
-            USING ERRCODE = '22023';
-    END IF;
+    PERFORM academico_test.fn_actividad_validar_coherencia(
+        p_titulo, p_fk_tasignatura, p_fk_tgrupo, p_fk_tunidad, p_ponderacion,
+        v_evaluativa, v_ctx_evaluativo, p_recuperacion IS NOT NULL,
+        p_fecha_inicio, p_fecha_cierre, p_duracion_estimada, p_semana_cronograma);
 
-    -- 4. Catalogos (helper unico). Nombres de categoria verificados contra
-    --    el servidor de test: la jerarquia es TIPO_JERARQUIA_ACTIVIDAD.
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_actividad,          'TIPO_ACTIVIDAD',           'FK_TLV_TIPO_ACTIVIDAD');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_jerarquia,               'TIPO_JERARQUIA_ACTIVIDAD', 'FK_TLV_JERARQUIA');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_modalidad,               'MODALIDAD',                'FK_TLV_MODALIDAD');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_instrumento_evaluacion,  'INSTRUMENTO_EVALUACION',   'FK_TLV_INSTRUMENTO_EVALUACION');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_evidencia,          'TIPO_EVIDENCIA',           'FK_TLV_TIPO_EVIDENCIA');
-    PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_metodo_valoracion,       'METODO_VALORACION',        'FK_TLV_METODO_VALORACION'); -- sin seed: solo valida existencia+ACTIVE
+    PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_metodo_valoracion,       'METODO_VALORACION',        'FK_TLV_METODO_VALORACION');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_calculo,            'TIPO_CALCULO',             'FK_TLV_TIPO_CALCULO');
 
-    -- 4.a Una actividad no puede quedar evaluativa (ES_EVALUATIVA = 'S') si
-    --     se vincula a una unidad cuyo referente curricular es FORMATIVO:
-    --     ese enfoque valora con observaciones, no con nota. Mismo helper
-    --     que usa la sub-rama de instrumento (4.b) de abajo, aplicado ahora
-    --     al flag ES_EVALUATIVA en si, no solo al instrumento.
-    IF v_evaluativa = 'S' AND NOT v_ctx_evaluativo THEN
-        IF p_fk_tunidad IS NOT NULL THEN
-            RAISE EXCEPTION 'La actividad no puede ser evaluativa: la unidad "%" se rige por un referente curricular Formativo, que valora el aprendizaje con observaciones y no con nota',
-                (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad)
-                USING ERRCODE = '22023';
-        ELSE
-            RAISE EXCEPTION 'La actividad no puede ser evaluativa: el referente curricular que le corresponde a este grado y asignatura es Formativo, y valora el aprendizaje con observaciones y no con nota'
-                USING ERRCODE = '22023';
-        END IF;
-    END IF;
-
-    -- 4.b Sub-rama "evaluacion" (instrumento de evaluacion): el instrumento lo
-    --     admite el REFERENTE, no la unidad. La regla entera vive en
-    --     fn_actividad_instrumento_contexto_assert (V479), compartida con el PATCH.
+    PERFORM academico_test.fn_actividad_validar_evaluativa_contexto(
+        v_evaluativa, v_ctx_evaluativo, p_fk_tunidad, TRIM(p_titulo));
     PERFORM academico_test.fn_actividad_instrumento_contexto_assert(
-                p_fk_tlv_instrumento_evaluacion, p_fk_tgrupo, p_fk_tasignatura,
-                p_fk_tunidad, p_titulo);
+        p_fk_tlv_instrumento_evaluacion, p_fk_tgrupo, p_fk_tasignatura,
+        p_fk_tunidad, p_titulo);
+    PERFORM academico_test.fn_actividad_validar_titulo_unico(
+        p_titulo, p_fk_tunidad, p_fk_tgrupo, p_fk_tlv_jerarquia);
 
-    -- 5. Unicidad (TITULO, unidad, grupo, jerarquia) entre activas —
-    --    backstop de U_TACTIVIDAD_1 (V22), que con FK_TUNIDAD/FK_TGRUPO
-    --    NULL no garantiza nada (NULL nunca colisiona en un UNIQUE).
-    IF EXISTS (
-        SELECT 1 FROM academico_test.TACTIVIDAD
-         WHERE UPPER(TRIM(TITULO)) = UPPER(TRIM(p_titulo))
-           AND FK_TUNIDAD       IS NOT DISTINCT FROM p_fk_tunidad
-           AND FK_TGRUPO        IS NOT DISTINCT FROM p_fk_tgrupo
-           AND FK_TLV_JERARQUIA = p_fk_tlv_jerarquia
-           AND ACTIVE = TRUE
-    ) THEN
-        RAISE EXCEPTION 'Ya existe una actividad activa "%" para esa unidad, grupo y jerarquia', p_titulo
-            USING ERRCODE = '23505';
-    END IF;
-
-    -- 6. INSERT. FK_TUNIDAD/PONDERACION van directo: la regla del 100% por
-    --    (unidad, grupo) la impone el trigger tr_tactividad_ponderacion_unidad
-    --    (V223) — no se re-implementa la suma aqui.
+    -- La regla del 100% por (unidad, grupo) la impone el trigger
+    -- tr_tactividad_ponderacion_unidad: no se re-implementa la suma aqui.
     INSERT INTO academico_test.TACTIVIDAD (
         TITULO, DESCRIPCION, FECHA_CREACION,
         FK_TASIGNATURA, FK_TGRUPO, FK_TUNIDAD, PONDERACION,
@@ -376,41 +534,26 @@ BEGIN
     )
     RETURNING PK_TACTIVIDAD INTO v_id_creado;
 
-    -- 6.b Unidad de SUMATORIA: el % de TODAS las actividades del bucket
-    --     (unidad, grupo) se reparte proporcionalmente segun NOTA_MAXIMA, asi
-    --     que entrar una actividad nueva obliga a recalcular el bucket
-    --     completo. No-op si la unidad no es de sumatoria (o no hay unidad).
+    -- Sumatoria: una actividad nueva cambia el % de todo su bucket.
     PERFORM academico_test.fn_unidad_ponderacion_recalcular_sumatoria(p_fk_tunidad, p_fk_tgrupo);
 
-    -- 7. Satelites (helpers reutilizables). ORDEN IMPORTA: los estudiantes
-    --    van primero porque las adaptaciones con
-    --    aplicaA = ESTUDIANTES_SELECCIONADOS apuntan a filas de
-    --    TACTIVIDAD_ESTUDIANTE que deben existir ya.
+    -- ORDEN IMPORTA: las adaptaciones a ESTUDIANTES_SELECCIONADOS apuntan a
+    -- filas de TACTIVIDAD_ESTUDIANTE que deben existir ya.
     PERFORM academico_test.fn_actividad_estudiantes_asignar(
                 p_pk_usuario_solicitante, v_id_creado, p_fk_tmatriculas, p_asignar_todo_el_grupo);
     PERFORM academico_test.fn_actividad_material_reemplazar(
                 p_pk_usuario_solicitante, v_id_creado, p_materiales);
     PERFORM academico_test.fn_actividad_adaptacion_reemplazar(
                 p_pk_usuario_solicitante, v_id_creado, p_adaptaciones);
-    -- Config 1:1 de recuperacion (crea TACTIVIDAD_RECUPERACION si p_recuperacion no es NULL).
     PERFORM academico_test.fn_actividad_recuperacion_configurar(
                 p_pk_usuario_solicitante, v_id_creado, p_recuperacion);
 
-    -- 8. Evidencias de enunciado (opcional; TACTIVIDAD_EVIDENCIA, V214.1).
-    --    fn_actividad_evidencia_relacionar exige FK_TUNIDAD y que el
-    --    enunciado padre de cada evidencia ya este en TUNIDAD_ENUNCIADO
-    --    para esa misma unidad -- revienta y aborta el CREATE si no.
     IF p_evidencias IS NOT NULL THEN
         PERFORM academico_test.fn_actividad_evidencia_relacionar(
                     p_pk_usuario_solicitante, v_id_creado, ev)
           FROM unnest(p_evidencias) AS ev
          WHERE ev IS NOT NULL;
     END IF;
-
-    -- 9. Criterios de la rubrica de la unidad (opcional;
-    --    TACTIVIDAD_CRITERIO_UNIDAD, V214.1). fn_actividad_criterio_relacionar
-    --    exige FK_TUNIDAD y que cada criterio pertenezca a la rubrica de
-    --    esa misma unidad -- revienta y aborta el CREATE si no.
     IF p_criterios IS NOT NULL THEN
         PERFORM academico_test.fn_actividad_criterio_relacionar(
                     p_pk_usuario_solicitante, v_id_creado, cr)
@@ -421,9 +564,80 @@ BEGIN
     RETURN v_id_creado;
 END;
 $$;
+COMMENT ON FUNCTION academico_test.fn_actividad_crear_interno(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BIGINT[], BIGINT[])
+    IS 'INTERNO: alta de actividad sin gate ni etiqueta de auditoria (validaciones + INSERT + satelites). La invoca fn_actividad_crear; un import o un duplicado de actividades puede reutilizarla tras su propio gate. p_pk_usuario_solicitante solo se usa para CREATED_BY y los satelites.';
 
--- 2.b PATCH parcial: mismo criterio sobre los valores RESULTANTES.
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_actualizar(
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_crear(
+    p_pk_usuario_solicitante            BIGINT,
+    p_titulo                            VARCHAR(250),
+    p_fk_tasignatura                    BIGINT,
+    p_fk_tlv_tipo_actividad             BIGINT,
+    p_fk_tlv_jerarquia                  BIGINT,
+    p_descripcion                       VARCHAR(4000) DEFAULT NULL,
+    p_fk_tgrupo                         BIGINT        DEFAULT NULL,
+    p_fk_tunidad                        BIGINT        DEFAULT NULL,
+    p_ponderacion                       NUMERIC       DEFAULT NULL,
+    p_fecha_inicio                      DATE          DEFAULT NULL,
+    p_fecha_cierre                      DATE          DEFAULT NULL,
+    p_duracion_estimada                 NUMERIC       DEFAULT NULL,
+    p_semana_cronograma                 VARCHAR(50)   DEFAULT NULL,
+    p_fk_tlv_modalidad                  BIGINT        DEFAULT NULL,
+    p_material_requerido                VARCHAR(4000) DEFAULT NULL,
+    p_es_evaluativa                     academico_test.bool_sn DEFAULT NULL,
+    p_fk_tlv_instrumento_evaluacion     BIGINT        DEFAULT NULL,
+    p_descripcion_instrumento           VARCHAR(4000) DEFAULT NULL,
+    p_fk_tlv_tipo_evidencia             BIGINT        DEFAULT NULL,
+    p_fk_tlv_metodo_valoracion          BIGINT        DEFAULT NULL,
+    p_fk_tlv_tipo_calculo               BIGINT        DEFAULT NULL,
+    p_influencia                        NUMERIC       DEFAULT NULL,
+    p_nota_maxima                       NUMERIC       DEFAULT NULL,
+    p_requiere_archivo                  academico_test.bool_sn DEFAULT 'N',
+    p_requiere_texto                    academico_test.bool_sn DEFAULT 'N',
+    p_genera_evidencias                 academico_test.bool_sn DEFAULT 'N',
+    p_requiere_validacion_coordinador   academico_test.bool_sn DEFAULT 'N',
+    p_observaciones_docente             VARCHAR(4000) DEFAULT NULL,
+    p_materiales                        JSONB         DEFAULT NULL,
+    p_adaptaciones                      JSONB         DEFAULT NULL,
+    p_fk_tmatriculas                    BIGINT[]      DEFAULT NULL,
+    p_asignar_todo_el_grupo             BOOLEAN       DEFAULT FALSE,
+    p_recuperacion                      JSONB         DEFAULT NULL,
+    p_evidencias                        BIGINT[]      DEFAULT NULL,
+    p_criterios                         BIGINT[]      DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- La actividad huerfana (sin grupo ni unidad) no tiene sede contra la que
+    -- comprobar alcance; vincularla despues si lo comprueba.
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'CREAR', p_fk_tgrupo, NULL, p_fk_tunidad,
+        NULL, p_permitir_sin_ancla => TRUE);
+
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Creacion de la actividad %s', TRIM(p_titulo)), NULL,
+        academico_test.fn_actividad_sede(p_fk_tgrupo, p_fk_tunidad));
+
+    RETURN academico_test.fn_actividad_crear_interno(
+        p_pk_usuario_solicitante, p_titulo, p_fk_tasignatura, p_fk_tlv_tipo_actividad,
+        p_fk_tlv_jerarquia, p_descripcion, p_fk_tgrupo, p_fk_tunidad, p_ponderacion,
+        p_fecha_inicio, p_fecha_cierre, p_duracion_estimada, p_semana_cronograma,
+        p_fk_tlv_modalidad, p_material_requerido, p_es_evaluativa,
+        p_fk_tlv_instrumento_evaluacion, p_descripcion_instrumento,
+        p_fk_tlv_tipo_evidencia, p_fk_tlv_metodo_valoracion, p_fk_tlv_tipo_calculo,
+        p_influencia, p_nota_maxima, p_requiere_archivo, p_requiere_texto,
+        p_genera_evidencias, p_requiere_validacion_coordinador, p_observaciones_docente,
+        p_materiales, p_adaptaciones, p_fk_tmatriculas, p_asignar_todo_el_grupo,
+        p_recuperacion, p_evidencias, p_criterios);
+END;
+$$;
+COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BIGINT[], BIGINT[])
+    IS 'POST /planeador/actividades. Wrapper: gate CREAR de PLANEADOR con alcance (la actividad huerfana pasa con solo capability), etiqueta de auditoria con la sede de la actividad, y delega en fn_actividad_crear_interno. Rechaza 22023 si las fechas abarcan mas de un periodo de evaluacion.';
+
+-- ---------------------------------------------------------------------------
+-- 4) PATCH: mismo reparto, reglas sobre los valores RESULTANTES.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_actualizar_interno(
     p_pk_usuario_solicitante            BIGINT,
     p_pk_tactividad                     BIGINT,
     p_titulo                            VARCHAR(250)  DEFAULT NULL,
@@ -453,17 +667,12 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_actualizar(
     p_genera_evidencias                 academico_test.bool_sn DEFAULT NULL,
     p_requiere_validacion_coordinador   academico_test.bool_sn DEFAULT NULL,
     p_observaciones_docente             VARCHAR(4000) DEFAULT NULL,
-    -- NULL = no tocar; array (incl. vacio) = reemplazo completo
     p_materiales                        JSONB         DEFAULT NULL,
     p_adaptaciones                      JSONB         DEFAULT NULL,
     p_fk_tmatriculas                    BIGINT[]      DEFAULT NULL,
     p_asignar_todo_el_grupo             BOOLEAN       DEFAULT FALSE,
-    -- NULL = no tocar la recuperacion. Objeto = configurarla. Para QUITARLA
-    -- (volver la actividad a normal) usar p_quitar_recuperacion = TRUE.
     p_recuperacion                      JSONB         DEFAULT NULL,
     p_quitar_recuperacion               BOOLEAN       DEFAULT FALSE,
-    -- Mismo contrato que p_materiales / p_adaptaciones: NULL = no tocar,
-    -- array (incl. vacio) = el set queda EXACTAMENTE ese.
     p_evidencias                        BIGINT[]      DEFAULT NULL,
     p_criterios                         BIGINT[]      DEFAULT NULL
 )
@@ -471,27 +680,22 @@ RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_actual      academico_test.TACTIVIDAD%ROWTYPE;
-    v_titulo      VARCHAR(250);
-    v_grupo       BIGINT;
-    v_inicio      DATE;
-    v_cierre      DATE;
-    v_fk_tunidad  BIGINT;
-    v_instrumento BIGINT;
-    v_evaluativa  academico_test.bool_sn;
+    v_actual         academico_test.TACTIVIDAD%ROWTYPE;
+    v_titulo         VARCHAR(250);
+    v_asignatura     BIGINT;
+    v_grupo          BIGINT;
+    v_inicio         DATE;
+    v_cierre         DATE;
+    v_fk_tunidad     BIGINT;
+    v_instrumento    BIGINT;
+    v_evaluativa     academico_test.bool_sn;
     v_ctx_evaluativo BOOLEAN;
-    v_modo_calc   VARCHAR;
 BEGIN
     SELECT * INTO v_actual
       FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'No se encontro la actividad solicitada' USING ERRCODE = 'P0002';
     END IF;
-
-    PERFORM academico_test.fn_planeador_assert_alcance(
-        p_pk_usuario_solicitante, 'EDITAR', p_fk_tgrupo, NULL, p_fk_tunidad, p_pk_tactividad
-    );
-
     IF v_actual.ACTIVE = FALSE THEN
         RAISE EXCEPTION 'La actividad "%" ya no esta disponible; no se puede editar', v_actual.TITULO
             USING ERRCODE = '22023';
@@ -506,133 +710,53 @@ BEGIN
     IF p_quitar_recuperacion AND p_recuperacion IS NOT NULL THEN
         RAISE EXCEPTION 'No se puede quitar y configurar la recuperacion de la actividad en la misma operacion: elige una de las dos cosas' USING ERRCODE = '22023';
     END IF;
-    IF p_recuperacion IS NOT NULL
-       AND COALESCE(p_es_evaluativa, v_actual.ES_EVALUATIVA) = 'N' THEN
-        RAISE EXCEPTION 'Una actividad de recuperacion debe ser evaluativa' USING ERRCODE = '22023';
-    END IF;
 
-    -- Valores resultantes para coherencia/unicidad.
-    v_titulo := COALESCE(NULLIF(TRIM(p_titulo), ''), v_actual.TITULO);
-    v_grupo  := COALESCE(p_fk_tgrupo, v_actual.FK_TGRUPO);
-    v_inicio := COALESCE(p_fecha_inicio, v_actual.FECHA_INICIO);
-    v_cierre := COALESCE(p_fecha_cierre, v_actual.FECHA_CIERRE);
-    -- Unidad resultante tras aplicar p_desvincular_unidad / p_fk_tunidad,
-    -- necesaria para validar la sub-rama de evaluacion mas abajo.
+    -- Un PATCH que solo mueve el grupo puede dejar fuera de regla unas fechas
+    -- que no venian en el body: todo se valida sobre lo que QUEDA.
+    v_titulo      := COALESCE(NULLIF(TRIM(p_titulo), ''), v_actual.TITULO);
+    v_asignatura  := COALESCE(p_fk_tasignatura, v_actual.FK_TASIGNATURA);
+    v_grupo       := COALESCE(p_fk_tgrupo, v_actual.FK_TGRUPO);
+    v_inicio      := COALESCE(p_fecha_inicio, v_actual.FECHA_INICIO);
+    v_cierre      := COALESCE(p_fecha_cierre, v_actual.FECHA_CIERRE);
     v_fk_tunidad  := CASE WHEN p_desvincular_unidad THEN NULL
                           ELSE COALESCE(p_fk_tunidad, v_actual.FK_TUNIDAD) END;
     v_instrumento := COALESCE(p_fk_tlv_instrumento_evaluacion, v_actual.FK_TLV_INSTRUMENTO_EVALUACION);
-    -- ES_EVALUATIVA resultante (nueva o heredada), mismo criterio de "valor
-    -- resultante" que v_fk_tunidad / v_instrumento. El ultimo COALESCE ya no
-    -- es 'S' fijo: una actividad sin valor guardado cae en el que le
-    -- corresponde a su referente (con unidad, el de la unidad; sin ella, el
-    -- derivado del grado y la asignatura resultantes).
     v_ctx_evaluativo := academico_test.fn_actividad_contexto_evaluativo(
-                            v_grupo,
-                            COALESCE(p_fk_tasignatura, v_actual.FK_TASIGNATURA),
-                            v_fk_tunidad);
+                            v_grupo, v_asignatura, v_fk_tunidad);
     v_evaluativa  := COALESCE(p_es_evaluativa, v_actual.ES_EVALUATIVA,
                         CASE WHEN v_ctx_evaluativo THEN 'S' ELSE 'N' END);
 
-    -- Condicion dinamica "actividad -> ponderacion" (V214.2). Gate (a): sin
-    -- evaluacion no hay peso. Gate (b): el metodo de calculo de la unidad
-    -- resultante decide si el % se captura a mano (Ponderar), no aplica
-    -- (Promediar) o lo autocalcula el sistema desde NOTA_MAXIMA (Sumatoria).
-    IF p_ponderacion IS NOT NULL AND v_evaluativa = 'N' THEN
-        RAISE EXCEPTION 'La ponderacion no aplica: la actividad "%" no es evaluativa', v_titulo
-            USING ERRCODE = '22023';
-    END IF;
-    v_modo_calc := CASE WHEN v_fk_tunidad IS NULL THEN NULL
-                        ELSE academico_test.fn_unidad_calculo_definitiva_modo(v_fk_tunidad) END;
-    IF p_ponderacion IS NOT NULL AND v_modo_calc = 'PROMEDIAR' THEN
-        RAISE EXCEPTION 'La unidad "%" promedia sus actividades, asi que la actividad no lleva peso (%%)', (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = v_fk_tunidad)
-            USING ERRCODE = '22023';
-    END IF;
-    IF p_ponderacion IS NOT NULL AND v_modo_calc = 'SUMATORIA' THEN
-        RAISE EXCEPTION 'La unidad "%" suma los puntajes de sus actividades: indica el puntaje maximo de la actividad en vez del peso (%%), que se calcula solo', (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = v_fk_tunidad)
-            USING ERRCODE = '22023';
-    END IF;
-
-    IF v_inicio IS NOT NULL AND v_cierre IS NOT NULL AND v_cierre < v_inicio THEN
-        RAISE EXCEPTION 'La fecha de cierre (%) no puede ser anterior a la de inicio (%)',
-            v_cierre, v_inicio USING ERRCODE = '22023';
-    END IF;
-
-    -- Mismos limites que en el alta, pero sobre los valores RESULTANTES: un
-    -- PATCH que solo mueve el grupo puede dejar fuera de rango unas fechas que
-    -- no venian en el body.
-    PERFORM academico_test.fn_actividad_programacion_assert(
-        v_grupo,
-        COALESCE(p_fk_tasignatura, v_actual.FK_TASIGNATURA),
+    PERFORM academico_test.fn_actividad_validar_referencias_activas(
+        p_fk_tasignatura, p_fk_tgrupo, NULL);
+    -- La ponderacion solo se valida si viene: la guardada ya paso la regla.
+    PERFORM academico_test.fn_actividad_validar_coherencia(
+        v_titulo, v_asignatura, v_grupo, v_fk_tunidad, p_ponderacion,
+        v_evaluativa, v_ctx_evaluativo, p_recuperacion IS NOT NULL,
         v_inicio, v_cierre,
         COALESCE(p_duracion_estimada, v_actual.DURACION_ESTIMADA),
         COALESCE(NULLIF(TRIM(p_semana_cronograma), ''), v_actual.SEMANA_CRONOGRAMA));
-
-    IF p_fk_tasignatura IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA
-                    WHERE PK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'La asignatura seleccionada no esta disponible' USING ERRCODE = '23503';
-    END IF;
-    IF p_fk_tgrupo IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TGRUPO
-                    WHERE PK_TGRUPO = p_fk_tgrupo AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'El grupo seleccionado no esta disponible' USING ERRCODE = '23503';
-    END IF;
 
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_actividad,          'TIPO_ACTIVIDAD',         'FK_TLV_TIPO_ACTIVIDAD');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_modalidad,               'MODALIDAD',              'FK_TLV_MODALIDAD');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_instrumento_evaluacion,  'INSTRUMENTO_EVALUACION', 'FK_TLV_INSTRUMENTO_EVALUACION');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_evidencia,          'TIPO_EVIDENCIA',         'FK_TLV_TIPO_EVIDENCIA');
-    PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_metodo_valoracion,       'METODO_VALORACION',      'FK_TLV_METODO_VALORACION'); -- sin seed: solo valida existencia+ACTIVE
+    PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_metodo_valoracion,       'METODO_VALORACION',      'FK_TLV_METODO_VALORACION');
     PERFORM academico_test.fn_actividad_lv_assert(p_fk_tlv_tipo_calculo,            'TIPO_CALCULO',           'FK_TLV_TIPO_CALCULO');
 
-    -- La actividad no puede quedar evaluativa (v_evaluativa = 'S') si, tras
-    -- el PATCH, termina vinculada a una unidad Formativa: mismo criterio de
-    -- "valor resultante" (v_fk_tunidad / v_evaluativa) que las sub-ramas de
-    -- ponderacion y evaluacion, para cubrir tanto "marcarla evaluativa
-    -- ahora" como "moverla a una unidad Formativa dejandola evaluativa".
-    IF v_evaluativa = 'S' AND NOT v_ctx_evaluativo THEN
-        IF v_fk_tunidad IS NOT NULL THEN
-            RAISE EXCEPTION 'La actividad "%" no puede ser evaluativa: la unidad "%" se rige por un referente curricular Formativo, que valora el aprendizaje con observaciones y no con nota', v_titulo,
-                (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = v_fk_tunidad)
-                USING ERRCODE = '22023';
-        ELSE
-            RAISE EXCEPTION 'La actividad "%" no puede ser evaluativa: el referente curricular que le corresponde a su grado y asignatura es Formativo, y valora el aprendizaje con observaciones y no con nota', v_titulo
-                USING ERRCODE = '22023';
-        END IF;
-    END IF;
-
-    -- Sub-rama "evaluacion" (instrumento de evaluacion): se valida contra los
-    -- valores RESULTANTES (instrumento / unidad / grupo / asignatura), no solo
-    -- contra los parametros entrantes, para cubrir tanto "fijar instrumento
-    -- ahora" como "mover la actividad a un contexto Formativo dejando el
-    -- instrumento heredado". Desvincular la unidad ya NO es motivo de rechazo:
-    -- sin unidad manda el referente del grado y la asignatura.
+    PERFORM academico_test.fn_actividad_validar_evaluativa_contexto(
+        v_evaluativa, v_ctx_evaluativo, v_fk_tunidad, v_titulo);
     PERFORM academico_test.fn_actividad_instrumento_contexto_assert(
-                v_instrumento, v_grupo,
-                COALESCE(p_fk_tasignatura, v_actual.FK_TASIGNATURA),
-                v_fk_tunidad, v_titulo);
-
-    -- Unicidad contra la unidad RESULTANTE (v_fk_tunidad, ya calculada
-    -- arriba y usada tambien para la sub-rama de evaluacion), NO contra
-    -- v_actual.FK_TUNIDAD: con la unidad vieja, mover una actividad de
-    -- unidad comparaba contra el bucket equivocado y podia lanzar un 23505
-    -- falso (o dejar pasar un duplicado real en la unidad destino).
-    IF EXISTS (
-        SELECT 1 FROM academico_test.TACTIVIDAD
-         WHERE UPPER(TRIM(TITULO)) = UPPER(TRIM(v_titulo))
-           AND FK_TUNIDAD       IS NOT DISTINCT FROM v_fk_tunidad
-           AND FK_TGRUPO        IS NOT DISTINCT FROM v_grupo
-           AND FK_TLV_JERARQUIA = v_actual.FK_TLV_JERARQUIA
-           AND ACTIVE = TRUE
-           AND PK_TACTIVIDAD <> p_pk_tactividad
-    ) THEN
-        RAISE EXCEPTION 'Ya existe otra actividad activa "%" para esa unidad, grupo y jerarquia', v_titulo
-            USING ERRCODE = '23505';
-    END IF;
+        v_instrumento, v_grupo, v_asignatura, v_fk_tunidad, v_titulo);
+    -- Contra la unidad RESULTANTE: con la vieja, mover de unidad comparaba
+    -- contra el bucket equivocado.
+    PERFORM academico_test.fn_actividad_validar_titulo_unico(
+        v_titulo, v_fk_tunidad, v_grupo, v_actual.FK_TLV_JERARQUIA, p_pk_tactividad);
 
     UPDATE academico_test.TACTIVIDAD
        SET TITULO                          = v_titulo,
            DESCRIPCION                     = CASE WHEN p_descripcion IS NULL THEN DESCRIPCION
                                                   ELSE NULLIF(TRIM(p_descripcion), '') END,
-           FK_TASIGNATURA                  = COALESCE(p_fk_tasignatura, FK_TASIGNATURA),
+           FK_TASIGNATURA                  = v_asignatura,
            FK_TGRUPO                       = v_grupo,
            FK_TLV_TIPO_ACTIVIDAD           = COALESCE(p_fk_tlv_tipo_actividad, FK_TLV_TIPO_ACTIVIDAD),
            FECHA_INICIO                    = v_inicio,
@@ -643,7 +767,7 @@ BEGIN
            MATERIAL_REQUERIDO              = CASE WHEN p_material_requerido IS NULL THEN MATERIAL_REQUERIDO
                                                   ELSE NULLIF(TRIM(p_material_requerido), '') END,
            ES_EVALUATIVA                   = v_evaluativa,
-           FK_TLV_INSTRUMENTO_EVALUACION   = COALESCE(p_fk_tlv_instrumento_evaluacion, FK_TLV_INSTRUMENTO_EVALUACION),
+           FK_TLV_INSTRUMENTO_EVALUACION   = v_instrumento,
            DESCRIPCION_INSTRUMENTO         = CASE WHEN p_descripcion_instrumento IS NULL THEN DESCRIPCION_INSTRUMENTO
                                                   ELSE NULLIF(TRIM(p_descripcion_instrumento), '') END,
            FK_TLV_TIPO_EVIDENCIA           = COALESCE(p_fk_tlv_tipo_evidencia, FK_TLV_TIPO_EVIDENCIA),
@@ -661,8 +785,7 @@ BEGIN
            MODIFIED_AT                     = CURRENT_TIMESTAMP
      WHERE PK_TACTIVIDAD = p_pk_tactividad;
 
-    -- Unidad / ponderacion: se delega en las funciones de V223 (mismo gate
-    -- EDITAR) para no duplicar la regla del 100%.
+    -- Unidad / ponderacion: la regla del 100% es de las funciones de unidad.
     IF p_desvincular_unidad THEN
         PERFORM academico_test.fn_unidad_actividad_desvincular(p_pk_usuario_solicitante, p_pk_tactividad);
     ELSIF p_fk_tunidad IS NOT NULL THEN
@@ -673,12 +796,8 @@ BEGIN
                     p_pk_usuario_solicitante, p_pk_tactividad, p_ponderacion);
     END IF;
 
-    -- Sumatoria: el reparto proporcional depende de NOTA_MAXIMA y del
-    -- conjunto de actividades del bucket, asi que se recalcula SIEMPRE (no
-    -- solo cuando se toco la unidad): editar el puntaje de una actividad
-    -- cambia el % de TODAS las de su (unidad, grupo). Se recalcula tambien el
-    -- bucket de origen si la unidad o el grupo cambiaron. No-op fuera de
-    -- Sumatoria.
+    -- Sumatoria: se recalcula siempre el bucket destino, y tambien el de
+    -- origen si la actividad cambio de unidad o de grupo.
     PERFORM academico_test.fn_unidad_ponderacion_recalcular_sumatoria(v_fk_tunidad, v_grupo);
     IF v_actual.FK_TUNIDAD IS NOT NULL
        AND (v_actual.FK_TUNIDAD IS DISTINCT FROM v_fk_tunidad
@@ -687,7 +806,7 @@ BEGIN
                     v_actual.FK_TUNIDAD, v_actual.FK_TGRUPO);
     END IF;
 
-    -- ORDEN IMPORTA: estudiantes antes que adaptaciones (ver fn_actividad_crear).
+    -- ORDEN IMPORTA: estudiantes antes que adaptaciones.
     PERFORM academico_test.fn_actividad_estudiantes_asignar(
                 p_pk_usuario_solicitante, p_pk_tactividad, p_fk_tmatriculas, p_asignar_todo_el_grupo);
     PERFORM academico_test.fn_actividad_material_reemplazar(
@@ -695,7 +814,6 @@ BEGIN
     PERFORM academico_test.fn_actividad_adaptacion_reemplazar(
                 p_pk_usuario_solicitante, p_pk_tactividad, p_adaptaciones);
 
-    -- Recuperacion: solo si el caller la toco (objeto = configurar; flag = quitar).
     IF p_quitar_recuperacion THEN
         PERFORM academico_test.fn_actividad_recuperacion_configurar(
                     p_pk_usuario_solicitante, p_pk_tactividad, NULL);
@@ -704,12 +822,8 @@ BEGIN
                     p_pk_usuario_solicitante, p_pk_tactividad, p_recuperacion);
     END IF;
 
-    -- Evidencias / criterios: reemplazo del set. Primero se desactiva lo que
-    -- ya no viene y despues se relaciona el resto con los helpers de V214.1,
-    -- que son los duenos de la regla de negocio (evidencia de nivel 2 cuyo
-    -- enunciado padre este en la unidad; criterio de la rubrica de esa unidad)
-    -- y reactivan la fila existente en vez de duplicarla. Quitar se permite
-    -- siempre; agregar exige unidad, igual que en fn_actividad_crear.
+    -- Reemplazo del set: se desactiva lo que ya no viene y los helpers de
+    -- relacion reactivan la fila existente en vez de duplicarla.
     IF p_evidencias IS NOT NULL THEN
         UPDATE academico_test.TACTIVIDAD_EVIDENCIA
            SET ACTIVE = FALSE,
@@ -745,6 +859,88 @@ BEGIN
     RETURN p_pk_tactividad;
 END;
 $$;
+COMMENT ON FUNCTION academico_test.fn_actividad_actualizar_interno(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN, BIGINT[], BIGINT[])
+    IS 'INTERNO: PATCH de actividad sin gate ni etiqueta de auditoria; valida sobre los valores resultantes y aplica UPDATE + satelites. La invoca fn_actividad_actualizar.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_actualizar(
+    p_pk_usuario_solicitante            BIGINT,
+    p_pk_tactividad                     BIGINT,
+    p_titulo                            VARCHAR(250)  DEFAULT NULL,
+    p_descripcion                       VARCHAR(4000) DEFAULT NULL,
+    p_fk_tasignatura                    BIGINT        DEFAULT NULL,
+    p_fk_tgrupo                         BIGINT        DEFAULT NULL,
+    p_fk_tunidad                        BIGINT        DEFAULT NULL,
+    p_ponderacion                       NUMERIC       DEFAULT NULL,
+    p_desvincular_unidad                BOOLEAN       DEFAULT FALSE,
+    p_fk_tlv_tipo_actividad             BIGINT        DEFAULT NULL,
+    p_fecha_inicio                      DATE          DEFAULT NULL,
+    p_fecha_cierre                      DATE          DEFAULT NULL,
+    p_duracion_estimada                 NUMERIC       DEFAULT NULL,
+    p_semana_cronograma                 VARCHAR(50)   DEFAULT NULL,
+    p_fk_tlv_modalidad                  BIGINT        DEFAULT NULL,
+    p_material_requerido                VARCHAR(4000) DEFAULT NULL,
+    p_es_evaluativa                     academico_test.bool_sn DEFAULT NULL,
+    p_fk_tlv_instrumento_evaluacion     BIGINT        DEFAULT NULL,
+    p_descripcion_instrumento           VARCHAR(4000) DEFAULT NULL,
+    p_fk_tlv_tipo_evidencia             BIGINT        DEFAULT NULL,
+    p_fk_tlv_metodo_valoracion          BIGINT        DEFAULT NULL,
+    p_fk_tlv_tipo_calculo               BIGINT        DEFAULT NULL,
+    p_influencia                        NUMERIC       DEFAULT NULL,
+    p_nota_maxima                       NUMERIC       DEFAULT NULL,
+    p_requiere_archivo                  academico_test.bool_sn DEFAULT NULL,
+    p_requiere_texto                    academico_test.bool_sn DEFAULT NULL,
+    p_genera_evidencias                 academico_test.bool_sn DEFAULT NULL,
+    p_requiere_validacion_coordinador   academico_test.bool_sn DEFAULT NULL,
+    p_observaciones_docente             VARCHAR(4000) DEFAULT NULL,
+    p_materiales                        JSONB         DEFAULT NULL,
+    p_adaptaciones                      JSONB         DEFAULT NULL,
+    p_fk_tmatriculas                    BIGINT[]      DEFAULT NULL,
+    p_asignar_todo_el_grupo             BOOLEAN       DEFAULT FALSE,
+    p_recuperacion                      JSONB         DEFAULT NULL,
+    p_quitar_recuperacion               BOOLEAN       DEFAULT FALSE,
+    p_evidencias                        BIGINT[]      DEFAULT NULL,
+    p_criterios                         BIGINT[]      DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_titulo VARCHAR;
+    v_grupo  BIGINT;
+    v_unidad BIGINT;
+BEGIN
+    -- Existencia (P0002) antes que el gate: el alcance se resuelve desde la fila.
+    SELECT TITULO, FK_TGRUPO, FK_TUNIDAD INTO v_titulo, v_grupo, v_unidad
+      FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se encontro la actividad solicitada' USING ERRCODE = 'P0002';
+    END IF;
+
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'EDITAR', p_fk_tgrupo, NULL, p_fk_tunidad, p_pk_tactividad);
+
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualizacion de la actividad %s', COALESCE(NULLIF(TRIM(p_titulo), ''), v_titulo)),
+        NULL,
+        academico_test.fn_actividad_sede(COALESCE(p_fk_tgrupo, v_grupo),
+                                         COALESCE(p_fk_tunidad, v_unidad)));
+
+    RETURN academico_test.fn_actividad_actualizar_interno(
+        p_pk_usuario_solicitante, p_pk_tactividad, p_titulo, p_descripcion,
+        p_fk_tasignatura, p_fk_tgrupo, p_fk_tunidad, p_ponderacion, p_desvincular_unidad,
+        p_fk_tlv_tipo_actividad, p_fecha_inicio, p_fecha_cierre, p_duracion_estimada,
+        p_semana_cronograma, p_fk_tlv_modalidad, p_material_requerido, p_es_evaluativa,
+        p_fk_tlv_instrumento_evaluacion, p_descripcion_instrumento, p_fk_tlv_tipo_evidencia,
+        p_fk_tlv_metodo_valoracion, p_fk_tlv_tipo_calculo, p_influencia, p_nota_maxima,
+        p_requiere_archivo, p_requiere_texto, p_genera_evidencias,
+        p_requiere_validacion_coordinador, p_observaciones_docente, p_materiales,
+        p_adaptaciones, p_fk_tmatriculas, p_asignar_todo_el_grupo, p_recuperacion,
+        p_quitar_recuperacion, p_evidencias, p_criterios);
+END;
+$$;
+COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN, BIGINT[], BIGINT[])
+    IS 'PATCH /planeador/actividades/:id. Wrapper: existencia (P0002), gate EDITAR de PLANEADOR con alcance, etiqueta de auditoria con la sede resultante, y delega en fn_actividad_actualizar_interno. Rechaza 22023 si las fechas resultantes abarcan mas de un periodo de evaluacion.';
+
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_campos_disponibles(
     p_pk_usuario_solicitante BIGINT,
@@ -856,11 +1052,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BIGINT[], BIGINT[])
-    IS 'Crea una actividad del Planeador (gate CREAR sobre PLANEADOR): inserta TACTIVIDAD (identificacion, programacion, evaluacion y seguimiento) y opcionalmente la vincula a una unidad con su PONDERACION (%) — la regla "la suma por (unidad, grupo) no pasa de 100" la impone el trigger de V223. NO asigna estudiantes por defecto: p_asignar_todo_el_grupo=TRUE los toma del FK_TGRUPO, o p_fk_tmatriculas fija estudiantes especificos (1 o mas). p_recuperacion (objeto) marca la actividad como de recuperacion y crea su fila TACTIVIDAD_RECUPERACION via fn_actividad_recuperacion_configurar. p_evidencias (PKs de TREFERENTE_ENUNCIADO nivel 2) y p_criterios (PKs de TCRITERIO_UNIDAD) relacionan la actividad, via fn_actividad_evidencia_relacionar / fn_actividad_criterio_relacionar (V214.1), con evidencias de enunciados ya vinculados a la unidad y con criterios de la rubrica de esa misma unidad — ambos exigen FK_TUNIDAD y abortan el CREATE si la actividad no tiene unidad o alguna PK no cumple la regla de negocio. Delega materiales / adaptaciones / estudiantes en sus helpers. Valida catalogos con fn_actividad_lv_assert y unicidad (titulo, unidad, grupo, jerarquia) entre activas con IS NOT DISTINCT FROM. p_fk_tlv_instrumento_evaluacion solo se acepta si el referente curricular que le aplica al contexto es EVALUATIVO (fn_actividad_instrumento_contexto_assert, condicion dinamica "actividad -> evaluacion" de V214.2); en otro caso lanza 22023. PONDERACION (condicion dinamica "actividad -> ponderacion" de V214.2): se rechaza (22023) si la actividad no es evaluativa (p_es_evaluativa=''N''), si no se vincula a una unidad, si la unidad PROMEDIA (no aplica) o si la unidad calcula por SUMATORIA -- ahi el docente envia p_nota_maxima (puntaje) y el % lo autocalcula fn_unidad_ponderacion_recalcular_sumatoria (V223), invocada tras el INSERT para repartir el bucket (unidad, grupo) completo. Retorna PK_TACTIVIDAD. V224. V476 -- El gate del referente Formativo ya no exige unidad: si la actividad nace sin ella, el referente se deriva del (grado del grupo, asignatura) con fn_actividad_contexto_evaluativo, y un ES_EVALUATIVA=''S'' explicito contra un referente Formativo se rechaza con 22023 igual que si la unidad lo fuera. Ademas el parametro p_es_evaluativa pasa a DEFAULT NULL: omitirlo ya no significa ''S'' fijo, significa "el valor que le corresponde a mi referente" -- ''N'' con referente Formativo, ''S'' con Evaluativo o cuando no hay referente del que decidir. Una actividad de Preescolar creada sin unidad dejaba de ser formativa solo por el default. V479 -- El instrumento de evaluacion tampoco exige unidad: se acepta si el referente que le aplica al contexto (unidad, o grado del grupo + asignatura) es EVALUATIVO, y se rechaza con 22023 solo si es Formativo. La regla vive en fn_actividad_instrumento_contexto_assert, compartida con el PATCH.';
 
-COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN, BIGINT[], BIGINT[])
-    IS 'PATCH parcial de una actividad (gate EDITAR sobre PLANEADOR): cada parametro NULL preserva el valor actual. Unidad/ponderacion se delegan en fn_unidad_actividad_vincular / _ponderacion_set / _desvincular (V223) para que la regla del 100% viva en un solo sitio; p_desvincular_unidad=TRUE es excluyente con p_fk_tunidad/p_ponderacion. Recuperacion: p_recuperacion (objeto) la configura via fn_actividad_recuperacion_configurar, p_quitar_recuperacion=TRUE la elimina (vuelve la actividad a normal); son excluyentes y NULL/FALSE no la tocan. p_materiales / p_adaptaciones / p_fk_tmatriculas NULL = no tocar, array = reemplazo completo. p_evidencias (PKs de TREFERENTE_ENUNCIADO nivel 2) y p_criterios (PKs de TCRITERIO_UNIDAD) siguen el MISMO contrato: NULL = no tocar, array (incl. vacio) = el set queda exactamente ese -- se desactivan (ACTIVE=FALSE) las relaciones que ya no vienen y el resto se relaciona/reactiva con fn_actividad_evidencia_relacionar / fn_actividad_criterio_relacionar (V214.1), duenos unicos de la regla de negocio (la evidencia debe ser nivel 2 y su enunciado padre estar ya relacionado con la unidad de la actividad; el criterio debe pertenecer a la rubrica de esa misma unidad). QUITAR siempre se puede; AGREGAR exige que la actividad tenga unidad, igual que en fn_actividad_crear. Revalida fechas, catalogos y unicidad (titulo, unidad, grupo, jerarquia). El FK_TLV_INSTRUMENTO_EVALUACION resultante (nuevo o heredado) solo se admite si el referente curricular que le aplica al contexto resultante es EVALUATIVO (fn_actividad_instrumento_contexto_assert, condicion dinamica "actividad -> evaluacion" de V214.2); en otro caso lanza 22023. PONDERACION (condicion dinamica "actividad -> ponderacion" de V214.2, evaluada contra los valores RESULTANTES): se rechaza p_ponderacion (22023) si la actividad queda NO evaluativa (ES_EVALUATIVA resultante = ''N''), si la unidad resultante PROMEDIA, o si calcula por SUMATORIA -- ahi el docente envia p_nota_maxima y el % lo autocalcula fn_unidad_ponderacion_recalcular_sumatoria (V223), que se invoca SIEMPRE al final sobre el bucket resultante (y sobre el de origen si cambio la unidad o el grupo), porque editar el puntaje de una actividad cambia el % de todas las de su (unidad, grupo). Retorna PK_TACTIVIDAD. V224. V476 -- El gate del referente Formativo ya no exige unidad: si la actividad nace sin ella, el referente se deriva del (grado del grupo, asignatura) con fn_actividad_contexto_evaluativo, y un ES_EVALUATIVA=''S'' explicito contra un referente Formativo se rechaza con 22023 igual que si la unidad lo fuera. Ademas el parametro p_es_evaluativa pasa a DEFAULT NULL: omitirlo ya no significa ''S'' fijo, significa "el valor que le corresponde a mi referente" -- ''N'' con referente Formativo, ''S'' con Evaluativo o cuando no hay referente del que decidir. Una actividad de Preescolar creada sin unidad dejaba de ser formativa solo por el default. V479 -- El instrumento de evaluacion tampoco exige unidad: el valor RESULTANTE se acepta si el referente que le aplica al contexto resultante (unidad, o grado del grupo + asignatura) es EVALUATIVO. Desvincular la unidad de una actividad con instrumento heredado ya no falla: antes se rechazaba con 22023 sin mas salida que retirar el instrumento. La regla vive en fn_actividad_instrumento_contexto_assert, compartida con el alta.';
 
 COMMENT ON FUNCTION academico_test.fn_actividad_campos_disponibles(BIGINT, BIGINT)
     IS 'Que pintar en el formulario de una actividad YA creada: {esFormativo, esSumativoSugerido, criterio, evaluacion, ponderacion, recuperacion}. Gate VER sobre PLANEADOR + alcance por la actividad; P0002 si no existe. V214.2. V479 -- evaluacion.visible/requerido e instrumentosPermitidos ya no se apagan por no tener unidad: salen del referente que le aplica a la actividad (fn_actividad_evaluacion_requerida + fn_actividad_referente_tipo_evaluacion, ambas generalizadas aqui). El apagon de Preescolar se mantiene, y ahora tambien SIN unidad: el nivel de ensenanza se deriva del grado del grupo cuando no hay unidad de la que leerlo -- sin eso, generalizar la evaluacion le habria abierto el instrumento a una actividad suelta de Preescolar.';
