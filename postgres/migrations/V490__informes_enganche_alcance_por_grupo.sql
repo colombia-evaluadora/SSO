@@ -1187,11 +1187,10 @@ $function$
 ;
 
 -- ---------------------------------------------------------------------------
--- fn_informe_periodo_evidencias_listar (+ es_favorito: el tipo de retorno cambia)
+-- fn_informe_periodo_evidencias_listar
 -- ---------------------------------------------------------------------------
-DROP FUNCTION IF EXISTS academico_test.fn_informe_periodo_evidencias_listar(bigint, bigint, bigint);
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_periodo_evidencias_listar(p_pk_usuario_solicitante bigint, p_fk_tmatricula bigint, p_fk_tperiodo_evaluacion bigint DEFAULT NULL::bigint)
- RETURNS TABLE(pk_tactividad_soporte bigint, fk_tarchivo bigint, nombre character varying, urls3 character varying, peso bigint, etiqueta character varying, fecha date, fk_tperiodo_evaluacion bigint, periodo_nombre character varying, fk_tactividad bigint, actividad_titulo character varying, observacion character varying, es_favorito boolean)
+ RETURNS TABLE(pk_tactividad_soporte bigint, fk_tarchivo bigint, nombre character varying, urls3 character varying, peso bigint, etiqueta character varying, fecha date, fk_tperiodo_evaluacion bigint, periodo_nombre character varying, fk_tactividad bigint, actividad_titulo character varying, observacion character varying)
  LANGUAGE plpgsql
  STABLE
 AS $function$
@@ -1253,8 +1252,7 @@ BEGIN
            p.nombre,
            a.PK_TACTIVIDAD,
            a.TITULO,
-           so.OBSERVACION,
-           so.ES_FAVORITO
+           so.OBSERVACION
       FROM academico_test.TACTIVIDAD_SOPORTE so
       JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae
         ON ae.PK_TACTIVIDAD_ESTUDIANTE = so.FK_TACTIVIDAD_ESTUDIANTE
@@ -1277,7 +1275,20 @@ $function$
 ;
 
 COMMENT ON FUNCTION academico_test.fn_informe_periodo_evidencias_listar(BIGINT, BIGINT, BIGINT)
-    IS 'Las evidencias (archivos adjuntos a la observacion, con o sin texto) de UN estudiante en un periodo, para la pantalla de informes; con FK_TPERIODO_EVALUACION nulo, las de TODO el año (fila Final). Lee la misma TACTIVIDAD_SOPORTE que GET /planeador/actividades/estudiantes/:ID/soportes pero no lo reusa: aquel pide PLANEADOR/VER y va por actividad, aca es por (estudiante, periodo). Cada evidencia trae el periodo en que cae (por fechas, fn_actividad_en_periodo_eval) y es_favorito, la evidencia destacada de su observacion. Gate INFORMES/VER sobre EE/sede/jornada de la matricula + recorte por grupo propio; 404 si la matricula no existe.';
+    IS 'Las evidencias (archivos adjuntos a la observacion, con o sin texto) de UN estudiante en un periodo, para la pantalla de informes; con FK_TPERIODO_EVALUACION nulo, las de TODO el año (fila Final). Lee la misma TACTIVIDAD_SOPORTE que GET /planeador/actividades/estudiantes/:ID/soportes pero no lo reusa: aquel pide PLANEADOR/VER y va por actividad, aca es por (estudiante, periodo). Cada evidencia trae el periodo en que cae (por fechas, fn_actividad_en_periodo_eval) (es_favorito lo agrega la query de POST /informes/evidencias, para no cambiar el tipo de retorno). Gate INFORMES/VER sobre EE/sede/jornada de la matricula + recorte por grupo propio; 404 si la matricula no existe.';
+
+-- es_favorito va en la query y no en RETURNS TABLE: cambiar el tipo de retorno
+-- exige DROP, y reaplicar una version anterior de este archivo fallaria.
+UPDATE public.query q
+   SET query = 'SELECT e.*, so.ES_FAVORITO AS es_favorito
+  FROM academico_test.fn_informe_periodo_evidencias_listar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:BODY.FK_TMATRICULA AS BIGINT),
+    CAST(:BODY.FK_TPERIODO_EVALUACION AS BIGINT)
+  ) e
+  JOIN academico_test.TACTIVIDAD_SOPORTE so
+    ON so.PK_TACTIVIDAD_SOPORTE = e.pk_tactividad_soporte;'
+ WHERE q.uuid = 'eval-col-informes-evidencias-001';
 
 -- ---------------------------------------------------------------------------
 -- fn_estudiante_periodo_observacion_generar
