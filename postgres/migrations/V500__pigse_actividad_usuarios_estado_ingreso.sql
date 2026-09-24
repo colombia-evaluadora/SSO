@@ -1,8 +1,25 @@
 -- V500 -- corrige el estado de POST /usuarios/actividad/query (V495): CON_INGRESO si el usuario tiene
 -- alguna sesion registrada, SIN_INGRESO si no; EN_LINEA/DESCONECTADO desaparecen.
--- Las sesiones anteriores al deploy de V495 solo traen fk_tusuario (academico): se cruzan tambien por
--- public.fn_get_academico_usuario_id, la misma funcion con que auth-center las escribio.
--- Firma y wrapper sin cambios. Depende de: V495.
+-- pigse.fn_sesion_usuario lleva una fila de tsesion_web al pigse.tusuario dueno: por fk_id_user (V495)
+-- o, en sesiones previas, por fk_tusuario -> TUSUARIO.CUENTA = users.email -> fn_get_pigse_usuario_id.
+-- Firma y wrapper del endpoint sin cambios. Depende de: V495, V261 (fn_get_pigse_usuario_id).
+
+CREATE OR REPLACE FUNCTION pigse.fn_sesion_usuario(p_fk_tusuario BIGINT, p_fk_id_user BIGINT)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT public.fn_get_pigse_usuario_id(COALESCE(
+        p_fk_id_user,
+        (SELECT u.id_user
+           FROM academico_test.tusuario t
+           JOIN public.users u ON u.email = t.cuenta
+          WHERE t.pk_tusuario = p_fk_tusuario)
+    ))
+$$;
+
+COMMENT ON FUNCTION pigse.fn_sesion_usuario(BIGINT, BIGINT) IS
+    'V500: pk de pigse.tusuario dueno de una fila de academico_test.tsesion_web, o NULL. Usa fk_id_user (V495) y, si falta, el puente academico TUSUARIO.CUENTA = public.users.email (paso 1 de fn_get_academico_usuario_id). Resolver el actor: pigse.fn_resolver_actor(pigse.fn_sesion_usuario(...)).';
 
 CREATE OR REPLACE FUNCTION pigse.fn_usuarios_actividad_listar_interno(
     p_search             VARCHAR DEFAULT NULL,
@@ -60,26 +77,19 @@ BEGIN
           FROM vinculos v
           JOIN pigse.TESTABLECIMIENTO e ON e.PK_ESTABLECIMIENTO = v.fk_ee AND e.ACTIVE
     ),
-    usuarios AS (
-        SELECT u.PK_TUSUARIO, u.FK_ID_USER, public.fn_get_academico_usuario_id(u.FK_ID_USER) AS acad_pk
-          FROM pigse.TUSUARIO u
-         WHERE u.ACTIVE
-    ),
-    sesiones AS (
-        SELECT us.PK_TUSUARIO, s.started_at, s.last_seen_at
-          FROM usuarios us
-          JOIN academico_test.tsesion_web s ON s.fk_id_user = us.FK_ID_USER
-        UNION ALL
-        SELECT us.PK_TUSUARIO, s.started_at, s.last_seen_at
-          FROM usuarios us
-          JOIN academico_test.tsesion_web s ON s.fk_tusuario = us.acad_pk AND s.fk_id_user IS NULL
+    pares AS (
+        SELECT s.fk_tusuario, s.fk_id_user,
+               MAX(s.started_at)   AS ultimo_login,
+               MAX(s.last_seen_at) AS ultima_actividad
+          FROM academico_test.tsesion_web s
+         GROUP BY s.fk_tusuario, s.fk_id_user
     ),
     actividad AS (
-        SELECT se.PK_TUSUARIO AS pk_tusuario,
-               MAX(se.started_at)   AS ultimo_login,
-               MAX(se.last_seen_at) AS ultima_actividad
-          FROM sesiones se
-         GROUP BY se.PK_TUSUARIO
+        SELECT pigse.fn_sesion_usuario(p.fk_tusuario, p.fk_id_user) AS pk_tusuario,
+               MAX(p.ultimo_login)     AS ultimo_login,
+               MAX(p.ultima_actividad) AS ultima_actividad
+          FROM pares p
+         GROUP BY 1
     ),
     roles AS (
         SELECT ru.user_id, string_agg(r.name, ',' ORDER BY r.name) AS roles
@@ -150,7 +160,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION pigse.fn_usuarios_actividad_listar_interno(VARCHAR, BIGINT, VARCHAR, VARCHAR, BOOLEAN, INTEGER, INTEGER) IS
-    'V500: nucleo sin permisos. Una fila por (establecimiento, usuario PIGSE activo); quien no tiene EE sale con establecimiento NULL. Actividad = academico_test.tsesion_web por fk_id_user (V495) o, en sesiones previas sin fk_id_user, por fk_tusuario = fn_get_academico_usuario_id. estado: CON_INGRESO (alguna sesion registrada) o SIN_INGRESO.';
+    'V500: nucleo sin permisos. Una fila por (establecimiento, usuario PIGSE activo); quien no tiene EE sale con establecimiento NULL. Actividad = academico_test.tsesion_web resuelta a pigse.tusuario con pigse.fn_sesion_usuario. estado: CON_INGRESO (alguna sesion registrada) o SIN_INGRESO.';
 
 UPDATE public.query
    SET detail = 'Actividad de usuarios PIGSE por establecimiento: ultimo ingreso, ultima actividad y estado CON_INGRESO/SIN_INGRESO, paginado. Lee academico_test.tsesion_web en Postgres, no ClickHouse; no es /audits/query (sesiones de auditoria).'
