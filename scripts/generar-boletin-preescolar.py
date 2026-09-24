@@ -119,8 +119,11 @@ CABECERA = (
                 size=7)
     + en_franja(X0, 45, 260, 10, '$F{ciudad}', size=7)
     + [
-        txt(400, 110, 173, 12, '"Expedido: " + $P{GENERADO}', size=7, align='Right',
-            color=GRIS),
+        # La fecha va en el hueco blanco de arriba a la derecha, pasada la
+        # diagonal: en los 14 fondos x=393..573, y=26..38 queda en blanco, asi
+        # que no hace falta medir el tono como con el nombre del colegio.
+        txt(393, 26, 180, 12, '"Expedido: " + $P{GENERADO}', size=7, align='Right',
+            color=GRIS, valign='Middle'),
         # En las hojas de continuacion no se repite el bloque del estudiante,
         # pero hay que poder saber de quien es la hoja suelta.
         txt(X0, 110, 360, 12, '$F{estudiante} + " (continuacion)"', size=7, bold=True,
@@ -163,8 +166,6 @@ TITULO = [
         size=10, bold=True, color=BLANCO, blank=False, stretch=True, valign='Middle',
         box='\t\t\t\t<box topPadding="5" bottomPadding="5"/>\n'),
 ]
-AREAS = [txt(X0 + 4, 2, ANCHO - 8, 12, '"Areas: " + $F{area_nombre}', size=7,
-             color=GRIS, stretch=True)]
 
 # ----------------------------------------------------------- observacion
 # Sin alto fijo: la banda se parte entre hojas (splitType Stretch) y el borde
@@ -187,55 +188,69 @@ N_EVIDENCIAS = '(%s)' % ' + '.join(
     ' ? "" : $F{evidencia%d_titulo}.trim()) ? 1 : 0)' % (i, i, i)
     for i in range(1, 7))
 
-# El reparto depende de cuantas haya: una sola ocupa el recuadro entero, y
-# de ahi hasta la rejilla de 3x2. Jasper no calcula posiciones, asi que se
-# dibujan las seis distribuciones y cada una se imprime solo con su cantidad.
-GY, GH, GAP = 30, 250, 8                 # rejilla: arriba, alto total, separacion
-FILA = (GH - GAP) // 2                    # alto de una tarjeta en dos filas
-C3 = (ANCHO - 2 * 12) // 3               # ancho en tres columnas (169)
-C2 = (ANCHO - 12) // 2                   # ancho en dos columnas (260)
+# El TAMAÑO de cada foto depende de cuantas haya. Jasper no acepta x, y ni
+# ancho por expresion (tampoco en 7.0.8), y una banda tiene alto fijo: por eso
+# cada cantidad es SU PROPIA banda, con su alto y su reparto, y solo se
+# imprime la que corresponde. Con una rejilla de alto unico, seis fotos
+# quedaban de 80pt y una sola dejaba media hoja vacia.
+GY, GAP = 30, 10                         # rejilla: arriba y separacion
+C3 = (ANCHO - 2 * GAP) // 3              # ancho en tres columnas (171)
+C2 = (ANCHO - GAP) // 2                  # ancho en dos columnas (261)
 
 
 def _centro(w):
     return X0 + (ANCHO - w) // 2
 
 
+def _filas(anchos, alto, filas):
+    """Tarjetas de `alto` en `filas` filas; cada fila centra sus `anchos`."""
+    tarjetas = []
+    for f, fila in enumerate(filas):
+        total = sum(anchos[i] for i in fila) + GAP * (len(fila) - 1)
+        x = _centro(total)
+        for i in fila:
+            tarjetas.append((x, GY + f * (alto + GAP), anchos[i], alto))
+            x += anchos[i] + GAP
+    return tarjetas
+
+
+# (tarjetas, alto de la rejilla). Una sola va grande y centrada; dos, a media
+# columna; tres, una grande a la izquierda y dos apiladas (tres tiras dejan
+# diminuta una foto apaisada); de cuatro en adelante, dos filas.
+ALTO_4, ALTO_6 = 175, 165
 DISTRIBUCION = {
-    1: [(_centro(360), GY, 360, GH)],
-    2: [(X0, GY, C2, GH), (X0 + C2 + 12, GY, C2, GH)],
-    # Tres: una grande a la izquierda y dos apiladas, en vez de tres tiras
-    # verticales donde una foto apaisada queda diminuta.
-    3: [(X0, GY, C2, GH),
-        (X0 + C2 + 12, GY, C2, FILA), (X0 + C2 + 12, GY + FILA + GAP, C2, FILA)],
-    4: [(X0 + c * (C2 + 12), GY + f * (FILA + GAP), C2, FILA)
-        for f in (0, 1) for c in (0, 1)],
-    5: [(X0 + c * (C3 + 12), GY, C3, FILA) for c in (0, 1, 2)]
-       + [(_centro(2 * C3 + 12) + c * (C3 + 12), GY + FILA + GAP, C3, FILA) for c in (0, 1)],
-    6: [(X0 + c * (C3 + 12), GY + f * (FILA + GAP), C3, FILA)
-        for f in (0, 1) for c in (0, 1, 2)],
+    1: ([(_centro(420), GY, 420, 310)], 310),
+    2: ([(X0, GY, C2, 260), (X0 + C2 + GAP, GY, C2, 260)], 260),
+    3: ([(X0, GY, C2, 290),
+         (X0 + C2 + GAP, GY, C2, 140), (X0 + C2 + GAP, GY + 150, C2, 140)], 290),
+    4: (_filas([C2] * 4, ALTO_4, [(0, 1), (2, 3)]), 2 * ALTO_4 + GAP),
+    5: (_filas([C3] * 5, ALTO_6, [(0, 1, 2), (3, 4)]), 2 * ALTO_6 + GAP),
+    6: (_filas([C3] * 6, ALTO_6, [(0, 1, 2), (3, 4, 5)]), 2 * ALTO_6 + GAP),
 }
 
-EVIDENCIAS = [
-    rect(X0, 0, ANCHO, 22, AZUL, radius=6),
-    static(52, 0, 400, 22, 'EVIDENCIAS DE APRENDIZAJE', size=10, bold=True, color=BLANCO),
-]
-for cantidad, tarjetas in DISTRIBUCION.items():
-    cuando = N_EVIDENCIAS + ' == %d' % cantidad
+
+def evidencias(cantidad):
+    tarjetas, alto = DISTRIBUCION[cantidad]
     grande = cantidad <= 3
+    pie = 36 if grande else 32
+    elementos = [
+        rect(X0, 0, ANCHO, 22, AZUL, radius=6),
+        static(52, 0, 400, 22, 'EVIDENCIAS DE APRENDIZAJE', size=10, bold=True,
+               color=BLANCO),
+    ]
     for n, (fx, fy, fw, fh) in enumerate(tarjetas, start=1):
-        pie = 40 if grande else 36
-        EVIDENCIAS.append(rect(fx, fy, fw, fh, TARJETA, radius=6, when=cuando))
-        EVIDENCIAS.append(img(fx + 4, fy + 4, fw - 8, fh - pie - 4,
-                              '$F{evidencia%d_archivo}' % n, when=cuando))
+        elementos.append(rect(fx, fy, fw, fh, TARJETA, radius=6))
+        elementos.append(img(fx + 4, fy + 4, fw - 8, fh - pie - 4,
+                             '$F{evidencia%d_archivo}' % n))
         # La fecha ya viene formateada: CellValues.toText la convierte antes
         # de llegar aqui, igual que en cualquier otro reporte.
-        EVIDENCIAS.append(txt(fx + 6, fy + fh - pie, fw - 12, pie - 14,
-                              '$F{evidencia%d_titulo}' % n, size=8 if grande else 7,
-                              bold=True, when=cuando, valign='Middle'))
-        EVIDENCIAS.append(txt(fx + 6, fy + fh - 13, fw - 12, 10,
-                              '$F{evidencia%d_fecha}' % n, size=6, align='Right',
-                              color=GRIS, when=cuando))
-ALTO_EVIDENCIAS = GY + GH + 8
+        elementos.append(txt(fx + 6, fy + fh - pie, fw - 12, pie - 14,
+                             '$F{evidencia%d_titulo}' % n, size=8 if grande else 7,
+                             bold=True, valign='Middle'))
+        elementos.append(txt(fx + 6, fy + fh - 13, fw - 12, 10,
+                             '$F{evidencia%d_fecha}' % n, size=6, align='Right',
+                             color=GRIS))
+    return banda(GY + alto + 8, elementos, when=N_EVIDENCIAS + ' == %d' % cantidad)
 
 SIN_EVIDENCIAS = [
     rect(X0, 0, ANCHO, 22, AZUL, radius=6),
@@ -245,10 +260,14 @@ SIN_EVIDENCIAS = [
 ]
 
 # ---------------------------------------------------------------- firma
+# El documento va en su propia linea y solo si existe: CellValues.toText
+# convierte el null en "", y un "CC:" suelto se leeria como un dato roto.
 FIRMA = [
     line(207, 32, 200),
     txt(157, 35, 300, 12, '$F{rector_nombre}', size=9, bold=True, align='Center'),
     static(157, 47, 300, 11, 'Rector(a)', size=7, align='Center', color=GRIS),
+    txt(157, 58, 300, 11, '$F{rector_documento}', size=7, align='Center', color=GRIS,
+        when='$F{rector_documento} != null && !$F{rector_documento}.trim().isEmpty()'),
 ]
 
 # ------------------------------------------------------------ pie de pagina
@@ -264,8 +283,8 @@ ALTO_PIE = 60
 
 campos = ['ee_nombre', 'ee_dane', 'ee_nit', 'ciudad', 'sede_nombre', 'nivel_ensenanza',
           'grado_nombre', 'grupo_etiqueta', 'periodo_nombre', 'anio', 'estudiante',
-          'documento', 'asignatura_nombre', 'area_nombre',
-          'observacion', 'observacion_estado', 'rector_nombre']
+          'documento', 'asignatura_nombre',
+          'observacion', 'observacion_estado', 'rector_nombre', 'rector_documento']
 campos += ['evidencia%d_titulo' % i for i in range(1, 7)]
 # Las fechas se declaran como TEXTO: el datasource las entrega ya
 # formateadas por CellValues, no como objetos de fecha.
@@ -336,12 +355,10 @@ def seccion(nombre, alto, elementos):
 
 detalle = (banda(104, DATOS)
            + banda(28, TITULO, split='Stretch')
-           + banda(16, AREAS, split='Stretch',
-                   when='$F{area_nombre} != null && !$F{area_nombre}.trim().isEmpty()')
            + banda(34, OBSERVACION, split='Stretch')
-           + banda(ALTO_EVIDENCIAS, EVIDENCIAS, when=N_EVIDENCIAS + ' > 0')
+           + ''.join(evidencias(n) for n in DISTRIBUCION)
            + banda(50, SIN_EVIDENCIAS, when=N_EVIDENCIAS + ' == 0')
-           + banda(62, FIRMA))
+           + banda(74, FIRMA))
 
 xml = (cabecera + decl + '\n'
        + seccion('background', 894, FONDO)

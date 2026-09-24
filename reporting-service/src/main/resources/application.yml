@@ -572,7 +572,6 @@ reporting:
         documento: Documento
         foto_archivo: Foto
         asignatura_nombre: Asignatura o dimension
-        area_nombre: Area
         observacion: Seguimiento y valoracion
         observacion_estado: Estado de la observacion
         evidencia1_titulo: Evidencia 1
@@ -594,6 +593,7 @@ reporting:
         evidencia6_fecha: Fecha evidencia 6
         evidencia6_archivo: Foto evidencia 6
         rector_nombre: Rector
+        rector_documento: Documento del rector
 
 sso:
   jwt:

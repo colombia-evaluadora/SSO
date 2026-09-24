@@ -7,10 +7,12 @@
 -- (matricula, periodo). Ahora: una hoja, los nombres de las asignaturas
 -- juntos en una linea y las evidencias mas recientes de todas las materias.
 -- Los nombres salen del PLAN DE ESTUDIO y no del listado. El porque de las
--- tres decisiones, en el COMMENT.
+-- tres decisiones, en el COMMENT. El rector sale del rol en las sedes del EE.
 --
--- Depende de: V466, V461 (ES_FAVORITO). Idempotente: CREATE OR REPLACE, mismo tipo de retorno.
+-- Depende de: V466, V461 (ES_FAVORITO). Idempotente: DROP + CREATE (RECTOR_DOCUMENTO cambia el retorno).
 -- ===========================================================================
+
+DROP FUNCTION IF EXISTS academico_test.fn_informe_boletin_preescolar(BIGINT, BIGINT, BIGINT, BIGINT[]);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_boletin_preescolar(
     p_pk_usuario_solicitante BIGINT,
@@ -55,7 +57,8 @@ RETURNS TABLE(
     evidencia6_titulo    VARCHAR,
     evidencia6_fecha     DATE,
     evidencia6_archivo   BIGINT,
-    rector_nombre        VARCHAR
+    rector_nombre        VARCHAR,
+    rector_documento     VARCHAR
 )
 LANGUAGE sql
 STABLE
@@ -131,7 +134,8 @@ AS $function$
                           AS grupo_etiqueta,
                academico_test.fn_anio_lectivo_numero(al.NOMBRE) AS anio,
                ee.FK_TARCHIVO_FONDO_BOLETIN AS fondo_archivo,
-               ee.PK_ESTABLECIMIENTO        AS pk_ee
+               ee.PK_ESTABLECIMIENTO        AS pk_ee,
+               s.PK_TSEDE                   AS pk_sede
           FROM academico_test.TGRUPO gr
           JOIN academico_test.TGRADO gd  ON gd.PK_TGRADO = gr.FK_TGRADO
           LEFT JOIN academico_test.TNIVEL_ENSENANZA niv
@@ -209,21 +213,29 @@ AS $function$
                                                            p_fk_tperiodo_evaluacion)
            AND ae.FK_TMATRICULA IN (SELECT f.fk_tmatricula FROM filas f)
     ),
+    -- El rector es quien tiene el rol RECTOR en una sede del establecimiento,
+    -- la del grupo primero. No se pasa por TFUNCIONARIO: su FK_ESTABLECIMIENTO
+    -- viene NULL en casi todos los rectores y el boletin salia sin firma.
     rector AS (
         SELECT c.pk_ee,
                NULLIF(TRIM(CONCAT_WS(' ', u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO,
                                           u.PRIMER_NOMBRE,   u.SEGUNDO_NOMBRE)), '')
-                   AS nombre
+                   AS nombre,
+               CASE WHEN NULLIF(TRIM(u.IDENTIFICACION), '') IS NOT NULL
+                    THEN CONCAT_WS(' ', td.VALOR || ':', TRIM(u.IDENTIFICACION))
+               END AS documento
           FROM cabecera c
-          JOIN academico_test.TFUNCIONARIO fu
-            ON fu.FK_ESTABLECIMIENTO = c.pk_ee AND fu.ACTIVE = TRUE
-          JOIN academico_test.TUSUARIO u
-            ON u.PK_TUSUARIO = fu.FK_TUSUARIO AND u.ACTIVE = TRUE
+          JOIN academico_test.TSEDE s
+            ON s.FK_TESTABLECIMIENTO = c.pk_ee AND s.ACTIVE = TRUE
           JOIN academico_test.TSEDE_USUARIO su
-            ON su.FK_TUSUARIO = u.PK_TUSUARIO AND su.ACTIVE = TRUE
+            ON su.FK_TSEDE = s.PK_TSEDE AND su.ACTIVE = TRUE
           JOIN academico_test.TROL r
             ON r.PK_TROL = su.FK_TROL AND r.CODIGO = 'RECTOR'
-         ORDER BY u.PK_TUSUARIO
+          JOIN academico_test.TUSUARIO u
+            ON u.PK_TUSUARIO = su.FK_TUSUARIO AND u.ACTIVE = TRUE
+          LEFT JOIN academico_test.TLISTA_VALOR td
+                 ON td.PK_LISTA_VALOR = u.FK_TLV_TIPO_DOCUMENTO
+         ORDER BY (s.PK_TSEDE = c.pk_sede) DESC, u.PK_TUSUARIO
          LIMIT 1
     )
     SELECT c.ee_nombre, c.ee_dane, c.ee_nit, c.ciudad, c.sede_nombre,
@@ -238,7 +250,7 @@ AS $function$
            e4.titulo, e4.fecha, e4.fk_tarchivo,
            e5.titulo, e5.fecha, e5.fk_tarchivo,
            e6.titulo, e6.fecha, e6.fk_tarchivo,
-           re.nombre
+           re.nombre, re.documento
       FROM filas f
       CROSS JOIN cabecera c
       LEFT JOIN foto   fo ON fo.FK_TMATRICULA = f.fk_tmatricula

@@ -1,0 +1,57 @@
+-- ===========================================================================
+-- V493 - El informe volvio a tardar cinco segundos por una estimacion de filas.
+--
+--   fn_promedio_homologar   ROWS 1000 -> ROWS 1
+--
+--   No cambia una sola linea de logica. Es el mismo arreglo que el V432, en
+--   la funcion que el V474 agrego despues.
+--
+--
+-- EL SINTOMA
+--   fn_informe_grupo_listar tardaba 5,6 s en un grupo de SEIS estudiantes con
+--   dos periodos. Medido apagando el compilador:
+--
+--     con jit (como esta hoy)   5583 ms
+--     sin jit                   1138 ms
+--
+--   Cuatro de cada cinco segundos son compilar, no consultar.
+--
+--
+-- LA CAUSA, OTRA VEZ
+--   Una funcion que devuelve conjunto le declara al planificador cuantas
+--   filas produce, con ROWS. Sin ROWS, Postgres asume 1000. El V474 agrego
+--   fn_promedio_homologar -- que resuelve el promedio en el formato del
+--   colegio -- y la dejo con ese default; el cuerpo del listado la usa en
+--   laterales, asi que el costo estimado se multiplica hasta pasar
+--   jit_above_cost (100000) y, peor, jit_optimize_above_cost e
+--   jit_inline_above_cost (500000 cada uno). El resultado es una compilacion
+--   completa por llamada.
+--
+--   Es exactamente lo que el V432 arreglo en fn_nota_homologar y
+--   fn_asignatura_tipo_evaluacion. Aquella migracion dejo dicho como
+--   reconocerlo: "si en EXPLAIN (ANALYZE) el Timing/Total del bloque JIT se
+--   parece al Execution Time, el tiempo se va en compilar". Esto es eso.
+--
+--
+-- EL ARREGLO
+--   Declarar la verdad: devuelve UNA fila. Se verifico contando el maximo de
+--   filas devueltas sobre 400 combinaciones de (periodo academico, valor),
+--   incluido el porcentaje NULL: 1 en todas.
+--
+--   ROWS es SOLO una estimacion para el planificador -- no limita ni valida
+--   nada --, asi que no puede cambiar ningun resultado. Lo unico que cambia
+--   son los planes, y cambian hacia una estimacion mas parecida a la
+--   realidad.
+--
+--
+-- PARA LA PROXIMA
+--   Toda funcion nueva que devuelva TABLE y se use en un LATERAL deberia
+--   declarar su ROWS. Son tres ya: fn_nota_homologar, fn_asignatura_tipo_
+--   evaluacion y esta. El sintoma no se parece a un problema de indices --
+--   los datos son pocos y las tablas chicas -- y por eso cuesta encontrarlo
+--   la primera vez.
+--
+-- Idempotente: ALTER FUNCTION es declarativo, se puede repetir.
+-- ===========================================================================
+
+ALTER FUNCTION academico_test.fn_promedio_homologar(NUMERIC, BIGINT) ROWS 1;
