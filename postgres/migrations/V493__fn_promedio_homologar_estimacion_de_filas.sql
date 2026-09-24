@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V492 - El informe volvio a tardar cinco segundos por una estimacion de filas.
+-- V493 - El informe volvio a tardar cinco segundos por una estimacion de filas.
 --
 --   fn_promedio_homologar   ROWS 1000 -> ROWS 1
 --
