@@ -50,7 +50,7 @@ texto ya no describe el estado actual al depurar, y qué colapsaría en un squas
 |---|---|
 | `sqlscan.py` | Parte el SQL en sentencias respetando literales, `$$ … $$` y comentarios. Todo lo demás depende de esto: un grep a secas matchea dentro de cuerpos de función y de comentarios. |
 | `analyze_migrations.py` | Extractores, grafo de reescritura, firmas, llamadores, slots, dependencias. |
-| `render.py` | Emite el HTML (CSS y JS propios, datos embebidos, sin CDN). |
+| `render.py` | Emite el HTML (CSS y JS propios, datos embebidos, sin CDN salvo Cytoscape para el grafo de la pestaña Dependencias). |
 
 ## Por elemento
 

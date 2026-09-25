@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Emisor del HTML interactivo. Sin dependencias: JS y CSS propios, datos embebidos."""
+"""Emisor del HTML interactivo. JS y CSS propios, datos embebidos; solo el grafo de
+dependencias carga Cytoscape desde cdnjs (sin red, el resto del informe funciona igual)."""
 
 from __future__ import annotations
 
@@ -362,6 +363,14 @@ tr.person{cursor:pointer}
 .stat .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
 .stat .n{font-family:var(--mono);font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}
 .stat .s{font-size:11px;color:var(--muted)}
+#depgraph{height:640px;background:var(--panel);border:1px solid var(--rule);border-radius:6px;
+ box-shadow:var(--shadow);min-width:0}
+.graphsplit{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:12px;margin-bottom:18px}
+@media (max-width:900px){.graphsplit{grid-template-columns:1fr} #depgraph{height:480px}}
+#gdetail{max-height:640px;overflow:auto}
+#gdetail .gobj{font-family:var(--mono);font-size:11.5px;color:var(--muted);word-break:break-all}
+#gdetail .gobj .objlink{display:inline;padding:0;font-size:inherit}
+#gdetail .use .who{display:block}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 """
 
@@ -372,11 +381,23 @@ const $ = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+/* Búsqueda por términos (todos deben aparecer), sin tildes, mayúsculas ni esquema:
+   el mismo objeto figura como `tusuario` y `academico_test.tusuario` según cómo lo
+   escribió cada migración, y `fn_x(`, `"fn_x"` o `GET /sedes` deben encontrar lo
+   mismo que `fn_x` o `/sedes GET`. */
+const fold = s => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const unschema = s => s.replace(/(^|[\s:|(,])[a-z_][a-z0-9_]*\./g, '$1');
+const qTerms = q => fold(q).replace(/["'`();,]/g, ' ').split(/\s+/)
+  .map(unschema).filter(Boolean);
+const hay = (...xs) => { const f = xs.map(fold).join(' \u0001 '); return f + ' \u0001 ' + unschema(f); };
+const matches = (h, terms) => terms.every(t => h.includes(t));
 const hl = (s, q) => {
   const t = esc(s);
-  if (!q) return t;
-  try { return t.replace(new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','ig'),
-        '<mark>$1</mark>'); } catch { return t; }
+  const terms = q ? qTerms(q).map(x => x.replace(/^v(?=\d)/, '')) : [];
+  if (!terms.length) return t;
+  try { return t.replace(new RegExp('(' + terms.map(x =>
+          x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'ig'), '<mark>$1</mark>');
+  } catch { return t; }
 };
 const byV = v => D.migs.find(m => m.v === v);
 const fmt = n => n.toLocaleString('en-US');
@@ -455,6 +476,7 @@ function showTab(name, keepHash) {
   $$('.tab').forEach(x => x.setAttribute('aria-selected', String(x === t)));
   $$('.panel').forEach(p => p.hidden = p.id !== 'p-' + name);
   if (!keepHash) location.hash = name;
+  if (name === 'dependencias' && !cy) setTimeout(initGraph);
 }
 $$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
 
@@ -506,14 +528,29 @@ $$('#vfilters .chipbtn').forEach(b => b.addEventListener('click', () => {
 $('#migsearch').addEventListener('input', e => { migQ = e.target.value.trim(); renderMigs(); });
 $('#migauthor').addEventListener('change', e => { migAuthor = e.target.value; renderMigs(); });
 
+// texto buscable de cada migración: versión, nombre, lo que escribe y lo que usa
+let _migHay = null;
+function migHay() {
+  if (_migHay) return _migHay;
+  const usedIn = new Map();
+  D.uses.forEach(u => {
+    if (u[4] === 'java') return;
+    if (!usedIn.has(u[2])) usedIn.set(u[2], new Set());
+    usedIn.get(u[2]).add(u[1]);
+  });
+  _migHay = new Map(D.migs.map(m => [m.v, hay(m.v, m.n,
+    ...m.w.map(w => w[1]),
+    ...[...(usedIn.get(m.v) || [])].map(k => k + ' ' + objLabel(k)))]));
+  return _migHay;
+}
+
 function migRows() {
-  const q = migQ.toLowerCase().replace(/^v/, '');
+  const terms = qTerms(migQ).map(t => /^v\d/.test(t) ? t.slice(1) : t);
   const f = MIG_KEY[migSort.k];
   return D.migs.filter(m =>
     (!migFilter.size || migFilter.has(m.vd)) &&
     (migAuthor === '' || handsOf(m.v).has(+migAuthor)) &&
-    (!q || m.v.includes(q) || m.n.toLowerCase().includes(q) ||
-      m.w.some(w => w[1].toLowerCase().includes(q))))
+    (!terms.length || matches(migHay().get(m.v), terms)))
     .sort((a, b) => {
       const x = f(a), y = f(b);
       const c = typeof x === 'string' ? x.localeCompare(y) : x - y;
@@ -695,6 +732,12 @@ D.uses.forEach(u => {
   usedBy.get(u[1]).push(u);
   if (u[0]) { if (!usesOf.has(u[0])) usesOf.set(u[0], []); usesOf.get(u[0]).push(u); }
 });
+// usados pero nunca escritos por una migración (llegan del dump base): también se buscan
+[...usedBy.keys()].filter(k => !D.chains[k]).forEach(k => {
+  const id = k.slice(k.indexOf(':') + 1);
+  chainEntries.push({key:k, type:k.split(':')[0], id, label:id, group:'', steps:[], ext:true});
+});
+chainEntries.forEach(o => { o.h = hay(o.key, o.label, TYPE_ES[o.type] || o.type); });
 
 $('#objsearch').addEventListener('input', e => { objQ = e.target.value.trim(); renderObjs(); });
 $('#objtype').addEventListener('change', e => { objType = e.target.value; renderObjs(); });
@@ -704,18 +747,20 @@ $('#objrew').addEventListener('click', e => {
 });
 
 function renderObjs() {
-  const q = objQ.toLowerCase();
-  const onlyRew = $('#objrew').getAttribute('aria-pressed') === 'true';
+  const terms = qTerms(objQ);
+  // al buscar no aplica «solo reescritos» (activo por defecto): ocultaba todo
+  // lo que se creó una sola vez, que es la mayoría de los objetos
+  const onlyRew = !terms.length && $('#objrew').getAttribute('aria-pressed') === 'true';
   const rows = chainEntries.filter(o =>
     (!objType || o.type === objType) &&
     (!onlyRew || o.steps.filter(s => s[1] !== 'patch').length > 1) &&
-    (!q || o.id.toLowerCase().includes(q) || o.label.toLowerCase().includes(q)));
+    (!terms.length || matches(o.h, terms)));
   $('#objcount').textContent = `${rows.length} objetos`;
   $('#objbody').innerHTML = rows.slice(0, 800).map(o => `
     <tr class="clickable ${selObj===o.key?'sel':''}" data-key="${esc(o.key)}">
       <td class="dim">${TYPE_ES[o.type]||o.type}</td>
       <td class="m" title="${esc(o.key)}">${hl(o.label, objQ)}</td>
-      <td><div class="chain">${o.steps.map((s,i) => `${i?'<span class="arrow">→</span>':''}
+      <td><div class="chain">${o.ext ? '<span class="dim">ninguna migración lo define</span>' : ''}${o.steps.map((s,i) => `${i?'<span class="arrow">→</span>':''}
         <button class="node n-${s[2]}" data-goto="${s[0]}"
          title="${esc(kindEs(s[3]))} · ${esc(s[2])} · L${s[4]}">V${s[0]}</button>`).join('')}</div></td>
       <td class="num dim">${(usedBy.get(o.key)||[]).length||''}</td>
@@ -746,7 +791,7 @@ function useRow(u, own) {
 
 function selectObj(key) {
   selObj = key;
-  const c = D.chains[key];
+  const c = D.chains[key] || (usedBy.has(key) && {l: objLabel(key), t: key.split(':')[0], s: []});
   if (!c) return;
   renderObjs();
   if (curTab === 'objetos') history.replaceState(null, '', '#objetos/' + encodeURIComponent(key));
@@ -1226,6 +1271,146 @@ function selectPerson(i) {
   wireGoto($('#audetail'));
 }
 
+/* ---------- grafo de dependencias (Cytoscape) ----------
+   Nodo = migración. Arista definidora → usuaria, etiquetada con los objetos:
+   las entrantes de un nodo son lo que usa de otras migraciones; las salientes,
+   lo suyo que usan otras. Se crea al abrir la pestaña: en un panel oculto el
+   contenedor mide 0 px y el layout sale colapsado. */
+let cy = null, gFocus = null;
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const VD_VAR = {obsoleta:'--dead', residual:'--resid', parcial:'--muted', viva:'--live',
+  'solo-binds':'--accent', 'sin-cambios':'--faint'};
+const objsShort = objs => objs.length > 3
+  ? objs.slice(0, 3).map(o => o.split('.').pop()).join(', ') + ` +${objs.length - 3}`
+  : objs.map(o => o.split('.').pop()).join(', ');
+
+function graphElements() {
+  const lo = +$('#gfrom').value || -Infinity, hi = +$('#gto').value || Infinity;
+  const inR = v => +v >= lo && +v <= hi;
+  const edges = D.edges.filter(e => e.from !== e.to && inR(e.from) && inR(e.to));
+  const vs = new Set(edges.flatMap(e => [e.from, e.to]));
+  const deg = new Map();
+  edges.forEach(e => [e.from, e.to].forEach(v => deg.set(v, (deg.get(v) || 0) + 1)));
+  return [
+    ...[...vs].map(v => { const m = byV(v);
+      return {data: {id: v, label: 'V' + v, name: m ? m.n : '', vd: m ? m.vd : 'viva',
+                     deg: deg.get(v)}}; }),
+    ...edges.map(e => ({data: {id: e.to + '>' + e.from, source: e.to, target: e.from,
+      objs: e.objs, label: objsShort(e.objs)}})),
+  ];
+}
+
+function graphStyle() {
+  const ink = cssVar('--ink'), muted = cssVar('--muted'), rule = cssVar('--rule'),
+        panel = cssVar('--panel'), acc = cssVar('--accent');
+  return [
+    {selector: 'node', style: {
+      'background-color': n => cssVar(VD_VAR[n.data('vd')] || '--muted'),
+      width: n => 10 + 3 * Math.sqrt(n.data('deg')), height: n => 10 + 3 * Math.sqrt(n.data('deg')),
+      label: 'data(label)', 'font-size': 9, color: ink, 'font-family': 'monospace',
+      'text-valign': 'top', 'text-margin-y': -2, 'min-zoomed-font-size': 7}},
+    {selector: 'edge', style: {
+      width: 1, 'line-color': rule, 'target-arrow-color': rule, 'target-arrow-shape': 'triangle',
+      'arrow-scale': .7, 'curve-style': 'bezier', opacity: .7}},
+    {selector: '.lbl', style: {
+      label: 'data(label)', 'font-size': 8, color: muted, 'text-rotation': 'autorotate',
+      'text-background-color': panel, 'text-background-opacity': 1, 'text-background-padding': 1,
+      'font-family': 'monospace'}},
+    {selector: '.faded', style: {opacity: .08}},
+    {selector: 'edge.in', style: {'line-color': cssVar('--live'), 'target-arrow-color': cssVar('--live'), width: 1.6, opacity: 1}},
+    {selector: 'edge.out', style: {'line-color': cssVar('--resid'), 'target-arrow-color': cssVar('--resid'), width: 1.6, opacity: 1}},
+    {selector: 'node.focus', style: {'border-width': 3, 'border-color': acc}},
+  ];
+}
+
+function graphLayout() {
+  if (!cy) return;
+  cy.layout({name: 'cose', animate: false, nodeRepulsion: () => 9000, idealEdgeLength: () => 70,
+             gravity: .25, numIter: 1500, randomize: true, fit: true, padding: 20}).run();
+}
+
+function initGraph() {
+  if (!window.cytoscape) {
+    $('#depgraph').innerHTML = '<div class="empty" style="padding:20px">No se pudo cargar Cytoscape ' +
+      'desde el CDN (¿sin conexión?). La tabla de abajo tiene los mismos datos.</div>';
+    return;
+  }
+  if (cy) cy.destroy();
+  cy = cytoscape({container: $('#depgraph'), elements: graphElements(), style: graphStyle(),
+                  minZoom: .05, maxZoom: 4});
+  cy.on('tap', 'node', e => focusGraph(e.target.id()));
+  cy.on('tap', e => { if (e.target === cy) focusGraph(null); });
+  cy.on('dbltap', 'node', e => { $('.tab[data-tab="migraciones"]').click(); selectMig(e.target.id()); });
+  cy.on('mouseover', 'edge', e => e.target.addClass('lbl'));
+  cy.on('mouseout', 'edge', e => { if (!e.target.hasClass('in') && !e.target.hasClass('out') &&
+    !$('#glabels').matches('[aria-pressed="true"]')) e.target.removeClass('lbl'); });
+  graphLayout();
+  applyLabels();
+  $('#gcount').textContent = `${cy.nodes().length} migraciones · ${cy.edges().length} dependencias`;
+  if (gFocus && cy.getElementById(gFocus).length) focusGraph(gFocus); else focusGraph(null);
+}
+
+function applyLabels() {
+  if (!cy) return;
+  const on = $('#glabels').getAttribute('aria-pressed') === 'true';
+  cy.edges().forEach(e => e.toggleClass('lbl', on || e.hasClass('in') || e.hasClass('out')));
+}
+
+function focusGraph(v) {
+  gFocus = v;
+  if (!cy) return;
+  cy.elements().removeClass('faded in out focus');
+  if (!v || !cy.getElementById(v).length) {
+    applyLabels();
+    $('#gdetail').innerHTML = `<div class="empty">Tocá una migración para ver qué usa de otras
+      (entrantes, verde) y qué suyo usan otras (salientes, ámbar). Doble clic abre su detalle.</div>`;
+    return;
+  }
+  const n = cy.getElementById(v);
+  const ein = n.incomers('edge'), eout = n.outgoers('edge');
+  const hood = n.closedNeighborhood();
+  cy.elements().not(hood).addClass('faded');
+  n.addClass('focus'); ein.addClass('in'); eout.addClass('out');
+  applyLabels();
+  cy.animate({fit: {eles: hood, padding: 40}}, {duration: 250});
+  const m = byV(v);
+  const list = (es, end) => es.length ? es.sort((a, b) => +a.data(end) - +b.data(end)).map(e => `
+    <div class="use"><span class="who"><button class="node n-live" data-gfocus="${e.data(end)}">V${e.data(end)}</button>
+      <span class="gobj">${e.data('objs').map(o => `<button class="objlink" data-gobj="${esc(o)}">${esc(o)}</button>`).join(', ')}</span></span></div>`).join('')
+    : '<div class="empty" style="padding:8px">ninguna</div>';
+  $('#gdetail').innerHTML = `
+    <h4>V${v} <span class="pill p-${m?.vd}">${m?.vd || ''}</span></h4>
+    <div class="sub">${esc(m?.n || '')}</div>
+    <h3 class="sect">Entrantes: usa de otras <span class="n">${ein.length}</span></h3>
+    <div class="uselist">${list(ein.toArray(), 'source')}</div>
+    <h3 class="sect">Salientes: otras usan lo suyo <span class="n">${eout.length}</span></h3>
+    <div class="uselist">${list(eout.toArray(), 'target')}</div>`;
+  $$('#gdetail [data-gfocus]').forEach(b => b.addEventListener('click', () => focusGraph(b.dataset.gfocus)));
+  $$('#gdetail [data-gobj]').forEach(b => b.addEventListener('click', () => {
+    const o = fold(b.dataset.gobj);
+    const hit = chainEntries.find(c => fold(c.id) === o) ||
+                chainEntries.find(c => unschema(fold(c.id)) === unschema(o));
+    $('.tab[data-tab="objetos"]').click();
+    if (hit) selectObj(hit.key); else { $('#objsearch').value = b.dataset.gobj; objQ = b.dataset.gobj; renderObjs(); }
+  }));
+}
+
+$('#gfind').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const v = e.target.value.trim().replace(/^v/i, '');
+  if (cy && cy.getElementById(v).length) focusGraph(v);
+  else e.target.setCustomValidity('V' + v + ' no tiene dependencias en el rango'), e.target.reportValidity();
+});
+$('#gfind').addEventListener('input', e => e.target.setCustomValidity(''));
+['#gfrom', '#gto'].forEach(s => $(s).addEventListener('change', initGraph));
+$('#glayout').addEventListener('click', graphLayout);
+$('#gfit').addEventListener('click', () => { focusGraph(null); cy && cy.fit(undefined, 20); });
+$('#glabels').addEventListener('click', e => {
+  e.target.setAttribute('aria-pressed', e.target.getAttribute('aria-pressed') !== 'true');
+  applyLabels();
+});
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => cy && cy.style(graphStyle()));
+
 /* ---------- init ---------- */
 renderMigs();
 renderObjs();
@@ -1419,6 +1604,7 @@ def build(model: dict) -> str:
 <html lang="es">
 <head>
 <meta charset="utf-8">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js"></script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Análisis de migraciones · {meta['repo']}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1794,6 +1980,24 @@ no mata lo anterior, lo modifica. Regenerá esta página con
   <h2>Dependencias de uso</h2>
   <p class="note">«V<i>x</i> llama a una función creada en V<i>y</i>»: si V<i>y</i> cambia la firma,
   V<i>x</i> es lo que hay que revisar. Se deriva de las llamadas reales en el SQL, no de comentarios.</p>
+  <div class="controls">
+    <input type="search" id="gfind" placeholder="ir a V… (Enter)" aria-label="Ir a migración"
+      style="flex:0 1 160px">
+    <input type="number" id="gfrom" placeholder="desde V" aria-label="Desde versión" style="width:90px">
+    <input type="number" id="gto" placeholder="hasta V" aria-label="Hasta versión" style="width:90px">
+    <button class="chipbtn" id="glabels" aria-pressed="false">objetos en todas las aristas</button>
+    <button class="chipbtn" id="glayout">reordenar</button>
+    <button class="chipbtn" id="gfit">ver todo</button>
+    <span class="count" id="gcount"></span>
+  </div>
+  <p class="note">Cada nodo es una migración (color = veredicto, tamaño = cuántas dependencias
+  tiene). La flecha va de la migración que <b>define</b> el objeto a la que lo <b>usa</b>, con el
+  objeto en la arista: las <b>entrantes</b> de un nodo son lo que usa de otras migraciones y las
+  <b>salientes</b>, lo suyo que usan otras. Rueda = zoom, arrastrar = mover.</p>
+  <div class="graphsplit">
+    <div id="depgraph"></div>
+    <aside class="detail" id="gdetail"></aside>
+  </div>
   <div class="tablewrap"><table><thead><tr>
     <th>Migración</th><th>Depende de</th><th>Objetos usados</th>
   </tr></thead><tbody>{edge_rows}</tbody></table></div>
