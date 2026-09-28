@@ -129,8 +129,8 @@ SELECT
     'Crea un referente curricular. BODY.INSTRUMENTO es el Rotulo de Secuencia de Actividades y BODY.ROTULO_EJECUCION el Rotulo de Ejecucion (max 50, defecto Actividad). Formativo exige Cualitativa (22023); un nivel ya gobernado por otro referente activo da 23505. BODY.NOMBRE_ASIGNATURA es el PK_LISTA_VALOR de un valor de la categoria PERSONALIZAR_ASIGNATURA (GET /referentes-curriculares/personalizar-asignatura lo lista), no texto libre; es OPCIONAL: si no viene se resuelve por nivel -- Asignatura, o Dimension si el referente es SOLO de preescolar. Un id que no sea de esa categoria da 23503. BODY.NIVELES_IDS obligatorio con al menos un nivel; BODY.AREAS_IDS vacio/ausente = aplica a todas las areas'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
--- Identica a la fila de V214.3 a proposito: el deploy puede reaplicar V214
--- despues de V214.3 y un contenido distinto aqui la devolveria atras.
+-- Unica definicion de esta fila: V214.3 ya no la toca, asi que reaplicar en
+-- cualquier orden deja el mismo contenido.
 ON CONFLICT (uuid) DO UPDATE
    SET query = EXCLUDED.query, param_types = EXCLUDED.param_types,
        path_template = EXCLUDED.path_template, http_method = EXCLUDED.http_method,
@@ -188,8 +188,8 @@ SELECT
     'PATCH parcial de un referente curricular; BODY.ROTULO_EJECUCION ausente = no tocar. cada campo ausente preserva su valor actual. BODY.NOMBRE_ASIGNATURA es el PK_LISTA_VALOR de un valor de PERSONALIZAR_ASIGNATURA: ausente = no tocar, id = lo reemplaza, id que no sea de esa categoria = 23503. BODY.NIVELES_IDS ausente = no tocar los niveles, array = reemplazo completo del set. BODY.AREAS_IDS ausente = no tocar areas, [] = vaciarlas'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
--- Identica a la fila de V214.3 a proposito: el deploy puede reaplicar V214
--- despues de V214.3 y un contenido distinto aqui la devolveria atras.
+-- Unica definicion de esta fila: V214.3 ya no la toca, asi que reaplicar en
+-- cualquier orden deja el mismo contenido.
 ON CONFLICT (uuid) DO UPDATE
    SET query = EXCLUDED.query, param_types = EXCLUDED.param_types,
        path_template = EXCLUDED.path_template, http_method = EXCLUDED.http_method,
