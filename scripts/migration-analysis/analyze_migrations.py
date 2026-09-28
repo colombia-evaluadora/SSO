@@ -499,6 +499,17 @@ def analyze_file(path: Path, version: str) -> Migration:
         flagged = len(mig.unparsed_stmts)
 
         if head.startswith("COMMENT ON"):
+            # CREATE OR REPLACE no borra el comentario de una funcion: el que
+            # queda es el del ultimo COMMENT ON, aunque el cuerpo lo haya
+            # reescrito otra migracion (V344, V433).
+            mc = re.match(r"COMMENT\s+ON\s+FUNCTION\s+([\w.\"]+)\s*\(", stmt, re.I)
+            if mc:
+                close = match_paren(stmt, mc.end() - 1)
+                arity = len(split_top_level(stmt[mc.end():close]))
+                mig.writes.append(Write(
+                    version=version, obj_type="comment",
+                    obj_key=f"comment:function:{qname(mc.group(1))}/{arity}",
+                    effect="full", kind="comment", line=st.line))
             continue
 
         # Los bloques DO son, en este repo, la forma habitual de hacer DDL
@@ -552,6 +563,11 @@ def analyze_file(path: Path, version: str) -> Migration:
                 detail=f"drop firma de {len(params)} parametros",
                 extra={"total": len(params)},
             ))
+            # el comentario muere con la firma que se borra (V386 sobre V371)
+            mig.writes.append(Write(
+                version=version, obj_type="comment",
+                obj_key=f"comment:function:{name}/{len(params)}",
+                effect="delete", kind="drop", line=st.line))
 
         # --- DDL
         for m in RE_TABLE.finditer(stmt):
@@ -1089,7 +1105,8 @@ def resolve_query_row(ws: list[Write]) -> None:
 
 COUNTED = ("function", "query_row", "table", "column", "constraint", "index",
            "trigger", "view", "domain", "schema", "sequence", "role", "route",
-           "endpoint", "dynamic", "extension", "publication", "scratch", "query_bulk")
+           "endpoint", "dynamic", "extension", "publication", "scratch", "query_bulk",
+           "comment")
 
 
 def line_budget(mig: Migration, text: str) -> None:
