@@ -26,3 +26,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS un_tactividad_soporte_archivo
 
 COMMENT ON INDEX academico_test.un_tactividad_soporte_archivo
     IS 'Un archivo no puede estar adjunto dos veces a la misma fila de TACTIVIDAD_ESTUDIANTE. Parcial (solo ACTIVE) para que el borrado logico libere la combinacion, mismo patron que V65/V71. V243.';
+
+-- fn_actividad_es_formativa deja de repetir la derivacion: una sola regla.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_es_formativa(
+    p_pk_tactividad BIGINT
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(
+        (SELECT NOT academico_test.fn_actividad_contexto_evaluativo(
+                        a.FK_TGRUPO, a.FK_TASIGNATURA, a.FK_TUNIDAD)
+           FROM academico_test.TACTIVIDAD a
+          WHERE a.PK_TACTIVIDAD = p_pk_tactividad
+            AND a.ACTIVE = TRUE),
+        FALSE
+    );
+$$;
