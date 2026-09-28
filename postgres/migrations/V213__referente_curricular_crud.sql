@@ -624,14 +624,103 @@ COMMENT ON FUNCTION academico_test.fn_refcurr_uso_assert(BIGINT, BIGINT)
     IS 'Guarda de uso previa a la baja de un referente curricular (solo primer argumento) o de un enunciado/evidencia (segundo argumento). Cuenta las UNIDADES activas que citan el referente (TUNIDAD.FK_REFERENTE_CURRICULAR) o alguno de sus enunciados (TUNIDAD_ENUNCIADO, V214.1) y las ACTIVIDADES activas que amarran alguna de sus evidencias (TACTIVIDAD_EVIDENCIA, V214.1); para un enunciado se cuentan el y sus evidencias hijas. Si hay alguna, lanza 23503 con el conteo y NO existe forma de confirmar para saltarsela: p_confirmar_cascada de fn_refcurr_eliminar solo cubre el contenido propio del referente (enunciados y evidencias), nunca el trabajo de los docentes que cuelga de el, porque una unidad o una actividad que apunta a un referente inactivo se rompe en silencio en el Planeador. Solo mira filas ACTIVE en las tres tablas: lo ya dado de baja no retiene nada. Helper interno, no gatea; lo invocan fn_refcurr_eliminar y fn_refenunc_eliminar.';
 
 -- ===========================================================================
--- fn_refcurr_eliminar — soft delete en cascada, con confirmacion explicita.
+-- Validaciones compartidas del dominio (lanzan o no hacen nada)
 -- ===========================================================================
--- Gana un tercer parametro (p_confirmar_cascada): CREATE OR REPLACE dejaria
--- viva la firma de 2 argumentos y la llamada de 2 argumentos quedaria
--- ambigua, hay que borrar la firma vieja (patron V58).
-DROP FUNCTION IF EXISTS academico_test.fn_refcurr_eliminar(BIGINT, BIGINT);
-CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_eliminar(
-    p_pk_usuario_solicitante   BIGINT,
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_validar_existe(p_pk_referente_curricular BIGINT)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR
+                    WHERE PK_REFERENTE_CURRICULAR = p_pk_referente_curricular) THEN
+        RAISE EXCEPTION 'No se encontro el referente curricular solicitado'
+            USING ERRCODE = 'P0002';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_validar_existe(BIGINT)
+    IS 'INTERNO: P0002 si el referente curricular no existe (incluye los dados de baja). Primer paso de los wrappers de edicion y baja, antes del gate.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_validar_texto(
+    p_valor        VARCHAR,
+    p_campo        VARCHAR,
+    p_max          INTEGER,
+    p_obligatorio  BOOLEAN DEFAULT FALSE
+)
+RETURNS VOID
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+BEGIN
+    IF p_obligatorio AND NULLIF(TRIM(p_valor), '') IS NULL THEN
+        RAISE EXCEPTION '% es obligatorio', p_campo USING ERRCODE = '22023';
+    END IF;
+    IF p_valor IS NOT NULL AND NULLIF(TRIM(p_valor), '') IS NULL THEN
+        RAISE EXCEPTION '% no puede quedar vacio', p_campo USING ERRCODE = '22023';
+    END IF;
+    IF length(TRIM(p_valor)) > p_max THEN
+        RAISE EXCEPTION '% supera los % caracteres', p_campo, p_max USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_validar_texto(VARCHAR, VARCHAR, INTEGER, BOOLEAN)
+    IS 'INTERNO: 22023 si un texto del referente o de sus componentes es obligatorio y falta, llega vacio, o supera p_max caracteres. NULL con p_obligatorio=FALSE es "no tocar" y pasa.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_validar_estado(p_estado VARCHAR)
+RETURNS VOID
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+BEGIN
+    IF p_estado IS NOT NULL AND UPPER(TRIM(p_estado)) NOT IN ('A', 'I') THEN
+        RAISE EXCEPTION 'Estado invalido: % (use ''A'' o ''I'')', p_estado USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_validar_estado(VARCHAR)
+    IS 'INTERNO: 22023 si el estado de negocio no es A/I. NULL pasa (no tocar).';
+
+-- ===========================================================================
+-- fn_refcurr_grados_disponibles_interno -- grados del catalogo GRADOS que
+-- caen en los niveles educativos activos del referente (Regla 11).
+-- ===========================================================================
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_grados_disponibles_interno(
+    p_pk_referente_curricular BIGINT
+)
+RETURNS TABLE (
+    fk_tlv_grado         BIGINT,
+    codigo               VARCHAR,
+    nombre               VARCHAR,
+    fk_tnivel_ensenanza  BIGINT,
+    nivel_ensenanza      VARCHAR
+)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT lv.PK_LISTA_VALOR, lv.VALOR, lv.NOMBRE, ne.PK_NIVEL_ENSENANZA, ne.NOMBRE
+      FROM academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
+      JOIN academico_test.TNIVEL_ENSENANZA ne ON ne.PK_NIVEL_ENSENANZA = rcn.FK_TNIVEL_ENSENANZA
+      JOIN academico_test.TNIVEL_ENSENANZA_GRADO ng
+        ON ng.FK_TNIVEL_ENSENANZA = rcn.FK_TNIVEL_ENSENANZA AND ng.ACTIVE = TRUE
+      JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = ng.FK_TLV_GRADO AND lv.ACTIVE = TRUE
+     WHERE rcn.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
+       AND rcn.ACTIVE = TRUE
+     -- VALOR es el codigo MEN (-3..26): ordenar como numero, no como texto.
+     ORDER BY CASE WHEN lv.VALOR ~ '^-?\d+$' THEN lv.VALOR::INTEGER END NULLS LAST, lv.NOMBRE;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_grados_disponibles_interno(BIGINT)
+    IS 'INTERNO: grados que un enunciado de nivel 1 del referente puede declarar -- los de TNIVEL_ENSENANZA_GRADO para sus niveles educativos activos, en orden MEN. Lo reutilizan fn_refenunc_validar_grado, fn_refcurr_grados_listar y la validacion de niveles de fn_refcurr_actualizar_interno.';
+
+-- ===========================================================================
+-- fn_refcurr_eliminar -- soft delete en cascada, con confirmacion explicita.
+-- ===========================================================================
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_eliminar_interno(
+    p_actor                    BIGINT,
     p_pk_referente_curricular  BIGINT,
     p_confirmar_cascada        BOOLEAN DEFAULT FALSE
 )
@@ -641,10 +730,6 @@ AS $$
 DECLARE
     v_estado_actual  BOOLEAN;
     v_nombre_actual  VARCHAR;
-    v_evidencias     BIGINT := 0;
-    v_enunciados     BIGINT := 0;
-    v_areas          BIGINT := 0;
-    v_niveles        BIGINT := 0;
     v_pendientes     BIGINT := 0;
     v_pend_evid      BIGINT := 0;
 BEGIN
@@ -656,11 +741,6 @@ BEGIN
         RAISE EXCEPTION 'No se encontro el referente curricular solicitado'
             USING ERRCODE = 'P0002';
     END IF;
-
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'ELIMINAR'
-    );
-
     IF v_estado_actual = FALSE THEN
         RAISE EXCEPTION 'El referente curricular "%" ya se encuentra inactivo', v_nombre_actual
             USING ERRCODE = '22023';
@@ -669,11 +749,8 @@ BEGIN
     -- En uso por unidades o actividades: se bloquea, sin confirmacion posible.
     PERFORM academico_test.fn_refcurr_uso_assert(p_pk_referente_curricular);
 
-    -- Regla 10: un referente con contenido vivo no se da de baja "de paso".
-    -- Simetrico a la regla 7 (quitar un area con enunciados amarrados): el
-    -- caller tiene que reconocer que se lleva por delante los enunciados y
-    -- sus evidencias, mandando p_confirmar_cascada = TRUE. Sin eso, 23503 y
-    -- no se toca ninguna fila.
+    -- Un referente con contenido vivo no se da de baja "de paso": el caller
+    -- reconoce que se lleva los enunciados y evidencias con p_confirmar_cascada.
     IF NOT COALESCE(p_confirmar_cascada, FALSE) THEN
         SELECT COUNT(*) FILTER (WHERE FK_PADRE IS NULL),
                COUNT(*) FILTER (WHERE FK_PADRE IS NOT NULL)
@@ -689,50 +766,64 @@ BEGIN
         END IF;
     END IF;
 
-    -- 1. Evidencias (nivel 2) primero.
+    -- Evidencias antes que enunciados, y el referente al final.
     UPDATE academico_test.TREFERENTE_ENUNCIADO
-       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+       SET ACTIVE = FALSE, MODIFIED_BY = p_actor::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
-       AND FK_PADRE IS NOT NULL
-       AND ACTIVE = TRUE;
-    GET DIAGNOSTICS v_evidencias = ROW_COUNT;
+       AND FK_PADRE IS NOT NULL AND ACTIVE = TRUE;
 
-    -- 2. Enunciados (nivel 1).
     UPDATE academico_test.TREFERENTE_ENUNCIADO
-       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+       SET ACTIVE = FALSE, MODIFIED_BY = p_actor::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
-       AND FK_PADRE IS NULL
-       AND ACTIVE = TRUE;
-    GET DIAGNOSTICS v_enunciados = ROW_COUNT;
+       AND FK_PADRE IS NULL AND ACTIVE = TRUE;
 
-    -- 3. Areas/dimensiones asociadas.
     UPDATE academico_test.TREFERENTE_CURRICULAR_AREA
-       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
-       AND ACTIVE = TRUE;
-    GET DIAGNOSTICS v_areas = ROW_COUNT;
+       SET ACTIVE = FALSE, MODIFIED_BY = p_actor::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_REFERENTE_CURRICULAR = p_pk_referente_curricular AND ACTIVE = TRUE;
 
-    -- 4. Niveles educativos asociados (N:N, V212).
     UPDATE academico_test.TREFERENTE_CURRICULAR_NIVEL
-       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
-       AND ACTIVE = TRUE;
-    GET DIAGNOSTICS v_niveles = ROW_COUNT;
+       SET ACTIVE = FALSE, MODIFIED_BY = p_actor::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_REFERENTE_CURRICULAR = p_pk_referente_curricular AND ACTIVE = TRUE;
 
-    -- 5. El referente.
     UPDATE academico_test.TREFERENTE_CURRICULAR
-       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+       SET ACTIVE = FALSE, MODIFIED_BY = p_actor::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_REFERENTE_CURRICULAR = p_pk_referente_curricular;
-
-    RAISE NOTICE 'Soft delete TREFERENTE_CURRICULAR=% (autor: %): enunciados=%, evidencias=%, areas=%, niveles=%',
-        p_pk_referente_curricular, p_pk_usuario_solicitante, v_enunciados, v_evidencias, v_areas, v_niveles;
 
     RETURN p_pk_referente_curricular;
 END;
 $$;
 
+COMMENT ON FUNCTION academico_test.fn_refcurr_eliminar_interno(BIGINT, BIGINT, BOOLEAN)
+    IS 'INTERNO: soft delete en cascada de un referente (evidencias -> enunciados -> areas -> niveles -> referente), sin permisos. P0002 inexistente, 22023 ya inactivo, 23503 si fn_refcurr_uso_assert encuentra unidades/actividades (no confirmable) o si tiene contenido vivo y p_confirmar_cascada no es TRUE. Lo usa fn_refcurr_eliminar.';
+
+DROP FUNCTION IF EXISTS academico_test.fn_refcurr_eliminar(BIGINT, BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_eliminar(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_referente_curricular  BIGINT,
+    p_confirmar_cascada        BOOLEAN DEFAULT FALSE
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM academico_test.fn_refcurr_validar_existe(p_pk_referente_curricular);
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'ELIMINAR'
+    );
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        'Eliminacion del referente curricular "'
+            || (SELECT NOMBRE FROM academico_test.TREFERENTE_CURRICULAR
+                 WHERE PK_REFERENTE_CURRICULAR = p_pk_referente_curricular) || '"',
+        NULL, NULL, ARRAY['REFERENTES_CURRICULARES', 'ELIMINACION']);
+
+    RETURN academico_test.fn_refcurr_eliminar_interno(
+        p_pk_usuario_solicitante, p_pk_referente_curricular, p_confirmar_cascada);
+END;
+$$;
+
 COMMENT ON FUNCTION academico_test.fn_refcurr_eliminar(BIGINT, BIGINT, BOOLEAN)
-    IS 'Soft delete (ACTIVE=FALSE) de un TREFERENTE_CURRICULAR (gate ELIMINAR, solo SUPER_ADMIN por defecto). Si el referente tiene enunciados o evidencias vigentes exige p_confirmar_cascada = TRUE; sin esa confirmacion lanza 23503 sin tocar ninguna fila (simetrico a la regla 7 de las areas). Confirmada, la baja es en cascada: evidencias (nivel 2) -> enunciados (nivel 1) -> TREFERENTE_CURRICULAR_AREA -> TREFERENTE_CURRICULAR_NIVEL -> el referente. ANTES de todo eso, fn_refcurr_uso_assert bloquea con 23503 si alguna unidad activa cita el referente o uno de sus enunciados, o alguna actividad activa amarra una de sus evidencias: ese bloqueo no se puede confirmar, porque lo que colgaria de un referente inactivo es trabajo de los docentes, no contenido del referente.';
+    IS 'PATCH /referentes-curriculares/:ID/eliminar: baja logica en cascada. Existencia (P0002) -> gate ELIMINAR sobre REFERENTES_CURRICULARES -> etiqueta de auditoria -> fn_refcurr_eliminar_interno (22023 ya inactivo, 23503 en uso o contenido vivo sin confirmar).';
 
 -- ===========================================================================
 -- fn_refcurr_listar — pagina con filtros/orden (pantalla listado).
@@ -983,37 +1074,132 @@ COMMENT ON FUNCTION academico_test.fn_refcurr_areas_listar(BIGINT, BIGINT)
     IS 'Areas/dimensiones ACTIVE asociadas a un referente (TREFERENTE_CURRICULAR_AREA), con el nombre de TAREA_ASIGNATURA -- alimenta el select "Areas o dimensiones" de la pestaña Enunciado. Lista vacia = el referente aplica a todas las areas. Gate VER.';
 
 -- ===========================================================================
--- fn_refenunc_crear — enunciado (nivel 1) o evidencia (nivel 2, p_fk_padre).
+-- Enunciados (nivel 1) y evidencias (nivel 2): validaciones
 -- ===========================================================================
-CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_crear(
-    p_pk_usuario_solicitante         BIGINT,
+CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_validar_existe(p_pk_referente_enunciado BIGINT)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM academico_test.TREFERENTE_ENUNCIADO
+                    WHERE PK_REFERENTE_ENUNCIADO = p_pk_referente_enunciado) THEN
+        RAISE EXCEPTION 'No se encontro el enunciado/evidencia solicitado'
+            USING ERRCODE = 'P0002';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refenunc_validar_existe(BIGINT)
+    IS 'INTERNO: P0002 si el componente curricular no existe. Primer paso de los wrappers de edicion y baja, antes del gate.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_validar_padre(
+    p_pk_referente_curricular  BIGINT,
+    p_fk_padre                 BIGINT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_padre  academico_test.TREFERENTE_ENUNCIADO%ROWTYPE;
+BEGIN
+    SELECT * INTO v_padre
+      FROM academico_test.TREFERENTE_ENUNCIADO
+     WHERE PK_REFERENTE_ENUNCIADO = p_fk_padre;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'El enunciado padre (%) no existe; debe crear el enunciado antes de agregarle evidencias', p_fk_padre
+            USING ERRCODE = 'P0002';
+    END IF;
+    IF v_padre.ACTIVE = FALSE THEN
+        RAISE EXCEPTION 'El enunciado padre (%) esta inactivo; no se le pueden agregar evidencias', p_fk_padre
+            USING ERRCODE = '22023';
+    END IF;
+    IF v_padre.FK_REFERENTE_CURRICULAR <> p_pk_referente_curricular THEN
+        RAISE EXCEPTION 'El enunciado padre (%) pertenece a otro referente curricular', p_fk_padre
+            USING ERRCODE = '22023';
+    END IF;
+    IF v_padre.FK_PADRE IS NOT NULL THEN
+        RAISE EXCEPTION 'Solo se permite un nivel de anidamiento: el padre (%) ya es una evidencia, no un enunciado', p_fk_padre
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refenunc_validar_padre(BIGINT, BIGINT)
+    IS 'INTERNO: el padre de una evidencia existe (P0002), esta activo, es del mismo referente y es de nivel 1 (22023).';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_validar_area(
+    p_pk_referente_curricular       BIGINT,
+    p_fk_referente_curricular_area  BIGINT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF p_fk_referente_curricular_area IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_AREA
+         WHERE PK_REFERENTE_CURRICULAR_AREA = p_fk_referente_curricular_area
+           AND FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
+           AND ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION 'El area/dimension (%) no existe, no esta activa o no pertenece a este referente', p_fk_referente_curricular_area
+            USING ERRCODE = '23503';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refenunc_validar_area(BIGINT, BIGINT)
+    IS 'INTERNO: 23503 si el area pedida no es un area ACTIVA del referente. NULL pasa (aplica a todas).';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_validar_grado(
+    p_pk_referente_curricular  BIGINT,
+    p_fk_tlv_grado             BIGINT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF p_fk_tlv_grado IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM academico_test.fn_refcurr_grados_disponibles_interno(p_pk_referente_curricular) g
+         WHERE g.fk_tlv_grado = p_fk_tlv_grado
+    ) THEN
+        RAISE EXCEPTION 'El grado "%" no pertenece a ninguno de los niveles educativos del referente',
+              COALESCE((SELECT NOMBRE FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = p_fk_tlv_grado),
+                       p_fk_tlv_grado::TEXT)
+            USING ERRCODE = '23503',
+                  HINT = 'GET /referentes-curriculares/:ID/grados lista los grados disponibles';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refenunc_validar_grado(BIGINT, BIGINT)
+    IS 'INTERNO: 23503 si el grado no esta entre los grados disponibles del referente (fn_refcurr_grados_disponibles_interno: grados de sus niveles educativos activos). NULL pasa (aplica a todos los grados).';
+
+-- ===========================================================================
+-- fn_refenunc_crear -- enunciado (nivel 1) o evidencia (nivel 2, p_fk_padre).
+-- ===========================================================================
+CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_crear_interno(
+    p_actor                          BIGINT,
     p_pk_referente_curricular        BIGINT,
-    p_texto                          VARCHAR(400),
+    p_texto                          VARCHAR,
     p_fk_padre                       BIGINT      DEFAULT NULL,
     p_fk_referente_curricular_area   BIGINT      DEFAULT NULL,
-    p_estado                         VARCHAR(1)  DEFAULT 'A'
+    p_estado                         VARCHAR(1)  DEFAULT 'A',
+    p_fk_tlv_grado                   BIGINT      DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_id_creado       BIGINT;
-    v_referente_activo BOOLEAN;
-    v_padre_fk_padre  BIGINT;
-    v_padre_referente BIGINT;
-    v_padre_active    BOOLEAN;
+    v_id_creado         BIGINT;
+    v_referente_activo  BOOLEAN;
 BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'CREAR'
-    );
-
-    IF NULLIF(TRIM(p_texto), '') IS NULL THEN
-        RAISE EXCEPTION 'Texto del enunciado/evidencia es obligatorio'
-            USING ERRCODE = '22023';
-    END IF;
-    IF UPPER(TRIM(COALESCE(p_estado, ''))) NOT IN ('A', 'I') THEN
-        RAISE EXCEPTION 'Estado invalido: % (use ''A'' o ''I'')', p_estado USING ERRCODE = '22023';
-    END IF;
+    PERFORM academico_test.fn_refcurr_validar_texto(p_texto, 'Descripcion', 500, TRUE);
+    PERFORM academico_test.fn_refcurr_validar_estado(COALESCE(p_estado, ''));
 
     SELECT ACTIVE INTO v_referente_activo
       FROM academico_test.TREFERENTE_CURRICULAR
@@ -1029,62 +1215,23 @@ BEGIN
     END IF;
 
     IF p_fk_padre IS NOT NULL THEN
-        -- ---------------------------------------------------------------
-        -- Nivel 2 (evidencia): regla "enunciados antes que evidencias" --
-        -- el padre debe existir YA, estar activo y ser del mismo referente.
-        -- ---------------------------------------------------------------
-        SELECT FK_PADRE, FK_REFERENTE_CURRICULAR, ACTIVE
-          INTO v_padre_fk_padre, v_padre_referente, v_padre_active
-          FROM academico_test.TREFERENTE_ENUNCIADO
-         WHERE PK_REFERENTE_ENUNCIADO = p_fk_padre;
-
-        IF NOT FOUND THEN
-            RAISE EXCEPTION 'El enunciado padre (p_fk_padre=%) no existe; debe crear el enunciado antes de agregarle evidencias', p_fk_padre
-                USING ERRCODE = 'P0002';
-        END IF;
-        IF v_padre_active = FALSE THEN
-            RAISE EXCEPTION 'El enunciado padre (%) esta inactivo; no se le pueden agregar evidencias', p_fk_padre
-                USING ERRCODE = '22023';
-        END IF;
-        IF v_padre_referente <> p_pk_referente_curricular THEN
-            RAISE EXCEPTION 'El enunciado padre (%) pertenece a otro referente curricular', p_fk_padre
-                USING ERRCODE = '22023';
-        END IF;
-        IF v_padre_fk_padre IS NOT NULL THEN
-            RAISE EXCEPTION 'Solo se permite un nivel de anidamiento: el padre (%) ya es una evidencia, no un enunciado', p_fk_padre
-                USING ERRCODE = '22023';
-        END IF;
-        IF p_fk_referente_curricular_area IS NOT NULL THEN
-            RAISE EXCEPTION 'Una evidencia no elige area propia: hereda la de su enunciado padre'
+        PERFORM academico_test.fn_refenunc_validar_padre(p_pk_referente_curricular, p_fk_padre);
+        -- Regla 11: area y grado son del nivel 1; la evidencia los hereda.
+        IF p_fk_referente_curricular_area IS NOT NULL OR p_fk_tlv_grado IS NOT NULL THEN
+            RAISE EXCEPTION 'Una evidencia no elige area ni grado propios: hereda los de su enunciado padre'
                 USING ERRCODE = '22023';
         END IF;
     ELSE
-        -- ---------------------------------------------------------------
-        -- Nivel 1 (enunciado): area SIEMPRE opcional, tenga o no el
-        -- referente areas asociadas. NULL = el enunciado aplica a TODAS
-        -- las areas/dimensiones (mismo significado que un referente sin
-        -- areas propias, V212) -- incluso cuando el referente si tiene
-        -- areas especificas, el usuario puede dejar un enunciado sin
-        -- amarrar a ninguna en particular. Si se manda una, debe ser una
-        -- de las areas ACTIVAS de ESE referente.
-        -- ---------------------------------------------------------------
-        IF p_fk_referente_curricular_area IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_AREA
-             WHERE PK_REFERENTE_CURRICULAR_AREA = p_fk_referente_curricular_area
-               AND FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
-               AND ACTIVE = TRUE
-        ) THEN
-            RAISE EXCEPTION 'FK_REFERENTE_CURRICULAR_AREA (%) no existe, no esta activa o no pertenece a este referente', p_fk_referente_curricular_area
-                USING ERRCODE = '23503';
-        END IF;
+        PERFORM academico_test.fn_refenunc_validar_area(p_pk_referente_curricular, p_fk_referente_curricular_area);
+        PERFORM academico_test.fn_refenunc_validar_grado(p_pk_referente_curricular, p_fk_tlv_grado);
     END IF;
 
     INSERT INTO academico_test.TREFERENTE_ENUNCIADO (
-        FK_REFERENTE_CURRICULAR, FK_REFERENTE_CURRICULAR_AREA, FK_PADRE, TEXTO,
-        ESTADO, CREATED_BY, CREATED_AT, ACTIVE
+        FK_REFERENTE_CURRICULAR, FK_REFERENTE_CURRICULAR_AREA, FK_PADRE, FK_TLV_GRADO,
+        TEXTO, ESTADO, CREATED_BY, CREATED_AT, ACTIVE
     ) VALUES (
-        p_pk_referente_curricular, p_fk_referente_curricular_area, p_fk_padre, p_texto,
-        UPPER(TRIM(p_estado)), p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
+        p_pk_referente_curricular, p_fk_referente_curricular_area, p_fk_padre, p_fk_tlv_grado,
+        TRIM(p_texto), UPPER(TRIM(p_estado)), p_actor::VARCHAR, CURRENT_TIMESTAMP, TRUE
     )
     RETURNING PK_REFERENTE_ENUNCIADO INTO v_id_creado;
 
@@ -1092,20 +1239,55 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_refenunc_crear(BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, VARCHAR)
-    IS 'Crea un enunciado (p_fk_padre NULL, nivel 1) o una evidencia (p_fk_padre = PK de un enunciado ya existente, nivel 2) en TREFERENTE_ENUNCIADO. Gate CREAR, solo SUPER_ADMIN por defecto. Reglas: (1) el padre debe existir/estar activo/ser del mismo referente/ser el mismo nivel 1 -- no se puede crear una evidencia sin su enunciado, ni anidar mas de 2 niveles; (2) una evidencia nunca elige area (hereda la del padre); (3) el area de un enunciado SIEMPRE es opcional (NULL = aplica a todas las areas), tenga o no el referente areas asociadas; si se manda una, debe ser un area ACTIVA de ese mismo referente.';
+COMMENT ON FUNCTION academico_test.fn_refenunc_crear_interno(BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, VARCHAR, BIGINT)
+    IS 'INTERNO: crea un enunciado (p_fk_padre NULL) o una evidencia en TREFERENTE_ENUNCIADO, sin permisos. Texto obligatorio hasta 500 caracteres; area y grado solo en nivel 1 (la evidencia los hereda, 22023) y validados contra el referente (23503); ambos opcionales: NULL = todas las areas / todos los grados. Lo usa fn_refenunc_crear.';
+
+DROP FUNCTION IF EXISTS academico_test.fn_refenunc_crear(BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, VARCHAR);
+CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_crear(
+    p_pk_usuario_solicitante         BIGINT,
+    p_pk_referente_curricular        BIGINT,
+    p_texto                          VARCHAR(500),
+    p_fk_padre                       BIGINT      DEFAULT NULL,
+    p_fk_referente_curricular_area   BIGINT      DEFAULT NULL,
+    p_estado                         VARCHAR(1)  DEFAULT 'A',
+    p_fk_tlv_grado                   BIGINT      DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'CREAR'
+    );
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        'Creacion de un componente curricular del referente "'
+            || COALESCE((SELECT NOMBRE FROM academico_test.TREFERENTE_CURRICULAR
+                          WHERE PK_REFERENTE_CURRICULAR = p_pk_referente_curricular),
+                        p_pk_referente_curricular::TEXT) || '"',
+        NULL, NULL, ARRAY['REFERENTES_CURRICULARES', 'COMPONENTE_CURRICULAR', 'CREACION']);
+
+    RETURN academico_test.fn_refenunc_crear_interno(
+        p_pk_usuario_solicitante, p_pk_referente_curricular, p_texto, p_fk_padre,
+        p_fk_referente_curricular_area, p_estado, p_fk_tlv_grado);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refenunc_crear(BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, VARCHAR, BIGINT)
+    IS 'POST /referentes-curriculares/:ID/enunciados: crea un enunciado (BODY.ENUNCIADO_PADRE ausente) o una evidencia. p_fk_tlv_grado (BODY.GRADO_ID, TLISTA_VALOR categoria GRADOS) es opcional y solo de nivel 1; queda fijo desde la creacion. Gate CREAR sobre REFERENTES_CURRICULARES + etiqueta de auditoria; logica en fn_refenunc_crear_interno.';
 
 -- ===========================================================================
--- fn_refenunc_actualizar
+-- fn_refenunc_actualizar -- solo texto y estado. Area, grado y padre son fijos
+-- desde la creacion (Regla 11): reasignar es borrar y volver a crear.
 -- ===========================================================================
-CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_actualizar(
-    p_pk_usuario_solicitante        BIGINT,
-    p_pk_referente_enunciado        BIGINT,
-    p_texto                         VARCHAR(400) DEFAULT NULL,
-    p_estado                        VARCHAR(1)   DEFAULT NULL,
-    -- solo aplica a un enunciado (nivel 1); ignorado para evidencias.
-    p_fk_referente_curricular_area  BIGINT       DEFAULT NULL,
-    p_limpiar_area                  BOOLEAN      DEFAULT FALSE
+DROP FUNCTION IF EXISTS academico_test.fn_refenunc_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BOOLEAN);
+DROP FUNCTION IF EXISTS academico_test.fn_refenunc_actualizar_interno(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BOOLEAN);
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_actualizar_interno(
+    p_actor                   BIGINT,
+    p_pk_referente_enunciado  BIGINT,
+    p_texto                   VARCHAR  DEFAULT NULL,
+    p_estado                  VARCHAR  DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -1121,44 +1303,18 @@ BEGIN
         RAISE EXCEPTION 'No se encontro el enunciado/evidencia solicitado'
             USING ERRCODE = 'P0002';
     END IF;
-
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'EDITAR'
-    );
-
     IF v_actual.ACTIVE = FALSE THEN
         RAISE EXCEPTION 'Este enunciado/evidencia esta inactivo; no se puede editar'
             USING ERRCODE = '22023';
     END IF;
-    IF p_texto IS NOT NULL AND NULLIF(TRIM(p_texto), '') IS NULL THEN
-        RAISE EXCEPTION 'Texto no puede quedar vacio' USING ERRCODE = '22023';
-    END IF;
-    IF p_estado IS NOT NULL AND UPPER(TRIM(p_estado)) NOT IN ('A', 'I') THEN
-        RAISE EXCEPTION 'Estado invalido: % (use ''A'' o ''I'')', p_estado USING ERRCODE = '22023';
-    END IF;
 
-    IF (p_fk_referente_curricular_area IS NOT NULL OR p_limpiar_area) AND v_actual.FK_PADRE IS NOT NULL THEN
-        RAISE EXCEPTION 'Una evidencia no tiene area propia (hereda la de su enunciado padre); no aplica reasignarla'
-            USING ERRCODE = '22023';
-    END IF;
-    IF p_fk_referente_curricular_area IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_AREA
-         WHERE PK_REFERENTE_CURRICULAR_AREA = p_fk_referente_curricular_area
-           AND FK_REFERENTE_CURRICULAR = v_actual.FK_REFERENTE_CURRICULAR
-           AND ACTIVE = TRUE
-    ) THEN
-        RAISE EXCEPTION 'FK_REFERENTE_CURRICULAR_AREA (%) no existe, no esta activa o no pertenece a este referente', p_fk_referente_curricular_area
-            USING ERRCODE = '23503';
-    END IF;
+    PERFORM academico_test.fn_refcurr_validar_texto(p_texto, 'Descripcion', 500);
+    PERFORM academico_test.fn_refcurr_validar_estado(p_estado);
 
     UPDATE academico_test.TREFERENTE_ENUNCIADO
-       SET TEXTO                        = COALESCE(p_texto, TEXTO),
-           ESTADO                       = COALESCE(UPPER(TRIM(p_estado)), ESTADO),
-           FK_REFERENTE_CURRICULAR_AREA = CASE
-               WHEN p_limpiar_area THEN NULL
-               ELSE COALESCE(p_fk_referente_curricular_area, FK_REFERENTE_CURRICULAR_AREA)
-           END,
-           MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+       SET TEXTO       = COALESCE(TRIM(p_texto), TEXTO),
+           ESTADO      = COALESCE(UPPER(TRIM(p_estado)), ESTADO),
+           MODIFIED_BY = p_actor::VARCHAR,
            MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_REFERENTE_ENUNCIADO = p_pk_referente_enunciado;
 
@@ -1166,22 +1322,56 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_refenunc_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BOOLEAN)
-    IS 'PATCH parcial de TREFERENTE_ENUNCIADO (gate EDITAR, solo SUPER_ADMIN por defecto). FK_PADRE y FK_REFERENTE_CURRICULAR son inmutables (mover un nodo de referente o de nivel no esta soportado; borre y cree de nuevo). p_fk_referente_curricular_area / p_limpiar_area solo aplican a un enunciado (nivel 1); en una evidencia lanzan 22023.';
+COMMENT ON FUNCTION academico_test.fn_refenunc_actualizar_interno(BIGINT, BIGINT, VARCHAR, VARCHAR)
+    IS 'INTERNO: PATCH parcial de un componente curricular sin permisos (NULL = no tocar): solo descripcion y estado. FK_PADRE, FK_REFERENTE_CURRICULAR, FK_REFERENTE_CURRICULAR_AREA y FK_TLV_GRADO son inmutables (Regla 11). Lo usa fn_refenunc_actualizar.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_actualizar(
+    p_pk_usuario_solicitante  BIGINT,
+    p_pk_referente_enunciado  BIGINT,
+    p_texto                   VARCHAR(500) DEFAULT NULL,
+    p_estado                  VARCHAR(1)   DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_etiquetas  TEXT[] := ARRAY['REFERENTES_CURRICULARES', 'COMPONENTE_CURRICULAR', 'EDICION'];
+BEGIN
+    PERFORM academico_test.fn_refenunc_validar_existe(p_pk_referente_enunciado);
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'EDITAR'
+    );
+
+    IF p_estado IS NOT NULL AND EXISTS (
+        SELECT 1 FROM academico_test.TREFERENTE_ENUNCIADO
+         WHERE PK_REFERENTE_ENUNCIADO = p_pk_referente_enunciado
+           AND ESTADO::VARCHAR IS DISTINCT FROM UPPER(TRIM(p_estado))
+    ) THEN
+        v_etiquetas := v_etiquetas || 'CAMBIO_ESTADO'::TEXT;
+    END IF;
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, 'Edicion de un componente curricular', NULL, NULL, v_etiquetas);
+
+    RETURN academico_test.fn_refenunc_actualizar_interno(
+        p_pk_usuario_solicitante, p_pk_referente_enunciado, p_texto, p_estado);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refenunc_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR)
+    IS 'PATCH /referentes-curriculares/enunciados/:ID: solo BODY.TEXTO y BODY.ESTADO. Existencia (P0002) -> gate EDITAR sobre REFERENTES_CURRICULARES -> etiqueta de auditoria (CAMBIO_ESTADO si cambia el estado) -> fn_refenunc_actualizar_interno.';
 
 -- ===========================================================================
--- fn_refenunc_eliminar — soft delete; cascada a evidencias si es enunciado.
+-- fn_refenunc_eliminar -- soft delete; cascada a evidencias si es enunciado.
 -- ===========================================================================
-CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_eliminar(
-    p_pk_usuario_solicitante   BIGINT,
+CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_eliminar_interno(
+    p_actor                    BIGINT,
     p_pk_referente_enunciado   BIGINT
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_actual      academico_test.TREFERENTE_ENUNCIADO%ROWTYPE;
-    v_evidencias  BIGINT := 0;
+    v_actual  academico_test.TREFERENTE_ENUNCIADO%ROWTYPE;
 BEGIN
     SELECT * INTO v_actual
       FROM academico_test.TREFERENTE_ENUNCIADO
@@ -1191,50 +1381,61 @@ BEGIN
         RAISE EXCEPTION 'No se encontro el enunciado/evidencia solicitado'
             USING ERRCODE = 'P0002';
     END IF;
-
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'ELIMINAR'
-    );
-
     IF v_actual.ACTIVE = FALSE THEN
         RAISE EXCEPTION 'Este enunciado/evidencia ya se encuentra inactivo'
             USING ERRCODE = '22023';
     END IF;
 
-    -- En uso por unidades o actividades: se bloquea (mismo guard del referente).
+    -- Referenciado por una unidad o actividad: no se borra (Regla 10: se inactiva).
     PERFORM academico_test.fn_refcurr_uso_assert(v_actual.FK_REFERENTE_CURRICULAR, p_pk_referente_enunciado);
 
-    IF v_actual.FK_PADRE IS NULL THEN
-        -- Es un enunciado (nivel 1): cascada a sus evidencias activas.
-        UPDATE academico_test.TREFERENTE_ENUNCIADO
-           SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE FK_PADRE = p_pk_referente_enunciado
-           AND ACTIVE = TRUE;
-        GET DIAGNOSTICS v_evidencias = ROW_COUNT;
-    END IF;
-
     UPDATE academico_test.TREFERENTE_ENUNCIADO
-       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE PK_REFERENTE_ENUNCIADO = p_pk_referente_enunciado;
-
-    RAISE NOTICE 'Soft delete TREFERENTE_ENUNCIADO=% (autor: %): evidencias afectadas=%',
-        p_pk_referente_enunciado, p_pk_usuario_solicitante, v_evidencias;
+       SET ACTIVE = FALSE, MODIFIED_BY = p_actor::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE ACTIVE = TRUE
+       AND (PK_REFERENTE_ENUNCIADO = p_pk_referente_enunciado
+            OR (v_actual.FK_PADRE IS NULL AND FK_PADRE = p_pk_referente_enunciado));
 
     RETURN p_pk_referente_enunciado;
 END;
 $$;
 
+COMMENT ON FUNCTION academico_test.fn_refenunc_eliminar_interno(BIGINT, BIGINT)
+    IS 'INTERNO: baja logica de un componente curricular sin permisos; un enunciado arrastra sus evidencias activas. 22023 si ya esta inactivo, 23503 (fn_refcurr_uso_assert) si una unidad o actividad activa lo usa. Lo usa fn_refenunc_eliminar.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_eliminar(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_referente_enunciado   BIGINT
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM academico_test.fn_refenunc_validar_existe(p_pk_referente_enunciado);
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'ELIMINAR'
+    );
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante, 'Eliminacion de un componente curricular', NULL, NULL,
+        ARRAY['REFERENTES_CURRICULARES', 'COMPONENTE_CURRICULAR', 'ELIMINACION']);
+
+    RETURN academico_test.fn_refenunc_eliminar_interno(p_pk_usuario_solicitante, p_pk_referente_enunciado);
+END;
+$$;
+
 COMMENT ON FUNCTION academico_test.fn_refenunc_eliminar(BIGINT, BIGINT)
-    IS 'Soft delete (ACTIVE=FALSE) de un enunciado o evidencia (gate ELIMINAR, solo SUPER_ADMIN por defecto). Si es un enunciado (FK_PADRE IS NULL), en cascada da de baja tambien sus evidencias (FK_PADRE = este pk) ACTIVE. Si es una evidencia, solo se da de baja ella misma. En ambos casos fn_refcurr_uso_assert bloquea antes con 23503 si el enunciado (o alguna de sus evidencias) esta amarrado a una unidad o actividad activa.';
+    IS 'PATCH /referentes-curriculares/enunciados/:ID/eliminar: existencia (P0002) -> gate ELIMINAR sobre REFERENTES_CURRICULARES -> etiqueta de auditoria -> fn_refenunc_eliminar_interno.';
 
 -- ===========================================================================
--- fn_refenunc_listar — enunciados (nivel 1) de un referente (panel izquierdo).
+-- fn_refenunc_listar -- enunciados (nivel 1) del Gestor de Contenido,
+-- filtrados por area y grado (los dos filtros del panel izquierdo).
 -- ===========================================================================
-CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_listar(
-    p_pk_usuario_solicitante        BIGINT,
+DROP FUNCTION IF EXISTS academico_test.fn_refenunc_listar(BIGINT, BIGINT, BIGINT, BOOLEAN);
+DROP FUNCTION IF EXISTS academico_test.fn_refenunc_listar_interno(BIGINT, BIGINT, BOOLEAN, BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_listar_interno(
     p_pk_referente_curricular       BIGINT,
     p_fk_referente_curricular_area  BIGINT   DEFAULT NULL,
-    p_incluir_inactivos             BOOLEAN  DEFAULT FALSE
+    p_incluir_inactivos             BOOLEAN  DEFAULT FALSE,
+    p_fk_tlv_grado                  BIGINT   DEFAULT NULL
 )
 RETURNS TABLE (
     pk_referente_enunciado         BIGINT,
@@ -1242,9 +1443,50 @@ RETURNS TABLE (
     estado                         VARCHAR,
     active                         BOOLEAN,
     fk_referente_curricular_area   BIGINT,
-    total_evidencias                BIGINT
+    fk_tlv_grado                   BIGINT,
+    grado                          VARCHAR,
+    total_evidencias               BIGINT
+)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT e.PK_REFERENTE_ENUNCIADO, e.TEXTO, e.ESTADO::VARCHAR, e.ACTIVE,
+           e.FK_REFERENTE_CURRICULAR_AREA, e.FK_TLV_GRADO, lvg.NOMBRE,
+           (SELECT COUNT(*) FROM academico_test.TREFERENTE_ENUNCIADO ev
+             WHERE ev.FK_PADRE = e.PK_REFERENTE_ENUNCIADO
+               AND (p_incluir_inactivos OR ev.ACTIVE = TRUE))
+      FROM academico_test.TREFERENTE_ENUNCIADO e
+      LEFT JOIN academico_test.TLISTA_VALOR lvg ON lvg.PK_LISTA_VALOR = e.FK_TLV_GRADO
+     WHERE e.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
+       AND e.FK_PADRE IS NULL
+       AND (p_incluir_inactivos OR e.ACTIVE = TRUE)
+       AND (p_fk_referente_curricular_area IS NULL OR e.FK_REFERENTE_CURRICULAR_AREA = p_fk_referente_curricular_area)
+       AND (p_fk_tlv_grado IS NULL OR e.FK_TLV_GRADO = p_fk_tlv_grado)
+     ORDER BY e.PK_REFERENTE_ENUNCIADO;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refenunc_listar_interno(BIGINT, BIGINT, BOOLEAN, BIGINT)
+    IS 'INTERNO: enunciados de nivel 1 de un referente con su grado y el conteo de evidencias, filtrados por area y por grado (filtro exacto: el Gestor lista lo que se asigno a ese grado). Lo usa fn_refenunc_listar.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_listar(
+    p_pk_usuario_solicitante        BIGINT,
+    p_pk_referente_curricular       BIGINT,
+    p_fk_referente_curricular_area  BIGINT   DEFAULT NULL,
+    p_incluir_inactivos             BOOLEAN  DEFAULT FALSE,
+    p_fk_tlv_grado                  BIGINT   DEFAULT NULL
+)
+RETURNS TABLE (
+    pk_referente_enunciado         BIGINT,
+    texto                          VARCHAR,
+    estado                         VARCHAR,
+    active                         BOOLEAN,
+    fk_referente_curricular_area   BIGINT,
+    fk_tlv_grado                   BIGINT,
+    grado                          VARCHAR,
+    total_evidencias               BIGINT
 )
 LANGUAGE plpgsql
+STABLE
 AS $$
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
@@ -1252,22 +1494,14 @@ BEGIN
     );
 
     RETURN QUERY
-    SELECT e.PK_REFERENTE_ENUNCIADO, e.TEXTO, e.ESTADO::VARCHAR, e.ACTIVE,
-           e.FK_REFERENTE_CURRICULAR_AREA,
-           (SELECT COUNT(*) FROM academico_test.TREFERENTE_ENUNCIADO ev
-             WHERE ev.FK_PADRE = e.PK_REFERENTE_ENUNCIADO
-               AND (p_incluir_inactivos OR ev.ACTIVE = TRUE))
-      FROM academico_test.TREFERENTE_ENUNCIADO e
-     WHERE e.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
-       AND e.FK_PADRE IS NULL
-       AND (p_incluir_inactivos OR e.ACTIVE = TRUE)
-       AND (p_fk_referente_curricular_area IS NULL OR e.FK_REFERENTE_CURRICULAR_AREA = p_fk_referente_curricular_area)
-     ORDER BY e.PK_REFERENTE_ENUNCIADO;
+    SELECT * FROM academico_test.fn_refenunc_listar_interno(
+        p_pk_referente_curricular, p_fk_referente_curricular_area,
+        p_incluir_inactivos, p_fk_tlv_grado);
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_refenunc_listar(BIGINT, BIGINT, BIGINT, BOOLEAN)
-    IS 'Enunciados (nivel 1, FK_PADRE IS NULL) de un referente, opcionalmente filtrados por FK_REFERENTE_CURRICULAR_AREA (select "Areas o dimensiones" de la pantalla), con el conteo de sus evidencias. Alimenta el panel izquierdo de la pestaña Enunciado. Gate VER.';
+COMMENT ON FUNCTION academico_test.fn_refenunc_listar(BIGINT, BIGINT, BIGINT, BOOLEAN, BIGINT)
+    IS 'GET /referentes-curriculares/:ID/enunciados?area=&grado=: panel izquierdo del Gestor de Contenido. Gate VER sobre REFERENTES_CURRICULARES; logica en fn_refenunc_listar_interno.';
 
 -- ===========================================================================
 -- fn_refenunc_evidencias_listar — evidencias (nivel 2) de UN enunciado.
