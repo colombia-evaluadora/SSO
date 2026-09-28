@@ -66,11 +66,10 @@ public class SessionTrackingService {
 
     /**
      * Abre una sesión para el {@code familyId} recién minteado en
-     * login. Omite silenciosamente el INSERT (no lanza) si el
-     * usuario no tiene fila en {@code academico_test.TUSUARIO} — no
-     * tiene sentido una fila de sesión sin nada que correlacionar
-     * en ese esquema, y esto NO debe impedir un login legítimo de
-     * una cuenta admin/SSO pura.
+     * login. V495: la fila se abre aunque el usuario no tenga
+     * {@code academico_test.TUSUARIO} (cuentas solo-PIGSE): queda con
+     * {@code fk_tusuario} NULL y siempre con {@code fk_id_user}, que es
+     * la identidad que lee {@code POST /usuarios/actividad/query}.
      *
      * @param idUser {@code public.users.id_user} (puede ser
      *                {@code null} para un login sin claim numérico —
@@ -109,25 +108,21 @@ public class SessionTrackingService {
         }
         Long pkTusuario = jdbc.queryForObject(
                 "SELECT public.fn_get_academico_usuario_id(?)", Long.class, idUser);
-        if (pkTusuario == null) {
-            log.debug("id_user={} sin identidad académica -- no se abre sesión de tracking", idUser);
-            return;
-        }
 
         String resolvedAppName = resolveAppName(appName);
         if (appName != null && !appName.isBlank() && resolvedAppName == null) {
             log.warn("openSession: app='{}' no matchea ningún public.app.name conocido, se guarda NULL", appName);
         }
 
-        applyAuditGucs(pkTusuario, "Inicio de sesión", requestBodySnapshot, familyId, establishment);
+        applyAuditGucs(pkTusuario, idUser, "Inicio de sesión", requestBodySnapshot, familyId, establishment);
         // last_seen_at = now() explícito para no depender del DEFAULT
         // (V89 lo creó con DEFAULT now() pero escribirlo acá hace
         // explícito que en el momento del open ambos timestamps son
         // el mismo -- coherente con "acaba de iniciar").
         jdbc.update(
-                "INSERT INTO academico_test.tsesion_web (fk_tusuario, family_id, last_seen_at, app_name, establecimiento) "
-                        + "VALUES (?, ?, now(), ?, ?)",
-                pkTusuario, familyId, resolvedAppName, establishment);
+                "INSERT INTO academico_test.tsesion_web (fk_tusuario, fk_id_user, family_id, last_seen_at, app_name, establecimiento) "
+                        + "VALUES (?, ?, ?, now(), ?, ?)",
+                pkTusuario, idUser, familyId, resolvedAppName, establishment);
     }
 
     /**
@@ -186,8 +181,8 @@ public class SessionTrackingService {
 
     /**
      * Cierra la sesión abierta (si existe) para {@code familyId}.
-     * Idempotente: si ya está cerrada o nunca se abrió (usuario sin
-     * identidad académica en {@link #openSession}), el
+     * Idempotente: si ya está cerrada o nunca se abrió (login sin
+     * id_user numérico en {@link #openSession}), el
      * {@code UPDATE} afecta cero filas y no pasa nada — mismo
      * contrato "seguro llamar dos veces" que ya tiene
      * {@code RefreshController.logout}.
@@ -217,18 +212,17 @@ public class SessionTrackingService {
     @Transactional
     public void closeSession(String familyId, String closeReason) {
         SessionOwner owner = jdbc.query(
-                "SELECT fk_tusuario, establecimiento FROM academico_test.tsesion_web WHERE family_id = ? AND ended_at IS NULL",
+                "SELECT fk_tusuario, fk_id_user, establecimiento FROM academico_test.tsesion_web WHERE family_id = ? AND ended_at IS NULL",
                 rs -> rs.next()
-                        ? new SessionOwner(rs.getObject("fk_tusuario", Long.class), rs.getString("establecimiento"))
+                        ? new SessionOwner(rs.getObject("fk_tusuario", Long.class), rs.getObject("fk_id_user", Long.class),
+                                rs.getString("establecimiento"))
                         : null,
                 familyId);
         if (owner == null) {
             log.debug("Sin sesión abierta para family={} -- closeSession no-op", shortFamily(familyId));
             return;
         }
-        Long pkTusuario = owner.pkTusuario();
-
-        applyAuditGucs(pkTusuario, "Cierre de sesión (" + closeReason + ")", Map.of(), familyId, owner.establecimiento());
+        applyAuditGucs(owner.pkTusuario(), owner.idUser(), "Cierre de sesión (" + closeReason + ")", Map.of(), familyId, owner.establecimiento());
         int updated = jdbc.update(
                 "UPDATE academico_test.tsesion_web SET ended_at = now(), close_reason = ? "
                         + "WHERE family_id = ? AND ended_at IS NULL",
@@ -267,7 +261,7 @@ public class SessionTrackingService {
      * las funciones de sede) pero nunca el evento de "Inicio de
      * sesión" mismo.
      */
-    private void applyAuditGucs(long pkTusuario, String etiqueta, Map<String, Object> requestBodySnapshot,
+    private void applyAuditGucs(Long pkTusuario, Long idUser, String etiqueta, Map<String, Object> requestBodySnapshot,
                                  String familyId, String establishment) {
         Optional<AuditContext> ctx = AuditContextExtractor.fromCurrentRequest(requestBodySnapshot);
         // V-audit-ctx-4 (sesiones reales): funde sesion_id y familia
@@ -290,7 +284,8 @@ public class SessionTrackingService {
             contextoJson = json.append('}').toString();
         }
         jdbc.queryForList(
-                "SELECT set_config('app.user_id', COALESCE(academico_test.fn_resolver_actor(?), ?), true), "
+                "SELECT set_config('app.user_id', COALESCE(academico_test.fn_resolver_actor(CAST(? AS BIGINT)), "
+                        + "(SELECT email FROM public.users WHERE id_user = CAST(? AS BIGINT)), ?), true), "
                         + "set_config('app.user_pk', ?, true), "
                         + "set_config('app.etiqueta', ?, true), "
                         + "set_config('app.request_id', ?, true), "
@@ -298,8 +293,8 @@ public class SessionTrackingService {
                         + "set_config('app.client_ip', ?, true), "
                         + "set_config('app.user_agent', ?, true), "
                         + "set_config('app.contexto', ?, true)",
-                pkTusuario, String.valueOf(pkTusuario),
-                String.valueOf(pkTusuario),
+                pkTusuario, idUser, String.valueOf(pkTusuario != null ? pkTusuario : idUser),
+                pkTusuario == null ? null : String.valueOf(pkTusuario),
                 etiqueta,
                 ctx.map(AuditContext::requestId).orElse(null),
                 ctx.map(AuditContext::httpMethod).orElse("POST"),
@@ -308,7 +303,7 @@ public class SessionTrackingService {
                 contextoJson);
     }
 
-    private record SessionOwner(Long pkTusuario, String establecimiento) {
+    private record SessionOwner(Long pkTusuario, Long idUser, String establecimiento) {
     }
 
     /**

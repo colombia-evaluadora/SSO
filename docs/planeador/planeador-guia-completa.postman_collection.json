@@ -454,6 +454,58 @@
           ]
         },
         {
+          "name": "1.2b — GET pares grado-asignatura de UNA pestana de unidad (?referente=)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().rows || [];",
+                  "pm.test('cada fila trae grado y asignatura', () => rows.forEach(r => { pm.expect(r).to.have.property('grado_id'); pm.expect(r).to.have.property('asignatura_id'); }));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/docentes/grado-asignatura?periodo={{periodoId}}&referente={{referenteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "docentes",
+                "grado-asignatura"
+              ],
+              "query": [
+                {
+                  "key": "periodo",
+                  "value": "{{periodoId}}",
+                  "description": "PK_TPERIODO_ACADEMICO -- opcional"
+                },
+                {
+                  "key": "referente",
+                  "value": "{{referenteId}}",
+                  "description": "pk_referente_curricular de la pestana (GET /planeador/unidades/tabs) -- opcional"
+                }
+              ]
+            },
+            "description": "Igual que 1.2 pero acotado a la pestana de unidad desde la que se abre el formulario: `?referente=` es el `pk_referente_curricular` de esa pestana en `GET /planeador/unidades/tabs`. Solo quedan los pares (grado, asignatura) cuyo referente aplicable (`fn_unidad_referente_aplicable`, la misma regla con la que se arman las pestanas) es ese, asi que el combo de grado ofrece justo los grados de la pestana. Sin `?referente=` responde lo mismo que 1.2."
+          },
+          "response": []
+        },
+        {
           "name": "1.3 — GET periodos de evaluacion",
           "request": {
             "method": "GET",
@@ -2184,6 +2236,65 @@
             },
             "description": "El endpoint que le dice al front EXACTAMENTE que pintar para esta actividad puntual, con el MOTIVO de cada decision -- 'visualizacion construida por endpoint', no logica de UI adivinando reglas. `campos_disponibles`: `criterio` (oculto solo en Preescolar, opcional en el resto), `evaluacion` (visible/requerido solo si la unidad tiene referente EVALUATIVO -- carpeta 3.1 -- con `instrumentosPermitidos` ya filtrado por el TIPO_EVALUACION del referente), `ponderacion` (oculto sin unidad o si ES_EVALUATIVA=N; el modo -- PORCENTAJE vs PUNTAJE autocalculado -- lo decide el metodo de calculo de la unidad, V73). `unidad_configuracion` es el mismo snapshot completo que ya trae el detalle de actividad (4.3), o `{tieneUnidad:false}` si no tiene unidad. Llamar esto (o leerlo del detalle 4.3) es el paso previo a mostrar el formulario de evaluacion/ponderacion/instrumento de una actividad.\n\n**Pantalla del prototipo:** P2 - es el endpoint que decide que secciones del formulario se pintan: los instrumentos que ofrece el desplegable, si se muestra Ponderacion, y el bloque \"Unidad tematica seleccionada\"."
           }
+        },
+        {
+          "name": "5.2 — GET configuracion para NUEVA actividad desde la unidad (?grupo=)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const cfg = pm.response.json().rows[0].configuracion;",
+                  "pm.test('trae programacion y campos_disponibles', () => { pm.expect(cfg).to.have.property('programacion'); pm.expect(cfg).to.have.property('campos_disponibles'); });",
+                  "pm.test('con ?grupo= el origen es PARAMETRO', () => pm.expect(cfg.origenGrupo).to.eql('PARAMETRO'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/unidades/{{unidadEvaluativaId}}/configuracion-actividad?grupo={{grupoId}}&ES_SUMATIVO=S&RECUPERAR=N",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "eval-col",
+                "planeador",
+                "unidades",
+                "{{unidadEvaluativaId}}",
+                "configuracion-actividad"
+              ],
+              "query": [
+                {
+                  "key": "grupo",
+                  "value": "{{grupoId}}",
+                  "description": "PK_TGRUPO del grado de la unidad -- opcional"
+                },
+                {
+                  "key": "ES_SUMATIVO",
+                  "value": "S",
+                  "description": "S|N, default S"
+                },
+                {
+                  "key": "RECUPERAR",
+                  "value": "N",
+                  "description": "S lista las actividades recuperables -- opcional"
+                }
+              ]
+            },
+            "description": "Configuracion del formulario de NUEVA actividad a partir de la unidad. Responde lo mismo que `GET /planeador/actividades/configuracion?grupo=&asignatura=&unidad=` (mismo nucleo; la asignatura sale de la unidad): `programacion` (periodo academico, fechas min/max y dias habiles, semanas, duracion en MINUTOS y horario), contexto, `referente`, `esFormativo`/`esSumativoSugerido` y `campos_disponibles`, mas `unidad` y `origenGrupo`.\n\nLa unidad es de un grado y el horario de un grupo: `?grupo=` tiene que ser del grado de la unidad (422 si no). Sin el se usa el unico grupo activo del grado (`origenGrupo = UNICO_DEL_GRADO`); si hay varios, `origenGrupo` es null y `programacion` viene sin limites con el motivo \"Falta el grupo\": pedir el grupo y volver a consultar."
+          },
+          "response": []
         }
       ]
     },

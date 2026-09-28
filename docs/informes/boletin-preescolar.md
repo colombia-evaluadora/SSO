@@ -106,13 +106,13 @@ columna de texto.
 
 | Bloque | De dónde sale |
 |---|---|
-| Encabezado institucional | nombre, DANE, NIT y ciudad del establecimiento |
+| Encabezado institucional | nombre, DANE, NIT y ciudad del establecimiento; la fecha de expedición arriba a la derecha |
 | Foto del estudiante | `TMATRICULA_ARCHIVO`, tipo `ARCHIVO_MATRICULA` = `05` |
 | Sede · Nivel · Grado · Grupo · Periodo | el grupo y su periodo académico |
 | Título del bloque | las dimensiones que cursa, en una línea (ver arriba) |
 | Seguimiento y valoración | la observación del periodo que el docente aprobó, una sola vez |
-| Evidencias (hasta **6**) | las **más recientes** de **todas** las materias: actividades del periodo con observación escrita, con su primera foto adjunta |
-| Firma | el rector del establecimiento |
+| Evidencias (hasta **6**) | las **más recientes** de **todas** las materias, favoritas primero. El tamaño de cada foto depende de cuántas haya: cada cantidad tiene su propio reparto y su propio alto |
+| Firma | nombre y documento (`CC: …`) de quien tiene el rol `RECTOR` en una sede del establecimiento, la del grupo primero |
 
 **La fecha de cada foto es la de su carga**, no la de la actividad. Una actividad
 de marzo puede recibir una evidencia en mayo, y fecharla con la actividad sería
@@ -169,7 +169,8 @@ Content-Type: application/json
     "evidencia1_fecha": "2026-04-09",
     "evidencia1_archivo": 912,
     "evidencia2_titulo": null, "evidencia2_fecha": null, "evidencia2_archivo": null,
-    "rector_nombre": "PAYARES HERAZO ALEJANDRA"
+    "rector_nombre": "PAYARES HERAZO ALEJANDRA",
+    "rector_documento": "CC: 45123456"
   }]
 }
 ```
