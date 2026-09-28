@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 438 migraciones (V1–V512), 685 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-28.
+Estado: 439 migraciones (V1–V513), 685 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-28.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
