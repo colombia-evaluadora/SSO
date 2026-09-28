@@ -153,7 +153,11 @@ RE_INDEX = re.compile(
     r"\bCREATE\s+(UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(IF\s+NOT\s+EXISTS\s+)?"
     r"([\w.\"]+)\s+ON\s+([\w.\"]+)", re.I)
 RE_DROP_INDEX = re.compile(r"\bDROP\s+INDEX\s+(IF\s+EXISTS\s+)?([\w.\"]+)", re.I)
-RE_TRIGGER = re.compile(r"\bCREATE\s+(?:OR\s+REPLACE\s+)?TRIGGER\s+(\w+)\s", re.I)
+RE_TRIGGER = re.compile(
+    r"\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER\s+(\w+)\s", re.I)
+# ALTER FUNCTION f(args) ROWS/COST/SET/OWNER...: cambia atributos de una
+# funcion que ya existe. RENAME TO no se interpreta (cambiaria la clave).
+RE_ALTER_FUNC = re.compile(r"\bALTER\s+FUNCTION\s+([\w.\"]+)\s*\((?![^;]*\bRENAME\s+TO\b)", re.I)
 RE_DROP_TRIGGER = re.compile(
     r"\bDROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?(\w+)\s+ON\s+([\w.\"]+)", re.I)
 RE_VIEW = re.compile(
@@ -566,6 +570,12 @@ def analyze_file(path: Path, version: str) -> Migration:
                 obj_key=f"index:{qname(m.group(2))}",
                 effect="delete", kind="drop-index", line=st.line))
 
+        for m in RE_ALTER_FUNC.finditer(stmt):
+            mig.writes.append(Write(
+                version=version, obj_type="function",
+                obj_key=f"function:{qname(m.group(1))}",
+                effect="patch", kind="alter-function", line=st.line))
+
         for m in RE_TRIGGER.finditer(stmt):
             on = re.search(r"\bON\s+([\w.\"]+)", stmt[m.end():], re.I)
             tgt = qname(on.group(1)) if on else "?"
@@ -660,7 +670,10 @@ def analyze_file(path: Path, version: str) -> Migration:
                     _unparsed(mig, st)
 
             elif target == "route":
-                paths = [l for l in literals(stmt) if PATHISH_RE.match(l)]
+                # path de un solo segmento ('actividad-usuarios') no pasa el
+                # PATHISH_RE; se toma de la columna path del WHERE/NOT EXISTS.
+                paths = ([l for l in literals(stmt) if PATHISH_RE.match(l)]
+                         or find_all_values(stmt, "path"))
                 codigos = find_all_values(stmt, "codigo")
                 keyvals = paths or codigos
                 for p in dict.fromkeys(keyvals):
@@ -817,6 +830,14 @@ def apply_service_aliases(migs: list[Migration]) -> None:
                     w.extra["services"] = [SERVICE_ALIASES.get(s, s) for s in ex]
 
 
+# Tipos cuya clave agrupa todas las sentencias de una migracion
+# (bind:<tabla>:V<n>, data:<tabla>:V<n>) y cuyas escrituras se suman.
+CUMULATIVE = ("bind", "data",
+              # tablas/vistas temporales de la propia migracion: se crean y se
+              # tiran dentro de ella; no dejan nada que pueda quedar muerto.
+              "scratch")
+
+
 def build_graph(migs: list[Migration]) -> dict[str, list[Write]]:
     apply_service_aliases(migs)
     resolve_methods(migs)
@@ -834,6 +855,21 @@ def build_graph(migs: list[Migration]) -> dict[str, list[Write]]:
         for w in mig.writes:
             if w.obj_type == "query_row":
                 w.obj_key = uf.find(w.obj_key)
+        # Una misma sentencia puede emitir la misma escritura dos veces: un
+        # INSERT en public.query emite una por clave (uuid y ruta) y el
+        # UnionFind las funde en una; un bloque DO repite la del cuerpo. Sin
+        # quitar la copia, la segunda "mata" a la primera y la migracion
+        # aparece con codigo muerto por ella misma.
+        seen: set[tuple] = set()
+        unique: list[Write] = []
+        for w in mig.writes:
+            ident = (w.obj_key, w.effect, w.kind, w.line)
+            if ident in seen:
+                continue
+            seen.add(ident)
+            unique.append(w)
+        mig.writes = unique
+        for w in mig.writes:
             chains[w.obj_key].append(w)
 
     for key, ws in chains.items():
@@ -851,8 +887,24 @@ def build_graph(migs: list[Migration]) -> dict[str, list[Write]]:
             nxt = next((x for x in ws[i + 1:] if x.effect in effects), None)
             return nxt.version if nxt else ""
 
+        # Permisos y datos se ACUMULAN: varios INSERT INTO role_query del mismo
+        # fichero comparten la clave bind:role_query:V<n> pero suman filas, no
+        # se reemplazan. Entre ellos no hay muerte posible.
+        if ws and ws[0].obj_type in CUMULATIVE:
+            for w in ws:
+                w.status = "live"
+            continue
+
         for i, w in enumerate(ws):
+            nxt_same = next((x for x in ws[i + 1:] if x.effect != "drop"), None)
             if w.effect == "drop":
+                w.status = "drop"
+
+            elif (w.effect == "delete" and nxt_same is not None
+                  and nxt_same.effect == "create" and nxt_same.version == w.version):
+                # DROP ... IF EXISTS / DELETE por uuid justo antes de volver a
+                # crear el objeto en la misma migracion: es la guarda de
+                # idempotencia, no codigo muerto (mismo trato que DROP FUNCTION).
                 w.status = "drop"
 
             elif w.effect == "create":
