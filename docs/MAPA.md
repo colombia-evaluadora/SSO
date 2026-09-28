@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 443 migraciones (V1–V501), 651 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-28.
+Estado: 444 migraciones (V1–V511), 684 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-28.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -62,15 +62,15 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 - [personalizar](#personalizar) — 4 funcion(es), 0 endpoint(s)
 - [pigse](#pigse) — 15 funcion(es), 0 endpoint(s)
 - [plan](#plan) — 13 funcion(es), 1 endpoint(s)
-- [planeador](#planeador) — 7 funcion(es), 73 endpoint(s)
+- [planeador](#planeador) — 9 funcion(es), 73 endpoint(s)
 - [planilla](#planilla) — 5 funcion(es), 0 endpoint(s)
 - [prematricula](#prematricula) — 2 funcion(es), 0 endpoint(s)
 - [promedio](#promedio) — 1 funcion(es), 0 endpoint(s)
 - [puede](#puede) — 2 funcion(es), 0 endpoint(s)
 - [rango](#rango) — 4 funcion(es), 0 endpoint(s)
 - [recuperacion](#recuperacion) — 2 funcion(es), 0 endpoint(s)
-- [refcurr](#refcurr) — 12 funcion(es), 0 endpoint(s)
-- [refenunc](#refenunc) — 5 funcion(es), 0 endpoint(s)
+- [refcurr](#refcurr) — 35 funcion(es), 0 endpoint(s)
+- [refenunc](#refenunc) — 13 funcion(es), 0 endpoint(s)
 - [referente](#referente) — 2 funcion(es), 0 endpoint(s)
 - [reorder](#reorder) — 1 funcion(es), 0 endpoint(s)
 - [resolver](#resolver) — 3 funcion(es), 0 endpoint(s)
@@ -141,7 +141,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_campos_disponibles` | 2 | V479 | V224, V246, V452 |
 | `academico_test.fn_actividad_configuracion_contexto` | 7 | V496 | V458, V459 |
 | `academico_test.fn_actividad_configuracion_contexto_interno` | 7 | V496 | — |
-| `academico_test.fn_actividad_contexto_evaluativo` | 3 | V476 | V479 |
+| `academico_test.fn_actividad_contexto_evaluativo` | 3 | V476 | V476, V479 |
 | `academico_test.fn_actividad_contexto_tipo_evaluacion` | 3 | V479 | — |
 | `academico_test.fn_actividad_cotejo_definir` | 3 | V226 | V240, V274, V340, V469 |
 | `academico_test.fn_actividad_crear` | 35 | V479 | V246, V274, V340 |
@@ -962,6 +962,8 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_planeador_etiqueta_a_lv` | 2 | V274 | V340 |
 | `academico_test.fn_planeador_listado_alcance` | 1 | V481 | V488 |
 | `academico_test.fn_planeador_periodo_vigente` | 3 | V203 | V272, V274, V340 |
+| `academico_test.fn_planeador_rotulo_actividad` | 4 | V511 | — |
+| `academico_test.fn_planeador_rotulo_actividad_interno` | 3 | V511 | — |
 | `academico_test.fn_planeador_sn` | 2 | V274 | V340 |
 
 ## planilla
@@ -1014,28 +1016,59 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_refcurr_actualizar` | 17 | V214.3 | V214, V214.3 |
+| `academico_test.fn_refcurr_actualizar` | 18 | V214.3 | V214, V214.3 |
+| `academico_test.fn_refcurr_actualizar_interno` | 18 | V214.3 | — |
 | `academico_test.fn_refcurr_areas_listar` | 2 | V213 | V214 |
 | `academico_test.fn_refcurr_buscar_por_pk` | 2 | V214.3 | V214 |
-| `academico_test.fn_refcurr_crear` | 16 | V214.3 | V214, V214.3 |
+| `academico_test.fn_refcurr_buscar_por_pk_interno` | 1 | V214.3 | — |
+| `academico_test.fn_refcurr_crear` | 17 | V214.3 | V214, V214.3 |
+| `academico_test.fn_refcurr_crear_interno` | 17 | V214.3 | — |
 | `academico_test.fn_refcurr_eliminar` | 3 | V213 | V214 |
+| `academico_test.fn_refcurr_eliminar_interno` | 3 | V213 | — |
 | `academico_test.fn_refcurr_enfoque_guard` | 0 | V214.2 | — |
+| `academico_test.fn_refcurr_grados_disponibles_interno` | 1 | V213 | V214.3 |
+| `academico_test.fn_refcurr_grados_listar` | 2 | V214.3 | — |
+| `academico_test.fn_refcurr_grados_vinculados_interno` | 1 | V214.3 | — |
+| `academico_test.fn_refcurr_impacto` | 2 | V214.3 | — |
+| `academico_test.fn_refcurr_impacto_interno` | 1 | V214.3 | — |
 | `academico_test.fn_refcurr_listar` | 11 | V214.3 | V214 |
+| `academico_test.fn_refcurr_listar_interno` | 10 | V214.3 | — |
 | `academico_test.fn_refcurr_niveles_listar` | 2 | V213 | V214 |
 | `academico_test.fn_refcurr_nombre_asignatura` | 2 | V214.3 | — |
 | `academico_test.fn_refcurr_nombre_asignatura_default` | 1 | V214.3 | — |
 | `academico_test.fn_refcurr_por_grado_asignatura` | 4 | V422 | — |
 | `academico_test.fn_refcurr_uso_assert` | 2 | V213 | — |
+| `academico_test.fn_refcurr_validar_areas` | 1 | V214.3 | — |
+| `academico_test.fn_refcurr_validar_areas_sin_enunciados` | 2 | V214.3 | — |
+| `academico_test.fn_refcurr_validar_campos` | 13 | V214.3 | — |
+| `academico_test.fn_refcurr_validar_enfoque_tipo` | 2 | V214.3 | — |
+| `academico_test.fn_refcurr_validar_estado` | 1 | V213 | V214.3 |
+| `academico_test.fn_refcurr_validar_existe` | 1 | V213 | V214.3 |
+| `academico_test.fn_refcurr_validar_lista_valor` | 3 | V214.3 | — |
+| `academico_test.fn_refcurr_validar_nivel_unico_activo` | 2 | V214.3 | — |
+| `academico_test.fn_refcurr_validar_niveles` | 1 | V214.3 | — |
+| `academico_test.fn_refcurr_validar_niveles_con_grados` | 2 | V214.3 | — |
+| `academico_test.fn_refcurr_validar_nombre_unico` | 3 | V214.3 | — |
+| `academico_test.fn_refcurr_validar_texto` | 4 | V213 | V214.3 |
+| `academico_test.fn_refcurr_validar_vigencia` | 2 | V214.3 | — |
 
 ## refenunc
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_refenunc_actualizar` | 6 | V213 | V214 |
-| `academico_test.fn_refenunc_crear` | 6 | V213 | V214 |
+| `academico_test.fn_refenunc_actualizar` | 4 | V213 | V214 |
+| `academico_test.fn_refenunc_actualizar_interno` | 4 | V213 | — |
+| `academico_test.fn_refenunc_crear` | 7 | V213 | V214 |
+| `academico_test.fn_refenunc_crear_interno` | 7 | V213 | — |
 | `academico_test.fn_refenunc_eliminar` | 2 | V213 | V214 |
+| `academico_test.fn_refenunc_eliminar_interno` | 2 | V213 | — |
 | `academico_test.fn_refenunc_evidencias_listar` | 3 | V213 | V214 |
-| `academico_test.fn_refenunc_listar` | 4 | V213 | V214 |
+| `academico_test.fn_refenunc_listar` | 5 | V213 | V214 |
+| `academico_test.fn_refenunc_listar_interno` | 4 | V213 | — |
+| `academico_test.fn_refenunc_validar_area` | 2 | V213 | — |
+| `academico_test.fn_refenunc_validar_existe` | 1 | V213 | — |
+| `academico_test.fn_refenunc_validar_grado` | 2 | V213 | — |
+| `academico_test.fn_refenunc_validar_padre` | 2 | V213 | — |
 
 ## referente
 
@@ -1054,9 +1087,9 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_resolver_actor` | 1 | V66 | — |
+| `academico_test.fn_resolver_actor` | 1 | V66 | V214.3 |
 | `academico_test.fn_resolver_establecimiento_unico` | 1 | V112 | V51, V112, V114 |
-| `pigse.fn_resolver_actor` | 1 | V362 | — |
+| `pigse.fn_resolver_actor` | 1 | V362 | V214.3 |
 
 ## rol
 
@@ -1242,7 +1275,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_unidad_ponderacion_disponible` | 3 | V223 | V245 |
 | `academico_test.fn_unidad_ponderacion_intra_asignatura_asignada` | 3 | V239 | V216, V248, V478, V492 |
 | `academico_test.fn_unidad_ponderacion_recalcular_sumatoria` | 2 | V223 | V224, V244, V476, V478, V479, V482… |
-| `academico_test.fn_unidad_referente_aplicable` | 3 | V451 | V280, V281, V407, V422, V440, V455… |
+| `academico_test.fn_unidad_referente_aplicable` | 3 | V451 | V243, V280, V281, V407, V422, V440… |
 | `academico_test.fn_unidad_referente_detalle` | 2 | V255 | — |
 | `academico_test.fn_unidad_referente_evaluativo` | 1 | V214.2 | V216, V224, V226, V282, V422, V440… |
 | `academico_test.fn_unidad_referente_reparar` | 1 | V455 | — |

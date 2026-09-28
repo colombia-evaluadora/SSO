@@ -1,15 +1,15 @@
 -- ===========================================================================
--- V214.3 -- TREFERENTE_CURRICULAR.FK_TLV_NOMBRE_ASIGNATURA  [CU-86e385egu]
+-- V214.3 -- Referente curricular: CRUD en capas y rotulos  [CU-86e385egu]
 -- ===========================================================================
--- QUE HACE: el referente curricular gana el rotulo con el que se llamara su
--- asignatura en planeador / asistencias / periodos. No es texto libre: es una
--- FK a TLISTA_VALOR, categoria PERSONALIZAR_ASIGNATURA, con CRUD propio
--- (crear / listar / eliminar) para que se puedan anadir mas valores.
--- Si el caller no manda el valor, se resuelve por nivel: 'Dimension' si el
--- referente es SOLO de preescolar, 'Asignatura' en el resto.
+-- QUE HACE: CRUD vivo del referente curricular en tres capas: validaciones
+-- fn_refcurr_validar_* (Reglas 2, 6, 7, rotulos, niveles con grados en uso),
+-- nucleos _interno sin permisos y wrappers (gate + etiqueta de auditoria). El
+-- rotulo de area es una FK a TLISTA_VALOR PERSONALIZAR_ASIGNATURA con CRUD
+-- propio; el de ejecucion (ROTULO_EJECUCION) y el de secuencia (INSTRUMENTO)
+-- son texto. Suma GET .../grados y GET .../impacto.
 -- POR QUE AQUI: out-of-order pegado a la familia del referente curricular
--- (V212 schema / V213 CRUD / V214 endpoints; V214.1 y V214.2 ocupadas).
--- DEPENDE DE: V22 (TLISTA_VALOR), V212, V213, V214, V29 (gates).
+-- (V212 schema / V213 CRUD / V214 endpoints); es la duena de estas funciones.
+-- DEPENDE DE: V22 (TLISTA_VALOR), V212, V213, V214, V29 (gates), V66 (auditoria).
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -146,10 +146,383 @@ COMMENT ON COLUMN academico_test.TREFERENTE_CURRICULAR.FK_TLV_NOMBRE_ASIGNATURA
     IS 'V214.3 -- Llave foranea a TLISTA_VALOR, CATEGORIA=PERSONALIZAR_ASIGNATURA: como se llama la asignatura de este referente en las pantallas que lo consumen (planeador, asistencias, periodos academicos). NOT NULL, pero el caller no esta obligado a enviarlo: si falta se resuelve con fn_refcurr_nombre_asignatura_default (''Asignatura'', o ''Dimension'' si el referente es solo de preescolar). El catalogo se amplia con fn_personalizar_asignatura_crear.';
 
 -- ---------------------------------------------------------------------------
--- 2) fn_refcurr_crear -- nuevo parametro p_fk_tlv_nombre_asignatura.
---    Cambia la aridad: hay que borrar las firmas viejas o quedan sobrecargas
---    vivas y una llamada con argumentos nombrados sale ambigua (42725).
+-- 2) Validaciones del referente (una regla por funcion; lanzan o no hacen nada)
 -- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_validar_lista_valor(
+    p_pk_lista_valor  BIGINT,
+    p_categoria       VARCHAR,
+    p_campo           VARCHAR
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF p_pk_lista_valor IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM academico_test.TLISTA_VALOR
+         WHERE PK_LISTA_VALOR = p_pk_lista_valor AND CATEGORIA = p_categoria AND ACTIVE = TRUE
+    ) THEN
+        RAISE EXCEPTION '% (%) no existe, no esta activo o no es de la categoria %', p_campo, p_pk_lista_valor, p_categoria
+            USING ERRCODE = '23503';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_validar_lista_valor(BIGINT, VARCHAR, VARCHAR)
+    IS 'INTERNO: 23503 si el pk no es un valor ACTIVO de esa categoria de TLISTA_VALOR. NULL pasa.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_validar_niveles(p_fk_tnivel_ensenanza_ids BIGINT[])
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF COALESCE(array_length(p_fk_tnivel_ensenanza_ids, 1), 0) = 0 THEN
+        RAISE EXCEPTION 'Debe indicar al menos un nivel educativo'
+            USING ERRCODE = '22023', HINT = 'la lista de niveles no puede ser NULL ni vacia';
+    END IF;
+    IF EXISTS (SELECT 1 FROM unnest(p_fk_tnivel_ensenanza_ids) n WHERE n IS NULL) THEN
+        RAISE EXCEPTION 'La lista de niveles educativos no puede contener valores nulos'
+            USING ERRCODE = '22023';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM unnest(p_fk_tnivel_ensenanza_ids) ne_id
+         WHERE NOT EXISTS (SELECT 1 FROM academico_test.TNIVEL_ENSENANZA ne
+                            WHERE ne.PK_NIVEL_ENSENANZA = ne_id AND ne.ACTIVE = TRUE)
+    ) THEN
+        RAISE EXCEPTION 'Uno o mas niveles educativos (TNIVEL_ENSENANZA) no existen o no estan activos'
+            USING ERRCODE = '23503';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_validar_niveles(BIGINT[])
+    IS 'INTERNO: el set de niveles educativos no es vacio, no trae NULL (22023) y todos existen activos (23503).';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_validar_areas(p_fk_tarea_asignatura_ids BIGINT[])
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM unnest(p_fk_tarea_asignatura_ids) ta_id
+         WHERE NOT EXISTS (SELECT 1 FROM academico_test.TAREA_ASIGNATURA ta
+                            WHERE ta.PK_TAREA_ASIGNATURA = ta_id AND ta.ACTIVE = TRUE)
+    ) THEN
+        RAISE EXCEPTION 'Una o mas areas/dimensiones (TAREA_ASIGNATURA) no existen o no estan activas'
+            USING ERRCODE = '23503';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_validar_areas(BIGINT[])
+    IS 'INTERNO: 23503 si alguna area del catalogo no existe activa. NULL o vacio pasa (aplica a todas).';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_validar_vigencia(p_desde INTEGER, p_hasta INTEGER)
+RETURNS VOID
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+BEGIN
+    IF p_desde IS NULL THEN
+        RAISE EXCEPTION 'Anio de vigencia (desde) es obligatorio' USING ERRCODE = '22023';
+    END IF;
+    IF p_hasta IS NOT NULL AND p_hasta < p_desde THEN
+        RAISE EXCEPTION 'El anio de vigencia hasta (%) no puede ser anterior al anio desde (%)', p_hasta, p_desde
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_validar_vigencia(INTEGER, INTEGER)
+    IS 'INTERNO: 22023 si falta el anio desde o el hasta es anterior al desde.';
+
+-- Regla 2. Por VALOR y no por pk: los pk de TLISTA_VALOR cambian por entorno.
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_validar_enfoque_tipo(
+    p_fk_tlv_enfoque_pedagogico  BIGINT,
+    p_fk_tlv_tipo_evaluacion     BIGINT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR
+                WHERE PK_LISTA_VALOR = p_fk_tlv_enfoque_pedagogico AND VALOR = 'FORMATIVO')
+       AND NOT EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR
+                        WHERE PK_LISTA_VALOR = p_fk_tlv_tipo_evaluacion AND VALOR = 'CUALITATIVA') THEN
+        RAISE EXCEPTION 'Los referentes de enfoque formativo requieren evaluacion cualitativa'
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_validar_enfoque_tipo(BIGINT, BIGINT)
+    IS 'INTERNO (Regla 2): 22023 si el enfoque es FORMATIVO y el tipo de evaluacion no es CUALITATIVA. Evaluativo admite cualquier tipo (Regla 3).';
+
+-- Regla 6.
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_validar_nombre_unico(
+    p_pk_excluir               BIGINT,
+    p_nombre                   VARCHAR,
+    p_fk_tnivel_ensenanza_ids  BIGINT[]
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+          FROM academico_test.TREFERENTE_CURRICULAR rc
+          JOIN academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
+            ON rcn.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR AND rcn.ACTIVE = TRUE
+         WHERE UPPER(TRIM(rc.NOMBRE)) = UPPER(TRIM(p_nombre))
+           AND rc.ACTIVE = TRUE
+           AND rc.PK_REFERENTE_CURRICULAR IS DISTINCT FROM p_pk_excluir
+           AND rcn.FK_TNIVEL_ENSENANZA = ANY(p_fk_tnivel_ensenanza_ids)
+    ) THEN
+        RAISE EXCEPTION 'Ya existe un referente curricular con el nombre "%" para al menos uno de esos niveles educativos', p_nombre
+            USING ERRCODE = '23505';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_validar_nombre_unico(BIGINT, VARCHAR, BIGINT[])
+    IS 'INTERNO (Regla 6): 23505 si otro referente no dado de baja lleva el mismo nombre (sin distinguir mayusculas) y comparte al menos un nivel educativo. p_pk_excluir = el propio referente al editar.';
+
+-- Regla 7: el conflicto se nombra (nivel + referente) para que la UI ofrezca
+-- guardar como inactivo o abrir el otro referente.
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_validar_nivel_unico_activo(
+    p_pk_excluir               BIGINT,
+    p_fk_tnivel_ensenanza_ids  BIGINT[]
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_nivel     VARCHAR;
+    v_otro      VARCHAR;
+    v_otro_pk   BIGINT;
+BEGIN
+    SELECT ne.NOMBRE, rc.NOMBRE, rc.PK_REFERENTE_CURRICULAR
+      INTO v_nivel, v_otro, v_otro_pk
+      FROM academico_test.TREFERENTE_CURRICULAR rc
+      JOIN academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
+        ON rcn.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR AND rcn.ACTIVE = TRUE
+      JOIN academico_test.TNIVEL_ENSENANZA ne ON ne.PK_NIVEL_ENSENANZA = rcn.FK_TNIVEL_ENSENANZA
+     WHERE rc.ACTIVE = TRUE
+       AND rc.ESTADO = 'A'
+       AND rc.PK_REFERENTE_CURRICULAR IS DISTINCT FROM p_pk_excluir
+       AND rcn.FK_TNIVEL_ENSENANZA = ANY(p_fk_tnivel_ensenanza_ids)
+     ORDER BY ne.NOMBRE, rc.PK_REFERENTE_CURRICULAR
+     LIMIT 1;
+
+    IF FOUND THEN
+        RAISE EXCEPTION 'El nivel educativo "%" ya lo gobierna el referente activo "%"', v_nivel, v_otro
+            USING ERRCODE = '23505',
+                  HINT = format('Guarde este referente como inactivo o inactive primero el referente %s', v_otro_pk);
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_validar_nivel_unico_activo(BIGINT, BIGINT[])
+    IS 'INTERNO (Regla 7): 23505 si alguno de los niveles ya lo cubre otro referente con ESTADO = A y no dado de baja, sin importar el nombre. El mensaje nombra el primer nivel en conflicto y el referente; el HINT lleva su pk. Solo se invoca cuando el referente va a quedar activo.';
+
+-- Quitar un nivel no puede dejar huerfano el grado de un enunciado vivo.
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_validar_niveles_con_grados(
+    p_pk_referente_curricular  BIGINT,
+    p_fk_tnivel_ensenanza_ids  BIGINT[]
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_grado  VARCHAR;
+BEGIN
+    SELECT lv.NOMBRE INTO v_grado
+      FROM academico_test.TREFERENTE_ENUNCIADO e
+      JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = e.FK_TLV_GRADO
+     WHERE e.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
+       AND e.ACTIVE = TRUE
+       AND NOT EXISTS (
+           SELECT 1 FROM academico_test.TNIVEL_ENSENANZA_GRADO ng
+            WHERE ng.FK_TLV_GRADO = e.FK_TLV_GRADO AND ng.ACTIVE = TRUE
+              AND ng.FK_TNIVEL_ENSENANZA = ANY(p_fk_tnivel_ensenanza_ids)
+       )
+     LIMIT 1;
+
+    IF FOUND THEN
+        RAISE EXCEPTION 'No se puede quitar el nivel educativo del grado "%": todavia tiene enunciados asociados', v_grado
+            USING ERRCODE = '23503',
+                  HINT = 'Elimine o inactive esos enunciados, o conserve el nivel';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_validar_niveles_con_grados(BIGINT, BIGINT[])
+    IS 'INTERNO: 23503 si el nuevo set de niveles deja fuera el grado de algun enunciado activo del referente (simetrico a quitar un area con enunciados).';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_validar_areas_sin_enunciados(
+    p_pk_referente_curricular  BIGINT,
+    p_fk_tarea_asignatura_ids  BIGINT[]
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+          FROM academico_test.TREFERENTE_CURRICULAR_AREA rca
+          JOIN academico_test.TREFERENTE_ENUNCIADO re
+            ON re.FK_REFERENTE_CURRICULAR_AREA = rca.PK_REFERENTE_CURRICULAR_AREA AND re.ACTIVE = TRUE
+         WHERE rca.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
+           AND rca.ACTIVE = TRUE
+           AND NOT (rca.FK_TAREA_ASIGNATURA = ANY(p_fk_tarea_asignatura_ids))
+    ) THEN
+        RAISE EXCEPTION 'No se puede quitar un area/dimension que todavia tiene enunciados asociados; reasigne o elimine esos enunciados primero'
+            USING ERRCODE = '23503';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_validar_areas_sin_enunciados(BIGINT, BIGINT[])
+    IS 'INTERNO: 23503 si el nuevo set de areas quita una que tiene enunciados activos amarrados.';
+
+-- Validaciones de formulario comunes a crear y actualizar. En actualizar los
+-- NULL significan "no tocar", por eso aqui nada es obligatorio.
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_validar_campos(
+    p_nombre                      VARCHAR,
+    p_descripcion                 VARCHAR,
+    p_nivel_1_etiqueta            VARCHAR,
+    p_nivel_2_etiqueta            VARCHAR,
+    p_instrumento                 VARCHAR,
+    p_instrumento_info_adicional  VARCHAR,
+    p_normatividad                VARCHAR,
+    p_rotulo_ejecucion            VARCHAR,
+    p_estado                      VARCHAR,
+    p_fk_tlv_enfoque_pedagogico   BIGINT,
+    p_fk_tlv_tipo_evaluacion      BIGINT,
+    p_fk_tlv_nombre_asignatura    BIGINT,
+    p_fk_tarea_asignatura_ids     BIGINT[]
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    PERFORM academico_test.fn_refcurr_validar_texto(p_nombre, 'Nombre del referente', 150);
+    PERFORM academico_test.fn_refcurr_validar_texto(p_descripcion, 'Descripcion/finalidad', 400);
+    PERFORM academico_test.fn_refcurr_validar_texto(p_nivel_1_etiqueta, 'Rotulo de nivel 1', 50);
+    PERFORM academico_test.fn_refcurr_validar_texto(p_nivel_2_etiqueta, 'Rotulo de nivel 2', 50);
+    PERFORM academico_test.fn_refcurr_validar_texto(p_instrumento, 'Rotulo de secuencia de actividades', 50);
+    PERFORM academico_test.fn_refcurr_validar_texto(p_instrumento_info_adicional, 'Informacion adicional de la secuencia', 400);
+    PERFORM academico_test.fn_refcurr_validar_texto(p_normatividad, 'Normatividad', 400);
+    PERFORM academico_test.fn_refcurr_validar_texto(p_rotulo_ejecucion, 'Rotulo de ejecucion', 50);
+    PERFORM academico_test.fn_refcurr_validar_estado(p_estado);
+    PERFORM academico_test.fn_refcurr_validar_lista_valor(p_fk_tlv_enfoque_pedagogico, 'ENFOQUE_PEDAGOGICO', 'Enfoque pedagogico');
+    PERFORM academico_test.fn_refcurr_validar_lista_valor(p_fk_tlv_tipo_evaluacion, 'TIPO_EVALUACION', 'Tipo de evaluacion');
+    PERFORM academico_test.fn_refcurr_validar_lista_valor(p_fk_tlv_nombre_asignatura, 'PERSONALIZAR_ASIGNATURA', 'Rotulo de area');
+    PERFORM academico_test.fn_refcurr_validar_areas(p_fk_tarea_asignatura_ids);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_validar_campos(VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT[])
+    IS 'INTERNO: formato de cada campo del Formulario de Configuracion (longitudes de la seccion 2.1, estado, catalogos de TLISTA_VALOR, areas). NULL = no tocar; la obligatoriedad la comprueba fn_refcurr_crear_interno.';
+
+-- ---------------------------------------------------------------------------
+-- 3) fn_refcurr_crear
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_crear_interno(
+    p_actor                         BIGINT,
+    p_nombre                        VARCHAR,
+    p_descripcion                   VARCHAR,
+    p_fk_tnivel_ensenanza_ids       BIGINT[],
+    p_fk_tlv_enfoque_pedagogico     BIGINT,
+    p_fk_tlv_tipo_evaluacion        BIGINT,
+    p_instrumento                   VARCHAR,
+    p_normatividad                  VARCHAR,
+    p_anio_vigencia_desde           INTEGER,
+    p_nivel_1_etiqueta              VARCHAR  DEFAULT 'Enunciado',
+    p_nivel_2_etiqueta              VARCHAR  DEFAULT 'Evidencia',
+    p_instrumento_info_adicional    VARCHAR  DEFAULT NULL,
+    p_anio_vigencia_hasta           INTEGER  DEFAULT NULL,
+    p_estado                        VARCHAR  DEFAULT 'A',
+    p_fk_tarea_asignatura_ids       BIGINT[] DEFAULT NULL,
+    p_fk_tlv_nombre_asignatura      BIGINT   DEFAULT NULL,
+    p_rotulo_ejecucion              VARCHAR  DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_id_creado  BIGINT;
+    v_estado     VARCHAR := UPPER(TRIM(COALESCE(p_estado, 'A')));
+BEGIN
+    PERFORM academico_test.fn_refcurr_validar_texto(p_nombre, 'Nombre del referente', 150, TRUE);
+    PERFORM academico_test.fn_refcurr_validar_texto(p_descripcion, 'Descripcion/finalidad', 400, TRUE);
+    PERFORM academico_test.fn_refcurr_validar_texto(p_instrumento, 'Rotulo de secuencia de actividades', 50, TRUE);
+    PERFORM academico_test.fn_refcurr_validar_texto(p_normatividad, 'Normatividad', 400, TRUE);
+    IF p_fk_tlv_enfoque_pedagogico IS NULL THEN
+        RAISE EXCEPTION 'Enfoque pedagogico es obligatorio' USING ERRCODE = '22023';
+    END IF;
+    IF p_fk_tlv_tipo_evaluacion IS NULL THEN
+        RAISE EXCEPTION 'Tipo de evaluacion es obligatorio' USING ERRCODE = '22023';
+    END IF;
+    PERFORM academico_test.fn_refcurr_validar_niveles(p_fk_tnivel_ensenanza_ids);
+    PERFORM academico_test.fn_refcurr_validar_campos(
+        p_nombre, p_descripcion, p_nivel_1_etiqueta, p_nivel_2_etiqueta, p_instrumento,
+        p_instrumento_info_adicional, p_normatividad, p_rotulo_ejecucion, v_estado,
+        p_fk_tlv_enfoque_pedagogico, p_fk_tlv_tipo_evaluacion, p_fk_tlv_nombre_asignatura,
+        p_fk_tarea_asignatura_ids);
+    PERFORM academico_test.fn_refcurr_validar_vigencia(p_anio_vigencia_desde, p_anio_vigencia_hasta);
+    PERFORM academico_test.fn_refcurr_validar_enfoque_tipo(p_fk_tlv_enfoque_pedagogico, p_fk_tlv_tipo_evaluacion);
+    PERFORM academico_test.fn_refcurr_validar_nombre_unico(NULL, p_nombre, p_fk_tnivel_ensenanza_ids);
+    IF v_estado = 'A' THEN
+        PERFORM academico_test.fn_refcurr_validar_nivel_unico_activo(NULL, p_fk_tnivel_ensenanza_ids);
+    END IF;
+
+    INSERT INTO academico_test.TREFERENTE_CURRICULAR (
+        NOMBRE, FK_TLV_NOMBRE_ASIGNATURA, DESCRIPCION, FK_TLV_ENFOQUE_PEDAGOGICO,
+        FK_TLV_TIPO_EVALUACION, NIVEL_1_ETIQUETA, NIVEL_2_ETIQUETA, ROTULO_EJECUCION,
+        INSTRUMENTO, INSTRUMENTO_INFO_ADICIONAL, NORMATIVIDAD, ANIO_VIGENCIA_DESDE,
+        ANIO_VIGENCIA_HASTA, ESTADO, CREATED_BY, CREATED_AT, ACTIVE
+    ) VALUES (
+        TRIM(p_nombre),
+        COALESCE(p_fk_tlv_nombre_asignatura,
+                 academico_test.fn_refcurr_nombre_asignatura_default(p_fk_tnivel_ensenanza_ids)),
+        p_descripcion, p_fk_tlv_enfoque_pedagogico, p_fk_tlv_tipo_evaluacion,
+        COALESCE(NULLIF(TRIM(p_nivel_1_etiqueta), ''), 'Enunciado'),
+        COALESCE(NULLIF(TRIM(p_nivel_2_etiqueta), ''), 'Evidencia'),
+        COALESCE(NULLIF(TRIM(p_rotulo_ejecucion), ''), 'Actividad'),
+        TRIM(p_instrumento), p_instrumento_info_adicional, p_normatividad,
+        p_anio_vigencia_desde, p_anio_vigencia_hasta, v_estado,
+        p_actor::VARCHAR, CURRENT_TIMESTAMP, TRUE
+    )
+    RETURNING PK_REFERENTE_CURRICULAR INTO v_id_creado;
+
+    INSERT INTO academico_test.TREFERENTE_CURRICULAR_NIVEL (
+        FK_REFERENTE_CURRICULAR, FK_TNIVEL_ENSENANZA, CREATED_BY, CREATED_AT, ACTIVE
+    )
+    SELECT DISTINCT v_id_creado, ne_id, p_actor::VARCHAR, CURRENT_TIMESTAMP, TRUE
+      FROM unnest(p_fk_tnivel_ensenanza_ids) ne_id;
+
+    INSERT INTO academico_test.TREFERENTE_CURRICULAR_AREA (
+        FK_REFERENTE_CURRICULAR, FK_TAREA_ASIGNATURA, CREATED_BY, CREATED_AT, ACTIVE
+    )
+    SELECT DISTINCT v_id_creado, ta_id, p_actor::VARCHAR, CURRENT_TIMESTAMP, TRUE
+      FROM unnest(COALESCE(p_fk_tarea_asignatura_ids, ARRAY[]::BIGINT[])) ta_id;
+
+    RETURN v_id_creado;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_crear_interno(BIGINT, VARCHAR, VARCHAR, BIGINT[], BIGINT, BIGINT, VARCHAR, VARCHAR, INTEGER, VARCHAR, VARCHAR, VARCHAR, INTEGER, VARCHAR, BIGINT[], BIGINT, VARCHAR)
+    IS 'INTERNO: crea un referente curricular con sus niveles y areas, sin permisos. Valida obligatorios, longitudes, catalogos, vigencia, Regla 2 (formativo => cualitativa), Regla 6 (nombre por nivel) y, si nace activo, Regla 7 (un solo referente activo por nivel). Rotulos por defecto: Enunciado / Evidencia / Actividad; rotulo de area por nivel (fn_refcurr_nombre_asignatura_default). Lo usa fn_refcurr_crear.';
+
 DROP FUNCTION IF EXISTS academico_test.fn_refcurr_crear(
     BIGINT, VARCHAR, VARCHAR, BIGINT[], BIGINT, BIGINT, VARCHAR, VARCHAR,
     INTEGER, VARCHAR, VARCHAR, VARCHAR, INTEGER, VARCHAR, BIGINT[]);
@@ -173,181 +546,200 @@ CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_crear(
     p_nivel_1_etiqueta              VARCHAR(60)  DEFAULT 'Enunciado',
     p_nivel_2_etiqueta              VARCHAR(60)  DEFAULT 'Evidencia',
     p_instrumento_info_adicional    VARCHAR(400) DEFAULT NULL,
-    p_anio_vigencia_hasta           INTEGER     DEFAULT NULL,
+    p_anio_vigencia_hasta           INTEGER      DEFAULT NULL,
     p_estado                        VARCHAR(1)   DEFAULT 'A',
     p_fk_tarea_asignatura_ids       BIGINT[]     DEFAULT NULL,
-    -- Opcional: si no viene, cae al defecto por nivel. Va al final para no
-    -- reordenar los parametros que ya existian.
-    p_fk_tlv_nombre_asignatura      BIGINT       DEFAULT NULL
+    p_fk_tlv_nombre_asignatura      BIGINT       DEFAULT NULL,
+    -- Nuevos al final para no reordenar los que ya existian.
+    p_rotulo_ejecucion              VARCHAR(60)  DEFAULT NULL
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'CREAR'
+    );
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        'Creacion del referente curricular "' || COALESCE(TRIM(p_nombre), '') || '"',
+        NULL, NULL, ARRAY['REFERENTES_CURRICULARES', 'CREACION']);
+
+    RETURN academico_test.fn_refcurr_crear_interno(
+        p_pk_usuario_solicitante, p_nombre, p_descripcion, p_fk_tnivel_ensenanza_ids,
+        p_fk_tlv_enfoque_pedagogico, p_fk_tlv_tipo_evaluacion, p_instrumento,
+        p_normatividad, p_anio_vigencia_desde, p_nivel_1_etiqueta, p_nivel_2_etiqueta,
+        p_instrumento_info_adicional, p_anio_vigencia_hasta, p_estado,
+        p_fk_tarea_asignatura_ids, p_fk_tlv_nombre_asignatura, p_rotulo_ejecucion);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_crear(BIGINT, VARCHAR, VARCHAR, BIGINT[], BIGINT, BIGINT, VARCHAR, VARCHAR, INTEGER, VARCHAR, VARCHAR, VARCHAR, INTEGER, VARCHAR, BIGINT[], BIGINT, VARCHAR)
+    IS 'POST /referentes-curriculares: gate CREAR sobre REFERENTES_CURRICULARES + etiqueta de auditoria; logica en fn_refcurr_crear_interno. p_instrumento es el Rotulo de Secuencia de Actividades, p_rotulo_ejecucion el Rotulo de Ejecucion (defecto Actividad) y p_fk_tlv_nombre_asignatura el Rotulo de Area (PERSONALIZAR_ASIGNATURA). 23505 por nombre repetido en un nivel o por nivel ya gobernado por otro referente activo.';
+
+-- ---------------------------------------------------------------------------
+-- 4) fn_refcurr_actualizar -- PATCH: cada NULL conserva el valor actual.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_actualizar_interno(
+    p_actor                         BIGINT,
+    p_pk_referente_curricular       BIGINT,
+    p_nombre                        VARCHAR  DEFAULT NULL,
+    p_descripcion                   VARCHAR  DEFAULT NULL,
+    p_fk_tnivel_ensenanza_ids       BIGINT[] DEFAULT NULL,
+    p_fk_tlv_enfoque_pedagogico     BIGINT   DEFAULT NULL,
+    p_fk_tlv_tipo_evaluacion        BIGINT   DEFAULT NULL,
+    p_nivel_1_etiqueta              VARCHAR  DEFAULT NULL,
+    p_nivel_2_etiqueta              VARCHAR  DEFAULT NULL,
+    p_instrumento                   VARCHAR  DEFAULT NULL,
+    p_instrumento_info_adicional    VARCHAR  DEFAULT NULL,
+    p_normatividad                  VARCHAR  DEFAULT NULL,
+    p_anio_vigencia_desde           INTEGER  DEFAULT NULL,
+    p_anio_vigencia_hasta           INTEGER  DEFAULT NULL,
+    p_estado                        VARCHAR  DEFAULT NULL,
+    p_fk_tarea_asignatura_ids       BIGINT[] DEFAULT NULL,
+    p_fk_tlv_nombre_asignatura      BIGINT   DEFAULT NULL,
+    p_rotulo_ejecucion              VARCHAR  DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_id_creado  BIGINT;
+    v_actual   academico_test.TREFERENTE_CURRICULAR%ROWTYPE;
+    v_niveles  BIGINT[];
+    v_enfoque  BIGINT;
+    v_tipo     BIGINT;
+    v_estado   VARCHAR;
 BEGIN
-    -- 0. Gate: capability CREAR sobre REFERENTES_CURRICULARES (sin scope,
-    --    catalogo global).
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'CREAR'
-    );
+    SELECT * INTO v_actual
+      FROM academico_test.TREFERENTE_CURRICULAR
+     WHERE PK_REFERENTE_CURRICULAR = p_pk_referente_curricular;
 
-    -- 1. Obligatorios reales.
-    IF NULLIF(TRIM(p_nombre), '') IS NULL THEN
-        RAISE EXCEPTION 'Nombre del referente es obligatorio'
-            USING ERRCODE = '22023', HINT = 'p_nombre no puede ser NULL ni vacio';
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se encontro el referente curricular solicitado'
+            USING ERRCODE = 'P0002';
     END IF;
-    IF NULLIF(TRIM(p_descripcion), '') IS NULL THEN
-        RAISE EXCEPTION 'Descripcion/finalidad es obligatoria'
-            USING ERRCODE = '22023', HINT = 'p_descripcion no puede ser NULL ni vacio';
-    END IF;
-    IF p_fk_tlv_nombre_asignatura IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM academico_test.TLISTA_VALOR
-         WHERE PK_LISTA_VALOR = p_fk_tlv_nombre_asignatura
-           AND CATEGORIA = 'PERSONALIZAR_ASIGNATURA' AND ACTIVE = TRUE
-    ) THEN
-        RAISE EXCEPTION 'El nombre de asignatura (%) no existe, no esta activo o no es de la categoria PERSONALIZAR_ASIGNATURA', p_fk_tlv_nombre_asignatura
-            USING ERRCODE = '23503';
-    END IF;
-    -- Nivel educativo: N:N, pero al menos UNO (el formulario lo exige y la
-    -- tabla puente no puede quedar vacia -- ver nota en V212).
-    IF p_fk_tnivel_ensenanza_ids IS NULL
-       OR COALESCE(array_length(p_fk_tnivel_ensenanza_ids, 1), 0) = 0 THEN
-        RAISE EXCEPTION 'Debe indicar al menos un nivel educativo'
-            USING ERRCODE = '22023', HINT = 'p_fk_tnivel_ensenanza_ids no puede ser NULL ni un array vacio';
-    END IF;
-    IF EXISTS (SELECT 1 FROM unnest(p_fk_tnivel_ensenanza_ids) n WHERE n IS NULL) THEN
-        RAISE EXCEPTION 'La lista de niveles educativos no puede contener valores nulos'
-            USING ERRCODE = '22023';
-    END IF;
-    IF p_fk_tlv_enfoque_pedagogico IS NULL THEN
-        RAISE EXCEPTION 'Enfoque pedagogico es obligatorio'
-            USING ERRCODE = '22023';
-    END IF;
-    IF p_fk_tlv_tipo_evaluacion IS NULL THEN
-        RAISE EXCEPTION 'Tipo de evaluacion es obligatorio'
-            USING ERRCODE = '22023';
-    END IF;
-    IF NULLIF(TRIM(p_instrumento), '') IS NULL THEN
-        RAISE EXCEPTION 'Instrumento es obligatorio'
-            USING ERRCODE = '22023';
-    END IF;
-    IF NULLIF(TRIM(p_normatividad), '') IS NULL THEN
-        RAISE EXCEPTION 'Normatividad es obligatoria'
-            USING ERRCODE = '22023';
-    END IF;
-    IF p_anio_vigencia_desde IS NULL THEN
-        RAISE EXCEPTION 'Anio de vigencia (desde) es obligatorio'
-            USING ERRCODE = '22023';
-    END IF;
-    IF p_anio_vigencia_hasta IS NOT NULL AND p_anio_vigencia_hasta < p_anio_vigencia_desde THEN
-        RAISE EXCEPTION 'El anio de vigencia hasta (%) no puede ser anterior al anio desde (%)',
-            p_anio_vigencia_hasta, p_anio_vigencia_desde
-            USING ERRCODE = '22023';
-    END IF;
-    IF UPPER(TRIM(COALESCE(p_estado, ''))) NOT IN ('A', 'I') THEN
-        RAISE EXCEPTION 'Estado invalido: % (use ''A'' o ''I'')', p_estado
+    IF v_actual.ACTIVE = FALSE THEN
+        RAISE EXCEPTION 'El referente curricular "%" esta inactivo (borrado logico); no se puede editar', v_actual.NOMBRE
             USING ERRCODE = '22023';
     END IF;
 
-    -- 2. FKs existen y activas.
-    IF EXISTS (
-        SELECT 1 FROM unnest(p_fk_tnivel_ensenanza_ids) ne_id
+    PERFORM academico_test.fn_refcurr_validar_campos(
+        p_nombre, p_descripcion, p_nivel_1_etiqueta, p_nivel_2_etiqueta, p_instrumento,
+        p_instrumento_info_adicional, p_normatividad, p_rotulo_ejecucion, p_estado,
+        p_fk_tlv_enfoque_pedagogico, p_fk_tlv_tipo_evaluacion, p_fk_tlv_nombre_asignatura,
+        p_fk_tarea_asignatura_ids);
+
+    -- Niveles efectivos: un array vacio no es "vaciar" (el nivel es obligatorio).
+    IF p_fk_tnivel_ensenanza_ids IS NOT NULL THEN
+        PERFORM academico_test.fn_refcurr_validar_niveles(p_fk_tnivel_ensenanza_ids);
+        PERFORM academico_test.fn_refcurr_validar_niveles_con_grados(p_pk_referente_curricular, p_fk_tnivel_ensenanza_ids);
+        v_niveles := p_fk_tnivel_ensenanza_ids;
+    ELSE
+        SELECT array_agg(rcn.FK_TNIVEL_ENSENANZA) INTO v_niveles
+          FROM academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
+         WHERE rcn.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular AND rcn.ACTIVE = TRUE;
+    END IF;
+
+    -- Regla 2: si el referente queda formativo y el caller no mando tipo, el
+    -- tipo se fija en Cualitativa (como hace el formulario); si lo mando
+    -- distinto, 22023.
+    v_enfoque := COALESCE(p_fk_tlv_enfoque_pedagogico, v_actual.FK_TLV_ENFOQUE_PEDAGOGICO);
+    v_tipo    := COALESCE(p_fk_tlv_tipo_evaluacion, v_actual.FK_TLV_TIPO_EVALUACION);
+    IF p_fk_tlv_tipo_evaluacion IS NULL
+       AND EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR
+                    WHERE PK_LISTA_VALOR = v_enfoque AND VALOR = 'FORMATIVO') THEN
+        v_tipo := COALESCE((SELECT PK_LISTA_VALOR FROM academico_test.TLISTA_VALOR
+                             WHERE CATEGORIA = 'TIPO_EVALUACION' AND VALOR = 'CUALITATIVA' AND ACTIVE = TRUE
+                             LIMIT 1), v_tipo);
+    END IF;
+    PERFORM academico_test.fn_refcurr_validar_enfoque_tipo(v_enfoque, v_tipo);
+
+    PERFORM academico_test.fn_refcurr_validar_vigencia(
+        COALESCE(p_anio_vigencia_desde, v_actual.ANIO_VIGENCIA_DESDE),
+        COALESCE(p_anio_vigencia_hasta, v_actual.ANIO_VIGENCIA_HASTA));
+
+    IF v_niveles IS NOT NULL THEN
+        PERFORM academico_test.fn_refcurr_validar_nombre_unico(
+            p_pk_referente_curricular, COALESCE(p_nombre, v_actual.NOMBRE), v_niveles);
+    END IF;
+
+    -- Regla 7 solo cuando lo que llega puede crear el solape (estado o
+    -- niveles): editar el nombre de un referente que ya choca por datos
+    -- anteriores a la regla no debe quedar bloqueado.
+    v_estado := COALESCE(UPPER(TRIM(p_estado)), v_actual.ESTADO::VARCHAR);
+    IF v_estado = 'A' AND (p_estado IS NOT NULL OR p_fk_tnivel_ensenanza_ids IS NOT NULL) THEN
+        PERFORM academico_test.fn_refcurr_validar_nivel_unico_activo(p_pk_referente_curricular, v_niveles);
+    END IF;
+
+    IF p_fk_tarea_asignatura_ids IS NOT NULL THEN
+        PERFORM academico_test.fn_refcurr_validar_areas_sin_enunciados(p_pk_referente_curricular, p_fk_tarea_asignatura_ids);
+    END IF;
+
+    UPDATE academico_test.TREFERENTE_CURRICULAR
+       SET NOMBRE                       = COALESCE(TRIM(p_nombre), NOMBRE),
+           FK_TLV_NOMBRE_ASIGNATURA     = COALESCE(p_fk_tlv_nombre_asignatura, FK_TLV_NOMBRE_ASIGNATURA),
+           DESCRIPCION                  = COALESCE(p_descripcion, DESCRIPCION),
+           FK_TLV_ENFOQUE_PEDAGOGICO    = v_enfoque,
+           FK_TLV_TIPO_EVALUACION       = v_tipo,
+           NIVEL_1_ETIQUETA             = COALESCE(NULLIF(TRIM(p_nivel_1_etiqueta), ''), NIVEL_1_ETIQUETA),
+           NIVEL_2_ETIQUETA             = COALESCE(NULLIF(TRIM(p_nivel_2_etiqueta), ''), NIVEL_2_ETIQUETA),
+           ROTULO_EJECUCION             = COALESCE(NULLIF(TRIM(p_rotulo_ejecucion), ''), ROTULO_EJECUCION),
+           INSTRUMENTO                  = COALESCE(TRIM(p_instrumento), INSTRUMENTO),
+           INSTRUMENTO_INFO_ADICIONAL   = COALESCE(p_instrumento_info_adicional, INSTRUMENTO_INFO_ADICIONAL),
+           NORMATIVIDAD                 = COALESCE(p_normatividad, NORMATIVIDAD),
+           ANIO_VIGENCIA_DESDE          = COALESCE(p_anio_vigencia_desde, ANIO_VIGENCIA_DESDE),
+           ANIO_VIGENCIA_HASTA          = COALESCE(p_anio_vigencia_hasta, ANIO_VIGENCIA_HASTA),
+           ESTADO                       = v_estado,
+           MODIFIED_BY                  = p_actor::VARCHAR,
+           MODIFIED_AT                  = CURRENT_TIMESTAMP
+     WHERE PK_REFERENTE_CURRICULAR = p_pk_referente_curricular;
+
+    IF p_fk_tnivel_ensenanza_ids IS NOT NULL THEN
+        UPDATE academico_test.TREFERENTE_CURRICULAR_NIVEL
+           SET ACTIVE = FALSE, MODIFIED_BY = p_actor::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
+           AND ACTIVE = TRUE
+           AND NOT (FK_TNIVEL_ENSENANZA = ANY(p_fk_tnivel_ensenanza_ids));
+
+        INSERT INTO academico_test.TREFERENTE_CURRICULAR_NIVEL (
+            FK_REFERENTE_CURRICULAR, FK_TNIVEL_ENSENANZA, CREATED_BY, CREATED_AT, ACTIVE
+        )
+        SELECT DISTINCT p_pk_referente_curricular, ne_id, p_actor::VARCHAR, CURRENT_TIMESTAMP, TRUE
+          FROM unnest(p_fk_tnivel_ensenanza_ids) ne_id
          WHERE NOT EXISTS (
-             SELECT 1 FROM academico_test.TNIVEL_ENSENANZA ne
-              WHERE ne.PK_NIVEL_ENSENANZA = ne_id AND ne.ACTIVE = TRUE
-         )
-    ) THEN
-        RAISE EXCEPTION 'Uno o mas niveles educativos (TNIVEL_ENSENANZA) no existen o no estan activos'
-            USING ERRCODE = '23503';
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = p_fk_tlv_enfoque_pedagogico AND CATEGORIA = 'ENFOQUE_PEDAGOGICO' AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'FK_TLV_ENFOQUE_PEDAGOGICO (%) no existe, no esta activo o no es de la categoria ENFOQUE_PEDAGOGICO', p_fk_tlv_enfoque_pedagogico
-            USING ERRCODE = '23503';
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = p_fk_tlv_tipo_evaluacion AND CATEGORIA = 'TIPO_EVALUACION' AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'FK_TLV_TIPO_EVALUACION (%) no existe, no esta activo o no es de la categoria TIPO_EVALUACION', p_fk_tlv_tipo_evaluacion
-            USING ERRCODE = '23503';
+             SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
+              WHERE rcn.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
+                AND rcn.FK_TNIVEL_ENSENANZA = ne_id AND rcn.ACTIVE = TRUE
+         );
     END IF;
 
-    -- 3. Unicidad de nombre entre activos, POR NIVEL (chequeo a nivel de
-    --    funcion, mismo criterio que TESTABLECIMIENTO/TSEDE en V52/V53). NO
-    --    es solo por NOMBRE: dos referentes distintos pueden compartir
-    --    nombre si no comparten ningun nivel educativo (p.ej. "DBA" para
-    --    Basica primaria y "DBA" para Basica secundaria). Con la relacion
-    --    N:N eso se traduce en: choca si ya hay un referente activo con el
-    --    mismo nombre cuyo set de niveles se SOLAPA con el que se pide.
-    IF EXISTS (
-        SELECT 1
-          FROM academico_test.TREFERENTE_CURRICULAR rc
-          JOIN academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
-            ON rcn.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
-           AND rcn.ACTIVE = TRUE
-         WHERE UPPER(TRIM(rc.NOMBRE)) = UPPER(TRIM(p_nombre))
-           AND rc.ACTIVE = TRUE
-           AND rcn.FK_TNIVEL_ENSENANZA = ANY(p_fk_tnivel_ensenanza_ids)
-    ) THEN
-        RAISE EXCEPTION 'Ya existe un referente curricular activo con el nombre "%" para al menos uno de esos niveles educativos', p_nombre
-            USING ERRCODE = '23505';
-    END IF;
-
-    -- 4. INSERT.
-    INSERT INTO academico_test.TREFERENTE_CURRICULAR (
-        NOMBRE, FK_TLV_NOMBRE_ASIGNATURA, DESCRIPCION, FK_TLV_ENFOQUE_PEDAGOGICO,
-        FK_TLV_TIPO_EVALUACION, NIVEL_1_ETIQUETA, NIVEL_2_ETIQUETA, INSTRUMENTO,
-        INSTRUMENTO_INFO_ADICIONAL, NORMATIVIDAD, ANIO_VIGENCIA_DESDE,
-        ANIO_VIGENCIA_HASTA, ESTADO, CREATED_BY, CREATED_AT, ACTIVE
-    ) VALUES (
-        p_nombre,
-        COALESCE(p_fk_tlv_nombre_asignatura,
-                 academico_test.fn_refcurr_nombre_asignatura_default(p_fk_tnivel_ensenanza_ids)),
-        p_descripcion, p_fk_tlv_enfoque_pedagogico,
-        p_fk_tlv_tipo_evaluacion,
-        COALESCE(NULLIF(TRIM(p_nivel_1_etiqueta), ''), 'Enunciado'),
-        COALESCE(NULLIF(TRIM(p_nivel_2_etiqueta), ''), 'Evidencia'),
-        p_instrumento, p_instrumento_info_adicional, p_normatividad,
-        p_anio_vigencia_desde, p_anio_vigencia_hasta, UPPER(TRIM(p_estado)),
-        p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
-    )
-    RETURNING PK_REFERENTE_CURRICULAR INTO v_id_creado;
-
-    -- 5. Niveles educativos (N:N, al menos uno -- ya validado arriba).
-    INSERT INTO academico_test.TREFERENTE_CURRICULAR_NIVEL (
-        FK_REFERENTE_CURRICULAR, FK_TNIVEL_ENSENANZA, CREATED_BY, CREATED_AT, ACTIVE
-    )
-    SELECT DISTINCT v_id_creado, ne_id, p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
-      FROM unnest(p_fk_tnivel_ensenanza_ids) ne_id;
-
-    -- 6. Areas/dimensiones iniciales (opcional -- vacio/NULL = aplica a todas).
-    IF p_fk_tarea_asignatura_ids IS NOT NULL AND array_length(p_fk_tarea_asignatura_ids, 1) > 0 THEN
-        IF EXISTS (
-            SELECT 1 FROM unnest(p_fk_tarea_asignatura_ids) ta_id
-             WHERE NOT EXISTS (
-                 SELECT 1 FROM academico_test.TAREA_ASIGNATURA ta
-                  WHERE ta.PK_TAREA_ASIGNATURA = ta_id AND ta.ACTIVE = TRUE
-             )
-        ) THEN
-            RAISE EXCEPTION 'Una o mas areas/dimensiones (TAREA_ASIGNATURA) no existen o no estan activas'
-                USING ERRCODE = '23503';
-        END IF;
+    -- NULL = no tocar areas; ARRAY[]::BIGINT[] = vaciarlas (aplica a todas).
+    IF p_fk_tarea_asignatura_ids IS NOT NULL THEN
+        UPDATE academico_test.TREFERENTE_CURRICULAR_AREA
+           SET ACTIVE = FALSE, MODIFIED_BY = p_actor::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
+           AND ACTIVE = TRUE
+           AND NOT (FK_TAREA_ASIGNATURA = ANY(p_fk_tarea_asignatura_ids));
 
         INSERT INTO academico_test.TREFERENTE_CURRICULAR_AREA (
             FK_REFERENTE_CURRICULAR, FK_TAREA_ASIGNATURA, CREATED_BY, CREATED_AT, ACTIVE
         )
-        SELECT DISTINCT v_id_creado, ta_id, p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
-          FROM unnest(p_fk_tarea_asignatura_ids) ta_id;
+        SELECT DISTINCT p_pk_referente_curricular, ta_id, p_actor::VARCHAR, CURRENT_TIMESTAMP, TRUE
+          FROM unnest(p_fk_tarea_asignatura_ids) ta_id
+         WHERE NOT EXISTS (
+             SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_AREA rca
+              WHERE rca.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
+                AND rca.FK_TAREA_ASIGNATURA = ta_id AND rca.ACTIVE = TRUE
+         );
     END IF;
 
-    RETURN v_id_creado;
+    RETURN p_pk_referente_curricular;
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_refcurr_crear(BIGINT, VARCHAR, VARCHAR, BIGINT[], BIGINT, BIGINT, VARCHAR, VARCHAR, INTEGER, VARCHAR, VARCHAR, VARCHAR, INTEGER, VARCHAR, BIGINT[], BIGINT)
-    IS 'Crea un referente curricular. p_fk_tlv_nombre_asignatura apunta a TLISTA_VALOR categoria PERSONALIZAR_ASIGNATURA y es OPCIONAL: si no viene se resuelve con fn_refcurr_nombre_asignatura_default sobre los niveles que se estan creando (''Asignatura'', o ''Dimension'' si todos son preescolar). Si viene y no es un valor activo de esa categoria, 23503. Gate CREAR sobre REFERENTES_CURRICULARES.';
+COMMENT ON FUNCTION academico_test.fn_refcurr_actualizar_interno(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT[], BIGINT, BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, INTEGER, INTEGER, VARCHAR, BIGINT[], BIGINT, VARCHAR)
+    IS 'INTERNO: PATCH parcial de un referente sin permisos (NULL = no tocar). Niveles: array = reemplazo completo, nunca vacio, y no puede dejar fuera el grado de un enunciado vivo (23503). Areas: [] = vaciar, bloqueado si quita una con enunciados (23503). Regla 2 sobre el enfoque/tipo resultantes (formativo sin tipo explicito fija Cualitativa). Regla 7 cuando llegan estado o niveles y el referente queda activo. Lo usa fn_refcurr_actualizar.';
 
--- ---------------------------------------------------------------------------
--- 3) fn_refcurr_actualizar -- p_nombre_asignatura opcional (NULL = no tocar).
--- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_refcurr_actualizar(
     BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT[], BIGINT, BIGINT, VARCHAR,
     VARCHAR, VARCHAR, VARCHAR, VARCHAR, INTEGER, INTEGER, VARCHAR, BIGINT[]);
@@ -363,8 +755,6 @@ CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_actualizar(
     p_pk_referente_curricular       BIGINT,
     p_nombre                        VARCHAR(150) DEFAULT NULL,
     p_descripcion                   VARCHAR(400) DEFAULT NULL,
-    -- NULL = no tocar los niveles; array = reemplazo completo del set
-    -- (nunca vacio: el referente siempre tiene al menos un nivel).
     p_fk_tnivel_ensenanza_ids       BIGINT[]     DEFAULT NULL,
     p_fk_tlv_enfoque_pedagogico     BIGINT       DEFAULT NULL,
     p_fk_tlv_tipo_evaluacion        BIGINT       DEFAULT NULL,
@@ -373,230 +763,96 @@ CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_actualizar(
     p_instrumento                   VARCHAR(400) DEFAULT NULL,
     p_instrumento_info_adicional    VARCHAR(400) DEFAULT NULL,
     p_normatividad                  VARCHAR(400) DEFAULT NULL,
-    p_anio_vigencia_desde           INTEGER     DEFAULT NULL,
-    p_anio_vigencia_hasta           INTEGER     DEFAULT NULL,
+    p_anio_vigencia_desde           INTEGER      DEFAULT NULL,
+    p_anio_vigencia_hasta           INTEGER      DEFAULT NULL,
     p_estado                        VARCHAR(1)   DEFAULT NULL,
-    -- NULL = no tocar areas; ARRAY[]::BIGINT[] = vaciarlas (aplica a todas).
     p_fk_tarea_asignatura_ids       BIGINT[]     DEFAULT NULL,
-    -- NULL = no tocar el rotulo de la asignatura.
-    p_fk_tlv_nombre_asignatura      BIGINT       DEFAULT NULL
+    p_fk_tlv_nombre_asignatura      BIGINT       DEFAULT NULL,
+    p_rotulo_ejecucion              VARCHAR(60)  DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_actual         academico_test.TREFERENTE_CURRICULAR%ROWTYPE;
-    v_nuevo_desde    INTEGER;
-    v_nuevo_hasta    INTEGER;
-    v_nuevo_nombre   VARCHAR;
-    v_niveles_efect  BIGINT[];
+    v_actual     academico_test.TREFERENTE_CURRICULAR%ROWTYPE;
+    v_etiquetas  TEXT[] := ARRAY['REFERENTES_CURRICULARES', 'EDICION'];
 BEGIN
-    SELECT * INTO v_actual
-      FROM academico_test.TREFERENTE_CURRICULAR
-     WHERE PK_REFERENTE_CURRICULAR = p_pk_referente_curricular;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'No se encontro el referente curricular solicitado'
-            USING ERRCODE = 'P0002';
-    END IF;
-
-    -- Gate: capability EDITAR (catalogo global, sin scope).
+    PERFORM academico_test.fn_refcurr_validar_existe(p_pk_referente_curricular);
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'EDITAR'
     );
 
-    IF v_actual.ACTIVE = FALSE THEN
-        RAISE EXCEPTION 'El referente curricular "%" esta inactivo (borrado logico); no se puede editar', v_actual.NOMBRE
-            USING ERRCODE = '22023';
-    END IF;
-
-    IF p_nombre IS NOT NULL AND NULLIF(TRIM(p_nombre), '') IS NULL THEN
-        RAISE EXCEPTION 'Nombre del referente no puede quedar vacio' USING ERRCODE = '22023';
-    END IF;
-
-    IF p_fk_tlv_nombre_asignatura IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM academico_test.TLISTA_VALOR
-         WHERE PK_LISTA_VALOR = p_fk_tlv_nombre_asignatura
-           AND CATEGORIA = 'PERSONALIZAR_ASIGNATURA' AND ACTIVE = TRUE
-    ) THEN
-        RAISE EXCEPTION 'El nombre de asignatura (%) no existe, no esta activo o no es de la categoria PERSONALIZAR_ASIGNATURA', p_fk_tlv_nombre_asignatura
-            USING ERRCODE = '23503';
-    END IF;
-
-    -- Niveles educativos EFECTIVOS: los que llegan en el PATCH, o los que
-    -- el referente ya tiene si el parametro no viene. Un array vacio no es
-    -- "vaciar" (a diferencia de las areas): el nivel es obligatorio.
-    IF p_fk_tnivel_ensenanza_ids IS NOT NULL THEN
-        IF COALESCE(array_length(p_fk_tnivel_ensenanza_ids, 1), 0) = 0 THEN
-            RAISE EXCEPTION 'El referente debe conservar al menos un nivel educativo'
-                USING ERRCODE = '22023', HINT = 'omita p_fk_tnivel_ensenanza_ids para no tocar los niveles actuales';
-        END IF;
-        IF EXISTS (SELECT 1 FROM unnest(p_fk_tnivel_ensenanza_ids) n WHERE n IS NULL) THEN
-            RAISE EXCEPTION 'La lista de niveles educativos no puede contener valores nulos'
-                USING ERRCODE = '22023';
-        END IF;
-        IF EXISTS (
-            SELECT 1 FROM unnest(p_fk_tnivel_ensenanza_ids) ne_id
-             WHERE NOT EXISTS (
-                 SELECT 1 FROM academico_test.TNIVEL_ENSENANZA ne
-                  WHERE ne.PK_NIVEL_ENSENANZA = ne_id AND ne.ACTIVE = TRUE
-             )
-        ) THEN
-            RAISE EXCEPTION 'Uno o mas niveles educativos (TNIVEL_ENSENANZA) no existen o no estan activos'
-                USING ERRCODE = '23503';
-        END IF;
-        v_niveles_efect := p_fk_tnivel_ensenanza_ids;
-    ELSE
-        SELECT array_agg(rcn.FK_TNIVEL_ENSENANZA) INTO v_niveles_efect
-          FROM academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
-         WHERE rcn.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
-           AND rcn.ACTIVE = TRUE;
-    END IF;
-
-    -- Unicidad de nombre entre activos POR NIVEL, igual que en
-    -- fn_refcurr_crear: choca si otro referente activo lleva el mismo
-    -- nombre y comparte al menos uno de los niveles efectivos.
-    v_nuevo_nombre := COALESCE(p_nombre, v_actual.NOMBRE);
-    IF v_niveles_efect IS NOT NULL AND EXISTS (
-        SELECT 1
-          FROM academico_test.TREFERENTE_CURRICULAR rc
-          JOIN academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
-            ON rcn.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
-           AND rcn.ACTIVE = TRUE
-         WHERE UPPER(TRIM(rc.NOMBRE)) = UPPER(TRIM(v_nuevo_nombre))
-           AND rc.ACTIVE = TRUE
-           AND rc.PK_REFERENTE_CURRICULAR <> p_pk_referente_curricular
-           AND rcn.FK_TNIVEL_ENSENANZA = ANY(v_niveles_efect)
-    ) THEN
-        RAISE EXCEPTION 'Ya existe otro referente curricular activo con el nombre "%" para al menos uno de esos niveles educativos', v_nuevo_nombre
-            USING ERRCODE = '23505';
-    END IF;
-    IF p_fk_tlv_enfoque_pedagogico IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = p_fk_tlv_enfoque_pedagogico AND CATEGORIA = 'ENFOQUE_PEDAGOGICO' AND ACTIVE = TRUE
-    ) THEN
-        RAISE EXCEPTION 'FK_TLV_ENFOQUE_PEDAGOGICO (%) no existe, no esta activo o no es de la categoria ENFOQUE_PEDAGOGICO', p_fk_tlv_enfoque_pedagogico USING ERRCODE = '23503';
-    END IF;
-    IF p_fk_tlv_tipo_evaluacion IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = p_fk_tlv_tipo_evaluacion AND CATEGORIA = 'TIPO_EVALUACION' AND ACTIVE = TRUE
-    ) THEN
-        RAISE EXCEPTION 'FK_TLV_TIPO_EVALUACION (%) no existe, no esta activo o no es de la categoria TIPO_EVALUACION', p_fk_tlv_tipo_evaluacion USING ERRCODE = '23503';
-    END IF;
-    IF p_estado IS NOT NULL AND UPPER(TRIM(p_estado)) NOT IN ('A', 'I') THEN
-        RAISE EXCEPTION 'Estado invalido: % (use ''A'' o ''I'')', p_estado USING ERRCODE = '22023';
-    END IF;
-
-    v_nuevo_desde := COALESCE(p_anio_vigencia_desde, v_actual.ANIO_VIGENCIA_DESDE);
-    v_nuevo_hasta := COALESCE(p_anio_vigencia_hasta, v_actual.ANIO_VIGENCIA_HASTA);
-    IF v_nuevo_hasta IS NOT NULL AND v_nuevo_hasta < v_nuevo_desde THEN
-        RAISE EXCEPTION 'El anio de vigencia hasta (%) no puede ser anterior al anio desde (%)', v_nuevo_hasta, v_nuevo_desde
-            USING ERRCODE = '22023';
-    END IF;
-
-    UPDATE academico_test.TREFERENTE_CURRICULAR
-       SET NOMBRE                       = COALESCE(p_nombre, NOMBRE),
-           FK_TLV_NOMBRE_ASIGNATURA     = COALESCE(p_fk_tlv_nombre_asignatura, FK_TLV_NOMBRE_ASIGNATURA),
-           DESCRIPCION                  = COALESCE(p_descripcion, DESCRIPCION),
-           FK_TLV_ENFOQUE_PEDAGOGICO    = COALESCE(p_fk_tlv_enfoque_pedagogico, FK_TLV_ENFOQUE_PEDAGOGICO),
-           FK_TLV_TIPO_EVALUACION       = COALESCE(p_fk_tlv_tipo_evaluacion, FK_TLV_TIPO_EVALUACION),
-           NIVEL_1_ETIQUETA             = COALESCE(NULLIF(TRIM(p_nivel_1_etiqueta), ''), NIVEL_1_ETIQUETA),
-           NIVEL_2_ETIQUETA             = COALESCE(NULLIF(TRIM(p_nivel_2_etiqueta), ''), NIVEL_2_ETIQUETA),
-           INSTRUMENTO                  = COALESCE(p_instrumento, INSTRUMENTO),
-           INSTRUMENTO_INFO_ADICIONAL   = COALESCE(p_instrumento_info_adicional, INSTRUMENTO_INFO_ADICIONAL),
-           NORMATIVIDAD                 = COALESCE(p_normatividad, NORMATIVIDAD),
-           ANIO_VIGENCIA_DESDE          = v_nuevo_desde,
-           ANIO_VIGENCIA_HASTA          = v_nuevo_hasta,
-           ESTADO                       = COALESCE(UPPER(TRIM(p_estado)), ESTADO),
-           MODIFIED_BY                  = p_pk_usuario_solicitante::VARCHAR,
-           MODIFIED_AT                  = CURRENT_TIMESTAMP
+    -- Las cuatro alertas de alto impacto y el cambio de estado se auditan
+    -- como eventos propios (Mapeo de Auditoria, seccion 2.1).
+    SELECT * INTO v_actual FROM academico_test.TREFERENTE_CURRICULAR
      WHERE PK_REFERENTE_CURRICULAR = p_pk_referente_curricular;
-
-    -- Reemplazo completo de niveles educativos, solo si el caller mando el
-    -- parametro (ya validado arriba: no nulo, no vacio, todos activos).
-    IF p_fk_tnivel_ensenanza_ids IS NOT NULL THEN
-        UPDATE academico_test.TREFERENTE_CURRICULAR_NIVEL
-           SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
-           AND ACTIVE = TRUE
-           AND NOT (FK_TNIVEL_ENSENANZA = ANY(p_fk_tnivel_ensenanza_ids));
-
-        INSERT INTO academico_test.TREFERENTE_CURRICULAR_NIVEL (
-            FK_REFERENTE_CURRICULAR, FK_TNIVEL_ENSENANZA, CREATED_BY, CREATED_AT, ACTIVE
-        )
-        SELECT DISTINCT p_pk_referente_curricular, ne_id, p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
-          FROM unnest(p_fk_tnivel_ensenanza_ids) ne_id
-         WHERE NOT EXISTS (
-             SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
-              WHERE rcn.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
-                AND rcn.FK_TNIVEL_ENSENANZA = ne_id
-                AND rcn.ACTIVE = TRUE
-         );
+    IF p_fk_tlv_enfoque_pedagogico IS DISTINCT FROM NULL
+       AND p_fk_tlv_enfoque_pedagogico IS DISTINCT FROM v_actual.FK_TLV_ENFOQUE_PEDAGOGICO THEN
+        v_etiquetas := v_etiquetas || 'CAMBIO_ENFOQUE_PEDAGOGICO'::TEXT;
     END IF;
-
-    -- Reemplazo completo de areas, solo si el caller mando el parametro.
-    IF p_fk_tarea_asignatura_ids IS NOT NULL THEN
-        -- Bloquea quitar un area que todavia tiene enunciados amarrados.
-        IF EXISTS (
-            SELECT 1
-              FROM academico_test.TREFERENTE_CURRICULAR_AREA rca
-              JOIN academico_test.TREFERENTE_ENUNCIADO re
-                ON re.FK_REFERENTE_CURRICULAR_AREA = rca.PK_REFERENTE_CURRICULAR_AREA
-               AND re.ACTIVE = TRUE
-             WHERE rca.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
-               AND rca.ACTIVE = TRUE
-               AND NOT (rca.FK_TAREA_ASIGNATURA = ANY(p_fk_tarea_asignatura_ids))
-        ) THEN
-            RAISE EXCEPTION 'No se puede quitar un area/dimension que todavia tiene enunciados asociados; reasigne o elimine esos enunciados primero'
-                USING ERRCODE = '23503';
-        END IF;
-
-        IF array_length(p_fk_tarea_asignatura_ids, 1) > 0 AND EXISTS (
-            SELECT 1 FROM unnest(p_fk_tarea_asignatura_ids) ta_id
-             WHERE NOT EXISTS (
-                 SELECT 1 FROM academico_test.TAREA_ASIGNATURA ta
-                  WHERE ta.PK_TAREA_ASIGNATURA = ta_id AND ta.ACTIVE = TRUE
-             )
-        ) THEN
-            RAISE EXCEPTION 'Una o mas areas/dimensiones (TAREA_ASIGNATURA) no existen o no estan activas'
-                USING ERRCODE = '23503';
-        END IF;
-
-        -- Desactiva las que ya no vienen en la lista.
-        UPDATE academico_test.TREFERENTE_CURRICULAR_AREA
-           SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
-           AND ACTIVE = TRUE
-           AND NOT (FK_TAREA_ASIGNATURA = ANY(p_fk_tarea_asignatura_ids));
-
-        -- Reactiva/crea las de la lista que no estan activas todavia.
-        INSERT INTO academico_test.TREFERENTE_CURRICULAR_AREA (
-            FK_REFERENTE_CURRICULAR, FK_TAREA_ASIGNATURA, CREATED_BY, CREATED_AT, ACTIVE
-        )
-        SELECT DISTINCT p_pk_referente_curricular, ta_id, p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
-          FROM unnest(p_fk_tarea_asignatura_ids) ta_id
-         WHERE NOT EXISTS (
-             SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_AREA rca
-              WHERE rca.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
-                AND rca.FK_TAREA_ASIGNATURA = ta_id
-                AND rca.ACTIVE = TRUE
-         );
+    IF p_instrumento IS NOT NULL AND TRIM(p_instrumento) IS DISTINCT FROM v_actual.INSTRUMENTO THEN
+        v_etiquetas := v_etiquetas || 'CAMBIO_ROTULO_SECUENCIA'::TEXT;
     END IF;
+    IF p_rotulo_ejecucion IS NOT NULL AND TRIM(p_rotulo_ejecucion) IS DISTINCT FROM v_actual.ROTULO_EJECUCION THEN
+        v_etiquetas := v_etiquetas || 'CAMBIO_ROTULO_EJECUCION'::TEXT;
+    END IF;
+    IF p_fk_tlv_nombre_asignatura IS NOT NULL
+       AND p_fk_tlv_nombre_asignatura IS DISTINCT FROM v_actual.FK_TLV_NOMBRE_ASIGNATURA THEN
+        v_etiquetas := v_etiquetas || 'CAMBIO_ROTULO_AREA'::TEXT;
+    END IF;
+    IF p_estado IS NOT NULL AND UPPER(TRIM(p_estado)) IS DISTINCT FROM v_actual.ESTADO::VARCHAR THEN
+        v_etiquetas := v_etiquetas || 'CAMBIO_ESTADO'::TEXT;
+    END IF;
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        'Edicion del referente curricular "' || v_actual.NOMBRE || '"',
+        NULL, NULL, v_etiquetas);
 
-    RETURN p_pk_referente_curricular;
+    RETURN academico_test.fn_refcurr_actualizar_interno(
+        p_pk_usuario_solicitante, p_pk_referente_curricular, p_nombre, p_descripcion,
+        p_fk_tnivel_ensenanza_ids, p_fk_tlv_enfoque_pedagogico, p_fk_tlv_tipo_evaluacion,
+        p_nivel_1_etiqueta, p_nivel_2_etiqueta, p_instrumento, p_instrumento_info_adicional,
+        p_normatividad, p_anio_vigencia_desde, p_anio_vigencia_hasta, p_estado,
+        p_fk_tarea_asignatura_ids, p_fk_tlv_nombre_asignatura, p_rotulo_ejecucion);
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_refcurr_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT[], BIGINT, BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, INTEGER, INTEGER, VARCHAR, BIGINT[], BIGINT)
-    IS 'PATCH parcial de un referente curricular: cada parametro NULL conserva su valor actual. p_fk_tlv_nombre_asignatura apunta a TLISTA_VALOR categoria PERSONALIZAR_ASIGNATURA; si viene y no es un valor activo de esa categoria, 23503. Gate EDITAR sobre REFERENTES_CURRICULARES.';
+COMMENT ON FUNCTION academico_test.fn_refcurr_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT[], BIGINT, BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, INTEGER, INTEGER, VARCHAR, BIGINT[], BIGINT, VARCHAR)
+    IS 'PATCH /referentes-curriculares/:ID: existencia (P0002) -> gate EDITAR sobre REFERENTES_CURRICULARES -> etiqueta de auditoria con un evento por alerta de alto impacto (CAMBIO_ENFOQUE_PEDAGOGICO, CAMBIO_ROTULO_SECUENCIA, CAMBIO_ROTULO_EJECUCION, CAMBIO_ROTULO_AREA) y CAMBIO_ESTADO -> fn_refcurr_actualizar_interno. El modal de confirmacion lo decide la UI con GET /referentes-curriculares/:ID/impacto.';
 
 -- ---------------------------------------------------------------------------
--- 4) fn_refcurr_listar -- nueva columna nombre_asignatura en el RETURNS TABLE
---    (y el search ahora tambien pega sobre ella).
+-- 5) Grados vinculados (Regla 12): agregado de los grados que declararon los
+--    enunciados de nivel 1. [] = ningun enunciado tiene grado ("Todos").
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_grados_vinculados_interno(p_pk_referente_curricular BIGINT)
+RETURNS JSONB
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(jsonb_agg(jsonb_build_object('id', g.fk_tlv_grado, 'codigo', g.codigo, 'nombre', g.nombre)
+                              ORDER BY g.orden), '[]'::jsonb)
+      FROM (SELECT DISTINCT d.fk_tlv_grado, d.codigo, d.nombre,
+                   CASE WHEN d.codigo ~ '^-?\d+$' THEN d.codigo::INTEGER END AS orden
+              FROM academico_test.fn_refcurr_grados_disponibles_interno(p_pk_referente_curricular) d
+             WHERE EXISTS (SELECT 1 FROM academico_test.TREFERENTE_ENUNCIADO e
+                            WHERE e.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
+                              AND e.FK_TLV_GRADO = d.fk_tlv_grado
+                              AND e.FK_PADRE IS NULL
+                              AND e.ACTIVE = TRUE)) g;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_grados_vinculados_interno(BIGINT)
+    IS 'INTERNO: [{id, codigo, nombre}] de los grados que usan los enunciados activos de nivel 1 del referente, acotado a sus niveles educativos. [] significa "Todos" (ningun enunciado declara grado). Lo usan fn_refcurr_listar_interno y fn_refcurr_buscar_por_pk_interno.';
+
+-- ---------------------------------------------------------------------------
+-- 6) fn_refcurr_listar -- Vista Maestra.
 -- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_refcurr_listar(
     BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BOOLEAN, VARCHAR, BOOLEAN, INT, INT);
+DROP FUNCTION IF EXISTS academico_test.fn_refcurr_listar_interno(
+    VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BOOLEAN, VARCHAR, BOOLEAN, INT, INT);
 
-CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_listar(
-    p_pk_usuario_solicitante      BIGINT,
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_listar_interno(
     p_search                      VARCHAR   DEFAULT NULL,
     p_fk_tnivel_ensenanza         BIGINT    DEFAULT NULL,
     p_fk_tlv_enfoque_pedagogico   BIGINT    DEFAULT NULL,
@@ -609,34 +865,30 @@ CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_listar(
     p_offset                      INT       DEFAULT 0
 )
 RETURNS TABLE (
-    pk_referente_curricular   BIGINT,
-    nombre                    VARCHAR,
+    pk_referente_curricular    BIGINT,
+    nombre                     VARCHAR,
     descripcion                VARCHAR,
     fk_tlv_nombre_asignatura   BIGINT,
     nombre_asignatura          VARCHAR,
-    -- N:N con TNIVEL_ENSENANZA: la columna de la tabla-listado muestra los
-    -- nombres concatenados; niveles trae el detalle [{id, codigo, nombre}]
-    -- para pintar chips y precargar el multi-select de edicion.
     niveles_educativos         VARCHAR,
     niveles                    JSONB,
     instrumento                VARCHAR,
     instrumento_info_adicional VARCHAR,
+    rotulo_ejecucion           VARCHAR,
     enfoque_pedagogico         VARCHAR,
     tipo_evaluacion            VARCHAR,
+    grados_vinculados          JSONB,
     estado                     VARCHAR,
     anio_vigencia_desde        INTEGER,
     anio_vigencia_hasta        INTEGER,
+    modificado_por             VARCHAR,
+    modificado_en              TIMESTAMP,
     active                     BOOLEAN,
     total_count                BIGINT
 )
-LANGUAGE plpgsql
+LANGUAGE sql
+STABLE
 AS $$
-BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'VER'
-    );
-
-    RETURN QUERY
     SELECT rc.PK_REFERENTE_CURRICULAR,
            rc.NOMBRE,
            rc.DESCRIPCION,
@@ -646,16 +898,22 @@ BEGIN
            niv.niveles_json,
            rc.INSTRUMENTO,
            rc.INSTRUMENTO_INFO_ADICIONAL,
+           rc.ROTULO_EJECUCION,
            lve.NOMBRE,
            lvt.NOMBRE,
+           academico_test.fn_refcurr_grados_vinculados_interno(rc.PK_REFERENTE_CURRICULAR),
            rc.ESTADO::VARCHAR,
            rc.ANIO_VIGENCIA_DESDE,
            rc.ANIO_VIGENCIA_HASTA,
+           -- CREATED_BY/MODIFIED_BY guardan el pk de TUSUARIO como texto.
+           COALESCE(CASE WHEN COALESCE(rc.MODIFIED_BY, rc.CREATED_BY) ~ '^\d+$'
+                         THEN academico_test.fn_resolver_actor(COALESCE(rc.MODIFIED_BY, rc.CREATED_BY)::BIGINT) END,
+                    COALESCE(rc.MODIFIED_BY, rc.CREATED_BY))::VARCHAR,
+           COALESCE(rc.MODIFIED_AT, rc.CREATED_AT),
            rc.ACTIVE,
            COUNT(*) OVER()
       FROM academico_test.TREFERENTE_CURRICULAR rc
-      -- LATERAL y no JOIN + GROUP BY: agrupar rompería el COUNT(*) OVER()
-      -- que alimenta total_count.
+      -- LATERAL y no JOIN + GROUP BY: agrupar romperia el COUNT(*) OVER().
       LEFT JOIN LATERAL (
           SELECT COALESCE(string_agg(ne.NOMBRE, ', ' ORDER BY ne.NOMBRE), '')::VARCHAR AS niveles_texto,
                  COALESCE(jsonb_agg(jsonb_build_object(
@@ -671,8 +929,6 @@ BEGIN
       JOIN academico_test.TLISTA_VALOR lvna ON lvna.PK_LISTA_VALOR = rc.FK_TLV_NOMBRE_ASIGNATURA
      WHERE (p_incluir_inactivos OR rc.ACTIVE = TRUE)
        AND (p_search IS NULL OR rc.NOMBRE ILIKE '%' || p_search || '%' OR rc.DESCRIPCION ILIKE '%' || p_search || '%' OR lvna.VALOR ILIKE '%' || p_search || '%')
-       -- Filtro por nivel: el referente califica si ALGUNO de sus niveles
-       -- activos es el pedido.
        AND (p_fk_tnivel_ensenanza IS NULL OR EXISTS (
                SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_NIVEL rcn_f
                 WHERE rcn_f.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
@@ -703,20 +959,23 @@ BEGIN
        END DESC
      LIMIT GREATEST(p_limite, 1)
     OFFSET GREATEST(p_offset, 0);
-END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_refcurr_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BOOLEAN, VARCHAR, BOOLEAN, INT, INT)
-    IS 'Pagina de referentes curriculares con filtros y orden. Devuelve fk_tlv_nombre_asignatura + nombre_asignatura (el VALOR de TLISTA_VALOR categoria PERSONALIZAR_ASIGNATURA al que apunta el referente); p_search busca sobre NOMBRE, DESCRIPCION y ese rotulo. total_count via COUNT(*) OVER(). Gate VER sobre REFERENTES_CURRICULARES.';
+COMMENT ON FUNCTION academico_test.fn_refcurr_listar_interno(VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BOOLEAN, VARCHAR, BOOLEAN, INT, INT)
+    IS 'INTERNO: pagina de la Vista Maestra de referentes -- niveles, los tres rotulos (instrumento = secuencia, rotulo_ejecucion, nombre_asignatura = area), grados_vinculados ([] = Todos), ultima modificacion (usuario legible + fecha) y total_count. Filtros: search, nivel, enfoque, tipo, estado. Lo usa fn_refcurr_listar.';
 
--- ---------------------------------------------------------------------------
--- 5) fn_refcurr_buscar_por_pk -- nueva columna nombre_asignatura.
--- ---------------------------------------------------------------------------
-DROP FUNCTION IF EXISTS academico_test.fn_refcurr_buscar_por_pk(BIGINT, BIGINT);
-
-CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_buscar_por_pk(
-    p_pk_usuario_solicitante   BIGINT,
-    p_pk_referente_curricular  BIGINT
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_listar(
+    p_pk_usuario_solicitante      BIGINT,
+    p_search                      VARCHAR   DEFAULT NULL,
+    p_fk_tnivel_ensenanza         BIGINT    DEFAULT NULL,
+    p_fk_tlv_enfoque_pedagogico   BIGINT    DEFAULT NULL,
+    p_fk_tlv_tipo_evaluacion      BIGINT    DEFAULT NULL,
+    p_estado                      VARCHAR   DEFAULT NULL,
+    p_incluir_inactivos           BOOLEAN   DEFAULT FALSE,
+    p_orden_por                   VARCHAR   DEFAULT 'nombre',
+    p_orden_asc                   BOOLEAN   DEFAULT TRUE,
+    p_limite                      INT       DEFAULT 20,
+    p_offset                      INT       DEFAULT 0
 )
 RETURNS TABLE (
     pk_referente_curricular    BIGINT,
@@ -724,8 +983,53 @@ RETURNS TABLE (
     descripcion                VARCHAR,
     fk_tlv_nombre_asignatura   BIGINT,
     nombre_asignatura          VARCHAR,
-    -- N:N: [{id, codigo, nombre}] de los niveles educativos activos del
-    -- referente -- precarga el multi-select "Nivel educativo".
+    niveles_educativos         VARCHAR,
+    niveles                    JSONB,
+    instrumento                VARCHAR,
+    instrumento_info_adicional VARCHAR,
+    rotulo_ejecucion           VARCHAR,
+    enfoque_pedagogico         VARCHAR,
+    tipo_evaluacion            VARCHAR,
+    grados_vinculados          JSONB,
+    estado                     VARCHAR,
+    anio_vigencia_desde        INTEGER,
+    anio_vigencia_hasta        INTEGER,
+    modificado_por             VARCHAR,
+    modificado_en              TIMESTAMP,
+    active                     BOOLEAN,
+    total_count                BIGINT
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'VER'
+    );
+
+    RETURN QUERY
+    SELECT * FROM academico_test.fn_refcurr_listar_interno(
+        p_search, p_fk_tnivel_ensenanza, p_fk_tlv_enfoque_pedagogico, p_fk_tlv_tipo_evaluacion,
+        p_estado, p_incluir_inactivos, p_orden_por, p_orden_asc, p_limite, p_offset);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BOOLEAN, VARCHAR, BOOLEAN, INT, INT)
+    IS 'POST /referentes-curriculares/query: Vista Maestra. Gate VER sobre REFERENTES_CURRICULARES; logica en fn_refcurr_listar_interno.';
+
+-- ---------------------------------------------------------------------------
+-- 7) fn_refcurr_buscar_por_pk -- Formulario de Configuracion / cabecera del Gestor.
+-- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_refcurr_buscar_por_pk(BIGINT, BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_refcurr_buscar_por_pk_interno(BIGINT);
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_buscar_por_pk_interno(p_pk_referente_curricular BIGINT)
+RETURNS TABLE (
+    pk_referente_curricular    BIGINT,
+    nombre                     VARCHAR,
+    descripcion                VARCHAR,
+    fk_tlv_nombre_asignatura   BIGINT,
+    nombre_asignatura          VARCHAR,
     niveles                    JSONB,
     fk_tlv_enfoque_pedagogico  BIGINT,
     enfoque_pedagogico         VARCHAR,
@@ -735,20 +1039,17 @@ RETURNS TABLE (
     nivel_2_etiqueta           VARCHAR,
     instrumento                VARCHAR,
     instrumento_info_adicional VARCHAR,
+    rotulo_ejecucion           VARCHAR,
     normatividad               VARCHAR,
+    grados_vinculados          JSONB,
     anio_vigencia_desde        INTEGER,
     anio_vigencia_hasta        INTEGER,
     estado                     VARCHAR,
     active                     BOOLEAN
 )
-LANGUAGE plpgsql
+LANGUAGE sql
+STABLE
 AS $$
-BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'VER'
-    );
-
-    RETURN QUERY
     SELECT rc.PK_REFERENTE_CURRICULAR, rc.NOMBRE, rc.DESCRIPCION,
            rc.FK_TLV_NOMBRE_ASIGNATURA, lvna.VALOR,
            COALESCE((
@@ -763,7 +1064,8 @@ BEGIN
            rc.FK_TLV_ENFOQUE_PEDAGOGICO, lve.NOMBRE,
            rc.FK_TLV_TIPO_EVALUACION, lvt.NOMBRE,
            rc.NIVEL_1_ETIQUETA, rc.NIVEL_2_ETIQUETA,
-           rc.INSTRUMENTO, rc.INSTRUMENTO_INFO_ADICIONAL, rc.NORMATIVIDAD,
+           rc.INSTRUMENTO, rc.INSTRUMENTO_INFO_ADICIONAL, rc.ROTULO_EJECUCION, rc.NORMATIVIDAD,
+           academico_test.fn_refcurr_grados_vinculados_interno(rc.PK_REFERENTE_CURRICULAR),
            rc.ANIO_VIGENCIA_DESDE, rc.ANIO_VIGENCIA_HASTA,
            rc.ESTADO::VARCHAR, rc.ACTIVE
       FROM academico_test.TREFERENTE_CURRICULAR rc
@@ -771,14 +1073,142 @@ BEGIN
       JOIN academico_test.TLISTA_VALOR lvt ON lvt.PK_LISTA_VALOR = rc.FK_TLV_TIPO_EVALUACION
       JOIN academico_test.TLISTA_VALOR lvna ON lvna.PK_LISTA_VALOR = rc.FK_TLV_NOMBRE_ASIGNATURA
      WHERE rc.PK_REFERENTE_CURRICULAR = p_pk_referente_curricular;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_buscar_por_pk_interno(BIGINT)
+    IS 'INTERNO: detalle de un referente (0 o 1 fila, incluye dados de baja) con niveles, los tres rotulos, los rotulos de nivel 1/2 y grados_vinculados. Lo usa fn_refcurr_buscar_por_pk.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_buscar_por_pk(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_referente_curricular  BIGINT
+)
+RETURNS TABLE (
+    pk_referente_curricular    BIGINT,
+    nombre                     VARCHAR,
+    descripcion                VARCHAR,
+    fk_tlv_nombre_asignatura   BIGINT,
+    nombre_asignatura          VARCHAR,
+    niveles                    JSONB,
+    fk_tlv_enfoque_pedagogico  BIGINT,
+    enfoque_pedagogico         VARCHAR,
+    fk_tlv_tipo_evaluacion     BIGINT,
+    tipo_evaluacion            VARCHAR,
+    nivel_1_etiqueta           VARCHAR,
+    nivel_2_etiqueta           VARCHAR,
+    instrumento                VARCHAR,
+    instrumento_info_adicional VARCHAR,
+    rotulo_ejecucion           VARCHAR,
+    normatividad               VARCHAR,
+    grados_vinculados          JSONB,
+    anio_vigencia_desde        INTEGER,
+    anio_vigencia_hasta        INTEGER,
+    estado                     VARCHAR,
+    active                     BOOLEAN
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'VER'
+    );
+
+    RETURN QUERY SELECT * FROM academico_test.fn_refcurr_buscar_por_pk_interno(p_pk_referente_curricular);
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_refcurr_buscar_por_pk(BIGINT, BIGINT)
-    IS 'Detalle de un referente curricular, con fk_tlv_nombre_asignatura + nombre_asignatura resueltos contra TLISTA_VALOR (categoria PERSONALIZAR_ASIGNATURA). SETOF 0 o 1 fila. Gate VER sobre REFERENTES_CURRICULARES.';
+    IS 'GET /referentes-curriculares/:ID: detalle del referente. Gate VER sobre REFERENTES_CURRICULARES; logica en fn_refcurr_buscar_por_pk_interno.';
 
 -- ---------------------------------------------------------------------------
--- 6) fn_refcurr_nombre_asignatura -- resolucion de UN nombre de asignatura.
+-- 7.1) fn_refcurr_grados_listar -- selector "Grado" del Gestor de Contenido.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_grados_listar(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_referente_curricular  BIGINT
+)
+RETURNS TABLE (
+    fk_tlv_grado          BIGINT,
+    codigo                VARCHAR,
+    nombre                VARCHAR,
+    fk_tnivel_ensenanza   BIGINT,
+    nivel_ensenanza       VARCHAR,
+    total_enunciados      BIGINT
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    PERFORM academico_test.fn_refcurr_validar_existe(p_pk_referente_curricular);
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'VER'
+    );
+
+    RETURN QUERY
+    SELECT d.fk_tlv_grado, d.codigo, d.nombre, d.fk_tnivel_ensenanza, d.nivel_ensenanza,
+           (SELECT COUNT(*) FROM academico_test.TREFERENTE_ENUNCIADO e
+             WHERE e.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular
+               AND e.FK_TLV_GRADO = d.fk_tlv_grado
+               AND e.FK_PADRE IS NULL AND e.ACTIVE = TRUE)
+      FROM academico_test.fn_refcurr_grados_disponibles_interno(p_pk_referente_curricular) d;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_grados_listar(BIGINT, BIGINT)
+    IS 'GET /referentes-curriculares/:ID/grados: grados que el referente ofrece segun sus niveles educativos (fn_refcurr_grados_disponibles_interno), con cuantos enunciados activos declara cada uno. Lista vacia = el selector Grado no se muestra. P0002 si el referente no existe; gate VER sobre REFERENTES_CURRICULARES.';
+
+-- ---------------------------------------------------------------------------
+-- 7.2) fn_refcurr_impacto -- conteos para los modales de alto impacto.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_impacto_interno(p_pk_referente_curricular BIGINT)
+RETURNS TABLE (unidades BIGINT, actividades BIGINT)
+LANGUAGE sql
+STABLE
+AS $$
+    WITH u AS (
+        SELECT un.PK_TUNIDAD
+          FROM academico_test.TUNIDAD un
+         WHERE un.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular AND un.ACTIVE = TRUE
+    )
+    SELECT (SELECT COUNT(*) FROM u),
+           (SELECT COUNT(DISTINCT a.PK_TACTIVIDAD)
+              FROM academico_test.TACTIVIDAD a
+             WHERE a.ACTIVE = TRUE
+               AND (a.FK_TUNIDAD IN (SELECT PK_TUNIDAD FROM u)
+                    OR EXISTS (SELECT 1
+                                 FROM academico_test.TACTIVIDAD_EVIDENCIA ae
+                                 JOIN academico_test.TREFERENTE_ENUNCIADO e
+                                   ON e.PK_REFERENTE_ENUNCIADO = ae.FK_REFERENTE_ENUNCIADO
+                                WHERE ae.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND ae.ACTIVE = TRUE
+                                  AND e.FK_REFERENTE_CURRICULAR = p_pk_referente_curricular)));
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_impacto_interno(BIGINT)
+    IS 'INTERNO: unidades activas bajo el referente y actividades activas que cuelgan de ellas o citan alguna de sus evidencias. Alimenta los cuatro modales de alto impacto (enfoque y los tres rotulos). Lo usa fn_refcurr_impacto.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_impacto(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_referente_curricular  BIGINT
+)
+RETURNS TABLE (unidades BIGINT, actividades BIGINT)
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    PERFORM academico_test.fn_refcurr_validar_existe(p_pk_referente_curricular);
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'VER'
+    );
+
+    RETURN QUERY SELECT * FROM academico_test.fn_refcurr_impacto_interno(p_pk_referente_curricular);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_refcurr_impacto(BIGINT, BIGINT)
+    IS 'GET /referentes-curriculares/:ID/impacto: {unidades, actividades} afectadas por un cambio de enfoque o de rotulo; con ambos en 0 la UI guarda sin modal. P0002 si el referente no existe; gate VER sobre REFERENTES_CURRICULARES.';
+
+-- ---------------------------------------------------------------------------
+-- 8) fn_refcurr_nombre_asignatura -- resolucion de UN nombre de asignatura.
 -- ---------------------------------------------------------------------------
 -- Gate distinto al del CRUD a proposito: el CRUD del catalogo exige
 -- capability sobre REFERENTES_CURRICULARES, pero LEER como se llama la
@@ -837,7 +1267,7 @@ COMMENT ON FUNCTION academico_test.fn_refcurr_nombre_asignatura(BIGINT, BIGINT)
 
 
 -- ---------------------------------------------------------------------------
--- 7) CRUD del catalogo PERSONALIZAR_ASIGNATURA
+-- 9) CRUD del catalogo PERSONALIZAR_ASIGNATURA
 -- ---------------------------------------------------------------------------
 -- Mismo gate que el catalogo de referentes (CREAR / VER / ELIMINAR sobre
 -- REFERENTES_CURRICULARES): quien administra referentes administra los
@@ -1005,94 +1435,12 @@ COMMENT ON FUNCTION academico_test.fn_personalizar_asignatura_eliminar(BIGINT, B
     IS 'Baja logica (ACTIVE=FALSE) de un valor de PERSONALIZAR_ASIGNATURA. Rechaza los tres basicos -- Asignatura, Dimension, Area -- con 22023, porque fn_refcurr_nombre_asignatura_default los resuelve por texto y sin ellos los referentes nuevos se quedarian sin valor por defecto. Rechaza con 23503, nombrando el valor y cuantos lo usan, si algun referente ACTIVE apunta a el. Idempotente: sobre un valor ya inactivo devuelve su pk sin tocar nada. Un pk de otra categoria responde P0002, no lo borra. Gate ELIMINAR sobre REFERENTES_CURRICULARES.';
 
 -- ===========================================================================
--- 8) public.query -- filas del gateway (serviceid eval-col).
+-- 10) public.query -- filas del gateway (serviceid eval-col).
 -- ===========================================================================
--- Las de crear/actualizar se REEMPLAZAN con UPDATE y no editando V214: esa
--- migracion ya corrio y su ON CONFLICT no se reejecuta.
+-- refcurr-crear y refcurr-actualizar las escribe V214 (INSERT ... ON CONFLICT DO
+-- UPDATE), que se reaplica al editarse; aqui solo van las filas nuevas.
 
--- 8.1 refcurr-crear -- + BODY.NOMBRE_ASIGNATURA (opcional, cae al defecto).
-UPDATE public.query
-   SET query = $q$SELECT academico_test.fn_refcurr_crear(
-    p_pk_usuario_solicitante     => public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
-    p_nombre                     => CAST(:BODY.NOMBRE AS VARCHAR),
-    p_descripcion                => CAST(:BODY.DESCRIPCION AS VARCHAR),
-    p_fk_tnivel_ensenanza_ids    => CAST(:BODY.NIVELES_IDS AS BIGINT[]),
-    p_fk_tlv_enfoque_pedagogico  => CAST(:BODY.ENFOQUE_PEDAGOGICO AS BIGINT),
-    p_fk_tlv_tipo_evaluacion     => CAST(:BODY.TIPO_EVALUACION AS BIGINT),
-    p_instrumento                => CAST(:BODY.INSTRUMENTO AS VARCHAR),
-    p_normatividad               => CAST(:BODY.NORMATIVIDAD AS VARCHAR),
-    p_anio_vigencia_desde        => CAST(:BODY.ANIO_DESDE AS INTEGER),
-    p_nivel_1_etiqueta           => CAST(:BODY.NIVEL_1_ETIQUETA AS VARCHAR),
-    p_nivel_2_etiqueta           => CAST(:BODY.NIVEL_2_ETIQUETA AS VARCHAR),
-    p_instrumento_info_adicional => CAST(:BODY.INSTRUMENTO_INFO AS VARCHAR),
-    p_anio_vigencia_hasta        => CAST(:BODY.ANIO_HASTA AS INTEGER),
-    p_estado                     => COALESCE(CAST(:BODY.ESTADO AS VARCHAR), 'A'),
-    p_fk_tarea_asignatura_ids    => CAST(:BODY.AREAS_IDS AS BIGINT[]),
-    p_fk_tlv_nombre_asignatura   => CAST(:BODY.NOMBRE_ASIGNATURA AS BIGINT)
-) AS pk_referente_curricular_creado$q$,
-       param_types = '{
-       "BODY.NOMBRE":             "VARCHAR",
-       "BODY.NOMBRE_ASIGNATURA":  "BIGINT",
-       "BODY.DESCRIPCION":        "VARCHAR",
-       "BODY.NIVELES_IDS":        "BIGINT[]",
-       "BODY.ENFOQUE_PEDAGOGICO": "BIGINT",
-       "BODY.TIPO_EVALUACION":    "BIGINT",
-       "BODY.INSTRUMENTO":        "VARCHAR",
-       "BODY.NORMATIVIDAD":       "VARCHAR",
-       "BODY.ANIO_DESDE":         "INTEGER",
-       "BODY.NIVEL_1_ETIQUETA":   "VARCHAR",
-       "BODY.NIVEL_2_ETIQUETA":   "VARCHAR",
-       "BODY.INSTRUMENTO_INFO":   "VARCHAR",
-       "BODY.ANIO_HASTA":         "INTEGER",
-       "BODY.ESTADO":             "VARCHAR",
-       "BODY.AREAS_IDS":          "BIGINT[]"
-     }'::jsonb,
-       detail = 'Crea un referente curricular. BODY.NOMBRE_ASIGNATURA es el PK_LISTA_VALOR de un valor de la categoria PERSONALIZAR_ASIGNATURA (GET /referentes-curriculares/personalizar-asignatura lo lista), no texto libre; es OPCIONAL: si no viene se resuelve por nivel -- Asignatura, o Dimension si el referente es SOLO de preescolar. Un id que no sea de esa categoria da 23503. BODY.NIVELES_IDS obligatorio con al menos un nivel; BODY.AREAS_IDS vacio/ausente = aplica a todas las areas'
- WHERE uuid = 'refcurr-crear';
-
--- 8.2 refcurr-actualizar -- + BODY.NOMBRE_ASIGNATURA (ausente = no tocar).
-UPDATE public.query
-   SET query = $q$SELECT academico_test.fn_refcurr_actualizar(
-    p_pk_usuario_solicitante     => public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
-    p_pk_referente_curricular    => CAST(:PARAM.ID AS BIGINT),
-    p_nombre                     => CAST(:BODY.NOMBRE AS VARCHAR),
-    p_descripcion                => CAST(:BODY.DESCRIPCION AS VARCHAR),
-    p_fk_tnivel_ensenanza_ids    => CAST(:BODY.NIVELES_IDS AS BIGINT[]),
-    p_fk_tlv_enfoque_pedagogico  => CAST(:BODY.ENFOQUE_PEDAGOGICO AS BIGINT),
-    p_fk_tlv_tipo_evaluacion     => CAST(:BODY.TIPO_EVALUACION AS BIGINT),
-    p_nivel_1_etiqueta           => CAST(:BODY.NIVEL_1_ETIQUETA AS VARCHAR),
-    p_nivel_2_etiqueta           => CAST(:BODY.NIVEL_2_ETIQUETA AS VARCHAR),
-    p_instrumento                => CAST(:BODY.INSTRUMENTO AS VARCHAR),
-    p_instrumento_info_adicional => CAST(:BODY.INSTRUMENTO_INFO AS VARCHAR),
-    p_normatividad               => CAST(:BODY.NORMATIVIDAD AS VARCHAR),
-    p_anio_vigencia_desde        => CAST(:BODY.ANIO_DESDE AS INTEGER),
-    p_anio_vigencia_hasta        => CAST(:BODY.ANIO_HASTA AS INTEGER),
-    p_estado                     => CAST(:BODY.ESTADO AS VARCHAR),
-    p_fk_tarea_asignatura_ids    => CAST(:BODY.AREAS_IDS AS BIGINT[]),
-    p_fk_tlv_nombre_asignatura   => CAST(:BODY.NOMBRE_ASIGNATURA AS BIGINT)
-) AS pk_referente_curricular$q$,
-       param_types = '{
-       "PARAM.ID":                "BIGINT",
-       "BODY.NOMBRE":             "VARCHAR",
-       "BODY.NOMBRE_ASIGNATURA":  "BIGINT",
-       "BODY.DESCRIPCION":        "VARCHAR",
-       "BODY.NIVELES_IDS":        "BIGINT[]",
-       "BODY.ENFOQUE_PEDAGOGICO": "BIGINT",
-       "BODY.TIPO_EVALUACION":    "BIGINT",
-       "BODY.NIVEL_1_ETIQUETA":   "VARCHAR",
-       "BODY.NIVEL_2_ETIQUETA":   "VARCHAR",
-       "BODY.INSTRUMENTO":        "VARCHAR",
-       "BODY.INSTRUMENTO_INFO":   "VARCHAR",
-       "BODY.NORMATIVIDAD":       "VARCHAR",
-       "BODY.ANIO_DESDE":         "INTEGER",
-       "BODY.ANIO_HASTA":         "INTEGER",
-       "BODY.ESTADO":             "VARCHAR",
-       "BODY.AREAS_IDS":          "BIGINT[]"
-     }'::jsonb,
-       detail = 'PATCH parcial de un referente curricular; cada campo ausente preserva su valor actual. BODY.NOMBRE_ASIGNATURA es el PK_LISTA_VALOR de un valor de PERSONALIZAR_ASIGNATURA: ausente = no tocar, id = lo reemplaza, id que no sea de esa categoria = 23503. BODY.NIVELES_IDS ausente = no tocar los niveles, array = reemplazo completo del set. BODY.AREAS_IDS ausente = no tocar areas, [] = vaciarlas'
- WHERE uuid = 'refcurr-actualizar';
-
--- 8.3 refcurr-nombre-asignatura -- endpoint nuevo.
+-- 10.3 refcurr-nombre-asignatura -- endpoint nuevo.
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
                            path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -1113,7 +1461,7 @@ ON CONFLICT (uuid) DO UPDATE
        execution_mode = EXCLUDED.execution_mode, microservice_id = EXCLUDED.microservice_id,
        detail = EXCLUDED.detail;
 
--- 8.4 personalizar-asignatura -- LISTAR
+-- 10.4 personalizar-asignatura -- LISTAR
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
                            path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -1135,7 +1483,7 @@ ON CONFLICT (uuid) DO UPDATE
        execution_mode = EXCLUDED.execution_mode, microservice_id = EXCLUDED.microservice_id,
        detail = EXCLUDED.detail;
 
--- 8.5 personalizar-asignatura -- CREAR
+-- 10.5 personalizar-asignatura -- CREAR
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
                            path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -1156,7 +1504,7 @@ ON CONFLICT (uuid) DO UPDATE
        execution_mode = EXCLUDED.execution_mode, microservice_id = EXCLUDED.microservice_id,
        detail = EXCLUDED.detail;
 
--- 8.6 personalizar-asignatura -- ELIMINAR
+-- 10.6 personalizar-asignatura -- ELIMINAR
 -- PATCH sobre un sub-path .../eliminar, igual que el resto del dominio (V214).
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
                            path_template, execution_mode, http_method, param_types, detail)
@@ -1178,12 +1526,54 @@ ON CONFLICT (uuid) DO UPDATE
        execution_mode = EXCLUDED.execution_mode, microservice_id = EXCLUDED.microservice_id,
        detail = EXCLUDED.detail;
 
+-- 10.7 refcurr-grados -- selector "Grado" del Gestor de Contenido.
+INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
+                           path_template, execution_mode, http_method, param_types, detail)
+SELECT
+    'refcurr-grados',
+    $q$SELECT * FROM academico_test.fn_refcurr_grados_listar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:PARAM.ID AS BIGINT)
+);$q$,
+    'postgres', false, false, m.id_microservice,
+    '/referentes-curriculares/:ID/grados', 'SELECT', 'GET',
+    '{"PARAM.ID": "BIGINT"}'::jsonb,
+    'Grados (catalogo GRADOS) que ofrece el referente segun sus niveles educativos, con total_enunciados por grado. Lista vacia = no mostrar el selector Grado. El fk_tlv_grado es el BODY.GRADO_ID de POST /referentes-curriculares/:ID/enunciados y el ?grado= de su GET. Gate VER sobre REFERENTES_CURRICULARES'
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (uuid) DO UPDATE
+   SET query = EXCLUDED.query, param_types = EXCLUDED.param_types,
+       path_template = EXCLUDED.path_template, http_method = EXCLUDED.http_method,
+       execution_mode = EXCLUDED.execution_mode, microservice_id = EXCLUDED.microservice_id,
+       detail = EXCLUDED.detail;
+
+-- 10.8 refcurr-impacto -- conteos de los modales de alto impacto.
+INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
+                           path_template, execution_mode, http_method, param_types, detail)
+SELECT
+    'refcurr-impacto',
+    $q$SELECT * FROM academico_test.fn_refcurr_impacto(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:PARAM.ID AS BIGINT)
+);$q$,
+    'postgres', false, false, m.id_microservice,
+    '/referentes-curriculares/:ID/impacto', 'SELECT', 'GET',
+    '{"PARAM.ID": "BIGINT"}'::jsonb,
+    'Unidades y actividades activas que se verian afectadas al cambiar el enfoque pedagogico o alguno de los tres rotulos del referente; con ambos en 0 la UI guarda sin modal de confirmacion. Gate VER sobre REFERENTES_CURRICULARES'
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (uuid) DO UPDATE
+   SET query = EXCLUDED.query, param_types = EXCLUDED.param_types,
+       path_template = EXCLUDED.path_template, http_method = EXCLUDED.http_method,
+       execution_mode = EXCLUDED.execution_mode, microservice_id = EXCLUDED.microservice_id,
+       detail = EXCLUDED.detail;
+
 -- ---------------------------------------------------------------------------
--- 9) role_query -- sin fila aqui el gateway responde 403 y el gate de la
+-- 11) role_query -- sin fila aqui el gateway responde 403 y el gate de la
 --    funcion no llega a ejecutarse. Los roles salen de TROL_MENU, para que el
 --    gate del JWT y el de la base no queden desincronizados.
 -- ---------------------------------------------------------------------------
--- 9.1 Catalogo: solo quien administra referentes (REFERENTES_CURRICULARES ->
+-- 11.1 Catalogo: solo quien administra referentes (REFERENTES_CURRICULARES ->
 --     SUPER_ADMINISTRADOR), el mismo conjunto que V214 dio al resto del dominio.
 INSERT INTO public.role_query (role_id, query_id)
 SELECT r.id_role, q.id_query
@@ -1192,13 +1582,13 @@ SELECT r.id_role, q.id_query
  CROSS JOIN public.role r
  WHERE r.name = 'CEVAL-SUPER_ADMINISTRADOR'
    AND q.uuid IN ('personalizar-asignatura-listar', 'personalizar-asignatura-crear',
-                  'personalizar-asignatura-eliminar')
+                  'personalizar-asignatura-eliminar', 'refcurr-grados', 'refcurr-impacto')
    AND NOT EXISTS (
        SELECT 1 FROM public.role_query rq
         WHERE rq.query_id = q.id_query AND rq.role_id = r.id_role
    );
 
--- 9.2 Resolver del rotulo: quien tiene PLANEADOR, ASISTENCIAS o
+-- 11.2 Resolver del rotulo: quien tiene PLANEADOR, ASISTENCIAS o
 --     PERIODOS_ACADEMICOS -- coordinador, docente, rector y super admin.
 INSERT INTO public.role_query (role_id, query_id)
 SELECT r.id_role, q.id_query

@@ -417,11 +417,14 @@ jobs:
             # migraciones editadas redefinen el mismo objeto (p.ej. V40 y V103
             # ambas crean fn_subject_listar): hay que re-aplicarlas en el
             # mismo orden que Flyway las aplico, o la ultima gana la version
-            # equivocada.
+            # equivocada. Se ordena por la VERSION (antes de "__"), no por el
+            # nombre entero: sobre el nombre, sort -V pone V214.3__ antes que
+            # V214__ y el hijo out-of-order queda pisado por su padre.
             files="$(printf '%s' "$json" | jq -r '
                       (.invalidMigrations // [])[]
                       | select(.errorDetails.errorCode == "CHECKSUM_MISMATCH")
-                      | .filepath | sub("^.*/"; "")' 2>/dev/null | sort -V -u || true)"
+                      | .filepath | sub("^.*/"; "")' 2>/dev/null \
+                      | awk -F'__' '{print $1"\t"$0}' | sort -V -u -k1,1 | cut -f2 || true)"
             if [ -z "$files" ]; then
               # Fallback: parsear el texto de `flyway validate`.
               txt="$(docker compose run --rm flyway validate 2>&1 || true)"
