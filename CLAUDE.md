@@ -38,8 +38,8 @@ mejorar la calidad del trabajo:
 
 Propias del repo, invocables con `/`: las skills `/next-migration-number`
 (además se carga sola al tocar migraciones), `/new-query-endpoint` y
-`/server-status`; y los comandos `/migration-lint`, `/migration-analysis`
-y `/pre-pr`.
+`/server-status`; y los comandos `/migration-lint`, `/migration-analysis`,
+`/pre-pr` y `/publicar-pr` (commit + rama en `origin` + PR a dev con la plantilla).
 
 ## Reglas por sección
 
