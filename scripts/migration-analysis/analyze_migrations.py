@@ -347,6 +347,29 @@ def values_rows(stmt: str) -> list[dict[str, str]]:
     return rows
 
 
+def cte_insert_rows(stmt: str) -> list[dict[str, str]]:
+    """
+    `WITH n (uuid, path_template, ...) AS (VALUES (...), (...))
+     INSERT INTO public.query ... SELECT ... FROM n` (V67, V124): las filas
+    que crea salen de las tuplas del CTE. Sin esto el INSERT no deja rastro
+    y un `ON CONFLICT DO NOTHING` posterior parece crear la fila.
+    """
+    m = re.match(r"\s*WITH\s+\w+\s*\(([^)]*)\)\s*AS\s*\(\s*VALUES\b", stmt, re.I)
+    if not m or find_top_level(stmt, r"\bINSERT\s+INTO\s+(?:public\.)?query\b") == -1:
+        return []
+    cols = [c.strip().strip('"').lower() for c in m.group(1).split(",")]
+    open_pos = stmt.index("(", m.end(1) + 1)
+    inner = re.sub(r"^\s*VALUES\s*", "",
+                   stmt[open_pos + 1:match_paren(stmt, open_pos)], flags=re.I)
+    rows = []
+    for tup in split_top_level(inner):
+        if tup.startswith("("):
+            vals = split_top_level(tup[1:match_paren(tup, 0)])
+            if len(vals) == len(cols):
+                rows.append({c: (unquote(v) or v) for c, v in zip(cols, vals)})
+    return rows
+
+
 def query_row_keys_from(row: dict[str, str], services: list[str]) -> tuple[list[str], dict]:
     """Claves de una fila de public.query dada como {col: valor}."""
     uuids = [row["uuid"]] if row.get("uuid") else []
@@ -384,6 +407,48 @@ def dml_effect(stmt: str, head: str) -> tuple[str, str]:
             return "patch", "update-patch"
         return "full", "update-body"
     return "patch", "update-meta"
+
+
+def _set_assignments(setpart: str) -> tuple[list[str], list[str]]:
+    """(asignadas, reescritas) de una lista `col = expr, ...`. Una columna que
+    se deriva de si misma (`param_types = param_types || ...`,
+    `query = replace(query, ...)`) se asigna pero no se reescribe."""
+    cut = find_top_level(setpart, r"\b(WHERE|FROM|RETURNING)\b")
+    assigned, covers = [], []
+    for part in split_top_level(setpart if cut == -1 else setpart[:cut]):
+        m = re.match(r"\s*(?:\w+\.)?(\w+)\s*=(.*)$", part, re.S)
+        if not m:
+            continue
+        col = m.group(1).lower()
+        expr = re.sub(r"(?s)\$(\w*)\$.*?\$\1\$|'(?:[^']|'')*'", "''", m.group(2))
+        expr = re.sub(r"\bEXCLUDED\.\w+", "", expr, flags=re.I)
+        assigned.append(col)
+        if not re.search(rf"\b{col}\b", expr, re.I):
+            covers.append(col)
+    return assigned, covers
+
+
+def query_columns(stmt: str, head: str) -> dict:
+    """Columnas de public.query que escribe la sentencia, para saber que
+    parte de una escritura anterior pisa. `*` = la fila entera."""
+    if head.startswith("DELETE"):
+        return {"assigned": ["*"], "covers": ["*"], "conflict": ""}
+    if head.startswith("INSERT"):
+        cols = list(extract_columns_and_values(stmt)) or ["*"]
+        pos = find_top_level(stmt, r"\bON\s+CONFLICT\b")
+        if pos == -1:
+            return {"assigned": cols, "covers": ["*"], "conflict": ""}
+        tail = stmt[pos:]
+        if re.search(r"\bDO\s+NOTHING\b", tail, re.I):
+            return {"assigned": cols, "covers": ["*"], "conflict": "nothing",
+                    "on_conflict": [], "on_conflict_covers": []}
+        m = re.search(r"\bDO\s+UPDATE\s+SET\b", tail, re.I)
+        a, c = _set_assignments(tail[m.end():]) if m else ([], [])
+        return {"assigned": cols, "covers": ["*"], "conflict": "update",
+                "on_conflict": a, "on_conflict_covers": c}
+    pos = find_top_level(stmt, r"\bSET\b")
+    a, c = _set_assignments(stmt[pos + 3:]) if pos != -1 else ([], [])
+    return {"assigned": a, "covers": c, "conflict": ""}
 
 
 ROLE_NAME_RE = re.compile(r"^(?:PIGSE|CEVAL|SSO|ADMIN)[A-Z0-9_\-]*$")
@@ -452,7 +517,9 @@ def analyze_file(path: Path, version: str) -> Migration:
             stmt = "\n".join(pieces)
         elif head.startswith(("SET ", "BEGIN", "COMMIT", "GRANT", "REVOKE",
                               "ANALYZE", "VACUUM", "SELECT", "WITH ")):
-            continue
+            # un WITH ... INSERT INTO public.query si crea filas
+            if not (head.startswith("WITH ") and cte_insert_rows(stmt)):
+                continue
 
         # --- funciones
         for m in RE_FUNC.finditer(stmt):
@@ -623,13 +690,24 @@ def analyze_file(path: Path, version: str) -> Migration:
                 effect="create", kind="create-sequence", line=st.line))
 
         # --- DML sobre el catalogo
+        for row in cte_insert_rows(stmt):
+            if row.get("uuid"):
+                k = f"query:uuid:{row['uuid']}"
+                mig.writes.append(Write(
+                    version=version, obj_type="query_row", obj_key=k,
+                    effect="create", kind="insert-cte", line=st.line,
+                    detail=row.get("path_template") or row["uuid"],
+                    extra={"all_keys": [k], "uuids": [row["uuid"]],
+                           "cols": query_columns(stmt, "INSERT")}))
         mdml = RE_DML.match(stmt)
         if mdml:
             target = strip_schema(qname(mdml.group(2)))
             effect, kind = dml_effect(stmt, head)
 
             if target == "query":
+                cols = query_columns(stmt, head)
                 keys, meta = query_row_keys(stmt)
+                meta = {**meta, "cols": cols}
                 rows = values_rows(stmt) if not keys else []
                 if keys:
                     for k in keys:
@@ -644,6 +722,7 @@ def analyze_file(path: Path, version: str) -> Migration:
                     svcs = find_all_values(stmt, "serviceid") or ["?"]
                     for row in rows:
                         rkeys, rmeta = query_row_keys_from(row, svcs)
+                        rmeta["cols"] = cols
                         for k in rkeys:
                             mig.writes.append(Write(
                                 version=version, obj_type="query_row", obj_key=k,
@@ -895,6 +974,10 @@ def build_graph(migs: list[Migration]) -> dict[str, list[Write]]:
                 w.status = "live"
             continue
 
+        if ws and ws[0].obj_type == "query_row":
+            resolve_query_row(ws)
+            continue
+
         for i, w in enumerate(ws):
             nxt_same = next((x for x in ws[i + 1:] if x.effect != "drop"), None)
             if w.effect == "drop":
@@ -930,6 +1013,78 @@ def build_graph(migs: list[Migration]) -> dict[str, list[Write]]:
                     w.status = "patch-dead"
                     w.killed_by = killer_after(i, ("create", "full", "delete"))
     return chains
+
+
+def resolve_query_row(ws: list[Write]) -> None:
+    """
+    Una fila de public.query se resuelve por COLUMNA, no por sentencia:
+    cada escritura muere solo cuando las posteriores han reescrito todas
+    las columnas que ella dejo. Evita dos falsos "obsoleta":
+      - `INSERT ... ON CONFLICT DO NOTHING` sobre una fila que ya existe no
+        escribe nada (V93 sobre las filas de V67): no mata el UPDATE previo.
+      - un UPDATE que solo reescribe `query` no mata un parche anterior de
+        `param_types` (V377 sobre V208).
+    """
+    exists = False
+    remaining: dict[int, set[str]] = {}
+
+    def cover(upto: int, cols: set[str], version: str) -> None:
+        for j, rest in remaining.items():
+            if j >= upto or not rest:
+                continue
+            rest -= rest if "*" in cols else cols
+            if not rest and not ws[j].killed_by:
+                ws[j].killed_by = version
+
+    for i, w in enumerate(ws):
+        cols = w.extra.get("cols") or {}
+        assigned = set(cols.get("assigned") or ["*"])
+        covers = set(cols.get("covers") or [])
+        conflict = cols.get("conflict", "")
+        if w.effect == "delete":
+            cover(i, {"*"}, w.version)
+            remaining[i] = set()
+            w.status = "drop" if (i + 1 < len(ws) and ws[i + 1].effect == "create"
+                                  and ws[i + 1].version == w.version) else "live"
+            exists = False
+            continue
+        if w.effect == "create":
+            if exists and conflict == "nothing":
+                w.status = "dead"
+                w.note = "no-op: la fila ya existia (ON CONFLICT DO NOTHING)"
+                remaining[i] = set()
+                continue
+            if exists and conflict == "update":
+                assigned = set(cols.get("on_conflict") or [])
+                covers = set(cols.get("on_conflict_covers") or [])
+                w.note = "la fila ya existia: solo aplica el DO UPDATE"
+            else:
+                covers, assigned = {"*"}, {"*"}
+            exists = True
+        cover(i, covers, w.version)
+        remaining[i] = set(assigned)
+
+    live_create = max((i for i, w in enumerate(ws) if w.effect == "create"
+                       and not w.note.startswith("no-op")), default=-1)
+    for i, w in enumerate(ws):
+        if w.status:
+            continue
+        if w.effect == "create" and i == live_create and not w.note:
+            w.status, w.killed_by = "live", ""
+            if not remaining[i]:
+                w.note = "cuerpo reescrito"
+            continue
+        alive = bool(remaining.get(i))
+        if w.effect == "patch":
+            w.status = "patch-live" if alive else "patch-dead"
+        else:
+            w.status = "live" if alive else "dead"
+        if alive:
+            w.killed_by = ""
+            if "*" not in remaining[i] and w.effect == "full":
+                gone = set((w.extra.get("cols") or {}).get("assigned") or []) - remaining[i]
+                if gone:
+                    w.note = "sigue viva solo en " + ", ".join(sorted(remaining[i]))
 
 
 COUNTED = ("function", "query_row", "table", "column", "constraint", "index",
