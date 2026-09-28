@@ -270,7 +270,13 @@ COMMENT ON FUNCTION pigse.fn_documento_categorias_listar(BIGINT, VARCHAR) IS
 -- 6. fn_documento_guardar / fn_documento_eliminar ganan p_categoria.
 --    DROP+CREATE: cambia la firma (nuevo parametro) y el RETURNS TABLE.
 -- ---------------------------------------------------------------------------
+-- Dos DROP: la firma VIEJA (4 args, primera vez que corre esta migración) y
+-- la NUEVA (5 args, si esta migración se re-ejecuta sobre un esquema donde
+-- ya corrió antes -- el chequeo de idempotencia de CI la aplica dos veces).
+-- Sin el segundo DROP, el CREATE de abajo choca con la firma que la MISMA
+-- migración ya había creado.
 DROP FUNCTION IF EXISTS pigse.fn_documento_guardar(BIGINT, VARCHAR, VARCHAR, BIGINT);
+DROP FUNCTION IF EXISTS pigse.fn_documento_guardar(BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR);
 
 CREATE FUNCTION pigse.fn_documento_guardar(
     p_pk_usuario  BIGINT,
@@ -366,7 +372,9 @@ $$;
 COMMENT ON FUNCTION pigse.fn_documento_guardar(BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR) IS
     'V502: gana p_categoria -- obligatoria para PEI/PEC (una de las 5 fijas), debe ser NULL para PMI. Devuelve la forma de fn_documento_categorias_listar para PEI/PEC, o la de fn_documentos_listar (categoria/categoriaName en NULL) para PMI -- mismo shape que ya esperaba el front.';
 
+-- Mismo motivo que arriba: firma vieja (3 args) + firma nueva (4 args).
 DROP FUNCTION IF EXISTS pigse.fn_documento_eliminar(BIGINT, VARCHAR, VARCHAR);
+DROP FUNCTION IF EXISTS pigse.fn_documento_eliminar(BIGINT, VARCHAR, VARCHAR, VARCHAR);
 
 CREATE FUNCTION pigse.fn_documento_eliminar(
     p_pk_usuario BIGINT,
