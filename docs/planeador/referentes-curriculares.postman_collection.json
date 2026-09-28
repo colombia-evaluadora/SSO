@@ -171,10 +171,10 @@
               "language": "json"
             }
           },
-          "raw": "{\n  \"NOMBRE\": \"DBA - Primaria\",\n  \"DESCRIPCION\": \"Derechos Basicos de Aprendizaje para educacion basica primaria.\",\n  \"NIVELES_IDS\": [{{pkNivelEnsenanza}}, {{pkNivelEnsenanza2}}],\n  \"ENFOQUE_PEDAGOGICO\": {{pkEnfoquePedagogico}},\n  \"TIPO_EVALUACION\": {{pkTipoEvaluacion}},\n  \"INSTRUMENTO\": \"Unidad tematica\",\n  \"INSTRUMENTO_INFO\": \"Incluye planes de area, rubricas, informes de logro.\",\n  \"NORMATIVIDAD\": \"Decreto 1290 de 2009.\\nLey 115 de 1994 (Art. 77).\\nDecreto 1411 de 2022.\",\n  \"ANIO_DESDE\": 2023,\n  \"ANIO_HASTA\": null,\n  \"NIVEL_1_ETIQUETA\": \"Enunciado\",\n  \"NIVEL_2_ETIQUETA\": \"Evidencia\",\n  \"ESTADO\": \"A\",\n  \"AREAS_IDS\": [{{pkTareaAsignatura}}]\n}"
+          "raw": "{\n  \"NOMBRE\": \"DBA - Primaria\",\n  \"DESCRIPCION\": \"Derechos Basicos de Aprendizaje para educacion basica primaria.\",\n  \"NIVELES_IDS\": [{{pkNivelEnsenanza}}, {{pkNivelEnsenanza2}}],\n  \"ENFOQUE_PEDAGOGICO\": {{pkEnfoquePedagogico}},\n  \"TIPO_EVALUACION\": {{pkTipoEvaluacion}},\n  \"INSTRUMENTO\": \"Unidad tematica\",\n  \"ROTULO_EJECUCION\": \"Actividad\",\n  \"INSTRUMENTO_INFO\": \"Incluye planes de area, rubricas, informes de logro.\",\n  \"NORMATIVIDAD\": \"Decreto 1290 de 2009.\\nLey 115 de 1994 (Art. 77).\\nDecreto 1411 de 2022.\",\n  \"ANIO_DESDE\": 2023,\n  \"ANIO_HASTA\": null,\n  \"NIVEL_1_ETIQUETA\": \"Enunciado\",\n  \"NIVEL_2_ETIQUETA\": \"Evidencia\",\n  \"ESTADO\": \"A\",\n  \"AREAS_IDS\": [{{pkTareaAsignatura}}]\n}"
         },
         "description": {
-          "content": "`fn_refcurr_crear`. Campos obligatorios: `NOMBRE` (<=150), `DESCRIPCION` (<=400), `NIVELES_IDS` (BIGINT[], PKs de `/catalogos/niveles-ensenanza` -- relacion N:N, al menos un nivel; `22023` si llega vacio o ausente), `ENFOQUE_PEDAGOGICO` / `TIPO_EVALUACION` (BIGINT, PK de `GET /select/ENFOQUE_PEDAGOGICO` y `/select/TIPO_EVALUACION`), `INSTRUMENTO` (<=400), `NORMATIVIDAD` (<=400), `ANIO_DESDE` (INTEGER). Opcionales: `NIVEL_1_ETIQUETA`/`NIVEL_2_ETIQUETA` (default 'Enunciado'/'Evidencia' -- texto libre, sin regla especial para Preescolar), `INSTRUMENTO_INFO` (<=400), `ANIO_HASTA` (INTEGER, debe ser >= ANIO_DESDE), `ESTADO` ('A'/'I', default 'A' -- se puede crear inactivo), `AREAS_IDS` (BIGINT[], ausente/vacio = aplica a todas las areas).\n\n**Errores**: `22023` obligatorio faltante / vigencia invertida / estado invalido; `23503` FK inexistente o inactiva (nivel, enfoque, tipo evaluacion, alguna area); `23505` nombre duplicado entre activos que comparte al menos un nivel educativo (dos referentes pueden llamarse igual si sus niveles son disjuntos); `403` gate.\n\nGuarda `id` de la respuesta en `pkReferenteCurricular`.",
+          "content": "`fn_refcurr_crear`. Campos obligatorios: `NOMBRE` (<=150), `DESCRIPCION` (<=400), `NIVELES_IDS` (BIGINT[], PKs de `/catalogos/niveles-ensenanza` -- relacion N:N, al menos un nivel; `22023` si llega vacio o ausente), `ENFOQUE_PEDAGOGICO` / `TIPO_EVALUACION` (BIGINT, PK de `GET /select/ENFOQUE_PEDAGOGICO` y `/select/TIPO_EVALUACION`), `INSTRUMENTO` (<=50; es el \"Rotulo de Secuencia de Actividades\"), `NORMATIVIDAD` (<=400), `ANIO_DESDE` (INTEGER). Opcionales: `ROTULO_EJECUCION` (<=50, default 'Actividad'), `NIVEL_1_ETIQUETA`/`NIVEL_2_ETIQUETA` (<=50, default 'Enunciado'/'Evidencia' -- texto libre, sin regla especial para Preescolar), `INSTRUMENTO_INFO` (<=400), `ANIO_HASTA` (INTEGER, debe ser >= ANIO_DESDE), `ESTADO` ('A'/'I', default 'A' -- se puede crear inactivo), `AREAS_IDS` (BIGINT[], ausente/vacio = aplica a todas las areas).\n\n**Errores**: `22023` obligatorio faltante / vigencia invertida / estado invalido; `23503` FK inexistente o inactiva (nivel, enfoque, tipo evaluacion, alguna area); `22023` enfoque Formativo con tipo de evaluacion distinto de Cualitativa (\"Los referentes de enfoque formativo requieren evaluacion cualitativa\"); `23505` \"El nivel educativo X ya lo gobierna el referente activo Y\" (Regla 7: un solo referente con `ESTADO='A'` por nivel; el `HINT` trae el pk del otro -- crear con `ESTADO='I'` lo evita); `23505` nombre duplicado entre activos que comparte al menos un nivel educativo (dos referentes pueden llamarse igual si sus niveles son disjuntos); `403` gate.\n\nGuarda `id` de la respuesta en `pkReferenteCurricular`.",
           "type": "text/markdown"
         }
       },
@@ -184,6 +184,7 @@
           "script": {
             "type": "text/javascript",
             "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
               "const d = pm.response.json();",
               "const pk = d.pkReferenteCurricularCreado ?? d.id;",
               "if (pk) { pm.environment.set(\"pkReferenteCurricular\", pk); }"
@@ -225,7 +226,89 @@
       ]
     },
     {
-      "name": "4 - Listar referentes (paginado)",
+      "name": "4 - Crear referente Formativo + Cuantitativa -> 22023",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"NOMBRE\": \"Negativo Formativo + Cuantitativa\",\n  \"DESCRIPCION\": \"No debe crearse.\",\n  \"NIVELES_IDS\": [{{pkNivelEnsenanza}}],\n  \"ENFOQUE_PEDAGOGICO\": {{pkEnfoqueFormativo}},\n  \"TIPO_EVALUACION\": {{pkTipoCuantitativa}},\n  \"INSTRUMENTO\": \"Unidad tematica\",\n  \"NORMATIVIDAD\": \"Decreto 1290 de 2009.\",\n  \"ANIO_DESDE\": 2023,\n  \"ESTADO\": \"I\"\n}"
+        },
+        "description": {
+          "content": "Negativo de `fn_refcurr_crear`: enfoque `Formativo` con `TIPO_EVALUACION` distinto de `Cualitativa` -> `22023` \"Los referentes de enfoque formativo requieren evaluacion cualitativa\". Se crea con `ESTADO='I'` para que la Regla 7 (un solo activo por nivel) no conteste antes con `23505`. En el PATCH, pasar a Formativo SIN mandar `TIPO_EVALUACION` fija el tipo en Cualitativa solo; mandarlo con otro tipo da el mismo `22023`.\n\nEl pre-request resuelve `pkEnfoqueFormativo` / `pkTipoCuantitativa` por TEXTO desde `/select/ENFOQUE_PEDAGOGICO` y `/select/TIPO_EVALUACION` (los pk de `TLISTA_VALOR` difieren entre servidores); si no los encuentra, usa el valor de la variable. Si por error se creara, el test lo da de baja para dejar la corrida en cero.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const base = pm.variables.get('baseUrl') + '/api/eval-col/select/';",
+              "const auth = { key: 'Authorization', value: 'Bearer ' + pm.environment.get('token') };",
+              "function resolver(cat, texto, variable) {",
+              "  pm.sendRequest({ url: base + cat, method: 'GET', header: [auth] }, (err, res) => {",
+              "    if (err || res.code !== 200) return;",
+              "    let rows = res.json(); if (!Array.isArray(rows)) rows = rows.data || rows.items || [];",
+              "    const r = rows.find(x => Object.values(x).some(v => typeof v === 'string' && v.trim().toLowerCase() === texto));",
+              "    if (!r) return;",
+              "    const pk = r.id ?? r.value ?? r.pk_lista_valor ?? Object.values(r).find(v => typeof v === 'number');",
+              "    if (pk != null) pm.variables.set(variable, pk);",
+              "  });",
+              "}",
+              "resolver('ENFOQUE_PEDAGOGICO', 'formativo', 'pkEnfoqueFormativo');",
+              "resolver('TIPO_EVALUACION', 'cuantitativa', 'pkTipoCuantitativa');"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Rechazado con error de validacion (no 2xx, no 403)\", () => {",
+              "  pm.expect(pm.response.code).to.be.within(400, 499);",
+              "  pm.expect(pm.response.code).to.not.equal(403);",
+              "});",
+              "pm.test(\"Menciona 22023 / evaluacion cualitativa\", () => pm.expect(pm.response.text()).to.match(/22023|cualitativa/i));",
+              "if (pm.response.code < 300) {",
+              "  let d = {}; try { d = pm.response.json(); } catch (e) {}",
+              "  const pk = d.pkReferenteCurricularCreado ?? d.id;",
+              "  if (pk) pm.sendRequest({ url: pm.variables.get('baseUrl') + '/api/eval-col/referentes-curriculares/' + pk + '/eliminar', method: 'PATCH', header: [{ key: 'Authorization', value: 'Bearer ' + pm.environment.get('token') }] });",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 - Listar referentes (paginado)",
       "request": {
         "method": "POST",
         "header": [
@@ -260,13 +343,33 @@
           "raw": "{\n  \"FILTERS\": {\n    \"SEARCH\": \"DBA\",\n    \"NIVEL_EDUCATIVO\": null,\n    \"ENFOQUE_PEDAGOGICO\": null,\n    \"TIPO_EVALUACION\": null,\n    \"ESTADO\": null\n  },\n  \"SORTING\": { \"ID\": \"nombre\", \"DESC\": false },\n  \"PAGEINDEX\": 0,\n  \"PAGESIZE\": 20\n}"
         },
         "description": {
-          "content": "`fn_refcurr_listar`. Todos los campos de `FILTERS` son opcionales (null = sin ese filtro). `SORTING.ID` in (`nombre`|`nivel_educativo`|`instrumento`|`estado`). `PAGEINDEX` (0-based) x `PAGESIZE` -> `p_offset`/`p_limite`. El filtro `FILTERS.NIVEL_EDUCATIVO` es UN solo nivel: el referente califica si CUALQUIERA de sus niveles coincide. Cada fila trae `niveles_educativos` (nombres concatenados, tambien la clave de orden de `nivel_educativo`) y `niveles` (`[{id, codigo, nombre}]`, para chips y para precargar el multi-select). La respuesta trae `total_count` (mismo valor repetido en cada fila) para `pageCount`.",
+          "content": "`fn_refcurr_listar`. Todos los campos de `FILTERS` son opcionales (null = sin ese filtro). `SORTING.ID` in (`nombre`|`nivel_educativo`|`instrumento`|`estado`). `PAGEINDEX` (0-based) x `PAGESIZE` -> `p_offset`/`p_limite`. El filtro `FILTERS.NIVEL_EDUCATIVO` es UN solo nivel: el referente califica si CUALQUIERA de sus niveles coincide. Cada fila trae `niveles_educativos` (nombres concatenados, tambien la clave de orden de `nivel_educativo`) y `niveles` (`[{id, codigo, nombre}]`, para chips y para precargar el multi-select). La respuesta trae `total_count` (mismo valor repetido en cada fila) para `pageCount`. Ademas cada fila trae `rotulo_ejecucion`, `grados_vinculados` (`[{id, codigo, nombre}]`; `[]` = \"Todos\" los grados), `modificado_por` y `modificado_en`.",
           "type": "text/markdown"
         }
-      }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+              "const r0 = (d => Array.isArray(d) ? d[0] : d)(pm.response.json());",
+              "pm.test(\"Trae rotulo_ejecucion, grados_vinculados, modificado_por, modificado_en\", () => {",
+              "  pm.expect(r0, \"sin filas\").to.be.an(\"object\");",
+              "  pm.expect(r0).to.have.property(\"rotulo_ejecucion\");",
+              "  pm.expect(r0).to.have.property(\"grados_vinculados\");",
+              "  pm.expect(r0).to.have.property(\"modificado_por\");",
+              "  pm.expect(r0).to.have.property(\"modificado_en\");",
+              "  pm.expect(r0.grados_vinculados).to.be.an(\"array\");",
+              "});"
+            ]
+          }
+        }
+      ]
     },
     {
-      "name": "5 - Detalle de un referente",
+      "name": "6 - Detalle de un referente",
       "request": {
         "method": "GET",
         "header": [
@@ -288,13 +391,77 @@
           ]
         },
         "description": {
-          "content": "`fn_refcurr_buscar_por_pk`. Pestaña \"Información general\" del detalle -- enfoque/tipo con nombre ya resuelto y `niveles` como arreglo `[{id, codigo, nombre}]` (N:N). 0 filas (cuerpo vacio) si el `:ID` no existe: el front lo trata como 404.",
+          "content": "`fn_refcurr_buscar_por_pk`. Pestaña \"Información general\" del detalle -- enfoque/tipo con nombre ya resuelto y `niveles` como arreglo `[{id, codigo, nombre}]` (N:N). 0 filas (cuerpo vacio) si el `:ID` no existe: el front lo trata como 404. Trae ademas `rotulo_ejecucion` y `grados_vinculados` (`[{id, codigo, nombre}]`; `[]` = \"Todos\").",
           "type": "text/markdown"
         }
-      }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+              "const r0 = (d => Array.isArray(d) ? d[0] : d)(pm.response.json());",
+              "pm.test(\"Trae rotulo_ejecucion, grados_vinculados\", () => {",
+              "  pm.expect(r0, \"sin filas\").to.be.an(\"object\");",
+              "  pm.expect(r0).to.have.property(\"rotulo_ejecucion\");",
+              "  pm.expect(r0).to.have.property(\"grados_vinculados\");",
+              "  pm.expect(r0.grados_vinculados).to.be.an(\"array\");",
+              "});"
+            ]
+          }
+        }
+      ]
     },
     {
-      "name": "6 - Areas del referente",
+      "name": "7 - Grados del referente",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/grados",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares",
+            "{{pkReferenteCurricular}}",
+            "grados"
+          ]
+        },
+        "description": {
+          "content": "Grados (catalogo `GRADOS` de `TLISTA_VALOR`) de los niveles educativos del referente. Filas `{fk_tlv_grado, codigo, nombre, fk_tnivel_ensenanza, nivel_ensenanza, total_enunciados}`. Alimenta el select de grado del enunciado (`GRADO_ID`) y el filtro `?grado=` del listado.\n\nGuarda el primer `fk_tlv_grado` en `pkGrado`. Si llega vacio (el catalogo `GRADOS` puede no existir en un Postgres limpio) borra `pkGrado` y los pasos siguientes omiten `GRADO_ID` / `?grado=`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+              "const d = pm.response.json();",
+              "pm.test(\"Es una lista\", () => pm.expect(d).to.be.an(\"array\"));",
+              "if (Array.isArray(d) && d[0]) {",
+              "  pm.test(\"Fila con fk_tlv_grado y total_enunciados\", () => { pm.expect(d[0]).to.have.property(\"fk_tlv_grado\"); pm.expect(d[0]).to.have.property(\"total_enunciados\"); });",
+              "  pm.environment.set(\"pkGrado\", d[0].fk_tlv_grado);",
+              "} else { pm.environment.unset(\"pkGrado\"); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8 - Areas del referente",
       "request": {
         "method": "GET",
         "header": [
@@ -327,6 +494,7 @@
           "script": {
             "type": "text/javascript",
             "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
               "const d = pm.response.json();",
               "if (Array.isArray(d) && d[0]) { pm.environment.set(\"pkReferenteCurricularArea\", d[0].pk_referente_curricular_area); }"
             ]
@@ -335,7 +503,7 @@
       ]
     },
     {
-      "name": "7 - Niveles educativos del referente",
+      "name": "9 - Niveles educativos del referente",
       "request": {
         "method": "GET",
         "header": [
@@ -361,10 +529,63 @@
           "content": "`fn_refcurr_niveles_listar`. Niveles educativos ACTIVOS del referente (relacion N:N, `TREFERENTE_CURRICULAR_NIVEL`) -- precarga el multi-select \"Nivel educativo\" al editar. Devuelve `[{ pk_referente_curricular_nivel, fk_tnivel_ensenanza, codigo, nombre }]`; para `NIVELES_IDS` se usa `fk_tnivel_ensenanza` (el PK del catalogo), NO `pk_referente_curricular_nivel`. Nunca deberia venir vacio en un referente activo: el nivel es obligatorio.",
           "type": "text/markdown"
         }
-      }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
     },
     {
-      "name": "8 - Actualizar referente (PATCH parcial)",
+      "name": "10 - Impacto del referente",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/impacto",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "referentes-curriculares",
+            "{{pkReferenteCurricular}}",
+            "impacto"
+          ]
+        },
+        "description": {
+          "content": "Cuantas unidades y actividades vivas usan el referente: `{unidades, actividades}`. El front lo muestra como advertencia antes de editar o eliminar.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+              "const r0 = (d => Array.isArray(d) ? d[0] : d)(pm.response.json());",
+              "pm.test(\"Trae unidades y actividades\", () => { pm.expect(r0).to.have.property(\"unidades\"); pm.expect(r0).to.have.property(\"actividades\"); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 - Actualizar referente (PATCH parcial)",
       "request": {
         "method": "PATCH",
         "header": [
@@ -399,13 +620,24 @@
           "raw": "{\n  \"DESCRIPCION\": \"Descripcion actualizada.\",\n  \"NIVELES_IDS\": [{{pkNivelEnsenanza}}],\n  \"ESTADO\": \"A\"\n}"
         },
         "description": {
-          "content": "`fn_refcurr_actualizar`. Cualquier campo ausente/null preserva su valor actual (PATCH real, no PUT). `NIVELES_IDS`: ausente = no tocar los niveles; array = reemplazo completo del set -- NO acepta `[]` (`22023`: el referente siempre conserva al menos un nivel), y da `23505` si el set resultante choca con otro referente activo del mismo nombre. `AREAS_IDS`: ausente = no tocar; `[]` = vaciar (vuelve a \"aplica a todas\"); array con PKs = reemplazo completo -- `23503` si intenta quitar un area con enunciados vivos amarrados.",
+          "content": "`fn_refcurr_actualizar`. Cualquier campo ausente/null preserva su valor actual (PATCH real, no PUT). `NIVELES_IDS`: ausente = no tocar los niveles; array = reemplazo completo del set -- NO acepta `[]` (`22023`: el referente siempre conserva al menos un nivel), y da `23505` si el set resultante choca con otro referente activo del mismo nombre. `AREAS_IDS`: ausente = no tocar; `[]` = vaciar (vuelve a \"aplica a todas\"); array con PKs = reemplazo completo -- `23503` si intenta quitar un area con enunciados vivos amarrados. `ROTULO_EJECUCION` (<=50): ausente = no tocar. `INSTRUMENTO` y etiquetas <=50. Si pasa a Formativo sin mandar `TIPO_EVALUACION`, el tipo se fija solo en Cualitativa; con otro tipo explicito, `22023`. Quitar un nivel cuyo grado usan enunciados vivos da `23503`; activar (`ESTADO='A'`) sobre un nivel ya gobernado por otro referente activo da `23505` (Regla 7, `HINT` con el pk del otro).",
           "type": "text/markdown"
         }
-      }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
     },
     {
-      "name": "9 - Crear enunciado (nivel 1)",
+      "name": "12 - Crear enunciado (nivel 1)",
       "request": {
         "method": "POST",
         "header": [
@@ -438,19 +670,33 @@
               "language": "json"
             }
           },
-          "raw": "{\n  \"TEXTO\": \"Fortalecer la comunicacion oral y la escucha activa en diferentes contextos.\",\n  \"AREA_ID\": null,\n  \"ESTADO\": \"A\"\n}"
+          "raw": "{\n  \"TEXTO\": \"Fortalecer la comunicacion oral y la escucha activa en diferentes contextos.\",\n  \"AREA_ID\": null,\n  \"GRADO_ID\": {{pkGrado}},\n  \"ESTADO\": \"A\"\n}"
         },
         "description": {
-          "content": "`fn_refenunc_crear`, sin `ENUNCIADO_PADRE` -> nivel 1 (enunciado). `TEXTO` obligatorio (<=400). `AREA_ID` SIEMPRE opcional (null = aplica a todas las areas del referente); si se manda, debe ser un `pk_referente_curricular_area` (no el `pk_tarea_asignatura`) de ESTE referente -- usar el id devuelto por el paso 6.\n\n**Errores**: `22023` texto vacio / estado invalido; `23503` `AREA_ID` no pertenece a este referente o esta inactiva; `P0002` referente inexistente; `403` gate.\n\nGuarda `id` en `pkReferenteEnunciado`.",
+          "content": "`fn_refenunc_crear`, sin `ENUNCIADO_PADRE` -> nivel 1 (enunciado). `TEXTO` obligatorio (<=500). `AREA_ID` SIEMPRE opcional (null = aplica a todas las areas del referente); si se manda, debe ser un `pk_referente_curricular_area` (no el `pk_tarea_asignatura`) de ESTE referente -- usar el id devuelto por el paso de areas. `GRADO_ID` opcional (`fk_tlv_grado` del paso de grados; ausente = todos los grados), solo en enunciados de nivel 1 y fijo desde la creacion (el PATCH no lo expone). El pre-request lo quita del body si `pkGrado` no esta definido.\n\n**Errores**: `22023` texto vacio / estado invalido; `23503` grado que no es de los niveles del referente; `23503` `AREA_ID` no pertenece a este referente o esta inactiva; `P0002` referente inexistente; `403` gate.\n\nGuarda `id` en `pkReferenteEnunciado`.",
           "type": "text/markdown"
         }
       },
       "event": [
         {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (!pm.environment.get(\"pkGrado\")) {",
+              "  const b = JSON.parse(pm.request.body.raw.replace('{{pkGrado}}', 'null'));",
+              "  delete b.GRADO_ID;",
+              "  pm.request.body.raw = JSON.stringify(b, null, 2);",
+              "}"
+            ]
+          }
+        },
+        {
           "listen": "test",
           "script": {
             "type": "text/javascript",
             "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
               "const d = pm.response.json();",
               "const pk = d.pkReferenteEnunciadoCreado ?? d.id;",
               "if (pk) { pm.environment.set(\"pkReferenteEnunciado\", pk); }"
@@ -460,7 +706,7 @@
       ]
     },
     {
-      "name": "10 - Crear evidencia (nivel 2, de un enunciado)",
+      "name": "13 - Crear evidencia (nivel 2, de un enunciado)",
       "request": {
         "method": "POST",
         "header": [
@@ -496,13 +742,24 @@
           "raw": "{\n  \"TEXTO\": \"Expresa ideas con claridad en diferentes situaciones.\",\n  \"ENUNCIADO_PADRE\": {{pkReferenteEnunciado}},\n  \"ESTADO\": \"A\"\n}"
         },
         "description": {
-          "content": "`fn_refenunc_crear`, con `ENUNCIADO_PADRE` = PK de un enunciado YA EXISTENTE y activo -> nivel 2 (evidencia). El padre debe existir ANTES de crear su evidencia (no hay forma de crear una evidencia huerfana). No se puede anidar una evidencia sobre otra evidencia. NO manda `AREA_ID`: una evidencia hereda el area de su enunciado padre; si se manda, `22023`.\n\n**Errores**: `P0002` `ENUNCIADO_PADRE` no existe; `22023` padre inactivo, de otro referente, ya es una evidencia (nivel 2), o se mando `AREA_ID`.",
+          "content": "`fn_refenunc_crear`, con `ENUNCIADO_PADRE` = PK de un enunciado YA EXISTENTE y activo -> nivel 2 (evidencia). El padre debe existir ANTES de crear su evidencia (no hay forma de crear una evidencia huerfana). No se puede anidar una evidencia sobre otra evidencia. NO manda `AREA_ID` ni `GRADO_ID`: una evidencia hereda el area y el grado de su enunciado padre; si se manda, `22023`.\n\n**Errores**: `P0002` `ENUNCIADO_PADRE` no existe; `22023` padre inactivo, de otro referente, ya es una evidencia (nivel 2), o se mando `AREA_ID`/`GRADO_ID`.",
           "type": "text/markdown"
         }
-      }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
     },
     {
-      "name": "11 - Listar enunciados de un referente",
+      "name": "14 - Listar enunciados de un referente",
       "request": {
         "method": "GET",
         "header": [
@@ -512,7 +769,7 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/enunciados?area=",
+          "raw": "{{baseUrl}}/api/eval-col/referentes-curriculares/{{pkReferenteCurricular}}/enunciados?area=&grado={{pkGrado}}",
           "host": [
             "{{baseUrl}}"
           ],
@@ -527,18 +784,36 @@
             {
               "key": "area",
               "value": "",
-              "description": "Opcional -- pk_referente_curricular_area para filtrar (ver paso 6). Vacio = todos los enunciados del referente."
+              "description": "Opcional -- pk_referente_curricular_area para filtrar (ver paso Areas del referente). Vacio = todos los enunciados del referente."
+            },
+            {
+              "key": "grado",
+              "value": "{{pkGrado}}",
+              "description": "Opcional -- fk_tlv_grado (ver paso de grados). Vacio = todos los grados."
             }
           ]
         },
         "description": {
-          "content": "`fn_refenunc_listar`. Solo nivel 1 (enunciados); cada fila trae `total_evidencias`. Panel izquierdo de la pestaña Enunciado.",
+          "content": "`fn_refenunc_listar`. Solo nivel 1 (enunciados); cada fila trae `total_evidencias`. Panel izquierdo de la pestaña Enunciado. Acepta `?grado=` (fk_tlv_grado) ademas de `?area=`; cada fila trae `fk_tlv_grado` y `grado`.",
           "type": "text/markdown"
         }
-      }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+              "const r0 = pm.response.json()[0];",
+              "if (r0) pm.test(\"Trae fk_tlv_grado y grado\", () => { pm.expect(r0).to.have.property(\"fk_tlv_grado\"); pm.expect(r0).to.have.property(\"grado\"); });"
+            ]
+          }
+        }
+      ]
     },
     {
-      "name": "12 - Listar evidencias de un enunciado",
+      "name": "15 - Listar evidencias de un enunciado",
       "request": {
         "method": "GET",
         "header": [
@@ -565,10 +840,21 @@
           "content": "`fn_refenunc_evidencias_listar`. Tabla \"Evidencias del enunciado\" (columna `#` = `numero`, 1-based). `P0002` si `:ID` no existe o no es un enunciado de nivel 1 (p.ej. si se pasa el PK de una evidencia por error).",
           "type": "text/markdown"
         }
-      }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
     },
     {
-      "name": "13 - Actualizar enunciado/evidencia (PATCH parcial)",
+      "name": "16 - Actualizar enunciado/evidencia (PATCH parcial)",
       "request": {
         "method": "PATCH",
         "header": [
@@ -601,16 +887,27 @@
               "language": "json"
             }
           },
-          "raw": "{\n  \"TEXTO\": \"Fortalecer la comunicacion oral y la escucha activa.\",\n  \"AREA_ID\": null,\n  \"LIMPIAR_AREA\": true\n}"
+          "raw": "{\n  \"TEXTO\": \"Fortalecer la comunicacion oral y la escucha activa.\"\n}"
         },
         "description": {
-          "content": "`fn_refenunc_actualizar`. `FK_PADRE` y el referente son inmutables (borrar y crear de nuevo si hace falta moverlo). `AREA_ID`/`LIMPIAR_AREA` solo aplican a un enunciado (nivel 1) -- en una evidencia dan `22023`. `LIMPIAR_AREA: true` vuelve el area a NULL (aplica a todas); si se manda junto con `AREA_ID`, `LIMPIAR_AREA` gana.",
+          "content": "`fn_refenunc_actualizar`. Solo `TEXTO` (<=500) y `ESTADO`. El area, el grado, el padre y el referente quedan fijos desde la creacion (Regla 11): para reasignarlos se elimina el enunciado y se vuelve a crear con los filtros correspondientes. `AREA_ID`/`LIMPIAR_AREA` ya no existen en este endpoint.",
           "type": "text/markdown"
         }
-      }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
     },
     {
-      "name": "14 - Eliminar enunciado/evidencia (soft delete)",
+      "name": "17 - Eliminar enunciado/evidencia (soft delete)",
       "request": {
         "method": "PATCH",
         "header": [
@@ -637,10 +934,21 @@
           "content": "`fn_refenunc_eliminar`. PATCH, no DELETE (`ck_query_http_method` no admite DELETE). Si `:ID` es un enunciado (nivel 1), da de baja en cascada sus evidencias activas.",
           "type": "text/markdown"
         }
-      }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
     },
     {
-      "name": "15 - Eliminar referente (soft delete en cascada)",
+      "name": "18 - Eliminar referente (soft delete en cascada)",
       "request": {
         "method": "PATCH",
         "header": [
@@ -666,6 +974,71 @@
           "content": "`fn_refcurr_eliminar`. PATCH, no DELETE. Cascada: evidencias -> enunciados -> areas -> niveles -> referente. `22023` si ya estaba inactivo.",
           "type": "text/markdown"
         }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Rotulo de la actividad por grado (Planeador)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const b = pm.response.json(); const r = Array.isArray(b) ? b[0] : (b.data ? b.data[0] : b);",
+              "pm.test('trae rotulo_ejecucion', () => pm.expect(r).to.have.property('rotulo_ejecucion'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/rotulo-actividad?grado={{pkTgrado}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "rotulo-actividad"
+          ],
+          "query": [
+            {
+              "key": "grado",
+              "value": "{{pkTgrado}}"
+            },
+            {
+              "key": "asignatura",
+              "value": "",
+              "disabled": true
+            },
+            {
+              "key": "anio",
+              "value": "",
+              "disabled": true
+            }
+          ]
+        },
+        "description": "`fn_planeador_rotulo_actividad` (V511). Como se llama la actividad para un `grado` (PK de TGRADO, obligatorio) y `asignatura` (opcional): el Rotulo de Ejecucion del referente que le corresponde, con la misma regla que la unidad (`fn_unidad_referente_aplicable`). Siempre una fila `{fk_tgrado, pk_referente_curricular, rotulo_ejecucion}`; sin referente aplicable, `pk_referente_curricular` = null y `rotulo_ejecucion` = \"Actividad\". Gate VER sobre PLANEADOR + alcance por el grado: fuera de alcance o inexistente = 403; grado alcanzable o asignatura inexistentes = 404. Fijar `pkTgrado` en el entorno."
       }
     }
   ],
@@ -719,6 +1092,25 @@
       "key": "pkTareaAsignatura",
       "value": "1",
       "type": "string"
+    },
+    {
+      "key": "pkEnfoqueFormativo",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "pkTipoCuantitativa",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "pkGrado",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "pkTgrado",
+      "value": ""
     }
   ]
 }

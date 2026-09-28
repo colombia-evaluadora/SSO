@@ -11,6 +11,14 @@ from datetime import datetime
 VERDICTS = ["obsoleta", "residual", "parcial", "viva", "solo-binds", "sin-cambios"]
 
 
+
+def _cobertura_pct(sin_clasificar: int, total: int) -> str:
+    """100% solo si no falta nada; si no, se trunca a un decimal para que un
+    99,86% no se muestre como 100% y esconda las sentencias pendientes."""
+    if not total or not sin_clasificar:
+        return "100%"
+    return f"{int(1000 * (total - sin_clasificar) / total) / 10:.1f}%"
+
 def compact(model: dict) -> dict:
     """Modelo reducido para embeber: nombres cortos, sin campos redundantes."""
     migs = []
@@ -1661,7 +1669,7 @@ no mata lo anterior, lo modifica. Regenerá esta página con
     <div class="n">{len(data['sig'])}</div>
     <div class="s">{len(data['issues'])} llamadas desalineadas</div></div>
   <div class="metric"><div class="k">Cobertura</div>
-    <div class="n">{100 - round(100*meta['unparsed']/max(1,meta['statements']))}%</div>
+    <div class="n">{_cobertura_pct(meta['unparsed'], meta['statements'])}</div>
     <div class="s">{meta['unparsed']} de {meta['statements']} sentencias sin clasificar</div></div>
 </div>
 
