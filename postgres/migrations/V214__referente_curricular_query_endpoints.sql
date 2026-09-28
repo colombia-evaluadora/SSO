@@ -95,19 +95,23 @@ SELECT
     p_fk_tlv_enfoque_pedagogico  => CAST(:BODY.ENFOQUE_PEDAGOGICO AS BIGINT),
     p_fk_tlv_tipo_evaluacion     => CAST(:BODY.TIPO_EVALUACION AS BIGINT),
     p_instrumento                => CAST(:BODY.INSTRUMENTO AS VARCHAR),
-    p_normatividad                => CAST(:BODY.NORMATIVIDAD AS VARCHAR),
-    p_anio_vigencia_desde         => CAST(:BODY.ANIO_DESDE AS INTEGER),
-    p_nivel_1_etiqueta             => CAST(:BODY.NIVEL_1_ETIQUETA AS VARCHAR),
-    p_nivel_2_etiqueta             => CAST(:BODY.NIVEL_2_ETIQUETA AS VARCHAR),
-    p_instrumento_info_adicional  => CAST(:BODY.INSTRUMENTO_INFO AS VARCHAR),
-    p_anio_vigencia_hasta          => CAST(:BODY.ANIO_HASTA AS INTEGER),
-    p_estado                       => COALESCE(CAST(:BODY.ESTADO AS VARCHAR), 'A'),
-    p_fk_tarea_asignatura_ids      => CAST(:BODY.AREAS_IDS AS BIGINT[])
+    p_normatividad               => CAST(:BODY.NORMATIVIDAD AS VARCHAR),
+    p_anio_vigencia_desde        => CAST(:BODY.ANIO_DESDE AS INTEGER),
+    p_nivel_1_etiqueta           => CAST(:BODY.NIVEL_1_ETIQUETA AS VARCHAR),
+    p_nivel_2_etiqueta           => CAST(:BODY.NIVEL_2_ETIQUETA AS VARCHAR),
+    p_instrumento_info_adicional => CAST(:BODY.INSTRUMENTO_INFO AS VARCHAR),
+    p_anio_vigencia_hasta        => CAST(:BODY.ANIO_HASTA AS INTEGER),
+    p_estado                     => COALESCE(CAST(:BODY.ESTADO AS VARCHAR), 'A'),
+    p_fk_tarea_asignatura_ids    => CAST(:BODY.AREAS_IDS AS BIGINT[]),
+    p_fk_tlv_nombre_asignatura   => CAST(:BODY.NOMBRE_ASIGNATURA AS BIGINT),
+    p_rotulo_ejecucion           => CAST(:BODY.ROTULO_EJECUCION AS VARCHAR)
 ) AS pk_referente_curricular_creado$q$,
     'postgres', false, false, m.id_microservice,
     '/referentes-curriculares', 'SELECT', 'POST',
     '{
        "BODY.NOMBRE":             "VARCHAR",
+       "BODY.NOMBRE_ASIGNATURA":  "BIGINT",
+       "BODY.ROTULO_EJECUCION":   "VARCHAR",
        "BODY.DESCRIPCION":        "VARCHAR",
        "BODY.NIVELES_IDS":        "BIGINT[]",
        "BODY.ENFOQUE_PEDAGOGICO": "BIGINT",
@@ -122,9 +126,11 @@ SELECT
        "BODY.ESTADO":             "VARCHAR",
        "BODY.AREAS_IDS":          "BIGINT[]"
      }'::jsonb,
-    'V214 -- crea un referente curricular (DBA, Propositos e Imprescindibles, etc.); BODY.NIVELES_IDS (BIGINT[]) es obligatorio y debe traer al menos un nivel educativo (relacion N:N); BODY.AREAS_IDS vacio/ausente = aplica a todas las areas'
+    'Crea un referente curricular. BODY.INSTRUMENTO es el Rotulo de Secuencia de Actividades y BODY.ROTULO_EJECUCION el Rotulo de Ejecucion (max 50, defecto Actividad). Formativo exige Cualitativa (22023); un nivel ya gobernado por otro referente activo da 23505. BODY.NOMBRE_ASIGNATURA es el PK_LISTA_VALOR de un valor de la categoria PERSONALIZAR_ASIGNATURA (GET /referentes-curriculares/personalizar-asignatura lo lista), no texto libre; es OPCIONAL: si no viene se resuelve por nivel -- Asignatura, o Dimension si el referente es SOLO de preescolar. Un id que no sea de esa categoria da 23503. BODY.NIVELES_IDS obligatorio con al menos un nivel; BODY.AREAS_IDS vacio/ausente = aplica a todas las areas'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
+-- Identica a la fila de V214.3 a proposito: el deploy puede reaplicar V214
+-- despues de V214.3 y un contenido distinto aqui la devolveria atras.
 ON CONFLICT (uuid) DO UPDATE
    SET query = EXCLUDED.query, param_types = EXCLUDED.param_types,
        path_template = EXCLUDED.path_template, http_method = EXCLUDED.http_method,
@@ -146,21 +152,25 @@ SELECT
     p_fk_tnivel_ensenanza_ids    => CAST(:BODY.NIVELES_IDS AS BIGINT[]),
     p_fk_tlv_enfoque_pedagogico  => CAST(:BODY.ENFOQUE_PEDAGOGICO AS BIGINT),
     p_fk_tlv_tipo_evaluacion     => CAST(:BODY.TIPO_EVALUACION AS BIGINT),
-    p_nivel_1_etiqueta             => CAST(:BODY.NIVEL_1_ETIQUETA AS VARCHAR),
-    p_nivel_2_etiqueta             => CAST(:BODY.NIVEL_2_ETIQUETA AS VARCHAR),
+    p_nivel_1_etiqueta           => CAST(:BODY.NIVEL_1_ETIQUETA AS VARCHAR),
+    p_nivel_2_etiqueta           => CAST(:BODY.NIVEL_2_ETIQUETA AS VARCHAR),
     p_instrumento                => CAST(:BODY.INSTRUMENTO AS VARCHAR),
-    p_instrumento_info_adicional  => CAST(:BODY.INSTRUMENTO_INFO AS VARCHAR),
-    p_normatividad                => CAST(:BODY.NORMATIVIDAD AS VARCHAR),
-    p_anio_vigencia_desde         => CAST(:BODY.ANIO_DESDE AS INTEGER),
-    p_anio_vigencia_hasta          => CAST(:BODY.ANIO_HASTA AS INTEGER),
-    p_estado                       => CAST(:BODY.ESTADO AS VARCHAR),
-    p_fk_tarea_asignatura_ids      => CAST(:BODY.AREAS_IDS AS BIGINT[])
+    p_instrumento_info_adicional => CAST(:BODY.INSTRUMENTO_INFO AS VARCHAR),
+    p_normatividad               => CAST(:BODY.NORMATIVIDAD AS VARCHAR),
+    p_anio_vigencia_desde        => CAST(:BODY.ANIO_DESDE AS INTEGER),
+    p_anio_vigencia_hasta        => CAST(:BODY.ANIO_HASTA AS INTEGER),
+    p_estado                     => CAST(:BODY.ESTADO AS VARCHAR),
+    p_fk_tarea_asignatura_ids    => CAST(:BODY.AREAS_IDS AS BIGINT[]),
+    p_fk_tlv_nombre_asignatura   => CAST(:BODY.NOMBRE_ASIGNATURA AS BIGINT),
+    p_rotulo_ejecucion           => CAST(:BODY.ROTULO_EJECUCION AS VARCHAR)
 ) AS pk_referente_curricular$q$,
     'postgres', false, false, m.id_microservice,
     '/referentes-curriculares/:ID', 'SELECT', 'PATCH',
     '{
        "PARAM.ID":                "BIGINT",
        "BODY.NOMBRE":             "VARCHAR",
+       "BODY.NOMBRE_ASIGNATURA":  "BIGINT",
+       "BODY.ROTULO_EJECUCION":   "VARCHAR",
        "BODY.DESCRIPCION":        "VARCHAR",
        "BODY.NIVELES_IDS":        "BIGINT[]",
        "BODY.ENFOQUE_PEDAGOGICO": "BIGINT",
@@ -175,9 +185,11 @@ SELECT
        "BODY.ESTADO":             "VARCHAR",
        "BODY.AREAS_IDS":          "BIGINT[]"
      }'::jsonb,
-    'V214 -- PATCH parcial de un referente curricular; cada campo ausente preserva su valor actual. BODY.NIVELES_IDS ausente = no tocar los niveles educativos, array = reemplazo completo del set (vacio da 22023: siempre queda al menos un nivel). BODY.AREAS_IDS ausente = no tocar areas, [] = vaciarlas'
+    'PATCH parcial de un referente curricular; BODY.ROTULO_EJECUCION ausente = no tocar. cada campo ausente preserva su valor actual. BODY.NOMBRE_ASIGNATURA es el PK_LISTA_VALOR de un valor de PERSONALIZAR_ASIGNATURA: ausente = no tocar, id = lo reemplaza, id que no sea de esa categoria = 23503. BODY.NIVELES_IDS ausente = no tocar los niveles, array = reemplazo completo del set. BODY.AREAS_IDS ausente = no tocar areas, [] = vaciarlas'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
+-- Identica a la fila de V214.3 a proposito: el deploy puede reaplicar V214
+-- despues de V214.3 y un contenido distinto aqui la devolveria atras.
 ON CONFLICT (uuid) DO UPDATE
    SET query = EXCLUDED.query, param_types = EXCLUDED.param_types,
        path_template = EXCLUDED.path_template, http_method = EXCLUDED.http_method,
