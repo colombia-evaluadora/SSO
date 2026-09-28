@@ -1278,7 +1278,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_unidad_ponderacion_recalcular_sumatoria` | 2 | V223 | V224, V244, V479, V482, V492 |
 | `academico_test.fn_unidad_referente_aplicable` | 3 | V451 | V243, V280, V281, V407, V422, V455… |
 | `academico_test.fn_unidad_referente_detalle` | 2 | V255 | — |
-| `academico_test.fn_unidad_referente_evaluativo` | 1 | V214.2 | V216, V224, V226, V282, V422, V440… |
+| `academico_test.fn_unidad_referente_evaluativo` | 1 | V214.2 | V216, V224, V226, V243, V282, V422… |
 | `academico_test.fn_unidad_referente_reparar` | 1 | V455 | — |
 | `academico_test.fn_unidad_referente_tipo_evaluacion` | 1 | V214.2 | V282, V422, V458, V459, V460, V479… |
 | `academico_test.fn_unidad_rubrica_asegurar` | 2 | V222 | V216, V455 |
@@ -1319,15 +1319,15 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_usuario_categoria_rol_nivel` | 1 | V302 | V40, V51, V52, V53, V116, V130… |
 | `academico_test.fn_usuario_ee_accesibles` | 1 | V29 | V40, V51, V116, V140, V179, V233… |
 | `academico_test.fn_usuario_ee_lectura` | 1 | V29 | V40, V52, V53, V116, V130 |
-| `academico_test.fn_usuario_es_docente_puro` | 1 | V29 | V136, V216, V224, V407, V454, V481 |
-| `academico_test.fn_usuario_grupos_dirigidos` | 1 | V489 | V490, V491 |
+| `academico_test.fn_usuario_es_docente_puro` | 1 | V29 | V216, V224, V407, V454, V481 |
+| `academico_test.fn_usuario_grupos_dirigidos` | 1 | V489 | V140, V490, V491 |
 | `academico_test.fn_usuario_otros_usos` | 3 | V162 | V160, V161 |
 | `academico_test.fn_usuario_permisos_menu` | 1 | V303 | V29, V127 |
 | `academico_test.fn_usuario_peso_categoria` | 1 | V298 | — |
 | `academico_test.fn_usuario_puede_en_menu` | 3 | V29 | V40, V51, V52, V53, V116, V130… |
 | `academico_test.fn_usuario_sedes_jornadas_accesibles` | 1 | V29 | V40, V51, V116, V140, V297, V300… |
 | `academico_test.fn_usuario_sedes_lectura` | 1 | V29 | V52, V116, V130, V216, V224, V244… |
-| `academico_test.fn_usuario_solo_sus_grupos` | 1 | V489 | V490, V491 |
+| `academico_test.fn_usuario_solo_sus_grupos` | 1 | V489 | V140, V490, V491 |
 | `pigse.fn_usuario_categoria_rol_nivel` | 1 | V370 | V390 |
 | `pigse.fn_usuario_ee_accesibles` | 1 | V370 | V390 |
 | `pigse.fn_usuario_ente_crear` | 11 | V263 | — |
