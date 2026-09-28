@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V140 -- DDL e indices de TASISTENCIA para asistencia por ACTIVIDAD. Vivia en
+-- V139 -- DDL e indices de TASISTENCIA para asistencia por ACTIVIDAD. Vivia en
 -- V220 (eliminada); el `ON DELETE CASCADE` y `IDX_TASISTENCIA_ACTIVIDAD` de
 -- aqui vienen de V243 (que sigue existiendo y corre despues -- es su version
 -- la que gana hoy sobre FK_TASISTENCIA_ACTIVIDAD, V220 no la tenia).
@@ -26,7 +26,7 @@ BEGIN
         EXECUTE 'ALTER TABLE academico_test.TASISTENCIA
                      DROP CONSTRAINT IF EXISTS FK_TASISTENCIA_ACTIVIDAD';
         -- ON DELETE CASCADE: asi la definio V243 (que corre despues de este
-        -- archivo) y es la que hoy esta vigente -- sin esto, reaplicar V140
+        -- archivo) y es la que hoy esta vigente -- sin esto, reaplicar V139
         -- solo dejaria la constraint sin CASCADE hasta que V243 la corrija.
         EXECUTE 'ALTER TABLE academico_test.TASISTENCIA
                      ADD CONSTRAINT FK_TASISTENCIA_ACTIVIDAD

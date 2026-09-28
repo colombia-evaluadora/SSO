@@ -5,7 +5,7 @@
 -- consolidada en V136-V141.
 -- Depende de: TGRUPO/TGRADO/TPERIODO_ACADEMICO/TMATRICULA/TESTUDIANTE/
 -- TUSUARIO/TASIGNATURA/TACTIVIDAD/THORARIO/TLISTA_VALOR/TDOCENTE_ASIGNATURA
--- (V22), V139 (fn_asistencia_puede_ver, v_asistencia_detalle,
+-- (V22), V140 (fn_asistencia_puede_ver, v_asistencia_detalle,
 -- fn_asistencia_franja_bloque), V137 (fn_asistencia_periodo_eval).
 -- ===========================================================================
 

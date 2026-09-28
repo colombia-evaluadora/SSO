@@ -298,27 +298,27 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_asistencia_actividades_dia` | 4 | V141 | V221 |
-| `academico_test.fn_asistencia_actividades_programadas` | 6 | V457 | V139 |
+| `academico_test.fn_asistencia_actividades_programadas` | 6 | V457 | V140 |
 | `academico_test.fn_asistencia_asignaturas_sesion` | 4 | V141 | V221 |
 | `academico_test.fn_asistencia_bloques_programados` | 4 | V485 | — |
-| `academico_test.fn_asistencia_calendario` | 8 | V139 | V221 |
+| `academico_test.fn_asistencia_calendario` | 8 | V140 | V221 |
 | `academico_test.fn_asistencia_editar` | 7 | V138 | V221, V438 |
 | `academico_test.fn_asistencia_editar_bulk` | 7 | V438 | — |
 | `academico_test.fn_asistencia_editar_interno` | 8 | V137 | V138 |
 | `academico_test.fn_asistencia_estudiantes_sesion` | 6 | V141 | V221 |
-| `academico_test.fn_asistencia_franja_bloque` | 5 | V139 | V141, V457 |
+| `academico_test.fn_asistencia_franja_bloque` | 5 | V140 | V141, V457 |
 | `academico_test.fn_asistencia_gate_escritura` | 3 | V138 | — |
-| `academico_test.fn_asistencia_grupo_es_formativo` | 1 | V436 | V139, V457 |
-| `academico_test.fn_asistencia_horas_actividad` | 3 | V139 | V457 |
-| `academico_test.fn_asistencia_horas_bloque` | 5 | V139 | V457 |
+| `academico_test.fn_asistencia_grupo_es_formativo` | 1 | V436 | V140, V457 |
+| `academico_test.fn_asistencia_horas_actividad` | 3 | V140 | V457 |
+| `academico_test.fn_asistencia_horas_bloque` | 5 | V140 | V457 |
 | `academico_test.fn_asistencia_listar_seguimiento` | 15 | V438 | V221, V228, V290 |
 | `academico_test.fn_asistencia_periodo_estado` | 1 | V136 | — |
 | `academico_test.fn_asistencia_periodo_eval` | 2 | V137 | V141, V408, V469 |
-| `academico_test.fn_asistencia_puede_ver` | 2 | V139 | V141, V436, V438, V457 |
+| `academico_test.fn_asistencia_puede_ver` | 2 | V140 | V141, V436, V438, V457 |
 | `academico_test.fn_asistencia_registrar_bulk` | 8 | V138 | V221 |
 | `academico_test.fn_asistencia_registrar_bulk_interno` | 8 | V137 | V138 |
-| `academico_test.fn_asistencia_resumen_horas` | 6 | V139 | V221 |
-| `academico_test.fn_asistencia_sesiones_programadas` | 7 | V457 | V139, V485 |
+| `academico_test.fn_asistencia_resumen_horas` | 6 | V140 | V221 |
+| `academico_test.fn_asistencia_sesiones_programadas` | 7 | V457 | V140, V485 |
 | `academico_test.fn_asistencia_tipo_pk` | 1 | V137 | V227, V441, V450, V469 |
 | `academico_test.fn_asistencia_tipo_prioridad` | 1 | V438 | — |
 | `academico_test.fn_asistencia_validar_contexto` | 3 | V136 | V138 |
@@ -601,11 +601,11 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_grupo_bulk_delete` | 2 | V43 | V79 |
 | `academico_test.fn_grupo_crear` | 6 | V285 | V79 |
 | `academico_test.fn_grupo_director_rol_sync_interno` | 5 | V285 | — |
-| `academico_test.fn_grupo_establecimiento` | 1 | V40 | V138, V139, V429, V471 |
-| `academico_test.fn_grupo_jornada` | 1 | V40 | V138, V139 |
+| `academico_test.fn_grupo_establecimiento` | 1 | V40 | V138, V140, V429, V471 |
+| `academico_test.fn_grupo_jornada` | 1 | V40 | V138, V140 |
 | `academico_test.fn_grupo_listar` | 7 | V43 | V79 |
 | `academico_test.fn_grupo_obtener` | 2 | V43 | V79 |
-| `academico_test.fn_grupo_periodo` | 1 | V40 | V137, V138, V139, V485 |
+| `academico_test.fn_grupo_periodo` | 1 | V40 | V137, V138, V140, V485 |
 | `academico_test.fn_grupo_soft_delete` | 2 | V43 | V79 |
 
 ## horario
@@ -1283,7 +1283,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 |---|---|---|---|
 | `academico_test.fn_usuario_administrado_crear` | 10 | V30 | V219 |
 | `academico_test.fn_usuario_categoria_rol_nivel` | 1 | V302 | V40, V51, V52, V53, V116, V130… |
-| `academico_test.fn_usuario_ee_accesibles` | 1 | V29 | V40, V51, V116, V139, V179, V233… |
+| `academico_test.fn_usuario_ee_accesibles` | 1 | V29 | V40, V51, V116, V140, V179, V233… |
 | `academico_test.fn_usuario_ee_lectura` | 1 | V29 | V40, V52, V53, V116, V130 |
 | `academico_test.fn_usuario_es_docente_puro` | 1 | V29 | V136, V216, V224, V407, V454, V481 |
 | `academico_test.fn_usuario_grupos_dirigidos` | 1 | V489 | V490, V491 |
@@ -1291,7 +1291,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_usuario_permisos_menu` | 1 | V303 | V29, V127 |
 | `academico_test.fn_usuario_peso_categoria` | 1 | V298 | — |
 | `academico_test.fn_usuario_puede_en_menu` | 3 | V29 | V40, V51, V52, V53, V116, V130… |
-| `academico_test.fn_usuario_sedes_jornadas_accesibles` | 1 | V29 | V40, V51, V116, V139, V297, V300… |
+| `academico_test.fn_usuario_sedes_jornadas_accesibles` | 1 | V29 | V40, V51, V116, V140, V297, V300… |
 | `academico_test.fn_usuario_sedes_lectura` | 1 | V29 | V52, V116, V130, V216, V224, V244… |
 | `academico_test.fn_usuario_solo_sus_grupos` | 1 | V489 | V490, V491 |
 | `pigse.fn_usuario_categoria_rol_nivel` | 1 | V370 | V390 |

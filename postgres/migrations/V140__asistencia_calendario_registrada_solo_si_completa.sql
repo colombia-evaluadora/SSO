@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V139 - fn_asistencia_calendario: REGISTRADA exige el padron completo (antes
+-- V140 - fn_asistencia_calendario: REGISTRADA exige el padron completo (antes
 -- bastaba 1 fila de TASISTENCIA; ahora exige registrados >= padron activo).
 -- Incluye fn_asistencia_puede_ver, v_asistencia_detalle, sus 3 helpers de
 -- duracion/franja y fn_asistencia_resumen_horas, que vivian solo en V220
@@ -53,7 +53,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_puede_ver(BIGINT, BIGINT)
-    IS 'BOOLEAN para el WHERE de listados: capability ''VER'' + scope por categoria de rol (0/1 => todo, 2 => fn_usuario_ee_accesibles, 3 => par sede/jornada, 4/sin categoria => FALSE). p_pk_usuario NULL => TRUE. Copia identica de V220, redefinida aqui (V139) para trazabilidad -- la usa fn_asistencia_calendario.';
+    IS 'BOOLEAN para el WHERE de listados: capability ''VER'' + scope por categoria de rol (0/1 => todo, 2 => fn_usuario_ee_accesibles, 3 => par sede/jornada, 4/sin categoria => FALSE). p_pk_usuario NULL => TRUE. Copia identica de V220, redefinida aqui (V140) para trazabilidad -- la usa fn_asistencia_calendario.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_horas_bloque(
     p_hora_inicio         TIMESTAMP,
@@ -72,7 +72,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_horas_bloque(TIMESTAMP, TIMESTAMP, TIME, TIME, BIGINT)
-    IS 'Duracion en horas de un bloque de THORARIO; sin HORA_INICIO/HORA_FIN propias, se estima con la jornada del TPERIODO_ACADEMICO / BLOQUES_POR_DEFECTO. Copia identica de V220, redefinida aqui (V139) -- la usa v_asistencia_detalle.';
+    IS 'Duracion en horas de un bloque de THORARIO; sin HORA_INICIO/HORA_FIN propias, se estima con la jornada del TPERIODO_ACADEMICO / BLOQUES_POR_DEFECTO. Copia identica de V220, redefinida aqui (V140) -- la usa v_asistencia_detalle.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_franja_bloque(
     p_fecha          DATE,
@@ -88,7 +88,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_franja_bloque(DATE, TIMESTAMP, TIMESTAMP, TIME, TIME)
-    IS 'Franja horaria (reloj) de un bloque de THORARIO estampada sobre la FECHA de la sesion, con la misma reserva de jornada que fn_asistencia_horas_bloque. Copia identica de V220, redefinida aqui (V139) -- la usa v_asistencia_detalle.';
+    IS 'Franja horaria (reloj) de un bloque de THORARIO estampada sobre la FECHA de la sesion, con la misma reserva de jornada que fn_asistencia_horas_bloque. Copia identica de V220, redefinida aqui (V140) -- la usa v_asistencia_detalle.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_horas_actividad(
     p_duracion_estimada NUMERIC,
@@ -104,7 +104,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_horas_actividad(NUMERIC, DATE, DATE)
-    IS 'Horas que aporta UN dia de una actividad: DURACION_ESTIMADA (duracion de la actividad COMPLETA) repartida entre los dias de su rango. Copia identica de V220, redefinida aqui (V139) -- la usa v_asistencia_detalle.';
+    IS 'Horas que aporta UN dia de una actividad: DURACION_ESTIMADA (duracion de la actividad COMPLETA) repartida entre los dias de su rango. Copia identica de V220, redefinida aqui (V140) -- la usa v_asistencia_detalle.';
 
 -- Copia de V220 (sin cambios). Unico dueño real: nadie mas la redefine.
 CREATE OR REPLACE VIEW academico_test.v_asistencia_detalle AS
@@ -199,7 +199,7 @@ SELECT
  WHERE a.ACTIVE = TRUE;
 
 COMMENT ON VIEW academico_test.v_asistencia_detalle
-    IS 'Detalle plano de TASISTENCIA (solo ACTIVE), evaluativo y formativo. Cadena de joins: estudiante, grupo, grado, periodo academico, sede, jornada, asignatura, soporte, franja horaria + duracion via THORARIO por (grupo, asignatura, bloque, dia de semana). Expone banderas de estado (es_presente/es_tarde/es_ausente/es_justificado). Copia identica de V220, redefinida aqui (V139) para trazabilidad -- la usa fn_asistencia_calendario.';
+    IS 'Detalle plano de TASISTENCIA (solo ACTIVE), evaluativo y formativo. Cadena de joins: estudiante, grupo, grado, periodo academico, sede, jornada, asignatura, soporte, franja horaria + duracion via THORARIO por (grupo, asignatura, bloque, dia de semana). Expone banderas de estado (es_presente/es_tarde/es_ausente/es_justificado). Copia identica de V220, redefinida aqui (V140) para trazabilidad -- la usa fn_asistencia_calendario.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_calendario(
     p_pk_usuario      BIGINT,
@@ -331,7 +331,7 @@ BEGIN
         COALESCE(r.n_a_tiempo, 0)::BIGINT,
         COALESCE(r.n_tarde, 0)::BIGINT,
         COALESCE(r.n_ausentes, 0)::BIGINT,
-        -- V139 -- REGISTRADA exige que TODO el padron activo del grupo tenga
+        -- V140 -- REGISTRADA exige que TODO el padron activo del grupo tenga
         -- fila de asistencia, no solo que exista alguna. Con registro parcial
         -- (ej. 1 de 7) la sesion sigue contando lo que falte, igual que si no
         -- se hubiera tomado nada.
@@ -356,7 +356,7 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_calendario(
     BIGINT, BIGINT, INTEGER, INTEGER, BIGINT, BIGINT, DATE, BIGINT
-) IS 'Pantalla Asistencia (calendario mensual por sede). Una fila por SESION del mes: las PROGRAMADAS (fn_asistencia_sesiones_programadas) en FULL OUTER JOIN con las REGISTRADAS, de modo que tambien aparecen las tomas manuales sin bloque programado. Incluye grado (fk_tgrado/grado/grado_valor -- CODIGO de TGRADO) y jornada (fk_tlv_jornada/jornada/jornada_valor -- NOMBRE/VALOR de TLISTA_VALOR CATEGORIA=''JORNADA'') del grupo de cada sesion. estado_sesion = REGISTRADA (registrados >= matriculas del padron activo del grupo -- V139, antes bastaba con que existiera una sola fila y un registro PARCIAL ya se veia como completo) | RETRASADA (fecha < p_fecha_hoy sin registro completo, contada desde el DIA ANTERIOR, V464) | PENDIENTE (hoy o futuro, o registro parcial sin vencer). p_fk_tfuncionario no NULL acota a las asignaturas asignadas a ese docente en TDOCENTE_ASIGNATURA (vista "mis clases"). Rango de fechas sargable. Alcance por rol via fn_asistencia_puede_ver.';
+) IS 'Pantalla Asistencia (calendario mensual por sede). Una fila por SESION del mes: las PROGRAMADAS (fn_asistencia_sesiones_programadas) en FULL OUTER JOIN con las REGISTRADAS, de modo que tambien aparecen las tomas manuales sin bloque programado. Incluye grado (fk_tgrado/grado/grado_valor -- CODIGO de TGRADO) y jornada (fk_tlv_jornada/jornada/jornada_valor -- NOMBRE/VALOR de TLISTA_VALOR CATEGORIA=''JORNADA'') del grupo de cada sesion. estado_sesion = REGISTRADA (registrados >= matriculas del padron activo del grupo -- V140, antes bastaba con que existiera una sola fila y un registro PARCIAL ya se veia como completo) | RETRASADA (fecha < p_fecha_hoy sin registro completo, contada desde el DIA ANTERIOR, V464) | PENDIENTE (hoy o futuro, o registro parcial sin vencer). p_fk_tfuncionario no NULL acota a las asignaturas asignadas a ese docente en TDOCENTE_ASIGNATURA (vista "mis clases"). Rango de fechas sargable. Alcance por rol via fn_asistencia_puede_ver.';
 
 -- Copia de V220 (sin cambios). Unico dueño real: nadie mas la redefine.
 -- Depende de esta misma migracion (v_asistencia_detalle, fn_asistencia_
@@ -471,4 +471,4 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_resumen_horas(
     BIGINT, BIGINT, DATE, BIGINT, BIGINT, BIGINT
-) IS 'Tarjetas del encabezado de la pantalla Asistencia. Horas DICTADAS (registradas) de semana/mes/anio + horas PROGRAMADAS del horario de semana/mes. horas_efectivas_mes ponderada por fraccion de presentes. Los 3 contadores de estado (registradas/retrasadas/pendientes) delegados en fn_asistencia_calendario. p_fk_tfuncionario no NULL acota todo a las asignaturas asignadas a ese docente. Alcance por rol via fn_asistencia_puede_ver. Copia identica de V220, redefinida aqui (V139) para trazabilidad.';
+) IS 'Tarjetas del encabezado de la pantalla Asistencia. Horas DICTADAS (registradas) de semana/mes/anio + horas PROGRAMADAS del horario de semana/mes. horas_efectivas_mes ponderada por fraccion de presentes. Los 3 contadores de estado (registradas/retrasadas/pendientes) delegados en fn_asistencia_calendario. p_fk_tfuncionario no NULL acota todo a las asignaturas asignadas a ese docente. Alcance por rol via fn_asistencia_puede_ver. Copia identica de V220, redefinida aqui (V140) para trazabilidad.';
