@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 430 migraciones (V1–V514), 685 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-28.
+Estado: 425 migraciones (V1–V514), 685 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-28.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -427,7 +427,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `pigse.fn_documento_guardar` | 5 | V512 | V262, V512 |
 | `pigse.fn_documentos_listar` | 1 | V512 | V262, V512 |
 | `pigse.fn_documentos_listar_todos` | 0 | V512 | V374 |
-| `pigse.fn_documentos_listar_todos_paginado` | 7 | V374 | V374 |
+| `pigse.fn_documentos_listar_todos_paginado` | 7 | V374 | V368 |
 
 ## enfasi
 
@@ -823,7 +823,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_periodo_soft_delete` | 2 | V37 | V75 |
 | `academico_test.fn_periodo_usuario_establecimientos` | 1 | V37 | V191 |
 | `academico_test.fn_periodo_usuario_global` | 1 | V37 | V191 |
-| `academico_test.fn_periodo_usuario_puede_ver` | 2 | V37 | V162, V242, V250, V254, V270, V350… |
+| `academico_test.fn_periodo_usuario_puede_ver` | 2 | V37 | V162, V250, V254, V270, V350, V351… |
 | `academico_test.fn_periodo_usuario_sedes` | 1 | V37 | V191 |
 
 ## personalizar
@@ -844,8 +844,8 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_pigse_cumplimiento_metricas` | 0 | V149 | — |
 | `academico_test.fn_pigse_documento_eliminar` | 3 | V156 | — |
 | `academico_test.fn_pigse_documento_guardar` | 4 | V156 | — |
-| `academico_test.fn_pigse_documentos_listar` | 1 | V156 | V152, V156 |
-| `academico_test.fn_pigse_mi_establecimiento` | 1 | V149 | V152, V156 |
+| `academico_test.fn_pigse_documentos_listar` | 1 | V156 | V156 |
+| `academico_test.fn_pigse_mi_establecimiento` | 1 | V149 | V156 |
 | `public.fn_get_pigse_usuario_id` | 1 | V261 | V258, V262, V263, V360, V362, V366… |
 | `public.fn_pigse_es_administrador` | 1 | V364 | — |
 | `public.fn_pigse_rol_crear` | 2 | V364 | — |
