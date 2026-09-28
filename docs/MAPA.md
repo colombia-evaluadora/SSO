@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 439 migraciones (V1–V501), 676 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-28.
+Estado: 440 migraciones (V1–V511), 678 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-28.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -62,7 +62,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 - [personalizar](#personalizar) — 4 funcion(es), 0 endpoint(s)
 - [pigse](#pigse) — 15 funcion(es), 0 endpoint(s)
 - [plan](#plan) — 13 funcion(es), 1 endpoint(s)
-- [planeador](#planeador) — 7 funcion(es), 73 endpoint(s)
+- [planeador](#planeador) — 9 funcion(es), 73 endpoint(s)
 - [planilla](#planilla) — 5 funcion(es), 0 endpoint(s)
 - [prematricula](#prematricula) — 2 funcion(es), 0 endpoint(s)
 - [promedio](#promedio) — 1 funcion(es), 0 endpoint(s)
@@ -956,6 +956,8 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_planeador_etiqueta_a_lv` | 2 | V274 | V340 |
 | `academico_test.fn_planeador_listado_alcance` | 1 | V481 | V488 |
 | `academico_test.fn_planeador_periodo_vigente` | 3 | V203 | V272, V274, V340 |
+| `academico_test.fn_planeador_rotulo_actividad` | 4 | V511 | — |
+| `academico_test.fn_planeador_rotulo_actividad_interno` | 3 | V511 | — |
 | `academico_test.fn_planeador_sn` | 2 | V274 | V340 |
 
 ## planilla

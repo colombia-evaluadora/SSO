@@ -986,6 +986,60 @@
           }
         }
       ]
+    },
+    {
+      "name": "Rotulo de la actividad por grado (Planeador)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const b = pm.response.json(); const r = Array.isArray(b) ? b[0] : (b.data ? b.data[0] : b);",
+              "pm.test('trae rotulo_ejecucion', () => pm.expect(r).to.have.property('rotulo_ejecucion'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/rotulo-actividad?grado={{pkTgrado}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "rotulo-actividad"
+          ],
+          "query": [
+            {
+              "key": "grado",
+              "value": "{{pkTgrado}}"
+            },
+            {
+              "key": "asignatura",
+              "value": "",
+              "disabled": true
+            },
+            {
+              "key": "anio",
+              "value": "",
+              "disabled": true
+            }
+          ]
+        },
+        "description": "`fn_planeador_rotulo_actividad` (V511). Como se llama la actividad para un `grado` (PK de TGRADO, obligatorio) y `asignatura` (opcional): el Rotulo de Ejecucion del referente que le corresponde, con la misma regla que la unidad (`fn_unidad_referente_aplicable`). Siempre una fila `{fk_tgrado, pk_referente_curricular, rotulo_ejecucion}`; sin referente aplicable, `pk_referente_curricular` = null y `rotulo_ejecucion` = \"Actividad\". Gate VER sobre PLANEADOR + alcance por el grado: fuera de alcance o inexistente = 403; grado alcanzable o asignatura inexistentes = 404. Fijar `pkTgrado` en el entorno."
+      }
     }
   ],
   "variable": [
@@ -1053,6 +1107,10 @@
       "key": "pkGrado",
       "value": "",
       "type": "string"
+    },
+    {
+      "key": "pkTgrado",
+      "value": ""
     }
   ]
 }
