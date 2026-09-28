@@ -122,10 +122,7 @@ DECLARE
     v_funcionario BIGINT;
     v_asignatura  BIGINT;
 BEGIN
-    -- Regla 74: docente sin rol que administre solo escribe lo que dicta. Un
-    -- director de grupo / coordinador que ADEMAS dicta clase gana el peso
-    -- mas alto de sus roles (fn_usuario_es_docente_puro = FALSE) y no entra aqui.
-    IF NOT academico_test.fn_usuario_es_docente_puro(p_pk_usuario) THEN
+    IF COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario), 4) <= 2 THEN
         RETURN;
     END IF;
 
@@ -147,4 +144,4 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_validar_docente_asignado(BIGINT, BIGINT, BIGINT, BIGINT)
-    IS 'Regla 74: si fn_usuario_es_docente_puro(usuario), exige TDOCENTE_ASIGNATURA activa para (funcionario, grupo, asignatura). La usan fn_asistencia_registrar_bulk y fn_asistencia_editar (V138); fn_asistencia_editar_bulk (V438) la hereda porque llama a fn_asistencia_editar por cada pk.';
+    IS 'Regla 74: salvo nivel administrativo real (categoria <= 2), exige TDOCENTE_ASIGNATURA activa para (funcionario, grupo, asignatura) -- aplica igual a un docente que ademas es director de grupo/coordinador/jefe de area. La usan fn_asistencia_registrar_bulk y fn_asistencia_editar (V138); fn_asistencia_editar_bulk (V438) la hereda porque llama a fn_asistencia_editar por cada pk.';

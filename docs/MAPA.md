@@ -1277,7 +1277,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_unidad_ponderacion_recalcular_sumatoria` | 2 | V223 | V224, V244, V476, V478, V479, V482… |
 | `academico_test.fn_unidad_referente_aplicable` | 3 | V451 | V243, V280, V281, V407, V422, V440… |
 | `academico_test.fn_unidad_referente_detalle` | 2 | V255 | — |
-| `academico_test.fn_unidad_referente_evaluativo` | 1 | V214.2 | V216, V224, V226, V243, V282, V422… |
+| `academico_test.fn_unidad_referente_evaluativo` | 1 | V214.2 | V216, V224, V226, V282, V422, V440… |
 | `academico_test.fn_unidad_referente_reparar` | 1 | V455 | — |
 | `academico_test.fn_unidad_referente_tipo_evaluacion` | 1 | V214.2 | V282, V422, V440, V458, V459, V460… |
 | `academico_test.fn_unidad_rubrica_asegurar` | 2 | V222 | V216, V455 |
