@@ -42,7 +42,7 @@
             el proveedor fuera del dependencyManagement), así que la versión
             se fija aquí para que los módulos la hereden sin repetirla.
         -->
-        <bouncycastle.version>1.85</bouncycastle.version>
+        <bouncycastle.version>1.86</bouncycastle.version>
         <resilience4j.version>2.4.0</resilience4j.version>
         <postgresql.version>42.7.4</postgresql.version>
         <testcontainers.version>1.21.4</testcontainers.version>
