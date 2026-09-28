@@ -56,40 +56,24 @@
 -- ===========================================================================
 
 -- ---------------------------------------------------------------------------
--- 1. Categoria: columna + catalogo cerrado (mismo criterio que `tipo`: lista
---    fija en el CHECK, no una tabla de catalogo -- pedido explicito, "fijo
---    son esas 5").
+-- 1. Categoria: columna (sin CHECK todavia -- ver el punto 3: agregarlo acá
+--    mismo rompía en producción, que SÍ tiene PEI/PEC de un solo archivo
+--    viejos con categoria NULL todavía activos; el CHECK se valida contra
+--    TODAS las filas existentes en el momento de crearse, y el archivado
+--    del punto 2 corre recién después).
 -- ---------------------------------------------------------------------------
 ALTER TABLE pigse.tdocumento_institucional
     ADD COLUMN IF NOT EXISTS categoria VARCHAR(30);
 
-ALTER TABLE pigse.tdocumento_institucional
-    DROP CONSTRAINT IF EXISTS pigse_tdocumento_institucional_categoria_chk;
-ALTER TABLE pigse.tdocumento_institucional
-    ADD CONSTRAINT pigse_tdocumento_institucional_categoria_chk CHECK (
-        categoria IS NULL
-        OR categoria IN ('PLAN_ESTUDIOS', 'SIEE', 'MANUAL_CONVIVENCIA',
-                          'PROYECTOS_TRANSVERSALES', 'PLAN_GESTION_RIESGO')
-    );
-
--- PMI nunca lleva categoria; PEI/PEC siempre la llevan -- así una fila deja
--- ver a que tipo pertenece con solo mirar si categoria es NULL.
-ALTER TABLE pigse.tdocumento_institucional
-    DROP CONSTRAINT IF EXISTS pigse_tdocumento_institucional_tipo_categoria_chk;
-ALTER TABLE pigse.tdocumento_institucional
-    ADD CONSTRAINT pigse_tdocumento_institucional_tipo_categoria_chk CHECK (
-        (tipo = 'PMI' AND categoria IS NULL)
-        OR (tipo IN ('PEI', 'PEC') AND categoria IS NOT NULL)
-    );
-
 COMMENT ON COLUMN pigse.tdocumento_institucional.categoria IS
-    'V512: anexo dentro de PEI/PEC (Plan de estudios, SIEE, Manual de convivencia, Proyectos pedagogicos transversales, Plan escolar de gestion del riesgo). NULL siempre para PMI, obligatoria para PEI/PEC.';
+    'V512: anexo dentro de PEI/PEC (Plan de estudios, SIEE, Manual de convivencia, Proyectos pedagogicos transversales, Plan escolar de gestion del riesgo). NULL siempre para PMI, obligatoria para PEI/PEC ACTIVOS (ver pigse_tdocumento_institucional_tipo_categoria_chk).';
 
 -- ---------------------------------------------------------------------------
 -- 2. Archiva los PEI/PEC de un solo archivo que existieran antes de esta
 --    migracion (categoria todavia NULL en una fila activa PEI/PEC -- eso
 --    solo puede pasar en filas creadas antes de V512). Mismo patron que
---    fn_documento_eliminar: desactiva + copia a _hist, nunca borra.
+--    fn_documento_eliminar: desactiva + copia a _hist, nunca borra. Tiene
+--    que correr ANTES de agregar el CHECK del punto 3.
 -- ---------------------------------------------------------------------------
 DO $$
 DECLARE
@@ -116,7 +100,35 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------------
--- 3. Unico parcial: ahora por (EE, tipo, categoria) -- antes por (EE, tipo).
+-- 3. Los CHECK, recién ahora que el punto 2 ya dejó inactivas las filas
+--    viejas que los violarían. `pigse_tdocumento_institucional_tipo_
+--    categoria_chk` además exceptúa las filas YA inactivas (`NOT active`)
+--    a propósito -- por si queda alguna fila historica (de un EE dado de
+--    baja, por ejemplo) que el archivado de arriba no haya cubierto; el
+--    invariante "categoria obligatoria para PEI/PEC" es sobre documentos
+--    VIGENTES, no sobre el historial completo.
+-- ---------------------------------------------------------------------------
+ALTER TABLE pigse.tdocumento_institucional
+    DROP CONSTRAINT IF EXISTS pigse_tdocumento_institucional_categoria_chk;
+ALTER TABLE pigse.tdocumento_institucional
+    ADD CONSTRAINT pigse_tdocumento_institucional_categoria_chk CHECK (
+        categoria IS NULL
+        OR categoria IN ('PLAN_ESTUDIOS', 'SIEE', 'MANUAL_CONVIVENCIA',
+                          'PROYECTOS_TRANSVERSALES', 'PLAN_GESTION_RIESGO')
+    );
+
+-- PMI nunca lleva categoria; PEI/PEC ACTIVOS siempre la llevan.
+ALTER TABLE pigse.tdocumento_institucional
+    DROP CONSTRAINT IF EXISTS pigse_tdocumento_institucional_tipo_categoria_chk;
+ALTER TABLE pigse.tdocumento_institucional
+    ADD CONSTRAINT pigse_tdocumento_institucional_tipo_categoria_chk CHECK (
+        NOT active
+        OR (tipo = 'PMI' AND categoria IS NULL)
+        OR (tipo IN ('PEI', 'PEC') AND categoria IS NOT NULL)
+    );
+
+-- ---------------------------------------------------------------------------
+-- 5. Unico parcial: ahora por (EE, tipo, categoria) -- antes por (EE, tipo).
 --    COALESCE(categoria, '') en la expresion: dos NULL no son iguales entre
 --    si para un indice unico comun, y PMI SIEMPRE tiene categoria NULL, asi
 --    que sin esto dos filas PMI activas del mismo EE no chocarian.
@@ -127,7 +139,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS u_pigse_tdocumento_inst_ee_tipo_categoria
     WHERE active = true;
 
 -- ---------------------------------------------------------------------------
--- 4. fn_documentos_listar -- para PEI/PEC ya no trae un archivo propio:
+-- 6. fn_documentos_listar -- para PEI/PEC ya no trae un archivo propio:
 --    reporta el avance por categorias. PMI sin cambios de comportamiento.
 --    DROP+CREATE (no OR REPLACE): cambia el RETURNS TABLE.
 -- ---------------------------------------------------------------------------
@@ -206,7 +218,7 @@ COMMENT ON FUNCTION pigse.fn_documentos_listar(BIGINT) IS
     'V512: PEI/PEC ya no traen archivo propio -- "completedCategories"/"totalCategories" resumen el avance de sus 5 anexos (ver fn_documento_categorias_listar para el detalle). PMI sin cambios.';
 
 -- ---------------------------------------------------------------------------
--- 5. Nueva: detalle de las 5 categorias de un PEI o PEC puntual.
+-- 7. Nueva: detalle de las 5 categorias de un PEI o PEC puntual.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION pigse.fn_documento_categorias_listar(
     p_fk_establecimiento BIGINT,
@@ -267,7 +279,7 @@ COMMENT ON FUNCTION pigse.fn_documento_categorias_listar(BIGINT, VARCHAR) IS
     'V512: los 5 anexos de un PEI o PEC puntual -- alimenta la pantalla de "entrar" a PEI/PEC desde Gestion documental. p_tipo debe ser PEI o PEC (PMI no tiene categorias, no lo valida acá -- el llamador nunca navega ahí para PMI).';
 
 -- ---------------------------------------------------------------------------
--- 6. fn_documento_guardar / fn_documento_eliminar ganan p_categoria.
+-- 8. fn_documento_guardar / fn_documento_eliminar ganan p_categoria.
 --    DROP+CREATE: cambia la firma (nuevo parametro) y el RETURNS TABLE.
 -- ---------------------------------------------------------------------------
 -- Dos DROP: la firma VIEJA (4 args, primera vez que corre esta migración) y
@@ -444,7 +456,7 @@ COMMENT ON FUNCTION pigse.fn_documento_eliminar(BIGINT, VARCHAR, VARCHAR, VARCHA
     'V512: gana p_categoria -- misma regla que fn_documento_guardar. Sigue siendo baja logica: el archivo pasa al historial, nunca se borra.';
 
 -- ---------------------------------------------------------------------------
--- 7. fn_cumplimiento_metricas -- ya NO puede leer tdocumento_institucional
+-- 9. fn_cumplimiento_metricas -- ya NO puede leer tdocumento_institucional
 --    directo (PEI/PEC pueden tener hasta 5 filas activas por EE ahora): pasa
 --    a apoyarse en fn_documentos_listar(), igual que ya hacia
 --    fn_cumplimiento_listar. Mismo shape de salida, mismo criterio de
@@ -501,7 +513,7 @@ COMMENT ON FUNCTION pigse.fn_cumplimiento_metricas() IS
     'V512: pasa a leer fn_documentos_listar() (antes leia tdocumento_institucional directo) porque PEI/PEC ahora pueden tener hasta 5 filas activas por EE -- contarlas crudas habria inflado "completed". "completo" = status COMPLETO, que para PEI/PEC ya exige las 5 categorias.';
 
 -- ---------------------------------------------------------------------------
--- 7.1 fn_documentos_listar_todos (V368, fiscalización PIGSE-ADMINISTRADOR/
+-- 9.1 fn_documentos_listar_todos (V368, fiscalización PIGSE-ADMINISTRADOR/
 --     PIGSE-SECRETARIA_TERRITORIAL) -- mismo problema que fn_cumplimiento_
 --     metricas: hace `LEFT JOIN tdocumento_institucional ON tipo = ... AND
 --     active` sin filtrar categoria, así que con hasta 5 filas activas por
@@ -596,7 +608,7 @@ COMMENT ON FUNCTION pigse.fn_documentos_listar_todos() IS
     'V512: PEI/PEC ya no leen tdocumento_institucional como un archivo propio (evita el fan-out de hasta 5 filas por categoría) -- reportan completedCategories/totalCategories, igual que fn_documentos_listar. PMI sin cambios.';
 
 -- ---------------------------------------------------------------------------
--- 8. public.query -- nuevos endpoints + el upload existente gana
+-- 10. public.query -- nuevos endpoints + el upload existente gana
 --    BODY.CATEGORIA (opcional en el catalogo; la funcion exige el valor
 --    cuando corresponde).
 -- ---------------------------------------------------------------------------
@@ -666,7 +678,7 @@ SELECT q.id_query, ro.id_role
    AND NOT EXISTS (SELECT 1 FROM public.role_query rq WHERE rq.query_id = q.id_query AND rq.role_id = ro.id_role);
 
 -- ---------------------------------------------------------------------------
--- 9. Verificacion
+-- 11. Verificacion
 -- ---------------------------------------------------------------------------
 DO $$
 DECLARE
