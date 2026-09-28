@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V502 -- PEI y PEC dejan de ser UN solo archivo: pasan a tener 5 anexos por
+-- V512 -- PEI y PEC dejan de ser UN solo archivo: pasan a tener 5 anexos por
 -- categoria (Plan de estudios, SIEE, Manual de convivencia, Proyectos
 -- pedagogicos transversales, Plan escolar de gestion del riesgo), cada uno
 -- con su propio archivo vigente -- mismo semantica de "version vigente" que
@@ -83,12 +83,12 @@ ALTER TABLE pigse.tdocumento_institucional
     );
 
 COMMENT ON COLUMN pigse.tdocumento_institucional.categoria IS
-    'V502: anexo dentro de PEI/PEC (Plan de estudios, SIEE, Manual de convivencia, Proyectos pedagogicos transversales, Plan escolar de gestion del riesgo). NULL siempre para PMI, obligatoria para PEI/PEC.';
+    'V512: anexo dentro de PEI/PEC (Plan de estudios, SIEE, Manual de convivencia, Proyectos pedagogicos transversales, Plan escolar de gestion del riesgo). NULL siempre para PMI, obligatoria para PEI/PEC.';
 
 -- ---------------------------------------------------------------------------
 -- 2. Archiva los PEI/PEC de un solo archivo que existieran antes de esta
 --    migracion (categoria todavia NULL en una fila activa PEI/PEC -- eso
---    solo puede pasar en filas creadas antes de V502). Mismo patron que
+--    solo puede pasar en filas creadas antes de V512). Mismo patron que
 --    fn_documento_eliminar: desactiva + copia a _hist, nunca borra.
 -- ---------------------------------------------------------------------------
 DO $$
@@ -97,7 +97,7 @@ DECLARE
 BEGIN
     INSERT INTO pigse.tdocumento_institucional_hist
         (fk_documento_institucional, fk_tarchivo, reemplazado_by)
-    SELECT pk_documento_institucional, fk_tarchivo, 'V502'
+    SELECT pk_documento_institucional, fk_tarchivo, 'V512'
       FROM pigse.tdocumento_institucional
      WHERE tipo IN ('PEI', 'PEC')
        AND categoria IS NULL
@@ -106,12 +106,12 @@ BEGIN
     GET DIAGNOSTICS v_archivados = ROW_COUNT;
 
     UPDATE pigse.tdocumento_institucional
-       SET active = false, modified_by = 'V502', modified_at = CURRENT_TIMESTAMP
+       SET active = false, modified_by = 'V512', modified_at = CURRENT_TIMESTAMP
      WHERE tipo IN ('PEI', 'PEC')
        AND categoria IS NULL
        AND active;
 
-    RAISE NOTICE 'V502: % documento(s) PEI/PEC de un solo archivo archivado(s) (categorias quedan PENDIENTE, el archivo sigue en el historial)',
+    RAISE NOTICE 'V512: % documento(s) PEI/PEC de un solo archivo archivado(s) (categorias quedan PENDIENTE, el archivo sigue en el historial)',
         v_archivados;
 END $$;
 
@@ -203,7 +203,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION pigse.fn_documentos_listar(BIGINT) IS
-    'V502: PEI/PEC ya no traen archivo propio -- "completedCategories"/"totalCategories" resumen el avance de sus 5 anexos (ver fn_documento_categorias_listar para el detalle). PMI sin cambios.';
+    'V512: PEI/PEC ya no traen archivo propio -- "completedCategories"/"totalCategories" resumen el avance de sus 5 anexos (ver fn_documento_categorias_listar para el detalle). PMI sin cambios.';
 
 -- ---------------------------------------------------------------------------
 -- 5. Nueva: detalle de las 5 categorias de un PEI o PEC puntual.
@@ -264,7 +264,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION pigse.fn_documento_categorias_listar(BIGINT, VARCHAR) IS
-    'V502: los 5 anexos de un PEI o PEC puntual -- alimenta la pantalla de "entrar" a PEI/PEC desde Gestion documental. p_tipo debe ser PEI o PEC (PMI no tiene categorias, no lo valida acá -- el llamador nunca navega ahí para PMI).';
+    'V512: los 5 anexos de un PEI o PEC puntual -- alimenta la pantalla de "entrar" a PEI/PEC desde Gestion documental. p_tipo debe ser PEI o PEC (PMI no tiene categorias, no lo valida acá -- el llamador nunca navega ahí para PMI).';
 
 -- ---------------------------------------------------------------------------
 -- 6. fn_documento_guardar / fn_documento_eliminar ganan p_categoria.
@@ -370,7 +370,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION pigse.fn_documento_guardar(BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR) IS
-    'V502: gana p_categoria -- obligatoria para PEI/PEC (una de las 5 fijas), debe ser NULL para PMI. Devuelve la forma de fn_documento_categorias_listar para PEI/PEC, o la de fn_documentos_listar (categoria/categoriaName en NULL) para PMI -- mismo shape que ya esperaba el front.';
+    'V512: gana p_categoria -- obligatoria para PEI/PEC (una de las 5 fijas), debe ser NULL para PMI. Devuelve la forma de fn_documento_categorias_listar para PEI/PEC, o la de fn_documentos_listar (categoria/categoriaName en NULL) para PMI -- mismo shape que ya esperaba el front.';
 
 -- Mismo motivo que arriba: firma vieja (3 args) + firma nueva (4 args).
 DROP FUNCTION IF EXISTS pigse.fn_documento_eliminar(BIGINT, VARCHAR, VARCHAR);
@@ -441,7 +441,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION pigse.fn_documento_eliminar(BIGINT, VARCHAR, VARCHAR, VARCHAR) IS
-    'V502: gana p_categoria -- misma regla que fn_documento_guardar. Sigue siendo baja logica: el archivo pasa al historial, nunca se borra.';
+    'V512: gana p_categoria -- misma regla que fn_documento_guardar. Sigue siendo baja logica: el archivo pasa al historial, nunca se borra.';
 
 -- ---------------------------------------------------------------------------
 -- 7. fn_cumplimiento_metricas -- ya NO puede leer tdocumento_institucional
@@ -498,7 +498,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION pigse.fn_cumplimiento_metricas() IS
-    'V502: pasa a leer fn_documentos_listar() (antes leia tdocumento_institucional directo) porque PEI/PEC ahora pueden tener hasta 5 filas activas por EE -- contarlas crudas habria inflado "completed". "completo" = status COMPLETO, que para PEI/PEC ya exige las 5 categorias.';
+    'V512: pasa a leer fn_documentos_listar() (antes leia tdocumento_institucional directo) porque PEI/PEC ahora pueden tener hasta 5 filas activas por EE -- contarlas crudas habria inflado "completed". "completo" = status COMPLETO, que para PEI/PEC ya exige las 5 categorias.';
 
 -- ---------------------------------------------------------------------------
 -- 7.1 fn_documentos_listar_todos (V368, fiscalización PIGSE-ADMINISTRADOR/
@@ -593,7 +593,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION pigse.fn_documentos_listar_todos() IS
-    'V502: PEI/PEC ya no leen tdocumento_institucional como un archivo propio (evita el fan-out de hasta 5 filas por categoría) -- reportan completedCategories/totalCategories, igual que fn_documentos_listar. PMI sin cambios.';
+    'V512: PEI/PEC ya no leen tdocumento_institucional como un archivo propio (evita el fan-out de hasta 5 filas por categoría) -- reportan completedCategories/totalCategories, igual que fn_documentos_listar. PMI sin cambios.';
 
 -- ---------------------------------------------------------------------------
 -- 8. public.query -- nuevos endpoints + el upload existente gana
@@ -687,14 +687,14 @@ BEGIN
       FROM pigse.tdocumento_institucional
      WHERE tipo IN ('PEI', 'PEC') AND categoria IS NULL AND active;
 
-    RAISE NOTICE 'V502: nuevas queries=% (esperado 2) role_query nuevos=% (esperado 7: 4+3) PEI/PEC activos sin categoria=% (esperado 0)',
+    RAISE NOTICE 'V512: nuevas queries=% (esperado 2) role_query nuevos=% (esperado 7: 4+3) PEI/PEC activos sin categoria=% (esperado 0)',
         v_queries, v_role_query, v_pei_pec_sin_categoria;
 
     IF v_queries <> 2 THEN
-        RAISE EXCEPTION 'V502 fallo: se esperaban 2 queries nuevas, se encontraron %', v_queries;
+        RAISE EXCEPTION 'V512 fallo: se esperaban 2 queries nuevas, se encontraron %', v_queries;
     END IF;
     IF v_pei_pec_sin_categoria <> 0 THEN
-        RAISE EXCEPTION 'V502 fallo: quedaron % fila(s) PEI/PEC activas sin categoria (el CHECK deberia haberlo impedido)',
+        RAISE EXCEPTION 'V512 fallo: quedaron % fila(s) PEI/PEC activas sin categoria (el CHECK deberia haberlo impedido)',
             v_pei_pec_sin_categoria;
     END IF;
 END $$;
