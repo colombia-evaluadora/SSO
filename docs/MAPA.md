@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 431 migraciones (V1–V513), 685 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-28.
+Estado: 430 migraciones (V1–V514), 685 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-28.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -152,8 +152,8 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_disponibles_listar` | 5 | V223 | V246 |
 | `academico_test.fn_actividad_eliminar` | 2 | V482 | V246 |
 | `academico_test.fn_actividad_eliminar_interno` | 2 | V482 | — |
-| `academico_test.fn_actividad_en_periodo_eval` | 2 | V332 | V333, V334, V335, V338, V410, V411… |
-| `academico_test.fn_actividad_es_formativa` | 1 | V476 | V441, V450, V454, V461, V463, V469… |
+| `academico_test.fn_actividad_en_periodo_eval` | 2 | V332 | V333, V335, V410, V411, V428, V433… |
+| `academico_test.fn_actividad_es_formativa` | 1 | V476 | V450, V454, V461, V463, V469, V479… |
 | `academico_test.fn_actividad_escala_definir` | 3 | V226 | V240, V274, V340, V469 |
 | `academico_test.fn_actividad_estado` | 5 | V462 | V251, V452, V454, V481 |
 | `academico_test.fn_actividad_estudiante_actividad` | 1 | V227 | V241, V461, V463, V469, V472, V473… |
@@ -211,7 +211,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_observar_grupal` | 5 | V463 | V246 |
 | `academico_test.fn_actividad_otro_campos_disponibles` | 1 | V458 | — |
 | `academico_test.fn_actividad_otro_definir` | 3 | V469 | V274, V340 |
-| `academico_test.fn_actividad_otro_metodo_valoracion` | 1 | V241 | V441, V454, V469, V472, V473, V477 |
+| `academico_test.fn_actividad_otro_metodo_valoracion` | 1 | V241 | V454, V469, V472, V473, V477 |
 | `academico_test.fn_actividad_otro_sn` | 1 | V469 | — |
 | `academico_test.fn_actividad_pantalla_edicion` | 3 | V452 | V450 |
 | `academico_test.fn_actividad_periodo_evaluacion` | 2 | V408 | — |
@@ -280,7 +280,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_asignatura_criterio_evaluacion_vigente` | 2 | V239 | V227, V408, V410, V428, V455 |
-| `academico_test.fn_asignatura_definitiva_proyectada_periodo` | 3 | V333 | V334, V346, V348, V408, V410, V428… |
+| `academico_test.fn_asignatura_definitiva_proyectada_periodo` | 3 | V333 | V346, V348, V408, V410, V428, V469… |
 | `academico_test.fn_asignatura_grado_ponderacion_disponible` | 3 | V239 | V248 |
 | `academico_test.fn_asignatura_nota_requerida_periodo` | 3 | V410 | V428 |
 | `academico_test.fn_asignatura_plan_calculo_definitiva_modo` | 1 | V239 | V216, V333, V492 |
@@ -319,7 +319,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_asistencia_registrar_bulk_interno` | 8 | V137 | V138 |
 | `academico_test.fn_asistencia_resumen_horas` | 6 | V140 | V221 |
 | `academico_test.fn_asistencia_sesiones_programadas` | 7 | V457 | V140, V485 |
-| `academico_test.fn_asistencia_tipo_pk` | 1 | V137 | V227, V441, V450, V469 |
+| `academico_test.fn_asistencia_tipo_pk` | 1 | V137 | V227, V450, V469 |
 | `academico_test.fn_asistencia_tipo_prioridad` | 1 | V438 | — |
 | `academico_test.fn_asistencia_validar_contexto` | 3 | V136 | V138 |
 | `academico_test.fn_asistencia_validar_docente_asignado` | 4 | V136 | V138 |
@@ -628,7 +628,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_informe_assert_grupo_propio` | 2 | V489 | V490 |
 | `academico_test.fn_informe_boletin_preescolar` | 4 | V468 | — |
 | `academico_test.fn_informe_cambios_pendientes` | 3 | V491 | V342 |
-| `academico_test.fn_informe_estudiante_asignaturas` | 4 | V428 | V335, V336, V337, V346, V348, V410… |
+| `academico_test.fn_informe_estudiante_asignaturas` | 4 | V428 | V335, V336, V346, V348, V411, V428… |
 | `academico_test.fn_informe_grupo_listar` | 4 | V490 | V342, V420, V435, V439, V466, V468 |
 | `academico_test.fn_informe_grupo_reporte` | 5 | V439 | V439 |
 | `academico_test.fn_informe_grupo_tabla` | 4 | V439 | V434 |
@@ -768,7 +768,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_nota_homologar` | 3 | V428 | V334, V410, V428, V432, V435, V439… |
+| `academico_test.fn_nota_homologar` | 3 | V428 | V410, V428, V432, V435, V439, V469… |
 
 ## numero
 
@@ -925,7 +925,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `/planeador/docentes/grupos` | GET | V248 | `fn_asignatura_grado_ponderacion_disponible` (V239), `fn_docente_grado_asignatura_listar` (V497), `fn_docente_grupos_listar` (V250)… |
 | `/planeador/periodos-evaluacion` | GET | V254 | `fn_docente_periodo_vigente` (V250), `fn_funcionario_actual` (V224), `fn_periodo_usuario_puede_ver` (V37)… |
 | `/planeador/planilla/calificaciones` | GET | V248, V441, V450, V469 | `fn_actividad_asistencia_fecha_resolver` (V450), `fn_actividad_buscar_por_pk` (V452), `fn_actividad_cotejo_definir` (V226)… |
-| `/planeador/planilla/columnas` | GET | V248, V441 | `fn_actividad_es_formativa` (V476), `fn_actividad_otro_metodo_valoracion` (V241), `fn_asignatura_grado_ponderacion_disponible` (V239)… |
+| `/planeador/planilla/columnas` | GET | V248, V441 | `fn_asignatura_grado_ponderacion_disponible` (V239), `fn_docente_grado_asignatura_listar` (V497), `fn_docente_grupos_listar` (V250)… |
 | `/planeador/referente-curricular` | GET | V278, V422 | `fn_actividad_estudiantes_asignar` (V224), `fn_actividad_recuperacion_campos_disponibles` (V459), `fn_instrumento_permitido_por_tipo_evaluacion` (V453)… |
 | `/planeador/unidades` | GET | V406 | `fn_unidad_listar` (V488), `fn_get_academico_usuario_id` (V299) |
 | `/planeador/unidades` | POST | V406, V488 | `fn_planeador_assert_alcance` (V277), `fn_planeador_listado_alcance` (V481), `fn_unidad_campos_disponibles` (V214.2)… |
@@ -971,11 +971,11 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_planilla_actividades_universo` | 5 | V239 | V441, V450, V454, V469 |
+| `academico_test.fn_planilla_actividades_universo` | 5 | V239 | V450, V454, V469 |
 | `academico_test.fn_planilla_calificaciones_listar` | 11 | V469 | V248, V469 |
 | `academico_test.fn_planilla_columnas_listar` | 7 | V454 | V248 |
-| `academico_test.fn_planilla_definitiva_proyectada` | 2 | V239 | V408, V441, V450 |
-| `academico_test.fn_planilla_grupo_asignatura_assert` | 3 | V239 | V346, V348, V441, V450, V454, V469… |
+| `academico_test.fn_planilla_definitiva_proyectada` | 2 | V239 | V408, V450 |
+| `academico_test.fn_planilla_grupo_asignatura_assert` | 3 | V239 | V346, V348, V450, V454, V469, V490 |
 
 ## prematricula
 
