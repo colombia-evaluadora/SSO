@@ -44,6 +44,25 @@ imprime:
 - Con `--version`, además **DEPENDE DE**: las migraciones que tienen que haberse
   aplicado antes. Es lo que decide si puedes numerar out-of-order o no.
 
+El modelo agrupa funciones por nombre y número de parámetros, y no distingue
+cómo se usan. `precision.py` relee los `.sql` y corrige eso:
+
+- **POR FIRMA EXACTA** / **VIVA POR FIRMA** — una posterior con otros tipos o
+  más parámetros crea otra sobrecarga y la vieja sigue viva, aunque el
+  historial diga "muerta" (V116→V130, V257→V360). No se puede quitar.
+- **USOS POR CONTEXTO** — `migracion` (DO, backfill, SQL suelto, trigger) y
+  `sql-body` (LANGUAGE sql, se valida al crearse) atan el orden; `plpgsql` y
+  `texto` (filas de public.query, comentarios fuera) no.
+- **MUERTA PERO NECESARIA** — reescrita después, pero algo la ejecuta antes en
+  una base limpia (también en el propio fichero). Se conserva con un CREATE
+  condicionado a `to_regprocedure(...) IS NULL`.
+- **DROP PELIGROSO** — el fichero borra una firma que hoy define otra
+  migración: el deploy, al re-aplicarlo, la borraría.
+- **ALTER POSTERIOR** / COMMENT dinámico — escrituras que el modelo no ve
+  (`ALTER FUNCTION ... ROWS`, COMMENT por OID); re-aplicar el CREATE las deshace.
+- **BACKFILL**, **VERIFICACION**, **SEMILLA NECESARIA**, **PARCHE 'PISADO'** —
+  lo que hay que revisar antes de editar un fichero que el deploy re-ejecutará.
+
 ## Paso 2 — editar vs. crear
 
 | Situación | Qué hacer |
