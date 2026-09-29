@@ -113,21 +113,32 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
-    v  RECORD;
+    v         RECORD;
+    v_nombre  VARCHAR;
 BEGIN
     SELECT * INTO v FROM academico_test.fn_prematricula_grupo_procesado(p_fk_tgrupo);
+
+    -- Como se nombra el grupo en los mensajes: "01 de Quinto" y no un PK, que
+    -- no le dice nada a quien lee el error en pantalla. El grupo existe (si no,
+    -- el gate ya habria fallado antes), asi que el nombre siempre se resuelve;
+    -- el COALESCE es la red por si alguien llama esta funcion suelta.
+    SELECT g.NOMBRE || ' de ' || gd.NOMBRE INTO v_nombre
+      FROM academico_test.TGRUPO g
+      JOIN academico_test.TGRADO gd ON gd.PK_TGRADO = g.FK_TGRADO
+     WHERE g.PK_TGRUPO = p_fk_tgrupo;
+    v_nombre := COALESCE(v_nombre, 'con identificador ' || p_fk_tgrupo);
 
     IF v.matriculas = 0 THEN
         RAISE EXCEPTION
             'El grupo % no tiene matriculas en estado Cursando, Aprobado ni Reprobado: no hay a quien prematricular',
-            p_fk_tgrupo
+            v_nombre
             USING ERRCODE = '22023';
     END IF;
 
     IF v.pendientes = 0 THEN
         RAISE EXCEPTION
             'El grupo % ya fue prematriculado por completo (% de % estudiantes)',
-            p_fk_tgrupo, v.procesadas, v.matriculas
+            v_nombre, v.procesadas, v.matriculas
             USING ERRCODE = '23505';
     END IF;
 END;

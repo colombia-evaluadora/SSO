@@ -81,9 +81,29 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
-    v_actuales  INT;
-    v_con_sig   INT;
+    v_actuales   INT;
+    v_con_sig    INT;
+    v_ee_nombre  VARCHAR;
+    v_sede_txt   VARCHAR := '';
 BEGIN
+    -- Los nombres para el mensaje. Estos dos SI se pueden resolver -- el
+    -- establecimiento y la sede existen --, y un id suelto no le dice nada a
+    -- quien lee el error. El COALESCE cubre el id que no existe: ahi el
+    -- numero es lo unico que hay, y es mejor que un hueco.
+    SELECT e.NOMBRE INTO v_ee_nombre
+      FROM academico_test.TESTABLECIMIENTO e
+     WHERE e.PK_ESTABLECIMIENTO = p_fk_testablecimiento;
+    v_ee_nombre := COALESCE(v_ee_nombre,
+                            'con identificador ' || p_fk_testablecimiento);
+
+    IF p_fk_tsede IS NOT NULL THEN
+        SELECT ' en la sede ' || s.NOMBRE INTO v_sede_txt
+          FROM academico_test.TSEDE s
+         WHERE s.PK_TSEDE = p_fk_tsede;
+        v_sede_txt := COALESCE(v_sede_txt,
+                               ' en la sede con identificador ' || p_fk_tsede);
+    END IF;
+
     SELECT COUNT(*),
            COUNT(*) FILTER (
                WHERE academico_test.fn_prematricula_periodo_siguiente(
@@ -95,9 +115,9 @@ BEGIN
     IF v_actuales = 0 THEN
         RAISE EXCEPTION
             'El establecimiento % no tiene periodo academico del ano en curso (%)%',
-            p_fk_testablecimiento,
+            v_ee_nombre,
             EXTRACT(YEAR FROM CURRENT_DATE)::INT,
-            CASE WHEN p_fk_tsede IS NULL THEN '' ELSE ' en la sede ' || p_fk_tsede END
+            v_sede_txt
             USING ERRCODE = '22023';
     END IF;
 
@@ -105,7 +125,7 @@ BEGIN
         RAISE EXCEPTION
             'No se puede prematricular: falta crear el periodo academico del ano % para el establecimiento %. Creelo primero, con sus grados y grupos.',
             EXTRACT(YEAR FROM CURRENT_DATE)::INT + 1,
-            p_fk_testablecimiento
+            v_ee_nombre
             USING ERRCODE = '22023';
     END IF;
 END;

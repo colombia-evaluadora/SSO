@@ -11,10 +11,12 @@
 --   1. Gate PRE_MATRICULA/CREAR sobre el grupo (scope por EE/sede/jornada).
 --   2. Que el grupo no este ya prematriculado completo -- reanudar un grupo
 --      a medias SI se permite, y ahi solo se hacen los que faltan.
---   3. Resolver los dos destinos UNA vez para todo el grupo, no por
+--   3. Resolver como se llama el grupo y donde esta: lo necesitan tanto los
+--      mensajes de error como la etiqueta de auditoria.
+--   4. Resolver los dos destinos UNA vez para todo el grupo, no por
 --      estudiante: son los mismos para los 30.
---   4. Declarar la etiqueta de auditoria.
---   5. Recorrer las matriculas creando cada prematricula.
+--   5. Declarar la etiqueta de auditoria.
+--   6. Recorrer las matriculas creando cada prematricula.
 --
 --
 -- A DONDE VA CADA UNO
@@ -100,14 +102,28 @@ BEGIN
     -- 2. Que quede algo por hacer.
     PERFORM academico_test.fn_prematricula_assert_grupo_no_procesado(p_fk_tgrupo);
 
-    -- 3. Los destinos, una sola vez para todo el grupo.
+    -- 3. Como se llama el grupo y donde esta. Se resuelve ACA, antes de los
+    --    destinos, porque lo necesitan las dos cosas: el mensaje de error de
+    --    abajo -- que dice "el grupo 01 de Quinto" y no un PK -- y la etiqueta
+    --    de auditoria del paso 5. Una sola SELECT para ambas.
+    SELECT g.NOMBRE, gd.NOMBRE, pa.FK_TSEDE, s.FK_TESTABLECIMIENTO
+      INTO v_grupo_nom, v_grado_nom, v_sede, v_ee
+      FROM academico_test.TGRUPO g
+      JOIN academico_test.TGRADO gd ON gd.PK_TGRADO = g.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa
+        ON pa.PK_TPERIODO_ACADEMICO = gd.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE g.PK_TGRUPO = p_fk_tgrupo;
+
+    -- 4. Los destinos, una sola vez para todo el grupo.
     SELECT * INTO v_destino
       FROM academico_test.fn_prematricula_grupos_destino(p_fk_tgrupo);
 
     IF v_destino.fk_tperiodo_siguiente IS NULL THEN
         RAISE EXCEPTION
-            'El grupo % no tiene periodo academico del ano siguiente en su sede y jornada',
-            p_fk_tgrupo
+            'El grupo % de % no tiene periodo academico del ano siguiente en su sede y jornada',
+            COALESCE(v_grupo_nom, 'con identificador ' || p_fk_tgrupo),
+            COALESCE(v_grado_nom, 'grado desconocido')
             USING ERRCODE = '22023';
     END IF;
 
@@ -122,17 +138,7 @@ BEGIN
           WHERE u.PK_TUSUARIO = p_pk_usuario_solicitante),
         'fn_prematricula_grupo_procesar');
 
-    -- 4. La etiqueta. Una sola SELECT trae las cuatro cosas que hacen falta:
-    --    los dos nombres para el texto y las dos coordenadas para el contexto.
-    SELECT g.NOMBRE, gd.NOMBRE, pa.FK_TSEDE, s.FK_TESTABLECIMIENTO
-      INTO v_grupo_nom, v_grado_nom, v_sede, v_ee
-      FROM academico_test.TGRUPO g
-      JOIN academico_test.TGRADO gd ON gd.PK_TGRADO = g.FK_TGRADO
-      JOIN academico_test.TPERIODO_ACADEMICO pa
-        ON pa.PK_TPERIODO_ACADEMICO = gd.FK_TPERIODO_ACADEMICO
-      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-     WHERE g.PK_TGRUPO = p_fk_tgrupo;
-
+    -- 5. La etiqueta, con los nombres que ya se resolvieron en el paso 3.
     SELECT al.NOMBRE::INT INTO v_anio_sig
       FROM academico_test.TPERIODO_ACADEMICO pa
       JOIN academico_test.TANO_LECTIVO al
@@ -146,7 +152,7 @@ BEGIN
                v_grupo_nom, v_grado_nom, v_anio_sig),
         v_ee, v_sede);
 
-    -- 5. Cada estudiante.
+    -- 6. Cada estudiante.
     FOR v_fila IN
         SELECT m.PK_TMATRICULA, m.FK_TESTUDIANTE, m.FK_TPADRE,
                m.FK_TLV_ACUDIENTE_PARENTESCO, m.EDICION_ACUDIENTE,
