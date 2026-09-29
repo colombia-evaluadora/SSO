@@ -452,6 +452,11 @@ def query_columns(stmt: str, head: str) -> dict:
 
 
 ROLE_NAME_RE = re.compile(r"^(?:PIGSE|CEVAL|SSO|ADMIN)[A-Z0-9_\-]*$")
+RE_RAISE_MSG = re.compile(r"\bRAISE\s+(?:NOTICE|WARNING|INFO|LOG|DEBUG|EXCEPTION)\b(?:'(?:[^']|'')*'|[^;'])*;",
+                          re.I)
+RE_STR = re.compile(r"'((?:[^']|'')*)'")
+# Creacion que no hace nada si el objeto ya existe: no reemplaza a la anterior.
+RE_GUARDED = re.compile(r"IF\s+NOT\s+EXISTS|\bNOT\s+EXISTS\s*\(|ON\s+CONFLICT\b[^;]*?\bDO\s+NOTHING", re.I)
 PATHISH_RE = re.compile(r"^/?[a-z0-9][a-z0-9\-]*(?:/[a-z0-9\-:]+)+$|^/[a-z0-9\-]+$", re.I)
 
 
@@ -519,6 +524,9 @@ def analyze_file(path: Path, version: str) -> Migration:
         # que se analiza su cuerpo -- y tambien el texto de los EXECUTE.
         dynamic = head.startswith(("DO ", "DO$"))
         if dynamic:
+            # El mensaje de un RAISE no se ejecuta: V391 solo avisa con
+            # RAISE NOTICE 'ALTER TABLE auditoria.tsesion_web ADD COLUMN ...'.
+            stmt = RE_RAISE_MSG.sub("", stmt)
             pieces = [stmt]
             for body in dollar_bodies(stmt):
                 pieces.append(body)
@@ -533,6 +541,7 @@ def analyze_file(path: Path, version: str) -> Migration:
                 continue
 
         # --- funciones
+        guarded = bool(RE_GUARDED.search(stmt))
         for m in RE_FUNC.finditer(stmt):
             name = qname(m.group(2))
             open_pos = m.end() - 1
@@ -780,11 +789,18 @@ def analyze_file(path: Path, version: str) -> Migration:
                     _unparsed(mig, st)
 
             elif target == "endpoint":
-                paths = [l for l in literals(stmt) if l.startswith("/")]
-                meths = [l for l in literals(stmt) if l.upper() in HTTP_METHODS]
+                # cada ruta va con el metodo que la precede: con el primero de la
+                # sentencia, ('GET','/a'),('POST','/b') daba "GET /b" (V35).
+                pares, meth = [], "?"
+                for lm in RE_STR.finditer(stmt):
+                    lit = lm.group(1)
+                    if lit.upper() in HTTP_METHODS:
+                        meth = lit.upper()
+                    elif lit.startswith("/"):
+                        pares.append((meth, lit))
+                paths = pares
                 if paths:
-                    meth = (meths[0].upper() if meths else "?")
-                    for p in dict.fromkeys(paths):
+                    for meth, p in dict.fromkeys(paths):
                         mig.writes.append(Write(
                             version=version, obj_type="endpoint",
                             obj_key=f"endpoint:{meth} {p}",
@@ -838,6 +854,8 @@ def analyze_file(path: Path, version: str) -> Migration:
         span = [st.line, min(mig.lines, st.line + st.raw.count("\n"))]
         for w in mig.writes[before:]:
             w.span = list(span)
+            if guarded and w.effect == "create":
+                w.extra["guarded"] = True
 
         if (len(mig.writes) == before and len(mig.unparsed_stmts) == flagged
                 and not head.startswith(("COMMENT", "DO", "SET", "SELECT"))):
@@ -973,10 +991,24 @@ def build_graph(migs: list[Migration]) -> dict[str, list[Write]]:
         # dos cadenas conviven sobre el mismo objeto:
         #   identidad -> create / delete  (existe o no existe)
         #   cuerpo    -> create / full / delete  (que dice hoy)
+        # Un create condicionado (IF NOT EXISTS, NOT EXISTS, ON CONFLICT DO
+        # NOTHING) sobre un objeto que ya existe no hace nada: el vivo sigue
+        # siendo el anterior (esquema de V22 frente a V48, pg_trgm de V112,
+        # rol de V59). El redundante es el que sobra.
+        redundant: dict[int, int] = {}
+        alive = None
+        for i, w in enumerate(ws):
+            if w.effect == "create":
+                if w.extra.get("guarded") and alive is not None:
+                    redundant[i] = alive
+                else:
+                    alive = i
+            elif w.effect == "delete":
+                alive = None
         last_body = max((i for i, w in enumerate(ws)
-                         if w.effect in ("create", "full", "delete")), default=-1)
+                         if w.effect in ("create", "full", "delete") and i not in redundant), default=-1)
         last_ident = max((i for i, w in enumerate(ws)
-                          if w.effect in ("create", "delete")), default=-1)
+                          if w.effect in ("create", "delete") and i not in redundant), default=-1)
 
         def killer_after(i: int, effects: tuple[str, ...]) -> str:
             nxt = next((x for x in ws[i + 1:] if x.effect in effects), None)
@@ -1005,6 +1037,11 @@ def build_graph(migs: list[Migration]) -> dict[str, list[Write]]:
                 # crear el objeto en la misma migracion: es la guarda de
                 # idempotencia, no codigo muerto (mismo trato que DROP FUNCTION).
                 w.status = "drop"
+
+            elif i in redundant:
+                w.status = "dead"
+                w.killed_by = ""
+                w.note = f"no-op: ya existe desde V{ws[redundant[i]].version}"
 
             elif w.effect == "create":
                 if i == last_ident:

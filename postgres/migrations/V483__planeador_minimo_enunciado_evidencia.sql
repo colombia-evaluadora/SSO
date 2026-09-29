@@ -8,7 +8,7 @@
 -- misma operación (se inserta la unidad y luego sus enunciados) y hay varios
 -- caminos que lo rompen (crear, actualizar, quitar enunciado/evidencia);
 -- validar al COMMIT los cubre todos sin duplicar la regla en cada función.
--- Solo se dispara sobre filas que cambian: los datos viejos no se revalidan.
+-- Quedan los triggers de las tablas puente; los de TUNIDAD/TACTIVIDAD los quito V492.
 -- Depende de: V212 (referente/enunciados), V214.1 (tablas puente), V216.
 
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_assert_minimo_enunciado(p_fk_tunidad BIGINT)
@@ -117,23 +117,9 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS tr_tunidad_minimo_enunciado ON academico_test.TUNIDAD;
-CREATE CONSTRAINT TRIGGER tr_tunidad_minimo_enunciado
-    AFTER INSERT OR UPDATE OF FK_REFERENTE_CURRICULAR, ACTIVE ON academico_test.TUNIDAD
-    DEFERRABLE INITIALLY DEFERRED
-    FOR EACH ROW
-    EXECUTE FUNCTION academico_test.tg_planeador_minimo_enunciado_evidencia();
-
 DROP TRIGGER IF EXISTS tr_tunidad_enunciado_minimo ON academico_test.TUNIDAD_ENUNCIADO;
 CREATE CONSTRAINT TRIGGER tr_tunidad_enunciado_minimo
     AFTER UPDATE OF ACTIVE OR DELETE ON academico_test.TUNIDAD_ENUNCIADO
-    DEFERRABLE INITIALLY DEFERRED
-    FOR EACH ROW
-    EXECUTE FUNCTION academico_test.tg_planeador_minimo_enunciado_evidencia();
-
-DROP TRIGGER IF EXISTS tr_tactividad_minimo_evidencia ON academico_test.TACTIVIDAD;
-CREATE CONSTRAINT TRIGGER tr_tactividad_minimo_evidencia
-    AFTER INSERT OR UPDATE OF FK_TUNIDAD, ACTIVE ON academico_test.TACTIVIDAD
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW
     EXECUTE FUNCTION academico_test.tg_planeador_minimo_enunciado_evidencia();
