@@ -24,6 +24,23 @@
 --   sobre la prematricula ya creada. Por eso son parametros y no se leen aca
 --   -- esta funcion no sabe de donde vienen.
 --
+-- NO DECLARA ETIQUETA DE AUDITORIA, A PROPOSITO
+--   fn_audit_declarar usa set_config(..., true), que es "ultima llamada
+--   gana" por transaccion. Esta funcion se invoca dentro del bucle de
+--   fn_prematricula_grupo_procesar, una vez por estudiante: si declarara la
+--   suya, los 30 estudiantes de una tanda se pisarian entre si y en
+--   ClickHouse quedaria la del ultimo en vez de la del proceso. La etiqueta
+--   la pone el orquestador, UNA vez antes del bucle.
+--
+--   Es el mismo criterio por el que fn_enfasis_desde_seleccion,
+--   fn_enfasis_resolver y fn_escala_propagar quedaron excluidas de la
+--   adopcion (ver "Funciones excluidas a proposito" en
+--   docs/auditoria/etiqueta-cambios-por-funcion.md).
+--
+--   Si algun dia esta funcion gana un endpoint propio -- un alta de
+--   prematricula individual desde pantalla --, ahi SI tiene que declarar su
+--   etiqueta, porque dejaria de ser un helper interno.
+--
 -- Idempotente: CREATE OR REPLACE.
 -- ===========================================================================
 

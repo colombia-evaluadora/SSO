@@ -13,7 +13,8 @@
 --      a medias SI se permite, y ahi solo se hacen los que faltan.
 --   3. Resolver los dos destinos UNA vez para todo el grupo, no por
 --      estudiante: son los mismos para los 30.
---   4. Recorrer las matriculas creando cada prematricula.
+--   4. Declarar la etiqueta de auditoria.
+--   5. Recorrer las matriculas creando cada prematricula.
 --
 --
 -- A DONDE VA CADA UNO
@@ -28,6 +29,26 @@
 -- QUE SE ARRASTRA
 --   El acudiente de la matricula de origen (FK_TPADRE, el parentesco) y
 --   EDICION_ACUDIENTE. Corregir esos datos no es parte de este proceso.
+--
+--
+-- LA ETIQUETA DE AUDITORIA
+--   Una sola llamada a fn_audit_declarar, despues de TODAS las validaciones
+--   (gate, grupo no procesado, destinos, estado) y justo antes del bucle, que
+--   es el primer INSERT. Asi una tanda que termina en excepcion no deja una
+--   etiqueta colgada, que es la regla del manual
+--   (docs/auditoria/etiqueta-cambios-por-funcion.md).
+--
+--   Va aca y no en fn_prematricula_crear porque set_config(..., true) es
+--   "ultima llamada gana": declarar por estudiante dejaria en ClickHouse la
+--   etiqueta del ultimo de los 30 en vez de la del proceso. Es la misma razon
+--   por la que los helpers internos (fn_escala_propagar y los otros dos)
+--   quedaron excluidos de la adopcion.
+--
+--   Se pasan establecimiento Y sede. El manual marca el sede_id como el gap
+--   real de la adopcion -- "se debe pasar" --, y aca no cuesta nada: son las
+--   mismas coordenadas que el gate ya necesita resolver. Con la sede,
+--   fn_audit_declarar resuelve tambien el establecimiento por su propio JOIN,
+--   asi que pasar las dos es equivalente o mejor que pasar solo una.
 --
 --
 -- POR QUE NO FALLA ENTERO
@@ -59,6 +80,11 @@ DECLARE
     v_destino     RECORD;
     v_estado      BIGINT;
     v_usuario     VARCHAR;
+    v_grupo_nom   VARCHAR;
+    v_grado_nom   VARCHAR;
+    v_sede        BIGINT;
+    v_ee          BIGINT;
+    v_anio_sig    INT;
     v_fila        RECORD;
     v_grupo_dest  BIGINT;
     v_pk          BIGINT;
@@ -96,7 +122,31 @@ BEGIN
           WHERE u.PK_TUSUARIO = p_pk_usuario_solicitante),
         'fn_prematricula_grupo_procesar');
 
-    -- 4. Cada estudiante.
+    -- 4. La etiqueta. Una sola SELECT trae las cuatro cosas que hacen falta:
+    --    los dos nombres para el texto y las dos coordenadas para el contexto.
+    SELECT g.NOMBRE, gd.NOMBRE, pa.FK_TSEDE, s.FK_TESTABLECIMIENTO
+      INTO v_grupo_nom, v_grado_nom, v_sede, v_ee
+      FROM academico_test.TGRUPO g
+      JOIN academico_test.TGRADO gd ON gd.PK_TGRADO = g.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa
+        ON pa.PK_TPERIODO_ACADEMICO = gd.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE g.PK_TGRUPO = p_fk_tgrupo;
+
+    SELECT al.NOMBRE::INT INTO v_anio_sig
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TANO_LECTIVO al
+        ON al.PK_ANO_LECTIVO = pa.FK_TANO_LECTIVO
+     WHERE pa.PK_TPERIODO_ACADEMICO = v_destino.fk_tperiodo_siguiente
+       AND al.NOMBRE ~ '^[0-9]{4}$';
+
+    PERFORM academico_test.fn_audit_declarar(
+        p_pk_usuario_solicitante,
+        FORMAT('Prematrícula del grupo %s de %s para el año %s',
+               v_grupo_nom, v_grado_nom, v_anio_sig),
+        v_ee, v_sede);
+
+    -- 5. Cada estudiante.
     FOR v_fila IN
         SELECT m.PK_TMATRICULA, m.FK_TESTUDIANTE, m.FK_TPADRE,
                m.FK_TLV_ACUDIENTE_PARENTESCO, m.EDICION_ACUDIENTE,
@@ -173,4 +223,4 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_prematricula_grupo_procesar(BIGINT, BIGINT, BIGINT[])
-    IS 'Prematricula UN grupo: crea la prematricula del ano siguiente para cada matricula Cursando/Aprobado/Reprobado. Cursando y Aprobado van al grupo de ascenso, Reprobado al del mismo grado -- Cursando entra al ascenso porque al prematricular el ano todavia no cerro. Arrastra el acudiente y EDICION_ACUDIENTE de la matricula de origen. p_pk_tmatriculas acota la tanda y siempre se intersecta con el grupo, asi que no puede colar a nadie de otro. Es reanudable: las matriculas que ya tienen prematricula se cuentan como omitidas en vez de duplicarse, y un grupo completo falla antes con 23505. Un estudiante sin destino (ultimo grado, o el grado no existe el ano que viene) NO tumba la tanda: se cuenta en sin_destino con su motivo. Devuelve JSONB con totales y detalle por estudiante, como fn_matricula_promover_lote.';
+    IS 'Prematricula UN grupo: crea la prematricula del ano siguiente para cada matricula Cursando/Aprobado/Reprobado. Cursando y Aprobado van al grupo de ascenso, Reprobado al del mismo grado -- Cursando entra al ascenso porque al prematricular el ano todavia no cerro. Arrastra el acudiente y EDICION_ACUDIENTE de la matricula de origen. p_pk_tmatriculas acota la tanda y siempre se intersecta con el grupo, asi que no puede colar a nadie de otro. Es reanudable: las matriculas que ya tienen prematricula se cuentan como omitidas en vez de duplicarse, y un grupo completo falla antes con 23505. Un estudiante sin destino (ultimo grado, o el grado no existe el ano que viene) NO tumba la tanda: se cuenta en sin_destino con su motivo. Declara la etiqueta de auditoria UNA vez, tras todas las validaciones y antes del bucle, con establecimiento y sede: fn_prematricula_crear no declara la suya a proposito, porque set_config es ultima-llamada-gana y quedaria la del ultimo estudiante. Devuelve JSONB con totales y detalle por estudiante, como fn_matricula_promover_lote.';
