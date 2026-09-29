@@ -1,11 +1,12 @@
--- V494 -- role_query: /planeador, /informes y /asistencias para jefes de sistema, jefes de area, coordinador, director de grupo y auxiliar administrativo (CEVAL).
+-- V494 -- role_query: /planeador, /informes y /asistencias para rector, jefes de sistema, jefes de area, coordinador, director de grupo y auxiliar administrativo (CEVAL).
 -- Solo abre la capa JWT; el gate PL/pgSQL de cada funcion sigue decidiendo. Endpoints nuevos requieren su propio INSERT.
 -- Depende de: roles CEVAL-* del dump base (si faltan, el JOIN no inserta).
 
 INSERT INTO public.role_query (role_id, query_id)
 SELECT r.id_role, q.id_query
   FROM public.query q
-  JOIN public.role r ON r.name IN ('CEVAL-JEFE_SISTEMA_ESTABLECIMIENTO',
+  JOIN public.role r ON r.name IN ('CEVAL-RECTOR',
+                                   'CEVAL-JEFE_SISTEMA_ESTABLECIMIENTO',
                                    'CEVAL-JEFE_SISTEMA_ENTE_TERRITORIAL',
                                    'CEVAL-COORDINADOR',
                                    'CEVAL-DIRECTOR_GRUPO',
