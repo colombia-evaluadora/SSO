@@ -3,9 +3,10 @@
 -- servida por public.query. Quedan fn_assert_superadmin, fn_list_roles,
 -- fn_add_trol + trigger de sincronizacion con public.role,
 -- fn_list_menu_possibilities_for_rol, fn_dissociate_menus_from_rol,
--- fn_upsert_menu, las funciones de planes y las semillas de menu, ruta y rol.
+-- fn_upsert_menu, las funciones de planes y las semillas de menu y ruta.
 -- fn_associate_menus_to_rol, fn_list_available_menus, fn_delete_menu y
--- fn_reorder_menus se reescribieron en V115, V123 y V498.
+-- fn_reorder_menus se reescribieron en V115, V123 y V498; el rol lo crea V59
+-- y las asignaciones rol-menu (TROL_MENU) las siembra V193.
 -- ===========================================================================
 
 
@@ -824,6 +825,8 @@ SELECT v.categoria, v.nombre, v.valor, 'V59_seed'
           AND lv.active    = TRUE
        );
 
+-- El NOT EXISTS mira tambien los menus inactivos: re-aplicar no resucita
+-- uno que se desactivo a mano.
 INSERT INTO academico_test.tmenu (codigo, nombre, icono, visible, estado, url, fk_tmenu, orden, created_by)
 SELECT v.codigo, v.nombre, v.icono, 'S', 'A', v.url, NULL, v.orden, 'V59_seed'
   FROM (VALUES
@@ -834,7 +837,7 @@ SELECT v.codigo, v.nombre, v.icono, 'S', 'A', v.url, NULL, v.orden, 'V59_seed'
   ) AS v(codigo, nombre, icono, url, orden)
  WHERE NOT EXISTS (
        SELECT 1 FROM academico_test.tmenu m
-        WHERE m.codigo = v.codigo AND m.active = TRUE
+        WHERE m.codigo = v.codigo
        );
 
 INSERT INTO academico_test.tmenu (codigo, nombre, url, visible, estado, fk_tmenu, orden, created_by)
@@ -858,34 +861,7 @@ SELECT v.codigo, v.nombre, v.url, 'S', 'A', padre.pk_tmenu, v.orden, 'V59_seed'
    AND padre.fk_tmenu IS NULL
  WHERE NOT EXISTS (
        SELECT 1 FROM academico_test.tmenu m
-        WHERE m.codigo = v.codigo AND m.active = TRUE
-       );
-
-INSERT INTO academico_test.trol_menu (fk_trol, fk_tmenu, orden_rol, active, created_by)
-SELECT t.pk_trol,
-       m.pk_tmenu,
-       ROW_NUMBER() OVER (
-           ORDER BY COALESCE(m.fk_tmenu, m.pk_tmenu),
-                    (m.fk_tmenu IS NULL) DESC,
-                    m.orden
-       ),
-       TRUE,
-       'V59_seed'
-  FROM academico_test.tmenu m
- CROSS JOIN academico_test.trol t
- WHERE t.codigo = 'SUPER_ADMINISTRADOR'
-   AND t.active = TRUE
-   AND m.active = TRUE
-   AND m.codigo IN (
-       'COBERTURA_EDUCATIVA', 'ADMINISTRACION', 'ESTABLECIMIENTO_EDUCATIVO', 'USUARIOS',
-       'PRE_MATRICULA', 'INSCRITOS', 'MATRICULA',
-       'REGISTRO_ACTIVIDAD', 'CONFIG_ROLES_MENUS',
-       'ESTABLECIMIENTO', 'SEDES_EDUCATIVAS', 'FUNCIONARIOS', 'PERIODOS_ACADEMICOS',
-       'EQUIPO', 'ROLES'
-   )
-   AND NOT EXISTS (
-       SELECT 1 FROM academico_test.trol_menu tm
-        WHERE tm.fk_trol = t.pk_trol AND tm.fk_tmenu = m.pk_tmenu
+        WHERE m.codigo = v.codigo
        );
 
 INSERT INTO public.route (name, icon, path, menuorder, type, idparent)
