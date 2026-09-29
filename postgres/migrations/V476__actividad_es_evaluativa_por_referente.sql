@@ -6,6 +6,8 @@
 -- delegar en ella. Las filas de public.query de configuracion anuncian las
 -- claves esFormativo / esSumativoSugerido.
 -- Depende de: V460 (contexto), V475 (fn_actividad_es_formativa), V451.
+-- El detail de /planeador/actividades/configuracion se construye en orden
+-- V459 (texto) -> V460 (REPLACE) -> V476 (append): se re-aplican juntas.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
