@@ -3,7 +3,7 @@
 -- Quedan: fn_actividad_recuperacion_campos_disponibles (4 args),
 -- fn_actividad_recuperacion_configurar (REEMPLAZAR sin tipoCalculo, origen
 -- sumativa) y la query de GET /planeador/actividades/configuracion con
--- ?RECUPERAR= y ?ACTIVIDAD_RECUPERAR= (V460 y V476 reescriben su detail).
+-- ?RECUPERAR= y ?ACTIVIDAD_RECUPERAR= (V460 y V475 reescriben su detail).
 -- Lo demas lo reescribieron despues: campos_disponibles (V479),
 -- unidad_configuracion_actividad y configuracion_contexto (V460/V496).
 -- Depende de: V458 (helpers), V224 (writer), V408 (combinar), V422 (fila).
