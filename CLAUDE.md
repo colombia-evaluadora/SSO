@@ -34,11 +34,12 @@ mejorar la calidad del trabajo:
 | Probar un cambio en los contenedores locales | `probando-en-contenedores-locales` |
 | Editar una migración que un servidor ya aplicó | `reaplicando-migraciones` |
 | Qué quedó obsoleto / firmas / siguiente V<n> | `analizando-migraciones` |
+| Borrar o recortar código muerto de migraciones | `limpiando-migraciones` |
 | Colección Postman de un endpoint | `documentando-con-postman` |
 
 Propias del repo, invocables con `/`: las skills `/next-migration-number`
-(además se carga sola al tocar migraciones), `/new-query-endpoint` y
-`/server-status`; y los comandos `/migration-lint`, `/migration-analysis`,
+(además se carga sola al tocar migraciones), `/new-query-endpoint`,
+`/server-status` y `/limpiando-migraciones`; y los comandos `/migration-lint`, `/migration-analysis`,
 `/pre-pr` y `/publicar-pr` (commit + rama en `origin` + PR a dev con la plantilla).
 
 ## Reglas por sección
