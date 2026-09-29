@@ -38,12 +38,6 @@ BEGIN
 END;
 $$;
 
-INSERT INTO public.role (name, description)
-SELECT 'CEVAL-SUPER_ADMINISTRADOR', 'Super Administrador del sistema academico (V113 seed)'
- WHERE NOT EXISTS (
-       SELECT 1 FROM public.role WHERE name = 'CEVAL-SUPER_ADMINISTRADOR'
-       );
-
 ALTER TABLE academico_test.tmenu
 ADD COLUMN IF NOT EXISTS fk_tplan BIGINT
     REFERENCES academico_test.tlista_valor(pk_lista_valor)
