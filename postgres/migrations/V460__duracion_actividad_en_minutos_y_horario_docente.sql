@@ -6,8 +6,7 @@
 -- fn_actividad_programacion_limites cambia sus columnas (DROP + CREATE).
 -- Los valores ya guardados en bloques NO se convierten.
 -- fn_actividad_configuracion_contexto vive hoy en V496.
--- Depende de: V422 (assert/limites), V45 (fn_horario_calcular_bloques),
--- V459 (detail de la fila de configuracion, que aqui se reconcilia).
+-- Depende de: V422 (assert/limites), V45 (fn_horario_calcular_bloques).
 -- ===========================================================================
 
 
@@ -219,15 +218,3 @@ END $$;
 
 COMMENT ON COLUMN academico_test.TACTIVIDAD.DURACION_ESTIMADA
     IS 'Duracion estimada de la actividad en MINUTOS de clase (programacion). Tope: semanas del periodo academico x minutos semanales de la asignatura en el horario del grupo. No admite negativos.';
-
-UPDATE public.query q
-   SET detail = REPLACE(REPLACE(q.detail,
-        'duracionEstimada {min: 1, max} donde max = semanas del periodo x bloques semanales de la asignatura (la intensidad horaria, contada sobre THORARIO activo), e intensidadHoraria {bloquesPorSemana, diasHabiles:[{valor,nombre}]}',
-        'duracionEstimada {min: 1, max, unidad: MINUTOS, paso} donde max = semanas del periodo x minutos semanales de clase de la asignatura (horas de THORARIO o del bloque del periodo), e intensidadHoraria {bloquesPorSemana, minutosPorBloque, minutosPorSemana, diasHabiles:[{valor,nombre}], horario:[{valor, nombre, bloques:[{numero, horaInicio, horaFin, minutos}]}]}: las fechas de inicio y cierre solo se aceptan en dias con clase'),
-        'sin horario, las fechas solo se acotan por el periodo y duracionEstimada.max viene NULL',
-        'sin horario, las fechas solo se acotan por el periodo; sin horas en el horario duracionEstimada.max viene NULL')
-  FROM public.microservice m
- WHERE m.id_microservice = q.microservice_id
-   AND m.serviceid       = 'eval-col'
-   AND q.path_template   = '/planeador/actividades/configuracion'
-   AND q.http_method     = 'GET';

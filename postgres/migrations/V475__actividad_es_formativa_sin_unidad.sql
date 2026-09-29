@@ -7,8 +7,8 @@
 -- fn_actividad_es_formativa delega en ella (misma firma: arregla a la vez a
 -- sus llamadores de V441/V450/V454/V461/V463/V469).
 -- El detail de /planeador/actividades/configuracion se construye en orden
--- V459 (texto) -> V460 (REPLACE) -> V475 (append): se re-aplican juntas.
--- Depende de: V243 (funciones), V451 (derivacion), V218 (columnas), V460.
+-- V459 (texto) -> V475 (append): se re-aplican juntas.
+-- Depende de: V243 (funciones), V451 (derivacion), V218 (columnas), V459.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
