@@ -36,6 +36,13 @@ Un **parche** (`replace()`, `regexp_replace`, `ALTER TABLE`, cambiar solo
 `param_types`/`icon`/`menuorder`) deriva del estado anterior: no lo mata, lo
 modifica, y muere junto con él.
 
+Las filas de `public.query` se resuelven **por columna**: una escritura muere
+solo cuando las posteriores han reescrito todas las columnas que dejó. Un
+`UPDATE` que solo cambia `query` no mata un `param_types` o un `detail`
+anterior, y un `INSERT … ON CONFLICT DO NOTHING` sobre una fila que ya existe
+es un no-op: no mata nada (V93 sobre las filas de V67). Los
+`WITH … AS (VALUES …) INSERT INTO public.query` crean las filas de sus tuplas.
+
 Veredictos: `obsoleta` (ninguna escritura sobrevive), `residual` (una sola viva
 contra tres o más muertas), `parcial`, `viva`, `solo-binds` (únicamente ata
 permisos o siembra datos — eso no se reescribe) y `sin-cambios` (documental).

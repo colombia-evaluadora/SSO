@@ -4,8 +4,8 @@
 -- Incluye fn_asistencia_puede_ver, v_asistencia_detalle, sus 3 helpers de
 -- duracion/franja y fn_asistencia_resumen_horas, que vivian solo en V220
 -- (eliminada: su contenido quedo consolidado en V136-V141).
--- Depende de: V29/V40 (helpers de rol/scope), V457 (sesiones/actividades
--- programadas), V436 (grupo_es_formativo), V22 (tablas).
+-- Depende de: V29/V40 (helpers de rol/scope), V489 (fn_usuario_solo_sus_grupos/
+-- _grupos_dirigidos), V457 (sesiones programadas), V436 (grupo_es_formativo), V22.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -40,12 +40,23 @@ BEGIN
                    SELECT establecimiento_id
                      FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario));
     ELSIF v_nivel = 3 THEN
-        RETURN (
-                   academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(p_fk_tgrupo)),
-                   academico_test.fn_grupo_jornada(p_fk_tgrupo)
-               ) IN (
-                   SELECT sede_id, jornada_id
-                     FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario));
+        IF NOT academico_test.fn_usuario_solo_sus_grupos(p_pk_usuario) THEN
+            RETURN (
+                       academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(p_fk_tgrupo)),
+                       academico_test.fn_grupo_jornada(p_fk_tgrupo)
+                   ) IN (
+                       SELECT sede_id, jornada_id
+                         FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario));
+        END IF;
+
+        RETURN p_fk_tgrupo IN (SELECT grupo_id FROM academico_test.fn_usuario_grupos_dirigidos(p_pk_usuario))
+            OR EXISTS (
+                SELECT 1
+                  FROM academico_test.TDOCENTE_ASIGNATURA da
+                  JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = da.FK_TFUNCIONARIO
+                 WHERE f.FK_TUSUARIO = p_pk_usuario AND f.ACTIVE = TRUE
+                   AND da.FK_TGRUPO = p_fk_tgrupo AND da.ACTIVE = TRUE
+            );
     END IF;
 
     RETURN FALSE;
@@ -53,7 +64,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_puede_ver(BIGINT, BIGINT)
-    IS 'BOOLEAN para el WHERE de listados: capability ''VER'' + scope por categoria de rol (0/1 => todo, 2 => fn_usuario_ee_accesibles, 3 => par sede/jornada, 4/sin categoria => FALSE). p_pk_usuario NULL => TRUE. Copia identica de V220, redefinida aqui (V140) para trazabilidad -- la usa fn_asistencia_calendario.';
+    IS 'BOOLEAN para el WHERE de listados: capability ''VER'' + scope por categoria de rol (0/1 => todo, 2 => fn_usuario_ee_accesibles, 3 => sede/jornada si fn_usuario_solo_sus_grupos es FALSE (coordinador/jefe de area/psico orientador, V489), si no solo fn_usuario_grupos_dirigidos + TDOCENTE_ASIGNATURA propia (director de grupo/docente), 4/sin categoria => FALSE). p_pk_usuario NULL => TRUE. Redefinida aqui (V140, antes copia identica de V220) para acotar nivel 3 a grupo propio -- ver Regla 74.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_horas_bloque(
     p_hora_inicio         TIMESTAMP,

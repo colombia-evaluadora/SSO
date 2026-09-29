@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 444 migraciones (V1–V511), 684 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-28.
+Estado: 425 migraciones (V1–V514), 685 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-28.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -29,7 +29,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 - [cumplimiento](#cumplimiento) — 3 funcion(es), 0 endpoint(s)
 - [descanso](#descanso) — 2 funcion(es), 0 endpoint(s)
 - [docente](#docente) — 7 funcion(es), 0 endpoint(s)
-- [documento](#documento) — 5 funcion(es), 1 endpoint(s)
+- [documento](#documento) — 6 funcion(es), 1 endpoint(s)
 - [enfasi](#enfasi) — 4 funcion(es), 0 endpoint(s)
 - [ente](#ente) — 8 funcion(es), 0 endpoint(s)
 - [es](#es) — 2 funcion(es), 0 endpoint(s)
@@ -114,7 +114,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_menu_grupo_de` | 1 | V396 | — |
 | `academico_test.fn_upsert_menu` | 11 | V113 | V126 |
 | `pigse.fn_assert_permiso_funcionario` | 3 | V370 | V386, V390, V393 |
-| `pigse.fn_assert_permiso_seccion` | 6 | V370 | V371, V386 |
+| `pigse.fn_assert_permiso_seccion` | 6 | V370 | V386 |
 | `pigse.fn_audit_declarar` | 4 | V362 | V394 |
 
 ## academico
@@ -130,7 +130,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_actualizar` | 37 | V479 | V246 |
 | `academico_test.fn_actividad_actualizar_interno` | 37 | V479 | — |
 | `academico_test.fn_actividad_adaptacion_archivo_registrar` | 3 | V470 | — |
-| `academico_test.fn_actividad_adaptacion_reemplazar` | 3 | V224 | V246, V476, V479 |
+| `academico_test.fn_actividad_adaptacion_reemplazar` | 3 | V224 | V246, V479 |
 | `academico_test.fn_actividad_adaptaciones_reutilizables_listar` | 8 | V471 | — |
 | `academico_test.fn_actividad_asistencia_fecha_resolver` | 2 | V450 | V469 |
 | `academico_test.fn_actividad_asistencia_valida` | 3 | V450 | — |
@@ -146,23 +146,23 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_cotejo_definir` | 3 | V226 | V240, V274, V340, V469 |
 | `academico_test.fn_actividad_crear` | 35 | V479 | V246, V274, V340 |
 | `academico_test.fn_actividad_crear_interno` | 35 | V479 | — |
-| `academico_test.fn_actividad_criterio_campos_disponibles` | 2 | V440 | V458, V459, V460, V476, V479, V496 |
+| `academico_test.fn_actividad_criterio_campos_disponibles` | 2 | V440 | V458, V459, V460, V479, V496 |
 | `academico_test.fn_actividad_criterio_quitar` | 2 | V214.1 | V246 |
-| `academico_test.fn_actividad_criterio_relacionar` | 3 | V214.1 | V224, V246, V476, V479 |
+| `academico_test.fn_actividad_criterio_relacionar` | 3 | V214.1 | V224, V246, V479 |
 | `academico_test.fn_actividad_disponibles_listar` | 5 | V223 | V246 |
 | `academico_test.fn_actividad_eliminar` | 2 | V482 | V246 |
 | `academico_test.fn_actividad_eliminar_interno` | 2 | V482 | — |
-| `academico_test.fn_actividad_en_periodo_eval` | 2 | V332 | V333, V334, V335, V338, V344, V410… |
-| `academico_test.fn_actividad_es_formativa` | 1 | V476 | V441, V450, V454, V461, V463, V469… |
+| `academico_test.fn_actividad_en_periodo_eval` | 2 | V332 | V333, V335, V410, V411, V428, V433… |
+| `academico_test.fn_actividad_es_formativa` | 1 | V476 | V450, V454, V461, V463, V469, V479… |
 | `academico_test.fn_actividad_escala_definir` | 3 | V226 | V240, V274, V340, V469 |
 | `academico_test.fn_actividad_estado` | 5 | V462 | V251, V452, V454, V481 |
 | `academico_test.fn_actividad_estudiante_actividad` | 1 | V227 | V241, V461, V463, V469, V472, V473… |
-| `academico_test.fn_actividad_estudiantes_asignar` | 4 | V224 | V422, V476, V479 |
+| `academico_test.fn_actividad_estudiantes_asignar` | 4 | V224 | V422, V479 |
 | `academico_test.fn_actividad_estudiantes_calificaciones_listar` | 4 | V469 | V247 |
 | `academico_test.fn_actividad_estudiantes_set` | 4 | V422 | — |
-| `academico_test.fn_actividad_evaluacion_requerida` | 1 | V479 | V440, V458, V459, V476, V479 |
+| `academico_test.fn_actividad_evaluacion_requerida` | 1 | V479 | V458, V459, V479 |
 | `academico_test.fn_actividad_evidencia_quitar` | 2 | V214.1 | V246 |
-| `academico_test.fn_actividad_evidencia_relacionar` | 3 | V214.1 | V224, V246, V476, V479 |
+| `academico_test.fn_actividad_evidencia_relacionar` | 3 | V214.1 | V224, V246, V479 |
 | `academico_test.fn_actividad_exportar` | 5 | V272 | V129, V273 |
 | `academico_test.fn_actividad_finalizacion_refrescar` | 1 | V224 | — |
 | `academico_test.fn_actividad_grado` | 2 | V479 | — |
@@ -174,15 +174,15 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_instrumento_definir` | 3 | V240 | V247 |
 | `academico_test.fn_actividad_instrumento_obtener` | 2 | V469 | V247, V272, V353, V452 |
 | `academico_test.fn_actividad_instrumento_reset` | 3 | V226 | — |
-| `academico_test.fn_actividad_instrumentos_campos_disponibles` | 1 | V458 | V458, V459, V460, V476, V479, V496 |
+| `academico_test.fn_actividad_instrumentos_campos_disponibles` | 1 | V458 | V458, V459, V460, V479, V496 |
 | `academico_test.fn_actividad_instrumentos_permitidos` | 2 | V214.2 | — |
 | `academico_test.fn_actividad_listar` | 18 | V481 | V246, V404 |
 | `academico_test.fn_actividad_listar_docente` | 12 | V481 | V250 |
 | `academico_test.fn_actividad_listar_interno` | 22 | V481 | — |
-| `academico_test.fn_actividad_lv_assert` | 3 | V224 | V226, V240, V459, V469, V476, V479 |
+| `academico_test.fn_actividad_lv_assert` | 3 | V224 | V226, V240, V459, V469, V479 |
 | `academico_test.fn_actividad_material_archivo_registrar` | 3 | V426 | — |
 | `academico_test.fn_actividad_material_archivos_listar` | 2 | V427 | — |
-| `academico_test.fn_actividad_material_reemplazar` | 3 | V224 | V246, V476, V479 |
+| `academico_test.fn_actividad_material_reemplazar` | 3 | V224 | V246, V479 |
 | `academico_test.fn_actividad_materiales_reutilizables_listar` | 8 | V429 | V246, V429 |
 | `academico_test.fn_actividad_matriculas_grupo_listar` | 2 | V421 | — |
 | `academico_test.fn_actividad_nota_ajustar_por_criterio` | 2 | V227 | V408, V469, V472 |
@@ -211,19 +211,19 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_observar_grupal` | 5 | V463 | V246 |
 | `academico_test.fn_actividad_otro_campos_disponibles` | 1 | V458 | — |
 | `academico_test.fn_actividad_otro_definir` | 3 | V469 | V274, V340 |
-| `academico_test.fn_actividad_otro_metodo_valoracion` | 1 | V241 | V441, V454, V469, V472, V473, V477 |
+| `academico_test.fn_actividad_otro_metodo_valoracion` | 1 | V241 | V454, V469, V472, V473, V477 |
 | `academico_test.fn_actividad_otro_sn` | 1 | V469 | — |
 | `academico_test.fn_actividad_pantalla_edicion` | 3 | V452 | V450 |
 | `academico_test.fn_actividad_periodo_evaluacion` | 2 | V408 | — |
-| `academico_test.fn_actividad_ponderacion_campos_disponibles` | 3 | V458 | V458, V459, V460, V476, V479, V496 |
-| `academico_test.fn_actividad_programacion_assert` | 6 | V460 | V224, V476, V479 |
-| `academico_test.fn_actividad_programacion_limites` | 2 | V460 | V440, V458, V459, V460, V476, V496 |
+| `academico_test.fn_actividad_ponderacion_campos_disponibles` | 3 | V458 | V459, V460, V479, V496 |
+| `academico_test.fn_actividad_programacion_assert` | 6 | V460 | V224, V479 |
+| `academico_test.fn_actividad_programacion_limites` | 2 | V460 | V458, V459, V460, V496 |
 | `academico_test.fn_actividad_progreso_evaluacion` | 1 | V481 | — |
 | `academico_test.fn_actividad_recuperacion_aplicar` | 2 | V408 | V227, V469, V472 |
-| `academico_test.fn_actividad_recuperacion_campos_disponibles` | 9 | V459 | V282, V422, V440, V458, V459, V460… |
-| `academico_test.fn_actividad_recuperacion_configurar` | 3 | V459 | V476, V479 |
+| `academico_test.fn_actividad_recuperacion_campos_disponibles` | 9 | V459 | V282, V422, V458, V459, V460, V479… |
+| `academico_test.fn_actividad_recuperacion_configurar` | 3 | V459 | V479 |
 | `academico_test.fn_actividad_recuperacion_revertir` | 2 | V408 | V224, V459, V482 |
-| `academico_test.fn_actividad_referente_tipo_evaluacion` | 1 | V479 | V226, V440, V458, V459, V476, V479 |
+| `academico_test.fn_actividad_referente_tipo_evaluacion` | 1 | V479 | V226, V458, V459, V479 |
 | `academico_test.fn_actividad_resumen_estados` | 8 | V224 | — |
 | `academico_test.fn_actividad_resumen_estados_docente` | 7 | V224 | V250, V252 |
 | `academico_test.fn_actividad_rubrica_definir` | 3 | V226 | V240, V274, V340, V469 |
@@ -280,13 +280,13 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_asignatura_criterio_evaluacion_vigente` | 2 | V239 | V227, V408, V410, V428, V455 |
-| `academico_test.fn_asignatura_definitiva_proyectada_periodo` | 3 | V333 | V334, V344, V346, V348, V408, V410… |
+| `academico_test.fn_asignatura_definitiva_proyectada_periodo` | 3 | V333 | V346, V348, V408, V410, V428, V469… |
 | `academico_test.fn_asignatura_grado_ponderacion_disponible` | 3 | V239 | V248 |
 | `academico_test.fn_asignatura_nota_requerida_periodo` | 3 | V410 | V428 |
-| `academico_test.fn_asignatura_plan_calculo_definitiva_modo` | 1 | V239 | V216, V333, V478, V492 |
-| `academico_test.fn_asignatura_plan_elemento_calculo` | 1 | V239 | V216, V333, V478, V492 |
+| `academico_test.fn_asignatura_plan_calculo_definitiva_modo` | 1 | V239 | V216, V333, V492 |
+| `academico_test.fn_asignatura_plan_elemento_calculo` | 1 | V239 | V216, V333, V492 |
 | `academico_test.fn_asignatura_plan_vigente` | 2 | V239 | V333 |
-| `academico_test.fn_asignatura_plan_vigente_por_grado` | 2 | V239 | V216, V478, V492 |
+| `academico_test.fn_asignatura_plan_vigente_por_grado` | 2 | V239 | V216, V492 |
 | `academico_test.fn_asignatura_tipo_evaluacion` | 2 | V428 | V432 |
 
 ## asistencia
@@ -319,7 +319,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_asistencia_registrar_bulk_interno` | 8 | V137 | V138 |
 | `academico_test.fn_asistencia_resumen_horas` | 6 | V140 | V221 |
 | `academico_test.fn_asistencia_sesiones_programadas` | 7 | V457 | V140, V485 |
-| `academico_test.fn_asistencia_tipo_pk` | 1 | V137 | V227, V441, V450, V469 |
+| `academico_test.fn_asistencia_tipo_pk` | 1 | V137 | V227, V450, V469 |
 | `academico_test.fn_asistencia_tipo_prioridad` | 1 | V438 | — |
 | `academico_test.fn_asistencia_validar_contexto` | 3 | V136 | V138 |
 | `academico_test.fn_asistencia_validar_docente_asignado` | 4 | V136 | V138 |
@@ -330,9 +330,9 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Endpoint | Verbo | Migraciones que la tocan | Funciones que invocan (aprox.) |
 |---|---|---|---|
-| `/audits/query` | POST | V133, V356, V377, V400 | — |
-| `/audits/sessions/:SESSIONID` | GET | V86, V133, V183, V356 | — |
-| `/audits/sessions/:SESSIONID/operations` | DELETE | V183, V376, V380 | — |
+| `/audits/query` | POST | V208, V356, V377, V400 | — |
+| `/audits/sessions/:SESSIONID` | GET | V90, V133, V183, V356 | — |
+| `/audits/sessions/:SESSIONID/operations` | DELETE | V90, V183, V376, V380 | — |
 | `/audits/sessions/:SESSIONID/operations` | POST | V356, V362, V376, V380 | `fn_matricula_config_ee_solicitante` (V180), `fn_usuario_tiene_rol` (V257), `fn_get_academico_usuario_id` (V299)… |
 | `/audits/stats` | POST | V133, V356, V384, V400 | — |
 
@@ -344,8 +344,8 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `/audit-tables/:SLUG/operations/:OPERATIONID/changes` | DELETE | V134, V183 | — |
 | `/audit-tables/:SLUG/operations/:OPERATIONID/changes` | GET | V85, V356 | — |
 | `/audit-tables/:SLUG/operations/query` | DELETE | V381 | — |
-| `/audit-tables/:SLUG/operations/query` | POST | V132, V356, V362, V376 | `fn_matricula_config_ee_solicitante` (V180), `fn_usuario_tiene_rol` (V257), `fn_get_academico_usuario_id` (V299)… |
-| `/audit-tables/:SLUG/operations/stats` | POST | V85, V356, V384, V402 | — |
+| `/audit-tables/:SLUG/operations/query` | POST | V355, V356, V362, V376 | `fn_matricula_config_ee_solicitante` (V180), `fn_usuario_tiene_rol` (V257), `fn_get_academico_usuario_id` (V299)… |
+| `/audit-tables/:SLUG/operations/stats` | POST | V355, V356, V384, V402 | — |
 | `/audit-tables/query` | POST | V85, V356, V381, V403 | — |
 
 ## available
@@ -393,7 +393,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 |---|---|---|---|
 | `pigse.fn_cumplimiento_listar` | 0 | V261 | V262 |
 | `pigse.fn_cumplimiento_listar_paginado` | 8 | V261 | V262 |
-| `pigse.fn_cumplimiento_metricas` | 0 | V261 | V262 |
+| `pigse.fn_cumplimiento_metricas` | 0 | V512 | V262 |
 
 ## descanso
 
@@ -422,11 +422,12 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `pigse.fn_documento_eliminar` | 3 | V261 | V262 |
-| `pigse.fn_documento_guardar` | 4 | V261 | V262 |
-| `pigse.fn_documentos_listar` | 1 | V261 | V262 |
-| `pigse.fn_documentos_listar_todos` | 0 | V368 | V374 |
-| `pigse.fn_documentos_listar_todos_paginado` | 7 | V374 | V374 |
+| `pigse.fn_documento_categorias_listar` | 2 | V512 | — |
+| `pigse.fn_documento_eliminar` | 4 | V512 | V262, V512 |
+| `pigse.fn_documento_guardar` | 5 | V512 | V262, V512 |
+| `pigse.fn_documentos_listar` | 1 | V512 | V262, V512 |
+| `pigse.fn_documentos_listar_todos` | 0 | V512 | V374 |
+| `pigse.fn_documentos_listar_todos_paginado` | 7 | V374 | V368 |
 
 ## enfasi
 
@@ -482,7 +483,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_est_actualizar` | 34 | V399 | V64, V98 |
-| `academico_test.fn_est_buscar_por_nit` | 2 | V53 | V52, V111, V296, V354, V399, V401… |
+| `academico_test.fn_est_buscar_por_nit` | 2 | V53 | V52, V111, V354, V399, V414 |
 | `academico_test.fn_est_buscar_por_pk` | 2 | V53 | V98 |
 | `academico_test.fn_est_contar` | 5 | V116 | V116, V130 |
 | `academico_test.fn_est_crear` | 32 | V414 | V64, V98 |
@@ -526,7 +527,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_estudiante_anio_observacion_guardar` | 5 | V490 | — |
 | `academico_test.fn_estudiante_crear` | 12 | V160 | V166, V415 |
 | `academico_test.fn_estudiante_dependencias_bloqueantes` | 2 | V162 | V160 |
-| `academico_test.fn_estudiante_final_observacion` | 2 | V490 | — |
+| `academico_test.fn_estudiante_final_observacion` | 2 | V490 | V434 |
 | `academico_test.fn_estudiante_obtener_por_id` | 2 | V160 | V166, V204 |
 | `academico_test.fn_estudiante_periodo_observacion_eliminar` | 3 | V490 | V413 |
 | `academico_test.fn_estudiante_periodo_observacion_fuentes` | 3 | V486 | — |
@@ -585,7 +586,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_grado_actualizar` | 6 | V43 | V79 |
 | `academico_test.fn_grado_bulk_delete` | 2 | V43 | V79 |
 | `academico_test.fn_grado_crear` | 5 | V43 | V79 |
-| `academico_test.fn_grado_desempeno_minimo` | 1 | V334 | V344, V346, V410, V411, V412, V428… |
+| `academico_test.fn_grado_desempeno_minimo` | 1 | V334 | V346, V410, V411, V428, V435, V439… |
 | `academico_test.fn_grado_es_preescolar` | 1 | V285 | V286, V287, V437 |
 | `academico_test.fn_grado_grupo_etiqueta` | 3 | V224 | V251, V419, V452, V454, V466, V468… |
 | `academico_test.fn_grado_grupo_reporte_listar` | 5 | V187 | V135 |
@@ -627,19 +628,19 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_informe_assert_grupo_propio` | 2 | V489 | V490 |
 | `academico_test.fn_informe_boletin_preescolar` | 4 | V468 | — |
 | `academico_test.fn_informe_cambios_pendientes` | 3 | V491 | V342 |
-| `academico_test.fn_informe_estudiante_asignaturas` | 4 | V428 | V335, V336, V337, V346, V348, V410… |
-| `academico_test.fn_informe_grupo_listar` | 4 | V490 | V342, V420, V430, V431, V434, V435… |
-| `academico_test.fn_informe_grupo_reporte` | 5 | V439 | V431, V434, V439 |
-| `academico_test.fn_informe_grupo_tabla` | 4 | V439 | V439 |
+| `academico_test.fn_informe_estudiante_asignaturas` | 4 | V428 | V335, V336, V346, V348, V411, V428… |
+| `academico_test.fn_informe_grupo_listar` | 4 | V490 | V342, V420, V435, V439, V466, V468 |
+| `academico_test.fn_informe_grupo_reporte` | 5 | V439 | V439 |
+| `academico_test.fn_informe_grupo_tabla` | 4 | V439 | V434 |
 | `academico_test.fn_informe_grupos_listar` | 5 | V490 | — |
 | `academico_test.fn_informe_historial_listar` | 5 | V491 | — |
 | `academico_test.fn_informe_historial_registrar` | 6 | V348 | V490 |
 | `academico_test.fn_informe_jornadas_listar` | 3 | V417 | — |
 | `academico_test.fn_informe_metricas_recalcular` | 3 | V346 | V348, V490 |
 | `academico_test.fn_informe_periodo_academico_resolver` | 4 | V418 | V419, V490 |
-| `academico_test.fn_informe_periodo_evidencias_listar` | 3 | V490 | V490 |
+| `academico_test.fn_informe_periodo_evidencias_listar` | 3 | V490 | V434 |
 | `academico_test.fn_informe_periodo_guardar` | 4 | V490 | V342 |
-| `academico_test.fn_informe_periodo_requerido` | 3 | V428 | V411, V412, V428, V431, V434, V435… |
+| `academico_test.fn_informe_periodo_requerido` | 3 | V428 | V411, V428, V435, V439, V474, V490 |
 | `academico_test.fn_informe_periodos_evaluacion_listar` | 4 | V418 | — |
 | `academico_test.fn_informe_planilla_guardar` | 5 | V490 | V347 |
 | `academico_test.fn_informe_planilla_listar` | 5 | V490 | V345 |
@@ -651,8 +652,8 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_instrumento_base_derivar` | 1 | V477 | — |
-| `academico_test.fn_instrumento_nombre` | 1 | V214.2 | V224, V476, V479 |
-| `academico_test.fn_instrumento_permitido_por_tipo_evaluacion` | 2 | V453 | V226, V282, V422, V440, V453, V458 |
+| `academico_test.fn_instrumento_nombre` | 1 | V214.2 | V224, V479 |
+| `academico_test.fn_instrumento_permitido_por_tipo_evaluacion` | 2 | V453 | V226, V282, V422, V453, V458 |
 
 ## jornada
 
@@ -694,14 +695,14 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_matricula_mover_lote` | 8 | V178 | V178 |
 | `academico_test.fn_matricula_obtener_completa` | 2 | V204 | V168 |
 | `academico_test.fn_matricula_obtener_por_id` | 2 | V163 | V166, V204 |
-| `academico_test.fn_matricula_promover_lote` | 5 | V178 | V129, V176, V179 |
+| `academico_test.fn_matricula_promover_lote` | 5 | V178 | V129, V179 |
 | `academico_test.fn_matricula_puede_cambiar_estado` | 3 | V233 | V166, V177, V178 |
 | `academico_test.fn_matricula_puede_ver` | 2 | V40 | — |
 | `academico_test.fn_matricula_reactivar` | 2 | V166 | V127, V173 |
 | `academico_test.fn_matricula_reingresar` | 2 | V166 | V127, V172 |
 | `academico_test.fn_matricula_replicar` | 3 | V175 | V178 |
 | `academico_test.fn_matricula_retirar` | 2 | V166 | V127, V171 |
-| `academico_test.fn_matricula_reubicar_lote` | 5 | V178 | V129, V176, V179 |
+| `academico_test.fn_matricula_reubicar_lote` | 5 | V178 | V129, V179 |
 | `academico_test.fn_matricula_socioeconomico_actualizar` | 18 | V177 | — |
 | `academico_test.fn_matricula_socioeconomico_crear` | 18 | V164 | V166, V177, V415 |
 | `academico_test.fn_matricula_socioeconomico_obtener_por_matricula` | 2 | V164 | V166, V204 |
@@ -736,7 +737,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_mi_establecimiento_para_auditoria` | 1 | V362 | — |
-| `pigse.fn_mi_establecimiento` | 1 | V261 | V262 |
+| `pigse.fn_mi_establecimiento` | 1 | V261 | V262, V512 |
 | `pigse.fn_mi_establecimiento_para_auditoria` | 1 | V362 | — |
 
 ## microservice
@@ -767,7 +768,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_nota_homologar` | 3 | V428 | V334, V344, V410, V428, V431, V432… |
+| `academico_test.fn_nota_homologar` | 3 | V428 | V410, V428, V432, V435, V439, V469… |
 
 ## numero
 
@@ -822,7 +823,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_periodo_soft_delete` | 2 | V37 | V75 |
 | `academico_test.fn_periodo_usuario_establecimientos` | 1 | V37 | V191 |
 | `academico_test.fn_periodo_usuario_global` | 1 | V37 | V191 |
-| `academico_test.fn_periodo_usuario_puede_ver` | 2 | V37 | V162, V242, V250, V254, V270, V350… |
+| `academico_test.fn_periodo_usuario_puede_ver` | 2 | V37 | V162, V250, V254, V270, V350, V351… |
 | `academico_test.fn_periodo_usuario_sedes` | 1 | V37 | V191 |
 
 ## personalizar
@@ -843,8 +844,8 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_pigse_cumplimiento_metricas` | 0 | V149 | — |
 | `academico_test.fn_pigse_documento_eliminar` | 3 | V156 | — |
 | `academico_test.fn_pigse_documento_guardar` | 4 | V156 | — |
-| `academico_test.fn_pigse_documentos_listar` | 1 | V156 | V152, V156 |
-| `academico_test.fn_pigse_mi_establecimiento` | 1 | V149 | V152, V156 |
+| `academico_test.fn_pigse_documentos_listar` | 1 | V156 | V156 |
+| `academico_test.fn_pigse_mi_establecimiento` | 1 | V149 | V156 |
 | `public.fn_get_pigse_usuario_id` | 1 | V261 | V258, V262, V263, V360, V362, V366… |
 | `public.fn_pigse_es_administrador` | 1 | V364 | — |
 | `public.fn_pigse_rol_crear` | 2 | V364 | — |
@@ -924,7 +925,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `/planeador/docentes/grupos` | GET | V248 | `fn_asignatura_grado_ponderacion_disponible` (V239), `fn_docente_grado_asignatura_listar` (V497), `fn_docente_grupos_listar` (V250)… |
 | `/planeador/periodos-evaluacion` | GET | V254 | `fn_docente_periodo_vigente` (V250), `fn_funcionario_actual` (V224), `fn_periodo_usuario_puede_ver` (V37)… |
 | `/planeador/planilla/calificaciones` | GET | V248, V441, V450, V469 | `fn_actividad_asistencia_fecha_resolver` (V450), `fn_actividad_buscar_por_pk` (V452), `fn_actividad_cotejo_definir` (V226)… |
-| `/planeador/planilla/columnas` | GET | V248, V441 | `fn_actividad_es_formativa` (V476), `fn_actividad_otro_metodo_valoracion` (V241), `fn_asignatura_grado_ponderacion_disponible` (V239)… |
+| `/planeador/planilla/columnas` | GET | V248, V441 | `fn_asignatura_grado_ponderacion_disponible` (V239), `fn_docente_grado_asignatura_listar` (V497), `fn_docente_grupos_listar` (V250)… |
 | `/planeador/referente-curricular` | GET | V278, V422 | `fn_actividad_estudiantes_asignar` (V224), `fn_actividad_recuperacion_campos_disponibles` (V459), `fn_instrumento_permitido_por_tipo_evaluacion` (V453)… |
 | `/planeador/unidades` | GET | V406 | `fn_unidad_listar` (V488), `fn_get_academico_usuario_id` (V299) |
 | `/planeador/unidades` | POST | V406, V488 | `fn_planeador_assert_alcance` (V277), `fn_planeador_listado_alcance` (V481), `fn_unidad_campos_disponibles` (V214.2)… |
@@ -970,11 +971,11 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_planilla_actividades_universo` | 5 | V239 | V441, V450, V454, V469 |
+| `academico_test.fn_planilla_actividades_universo` | 5 | V239 | V450, V454, V469 |
 | `academico_test.fn_planilla_calificaciones_listar` | 11 | V469 | V248, V469 |
 | `academico_test.fn_planilla_columnas_listar` | 7 | V454 | V248 |
-| `academico_test.fn_planilla_definitiva_proyectada` | 2 | V239 | V408, V441, V450 |
-| `academico_test.fn_planilla_grupo_asignatura_assert` | 3 | V239 | V344, V346, V348, V441, V450, V454… |
+| `academico_test.fn_planilla_definitiva_proyectada` | 2 | V239 | V408, V450 |
+| `academico_test.fn_planilla_grupo_asignatura_assert` | 3 | V239 | V346, V348, V450, V454, V469, V490 |
 
 ## prematricula
 
@@ -993,7 +994,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_puede_afectar_establecimiento` | 1 | V302 | V51, V52, V53, V111, V112, V114… |
+| `academico_test.fn_puede_afectar_establecimiento` | 1 | V302 | V51, V52, V53, V111, V112, V130 |
 | `academico_test.fn_puede_afectar_usuarios` | 1 | V50 | V30, V51, V150 |
 
 ## rango
@@ -1016,12 +1017,12 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_refcurr_actualizar` | 18 | V214.3 | V214, V214.3 |
+| `academico_test.fn_refcurr_actualizar` | 18 | V214.3 | V214 |
 | `academico_test.fn_refcurr_actualizar_interno` | 18 | V214.3 | — |
 | `academico_test.fn_refcurr_areas_listar` | 2 | V213 | V214 |
 | `academico_test.fn_refcurr_buscar_por_pk` | 2 | V214.3 | V214 |
 | `academico_test.fn_refcurr_buscar_por_pk_interno` | 1 | V214.3 | — |
-| `academico_test.fn_refcurr_crear` | 17 | V214.3 | V214, V214.3 |
+| `academico_test.fn_refcurr_crear` | 17 | V214.3 | V214 |
 | `academico_test.fn_refcurr_crear_interno` | 17 | V214.3 | — |
 | `academico_test.fn_refcurr_eliminar` | 3 | V213 | V214 |
 | `academico_test.fn_refcurr_eliminar_interno` | 3 | V213 | — |
@@ -1075,7 +1076,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_referente_actividades_instrumentadas` | 1 | V214.2 | — |
-| `academico_test.fn_referente_es_evaluativo_vigente` | 1 | V214.2 | V216, V478, V492 |
+| `academico_test.fn_referente_es_evaluativo_vigente` | 1 | V214.2 | V216, V492 |
 
 ## reorder
 
@@ -1088,7 +1089,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_resolver_actor` | 1 | V66 | V214.3 |
-| `academico_test.fn_resolver_establecimiento_unico` | 1 | V112 | V51, V112, V114 |
+| `academico_test.fn_resolver_establecimiento_unico` | 1 | V112 | V51, V112 |
 | `pigse.fn_resolver_actor` | 1 | V362 | V214.3 |
 
 ## rol
@@ -1096,7 +1097,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_rol_alcance_sede` | 1 | V489 | — |
-| `academico_test.fn_rol_categoria_nivel` | 1 | V29 | V51, V294, V295, V297, V298, V300… |
+| `academico_test.fn_rol_categoria_nivel` | 1 | V29 | V51, V297, V298, V300, V302, V489 |
 | `academico_test.fn_rol_menus_asignar_interno` | 4 | V498 | — |
 | `academico_test.fn_rol_menus_listar` | 2 | V498 | — |
 | `academico_test.fn_rol_menus_listar_interno` | 1 | V498 | — |
@@ -1166,7 +1167,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_sincronizar_rol_publico` | 1 | V302 | V51, V53, V150, V296, V300, V301… |
+| `academico_test.fn_sincronizar_rol_publico` | 1 | V302 | V51, V53, V150, V300, V301, V399… |
 
 ## subject
 
@@ -1243,10 +1244,10 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_unidad_actividad_desvincular` | 2 | V223 | V224, V245, V476, V479 |
-| `academico_test.fn_unidad_actividad_ponderacion_set` | 3 | V223 | V224, V245, V476, V479 |
-| `academico_test.fn_unidad_actividad_vincular` | 5 | V244 | V224, V245, V476, V479 |
-| `academico_test.fn_unidad_actividades_instrumentadas` | 1 | V214.2 | V216, V455, V478, V492 |
+| `academico_test.fn_unidad_actividad_desvincular` | 2 | V223 | V224, V245, V479 |
+| `academico_test.fn_unidad_actividad_ponderacion_set` | 3 | V223 | V224, V245, V479 |
+| `academico_test.fn_unidad_actividad_vincular` | 5 | V244 | V224, V245, V479 |
+| `academico_test.fn_unidad_actividades_instrumentadas` | 1 | V214.2 | V216, V455, V492 |
 | `academico_test.fn_unidad_actividades_listar` | 9 | V480 | V245 |
 | `academico_test.fn_unidad_actualizar` | 15 | V492 | V245 |
 | `academico_test.fn_unidad_assert_minimo_enunciado` | 1 | V483 | — |
@@ -1273,13 +1274,13 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_unidad_objetivos_listar` | 2 | V216 | V245 |
 | `academico_test.fn_unidad_ponderacion_asignada` | 3 | V223 | V244, V245 |
 | `academico_test.fn_unidad_ponderacion_disponible` | 3 | V223 | V245 |
-| `academico_test.fn_unidad_ponderacion_intra_asignatura_asignada` | 3 | V239 | V216, V248, V478, V492 |
-| `academico_test.fn_unidad_ponderacion_recalcular_sumatoria` | 2 | V223 | V224, V244, V476, V478, V479, V482… |
-| `academico_test.fn_unidad_referente_aplicable` | 3 | V451 | V243, V280, V281, V407, V422, V440… |
+| `academico_test.fn_unidad_ponderacion_intra_asignatura_asignada` | 3 | V239 | V216, V248, V492 |
+| `academico_test.fn_unidad_ponderacion_recalcular_sumatoria` | 2 | V223 | V224, V244, V479, V482, V492 |
+| `academico_test.fn_unidad_referente_aplicable` | 3 | V451 | V243, V280, V281, V407, V422, V455… |
 | `academico_test.fn_unidad_referente_detalle` | 2 | V255 | — |
 | `academico_test.fn_unidad_referente_evaluativo` | 1 | V214.2 | V216, V224, V226, V243, V282, V422… |
 | `academico_test.fn_unidad_referente_reparar` | 1 | V455 | — |
-| `academico_test.fn_unidad_referente_tipo_evaluacion` | 1 | V214.2 | V282, V422, V440, V458, V459, V460… |
+| `academico_test.fn_unidad_referente_tipo_evaluacion` | 1 | V214.2 | V282, V422, V458, V459, V460, V479… |
 | `academico_test.fn_unidad_rubrica_asegurar` | 2 | V222 | V216, V455 |
 | `academico_test.fn_unidad_valoraciones_listar` | 2 | V455 | — |
 
@@ -1318,15 +1319,15 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_usuario_categoria_rol_nivel` | 1 | V302 | V40, V51, V52, V53, V116, V130… |
 | `academico_test.fn_usuario_ee_accesibles` | 1 | V29 | V40, V51, V116, V140, V179, V233… |
 | `academico_test.fn_usuario_ee_lectura` | 1 | V29 | V40, V52, V53, V116, V130 |
-| `academico_test.fn_usuario_es_docente_puro` | 1 | V29 | V136, V216, V224, V407, V454, V481 |
-| `academico_test.fn_usuario_grupos_dirigidos` | 1 | V489 | V490, V491 |
+| `academico_test.fn_usuario_es_docente_puro` | 1 | V29 | V216, V224, V407, V454, V481 |
+| `academico_test.fn_usuario_grupos_dirigidos` | 1 | V489 | V140, V490, V491 |
 | `academico_test.fn_usuario_otros_usos` | 3 | V162 | V160, V161 |
 | `academico_test.fn_usuario_permisos_menu` | 1 | V303 | V29, V127 |
 | `academico_test.fn_usuario_peso_categoria` | 1 | V298 | — |
 | `academico_test.fn_usuario_puede_en_menu` | 3 | V29 | V40, V51, V52, V53, V116, V130… |
 | `academico_test.fn_usuario_sedes_jornadas_accesibles` | 1 | V29 | V40, V51, V116, V140, V297, V300… |
 | `academico_test.fn_usuario_sedes_lectura` | 1 | V29 | V52, V116, V130, V216, V224, V244… |
-| `academico_test.fn_usuario_solo_sus_grupos` | 1 | V489 | V490, V491 |
+| `academico_test.fn_usuario_solo_sus_grupos` | 1 | V489 | V140, V490, V491 |
 | `pigse.fn_usuario_categoria_rol_nivel` | 1 | V370 | V390 |
 | `pigse.fn_usuario_ee_accesibles` | 1 | V370 | V390 |
 | `pigse.fn_usuario_ente_crear` | 11 | V263 | — |
