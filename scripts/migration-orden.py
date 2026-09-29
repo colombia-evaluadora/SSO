@@ -98,6 +98,19 @@ def modelo(refresh: bool) -> dict:
     return json.loads(destino.read_text(encoding="utf-8"))
 
 
+GUARDA = re.compile(r"IF\s+to_regprocedure\(\s*'([\w.]+)\(.*?\)'\s*\)\s+IS\s+NULL\s+THEN\s+EXECUTE",
+                   re.I | re.S)
+
+
+def solo_si_falta(version: str) -> set[str]:
+    """Funciones que esa migracion crea solo si aun no existen: en un servidor
+    no revierten nada y en una base limpia las pisa la posterior, que es lo buscado."""
+    nombres: set[str] = set()
+    for p in MIGRATIONS.glob(f"V{version}__*.sql"):
+        nombres.update(m.group(1).lower() for m in GUARDA.finditer(p.read_text(encoding="utf-8")))
+    return nombres
+
+
 def hallazgos(model: dict, objetivo: dict[str, str]) -> list[dict]:
     """Escrituras completas de las migraciones objetivo que ya nacen muertas."""
     fuera = []
@@ -111,6 +124,15 @@ def hallazgos(model: dict, objetivo: dict[str, str]) -> list[dict]:
             matador = w.get("killed_by") or vivo
             if not matador or vkey(matador) <= vkey(v):
                 continue  # la mato una version ANTERIOR: eso es otra cosa
+            if clave.startswith("function:"):
+                if clave.split(":", 1)[1].lower() in solo_si_falta(v):
+                    continue
+                # Otra lista de tipos es otra sobrecarga, no una reescritura.
+                propios = (w.get("extra") or {}).get("params")
+                suyos = next(((e.get("extra") or {}).get("params") for e in escrituras
+                              if e.get("version") == matador and e.get("effect") == "full"), None)
+                if propios is not None and suyos is not None and propios != suyos:
+                    continue
             fuera.append({
                 "version": v,
                 "estado": objetivo[v],
