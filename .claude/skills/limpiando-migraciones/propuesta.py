@@ -65,7 +65,7 @@ def proponer(model: dict, R, v: str) -> dict:
         sig_ev = next((x for x in life.history if (P.vkey(x.version), x.line) > (P.vkey(v), e.line)
                        and x.kind in ("create", "drop")), None)
         nec = P.needed_between(R, e.name, v, sig_ev.version if sig_ev else None, e.line,
-                               sig_ev.line if sig_ev else 10 ** 9)
+                               sig_ev.line if sig_ev else 10 ** 9, sig=e.sig)
         if nec:
             guardas[e.line] = (e, nec)
 
