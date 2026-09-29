@@ -266,7 +266,13 @@ COMMENT ON FUNCTION pigse.fn_documento_guardar(BIGINT, VARCHAR, VARCHAR, BIGINT,
 --    fila activa por (tipo, categoria) como en V512 -- p_fk_tarchivo debe
 --    venir NULL ahí, se rechaza si no.
 -- ---------------------------------------------------------------------------
+-- Dos DROP, mismo motivo que V512: la firma VIEJA (4 args, primera vez que
+-- corre esta migración) y la NUEVA (5 args, si se re-ejecuta sobre un
+-- esquema donde ya corrió antes -- el chequeo de idempotencia de CI la
+-- aplica dos veces). Sin el segundo DROP, el CREATE de abajo choca con la
+-- firma que la MISMA migración ya había creado.
 DROP FUNCTION IF EXISTS pigse.fn_documento_eliminar(BIGINT, VARCHAR, VARCHAR, VARCHAR);
+DROP FUNCTION IF EXISTS pigse.fn_documento_eliminar(BIGINT, VARCHAR, VARCHAR, VARCHAR, BIGINT);
 
 CREATE FUNCTION pigse.fn_documento_eliminar(
     p_pk_usuario  BIGINT,
