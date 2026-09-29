@@ -192,6 +192,9 @@ def report_precision_version(model: dict, version: str) -> None:
                 avisos.append(f"MUERTA           {full} ({estado}): se puede quitar")
             if e.kind == "create" and d is not None:
                 avisos.append(f"  ojo: re-aplicar esta version sin quitarla pisa la vigente de V{d.version}")
+            elif e.kind == "create":
+                avisos.append("  ojo: la firma no existe hoy; re-aplicar esta version sin quitarla la resucita "
+                              "como sobrecarga")
         elif e.kind == "drop" and d is not None and P.vkey(d.version) > P.vkey(version):
             avisos.append(f"DROP PELIGROSO   {full}: la vigente la define V{d.version}; re-aplicar este fichero "
                           f"la borra")
