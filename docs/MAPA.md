@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 434 migraciones (V1–V517), 697 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-29.
+Estado: 434 migraciones (V1–V517), 703 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-29.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -11,7 +11,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 ## Indice
 
-- [(transversal)](#transversal) — 15 funcion(es), 0 endpoint(s)
+- [(transversal)](#transversal) — 21 funcion(es), 0 endpoint(s)
 - [academico](#academico) — 1 funcion(es), 0 endpoint(s)
 - [actividad](#actividad) — 113 funcion(es), 0 endpoint(s)
 - [anio](#anio) — 1 funcion(es), 0 endpoint(s)
@@ -109,9 +109,15 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_delete_menu` | 2 | V115 | V126 |
 | `academico_test.fn_list_menu_possibilities_for_rol` | 2 | V113 | — |
 | `academico_test.fn_menu_catalogo_listar_interno` | 0 | V498 | — |
-| `academico_test.fn_menu_codigo_canonico` | 1 | V396 | — |
+| `academico_test.fn_menu_codigo_canonico` | 1 | V29 | V113, V396 |
+| `academico_test.fn_menu_codigo_desde_nombre` | 1 | V113 | — |
+| `academico_test.fn_menu_eliminar_interno` | 1 | V115 | — |
 | `academico_test.fn_menu_grupo_de` | 1 | V396 | — |
+| `academico_test.fn_menu_validar_codigo_unico` | 1 | V113 | — |
+| `academico_test.fn_menu_validar_rama_no_visible` | 1 | V115 | — |
+| `academico_test.fn_menu_validar_rama_sin_roles` | 1 | V115 | — |
 | `academico_test.fn_upsert_menu` | 11 | V113 | V126 |
+| `academico_test.fn_upsert_menu_interno` | 10 | V113 | — |
 | `pigse.fn_assert_permiso_funcionario` | 3 | V370 | V386, V390, V393 |
 | `pigse.fn_assert_permiso_seccion` | 6 | V370 | V386 |
 | `pigse.fn_audit_declarar` | 4 | V362 | V394 |
@@ -1008,9 +1014,9 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_assert_rango_rol` | 2 | V298 | V51, V297 |
+| `academico_test.fn_assert_rango_rol` | 2 | V298 | V29, V51, V297 |
 | `academico_test.fn_assert_rango_rol_otorgable` | 2 | V298 | V111, V297 |
-| `pigse.fn_assert_rango_rol` | 2 | V370 | V51, V297 |
+| `pigse.fn_assert_rango_rol` | 2 | V370 | V29, V51, V297 |
 | `pigse.fn_assert_rango_rol_otorgable` | 2 | V370 | V390 |
 
 ## recuperacion
