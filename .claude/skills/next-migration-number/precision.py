@@ -74,10 +74,11 @@ class Event:
 class Use:
     version: str
     line: int
-    ctx: str                # migracion | sql-body | plpgsql | texto
+    ctx: str                # migracion | sql-body | plpgsql | texto | objeto
     name: str
     where: str              # funcion o sentencia que llama
     nargs: int | None = None
+    sig: tuple | None = None  # ctx objeto: firma exacta del COMMENT/ALTER
 
 
 @dataclass
@@ -181,7 +182,15 @@ def _calls(text: str, names: set[str]):
 
 def _scan_uses(repo: Repo, v: str, s, names: set[str]) -> None:
     t, h = s.text, s.head
-    if h.startswith(("COMMENT ON", "DROP FUNCTION", "DROP PROCEDURE", "ALTER FUNCTION")):
+    if re.match(r"(COMMENT\s+ON|ALTER)\s+FUNCTION", h):
+        # COMMENT/ALTER sobre una firma: falla al migrar si esa firma no existe.
+        m = re.search(r"FUNCTION\s+" + FN_NAME + r"\s*\(", t, re.I)
+        if m and split_name(m.group(1))[1] in names:
+            op = m.end() - 1
+            repo.uses.append(Use(v, s.line, "objeto", split_name(m.group(1))[1], h.split()[0],
+                                 sig=sig_of(t[op + 1:match_paren(t, op)])))
+        return
+    if h.startswith(("COMMENT ON", "DROP FUNCTION", "DROP PROCEDURE")):
         return
     if re.match(r"CREATE\s+(OR\s+REPLACE\s+)?(FUNCTION|PROCEDURE)", h):
         m = re.search(r"(?:FUNCTION|PROCEDURE)\s+" + FN_NAME + r"\s*\(", t, re.I)
@@ -270,10 +279,174 @@ def uses_of(repo: Repo, name: str) -> list[Use]:
 
 
 def needed_between(repo: Repo, name: str, v_from: str, v_to: str | None, line_from: int = 0,
-                   line_to: int = 10 ** 9) -> list[Use]:
+                   line_to: int = 10 ** 9, sig: tuple | None = None) -> list[Use]:
     """Usos que se EJECUTAN (o se validan) al migrar entre (v_from, line_from) y
-    (v_to, line_to): incluye los del propio fichero despues del CREATE."""
+    (v_to, line_to): incluye los del propio fichero despues del CREATE, y los
+    COMMENT/ALTER de OTRA migracion sobre la misma firma (V348, V433)."""
     lo = (vkey(v_from), line_from)
     hi = (vkey(v_to), line_to) if v_to else ((10 ** 9,), 0)
     return [u for u in uses_of(repo, name)
-            if u.ctx in CTX_EJECUTA and lo < (vkey(u.version), u.line) < hi]
+            if lo < (vkey(u.version), u.line) < hi
+            and (u.ctx in CTX_EJECUTA
+                 or (u.ctx == "objeto" and u.version != v_from and (sig is None or u.sig == sig)))]
+
+
+# ---------------------------------------------------------------------------
+# Hallazgos por migracion: que pasa si se recorta o se re-aplica
+# ---------------------------------------------------------------------------
+@dataclass
+class Finding:
+    kind: str       # MUERTA | NECESARIA | CONDICIONADA | VIVA_FIRMA | ALTER_POSTERIOR | DROP_PELIGROSO
+                    # | REVIERTE | BACKFILL | VERIFICACION | NO_IDEMPOTENTE | COMMENT_HUERFANO
+                    # | PARCHE_PISADO | SEMILLA
+    line: int
+    msg: str
+    extra: str = ""   # nota secundaria ("ojo: ...")
+
+
+# Escrituras que, re-aplicadas, pueden revertir lo que una migracion posterior
+# escribio sobre la misma clave (V422, V450, V459 con filas; V37 con indices).
+REVIERTE_TIPOS = ("query_row", "route", "bind", "data", "role", "endpoint", "index", "constraint")
+
+
+def stmt_at(repo: Repo, version: str, line: int) -> Stmt | None:
+    """La sentencia que contiene la linea (la ultima que arranca antes)."""
+    best = None
+    for s in repo.stmts.get(version, []):
+        if s.line > line:
+            break
+        best = s
+    return best
+
+
+def stmt_span(s: Stmt) -> range:
+    return range(s.line, s.line + s.text.count("\n") + 1)
+
+
+def _guarded_wrapper(text: str) -> bool:
+    return bool(re.search(r"to_regprocedure\([^)]*\)\s*\)?\s*IS\s+NULL", text, re.I)
+                and re.search(r"EXECUTE\s+\$", text, re.I))
+
+
+def version_findings(repo: Repo, model: dict, version: str) -> list[Finding]:
+    """Recorte y re-aplicacion de una migracion, por firma exacta y contexto."""
+    mig = next(m for m in model["migrations"] if m["version"] == version)
+    model_status = {}
+    for w in mig["writes"]:
+        if w["obj_type"] == "function" and w["effect"] == "full":
+            model_status[(w["obj_key"].rsplit(".", 1)[-1], (w.get("extra") or {}).get("total"))] = w["status"]
+
+    out: list[Finding] = []
+    for e in (x for x in repo.events if x.version == version):
+        life = next((l for l in lives(repo, e.name) if l.sig == e.sig and _same(l.schema, e.schema)), None)
+        if life is None:
+            continue
+        d = life.definer()
+        full = f"{e.name}({', '.join(e.sig)})"
+        if e.kind in ("create", "guarded-create"):
+            if d is e:
+                st = model_status.get((e.name, len(e.sig)))
+                if st and st != "live":
+                    out.append(Finding("VIVA_FIRMA", e.line, f"{full}: el modelo la da por '{st}', pero ninguna "
+                                       "posterior reescribe ni borra esta firma exacta -> no se puede quitar"))
+                s = stmt_at(repo, version, e.line)
+                own = " ".join((s.text if s else "").split()).upper()
+                for a in (x for x in life.history if x.kind == "alter" and vkey(x.version) > vkey(version)):
+                    if " ".join(a.detail.split()).rstrip(";").upper() in own:
+                        continue  # la clausula ya esta copiada en el CREATE
+                    out.append(Finding("ALTER_POSTERIOR", e.line, f"{full}: V{a.version} '{a.detail}'; re-aplicar "
+                                       "este fichero lo deshace -> copia la clausula al CREATE"))
+                continue
+            sig_ev = next((x for x in life.history if (vkey(x.version), x.line) > (vkey(version), e.line)
+                           and x.kind in ("create", "drop")), None)
+            killer = sig_ev.version if sig_ev else None
+            estado = (f"reescrita por V{killer}" if sig_ev and sig_ev.kind == "create" else
+                      f"borrada por firma en V{killer}" if sig_ev else "sustituida")
+            if e.kind == "guarded-create":
+                out.append(Finding("CONDICIONADA", e.line, f"{full} ({estado}): se crea solo si falta; re-aplicar "
+                                   "no pisa la vigente"))
+                continue
+            nec = needed_between(repo, e.name, version, killer, e.line,
+                                 sig_ev.line if sig_ev else 10 ** 9, sig=e.sig)
+            if nec:
+                quien = ", ".join(f"V{u.version}({u.ctx}:{u.where})" for u in nec[:6])
+                out.append(Finding("NECESARIA", e.line, f"{full} ({estado}): {quien} la necesitan al migrar -> "
+                                   "conservarla con CREATE condicionado (to_regprocedure IS NULL)"))
+            else:
+                out.append(Finding("MUERTA", e.line, f"{full} ({estado}): se puede quitar"))
+            out[-1].extra = (f"re-aplicar esta version sin quitarla pisa la vigente de V{d.version}" if d is not None
+                             else "la firma no existe hoy; re-aplicar esta version sin quitarla la resucita "
+                                  "como sobrecarga")
+        elif e.kind == "drop" and d is not None and vkey(d.version) > vkey(version):
+            out.append(Finding("DROP_PELIGROSO", e.line, f"{full}: la vigente la define V{d.version}; re-aplicar "
+                               "este fichero la borra"))
+
+    for s in repo.stmts.get(version, []):
+        h, t = s.head, s.text
+        if h.startswith("DO "):
+            if _guarded_wrapper(t):
+                continue
+            if re.search(r"\b(UPDATE|INSERT\s+INTO|DELETE\s+FROM)\b", t, re.I):
+                out.append(Finding("BACKFILL", s.line, "el DO escribe datos; re-aplicarlo lo recalcula con las "
+                                   "reglas de HOY (revisar antes de editar el fichero)"))
+            elif re.search(r"\bLOOP\b", t, re.I) and re.search(r"\bPERFORM\b", t, re.I):
+                # V111, V224: el backfill delega en una funcion dentro de un bucle.
+                out.append(Finding("BACKFILL", s.line, "el DO recorre filas y llama a una funcion por cada una; "
+                                   "re-aplicarlo lo recalcula con las reglas de HOY sobre los datos reales"))
+            if re.search(r"EXECUTE\s+format\(\s*'COMMENT\s+ON\s+FUNCTION", t, re.I):
+                nombres = sorted({n.lower() for n in re.findall(r"'(fn_\w+)'", t)})
+                pisa = sorted({f"V{e.version}" for e in repo.events if e.kind in ("comment", "dyn-comment")
+                               and e.name in nombres and vkey(e.version) > vkey(version)}, key=vkey)
+                if pisa:
+                    out.append(Finding("REVIERTE", s.line, f"COMMENT por OID sobre {', '.join(nombres)}: "
+                                       f"re-aplicarlo pisa los COMMENT de {', '.join(pisa)}"))
+            if re.search(r"RAISE\s+EXCEPTION", t, re.I) and re.search(r"count\s*\(|NOT\s+EXISTS|<>|!=", t, re.I):
+                out.append(Finding("VERIFICACION", s.line, "DO con RAISE EXCEPTION sobre conteos/existencia; si ya "
+                                   "no se cumple, re-aplicarlo tumba el deploy"))
+        elif re.match(r"INSERT\s+INTO", h) and not re.search(r"ON\s+CONFLICT|NOT\s+EXISTS", t, re.I):
+            out.append(Finding("NO_IDEMPOTENTE", s.line, "INSERT sin ON CONFLICT ni NOT EXISTS"))
+        elif re.match(r"CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)", h):
+            out.append(Finding("NO_IDEMPOTENTE", s.line, "CREATE TABLE sin IF NOT EXISTS"))
+        elif re.match(r"COMMENT\s+ON\s+(TRIGGER|INDEX|CONSTRAINT)", h):
+            m = re.match(r"COMMENT\s+ON\s+\w+\s+([\w.]+)", h)
+            obj = (m.group(1).split(".")[-1] if m else "").lower()
+            if obj and not re.search(r"CREATE\s+(?:UNIQUE\s+)?(?:TRIGGER|INDEX)[^;]*\b" + obj + r"\b",
+                                     "\n".join(x.text for x in repo.stmts[version]), re.I):
+                out.append(Finding("COMMENT_HUERFANO", s.line, f"{h[:60]} -- el objeto no se crea en este fichero"))
+
+    chains = model.get("chains", {})
+    for w in mig["writes"]:
+        if w.get("effect") == "delete" and w["obj_type"] in ("index", "constraint", "trigger"):
+            # V37: su DROP INDEX, re-aplicado, borra el indice que V146 recreo.
+            # El modelo guarda el indice con y sin esquema: se empareja por nombre.
+            nombre = w["obj_key"].rsplit(".", 1)[-1].rsplit(":", 1)[-1].lower()
+            vivos = sorted({x["version"] for k, xs in chains.items()
+                            if k.startswith(w["obj_type"] + ":") and k.lower().rsplit(".", 1)[-1].rsplit(":", 1)[-1] == nombre
+                            for x in xs if x.get("status") == "live" and x.get("effect") == "create"
+                            and vkey(x["version"]) > vkey(version)}, key=vkey)
+            if vivos:
+                out.append(Finding("DROP_PELIGROSO", w["line"], f"{w['obj_key']}: V{', V'.join(vivos)} lo crea "
+                                   "despues; re-aplicar este DROP lo borra"))
+        if w.get("status") == "patch-dead":
+            out.append(Finding("PARCHE_PISADO", w["line"], f"{w['obj_key']}: el modelo empareja por clave; si el "
+                               f"WHERE de V{w['killed_by']} toca OTRAS filas, este sigue vivo"))
+        if w.get("status") == "dead" and w["obj_type"] in ("role", "query_row", "extension", "route"):
+            ident = w["obj_key"].split(":")[-1].split("|")[0]
+            lo, hi = vkey(version), vkey(w.get("killed_by") or "99999")
+            pat = re.compile(re.escape(ident), re.I) if w["obj_type"] != "extension" else \
+                re.compile(r"gin_trgm_ops|gist_trgm_ops|similarity\s*\(|%>|<%", re.I)
+            quien = sorted({v for v, sts in repo.stmts.items() if lo < vkey(v) < hi
+                            and any(pat.search(x.text) for x in sts)}, key=vkey)
+            if quien or w["obj_type"] == "extension":
+                out.append(Finding("SEMILLA", w["line"], f"{w['obj_key']} (el modelo la da por muerta, "
+                                   f"V{w['killed_by']} la repite): la usan antes "
+                                   f"{', '.join('V' + q for q in quien[:8]) or 'este mismo fichero'} -> no quitarla"))
+        if (w.get("status") in ("live", "patch-live") and w["obj_type"] in REVIERTE_TIPOS
+                and w.get("effect") != "drop"):
+            later = sorted({x["version"] for x in chains.get(w["obj_key"], [])
+                            if vkey(x["version"]) > vkey(version)}, key=vkey)
+            if later:
+                out.append(Finding("REVIERTE", w["line"], f"{w['obj_key']}: V{', V'.join(later[:5])} la modifica "
+                                   "despues; re-aplicar esta escritura puede revertirlo (revisar la guarda o "
+                                   "re-aplicar tambien las posteriores)"))
+    return sorted(out, key=lambda f: f.line)
