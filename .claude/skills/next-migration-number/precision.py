@@ -112,7 +112,9 @@ def _create_header(text: str, m: re.Match) -> tuple[tuple, str, str]:
     return sig, (lang.group(1).lower() if lang else "?"), (bodies[0] if bodies else "")
 
 
-def load(mig_dir: Path = MIG) -> Repo:
+def load(mig_dir: Path = MIG, extra_names: set[str] | frozenset = frozenset()) -> Repo:
+    """extra_names: nombres cuyos usos se rastrean aunque ya no se creen en este
+    arbol (p.ej. funciones que un recorte quito del todo)."""
     repo = Repo()
     for f in sorted(mig_dir.glob("V*.sql"), key=lambda p: vkey(p.name.split("__")[0])):
         v = re.match(r"V([\d.]+)__", f.name).group(1)
@@ -122,7 +124,7 @@ def load(mig_dir: Path = MIG) -> Repo:
         repo.stmts[v] = [Stmt(v, s.line, s.head, s.text, s.raw) for s in st]
         for s in st:
             _scan_stmt(repo, v, s)
-    names = _func_names(repo)
+    names = _func_names(repo) | {n.lower() for n in extra_names}
     for v, sts in repo.stmts.items():
         for s in sts:
             _scan_uses(repo, v, s, names)
