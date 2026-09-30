@@ -4,9 +4,11 @@
 -- /planeador/actividades* (upsert que conserva el id y con él los role_query
 -- de cada servidor) y sus roles: DOCENTE y SUPER_ADMINISTRADOR, los que ya
 -- tenían. Las consultas no cambian; el detail describe el contrato vigente.
--- Los INSERT originales siguen en V246/V247/V422/V426/V470 porque V421, V426,
--- V470 y V471 copian de ellos los roles de sus propias filas al migrar.
--- Depende de: V496.3 (funciones), V246/V247/V422/V426/V470 (filas).
+-- También las dos lecturas del formulario (pantalla-edicion y configuracion),
+-- tal cual estaban, para que re-aplicar V353/V452/V459 no les pise el detail.
+-- Los INSERT originales siguen en V246/V247/V353/V422/V426/V470 porque otras
+-- migraciones copian de ellos los roles de sus propias filas al migrar.
+-- Depende de: V496.3 (funciones), V246/V247/V353/V422/V426/V470 (filas).
 
 SET search_path TO academico_test, public;
 
@@ -314,6 +316,52 @@ SELECT 'bdf2337d-3b7f-403c-a0c5-626f0398f92b', m.id_microservice, '/planeador/ac
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.ID AS BIGINT)
 ) AS eliminado;$q$
+  FROM public.microservice m WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
+   SET type = EXCLUDED.type, execution_mode = EXCLUDED.execution_mode, out_param_names = EXCLUDED.out_param_names,
+       public_end = EXCLUDED.public_end, captcha = EXCLUDED.captcha, cacheable = EXCLUDED.cacheable,
+       cache_ttl_seconds = EXCLUDED.cache_ttl_seconds, action = EXCLUDED.action, style = EXCLUDED.style,
+       param_types = EXCLUDED.param_types, detail = EXCLUDED.detail, query = EXCLUDED.query;
+
+-- GET /planeador/actividades/:ID/pantalla-edicion
+INSERT INTO public.query (uuid, microservice_id, path_template, http_method, type, execution_mode, out_param_names,
+                          public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
+SELECT 'q-planeador-actividad-pantalla-edicion', m.id_microservice, '/planeador/actividades/:ID/pantalla-edicion', 'GET', 'postgres', 'SELECT', NULL,
+       'f', 'f', 'f', '60', NULL, NULL,
+       '{"PARAM.ID": "BIGINT", "QUERY.DIAS_GRACIA": "INTEGER"}'::jsonb,
+       'V353 -- DTO compuesto para PlaneadorEditarActividadPage: actividad + instrumento en una sola llamada, ya en camelCase y anidado por concepto. Reemplaza, PARA ESA PANTALLA, la cadena GET .../:ID + GET .../:ID/instrumento. Incluye ademas evidencias (TACTIVIDAD_EVIDENCIA: [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}]) y criterios (TACTIVIDAD_CRITERIO_UNIDAD: [{pk, fkTcriterioUnidad, descripcion, codigo, orden}]) ya relacionados, para poder pre-marcarlos al reabrir la actividad y para conocer el pk que exigen PATCH /planeador/actividades/evidencias/:ID y PATCH /planeador/actividades/criterios/:ID. Y estudiantes ([{pkTactividadEstudiante, pkTmatricula, fkTestudiante, estudiante, calificacion, calificable, observacion}]): los asignados, con el pk de la asignacion que piden calificar, observar y las adaptaciones. V475 -- Correccion del parrafo anterior: una actividad SIN unidad ya NO devuelve FALSE por defecto. Su referente se deriva del grado del grupo y la asignatura (fn_unidad_referente_aplicable), asi que una actividad de Preescolar sin unidad responde es_formativa = true, como corresponde a su referente y como ya la pintaba GET /planeador/actividades/configuracion. Solo queda FALSE si no hay ningun referente activo para ese (grado, asignatura).',
+       $q$SELECT t.p || jsonb_build_object(
+           'esFormativa',
+           academico_test.fn_actividad_es_formativa((t.p->'actividad'->>'id')::BIGINT)
+       ) AS pantalla
+  FROM (SELECT academico_test.fn_actividad_pantalla_edicion(
+            public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+            CAST(:PARAM.ID AS BIGINT),
+            COALESCE(CAST(:QUERY.DIAS_GRACIA AS INT), 2)
+        ) AS p) t$q$
+  FROM public.microservice m WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
+   SET type = EXCLUDED.type, execution_mode = EXCLUDED.execution_mode, out_param_names = EXCLUDED.out_param_names,
+       public_end = EXCLUDED.public_end, captcha = EXCLUDED.captcha, cacheable = EXCLUDED.cacheable,
+       cache_ttl_seconds = EXCLUDED.cache_ttl_seconds, action = EXCLUDED.action, style = EXCLUDED.style,
+       param_types = EXCLUDED.param_types, detail = EXCLUDED.detail, query = EXCLUDED.query;
+
+-- GET /planeador/actividades/configuracion
+INSERT INTO public.query (uuid, microservice_id, path_template, http_method, type, execution_mode, out_param_names,
+                          public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
+SELECT 'eval-col-planeador-actividad-configuracion-001', m.id_microservice, '/planeador/actividades/configuracion', 'GET', 'postgres', 'SELECT', NULL,
+       'f', 'f', 'f', '60', NULL, NULL,
+       '{"QUERY.GRUPO": "BIGINT", "QUERY.UNIDAD": "BIGINT", "QUERY.RECUPERAR": "VARCHAR", "QUERY.ASIGNATURA": "BIGINT", "QUERY.ES_SUMATIVO": "VARCHAR", "QUERY.ACTIVIDAD_RECUPERAR": "BIGINT"}'::jsonb,
+       'Que pintar en el formulario de actividad a partir de los DOS filtros de la pantalla: ?grupo= y ?asignatura= (obligatorios), con ?unidad= OPCIONAL. Con unidad manda la unidad (referente y metodo de calculo); sin unidad el referente se deriva del grado + asignatura (fn_unidad_referente_aplicable). origenConfiguracion dice cual camino se uso (CONTEXTO o UNIDAD). Devuelve el contexto resuelto (grupo, grado, nivelEnsenanza, asignatura, referente {pk, nombre}), programacion (limites de fechaInicio/fechaCierre, semanaCronograma, duracionEstimada e intensidadHoraria a partir del periodo academico del grado y del horario) y campos_disponibles con la MISMA forma que GET /planeador/unidades/:ID/configuracion-actividad y GET /planeador/actividades/:ID/configuracion: criterio {visible, requerido, motivo}, evaluacion {visible, requerido, motivo, tipoEvaluacion, instrumentosPermitidos:[{pk, valor, nombre, variantes, campos}]}, ponderacion {visible, requerido, modo, campo?, autocalculado?, motivo} y recuperacion {visible, requerido, motivo, catalogos, reglas}. ?ES_SUMATIVO=S|N (default S: si no se envia, se responde la configuracion de una actividad sumativa) es lo que el usuario acaba de marcar en el formulario; con N SOLO se apagan recuperacion (una recuperacion debe ser sumativa) y ponderacion (la escritura la rechaza); la seccion de evaluacion y sus instrumentosPermitidos salen del referente igual que con S. En instrumentosPermitidos la entrada OTRO trae `campos`: tipoEvidencia {catalogo TIPO_EVIDENCIA_OTRO}, metodoValoracion {catalogo: los demas instrumentos que admite el tipo de evaluacion del referente, con variantes de escala}, definicion {formaPorMetodo}, descripcionInstrumento, requiereArchivo y requiereTexto; los demas instrumentos traen campos = null. El front decide por VALOR: los pk no son estables entre entornos. Recuperacion: ?RECUPERAR=S (la casilla "es una recuperacion") hace que recuperacion.actividadesRecuperables liste las actividades sumativas del (grupo, asignatura) que aun se pueden recuperar (ES_EVALUATIVA = S, no son recuperacion, sin otra recuperacion activa) -- el selector "Que desea recuperar"; ?ACTIVIDAD_RECUPERAR=<PK_TACTIVIDAD> devuelve recuperacion.origen con el contexto que el formulario hereda e inhabilita (grado, grupo, asignatura, unidad, tituloBase) y los estudiantes asignados a esa actividad con su notaPrevia, todos seleccionado=true para que el docente desmarque los que no la necesitan y envie los restantes en BODY.FK_TMATRICULAS del POST; 404/422 si la origen no existe, no es sumativa, ya es recuperacion o es de otra asignatura. recuperacion.reglas dice que tipoCalculo se oculta con REEMPLAZAR y se exige con COMPUTAR. En nivel Preescolar (formativo por definicion) evaluacion y recuperacion vienen visible=false. El arbol de enunciados y evidencias NO viene aqui: GET /planeador/referente-curricular?grado=&asignatura=. Gate VER sobre PLANEADOR + alcance por el grupo; 404 (P0002) si el grupo, la asignatura o la unidad no existen. V476 -- La respuesta gana esFormativo (boolean) y esSumativoSugerido (S|N) al lado de esSumativoConsultado: el primero es lo que el usuario pregunto, estos dos son lo que el referente DICTA. Con referente Formativo (y en Preescolar, formativo por definicion) esSumativoSugerido = N: es lo que el front debe traer marcado y lo que POST /planeador/actividades guarda si no envia es_evaluativa. Enviar es_evaluativa = S contra un referente Formativo se rechaza con 422 (22023), venga o no la actividad con unidad.',
+       $q$SELECT academico_test.fn_actividad_configuracion_contexto(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:QUERY.GRUPO AS BIGINT),
+    CAST(:QUERY.ASIGNATURA AS BIGINT),
+    CAST(:QUERY.UNIDAD AS BIGINT),
+    COALESCE(CAST(:QUERY.ES_SUMATIVO AS VARCHAR), 'S'),
+    COALESCE(CAST(:QUERY.RECUPERAR AS VARCHAR), 'N'),
+    CAST(:QUERY.ACTIVIDAD_RECUPERAR AS BIGINT)
+) AS configuracion;$q$
   FROM public.microservice m WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
    SET type = EXCLUDED.type, execution_mode = EXCLUDED.execution_mode, out_param_names = EXCLUDED.out_param_names,
