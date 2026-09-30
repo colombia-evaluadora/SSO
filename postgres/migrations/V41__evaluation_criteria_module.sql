@@ -1,21 +1,13 @@
--- *** fn_criterio_eval_actualizar tiene 3 OVERLOADS realmente desplegados en
--- pg_proc (no son solo volcados historicos) ***:
---   1) 12 argumentos, con p_decimal_places / p_final_grade_editable al final.
---   2) 14 argumentos, con p_modif_final_peraca y p_max_recovery_grade.
---      *** ESTA ES LA QUE USA PRODUCCION *** (public.query id_query=51,
---      invocada posicionalmente con exactamente esta firma de 14 args).
---   3) 12 argumentos, variante que reemplaza p_grading_scale por
---      p_pk_tescala_valoracion (resuelve la escala via TESCALA_VALORACION).
--- Las tres siguen vigentes por compatibilidad con distintos llamadores
--- historicos. fn_criterio_eval_obtener no forma parte de este problema: es
--- LANGUAGE sql, de una sola firma.
+-- ===========================================================================
+-- V41 - Modulo de criterios de evaluacion: columnas y catalogos, backfill de
+-- FK_TLV_MODO_REDONDEAR (no-op si la columna de origen ya no existe) y CRUD.
+-- fn_criterio_eval_actualizar queda con una sola firma, la de 14 parametros que usa
+-- PUT /periodos/:ID/criterio-evaluacion; las de 12 y 15 se borran en V41.1.
+-- ===========================================================================
+
 
 SET search_path TO academico_test, public;
 
--- DDL + migracion de datos inseparable de fn_criterio_eval_obtener/
--- _actualizar de abajo (las funciones leen estas columnas). Sin esto, un
--- consolidado que solo tuviera los CREATE FUNCTION quedaria referenciando
--- columnas que nunca se crearon.
 ALTER TABLE academico_test.TCRITERIO_EVALUACION
     ADD COLUMN IF NOT EXISTS FK_TLV_MODO_REDONDEAR BIGINT
         REFERENCES academico_test.TLISTA_VALOR (PK_LISTA_VALOR),
@@ -25,27 +17,37 @@ ALTER TABLE academico_test.TCRITERIO_EVALUACION
 
 CREATE INDEX IF NOT EXISTS IDX_TCRITERIO_EVALUACION_MODO_REDONDEAR
     ON academico_test.TCRITERIO_EVALUACION (FK_TLV_MODO_REDONDEAR);
+
 CREATE INDEX IF NOT EXISTS IDX_TCRITERIO_EVALUACION_CRITERIO_ASIGNATURA
     ON academico_test.TCRITERIO_EVALUACION (FK_TLV_CRITERIO_ASIGNATURA);
 
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_MODO_REDONDEAR IS
     'Campo UI "Regla de redondeo" (imagen, columna 3 fila 2). Llave foranea de lista valor, categoria MODO_REDONDEAR: "Hacia arriba" / "Hacia Abajo" / "Depende del valor" (~ "Al mas cercano") / "No redondear" (extra, sin campo UI). Trasladada desde TPERIODO_ACADEMICO_CONFIG (V62) — vivia en la tabla equivocada; fn_criterio_eval_actualizar/obtener (V41) la exponen como "criterios de evaluacion" del periodo, no TPERIODO_ACADEMICO_CONFIG.';
+
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_CRITERIO_ASIGNATURA IS
     'Campo UI "Criterio para calcular la nota de la asignatura" (imagen, columna 2 fila 3). Llave foranea de lista valor, categoria TIPO_CALCULO: "Promediado" / "Ponderado" / "Sumatoria" / "Nota Directa" (extra, sin campo UI) — misma categoria que TACTIVIDAD.FK_TLV_TIPO_CALCULO usa a nivel de actividad, reutilizada aqui a nivel de periodo. fn_criterio_eval_actualizar (V41) ya tenia un parametro "subject_grade_criteria" pensado para esto, pero escribia por error FK_TLV_MODIF_FINAL_PERACA (un SI/NO no relacionado).';
+
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.PORCENTAJE_MAXIMO_RECUPERACION IS
     'Campo UI "Nota maxima de recuperacion" (imagen, columna 2 fila 2). Tope para que una actividad de nivelacion no iguale la nota de quien aprobo de una. Numero libre, sin lookup de TLISTA_VALOR (no existe categoria que calce con este concepto en todo el esquema).';
+
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TESCALA IS
     'Campo UI "Escala de valoracion" (imagen, columna 1 fila 1). Llave foranea a TESCALA — NO a TLISTA_VALOR. Verificado contra el servidor de test: no existe una fila unica "Escala Nacional" en TESCALA (22 escalas, todas institucionales: "ESCALA DE VALORACION INSTITUCIONAL", "DECRETO 1290...", etc.) — el concepto de "escala nacional" es el marco legal (Superior/Alto/Basico/Bajo, Decreto 1290), no una fila del catalogo; TVALORACION tiene 27 filas con nombres tipo Superior/Alto/Basico/Bajo repartidas entre distintas TESCALA institucionales, cada institucion las nombra/codifica a su manera (ej. pk_tvaloracion 158-165, 218-223, 336-339). El vinculo TESCALA<->periodo pasa por TNIVEL_ESCALA (fk_tescala + fk_periodo_academico), no hay columna fk_tescala directa en TVALORACION.';
+
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_FORMATO_CALIFICACION IS
     'Campo UI "Formato de calificacion" (imagen, columna 2 fila 1). Llave foranea de lista valor, categoria FORMATO_CALIFICACION. Verificado contra el servidor de test: 6 filas activas, no 3 — "DE CERO A CINCO" (51857), "DE CERO A DIEZ" (51882), "DE CERO A CIEN" (51889) calzan con la especificacion; la categoria tiene ademas "Simbolos" (51861), "Valoraciones" (51893) y "Caritas" (51914), formatos no numericos fuera del alcance de la especificacion de esta pestaña (probablemente usados en otra UI, no en "Criterios de evaluacion").';
+
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_DESEMPENO_SIN_CALIF IS
     'Campo UI "Sin calificaciones" (imagen, columna 3 fila 1). Llave foranea de lista valor, categoria DESEMPENIOSUGERIR. Verificado contra el servidor de test, texto exacto: "Menor calificación posible" (521) / "Ninguna Calificación" (522) — nota que asume el sistema si un docente deja una actividad o asignatura sin calificar.';
+
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.PORCENTAJE_INICIAL_CALIF IS
     'Campo UI "Nota inicial para las calificaciones" (imagen, columna 1 fila 2). Numero libre, sin lookup de TLISTA_VALOR — limite inferior real de la escala institucional (ej. 0, 1, 10); valores reales observados en la tabla: 0,1,10,20,30,40.';
+
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_ELEMENTO_DEF IS
     'Campo UI "Elementos para calcular la nota de la asignatura" (imagen, columna 1 fila 3). Llave foranea de lista valor, categoria ELEMENTO_CALCULO_DEF: "Actividades" (495) / "Unidades" (494, renombrada por V62 desde "Descriptores de desempeño" — ver seccion 1c).';
+
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_CRITERIO_AREA IS
     'Campo UI "Criterio para calcular la nota del area" (imagen, columna 3 fila 3). Llave foranea de lista valor, categoria CRITERIO_AREA. Verificado contra el servidor de test, texto exacto (distinto de la redaccion de la especificacion funcional, mismo significado): "Promediar las Asignaturas" (510, ~"Promediar las asignaturas") / "Cada asignatura tiene un porcentaje" (508, ~"Ponderar las asignaturas") / "Proporcional a la intensidad horaria" (509, ~"De acuerdo a la intensidad horaria").';
+
 COMMENT ON COLUMN academico_test.TCRITERIO_EVALUACION.FK_TLV_CRITERIO_FINAL IS
     'Campo UI "Criterio para calcular la nota final" (imagen, columna 1 fila 4). Llave foranea de lista valor, categoria CRITERIO_FINAL_PERACA. Verificado contra el servidor de test, texto exacto (distinto de la redaccion de la especificacion funcional, mismo significado): "Equitativamente de acuerdo al número de PE" (501, ~"Promedio de periodos") / "De acuerdo al porcentaje de cada PE" (502, ~"Ponderacion de periodos"). PE = Periodo de Evaluacion.';
 
@@ -57,9 +59,6 @@ UPDATE academico_test.TLISTA_VALOR
    AND CATEGORIA = 'ELEMENTO_CALCULO_DEF'
    AND NOMBRE = 'Descriptores de desempeño';
 
--- Backfill de FK_TLV_MODO_REDONDEAR desde TPERIODO_ACADEMICO_CONFIG (vivia
--- ahi por error), luego drop de la columna de origen. Idempotente: si la
--- columna de origen ya no existe, sale sin hacer nada.
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -85,9 +84,6 @@ BEGIN
                 DROP COLUMN IF EXISTS FK_TLV_MODO_REDONDEAR';
 END $$;
 
--- DROP previo obligatorio: Postgres rechaza CREATE OR REPLACE cuando cambia
--- el RETURNS TABLE, aunque los parametros de entrada sean identicos.
-DROP FUNCTION IF EXISTS academico_test.fn_criterio_eval_obtener(BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_criterio_eval_obtener(BIGINT, BIGINT);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_criterio_eval_obtener(
@@ -187,7 +183,6 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_criterio_eval_obtener(BIGINT, BIGINT) IS
     'V62: rounding_mode ahora lee FK_TLV_MODO_REDONDEAR (antes leia NUMERO_DECIMALES por error) y gana su propio rounding_mode_name, igual que el resto de lookups. subject_grade_criteria ahora lee la columna dedicada FK_TLV_CRITERIO_ASIGNATURA (antes leia FK_TLV_MODIF_FINAL_PERACA por error). initial_grade y max_recovery_grade ahora convierten PORCENTAJE_INICIAL_CALIF/PORCENTAJE_MAXIMO_RECUPERACION de vuelta al rango real del formato de calificacion (V22: "Porcentaje inicial del rango de calificaciones" -- la columna SIEMPRE fue un %, nunca el valor crudo; V41 jamas convirtio, bug heredado corregido aqui). Regla identica a V42 (fn_escala_guardar_bulk/fn_escala_listar: "las notas se guardan en % contra el formato del periodo"), pero comparando contra TLISTA_VALOR.NOMBRE en vez de VALOR -- V42 compara contra VALOR ("CINCO"/"DIEZ"/"CIEN", confirmado con datos reales), que nunca calza con los literales "DE CERO A CINCO"/"DE CERO A DIEZ" de su propio CASE, asi que su rango cae siempre al ELSE (100); no se replica ese bug aca. decimal_places y final_grade_editable son nuevos, exponen NUMERO_DECIMALES y FK_TLV_MODIF_FINAL_PERACA bajo su nombre real para no perder esa capacidad.';
 
--- Overload 1 de 3: 12 argumentos, con p_decimal_places / p_final_grade_editable al final.
 CREATE OR REPLACE FUNCTION academico_test.fn_criterio_eval_actualizar(
     p_pk_periodo bigint,
     p_grading_format bigint DEFAULT NULL::bigint,
@@ -444,228 +439,6 @@ BEGIN
 
     IF p_set_grading_scale AND p_grading_scale IS NOT NULL AND v_fk_tescala IS DISTINCT FROM v_escala_actual THEN
         PERFORM academico_test.fn_escala_propagar(p_pk_periodo, v_fk_tescala, v_audit);
-    END IF;
-
-    RETURN p_pk_periodo;
-END;
-$$;
-
--- Overload 2 de 3: 14 argumentos, con p_modif_final_peraca / p_max_recovery_grade
--- — ESTA ES LA DE PRODUCCION (public.query id_query=51, invocacion posicional).
-CREATE OR REPLACE FUNCTION academico_test.fn_criterio_eval_actualizar(
-    p_pk_periodo bigint,
-    p_grading_format bigint DEFAULT NULL::bigint,
-    p_grading_scale bigint DEFAULT NULL::bigint,
-    p_set_grading_scale boolean DEFAULT false,
-    p_period_calc_elements bigint DEFAULT NULL::bigint,
-    p_subject_grade_criteria bigint DEFAULT NULL::bigint,
-    p_final_grade_criteria bigint DEFAULT NULL::bigint,
-    p_area_grade_criteria bigint DEFAULT NULL::bigint,
-    p_student_wo_grades bigint DEFAULT NULL::bigint,
-    p_rounding_mode numeric DEFAULT NULL::numeric,
-    p_initial_grade numeric DEFAULT NULL::numeric,
-    p_pk_usuario_solicitante bigint DEFAULT NULL::bigint,
-    p_decimal_places numeric DEFAULT NULL::numeric,
-    p_final_grade_editable bigint DEFAULT NULL::bigint,
-    p_max_recovery_grade numeric DEFAULT NULL::numeric
-)
-RETURNS bigint LANGUAGE plpgsql AS $$
-DECLARE
-    v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-    v_escala_actual BIGINT;
-    v_fmt_nombre TEXT; v_max NUMERIC;
-    v_tmp_nombre VARCHAR; v_tmp_nombre2 VARCHAR;
-    v_establecimiento_id BIGINT;
-    v_periodo_nombre VARCHAR;
-BEGIN
-    v_establecimiento_id := academico_test.fn_periodo_establecimiento(p_pk_periodo);
-    PERFORM academico_test.fn_periodo_gate_escritura(
-        p_pk_usuario_solicitante, v_establecimiento_id,
-        academico_test.fn_periodo_sede(p_pk_periodo),
-        academico_test.fn_periodo_jornada(p_pk_periodo), 'EDITAR');
-    SELECT NOMBRE INTO v_periodo_nombre FROM academico_test.TPERIODO_ACADEMICO
-     WHERE PK_TPERIODO_ACADEMICO = p_pk_periodo;
-    SELECT lv.NOMBRE INTO v_fmt_nombre
-      FROM academico_test.TLISTA_VALOR lv
-     WHERE lv.PK_LISTA_VALOR = COALESCE(p_grading_format, (
-         SELECT FK_TLV_FORMATO_CALIFICACION FROM academico_test.TCRITERIO_EVALUACION
-          WHERE PK_TCRITERIO_EVALUACION = p_pk_periodo AND ACTIVE = TRUE
-     ));
-    v_max := CASE UPPER(TRIM(COALESCE(v_fmt_nombre, '')))
-                WHEN 'DE CERO A CINCO' THEN 5
-                WHEN 'DE CERO A DIEZ'  THEN 10
-                ELSE 100
-              END;
-    IF p_set_grading_scale AND p_grading_scale IS NOT NULL THEN
-        IF NOT EXISTS (
-            SELECT 1 FROM academico_test.TESCALA WHERE PK_TESCALA = p_grading_scale AND ACTIVE = TRUE
-        ) THEN
-            SELECT NOMBRE INTO v_tmp_nombre FROM academico_test.TESCALA WHERE PK_TESCALA = p_grading_scale;
-            IF v_tmp_nombre IS NOT NULL THEN
-                RAISE EXCEPTION 'La escala de valoracion "%" existe pero esta inactiva', v_tmp_nombre
-                    USING ERRCODE = '23503';
-            ELSE
-                RAISE EXCEPTION 'La escala de valoracion seleccionada no existe' USING ERRCODE = '23503';
-            END IF;
-        END IF;
-        IF NOT EXISTS (
-            SELECT 1 FROM academico_test.TNIVEL_ESCALA
-             WHERE FK_TESCALA = p_grading_scale AND FK_PERIODO_ACADEMICO = p_pk_periodo AND ACTIVE = TRUE
-        ) THEN
-            SELECT NOMBRE INTO v_tmp_nombre FROM academico_test.TESCALA WHERE PK_TESCALA = p_grading_scale;
-            SELECT NOMBRE INTO v_tmp_nombre2 FROM academico_test.TPERIODO_ACADEMICO WHERE PK_TPERIODO_ACADEMICO = p_pk_periodo;
-            RAISE EXCEPTION 'La escala "%" no pertenece al periodo academico "%"', v_tmp_nombre, v_tmp_nombre2
-                USING ERRCODE = '22023';
-        END IF;
-    END IF;
-    SELECT FK_TESCALA INTO v_escala_actual
-      FROM academico_test.TCRITERIO_EVALUACION
-     WHERE PK_TCRITERIO_EVALUACION = p_pk_periodo AND ACTIVE = TRUE;
-    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
-        format('Actualización del criterio de evaluación del periodo %s', v_periodo_nombre),
-        v_establecimiento_id);
-
-    UPDATE academico_test.TCRITERIO_EVALUACION SET
-        FK_TLV_FORMATO_CALIFICACION = COALESCE(p_grading_format, FK_TLV_FORMATO_CALIFICACION),
-        FK_TESCALA                  = CASE WHEN p_set_grading_scale THEN p_grading_scale ELSE FK_TESCALA END,
-        FK_TLV_ELEMENTO_DEF         = COALESCE(p_period_calc_elements, FK_TLV_ELEMENTO_DEF),
-        FK_TLV_CRITERIO_ASIGNATURA  = COALESCE(p_subject_grade_criteria, FK_TLV_CRITERIO_ASIGNATURA),
-        FK_TLV_CRITERIO_FINAL       = COALESCE(p_final_grade_criteria, FK_TLV_CRITERIO_FINAL),
-        FK_TLV_CRITERIO_AREA        = COALESCE(p_area_grade_criteria, FK_TLV_CRITERIO_AREA),
-        FK_TLV_DESEMPENO_SIN_CALIF  = COALESCE(p_student_wo_grades, FK_TLV_DESEMPENO_SIN_CALIF),
-        FK_TLV_MODO_REDONDEAR       = COALESCE(p_rounding_mode::BIGINT, FK_TLV_MODO_REDONDEAR),
-        PORCENTAJE_INICIAL_CALIF    = COALESCE(p_initial_grade / v_max * 100, PORCENTAJE_INICIAL_CALIF),
-        NUMERO_DECIMALES            = COALESCE(p_decimal_places, NUMERO_DECIMALES),
-        FK_TLV_MODIF_FINAL_PERACA   = COALESCE(p_final_grade_editable, FK_TLV_MODIF_FINAL_PERACA),
-        PORCENTAJE_MAXIMO_RECUPERACION = COALESCE(p_max_recovery_grade / v_max * 100, PORCENTAJE_MAXIMO_RECUPERACION),
-        MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE PK_TCRITERIO_EVALUACION = p_pk_periodo AND ACTIVE = TRUE;
-    GET DIAGNOSTICS v_n = ROW_COUNT;
-    IF v_n = 0 THEN
-        SELECT NOMBRE INTO v_tmp_nombre FROM academico_test.TPERIODO_ACADEMICO WHERE PK_TPERIODO_ACADEMICO = p_pk_periodo;
-        IF v_tmp_nombre IS NOT NULL THEN
-            RAISE EXCEPTION 'No existe criterio de evaluacion activo para el periodo "%"', v_tmp_nombre
-                USING ERRCODE = 'P0002';
-        ELSE
-            RAISE EXCEPTION 'El periodo academico seleccionado no existe' USING ERRCODE = 'P0002';
-        END IF;
-    END IF;
-
-    IF p_set_grading_scale AND p_grading_scale IS NOT NULL
-       AND p_grading_scale IS DISTINCT FROM v_escala_actual THEN
-        PERFORM academico_test.fn_escala_propagar(p_pk_periodo, p_grading_scale, v_audit);
-    END IF;
-
-    RETURN p_pk_periodo;
-END;
-$$;
-
--- Overload 3 de 3: 12 argumentos, con p_pk_tescala_valoracion en vez de p_grading_scale.
-CREATE OR REPLACE FUNCTION academico_test.fn_criterio_eval_actualizar(
-    p_pk_periodo bigint,
-    p_grading_format bigint DEFAULT NULL::bigint,
-    p_pk_tescala_valoracion bigint DEFAULT NULL::bigint,
-    p_set_grading_scale boolean DEFAULT false,
-    p_period_calc_elements bigint DEFAULT NULL::bigint,
-    p_subject_grade_criteria bigint DEFAULT NULL::bigint,
-    p_final_grade_criteria bigint DEFAULT NULL::bigint,
-    p_area_grade_criteria bigint DEFAULT NULL::bigint,
-    p_student_wo_grades bigint DEFAULT NULL::bigint,
-    p_rounding_mode numeric DEFAULT NULL::numeric,
-    p_initial_grade numeric DEFAULT NULL::numeric,
-    p_pk_usuario_solicitante bigint DEFAULT NULL::bigint
-)
-RETURNS bigint LANGUAGE plpgsql AS $$
-DECLARE
-    v_n INT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-    v_escala_actual BIGINT;
-    v_grading_scale BIGINT;
-    v_tmp_nombre VARCHAR; v_tmp_nombre2 VARCHAR;
-    v_establecimiento_id BIGINT;
-    v_periodo_nombre VARCHAR;
-BEGIN
-    v_establecimiento_id := academico_test.fn_periodo_establecimiento(p_pk_periodo);
-    PERFORM academico_test.fn_periodo_gate_escritura(
-        p_pk_usuario_solicitante, v_establecimiento_id,
-        academico_test.fn_periodo_sede(p_pk_periodo),
-        academico_test.fn_periodo_jornada(p_pk_periodo), 'EDITAR');
-    SELECT NOMBRE INTO v_periodo_nombre FROM academico_test.TPERIODO_ACADEMICO
-     WHERE PK_TPERIODO_ACADEMICO = p_pk_periodo;
-
-    IF p_set_grading_scale AND p_pk_tescala_valoracion IS NOT NULL THEN
-        SELECT FK_ESCALA INTO v_grading_scale
-          FROM academico_test.TESCALA_VALORACION
-         WHERE PK_TESCALA_VALORACION = p_pk_tescala_valoracion AND ACTIVE = TRUE;
-
-        IF v_grading_scale IS NULL THEN
-            SELECT v.NOMBRE INTO v_tmp_nombre
-              FROM academico_test.TESCALA_VALORACION tv
-              JOIN academico_test.TVALORACION v ON v.PK_TVALORACION = tv.FK_TVALORACION
-             WHERE tv.PK_TESCALA_VALORACION = p_pk_tescala_valoracion;
-            IF v_tmp_nombre IS NOT NULL THEN
-                RAISE EXCEPTION 'La valoracion "%" existe pero esta inactiva', v_tmp_nombre
-                    USING ERRCODE = '23503';
-            ELSE
-                RAISE EXCEPTION 'La valoracion seleccionada no existe' USING ERRCODE = '23503';
-            END IF;
-        END IF;
-
-        IF NOT EXISTS (
-            SELECT 1 FROM academico_test.TESCALA WHERE PK_TESCALA = v_grading_scale AND ACTIVE = TRUE
-        ) THEN
-            SELECT NOMBRE INTO v_tmp_nombre FROM academico_test.TESCALA WHERE PK_TESCALA = v_grading_scale;
-            IF v_tmp_nombre IS NOT NULL THEN
-                RAISE EXCEPTION 'La escala de valoracion "%" existe pero esta inactiva', v_tmp_nombre
-                    USING ERRCODE = '23503';
-            ELSE
-                RAISE EXCEPTION 'La escala de valoracion seleccionada no existe' USING ERRCODE = '23503';
-            END IF;
-        END IF;
-        IF NOT EXISTS (
-            SELECT 1 FROM academico_test.TNIVEL_ESCALA
-             WHERE FK_TESCALA = v_grading_scale AND FK_PERIODO_ACADEMICO = p_pk_periodo AND ACTIVE = TRUE
-        ) THEN
-            SELECT NOMBRE INTO v_tmp_nombre FROM academico_test.TESCALA WHERE PK_TESCALA = v_grading_scale;
-            SELECT NOMBRE INTO v_tmp_nombre2 FROM academico_test.TPERIODO_ACADEMICO WHERE PK_TPERIODO_ACADEMICO = p_pk_periodo;
-            RAISE EXCEPTION 'La escala "%" no pertenece al periodo academico "%"', v_tmp_nombre, v_tmp_nombre2
-                USING ERRCODE = '22023';
-        END IF;
-    END IF;
-
-    SELECT FK_TESCALA INTO v_escala_actual
-      FROM academico_test.TCRITERIO_EVALUACION
-     WHERE PK_TCRITERIO_EVALUACION = p_pk_periodo AND ACTIVE = TRUE;
-
-    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
-        format('Actualización del criterio de evaluación del periodo %s', v_periodo_nombre),
-        v_establecimiento_id);
-
-    UPDATE academico_test.TCRITERIO_EVALUACION SET
-        FK_TLV_FORMATO_CALIFICACION = COALESCE(p_grading_format, FK_TLV_FORMATO_CALIFICACION),
-        FK_TESCALA                  = CASE WHEN p_set_grading_scale THEN v_grading_scale ELSE FK_TESCALA END,
-        FK_TLV_ELEMENTO_DEF         = COALESCE(p_period_calc_elements, FK_TLV_ELEMENTO_DEF),
-        FK_TLV_MODIF_FINAL_PERACA   = COALESCE(p_subject_grade_criteria, FK_TLV_MODIF_FINAL_PERACA),
-        FK_TLV_CRITERIO_FINAL       = COALESCE(p_final_grade_criteria, FK_TLV_CRITERIO_FINAL),
-        FK_TLV_CRITERIO_AREA        = COALESCE(p_area_grade_criteria, FK_TLV_CRITERIO_AREA),
-        FK_TLV_DESEMPENO_SIN_CALIF  = COALESCE(p_student_wo_grades, FK_TLV_DESEMPENO_SIN_CALIF),
-        NUMERO_DECIMALES            = COALESCE(p_rounding_mode, NUMERO_DECIMALES),
-        PORCENTAJE_INICIAL_CALIF    = COALESCE(p_initial_grade, PORCENTAJE_INICIAL_CALIF),
-        MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE PK_TCRITERIO_EVALUACION = p_pk_periodo AND ACTIVE = TRUE;
-    GET DIAGNOSTICS v_n = ROW_COUNT;
-    IF v_n = 0 THEN
-        SELECT NOMBRE INTO v_tmp_nombre FROM academico_test.TPERIODO_ACADEMICO WHERE PK_TPERIODO_ACADEMICO = p_pk_periodo;
-        IF v_tmp_nombre IS NOT NULL THEN
-            RAISE EXCEPTION 'No existe criterio de evaluacion activo para el periodo "%"', v_tmp_nombre
-                USING ERRCODE = 'P0002';
-        ELSE
-            RAISE EXCEPTION 'El periodo academico seleccionado no existe' USING ERRCODE = 'P0002';
-        END IF;
-    END IF;
-
-    IF p_set_grading_scale AND v_grading_scale IS NOT NULL
-       AND v_grading_scale IS DISTINCT FROM v_escala_actual THEN
-        PERFORM academico_test.fn_escala_propagar(p_pk_periodo, v_grading_scale, v_audit);
     END IF;
 
     RETURN p_pk_periodo;
