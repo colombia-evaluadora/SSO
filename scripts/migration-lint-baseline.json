@@ -374,7 +374,6 @@
  "postgres/migrations/V350__fn_prematricula_listar.sql|COMENTARIOS",
  "postgres/migrations/V351__fn_prematricula_buscar_por_pk.sql|CABECERA",
  "postgres/migrations/V351__fn_prematricula_buscar_por_pk.sql|COMENTARIOS",
- "postgres/migrations/V353__fn_actividad_pantalla_edicion.sql|QUERY-ON-CONFLICT|INSERT en public.query con ON CONFLICT DO NOTHING y sin DELETE previo por uuid: si la fila ya existe esta migracion es un no-op silencioso (ver V253/V279)",
  "postgres/migrations/V354__sede_no_se_borra_con_periodos_academicos.sql|CABECERA",
  "postgres/migrations/V354__sede_no_se_borra_con_periodos_academicos.sql|COMENTARIOS",
  "postgres/migrations/V354__sede_no_se_borra_con_periodos_academicos.sql|GATE-EN-LINEA|fn_est_soft_delete_bulk(): lanza 42501 a mano en vez de llamar a un helper de permisos. El gate va en un wrapper que delega en un nucleo `_interno` reutilizable (ver .claude/rules/migraciones.md)",

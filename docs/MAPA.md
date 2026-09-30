@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 438 migraciones (V1–V517), 818 funciones vivas, 72 endpoints vivos. Ultima generacion: 2026-09-30.
+Estado: 433 migraciones (V1–V517), 818 funciones vivas, 72 endpoints vivos. Ultima generacion: 2026-09-30.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -134,7 +134,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 |---|---|---|---|
 | `academico_test.fn_actividad_actualizar` | 37 | V496.3 | V246, V496.4 |
 | `academico_test.fn_actividad_actualizar_interno` | 37 | V496.2 | V496.3 |
-| `academico_test.fn_actividad_adaptacion_archivo_registrar` | 3 | V496.3 | V470, V496.4 |
+| `academico_test.fn_actividad_adaptacion_archivo_registrar` | 3 | V496.3 | V496.4 |
 | `academico_test.fn_actividad_adaptacion_reemplazar` | 3 | V496.3 | V246, V496.4 |
 | `academico_test.fn_actividad_adaptacion_reemplazar_interno` | 3 | V496.2 | V496.3 |
 | `academico_test.fn_actividad_adaptaciones_reutilizables_listar` | 8 | V471 | — |
@@ -200,7 +200,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_listar_docente` | 12 | V481 | V250 |
 | `academico_test.fn_actividad_listar_interno` | 22 | V481 | — |
 | `academico_test.fn_actividad_lv_assert` | 3 | V496.1 | V226, V469 |
-| `academico_test.fn_actividad_material_archivo_registrar` | 3 | V496.3 | V426, V496.4 |
+| `academico_test.fn_actividad_material_archivo_registrar` | 3 | V496.3 | V496.4 |
 | `academico_test.fn_actividad_material_archivos_listar` | 2 | V427 | — |
 | `academico_test.fn_actividad_material_reemplazar` | 3 | V496.3 | V246, V496.4 |
 | `academico_test.fn_actividad_material_reemplazar_interno` | 3 | V496.2 | V496.3 |
@@ -234,7 +234,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_otro_definir` | 3 | V469 | V340, V496.3 |
 | `academico_test.fn_actividad_otro_metodo_valoracion` | 1 | V241 | V454, V469, V473, V477 |
 | `academico_test.fn_actividad_otro_sn` | 1 | V469 | — |
-| `academico_test.fn_actividad_pantalla_edicion` | 3 | V452 | V353, V496.4 |
+| `academico_test.fn_actividad_pantalla_edicion` | 3 | V452 | V496.4 |
 | `academico_test.fn_actividad_periodo_evaluacion` | 2 | V408 | — |
 | `academico_test.fn_actividad_ponderacion_campos_disponibles` | 3 | V458 | V479, V496 |
 | `academico_test.fn_actividad_programacion_assert` | 6 | V460 | V496.1 |
@@ -518,7 +518,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_escala_nivel_soft_delete` | 3 | V42 | V78, V128 |
 | `academico_test.fn_escala_propagar` | 3 | V42 | V41 |
 | `academico_test.fn_escala_valoracion_bulk_delete` | 2 | V42 | V78 |
-| `academico_test.fn_escala_variantes_permitidas` | 1 | V453 | V458 |
+| `academico_test.fn_escala_variantes_permitidas` | 1 | V458 | — |
 
 ## especialidad
 
@@ -704,7 +704,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 |---|---|---|---|
 | `academico_test.fn_instrumento_base_derivar` | 1 | V477 | — |
 | `academico_test.fn_instrumento_nombre` | 1 | V214.2 | V479 |
-| `academico_test.fn_instrumento_permitido_por_tipo_evaluacion` | 2 | V453 | V214.2, V226, V458 |
+| `academico_test.fn_instrumento_permitido_por_tipo_evaluacion` | 2 | V458 | V214.2, V226 |
 
 ## jornada
 
