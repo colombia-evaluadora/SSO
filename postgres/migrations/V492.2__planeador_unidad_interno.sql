@@ -852,6 +852,37 @@ AS $$
     SELECT GREATEST(100 - academico_test.fn_unidad_ponderacion_asignada(p_pk_tunidad, p_fk_tgrupo, NULL), 0);
 $$;
 
+-- ---------------------------------------------------------------------------
+-- Reglas 38a y 39: al eliminar o desvincular no se redistribuye el peso; se
+-- avisa cuánto quedó libre para que el docente lo ajuste.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_aviso_peso_liberado(
+    p_fk_tunidad  BIGINT,
+    p_fk_tgrupo   BIGINT,
+    p_ponderacion NUMERIC,
+    p_accion      VARCHAR
+)
+RETURNS TABLE (porcentaje_libre NUMERIC, aviso VARCHAR)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_libre NUMERIC;
+BEGIN
+    IF p_fk_tunidad IS NULL OR p_ponderacion IS NULL
+       OR academico_test.fn_unidad_calculo_definitiva_modo(p_fk_tunidad) IS DISTINCT FROM 'PONDERAR' THEN
+        RETURN QUERY SELECT NULL::NUMERIC, NULL::VARCHAR;
+        RETURN;
+    END IF;
+    v_libre := academico_test.fn_unidad_ponderacion_disponible_interno(p_fk_tunidad, p_fk_tgrupo);
+    RETURN QUERY SELECT v_libre,
+        format(CASE WHEN p_accion = 'DESVINCULAR'
+                    THEN 'Al desvincular esta actividad, quedará un %s%% libre en %s. Ajuste los pesos restantes para cerrar el 100%%.'
+                    ELSE 'La eliminación dejará %s%% libre en %s. Ajuste los pesos restantes para cerrar el 100%%.' END,
+               trim_scale(v_libre), academico_test.fn_unidad_etiqueta(p_fk_tunidad))::VARCHAR;
+END;
+$$;
+
 -- Solo enunciados del referente vigente de la unidad, con sus evidencias activas.
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_referente_detalle_interno(p_pk_tunidad BIGINT)
 RETURNS TABLE(pk_tunidad BIGINT, unidad_nombre VARCHAR, fk_tgrado BIGINT, grado VARCHAR,
@@ -894,3 +925,5 @@ AS $$
       LEFT JOIN academico_test.TLISTA_VALOR tev ON tev.PK_LISTA_VALOR = rc.FK_TLV_TIPO_EVALUACION
      WHERE u.PK_TUNIDAD = p_pk_tunidad;
 $$;
+COMMENT ON FUNCTION academico_test.fn_unidad_aviso_peso_liberado(BIGINT, BIGINT, NUMERIC, VARCHAR)
+    IS 'INTERNO: Reglas 38a/39. En una unidad que pondera, el % que queda libre en (unidad, grupo) tras eliminar o desvincular una actividad con peso, y el aviso para el docente; NULL si no aplica. No redistribuye. La usan fn_unidad_actividad_desvincular y fn_actividad_eliminar.';
