@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 439 migraciones (V1–V520), 862 funciones vivas, 66 endpoints vivos. Ultima generacion: 2026-09-30.
+Estado: 435 migraciones (V1–V520), 862 funciones vivas, 66 endpoints vivos. Ultima generacion: 2026-09-30.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -200,7 +200,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_instrumento_contexto_assert` | 5 | V479 | V496.1 |
 | `academico_test.fn_actividad_instrumento_definir` | 3 | V496.3 | V247, V496.4 |
 | `academico_test.fn_actividad_instrumento_definir_interno` | 3 | V496.6 | V340, V496.3 |
-| `academico_test.fn_actividad_instrumento_efectivo` | 1 | V496.5 | V477, V496.6, V496.9 |
+| `academico_test.fn_actividad_instrumento_efectivo` | 1 | V496.5 | V496.6, V496.9 |
 | `academico_test.fn_actividad_instrumento_nombre_de` | 1 | V496.5 | — |
 | `academico_test.fn_actividad_instrumento_obtener` | 2 | V469 | V247, V272, V452 |
 | `academico_test.fn_actividad_instrumento_reset` | 3 | V226 | V496.6 |
@@ -237,7 +237,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_nota_guardar_interno` | 3 | V496.6 | V496.9 |
 | `academico_test.fn_actividad_nota_obtener` | 2 | V496.7 | V247, V496.8 |
 | `academico_test.fn_actividad_nota_obtener_interno` | 1 | V496.6 | V496.7 |
-| `academico_test.fn_actividad_nota_resultado_instrumento` | 1 | V477 | V490, V496.6 |
+| `academico_test.fn_actividad_nota_resultado_instrumento` | 1 | V496.6 | V490, V496.6 |
 | `academico_test.fn_actividad_nota_rubrica_recalcular` | 1 | V496.6 | V496.9 |
 | `academico_test.fn_actividad_observacion_evidencias_set` | 4 | V463 | — |
 | `academico_test.fn_actividad_observacion_soporte_agregar` | 4 | V461 | — |
@@ -249,7 +249,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_otro_campos_disponibles` | 1 | V458 | — |
 | `academico_test.fn_actividad_otro_definir` | 3 | V469 | — |
 | `academico_test.fn_actividad_otro_definir_interno` | 3 | V496.6 | — |
-| `academico_test.fn_actividad_otro_metodo_valoracion` | 1 | V241 | V454, V469, V496.5 |
+| `academico_test.fn_actividad_otro_metodo_valoracion` | 1 | V226 | V454, V469, V496.5 |
 | `academico_test.fn_actividad_otro_sn` | 1 | V469 | V496.6 |
 | `academico_test.fn_actividad_pantalla_edicion` | 3 | V452 | V496.4 |
 | `academico_test.fn_actividad_periodo_evaluacion` | 2 | V408 | — |
@@ -868,7 +868,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_numero_corto` | 1 | V477 | V496.5 |
+| `academico_test.fn_numero_corto` | 1 | V496.6 | V496.5 |
 
 ## padre
 
