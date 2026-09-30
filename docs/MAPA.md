@@ -356,7 +356,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_area_crear` | 6 | V40 | V77 |
 | `academico_test.fn_area_listar` | 7 | V40 | V77 |
 | `academico_test.fn_area_soft_delete` | 2 | V40 | V77 |
-| `academico_test.fn_area_subject_reporte_listar` | 8 | V188 | — |
+| `academico_test.fn_area_subject_reporte_listar` | 8 | V188 | V135 |
 
 ## asignacion
 
@@ -693,7 +693,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_grado_crear` | 5 | V43 | V79 |
 | `academico_test.fn_grado_desempeno_minimo` | 1 | V334 | V346, V410, V428, V439, V469, V490 |
 | `academico_test.fn_grado_es_preescolar` | 1 | V285 | V286, V287, V437 |
-| `academico_test.fn_grado_grupo_etiqueta` | 3 | V224 | V251, V419, V452, V468, V481, V490 |
+| `academico_test.fn_grado_grupo_etiqueta` | 3 | V224 | V251, V452, V468, V481, V490 |
 | `academico_test.fn_grado_grupo_reporte_listar` | 5 | V187 | V135 |
 | `academico_test.fn_grado_listar` | 7 | V43 | V79 |
 | `academico_test.fn_grado_obtener` | 2 | V43 | V79 |
@@ -737,12 +737,12 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_informe_grupo_listar` | 4 | V490 | V342, V439, V468 |
 | `academico_test.fn_informe_grupo_reporte` | 5 | V439 | V420 |
 | `academico_test.fn_informe_grupo_tabla` | 4 | V439 | V434 |
-| `academico_test.fn_informe_grupos_listar` | 5 | V490 | — |
-| `academico_test.fn_informe_historial_listar` | 5 | V491 | — |
+| `academico_test.fn_informe_grupos_listar` | 5 | V490 | V419 |
+| `academico_test.fn_informe_historial_listar` | 5 | V491 | V349 |
 | `academico_test.fn_informe_historial_registrar` | 6 | V348 | V490 |
 | `academico_test.fn_informe_jornadas_listar` | 3 | V417 | — |
 | `academico_test.fn_informe_metricas_recalcular` | 3 | V346 | V490 |
-| `academico_test.fn_informe_periodo_academico_resolver` | 4 | V418 | V419, V490 |
+| `academico_test.fn_informe_periodo_academico_resolver` | 4 | V418 | V490 |
 | `academico_test.fn_informe_periodo_evidencias_listar` | 3 | V490 | V434 |
 | `academico_test.fn_informe_periodo_guardar` | 4 | V490 | V342 |
 | `academico_test.fn_informe_periodo_requerido` | 3 | V428 | V439, V490 |
@@ -915,13 +915,13 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_periodo_jornadas_listar` | 2 | V191 | — |
 | `academico_test.fn_periodo_listar` | 11 | V37 | V75, V124 |
 | `academico_test.fn_periodo_puede_ver` | 2 | V29 | V37, V38, V39, V40, V41, V42… |
-| `academico_test.fn_periodo_resolver_matricula` | 4 | V415 | V127, V415 |
+| `academico_test.fn_periodo_resolver_matricula` | 4 | V415 | V127 |
 | `academico_test.fn_periodo_sede` | 1 | V29 | V37, V38, V39, V40, V41, V42… |
 | `academico_test.fn_periodo_sedes_listar` | 1 | V191 | — |
 | `academico_test.fn_periodo_soft_delete` | 2 | V37 | V75 |
 | `academico_test.fn_periodo_usuario_establecimientos` | 1 | V37 | V191 |
 | `academico_test.fn_periodo_usuario_global` | 1 | V37 | V191 |
-| `academico_test.fn_periodo_usuario_puede_ver` | 2 | V37 | V162, V250, V254, V270, V350, V351… |
+| `academico_test.fn_periodo_usuario_puede_ver` | 2 | V37 | V250, V254, V270, V350, V351, V415… |
 | `academico_test.fn_periodo_usuario_sedes` | 1 | V37 | V191 |
 
 ## personalizar
@@ -1252,7 +1252,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_assert_superadmin` | 1 | V113 | V115, V119, V123, V498 |
+| `academico_test.fn_assert_superadmin` | 1 | V113 | V115, V119, V498 |
 
 ## tactividad
 
