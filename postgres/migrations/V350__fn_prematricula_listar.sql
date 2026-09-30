@@ -1,100 +1,11 @@
 -- ===========================================================================
--- V350 - fn_prematricula_listar: listado paginado de PRE-MATRICULAS.
---
--- QUE ES LA PRE-MATRICULA
---   TPREMATRICULA (V22) es el paso intermedio de los estudiantes ANTIGUOS:
---   el que ya esta en la institucion y va a cambiar de grado. Su FK_TGRUPO
---   es, textualmente segun el comentario de la DDL, el "grupo tentativo del
---   nuevo grado" -- o sea el DESTINO, no donde esta hoy.
---
---   Los estudiantes NUEVOS van por la otra rama del modelo
---   (TRESERVA_CUPO -> TINSCRIPCION -> TMATRICULA) y no se listan aqui.
---
--- ALCANCE DE ESTA FUNCION
---   Devuelve SOLO lo que pinta la tabla del listado. El detalle de una fila
---   es un endpoint aparte -- fn_prematricula_buscar_por_pk (V351) -- igual
---   que en los demas modulos: el listado no arrastra los datos de la ficha.
---
---   Las columnas de la tabla son ID / Nombres / Apellidos / Sede / Grado /
---   Grado al que aspira / Estado. A eso se suman:
---
---     * failed -- lo necesita la celda "Grado al que aspira": si el
---       estudiante reprobo, el front pinta que repite el mismo grado en vez
---       de avanzar. La resolucion la hace el front; aqui target_grade es
---       siempre el grado crudo del grupo destino.
---     * institution / shift / education_level / grupo -- no son columnas,
---       pero si son las dimensiones de "Agrupar por" (junto con campus y
---       grade, que ya estan). Sin su valor el front no puede rotular los
---       grupos que el propio p_group_by arma.
---
--- DE DONDE SALE CADA COLUMNA
---   La fila mezcla DOS ubicaciones, y conviene tenerlo presente porque no
---   son la misma:
---
---     * ORIGEN  -- institution / campus / shift / education_level / grade /
---       grupo: la matricula ACTIVA mas reciente del estudiante, que es donde
---       esta hoy. El tipo del front lo dice asi: el bloque se titula "Datos
---       de la institucion educativa de origen" y group es "Grupo actual del
---       estudiante".
---     * DESTINO -- target_grade y status: el FK_TGRUPO de la prematricula.
---
---   No hay ninguna FK entre prematricula y matricula: TPREMATRICULA solo
---   conoce al estudiante, asi que el origen se resuelve por LATERAL a su
---   matricula activa mas reciente. En los datos de hoy los 47 registros
---   tienen matricula activa y ninguno esta ya en el grupo destino, que es
---   justo lo que se espera de un cambio de grado.
---
--- EL CUPO (status)
---   Compara TGRUPO.CAPACIDAD del grupo DESTINO contra
---   fn_matricula_cupo_ocupado (V145), que cuenta solo las matriculas en
---   Cursando / Aprobado / Reprobado -- las reubicadas y promovidas no gastan
---   cupo. status es su lectura textual: 'con_cupo' / 'sin_cupo'.
---
---   OJO -- el tipo del front admite un tercer valor, 'pendiente', y aqui NO
---   se emite nunca. No es un olvido: no hay regla de negocio conocida que lo
---   defina, el mock tampoco lo produce (status = hasSlot ? con_cupo :
---   sin_cupo) y los 5.335 grupos activos tienen CAPACIDAD, asi que tampoco
---   cabe como "no se puede saber". Se deja el hueco a proposito en vez de
---   inventarle un significado; cuando se defina, entra aqui.
---
--- PERMISOS
---   Capability por el menu PRE_MATRICULA (ya existe en TMENU, pk 868) y, por
---   fila, el alcance sobre el periodo academico del grupo DESTINO
---   (fn_periodo_usuario_puede_ver, el mismo criterio que fn_matricula_listar).
---   Sin capability se levanta 42501 en vez de devolver una lista vacia, que
---   son cosas distintas para el que llama.
---
--- FORMA
---   Calcada de fn_matricula_listar: SQL dinamico con lista blanca de
---   ordenamiento, count(*) OVER() como total_count en el nivel exterior, y
---   LIMIT/OFFSET por pageIndex/pageSize. Los filtros sobre columnas ya
---   derivadas (origen y status) se aplican en un nivel intermedio, porque un
---   alias del SELECT no es visible en el WHERE de su mismo nivel y
---   total_count tiene que reflejarlos.
---
---   p_group_by no cambia el conjunto de filas, solo antepone esa dimension
---   al ORDER BY -- es lo que el front documenta para "Agrupar por".
---
---   p_created_from / p_created_to filtran por CREATED_AT de la prematricula.
---   En el front ese control se llama reservedFrom/reservedTo porque la vista
---   reusa el formulario de reservas; aqui no hay reserva, la fecha propia es
---   la de creacion.
---
---   Las jornadas se comparan sin tildes y en mayuscula (TRANSLATE) para que
---   el 'MANANA' del front case con el 'Mañana' del catalogo, y tambien
---   contra el NOMBRE crudo por si llega ya resuelto.
---
--- El DROP de arriba existe porque cambia el RETURNS TABLE: CREATE OR REPLACE
--- no puede alterar el tipo de retorno de una funcion existente.
---
--- Idempotente: DROP IF EXISTS + CREATE OR REPLACE.
+-- V350 - fn_prematricula_listar: listado de prematricula con filtros y paginado.
 -- ===========================================================================
 
 
 DROP FUNCTION IF EXISTS academico_test.fn_prematricula_listar(
     BIGINT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, INTEGER, TEXT,
     TEXT[], TEXT[], TEXT[], DATE, DATE, TEXT, TEXT, TEXT, INTEGER, INTEGER);
-
 
 CREATE OR REPLACE FUNCTION academico_test.fn_prematricula_listar(
     p_pk_usuario       BIGINT,
@@ -122,14 +33,14 @@ RETURNS TABLE(
     document_number  VARCHAR,
     first_name       VARCHAR,
     last_name        VARCHAR,
-    -- origen: donde esta hoy
+    
     institution      VARCHAR,
     campus           VARCHAR,
     shift            VARCHAR,
     education_level  TEXT,
     grade            INTEGER,
     grupo            VARCHAR,
-    -- destino: a donde aspira
+    
     target_grade     INTEGER,
     failed           BOOLEAN,
     status           TEXT,
