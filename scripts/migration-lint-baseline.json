@@ -238,8 +238,6 @@
  "postgres/migrations/V237__trol_menu_funcionarios_acceso_actual.sql|SEED-POR-CODIGO|seed sobre TROL resuelto por CODIGO: Flyway solo crea pk_trol=17 (V51), los 16 roles reales vienen del dump base -> no-op silencioso en CI",
  "postgres/migrations/V238__drop_funcionarios_listar_sobrecarga_bigint.sql|CABECERA",
  "postgres/migrations/V238__drop_funcionarios_listar_sobrecarga_bigint.sql|COMENTARIOS",
- "postgres/migrations/V239__fn_planilla_calificacion.sql|CABECERA",
- "postgres/migrations/V239__fn_planilla_calificacion.sql|COMENTARIOS",
  "postgres/migrations/V246__query_endpoints_actividad.sql|QUERY-ON-CONFLICT|INSERT en public.query con ON CONFLICT DO NOTHING y sin DELETE previo por uuid: si la fila ya existe esta migracion es un no-op silencioso (ver V253/V279)",
  "postgres/migrations/V247__query_endpoints_instrumentos.sql|QUERY-ON-CONFLICT|INSERT en public.query con ON CONFLICT DO NOTHING y sin DELETE previo por uuid: si la fila ya existe esta migracion es un no-op silencioso (ver V253/V279)",
  "postgres/migrations/V248__query_endpoints_planilla.sql|CABECERA",
