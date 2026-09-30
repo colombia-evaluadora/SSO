@@ -1,11 +1,11 @@
 -- V496.5 - Instrumentos y calificación de actividades: validaciones (una por
 -- regla), los validadores centrales de definición y de calificación, y el
 -- assert de propiedad de resultados (Regla 54). Mensajes con nombres, nunca
--- con pk. Sustituye a fn_actividad_instrumento_assert (V240) y
+-- con pk. Sustituye a fn_actividad_instrumento_assert y
 -- fn_actividad_nota_asistencia_assert (V227).
 -- Depende de: V496.1 (etiquetas, validar_existente/activa, catálogo,
 -- propietario), V479 (tipo de evaluación), V458 (instrumento permitido),
--- V241 (método de Otro), V475 (es_formativa), V450 (asistencia válida).
+-- V226 (método de Otro), V475 (es_formativa), V450 (asistencia válida).
 
 SET search_path TO academico_test, public;
 
