@@ -22,6 +22,35 @@ DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_referencias_activas(
 -- Regla 13: el nombre que el referente le da a la actividad (Rótulo de
 -- Ejecución). Con unidad manda el referente de la unidad; sin ella, el que le
 -- aplica al grado del grupo y la asignatura (la misma regla de V511).
+-- Regla 82: sitios admitidos en los materiales de apoyo. VALOR es el dominio
+-- (también vale cualquier subdominio); el colegio agrega su LMS aquí.
+-- La secuencia de PK_LISTA_VALOR va detrás de los pk del dump base (V214.3).
+SELECT setval(pg_get_serial_sequence('academico_test.tlista_valor', 'pk_lista_valor'),
+              GREATEST((SELECT COALESCE(MAX(PK_LISTA_VALOR), 0) FROM academico_test.TLISTA_VALOR), 1));
+
+INSERT INTO academico_test.TLISTA_VALOR (CATEGORIA, NOMBRE, VALOR, CREATED_BY)
+SELECT v.categoria, v.nombre, v.valor, 'V496.1_seed'
+  FROM (VALUES
+    ('DOMINIO_MATERIAL_URL', 'Wikipedia', 'wikipedia.org'),
+    ('DOMINIO_MATERIAL_URL', 'YouTube', 'youtube.com'),
+    ('DOMINIO_MATERIAL_URL', 'YouTube (enlace corto)', 'youtu.be'),
+    ('DOMINIO_MATERIAL_URL', 'Google Classroom', 'classroom.google.com'),
+    ('DOMINIO_MATERIAL_URL', 'Moodle', 'moodle.org'),
+    ('DOMINIO_MATERIAL_URL', 'MoodleCloud', 'moodlecloud.com'),
+    ('DOMINIO_MATERIAL_URL', 'Khan Academy', 'khanacademy.org'),
+    ('DOMINIO_MATERIAL_URL', 'Colombia Aprende', 'colombiaaprende.edu.co'),
+    ('DOMINIO_MATERIAL_URL', 'Ministerio de Educación', 'mineducacion.gov.co'),
+    ('DOMINIO_MATERIAL_REPOSITORIO', 'Google Drive', 'drive.google.com'),
+    ('DOMINIO_MATERIAL_REPOSITORIO', 'Google Docs', 'docs.google.com'),
+    ('DOMINIO_MATERIAL_REPOSITORIO', 'Dropbox', 'dropbox.com'),
+    ('DOMINIO_MATERIAL_REPOSITORIO', 'OneDrive', 'onedrive.live.com'),
+    ('DOMINIO_MATERIAL_REPOSITORIO', 'OneDrive (enlace corto)', '1drv.ms'),
+    ('DOMINIO_MATERIAL_REPOSITORIO', 'Mega', 'mega.nz'),
+    ('DOMINIO_MATERIAL_REPOSITORIO', 'SharePoint', 'sharepoint.com')
+  ) AS v(categoria, nombre, valor)
+ WHERE NOT EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR lv
+                    WHERE lv.CATEGORIA = v.categoria AND lv.VALOR = v.valor);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_rotulo(
     p_fk_tgrupo      BIGINT,
     p_fk_tasignatura BIGINT,
@@ -809,14 +838,76 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_url_host(p_url VARCHAR)
+RETURNS VARCHAR
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT regexp_replace(lower(substring(TRIM(p_url) FROM '^[A-Za-z]+://([^/:?#]+)')), '^www\.', '');
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_url_dominio(
+    p_url       VARCHAR,
+    p_categoria VARCHAR,
+    p_fuente    VARCHAR,
+    p_que       VARCHAR
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_host VARCHAR := academico_test.fn_actividad_url_host(p_url);
+BEGIN
+    IF NULLIF(TRIM(p_url), '') IS NULL THEN
+        RETURN;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR lv
+                    WHERE lv.CATEGORIA = p_categoria AND lv.ACTIVE = TRUE
+                      AND (v_host = lower(lv.VALOR) OR v_host LIKE '%.' || lower(lv.VALOR))) THEN
+        RAISE EXCEPTION 'El enlace en % es de "%", que no está entre los sitios admitidos para %: %',
+            p_que, COALESCE(v_host, TRIM(p_url)), p_fuente,
+            (SELECT string_agg(lv.NOMBRE, ', ' ORDER BY lv.NOMBRE) FROM academico_test.TLISTA_VALOR lv
+              WHERE lv.CATEGORIA = p_categoria AND lv.ACTIVE = TRUE)
+            USING ERRCODE = '22023',
+                  HINT = 'Si es la plataforma del colegio, pida que la agreguen a la lista de sitios admitidos';
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_archivo_material(p_fk_tarchivo BIGINT, p_que VARCHAR)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_a RECORD;
+BEGIN
+    SELECT NOMBRE, PESO INTO v_a FROM academico_test.TARCHIVO WHERE PK_TARCHIVO = p_fk_tarchivo;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    IF COALESCE(lower(substring(v_a.NOMBRE FROM '\.([A-Za-z0-9]+)$')), '') <> ALL
+       (ARRAY['pdf','doc','docx','xls','xlsx','ppt','pptx','jpg','jpeg','png','gif','mp3','mp4','webm','txt']) THEN
+        RAISE EXCEPTION 'El archivo "%" en % no tiene un formato admitido (PDF, Word, Excel, PowerPoint, imagen JPG/PNG/GIF, audio MP3, video MP4/WEBM o texto)',
+            v_a.NOMBRE, p_que USING ERRCODE = '22023';
+    END IF;
+    IF v_a.PESO > 20 * 1024 * 1024 THEN
+        RAISE EXCEPTION 'El archivo "%" en % pesa % MB: el máximo es 20 MB',
+            v_a.NOMBRE, p_que, ROUND(v_a.PESO / 1048576.0, 1) USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_materiales(p_materiales JSONB)
 RETURNS VOID
 LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
-    v_m   RECORD;
-    v_que VARCHAR;
+    v_m    RECORD;
+    v_que  VARCHAR;
+    v_tipo VARCHAR;
 BEGIN
     IF p_materiales IS NULL THEN
         RETURN;
@@ -842,6 +933,20 @@ BEGIN
         PERFORM academico_test.fn_actividad_validar_texto(v_m.j->>'descripcion', 'El nombre indicado en ' || v_que, 100);
         PERFORM academico_test.fn_actividad_validar_url(v_m.j->>'url', v_que);
         PERFORM academico_test.fn_actividad_validar_archivo_existente((v_m.j->>'fkTarchivo')::BIGINT, v_que);
+        -- Regla 82: cada Tipo - Fuente tiene su forma y sus límites.
+        SELECT VALOR INTO v_tipo FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = (v_m.j->>'tipoRecurso')::BIGINT;
+        IF v_tipo = 'ARCHIVO' AND (v_m.j->>'fkTarchivo') IS NULL THEN
+            RAISE EXCEPTION 'En % se eligió "Archivo en PC": adjunte el archivo en lugar de un enlace', v_que USING ERRCODE = '22023';
+        END IF;
+        IF v_tipo IN ('URL', 'REPOSITORIO') AND (v_m.j->>'fkTarchivo') IS NOT NULL THEN
+            RAISE EXCEPTION 'En % se eligió un enlace: escriba la dirección en lugar de adjuntar un archivo', v_que USING ERRCODE = '22023';
+        END IF;
+        PERFORM academico_test.fn_actividad_validar_archivo_material((v_m.j->>'fkTarchivo')::BIGINT, v_que);
+        IF v_tipo = 'URL' THEN
+            PERFORM academico_test.fn_actividad_validar_url_dominio(v_m.j->>'url', 'DOMINIO_MATERIAL_URL', '"URL - Sitio web"', v_que);
+        ELSIF v_tipo = 'REPOSITORIO' THEN
+            PERFORM academico_test.fn_actividad_validar_url_dominio(v_m.j->>'url', 'DOMINIO_MATERIAL_REPOSITORIO', '"Unidad virtual - repositorio"', v_que);
+        END IF;
     END LOOP;
 END;
 $$;
@@ -1352,3 +1457,8 @@ COMMENT ON FUNCTION academico_test.fn_actividad_assert_carga_docente(BIGINT, BIG
     IS 'Bloque 1: 42501 si un docente de aula planea sobre un (grupo, asignatura) que no tiene en TDOCENTE_ASIGNATURA; sin grupo, si no dicta la asignatura (en el grado de la unidad). Coordinación, rectoría y super admin pasan. La usan los wrappers de crear y actualizar actividad.';
 COMMENT ON FUNCTION academico_test.fn_actividad_rotulo(BIGINT, BIGINT, BIGINT)
     IS 'Regla 13: Rótulo de Ejecución del referente que gobierna la actividad (el de su unidad o, sin ella, fn_unidad_referente_aplicable del grado del grupo y la asignatura); "Actividad" si no hay. Lo usan los mensajes y la bitácora.';
+
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_url_dominio(VARCHAR, VARCHAR, VARCHAR, VARCHAR)
+    IS 'Regla 82: 22023 si el dominio del enlace (o uno de sus subdominios) no está entre los VALOR activos de la categoría de TLISTA_VALOR (DOMINIO_MATERIAL_URL o DOMINIO_MATERIAL_REPOSITORIO). El mensaje lista los sitios admitidos. La usa fn_actividad_validar_materiales.';
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_archivo_material(BIGINT, VARCHAR)
+    IS 'Regla 82: 22023 si el archivo de un material no es de un formato admitido (PDF, DOC/X, XLS/X, PPT/X, JPG/JPEG/PNG/GIF, MP3, MP4, WEBM, TXT) o pesa más de 20 MB. La usa fn_actividad_validar_materiales.';
