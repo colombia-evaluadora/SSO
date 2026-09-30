@@ -370,9 +370,6 @@ END;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_pantalla_edicion(BIGINT, BIGINT, INT)
-    IS 'DTO compuesto de la pantalla "editar actividad": compone fn_actividad_buscar_por_pk (V224) y fn_actividad_instrumento_obtener en UN JSONB ya en camelCase y anidado por concepto (actividad{...}, materiales, adaptaciones, evidencias, criterios, recuperacion, instrumento, camposDisponibles, unidadConfiguracion), con las banderas S/N convertidas a boolean. No reimplementa ninguna regla: solo reempaqueta. evidencias y criterios son las relaciones ACTIVE que ya tiene la actividad, con el pk DE LA RELACION -- el que exigen fn_actividad_evidencia_quitar / fn_actividad_criterio_quitar (V214.1) --, para que al reabrir la actividad se puedan pre-marcar y quitar. Gate VER (fn_planeador_assert_alcance) una sola vez. P0002 si la actividad no existe. V353.';
-
-COMMENT ON FUNCTION academico_test.fn_actividad_pantalla_edicion(BIGINT, BIGINT, INT)
     IS 'DTO compuesto de la pantalla "editar actividad": compone fn_actividad_buscar_por_pk (V224) y fn_actividad_instrumento_obtener en UN JSONB ya en camelCase y anidado por concepto (actividad{...}, materiales, adaptaciones, evidencias, criterios, estudiantes, recuperacion, instrumento, camposDisponibles, unidadConfiguracion), con las banderas S/N convertidas a boolean. No reimplementa ninguna regla: solo reempaqueta. evidencias y criterios son las relaciones ACTIVE que ya tiene la actividad, con el pk DE LA RELACION -- el que exigen fn_actividad_evidencia_quitar / fn_actividad_criterio_quitar (V214.1) --, para que al reabrir la actividad se puedan pre-marcar y quitar. Gate VER (fn_planeador_assert_alcance) una sola vez. P0002 si la actividad no existe. V353. estudiantes: los asignados con el pk de la asignacion y su nota u observacion (misma forma que fn_actividad_buscar_por_pk).';
 
 UPDATE public.query q
