@@ -348,6 +348,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_unidad_actividad_desvincular(
 RETURNS TABLE (pk_tactividad BIGINT, porcentaje_libre NUMERIC, aviso VARCHAR)
 LANGUAGE plpgsql
 AS $$
+#variable_conflict use_column
 DECLARE
     v_unidad BIGINT;
     v_grupo  BIGINT;

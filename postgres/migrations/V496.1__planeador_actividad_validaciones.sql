@@ -661,8 +661,8 @@ BEGIN
       FROM academico_test.TUNIDAD u
       JOIN academico_test.TREFERENTE_CURRICULAR rc ON rc.PK_REFERENTE_CURRICULAR = u.FK_REFERENTE_CURRICULAR
      WHERE u.PK_TUNIDAD = p_fk_tunidad;
-    RAISE EXCEPTION 'Marque al menos una % de los % de % que cubre %',
-        COALESCE(v_etq_2, 'evidencia'), COALESCE(v_etq_1, 'enunciados'),
+    RAISE EXCEPTION 'Marque al menos una % de algún % de % que cubre %',
+        COALESCE(v_etq_2, 'evidencia'), COALESCE(v_etq_1, 'enunciado'),
         academico_test.fn_unidad_etiqueta(p_fk_tunidad), p_titulo
         USING ERRCODE = '22023';
 END;
@@ -769,8 +769,9 @@ BEGIN
        OR NOT EXISTS (SELECT 1 FROM academico_test.TMATRICULA WHERE FK_TGRUPO = v_grupo AND ACTIVE = TRUE) THEN
         RETURN;
     END IF;
-    RAISE EXCEPTION '% debe tener al menos un estudiante de %',
-        academico_test.fn_actividad_etiqueta(p_pk_tactividad), academico_test.fn_actividad_grupo_etiqueta(v_grupo)
+    RAISE EXCEPTION '% debe tener al menos un estudiante %',
+        academico_test.fn_actividad_etiqueta(p_pk_tactividad),
+        regexp_replace(academico_test.fn_actividad_grupo_etiqueta(v_grupo), '^el grupo', 'del grupo')
         USING ERRCODE = '22023';
 END;
 $$;

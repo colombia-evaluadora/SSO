@@ -47,6 +47,7 @@ DECLARE
     v_etq_1     VARCHAR;
     v_etq_2     VARCHAR;
     v_etq_unid  VARCHAR;
+    v_rotulo    VARCHAR;
 BEGIN
     SELECT a.TITULO, a.FK_TUNIDAD INTO v_titulo, v_unidad
       FROM academico_test.TACTIVIDAD a
@@ -70,13 +71,14 @@ BEGIN
                           AND ue.FK_TUNIDAD = v_unidad AND ue.ACTIVE = TRUE
                         WHERE ae.FK_TACTIVIDAD = p_fk_tactividad AND ae.ACTIVE = TRUE)
     THEN
-        SELECT LOWER(rc.NIVEL_1_ETIQUETA), LOWER(rc.NIVEL_2_ETIQUETA), LOWER(NULLIF(TRIM(rc.INSTRUMENTO), ''))
-          INTO v_etq_1, v_etq_2, v_etq_unid
+        SELECT LOWER(rc.NIVEL_1_ETIQUETA), LOWER(rc.NIVEL_2_ETIQUETA), LOWER(NULLIF(TRIM(rc.INSTRUMENTO), '')),
+               NULLIF(TRIM(rc.ROTULO_EJECUCION), '')
+          INTO v_etq_1, v_etq_2, v_etq_unid, v_rotulo
           FROM academico_test.TUNIDAD u
           JOIN academico_test.TREFERENTE_CURRICULAR rc ON rc.PK_REFERENTE_CURRICULAR = u.FK_REFERENTE_CURRICULAR
          WHERE u.PK_TUNIDAD = v_unidad;
-        RAISE EXCEPTION 'La actividad "%" debe tener al menos 1 % de cualquier % de su %',
-            v_titulo, COALESCE(v_etq_2, 'evidencia'), COALESCE(v_etq_1, 'enunciado'), COALESCE(v_etq_unid, 'unidad tematica')
+        RAISE EXCEPTION '% "%" debe tener al menos 1 % de cualquier % de su %',
+            COALESCE(v_rotulo, 'Actividad'), v_titulo, COALESCE(v_etq_2, 'evidencia'), COALESCE(v_etq_1, 'enunciado'), COALESCE(v_etq_unid, 'unidad tematica')
             USING ERRCODE = '22023';
     END IF;
 END;

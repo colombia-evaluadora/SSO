@@ -226,6 +226,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_eliminar(
 RETURNS TABLE (pk_tactividad BIGINT, porcentaje_libre NUMERIC, aviso VARCHAR)
 LANGUAGE plpgsql
 AS $$
+#variable_conflict use_column
 DECLARE
     v_act academico_test.TACTIVIDAD%ROWTYPE;
 BEGIN
