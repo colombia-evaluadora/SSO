@@ -1,7 +1,7 @@
--- V240 - Instrumento "Otro": tabla TACTIVIDAD_OTRO y
--- fn_actividad_instrumento_assert. fn_actividad_otro_definir vive en V469 y la
--- fachada fn_actividad_instrumento_definir en V496.3.
-
+-- V240 - Instrumento "Otro": catálogo TIPO_EVIDENCIA_OTRO y tabla
+-- TACTIVIDAD_OTRO (tipo de evidencia y método de valoración). Su definición
+-- vive hoy en V496.6 y su validación en V496.5.
+-- Depende de: V22 (TACTIVIDAD, TLISTA_VALOR).
 
 SET search_path TO academico_test, public;
 
@@ -52,63 +52,3 @@ COMMENT ON COLUMN TACTIVIDAD_OTRO.FK_TLV_TIPO_EVIDENCIA_OTRO IS 'Tipo de evidenc
 COMMENT ON COLUMN TACTIVIDAD_OTRO.FK_TLV_METODO_VALORACION IS 'Metodo de valoracion elegido para poder calificar el instrumento Otro. Llave foranea de lista valor, categoria INSTRUMENTO_EVALUACION reutilizada (solo RUBRICA | LISTA_COTEJO | ESCALA_VALORACION, nunca OTRO)';
 
 COMMENT ON TABLE TACTIVIDAD_OTRO IS 'Configuracion del instrumento de evaluacion "Otro (personalizado)" de una actividad (1:1 con TACTIVIDAD cuando INSTRUMENTO = OTRO): tipo de evidencia esperada + metodo de valoracion elegido para calificar. El detalle textual/ponderacion generica (DESCRIPCION_INSTRUMENTO, REQUIERE_ARCHIVO, REQUIERE_TEXTO, PONDERACION) vive en TACTIVIDAD (V224); la estructura del metodo de valoracion vive en TACTIVIDAD_RUBRICA_*/_COTEJO_ITEM/_ESCALA* (V226), no se duplica aqui. V240.';
-
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_instrumento_assert(
-    p_pk_tactividad   BIGINT,
-    p_valor_esperado  VARCHAR
-)
-RETURNS VOID
-LANGUAGE plpgsql
-STABLE
-AS $$
-DECLARE
-    v_active BOOLEAN;
-    v_valor  VARCHAR;
-BEGIN
-    SELECT a.ACTIVE, lv.VALOR
-      INTO v_active, v_valor
-      FROM academico_test.TACTIVIDAD a
-      LEFT JOIN academico_test.TLISTA_VALOR lv
-             ON lv.PK_LISTA_VALOR = a.FK_TLV_INSTRUMENTO_EVALUACION
-     WHERE a.PK_TACTIVIDAD = p_pk_tactividad;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'No se encontro la actividad solicitada' USING ERRCODE = 'P0002';
-    END IF;
-    IF v_active = FALSE THEN
-        RAISE EXCEPTION 'La actividad esta inactiva; no se le puede definir el instrumento' USING ERRCODE = '22023';
-    END IF;
-    IF v_valor IS NULL THEN
-        RAISE EXCEPTION 'La actividad no tiene instrumento de evaluacion definido; fijelo primero con fn_actividad_crear/_actualizar (FK_TLV_INSTRUMENTO_EVALUACION)'
-            USING ERRCODE = '22023';
-    END IF;
-
-    IF v_valor = p_valor_esperado THEN
-        RETURN;
-    END IF;
-
-    -- V240: el instrumento OTRO reutiliza rubrica/cotejo/escala como METODO
-    -- DE VALORACION (TACTIVIDAD_OTRO.FK_TLV_METODO_VALORACION, fijado por
-    -- fn_actividad_otro_definir). Se acepta como equivalente al instrumento
-    -- estructurado esperado SOLO si ya quedo configurado ese metodo.
-    IF v_valor = 'OTRO'
-       AND p_valor_esperado IN ('RUBRICA', 'LISTA_COTEJO', 'ESCALA_VALORACION')
-       AND EXISTS (
-           SELECT 1
-             FROM academico_test.TACTIVIDAD_OTRO o
-             JOIN academico_test.TLISTA_VALOR lvm ON lvm.PK_LISTA_VALOR = o.FK_TLV_METODO_VALORACION
-            WHERE o.FK_TACTIVIDAD = p_pk_tactividad
-              AND o.ACTIVE = TRUE
-              AND lvm.VALOR = p_valor_esperado
-       )
-    THEN
-        RETURN;
-    END IF;
-
-    RAISE EXCEPTION 'El instrumento de la actividad es % y no % — cambielo antes de definirlo', v_valor, p_valor_esperado
-        USING ERRCODE = '22023';
-END;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_actividad_instrumento_assert(BIGINT, VARCHAR)
-    IS 'Valida que la actividad exista, este activa y que su FK_TLV_INSTRUMENTO_EVALUACION (VALOR de TLISTA_VALOR) sea el esperado. Lanza P0002 / 22023. V240: ademas acepta como equivalente el caso instrumento OTRO con TACTIVIDAD_OTRO.FK_TLV_METODO_VALORACION ya configurado con el mismo valor esperado (RUBRICA | LISTA_COTEJO | ESCALA_VALORACION) — asi fn_actividad_rubrica_definir/_cotejo_definir/_escala_definir se pueden invocar desde fn_actividad_otro_definir sin romper. Helper de fn_actividad_*_definir. V226/V240.';

@@ -1,6 +1,8 @@
 -- V247 - Primer alta de las filas de instrumento y calificación de
--- /planeador/actividades* y sus roles. PUT :ID/instrumento lo define hoy V496.4
--- y PUT :ID/calificar-bulk/escala V484.
+-- /planeador/actividades* y sus roles. La consulta y el detail vigentes los
+-- define hoy V496.4 (PUT :ID/instrumento) y V496.8 (calificar, nota y
+-- calificaciones); estos INSERT siguen porque otras migraciones copian de
+-- ellos los roles de sus filas.
 
 
 INSERT INTO public.query
