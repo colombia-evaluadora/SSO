@@ -363,11 +363,12 @@ INSERT INTO public.query (uuid, microservice_id, path_template, http_method, typ
                           public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
 SELECT '529aba8e-501c-4749-a229-214083f2cd1a', m.id_microservice, '/planeador/unidades/actividades/:ACTIVIDADID', 'PATCH', 'postgres', 'SELECT', NULL,
        'f', 'f', 'f', '60', NULL, NULL, '{"PARAM.ACTIVIDADID": "BIGINT"}'::jsonb,
-       'V245 -- desvincula una actividad de su unidad: FK_TUNIDAD y PONDERACION quedan en NULL (fn_unidad_actividad_desvincular, V223). :ACTIVIDADID = PK_TACTIVIDAD. Si la unidad de origen calculaba por Sumatoria, recalcula el % de las actividades que quedan en ese (unidad,grupo). Retorna PK_TACTIVIDAD. Gate EDITAR sobre PLANEADOR. 404 (P0002) si la actividad no existe.',
-       'SELECT * FROM academico_test.fn_unidad_actividad_desvincular(
+       'V245 -- desvincula una actividad de su unidad: FK_TUNIDAD y PONDERACION quedan en NULL (fn_unidad_actividad_desvincular, V223). :ACTIVIDADID = PK_TACTIVIDAD. Si la unidad de origen calculaba por Sumatoria, recalcula el % de las actividades que quedan en ese (unidad,grupo). Retorna fn_unidad_actividad_desvincular (el PK, como antes) y, si la unidad pondera, porcentaje_libre y aviso (Al desvincular esta actividad, quedará un X% libre en la unidad...); no redistribuye (Regla 39). Gate EDITAR sobre PLANEADOR. 404 (P0002) si la actividad no existe.',
+       'SELECT r.pk_tactividad AS fn_unidad_actividad_desvincular, r.porcentaje_libre, r.aviso
+  FROM academico_test.fn_unidad_actividad_desvincular(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.ACTIVIDADID AS BIGINT)
-);'
+) r;'
   FROM public.microservice m WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
    SET type = EXCLUDED.type, execution_mode = EXCLUDED.execution_mode, out_param_names = EXCLUDED.out_param_names,

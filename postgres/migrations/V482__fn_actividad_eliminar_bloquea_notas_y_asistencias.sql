@@ -1,61 +1,9 @@
--- ===========================================================================
--- V482 — Borrar una actividad no puede llevarse notas ni asistencias.
--- El bloqueo solo miraba TACTIVIDAD_NOTA.CALIFICACION: dejaba borrar una
--- actividad con nota solo en DEFINITIVA, con observaciones formativas
--- (CALIFICABLE='N'), con capturas de rúbrica/cotejo/escala o con
--- asistencias tomadas por actividad (TASISTENCIA.FK_TACTIVIDAD, preescolar).
--- Cada bloqueo es un validador propio; fn_actividad_eliminar queda como
--- wrapper (existencia → estado → gate → dependencias) sobre un núcleo
--- _interno que hace la cascada.
--- Depende de: V220 (TASISTENCIA.FK_TACTIVIDAD), V224 (versión previa),
--- V226/V227 (capturas), V408 (fn_actividad_recuperacion_revertir).
--- ===========================================================================
+-- V482 - Eliminar actividad: bloqueos por asistencias y recuperaciones, el
+-- compuesto fn_actividad_validar_eliminable y el núcleo fn_actividad_eliminar_interno.
+-- El bloqueo por resultados y el wrapper viven hoy en V496.1/V496.3.
+
 
 SET search_path TO academico_test, public;
-
--- ---------------------------------------------------------------------------
--- 1. Validadores: lanzan 23503 o no hacen nada.
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_sin_notas(
-    p_pk_tactividad BIGINT
-)
-RETURNS VOID
-LANGUAGE plpgsql
-STABLE
-AS $$
-DECLARE
-    v_estudiantes BIGINT;
-BEGIN
-    -- Cuenta como tomada la misma nota que cuenta como "evaluado" en el
-    -- progreso de la actividad, más cualquier captura de instrumento: una
-    -- rúbrica llena sin nota consolidada también es trabajo del docente.
-    SELECT COUNT(DISTINCT ae.PK_TACTIVIDAD_ESTUDIANTE) INTO v_estudiantes
-      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
-     WHERE ae.FK_TACTIVIDAD = p_pk_tactividad
-       AND ae.ACTIVE = TRUE
-       AND (EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_NOTA n
-                     WHERE n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
-                       AND n.ACTIVE = TRUE
-                       AND (COALESCE(n.DEFINITIVA, n.CALIFICACION) IS NOT NULL
-                            OR NULLIF(TRIM(n.OBSERVACION), '') IS NOT NULL))
-         OR EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_RUBRICA_EVALUACION re
-                     WHERE re.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE AND re.ACTIVE = TRUE)
-         OR EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_COTEJO_EVALUACION ce
-                     WHERE ce.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE AND ce.ACTIVE = TRUE)
-         OR EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_ESCALA_EVALUACION ee
-                     WHERE ee.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE AND ee.ACTIVE = TRUE));
-
-    IF v_estudiantes > 0 THEN
-        RAISE EXCEPTION 'La actividad "%" ya tiene notas u observaciones registradas para % estudiante(s); no se puede eliminar',
-            (SELECT TITULO FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad), v_estudiantes
-            USING ERRCODE = '23503',
-                  HINT = 'Anule las calificaciones y observaciones de los estudiantes antes de eliminar la actividad';
-    END IF;
-END;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_actividad_validar_sin_notas(BIGINT)
-    IS 'INTERNO: 23503 si algún estudiante activo de la actividad tiene nota (DEFINITIVA o CALIFICACION), observación, o captura de rúbrica / lista de cotejo / escala activa. Lo usa fn_actividad_eliminar.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_sin_asistencias(
     p_pk_tactividad BIGINT
@@ -113,8 +61,6 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_actividad_validar_sin_recuperaciones(BIGINT)
     IS 'INTERNO: 23503 si otra actividad de recuperación activa recupera a esta (TACTIVIDAD_RECUPERACION.FK_TACTIVIDAD_RECUPERAR). Lo usa fn_actividad_eliminar.';
 
--- Punto único de extensión: una regla nueva de "no se puede borrar" es un
--- validador más aquí, sin tocar el wrapper.
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_eliminable(
     p_pk_tactividad BIGINT
 )
@@ -132,12 +78,9 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_actividad_validar_eliminable(BIGINT)
     IS 'INTERNO: todas las dependencias que impiden borrar una actividad (23503): notas/observaciones/capturas, asistencias, recuperaciones activas. Para agregar una regla, se crea su fn_actividad_validar_<regla> y se invoca aquí. Lo usa fn_actividad_eliminar.';
 
--- ---------------------------------------------------------------------------
--- 2. Núcleo: la cascada, sin gate ni validaciones.
--- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_eliminar_interno(
     p_pk_tactividad BIGINT,
-    -- Solo para auditoría (MODIFIED_BY) y para revertir la recuperación.
+    
     p_pk_usuario    BIGINT
 )
 RETURNS BIGINT
@@ -261,42 +204,3 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_eliminar_interno(BIGINT, BIGINT)
     IS 'INTERNO: soft delete en cascada de una TACTIVIDAD y todos sus satélites activos (capturas, notas, soportes, adaptaciones, estudiantes, definición del instrumento, materiales, recuperación revertida, evidencias, criterios de unidad); la suelta de su unidad y recalcula la Sumatoria del bucket. No valida permisos ni dependencias: eso es de fn_actividad_eliminar. p_pk_usuario solo para auditoría.';
-
--- ---------------------------------------------------------------------------
--- 3. Wrapper: existencia → estado → gate → dependencias → núcleo.
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_eliminar(
-    p_pk_usuario_solicitante   BIGINT,
-    p_pk_tactividad            BIGINT
-)
-RETURNS BIGINT
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_active BOOLEAN;
-    v_titulo VARCHAR;
-BEGIN
-    SELECT ACTIVE, TITULO INTO v_active, v_titulo
-      FROM academico_test.TACTIVIDAD
-     WHERE PK_TACTIVIDAD = p_pk_tactividad;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'No se encontro la actividad solicitada' USING ERRCODE = 'P0002';
-    END IF;
-
-    IF v_active = FALSE THEN
-        RAISE EXCEPTION 'La actividad "%" ya se encuentra inactiva', v_titulo USING ERRCODE = '22023';
-    END IF;
-
-    PERFORM academico_test.fn_planeador_assert_alcance(
-        p_pk_usuario_solicitante, 'ELIMINAR', NULL, NULL, NULL, p_pk_tactividad
-    );
-
-    -- Después del gate: a quien no puede borrar no se le cuenta qué hay dentro.
-    PERFORM academico_test.fn_actividad_validar_eliminable(p_pk_tactividad);
-
-    RETURN academico_test.fn_actividad_eliminar_interno(p_pk_tactividad, p_pk_usuario_solicitante);
-END;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_actividad_eliminar(BIGINT, BIGINT)
-    IS 'DELETE /planeador/actividades/:ID: P0002 si no existe, 22023 si ya está inactiva, gate ELIMINAR con alcance sobre la actividad (fn_planeador_assert_alcance), y 23503 si alguna dependencia lo impide (fn_actividad_validar_eliminable: notas u observaciones o capturas de instrumento, asistencias tomadas, recuperación activa que la recupera). Luego delega en fn_actividad_eliminar_interno. Retorna PK_TACTIVIDAD.';

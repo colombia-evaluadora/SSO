@@ -804,7 +804,9 @@ BEGIN
             p_observaciones_docente           := v_act->>'observaciones',
             p_materiales                      := v_materiales,
             p_adaptaciones                    := v_adapt,
-            p_fk_tmatriculas                  := v_matriculas);
+            p_fk_tmatriculas                  := v_matriculas,
+            -- La plantilla no trae evidencias ni pesos: se completan al editar.
+            p_exigir_minimos                  := FALSE);
 
         -- ---- el instrumento, delegando en la funcion de cada uno ----
         IF v_instr_val = 'RUBRICA' THEN

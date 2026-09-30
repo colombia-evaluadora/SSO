@@ -1,124 +1,9 @@
--- ===========================================================================
--- V246 — Planeador educativo: registro en public.query (motor SSO /
--- query-service) de los endpoints del dominio ACTIVIDAD (CU-86e311xxp,
--- LOTE 2 de la tanda de endpoints del Planeador).
---
--- Este archivo NO crea funciones nuevas: las funciones ya existen y estan
--- validadas en esta rama (V224, V214.2, V223, V244, V243, V214.1). Solo registra
--- las filas public.query (+ role_query) para exponerlas via el gateway como
--- api/eval-col/... . El LOTE 1 (V245, dominio UNIDAD) y el lote de
--- INSTRUMENTOS (V226/V240/V241, en paralelo) registran sus propios
--- endpoints por separado -- NO se duplican aqui ni se expone nada de
--- instrumentos (rubrica/cotejo/escala).
---
--- microservice_id se resuelve por serviceid='eval-col' (mismo microservicio
--- que sirve el resto del modulo academico -- V51/V64/V149/V185/V198/V199/V245).
---
--- p_pk_usuario_solicitante SIEMPRE se resuelve de :CONTEXT.USER_ID via
--- public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT) -- igual que
--- V149/V167/V168/V185/V198/V199/V245 -- nunca se expone como parametro
--- editable por el cliente.
---
--- AUTORIZACION
---   El gate real (capability CREAR/VER/EDITAR/ELIMINAR sobre la seccion
---   PLANEADOR, TROL_MENU + TUSUARIO_ROL_PERMISO) lo hace cada funcion via
---   fn_assert_permiso_seccion (V29/V185/V213/V216). role_query aqui NO
---   sustituye ese gate, solo decide que ROLES DE public.role pueden llamar
---   al endpoint por el gateway -- role_query NO tiene bypass de admin
---   (a diferencia de otras rutas, aqui no hay atajo para SSO-ADMIN/ADMIN
---   salvo que el rol este explicitamente listado).
---
---   Mismo criterio ya aplicado (y funcionando) en V245/V214: en este
---   Postgres local de Docker solo existe el rol 'CEVAL-SUPER_ADMINISTRADOR'
---   sincronizado a public.role (el catalogo real de TROL -- DOCENTE, RECTOR,
---   etc -- no esta sembrado en las migraciones, ver nota "TROL: el catalogo
---   de roles no esta en las migraciones" en memoria del proyecto). Cuando el
---   ambiente real tenga el rol de DOCENTE sincronizado, agregar esa fila a
---   role_query es un cambio de una linea (INSERT posterior a
---   public.role_query, no requiere tocar esta migracion).
---
--- CAVEAT DE RECARGA (dejar constancia, igual que V149/V167/V185/V198/V199/V245):
---   Las filas nuevas en public.query dan 404 por el gateway hasta que el
---   contenedor query-service-eval-col se reinicia. No aplica a esta
---   validacion SQL (fuera de alcance segun el enunciado de la tarea).
---
--- CONVENCIONES DE PARAMETROS (V32/V49, igual que V245):
---   :PARAM.<VAR>   -> variable de la ruta (path_template ...:VAR...).
---   :QUERY.<VAR>   -> filtro por query-string (?var=...); QUERY.SIZE/
---                     QUERY.OFFSET son system-bound (paginacion), el resto
---                     de nombres de QUERY.* SI necesita entrada en
---                     param_types.
---   :BODY.<VAR>    -> campo del body JSON.
---   :CONTEXT.*     -> system-bound (JWT verificado), nunca en param_types.
---
--- execution_mode = 'SELECT' en TODAS las filas (incluidas las de escritura):
---   "SELECT * FROM fn_x(...)" sigue siendo una sentencia SELECT aunque fn_x
---   escriba por dentro -- mismo patron que V64/V149/V185/V198/V199/V245.
---
--- DELETE -> PATCH: el CHECK ck_query_http_method de public.query solo admite
--- {GET,POST,PUT,PATCH} -- no existe DELETE en este catalogo. Los borrados
--- logicos / desvinculaciones de este lote (eliminar actividad, quitar
--- evidencia, quitar criterio) se registran como PATCH, mismo criterio ya
--- documentado en V149/V245.
---
--- NOMENCLATURA DE RUTAS (decision de este lote):
---   * /planeador/actividades                              (coleccion)
---   * /planeador/actividades/:ID                           (recurso, PK_TACTIVIDAD)
---   * /planeador/actividades/:ID/configuracion              (GET, secciones
---     dinamicas -- ver punto 6 mas abajo, el mas importante del pedido)
---   * /planeador/actividades/huerfanas                      (GET, sin unidad)
---   * /planeador/unidades/:ID/actividades-disponibles       (GET, candidatas
---     a vincularse a ESA unidad -- vive bajo /unidades porque el parametro de
---     ruta es PK_TUNIDAD, no PK_TACTIVIDAD; distinto de
---     /planeador/unidades/:ID/actividades de V245, que lista las YA
---     vinculadas)
---   * /planeador/actividades/:ID/materiales-reutilizables   (GET, picker)
---   * /planeador/actividades/:ID/materiales                 (PUT, reemplazo)
---   * /planeador/actividades/:ID/adaptaciones               (PUT, reemplazo)
---   * /planeador/actividades/:ID/observar-grupal            (POST, preescolar)
---   * /planeador/actividades/estudiantes/:ID/observar       (PUT, :ID =
---     PK_TACTIVIDAD_ESTUDIANTE, no PK_TACTIVIDAD -- ver punto 13)
---   * /planeador/actividades/:ID/evidencias                 (POST)
---   * /planeador/actividades/evidencias/:ID                 (PATCH, :ID =
---     PK_TACTIVIDAD_EVIDENCIA)
---   * /planeador/actividades/:ID/criterios                  (POST)
---   * /planeador/actividades/criterios/:ID                  (PATCH, :ID =
---     PK_TACTIVIDAD_CRITERIO_UNIDAD)
---
--- DECISIONES DE ALCANCE (documentadas, no son olvidos):
---   * fn_actividad_es_formativa NO se expone standalone: es un helper
---     booleano puro (BOOLEAN, sin gate VER propio, ver su propio COMMENT en
---     V243) consumido internamente por fn_actividad_nota_calificar y
---     fn_actividad_observar_grupal/_estudiante para decidir la rama de
---     negocio; el front ya recibe la senal equivalente (mas rica: visible/
---     requerido/motivo) via el bloque "evaluacion" de
---     fn_actividad_campos_disponibles (punto 6) y via los propios mensajes
---     22023 de calificar/observar cuando la rama no aplica. Exponerlo aparte
---     duplicaria una fuente de verdad sin aportar informacion nueva al
---     cliente.
---   * fn_actividad_estudiantes_asignar y fn_actividad_recuperacion_configurar
---     NO se exponen standalone: son helpers de fn_actividad_crear/_actualizar
---     (llamados desde adentro con los parametros p_fk_tmatriculas/
---     p_asignar_todo_el_grupo y p_recuperacion/p_quitar_recuperacion, puntos
---     1 y 2 de este archivo) -- exponerlos aparte permitiria escribir esas
---     tablas saltandose la validacion de coherencia que crear/actualizar ya
---     hacen sobre el resto de la actividad (p.ej. p_recuperacion exige
---     ES_EVALUATIVA='S' evaluado sobre el estado RESULTANTE completo).
---   * fn_actividad_resumen_estados y fn_actividad_calendario (V224, tarjetas
---     del tablero y grilla mensual) y fn_actividad_lv_assert / fn_actividad_estado
---     (helpers puros) quedan FUERA DE ALCANCE de este lote -- no estan en la
---     lista de funciones a registrar del enunciado; se registran en un lote
---     posterior si se confirma la pantalla de tablero/calendario.
---
--- Depende de (orden de version de Flyway): V224 (CRUD + helpers de
--- actividad), V214.2 (campos dinamicos / configuracion), V223 (disponibles por
--- unidad), V244 (huerfanas), V243 (observar preescolar), V214.1 (evidencias /
--- criterios de unidad).
--- ===========================================================================
+-- V246 - Primer alta de las filas de public.query de /planeador/actividades*
+-- y sus roles. Las filas de escritura las define hoy V496.4 (upsert); estos
+-- INSERT se conservan porque V404, V421 y V471 copian de ellos los roles
+-- de sus propias filas al migrar.
 
--- ===========================================================================
--- 1. POST /planeador/actividades — fn_actividad_crear (V224).
--- ===========================================================================
+
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -178,10 +63,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'POST'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- 2. PUT /planeador/actividades/:ID — fn_actividad_actualizar (V224, PATCH
---    parcial).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -243,43 +124,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
 
--- La fila del PUT se inserta con ON CONFLICT DO NOTHING: donde ya existe,
--- editar el INSERT no la actualiza. Se reconcilian query / param_types /
--- detail aparte, con guarda para que reaplicar la migracion sea un no-op.
-UPDATE public.query q
-   SET query = replace(
-                 q.query,
-                 E'COALESCE(CAST(:BODY.QUITAR_RECUPERACION AS BOOLEAN), FALSE)
-);',
-                 E'COALESCE(CAST(:BODY.QUITAR_RECUPERACION AS BOOLEAN), FALSE),
-    CAST(:BODY.EVIDENCIAS AS BIGINT[]),
-    CAST(:BODY.CRITERIOS AS BIGINT[])
-);'
-               ),
-       param_types = COALESCE(q.param_types, '{}'::jsonb)
-                     || '{"BODY.EVIDENCIAS": "BIGINT[]", "BODY.CRITERIOS": "BIGINT[]"}'::jsonb
-  FROM public.microservice m
- WHERE m.id_microservice = q.microservice_id
-   AND m.serviceid       = 'eval-col'
-   AND q.path_template   = '/planeador/actividades/:ID'
-   AND q.http_method     = 'PUT'
-   AND q.query LIKE '%fn_actividad_actualizar(%'
-   AND q.query NOT LIKE '%:BODY.EVIDENCIAS%';
-
-UPDATE public.query q
-   SET detail = 'V246 -- PATCH parcial de una actividad (fn_actividad_actualizar, V224). :ID = PK_TACTIVIDAD. Cada campo ausente/NULL preserva el valor actual; MATERIALES/ADAPTACIONES/FK_TMATRICULAS: NULL = no tocar, array (incl. vacio) = reemplazo completo. EVIDENCIAS (PKs de TREFERENTE_ENUNCIADO nivel 2) y CRITERIOS (PKs de TCRITERIO_UNIDAD) siguen el mismo contrato: NULL = no tocar, array (incl. vacio) = el set queda exactamente ese (se desactivan las relaciones que ya no vienen y el resto se relaciona/reactiva con fn_actividad_evidencia_relacionar / fn_actividad_criterio_relacionar, V214.1; agregar exige que la actividad tenga unidad). Los pk de esas relaciones se leen en GET /planeador/actividades/:ID (columnas evidencias y criterios). DESVINCULAR_UNIDAD=true es excluyente con FK_TUNIDAD/PONDERACION (unidad/ponderacion se delegan en fn_unidad_actividad_vincular/_ponderacion_set/_desvincular, V223, mismo punto unico de la regla del 100%). QUITAR_RECUPERACION=true es excluyente con RECUPERACION. Revalida fechas, catalogos, unicidad (titulo, unidad, grupo, jerarquia) y las condiciones dinamicas de evaluacion/ponderacion contra los valores RESULTANTES del PATCH (ver campos_disponibles del punto 6). Gate EDITAR sobre PLANEADOR. 404 (P0002) si la actividad no existe; 22023 si esta inactiva.'
-  FROM public.microservice m
- WHERE m.id_microservice = q.microservice_id
-   AND m.serviceid       = 'eval-col'
-   AND q.path_template   = '/planeador/actividades/:ID'
-   AND q.http_method     = 'PUT'
-   AND q.detail IS DISTINCT FROM 'V246 -- PATCH parcial de una actividad (fn_actividad_actualizar, V224). :ID = PK_TACTIVIDAD. Cada campo ausente/NULL preserva el valor actual; MATERIALES/ADAPTACIONES/FK_TMATRICULAS: NULL = no tocar, array (incl. vacio) = reemplazo completo. EVIDENCIAS (PKs de TREFERENTE_ENUNCIADO nivel 2) y CRITERIOS (PKs de TCRITERIO_UNIDAD) siguen el mismo contrato: NULL = no tocar, array (incl. vacio) = el set queda exactamente ese (se desactivan las relaciones que ya no vienen y el resto se relaciona/reactiva con fn_actividad_evidencia_relacionar / fn_actividad_criterio_relacionar, V214.1; agregar exige que la actividad tenga unidad). Los pk de esas relaciones se leen en GET /planeador/actividades/:ID (columnas evidencias y criterios). DESVINCULAR_UNIDAD=true es excluyente con FK_TUNIDAD/PONDERACION (unidad/ponderacion se delegan en fn_unidad_actividad_vincular/_ponderacion_set/_desvincular, V223, mismo punto unico de la regla del 100%). QUITAR_RECUPERACION=true es excluyente con RECUPERACION. Revalida fechas, catalogos, unicidad (titulo, unidad, grupo, jerarquia) y las condiciones dinamicas de evaluacion/ponderacion contra los valores RESULTANTES del PATCH (ver campos_disponibles del punto 6). Gate EDITAR sobre PLANEADOR. 404 (P0002) si la actividad no existe; 22023 si esta inactiva.';
-
--- ===========================================================================
--- 3. PATCH /planeador/actividades/:ID — fn_actividad_eliminar (V224, soft
---    delete en cascada; bloquea si tiene notas registradas o es recuperada
---    por otra actividad activa). DELETE -> PATCH: ver nota de cabecera.
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -306,10 +150,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PATCH'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- 4. GET /planeador/actividades/:ID — fn_actividad_buscar_por_pk (V224,
---    detalle completo).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -337,10 +177,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- 5. GET /planeador/actividades — fn_actividad_listar (V224, paginado +
---    filtros; buscador unico nombre/nivel/instrumento).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -383,41 +219,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- 6. GET /planeador/actividades/:ID/configuracion — "visualizacion construida
---    por endpoint" / secciones dinamicas del formulario de actividad
---    (fn_actividad_campos_disponibles + fn_actividad_unidad_configuracion,
---    V214.2). ESTE ES EL ENDPOINT MAS IMPORTANTE DEL PEDIDO ORIGINAL: le dice
---    al front, para ESTA actividad puntual, que secciones/campos del
---    formulario mostrar habilitados/deshabilitados y POR QUE.
---
---    campos_disponibles = {
---      criterio:   {visible, requerido, motivo}                       -- la
---        seccion "Relacionar con criterio de rubrica" se OCULTA solo si el
---        nivel de ensenanza del grado de la unidad es Preescolar; en
---        cualquier otro nivel es visible y OPCIONAL (nunca requerida).
---      evaluacion: {visible, requerido, motivo, instrumentosPermitidos}  --
---        la seccion "Evaluacion" (instrumento, ponderacion, etc.) se
---        muestra y se EXIGE solo si la actividad tiene unidad y el
---        referente curricular de esa unidad es EVALUATIVO;
---        instrumentosPermitidos ya viene FILTRADO por el TIPO_EVALUACION
---        del referente (CUALITATIVA -> Rubrica/Lista de cotejo;
---        CUANTITATIVA -> Escala de valoracion; CUANTITATIVA_CUALITATIVA o
---        sin tipo -> los 4; Otro siempre disponible).
---      ponderacion: {visible, requerido, modo, motivo, autocalculado?,
---        campo?} -- el campo "Ponderacion (%)" se oculta si la actividad no
---        tiene unidad o no es evaluativa; si aplica, el METODO DE CALCULO
---        de la unidad (Ponderar/Sumatoria/Promediar, V73) decide si se
---        captura el % a mano (modo PORCENTAJE, campo PONDERACION) o el
---        puntaje (modo PUNTAJE, campo NOTA_MAXIMA, autocalculado=true --
---        el sistema calcula el % solo).
---    }
---    unidad_configuracion = snapshot de la unidad relacionada (objetivos,
---      contenidos, referente curricular, rubrica con criterios/niveles,
---      enunciados/evidencias) o {tieneUnidad:false} si la actividad no
---      tiene unidad -- para pintar de un tiro todo lo heredado sin otro
---      round-trip a /planeador/unidades/:ID.
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -448,10 +249,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- 7. GET /planeador/actividades/huerfanas — fn_actividad_huerfanas_listar
---    (V244, actividades sin unidad).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -484,17 +281,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- 8. GET /planeador/unidades/:ID/actividades-disponibles —
---    fn_actividad_disponibles_listar (V223; candidatas a vincularse a ESA
---    unidad; :ID = PK_TUNIDAD, distinto de .../:ID/actividades de V245 que
---    lista las YA vinculadas).
--- ===========================================================================
-
--- ===========================================================================
--- 9. GET /planeador/actividades/:ID/materiales-reutilizables —
---    fn_actividad_materiales_reutilizables_listar (V224, picker de reuso).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -526,10 +312,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- 10. PUT /planeador/actividades/:ID/materiales — fn_actividad_material_reemplazar
---     (V224, reemplazo completo de materiales de apoyo).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -557,11 +339,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- 11. PUT /planeador/actividades/:ID/adaptaciones —
---     fn_actividad_adaptacion_reemplazar (V224, reemplazo completo de
---     adaptaciones curriculares).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -589,10 +366,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- 12. POST /planeador/actividades/:ID/observar-grupal —
---     fn_actividad_observar_grupal (V243, preescolar/formativo).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -622,13 +395,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'POST'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- 13. PUT /planeador/actividades/estudiantes/:ID/observar —
---     fn_actividad_observar_estudiante (V243; :ID = PK_TACTIVIDAD_ESTUDIANTE,
---     NO PK_TACTIVIDAD -- de ahi el segmento /estudiantes/ antes del :ID,
---     mismo criterio de desambiguacion de :ID que
---     /planeador/unidades/criterios/:ID de V245).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -658,10 +424,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- 14. POST /planeador/actividades/:ID/evidencias —
---     fn_actividad_evidencia_relacionar (V214.1).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -689,10 +451,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'POST'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- 15. PATCH /planeador/actividades/evidencias/:ID —
---     fn_actividad_evidencia_quitar (V214.1; :ID = PK_TACTIVIDAD_EVIDENCIA).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -719,10 +477,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PATCH'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- 16. POST /planeador/actividades/:ID/criterios —
---     fn_actividad_criterio_relacionar (V214.1).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -750,10 +504,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'POST'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- 17. PATCH /planeador/actividades/criterios/:ID —
---     fn_actividad_criterio_quitar (V214.1; :ID = PK_TACTIVIDAD_CRITERIO_UNIDAD).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -780,11 +530,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PATCH'
 ON CONFLICT DO NOTHING;
 
--- ===========================================================================
--- Las dos filas de observar ya existen en las bases desplegadas y los INSERT
--- de arriba son ON CONFLICT DO NOTHING: no habrian anadido BODY.EVIDENCIAS.
--- Se reconcilian aparte (patron V253/V279). No-op al reaplicar.
--- ===========================================================================
 UPDATE public.query q
    SET query       = replace(q.query,
                              'COALESCE(CAST(:BODY.FECHA AS DATE), CURRENT_DATE)' || chr(10) || ')',
