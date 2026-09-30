@@ -1,4 +1,10 @@
--- Grado/Grupo — funciones consolidadas (última versión)
+-- ===========================================================================
+-- V43 - Modulo de grados y grupos: CRUD de TGRADO, borrado/listado/obtener de
+-- TGRUPO, niveles de ensenanza y configuracion de grado.
+-- fn_grupo_crear/fn_grupo_actualizar viven en V285; fn_grado_grupo_reporte_listar en V187.
+-- ===========================================================================
+
+
 SET search_path TO academico_test, public;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_grado_crear(
@@ -355,8 +361,6 @@ BEGIN
 END;
 $$;
 
-DROP FUNCTION IF EXISTS academico_test.fn_grado_listar(BIGINT, TEXT, INT, INT);
-DROP FUNCTION IF EXISTS academico_test.fn_grado_listar(BIGINT, TEXT, INT, INT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_grado_listar(BIGINT, TEXT, INT, INT, BIGINT, TEXT, TEXT);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_grado_listar(
@@ -378,8 +382,8 @@ RETURNS TABLE (
     grado_siguiente_name VARCHAR,
     tiene_grado_siguiente BOOLEAN,
     total_count BIGINT,
-    -- Aditivo al final: el select de Grado del alta de matricula necesita el codigo
-    -- numerico para pasarlo a fn_matricula_listar(p_grade), que filtra por g.CODIGO::INT.
+    
+    
     codigo INT
 )
 LANGUAGE plpgsql STABLE AS $$
@@ -458,8 +462,8 @@ LANGUAGE sql STABLE AS $$
        AND academico_test.fn_periodo_puede_ver(p_pk_usuario, g.FK_TPERIODO_ACADEMICO);
 $$;
 
--- Cada id se procesa en su propio bloque BEGIN/EXCEPTION: un fallo no revierte al resto.
 DROP FUNCTION IF EXISTS academico_test.fn_grado_bulk_delete(BIGINT[], BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_grado_bulk_delete(
     p_ids BIGINT[], p_pk_usuario_solicitante BIGINT
 )
@@ -482,195 +486,6 @@ BEGIN
         END;
     END LOOP;
     RETURN;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION academico_test.fn_grupo_crear(
-    p_fk_grado BIGINT,
-    p_nombre VARCHAR,
-    p_fk_modelo_pedagogico BIGINT,
-    p_capacidad NUMERIC,
-    p_fk_funcionario BIGINT DEFAULT NULL,
-    p_pk_usuario_solicitante BIGINT DEFAULT NULL
-)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE
-    v_id BIGINT; v_jornada BIGINT; v_sede BIGINT; v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-    v_tmp_nombre VARCHAR(130); v_nombre_director VARCHAR(200);
-    v_nombre_sede VARCHAR(130);
-    v_periodo_id BIGINT;
-BEGIN
-    -- Se resuelven antes del gate porque el scope por sede+jornada los necesita.
-    SELECT pa.PK_TPERIODO_ACADEMICO, pa.FK_TLV_JORNADA, pa.FK_TSEDE
-      INTO v_periodo_id, v_jornada, v_sede
-      FROM academico_test.TGRADO g JOIN academico_test.TPERIODO_ACADEMICO pa
-        ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
-     WHERE g.PK_TGRADO = p_fk_grado AND g.ACTIVE = TRUE;
-    PERFORM academico_test.fn_periodo_gate_escritura(
-        p_pk_usuario_solicitante,
-        academico_test.fn_periodo_establecimiento(v_periodo_id),
-        v_sede, v_jornada, 'CREAR');
-
-    -- Nombre de sede para la etiqueta de auditoria (el EE ya viaja aparte como contexto de fn_audit_declarar).
-    SELECT s.NOMBRE INTO v_nombre_sede FROM academico_test.TSEDE s WHERE s.PK_TSEDE = v_sede;
-    IF p_fk_grado IS NULL OR NULLIF(TRIM(p_nombre),'') IS NULL OR p_fk_modelo_pedagogico IS NULL
-       OR p_capacidad IS NULL THEN
-        RAISE EXCEPTION 'Faltan campos obligatorios del grupo' USING ERRCODE = '22023';
-    END IF;
-    IF p_capacidad <= 0 THEN
-        RAISE EXCEPTION 'La capacidad del grupo debe ser mayor a 0' USING ERRCODE = '22023';
-    END IF;
-    IF v_jornada IS NULL THEN
-        SELECT NOMBRE INTO v_tmp_nombre FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_grado;
-        IF v_tmp_nombre IS NOT NULL THEN
-            RAISE EXCEPTION 'El grado "%" existe pero esta inactivo', v_tmp_nombre USING ERRCODE = '23503';
-        ELSE
-            RAISE EXCEPTION 'El grado seleccionado no existe' USING ERRCODE = '23503';
-        END IF;
-    END IF;
-    IF p_fk_funcionario IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM academico_test.TFUNCIONARIO WHERE PK_TFUNCIONARIO = p_fk_funcionario AND ACTIVE = TRUE
-    ) THEN
-        SELECT TRIM(u.PRIMER_NOMBRE || ' ' || u.PRIMER_APELLIDO) INTO v_tmp_nombre
-          FROM academico_test.TFUNCIONARIO f JOIN academico_test.TUSUARIO u ON u.PK_TUSUARIO = f.FK_TUSUARIO
-         WHERE f.PK_TFUNCIONARIO = p_fk_funcionario;
-        IF v_tmp_nombre IS NOT NULL THEN
-            RAISE EXCEPTION 'El director "%" existe pero no esta habilitado', v_tmp_nombre USING ERRCODE = '23503';
-        ELSE
-            RAISE EXCEPTION 'El director seleccionado no existe' USING ERRCODE = '23503';
-        END IF;
-    END IF;
-    IF p_fk_funcionario IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f.FK_TUSUARIO
-         WHERE f.PK_TFUNCIONARIO = p_fk_funcionario
-           AND su.FK_TSEDE = v_sede AND su.ACTIVE = TRUE AND su.TLV_ESTADO = 'ACTIVO'
-    ) THEN
-        SELECT TRIM(u.PRIMER_NOMBRE || ' ' || u.PRIMER_APELLIDO) INTO v_nombre_director
-          FROM academico_test.TFUNCIONARIO f JOIN academico_test.TUSUARIO u ON u.PK_TUSUARIO = f.FK_TUSUARIO
-         WHERE f.PK_TFUNCIONARIO = p_fk_funcionario;
-        RAISE EXCEPTION 'El director "%" no pertenece a la sede de este grado', v_nombre_director
-            USING ERRCODE = '23503';
-    END IF;
-    IF EXISTS (
-        SELECT 1 FROM academico_test.TGRUPO
-         WHERE FK_TGRADO = p_fk_grado AND FK_TLV_JORNADA = v_jornada AND ACTIVE = TRUE
-           AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(p_nombre))
-    ) THEN
-        RAISE EXCEPTION 'Ya existe un grupo con el nombre % en este grado y jornada', p_nombre USING ERRCODE = '23505';
-    END IF;
-    PERFORM academico_test.fn_audit_declarar(
-        p_pk_usuario_solicitante,
-        format('Creación del grupo %s en la sede %s', p_nombre, v_nombre_sede),
-        academico_test.fn_periodo_establecimiento((
-            SELECT FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_grado))
-    );
-
-    INSERT INTO academico_test.TGRUPO
-        (NOMBRE, FK_TGRADO, FK_TLV_JORNADA, FK_TLV_MODELO_PEDAGOGICO, CAPACIDAD, FK_TFUNCIONARIO, CREATED_BY)
-    VALUES (p_nombre, p_fk_grado, v_jornada, p_fk_modelo_pedagogico, p_capacidad, p_fk_funcionario, v_audit)
-    RETURNING PK_TGRUPO INTO v_id;
-    RETURN v_id;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION academico_test.fn_grupo_actualizar(
-    p_pk BIGINT,
-    p_nombre VARCHAR DEFAULT NULL,
-    p_fk_modelo_pedagogico BIGINT DEFAULT NULL,
-    p_capacidad NUMERIC DEFAULT NULL,
-    p_fk_funcionario BIGINT DEFAULT NULL,
-    p_pk_usuario_solicitante BIGINT DEFAULT NULL
-)
-RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE
-    r academico_test.TGRUPO; v_nombre VARCHAR(130);
-    v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
-    v_tmp_nombre VARCHAR(130); v_nombre_director VARCHAR(200);
-    v_nombre_sede VARCHAR(130);
-    v_periodo_id BIGINT; v_jornada_grupo BIGINT;
-BEGIN
-    -- La jornada propia del grupo es la autoritativa para el gate, no la del periodo.
-    SELECT g.FK_TPERIODO_ACADEMICO, gr.FK_TLV_JORNADA
-      INTO v_periodo_id, v_jornada_grupo
-      FROM academico_test.TGRUPO gr JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
-     WHERE gr.PK_TGRUPO = p_pk;
-    PERFORM academico_test.fn_periodo_gate_escritura(
-        p_pk_usuario_solicitante,
-        academico_test.fn_periodo_establecimiento(v_periodo_id),
-        academico_test.fn_periodo_sede(v_periodo_id),
-        v_jornada_grupo, 'EDITAR');
-
-    -- Nombre de sede para la etiqueta de auditoria (el EE ya viaja aparte como contexto de fn_audit_declarar).
-    SELECT s.NOMBRE INTO v_nombre_sede
-      FROM academico_test.TSEDE s
-     WHERE s.PK_TSEDE = academico_test.fn_periodo_sede(v_periodo_id);
-
-    SELECT * INTO r FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_pk AND ACTIVE = TRUE;
-    IF NOT FOUND THEN
-        SELECT NOMBRE INTO v_tmp_nombre FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_pk;
-        IF v_tmp_nombre IS NOT NULL THEN
-            RAISE EXCEPTION 'El grupo "%" existe pero esta inactivo', v_tmp_nombre USING ERRCODE = 'P0002';
-        ELSE
-            RAISE EXCEPTION 'El grupo seleccionado no existe' USING ERRCODE = 'P0002';
-        END IF;
-    END IF;
-    IF p_nombre IS NOT NULL AND NULLIF(TRIM(p_nombre),'') IS NULL THEN
-        RAISE EXCEPTION 'El nombre del grupo no puede ser vacio' USING ERRCODE = '22023';
-    END IF;
-    IF p_fk_funcionario IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM academico_test.TFUNCIONARIO WHERE PK_TFUNCIONARIO = p_fk_funcionario AND ACTIVE = TRUE
-    ) THEN
-        SELECT TRIM(u.PRIMER_NOMBRE || ' ' || u.PRIMER_APELLIDO) INTO v_tmp_nombre
-          FROM academico_test.TFUNCIONARIO f JOIN academico_test.TUSUARIO u ON u.PK_TUSUARIO = f.FK_TUSUARIO
-         WHERE f.PK_TFUNCIONARIO = p_fk_funcionario;
-        IF v_tmp_nombre IS NOT NULL THEN
-            RAISE EXCEPTION 'El director "%" existe pero no esta habilitado', v_tmp_nombre USING ERRCODE = '23503';
-        ELSE
-            RAISE EXCEPTION 'El director seleccionado no existe' USING ERRCODE = '23503';
-        END IF;
-    END IF;
-    IF p_fk_funcionario IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TSEDE_USUARIO su ON su.FK_TUSUARIO = f.FK_TUSUARIO
-          JOIN academico_test.TGRADO g ON g.PK_TGRADO = r.FK_TGRADO
-          JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
-         WHERE f.PK_TFUNCIONARIO = p_fk_funcionario
-           AND su.FK_TSEDE = pa.FK_TSEDE
-           AND su.ACTIVE = TRUE AND su.TLV_ESTADO = 'ACTIVO'
-    ) THEN
-        SELECT TRIM(u.PRIMER_NOMBRE || ' ' || u.PRIMER_APELLIDO) INTO v_nombre_director
-          FROM academico_test.TFUNCIONARIO f JOIN academico_test.TUSUARIO u ON u.PK_TUSUARIO = f.FK_TUSUARIO
-         WHERE f.PK_TFUNCIONARIO = p_fk_funcionario;
-        RAISE EXCEPTION 'El director "%" no pertenece a la sede de este grado', v_nombre_director
-            USING ERRCODE = '23503';
-    END IF;
-    IF p_capacidad IS NOT NULL AND p_capacidad <= 0 THEN
-        RAISE EXCEPTION 'La capacidad del grupo debe ser mayor a 0' USING ERRCODE = '22023';
-    END IF;
-    v_nombre := COALESCE(p_nombre, r.NOMBRE);
-    IF EXISTS (
-        SELECT 1 FROM academico_test.TGRUPO
-         WHERE FK_TGRADO = r.FK_TGRADO AND FK_TLV_JORNADA = r.FK_TLV_JORNADA AND ACTIVE = TRUE
-           AND PK_TGRUPO <> p_pk AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(v_nombre))
-    ) THEN
-        RAISE EXCEPTION 'Ya existe un grupo con el nombre % en este grado y jornada', v_nombre USING ERRCODE = '23505';
-    END IF;
-    PERFORM academico_test.fn_audit_declarar(
-        p_pk_usuario_solicitante,
-        format('Actualización del grupo %s en la sede %s', v_nombre, v_nombre_sede),
-        academico_test.fn_periodo_establecimiento((
-            SELECT g.FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO g WHERE g.PK_TGRADO = r.FK_TGRADO))
-    );
-
-    UPDATE academico_test.TGRUPO SET
-        NOMBRE = v_nombre,
-        FK_TLV_MODELO_PEDAGOGICO = COALESCE(p_fk_modelo_pedagogico, FK_TLV_MODELO_PEDAGOGICO),
-        CAPACIDAD = COALESCE(p_capacidad, CAPACIDAD),
-        FK_TFUNCIONARIO = COALESCE(p_fk_funcionario, FK_TFUNCIONARIO),
-        MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE PK_TGRUPO = p_pk;
-    RETURN p_pk;
 END;
 $$;
 
@@ -758,8 +573,6 @@ BEGIN
 END;
 $$;
 
--- Incluye modelo pedagogico y el rol del director en la sede, para reconstruir el formulario.
-DROP FUNCTION IF EXISTS academico_test.fn_grupo_obtener(BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_grupo_obtener(
     p_pk BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
 )
@@ -790,7 +603,6 @@ LANGUAGE sql STABLE AS $$
              (SELECT g2.FK_TPERIODO_ACADEMICO FROM academico_test.TGRADO g2 WHERE g2.PK_TGRADO = gr.FK_TGRADO));
 $$;
 
--- Delega en fn_grupo_soft_delete por fila y captura la excepcion para devolver resultado parcial.
 CREATE OR REPLACE FUNCTION academico_test.fn_grupo_bulk_delete(
     p_ids bigint[],
     p_pk_usuario_solicitante bigint
@@ -815,14 +627,13 @@ BEGIN
 END;
 $$;
 
-DROP FUNCTION IF EXISTS academico_test.fn_grupo_listar(BIGINT, TEXT, INT, INT);
-DROP FUNCTION IF EXISTS academico_test.fn_grupo_listar(BIGINT, TEXT, INT, INT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_grupo_listar(BIGINT, TEXT, INT, INT, BIGINT, TEXT, TEXT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_grupo_listar(
     p_fk_grado BIGINT, p_filtro TEXT DEFAULT NULL,
     p_page_index INT DEFAULT 0, p_page_size INT DEFAULT 10,
     p_pk_usuario_solicitante BIGINT DEFAULT NULL,
-    -- Columna del front (id) + direccion ('asc'/'desc').
+    
     p_sort_by TEXT DEFAULT NULL,
     p_sort_dir TEXT DEFAULT NULL
 )
@@ -867,7 +678,6 @@ BEGIN
 END;
 $$;
 
-DROP FUNCTION IF EXISTS academico_test.fn_nivel_ensenanza_listar();
 CREATE OR REPLACE FUNCTION academico_test.fn_nivel_ensenanza_listar(
     p_pk_usuario_solicitante BIGINT DEFAULT NULL
 )
@@ -879,10 +689,6 @@ LANGUAGE sql STABLE AS $$
      ORDER BY NOMBRE;
 $$;
 
--- DISTINCT porque un usuario puede tener varias filas en TSEDE_USUARIO (por rol/jornada).
--- DROP de firmas previas (con p_fk_rol y sin p_pk_usuario) por si quedaron aplicadas.
-DROP FUNCTION IF EXISTS academico_test.fn_funcionario_sede_listar(BIGINT, BIGINT, TEXT);
-DROP FUNCTION IF EXISTS academico_test.fn_funcionario_sede_listar(BIGINT, TEXT);
 CREATE OR REPLACE FUNCTION academico_test.fn_funcionario_sede_listar(
     p_fk_sede BIGINT, p_filtro TEXT DEFAULT NULL,
     p_pk_usuario_solicitante BIGINT DEFAULT NULL
@@ -908,8 +714,6 @@ LANGUAGE sql STABLE AS $$
      ORDER BY nombre;
 $$;
 
--- Devuelve { schedule: { entries: [...] }, promotionCriteria: {...} }.
-DROP FUNCTION IF EXISTS academico_test.fn_grade_config_obtener(BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_grade_config_obtener(
     p_fk_grado BIGINT, p_pk_usuario_solicitante BIGINT DEFAULT NULL
 )
@@ -984,55 +788,4 @@ BEGIN
     END IF;
     RETURN p_fk_grado;
 END;
-$$;
-
--- Reporte "Grados y grupos" (RN-06/RN-07/RN-10): a diferencia de la pantalla de edicion
--- (fn_grado_listar + fn_grupo_listar por separado), esta funcion exporta ambos niveles
--- juntos para TODOS los grados del periodo. LEFT JOIN a TGRUPO para que un grado sin
--- grupos todavia siga apareciendo (RN-06: estructura vigente del periodo).
-CREATE OR REPLACE FUNCTION academico_test.fn_grado_grupo_reporte_listar(
-    p_fk_periodo BIGINT,
-    p_fk_grado   BIGINT[] DEFAULT NULL,
-    p_pk_usuario BIGINT   DEFAULT NULL,
-    p_page_index INT      DEFAULT 0,
-    p_page_size  INT      DEFAULT 10
-)
-RETURNS TABLE (
-    grado_id BIGINT, grado_name VARCHAR, grado_codigo VARCHAR,
-    teaching_level_id BIGINT, teaching_level_name VARCHAR,
-    grupo_id BIGINT, grupo_name VARCHAR,
-    jornada_id BIGINT, jornada_name VARCHAR,
-    director_id BIGINT, director_name TEXT,
-    plan_estudio_name VARCHAR, total_count BIGINT
-)
-LANGUAGE sql STABLE AS $$
-    SELECT g.PK_TGRADO, g.NOMBRE, g.CODIGO,
-           g.FK_TNIVEL_ENSENANZA, ne.NOMBRE,
-           gr.PK_TGRUPO, gr.NOMBRE,
-           jor.PK_LISTA_VALOR, jor.NOMBRE,
-           df.PK_TFUNCIONARIO,
-           NULLIF(TRIM(regexp_replace(
-               concat_ws(' ', du.PRIMER_NOMBRE, du.SEGUNDO_NOMBRE, du.PRIMER_APELLIDO, du.SEGUNDO_APELLIDO),
-               '\s+', ' ', 'g')), ''),
-           plan.NOMBRE,
-           count(*) OVER()::BIGINT
-      FROM academico_test.TGRADO g
-      JOIN academico_test.TNIVEL_ENSENANZA ne ON ne.PK_NIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
- LEFT JOIN academico_test.TGRUPO gr            ON gr.FK_TGRADO = g.PK_TGRADO AND gr.ACTIVE = TRUE
- LEFT JOIN academico_test.TLISTA_VALOR jor     ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
- LEFT JOIN academico_test.TFUNCIONARIO df      ON df.PK_TFUNCIONARIO = gr.FK_TFUNCIONARIO
- LEFT JOIN academico_test.TUSUARIO du          ON du.PK_TUSUARIO = df.FK_TUSUARIO
- LEFT JOIN LATERAL (
-       SELECT p.NOMBRE
-         FROM academico_test.TPLAN p
-        WHERE p.FK_TGRADO = g.PK_TGRADO AND p.ACTIVE = TRUE
-        ORDER BY p.PK_TPLAN
-        LIMIT 1
- ) plan ON TRUE
-     WHERE g.FK_TPERIODO_ACADEMICO = p_fk_periodo AND g.ACTIVE = TRUE
-       AND academico_test.fn_periodo_puede_ver(p_pk_usuario, p_fk_periodo)
-       AND (p_fk_grado IS NULL OR CARDINALITY(p_fk_grado) = 0 OR g.PK_TGRADO = ANY(p_fk_grado))
-     ORDER BY g.NOMBRE, gr.NOMBRE
-     LIMIT NULLIF(p_page_size, 0)
-    OFFSET COALESCE(p_page_index, 0) * COALESCE(NULLIF(p_page_size, 0), 0);
 $$;
