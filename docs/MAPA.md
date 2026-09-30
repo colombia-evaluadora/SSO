@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 435 migraciones (V1–V520), 862 funciones vivas, 66 endpoints vivos. Ultima generacion: 2026-09-30.
+Estado: 442 migraciones (V1–V523), 866 funciones vivas, 66 endpoints vivos. Ultima generacion: 2026-09-30.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -40,6 +40,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 - [estudiante](#estudiante) — 15 funcion(es), 0 endpoint(s)
 - [fun](#fun) — 19 funcion(es), 0 endpoint(s)
 - [funcionario](#funcionario) — 5 funcion(es), 2 endpoint(s)
+- [gestion](#gestion) — 4 funcion(es), 0 endpoint(s)
 - [grade](#grade) — 2 funcion(es), 0 endpoint(s)
 - [grado](#grado) — 10 funcion(es), 0 endpoint(s)
 - [grupo](#grupo) — 10 funcion(es), 0 endpoint(s)
@@ -483,9 +484,9 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `pigse.fn_cumplimiento_listar` | 0 | V261 | V262 |
+| `pigse.fn_cumplimiento_listar` | 0 | V523 | V262 |
 | `pigse.fn_cumplimiento_listar_paginado` | 8 | V261 | V262 |
-| `pigse.fn_cumplimiento_metricas` | 0 | V512 | V262 |
+| `pigse.fn_cumplimiento_metricas` | 0 | V521 | V262 |
 
 ## descanso
 
@@ -514,11 +515,11 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `pigse.fn_documento_categorias_listar` | 2 | V515 | V512 |
-| `pigse.fn_documento_eliminar` | 5 | V515 | V262, V512, V515 |
-| `pigse.fn_documento_guardar` | 5 | V515 | V262, V512 |
-| `pigse.fn_documentos_listar` | 1 | V512 | V262, V512, V515 |
-| `pigse.fn_documentos_listar_todos` | 0 | V512 | V374 |
+| `pigse.fn_documento_categorias_listar` | 2 | V521 | V512, V521, V522 |
+| `pigse.fn_documento_eliminar` | 5 | V522 | V262, V512, V515 |
+| `pigse.fn_documento_guardar` | 5 | V522 | V262, V512 |
+| `pigse.fn_documentos_listar` | 1 | V521 | V262, V512, V515, V521, V523 |
+| `pigse.fn_documentos_listar_todos` | 0 | V521 | V374 |
 | `pigse.fn_documentos_listar_todos_paginado` | 7 | V374 | V368 |
 
 ## enfasi
@@ -666,6 +667,15 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_funcionario_archivo_eliminar` | 2 | V443 | V445 |
 | `academico_test.fn_funcionario_archivo_listar` | 2 | V443 | — |
 | `academico_test.fn_funcionario_sede_listar` | 3 | V43 | V79 |
+
+## gestion
+
+| Funcion | Params | Migracion dueña | La usan |
+|---|---|---|---|
+| `pigse.fn_gestion_documental_excepcion_eliminar` | 3 | V522 | — |
+| `pigse.fn_gestion_documental_excepcion_guardar` | 4 | V522 | — |
+| `pigse.fn_gestion_documental_fecha_limite_guardar` | 3 | V522 | — |
+| `pigse.fn_gestion_documental_fecha_limite_obtener` | 0 | V522 | — |
 
 ## grade
 
@@ -831,7 +841,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_mi_establecimiento_para_auditoria` | 1 | V362 | — |
-| `pigse.fn_mi_establecimiento` | 1 | V261 | V262, V512, V515 |
+| `pigse.fn_mi_establecimiento` | 1 | V261 | V262, V512, V515, V521, V522 |
 | `pigse.fn_mi_establecimiento_para_auditoria` | 1 | V362 | — |
 
 ## microservice
