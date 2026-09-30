@@ -370,6 +370,7 @@ ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS
        param_types = EXCLUDED.param_types, detail = EXCLUDED.detail, query = EXCLUDED.query;
 
 -- Roles: el docente planea sus actividades; el super admin administra.
+-- configuracion va aquí porque V422 ya no crea la fila.
 INSERT INTO public.role_query (role_id, query_id)
 SELECT r.id_role, q.id_query
   FROM public.query q
@@ -388,5 +389,6 @@ SELECT r.id_role, q.id_query
         ('PUT', '/planeador/actividades/:ID/materiales'),
         ('POST', '/planeador/actividades/:ID/materiales/archivo'),
         ('PATCH', '/planeador/actividades/criterios/:ID'),
-        ('PATCH', '/planeador/actividades/evidencias/:ID'))
+        ('PATCH', '/planeador/actividades/evidencias/:ID'),
+        ('GET', '/planeador/actividades/configuracion'))
 ON CONFLICT DO NOTHING;
