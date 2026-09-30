@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 433 migraciones (V1–V517), 822 funciones vivas, 72 endpoints vivos. Ultima generacion: 2026-09-30.
+Estado: 435 migraciones (V1–V519), 822 funciones vivas, 72 endpoints vivos. Ultima generacion: 2026-09-30.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -1326,7 +1326,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_unidad_ponderacion_disponible_interno` | 2 | V492.2 | V492.3 |
 | `academico_test.fn_unidad_ponderacion_intra_asignatura_asignada` | 3 | V239 | V248, V492.1 |
 | `academico_test.fn_unidad_ponderacion_recalcular_sumatoria` | 2 | V223 | V482, V492.2, V496.2 |
-| `academico_test.fn_unidad_referente_aplicable` | 3 | V451 | V243, V280, V407, V455, V475, V479… |
+| `academico_test.fn_unidad_referente_aplicable` | 3 | V451 | V243, V280, V407, V452, V455, V475… |
 | `academico_test.fn_unidad_referente_detalle` | 2 | V492.3 | V492.4 |
 | `academico_test.fn_unidad_referente_detalle_interno` | 1 | V492.2 | V492.3 |
 | `academico_test.fn_unidad_referente_efectivo_interno` | 5 | V492.2 | — |

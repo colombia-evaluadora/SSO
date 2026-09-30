@@ -1,7 +1,9 @@
 -- V452 - Detalle de la actividad (fn_actividad_buscar_por_pk) con estudiantes
--- y la pantalla de edición (fn_actividad_pantalla_edicion). El detail de la
--- fila de pantalla-edicion lo define hoy V496.4.
-
+-- y rotulo_ejecucion (Regla 13), y la pantalla de edición
+-- (fn_actividad_pantalla_edicion). El detail de la fila de pantalla-edicion
+-- lo define hoy V496.4.
+-- Depende de: V224 (cuerpo base), V246 (fila del endpoint), V451
+-- (fn_unidad_referente_aplicable).
 
 SET search_path TO academico_test, public;
 
@@ -77,7 +79,12 @@ RETURNS TABLE (
     recuperacion                    JSONB,
     campos_disponibles              JSONB,
     unidad_configuracion            JSONB,
-    active                          BOOLEAN
+    active                          BOOLEAN,
+    -- Regla 13: como se llama la actividad para su grado/asignatura, mismo
+    -- calculo que fn_actividad_listar_interno (V481) y fn_unidad_listar_interno
+    -- (V488). No llama a fn_planeador_rotulo_actividad_interno (V511): es
+    -- posterior a este archivo.
+    rotulo_ejecucion                VARCHAR
 )
 LANGUAGE plpgsql
 STABLE
@@ -224,7 +231,14 @@ BEGIN
            -- de estilo en la cabecera de esa funcion.
            academico_test.fn_actividad_campos_disponibles(p_pk_usuario_solicitante, a.PK_TACTIVIDAD),
            academico_test.fn_actividad_unidad_configuracion(p_pk_usuario_solicitante, a.PK_TACTIVIDAD),
-           a.ACTIVE
+           a.ACTIVE,
+           COALESCE(
+               (SELECT rc_rot.ROTULO_EJECUCION
+                  FROM academico_test.TREFERENTE_CURRICULAR rc_rot
+                 WHERE rc_rot.PK_REFERENTE_CURRICULAR =
+                       academico_test.fn_unidad_referente_aplicable(gr.PK_TGRADO, a.FK_TASIGNATURA)),
+               'Actividad'
+           )::VARCHAR
       FROM academico_test.TACTIVIDAD a
       JOIN academico_test.TASIGNATURA asig      ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
       LEFT JOIN academico_test.TUNIDAD u        ON u.PK_TUNIDAD = a.FK_TUNIDAD
