@@ -132,6 +132,30 @@ Límite del dato: sale de `git log` sobre la rama actual. Una rama integrada con
 *squash* deja un solo commit, así que quien lo firmó figura como autor aunque el
 trabajo fuese de otro, y un rebase reescribe las fechas.
 
+## Categorías funcionales
+
+La pestaña **Categorías** reparte objetos y migraciones entre las áreas del
+producto (permisos, menús, establecimiento, sedes, funcionarios, periodos,
+PIGSE, matrícula, prematrícula, planeador, planilla, asistencias, referentes,
+auditoría, observaciones, informes, calificación con instrumentos, más
+estructura académica y plataforma SSO). Las reglas están en `categories.py`
+(una regex por categoría; el orden decide cuando un nombre casa con varias):
+
+- un **objeto** se clasifica por su nombre o el path de su fila de
+  `public.query`; si no dice nada, hereda de lo que usa y, si no, de la
+  migración que lo creó;
+- una **migración** toma la categoría de su nombre de archivo (la que aparece
+  primero) o, si no casa, la de la mayoría de sus líneas; figura en «también la
+  tocan» de las categorías que ocupan ≥15% de sus sentencias.
+
+Por categoría se ve: líneas y % del corpus, recortables, % de comentario,
+objetos vivos/muertos por tipo, veredictos, quién creó y quién aportó
+(commits, +/−), actividad por mes, firmas cambiadas, objetos más usados y qué
+usa de otras categorías o quién la usa. El grafo tiene dos niveles: burbujas por
+categoría con aristas de uso, y la categoría abierta con sus migraciones →
+objetos → categorías externas. `#categorias/<id>` abre una directamente, y la
+pestaña Migraciones filtra por categoría. El JSON lo expone como `categories`.
+
 ## Cómo se navega
 
 - Cada migración trae un **mapa del archivo**: una franja por tramo de líneas,

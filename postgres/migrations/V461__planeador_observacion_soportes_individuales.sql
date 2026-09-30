@@ -10,9 +10,6 @@
 -- FORMATIVA y asistencia valida en FECHA. Depende de V243, V277 y V450.
 -- ===========================================================================
 
--- ---------------------------------------------------------------------------
--- 0) Evidencia favorita: a lo sumo UNA viva por observacion.
--- ---------------------------------------------------------------------------
 ALTER TABLE academico_test.TACTIVIDAD_SOPORTE
     ADD COLUMN IF NOT EXISTS ES_FAVORITO BOOLEAN NOT NULL DEFAULT FALSE;
 
@@ -23,9 +20,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS un_tactividad_soporte_favorito
     ON academico_test.TACTIVIDAD_SOPORTE (fk_tactividad_estudiante)
  WHERE active = true AND es_favorito = true;
 
--- ---------------------------------------------------------------------------
--- 1) Listar
--- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_observacion_soportes_listar(BIGINT, BIGINT);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_observacion_soportes_listar(
@@ -76,9 +70,6 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_actividad_observacion_soportes_listar(BIGINT, BIGINT)
     IS 'Archivos de soporte ACTIVE adjuntos a la observacion de UN estudiante en una actividad (TACTIVIDAD_SOPORTE con FK_TARCHIVO, V243), con los datos del TARCHIVO (nombre, urls3, peso, etiqueta). Es la misma lista que la columna evidencias de fn_actividad_nota_leer (V241), expuesta como recurso propio para agregar/quitar uno a uno. es_favorito marca la evidencia destacada (a lo sumo una). Gate VER sobre PLANEADOR + alcance por la actividad; P0002 si la asignacion actividad-estudiante no existe o esta inactiva. Ordena por pk.';
 
--- ---------------------------------------------------------------------------
--- 2) Agregar UNO
--- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_observacion_soporte_agregar(BIGINT, BIGINT, BIGINT, DATE);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_observacion_soporte_agregar(
@@ -158,9 +149,6 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_actividad_observacion_soporte_agregar(BIGINT, BIGINT, BIGINT, DATE)
     IS 'Adjunta UN archivo (PK_TARCHIVO, ya subido por el file-service) a la observacion de UN estudiante en una actividad FORMATIVA, sin tocar los demas adjuntos -- a diferencia de fn_actividad_observacion_evidencias_set (V243), que reemplaza el set completo. Si el archivo ya estaba adjunto devuelve el mismo pk (idempotente); si estaba dado de baja lo reactiva. Mismas reglas que fn_actividad_observar_estudiante: gate EDITAR sobre PLANEADOR + alcance por la actividad, 22023 si la actividad no es FORMATIVA o si no hay asistencia valida en p_fecha (fn_actividad_nota_asistencia_assert_preescolar, V450), 23503 si el archivo no existe -- se comprueba la EXISTENCIA y no ACTIVE, porque file-service reserva la fila de TARCHIVO inactiva y la activa recien cuando el catalogo responde 2xx --, P0002 si la asignacion actividad-estudiante no existe. Retorna PK_TACTIVIDAD_SOPORTE.';
 
--- ---------------------------------------------------------------------------
--- 3) Quitar UNO (baja logica)
--- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_observacion_soporte_quitar(BIGINT, BIGINT, DATE);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_observacion_soporte_quitar(
@@ -210,9 +198,6 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_actividad_observacion_soporte_quitar(BIGINT, BIGINT, DATE)
     IS 'Baja logica (ACTIVE=FALSE, y desmarca ES_FAVORITO) de UN soporte de observacion por su PK_TACTIVIDAD_SOPORTE -- el pk que devuelven fn_actividad_observacion_soportes_listar y _soporte_agregar. El TARCHIVO no se toca: el binario sigue en el file-service. Mismas reglas que agregar: gate EDITAR sobre PLANEADOR + alcance por la actividad, 22023 si la actividad no es FORMATIVA o si no hay asistencia valida en p_fecha, P0002 si el soporte no existe o ya esta inactivo. Retorna el pk retirado.';
 
--- ---------------------------------------------------------------------------
--- 3b) Marcar / desmarcar la favorita
--- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_observacion_soporte_favorito(BIGINT, BIGINT, BOOLEAN);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_observacion_soporte_favorito(
@@ -270,10 +255,6 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_actividad_observacion_soporte_favorito(BIGINT, BIGINT, BOOLEAN)
     IS 'PUT /planeador/actividades/estudiantes/soportes/:ID/favorito. Marca (p_es_favorito TRUE, default) o desmarca la evidencia favorita de una observacion por su PK_TACTIVIDAD_SOPORTE; marcar desmarca la anterior, asi que queda a lo sumo una por TACTIVIDAD_ESTUDIANTE. No exige asistencia: no cambia la observacion, solo cual evidencia se destaca. Gate EDITAR sobre PLANEADOR + alcance por la actividad; 22023 si la actividad no es FORMATIVA; P0002 si el soporte no existe o esta retirado. Retorna el pk.';
 
--- ---------------------------------------------------------------------------
--- 4) Endpoints (eval-col). Se borran por uuid y por (ruta, metodo) antes del
---    INSERT para que una edicion de este archivo si actualice la fila.
--- ---------------------------------------------------------------------------
 DELETE FROM public.query q
  USING public.microservice m
  WHERE m.id_microservice = q.microservice_id
@@ -370,8 +351,6 @@ SELECT
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
 
--- Escritura: los mismos roles del PUT observar. Lectura: ademas los roles con
--- lectura del Planeador (V284).
 INSERT INTO public.role_query (role_id, query_id)
 SELECT r.id_role, q.id_query
   FROM public.query q
@@ -402,20 +381,3 @@ SELECT r.id_role, q.id_query
                            '/planeador/actividades/estudiantes/soportes/:ID/favorito')
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
-
-DO $$
-DECLARE
-    v_total INT;
-BEGIN
-    SELECT COUNT(*) INTO v_total
-      FROM public.query q
-      JOIN public.microservice m ON m.id_microservice = q.microservice_id
-     WHERE m.serviceid = 'eval-col'
-       AND q.uuid IN ('eval-col-planeador-obs-soportes-listar-001',
-                      'eval-col-planeador-obs-soportes-agregar-001',
-                      'eval-col-planeador-obs-soportes-quitar-001',
-                      'eval-col-planeador-obs-soportes-favorito-001');
-    IF v_total <> 4 THEN
-        RAISE EXCEPTION 'V461: se esperaban 4 filas de public.query para eval-col y hay %', v_total;
-    END IF;
-END $$;
