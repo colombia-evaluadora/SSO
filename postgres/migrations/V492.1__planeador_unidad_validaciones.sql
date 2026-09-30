@@ -12,6 +12,10 @@
 
 SET search_path TO academico_test, public;
 
+-- El rótulo por grado lo dan GET /planeador/unidades/tabs y fn_unidad_rotulo;
+-- esta variante con gate no tenía endpoint ni llamadores.
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_etiqueta_por_grado(BIGINT, BIGINT, BIGINT);
+
 -- ---------------------------------------------------------------------------
 -- Rótulos y nombres legibles para los mensajes
 -- ---------------------------------------------------------------------------
