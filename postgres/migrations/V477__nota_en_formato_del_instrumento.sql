@@ -1,10 +1,9 @@
 -- V477 -- La nota del instrumento sale en el formato del propio instrumento.
--- QUE HACE: fn_numero_corto, fn_instrumento_base_derivar (la base "sobre
---   cuanto" deducida de las ponderaciones) y fn_actividad_nota_resultado_
---   instrumento, que ahora publica valor / base / porcentaje y resume "3 / 5".
--- POR QUE AQUI: las lecturas devuelven el % crudo, que es correcto como
---   almacenamiento (V227) pero no es lo que el docente marco: marco 3 sobre 5.
---   Sin DDL -- la base se deriva de la definicion viva del instrumento.
+-- QUE HACE: fn_numero_corto y fn_actividad_nota_resultado_instrumento, que
+--   publica valor / base / porcentaje y resume "50 / 50". Regla 42: el
+--   puntaje del nivel es el valor, el nivel mas alto del criterio su maximo y
+--   la rubrica suma puntajes sobre la suma de maximos; la lista de cotejo,
+--   puntos cumplidos sobre el total posible.
 -- Depende de: V22 (tablas de instrumento), V469 (la funcion que se reescribe).
 
 -- 1. Numero legible: 3.00 -> "3", 3.50 -> "3.5". V469 lo hacia inline en un
@@ -25,91 +24,8 @@ COMMENT ON FUNCTION academico_test.fn_numero_corto(NUMERIC)
     IS 'Representacion corta de un numero para textos de UI: quita los ceros de relleno y el punto que queda suelto (3.00 -> 3, 3.50 -> 3.5). Nucleo puro sin permisos. V477.';
 
 
--- ---------------------------------------------------------------------------
--- 2. La base de un instrumento, derivada de sus niveles.
---
---    El docente define niveles con una PONDERACION en % (V22). Una rubrica
---    "sobre 5" con niveles 5/4/3/2 se guarda como 100/80/60/40: el paso entre
---    niveles consecutivos es 20 % y la base es 100/20 = 5. Una "sobre 10" da
---    paso 10 y base 10. De ahi sale el valor de cada nivel: pond * base / 100.
---
---    Solo se responde cuando la escala es regular: la base y TODOS los valores
---    tienen que caer en enteros. Una escala de pasos irregulares (33/66/100)
---    no tiene un "sobre cuanto" honesto, y ahi se devuelve NULL para que la
---    lectura se quede en el porcentaje en vez de inventarse una base.
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_instrumento_base_derivar(
-    p_ponderaciones NUMERIC[]
-)
-RETURNS NUMERIC
-LANGUAGE plpgsql
-IMMUTABLE
-AS $$
-DECLARE
-    v_pond  NUMERIC[];
-    v_paso  NUMERIC;
-    v_base  NUMERIC;
-BEGIN
-    SELECT ARRAY_AGG(DISTINCT p ORDER BY p)
-      INTO v_pond
-      FROM UNNEST(COALESCE(p_ponderaciones, ARRAY[]::NUMERIC[])) p
-     WHERE p IS NOT NULL AND p > 0;
+DROP FUNCTION IF EXISTS academico_test.fn_instrumento_base_derivar(NUMERIC[]);
 
-    IF v_pond IS NULL OR CARDINALITY(v_pond) = 0 THEN
-        RETURN NULL;
-    END IF;
-
-    IF CARDINALITY(v_pond) = 1 THEN
-        v_paso := v_pond[1];
-    ELSE
-        SELECT MIN(v_pond[i + 1] - v_pond[i])
-          INTO v_paso
-          FROM GENERATE_SUBSCRIPTS(v_pond, 1) i
-         WHERE i < CARDINALITY(v_pond);
-    END IF;
-
-    IF COALESCE(v_paso, 0) <= 0 THEN
-        RETURN NULL;
-    END IF;
-
-    v_base := 100::NUMERIC / v_paso;
-
-    IF ABS(v_base - ROUND(v_base)) > 0.005
-       OR ROUND(v_base) < 1 OR ROUND(v_base) > 1000 THEN
-        RETURN NULL;
-    END IF;
-
-    -- Cada nivel tiene que ser un multiplo exacto del paso; si uno no lo es,
-    -- la escala no es regular y la base seria una aproximacion silenciosa.
-    IF EXISTS (SELECT 1
-                 FROM UNNEST(v_pond) p
-                WHERE ABS(p / v_paso - ROUND(p / v_paso)) > 0.005) THEN
-        RETURN NULL;
-    END IF;
-
-    RETURN ROUND(v_base);
-END;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_instrumento_base_derivar(NUMERIC[])
-    IS 'Base ("sobre cuanto") de un instrumento, derivada de las PONDERACIONES en % de sus niveles: el paso minimo entre niveles consecutivos da la base 100/paso, y el valor de cada nivel es pond*base/100. Una rubrica con niveles 100/80/60/40 es una escala sobre 5, y el nivel de 60 % es un 3. Devuelve NULL si la escala no es regular (base o algun valor no entero), para que la lectura se quede en el porcentaje en vez de inventar una base. Nucleo puro sin permisos ni acceso a tablas. V477.';
-
-
--- ---------------------------------------------------------------------------
--- 3. El resultado del instrumento, en el formato del instrumento.
---
---    Se conservan todas las claves que ya publicaba V469 y se agregan, en cada
---    tipo, valor / base / porcentaje. El porcentaje NO se recalcula aqui: se
---    lee de TACTIVIDAD_NOTA.CALIFICACION, que es lo que escribio
---    fn_actividad_nota_calificar. Duplicar la formula del promedio de criterios
---    seria una segunda verdad que se desincroniza en la primera edicion.
---
---    En RUBRICA cada criterio trae su propia base -- el caso del negocio tiene
---    un criterio sobre 5 y otro sobre 10 -- y la base de la ACTIVIDAD solo se
---    publica cuando todos los criterios comparten la misma: con bases
---    distintas, el promedio de porcentajes no se puede expresar sobre una sola
---    base sin mentir.
--- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_resultado_instrumento(
     p_pk_tactividad_estudiante BIGINT
 )
@@ -123,97 +39,70 @@ DECLARE
     v_pct           NUMERIC;
     v_res           JSONB;
 BEGIN
-    SELECT ae.FK_TACTIVIDAD, lv.VALOR
+    SELECT ae.FK_TACTIVIDAD, academico_test.fn_actividad_instrumento_efectivo(ae.FK_TACTIVIDAD)
       INTO v_pk_tactividad, v_tipo
       FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
-      JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = ae.FK_TACTIVIDAD
-      LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_INSTRUMENTO_EVALUACION
      WHERE ae.PK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante;
     IF NOT FOUND THEN
         RETURN NULL;
-    END IF;
-
-    IF v_tipo = 'OTRO' THEN
-        v_tipo := COALESCE(academico_test.fn_actividad_otro_metodo_valoracion(v_pk_tactividad), 'OTRO');
     END IF;
 
     -- CALIFICACION y no DEFINITIVA: la definitiva ya incorpora recuperacion y
     -- los topes del criterio, y el instrumento describe lo que se marco.
     SELECT n.CALIFICACION INTO v_pct
       FROM academico_test.TACTIVIDAD_NOTA n
-     WHERE n.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante
-       AND n.ACTIVE = TRUE
+     WHERE n.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND n.ACTIVE = TRUE
      LIMIT 1;
 
     CASE v_tipo
         WHEN 'RUBRICA' THEN
+            -- Regla 42: valor = puntaje del nivel elegido; base = nivel mas alto
+            -- del criterio; la actividad suma valores sobre la suma de bases.
             WITH marcado AS (
-                SELECT c.PK_TACTIVIDAD_RUBRICA_CRITERIO AS pk_criterio,
-                       c.NOMBRE                         AS criterio,
-                       c.ORDEN                          AS orden,
-                       n.PK_TACTIVIDAD_RUBRICA_NIVEL    AS pk_nivel,
-                       COALESCE(n.ETIQUETA, n.DESCRIPCION) AS nivel,
-                       re.PONDERACION                   AS ponderacion,
-                       academico_test.fn_instrumento_base_derivar(
-                           ARRAY(SELECT nl.PONDERACION
-                                   FROM academico_test.TACTIVIDAD_RUBRICA_NIVEL nl
-                                  WHERE nl.FK_TACTIVIDAD_RUBRICA_CRITERIO = c.PK_TACTIVIDAD_RUBRICA_CRITERIO
-                                    AND nl.ACTIVE = TRUE)) AS base
+                SELECT c.PK_TACTIVIDAD_RUBRICA_CRITERIO AS pk_criterio, c.NOMBRE AS criterio, c.ORDEN AS orden,
+                       n.PK_TACTIVIDAD_RUBRICA_NIVEL AS pk_nivel, COALESCE(n.ETIQUETA, n.DESCRIPCION) AS nivel,
+                       re.PONDERACION AS valor,
+                       (SELECT MAX(nl.PONDERACION) FROM academico_test.TACTIVIDAD_RUBRICA_NIVEL nl
+                         WHERE nl.FK_TACTIVIDAD_RUBRICA_CRITERIO = c.PK_TACTIVIDAD_RUBRICA_CRITERIO AND nl.ACTIVE = TRUE) AS base
                   FROM academico_test.TACTIVIDAD_RUBRICA_EVALUACION re
                   JOIN academico_test.TACTIVIDAD_RUBRICA_CRITERIO c
                     ON c.PK_TACTIVIDAD_RUBRICA_CRITERIO = re.FK_TACTIVIDAD_RUBRICA_CRITERIO
-                  LEFT JOIN academico_test.TACTIVIDAD_RUBRICA_NIVEL n
-                    ON n.PK_TACTIVIDAD_RUBRICA_NIVEL = re.FK_TACTIVIDAD_RUBRICA_NIVEL
-                 WHERE re.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante
-                   AND re.ACTIVE = TRUE
-                   AND c.FK_TACTIVIDAD = v_pk_tactividad
-                   AND c.ACTIVE = TRUE
-            ),
-            con_valor AS (
-                SELECT m.*,
-                       CASE WHEN m.base IS NOT NULL AND m.ponderacion IS NOT NULL
-                            THEN ROUND(m.ponderacion * m.base / 100, 2)
-                       END AS valor
-                  FROM marcado m
+                  LEFT JOIN academico_test.TACTIVIDAD_RUBRICA_NIVEL n ON n.PK_TACTIVIDAD_RUBRICA_NIVEL = re.FK_TACTIVIDAD_RUBRICA_NIVEL
+                 WHERE re.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND re.ACTIVE = TRUE
+                   AND c.FK_TACTIVIDAD = v_pk_tactividad AND c.ACTIVE = TRUE
             )
             SELECT jsonb_build_object(
                        'tipo', 'RUBRICA',
-                       'resumen', string_agg(
-                                      cv.criterio || ': ' || COALESCE(cv.nivel, '-')
-                                      || CASE WHEN cv.valor IS NULL THEN ''
-                                              ELSE ' (' || academico_test.fn_numero_corto(cv.valor)
-                                                   || ' / ' || academico_test.fn_numero_corto(cv.base) || ')'
-                                         END,
-                                      ' · ' ORDER BY cv.orden),
+                       'resumen', string_agg(m.criterio || ': ' || COALESCE(m.nivel, '-') || ' ('
+                                             || academico_test.fn_numero_corto(m.valor) || ' / '
+                                             || academico_test.fn_numero_corto(m.base) || ')', ' · ' ORDER BY m.orden),
                        'porcentaje', v_pct,
-                       'base',  CASE WHEN COUNT(*) = COUNT(cv.base) AND MIN(cv.base) = MAX(cv.base)
-                                     THEN MIN(cv.base) END,
-                       'valor', CASE WHEN v_pct IS NOT NULL
-                                      AND COUNT(*) = COUNT(cv.base)
-                                      AND MIN(cv.base) = MAX(cv.base)
-                                     THEN ROUND(v_pct * MIN(cv.base) / 100, 2) END,
+                       'valor', SUM(m.valor),
+                       'base',  SUM(m.base),
                        'detalle', jsonb_agg(jsonb_build_object(
-                                      'pkCriterio', cv.pk_criterio, 'criterio', cv.criterio,
-                                      'pkNivel', cv.pk_nivel, 'nivel', cv.nivel,
-                                      'ponderacion', cv.ponderacion,
-                                      'base', cv.base, 'valor', cv.valor) ORDER BY cv.orden))
+                                      'pkCriterio', m.pk_criterio, 'criterio', m.criterio,
+                                      'pkNivel', m.pk_nivel, 'nivel', m.nivel,
+                                      'ponderacion', m.valor, 'base', m.base, 'valor', m.valor) ORDER BY m.orden))
               INTO v_res
-              FROM con_valor cv
+              FROM marcado m
             HAVING COUNT(*) > 0;
 
         WHEN 'LISTA_COTEJO' THEN
+            -- Puntos de los elementos cumplidos sobre el total posible (sin
+            -- puntaje pesa 1), mas el conteo de elementos.
             SELECT jsonb_build_object(
                        'tipo', 'LISTA_COTEJO',
-                       'resumen', COUNT(*) FILTER (WHERE ce.CUMPLIDO = 'S') || '/' || COUNT(*) || ' items',
+                       'resumen', academico_test.fn_numero_corto(SUM(COALESCE(i.PONDERACION, 1)) FILTER (WHERE ce.CUMPLIDO = 'S'))
+                                  || ' / ' || academico_test.fn_numero_corto(SUM(COALESCE(i.PONDERACION, 1)))
+                                  || ' (' || COUNT(*) FILTER (WHERE ce.CUMPLIDO = 'S') || '/' || COUNT(*) || ' elementos)',
                        'cumplidos', COUNT(*) FILTER (WHERE ce.CUMPLIDO = 'S'),
                        'total', COUNT(*),
-                       -- La lista de cotejo ya viene en su formato propio: su
-                       -- base son los items y su valor los cumplidos.
-                       'base',  COUNT(*),
-                       'valor', COUNT(*) FILTER (WHERE ce.CUMPLIDO = 'S'),
+                       'valor', COALESCE(SUM(COALESCE(i.PONDERACION, 1)) FILTER (WHERE ce.CUMPLIDO = 'S'), 0),
+                       'base',  SUM(COALESCE(i.PONDERACION, 1)),
                        'porcentaje', v_pct,
                        'detalle', jsonb_agg(jsonb_build_object(
                                       'pkItem', i.PK_TACTIVIDAD_COTEJO_ITEM, 'item', i.DESCRIPCION,
+                                      'puntaje', COALESCE(i.PONDERACION, 1),
                                       'cumplido', COALESCE(ce.CUMPLIDO, 'N') = 'S') ORDER BY i.ORDEN))
               INTO v_res
               FROM academico_test.TACTIVIDAD_COTEJO_ITEM i
@@ -224,54 +113,55 @@ BEGIN
             HAVING COUNT(ce.PK_TACTIVIDAD_COTEJO_EVAL) > 0;
 
         WHEN 'ESCALA_VALORACION' THEN
-            SELECT CASE WHEN ee.FK_TACTIVIDAD_ESCALA_NIVEL IS NOT NULL THEN
-                       jsonb_build_object(
-                           'tipo', 'ESCALA_CUALITATIVA',
-                           'resumen', COALESCE(n.ETIQUETA, n.DESCRIPCION)
-                                      || CASE WHEN b.base IS NULL THEN ''
-                                              ELSE ' (' || academico_test.fn_numero_corto(ROUND(ee.PONDERACION * b.base / 100, 2))
-                                                   || ' / ' || academico_test.fn_numero_corto(b.base) || ')'
-                                         END,
-                           'pkNivel', n.PK_TACTIVIDAD_ESCALA_NIVEL,
-                           'nivel', COALESCE(n.ETIQUETA, n.DESCRIPCION),
-                           'ponderacion', ee.PONDERACION,
-                           'base', b.base,
-                           'valor', CASE WHEN b.base IS NOT NULL
-                                         THEN ROUND(ee.PONDERACION * b.base / 100, 2) END,
-                           'porcentaje', v_pct)
-                   ELSE
-                       jsonb_build_object(
-                           'tipo', 'ESCALA_NUMERICA',
-                           'resumen', academico_test.fn_numero_corto(ee.VALOR)
-                                      || CASE WHEN e.VALOR_MAX IS NULL THEN ''
-                                              ELSE ' / ' || academico_test.fn_numero_corto(e.VALOR_MAX) END,
-                           'valor', ee.VALOR, 'valorMin', e.VALOR_MIN, 'valorMax', e.VALOR_MAX,
-                           -- La escala numerica trae su base declarada: aqui no
-                           -- hay nada que derivar.
-                           'base', e.VALOR_MAX,
-                           'porcentaje', v_pct)
-                   END
+            -- Cualitativa: puntaje del nivel sobre el nivel mas alto; numerica:
+            -- valor sobre el maximo declarado. Con varios criterios, uno por cada uno.
+            WITH marcado AS (
+                SELECT ce.CRITERIO_INDEX AS idx, ce.FK_TACTIVIDAD_ESCALA_NIVEL AS pk_nivel, ce.VALOR AS valor, e.PK_TACTIVIDAD_ESCALA AS escala
+                  FROM academico_test.TACTIVIDAD_ESCALA_CRITERIO_EVALUACION ce
+                  JOIN academico_test.TACTIVIDAD_ESCALA e ON e.PK_TACTIVIDAD_ESCALA = ce.FK_TACTIVIDAD_ESCALA
+                 WHERE ce.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND ce.ACTIVE = TRUE
+                   AND e.FK_TACTIVIDAD = v_pk_tactividad
+                UNION ALL
+                SELECT NULL, ee.FK_TACTIVIDAD_ESCALA_NIVEL, ee.VALOR, e.PK_TACTIVIDAD_ESCALA
+                  FROM academico_test.TACTIVIDAD_ESCALA_EVALUACION ee
+                  JOIN academico_test.TACTIVIDAD_ESCALA e ON e.PK_TACTIVIDAD_ESCALA = ee.FK_TACTIVIDAD_ESCALA
+                 WHERE ee.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND ee.ACTIVE = TRUE
+                   AND e.FK_TACTIVIDAD = v_pk_tactividad
+                   AND NOT EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_ESCALA_CRITERIO_EVALUACION x
+                                    WHERE x.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND x.ACTIVE = TRUE)
+            ), con_base AS (
+                SELECT m.*, COALESCE(n.ETIQUETA, n.DESCRIPCION) AS nivel,
+                       NULLIF(TRIM(split_part(e.CRITERIOS_GENERALES, ',', COALESCE(m.idx, 0) + 1)), '') AS criterio,
+                       CASE WHEN m.pk_nivel IS NOT NULL
+                            THEN (SELECT MAX(nl.PONDERACION) FROM academico_test.TACTIVIDAD_ESCALA_NIVEL nl
+                                   WHERE nl.FK_TACTIVIDAD_ESCALA = m.escala AND nl.ACTIVE = TRUE)
+                            ELSE e.VALOR_MAX END AS base,
+                       e.VALOR_MIN, e.VALOR_MAX, COUNT(*) OVER () AS n
+                  FROM marcado m
+                  JOIN academico_test.TACTIVIDAD_ESCALA e ON e.PK_TACTIVIDAD_ESCALA = m.escala
+                  LEFT JOIN academico_test.TACTIVIDAD_ESCALA_NIVEL n ON n.PK_TACTIVIDAD_ESCALA_NIVEL = m.pk_nivel
+            )
+            SELECT jsonb_build_object(
+                       'tipo', CASE WHEN bool_or(cb.pk_nivel IS NOT NULL) THEN 'ESCALA_CUALITATIVA' ELSE 'ESCALA_NUMERICA' END,
+                       'resumen', string_agg(CASE WHEN cb.n > 1 AND cb.criterio IS NOT NULL THEN cb.criterio || ': ' ELSE '' END
+                                             || COALESCE(cb.nivel || ' (', '') || academico_test.fn_numero_corto(cb.valor)
+                                             || ' / ' || academico_test.fn_numero_corto(cb.base) || CASE WHEN cb.nivel IS NOT NULL THEN ')' ELSE '' END,
+                                             ' · ' ORDER BY cb.idx),
+                       'pkNivel', MIN(cb.pk_nivel), 'nivel', MIN(cb.nivel),
+                       'valor', SUM(cb.valor), 'base', SUM(cb.base),
+                       'valorMin', MIN(cb.VALOR_MIN), 'valorMax', MIN(cb.VALOR_MAX),
+                       'porcentaje', v_pct,
+                       'detalle', jsonb_agg(jsonb_build_object('criterioIndex', cb.idx, 'criterio', cb.criterio,
+                                      'pkNivel', cb.pk_nivel, 'nivel', cb.nivel, 'valor', cb.valor, 'base', cb.base) ORDER BY cb.idx))
               INTO v_res
-              FROM academico_test.TACTIVIDAD_ESCALA_EVALUACION ee
-              JOIN academico_test.TACTIVIDAD_ESCALA e ON e.PK_TACTIVIDAD_ESCALA = ee.FK_TACTIVIDAD_ESCALA
-              LEFT JOIN academico_test.TACTIVIDAD_ESCALA_NIVEL n ON n.PK_TACTIVIDAD_ESCALA_NIVEL = ee.FK_TACTIVIDAD_ESCALA_NIVEL
-              LEFT JOIN LATERAL (
-                    SELECT academico_test.fn_instrumento_base_derivar(
-                               ARRAY(SELECT nl.PONDERACION
-                                       FROM academico_test.TACTIVIDAD_ESCALA_NIVEL nl
-                                      WHERE nl.FK_TACTIVIDAD_ESCALA = e.PK_TACTIVIDAD_ESCALA
-                                        AND nl.ACTIVE = TRUE)) AS base
-              ) b ON TRUE
-             WHERE ee.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante
-               AND ee.ACTIVE = TRUE AND e.FK_TACTIVIDAD = v_pk_tactividad
-             LIMIT 1;
+              FROM con_base cb
+            HAVING COUNT(*) > 0;
 
         ELSE
             SELECT jsonb_build_object('tipo', 'OTRO',
                                       'resumen', academico_test.fn_numero_corto(n.CALIFICACION) || ' %',
                                       'porcentaje', n.CALIFICACION,
-                                      -- Sin instrumento no hay formato propio:
-                                      -- el porcentaje ES la nota, sobre 100.
+                                      -- Sin estructura el porcentaje ES la nota, sobre 100.
                                       'base', 100,
                                       'valor', n.CALIFICACION)
               INTO v_res
@@ -285,4 +175,4 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_resultado_instrumento(BIGINT)
-    IS 'Resultado que el docente marco en el instrumento de la actividad, con etiquetas y EN EL FORMATO DEL PROPIO INSTRUMENTO: {tipo, resumen, valor, base, porcentaje, ...detalle}. base/valor se derivan de la definicion viva (fn_instrumento_base_derivar sobre las ponderaciones de los niveles); la escala numerica los trae declarados (VALOR/VALOR_MAX) y en la lista de cotejo son cumplidos/total. En RUBRICA cada criterio lleva su base -- pueden ser distintas entre criterios -- y la base de la ACTIVIDAD solo se publica si todos la comparten. El porcentaje se lee de TACTIVIDAD_NOTA.CALIFICACION, no se recalcula. NULL si no hay captura. No gatea permisos: helper de lectura para listados que ya gatearon. V469; formato del instrumento en V477.';
+    IS 'Resultado que el docente marcó en el instrumento, con etiquetas y en el formato del instrumento: {tipo, resumen, valor, base, porcentaje, detalle}. Regla 42: rúbrica = puntajes elegidos sobre la suma de los niveles más altos de cada criterio; lista de cotejo = puntos cumplidos sobre el total posible; escala = puntaje del nivel sobre el más alto, o valor sobre el máximo, por criterio. El porcentaje se lee de TACTIVIDAD_NOTA.CALIFICACION. NULL si no hay captura. Sin permisos: helper de lectura de listados ya gateados.';
