@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 434 migraciones (V1–V517), 775 funciones vivas, 83 endpoints vivos. Ultima generacion: 2026-09-30.
+Estado: 434 migraciones (V1–V517), 774 funciones vivas, 83 endpoints vivos. Ultima generacion: 2026-09-30.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -90,7 +90,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 - [tsede](#tsede) — 1 funcion(es), 0 endpoint(s)
 - [tunidad](#tunidad) — 1 funcion(es), 0 endpoint(s)
 - [tusuario](#tusuario) — 1 funcion(es), 0 endpoint(s)
-- [unidad](#unidad) — 108 funcion(es), 0 endpoint(s)
+- [unidad](#unidad) — 107 funcion(es), 0 endpoint(s)
 - [user](#user) — 2 funcion(es), 0 endpoint(s)
 - [usu](#usu) — 9 funcion(es), 0 endpoint(s)
 - [usuario](#usuario) — 22 funcion(es), 3 endpoint(s)
@@ -933,7 +933,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_planeador_alcanza` | 6 | V277 | V272, V340 |
-| `academico_test.fn_planeador_assert_alcance` | 7 | V277 | V214.1, V214.2, V216, V223, V226, V227… |
+| `academico_test.fn_planeador_assert_alcance` | 7 | V277 | V214.1, V214.2, V223, V226, V227, V239… |
 | `academico_test.fn_planeador_estudiantes_candidatos_listar` | 7 | V422 | — |
 | `academico_test.fn_planeador_etiqueta_a_lv` | 2 | V274 | V340 |
 | `academico_test.fn_planeador_listado_alcance` | 1 | V481 | V488 |
@@ -1277,7 +1277,6 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_unidad_escala_aplicable` | 1 | V455 | V492.1 |
 | `academico_test.fn_unidad_estado` | 3 | V224 | V488 |
 | `academico_test.fn_unidad_etiqueta` | 1 | V492.1 | V492.2 |
-| `academico_test.fn_unidad_etiqueta_por_grado` | 3 | V216 | — |
 | `academico_test.fn_unidad_instrumento_derivado` | 1 | V488 | — |
 | `academico_test.fn_unidad_listar` | 12 | V488 | V492.4 |
 | `academico_test.fn_unidad_listar_interno` | 15 | V488 | — |
