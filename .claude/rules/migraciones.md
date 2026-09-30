@@ -70,9 +70,9 @@ CREATE OR REPLACE FUNCTION fn_matricula_config_crear(p_pk_usuario BIGINT, ...)
   masivo de las funciones existentes.
 
 Por qué: cuando el gate va dentro de la lógica, la lógica no se puede reutilizar.
-La cabecera de `V130__listar_sin_paginar_para_reportes.sql` lo dice — se descartó
-crear funciones de reporte porque "duplicaría el WHERE y el gate de autorización
-de cada listado", y hubo que meter `p_page_size NULL` a la función existente.
+V130 (ya borrada, ver V130.1) lo decía: se descartó crear funciones de reporte
+porque "duplicaría el WHERE y el gate de autorización de cada listado", y hubo
+que meter `p_page_size NULL` a la función existente.
 
 ### Las validaciones también se componen
 
