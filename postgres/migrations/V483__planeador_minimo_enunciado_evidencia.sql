@@ -8,7 +8,7 @@
 -- misma operación (se inserta la unidad y luego sus enunciados) y hay varios
 -- caminos que lo rompen (crear, actualizar, quitar enunciado/evidencia);
 -- validar al COMMIT los cubre todos sin duplicar la regla en cada función.
--- Quedan los triggers de las tablas puente; los de TUNIDAD/TACTIVIDAD los quito V492.
+-- Solo sobre las tablas puente; los de TUNIDAD/TACTIVIDAD se quitan aquí.
 -- Depende de: V212 (referente/enunciados), V214.1 (tablas puente), V216.
 
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_assert_minimo_enunciado(p_fk_tunidad BIGINT)
@@ -116,6 +116,11 @@ BEGIN
     RETURN NULL;
 END;
 $$;
+
+-- Una versión anterior los ponía también sobre TUNIDAD y TACTIVIDAD: el flujo
+-- crea la unidad/actividad y asigna enunciados/evidencias después, así que ahí sobran.
+DROP TRIGGER IF EXISTS tr_tunidad_minimo_enunciado ON academico_test.TUNIDAD;
+DROP TRIGGER IF EXISTS tr_tactividad_minimo_evidencia ON academico_test.TACTIVIDAD;
 
 DROP TRIGGER IF EXISTS tr_tunidad_enunciado_minimo ON academico_test.TUNIDAD_ENUNCIADO;
 CREATE CONSTRAINT TRIGGER tr_tunidad_enunciado_minimo

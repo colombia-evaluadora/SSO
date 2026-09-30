@@ -1,6 +1,6 @@
 -- ===========================================================================
 -- V279 — Planeador educativo: el paginado por DIA ACTIVO se vuelve alcanzable
--- por HTTP (CU-86e311xxp).
+-- por HTTP (CU-86e311xxp). La fila de GET /planeador/unidades vive en V492.4.
 --
 -- POR QUE HACE FALTA ESTA MIGRACION Y NO BASTA CON EDITAR V245/V246/V250
 --
@@ -51,21 +51,6 @@ SET search_path TO academico_test, public;
 --    Gana DOS argumentos de cola: p_dia y p_dias_gracia (el segundo alimenta
 --    el umbral de VENCIDA del estado derivado de la unidad).
 -- ---------------------------------------------------------------------------
-UPDATE public.query q
-   SET query = replace(
-                 q.query,
-                 E'COALESCE(CAST(:QUERY.OFFSET AS INT), 0)\n);',
-                 E'COALESCE(CAST(:QUERY.OFFSET AS INT), 0),\n    CAST(:QUERY.DIA AS DATE),\n    COALESCE(CAST(:QUERY.DIAS_GRACIA AS INT), 2)\n);'
-               ),
-       param_types = COALESCE(q.param_types, '{}'::jsonb)
-                     || '{"QUERY.DIA": "DATE", "QUERY.DIAS_GRACIA": "INT"}'::jsonb
-  FROM public.microservice m
- WHERE m.id_microservice = q.microservice_id
-   AND m.serviceid       = 'eval-col'
-   AND q.path_template   = '/planeador/unidades'
-   AND q.http_method     = 'GET'
-   AND q.query LIKE '%fn_unidad_listar%'
-   AND q.query NOT LIKE '%:QUERY.DIA AS DATE%';
 
 -- ---------------------------------------------------------------------------
 -- 2) GET /planeador/actividades -> fn_actividad_listar
@@ -125,8 +110,7 @@ BEGIN
       JOIN public.microservice m ON m.id_microservice = q.microservice_id
      WHERE m.serviceid     = 'eval-col'
        AND q.http_method   = 'GET'
-       AND q.path_template IN ('/planeador/unidades',
-                               '/planeador/actividades',
+       AND q.path_template IN ('/planeador/actividades',
                                '/planeador/actividades/mias')
        AND (q.query NOT LIKE '%:QUERY.DIA AS DATE%'
             OR q.param_types->>'QUERY.DIA' IS NULL);
