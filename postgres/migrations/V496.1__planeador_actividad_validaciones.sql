@@ -1257,3 +1257,9 @@ COMMENT ON FUNCTION academico_test.fn_actividad_assert_propietario(BIGINT, BIGIN
     IS 'Reglas 25/54: 42501 si un docente de aula intenta modificar o eliminar una actividad que no creó. Coordinación, rectoría y super admin pasan. Lo usan los wrappers de escritura de actividad.';
 COMMENT ON FUNCTION academico_test.fn_actividad_validar_editable(BIGINT)
     IS 'Regla 37: 23503 si la actividad ya tiene resultados capturados o es la original de una recuperación activa. La usan los _interno que cambian la definición de la actividad.';
+COMMENT ON FUNCTION academico_test.fn_actividad_lv_assert(BIGINT, VARCHAR, VARCHAR)
+    IS 'Valida una FK a TLISTA_VALOR: NULL pasa, si viene debe existir, estar activa y ser de p_categoria (si la categoría está sembrada). Mensaje con el nombre del campo, nunca la pk; delega en fn_actividad_validar_catalogo. La usan las definiciones de instrumento, recuperación y calificación.';
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_periodo_evaluacion_unico(BIGINT, BIGINT, DATE, DATE)
+    IS 'INTERNO: 22023 si [fecha_inicio, fecha_cierre] solapa más de un periodo de evaluación activo del periodo académico del grado de la actividad: la nota se imputa a un solo periodo. Sin fechas o sin ancla no aplica. La usa fn_actividad_validar_coherencia.';
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_sin_notas(BIGINT)
+    IS 'INTERNO: 23503 si algún estudiante activo de la actividad tiene resultado (nota, observación o captura de instrumento; fn_actividad_estudiantes_con_resultado). Lo usa fn_actividad_validar_eliminable.';
