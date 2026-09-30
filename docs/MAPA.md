@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 433 migraciones (V1–V517), 818 funciones vivas, 72 endpoints vivos. Ultima generacion: 2026-09-30.
+Estado: 433 migraciones (V1–V517), 822 funciones vivas, 72 endpoints vivos. Ultima generacion: 2026-09-30.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -13,7 +13,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 - [(transversal)](#transversal) — 21 funcion(es), 0 endpoint(s)
 - [academico](#academico) — 1 funcion(es), 0 endpoint(s)
-- [actividad](#actividad) — 156 funcion(es), 0 endpoint(s)
+- [actividad](#actividad) — 159 funcion(es), 0 endpoint(s)
 - [anio](#anio) — 1 funcion(es), 0 endpoint(s)
 - [app](#app) — 1 funcion(es), 0 endpoint(s)
 - [area](#area) — 7 funcion(es), 0 endpoint(s)
@@ -90,7 +90,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 - [tsede](#tsede) — 1 funcion(es), 0 endpoint(s)
 - [tunidad](#tunidad) — 1 funcion(es), 0 endpoint(s)
 - [tusuario](#tusuario) — 1 funcion(es), 0 endpoint(s)
-- [unidad](#unidad) — 107 funcion(es), 0 endpoint(s)
+- [unidad](#unidad) — 108 funcion(es), 0 endpoint(s)
 - [user](#user) — 2 funcion(es), 0 endpoint(s)
 - [usu](#usu) — 9 funcion(es), 0 endpoint(s)
 - [usuario](#usuario) — 22 funcion(es), 3 endpoint(s)
@@ -141,6 +141,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_archivo_recibido` | 4 | V496.3 | — |
 | `academico_test.fn_actividad_asistencia_fecha_resolver` | 2 | V450 | V469 |
 | `academico_test.fn_actividad_asistencia_valida` | 3 | V450 | — |
+| `academico_test.fn_actividad_assert_carga_docente` | 4 | V496.1 | V496.3 |
 | `academico_test.fn_actividad_assert_escritura` | 4 | V496.3 | — |
 | `academico_test.fn_actividad_assert_minimo_evidencia` | 1 | V483 | V496.2 |
 | `academico_test.fn_actividad_assert_propietario` | 2 | V496.1 | V496.3 |
@@ -175,7 +176,8 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_estudiantes_calificaciones_listar` | 4 | V469 | V247 |
 | `academico_test.fn_actividad_estudiantes_con_resultado` | 1 | V496.1 | V496.2 |
 | `academico_test.fn_actividad_estudiantes_set` | 4 | V496.3 | V496.4 |
-| `academico_test.fn_actividad_etiqueta` | 1 | V496.1 | — |
+| `academico_test.fn_actividad_etiqueta` | 1 | V496.1 | V496.2, V496.3 |
+| `academico_test.fn_actividad_etiqueta_de` | 4 | V496.1 | V496.2, V496.3 |
 | `academico_test.fn_actividad_evaluacion_requerida` | 1 | V479 | V214.2 |
 | `academico_test.fn_actividad_evidencia_quitar` | 2 | V496.3 | V246, V496.4 |
 | `academico_test.fn_actividad_evidencia_quitar_interno` | 2 | V496.2 | V496.3 |
@@ -247,6 +249,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_referente_tipo_evaluacion` | 1 | V479 | V214.2, V226 |
 | `academico_test.fn_actividad_resumen_estados` | 8 | V224 | — |
 | `academico_test.fn_actividad_resumen_estados_docente` | 7 | V224 | V250, V252 |
+| `academico_test.fn_actividad_rotulo` | 3 | V496.1 | — |
 | `academico_test.fn_actividad_rubrica_definir` | 3 | V226 | V340, V469, V496.3 |
 | `academico_test.fn_actividad_sede` | 2 | V479 | V496.3 |
 | `academico_test.fn_actividad_unidad_configuracion` | 2 | V214.2 | V246, V452 |
@@ -1279,6 +1282,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_unidad_assert_criterio_propietario` | 2 | V492.1 | V492.3 |
 | `academico_test.fn_unidad_assert_minimo_enunciado` | 1 | V483 | V496.2 |
 | `academico_test.fn_unidad_assert_propietario` | 2 | V492.1 | V492.3 |
+| `academico_test.fn_unidad_aviso_peso_liberado` | 4 | V492.2 | V492.3, V496.3 |
 | `academico_test.fn_unidad_buscar_por_pk` | 2 | V488 | V492.4 |
 | `academico_test.fn_unidad_buscar_por_pk_interno` | 1 | V488 | — |
 | `academico_test.fn_unidad_calculo_definitiva_modo` | 1 | V223 | V239, V333, V479, V492.1, V492.2, V496… |
