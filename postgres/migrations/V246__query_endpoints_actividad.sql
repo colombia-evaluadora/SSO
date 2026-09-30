@@ -1,6 +1,6 @@
 -- V246 - Primer alta de las filas de public.query de /planeador/actividades*
 -- y sus roles. Las filas de escritura las define hoy V496.4 (upsert); estos
--- INSERT se conservan porque V421, V426, V470 y V471 copian de ellos los roles
+-- INSERT se conservan porque V404, V421 y V471 copian de ellos los roles
 -- de sus propias filas al migrar.
 
 

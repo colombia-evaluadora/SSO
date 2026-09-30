@@ -163,7 +163,7 @@ BEGIN
 END;
 $$;
 
--- Firma histórica que usan V226, V459 y V469: se conserva y traduce la
+-- Firma histórica que usan V226 y V469: se conserva y traduce la
 -- etiqueta técnica (FK_TLV_TIPO_ACTIVIDAD, tipoRecurso...) al nombre del campo.
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_lv_assert(
     p_fk         BIGINT,

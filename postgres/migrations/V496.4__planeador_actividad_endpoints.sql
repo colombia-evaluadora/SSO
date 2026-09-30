@@ -5,10 +5,10 @@
 -- de cada servidor) y sus roles: DOCENTE y SUPER_ADMINISTRADOR, los que ya
 -- tenían. Las consultas no cambian; el detail describe el contrato vigente.
 -- También las dos lecturas del formulario (pantalla-edicion y configuracion),
--- tal cual estaban, para que re-aplicar V353/V452/V459 no les pise el detail.
--- Los INSERT originales siguen en V246/V247/V353/V422/V426/V470 porque otras
--- migraciones copian de ellos los roles de sus propias filas al migrar.
--- Depende de: V496.3 (funciones), V246/V247/V353/V422/V426/V470 (filas).
+-- tal cual estaban, para que re-aplicar V452 no les pise el detail.
+-- Las filas de archivo y pantalla-edicion nacen aquí; las demás, en V246/V247,
+-- que se conservan porque otras migraciones copian de ellas sus roles.
+-- Depende de: V496.3 (funciones), V246/V247 (filas).
 
 SET search_path TO academico_test, public;
 
@@ -391,4 +391,15 @@ SELECT r.id_role, q.id_query
         ('PATCH', '/planeador/actividades/criterios/:ID'),
         ('PATCH', '/planeador/actividades/evidencias/:ID'),
         ('GET', '/planeador/actividades/configuracion'))
+ON CONFLICT DO NOTHING;
+
+-- La pantalla de edición la ve quien ve el detalle de la actividad.
+INSERT INTO public.role_query (role_id, query_id)
+SELECT rq.role_id, q.id_query
+  FROM public.query q
+  JOIN public.microservice m ON m.id_microservice = q.microservice_id AND m.serviceid = 'eval-col'
+  JOIN public.query d ON d.microservice_id = q.microservice_id
+                     AND d.path_template = '/planeador/actividades/:ID' AND d.http_method = 'GET'
+  JOIN public.role_query rq ON rq.query_id = d.id_query
+ WHERE q.path_template = '/planeador/actividades/:ID/pantalla-edicion' AND q.http_method = 'GET'
 ON CONFLICT DO NOTHING;
