@@ -339,15 +339,19 @@ BEGIN
 END;
 $$;
 
+-- Cambia el retorno (antes BIGINT): hace falta el DROP de la firma.
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_actividad_desvincular(BIGINT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_actividad_desvincular(
     p_pk_usuario_solicitante BIGINT,
     p_pk_tactividad          BIGINT
 )
-RETURNS BIGINT
+RETURNS TABLE (pk_tactividad BIGINT, porcentaje_libre NUMERIC, aviso VARCHAR)
 LANGUAGE plpgsql
 AS $$
 DECLARE
     v_unidad BIGINT;
+    v_grupo  BIGINT;
+    v_peso   NUMERIC;
 BEGIN
     PERFORM academico_test.fn_unidad_validar_actividad_existente(p_pk_tactividad);
     PERFORM academico_test.fn_unidad_validar_actividad_activa(p_pk_tactividad);
@@ -361,7 +365,11 @@ BEGIN
                COALESCE((SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = v_unidad), '(ninguna)')),
         NULL, academico_test.fn_unidad_sede(v_unidad));
 
-    RETURN academico_test.fn_unidad_actividad_desvincular_interno(p_pk_usuario_solicitante, p_pk_tactividad);
+    SELECT FK_TGRUPO, PONDERACION INTO v_grupo, v_peso FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
+    PERFORM academico_test.fn_unidad_actividad_desvincular_interno(p_pk_usuario_solicitante, p_pk_tactividad);
+    RETURN QUERY
+    SELECT p_pk_tactividad, l.porcentaje_libre, l.aviso
+      FROM academico_test.fn_unidad_aviso_peso_liberado(v_unidad, v_grupo, v_peso, 'DESVINCULAR') l;
 END;
 $$;
 
@@ -493,7 +501,7 @@ COMMENT ON FUNCTION academico_test.fn_unidad_criterio_eliminar(BIGINT, BIGINT)
 COMMENT ON FUNCTION academico_test.fn_unidad_actividad_vincular(BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN)
     IS 'PUT /planeador/unidades/:ID/actividades/:ACTIVIDADID: vincula una actividad de la misma asignatura y grado; mover desde otra unidad exige PERMITIR_MOVER_DE_UNIDAD. Lógica en fn_unidad_actividad_vincular_interno.';
 COMMENT ON FUNCTION academico_test.fn_unidad_actividad_desvincular(BIGINT, BIGINT)
-    IS 'PATCH /planeador/unidades/actividades/:ACTIVIDADID: suelta la actividad de su unidad (idempotente) y recalcula el reparto de Sumatoria. Lógica en fn_unidad_actividad_desvincular_interno.';
+    IS 'PATCH /planeador/unidades/actividades/:ACTIVIDADID: suelta la actividad de su unidad (idempotente) y recalcula el reparto de Sumatoria. Devuelve pk_tactividad y, si la unidad pondera, el % que quedó libre y el aviso (Regla 39). Lógica en fn_unidad_actividad_desvincular_interno.';
 COMMENT ON FUNCTION academico_test.fn_unidad_actividad_ponderacion_set(BIGINT, BIGINT, NUMERIC)
     IS 'PUT /planeador/unidades/actividades/:ACTIVIDADID/ponderacion: peso (%) de la actividad, solo en unidades que Ponderan, sin pasar de 100 por grupo.';
 COMMENT ON FUNCTION academico_test.fn_unidad_objetivos_listar(BIGINT, BIGINT)

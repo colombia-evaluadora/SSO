@@ -88,7 +88,7 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
-    v_que VARCHAR := COALESCE('La actividad "' || p_titulo || '"', 'La actividad');
+    v_que VARCHAR := COALESCE(p_titulo, 'La actividad');
 BEGIN
     IF p_fk_tlv_instrumento IS NULL THEN
         RETURN;

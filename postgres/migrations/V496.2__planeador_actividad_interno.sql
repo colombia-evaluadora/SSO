@@ -40,7 +40,7 @@ BEGIN
         RETURN 0;
     END IF;
     PERFORM academico_test.fn_actividad_validar_existente(p_pk_tactividad);
-    SELECT FK_TGRUPO, TITULO INTO v_grupo, v_titulo
+    SELECT FK_TGRUPO, academico_test.fn_actividad_etiqueta(p_pk_tactividad) INTO v_grupo, v_titulo
       FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
     PERFORM academico_test.fn_actividad_validar_matriculas(v_grupo, v_titulo, p_fk_tmatriculas, p_todo_el_grupo);
 
@@ -434,7 +434,7 @@ DECLARE
 BEGIN
     PERFORM academico_test.fn_actividad_validar_existente(p_pk_tactividad);
     PERFORM academico_test.fn_actividad_validar_activa(p_pk_tactividad);
-    SELECT TITULO, FK_TUNIDAD INTO v_titulo, v_unidad
+    SELECT academico_test.fn_actividad_etiqueta(p_pk_tactividad), FK_TUNIDAD INTO v_titulo, v_unidad
       FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
     PERFORM academico_test.fn_actividad_validar_evidencia(v_unidad, v_titulo, p_fk_referente_enunciado);
 
@@ -513,7 +513,7 @@ DECLARE
 BEGIN
     PERFORM academico_test.fn_actividad_validar_existente(p_pk_tactividad);
     PERFORM academico_test.fn_actividad_validar_activa(p_pk_tactividad);
-    SELECT TITULO, FK_TUNIDAD INTO v_titulo, v_unidad
+    SELECT academico_test.fn_actividad_etiqueta(p_pk_tactividad), FK_TUNIDAD INTO v_titulo, v_unidad
       FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
     PERFORM academico_test.fn_actividad_validar_criterio(v_unidad, v_titulo, p_fk_tcriterio_unidad);
 
@@ -704,6 +704,7 @@ AS $$
 DECLARE
     v_id             BIGINT;
     v_titulo         VARCHAR := TRIM(p_titulo);
+    v_etiqueta       VARCHAR := academico_test.fn_actividad_etiqueta_de(p_titulo, p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad);
     v_ctx_evaluativo BOOLEAN;
     v_evaluativa     academico_test.bool_sn;
     v_todo_el_grupo  BOOLEAN := COALESCE(p_asignar_todo_el_grupo, FALSE);
@@ -719,7 +720,7 @@ BEGIN
     v_evaluativa     := COALESCE(p_es_evaluativa, CASE WHEN v_ctx_evaluativo THEN 'S' ELSE 'N' END);
 
     PERFORM academico_test.fn_actividad_validar_coherencia(
-        v_titulo, p_fk_tasignatura, p_fk_tgrupo, p_fk_tunidad, p_ponderacion, p_nota_maxima,
+        v_etiqueta, p_fk_tasignatura, p_fk_tgrupo, p_fk_tunidad, p_ponderacion, p_nota_maxima,
         v_evaluativa, v_ctx_evaluativo, p_recuperacion IS NOT NULL, p_fk_tlv_instrumento_evaluacion,
         p_fecha_inicio, p_fecha_cierre, p_duracion_estimada, p_semana_cronograma,
         p_evidencias, TRUE, p_exigir_minimos);
@@ -847,12 +848,12 @@ BEGIN
     SELECT * INTO v_actual FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
 
     IF p_desvincular_unidad AND (p_fk_tunidad IS NOT NULL OR p_ponderacion IS NOT NULL) THEN
-        RAISE EXCEPTION 'No se puede quitar la actividad "%" de su unidad y a la vez asignarle una unidad o un peso: elija una de las dos cosas',
-            v_actual.TITULO USING ERRCODE = '22023';
+        RAISE EXCEPTION 'No se puede quitar % de su unidad y a la vez asignarle una unidad o un peso: elija una de las dos cosas',
+            academico_test.fn_actividad_etiqueta(p_pk_tactividad) USING ERRCODE = '22023';
     END IF;
     IF p_quitar_recuperacion AND p_recuperacion IS NOT NULL THEN
-        RAISE EXCEPTION 'No se puede quitar y configurar la recuperación de la actividad "%" en la misma operación: elija una de las dos cosas',
-            v_actual.TITULO USING ERRCODE = '22023';
+        RAISE EXCEPTION 'No se puede quitar y configurar la recuperación de % en la misma operación: elija una de las dos cosas',
+            academico_test.fn_actividad_etiqueta(p_pk_tactividad) USING ERRCODE = '22023';
     END IF;
 
     PERFORM academico_test.fn_actividad_validar_campos(
@@ -877,7 +878,7 @@ BEGIN
     v_evidencias    := COALESCE(p_evidencias, CASE WHEN v_cambia_unidad THEN ARRAY[]::BIGINT[] END);
 
     PERFORM academico_test.fn_actividad_validar_coherencia(
-        v_titulo, v_asignatura, v_grupo, v_unidad, v_ponderacion,
+        academico_test.fn_actividad_etiqueta_de(v_titulo, v_grupo, v_asignatura, v_unidad), v_asignatura, v_grupo, v_unidad, v_ponderacion,
         COALESCE(p_nota_maxima, v_actual.NOTA_MAXIMA),
         v_evaluativa, v_ctx_evaluativo,
         p_recuperacion IS NOT NULL OR (v_actual.ES_RECUPERACION = 'S' AND NOT p_quitar_recuperacion),

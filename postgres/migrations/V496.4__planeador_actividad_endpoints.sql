@@ -69,11 +69,12 @@ INSERT INTO public.query (uuid, microservice_id, path_template, http_method, typ
 SELECT '29eb7594-ede8-467c-bd0b-ab2e98bb988f', m.id_microservice, '/planeador/actividades/:ID', 'PATCH', 'postgres', 'SELECT', NULL,
        'f', 'f', 'f', '60', NULL, NULL,
        '{"PARAM.ID": "BIGINT"}'::jsonb,
-       'Elimina (borrado lógico en cascada) la actividad :ID (fn_actividad_eliminar): la suelta de su unidad y recalcula la Sumatoria. No se elimina si tiene resultados, asistencias o una recuperación activa que la recupera (409, 23503; Regla 38). Errores: 404 (P0002), 422 (22023) si ya fue eliminada, 403 (42501) sin permiso o si no es del docente.',
-       $q$SELECT * FROM academico_test.fn_actividad_eliminar(
+       'Elimina (borrado lógico en cascada) la actividad :ID (fn_actividad_eliminar): la suelta de su unidad y recalcula la Sumatoria. Devuelve fn_actividad_eliminar (el PK, como antes) y, si la unidad pondera, porcentaje_libre y aviso ("...quedará un X% libre en la unidad. Ajuste los pesos restantes..."); no redistribuye (Regla 38a). No se elimina si tiene resultados, asistencias o una recuperación activa que la recupera (409, 23503; Regla 38). Errores: 404 (P0002), 422 (22023) si ya fue eliminada, 403 (42501) sin permiso o si no es del docente.',
+       $q$SELECT r.pk_tactividad AS fn_actividad_eliminar, r.porcentaje_libre, r.aviso
+  FROM academico_test.fn_actividad_eliminar(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.ID AS BIGINT)
-);$q$
+) r;$q$
   FROM public.microservice m WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
    SET type = EXCLUDED.type, execution_mode = EXCLUDED.execution_mode, out_param_names = EXCLUDED.out_param_names,

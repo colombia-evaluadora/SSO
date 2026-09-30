@@ -19,12 +19,51 @@ DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_referencias_activas(
 -- Nombres legibles para los mensajes
 -- ---------------------------------------------------------------------------
 
+-- Regla 13: el nombre que el referente le da a la actividad (Rótulo de
+-- Ejecución). Con unidad manda el referente de la unidad; sin ella, el que le
+-- aplica al grado del grupo y la asignatura (la misma regla de V511).
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_rotulo(
+    p_fk_tgrupo      BIGINT,
+    p_fk_tasignatura BIGINT,
+    p_fk_tunidad     BIGINT
+)
+RETURNS VARCHAR
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(
+        (SELECT NULLIF(TRIM(rc.ROTULO_EJECUCION), '')
+           FROM academico_test.TUNIDAD u
+           JOIN academico_test.TREFERENTE_CURRICULAR rc ON rc.PK_REFERENTE_CURRICULAR = u.FK_REFERENTE_CURRICULAR
+          WHERE u.PK_TUNIDAD = p_fk_tunidad),
+        (SELECT NULLIF(TRIM(rc.ROTULO_EJECUCION), '')
+           FROM academico_test.TGRUPO g
+           JOIN academico_test.TREFERENTE_CURRICULAR rc
+             ON rc.PK_REFERENTE_CURRICULAR = academico_test.fn_unidad_referente_aplicable(g.FK_TGRADO, p_fk_tasignatura, NULL)
+          WHERE g.PK_TGRUPO = p_fk_tgrupo),
+        'Actividad')::VARCHAR;
+$$;
+
+-- 'Taller "Fracciones"': rótulo + título, el sujeto de los mensajes.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_etiqueta_de(
+    p_titulo         VARCHAR,
+    p_fk_tgrupo      BIGINT,
+    p_fk_tasignatura BIGINT,
+    p_fk_tunidad     BIGINT
+)
+RETURNS VARCHAR
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT format('%s "%s"', academico_test.fn_actividad_rotulo(p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad), TRIM(p_titulo))::VARCHAR;
+$$;
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_etiqueta(p_pk_tactividad BIGINT)
 RETURNS VARCHAR
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT format('La actividad "%s"', TITULO)
+    SELECT academico_test.fn_actividad_etiqueta_de(TITULO, FK_TGRUPO, FK_TASIGNATURA, FK_TUNIDAD)
       FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
 $$;
 
@@ -358,7 +397,7 @@ BEGIN
     SELECT FK_TASIGNATURA, FK_TGRADO INTO v_asig_uni, v_grado_uni
       FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad;
     IF p_fk_tasignatura IS NOT NULL AND p_fk_tasignatura IS DISTINCT FROM v_asig_uni THEN
-        RAISE EXCEPTION 'La actividad "%" es de "%" y % es de "%": elija una unidad de la misma asignatura',
+        RAISE EXCEPTION '% es de "%" y % es de "%": elija una unidad de la misma asignatura',
             p_titulo,
             (SELECT NOMBRE FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_fk_tasignatura),
             academico_test.fn_unidad_etiqueta(p_fk_tunidad),
@@ -367,7 +406,7 @@ BEGIN
     END IF;
     SELECT FK_TGRADO INTO v_grado_gr FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo;
     IF v_grado_gr IS NOT NULL AND v_grado_gr IS DISTINCT FROM v_grado_uni THEN
-        RAISE EXCEPTION '% es de "%" y la actividad "%" es para %',
+        RAISE EXCEPTION '% es de "%" y % es para %',
             academico_test.fn_unidad_etiqueta(p_fk_tunidad),
             (SELECT NOMBRE FROM academico_test.TGRADO WHERE PK_TGRADO = v_grado_uni),
             p_titulo, academico_test.fn_actividad_grupo_etiqueta(p_fk_tgrupo)
@@ -391,11 +430,11 @@ AS $$
 BEGIN
     IF p_es_evaluativa = 'S' AND NOT p_ctx_evaluativo THEN
         IF p_fk_tunidad IS NOT NULL THEN
-            RAISE EXCEPTION 'La actividad "%" no puede ser sumativa: % se rige por un referente curricular Formativo, que valora el aprendizaje con observaciones y no con nota',
+            RAISE EXCEPTION '% no puede ser sumativa: % se rige por un referente curricular Formativo, que valora el aprendizaje con observaciones y no con nota',
                 p_titulo, academico_test.fn_unidad_etiqueta(p_fk_tunidad)
                 USING ERRCODE = '22023';
         END IF;
-        RAISE EXCEPTION 'La actividad "%" no puede ser sumativa: el referente curricular de su grado y asignatura es Formativo, y valora el aprendizaje con observaciones y no con nota',
+        RAISE EXCEPTION '% no puede ser sumativa: el referente curricular de su grado y asignatura es Formativo, y valora el aprendizaje con observaciones y no con nota',
             p_titulo USING ERRCODE = '22023';
     END IF;
 END;
@@ -412,7 +451,7 @@ IMMUTABLE
 AS $$
 BEGIN
     IF p_es_recuperacion AND p_es_evaluativa = 'N' THEN
-        RAISE EXCEPTION 'La actividad "%" es de recuperación y debe ser sumativa: la recuperación reemplaza o combina una nota',
+        RAISE EXCEPTION '% es de recuperación y debe ser sumativa: la recuperación reemplaza o combina una nota',
             p_titulo USING ERRCODE = '22023';
     END IF;
 END;
@@ -439,11 +478,11 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
     IF p_fk_tunidad IS NULL THEN
-        RAISE EXCEPTION 'El peso (%%) de la actividad "%" solo aplica cuando está vinculada a una unidad', p_titulo
+        RAISE EXCEPTION 'El peso (%%) de % solo aplica cuando está vinculada a una unidad', p_titulo
             USING ERRCODE = '22023';
     END IF;
     IF p_es_evaluativa = 'N' THEN
-        RAISE EXCEPTION 'La actividad "%" no es sumativa: no lleva peso (%%) en la unidad', p_titulo
+        RAISE EXCEPTION '% no es sumativa: no lleva peso (%%) en la unidad', p_titulo
             USING ERRCODE = '22023';
     END IF;
     PERFORM academico_test.fn_unidad_validar_ponderacion_actividad_manual(p_fk_tunidad);
@@ -484,12 +523,12 @@ BEGIN
     CASE academico_test.fn_unidad_calculo_definitiva_modo(p_fk_tunidad)
         WHEN 'PONDERAR' THEN
             IF p_ponderacion IS NULL THEN
-                RAISE EXCEPTION '% pondera sus actividades: indique el peso (%%) de la actividad "%"',
+                RAISE EXCEPTION '% pondera sus actividades: indique el peso (%%) de %',
                     academico_test.fn_unidad_etiqueta(p_fk_tunidad), p_titulo USING ERRCODE = '22023';
             END IF;
         WHEN 'SUMATORIA' THEN
             IF p_nota_maxima IS NULL THEN
-                RAISE EXCEPTION '% suma los puntajes de sus actividades: indique el puntaje de la actividad "%"',
+                RAISE EXCEPTION '% suma los puntajes de sus actividades: indique el puntaje de %',
                     academico_test.fn_unidad_etiqueta(p_fk_tunidad), p_titulo USING ERRCODE = '22023';
             END IF;
         ELSE NULL;
@@ -520,7 +559,7 @@ BEGIN
            AND ACTIVE = TRUE
            AND PK_TACTIVIDAD IS DISTINCT FROM p_excluir_pk
     ) THEN
-        RAISE EXCEPTION 'Ya existe una actividad "%" en % para %: elija otro nombre',
+        RAISE EXCEPTION 'Ya existe "%" en % para %: elija otro nombre',
             TRIM(p_titulo),
             COALESCE(academico_test.fn_unidad_etiqueta(p_fk_tunidad), 'las actividades sin unidad'),
             COALESCE(academico_test.fn_actividad_grupo_etiqueta(p_fk_tgrupo), 'las actividades sin grupo')
@@ -541,7 +580,7 @@ IMMUTABLE
 AS $$
 BEGIN
     IF p_fk_tunidad IS NULL THEN
-        RAISE EXCEPTION 'La actividad "%" no está vinculada a ninguna unidad: vincúlela primero para seleccionar %',
+        RAISE EXCEPTION '% no está vinculada a ninguna unidad: vincúlela primero para seleccionar %',
             p_titulo, p_que USING ERRCODE = '22023';
     END IF;
 END;
@@ -564,14 +603,14 @@ DECLARE
     v_estado VARCHAR;
 BEGIN
     IF p_fk_referente_enunciado IS NULL THEN
-        RAISE EXCEPTION 'Seleccione la evidencia que cubre la actividad "%"', p_titulo USING ERRCODE = '22023';
+        RAISE EXCEPTION 'Seleccione la evidencia que cubre %', p_titulo USING ERRCODE = '22023';
     END IF;
     PERFORM academico_test.fn_actividad_validar_tiene_unidad(p_fk_tunidad, p_titulo, 'sus evidencias');
 
     SELECT FK_PADRE, ACTIVE, ESTADO INTO v_padre, v_active, v_estado
       FROM academico_test.TREFERENTE_ENUNCIADO WHERE PK_REFERENTE_ENUNCIADO = p_fk_referente_enunciado;
     IF NOT FOUND OR NOT v_active THEN
-        RAISE EXCEPTION 'Una de las evidencias seleccionadas para la actividad "%" ya no existe en el referente curricular',
+        RAISE EXCEPTION 'Una de las evidencias seleccionadas para % ya no existe en el referente curricular',
             p_titulo USING ERRCODE = '23503';
     END IF;
     IF v_estado IS DISTINCT FROM 'A' THEN
@@ -622,7 +661,7 @@ BEGIN
       FROM academico_test.TUNIDAD u
       JOIN academico_test.TREFERENTE_CURRICULAR rc ON rc.PK_REFERENTE_CURRICULAR = u.FK_REFERENTE_CURRICULAR
      WHERE u.PK_TUNIDAD = p_fk_tunidad;
-    RAISE EXCEPTION 'Marque al menos una % de los % de % que cubre la actividad "%"',
+    RAISE EXCEPTION 'Marque al menos una % de los % de % que cubre %',
         COALESCE(v_etq_2, 'evidencia'), COALESCE(v_etq_1, 'enunciados'),
         academico_test.fn_unidad_etiqueta(p_fk_tunidad), p_titulo
         USING ERRCODE = '22023';
@@ -646,7 +685,7 @@ DECLARE
     v_rub_active BOOLEAN;
 BEGIN
     IF p_fk_tcriterio_unidad IS NULL THEN
-        RAISE EXCEPTION 'Seleccione el criterio de la rúbrica que evalúa la actividad "%"', p_titulo
+        RAISE EXCEPTION 'Seleccione el criterio de la rúbrica que evalúa %', p_titulo
             USING ERRCODE = '22023';
     END IF;
     PERFORM academico_test.fn_actividad_validar_tiene_unidad(p_fk_tunidad, p_titulo, 'criterios de su rúbrica');
@@ -657,7 +696,7 @@ BEGIN
       JOIN academico_test.TRUBRICA_UNIDAD ru ON ru.PK_TRUBRICA_UNIDAD = cu.FK_TRUBRICA_UNIDAD
      WHERE cu.PK_TCRITERIO_UNIDAD = p_fk_tcriterio_unidad;
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'Uno de los criterios seleccionados para la actividad "%" no existe', p_titulo
+        RAISE EXCEPTION 'Uno de los criterios seleccionados para % no existe', p_titulo
             USING ERRCODE = '23503';
     END IF;
     IF NOT v_active OR NOT v_rub_active THEN
@@ -665,7 +704,7 @@ BEGIN
             v_desc, academico_test.fn_unidad_etiqueta(v_unidad) USING ERRCODE = '23503';
     END IF;
     IF v_unidad IS DISTINCT FROM p_fk_tunidad THEN
-        RAISE EXCEPTION 'El criterio "%" es de la rúbrica de % y la actividad "%" está en %',
+        RAISE EXCEPTION 'El criterio "%" es de la rúbrica de % y % está en %',
             v_desc, academico_test.fn_unidad_etiqueta(v_unidad), p_titulo,
             academico_test.fn_unidad_etiqueta(p_fk_tunidad)
             USING ERRCODE = '22023';
@@ -694,7 +733,7 @@ DECLARE
 BEGIN
     IF p_fk_tgrupo IS NULL
        AND (COALESCE(p_todo_el_grupo, FALSE) OR COALESCE(array_length(p_fk_tmatriculas, 1), 0) > 0) THEN
-        RAISE EXCEPTION 'La actividad "%" no tiene grupo: asígnele un grupo antes de escoger sus estudiantes', p_titulo
+        RAISE EXCEPTION '% no tiene grupo: asígnele un grupo antes de escoger sus estudiantes', p_titulo
             USING ERRCODE = '22023';
     END IF;
     SELECT mid INTO v_ajena
@@ -704,7 +743,7 @@ BEGIN
                         WHERE m.PK_TMATRICULA = mid AND m.ACTIVE = TRUE AND m.FK_TGRUPO = p_fk_tgrupo)
      LIMIT 1;
     IF FOUND THEN
-        RAISE EXCEPTION '% no tiene una matrícula activa en %: no se puede incluir en la actividad "%"',
+        RAISE EXCEPTION '% no tiene una matrícula activa en %: no se puede incluir en %',
             COALESCE(academico_test.fn_actividad_estudiante_nombre(v_ajena), 'Uno de los estudiantes seleccionados'),
             academico_test.fn_actividad_grupo_etiqueta(p_fk_tgrupo), p_titulo
             USING ERRCODE = '23503';
@@ -902,9 +941,9 @@ BEGIN
                           AND ae.FK_TMATRICULA = mid::BIGINT AND ae.ACTIVE = TRUE)
      LIMIT 1;
     IF FOUND THEN
-        RAISE EXCEPTION '% no está entre los estudiantes de %: inclúyalo en la actividad antes de asignarle la adaptación',
+        RAISE EXCEPTION '% no está entre los estudiantes de %: inclúyalo antes de asignarle la adaptación',
             COALESCE(academico_test.fn_actividad_estudiante_nombre(v_ajena), 'Uno de los estudiantes de la adaptación'),
-            lower(academico_test.fn_actividad_etiqueta(p_pk_tactividad))
+            academico_test.fn_actividad_etiqueta(p_pk_tactividad)
             USING ERRCODE = '23503';
     END IF;
 END;
@@ -938,23 +977,23 @@ BEGIN
         RAISE EXCEPTION 'No se encontró la actividad que se quiere recuperar' USING ERRCODE = 'P0002';
     END IF;
     IF p_fk_tactividad_recuperar = p_pk_tactividad_actual THEN
-        RAISE EXCEPTION 'La actividad "%" no puede recuperarse a sí misma', v_o.TITULO USING ERRCODE = '22023';
+        RAISE EXCEPTION '% no puede recuperarse a sí misma', academico_test.fn_actividad_etiqueta(p_fk_tactividad_recuperar) USING ERRCODE = '22023';
     END IF;
     IF v_o.sumativa = 'N' THEN
-        RAISE EXCEPTION 'La actividad "%" no es sumativa: no afecta la nota y no se puede recuperar', v_o.TITULO
+        RAISE EXCEPTION '% no es sumativa: no afecta la nota y no se puede recuperar', academico_test.fn_actividad_etiqueta(p_fk_tactividad_recuperar)
             USING ERRCODE = '22023';
     END IF;
     IF v_o.recuperacion = 'S' THEN
-        RAISE EXCEPTION 'La actividad "%" ya es una recuperación: no se puede recuperar una recuperación', v_o.TITULO
+        RAISE EXCEPTION '% ya es una recuperación: no se puede recuperar una recuperación', academico_test.fn_actividad_etiqueta(p_fk_tactividad_recuperar)
             USING ERRCODE = '22023';
     END IF;
     IF p_fk_tasignatura IS NOT NULL AND v_o.FK_TASIGNATURA IS DISTINCT FROM p_fk_tasignatura THEN
-        RAISE EXCEPTION 'La actividad "%" es de "%": la recuperación debe ser de la misma asignatura',
-            v_o.TITULO, (SELECT NOMBRE FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = v_o.FK_TASIGNATURA)
+        RAISE EXCEPTION '% es de "%": la recuperación debe ser de la misma asignatura',
+            academico_test.fn_actividad_etiqueta(p_fk_tactividad_recuperar), (SELECT NOMBRE FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = v_o.FK_TASIGNATURA)
             USING ERRCODE = '22023';
     END IF;
     IF academico_test.fn_actividad_estudiantes_con_resultado(p_fk_tactividad_recuperar) = 0 THEN
-        RAISE EXCEPTION 'La actividad "%" aún no tiene resultados registrados: no hay nota que recuperar', v_o.TITULO
+        RAISE EXCEPTION '% aún no tiene resultados registrados: no hay nota que recuperar', academico_test.fn_actividad_etiqueta(p_fk_tactividad_recuperar)
             USING ERRCODE = '22023';
     END IF;
     IF EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_RECUPERACION r
@@ -962,7 +1001,7 @@ BEGIN
                 WHERE r.FK_TACTIVIDAD_RECUPERAR = p_fk_tactividad_recuperar
                   AND r.FK_TACTIVIDAD IS DISTINCT FROM p_pk_tactividad_actual
                   AND r.ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'La actividad "%" ya tiene otra recuperación activa', v_o.TITULO USING ERRCODE = '23505';
+        RAISE EXCEPTION '% ya tiene otra recuperación activa', academico_test.fn_actividad_etiqueta(p_fk_tactividad_recuperar) USING ERRCODE = '23505';
     END IF;
 END;
 $$;
@@ -1246,9 +1285,58 @@ BEGIN
     SELECT CREATED_BY, TITULO INTO v_autor, v_titulo
       FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
     IF v_autor IS DISTINCT FROM p_pk_usuario_solicitante::VARCHAR THEN
-        RAISE EXCEPTION 'La actividad "%" la creó %: solo su autor puede modificarla o eliminarla',
-            v_titulo,
+        RAISE EXCEPTION '% la creó %: solo su autor puede modificarla o eliminarla',
+            academico_test.fn_actividad_etiqueta(p_pk_tactividad),
             COALESCE(academico_test.fn_resolver_actor(NULLIF(regexp_replace(v_autor, '\D', '', 'g'), '')::BIGINT), 'otro docente')
+            USING ERRCODE = '42501';
+    END IF;
+END;
+$$;
+
+-- Bloque 1: un docente de aula solo planea sobre su carga académica
+-- (TDOCENTE_ASIGNATURA), la misma regla con que el listado le filtra lo que ve.
+-- Sin grupo basta con que dicte la asignatura, en el grado de la unidad si la hay.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_assert_carga_docente(
+    p_pk_usuario_solicitante BIGINT,
+    p_fk_tgrupo              BIGINT,
+    p_fk_tasignatura         BIGINT,
+    p_fk_tunidad             BIGINT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_funcionario BIGINT;
+    v_grado       BIGINT;
+BEGIN
+    -- Referencias inexistentes las rechaza fn_actividad_validar_coherencia con nombre.
+    IF p_fk_tasignatura IS NULL
+       OR NOT EXISTS (SELECT 1 FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_fk_tasignatura)
+       OR (p_fk_tgrupo IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo))
+       OR NOT academico_test.fn_usuario_es_docente_puro(p_pk_usuario_solicitante) THEN
+        RETURN;
+    END IF;
+    v_funcionario := academico_test.fn_funcionario_actual(p_pk_usuario_solicitante);
+    IF p_fk_tgrupo IS NOT NULL THEN
+        IF NOT EXISTS (SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA
+                        WHERE FK_TFUNCIONARIO = v_funcionario AND FK_TGRUPO = p_fk_tgrupo
+                          AND FK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
+            RAISE EXCEPTION 'No tiene asignada "%" en %: solo puede planear actividades de su carga académica',
+                (SELECT NOMBRE FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_fk_tasignatura),
+                academico_test.fn_actividad_grupo_etiqueta(p_fk_tgrupo)
+                USING ERRCODE = '42501';
+        END IF;
+        RETURN;
+    END IF;
+    v_grado := (SELECT FK_TGRADO FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad);
+    IF NOT EXISTS (SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+                     JOIN academico_test.TGRUPO g ON g.PK_TGRUPO = da.FK_TGRUPO
+                    WHERE da.FK_TFUNCIONARIO = v_funcionario AND da.FK_TASIGNATURA = p_fk_tasignatura
+                      AND da.ACTIVE = TRUE AND (v_grado IS NULL OR g.FK_TGRADO = v_grado)) THEN
+        RAISE EXCEPTION 'No dicta "%"%: solo puede planear actividades de su carga académica',
+            (SELECT NOMBRE FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_fk_tasignatura),
+            COALESCE(' en ' || (SELECT NOMBRE FROM academico_test.TGRADO WHERE PK_TGRADO = v_grado), '')
             USING ERRCODE = '42501';
     END IF;
 END;
@@ -1266,3 +1354,7 @@ COMMENT ON FUNCTION academico_test.fn_actividad_validar_periodo_evaluacion_unico
     IS 'INTERNO: 22023 si [fecha_inicio, fecha_cierre] solapa más de un periodo de evaluación activo del periodo académico del grado de la actividad: la nota se imputa a un solo periodo. Sin fechas o sin ancla no aplica. La usa fn_actividad_validar_coherencia.';
 COMMENT ON FUNCTION academico_test.fn_actividad_validar_sin_notas(BIGINT)
     IS 'INTERNO: 23503 si algún estudiante activo de la actividad tiene resultado (nota, observación o captura de instrumento; fn_actividad_estudiantes_con_resultado). Lo usa fn_actividad_validar_eliminable.';
+COMMENT ON FUNCTION academico_test.fn_actividad_assert_carga_docente(BIGINT, BIGINT, BIGINT, BIGINT)
+    IS 'Bloque 1: 42501 si un docente de aula planea sobre un (grupo, asignatura) que no tiene en TDOCENTE_ASIGNATURA; sin grupo, si no dicta la asignatura (en el grado de la unidad). Coordinación, rectoría y super admin pasan. La usan los wrappers de crear y actualizar actividad.';
+COMMENT ON FUNCTION academico_test.fn_actividad_rotulo(BIGINT, BIGINT, BIGINT)
+    IS 'Regla 13: Rótulo de Ejecución del referente que gobierna la actividad (el de su unidad o, sin ella, fn_unidad_referente_aplicable del grado del grupo y la asignatura); "Actividad" si no hay. Lo usan los mensajes y la bitácora.';

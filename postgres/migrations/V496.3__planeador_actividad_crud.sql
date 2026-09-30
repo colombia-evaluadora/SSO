@@ -107,6 +107,8 @@ BEGIN
     PERFORM academico_test.fn_planeador_assert_alcance(
         p_pk_usuario_solicitante, 'CREAR', p_fk_tgrupo, NULL, p_fk_tunidad,
         NULL, p_permitir_sin_ancla => TRUE);
+    PERFORM academico_test.fn_actividad_assert_carga_docente(
+        p_pk_usuario_solicitante, p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad);
     IF v_recuperar IS NOT NULL THEN
         PERFORM academico_test.fn_actividad_validar_existente(v_recuperar);
         PERFORM academico_test.fn_planeador_assert_alcance(
@@ -114,7 +116,7 @@ BEGIN
     END IF;
 
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
-        format('Creación de la actividad %s', TRIM(p_titulo)), NULL,
+        format('Creación de %s', academico_test.fn_actividad_etiqueta_de(p_titulo, p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad)), NULL,
         academico_test.fn_actividad_sede(p_fk_tgrupo, p_fk_tunidad));
 
     RETURN academico_test.fn_actividad_crear_interno(
@@ -183,6 +185,12 @@ BEGIN
         PERFORM academico_test.fn_planeador_assert_alcance(
             p_pk_usuario_solicitante, 'EDITAR', p_fk_tgrupo, NULL, p_fk_tunidad, p_pk_tactividad);
     END IF;
+    -- La carga académica se mira sobre lo que QUEDA: mover el grupo o la
+    -- asignatura también tiene que caer dentro de lo que el docente dicta.
+    PERFORM academico_test.fn_actividad_assert_carga_docente(
+        p_pk_usuario_solicitante, COALESCE(p_fk_tgrupo, a.FK_TGRUPO), COALESCE(p_fk_tasignatura, a.FK_TASIGNATURA),
+        CASE WHEN p_desvincular_unidad THEN NULL ELSE COALESCE(p_fk_tunidad, a.FK_TUNIDAD) END)
+       FROM academico_test.TACTIVIDAD a WHERE a.PK_TACTIVIDAD = p_pk_tactividad;
     IF v_recuperar IS NOT NULL THEN
         PERFORM academico_test.fn_actividad_validar_existente(v_recuperar);
         PERFORM academico_test.fn_planeador_assert_alcance(
@@ -190,9 +198,7 @@ BEGIN
     END IF;
 
     PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, p_pk_tactividad,
-        format('Actualización de la actividad %s',
-               COALESCE(NULLIF(TRIM(p_titulo), ''),
-                        (SELECT TITULO FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad))));
+        format('Actualización de %s', academico_test.fn_actividad_etiqueta(p_pk_tactividad)));
 
     RETURN academico_test.fn_actividad_actualizar_interno(
         p_pk_usuario_solicitante, p_pk_tactividad, p_titulo, p_descripcion,
@@ -211,22 +217,30 @@ $$;
 -- Regla 38: con resultados, asistencias o un refuerzo que la recupera no se
 -- elimina (23503, después del gate: a quien no puede borrar no se le cuenta
 -- qué hay dentro).
+-- Cambia el retorno (antes BIGINT): hace falta el DROP de la firma.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_eliminar(BIGINT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_eliminar(
     p_pk_usuario_solicitante BIGINT,
     p_pk_tactividad          BIGINT
 )
-RETURNS BIGINT
+RETURNS TABLE (pk_tactividad BIGINT, porcentaje_libre NUMERIC, aviso VARCHAR)
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    v_act academico_test.TACTIVIDAD%ROWTYPE;
 BEGIN
     PERFORM academico_test.fn_actividad_assert_escritura(p_pk_usuario_solicitante, p_pk_tactividad, 'ELIMINAR', FALSE);
     PERFORM academico_test.fn_actividad_validar_eliminable(p_pk_tactividad);
 
     PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, p_pk_tactividad,
-        format('Eliminación de la actividad %s',
-               (SELECT TITULO FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad)));
+        format('Eliminación de %s', academico_test.fn_actividad_etiqueta(p_pk_tactividad)));
 
-    RETURN academico_test.fn_actividad_eliminar_interno(p_pk_tactividad, p_pk_usuario_solicitante);
+    SELECT * INTO v_act FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
+    PERFORM academico_test.fn_actividad_eliminar_interno(p_pk_tactividad, p_pk_usuario_solicitante);
+    RETURN QUERY
+    SELECT p_pk_tactividad, l.porcentaje_libre, l.aviso
+      FROM academico_test.fn_unidad_aviso_peso_liberado(
+               v_act.FK_TUNIDAD, v_act.FK_TGRUPO, v_act.PONDERACION, 'ELIMINAR') l;
 END;
 $$;
 
@@ -245,9 +259,9 @@ AS $$
 BEGIN
     PERFORM academico_test.fn_actividad_assert_escritura(p_pk_usuario_solicitante, p_fk_tactividad, 'EDITAR');
     PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, p_fk_tactividad,
-        format('%s marcada en la actividad %s',
+        format('%s marcada en %s',
                COALESCE(academico_test.fn_unidad_enunciado_etiqueta(p_fk_referente_enunciado), 'Evidencia'),
-               (SELECT TITULO FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_fk_tactividad)));
+               academico_test.fn_actividad_etiqueta(p_fk_tactividad)));
     RETURN academico_test.fn_actividad_evidencia_relacionar_interno(
         p_pk_usuario_solicitante, p_fk_tactividad, p_fk_referente_enunciado);
 END;
@@ -271,9 +285,9 @@ BEGIN
     END IF;
     PERFORM academico_test.fn_actividad_assert_escritura(p_pk_usuario_solicitante, v_actividad, 'EDITAR');
     PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, v_actividad,
-        format('%s desmarcada de la actividad %s',
+        format('%s desmarcada de %s',
                COALESCE(academico_test.fn_unidad_enunciado_etiqueta(v_enunciado), 'Evidencia'),
-               (SELECT TITULO FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = v_actividad)));
+               academico_test.fn_actividad_etiqueta(v_actividad)));
     RETURN academico_test.fn_actividad_evidencia_quitar_interno(p_pk_usuario_solicitante, p_pk_tactividad_evidencia);
 END;
 $$;
@@ -289,9 +303,9 @@ AS $$
 BEGIN
     PERFORM academico_test.fn_actividad_assert_escritura(p_pk_usuario_solicitante, p_fk_tactividad, 'EDITAR');
     PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, p_fk_tactividad,
-        format('Criterio %s asociado a la actividad %s',
+        format('Criterio %s asociado a %s',
                COALESCE((SELECT DESCRIPCION FROM academico_test.TCRITERIO_UNIDAD WHERE PK_TCRITERIO_UNIDAD = p_fk_tcriterio_unidad), ''),
-               (SELECT TITULO FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_fk_tactividad)));
+               academico_test.fn_actividad_etiqueta(p_fk_tactividad)));
     RETURN academico_test.fn_actividad_criterio_relacionar_interno(
         p_pk_usuario_solicitante, p_fk_tactividad, p_fk_tcriterio_unidad);
 END;
@@ -315,9 +329,9 @@ BEGIN
     END IF;
     PERFORM academico_test.fn_actividad_assert_escritura(p_pk_usuario_solicitante, v_actividad, 'EDITAR');
     PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, v_actividad,
-        format('Criterio %s retirado de la actividad %s',
+        format('Criterio %s retirado de %s',
                COALESCE((SELECT DESCRIPCION FROM academico_test.TCRITERIO_UNIDAD WHERE PK_TCRITERIO_UNIDAD = v_criterio), ''),
-               (SELECT TITULO FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = v_actividad)));
+               academico_test.fn_actividad_etiqueta(v_actividad)));
     RETURN academico_test.fn_actividad_criterio_quitar_interno(p_pk_usuario_solicitante, p_pk_tactividad_criterio_unidad);
 END;
 $$;
@@ -340,8 +354,7 @@ DECLARE
 BEGIN
     PERFORM academico_test.fn_actividad_assert_escritura(p_pk_usuario_solicitante, p_pk_tactividad, 'EDITAR');
     PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, p_pk_tactividad,
-        format('Estudiantes de la actividad %s',
-               (SELECT TITULO FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad)));
+        format('Estudiantes de %s', academico_test.fn_actividad_etiqueta(p_pk_tactividad)));
     v_total := academico_test.fn_actividad_estudiantes_asignar_interno(
         p_pk_usuario_solicitante, p_pk_tactividad, p_fk_tmatriculas, COALESCE(p_todo_el_grupo, FALSE));
     IF p_fk_tmatriculas IS NOT NULL OR COALESCE(p_todo_el_grupo, FALSE) THEN
@@ -362,8 +375,7 @@ AS $$
 BEGIN
     PERFORM academico_test.fn_actividad_assert_escritura(p_pk_usuario_solicitante, p_pk_tactividad, 'EDITAR');
     PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, p_pk_tactividad,
-        format('Materiales de apoyo de la actividad %s',
-               (SELECT TITULO FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad)));
+        format('Materiales de apoyo de %s', academico_test.fn_actividad_etiqueta(p_pk_tactividad)));
     RETURN academico_test.fn_actividad_material_reemplazar_interno(
         p_pk_usuario_solicitante, p_pk_tactividad, p_materiales);
 END;
@@ -380,8 +392,7 @@ AS $$
 BEGIN
     PERFORM academico_test.fn_actividad_assert_escritura(p_pk_usuario_solicitante, p_pk_tactividad, 'EDITAR');
     PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, p_pk_tactividad,
-        format('Adaptaciones curriculares de la actividad %s',
-               (SELECT TITULO FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad)));
+        format('Adaptaciones curriculares de %s', academico_test.fn_actividad_etiqueta(p_pk_tactividad)));
     RETURN academico_test.fn_actividad_adaptacion_reemplazar_interno(
         p_pk_usuario_solicitante, p_pk_tactividad, p_adaptaciones);
 END;
@@ -459,12 +470,12 @@ BEGIN
       LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_INSTRUMENTO_EVALUACION
      WHERE a.PK_TACTIVIDAD = p_pk_tactividad;
     IF v_valor IS NULL OR v_valor NOT IN ('RUBRICA', 'LISTA_COTEJO', 'ESCALA_VALORACION', 'OTRO') THEN
-        RAISE EXCEPTION 'La actividad "%" no tiene un instrumento de evaluación que se pueda configurar: elíjalo primero en el formulario de la actividad',
-            v_titulo USING ERRCODE = '22023';
+        RAISE EXCEPTION '% no tiene un instrumento de evaluación que se pueda configurar: elíjalo primero en su formulario',
+            academico_test.fn_actividad_etiqueta(p_pk_tactividad) USING ERRCODE = '22023';
     END IF;
 
     PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, p_pk_tactividad,
-        format('Definición del instrumento %s de la actividad %s', v_nombre, v_titulo));
+        format('Definición del instrumento %s de %s', v_nombre, academico_test.fn_actividad_etiqueta(p_pk_tactividad)));
 
     CASE v_valor
         WHEN 'RUBRICA' THEN
@@ -486,7 +497,7 @@ COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, B
 COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN, BIGINT[], BIGINT[])
     IS 'PUT /planeador/actividades/:ID. Wrapper: existencia, estado, alcance EDITAR en origen y destino, propiedad (Regla 25), bloqueo por resultados (Regla 37), etiqueta de auditoría; delega en fn_actividad_actualizar_interno.';
 COMMENT ON FUNCTION academico_test.fn_actividad_eliminar(BIGINT, BIGINT)
-    IS 'PATCH /planeador/actividades/:ID (borrado lógico). Wrapper: existencia, estado, alcance ELIMINAR, propiedad (Regla 25), dependencias que lo impiden (Regla 38, 23503), etiqueta de auditoría; delega en fn_actividad_eliminar_interno.';
+    IS 'PATCH /planeador/actividades/:ID (borrado lógico). Wrapper: existencia, estado, alcance ELIMINAR, propiedad (Regla 25), dependencias que lo impiden (Regla 38, 23503), etiqueta de auditoría; delega en fn_actividad_eliminar_interno. Devuelve pk_tactividad y, si la unidad pondera, el % que quedó libre y el aviso (Regla 38a).';
 COMMENT ON FUNCTION academico_test.fn_actividad_evidencia_relacionar(BIGINT, BIGINT, BIGINT)
     IS 'POST /planeador/actividades/:ID/evidencias. Wrapper con gate EDITAR, propiedad, Regla 37 y etiqueta; la evidencia debe ser de un enunciado de la unidad de la actividad (fn_actividad_validar_evidencia).';
 COMMENT ON FUNCTION academico_test.fn_actividad_evidencia_quitar(BIGINT, BIGINT)
