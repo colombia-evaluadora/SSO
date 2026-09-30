@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 434 migraciones (V1–V517), 703 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-29.
+Estado: 437 migraciones (V1–V517), 706 funciones vivas, 110 endpoints vivos. Ultima generacion: 2026-09-30.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -39,7 +39,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 - [establecimiento](#establecimiento) — 2 funcion(es), 2 endpoint(s)
 - [estudiante](#estudiante) — 15 funcion(es), 0 endpoint(s)
 - [fun](#fun) — 19 funcion(es), 0 endpoint(s)
-- [funcionario](#funcionario) — 2 funcion(es), 2 endpoint(s)
+- [funcionario](#funcionario) — 5 funcion(es), 2 endpoint(s)
 - [grade](#grade) — 2 funcion(es), 0 endpoint(s)
 - [grado](#grado) — 10 funcion(es), 0 endpoint(s)
 - [grupo](#grupo) — 10 funcion(es), 0 endpoint(s)
@@ -109,7 +109,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_delete_menu` | 2 | V115 | V126 |
 | `academico_test.fn_list_menu_possibilities_for_rol` | 2 | V113 | — |
 | `academico_test.fn_menu_catalogo_listar_interno` | 0 | V498 | — |
-| `academico_test.fn_menu_codigo_canonico` | 1 | V29 | V113, V396 |
+| `academico_test.fn_menu_codigo_canonico` | 1 | V29 | V113, V303, V396 |
 | `academico_test.fn_menu_codigo_desde_nombre` | 1 | V113 | — |
 | `academico_test.fn_menu_eliminar_interno` | 1 | V115 | — |
 | `academico_test.fn_menu_grupo_de` | 1 | V396 | — |
@@ -575,6 +575,9 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_funcionario_actual` | 1 | V224 | V216, V250, V251, V254, V281, V407… |
+| `academico_test.fn_funcionario_archivo_crear` | 5 | V443 | V445 |
+| `academico_test.fn_funcionario_archivo_eliminar` | 2 | V443 | V445 |
+| `academico_test.fn_funcionario_archivo_listar` | 2 | V443 | — |
 | `academico_test.fn_funcionario_sede_listar` | 3 | V43 | V79 |
 
 ## grade
@@ -1311,7 +1314,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_usu_autocompletar_por_documento` | 2 | V51 | V93 |
 | `academico_test.fn_usu_buscar_por_documento` | 3 | V51 | V93 |
 | `academico_test.fn_usu_crear` | 15 | V51 | — |
-| `academico_test.fn_usu_empleado_buscar_por_pk` | 2 | V51 | V93 |
+| `academico_test.fn_usu_empleado_buscar_por_pk` | 2 | V444 | V93 |
 | `academico_test.fn_usu_empleados_contar` | 6 | V116 | V130 |
 | `academico_test.fn_usu_empleados_listar` | 10 | V130 | V67, V69, V93, V130 |
 | `academico_test.fn_usu_empleados_listar_paginado` | 10 | V130 | V93 |
