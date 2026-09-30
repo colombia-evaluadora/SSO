@@ -787,12 +787,12 @@ BEGIN
 
     -- Unidad / ponderacion: la regla del 100% es de las funciones de unidad.
     IF p_desvincular_unidad THEN
-        PERFORM academico_test.fn_unidad_actividad_desvincular(p_pk_usuario_solicitante, p_pk_tactividad);
+        PERFORM academico_test.fn_unidad_actividad_desvincular_interno(p_pk_usuario_solicitante, p_pk_tactividad);
     ELSIF p_fk_tunidad IS NOT NULL THEN
-        PERFORM academico_test.fn_unidad_actividad_vincular(
+        PERFORM academico_test.fn_unidad_actividad_vincular_interno(
                     p_pk_usuario_solicitante, p_pk_tactividad, p_fk_tunidad, p_ponderacion);
     ELSIF p_ponderacion IS NOT NULL THEN
-        PERFORM academico_test.fn_unidad_actividad_ponderacion_set(
+        PERFORM academico_test.fn_unidad_actividad_ponderacion_set_interno(
                     p_pk_usuario_solicitante, p_pk_tactividad, p_ponderacion);
     END IF;
 

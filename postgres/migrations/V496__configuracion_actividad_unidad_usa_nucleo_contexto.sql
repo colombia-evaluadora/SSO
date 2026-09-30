@@ -245,7 +245,6 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_actividad_configuracion_contexto_interno(BIGINT, BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT)
     IS 'INTERNO: la configuracion del formulario de actividad sin gate, reutilizada por fn_actividad_configuracion_contexto (GET /planeador/actividades/configuracion) y fn_unidad_configuracion_actividad (GET /planeador/unidades/:ID/configuracion-actividad) para que las dos respondan lo mismo. Devuelve programacion (periodoAcademico, intensidadHoraria con horario, fechaInicio, fechaCierre, semanaCronograma, duracionEstimada en MINUTOS; limites de fn_actividad_programacion_limites), el contexto resuelto (grupo, grado, nivelEnsenanza, asignatura, unidad, referente), esFormativo / esSumativoSugerido y campos_disponibles {criterio, evaluacion, ponderacion, recuperacion}. p_fk_tgrupo es obligatorio salvo con unidad: sin grupo el grado sale de la unidad y programacion viene con sus limites NULL y el motivo "Falta el grupo". p_pk_usuario_alcance solo se reenvia a fn_actividad_recuperacion_campos_disponibles para comprobar alcance sobre la actividad a recuperar despues de validar que existe; NULL = el llamador ya lo comprobo. P0002 si el grupo, la asignatura o la unidad no existen o estan inactivos.';
 
-
 -- Mismo contrato y firma que V476: solo pasa a gate + delegacion.
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_configuracion_contexto(
     p_pk_usuario_solicitante  BIGINT,
@@ -270,7 +269,6 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_configuracion_contexto(BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT)
     IS 'GET /planeador/actividades/configuracion?grupo=&asignatura=&unidad=: que pintar en el formulario de actividad a partir de grupo + asignatura, con unidad OPCIONAL (con unidad manda la unidad; sin ella el referente se deriva con fn_unidad_referente_aplicable). Gate VER sobre PLANEADOR + alcance por el grupo y la unidad; la respuesta la arma fn_actividad_configuracion_contexto_interno, el mismo nucleo de GET /planeador/unidades/:ID/configuracion-actividad. p_es_sumativo (S|N, default S): con N solo se apagan recuperacion y ponderacion. p_recuperar = S lista las actividades recuperables del (grupo, asignatura) y p_fk_tactividad_recuperar devuelve el origen elegido con sus estudiantes. En Preescolar la evaluacion y la recuperacion vienen apagadas. P0002 si el grupo, la asignatura o la unidad no existen.';
-
 
 DROP FUNCTION IF EXISTS academico_test.fn_unidad_configuracion_actividad(BIGINT, BIGINT, VARCHAR);
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_configuracion_actividad(
@@ -343,34 +341,3 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_unidad_configuracion_actividad(BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR, BIGINT)
     IS 'GET /planeador/unidades/:ID/configuracion-actividad: que pintar en el formulario de NUEVA ACTIVIDAD para la unidad escogida, antes de crearla. Gate VER sobre PLANEADOR + alcance por la unidad (y el grupo si llega); la respuesta la arma fn_actividad_configuracion_contexto_interno con la asignatura de la unidad, asi que trae exactamente lo mismo que GET /planeador/actividades/configuracion con ?unidad=: programacion (periodo, fechas, semanas, duracion en minutos, horario), contexto, referente, esFormativo / esSumativoSugerido y campos_disponibles. Ademas: unidad (nombre) y origenGrupo. La unidad es de un grado y el horario de un grupo: p_fk_tgrupo (?grupo=) tiene que ser del grado de la unidad (22023 si no); sin el, se usa el unico grupo activo del grado (origenGrupo = UNICO_DEL_GRADO) y, si hay varios o ninguno, origenGrupo = NULL y programacion sale sin limites con el motivo "Falta el grupo". p_recuperar / p_fk_tactividad_recuperar igual que en la configuracion por contexto. P0002 si la unidad o el grupo no existen o estan inactivos.';
 
-
-UPDATE public.query q
-   SET query = 'SELECT academico_test.fn_unidad_configuracion_actividad(
-    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
-    CAST(:PARAM.ID AS BIGINT),
-    COALESCE(CAST(:QUERY.ES_SUMATIVO AS VARCHAR), ''S''),
-    CAST(:QUERY.GRUPO AS BIGINT),
-    COALESCE(CAST(:QUERY.RECUPERAR AS VARCHAR), ''N''),
-    CAST(:QUERY.ACTIVIDAD_RECUPERAR AS BIGINT)
-) AS configuracion;',
-       param_types = '{"PARAM.ID": "BIGINT", "QUERY.ES_SUMATIVO": "VARCHAR", "QUERY.GRUPO": "BIGINT", "QUERY.RECUPERAR": "VARCHAR", "QUERY.ACTIVIDAD_RECUPERAR": "BIGINT"}'::jsonb,
-       detail = 'Que pintar en el formulario de NUEVA ACTIVIDAD para la unidad escogida, antes de crearla. :ID = PK_TUNIDAD. Responde lo MISMO que GET /planeador/actividades/configuracion?grupo=&asignatura=&unidad= (mismo nucleo, la asignatura sale de la unidad): programacion {periodoAcademico, intensidadHoraria {bloquesPorSemana, minutosPorBloque, minutosPorSemana, diasHabiles, horario:[{valor, nombre, bloques:[{numero, horaInicio, horaFin, minutos}]}]}, fechaInicio/fechaCierre {min, max, diasHabiles}, semanaCronograma {min, max}, duracionEstimada {min, max, unidad: MINUTOS, paso}}, contexto (fkTgrupo, grupo, fkTgrado, grado, nivelEnsenanza, fkTasignatura, asignatura, pkTunidad, referente {pk, nombre}), esSumativoConsultado, esFormativo, esSumativoSugerido y campos_disponibles {criterio, evaluacion, ponderacion, recuperacion}; ademas unidad (nombre) y origenGrupo. La unidad es de un GRADO y el horario de un GRUPO: ?grupo= (opcional) tiene que ser del grado de la unidad (422 si no); sin el se usa el unico grupo activo del grado (origenGrupo = UNICO_DEL_GRADO) y si hay varios origenGrupo = NULL y programacion viene con sus limites NULL y el motivo "Falta el grupo": el front debe pedir el grupo y volver a consultar. ?ES_SUMATIVO=S|N (default S): con N solo se apagan recuperacion y ponderacion. ?RECUPERAR=S lista en recuperacion.actividadesRecuperables las sumativas del (grupo, asignatura); ?ACTIVIDAD_RECUPERAR= devuelve recuperacion.origen con sus estudiantes. El front decide por VALOR: los pk no son estables entre entornos. Gate VER sobre PLANEADOR + alcance por la unidad; 404 (P0002) si la unidad o el grupo no existen o estan inactivos.'
-  FROM public.microservice m
- WHERE m.id_microservice = q.microservice_id
-   AND m.serviceid       = 'eval-col'
-   AND q.path_template   = '/planeador/unidades/:ID/configuracion-actividad'
-   AND q.http_method     = 'GET';
-
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM public.query q
-          JOIN public.microservice m ON m.id_microservice = q.microservice_id
-         WHERE m.serviceid = 'eval-col'
-           AND q.path_template = '/planeador/unidades/:ID/configuracion-actividad'
-           AND q.http_method = 'GET'
-           AND q.query LIKE '%:QUERY.GRUPO%') THEN
-        RAISE EXCEPTION 'Falta la fila de GET /planeador/unidades/:ID/configuracion-actividad (V282)';
-    END IF;
-END;
-$$;

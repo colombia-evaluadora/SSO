@@ -6,8 +6,8 @@
 -- unidad, así que TUNIDAD no lleva columna para él (se retira si existe) y
 -- fn_unidad_crear / fn_unidad_actualizar vuelven a su firma de V216 / V478.
 -- Depende de: V216 (TUNIDAD, fn_unidad_*), V224 (fn_unidad_estado),
--- V245 (filas de public.query), V478 (fn_unidad_actualizar), V481
--- (fn_planeador_listado_alcance).
+-- V478 (fn_unidad_actualizar), V481 (fn_planeador_listado_alcance).
+-- Las filas de POST/PUT /planeador/unidades viven en V492.4.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -22,14 +22,6 @@ ALTER TABLE academico_test.TUNIDAD DROP COLUMN IF EXISTS FK_TLV_INSTRUMENTO_EVAL
 
 -- La fila existe desde V245 y ON CONFLICT no la tocaría: se le quita el
 -- argumento del instrumento donde lo tenga. Sin él, no cambia nada.
-UPDATE public.query
-   SET query       = replace(query, E',\n    CAST(:BODY.FK_TLV_INSTRUMENTO_EVALUACION AS BIGINT)', ''),
-       param_types = param_types - 'BODY.FK_TLV_INSTRUMENTO_EVALUACION',
-       detail      = regexp_replace(detail, ' V488: agrega BODY\.FK_TLV_INSTRUMENTO_EVALUACION.*$', '')
- WHERE ((path_template = '/planeador/unidades'     AND http_method = 'POST')
-     OR (path_template = '/planeador/unidades/:ID' AND http_method = 'PUT'))
-   AND microservice_id = (SELECT id_microservice FROM public.microservice WHERE serviceid = 'eval-col')
-   AND (query LIKE '%FK_TLV_INSTRUMENTO_EVALUACION%' OR param_types ? 'BODY.FK_TLV_INSTRUMENTO_EVALUACION');
 
 -- ---------------------------------------------------------------------------
 -- 2. Instrumento de la unidad.

@@ -47,9 +47,9 @@ Veredictos: `obsoleta` (ninguna escritura sobrevive), `residual` (una sola viva
 contra tres o más muertas), `parcial`, `viva`, `solo-binds` (únicamente ata
 permisos o siembra datos — eso no se reescribe) y `sin-cambios` (documental).
 
-Una migración obsoleta **no se puede borrar** del repo: rompería el checksum de
-Flyway en los servidores que ya la aplicaron. Lo que da el informe es saber qué
-texto ya no describe el estado actual al depurar, y qué colapsaría en un squash.
+Una migración obsoleta se puede borrar del repo: el deploy hace `flyway repair`
+y la marca como borrada. Antes hay que confirmar por firma exacta que nada la
+necesita al migrar (ver "Qué se puede recortar").
 
 ## Los tres ficheros
 
@@ -71,16 +71,36 @@ como `uses`: `{from, to, v, line, file, kind: call|ref|java}`.
 
 ## Cuántas líneas sobran
 
-La pestaña **Líneas** reparte las 127k líneas del corpus en *sin efecto* /
-*vigentes* / *sin encadenar*, con el desglose por archivo. Cada sentencia
+La pestaña **Líneas** reparte las líneas del corpus en *recortables* /
+*se conservan* / *vigentes* / *sin encadenar*, con el desglose por archivo. Cada sentencia
 reclama su tramo desde el `;` anterior (así que arrastra su comentario de
 cabecera, que es lo que de verdad se borraría) y el tramo sólo cuenta como
 sin efecto si **ninguna** de sus escrituras sigue viva: en un bloque `DO`
 que toca varios objetos, basta uno vigente para conservarlo.
 
-Ese número **no es una lista de borrado**: borrar una migración ya aplicada
-rompe el checksum de Flyway en el servidor. Es lo que colapsaría en un squash
-y lo que no hace falta leer al depurar.
+## Qué se puede recortar
+
+El modelo empareja funciones por nombre y aridad, así que "sin efecto" engaña
+en los dos sentidos. Si existe `.claude/skills/next-migration-number/precision.py`,
+`apply_precision()` relee cada migración por **firma exacta** y contexto de uso
+(`version_findings`, lo mismo que imprime `deps.py --version <n>`) y:
+
+- pasa a *se conservan* (`n` en el mapa del archivo) las sentencias sin efecto
+  que hacen falta: sobrecarga viva por firma, función que una migración
+  intermedia llama, valida (`LANGUAGE sql`), comenta o altera al migrar,
+  semilla que otra usa antes, CREATE ya condicionado (`solo_si_falta`);
+- da a cada migración un veredicto de recorte (`recorte` en el JSON):
+  `recortable`, `con-ajuste` (algo que re-aplicado borra o revierte lo de una
+  posterior: DROP de la vigente, filas o índices que otra reescribe, un ALTER
+  que hay que copiar al CREATE, COMMENT por OID, o una función necesaria al
+  migrar), `revisar-backfill` (recalcula datos reales al re-aplicarse) o `nada`;
+- guarda los avisos en `findings` y el detalle de cada migración los muestra.
+
+Recortar un fichero ya aplicado cambia su checksum: el deploy hace `repair` y
+lo re-ejecuta entero, así que lo que queda tiene que poder correr otra vez sin
+revertir nada. El procedimiento, con banco de pruebas, es la skill
+`limpiando-migraciones`. Sin `precision.py` el informe usa la cuenta del modelo
+y lo marca como `sin-precision`.
 
 ## Presupuesto de comentarios
 

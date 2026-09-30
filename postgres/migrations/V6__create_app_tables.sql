@@ -58,11 +58,8 @@ CREATE TABLE IF NOT EXISTS app_microservice (
 
 CREATE INDEX IF NOT EXISTS idx_app_microservice_ms ON app_microservice(id_microservice);
 
--- Direct id_app FKs on existing tables. Nullable + ON DELETE SET NULL
--- (deleting the app orphans the route/microservice at app=NULL, which
--- is the expected behavior: they keep existing standalone).
-ALTER TABLE ROUTE        ADD COLUMN IF NOT EXISTS id_app BIGINT REFERENCES app(id_app) ON DELETE SET NULL;
+-- Direct id_app FK on MICROSERVICE. Nullable + ON DELETE SET NULL (deleting
+-- the app orphans the microservice at app=NULL). ROUTE.id_app lo quito V8.
 ALTER TABLE MICROSERVICE ADD COLUMN IF NOT EXISTS id_app BIGINT REFERENCES app(id_app) ON DELETE SET NULL;
 
-CREATE INDEX IF NOT EXISTS idx_route_app        ON ROUTE(id_app);
 CREATE INDEX IF NOT EXISTS idx_microservice_app ON MICROSERVICE(id_app);

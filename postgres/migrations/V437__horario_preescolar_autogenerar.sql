@@ -1,7 +1,8 @@
 -- V437 -- Preescolar: el horario se arma solo al guardar el plan de estudio.
 -- Los dias salen de la jornada del periodo (Fin de semana -> sabado; el resto
 -- -> lunes a viernes) y cada renglon del plan ocupa tantos bloques como su
--- intensidad horaria (NUMERO_HORA), llenando dia por dia. Si no cabe en
+-- intensidad horaria (NUMERO_HORA), llenando dia por dia; bajarla retira los
+-- bloques sobrantes desde el final de la semana. Si no cabe en
 -- dias x BLOQUES_POR_DEFECTO, lanza y el guardado del plan se cae con ella.
 -- Depende de: V45 (fn_horario_calcular_bloques, THORARIO), V285
 -- (fn_grado_es_preescolar, TASIGNATURA_PLAN). Idempotente.
@@ -78,6 +79,37 @@ BEGIN
         -- cuentan contra la capacidad aunque no se toquen.
         v_idx := 0;
 
+        -- Bajar la intensidad retira el sobrante antes de rellenar: se quitan
+        -- las ultimas celdas de la grilla (y primero las de dias fuera de la
+        -- jornada), para que el hueco quede al final de la semana.
+        UPDATE academico_test.THORARIO h
+           SET ACTIVE      = FALSE,
+               MODIFIED_BY = v_audit,
+               MODIFIED_AT = CURRENT_TIMESTAMP
+          FROM (
+                SELECT h2.PK_THORARIO,
+                       p.bloques,
+                       COUNT(*) OVER (PARTITION BY h2.FK_TASIGNATURA) AS ya,
+                       -- rn = 1 es la ultima celda de la asignatura en la semana.
+                       ROW_NUMBER() OVER (
+                           PARTITION BY h2.FK_TASIGNATURA
+                           ORDER BY array_position(v_dias, h2.FK_TLV_DIA_SEMANA) DESC NULLS FIRST,
+                                    h2.NUMERO_BLOQUE DESC) AS rn
+                  FROM academico_test.THORARIO h2
+                  JOIN (SELECT ap.FK_TASIGNATURA,
+                               MAX(CEIL(COALESCE(ap.NUMERO_HORA, 0)))::INT AS bloques
+                          FROM academico_test.TASIGNATURA_PLAN ap
+                          JOIN academico_test.TPLAN pl
+                            ON pl.PK_TPLAN = ap.FK_TPLAN AND pl.ACTIVE = TRUE
+                         WHERE pl.FK_TGRADO = p_fk_grado AND ap.ACTIVE = TRUE
+                         GROUP BY ap.FK_TASIGNATURA) p
+                    ON p.FK_TASIGNATURA = h2.FK_TASIGNATURA
+                 WHERE h2.ACTIVE = TRUE
+                   AND h2.FK_TGRUPO = r_grupo.PK_TGRUPO
+               ) s
+         WHERE h.PK_THORARIO = s.PK_THORARIO
+           AND s.rn <= s.ya - s.bloques;
+
         FOR r_item IN
             SELECT ap.FK_TASIGNATURA,
                    CEIL(COALESCE(ap.NUMERO_HORA, 0))::INT AS bloques
@@ -141,7 +173,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_horario_preescolar_autogenerar(BIGINT, BIGINT)
-    IS 'Arma el horario de un grado de PREESCOLAR a partir de su plan de estudio. Dias segun la jornada del periodo academico: "Fin de semana" -> solo sabado, cualquier otra -> lunes a viernes (VALOR 2..6 de DIA_SEMANA, resuelto por CATEGORIA+VALOR y no por pk). Bloques por dia = TPERIODO_ACADEMICO.BLOQUES_POR_DEFECTO. Recorre los renglones del plan por PK y le da a cada asignatura tantos bloques como su NUMERO_HORA (intensidad horaria, redondeada hacia arriba), llenando la grilla dia por dia: con 5 bloques/dia y 20 horas, ocupa de lunes a jueves. SOLO rellena celdas vacias --lo puesto a mano se respeta-- pero las ocupadas igual consumen capacidad. Idempotente: descuenta los bloques que la asignatura ya tiene, asi que regenerar no duplica y subir la intensidad solo agrega la diferencia. Si el plan no cabe en dias x bloques lanza 22023 y, llamada desde el trigger, tumba el guardado del plan. Devuelve el numero de celdas creadas. Periodo sin jornada configurada (sin BLOQUES_POR_DEFECTO) -> 0 sin error. No es fn_horario_guardar (V45), que es el guardado manual de la grilla completa.';
+    IS 'Arma el horario de un grado de PREESCOLAR a partir de su plan de estudio. Dias segun la jornada del periodo academico: "Fin de semana" -> solo sabado, cualquier otra -> lunes a viernes (VALOR 2..6 de DIA_SEMANA, resuelto por CATEGORIA+VALOR y no por pk). Bloques por dia = TPERIODO_ACADEMICO.BLOQUES_POR_DEFECTO. Recorre los renglones del plan por PK y le da a cada asignatura tantos bloques como su NUMERO_HORA (intensidad horaria, redondeada hacia arriba), llenando la grilla dia por dia: con 5 bloques/dia y 20 horas, ocupa de lunes a jueves. SOLO rellena celdas vacias --lo puesto a mano se respeta-- pero las ocupadas igual consumen capacidad. Idempotente: descuenta los bloques que la asignatura ya tiene, asi que regenerar no duplica y subir la intensidad solo agrega la diferencia; bajarla retira (baja logica) las celdas sobrantes empezando por el final de la semana, incluso las puestas a mano, y el hueco queda vacio. Si el plan no cabe en dias x bloques lanza 22023 y, llamada desde el trigger, tumba el guardado del plan. Devuelve el numero de celdas creadas. Periodo sin jornada configurada (sin BLOQUES_POR_DEFECTO) -> 0 sin error. No es fn_horario_guardar (V45), que es el guardado manual de la grilla completa.';
 
 
 -- El disparo: cualquier alta o cambio de un renglon del plan regenera el

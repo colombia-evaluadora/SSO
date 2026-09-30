@@ -1,95 +1,11 @@
 -- ===========================================================================
--- V346 - Guardar la planilla de UNA asignatura, y el recalculo de metricas
---        que eso obliga a centralizar.
---
---   fn_informe_metricas_recalcular   recalcula TINFORME_PERIODO_MATRICULA
---   fn_informe_periodo_guardar       (REESCRITA) ahora delega en el helper
---   fn_informe_planilla_guardar      congela UNA asignatura
---
---
--- EL PROBLEMA QUE OBLIGA A ESTO
---   TASIGNATURA_NOTA es por (matricula, periodo, ASIGNATURA), asi que guardar
---   una sola asignatura no pisa a las demas: ahi no hay conflicto.
---
---   Pero TINFORME_PERIODO_MATRICULA (V336) es por (matricula, periodo) y
---   AGREGA TODAS las asignaturas: promedio, aprobadas, reprobadas. Si se
---   guarda una sola y nadie recalcula esa fila, queda describiendo un estado
---   que ya no existe. Medido en el servidor:
---
---     notas guardadas   MAT.FINANCIERA=70.00, MATEMATICAS=20.00
---     promedio real     45.00
---     fila de metricas  77.71   <- vieja
---     listado muestra   77.71   <- y por tanto miente
---
---   Es el peor tipo de error: silencioso y consistente consigo mismo.
---
---
--- UN SEGUNDO DEFECTO, HEREDADO DE V336
---   Aquella acumulaba las metricas DENTRO del bucle, leyendo d.aprobada del
---   detalle. Pero el detalle calcula la aprobacion sobre la nota VISIBLE
---   -- COALESCE(guardada, proyectada) --, o sea sobre la nota VIEJA, mientras
---   que lo que se escribe es la proyectada. Con una guardada previa distinta,
---   la fila de metricas describia un numero distinto del que quedaba en
---   TASIGNATURA_NOTA. Reproducido: re-guardar sin cambiar ninguna nota movia
---   aprobadas de 2 a 1.
---
---   Por eso el helper calcula DESPUES de escribir y SOLO desde lo guardado.
---   Es la definicion correcta: las metricas describen lo consolidado, no lo
---   que se estaba por consolidar.
---
---
--- (1) EL HELPER
---   Recalcula y persiste la fila de (matricula, periodo) leyendo
---   TASIGNATURA_NOTA. El universo de asignaturas sale de
---   fn_informe_estudiante_asignaturas -- el mismo que ve el usuario --, de
---   modo que una asignatura sin nota guardada cuenta en SIN_DEFINIR en vez de
---   desaparecer del total.
---
---   Si no queda NINGUNA nota guardada, la fila se da de BAJA en vez de
---   quedarse en cero: cero promedio y cero aprobadas se leerian como "este
---   estudiante saco cero", y lo que pasa es que el periodo no esta
---   consolidado. Con la fila inactiva, el listado vuelve a calcular al vuelo y
---   CONSOLIDADO vuelve a FALSE, que es la verdad.
---
---
--- (2) POR QUE EL GUARDADO PARCIAL NO ESTORBA AL COMPLETO
---   No hay estado que se bloquee. Guardar MATEMATICAS y despues el informe
---   entero es valido y da el mismo resultado que guardar el informe entero
---   directamente: la asignatura ya guardada se reporta 'sin_cambio' -- no se
---   toca, para no borrar su MODIFIED_AT -- y las demas se congelan. El helper
---   corre igual al final y deja las metricas coherentes con lo que haya.
---
---   Y al reves: guardar el informe completo y despues una asignatura suelta
---   solo reescribe esa y recalcula. Las dos operaciones son idempotentes y
---   conmutativas en su efecto final.
---
---
--- (3) COMO SE ENTERA EL FRONT
---   Por tres campos que ya existen, sin nada nuevo:
---
---     CONSOLIDADO         (fn_informe_grupo_listar) TRUE si hay fila de
---                         metricas, es decir si algo se congelo en ese
---                         periodo para ese estudiante.
---     ESTADO_NOTA         por asignatura: 'proyectada' (nunca se guardo),
---                         'guardada' (congelada y al dia) o
---                         'cambio_propuesto' (congelada y el docente la
---                         movio despues).
---     PROMEDIO_GUARDADO   vs PROMEDIO_PROYECTADO: si difieren, hay algo sin
---                         consolidar.
---
---   Un guardado parcial se ve exactamente asi: la asignatura guardada queda
---   'guardada' y el resto sigue 'proyectada'. El front no necesita recordar
---   que se guardo ni desde donde.
---
--- Idempotente: CREATE OR REPLACE, con DROP de fn_informe_periodo_guardar
--- porque su RETURNS TABLE no cambia pero si su cuerpo -- el DROP se deja por
--- simetria con el resto del modulo y para que una firma vieja no sobreviva.
+-- V346 - fn_informe_metricas_recalcular: recalcula TINFORME_PERIODO_MATRICULA,
+-- punto unico tras guardar una planilla o un periodo.
+-- fn_informe_periodo_guardar y fn_informe_planilla_guardar viven hoy en V490;
+-- aqui se crean solo si faltan, porque V348 las comenta al migrar.
 -- ===========================================================================
 
 
--- ---------------------------------------------------------------------------
--- 1. Recalculo de metricas. Punto UNICO: lo llaman los dos guardados.
--- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_metricas_recalcular(
     p_pk_usuario_solicitante BIGINT,
     p_fk_tmatricula          BIGINT,
@@ -188,13 +104,11 @@ $function$;
 COMMENT ON FUNCTION academico_test.fn_informe_metricas_recalcular(BIGINT, BIGINT, BIGINT)
     IS 'Recalcula y persiste la fila de TINFORME_PERIODO_MATRICULA de un (estudiante, periodo) a partir de lo que HAY GUARDADO en TASIGNATURA_NOTA. Es el punto UNICO de ese calculo y lo llaman los dos guardados -- el del informe completo y el de una sola asignatura desde la planilla -- porque esa fila agrega TODAS las asignaturas: guardar una sola y no recalcularla la deja describiendo un estado que ya no existe, en silencio y de forma consistente consigo misma (medido: notas 70 y 20, promedio real 45, fila diciendo 77.71). Calcula DESPUES de escribir y solo desde lo guardado, no desde lo que se iba a guardar: la version anterior acumulaba dentro del bucle leyendo la aprobacion del detalle, que la decide sobre la nota VISIBLE -- COALESCE(guardada, proyectada), es decir la VIEJA -- mientras escribia la proyectada, de modo que las metricas podian describir un numero distinto del que quedaba en la tabla (reproducido: re-guardar sin cambiar nada movia aprobadas de 2 a 1). El universo de asignaturas sale de fn_informe_estudiante_asignaturas, el mismo que ve el usuario, asi que una asignatura sin nota guardada cuenta en SIN_DEFINIR en vez de desaparecer del total; y una nota guardada cuyo grado no tiene DESEMPENHO_MINIMO tambien va a SIN_DEFINIR, nunca a reprobadas. Si no queda NINGUNA nota guardada la fila se da de BAJA en vez de quedar en cero: un promedio 0 se leeria como "saco cero" cuando lo que pasa es que el periodo no esta consolidado, y con la fila inactiva el listado vuelve a calcular al vuelo y CONSOLIDADO vuelve a FALSE.';
 
-
--- ---------------------------------------------------------------------------
--- 2. El guardado del informe completo, ahora delegando el recalculo.
--- ---------------------------------------------------------------------------
-DROP FUNCTION IF EXISTS academico_test.fn_informe_periodo_guardar(BIGINT, BIGINT, BIGINT, BIGINT[]);
-
-CREATE OR REPLACE FUNCTION academico_test.fn_informe_periodo_guardar(
+-- V348 la comenta al migrar; la vigente vive en V490
+DO $guarda$
+BEGIN
+    IF to_regprocedure('academico_test.fn_informe_periodo_guardar(bigint,bigint,bigint,bigint[])') IS NULL THEN
+        EXECUTE $crear$CREATE OR REPLACE FUNCTION academico_test.fn_informe_periodo_guardar(
     p_pk_usuario_solicitante BIGINT,
     p_fk_tgrupo              BIGINT,
     p_fk_tperiodo_evaluacion BIGINT,
@@ -373,16 +287,15 @@ BEGIN
         RETURN NEXT;
     END LOOP;
 END;
-$function$;
+$function$$crear$;
+    END IF;
+END $guarda$;
 
-COMMENT ON FUNCTION academico_test.fn_informe_periodo_guardar(BIGINT, BIGINT, BIGINT, BIGINT[])
-    IS 'Consolida un periodo COMPLETO: congela la nota proyectada de cada asignatura en TASIGNATURA_NOTA para el grupo (o solo las matriculas indicadas; NULL o vacio = todas) y deja las metricas al dia. Es el paso de gris a negro de la vista de informes. Las metricas ya NO se acumulan dentro del bucle: se delegan en fn_informe_metricas_recalcular, que corre despues de escribir y lee lo GUARDADO. Aquel calculo inline tenia un defecto -- leia la aprobacion del detalle, que la decide sobre la nota visible COALESCE(guardada, proyectada), es decir la vieja, mientras escribia la proyectada --, de modo que re-guardar sin cambiar ninguna nota podia mover aprobadas de 2 a 1. Convive sin problemas con fn_informe_planilla_guardar, que congela una sola asignatura: TASIGNATURA_NOTA es por (matricula, periodo, asignatura) y no se pisan, y ambas terminan llamando al mismo recalculo, asi que las dos operaciones son idempotentes y su efecto final no depende del orden. Lo ya guardado con el mismo valor se reporta sin_cambio y no se toca, para no borrar el MODIFIED_AT que dice cuando se consolido. DEFINITIVA se guarda en PORCENTAJE, no homologada, porque la escala depende de TCRITERIO_EVALUACION por (asignatura, grado) y puede cambiar. Preescolar no usa este endpoint: alli todo sale sin_proyeccion porque las observaciones se guardan con CALIFICABLE=N y no promedian. Devuelve un informe por estudiante con el detalle en JSONB, y el promedio y los conteos ya recalculados. Gate: INFORMES/EDITAR.';
-
-
--- ---------------------------------------------------------------------------
--- 3. El guardado de la planilla: UNA asignatura.
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_informe_planilla_guardar(
+-- V348 la comenta al migrar; la vigente vive en V490
+DO $guarda$
+BEGIN
+    IF to_regprocedure('academico_test.fn_informe_planilla_guardar(bigint,bigint,bigint,bigint,bigint[])') IS NULL THEN
+        EXECUTE $crear$CREATE OR REPLACE FUNCTION academico_test.fn_informe_planilla_guardar(
     p_pk_usuario_solicitante BIGINT,
     p_fk_tgrupo              BIGINT,
     p_fk_tasignatura         BIGINT,
@@ -538,7 +451,6 @@ BEGIN
         v_prev := NULL; v_existe := NULL;
     END LOOP;
 END;
-$function$;
-
-COMMENT ON FUNCTION academico_test.fn_informe_planilla_guardar(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT[])
-    IS 'Congela la definitiva de UNA asignatura desde la planilla de informes, para el grupo o solo las matriculas indicadas (NULL o vacio = todas). Es el hermano acotado de fn_informe_periodo_guardar, que congela todas las asignaturas del estudiante. NO SE PISAN: TASIGNATURA_NOTA es por (matricula, periodo, asignatura), asi que guardar una no toca las demas, y las dos terminan llamando a fn_informe_metricas_recalcular, de modo que la fila agregada de TINFORME_PERIODO_MATRICULA queda coherente sin importar en que orden se hayan usado; ambas son idempotentes. El recalculo corre SIEMPRE, incluso cuando el resultado es sin_cambio, porque otra asignatura pudo haberse movido desde el ultimo y esa fila las agrega a todas. Resultados por estudiante: guardada (primera vez), actualizada (habia otra, se devuelve nota_anterior), sin_cambio (ya estaba con el mismo valor, no se toca para no borrar su MODIFIED_AT) o sin_proyeccion (no hay actividad evaluativa calificada en el periodo). En sin_proyeccion lo ya guardado NO se borra: quitar un consolidado por una ausencia no es decision de un boton de guardar. Devuelve ademas el promedio y los conteos del periodo ya recalculados, para que la pantalla pueda refrescar sin volver a consultar. La nota se guarda en PORCENTAJE, no homologada, por la misma razon que en el guardado completo. Gate: INFORMES/EDITAR sobre el grupo, mas el validador puro fn_planilla_grupo_asignatura_assert (V239) para que el filtro invalido de el mismo error al leer y al guardar.';
+$function$$crear$;
+    END IF;
+END $guarda$;

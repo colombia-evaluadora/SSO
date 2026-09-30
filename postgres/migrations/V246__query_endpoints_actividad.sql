@@ -116,7 +116,6 @@
 -- criterios de unidad).
 -- ===========================================================================
 
-
 -- ===========================================================================
 -- 1. POST /planeador/actividades — fn_actividad_crear (V224).
 -- ===========================================================================
@@ -178,7 +177,6 @@ SELECT r.id_role, q.id_query
    AND q.path_template = '/planeador/actividades'
    AND q.http_method   = 'POST'
 ON CONFLICT DO NOTHING;
-
 
 -- ===========================================================================
 -- 2. PUT /planeador/actividades/:ID — fn_actividad_actualizar (V224, PATCH
@@ -277,7 +275,6 @@ UPDATE public.query q
    AND q.http_method     = 'PUT'
    AND q.detail IS DISTINCT FROM 'V246 -- PATCH parcial de una actividad (fn_actividad_actualizar, V224). :ID = PK_TACTIVIDAD. Cada campo ausente/NULL preserva el valor actual; MATERIALES/ADAPTACIONES/FK_TMATRICULAS: NULL = no tocar, array (incl. vacio) = reemplazo completo. EVIDENCIAS (PKs de TREFERENTE_ENUNCIADO nivel 2) y CRITERIOS (PKs de TCRITERIO_UNIDAD) siguen el mismo contrato: NULL = no tocar, array (incl. vacio) = el set queda exactamente ese (se desactivan las relaciones que ya no vienen y el resto se relaciona/reactiva con fn_actividad_evidencia_relacionar / fn_actividad_criterio_relacionar, V214.1; agregar exige que la actividad tenga unidad). Los pk de esas relaciones se leen en GET /planeador/actividades/:ID (columnas evidencias y criterios). DESVINCULAR_UNIDAD=true es excluyente con FK_TUNIDAD/PONDERACION (unidad/ponderacion se delegan en fn_unidad_actividad_vincular/_ponderacion_set/_desvincular, V223, mismo punto unico de la regla del 100%). QUITAR_RECUPERACION=true es excluyente con RECUPERACION. Revalida fechas, catalogos, unicidad (titulo, unidad, grupo, jerarquia) y las condiciones dinamicas de evaluacion/ponderacion contra los valores RESULTANTES del PATCH (ver campos_disponibles del punto 6). Gate EDITAR sobre PLANEADOR. 404 (P0002) si la actividad no existe; 22023 si esta inactiva.';
 
-
 -- ===========================================================================
 -- 3. PATCH /planeador/actividades/:ID — fn_actividad_eliminar (V224, soft
 --    delete en cascada; bloquea si tiene notas registradas o es recuperada
@@ -309,7 +306,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PATCH'
 ON CONFLICT DO NOTHING;
 
-
 -- ===========================================================================
 -- 4. GET /planeador/actividades/:ID — fn_actividad_buscar_por_pk (V224,
 --    detalle completo).
@@ -340,7 +336,6 @@ SELECT r.id_role, q.id_query
    AND q.path_template = '/planeador/actividades/:ID'
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
-
 
 -- ===========================================================================
 -- 5. GET /planeador/actividades — fn_actividad_listar (V224, paginado +
@@ -387,7 +382,6 @@ SELECT r.id_role, q.id_query
    AND q.path_template = '/planeador/actividades'
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
-
 
 -- ===========================================================================
 -- 6. GET /planeador/actividades/:ID/configuracion — "visualizacion construida
@@ -454,7 +448,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
 
-
 -- ===========================================================================
 -- 7. GET /planeador/actividades/huerfanas — fn_actividad_huerfanas_listar
 --    (V244, actividades sin unidad).
@@ -491,42 +484,12 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
 
-
 -- ===========================================================================
 -- 8. GET /planeador/unidades/:ID/actividades-disponibles —
 --    fn_actividad_disponibles_listar (V223; candidatas a vincularse a ESA
 --    unidad; :ID = PK_TUNIDAD, distinto de .../:ID/actividades de V245 que
 --    lista las YA vinculadas).
 -- ===========================================================================
-INSERT INTO public.query
-    (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
-SELECT
-    gen_random_uuid()::text,
-    'SELECT * FROM academico_test.fn_actividad_disponibles_listar(
-    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
-    CAST(:PARAM.ID AS BIGINT),
-    CAST(:QUERY.SEARCH AS VARCHAR),
-    COALESCE(CAST(:QUERY.PAGINA AS INT), 1),
-    COALESCE(CAST(:QUERY.SIZE AS INT), 20)
-);',
-    'postgres', false, false,
-    m.id_microservice, '/planeador/unidades/:ID/actividades-disponibles', 'SELECT', 'GET',
-    '{"PARAM.ID": "BIGINT", "QUERY.SEARCH": "VARCHAR", "QUERY.PAGINA": "INT"}'::jsonb,
-    'V246 -- actividades candidatas a vincularse a la unidad :ID (modal "Vincular actividad"; fn_actividad_disponibles_listar, V223). :ID = PK_TUNIDAD. Candidata = ACTIVE, sin unidad (FK_TUNIDAD IS NULL), misma asignatura que la unidad, y mismo grado via el grupo de la actividad (sin grupo tambien es candidata). ?search= (trigram TITULO+DESCRIPCION). Devuelve tipo/instrumento resueltos, grupo y porcentaje_disponible = fn_unidad_ponderacion_disponible(unidad, grupo de esa fila) para pintar "Disponible para asignar: X%". Paginacion ?pagina= (default 1) / ?size= (default 20). total_count via COUNT(*) OVER(). Gate VER sobre PLANEADOR. 404 (P0002) si la unidad no existe.'
-  FROM public.microservice m
- WHERE m.serviceid = 'eval-col'
-ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
-
-INSERT INTO public.role_query (role_id, query_id)
-SELECT r.id_role, q.id_query
-  FROM public.query q
-  JOIN public.microservice m ON m.id_microservice = q.microservice_id
-  JOIN public.role r ON r.name IN ('CEVAL-SUPER_ADMINISTRADOR')
- WHERE m.serviceid    = 'eval-col'
-   AND q.path_template = '/planeador/unidades/:ID/actividades-disponibles'
-   AND q.http_method   = 'GET'
-ON CONFLICT DO NOTHING;
-
 
 -- ===========================================================================
 -- 9. GET /planeador/actividades/:ID/materiales-reutilizables —
@@ -563,7 +526,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
 
-
 -- ===========================================================================
 -- 10. PUT /planeador/actividades/:ID/materiales — fn_actividad_material_reemplazar
 --     (V224, reemplazo completo de materiales de apoyo).
@@ -594,7 +556,6 @@ SELECT r.id_role, q.id_query
    AND q.path_template = '/planeador/actividades/:ID/materiales'
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
-
 
 -- ===========================================================================
 -- 11. PUT /planeador/actividades/:ID/adaptaciones —
@@ -628,7 +589,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
 
-
 -- ===========================================================================
 -- 12. POST /planeador/actividades/:ID/observar-grupal —
 --     fn_actividad_observar_grupal (V243, preescolar/formativo).
@@ -661,7 +621,6 @@ SELECT r.id_role, q.id_query
    AND q.path_template = '/planeador/actividades/:ID/observar-grupal'
    AND q.http_method   = 'POST'
 ON CONFLICT DO NOTHING;
-
 
 -- ===========================================================================
 -- 13. PUT /planeador/actividades/estudiantes/:ID/observar —
@@ -699,7 +658,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
 
-
 -- ===========================================================================
 -- 14. POST /planeador/actividades/:ID/evidencias —
 --     fn_actividad_evidencia_relacionar (V214.1).
@@ -731,7 +689,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'POST'
 ON CONFLICT DO NOTHING;
 
-
 -- ===========================================================================
 -- 15. PATCH /planeador/actividades/evidencias/:ID —
 --     fn_actividad_evidencia_quitar (V214.1; :ID = PK_TACTIVIDAD_EVIDENCIA).
@@ -761,7 +718,6 @@ SELECT r.id_role, q.id_query
    AND q.path_template = '/planeador/actividades/evidencias/:ID'
    AND q.http_method   = 'PATCH'
 ON CONFLICT DO NOTHING;
-
 
 -- ===========================================================================
 -- 16. POST /planeador/actividades/:ID/criterios —
@@ -793,7 +749,6 @@ SELECT r.id_role, q.id_query
    AND q.path_template = '/planeador/actividades/:ID/criterios'
    AND q.http_method   = 'POST'
 ON CONFLICT DO NOTHING;
-
 
 -- ===========================================================================
 -- 17. PATCH /planeador/actividades/criterios/:ID —
