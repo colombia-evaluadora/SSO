@@ -9,7 +9,8 @@
 -- de "mías" se quedaba con la forma vieja y respondía 42804.
 -- Depende de: V29 (alcance por sede/rol), V224 (fn_actividad_estado,
 -- fn_funcionario_actual), V454 (versión previa), V475/V476
--- (fn_actividad_es_formativa).
+-- (fn_actividad_es_formativa), V451 (fn_unidad_referente_aplicable,
+-- Regla 13 de rotulo_ejecucion).
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -56,13 +57,27 @@ BEGIN
             dia                             DATE,
             dia_anterior                    DATE,
             dia_siguiente                   DATE,
-            total_count                     BIGINT
+            total_count                     BIGINT,
+            rotulo_ejecucion                VARCHAR
         );
     END IF;
 END $$;
 
+-- rotulo_ejecucion al final: servidor con V481 ya aplicado sin la columna
+-- (ALTER TYPE ... ADD ATTRIBUTE siempre agrega al final, ver V488).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute
+         WHERE attrelid = 'academico_test.t_actividad_listado_fila'::regtype::oid
+           AND attname = 'rotulo_ejecucion' AND NOT attisdropped
+    ) THEN
+        ALTER TYPE academico_test.t_actividad_listado_fila ADD ATTRIBUTE rotulo_ejecucion VARCHAR;
+    END IF;
+END $$;
+
 COMMENT ON TYPE academico_test.t_actividad_listado_fila
-    IS 'Fila de GET /planeador/actividades, /planeador/actividades/mias y su export. Una columna nueva: ALTER TYPE ... ADD ATTRIBUTE y agregarla al SELECT de fn_actividad_listar_interno.';
+    IS 'Fila de GET /planeador/actividades, /planeador/actividades/mias y su export. rotulo_ejecucion: como se llama la actividad para su grado (Regla 13, mismo calculo que fn_planeador_rotulo_actividad_interno V511, sin llamarla: V511 es posterior a este archivo). Una columna nueva: ALTER TYPE ... ADD ATTRIBUTE y agregarla al SELECT de fn_actividad_listar_interno.';
 
 -- ---------------------------------------------------------------------------
 -- 2. Alcance de lectura del Planeador, resuelto una vez por petición.
@@ -330,7 +345,17 @@ BEGIN
            p_dia,
            n.anterior,
            n.siguiente,
-           COALESCE(b.total, 0)
+           COALESCE(b.total, 0),
+           -- Regla 13: Rotulo de Ejecucion del referente que aplica al grado
+           -- de la actividad (grupo o, si no tiene, el de su unidad) y su
+           -- asignatura.
+           COALESCE(
+               (SELECT rc_rot.ROTULO_EJECUCION
+                  FROM academico_test.TREFERENTE_CURRICULAR rc_rot
+                 WHERE rc_rot.PK_REFERENTE_CURRICULAR =
+                       academico_test.fn_unidad_referente_aplicable(gr.PK_TGRADO, a.FK_TASIGNATURA)),
+               'Actividad'
+           )::VARCHAR
       FROM base b
       FULL OUTER JOIN nav n ON TRUE
       LEFT JOIN academico_test.TACTIVIDAD a      ON a.PK_TACTIVIDAD = b.pk
