@@ -1,6 +1,6 @@
 -- ===========================================================================
 -- V349 - Endpoint GET del historial de informes (fila public.query + roles).
--- La funcion fn_informe_historial_listar vive en V491; su COMMENT en V523.
+-- La funcion fn_informe_historial_listar vive en V491; su COMMENT en V491.1.
 -- ===========================================================================
 
 

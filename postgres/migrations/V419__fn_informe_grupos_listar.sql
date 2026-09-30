@@ -1,6 +1,6 @@
 -- ===========================================================================
 -- V419 - Endpoint GET de grupos de informes (fila public.query + roles).
--- La funcion fn_informe_grupos_listar vive en V490; su COMMENT en V523.
+-- La funcion fn_informe_grupos_listar vive en V490; su COMMENT en V491.1.
 -- ===========================================================================
 
 

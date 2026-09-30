@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V523 - COMMENT de funciones cuyas migraciones de origen se recortaron
+-- V491.1 - COMMENT de funciones cuyas migraciones de origen se recortaron
 -- (V349, V419). Las reescrituras vigentes (V491, V490) no traen
 -- COMMENT; se copia literal.
 -- ===========================================================================

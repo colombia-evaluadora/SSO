@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 437 migraciones (V1–V523), 866 funciones vivas, 66 endpoints vivos. Ultima generacion: 2026-09-30.
+Estado: 438 migraciones (V1–V523), 866 funciones vivas, 66 endpoints vivos. Ultima generacion: 2026-09-30.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -484,7 +484,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `pigse.fn_cumplimiento_listar` | 0 | V261 | V262 |
+| `pigse.fn_cumplimiento_listar` | 0 | V523 | V262 |
 | `pigse.fn_cumplimiento_listar_paginado` | 8 | V261 | V262 |
 | `pigse.fn_cumplimiento_metricas` | 0 | V521 | V262 |
 
@@ -518,7 +518,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `pigse.fn_documento_categorias_listar` | 2 | V521 | V512, V521, V522 |
 | `pigse.fn_documento_eliminar` | 5 | V522 | V262, V512, V515 |
 | `pigse.fn_documento_guardar` | 5 | V522 | V262, V512 |
-| `pigse.fn_documentos_listar` | 1 | V521 | V262, V512, V515, V521 |
+| `pigse.fn_documentos_listar` | 1 | V521 | V262, V512, V515, V521, V523 |
 | `pigse.fn_documentos_listar_todos` | 0 | V521 | V374 |
 | `pigse.fn_documentos_listar_todos_paginado` | 7 | V374 | V368 |
 
