@@ -317,12 +317,7 @@ BEGIN
            AND COALESCE(a.ES_EVALUATIVA::VARCHAR, 'S') = 'S'
            AND COALESCE(a.ES_RECUPERACION::VARCHAR, 'N') = 'N'
            AND a.PK_TACTIVIDAD IS DISTINCT FROM p_pk_tactividad_actual
-           AND academico_test.fn_actividad_estudiantes_con_resultado(a.PK_TACTIVIDAD) > 0
-           AND NOT EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_RECUPERACION r
-                             JOIN academico_test.TACTIVIDAD ra ON ra.PK_TACTIVIDAD = r.FK_TACTIVIDAD AND ra.ACTIVE = TRUE
-                            WHERE r.FK_TACTIVIDAD_RECUPERAR = a.PK_TACTIVIDAD
-                              AND r.ACTIVE = TRUE
-                              AND r.FK_TACTIVIDAD IS DISTINCT FROM p_pk_tactividad_actual);
+           AND academico_test.fn_actividad_estudiantes_con_resultado(a.PK_TACTIVIDAD) > 0;
     END IF;
 
     IF p_fk_tactividad_recuperar IS NOT NULL THEN
@@ -986,4 +981,4 @@ COMMENT ON FUNCTION academico_test.fn_actividad_evidencias_set_interno(BIGINT, B
 COMMENT ON FUNCTION academico_test.fn_actividad_criterios_set_interno(BIGINT, BIGINT, BIGINT[])
     IS 'INTERNO: reemplazo del set de criterios de la rúbrica de la unidad que evalúan la actividad. NULL = no tocar. La usan crear/actualizar_interno.';
 COMMENT ON FUNCTION academico_test.fn_actividad_recuperacion_campos_disponibles(BOOLEAN, VARCHAR, BOOLEAN, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT)
-    IS 'La sección "Es una recuperación" del formulario: {visible, requerido, motivo, recuperarConsultado, catalogos, reglas, actividadesRecuperables, origen}. visible exige referente evaluativo, sumativa y nivel distinto de Preescolar. actividadesRecuperables (con p_recuperar = S): las sumativas del (grupo, asignatura), no recuperación, con resultados y sin otra recuperación activa (Regla 64). origen (con p_fk_tactividad_recuperar): alcance VER y fn_actividad_validar_recuperable antes de devolver el contexto heredado y los estudiantes con su nota previa.';
+    IS 'La sección "Es una recuperación" del formulario: {visible, requerido, motivo, recuperarConsultado, catalogos, reglas, actividadesRecuperables, origen}. visible exige referente evaluativo, sumativa y nivel distinto de Preescolar. actividadesRecuperables (con p_recuperar = S): las sumativas del (grupo, asignatura), no recuperación, con resultados (Regla 64); puede tener ya otros Refuerzos (Regla 67). origen (con p_fk_tactividad_recuperar): alcance VER y fn_actividad_validar_recuperable antes de devolver el contexto heredado y los estudiantes con su nota previa.';

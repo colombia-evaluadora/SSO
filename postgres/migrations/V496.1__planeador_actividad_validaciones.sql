@@ -997,13 +997,6 @@ BEGIN
         RAISE EXCEPTION '% aún no tiene resultados registrados: no hay nota que recuperar', academico_test.fn_actividad_etiqueta(p_fk_tactividad_recuperar)
             USING ERRCODE = '22023';
     END IF;
-    IF EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_RECUPERACION r
-                 JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = r.FK_TACTIVIDAD AND a.ACTIVE = TRUE
-                WHERE r.FK_TACTIVIDAD_RECUPERAR = p_fk_tactividad_recuperar
-                  AND r.FK_TACTIVIDAD IS DISTINCT FROM p_pk_tactividad_actual
-                  AND r.ACTIVE = TRUE) THEN
-        RAISE EXCEPTION '% ya tiene otra recuperación activa', academico_test.fn_actividad_etiqueta(p_fk_tactividad_recuperar) USING ERRCODE = '23505';
-    END IF;
 END;
 $$;
 
