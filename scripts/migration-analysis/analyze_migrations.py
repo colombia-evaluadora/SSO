@@ -452,6 +452,11 @@ def query_columns(stmt: str, head: str) -> dict:
 
 
 ROLE_NAME_RE = re.compile(r"^(?:PIGSE|CEVAL|SSO|ADMIN)[A-Z0-9_\-]*$")
+RE_RAISE_MSG = re.compile(r"\bRAISE\s+(?:NOTICE|WARNING|INFO|LOG|DEBUG|EXCEPTION)\b(?:'(?:[^']|'')*'|[^;'])*;",
+                          re.I)
+RE_STR = re.compile(r"'((?:[^']|'')*)'")
+# Creacion que no hace nada si el objeto ya existe: no reemplaza a la anterior.
+RE_GUARDED = re.compile(r"IF\s+NOT\s+EXISTS|\bNOT\s+EXISTS\s*\(|ON\s+CONFLICT\b[^;]*?\bDO\s+NOTHING", re.I)
 PATHISH_RE = re.compile(r"^/?[a-z0-9][a-z0-9\-]*(?:/[a-z0-9\-:]+)+$|^/[a-z0-9\-]+$", re.I)
 
 
@@ -519,6 +524,9 @@ def analyze_file(path: Path, version: str) -> Migration:
         # que se analiza su cuerpo -- y tambien el texto de los EXECUTE.
         dynamic = head.startswith(("DO ", "DO$"))
         if dynamic:
+            # El mensaje de un RAISE no se ejecuta: V391 solo avisa con
+            # RAISE NOTICE 'ALTER TABLE auditoria.tsesion_web ADD COLUMN ...'.
+            stmt = RE_RAISE_MSG.sub("", stmt)
             pieces = [stmt]
             for body in dollar_bodies(stmt):
                 pieces.append(body)
@@ -533,6 +541,7 @@ def analyze_file(path: Path, version: str) -> Migration:
                 continue
 
         # --- funciones
+        guarded = bool(RE_GUARDED.search(stmt))
         for m in RE_FUNC.finditer(stmt):
             name = qname(m.group(2))
             open_pos = m.end() - 1
@@ -780,11 +789,18 @@ def analyze_file(path: Path, version: str) -> Migration:
                     _unparsed(mig, st)
 
             elif target == "endpoint":
-                paths = [l for l in literals(stmt) if l.startswith("/")]
-                meths = [l for l in literals(stmt) if l.upper() in HTTP_METHODS]
+                # cada ruta va con el metodo que la precede: con el primero de la
+                # sentencia, ('GET','/a'),('POST','/b') daba "GET /b" (V35).
+                pares, meth = [], "?"
+                for lm in RE_STR.finditer(stmt):
+                    lit = lm.group(1)
+                    if lit.upper() in HTTP_METHODS:
+                        meth = lit.upper()
+                    elif lit.startswith("/"):
+                        pares.append((meth, lit))
+                paths = pares
                 if paths:
-                    meth = (meths[0].upper() if meths else "?")
-                    for p in dict.fromkeys(paths):
+                    for meth, p in dict.fromkeys(paths):
                         mig.writes.append(Write(
                             version=version, obj_type="endpoint",
                             obj_key=f"endpoint:{meth} {p}",
@@ -838,6 +854,8 @@ def analyze_file(path: Path, version: str) -> Migration:
         span = [st.line, min(mig.lines, st.line + st.raw.count("\n"))]
         for w in mig.writes[before:]:
             w.span = list(span)
+            if guarded and w.effect == "create":
+                w.extra["guarded"] = True
 
         if (len(mig.writes) == before and len(mig.unparsed_stmts) == flagged
                 and not head.startswith(("COMMENT", "DO", "SET", "SELECT"))):
@@ -973,10 +991,24 @@ def build_graph(migs: list[Migration]) -> dict[str, list[Write]]:
         # dos cadenas conviven sobre el mismo objeto:
         #   identidad -> create / delete  (existe o no existe)
         #   cuerpo    -> create / full / delete  (que dice hoy)
+        # Un create condicionado (IF NOT EXISTS, NOT EXISTS, ON CONFLICT DO
+        # NOTHING) sobre un objeto que ya existe no hace nada: el vivo sigue
+        # siendo el anterior (esquema de V22 frente a V48, pg_trgm de V112,
+        # rol de V59). El redundante es el que sobra.
+        redundant: dict[int, int] = {}
+        alive = None
+        for i, w in enumerate(ws):
+            if w.effect == "create":
+                if w.extra.get("guarded") and alive is not None:
+                    redundant[i] = alive
+                else:
+                    alive = i
+            elif w.effect == "delete":
+                alive = None
         last_body = max((i for i, w in enumerate(ws)
-                         if w.effect in ("create", "full", "delete")), default=-1)
+                         if w.effect in ("create", "full", "delete") and i not in redundant), default=-1)
         last_ident = max((i for i, w in enumerate(ws)
-                          if w.effect in ("create", "delete")), default=-1)
+                          if w.effect in ("create", "delete") and i not in redundant), default=-1)
 
         def killer_after(i: int, effects: tuple[str, ...]) -> str:
             nxt = next((x for x in ws[i + 1:] if x.effect in effects), None)
@@ -1005,6 +1037,11 @@ def build_graph(migs: list[Migration]) -> dict[str, list[Write]]:
                 # crear el objeto en la misma migracion: es la guarda de
                 # idempotencia, no codigo muerto (mismo trato que DROP FUNCTION).
                 w.status = "drop"
+
+            elif i in redundant:
+                w.status = "dead"
+                w.killed_by = ""
+                w.note = f"no-op: ya existe desde V{ws[redundant[i]].version}"
 
             elif w.effect == "create":
                 if i == last_ident:
@@ -1668,6 +1705,80 @@ def usage_edges(migs: list[Migration], chains: dict[str, list[Write]],
 # Main
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Recorte: que de lo "sin efecto" se puede quitar de verdad
+# ---------------------------------------------------------------------------
+# El modelo empareja funciones por nombre y aridad. precision.py (skill
+# next-migration-number) relee por firma exacta y contexto de uso: separa lo
+# que se recorta de lo que hay que conservar aunque este reescrito (sobrecargas
+# vivas, funciones que una migracion intermedia necesita al migrar, semillas) y
+# marca lo que, re-aplicado tras editar el fichero, revertiria una posterior.
+PRECISION = REPO / ".claude" / "skills" / "next-migration-number" / "precision.py"
+CONSERVA = ("NECESARIA", "VIVA_FIRMA", "SEMILLA", "CONDICIONADA")
+AJUSTE = ("DROP_PELIGROSO", "REVIERTE", "ALTER_POSTERIOR", "NECESARIA", "VERIFICACION")
+
+
+def _rle(runs: str) -> list[str]:
+    return [c for n, c in re.findall(r"(\d+)(\D)", runs) for _ in range(int(n))]
+
+
+def _unrle(cells: list[str]) -> str:
+    out: list[list] = []
+    for c in cells:
+        if out and out[-1][0] == c:
+            out[-1][1] += 1
+        else:
+            out.append([c, 1])
+    return "".join(f"{n}{c}" for c, n in out)
+
+
+def apply_precision(model: dict) -> bool:
+    """Anade a cada migracion cut_lines / keep_lines / recorte / findings.
+    Devuelve False (y deja cut_lines = dead_lines) si precision.py no esta."""
+    P = None
+    if PRECISION.exists():
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("precision", PRECISION)
+        P = importlib.util.module_from_spec(spec)
+        sys.modules["precision"] = P
+        spec.loader.exec_module(P)
+    R = P.load() if P else None
+    counts: dict[str, int] = defaultdict(int)
+    for m in model["migrations"]:
+        fs = P.version_findings(R, model, m["version"]) if P else []
+        cells = _rle(m["linemap"])
+        for f in fs:
+            if f.kind not in CONSERVA:
+                continue
+            s = P.stmt_at(R, m["version"], f.line)
+            for i in (P.stmt_span(s) if s else ()):
+                if 0 < i <= len(cells) and cells[i - 1] == "d":
+                    cells[i - 1] = "n"
+        keep = cells.count("n")
+        m["linemap"] = _unrle(cells)
+        m["keep_lines"] = keep
+        m["cut_lines"] = m["dead_lines"] - keep
+        kinds = {f.kind for f in fs}
+        if not P:
+            m["recorte"] = "sin-precision"
+        elif m["cut_lines"] <= 0:
+            m["recorte"] = "nada"
+        elif "BACKFILL" in kinds:
+            m["recorte"] = "revisar-backfill"
+        elif kinds & set(AJUSTE):
+            m["recorte"] = "con-ajuste"
+        else:
+            m["recorte"] = "recortable"
+        counts[m["recorte"]] += 1
+        m["findings"] = [[f.kind, f.line, f.msg, f.extra] for f in fs]
+    meta = model["meta"]
+    meta["cut_lines"] = sum(m["cut_lines"] for m in model["migrations"])
+    meta["keep_lines"] = sum(m["keep_lines"] for m in model["migrations"])
+    meta["recorte"] = dict(counts)
+    meta["precision"] = bool(P)
+    return bool(P)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1766,6 +1877,8 @@ def main() -> int:
         },
     }
 
+    apply_precision(model)
+
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(model, indent=1, ensure_ascii=False),
@@ -1786,6 +1899,12 @@ def main() -> int:
     dl = sum(m.dead_lines for m in migs)
     print(f"  lineas sin efecto: {dl:,} de {sum(m.lines for m in migs):,} "
           f"({round(100 * dl / max(1, sum(m.lines for m in migs)))}%)")
+    if model["meta"].get("precision"):
+        rc = model["meta"]["recorte"]
+        print(f"  recortables: {model['meta']['cut_lines']:,} lineas; se conservan "
+              f"{model['meta']['keep_lines']:,} (necesarias al migrar / vivas por firma)  "
+              f"recortable={rc.get('recortable', 0)} con-ajuste={rc.get('con-ajuste', 0)} "
+              f"revisar-backfill={rc.get('revisar-backfill', 0)}")
     if authors["people"]:
         top = ", ".join(f"{pr['name'].split()[0]} {len(pr['created'])}"
                         for pr in authors["people"][:5])

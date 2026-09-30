@@ -92,6 +92,7 @@ skills-lock*
 # Skills propias del repo
 !.claude/skills/next-migration-number/
 !.claude/skills/analizando-migraciones/
+!.claude/skills/limpiando-migraciones/
 !.claude/skills/probando-en-contenedores-locales/
 !.claude/skills/reaplicando-migraciones/
 !.claude/skills/documentando-con-postman/

@@ -1,56 +1,13 @@
--- ============================================================================
--- V370 — PIGSE gana el concepto de SEDE y el modelo de permisos rol+jornada+
--- estado por sede, igual que academico_test (CEVAL), incluyendo el motor de
--- autorizacion de 3 capas que lo sostiene (capability por menu, scope
--- estructural, rango de rol). Decision explicita del negocio: aunque PIGSE
--- hoy solo tiene 11 roles administrativos/territoriales (ningun rol de tipo
--- docente/aula), se sabe que va a necesitar personal por sede a futuro y el
--- modelo se construye ahora, calibrado a esos 11 roles pero listo para crecer
--- (agregar un rol de categoria 3 no requiere tocar una sola linea de SQL).
---
--- QUE SE PORTA DE academico_test (V22/V29/V51/V52/V297), fielmente:
---   1. Rango de rol por CATEGORIA (0 SUPER_ADMIN .. 3 ADMINISTRATIVOS_SEDES).
---   2. Capability por menu con granularidad CREAR/EDITAR/ELIMINAR/VER.
---   3. Scope estructural: fn_usuario_ee_accesibles / _sedes_jornadas_accesibles.
---   4. fn_assert_permiso_seccion / fn_assert_rango_rol(_otorgable) /
---      fn_assert_permiso_funcionario — los mismos 3 gates compuestos.
---   5. pigse.TSEDE + pigse.TSEDE_USUARIO (rol+jornada+estado), CRUD de sede
---      (fn_sed_crear/actualizar/soft_delete/soft_delete_bulk/listar/
---      buscar_por_pk) y fn_fun_permisos_actualizar (mismo contrato JSONB:
---      accion crear|eliminar, orden, fk_rol, fk_sede, fk_jornada,
---      predeterminado -> TABLE(accion, id, status)).
---
--- QUE SE SIMPLIFICA A PROPOSITO (documentado, no un olvido):
---   * NO hay tabla de "restriccion por usuario" (equivalente a
---     TUSUARIO_ROL_PERMISO): la capability de un rol viene UNICAMENTE de
---     public.role_route (techo del rol). CEVAL permite recortarla por
---     usuario/sede/ente encima de ese techo; PIGSE no tiene ese caso de uso
---     hoy y agregar la capa de recorte es un proyecto aparte si aparece.
---   * La capability se resuelve contra `public.role_users` (la MISMA tabla
---     que ya sincroniza el JWT), no contra una materializacion propia de
---     "roles activos por sede/ente" -- mas simple y ya es la fuente de
---     verdad de que roles tiene un usuario en la plataforma.
---   * public.role NO tiene tabla propia por app (CEVAL tiene TROL separado
---     de public.role, con V111 sincronizandolas); PIGSE ya usa public.role
---     directo para todo (V256+), asi que pigse.role_categoria referencia
---     public.role(id_role) sin capa intermedia.
---
--- QUE REEMPLAZA: pigse.TESTABLECIMIENTO_USUARIO deja de ser la fuente de
--- verdad de "que rol tiene un funcionario" -- pasa a pigse.TSEDE_USUARIO
--- (rol POR SEDE, no por establecimiento completo), igual que en CEVAL todo
--- rol -- incluido Rector -- se otorga sede por sede (fn_sed_crear replica
--- el rol de rector/secretaria del EE en cada sede nueva). La tabla vieja NO
--- se borra (evita romper backfills ya corridos) pero fn_fun_crear/
--- actualizar/listar/buscar_por_pk/soft_delete dejan de leerla o escribirla.
--- Confirmado con el negocio: los pocos funcionarios/roles de PIGSE en test
--- son datos de prueba, se pisan sin migrar.
--- ============================================================================
+-- ===========================================================================
+-- V370 - PIGSE: sedes (TSEDE, TSEDE_USUARIO), categoria de rol y motor de
+-- autorizacion (capability por menu + scope por categoria), con sus
+-- endpoints. El CRUD de funcionarios y fn_sed_listar que nacieron aqui viven
+-- hoy en V386 y V390; el COMMENT de fn_fun_permisos_actualizar, en V517.
+-- ===========================================================================
+
 
 SET search_path TO pigse, academico_test, public;
 
--- ============================================================================
--- 0. RANGO DE ROL — categoria + peso de cada rol PIGSE.
--- ============================================================================
 CREATE TABLE IF NOT EXISTS pigse.role_categoria (
     fk_id_role BIGINT PRIMARY KEY REFERENCES public.role(id_role) ON DELETE CASCADE,
     categoria  SMALLINT NOT NULL,
@@ -80,10 +37,6 @@ SELECT r.id_role, v.categoria, v.peso
     ON v.name = r.name
  WHERE NOT EXISTS (SELECT 1 FROM pigse.role_categoria rc WHERE rc.fk_id_role = r.id_role);
 
--- ============================================================================
--- 1. CAPABILITY POR MENU — public.route gana un codigo estable;
---    public.role_route gana granularidad CREAR/EDITAR/ELIMINAR/VER.
--- ============================================================================
 ALTER TABLE public.route ADD COLUMN IF NOT EXISTS codigo VARCHAR(60);
 
 UPDATE public.route SET codigo = 'FUNCIONARIOS'
@@ -97,13 +50,10 @@ ALTER TABLE public.role_route
 
 COMMENT ON COLUMN public.route.codigo IS
     'V370: codigo ESTABLE (no cambia si el nombre visible del menu cambia) para gates de autorizacion (fn_assert_permiso_seccion). Solo poblado para rutas que necesitan capability granular -- NULL en el resto, sin efecto.';
+
 COMMENT ON COLUMN public.role_route.puede_crear IS
     'V370: capability granular del rol sobre este menu (equivalente a academico_test.TROL_MENU + SOLO_LECTURA). DEFAULT TRUE en las filas existentes para no restringir nada de golpe -- un role_route ya era "tiene acceso a todo" antes de esta columna.';
 
--- ---------------------------------------------------------------------------
--- 1.b Restaura "Sedes" en el menu de PIGSE (V365 la habia sacado por no
---     existir el concepto -- ahora si existe). Mismo patron que V363.
--- ---------------------------------------------------------------------------
 INSERT INTO public.route (name, path, menuorder, idparent)
 SELECT 'Sedes', 'establecimiento-educativo/sedes', 2, r.idparent
   FROM public.route r
@@ -130,11 +80,6 @@ SELECT rt.id_route, ro.id_role
    AND ro.name = 'PIGSE-ADMINISTRADOR'
    AND NOT EXISTS (SELECT 1 FROM public.role_route rr WHERE rr.route_id = rt.id_route AND rr.role_id = ro.id_role);
 
--- ============================================================================
--- 2. HELPERS DE AUTORIZACION (espejo de academico_test, V29).
--- ============================================================================
-
--- 2.1) fn_rol_categoria_nivel — nivel (0..4) de un rol.
 CREATE OR REPLACE FUNCTION pigse.fn_rol_categoria_nivel(p_fk_id_role BIGINT)
 RETURNS INT LANGUAGE plpgsql STABLE
 SET search_path = pigse, public
@@ -153,9 +98,6 @@ $$;
 COMMENT ON FUNCTION pigse.fn_rol_categoria_nivel(BIGINT) IS
     'V370: nivel jerarquico (0=mas alto) de un rol PIGSE via pigse.role_categoria. Rol inexistente o sin fila -> 4 (fail-closed). Nunca NULL.';
 
--- 2.2) fn_usuario_categoria_rol_nivel — nivel mas alto entre los roles
---      PIGSE activos del usuario, resuelto contra public.role_users (la
---      misma fuente que ya alimenta el JWT).
 CREATE OR REPLACE FUNCTION pigse.fn_usuario_categoria_rol_nivel(p_pk_tusuario BIGINT)
 RETURNS INT LANGUAGE plpgsql STABLE
 SET search_path = pigse, public
@@ -177,8 +119,6 @@ $$;
 COMMENT ON FUNCTION pigse.fn_usuario_categoria_rol_nivel(BIGINT) IS
     'V370: nivel jerarquico (0=mas alto) MAS ALTO entre los roles PIGSE activos del usuario (public.role_users, filtrado a roles con fila en pigse.role_categoria -- ignora roles de otras apps). NULL si no tiene ningun rol PIGSE. Simplificacion documentada respecto a CEVAL: se resuelve contra role_users (fuente ya sincronizada del JWT), no recorriendo TENTE_USUARIO/TSEDE_USUARIO aparte.';
 
--- 2.3) fn_usuario_ee_accesibles — establecimientos que alcanza el usuario
---      (rector/secretaria por puntero + categoria 2 via TSEDE_USUARIO).
 CREATE OR REPLACE FUNCTION pigse.fn_usuario_ee_accesibles(p_pk_tusuario BIGINT)
 RETURNS TABLE (establecimiento_id BIGINT)
 LANGUAGE plpgsql STABLE
@@ -209,8 +149,6 @@ $$;
 COMMENT ON FUNCTION pigse.fn_usuario_ee_accesibles(BIGINT) IS
     'V370: establecimientos ACTIVE que el usuario alcanza estructuralmente -- rector/secretaria por puntero (TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR/SECRETARIA, V360) o un TSEDE_USUARIO ACTIVE de categoria 2 (ADMINISTRATIVOS_ESTABLECIMIENTO). Espejo de academico_test.fn_usuario_ee_accesibles. Los territoriales (nivel 1) alcanzan TODOS los EE y se resuelven aparte en fn_assert_permiso_seccion, sin materializar esta tabla.';
 
--- 2.4) fn_usuario_sedes_jornadas_accesibles — pares (sede, jornada) de
---      categoria 3 (listo para roles futuros de personal por sede).
 CREATE OR REPLACE FUNCTION pigse.fn_usuario_sedes_jornadas_accesibles(p_pk_tusuario BIGINT)
 RETURNS TABLE (sede_id BIGINT, jornada_id BIGINT)
 LANGUAGE plpgsql STABLE
@@ -230,7 +168,6 @@ $$;
 COMMENT ON FUNCTION pigse.fn_usuario_sedes_jornadas_accesibles(BIGINT) IS
     'V370: pares (sede,jornada) de un usuario con rol de categoria 3 (ADMINISTRATIVOS_SEDES). PIGSE no tiene hoy ningun rol clasificado en categoria 3 -- el mecanismo queda listo para cuando se agregue uno (INSERT en pigse.role_categoria), sin tocar SQL. Espejo de academico_test.fn_usuario_sedes_jornadas_accesibles.';
 
--- 2.5) fn_usuario_puede_en_menu — capability, contra public.role_route.
 CREATE OR REPLACE FUNCTION pigse.fn_usuario_puede_en_menu(
     p_pk_tusuario BIGINT, p_codigo_menu VARCHAR, p_accion VARCHAR
 )
@@ -263,7 +200,6 @@ $$;
 COMMENT ON FUNCTION pigse.fn_usuario_puede_en_menu(BIGINT, VARCHAR, VARCHAR) IS
     'V370: TRUE si alguno de los roles PIGSE activos del usuario (public.role_users) tiene, en public.role_route para el public.route de ese codigo, la capability p_accion (CREAR|EDITAR|ELIMINAR|VER) en TRUE. Accion desconocida/NULL -> FALSE (fail-closed). Espejo de academico_test.fn_usuario_puede_en_menu, sin la capa de recorte por usuario (TUSUARIO_ROL_PERMISO) -- simplificacion documentada en el encabezado de V370.';
 
--- 2.6) fn_assert_permiso_seccion — capability + scope, en una llamada.
 CREATE OR REPLACE FUNCTION pigse.fn_assert_permiso_seccion(
     p_pk_tusuario        BIGINT,
     p_codigo_menu        VARCHAR,
@@ -347,7 +283,6 @@ $$;
 COMMENT ON FUNCTION pigse.fn_assert_permiso_seccion(BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT) IS
     'V370: espejo de academico_test.fn_assert_permiso_seccion. (0) bypass SUPER_ADMIN; (1) capability (fn_usuario_puede_en_menu); (2) scope SOLO si llega EE o sede: nivel 1 = todos los EE; el EE objetivo en fn_usuario_ee_accesibles; el par (sede,jornada) en fn_usuario_sedes_jornadas_accesibles; para ESTABLECIMIENTO/SEDES_EDUCATIVAS un nivel 3 alcanza sus sedes propias sin jornada. Sin objeto (los 3 p_fk_* NULL), la capability basta.';
 
--- 2.7) fn_assert_rango_rol — no ver/afectar iguales o superiores.
 CREATE OR REPLACE FUNCTION pigse.fn_assert_rango_rol(
     p_pk_solicitante BIGINT, p_pk_funcionario_objetivo BIGINT
 )
@@ -393,7 +328,6 @@ $$;
 COMMENT ON FUNCTION pigse.fn_assert_rango_rol(BIGINT, BIGINT) IS
     'V370: espejo de academico_test.fn_assert_rango_rol. Un usuario no puede ver/afectar a un funcionario cuya categoria de rol (MIN de sus roles PIGSE activos) sea igual o superior a la propia. Objetivo sin rol activo -> pasa (nada que proteger). Solicitante SUPER_ADMIN -> bypass.';
 
--- 2.8) fn_assert_rango_rol_otorgable — no otorgar iguales/superiores.
 CREATE OR REPLACE FUNCTION pigse.fn_assert_rango_rol_otorgable(
     p_pk_solicitante BIGINT, p_fk_id_role BIGINT
 )
@@ -426,8 +360,6 @@ $$;
 COMMENT ON FUNCTION pigse.fn_assert_rango_rol_otorgable(BIGINT, BIGINT) IS
     'V370: espejo de academico_test.fn_assert_rango_rol_otorgable. Nadie puede otorgar un rol de categoria igual o superior a la propia. SUPER_ADMIN otorga cualquiera; sin rol activo, ninguno.';
 
--- 2.9) fn_assert_permiso_funcionario — capability + scope + rango, modulo
---      FUNCIONARIOS.
 CREATE OR REPLACE FUNCTION pigse.fn_assert_permiso_funcionario(
     p_pk_tusuario             BIGINT,
     p_accion                  VARCHAR,
@@ -492,9 +424,6 @@ $$;
 COMMENT ON FUNCTION pigse.fn_assert_permiso_funcionario(BIGINT, VARCHAR, BIGINT) IS
     'V370: espejo de academico_test.fn_assert_permiso_funcionario. Capability (FUNCIONARIOS) + scope (rector/secretaria por puntero, o TSEDE_USUARIO categoria 2 en un EE accesible, o categoria 3 en una sede accesible) + rango (fn_assert_rango_rol). Nivel 1 (territorial) alcanza cualquier funcionario.';
 
--- ============================================================================
--- 3. TABLAS: pigse.TSEDE + pigse.TSEDE_USUARIO.
--- ============================================================================
 CREATE TABLE IF NOT EXISTS pigse.TSEDE (
     PK_TSEDE            BIGINT GENERATED BY DEFAULT AS IDENTITY NOT NULL,
     CODIGO              VARCHAR(30) NOT NULL,
@@ -519,8 +448,11 @@ CREATE TABLE IF NOT EXISTS pigse.TSEDE (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS U_PIGSE_TSEDE_CODIGO ON pigse.TSEDE (CODIGO) WHERE ACTIVE = true;
+
 CREATE UNIQUE INDEX IF NOT EXISTS U_PIGSE_TSEDE_EST_NOMBRE ON pigse.TSEDE (FK_TESTABLECIMIENTO, NOMBRE) WHERE ACTIVE = true;
+
 CREATE UNIQUE INDEX IF NOT EXISTS U_PIGSE_TSEDE_EST_CONSEC ON pigse.TSEDE (FK_TESTABLECIMIENTO, CONSECUTIVO) WHERE ACTIVE = true;
+
 CREATE INDEX IF NOT EXISTS IDX_PIGSE_TSEDE_EST ON pigse.TSEDE (FK_TESTABLECIMIENTO);
 
 COMMENT ON TABLE pigse.TSEDE IS 'V370: sede de un establecimiento PIGSE. Espejo de academico_test.TSEDE (V22).';
@@ -549,18 +481,16 @@ CREATE TABLE IF NOT EXISTS pigse.TSEDE_USUARIO (
 );
 
 CREATE INDEX IF NOT EXISTS IDX_PIGSE_TSEDE_USUARIO_SEDE ON pigse.TSEDE_USUARIO (FK_TSEDE);
+
 CREATE INDEX IF NOT EXISTS IDX_PIGSE_TSEDE_USUARIO_ROLE ON pigse.TSEDE_USUARIO (FK_ID_ROLE);
+
 CREATE INDEX IF NOT EXISTS IDX_PIGSE_TSEDE_USUARIO_USUARIO ON pigse.TSEDE_USUARIO (FK_TUSUARIO);
+
 CREATE INDEX IF NOT EXISTS IDX_PIGSE_TSEDE_USUARIO_ACTIVE ON pigse.TSEDE_USUARIO (PK_TSEDE_USUARIO) WHERE ACTIVE = true;
 
 COMMENT ON TABLE pigse.TSEDE_USUARIO IS
     'V370: permiso rol+jornada+estado de un usuario en una sede -- reemplaza a pigse.TESTABLECIMIENTO_USUARIO (rol directo por establecimiento, sin jornada/estado) como fuente de verdad de "que rol tiene un funcionario". Espejo de academico_test.TSEDE_USUARIO (V22), FK_ID_ROLE contra public.role en vez de una TROL propia.';
 
--- ============================================================================
--- 4. fn_sede_usuario_crear / fn_sede_usuario_soft_delete — altas/bajas de
---    permiso, usadas por fn_fun_permisos_actualizar y por el auto-grant de
---    rector/secretaria en fn_sed_crear.
--- ============================================================================
 CREATE OR REPLACE FUNCTION pigse.fn_sede_usuario_crear(
     p_pk_usuario_solicitante BIGINT,
     p_fk_tsede               BIGINT,
@@ -659,10 +589,6 @@ $$;
 COMMENT ON FUNCTION pigse.fn_sede_usuario_soft_delete(BIGINT, BIGINT) IS
     'V370: baja logica de un TSEDE_USUARIO; si el usuario no le queda otro TSEDE_USUARIO activo con ese rol, lo retira de public.role_users. Espejo de academico_test.fn_sede_usuario_soft_delete.';
 
--- ============================================================================
--- 5. CRUD DE SEDE — fn_sed_crear/actualizar/soft_delete/soft_delete_bulk/
---    listar/buscar_por_pk. Espejo de academico_test (V52), gate propio.
--- ============================================================================
 CREATE OR REPLACE FUNCTION pigse.fn_sed_crear(
     p_pk_usuario_solicitante BIGINT,
     p_codigo                 VARCHAR,
@@ -935,66 +861,6 @@ $$;
 COMMENT ON FUNCTION pigse.fn_sed_soft_delete_bulk(BIGINT, BIGINT[]) IS
     'V370: baja logica bulk de sedes -- cada PK en su propio savepoint (un fallo no aborta el resto). Espejo de academico_test.fn_sed_soft_delete_bulk.';
 
-CREATE OR REPLACE FUNCTION pigse.fn_sed_listar(
-    p_pk_usuario_solicitante BIGINT,
-    p_search                 VARCHAR  DEFAULT NULL,
-    p_fk_establecimiento     BIGINT   DEFAULT NULL,
-    p_sort_campo             VARCHAR  DEFAULT NULL,
-    p_sort_desc              BOOLEAN  DEFAULT FALSE,
-    p_page_index             INT      DEFAULT 0,
-    p_page_size              INT      DEFAULT 10
-)
-RETURNS TABLE (rows JSONB, total_count BIGINT, page_count BIGINT, page_index INT, page_size INT)
-LANGUAGE plpgsql STABLE
-SET search_path = pigse, public
-AS $$
-DECLARE
-    v_page_size  INT := LEAST(GREATEST(COALESCE(p_page_size, 10), 1), 100);
-    v_page_index INT := GREATEST(COALESCE(p_page_index, 0), 0);
-    v_total      BIGINT;
-    v_rows       JSONB := '[]'::JSONB;
-BEGIN
-    PERFORM pigse.fn_assert_permiso_seccion(p_pk_usuario_solicitante, 'SEDES_EDUCATIVAS', 'VER');
-
-    SELECT COUNT(*) INTO v_total
-      FROM pigse.TSEDE s
-      JOIN pigse.TESTABLECIMIENTO e ON e.PK_ESTABLECIMIENTO = s.FK_TESTABLECIMIENTO
-     WHERE s.ACTIVE = TRUE
-       AND (NULLIF(TRIM(p_search), '') IS NULL
-            OR s.NOMBRE ILIKE '%' || p_search || '%' OR s.CODIGO ILIKE '%' || p_search || '%')
-       AND (p_fk_establecimiento IS NULL OR s.FK_TESTABLECIMIENTO = p_fk_establecimiento);
-
-    SELECT COALESCE(jsonb_agg(to_jsonb(t) - 'orden_fila' ORDER BY t.orden_fila), '[]'::JSONB) INTO v_rows
-      FROM (
-        SELECT s.PK_TSEDE AS pk_sede, s.CODIGO AS codigo, s.NOMBRE AS nombre,
-               s.CONSECUTIVO AS consecutivo, s.FK_TESTABLECIMIENTO AS fk_establecimiento,
-               e.NOMBRE AS establecimiento_nombre, s.DIRECCION AS direccion, s.TELEFONO AS telefono,
-               ROW_NUMBER() OVER (
-                   ORDER BY
-                     CASE WHEN p_sort_campo = 'nombre' AND NOT p_sort_desc THEN s.NOMBRE END ASC,
-                     CASE WHEN p_sort_campo = 'nombre' AND     p_sort_desc THEN s.NOMBRE END DESC,
-                     s.NOMBRE ASC, s.PK_TSEDE ASC
-               ) AS orden_fila
-          FROM pigse.TSEDE s
-          JOIN pigse.TESTABLECIMIENTO e ON e.PK_ESTABLECIMIENTO = s.FK_TESTABLECIMIENTO
-         WHERE s.ACTIVE = TRUE
-           AND (NULLIF(TRIM(p_search), '') IS NULL
-                OR s.NOMBRE ILIKE '%' || p_search || '%' OR s.CODIGO ILIKE '%' || p_search || '%')
-           AND (p_fk_establecimiento IS NULL OR s.FK_TESTABLECIMIENTO = p_fk_establecimiento)
-         ORDER BY orden_fila
-         LIMIT v_page_size OFFSET v_page_index * v_page_size
-      ) t;
-
-    RETURN QUERY
-    SELECT v_rows, v_total,
-           CASE WHEN v_total = 0 THEN 0::BIGINT ELSE CEIL(v_total::NUMERIC / v_page_size)::BIGINT END,
-           v_page_index, v_page_size;
-END;
-$$;
-
-COMMENT ON FUNCTION pigse.fn_sed_listar(BIGINT, VARCHAR, BIGINT, VARCHAR, BOOLEAN, INT, INT) IS
-    'V370: paginado real (servidor) de sedes activas, filtrable por texto/establecimiento. Mismo patron jsonb-rows que fn_fun_listar/fn_est_listar.';
-
 CREATE OR REPLACE FUNCTION pigse.fn_sed_buscar_por_pk(
     p_pk_usuario_solicitante BIGINT,
     p_pk_sede                BIGINT
@@ -1023,272 +889,7 @@ $$;
 
 COMMENT ON FUNCTION pigse.fn_sed_buscar_por_pk(BIGINT, BIGINT) IS 'V370: lookup por PK_TSEDE (solo activas).';
 
--- ============================================================================
--- 6. fn_fun_permisos_actualizar — rol+jornada+estado por sede, mismo
---    contrato JSONB que academico_test (V297).
--- ============================================================================
-CREATE OR REPLACE FUNCTION pigse.fn_fun_permisos_actualizar(
-    p_pk_usuario_solicitante BIGINT,
-    p_pk_funcionario         BIGINT,
-    p_permisos               JSONB
-)
-RETURNS TABLE(accion VARCHAR, id BIGINT, status VARCHAR)
-LANGUAGE plpgsql
-SET search_path = pigse, public
-AS $$
-DECLARE
-    v_pk_usuario    BIGINT;
-    v_active_fun    BOOLEAN;
-    v_es_super      BOOLEAN;
-    v_sedes_plenas  BIGINT[];
-    v_sedes_coord   BIGINT[];
-    v_perm          RECORD;
-    v_fk_sede_op    BIGINT;
-    v_fk_rol_op     BIGINT;
-BEGIN
-    SELECT f.ACTIVE, f.FK_TUSUARIO INTO v_active_fun, v_pk_usuario
-      FROM pigse.TFUNCIONARIO f WHERE f.PK_TFUNCIONARIO = p_pk_funcionario;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'No se encontro el funcionario solicitado' USING ERRCODE = 'P0002';
-    END IF;
-    IF v_active_fun = FALSE THEN
-        RAISE EXCEPTION 'El funcionario esta inactivo; no se puede actualizar' USING ERRCODE = '22023';
-    END IF;
-
-    PERFORM pigse.fn_assert_permiso_funcionario(p_pk_usuario_solicitante, 'EDITAR', p_pk_funcionario);
-
-    v_es_super := (pigse.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante) <= 1);
-
-    IF p_permisos IS NULL OR jsonb_typeof(p_permisos) <> 'array' THEN
-        RAISE EXCEPTION 'p_permisos debe ser un JSON array' USING ERRCODE = '22023';
-    END IF;
-
-    IF NOT v_es_super THEN
-        SELECT ARRAY(
-            SELECT s.PK_TSEDE FROM pigse.TSEDE s
-             WHERE s.ACTIVE = TRUE
-               AND s.FK_TESTABLECIMIENTO IN (SELECT establecimiento_id FROM pigse.fn_usuario_ee_accesibles(p_pk_usuario_solicitante))
-        ) INTO v_sedes_plenas;
-
-        SELECT ARRAY(SELECT DISTINCT sede_id FROM pigse.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario_solicitante))
-          INTO v_sedes_coord;
-    END IF;
-
-    FOR v_perm IN
-        SELECT
-            NULLIF(TRIM(elem->>'accion'), '')                       AS accion,
-            (elem->>'id')::BIGINT                                    AS id,
-            NULLIF(TRIM(elem->>'orden'), '')::NUMERIC(4)             AS orden,
-            NULLIF(TRIM(elem->>'fk_rol'), '')::BIGINT                AS fk_rol,
-            NULLIF(TRIM(elem->>'fk_sede'), '')::BIGINT               AS fk_sede,
-            NULLIF(TRIM(elem->>'fk_jornada'), '')::BIGINT            AS fk_jornada,
-            COALESCE(NULLIF(TRIM(elem->>'fk_estado'), ''), 'ACTIVO') AS fk_estado,
-            COALESCE(NULLIF(TRIM(elem->>'predeterminado'), '')::NUMERIC(6), 0) AS predeterminado
-          FROM jsonb_array_elements(p_permisos) AS elem
-    LOOP
-        accion := v_perm.accion; id := v_perm.id; status := NULL;
-
-        IF v_perm.accion = 'crear' THEN
-            IF v_perm.orden IS NULL OR v_perm.fk_rol IS NULL OR v_perm.fk_sede IS NULL OR v_perm.fk_jornada IS NULL THEN
-                status := 'error:faltan_campos_obligatorios'; RETURN NEXT; CONTINUE;
-            END IF;
-
-            PERFORM pigse.fn_assert_rango_rol_otorgable(p_pk_usuario_solicitante, v_perm.fk_rol);
-
-            IF NOT v_es_super
-               AND NOT (v_perm.fk_sede = ANY(v_sedes_plenas))
-               AND NOT (v_perm.fk_sede = ANY(v_sedes_coord) AND pigse.fn_rol_categoria_nivel(v_perm.fk_rol) = 3)
-            THEN
-                status := 'error:sin_permiso_en_sede'; RETURN NEXT; CONTINUE;
-            END IF;
-
-            id := pigse.fn_sede_usuario_crear(
-                p_pk_usuario_solicitante, v_perm.fk_sede, v_perm.fk_rol, v_pk_usuario,
-                v_perm.orden, v_perm.fk_jornada, v_perm.fk_estado, v_perm.predeterminado
-            );
-            status := 'creado'; RETURN NEXT;
-
-        ELSIF v_perm.accion = 'eliminar' THEN
-            IF v_perm.id IS NULL THEN
-                status := 'error:falta_id'; RETURN NEXT; CONTINUE;
-            END IF;
-
-            SELECT FK_TSEDE, FK_ID_ROLE INTO v_fk_sede_op, v_fk_rol_op
-              FROM pigse.TSEDE_USUARIO WHERE PK_TSEDE_USUARIO = v_perm.id;
-
-            IF FOUND AND NOT v_es_super
-               AND NOT (v_fk_sede_op = ANY(v_sedes_plenas))
-               AND NOT (v_fk_sede_op = ANY(v_sedes_coord) AND pigse.fn_rol_categoria_nivel(v_fk_rol_op) = 3)
-            THEN
-                status := 'error:sin_permiso_en_sede'; RETURN NEXT; CONTINUE;
-            END IF;
-
-            PERFORM pigse.fn_sede_usuario_soft_delete(v_perm.id, p_pk_usuario_solicitante);
-            status := 'eliminado'; RETURN NEXT;
-        ELSE
-            status := 'sin_cambios'; RETURN NEXT;
-        END IF;
-    END LOOP;
-END;
-$$;
-
-COMMENT ON FUNCTION pigse.fn_fun_permisos_actualizar(BIGINT, BIGINT, JSONB) IS
-    'V370: mismo contrato que academico_test.fn_fun_permisos_actualizar (V297) -- JSONB array de {accion: crear|eliminar, orden, fk_rol, fk_sede, fk_jornada, fk_estado, predeterminado, id}, retorna TABLE(accion, id, status). El front que ya conoce ese contrato (dialog-manage.tsx de CEVAL) se reusa sin cambios de forma.';
-
--- ============================================================================
--- 7. REWORK de fn_fun_crear/actualizar/soft_delete/listar/buscar_por_pk:
---    dejan de leer/escribir TESTABLECIMIENTO_USUARIO y de exigir el gate
---    plano de nombres de rol -- pasan a fn_assert_permiso_funcionario y a
---    TSEDE_USUARIO. p_fk_id_role SALE de fn_fun_crear (igual que CEVAL): el
---    rol se asigna aparte, vía fn_fun_permisos_actualizar, porque ahora
---    requiere una SEDE concreta que no siempre se conoce en el mismo
---    instante del alta.
--- ============================================================================
 DROP FUNCTION IF EXISTS pigse.fn_fun_crear(BIGINT, BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT);
-
-CREATE OR REPLACE FUNCTION pigse.fn_fun_crear(
-    p_pk_usuario_solicitante BIGINT,
-    p_fk_establecimiento     BIGINT,
-    p_correo_electronico     VARCHAR,
-    p_identificacion         VARCHAR,
-    p_primer_nombre          VARCHAR,
-    p_primer_apellido        VARCHAR,
-    p_segundo_nombre         VARCHAR DEFAULT NULL,
-    p_segundo_apellido       VARCHAR DEFAULT NULL,
-    p_telefono               VARCHAR DEFAULT NULL,
-    p_fk_tlv_tipo_documento  BIGINT  DEFAULT NULL,
-    p_fk_tlv_cargo           BIGINT  DEFAULT NULL
-)
-RETURNS BIGINT
-LANGUAGE plpgsql
-SET search_path = pigse, public
-AS $$
-DECLARE
-    v_pk_usuario     BIGINT;
-    v_pk_funcionario BIGINT;
-    v_id_user        BIGINT;
-BEGIN
-    PERFORM pigse.fn_assert_permiso_funcionario(p_pk_usuario_solicitante, 'CREAR');
-
-    IF NULLIF(TRIM(p_correo_electronico), '') IS NULL THEN
-        RAISE EXCEPTION 'Correo electronico es obligatorio' USING ERRCODE = '22023';
-    END IF;
-    IF NULLIF(TRIM(p_identificacion), '') IS NULL THEN
-        RAISE EXCEPTION 'Numero de identificacion es obligatorio' USING ERRCODE = '22023';
-    END IF;
-    IF NULLIF(TRIM(p_primer_nombre), '') IS NULL THEN
-        RAISE EXCEPTION 'Primer nombre es obligatorio' USING ERRCODE = '22023';
-    END IF;
-    IF NULLIF(TRIM(p_primer_apellido), '') IS NULL THEN
-        RAISE EXCEPTION 'Primer apellido es obligatorio' USING ERRCODE = '22023';
-    END IF;
-
-    IF p_fk_establecimiento IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM pigse.TESTABLECIMIENTO WHERE PK_ESTABLECIMIENTO = p_fk_establecimiento AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'El establecimiento (%) no existe o no esta activo', p_fk_establecimiento USING ERRCODE = '23503';
-    END IF;
-
-    SELECT u.PK_TUSUARIO INTO v_pk_usuario
-      FROM pigse.TUSUARIO u
-     WHERE UPPER(u.CORREO_ELECTRONICO) = UPPER(TRIM(p_correo_electronico)) AND u.ACTIVE = TRUE
-     LIMIT 1;
-
-    IF v_pk_usuario IS NULL THEN
-        SELECT us.id_user INTO v_id_user FROM public.users us WHERE UPPER(us.email) = UPPER(TRIM(p_correo_electronico)) LIMIT 1;
-
-        INSERT INTO pigse.TUSUARIO (
-            FK_ID_USER, CORREO_ELECTRONICO, IDENTIFICACION, FK_TLV_TIPO_DOCUMENTO,
-            PRIMER_NOMBRE, SEGUNDO_NOMBRE, PRIMER_APELLIDO, SEGUNDO_APELLIDO,
-            TELEFONO, CREATED_BY, CREATED_AT, ACTIVE
-        ) VALUES (
-            v_id_user, TRIM(p_correo_electronico), TRIM(p_identificacion), p_fk_tlv_tipo_documento,
-            TRIM(p_primer_nombre), p_segundo_nombre, TRIM(p_primer_apellido), p_segundo_apellido,
-            p_telefono, p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
-        )
-        RETURNING PK_TUSUARIO INTO v_pk_usuario;
-    END IF;
-
-    IF EXISTS (SELECT 1 FROM pigse.TFUNCIONARIO WHERE FK_TUSUARIO = v_pk_usuario AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'El usuario "%" ya tiene un funcionario activo', TRIM(p_correo_electronico) USING ERRCODE = '23505';
-    END IF;
-
-    INSERT INTO pigse.TFUNCIONARIO (FK_TUSUARIO, FK_TESTABLECIMIENTO, FK_TLV_CARGO, CREATED_BY, CREATED_AT, ACTIVE)
-    VALUES (v_pk_usuario, p_fk_establecimiento, p_fk_tlv_cargo, p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE)
-    RETURNING PK_TFUNCIONARIO INTO v_pk_funcionario;
-
-    RETURN v_pk_funcionario;
-END;
-$$;
-
-COMMENT ON FUNCTION pigse.fn_fun_crear(BIGINT, BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT) IS
-    'V370: gate por fn_assert_permiso_funcionario (capability+scope+rango) en vez del gate plano de nombres de rol. Ya NO recibe p_fk_id_role -- el rol se asigna aparte con fn_fun_permisos_actualizar (requiere una sede concreta). p_fk_establecimiento sigue opcional (funcionario "pendiente", V360).';
-
-CREATE OR REPLACE FUNCTION pigse.fn_fun_actualizar(
-    p_pk_usuario_solicitante BIGINT,
-    p_pk_funcionario         BIGINT,
-    p_correo_electronico     VARCHAR DEFAULT NULL,
-    p_identificacion         VARCHAR DEFAULT NULL,
-    p_primer_nombre          VARCHAR DEFAULT NULL,
-    p_segundo_nombre         VARCHAR DEFAULT NULL,
-    p_primer_apellido        VARCHAR DEFAULT NULL,
-    p_segundo_apellido       VARCHAR DEFAULT NULL,
-    p_telefono               VARCHAR DEFAULT NULL,
-    p_fk_tlv_tipo_documento  BIGINT  DEFAULT NULL,
-    p_fk_tlv_cargo           BIGINT  DEFAULT NULL,
-    p_fk_establecimiento     BIGINT  DEFAULT NULL
-)
-RETURNS BOOLEAN
-LANGUAGE plpgsql
-SET search_path = pigse, public
-AS $$
-DECLARE
-    v_pk_usuario BIGINT;
-BEGIN
-    SELECT f.FK_TUSUARIO INTO v_pk_usuario
-      FROM pigse.TFUNCIONARIO f WHERE f.PK_TFUNCIONARIO = p_pk_funcionario AND f.ACTIVE = TRUE;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'No se encontro el funcionario solicitado (%)', p_pk_funcionario USING ERRCODE = 'P0002';
-    END IF;
-
-    PERFORM pigse.fn_assert_permiso_funcionario(p_pk_usuario_solicitante, 'EDITAR', p_pk_funcionario);
-
-    IF p_fk_establecimiento IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM pigse.TESTABLECIMIENTO WHERE PK_ESTABLECIMIENTO = p_fk_establecimiento AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'El establecimiento (%) no existe o no esta activo', p_fk_establecimiento USING ERRCODE = '23503';
-    END IF;
-
-    IF p_correo_electronico IS NOT NULL AND EXISTS (
-        SELECT 1 FROM pigse.TUSUARIO WHERE UPPER(CORREO_ELECTRONICO) = UPPER(TRIM(p_correo_electronico)) AND ACTIVE = TRUE AND PK_TUSUARIO <> v_pk_usuario
-    ) THEN
-        RAISE EXCEPTION 'Ya existe otro usuario activo con el correo %', p_correo_electronico USING ERRCODE = '23505';
-    END IF;
-
-    UPDATE pigse.TUSUARIO
-       SET CORREO_ELECTRONICO = COALESCE(TRIM(p_correo_electronico), CORREO_ELECTRONICO),
-           IDENTIFICACION     = COALESCE(TRIM(p_identificacion), IDENTIFICACION),
-           FK_TLV_TIPO_DOCUMENTO = COALESCE(p_fk_tlv_tipo_documento, FK_TLV_TIPO_DOCUMENTO),
-           PRIMER_NOMBRE      = COALESCE(TRIM(p_primer_nombre), PRIMER_NOMBRE),
-           SEGUNDO_NOMBRE     = COALESCE(p_segundo_nombre, SEGUNDO_NOMBRE),
-           PRIMER_APELLIDO    = COALESCE(TRIM(p_primer_apellido), PRIMER_APELLIDO),
-           SEGUNDO_APELLIDO   = COALESCE(p_segundo_apellido, SEGUNDO_APELLIDO),
-           TELEFONO           = COALESCE(p_telefono, TELEFONO),
-           MODIFIED_BY        = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE PK_TUSUARIO = v_pk_usuario;
-
-    UPDATE pigse.TFUNCIONARIO
-       SET FK_TESTABLECIMIENTO = COALESCE(p_fk_establecimiento, FK_TESTABLECIMIENTO),
-           FK_TLV_CARGO        = COALESCE(p_fk_tlv_cargo, FK_TLV_CARGO),
-           MODIFIED_BY         = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE PK_TFUNCIONARIO = p_pk_funcionario;
-
-    RETURN TRUE;
-END;
-$$;
-
-COMMENT ON FUNCTION pigse.fn_fun_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT) IS
-    'V370: mismo gate (fn_assert_permiso_funcionario) que el resto del modulo funcionarios, en vez del gate plano por nombre de rol.';
 
 CREATE OR REPLACE FUNCTION pigse.fn_fun_soft_delete(
     p_pk_usuario_solicitante BIGINT,
@@ -1330,166 +931,6 @@ $$;
 COMMENT ON FUNCTION pigse.fn_fun_soft_delete(BIGINT, BIGINT) IS
     'V370: baja logica en cascada sobre TSEDE_USUARIO (reemplaza TESTABLECIMIENTO_USUARIO). Gate por fn_assert_permiso_funcionario.';
 
-CREATE OR REPLACE FUNCTION pigse.fn_fun_listar(
-    p_pk_usuario_solicitante BIGINT,
-    p_search                 VARCHAR  DEFAULT NULL,
-    p_establecimientos       BIGINT[] DEFAULT NULL,
-    p_sort_campo             VARCHAR  DEFAULT NULL,
-    p_sort_desc              BOOLEAN  DEFAULT FALSE,
-    p_page_index             INT      DEFAULT 0,
-    p_page_size              INT      DEFAULT 10
-)
-RETURNS TABLE (rows JSONB, total_count BIGINT, page_count BIGINT, page_index INT, page_size INT)
-LANGUAGE plpgsql STABLE
-SET search_path = pigse, public
-AS $$
-DECLARE
-    v_page_size  INT := CASE WHEN p_page_size IS NULL THEN NULL
-                             ELSE LEAST(CASE WHEN p_page_size > 0 THEN p_page_size ELSE 10 END, 100) END;
-    v_page_index INT := GREATEST(COALESCE(p_page_index, 0), 0);
-    v_total      BIGINT;
-    v_rows       JSONB := '[]'::JSONB;
-BEGIN
-    PERFORM pigse.fn_assert_permiso_funcionario(p_pk_usuario_solicitante, 'VER');
-
-    SELECT COUNT(*) INTO v_total
-      FROM pigse.TFUNCIONARIO f
-      JOIN pigse.TUSUARIO u ON u.PK_TUSUARIO = f.FK_TUSUARIO
-      JOIN pigse.TESTABLECIMIENTO e ON e.PK_ESTABLECIMIENTO = f.FK_TESTABLECIMIENTO
-     WHERE f.ACTIVE = TRUE
-       AND (NULLIF(TRIM(p_search), '') IS NULL
-            OR u.PRIMER_NOMBRE ILIKE '%' || p_search || '%' OR u.PRIMER_APELLIDO ILIKE '%' || p_search || '%'
-            OR u.SEGUNDO_APELLIDO ILIKE '%' || p_search || '%' OR u.IDENTIFICACION ILIKE '%' || p_search || '%'
-            OR u.CORREO_ELECTRONICO ILIKE '%' || p_search || '%' OR e.NOMBRE ILIKE '%' || p_search || '%')
-       AND (p_establecimientos IS NULL OR CARDINALITY(p_establecimientos) = 0 OR f.FK_TESTABLECIMIENTO = ANY(p_establecimientos));
-
-    SELECT COALESCE(jsonb_agg(to_jsonb(t) - 'orden_fila' ORDER BY t.orden_fila), '[]'::JSONB) INTO v_rows
-      FROM (
-        SELECT f.PK_TFUNCIONARIO AS pk_funcionario, u.PK_TUSUARIO AS pk_usuario,
-               u.IDENTIFICACION AS identificacion, u.PRIMER_NOMBRE AS primer_nombre,
-               u.SEGUNDO_NOMBRE AS segundo_nombre, u.PRIMER_APELLIDO AS primer_apellido,
-               u.SEGUNDO_APELLIDO AS segundo_apellido, u.CORREO_ELECTRONICO AS correo_electronico,
-               u.TELEFONO AS telefono, f.FK_TESTABLECIMIENTO AS fk_establecimiento,
-               e.NOMBRE AS establecimiento_nombre,
-               COALESCE((
-                   SELECT jsonb_agg(jsonb_build_object(
-                              'id', su.PK_TSEDE_USUARIO, 'orden', su.ORDEN,
-                              'idRole', r.id_role, 'nombre', r.name,
-                              'idSede', s.PK_TSEDE, 'sede', s.NOMBRE,
-                              'idJornada', su.FK_TLV_JORNADA, 'jornada', jr.NOMBRE,
-                              'estado', su.TLV_ESTADO)
-                            ORDER BY su.ORDEN)
-                     FROM pigse.TSEDE_USUARIO su
-                     JOIN public.role r ON r.id_role = su.FK_ID_ROLE
-                     JOIN pigse.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-                     JOIN pigse.TLISTA_VALOR jr ON jr.PK_LISTA_VALOR = su.FK_TLV_JORNADA
-                    WHERE su.FK_TUSUARIO = u.PK_TUSUARIO AND su.ACTIVE = TRUE
-               ), '[]'::JSONB) AS permisos,
-               ROW_NUMBER() OVER (
-                   ORDER BY
-                     CASE WHEN p_sort_campo = 'name'     AND NOT p_sort_desc THEN u.PRIMER_APELLIDO END ASC,
-                     CASE WHEN p_sort_campo = 'name'     AND     p_sort_desc THEN u.PRIMER_APELLIDO END DESC,
-                     CASE WHEN p_sort_campo = 'document' AND NOT p_sort_desc THEN u.IDENTIFICACION END ASC,
-                     CASE WHEN p_sort_campo = 'document' AND     p_sort_desc THEN u.IDENTIFICACION END DESC,
-                     CASE WHEN p_sort_campo = 'email'    AND NOT p_sort_desc THEN u.CORREO_ELECTRONICO END ASC,
-                     CASE WHEN p_sort_campo = 'email'    AND     p_sort_desc THEN u.CORREO_ELECTRONICO END DESC,
-                     CASE WHEN p_sort_campo = 'school'   AND NOT p_sort_desc THEN e.NOMBRE END ASC,
-                     CASE WHEN p_sort_campo = 'school'   AND     p_sort_desc THEN e.NOMBRE END DESC,
-                     u.PRIMER_APELLIDO ASC, f.PK_TFUNCIONARIO ASC
-               ) AS orden_fila
-          FROM pigse.TFUNCIONARIO f
-          JOIN pigse.TUSUARIO u ON u.PK_TUSUARIO = f.FK_TUSUARIO
-          JOIN pigse.TESTABLECIMIENTO e ON e.PK_ESTABLECIMIENTO = f.FK_TESTABLECIMIENTO
-         WHERE f.ACTIVE = TRUE
-           AND (NULLIF(TRIM(p_search), '') IS NULL
-                OR u.PRIMER_NOMBRE ILIKE '%' || p_search || '%' OR u.PRIMER_APELLIDO ILIKE '%' || p_search || '%'
-                OR u.SEGUNDO_APELLIDO ILIKE '%' || p_search || '%' OR u.IDENTIFICACION ILIKE '%' || p_search || '%'
-                OR u.CORREO_ELECTRONICO ILIKE '%' || p_search || '%' OR e.NOMBRE ILIKE '%' || p_search || '%')
-           AND (p_establecimientos IS NULL OR CARDINALITY(p_establecimientos) = 0 OR f.FK_TESTABLECIMIENTO = ANY(p_establecimientos))
-         ORDER BY orden_fila
-         LIMIT v_page_size OFFSET v_page_index * COALESCE(v_page_size, 0)
-      ) t;
-
-    RETURN QUERY
-    SELECT v_rows, v_total,
-           CASE WHEN v_total = 0 THEN 0::BIGINT WHEN v_page_size IS NULL THEN 1::BIGINT
-                ELSE CEIL(v_total::NUMERIC / v_page_size)::BIGINT END,
-           v_page_index, v_page_size;
-END;
-$$;
-
-COMMENT ON FUNCTION pigse.fn_fun_listar(BIGINT, VARCHAR, BIGINT[], VARCHAR, BOOLEAN, INT, INT) IS
-    'V370: "roles" pasa a "permisos" -- JSONB [{id, orden, idRole, nombre, idSede, sede, idJornada, jornada, estado}] agregado desde TSEDE_USUARIO (reemplaza TESTABLECIMIENTO_USUARIO). Gate por fn_assert_permiso_funcionario.';
-
-DROP FUNCTION IF EXISTS pigse.fn_fun_buscar_por_pk(BIGINT, BIGINT);
-
-CREATE OR REPLACE FUNCTION pigse.fn_fun_buscar_por_pk(
-    p_pk_usuario_solicitante BIGINT,
-    p_pk_funcionario         BIGINT
-)
-RETURNS TABLE (
-    pk_funcionario BIGINT, pk_usuario BIGINT, fk_id_user BIGINT,
-    identificacion VARCHAR, fk_tlv_tipo_documento BIGINT,
-    primer_nombre VARCHAR, segundo_nombre VARCHAR, primer_apellido VARCHAR, segundo_apellido VARCHAR,
-    correo_electronico VARCHAR, telefono VARCHAR,
-    fk_establecimiento BIGINT, establecimiento_nombre VARCHAR, fk_tlv_cargo BIGINT,
-    permisos JSONB,
-    created_by VARCHAR, created_at TIMESTAMP, modified_by VARCHAR, modified_at TIMESTAMP
-)
-LANGUAGE plpgsql STABLE
-SET search_path = pigse, public
-AS $$
-DECLARE
-    v_active BOOLEAN;
-BEGIN
-    SELECT f.ACTIVE INTO v_active FROM pigse.TFUNCIONARIO f WHERE f.PK_TFUNCIONARIO = p_pk_funcionario;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'No se encontro el funcionario solicitado (%)', p_pk_funcionario USING ERRCODE = 'P0002';
-    END IF;
-
-    PERFORM pigse.fn_assert_permiso_funcionario(p_pk_usuario_solicitante, 'VER', p_pk_funcionario);
-
-    IF v_active = FALSE THEN
-        RETURN;
-    END IF;
-
-    RETURN QUERY
-    SELECT f.PK_TFUNCIONARIO, u.PK_TUSUARIO, u.FK_ID_USER,
-           u.IDENTIFICACION, u.FK_TLV_TIPO_DOCUMENTO,
-           u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO,
-           u.CORREO_ELECTRONICO, u.TELEFONO,
-           f.FK_TESTABLECIMIENTO, e.NOMBRE, f.FK_TLV_CARGO,
-           COALESCE((
-               SELECT jsonb_agg(jsonb_build_object(
-                          'id', su.PK_TSEDE_USUARIO, 'orden', su.ORDEN,
-                          'idRole', r.id_role, 'nombre', r.name,
-                          'idSede', s.PK_TSEDE, 'sede', s.NOMBRE,
-                          'idJornada', su.FK_TLV_JORNADA, 'jornada', jr.NOMBRE,
-                          'estado', su.TLV_ESTADO)
-                        ORDER BY su.ORDEN)
-                 FROM pigse.TSEDE_USUARIO su
-                 JOIN public.role r ON r.id_role = su.FK_ID_ROLE
-                 JOIN pigse.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
-                 JOIN pigse.TLISTA_VALOR jr ON jr.PK_LISTA_VALOR = su.FK_TLV_JORNADA
-                WHERE su.FK_TUSUARIO = u.PK_TUSUARIO AND su.ACTIVE = TRUE
-           ), '[]'::JSONB),
-           f.CREATED_BY, f.CREATED_AT, f.MODIFIED_BY, f.MODIFIED_AT
-      FROM pigse.TFUNCIONARIO f
-      JOIN pigse.TUSUARIO u ON u.PK_TUSUARIO = f.FK_TUSUARIO
-      JOIN pigse.TESTABLECIMIENTO e ON e.PK_ESTABLECIMIENTO = f.FK_TESTABLECIMIENTO
-     WHERE f.PK_TFUNCIONARIO = p_pk_funcionario;
-END;
-$$;
-
-COMMENT ON FUNCTION pigse.fn_fun_buscar_por_pk(BIGINT, BIGINT) IS
-    'V370: "permisos" reemplaza a "roles", agregado desde TSEDE_USUARIO. Gate por fn_assert_permiso_funcionario.';
-
--- ============================================================================
--- 8. ENDPOINTS — sedes CRUD, permisos de funcionario. /funcionarios/:ID/rol
---    (V369, single-role) queda EN DESUSO: el front pasa a usar
---    PUT /funcionario/:ID/permisos, mismo path que CEVAL.
--- ============================================================================
 INSERT INTO public.query (uuid, query, type, microservice_id, path_template, execution_mode, http_method, param_types)
 SELECT 'pigse-sedes-query',
        $q$SELECT * FROM pigse.fn_sed_listar(
@@ -1568,8 +1009,6 @@ SELECT 'pigse-funcionario-permisos-actualizar',
   FROM public.microservice m WHERE m.serviceid = 'pigse'
    AND NOT EXISTS (SELECT 1 FROM public.query WHERE uuid = 'pigse-funcionario-permisos-actualizar');
 
--- role_query: escritura completa (admin/secretaria territorial) + lectura
--- para el resto de roles que ya leian /funcionarios* y /establecimientos*.
 INSERT INTO public.role_query (query_id, role_id)
 SELECT q.id_query, ro.id_role
   FROM public.query q CROSS JOIN public.role ro
@@ -1597,42 +1036,3 @@ SELECT q.id_query, ro.id_role
  WHERE q.uuid = 'pigse-funcionario-permisos-actualizar'
    AND ro.name IN ('PIGSE-RECTOR', 'PIGSE-JEFE_SISTEMA_ESTABLECIMIENTO')
    AND NOT EXISTS (SELECT 1 FROM public.role_query rq WHERE rq.query_id = q.id_query AND rq.role_id = ro.id_role);
-
--- ============================================================================
--- Verificacion
--- ============================================================================
-DO $$
-DECLARE
-    v_categoria_count BIGINT;
-    v_gate_test       INT;
-BEGIN
-    SELECT count(*) INTO v_categoria_count FROM pigse.role_categoria;
-    IF v_categoria_count != 11 THEN
-        RAISE EXCEPTION 'V370 fallo: se esperaban 11 filas en pigse.role_categoria, se encontraron %', v_categoria_count;
-    END IF;
-
-    IF to_regclass('pigse.tsede') IS NULL THEN
-        RAISE EXCEPTION 'V370 fallo: pigse.tsede no quedo creada';
-    END IF;
-    IF to_regclass('pigse.tsede_usuario') IS NULL THEN
-        RAISE EXCEPTION 'V370 fallo: pigse.tsede_usuario no quedo creada';
-    END IF;
-
-    IF to_regprocedure('pigse.fn_assert_permiso_seccion(bigint,varchar,varchar,bigint,bigint,bigint)') IS NULL THEN
-        RAISE EXCEPTION 'V370 fallo: pigse.fn_assert_permiso_seccion no quedo registrada';
-    END IF;
-    IF to_regprocedure('pigse.fn_fun_permisos_actualizar(bigint,bigint,jsonb)') IS NULL THEN
-        RAISE EXCEPTION 'V370 fallo: pigse.fn_fun_permisos_actualizar no quedo registrada';
-    END IF;
-
-    IF NOT EXISTS (SELECT 1 FROM public.route WHERE name = 'Sedes' AND codigo = 'SEDES_EDUCATIVAS') THEN
-        RAISE EXCEPTION 'V370 fallo: la ruta Sedes no quedo con codigo SEDES_EDUCATIVAS';
-    END IF;
-
-    v_gate_test := pigse.fn_rol_categoria_nivel((SELECT id_role FROM public.role WHERE name = 'PIGSE-ADMINISTRADOR'));
-    IF v_gate_test != 0 THEN
-        RAISE EXCEPTION 'V370 fallo: PIGSE-ADMINISTRADOR deberia ser categoria 0, es %', v_gate_test;
-    END IF;
-
-    RAISE NOTICE 'V370 OK: role_categoria (%), TSEDE/TSEDE_USUARIO, motor de autorizacion, fn_fun_permisos_actualizar y endpoints de sedes registrados.', v_categoria_count;
-END $$;

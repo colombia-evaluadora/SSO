@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -89,6 +90,84 @@ def report_object(model: dict, key: str) -> None:
         print(f"  MIGRACIONES QUE LO USAN: {', '.join('V' + u for u in users)}")
         print("    si cambias la firma o el contrato, revisa esas primero")
 
+    if fn:
+        report_precision_object(fn)
+
+
+# ---------------------------------------------------------------------------
+# Precision: firma exacta, contexto de uso, escrituras que el modelo no ve
+# ---------------------------------------------------------------------------
+_REPO = None
+
+
+def repo():
+    global _REPO
+    if _REPO is None:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import precision
+        _REPO = (precision, precision.load())
+    return _REPO
+
+
+def fmt_sig(sig) -> str:
+    return "(" + ", ".join(sig) + ")"
+
+
+def report_precision_object(fn: str) -> None:
+    P, R = repo()
+    name = fn.rsplit(".", 1)[-1]
+    lives = P.lives(R, name)
+    if not lives:
+        return
+    print("  POR FIRMA EXACTA (el historial de arriba agrupa por numero de parametros):")
+    vivas = []
+    for l in lives:
+        d = l.definer()
+        estado = f"VIVA, la define V{d.version}" if d else "borrada"
+        if d:
+            vivas.append(l)
+        pasos = " ".join(f"V{e.version}:{e.kind}" for e in l.history)
+        print(f"    {l.schema}.{l.name}{fmt_sig(l.sig)}  {estado}")
+        print(f"      {pasos}")
+    if len(vivas) > 1:
+        print(f"  ! {len(vivas)} SOBRECARGAS VIVAS: una llamada que encaje en varias da 42725 (ambigua)")
+    for e in P.hidden_writes(R, name):
+        why = {"alter": "ALTER FUNCTION: re-aplicar un CREATE anterior lo deshace",
+               "dyn-comment": "COMMENT dinamico por OID: pisa los COMMENT anteriores",
+               "guarded-create": "CREATE condicionado a que no exista (solo base limpia)",
+               "cond-drop": "DROP condicionado"}[e.kind]
+        print(f"  ! V{e.version} L{e.line}: {why} {e.detail}")
+    uses = P.uses_of(R, name)
+    if uses:
+        print("  USOS POR CONTEXTO:")
+        for ctx, nota in (("migracion", "se EJECUTA al migrar: la funcion tiene que existir en ese punto"),
+                          ("sql-body", "cuerpo LANGUAGE sql: Postgres lo valida al crearlo"),
+                          ("plpgsql", "cuerpo plpgsql: enlace tardio, no ata el orden"),
+                          ("texto", "solo texto (filas de public.query): no ata el orden")):
+            vs = sorted({u.version for u in uses if u.ctx == ctx}, key=vsort)
+            if vs:
+                print(f"    {ctx:<10} {', '.join('V' + v for v in vs[:14])}{' ...' if len(vs) > 14 else ''}")
+                print(f"               {nota}")
+
+
+ETIQUETA = {"MUERTA": "MUERTA", "NECESARIA": "MUERTA PERO NECESARIA", "CONDICIONADA": "CONDICIONADA",
+            "VIVA_FIRMA": "VIVA POR FIRMA", "ALTER_POSTERIOR": "ALTER POSTERIOR", "DROP_PELIGROSO": "DROP PELIGROSO",
+            "REVIERTE": "REVIERTE", "BACKFILL": "BACKFILL", "VERIFICACION": "VERIFICACION",
+            "NO_IDEMPOTENTE": "NO IDEMPOTENTE", "COMMENT_HUERFANO": "COMMENT HUERFANO",
+            "PARCHE_PISADO": "PARCHE 'PISADO'", "SEMILLA": "SEMILLA NECESARIA"}
+
+
+def report_precision_version(model: dict, version: str) -> None:
+    """Que pasa si se re-aplica o se recorta esta migracion."""
+    P, R = repo()
+    fs = P.version_findings(R, model, version)
+    if fs:
+        print("\n  PRECISION (firma exacta, contexto de uso, re-aplicacion):")
+        for f in fs:
+            print(f"    {ETIQUETA[f.kind]:<16} L{f.line} {f.msg}")
+            if f.extra:
+                print(f"      ojo: {f.extra}")
+
 
 def report_version(model: dict, version: str) -> None:
     mig = next((m for m in model["migrations"] if m["version"] == version), None)
@@ -111,6 +190,8 @@ def report_version(model: dict, version: str) -> None:
         print("\n  LA USAN (si cambias su contrato, revisalas):")
         for e in down:
             print(f"    V{e['from']:<7} {', '.join(e['objs'])}")
+
+    report_precision_version(model, version)
 
 
 def main() -> None:

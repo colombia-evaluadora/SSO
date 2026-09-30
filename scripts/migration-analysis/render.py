@@ -29,6 +29,8 @@ def compact(model: dict) -> dict:
             "dl": m["dead_lines"], "ll": m["live_lines"], "ol": m["other_lines"],
             "cl": m["comment_lines"], "cp": m["comment_pct"], "hl": m["header_lines"],
             "map": m["linemap"], "st2": m["total_statements"],
+            "rl": m.get("cut_lines", m["dead_lines"]), "nl": m.get("keep_lines", 0),
+            "rc": m.get("recorte", "sin-precision"), "fx": m.get("findings", []),
             "lw": m["live_writes"], "dw": m["dead_writes"],
             "u": m["unparsed"], "st": m["total_statements"],
             "cr": m["comment_refs"],
@@ -291,6 +293,14 @@ mark{background:rgba(29,92,143,.18);color:inherit;border-radius:2px}
 .f-lbl{font-size:11px;fill:var(--muted)}
 .f-val{font-size:11.5px;fill:var(--ink);font-variant-numeric:tabular-nums}
 .f-dead{fill:var(--dead)} .f-live{fill:var(--live)} .f-other{fill:var(--faint)}
+.f-keep{fill:var(--resid)} .f-bar-keep{fill:var(--resid);opacity:.85}
+.fmap-n{fill:var(--resid)} .lg-n{background:var(--resid)} .st-keep{color:var(--resid)}
+.p-recortable{color:var(--live)} .p-con-ajuste{color:var(--resid)}
+.p-revisar-backfill{color:var(--dead)} .p-nada,.p-sin-precision{color:var(--muted)}
+.fx{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:12px;margin:6px 0 12px}
+.fx .k{font-family:var(--mono,monospace);font-size:11px;white-space:nowrap}
+.fx .x{color:var(--muted);font-size:11px}
+.fx > span:not(.k){overflow-wrap:anywhere;min-width:0}
 .f-bar-dead{fill:var(--dead);opacity:.85} .f-bar-dead:hover{opacity:1}
 .f-bar-ok{fill:var(--accent);opacity:.75} .f-bar-ok:hover{opacity:1}
 .f-bar-mid{fill:var(--resid);opacity:.85} .f-bar-mid:hover{opacity:1}
@@ -410,7 +420,18 @@ const hl = (s, q) => {
 const byV = v => D.migs.find(m => m.v === v);
 const fmt = n => n.toLocaleString('en-US');
 const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
-const MAP_ES = {l:'vigente', d:'sin efecto', c:'comentario', o:'sin encadenar', b:'en blanco'};
+const MAP_ES = {l:'vigente', d:'recortable', n:'sin efecto, se conserva', c:'comentario',
+  o:'sin encadenar', b:'en blanco'};
+const RC_ES = {recortable:'recortable', 'con-ajuste':'con ajuste', 'revisar-backfill':'revisar backfill',
+  nada:'nada que recortar', 'sin-precision':'sin precisión'};
+const FX_ES = {MUERTA:'muerta', NECESARIA:'necesaria al migrar', CONDICIONADA:'condicionada',
+  VIVA_FIRMA:'viva por firma', ALTER_POSTERIOR:'ALTER posterior', DROP_PELIGROSO:'DROP peligroso',
+  REVIERTE:'revierte', BACKFILL:'backfill', VERIFICACION:'verificación', NO_IDEMPOTENTE:'no idempotente',
+  COMMENT_HUERFANO:'COMMENT huérfano', PARCHE_PISADO:'parche pisado', SEMILLA:'semilla necesaria'};
+const FX_CLS = {MUERTA:'st-dead', NECESARIA:'st-keep', CONDICIONADA:'st-keep', VIVA_FIRMA:'st-keep',
+  SEMILLA:'st-keep', DROP_PELIGROSO:'st-patch-live', REVIERTE:'st-patch-live', ALTER_POSTERIOR:'st-patch-live',
+  BACKFILL:'st-dead', VERIFICACION:'st-patch-live'};
+const rcPill = m => `<span class="pill p-${m.rc}">${RC_ES[m.rc] || m.rc}</span>`;
 const A = D.auth || {names:[], people:[], byv:{}};
 const whoName = i => A.names[i] || '?';
 const shortName = i => {
@@ -427,7 +448,7 @@ const handsOf = v => new Set(touchesOf(v).map(t => t[1]));
 const ini = i => `<span class="who-ini" title="${esc(whoName(i))}">${initials(i)}</span>`;
 
 /* El mapa viene comprimido por tramos ("84c1b269l…"): una letra por línea. */
-const parseMap = s => [...String(s||'').matchAll(/(\d+)([ldcbo])/g)].map(m => [m[2], +m[1]]);
+const parseMap = s => [...String(s||'').matchAll(/(\d+)([ldncbo])/g)].map(m => [m[2], +m[1]]);
 
 function fileMap(m) {
   const runs = parseMap(m.map);
@@ -441,7 +462,7 @@ function fileMap(m) {
     return r;
   }).join('');
   const present = [...new Set(runs.map(r => r[0]))];
-  const leg = ['l','d','c','o'].filter(c => present.includes(c)).map(c =>
+  const leg = ['l','d','n','c','o'].filter(c => present.includes(c)).map(c =>
     `<span><i class="lg-${c}"></i>${MAP_ES[c]}</span>`).join('');
   return `<svg class="fmap" viewBox="0 0 ${total} 10" preserveAspectRatio="none"
     role="img" aria-label="Mapa de las ${total} líneas del archivo por estado">${rects}</svg>
@@ -641,15 +662,15 @@ function selectMig(v) {
   const overC = m.cp > 20 && m.cl > 20, overH = m.hl > 14;
 
   $('#migdetail').innerHTML = `
-    <h4>V${esc(m.v)} <span class="pill p-${m.vd}">${m.vd}</span></h4>
+    <h4>V${esc(m.v)} <span class="pill p-${m.vd}">${m.vd}</span> ${rcPill(m)}</h4>
     <div class="sub">${esc(m.n)}<br><span class="dim">${esc(m.p)}</span></div>
     ${fileMap(m)}
     <div class="budget" style="margin-top:12px">
-      ${budgetBar('líneas', [[m.dl,'dead','sin efecto'],[m.ll,'live','vigentes'],
-        [m.ol,'faint','sin encadenar']],
+      ${budgetBar('líneas', [[m.rl,'dead','recortables'],[m.nl,'resid','se conservan'],
+        [m.ll,'live','vigentes'],[m.ol,'faint','sin encadenar']],
         `${fmt(m.l)}`)}
-      ${budgetBar('sin efecto', [[m.dl,'dead','sin efecto'],[m.l-m.dl,'rule','resto']],
-        `${fmt(m.dl)} · ${pct(m.dl,m.l)}%`, m.dl > 0)}
+      ${budgetBar('recortable', [[m.rl,'dead','recortable'],[m.l-m.rl,'rule','resto']],
+        `${fmt(m.rl)} · ${pct(m.rl,m.l)}%`, m.rl > 0)}
       ${budgetBar('comentarios', [[m.cp,CM_VAR[cmLevel(m)],'comentario'],
         [Math.max(0,100-m.cp),'rule','código']],
         `${fmt(m.cl)} · ${m.cp}%`, overC)}
@@ -681,10 +702,20 @@ function selectMig(v) {
         data-goto="${r}">V${r}</button>`), 'referencias documentadas, no verificadas')}
     ${dep('Mencionada por', usedBy.map(r =>
       `<button class="node n-live" data-goto="${r}">V${r}</button>`), '')}
+    ${fxHtml(m)}
     ${flowHtml(m.v)}
     <h3 class="sect">Objetos escritos <span class="n">${ws.length}</span></h3>
     ${grpHtml || '<div class="empty">sin objetos rastreables</div>'}`;
   wireGoto($('#migdetail'));
+}
+
+/* Lo que dice precision.py de recortar o re-aplicar esta migración. */
+function fxHtml(m) {
+  if (!m.fx.length) return m.rc === 'sin-precision' ? '' :
+    `<h3 class="sect">Recorte</h3><div class="empty" style="padding:8px">sin avisos</div>`;
+  return `<h3 class="sect">Recorte <span class="n">${m.fx.length} avisos</span></h3>
+    <div class="fx">${m.fx.map(f => `<span class="k ${FX_CLS[f[0]] || 'dim'}">L${f[1]} ${FX_ES[f[0]] || f[0]}</span>
+      <span>${esc(f[2])}${f[3] ? `<br><span class="x">ojo: ${esc(f[3])}</span>` : ''}</span>`).join('')}</div>`;
 }
 
 /* El flujo: quien la creó y quien la tocó después, en orden. En este repo las
@@ -986,42 +1017,46 @@ function renderMatrix() {
 
 /* ---------- líneas ---------- */
 const LN_SORT = {
-  dl: (a, b) => b.dl - a.dl || +b.v - +a.v,
-  pc: (a, b) => pct(b.dl, b.l) - pct(a.dl, a.l) || b.dl - a.dl,
+  rl: (a, b) => b.rl - a.rl || +b.v - +a.v,
+  pc: (a, b) => pct(b.rl, b.l) - pct(a.rl, a.l) || b.rl - a.rl,
+  nl: (a, b) => b.nl - a.nl || b.rl - a.rl,
   v:  (a, b) => +b.v - +a.v,
 };
 
 function lnRows() {
-  const onlyPart = $('#lnpart').getAttribute('aria-pressed') === 'true';
+  const rc = $('#lnrc').value;
   return D.migs
-    .filter(m => m.dl > 0 && (!onlyPart || m.vd === 'parcial' || m.vd === 'residual'))
+    .filter(m => (m.rl > 0 || m.nl > 0) && (!rc || m.rc === rc))
     .sort(LN_SORT[$('#lnsort').value]);
 }
 
 /* Composición del corpus: una sola barra apilada. Cada segmento lleva su propia
    etiqueta con glifo debajo — el color nunca es el único portador del dato. */
 function renderStack() {
-  const t = D.meta.total_lines, d = D.meta.dead_lines, l = D.meta.live_lines,
-        o = D.meta.other_lines;
+  const t = D.meta.total_lines, l = D.meta.live_lines, o = D.meta.other_lines,
+        k = D.meta.keep_lines || 0, d = D.meta.dead_lines - k;
   const W = 1000, H = 42, GAP = 2;
   const segs = [
-    {n: d, c: 'f-dead',  g: '✕', t: 'sin efecto', d: 'reescritas o borradas por una migración posterior'},
+    {n: d, c: 'f-dead',  g: '✕', t: 'recortables', d: 'reescritas después y sin uso al migrar: se pueden quitar'},
+    {n: k, c: 'f-keep',  g: '▲', t: 'se conservan', d: 'sin efecto hoy, pero necesarias al migrar o vivas por firma'},
     {n: l, c: 'f-live',  g: '●', t: 'vigentes',   d: 'describen el estado actual de la base'},
     {n: o, c: 'f-other', g: '·', t: 'sin encadenar', d: 'binds de permisos, seeds, COMMENT ON, cabeceras'},
   ];
-  let x = 0;
+  let x = 0, libre = 0;   // libre: donde puede empezar la siguiente etiqueta
   const bars = [], labs = [];
   segs.forEach((s, i) => {
     const w = t ? (s.n / t) * W : 0;
     bars.push(`<rect x="${x}" y="0" width="${Math.max(0, w - (i < segs.length-1 ? GAP : 0))}"
       height="${H}" rx="3" class="${s.c}"><title>${fmt(s.n)} líneas ${s.t} — ${s.d}</title></rect>`);
-    const lx = Math.min(x, W - 150);
+    const lx = Math.min(Math.max(x, libre), W - 150);
+    libre = lx + 150;
     labs.push(`<text x="${lx}" y="${H + 20}" class="f-val"><tspan class="${s.c}">${s.g}</tspan>
       ${fmt(s.n)}</text><text x="${lx}" y="${H + 35}" class="f-lbl">${s.t} · ${pct(s.n, t)}%</text>`);
     x += w;
   });
   $('#lnstack').innerHTML = `<svg viewBox="0 0 ${W} ${H + 42}" role="img"
-    aria-label="De ${fmt(t)} líneas de migración, ${fmt(d)} (${pct(d,t)}%) quedaron sin efecto,
+    aria-label="De ${fmt(t)} líneas de migración, ${fmt(d)} (${pct(d,t)}%) se pueden recortar,
+    ${fmt(k)} están sin efecto pero se conservan,
     ${fmt(l)} siguen vigentes y ${fmt(o)} no se encadenan.">${bars.join('')}${labs.join('')}</svg>`;
 }
 
@@ -1030,12 +1065,12 @@ function renderRank() {
   const n = +$('#lntop').value;
   const rows = lnRows().slice(0, n);
   if (!rows.length) { $('#lnrank').innerHTML = '<div class="empty">Sin migraciones que recortar</div>'; return; }
-  const RH = 21, LW = 210, VW = 96, W = 1000, TOP = 18;
-  const max = Math.max(...rows.map(m => m.dl));
+  const RH = 21, LW = 210, VW = 230, W = 1000, TOP = 18;
+  const max = Math.max(...rows.map(m => m.rl + m.nl));
   const plot = W - LW - VW;
   const H = TOP + rows.length * RH + 8;
   const out = [`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Migraciones ordenadas por
-    líneas sin efecto; V${rows[0].v} encabeza con ${fmt(rows[0].dl)} líneas.">`];
+    líneas recortables; V${rows[0].v} encabeza con ${fmt(rows[0].rl)} líneas.">`];
   [0, .25, .5, .75, 1].forEach(f => {
     const x = LW + plot * f;
     out.push(`<line x1="${x}" y1="${TOP - 6}" x2="${x}" y2="${H - 6}" class="f-axis"
@@ -1043,14 +1078,17 @@ function renderRank() {
       text-anchor="middle">${fmt(Math.round(max * f))}</text>`);
   });
   rows.forEach((m, i) => {
-    const y = TOP + i * RH, w = max ? (m.dl / max) * plot : 0;
+    const y = TOP + i * RH, w = max ? (m.rl / max) * plot : 0, wk = max ? (m.nl / max) * plot : 0;
     out.push(`<text x="0" y="${y + 14}" class="f-lbl">V${m.v}
       <tspan fill="currentColor" opacity=".75">${esc(m.n.slice(0, 26))}</tspan></text>`);
     out.push(`<rect x="${LW}" y="${y + 3}" width="${Math.max(1, w)}" height="${RH - 8}" rx="3"
-      class="f-bar-dead"><title>V${m.v} ${esc(m.n)} — ${fmt(m.dl)} de ${fmt(m.l)} líneas
-      sin efecto (${pct(m.dl, m.l)}%), veredicto ${m.vd}</title></rect>`);
-    out.push(`<text x="${LW + w + 8}" y="${y + 14}" class="f-val">${fmt(m.dl)}
-      <tspan class="f-lbl">${pct(m.dl, m.l)}%</tspan></text>`);
+      class="f-bar-dead"><title>V${m.v} ${esc(m.n)} — ${fmt(m.rl)} de ${fmt(m.l)} líneas
+      recortables (${pct(m.rl, m.l)}%), ${RC_ES[m.rc] || m.rc}</title></rect>`);
+    if (wk) out.push(`<rect x="${LW + w + 1}" y="${y + 3}" width="${Math.max(1, wk)}" height="${RH - 8}"
+      rx="3" class="f-bar-keep"><title>V${m.v} — ${fmt(m.nl)} líneas sin efecto que se conservan
+      (necesarias al migrar o vivas por firma)</title></rect>`);
+    out.push(`<text x="${LW + w + wk + 8}" y="${y + 14}" class="f-val">${fmt(m.rl)}
+      <tspan class="f-lbl">${pct(m.rl, m.l)}% · ${RC_ES[m.rc] || m.rc}</tspan></text>`);
   });
   out.push('</svg>');
   $('#lnrank').innerHTML = out.join('');
@@ -1058,20 +1096,21 @@ function renderRank() {
 
 function renderLnTable() {
   const rows = lnRows();
-  const tot = rows.reduce((a, m) => a + m.dl, 0);
+  const tot = rows.reduce((a, m) => a + m.rl, 0);
   $('#lncount').textContent = `${rows.length} archivos · ${fmt(tot)} líneas`;
   $('#lnbody').innerHTML = rows.map(m => `
     <tr class="clickable" data-v="${m.v}">
       <td class="m"><button class="node n-${m.vd==='obsoleta'?'dead':'live'}"
         data-goto="${m.v}">V${m.v}</button></td>
       <td>${esc(m.n)}</td>
-      <td><span class="pill p-${m.vd}">${m.vd}</span></td>
+      <td>${rcPill(m)}</td>
       <td class="num dim">${fmt(m.l)}</td>
-      <td class="num st-dead">${fmt(m.dl)}</td>
-      <td class="num"><span class="minibar"><i style="width:${pct(m.dl, m.l)}%"></i></span>
-        <span class="dim">${pct(m.dl, m.l)}%</span></td>
-      <td class="num st-live">${fmt(m.ll)}</td>
-      <td class="num dim">${fmt(m.ol)}</td>
+      <td class="num st-dead">${fmt(m.rl)}</td>
+      <td class="num st-keep">${m.nl ? fmt(m.nl) : ''}</td>
+      <td class="num"><span class="minibar"><i style="width:${pct(m.rl, m.l)}%"></i></span>
+        <span class="dim">${pct(m.rl, m.l)}%</span></td>
+      <td class="m dim">${[...new Set(m.fx.map(f => f[0]))].filter(k => k !== 'MUERTA')
+        .map(k => FX_ES[k] || k).join(', ')}</td>
     </tr>`).join('') || '<tr><td colspan="8" class="empty">Sin resultados</td></tr>';
   wireGoto($('#lnbody'));
 }
@@ -1149,10 +1188,7 @@ $('#cmover').addEventListener('click', e => {
 });
 $('#lnsort').addEventListener('change', () => { renderRank(); renderLnTable(); });
 $('#lntop').addEventListener('change', renderRank);
-$('#lnpart').addEventListener('click', e => {
-  e.target.setAttribute('aria-pressed', e.target.getAttribute('aria-pressed') !== 'true');
-  renderRank(); renderLnTable();
-});
+$('#lnrc').addEventListener('change', () => { renderRank(); renderLnTable(); });
 
 /* ---------- autoría ---------- */
 let selPerson = null;
@@ -1595,6 +1631,10 @@ def build(model: dict) -> str:
         '<tr><td colspan="3" class="empty">Todas las sentencias quedaron clasificadas</td></tr>'
 
     parcial_files = sum(1 for m in migs if m["dl"] and m["vd"] in ("parcial", "residual"))
+    rcc = meta.get("recorte", {})
+    rc_line = (f'{rcc.get("recortable", 0)} recortables tal cual · {rcc.get("con-ajuste", 0)} con ajuste · '
+               f'{rcc.get("revisar-backfill", 0)} con backfill' if meta.get("precision")
+               else "sin precision.py: cuenta del modelo por nombre y aridad")
 
     auth = data.get("auth", {})
     n_people = len(auth.get("people", []))
@@ -1651,10 +1691,10 @@ no mata lo anterior, lo modifica. Regenerá esta página con
   <div class="metric"><div class="k">Vivas</div>
     <div class="n live">{counts['viva']}</div>
     <div class="s">nada reescrito</div></div>
-  <div class="metric"><div class="k">Líneas sin efecto</div>
-    <div class="n dead">{meta['dead_lines']:,}</div>
-    <div class="s">{round(100 * meta['dead_lines'] / max(1, meta['total_lines']))}% de
-      {meta['total_lines']:,} líneas de migración</div></div>
+  <div class="metric"><div class="k">Líneas recortables</div>
+    <div class="n dead">{meta.get('cut_lines', meta['dead_lines']):,}</div>
+    <div class="s">{round(100 * meta.get('cut_lines', meta['dead_lines']) / max(1, meta['total_lines']))}% de
+      {meta['total_lines']:,}; {meta.get('keep_lines', 0):,} sin efecto se conservan</div></div>
   <div class="metric"><div class="k">Manos</div>
     <div class="n">{n_people}</div>
     <div class="s">{multi_hands} migraciones tocadas por más de una persona</div></div>
@@ -1719,9 +1759,11 @@ no mata lo anterior, lo modifica. Regenerá esta página con
 </section>
 
 <section class="panel" id="p-obsoletas" role="tabpanel" hidden>
-  <p class="note">Estas migraciones no dejan ningún rastro en el estado actual. No se pueden
-  borrar del repo sin romper el checksum de Flyway en los servidores que ya las aplicaron, pero
-  sí son texto que no hace falta leer al depurar, y lo primero que colapsa en un futuro squash.</p>
+  <p class="note">Según el modelo, estas migraciones no dejan ningún rastro en el estado
+  actual. Se pueden borrar del repo: el deploy hace <code>flyway repair</code> y las marca como
+  borradas en <code>flyway_schema_history</code>. Antes hay que confirmar con
+  <code>deps.py --version &lt;n&gt;</code> que nada las necesita al migrar ni sigue viva por
+  firma, y pasar el banco de la skill <code>limpiando-migraciones</code>.</p>
   <div class="tablewrap"><table><thead><tr>
     <th class="m">Versión</th><th>Nombre</th><th style="text-align:right">Líneas</th>
     <th style="text-align:right">Sin efecto</th><th>Reescrita por</th>
@@ -1753,16 +1795,26 @@ no mata lo anterior, lo modifica. Regenerá esta página con
 
 <section class="panel" id="p-lineas" role="tabpanel" hidden>
   <div class="lnhero">
-    <span class="big">{meta['dead_lines']:,}</span>
-    <span class="of">líneas sin efecto · {round(100 * meta['dead_lines'] / max(1, meta['total_lines']))}%
-      de {meta['total_lines']:,} · {parcial_files} archivos parcialmente reescritos</span>
+    <span class="big">{meta.get('cut_lines', meta['dead_lines']):,}</span>
+    <span class="of">líneas recortables · {round(100 * meta.get('cut_lines', meta['dead_lines']) / max(1, meta['total_lines']))}%
+      de {meta['total_lines']:,} · {meta.get('keep_lines', 0):,} sin efecto que se conservan ·
+      {rc_line}</span>
   </div>
-  <p class="note"><b>Qué significa «se deben eliminar»:</b> son las líneas cuyo efecto ya fue
-  reescrito, borrado o reemplazado por una migración posterior. <b>No se pueden borrar del
-  repo</b> —rompería el checksum de Flyway en los servidores que ya aplicaron el archivo—: son
-  lo que colapsaría en un squash, y lo que no hace falta leer al depurar. Una línea cuenta como
-  sin efecto sólo si <i>ninguna</i> escritura de su sentencia sigue viva: en un bloque
-  <code>DO</code> que toca varios objetos, basta uno vigente para que el tramo se conserve.</p>
+  <p class="note"><b>Qué se puede recortar:</b> líneas cuyo efecto reescribió o borró una
+  migración posterior, <i>por firma exacta</i>, y que nada necesita al migrar una base limpia.
+  Se quitan editando el fichero: en los servidores el deploy hace <code>flyway repair</code> y
+  re-ejecuta el fichero editado, así que lo que queda en él tiene que poder correr otra vez sin
+  revertir nada. Por eso cada migración lleva un veredicto:
+  <span class="pill p-recortable">recortable</span> se recorta tal cual;
+  <span class="pill p-con-ajuste">con ajuste</span> tiene algo que, re-aplicado, borraría o
+  revertiría lo de una posterior (DROP de la vigente, filas que otra reescribe, un ALTER que
+  habría que copiar al CREATE) o una función reescrita que alguien usa al migrar;
+  <span class="pill p-revisar-backfill">revisar backfill</span> recalcula datos reales al
+  re-aplicarse. <b>Se conservan</b> (ámbar) las sentencias sin efecto hoy que hacen falta: una
+  sobrecarga viva por firma, una función que una migración intermedia llama o comenta, una
+  semilla que otra usa antes. El procedimiento y el banco de pruebas están en la skill
+  <code>limpiando-migraciones</code>; los avisos de cada migración, en su detalle
+  (pestaña Migraciones) o con <code>deps.py --version &lt;n&gt;</code>.</p>
 
   <figure class="fig">
     <figcaption><b>Composición del corpus.</b> Cada sentencia reclama su tramo de líneas —
@@ -1773,8 +1825,9 @@ no mata lo anterior, lo modifica. Regenerá esta página con
   <div class="controls">
     <label class="dim">ordenar por
       <select id="lnsort" aria-label="Ordenar por">
-        <option value="dl">líneas sin efecto</option>
+        <option value="rl">líneas recortables</option>
         <option value="pc">% del archivo</option>
+        <option value="nl">líneas que se conservan</option>
         <option value="v">versión</option>
       </select></label>
     <label class="dim">mostrar
@@ -1783,22 +1836,29 @@ no mata lo anterior, lo modifica. Regenerá esta página con
         <option value="25" selected>top 25</option>
         <option value="50">top 50</option>
       </select></label>
-    <button class="chipbtn" id="lnpart" aria-pressed="true">sólo parcialmente reescritas</button>
+    <label class="dim">veredicto
+      <select id="lnrc" aria-label="Veredicto de recorte">
+        <option value="">todos</option>
+        <option value="recortable">recortable</option>
+        <option value="con-ajuste">con ajuste</option>
+        <option value="revisar-backfill">revisar backfill</option>
+        <option value="nada">nada que recortar</option>
+      </select></label>
     <span class="count" id="lncount"></span>
   </div>
 
   <figure class="fig">
-    <figcaption><b>Por archivo.</b> Cuántas líneas de cada migración quedaron sin efecto.
-    El porcentaje al lado de cada barra es sobre el propio archivo: una migración corta al
-    90% está casi entera obsoleta aunque su barra sea chica.</figcaption>
+    <figcaption><b>Por archivo.</b> Rojo: líneas que se pueden recortar. Ámbar, a
+    continuación: las que están sin efecto pero hay que conservar. El porcentaje es sobre el
+    propio archivo, y al lado va el veredicto de recorte.</figcaption>
     <div id="lnrank"></div>
   </figure>
 
   <div class="tablewrap"><table><thead><tr>
-    <th class="m">Versión</th><th>Nombre</th><th>Veredicto</th>
-    <th style="text-align:right">Líneas</th><th style="text-align:right">Sin efecto</th>
-    <th style="text-align:right">% del archivo</th><th style="text-align:right">Vigentes</th>
-    <th style="text-align:right">Sin encadenar</th>
+    <th class="m">Versión</th><th>Nombre</th><th>Recorte</th>
+    <th style="text-align:right">Líneas</th><th style="text-align:right">Recortables</th>
+    <th style="text-align:right">Se conservan</th>
+    <th style="text-align:right">% recortable</th><th>Avisos</th>
   </tr></thead><tbody id="lnbody"></tbody></table></div>
 
   <h2 id="comentarios">Presupuesto de comentarios</h2>
