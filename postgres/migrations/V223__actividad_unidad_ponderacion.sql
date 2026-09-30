@@ -141,8 +141,13 @@ BEGIN
 
     IF v_suma + NEW.PONDERACION > 100 THEN
         RAISE EXCEPTION
-          'La ponderacion de las actividades de la unidad % para el grupo % ya suma % y con % nueva llegaria a % (maximo 100)',
-          NEW.FK_TUNIDAD, NEW.FK_TGRUPO, v_suma, NEW.PONDERACION, v_suma + NEW.PONDERACION
+          'Con % %% de peso, la actividad "%" haría que las actividades de la unidad "%" en % sumen % %% (ya suman % %%; el máximo es 100 %%)',
+          NEW.PONDERACION, NEW.TITULO,
+          (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = NEW.FK_TUNIDAD),
+          COALESCE((SELECT format('el grupo %s de %s', gr.NOMBRE, g.NOMBRE)
+                      FROM academico_test.TGRUPO gr JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+                     WHERE gr.PK_TGRUPO = NEW.FK_TGRUPO), 'las actividades sin grupo'),
+          v_suma + NEW.PONDERACION, v_suma
           USING ERRCODE = '23514';
     END IF;
 
