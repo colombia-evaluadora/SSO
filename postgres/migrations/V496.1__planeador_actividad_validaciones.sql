@@ -12,6 +12,9 @@
 
 SET search_path TO academico_test, public;
 
+-- Sustituida por fn_actividad_validar_asignatura/_grupo/_unidad, con nombres.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_referencias_activas(BIGINT, BIGINT, BIGINT);
+
 -- ---------------------------------------------------------------------------
 -- Nombres legibles para los mensajes
 -- ---------------------------------------------------------------------------

@@ -1,15 +1,7 @@
--- V483 — Planeador: mínimo un enunciado por unidad y una evidencia por actividad.
---
--- Qué hace: una unidad activa con referente curricular que tiene enunciados
--- debe relacionar al menos uno (TUNIDAD_ENUNCIADO); una actividad activa con
--- unidad, si los enunciados de esa unidad tienen evidencias, debe escoger al
--- menos una de ellas (TACTIVIDAD_EVIDENCIA).
--- Por qué triggers diferidos: el mínimo se incumple entre sentencias de la
--- misma operación (se inserta la unidad y luego sus enunciados) y hay varios
--- caminos que lo rompen (crear, actualizar, quitar enunciado/evidencia);
--- validar al COMMIT los cubre todos sin duplicar la regla en cada función.
--- Solo sobre las tablas puente; los de TUNIDAD/TACTIVIDAD se quitan aquí.
--- Depende de: V212 (referente/enunciados), V214.1 (tablas puente), V216.
+-- V483 - Mínimo de un enunciado por unidad y de una evidencia por actividad:
+-- asserts y constraint triggers diferidos. La función del trigger la reescribe
+-- V496.2 (no revisa evidencias soltadas por cambio de unidad).
+
 
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_assert_minimo_enunciado(p_fk_tunidad BIGINT)
 RETURNS VOID
@@ -90,7 +82,11 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION academico_test.tg_planeador_minimo_enunciado_evidencia()
+-- La vigente es posterior; esta solo hace falta en una base limpia (V483:migracion, V483:migracion).
+DO $guarda$
+BEGIN
+    IF to_regprocedure('academico_test.tg_planeador_minimo_enunciado_evidencia()') IS NULL THEN
+        EXECUTE $crear$CREATE OR REPLACE FUNCTION academico_test.tg_planeador_minimo_enunciado_evidencia()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
@@ -115,14 +111,16 @@ BEGIN
     END CASE;
     RETURN NULL;
 END;
-$$;
+$$$crear$;
+    END IF;
+END $guarda$;
 
--- Una versión anterior los ponía también sobre TUNIDAD y TACTIVIDAD: el flujo
--- crea la unidad/actividad y asigna enunciados/evidencias después, así que ahí sobran.
 DROP TRIGGER IF EXISTS tr_tunidad_minimo_enunciado ON academico_test.TUNIDAD;
+
 DROP TRIGGER IF EXISTS tr_tactividad_minimo_evidencia ON academico_test.TACTIVIDAD;
 
 DROP TRIGGER IF EXISTS tr_tunidad_enunciado_minimo ON academico_test.TUNIDAD_ENUNCIADO;
+
 CREATE CONSTRAINT TRIGGER tr_tunidad_enunciado_minimo
     AFTER UPDATE OF ACTIVE OR DELETE ON academico_test.TUNIDAD_ENUNCIADO
     DEFERRABLE INITIALLY DEFERRED
@@ -130,6 +128,7 @@ CREATE CONSTRAINT TRIGGER tr_tunidad_enunciado_minimo
     EXECUTE FUNCTION academico_test.tg_planeador_minimo_enunciado_evidencia();
 
 DROP TRIGGER IF EXISTS tr_tactividad_evidencia_minimo ON academico_test.TACTIVIDAD_EVIDENCIA;
+
 CREATE CONSTRAINT TRIGGER tr_tactividad_evidencia_minimo
     AFTER UPDATE OF ACTIVE OR DELETE ON academico_test.TACTIVIDAD_EVIDENCIA
     DEFERRABLE INITIALLY DEFERRED
@@ -138,5 +137,6 @@ CREATE CONSTRAINT TRIGGER tr_tactividad_evidencia_minimo
 
 COMMENT ON FUNCTION academico_test.fn_unidad_assert_minimo_enunciado(BIGINT)
     IS 'Falla (22023) si la unidad activa tiene un referente curricular con enunciados y no relaciona ninguno en TUNIDAD_ENUNCIADO. Invocada por el constraint trigger diferido tr_tunidad_minimo_enunciado / tr_tunidad_enunciado_minimo. Sin gate: núcleo de validación. V483.';
+
 COMMENT ON FUNCTION academico_test.fn_actividad_assert_minimo_evidencia(BIGINT)
     IS 'Falla (22023) si la actividad activa tiene unidad cuyos enunciados tienen evidencias y no escoge ninguna de ellas en TACTIVIDAD_EVIDENCIA. Invocada por el constraint trigger diferido tr_tactividad_minimo_evidencia / tr_tactividad_evidencia_minimo. Sin gate: núcleo de validación. V483.';

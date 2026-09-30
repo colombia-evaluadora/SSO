@@ -1,10 +1,6 @@
--- ===========================================================================
--- V240 - Instrumento de evaluacion "Otro (personalizado)" de una actividad.
--- Quedan el catalogo TIPO_EVIDENCIA_OTRO, TACTIVIDAD_OTRO,
--- fn_actividad_instrumento_assert y fn_actividad_instrumento_definir.
--- fn_actividad_otro_definir y fn_actividad_instrumento_obtener viven en V469.
--- Depende de: V224 (catalogo INSTRUMENTO_EVALUACION), V226.
--- ===========================================================================
+-- V240 - Instrumento "Otro": tabla TACTIVIDAD_OTRO y
+-- fn_actividad_instrumento_assert. fn_actividad_otro_definir vive en V469 y la
+-- fachada fn_actividad_instrumento_definir en V496.3.
 
 
 SET search_path TO academico_test, public;
@@ -116,51 +112,3 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_instrumento_assert(BIGINT, VARCHAR)
     IS 'Valida que la actividad exista, este activa y que su FK_TLV_INSTRUMENTO_EVALUACION (VALOR de TLISTA_VALOR) sea el esperado. Lanza P0002 / 22023. V240: ademas acepta como equivalente el caso instrumento OTRO con TACTIVIDAD_OTRO.FK_TLV_METODO_VALORACION ya configurado con el mismo valor esperado (RUBRICA | LISTA_COTEJO | ESCALA_VALORACION) — asi fn_actividad_rubrica_definir/_cotejo_definir/_escala_definir se pueden invocar desde fn_actividad_otro_definir sin romper. Helper de fn_actividad_*_definir. V226/V240.';
-
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_instrumento_definir(
-    p_pk_usuario_solicitante   BIGINT,
-    p_pk_tactividad            BIGINT,
-    p_definicion               JSONB
-)
-RETURNS VARCHAR
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_valor VARCHAR;
-BEGIN
-    SELECT lv.VALOR INTO v_valor
-      FROM academico_test.TACTIVIDAD a
-      LEFT JOIN academico_test.TLISTA_VALOR lv
-             ON lv.PK_LISTA_VALOR = a.FK_TLV_INSTRUMENTO_EVALUACION
-     WHERE a.PK_TACTIVIDAD = p_pk_tactividad;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'No se encontro la actividad solicitada' USING ERRCODE = 'P0002';
-    END IF;
-
-    CASE v_valor
-        WHEN 'RUBRICA' THEN
-            PERFORM academico_test.fn_actividad_rubrica_definir(
-                        p_pk_usuario_solicitante, p_pk_tactividad, p_definicion);
-        WHEN 'LISTA_COTEJO' THEN
-            PERFORM academico_test.fn_actividad_cotejo_definir(
-                        p_pk_usuario_solicitante, p_pk_tactividad, p_definicion);
-        WHEN 'ESCALA_VALORACION' THEN
-            PERFORM academico_test.fn_actividad_escala_definir(
-                        p_pk_usuario_solicitante, p_pk_tactividad, p_definicion);
-        WHEN 'OTRO' THEN
-            -- V240: p_definicion es aqui el p_config de fn_actividad_otro_definir
-            -- {tipoEvidencia, metodoValoracion, definicion}.
-            PERFORM academico_test.fn_actividad_otro_definir(
-                        p_pk_usuario_solicitante, p_pk_tactividad, p_definicion);
-        ELSE
-            RAISE EXCEPTION 'La actividad no tiene un instrumento de evaluacion valido para definir (%)',
-                COALESCE(v_valor, 'sin instrumento') USING ERRCODE = '22023';
-    END CASE;
-
-    RETURN v_valor;
-END;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_actividad_instrumento_definir(BIGINT, BIGINT, JSONB)
-    IS 'Fachada: lee TACTIVIDAD.FK_TLV_INSTRUMENTO_EVALUACION y despacha a fn_actividad_rubrica_definir (array de criterios), fn_actividad_cotejo_definir (array de items), fn_actividad_escala_definir (objeto de config) o fn_actividad_otro_definir (objeto {tipoEvidencia, metodoValoracion, definicion} — V240). Gate EDITAR sobre PLANEADOR (via las funciones destino). Retorna el VALOR del instrumento aplicado. V226/V240.';
