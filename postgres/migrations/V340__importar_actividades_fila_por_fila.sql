@@ -481,7 +481,7 @@ BEGIN
             ELSE
                 -- La ponderacion de un nivel es la NOTA que ese nivel otorga, no
                 -- un adorno: sin ella la rubrica no puede calificar. Y
-                -- fn_actividad_rubrica_definir exige que sean DISTINTAS dentro
+                -- la validacion de la rubrica exige que sean DISTINTAS dentro
                 -- del criterio, porque dos niveles con el mismo peso son el
                 -- mismo nivel.
                 --
@@ -523,7 +523,7 @@ BEGIN
                 IF v_tmp IS NOT NULL AND EXISTS (
                     -- Misma regla que la rubrica, para los niveles de la escala
                     -- CUALITATIVA. La NUMERICA no lleva niveles: se define con
-                    -- min/max e interpretacion, y fn_actividad_escala_definir
+                    -- min/max e interpretacion, y la validacion de la escala
                     -- rechaza que los traiga.
                     SELECT 1
                       FROM jsonb_array_elements(COALESCE(v_act->'escala'->'niveles', '[]'::JSONB)) ni
@@ -808,9 +808,9 @@ BEGIN
             -- La plantilla no trae evidencias ni pesos: se completan al editar.
             p_exigir_minimos                  := FALSE);
 
-        -- ---- el instrumento, delegando en la funcion de cada uno ----
+        -- ---- el instrumento: el _interno valida y despacha segun su tipo ----
         IF v_instr_val = 'RUBRICA' THEN
-            PERFORM academico_test.fn_actividad_rubrica_definir(
+            PERFORM academico_test.fn_actividad_instrumento_definir_interno(
                 p_pk_usuario_solicitante, v_pk_act, (
                     SELECT jsonb_agg(jsonb_build_object(
                                'nombre',  cr->>'nombre',
@@ -825,7 +825,7 @@ BEGIN
         ELSIF v_instr_val = 'LISTA_COTEJO' THEN
             -- Se prefiere cotejo_detalle si viene (trae ponderacion); si no,
             -- la lista de textos planos del formato de negocio.
-            PERFORM academico_test.fn_actividad_cotejo_definir(
+            PERFORM academico_test.fn_actividad_instrumento_definir_interno(
                 p_pk_usuario_solicitante, v_pk_act,
                 CASE WHEN jsonb_typeof(COALESCE(v_act->'cotejo_detalle', 'null'::JSONB)) = 'array'
                      THEN v_act->'cotejo_detalle'
@@ -834,7 +834,7 @@ BEGIN
                 END);
 
         ELSIF v_instr_val = 'ESCALA_VALORACION' THEN
-            PERFORM academico_test.fn_actividad_escala_definir(
+            PERFORM academico_test.fn_actividad_instrumento_definir_interno(
                 p_pk_usuario_solicitante, v_pk_act, jsonb_strip_nulls(jsonb_build_object(
                     'tipoEscala',           academico_test.fn_planeador_etiqueta_a_lv(
                                                 'TIPO_ESCALA', v_act->'escala'->>'tipo'),
@@ -851,7 +851,7 @@ BEGIN
                                                         COALESCE(v_act->'escala'->'niveles', '[]'::JSONB)) ni))));
 
         ELSIF v_instr_val = 'OTRO' THEN
-            PERFORM academico_test.fn_actividad_otro_definir(
+            PERFORM academico_test.fn_actividad_instrumento_definir_interno(
                 p_pk_usuario_solicitante, v_pk_act, v_act->'otro');
         END IF;
 

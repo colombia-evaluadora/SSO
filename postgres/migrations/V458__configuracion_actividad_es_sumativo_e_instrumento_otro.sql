@@ -9,7 +9,6 @@
 -- Depende de: V440 (firmas), V240 (TACTIVIDAD_OTRO).
 -- ===========================================================================
 
-
 SET search_path TO academico_test, public;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_instrumento_permitido_por_tipo_evaluacion(
@@ -141,8 +140,6 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_actividad_instrumentos_campos_disponibles(VARCHAR)
     IS 'instrumentosPermitidos de campos_disponibles.evaluacion, unico para las tres configuraciones (por actividad, por unidad y por contexto): los INSTRUMENTO_EVALUACION que fn_instrumento_permitido_por_tipo_evaluacion admite para el TIPO_EVALUACION, como [{pk, valor, etiqueta, nombre, variantes, campos}] ordenados por nombre. variantes: para ESCALA_VALORACION, las de TIPO_ESCALA que ese tipo admite; [] en los demas. campos: solo en OTRO, lo que pide el instrumento personalizado (fn_actividad_otro_campos_disponibles); NULL en los demas. El front debe decidir por VALOR.';
 
-DROP FUNCTION IF EXISTS academico_test.fn_actividad_recuperacion_campos_disponibles(BOOLEAN, VARCHAR);
-
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_ponderacion_campos_disponibles(VARCHAR, BOOLEAN, VARCHAR);
 
 CREATE FUNCTION academico_test.fn_actividad_ponderacion_campos_disponibles(
@@ -177,7 +174,3 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_ponderacion_campos_disponibles(VARCHAR, BOOLEAN, VARCHAR)
     IS 'Bloque ponderacion del formulario de actividad, por metodo de calculo de la unidad (fn_unidad_calculo_definitiva_modo): PONDERAR -> PORCENTAJE sobre PONDERACION; SUMATORIA -> PUNTAJE sobre NOTA_MAXIMA con autocalculado; PROMEDIAR o sin metodo -> no visible. Con ES_SUMATIVO = N no aplica y se informa valor 0 (la actividad pesa cero frente a su unidad): fn_actividad_crear/_actualizar rechazan PONDERACION cuando ES_EVALUATIVA = N, asi que el front no la envia.';
-
-DROP FUNCTION IF EXISTS academico_test.fn_unidad_configuracion_actividad(BIGINT, BIGINT, VARCHAR);
-
-DROP FUNCTION IF EXISTS academico_test.fn_actividad_configuracion_contexto(BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR);

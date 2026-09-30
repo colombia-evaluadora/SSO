@@ -459,37 +459,15 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_instrumento_definir(
 RETURNS VARCHAR
 LANGUAGE plpgsql
 AS $$
-DECLARE
-    v_valor  VARCHAR;
-    v_nombre VARCHAR;
-    v_titulo VARCHAR;
 BEGIN
     PERFORM academico_test.fn_actividad_assert_escritura(p_pk_usuario_solicitante, p_pk_tactividad, 'EDITAR');
-
-    SELECT lv.VALOR, lv.NOMBRE, a.TITULO INTO v_valor, v_nombre, v_titulo
-      FROM academico_test.TACTIVIDAD a
-      LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_INSTRUMENTO_EVALUACION
-     WHERE a.PK_TACTIVIDAD = p_pk_tactividad;
-    IF v_valor IS NULL OR v_valor NOT IN ('RUBRICA', 'LISTA_COTEJO', 'ESCALA_VALORACION', 'OTRO') THEN
-        RAISE EXCEPTION '% no tiene un instrumento de evaluación que se pueda configurar: elíjalo primero en su formulario',
-            academico_test.fn_actividad_etiqueta(p_pk_tactividad) USING ERRCODE = '22023';
-    END IF;
-
     PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, p_pk_tactividad,
-        format('Definición del instrumento %s de %s', v_nombre, academico_test.fn_actividad_etiqueta(p_pk_tactividad)));
-
-    CASE v_valor
-        WHEN 'RUBRICA' THEN
-            PERFORM academico_test.fn_actividad_rubrica_definir(p_pk_usuario_solicitante, p_pk_tactividad, p_definicion);
-        WHEN 'LISTA_COTEJO' THEN
-            PERFORM academico_test.fn_actividad_cotejo_definir(p_pk_usuario_solicitante, p_pk_tactividad, p_definicion);
-        WHEN 'ESCALA_VALORACION' THEN
-            PERFORM academico_test.fn_actividad_escala_definir(p_pk_usuario_solicitante, p_pk_tactividad, p_definicion);
-        ELSE
-            -- p_definicion es el p_config de fn_actividad_otro_definir.
-            PERFORM academico_test.fn_actividad_otro_definir(p_pk_usuario_solicitante, p_pk_tactividad, p_definicion);
-    END CASE;
-    RETURN v_valor;
+        format('Definición del instrumento %s de %s',
+               lower(COALESCE(academico_test.fn_instrumento_nombre(
+                   (SELECT FK_TLV_INSTRUMENTO_EVALUACION FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad)),
+                   'de evaluación')),
+               academico_test.fn_actividad_etiqueta(p_pk_tactividad)));
+    RETURN academico_test.fn_actividad_instrumento_definir_interno(p_pk_usuario_solicitante, p_pk_tactividad, p_definicion);
 END;
 $$;
 
@@ -518,4 +496,4 @@ COMMENT ON FUNCTION academico_test.fn_actividad_material_archivo_registrar(BIGIN
 COMMENT ON FUNCTION academico_test.fn_actividad_adaptacion_archivo_registrar(BIGINT, BIGINT, BIGINT)
     IS 'POST /planeador/actividades/:ID/adaptaciones/archivo (multipart vía file-service). Devuelve el PK_TARCHIVO para usarlo como fkTarchivo en PUT :ID/adaptaciones.';
 COMMENT ON FUNCTION academico_test.fn_actividad_instrumento_definir(BIGINT, BIGINT, JSONB)
-    IS 'PUT /planeador/actividades/:ID/instrumento. Wrapper con gate EDITAR, propiedad, Regla 37 y etiqueta; despacha a la definición de rúbrica, lista de cotejo, escala u Otro según el instrumento de la actividad.';
+    IS 'PUT /planeador/actividades/:ID/instrumento. Wrapper con gate EDITAR, propiedad, Regla 37 y etiqueta; delega en fn_actividad_instrumento_definir_interno.';

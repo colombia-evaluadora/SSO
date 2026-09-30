@@ -46,6 +46,7 @@ from sqlscan import (  # noqa: E402
     parse_params, count_call_args, find_top_level, dollar_bodies,
     strip_comments,
 )
+import categories  # noqa: E402
 import render  # noqa: E402
 
 
@@ -1878,6 +1879,7 @@ def main() -> int:
     }
 
     apply_precision(model)
+    model["categories"] = categories.categorize(model)
 
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
