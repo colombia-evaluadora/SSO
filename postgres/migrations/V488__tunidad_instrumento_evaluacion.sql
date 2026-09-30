@@ -100,7 +100,7 @@ DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM pg_attribute
-         WHERE attrelid = 'academico_test.t_unidad_listado_fila'::regtype::oid
+         WHERE attrelid = 'academico_test.t_unidad_listado_fila'::regclass::oid
            AND attname = 'rotulo_ejecucion' AND NOT attisdropped
     ) THEN
         ALTER TYPE academico_test.t_unidad_listado_fila ADD ATTRIBUTE rotulo_ejecucion VARCHAR;
@@ -364,7 +364,7 @@ DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM pg_attribute
-         WHERE attrelid = 'academico_test.t_unidad_detalle'::regtype::oid
+         WHERE attrelid = 'academico_test.t_unidad_detalle'::regclass::oid
            AND attname = 'rotulo_ejecucion' AND NOT attisdropped
     ) THEN
         ALTER TYPE academico_test.t_unidad_detalle ADD ATTRIBUTE rotulo_ejecucion VARCHAR;
