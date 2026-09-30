@@ -1,101 +1,16 @@
 -- ===========================================================================
--- V396 — fn_sed_listar_todos_planeador + GET /planeador/sedes/opciones
+-- V396 — fn_sed_listar_todos_planeador + GET /planeador/sedes/opciones.
 --
--- Copia de academico_test.fn_sed_listar_todos (V52) -- la funcion que sirve
--- GET /establecimientos/sedes/opciones (V95) -- pero con el gate del
--- grupo Gestion Academica (el padre de Planeador y Asistencias en el
--- sidebar) en lugar del de SEDES_EDUCATIVAS, y su endpoint gemelo en
--- public.query bajo /planeador/sedes/opciones.
+-- El select liviano de sedes de fn_sed_listar_todos (V52), pero con el gate
+-- del grupo del sidebar que contiene a PLANEADOR y no el de SEDES_EDUCATIVAS:
+-- rector y coordinador tienen el grupo aunque no tengan el submenu. El grupo
+-- se resuelve por estructura (fn_menu_grupo_de) y el codigo se compara en
+-- forma canonica, asi que no depende de como este escrito en cada ambiente.
 --
--- Motivo: el planeador necesita el mismo select liviano de sedes (id+nombre+
--- establecimiento) para sus filtros, pero un docente/rector con acceso a
--- Gestion Academica no tiene necesariamente la capability VER sobre
--- SEDES_EDUCATIVAS, asi que fn_sed_listar_todos le responde 42501.
---
--- DECISION (usuario, 2026-09-14): el gate es el menu PADRE de Planeador y no
--- el hijo 'PLANEADOR'. En el servidor de test el submenu PLANEADOR solo lo
--- tienen DOCENTE y SUPER_ADMINISTRADOR, mientras que RECTOR/COORDINADOR
--- tienen el grupo (con Asistencias) y tambien necesitan este select. Queda
--- explicitamente aceptado que difiere del resto de endpoints /planeador/*
--- (gate 'PLANEADOR') y que basta el grupo para listar sedes.
---
--- CORRECCION (usuario, 2026-09-15): la primera version de este gate pasaba el
--- literal 'GESTIÓN_ACÁDEMICA' (con tildes) a fn_assert_permiso_seccion. En
--- PRODUCCION ese menu (pk_tmenu=18, created_by='migracion') tiene
--- CODIGO='GESTION_ACADEMICA', SIN tildes, y fn_usuario_puede_en_menu compara
--- el CODIGO **exacto** -> ningun usuario salvo el nivel 0 pasaba el gate y
--- GET /planeador/sedes/opciones respondia 42501/FORBIDDEN incluso a docentes
--- cuyo fn_usuario_permisos_menu listaba GESTION_ACADEMICA con puede_ver=TRUE.
---
--- Por eso el gate ya NO depende de como este escrito el texto del grupo:
---   * fn_menu_codigo_canonico  normaliza (UPPER + TRIM + sin tildes), asi que
---     'GESTIÓN_ACÁDEMICA', 'Gestion_Academica' y 'GESTION_ACADEMICA' son el
---     mismo codigo. No se usa la extension unaccent: no esta instalada en el
---     servidor (solo pg_trgm/pgcrypto/plpgsql), se hace con translate().
---   * fn_menu_grupo_de('PLANEADOR') resuelve el grupo por ESTRUCTURA
---     (TMENU.FK_TMENU, el padre del submenu) en vez de por su texto. El unico
---     literal que queda es 'PLANEADOR', que es estable y ya lo usan V216/
---     V224/V277 para el resto del modulo.
--- Ambos helpers son fail-closed: si el menu no existe devuelven NULL, y
--- fn_assert_permiso_seccion con menu NULL da FALSE -> 42501, como antes.
---
--- Diferencias respecto a fn_sed_listar_todos:
---   * Gate: fn_assert_permiso_seccion(usuario, fn_menu_grupo_de('PLANEADOR'),
---     'VER'), el mismo helper (V29) que usa el modulo planeador (V216/V224/
---     V277). Hace bypass del SUPER_ADMIN (nivel 0) por dentro, igual que el
---     IF manual de la original.
---   * Nada mas. El alcance de lectura sigue siendo fn_usuario_sedes_lectura,
---     las columnas y el orden son identicos, para que el front pueda reusar el
---     mismo tipo `Campus`.
---
--- Endpoint (misma forma que V95 #6, cambia path, funcion y roles):
---   GET /planeador/sedes/opciones  ->  fn_sed_listar_todos_planeador
---   Sin parametros (solo CONTEXT.USER_ID), sin query_param_constraint.
---   Roles JWT (role_query): los que tienen el grupo Gestion Academica en
---   TROL_MENU (COORDINADOR, DOCENTE, RECTOR, SUPER_ADMINISTRADOR) + SSO-ADMIN, para que
---   el gate del JWT y el gate de la base no queden desincronizados (ver
---   memoria "gate dual JWT vs PL/pgSQL"). El gate real es el de la funcion.
---
--- NOTA operativa: la fila nueva de public.query solo se sirve tras reiniciar
--- el contenedor query-service-eval-col (rutas provisionadas al arranque).
---
--- Dependencias:
---   * V29  — fn_assert_permiso_seccion, fn_usuario_sedes_lectura.
---   * V52  — fn_sed_listar_todos (funcion de referencia; no se toca).
---   * V95  — GET /establecimientos/sedes/opciones (endpoint de referencia).
---   * V216 — modulo planeador (fn_assert_permiso_seccion como gate).
+-- Depende de: V29 (fn_assert_permiso_seccion, fn_menu_codigo_canonico,
+-- fn_usuario_sedes_lectura), V52 y V216.
 -- ===========================================================================
 
--- ---------------------------------------------------------------------------
--- 0. Helpers de resolucion de menu (ver CORRECCION en la cabecera).
---    Viven aqui y no en V29 porque V29 ya corrio en todos los ambientes y
---    estos helpers solo los necesita este gate por ahora; si otro modulo los
---    reusa, mueranse a un helper comun.
--- ---------------------------------------------------------------------------
-
--- 0.a Forma canonica de un CODIGO de menu: mayusculas, sin espacios al borde
---     y sin tildes. translate() en vez de unaccent porque la extension no
---     esta instalada (pg_trgm / pgcrypto / plpgsql son las unicas).
-CREATE OR REPLACE FUNCTION academico_test.fn_menu_codigo_canonico(
-    p_codigo VARCHAR
-)
-RETURNS VARCHAR
-LANGUAGE sql
-IMMUTABLE
-AS $$
-    SELECT UPPER(TRIM(translate(
-        COALESCE(p_codigo, ''),
-        'ÁÀÄÂáàäâÉÈËÊéèëêÍÌÏÎíìïîÓÒÖÔóòöôÚÙÜÛúùüûÑñÇç',
-        'AAAAaaaaEEEEeeeeIIIIiiiiOOOOooooUUUUuuuuNnCc'
-    )))::VARCHAR;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_menu_codigo_canonico(VARCHAR)
-    IS 'Forma canonica de un TMENU.CODIGO: UPPER + TRIM + sin tildes/dieresis/cedilla (translate, porque la extension unaccent no esta instalada). Sirve para comparar codigos de menu sin depender de como quedaron escritos en cada ambiente: en produccion el grupo es GESTION_ACADEMICA y la documentacion original de V396 lo daba por GESTIÓN_ACÁDEMICA. V396.';
-
--- 0.b CODIGO real (tal como esta en la fila) del menu PADRE del submenu cuyo
---     codigo canonico es p_codigo_hijo. Devuelve NULL si el submenu no existe
---     o no tiene padre => el caller falla cerrado con 42501.
 CREATE OR REPLACE FUNCTION academico_test.fn_menu_grupo_de(
     p_codigo_hijo VARCHAR
 )

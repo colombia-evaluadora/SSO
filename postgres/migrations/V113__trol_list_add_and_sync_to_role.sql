@@ -3,7 +3,7 @@
 -- servida por public.query. Quedan fn_assert_superadmin, fn_list_roles,
 -- fn_add_trol + trigger de sincronizacion con public.role,
 -- fn_list_menu_possibilities_for_rol, fn_dissociate_menus_from_rol,
--- fn_upsert_menu, las funciones de planes y las semillas de menu y ruta.
+-- fn_upsert_menu (+ _interno y codigo canonico), planes y semillas de ruta.
 -- fn_associate_menus_to_rol, fn_list_available_menus, fn_delete_menu y
 -- fn_reorder_menus se reescribieron en V115, V123 y V498; el rol lo crea V59
 -- y las asignaciones rol-menu (TROL_MENU) las siembra V193.
@@ -316,8 +316,43 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_upsert_menu(
-    p_user_pk         BIGINT,
+-- El CODIGO de un menu nuevo se deriva de su nombre, siempre en forma
+-- canonica: "Matrícula" da MATRICULA, nunca MATRÍCULA.
+CREATE OR REPLACE FUNCTION academico_test.fn_menu_codigo_desde_nombre(p_nombre VARCHAR)
+RETURNS VARCHAR
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT LEFT(academico_test.fn_menu_codigo_canonico(
+               REGEXP_REPLACE(TRIM(COALESCE(p_nombre, '')), '\s+', '_', 'g')), 30)::VARCHAR;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_menu_validar_codigo_unico(p_codigo VARCHAR)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_pk     BIGINT;
+    v_nombre VARCHAR;
+BEGIN
+    SELECT m.pk_tmenu, m.nombre INTO v_pk, v_nombre
+      FROM academico_test.tmenu m
+     WHERE academico_test.fn_menu_codigo_canonico(m.codigo)
+         = academico_test.fn_menu_codigo_canonico(p_codigo)
+       AND m.active = TRUE
+     LIMIT 1;
+    IF v_pk IS NOT NULL THEN
+        RAISE EXCEPTION 'Ya existe el menu "%" con el codigo % (pk=%)', v_nombre, p_codigo, v_pk
+            USING ERRCODE = '23505';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_menu_validar_codigo_unico(VARCHAR)
+    IS 'Lanza 23505 si ya hay un TMENU activo con el mismo codigo en forma canonica (MATRICULA y MATRÍCULA chocan). La usa fn_upsert_menu_interno al crear.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_upsert_menu_interno(
     p_nombre          VARCHAR,
     p_created_by      VARCHAR,
     p_url             VARCHAR DEFAULT NULL,
@@ -363,8 +398,6 @@ DECLARE
     v_sub_orden_calc NUMERIC;
     v_padre_pk       BIGINT;
 BEGIN
-    PERFORM academico_test.fn_assert_superadmin(p_user_pk);
-
     IF p_created_by IS NULL OR LENGTH(TRIM(p_created_by)) = 0 THEN
         RAISE EXCEPTION 'fn_upsert_menu: p_created_by es obligatorio';
     END IF;
@@ -411,19 +444,9 @@ BEGIN
         IF p_nombre IS NULL OR LENGTH(TRIM(p_nombre)) = 0 THEN
             RAISE EXCEPTION 'fn_upsert_menu: p_nombre es obligatorio';
         END IF;
+        -- Renombrar no cambia el CODIGO: es la clave con la que los gates
+        -- (fn_assert_permiso_seccion) encuentran el menu.
         v_nombre := TRIM(p_nombre);
-        v_codigo := LEFT(UPPER(REGEXP_REPLACE(v_nombre, '\s+', '_', 'g')), 30);
-
-        SELECT m.pk_tmenu INTO v_existente
-          FROM academico_test.tmenu m
-         WHERE UPPER(TRIM(m.codigo)) = v_codigo
-           AND m.active = TRUE
-           AND m.pk_tmenu <> p_pk_tmenu_editar
-         LIMIT 1;
-        IF v_existente IS NOT NULL THEN
-            RAISE EXCEPTION 'fn_upsert_menu: ya existe otro TMENU activo con codigo=% (pk=%)', v_codigo, v_existente
-                USING ERRCODE = '23505';
-        END IF;
 
         -- Reparent (opcional): SaveMenuRequest.idParent siempre viaja en el
         -- body de PATCH /menus/{id}, incluso sin cambiar de padre — asi que
@@ -455,7 +478,6 @@ BEGIN
 
         UPDATE academico_test.tmenu m
            SET nombre      = v_nombre,
-               codigo      = v_codigo,
                url         = p_url,
                icono       = p_icono,
                visible     = v_visible_ch,
@@ -492,16 +514,9 @@ BEGIN
             RAISE EXCEPTION 'fn_upsert_menu: p_nombre es obligatorio';
         END IF;
         v_nombre := TRIM(p_nombre);
-        v_codigo := LEFT(UPPER(REGEXP_REPLACE(v_nombre, '\s+', '_', 'g')), 30);
+        v_codigo := academico_test.fn_menu_codigo_desde_nombre(v_nombre);
 
-        SELECT m.pk_tmenu INTO v_existente
-          FROM academico_test.tmenu m
-         WHERE UPPER(TRIM(m.codigo)) = v_codigo AND m.active = TRUE
-         LIMIT 1;
-        IF v_existente IS NOT NULL THEN
-            RAISE EXCEPTION 'fn_upsert_menu: ya existe un TMENU activo con codigo=% (pk=%)', v_codigo, v_existente
-                USING ERRCODE = '23505';
-        END IF;
+        PERFORM academico_test.fn_menu_validar_codigo_unico(v_codigo);
 
         -- orden = ultimo entre hermanos si no se especifica.
         v_orden_calc := COALESCE(
@@ -539,16 +554,9 @@ BEGIN
         RAISE EXCEPTION 'fn_upsert_menu: p_nombre es obligatorio';
     END IF;
     v_nombre := TRIM(p_nombre);
-    v_codigo := LEFT(UPPER(REGEXP_REPLACE(v_nombre, '\s+', '_', 'g')), 30);
+    v_codigo := academico_test.fn_menu_codigo_desde_nombre(v_nombre);
 
-    SELECT m.pk_tmenu INTO v_existente
-      FROM academico_test.tmenu m
-     WHERE UPPER(TRIM(m.codigo)) = v_codigo AND m.active = TRUE
-     LIMIT 1;
-    IF v_existente IS NOT NULL THEN
-        RAISE EXCEPTION 'fn_upsert_menu: ya existe un TMENU activo con codigo=% (pk=%)', v_codigo, v_existente
-            USING ERRCODE = '23505';
-    END IF;
+    PERFORM academico_test.fn_menu_validar_codigo_unico(v_codigo);
 
     v_orden_calc := COALESCE(
         p_orden,
@@ -643,11 +651,11 @@ BEGIN
                 CONTINUE;
             END IF;
 
-            v_sub_codigo := LEFT(UPPER(REGEXP_REPLACE(TRIM(v_sub_nombre), '\s+', '_', 'g')), 30);
+            v_sub_codigo := academico_test.fn_menu_codigo_desde_nombre(v_sub_nombre);
 
             SELECT m.pk_tmenu INTO v_existente
               FROM academico_test.tmenu m
-             WHERE UPPER(TRIM(m.codigo)) = v_sub_codigo AND m.active = TRUE
+             WHERE academico_test.fn_menu_codigo_canonico(m.codigo) = v_sub_codigo AND m.active = TRUE
              LIMIT 1;
             IF v_existente IS NOT NULL THEN
                 status  := 'submenu_error:codigo_duplicado';
@@ -682,6 +690,46 @@ BEGIN
     END IF;
 END;
 $$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_upsert_menu(
+    p_user_pk         BIGINT,
+    p_nombre          VARCHAR,
+    p_created_by      VARCHAR,
+    p_url             VARCHAR DEFAULT NULL,
+    p_icono           VARCHAR DEFAULT NULL,
+    p_visible         VARCHAR DEFAULT 'S',
+    p_orden           NUMERIC DEFAULT NULL,
+    p_plan_id         BIGINT  DEFAULT NULL,
+    p_id_padre        BIGINT  DEFAULT NULL,
+    p_pk_tmenu_editar BIGINT  DEFAULT NULL,
+    p_submenus        JSONB   DEFAULT NULL
+)
+RETURNS TABLE (
+    pk_tmenu BIGINT,
+    pk_padre BIGINT,
+    nombre   VARCHAR,
+    path     VARCHAR,
+    icono    VARCHAR,
+    orden    NUMERIC,
+    visible  BOOLEAN,
+    plan_id  BIGINT,
+    type     VARCHAR,
+    status   VARCHAR
+)
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    PERFORM academico_test.fn_assert_superadmin(p_user_pk);
+    RETURN QUERY
+    SELECT * FROM academico_test.fn_upsert_menu_interno(
+        p_nombre, p_created_by, p_url, p_icono, p_visible, p_orden,
+        p_plan_id, p_id_padre, p_pk_tmenu_editar, p_submenus);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_upsert_menu_interno(VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, NUMERIC, BIGINT, BIGINT, BIGINT, JSONB)
+    IS 'INTERNO: crea o edita un TMENU sin gate; lo llama fn_upsert_menu. El CODIGO se deriva del nombre en forma canonica al crear y no cambia al editar.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_list_plans_from_value(
     p_user_pk BIGINT
@@ -935,7 +983,7 @@ COMMENT ON FUNCTION academico_test.fn_dissociate_menus_from_rol(BIGINT, BIGINT, 
     'Desvincula (soft-delete) TMENU puntuales de un rol sin afectar el resto. Utilidad de proposito general; PUT /roles/{roleId}/menus usa fn_associate_menus_to_rol(p_full_replace=TRUE) en su lugar.';
 
 COMMENT ON FUNCTION academico_test.fn_upsert_menu(BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, NUMERIC, BIGINT, BIGINT, BIGINT, JSONB) IS
-    'Reemplaza a fn_create_parent_menu_with_submenus. Tres modos: EDITAR (p_pk_tmenu_editar IS NOT NULL -> PATCH /menus/{id}, UPDATE de una fila; p_id_padre actua como reparent — NULL mueve a raiz, un pk valido mueve bajo ese padre, rechazado si crea 3 niveles o auto-referencia); HIJO BAJO PADRE EXISTENTE (p_pk_tmenu_editar NULL + p_id_padre IS NOT NULL -> POST /menus con idParent, INSERT de un submenu); RAIZ (ambos NULL, default -> POST /menus con idParent=null, INSERT de un menu raiz, +/- batch de p_submenus JSONB para el flujo historico "Crear nuevo menu principal"). p_plan_id (o "plan_id" por submenu) se valida contra tlista_valor CATEGORIA=''PLAN'' y se persiste en tmenu.fk_tplan. Devuelve SIEMPRE la columna TYPE (''GROUP'' si fk_tmenu IS NULL, ''ITEM'' si no) — el contrato MenuDto.type es obligatorio, y el SELECT de los tres modos + el bucle de submenus lo calculan explicitamente (antes del fix 2026-08-14 solo lo retornaba fn_list_available_menus). Duplicado de codigo -> ERRCODE=''23505'' (409); referencias invalidas (padre/plan/menu inexistente, auto-referencia, 3er nivel) -> ERRCODE=''22023'' (400); menu a editar ausente/inactivo -> ERRCODE=''P0002'' (404). REQUIERE p_user_pk (fn_assert_superadmin).';
+    'POST /menus y PATCH /menus/{id}. Wrapper: gate de super admin (fn_assert_superadmin) y delega en fn_upsert_menu_interno. Tres modos: EDITAR (p_pk_tmenu_editar; p_id_padre actua como reparent, NULL mueve a raiz), HIJO (p_id_padre) y RAIZ con batch opcional de submenus (p_submenus).';
 
 COMMENT ON FUNCTION academico_test.fn_list_plans_from_value(BIGINT) IS
     'GET /plans -> PlanDto[]. Planes activos de tlista_valor CATEGORIA=''PLAN''. REQUIERE p_user_pk (fn_assert_superadmin).';
