@@ -1,20 +1,12 @@
--- ===========================================================================
--- V452 — el detalle de la actividad trae sus estudiantes asignados.
---
--- Que hace: fn_actividad_buscar_por_pk gana la columna estudiantes (los
--- TACTIVIDAD_ESTUDIANTE activos con el pk de la asignacion y su nota u
--- observacion) y fn_actividad_pantalla_edicion la expone. Con eso el detalle
--- devuelve todo lo relacionado a la actividad en una sola llamada.
--- Por que aqui y no en V224/V353: re-ejecutar V224 arrastra V251 y su cadena;
--- una migracion posterior aplica limpia. Ambas quedan muertas para estas dos
--- funciones. V272 (exportar) lee la fila por nombre y no se ve afectada.
--- Depende de: V224 (cuerpo base), V353 (cuerpo base), V246 (fila del endpoint).
--- ===========================================================================
+-- V452 - Detalle de la actividad (fn_actividad_buscar_por_pk) con estudiantes
+-- y rotulo_ejecucion (Regla 13), y la pantalla de edición
+-- (fn_actividad_pantalla_edicion). El detail de la fila de pantalla-edicion
+-- lo define hoy V496.4.
+-- Depende de: V224 (cuerpo base), V246 (fila del endpoint), V451
+-- (fn_unidad_referente_aplicable).
 
 SET search_path TO academico_test, public;
 
--- Cambia el RETURNS TABLE: hay que soltar la firma viva o CREATE OR REPLACE
--- falla con 42P13.
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_buscar_por_pk(BIGINT, BIGINT, INT);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_buscar_por_pk(
@@ -32,9 +24,9 @@ RETURNS TABLE (
     unidad                          VARCHAR,
     fk_tgrupo                       BIGINT,
     grupo                           VARCHAR,
-    -- Grado del grupo de la actividad y, si no tiene grupo, el de su unidad.
-    -- grado_grupo es la etiqueta compuesta (fn_grado_grupo_etiqueta): es lo
-    -- que el prototipo pinta en la tarjeta y en la celda del calendario.
+    
+    
+    
     fk_tgrado                       BIGINT,
     grado                           VARCHAR,
     grado_codigo                    VARCHAR,
@@ -76,18 +68,23 @@ RETURNS TABLE (
     estudiantes_evaluados           BIGINT,
     materiales                      JSONB,
     adaptaciones                    JSONB,
-    -- Evidencias (TACTIVIDAD_EVIDENCIA) y criterios (TACTIVIDAD_CRITERIO_UNIDAD)
-    -- ya relacionados: el "pk" de cada elemento es el de la RELACION, que es
-    -- lo que exigen fn_actividad_evidencia_quitar / _criterio_quitar (V214.1).
+    
+    
+    
     evidencias                      JSONB,
     criterios                       JSONB,
-    -- Los estudiantes asignados (TACTIVIDAD_ESTUDIANTE ACTIVE), con el pk de
-    -- la asignacion que piden calificar, observar y las adaptaciones.
+    
+    
     estudiantes                     JSONB,
     recuperacion                    JSONB,
     campos_disponibles              JSONB,
     unidad_configuracion            JSONB,
-    active                          BOOLEAN
+    active                          BOOLEAN,
+    -- Regla 13: como se llama la actividad para su grado/asignatura, mismo
+    -- calculo que fn_actividad_listar_interno (V481) y fn_unidad_listar_interno
+    -- (V488). No llama a fn_planeador_rotulo_actividad_interno (V511): es
+    -- posterior a este archivo.
+    rotulo_ejecucion                VARCHAR
 )
 LANGUAGE plpgsql
 STABLE
@@ -234,7 +231,14 @@ BEGIN
            -- de estilo en la cabecera de esa funcion.
            academico_test.fn_actividad_campos_disponibles(p_pk_usuario_solicitante, a.PK_TACTIVIDAD),
            academico_test.fn_actividad_unidad_configuracion(p_pk_usuario_solicitante, a.PK_TACTIVIDAD),
-           a.ACTIVE
+           a.ACTIVE,
+           COALESCE(
+               (SELECT rc_rot.ROTULO_EJECUCION
+                  FROM academico_test.TREFERENTE_CURRICULAR rc_rot
+                 WHERE rc_rot.PK_REFERENTE_CURRICULAR =
+                       academico_test.fn_unidad_referente_aplicable(gr.PK_TGRADO, a.FK_TASIGNATURA)),
+               'Actividad'
+           )::VARCHAR
       FROM academico_test.TACTIVIDAD a
       JOIN academico_test.TASIGNATURA asig      ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
       LEFT JOIN academico_test.TUNIDAD u        ON u.PK_TUNIDAD = a.FK_TUNIDAD
@@ -264,7 +268,6 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_actividad_buscar_por_pk(BIGINT, BIGINT, INT)
     IS 'estudiantes ([{pkTactividadEstudiante, pkTmatricula, fkTestudiante, estudiante, calificacion, calificable, observacion}]) son los asignados ACTIVE con el pk de la asignacion -- el que piden calificar, observar y las adaptaciones -- y su nota u observacion actual; con esto el detalle trae todo lo relacionado a la actividad (unidad con referente/rubrica/enunciados en unidad_configuracion, materiales, adaptaciones, evidencias, criterios, recuperacion y estudiantes) en una sola llamada. Detalle completo de una actividad (gate VER): todos los campos de TACTIVIDAD con los nombres de catalogo resueltos, el estado derivado (fn_actividad_estado), el progreso de evaluacion (asignados/evaluados en un solo LATERAL), los materiales de apoyo y las adaptaciones curriculares como JSONB, las evidencias y los criterios ya relacionados (columnas "evidencias" y "criterios", ambas [] cuando no hay ninguno: evidencias = [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}] sobre TACTIVIDAD_EVIDENCIA y criterios = [{pk, fkTcriterioUnidad, descripcion, codigo, orden}] sobre TACTIVIDAD_CRITERIO_UNIDAD, solo filas ACTIVE -- el "pk" de cada elemento es el de la RELACION, que es justo el que exigen fn_actividad_evidencia_quitar / fn_actividad_criterio_quitar de V214.1 y que antes solo se conocia en la respuesta del POST que lo creo), y la config de recuperacion (columna "recuperacion": objeto con destino/tipoAplicacion/tipoCalculo/valorPonderacion + nombres resueltos, o NULL si no es de recuperacion). campos_disponibles = fn_actividad_campos_disponibles (dependencias dinamicas actividad->criterio / actividad->evaluacion, V214.2); unidad_configuracion = fn_actividad_unidad_configuracion (snapshot de la unidad relacionada, o {tieneUnidad:false}, V214.2) -- ambas calculadas solo para esta fila (detalle), no en fn_actividad_listar. SETOF 0 o 1 fila (incluye inactivas). V224.';
 
--- Devuelve JSONB: no cambia el tipo, CREATE OR REPLACE basta.
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_pantalla_edicion(
     p_pk_usuario_solicitante BIGINT,
     p_pk_tactividad          BIGINT,
@@ -381,32 +384,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_pantalla_edicion(BIGINT, BIGINT, INT)
-    IS 'DTO compuesto de la pantalla "editar actividad": compone fn_actividad_buscar_por_pk (V224) y fn_actividad_instrumento_obtener en UN JSONB ya en camelCase y anidado por concepto (actividad{...}, materiales, adaptaciones, evidencias, criterios, recuperacion, instrumento, camposDisponibles, unidadConfiguracion), con las banderas S/N convertidas a boolean. No reimplementa ninguna regla: solo reempaqueta. evidencias y criterios son las relaciones ACTIVE que ya tiene la actividad, con el pk DE LA RELACION -- el que exigen fn_actividad_evidencia_quitar / fn_actividad_criterio_quitar (V214.1) --, para que al reabrir la actividad se puedan pre-marcar y quitar. Gate VER (fn_planeador_assert_alcance) una sola vez. P0002 si la actividad no existe. V353.';
-
--- La fila de arriba se inserta con ON CONFLICT DO NOTHING: donde ya existe,
--- editar el INSERT no la actualiza. Se reconcilia el detail aparte.
-UPDATE public.query q
-   SET detail = 'V353 -- DTO compuesto para PlaneadorEditarActividadPage: actividad + instrumento en una sola llamada, ya en camelCase y anidado por concepto. Reemplaza, PARA ESA PANTALLA, la cadena GET .../:ID + GET .../:ID/instrumento. Incluye ademas evidencias (TACTIVIDAD_EVIDENCIA: [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}]) y criterios (TACTIVIDAD_CRITERIO_UNIDAD: [{pk, fkTcriterioUnidad, descripcion, codigo, orden}]) ya relacionados, para poder pre-marcarlos al reabrir la actividad y para conocer el pk que exigen PATCH /planeador/actividades/evidencias/:ID y PATCH /planeador/actividades/criterios/:ID. Y estudiantes ([{pkTactividadEstudiante, pkTmatricula, fkTestudiante, estudiante, calificacion, calificable, observacion}]): los asignados, con el pk de la asignacion que piden calificar, observar y las adaptaciones.'
-  FROM public.microservice m
- WHERE m.id_microservice = q.microservice_id
-   AND m.serviceid       = 'eval-col'
-   AND q.path_template   = '/planeador/actividades/:ID/pantalla-edicion'
-   AND q.http_method     = 'GET'
-   AND q.detail IS DISTINCT FROM 'V353 -- DTO compuesto para PlaneadorEditarActividadPage: actividad + instrumento en una sola llamada, ya en camelCase y anidado por concepto. Reemplaza, PARA ESA PANTALLA, la cadena GET .../:ID + GET .../:ID/instrumento. Incluye ademas evidencias (TACTIVIDAD_EVIDENCIA: [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}]) y criterios (TACTIVIDAD_CRITERIO_UNIDAD: [{pk, fkTcriterioUnidad, descripcion, codigo, orden}]) ya relacionados, para poder pre-marcarlos al reabrir la actividad y para conocer el pk que exigen PATCH /planeador/actividades/evidencias/:ID y PATCH /planeador/actividades/criterios/:ID. Y estudiantes ([{pkTactividadEstudiante, pkTmatricula, fkTestudiante, estudiante, calificacion, calificable, observacion}]): los asignados, con el pk de la asignacion que piden calificar, observar y las adaptaciones.';
-
-COMMENT ON FUNCTION academico_test.fn_actividad_pantalla_edicion(BIGINT, BIGINT, INT)
     IS 'DTO compuesto de la pantalla "editar actividad": compone fn_actividad_buscar_por_pk (V224) y fn_actividad_instrumento_obtener en UN JSONB ya en camelCase y anidado por concepto (actividad{...}, materiales, adaptaciones, evidencias, criterios, estudiantes, recuperacion, instrumento, camposDisponibles, unidadConfiguracion), con las banderas S/N convertidas a boolean. No reimplementa ninguna regla: solo reempaqueta. evidencias y criterios son las relaciones ACTIVE que ya tiene la actividad, con el pk DE LA RELACION -- el que exigen fn_actividad_evidencia_quitar / fn_actividad_criterio_quitar (V214.1) --, para que al reabrir la actividad se puedan pre-marcar y quitar. Gate VER (fn_planeador_assert_alcance) una sola vez. P0002 si la actividad no existe. V353. estudiantes: los asignados con el pk de la asignacion y su nota u observacion (misma forma que fn_actividad_buscar_por_pk).';
-
--- Las filas de los dos endpoints existen con ON CONFLICT DO NOTHING: se
--- reconcilia el detail aparte (patron V253/V279). No-op al reaplicar.
-UPDATE public.query q
-   SET detail = 'V353 -- DTO compuesto para PlaneadorEditarActividadPage: actividad + instrumento en una sola llamada, ya en camelCase y anidado por concepto. Reemplaza, PARA ESA PANTALLA, la cadena GET .../:ID + GET .../:ID/instrumento. Incluye ademas evidencias (TACTIVIDAD_EVIDENCIA: [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}]) y criterios (TACTIVIDAD_CRITERIO_UNIDAD: [{pk, fkTcriterioUnidad, descripcion, codigo, orden}]) ya relacionados, para poder pre-marcarlos al reabrir la actividad y para conocer el pk que exigen PATCH /planeador/actividades/evidencias/:ID y PATCH /planeador/actividades/criterios/:ID. Y estudiantes ([{pkTactividadEstudiante, pkTmatricula, fkTestudiante, estudiante, calificacion, calificable, observacion}]): los asignados, con el pk de la asignacion que piden calificar, observar y las adaptaciones.'
-  FROM public.microservice m
- WHERE m.id_microservice = q.microservice_id
-   AND m.serviceid       = 'eval-col'
-   AND q.path_template   = '/planeador/actividades/:ID/pantalla-edicion'
-   AND q.http_method     = 'GET'
-   AND q.detail IS DISTINCT FROM 'V353 -- DTO compuesto para PlaneadorEditarActividadPage: actividad + instrumento en una sola llamada, ya en camelCase y anidado por concepto. Reemplaza, PARA ESA PANTALLA, la cadena GET .../:ID + GET .../:ID/instrumento. Incluye ademas evidencias (TACTIVIDAD_EVIDENCIA: [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}]) y criterios (TACTIVIDAD_CRITERIO_UNIDAD: [{pk, fkTcriterioUnidad, descripcion, codigo, orden}]) ya relacionados, para poder pre-marcarlos al reabrir la actividad y para conocer el pk que exigen PATCH /planeador/actividades/evidencias/:ID y PATCH /planeador/actividades/criterios/:ID. Y estudiantes ([{pkTactividadEstudiante, pkTmatricula, fkTestudiante, estudiante, calificacion, calificable, observacion}]): los asignados, con el pk de la asignacion que piden calificar, observar y las adaptaciones.';
 
 UPDATE public.query q
    SET detail = q.detail || ' V452 -- ademas estudiantes: [{pkTactividadEstudiante, pkTmatricula, fkTestudiante, estudiante, calificacion, calificable, observacion}], los asignados activos con el pk de la asignacion (el que piden calificar, observar y las adaptaciones) y su nota u observacion actual.'

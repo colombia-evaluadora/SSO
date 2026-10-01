@@ -7,6 +7,15 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+from render_categories import CAT_CSS, CAT_JS, CAT_PANEL
+
+
+def vnum(v: str) -> float:
+    """Clave numerica de version con el orden de Flyway: V496.15 va despues de V496.6
+    (float("496.15") lo pondria antes). Cada parte decimal ocupa 3 cifras."""
+    parts = str(v).split(".")
+    return float(parts[0]) + sum(int(p) / 1000 ** i for i, p in enumerate(parts[1:], 1))
+
 
 VERDICTS = ["obsoleta", "residual", "parcial", "viva", "solo-binds", "sin-cambios"]
 
@@ -66,6 +75,23 @@ def compact(model: dict) -> dict:
         "auth": compact_authors(model.get("authors", {})),
         "meta": model["meta"],
         "coverage": model.get("coverage", {}),
+        "cat": compact_categories(model.get("categories"), chains),
+    }
+
+
+def compact_categories(c: dict | None, chains: dict) -> dict:
+    """Categorias por indice: el mapa objeto -> categoria tiene miles de claves."""
+    if not c:
+        return {"defs": [], "oc": {}, "mc": {}, "sh": {}, "rel": []}
+    ids = [d["id"] for d in c["defs"]]
+    ix = {cid: i for i, cid in enumerate(ids)}
+    return {
+        "defs": c["defs"],
+        "oc": {k: ix[v] for k, v in c["object"].items() if k in chains and v in ix},
+        "os": {k: v[0] for k, v in c["object_source"].items() if k in chains},
+        "mc": {v: ix[k] for v, k in c["migration"].items()},
+        "sh": {v: {ix[k]: n for k, n in s.items() if k in ix} for v, s in c["share"].items()},
+        "rel": [[ix[a], ix[b], n] for a, b, n in c["relations"] if a in ix and b in ix],
     }
 
 
@@ -418,6 +444,22 @@ const hl = (s, q) => {
   } catch { return t; }
 };
 const byV = v => D.migs.find(m => m.v === v);
+const C = D.cat || {defs: [], oc: {}, os: {}, mc: {}, sh: {}, rel: []};
+const catOfMig = v => C.mc[v];
+const catOfObj = k => C.oc[k];
+const catDef = i => C.defs[i] || {label: '?', color: '#999', id: '?'};
+const catDot = i => i == null ? '' :
+  `<span class="catdot" style="background:${catDef(i).color}" title="${esc(catDef(i).label)}"></span>`;
+const catChip = i => i == null ? '' : `<button class="catchip" data-gocat="${i}"
+  style="--c:${catDef(i).color}">${esc(catDef(i).label)}</button>`;
+function migShareHtml(v) {
+  const sh = Object.entries(C.sh[v] || {}).sort((a, b) => b[1] - a[1]);
+  const tot = sh.reduce((a, [, n]) => a + n, 0) || 1;
+  const main = catOfMig(v);
+  return catChip(main) + sh.filter(([i]) => +i !== main && sh.length > 1)
+    .map(([i, n]) => ` <span class="dim" style="font-size:11.5px">${catDot(+i)}${esc(catDef(+i).label)} ${Math.round(100 * n / tot)}%</span>`)
+    .join('');
+}
 const fmt = n => n.toLocaleString('en-US');
 const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
 const MAP_ES = {l:'vigente', d:'recortable', n:'sin efecto, se conserva', c:'comentario',
@@ -506,6 +548,7 @@ function showTab(name, keepHash) {
   $$('.panel').forEach(p => p.hidden = p.id !== 'p-' + name);
   if (!keepHash) location.hash = name;
   if (name === 'dependencias' && !cy) setTimeout(initGraph);
+  if (name === 'categorias') setTimeout(() => window.initCatTab && initCatTab());
 }
 $$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
 
@@ -541,7 +584,7 @@ document.addEventListener('keydown', e => {
 
 /* ---------- migraciones ---------- */
 let migFilter = new Set(), migQ = '', selected = null;
-let migSort = {k: 'v', dir: 1}, migAuthor = '';
+let migSort = {k: 'v', dir: 1}, migAuthor = '', migCat = '';
 const MIG_KEY = {
   v: m => +m.v, n: m => m.n, vd: m => m.vd, lw: m => m.lw, dw: m => m.dw,
   l: m => m.l, dl: m => m.dl, cp: m => m.cp,
@@ -556,6 +599,7 @@ $$('#vfilters .chipbtn').forEach(b => b.addEventListener('click', () => {
 }));
 $('#migsearch').addEventListener('input', e => { migQ = e.target.value.trim(); renderMigs(); });
 $('#migauthor').addEventListener('change', e => { migAuthor = e.target.value; renderMigs(); });
+$('#migcat').addEventListener('change', e => { migCat = e.target.value; renderMigs(); });
 
 // texto buscable de cada migración: versión, nombre, lo que escribe y lo que usa
 let _migHay = null;
@@ -579,6 +623,7 @@ function migRows() {
   return D.migs.filter(m =>
     (!migFilter.size || migFilter.has(m.vd)) &&
     (migAuthor === '' || handsOf(m.v).has(+migAuthor)) &&
+    (migCat === '' || catOfMig(m.v) === +migCat || +migCat in (C.sh[m.v] || {})) &&
     (!terms.length || matches(migHay().get(m.v), terms)))
     .sort((a, b) => {
       const x = f(a), y = f(b);
@@ -601,7 +646,7 @@ function renderMigs() {
   $('#migbody').innerHTML = rows.map(m => `
     <tr class="clickable ${selected===m.v?'sel':''}" data-v="${m.v}">
       <td class="m">V${hl(m.v, migQ)}</td>
-      <td>${hl(m.n, migQ)}</td>
+      <td>${catDot(catOfMig(m.v))}${hl(m.n, migQ)}</td>
       <td><span class="pill p-${m.vd}">${m.vd}</span></td>
       <td class="num st-live">${m.lw||''}</td>
       <td class="num st-dead">${m.dw||''}</td>
@@ -663,6 +708,7 @@ function selectMig(v) {
 
   $('#migdetail').innerHTML = `
     <h4>V${esc(m.v)} <span class="pill p-${m.vd}">${m.vd}</span> ${rcPill(m)}</h4>
+    <div class="catline">${migShareHtml(m.v)}</div>
     <div class="sub">${esc(m.n)}<br><span class="dim">${esc(m.p)}</span></div>
     ${fileMap(m)}
     <div class="budget" style="margin-top:12px">
@@ -1565,7 +1611,7 @@ def build(model: dict) -> str:
         f'<td class="dim">{c["before"]} → {c["after"]}</td>'
         f'<td class="m dim" style="max-width:420px;word-break:break-word">'
         f'{", ".join(c["after_types"])}</td></tr>'
-        for c in sorted(data["sig"], key=lambda c: -float(c["to"]))) or \
+        for c in sorted(data["sig"], key=lambda c: -vnum(c["to"]))) or \
         '<tr><td colspan="4" class="empty">Sin cambios de firma detectados</td></tr>'
 
     issue_rows = "".join(
@@ -1645,6 +1691,10 @@ def build(model: dict) -> str:
         f'<option value="{pr["i"]}">{auth["names"][pr["i"]]} ({len(pr["cr"])})</option>'
         for pr in auth.get("people", []))
 
+    cat_opts = "".join(f'<option value="{i}">{d["label"]} ({len(d["migs"])})</option>'
+                       for i, d in enumerate(data["cat"]["defs"]))
+    n_cats = len(data["cat"]["defs"])
+
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
@@ -1657,7 +1707,7 @@ def build(model: dict) -> str:
 <title>Análisis de migraciones · {meta['repo']}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<style>{CSS}{MATRIX_CSS}</style>
+<style>{CSS}{MATRIX_CSS}{CAT_CSS}</style>
 </head>
 <body>
 <main>
@@ -1695,6 +1745,9 @@ no mata lo anterior, lo modifica. Regenerá esta página con
     <div class="n dead">{meta.get('cut_lines', meta['dead_lines']):,}</div>
     <div class="s">{round(100 * meta.get('cut_lines', meta['dead_lines']) / max(1, meta['total_lines']))}% de
       {meta['total_lines']:,}; {meta.get('keep_lines', 0):,} sin efecto se conservan</div></div>
+  <div class="metric"><div class="k">Categorías</div>
+    <div class="n">{n_cats}</div>
+    <div class="s">funcionales: pestaña Categorías</div></div>
   <div class="metric"><div class="k">Manos</div>
     <div class="n">{n_people}</div>
     <div class="s">{multi_hands} migraciones tocadas por más de una persona</div></div>
@@ -1715,6 +1768,7 @@ no mata lo anterior, lo modifica. Regenerá esta página con
 
 <div class="tabs" role="tablist">
   <button class="tab" data-tab="migraciones" role="tab" aria-selected="true">Migraciones</button>
+  <button class="tab" data-tab="categorias" role="tab" aria-selected="false">Categorías</button>
   <button class="tab" data-tab="obsoletas" role="tab" aria-selected="false">Obsoletas</button>
   <button class="tab" data-tab="objetos" role="tab" aria-selected="false">Objetos</button>
   <button class="tab" data-tab="lineas" role="tab" aria-selected="false">Líneas y comentarios</button>
@@ -1731,6 +1785,9 @@ no mata lo anterior, lo modifica. Regenerá esta página con
     <input type="search" id="migsearch" placeholder="buscar versión, nombre u objeto…  (/)"
       aria-label="Buscar migración">
     <span id="vfilters">{vfilters}</span>
+    <select id="migcat" aria-label="Filtrar por categoría">
+      <option value="">cualquier categoría</option>{cat_opts}
+    </select>
     <select id="migauthor" aria-label="Filtrar por persona">
       <option value="">cualquier persona</option>{author_opts}
     </select>
@@ -1758,6 +1815,7 @@ no mata lo anterior, lo modifica. Regenerá esta página con
   </div>
 </section>
 
+{CAT_PANEL}
 <section class="panel" id="p-obsoletas" role="tabpanel" hidden>
   <p class="note">Según el modelo, estas migraciones no dejan ningún rastro en el estado
   actual. Se pueden borrar del repo: el deploy hace <code>flyway repair</code> y las marca como
@@ -2075,7 +2133,8 @@ no mata lo anterior, lo modifica. Regenerá esta página con
 </section>
 </main>
 <script>window.__DATA__ = {payload};</script>
-<script>{JS}</script>
+<script>{JS}
+{CAT_JS}</script>
 </body>
 </html>
 """

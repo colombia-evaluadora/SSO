@@ -1,15 +1,12 @@
 -- ===========================================================================
--- V138 -- fn_asistencia_registrar_bulk / fn_asistencia_editar pasan a WRAPPER:
+-- V138 -- fn_asistencia_registrar_bulk / fn_asistencia_editar como WRAPPER:
 -- gate + validaciones (V136) + etiqueta de auditoria + nucleo _interno (V137).
--- Firmas intactas (CREATE OR REPLACE, sin DROP), reemplazan lo que definian
--- V464 y V220 (ambas eliminadas: su contenido quedo consolidado en V136-V141).
--- Suma fn_asistencia_validar_docente_asignado: antes el gate solo validaba
--- capability + alcance territorial, asi que un docente podia escribir
--- cualquier asignatura de su sede+jornada, no solo la que dicta (Regla 74).
--- Incluye fn_asistencia_gate_escritura, que vivia solo en V220.
--- Depende de: V136, V137, TGRUPO/TASISTENCIA/TMATRICULA (V22), V29
--- (fn_assert_permiso_seccion), V40 (fn_grupo_establecimiento/_periodo/_jornada,
--- fn_periodo_sede), V66 (fn_audit_declarar).
+-- Reglas: docente asignado a la asignatura (74), dia de clase programado
+-- (72c), excusa solo en inasistencia o tardanza (72b) y, con el periodo de
+-- evaluacion ya no calificable, la edicion queda como solicitud del
+-- Coordinador (75). Incluye fn_asistencia_gate_escritura (antes V220).
+-- Depende de: V136, V137, V22, V29 (fn_assert_permiso_seccion), V40, V66
+-- (fn_audit_declarar), V496.18-V496.19 (aprobacion; enlace tardio).
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -57,6 +54,9 @@ BEGIN
     PERFORM academico_test.fn_asistencia_validar_periodo_abierto(p_fk_tgrupo, 'registrar');
     PERFORM academico_test.fn_asistencia_validar_docente_asignado(
         p_pk_usuario_solicitante, p_fk_tgrupo, p_fk_tasignatura, p_fk_tactividad);
+    PERFORM academico_test.fn_asistencia_validar_fecha_programada(
+        p_fk_tgrupo, p_fk_tasignatura, p_fecha, p_bloque);
+    PERFORM academico_test.fn_asistencia_validar_excusa_registros(p_registros, p_marcar_todos_valor);
 
     SELECT NOMBRE INTO v_nombre_grupo FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo;
     PERFORM academico_test.fn_audit_declarar(
@@ -72,9 +72,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_asistencia_registrar_bulk(
-    BIGINT, BIGINT, BIGINT, DATE, NUMERIC, JSONB, NUMERIC, BIGINT
-) IS 'POST /asistencias/registrar. WRAPPER: 1) fn_asistencia_gate_escritura, 2) fn_asistencia_validar_fecha_no_futura / _contexto / _periodo_abierto / _docente_asignado (V136; Regla 74), 3) delega en fn_asistencia_registrar_bulk_interno (V137), previa etiqueta de auditoria (fn_audit_declarar). Contrato de parametros y de retorno sin cambios respecto a V464.';
+COMMENT ON FUNCTION academico_test.fn_asistencia_registrar_bulk(BIGINT, BIGINT, BIGINT, DATE, NUMERIC, JSONB, NUMERIC, BIGINT)
+    IS 'POST /asistencias/registrar. WRAPPER: 1) fn_asistencia_gate_escritura, 2) fecha no futura, contexto, periodo abierto, docente asignado (Regla 74), día de clase programado (72c) y excusa solo en inasistencia o tardanza (72b), 3) etiqueta de auditoría y fn_asistencia_registrar_bulk_interno.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_editar(
     p_pk_usuario_solicitante BIGINT,
@@ -91,12 +90,18 @@ DECLARE
     v_fk_tgrupo      BIGINT;
     v_fk_tasignatura BIGINT;
     v_fk_tactividad  BIGINT;
+    v_fk_tmatricula  BIGINT;
+    v_tipo_actual    NUMERIC;
+    v_archivo_actual BIGINT;
     v_nombre_grupo   VARCHAR(130);
+    v_requiere       BOOLEAN;
 BEGIN
-    SELECT m.FK_TGRUPO, a.FK_TASIGNATURA, a.FK_TACTIVIDAD
-      INTO v_fk_tgrupo, v_fk_tasignatura, v_fk_tactividad
+    SELECT m.FK_TGRUPO, a.FK_TASIGNATURA, a.FK_TACTIVIDAD, a.FK_TMATRICULA, a.FK_SOPORTE_ARCHIVO,
+           CASE WHEN lv.VALOR ~ '^\d+$' THEN lv.VALOR::NUMERIC END
+      INTO v_fk_tgrupo, v_fk_tasignatura, v_fk_tactividad, v_fk_tmatricula, v_archivo_actual, v_tipo_actual
       FROM academico_test.TASISTENCIA a
       JOIN academico_test.TMATRICULA m ON m.PK_TMATRICULA = a.FK_TMATRICULA
+      LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_TIPO_ASISTENCIA
      WHERE a.PK_TASISTENCIA = p_pk_tasistencia AND a.ACTIVE = TRUE;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'registro de asistencia (%) no existe o no esta activo', p_pk_tasistencia
@@ -106,16 +111,35 @@ BEGIN
     PERFORM academico_test.fn_asistencia_gate_escritura(
         p_pk_usuario_solicitante, v_fk_tgrupo, 'EDITAR');
 
-    PERFORM academico_test.fn_asistencia_validar_periodo_abierto(v_fk_tgrupo, 'editar');
+    -- Sin periodo de evaluación para la fecha queda el bloqueo plano por el
+    -- periodo académico cerrado (V136).
+    v_requiere := academico_test.fn_asistencia_correccion_requiere_aprobacion(p_pk_tasistencia);
+    IF v_requiere IS NULL THEN
+        PERFORM academico_test.fn_asistencia_validar_periodo_abierto(v_fk_tgrupo, 'editar');
+    END IF;
     PERFORM academico_test.fn_asistencia_validar_docente_asignado(
         p_pk_usuario_solicitante, v_fk_tgrupo, v_fk_tasignatura, v_fk_tactividad);
+    IF p_tipo_asistencia_valor IS NOT NULL OR p_fk_soporte_archivo IS NOT NULL THEN
+        PERFORM academico_test.fn_asistencia_validar_excusa_tipo(
+            COALESCE(p_tipo_asistencia_valor, v_tipo_actual),
+            CASE WHEN p_limpiar_archivo THEN NULL ELSE COALESCE(p_fk_soporte_archivo, v_archivo_actual) END,
+            v_fk_tmatricula);
+    END IF;
 
     SELECT NOMBRE INTO v_nombre_grupo FROM academico_test.TGRUPO WHERE PK_TGRUPO = v_fk_tgrupo;
     PERFORM academico_test.fn_audit_declarar(
         p_pk_usuario_solicitante,
-        format('Edicion de asistencia (registro %s) del grupo %s', p_pk_tasistencia, v_nombre_grupo),
+        format(CASE WHEN v_requiere THEN 'Solicitud de correccion de asistencia (registro %s) del grupo %s'
+                    ELSE 'Edicion de asistencia (registro %s) del grupo %s' END,
+               p_pk_tasistencia, v_nombre_grupo),
         academico_test.fn_grupo_establecimiento(v_fk_tgrupo),
         academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(v_fk_tgrupo)));
+
+    IF v_requiere THEN
+        RETURN academico_test.fn_asistencia_correccion_solicitar_interno(
+            p_pk_usuario_solicitante, p_pk_tasistencia, p_tipo_asistencia_valor, p_observacion,
+            p_fk_soporte_archivo, p_limpiar_archivo, p_limpiar_observacion);
+    END IF;
 
     RETURN academico_test.fn_asistencia_editar_interno(
         p_pk_tasistencia, v_fk_tgrupo, p_tipo_asistencia_valor, p_observacion,
@@ -124,6 +148,5 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_asistencia_editar(
-    BIGINT, BIGINT, NUMERIC, VARCHAR, BIGINT, BOOLEAN, BOOLEAN
-) IS 'PATCH /asistencias/:ID. WRAPPER: resuelve grupo/asignatura/actividad del registro, 1) fn_asistencia_gate_escritura, 2) fn_asistencia_validar_periodo_abierto / _docente_asignado (V136; Regla 74), 3) delega en fn_asistencia_editar_interno (V137), previa etiqueta de auditoria (fn_audit_declarar). fn_asistencia_editar_bulk (V438) hereda la Regla 74 y la etiqueta al llamar a esta por cada pk. Contrato sin cambios respecto a V220.';
+COMMENT ON FUNCTION academico_test.fn_asistencia_editar(BIGINT, BIGINT, NUMERIC, VARCHAR, BIGINT, BOOLEAN, BOOLEAN)
+    IS 'PATCH /asistencias/:ID: edita un registro de asistencia (estado, observación, soporte). Con el periodo de evaluación de la fecha Calificable se aplica; si ya no lo es, queda como solicitud CORRECCION_ASISTENCIA para el Coordinador (Regla 75) y el registro no cambia; si la fecha no cae en ningún periodo de evaluación, 22023 cuando el periodo académico está Cerrado. Devuelve el PK del registro.';

@@ -58,7 +58,7 @@
 --   su propia vista, vacia si no imparte clases. Sin error.
 --
 -- SOLO LECTURA
---   Se conceden unicamente los 31 endpoints GET del planeador. Los de
+--   Se conceden unicamente los 19 endpoints GET del planeador. Los de
 --   escritura (POST/PUT/PATCH de actividades, unidades, calificaciones) NO
 --   se tocan: el sintoma reportado es de lectura, y ampliar la escritura a
 --   un rector es una decision de negocio distinta que merece plantearse
@@ -98,19 +98,7 @@ SELECT DISTINCT r.id_role, q.id_query
             ('/planeador/periodos-evaluacion'),
             ('/planeador/planilla/calificaciones'),
             ('/planeador/planilla/columnas'),
-            ('/planeador/referente-curricular'),
-            ('/planeador/unidades'),
-            ('/planeador/unidades/:ID'),
-            ('/planeador/unidades/:ID/actividades'),
-            ('/planeador/unidades/:ID/actividades-disponibles'),
-            ('/planeador/unidades/:ID/configuracion-actividad'),
-            ('/planeador/unidades/:ID/contenidos'),
-            ('/planeador/unidades/:ID/criterios'),
-            ('/planeador/unidades/:ID/objetivos'),
-            ('/planeador/unidades/:ID/ponderacion-disponible'),
-            ('/planeador/unidades/:ID/referente'),
-            ('/planeador/unidades/:ID/valoraciones'),
-            ('/planeador/unidades/tabs')
+            ('/planeador/referente-curricular')
        ) AS d(ruta)
   CROSS JOIN (VALUES
             ('CEVAL-RECTOR'),
@@ -140,10 +128,10 @@ BEGIN
       JOIN public.query q ON q.id_query = rq.query_id
      WHERE r.name = 'CEVAL-JEFE_SISTEMA_ESTABLECIMIENTO' AND q.path_template LIKE '/planeador/%' AND q.http_method = 'GET';
 
-    RAISE NOTICE 'V284: GET de planeador -- RECTOR=% JEFE_SISTEMA_ESTABLECIMIENTO=% (se esperaban 31)',
+    RAISE NOTICE 'V284: GET de planeador -- RECTOR=% JEFE_SISTEMA_ESTABLECIMIENTO=% (se esperaban 19)',
         v_rector, v_jefe;
 
-    IF v_rector < 31 THEN
-        RAISE WARNING 'V284: CEVAL-RECTOR quedo con % de 31 endpoints. Revisa que las queries de /planeador/ existan en public.query y que el rol se llame asi exactamente.', v_rector;
+    IF v_rector < 19 THEN
+        RAISE WARNING 'V284: CEVAL-RECTOR quedo con % de 19 endpoints. Revisa que las queries de /planeador/ existan en public.query y que el rol se llame asi exactamente.', v_rector;
     END IF;
 END $$;

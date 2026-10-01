@@ -410,7 +410,8 @@ def version_of(path: Path) -> float:
     if not m:
         return -1.0
     parts = m.group(1).split(".")
-    return float(parts[0]) + (float("0." + "".join(parts[1:])) if len(parts) > 1 else 0.0)
+    # Orden de Flyway: V496.15 va despues de V496.6; cada parte decimal ocupa 3 cifras.
+    return float(parts[0]) + sum(int(p) / 1000 ** i for i, p in enumerate(parts[1:], 1))
 
 
 def main() -> int:

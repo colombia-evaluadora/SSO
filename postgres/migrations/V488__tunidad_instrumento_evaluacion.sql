@@ -6,8 +6,9 @@
 -- unidad, así que TUNIDAD no lleva columna para él (se retira si existe) y
 -- fn_unidad_crear / fn_unidad_actualizar vuelven a su firma de V216 / V478.
 -- Depende de: V216 (TUNIDAD, fn_unidad_*), V224 (fn_unidad_estado),
--- V245 (filas de public.query), V478 (fn_unidad_actualizar), V481
--- (fn_planeador_listado_alcance).
+-- V478 (fn_unidad_actualizar), V481 (fn_planeador_listado_alcance),
+-- V451 (fn_unidad_referente_aplicable, Regla 13 de rotulo_ejecucion).
+-- Las filas de POST/PUT /planeador/unidades viven en V492.4.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -20,16 +21,14 @@ DROP FUNCTION IF EXISTS academico_test.fn_unidad_actualizar(BIGINT, BIGINT, VARC
 
 ALTER TABLE academico_test.TUNIDAD DROP COLUMN IF EXISTS FK_TLV_INSTRUMENTO_EVALUACION;
 
+-- §4: título de sección del contenido. Va aquí y no en V492.1 porque
+-- fn_unidad_buscar_por_pk_interno (LANGUAGE sql) ya lo lee.
+ALTER TABLE academico_test.TUNIDAD_CONTENIDO ADD COLUMN IF NOT EXISTS TITULO VARCHAR(200);
+COMMENT ON COLUMN academico_test.TUNIDAD_CONTENIDO.TITULO
+    IS 'Título de la sección (máx. 200). NULL en filas anteriores a §4 o escritas por clientes que no lo envían.';
+
 -- La fila existe desde V245 y ON CONFLICT no la tocaría: se le quita el
 -- argumento del instrumento donde lo tenga. Sin él, no cambia nada.
-UPDATE public.query
-   SET query       = replace(query, E',\n    CAST(:BODY.FK_TLV_INSTRUMENTO_EVALUACION AS BIGINT)', ''),
-       param_types = param_types - 'BODY.FK_TLV_INSTRUMENTO_EVALUACION',
-       detail      = regexp_replace(detail, ' V488: agrega BODY\.FK_TLV_INSTRUMENTO_EVALUACION.*$', '')
- WHERE ((path_template = '/planeador/unidades'     AND http_method = 'POST')
-     OR (path_template = '/planeador/unidades/:ID' AND http_method = 'PUT'))
-   AND microservice_id = (SELECT id_microservice FROM public.microservice WHERE serviceid = 'eval-col')
-   AND (query LIKE '%FK_TLV_INSTRUMENTO_EVALUACION%' OR param_types ? 'BODY.FK_TLV_INSTRUMENTO_EVALUACION');
 
 -- ---------------------------------------------------------------------------
 -- 2. Instrumento de la unidad.
@@ -93,13 +92,29 @@ BEGIN
             dia_siguiente                 DATE,
             fk_tlv_instrumento_evaluacion BIGINT,
             instrumento_evaluacion        VARCHAR,
-            total_count                   BIGINT
+            total_count                   BIGINT,
+            rotulo_ejecucion              VARCHAR
         );
     END IF;
 END $$;
 
+-- rotulo_ejecucion: servidor que ya tenia V488 sin la columna. Al final de la
+-- lista de atributos porque ALTER TYPE ... ADD ATTRIBUTE siempre agrega al
+-- final; puesta en otro lugar en el CREATE de arriba, las dos vias dejarian
+-- el tipo con un orden de columnas distinto.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute
+         WHERE attrelid = 'academico_test.t_unidad_listado_fila'::regclass::oid
+           AND attname = 'rotulo_ejecucion' AND NOT attisdropped
+    ) THEN
+        ALTER TYPE academico_test.t_unidad_listado_fila ADD ATTRIBUTE rotulo_ejecucion VARCHAR;
+    END IF;
+END $$;
+
 COMMENT ON TYPE academico_test.t_unidad_listado_fila
-    IS 'Fila de GET /planeador/unidades y su export. Una columna nueva: ALTER TYPE ... ADD ATTRIBUTE y agregarla al SELECT de fn_unidad_listar_interno.';
+    IS 'Fila de GET /planeador/unidades y su export. rotulo_ejecucion: como se llama la actividad para el grado de la unidad (Regla 13, mismo calculo que fn_planeador_rotulo_actividad_interno V511, sin llamarla: V511 es posterior a este archivo). Una columna nueva: ALTER TYPE ... ADD ATTRIBUTE y agregarla al SELECT de fn_unidad_listar_interno.';
 
 DROP FUNCTION IF EXISTS academico_test.fn_unidad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, DATE, INT);
 
@@ -228,7 +243,16 @@ BEGIN
            n.siguiente,
            ins.fk_tlv_instrumento_evaluacion,
            ins.instrumento_evaluacion,
-           COALESCE(b.total, 0)
+           COALESCE(b.total, 0),
+           -- Regla 13: Rotulo de Ejecucion del referente que aplica al grado
+           -- de la unidad (o su asignatura, si el referente esta acotado).
+           COALESCE(
+               (SELECT rc_rot.ROTULO_EJECUCION
+                  FROM academico_test.TREFERENTE_CURRICULAR rc_rot
+                 WHERE rc_rot.PK_REFERENTE_CURRICULAR =
+                       academico_test.fn_unidad_referente_aplicable(u.FK_TGRADO, u.FK_TASIGNATURA)),
+               'Actividad'
+           )::VARCHAR
       FROM base b
       FULL OUTER JOIN nav n ON TRUE
       LEFT JOIN academico_test.TUNIDAD u         ON u.PK_TUNIDAD = b.pk
@@ -336,13 +360,25 @@ BEGIN
             estado                        VARCHAR,
             active                        BOOLEAN,
             fk_tlv_instrumento_evaluacion BIGINT,
-            instrumento_evaluacion        VARCHAR
+            instrumento_evaluacion        VARCHAR,
+            rotulo_ejecucion              VARCHAR
         );
     END IF;
 END $$;
 
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute
+         WHERE attrelid = 'academico_test.t_unidad_detalle'::regclass::oid
+           AND attname = 'rotulo_ejecucion' AND NOT attisdropped
+    ) THEN
+        ALTER TYPE academico_test.t_unidad_detalle ADD ATTRIBUTE rotulo_ejecucion VARCHAR;
+    END IF;
+END $$;
+
 COMMENT ON TYPE academico_test.t_unidad_detalle
-    IS 'Fila de GET /planeador/unidades/:ID. campos_disponibles depende de quién pide: lo llena el wrapper fn_unidad_buscar_por_pk, el núcleo lo deja NULL.';
+    IS 'Fila de GET /planeador/unidades/:ID. campos_disponibles depende de quién pide: lo llena el wrapper fn_unidad_buscar_por_pk, el núcleo lo deja NULL. rotulo_ejecucion: mismo cálculo que fn_unidad_listar_interno (Regla 13).';
 
 DROP FUNCTION IF EXISTS academico_test.fn_unidad_buscar_por_pk(BIGINT, BIGINT);
 
@@ -379,7 +415,8 @@ AS $$
                 WHERE o.FK_TUNIDAD = u.PK_TUNIDAD AND o.ACTIVE = TRUE
            ), '[]'::jsonb),
            COALESCE((
-               SELECT jsonb_agg(jsonb_build_object('pk', c.PK_TUNIDAD_CONTENIDO, 'orden', c.ORDEN, 'descripcion', c.DESCRIPCION)
+               SELECT jsonb_agg(jsonb_build_object('pk', c.PK_TUNIDAD_CONTENIDO, 'orden', c.ORDEN,
+                                                   'titulo', c.TITULO, 'descripcion', c.DESCRIPCION)
                                 ORDER BY c.ORDEN)
                  FROM academico_test.TUNIDAD_CONTENIDO c
                 WHERE c.FK_TUNIDAD = u.PK_TUNIDAD AND c.ACTIVE = TRUE
@@ -388,7 +425,14 @@ AS $$
            academico_test.fn_unidad_estado(u.PK_TUNIDAD, CURRENT_DATE),
            u.ACTIVE,
            ins.fk_tlv_instrumento_evaluacion,
-           ins.instrumento_evaluacion
+           ins.instrumento_evaluacion,
+           COALESCE(
+               (SELECT rc_rot.ROTULO_EJECUCION
+                  FROM academico_test.TREFERENTE_CURRICULAR rc_rot
+                 WHERE rc_rot.PK_REFERENTE_CURRICULAR =
+                       academico_test.fn_unidad_referente_aplicable(u.FK_TGRADO, u.FK_TASIGNATURA)),
+               'Actividad'
+           )::VARCHAR
       FROM academico_test.TUNIDAD u
       JOIN academico_test.TASIGNATURA asig       ON asig.PK_TASIGNATURA = u.FK_TASIGNATURA
       LEFT JOIN academico_test.TAREA ar          ON ar.PK_TAREA = asig.FK_TAREA
@@ -411,7 +455,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_buscar_por_pk_interno(BIGINT)
-    IS 'INTERNO: detalle de una TUNIDAD sin gate, incluidas las inactivas (0 o 1 fila): nombres resueltos, total de actividades activas, inicio/fin derivados, objetivos y contenidos JSONB, estado derivado e instrumento derivado (fn_unidad_instrumento_derivado). campos_disponibles va NULL: depende de quién pide y lo pone el wrapper. Lo reutiliza fn_unidad_buscar_por_pk.';
+    IS 'INTERNO: detalle de una TUNIDAD sin gate, incluidas las inactivas (0 o 1 fila): nombres resueltos, total de actividades activas, inicio/fin derivados, objetivos y contenidos (con título de sección) JSONB, estado e instrumento derivados. campos_disponibles va NULL: lo pone el wrapper. La reutiliza fn_unidad_buscar_por_pk.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_buscar_por_pk(
     p_pk_usuario_solicitante   BIGINT,

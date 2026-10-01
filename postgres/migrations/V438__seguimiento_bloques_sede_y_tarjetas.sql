@@ -233,7 +233,7 @@ BEGIN
                            ))
                        -- Alcance por rol. Se evalua al final y una sola vez por
                        -- grupo distinto (fn_asistencia_puede_ver es STABLE).
-                       AND academico_test.fn_asistencia_puede_ver($1, d.fk_tgrupo)
+                       AND academico_test.fn_asistencia_puede_ver_asignatura($1, d.fk_tgrupo, d.fk_tasignatura)
                      ) b0
                   ) b
                  -- fk_tasignatura no sale a la pantalla pero agrupa: dos

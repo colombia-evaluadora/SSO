@@ -1,142 +1,10 @@
--- ===========================================================================
--- V247 — Planeador educativo: registro en public.query (motor SSO /
--- query-service) de los endpoints de INSTRUMENTOS DE EVALUACION DINAMICOS
--- (CU-86e311xxp, LOTE 3 de la tanda de endpoints del Planeador).
---
--- Este archivo NO crea funciones nuevas: las funciones ya existen y estan
--- validadas en esta rama (V226, V240, V227, editada en V241/V243). Solo
--- registra las filas public.query (+ role_query) para exponerlas via el
--- gateway como api/eval-col/... . El LOTE 1 (V245, dominio UNIDAD) y el
--- LOTE 2 (V246, dominio ACTIVIDAD) registran sus propios endpoints por
--- separado -- NO se duplican aqui, y aqui no se expone nada de CRUD de
--- unidad/actividad ni de fn_actividad_observar_* (ya cubierto en V246).
---
--- microservice_id se resuelve por serviceid='eval-col' (mismo microservicio
--- que sirve el resto del modulo academico -- V51/V64/V149/V185/V198/V199/
--- V245/V246).
---
--- p_pk_usuario_solicitante SIEMPRE se resuelve de :CONTEXT.USER_ID via
--- public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT) -- igual que
--- V149/V167/V168/V185/V198/V199/V245/V246 -- nunca se expone como parametro
--- editable por el cliente.
---
--- AUTORIZACION
---   El gate real (capability CREAR/VER/EDITAR/ELIMINAR sobre la seccion
---   PLANEADOR, TROL_MENU + TUSUARIO_ROL_PERMISO) lo hace cada funcion via
---   fn_assert_permiso_seccion (V29/V185/V213/V216). role_query aqui NO
---   sustituye ese gate, solo decide que ROLES DE public.role pueden llamar
---   al endpoint por el gateway -- role_query NO tiene bypass de admin (a
---   diferencia de otras rutas, aqui no hay atajo para SSO-ADMIN/ADMIN salvo
---   que el rol este explicitamente listado).
---
---   Mismo criterio ya aplicado (y funcionando) en V245/V246/V214: en este
---   Postgres local de Docker solo existe el rol 'CEVAL-SUPER_ADMINISTRADOR'
---   sincronizado a public.role (el catalogo real de TROL -- DOCENTE, RECTOR,
---   etc -- no esta sembrado en las migraciones, ver nota "TROL: el catalogo
---   de roles no esta en las migraciones" en memoria del proyecto). Cuando el
---   ambiente real tenga el rol de DOCENTE sincronizado, agregar esa fila a
---   role_query es un cambio de una linea (INSERT posterior a
---   public.role_query, no requiere tocar esta migracion).
---
--- CAVEAT DE RECARGA (dejar constancia, igual que V149/V167/V185/V198/V199/
--- V245/V246): las filas nuevas en public.query dan 404 por el gateway hasta
--- que el contenedor query-service-eval-col se reinicia. No aplica a esta
--- validacion SQL (fuera de alcance segun el enunciado de la tarea).
---
--- CONVENCIONES DE PARAMETROS (V32/V49, igual que V245/V246):
---   :PARAM.<VAR>   -> variable de la ruta (path_template ...:VAR...).
---   :QUERY.<VAR>   -> filtro por query-string (?var=...); QUERY.SIZE/
---                     QUERY.OFFSET son system-bound (paginacion), el resto
---                     de nombres de QUERY.* SI necesita entrada en
---                     param_types.
---   :BODY.<VAR>    -> campo del body JSON.
---   :CONTEXT.*     -> system-bound (JWT verificado), nunca en param_types.
---
--- execution_mode = 'SELECT' en TODAS las filas (incluidas las de escritura):
---   "SELECT * FROM fn_x(...)" sigue siendo una sentencia SELECT aunque fn_x
---   escriba por dentro -- mismo patron que V64/V149/V185/V198/V199/V245/V246.
---
--- DELETE -> PATCH: el CHECK ck_query_http_method de public.query solo admite
--- {GET,POST,PUT,PATCH} -- no existe DELETE en este catalogo. No aplica a
--- este lote (no hay borrado real en el dominio de instrumentos/calificar,
--- solo definir/calificar, que son PUT).
---
--- -------------------------------------------------------------------------
--- DECISION 1 — SOLO se expone la FACHADA fn_actividad_instrumento_definir /
--- _obtener (V226), NO las 3 funciones especificas de rubrica/cotejo/escala
--- por separado (fn_actividad_rubrica_definir / _cotejo_definir /
--- _escala_definir).
---
--- La fachada YA hace todo el trabajo de despacho leyendo
--- TACTIVIDAD.FK_TLV_INSTRUMENTO_EVALUACION y llamando internamente a la
--- funcion correcta segun ese valor (confirmado leyendo V226 completo).
--- Exponer las 3 especificas ademas de la fachada crearia 3 rutas
--- redundantes que hacen exactamente lo mismo que la generica, con el
--- riesgo adicional de que el cliente le pase a la ruta especifica una
--- definicion que no calza con el instrumento real de la actividad (caso
--- que la fachada evita por diseño: siempre resuelve ella misma el
--- instrumento antes de despachar). Una sola ruta generica
--- PUT /planeador/actividades/:ID/instrumento (body = la definicion en el
--- formato que exija el instrumento vigente de esa actividad) es
--- suficiente y mas simple para el front, que de todas formas ya conoce el
--- instrumento vigente por GET /planeador/actividades/:ID/configuracion
--- (V246, campos_disponibles.evaluacion.instrumentosPermitidos) o por el
--- detalle de la actividad (V246, punto 4).
---
--- DECISION 2 — fn_actividad_otro_definir (V240) NO se expone standalone.
---
--- Confirmado leyendo V240 completo: la fachada fn_actividad_instrumento_definir
--- YA fue editada en V240 (CREATE OR REPLACE) para que su rama 'OTRO' delegue
--- exactamente en fn_actividad_otro_definir, pasandole tal cual el
--- p_definicion recibido (que para el caso OTRO es el objeto
--- {tipoEvidencia, metodoValoracion, definicion}). Por lo tanto exponer
--- PUT /planeador/actividades/:ID/instrumento (fachada) YA cubre por
--- completo configurar el instrumento OTRO -- una ruta aparte para
--- fn_actividad_otro_definir seria una tercera forma de llegar al mismo
--- efecto que la fachada, sin aportar nada que el cliente no pueda hacer ya
--- con ella.
---
--- -------------------------------------------------------------------------
--- NOMENCLATURA DE RUTAS (decision de este lote):
---   * /planeador/actividades/:ID/instrumento                (PUT define,
---     GET obtiene -- :ID = PK_TACTIVIDAD; fachada unica, ver Decision 1/2)
---   * /planeador/actividades/estudiantes/:ID/calificar      (PUT, :ID =
---     PK_TACTIVIDAD_ESTUDIANTE, no PK_TACTIVIDAD -- mismo criterio de
---     desambiguacion que /planeador/actividades/estudiantes/:ID/observar
---     de V246 punto 13 y /planeador/unidades/criterios/:ID de V245)
---   * /planeador/actividades/:ID/calificar-bulk/rubrica      (PUT, :ID =
---     PK_TACTIVIDAD; un criterio+nivel aplicado a N estudiantes)
---   * /planeador/actividades/:ID/calificar-bulk/cotejo       (PUT, idem,
---     un item marcado S/N para N estudiantes)
---   * /planeador/actividades/:ID/calificar-bulk/escala       (PUT, idem,
---     un nivel de escala CUALITATIVA para N estudiantes; la escala NUMERICA
---     no admite bulk -- la propia funcion SQL no lo permite, ver V227)
---     Un segmento /calificar-bulk/<instrumento> por cada bulk (en vez de
---     una fachada unica) porque, a diferencia de fn_actividad_instrumento_
---     definir/fn_actividad_nota_calificar, estas 3 funciones NO tienen una
---     fachada de despacho en el SQL (documentado explicitamente en la
---     cabecera de V227/V241: "SI exponlas aparte porque no tienen fachada
---     unica de despacho") -- construir una fachada de query-service (varias
---     filas public.query con el mismo path resuelta por instrumento) no es
---     el patron de este catalogo (1 fila = 1 funcion SQL), asi que se
---     diferencian por el ultimo segmento del path.
---   * /planeador/actividades/estudiantes/:ID/nota            (GET, :ID =
---     PK_TACTIVIDAD_ESTUDIANTE, detalle de un estudiante)
---   * /planeador/actividades/:ID/calificaciones              (GET, :ID =
---     PK_TACTIVIDAD, tabla completa de la pantalla "Calificaciones: <actividad>")
---
--- Depende de (orden de version de Flyway): V226 (definicion de instrumentos
--- + fachada), V240 (instrumento OTRO), V227 (motor de calculo de notas,
--- editado en V241 -- OTRO estructurado -- y V243 -- rechazo de actividades
--- FORMATIVAS).
--- ===========================================================================
+-- V247 - Primer alta de las filas de instrumento y calificación de
+-- /planeador/actividades* y sus roles. La consulta y el detail vigentes los
+-- define hoy V496.4 (PUT :ID/instrumento) y V496.8 (calificar, nota y
+-- calificaciones); estos INSERT siguen porque otras migraciones copian de
+-- ellos los roles de sus filas.
 
 
--- ===========================================================================
--- 1. PUT /planeador/actividades/:ID/instrumento —
---    fn_actividad_instrumento_definir (V226, editada en V240; fachada de
---    despacho segun el instrumento vigente de la actividad).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -164,12 +32,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
 
-
--- ===========================================================================
--- 2. GET /planeador/actividades/:ID/instrumento —
---    fn_actividad_instrumento_obtener (V226, editada en V240; lectura del
---    instrumento definido).
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -196,12 +58,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
 
-
--- ===========================================================================
--- 3. PUT /planeador/actividades/estudiantes/:ID/calificar —
---    fn_actividad_nota_calificar (V227, editada en V241/V243; fachada de
---    calificacion individual con nota numerica). :ID = PK_TACTIVIDAD_ESTUDIANTE.
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -230,12 +86,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
 
-
--- ===========================================================================
--- 4. PUT /planeador/actividades/:ID/calificar-bulk/rubrica —
---    fn_actividad_nota_calificar_rubrica_bulk (V227; un criterio+nivel
---    aplicado a N estudiantes -- flujo real de la Planilla). :ID = PK_TACTIVIDAD.
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -266,12 +116,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
 
-
--- ===========================================================================
--- 5. PUT /planeador/actividades/:ID/calificar-bulk/cotejo —
---    fn_actividad_nota_calificar_cotejo_bulk (V227; un item marcado S/N para
---    N estudiantes). :ID = PK_TACTIVIDAD.
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -302,13 +146,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
 
-
--- ===========================================================================
--- 6. PUT /planeador/actividades/:ID/calificar-bulk/escala —
---    fn_actividad_nota_calificar_escala_bulk (V227; un nivel de escala
---    CUALITATIVA para N estudiantes; la NUMERICA no admite bulk).
---    :ID = PK_TACTIVIDAD.
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -329,25 +166,6 @@ SELECT
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
 
--- El INSERT de arriba no toca la fila si ya existe (DO NOTHING), y este
--- endpoint YA estaba registrado con la firma de 5 argumentos. Sin este UPDATE
--- el catalogo seguiria llamando a una funcion que ya no existe.
-UPDATE public.query q
-   SET query = 'SELECT * FROM academico_test.fn_actividad_nota_calificar_escala_bulk(
-    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
-    CAST(:PARAM.ID AS BIGINT),
-    CAST(:BODY.PK_NIVEL AS BIGINT),
-    CAST(:BODY.VALOR_NUMERICO AS NUMERIC),
-    CAST(:BODY.ESTUDIANTES AS BIGINT[]),
-    COALESCE(CAST(:BODY.FECHA AS DATE), CURRENT_DATE)
-);',
-       param_types = '{"PARAM.ID": "BIGINT", "BODY.PK_NIVEL": "BIGINT", "BODY.VALOR_NUMERICO": "NUMERIC", "BODY.ESTUDIANTES": "BIGINT[]", "BODY.FECHA": "DATE"}'::jsonb
-  FROM public.microservice m
- WHERE m.id_microservice = q.microservice_id
-   AND m.serviceid       = 'eval-col'
-   AND q.path_template   = '/planeador/actividades/:ID/calificar-bulk/escala'
-   AND q.http_method     = 'PUT';
-
 INSERT INTO public.role_query (role_id, query_id)
 SELECT r.id_role, q.id_query
   FROM public.query q
@@ -358,12 +176,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
 
-
--- ===========================================================================
--- 7. GET /planeador/actividades/estudiantes/:ID/nota —
---    fn_actividad_nota_obtener (V227, editada en V241; detalle de UN
---    estudiante). :ID = PK_TACTIVIDAD_ESTUDIANTE.
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT
@@ -390,12 +202,6 @@ SELECT r.id_role, q.id_query
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
 
-
--- ===========================================================================
--- 8. GET /planeador/actividades/:ID/calificaciones —
---    fn_actividad_estudiantes_calificaciones_listar (V227; tabla completa
---    de la pantalla "Calificaciones: <actividad>"). :ID = PK_TACTIVIDAD.
--- ===========================================================================
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT

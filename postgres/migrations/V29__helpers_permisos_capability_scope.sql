@@ -1,132 +1,14 @@
 -- ===========================================================================
--- V29 — Helpers de autorizacion: capability (menu) + scope (EE / sede+
--- jornada) + rango de rol (categoria). Piezas base del modelo descrito en
--- docs/gate-permisos-por-menu-analysis.md (§3.1 a §3.6).
+-- V29 — Helpers de autorizacion: capability (menu) + scope (EE / sede+jornada)
+-- + categoria de rol. Son los ladrillos de fn_assert_permiso_seccion, de los
+-- gates de funcionarios y de los de Periodo Academico.
 --
--- CU-86e2w4xdt — Permisos segun rol.
+-- Viven en otras migraciones: fn_usuario_categoria_rol_nivel (V302; aqui solo
+-- se crea si falta, porque V40 y V224 la ejecutan al migrar) y
+-- fn_assert_rango_rol / fn_assert_rango_rol_otorgable (V298).
 --
--- QUE HACE
---   Crea 9 funciones nuevas y NO modifica ninguna existente. Son los
---   ladrillos que consumen los gates de establecimiento / sedes /
---   funcionarios / periodos academicos. Al final del archivo se agregan
---   ademas los gates propios de Periodo Academico (fn_periodo_establecimiento
---   / _sede / _jornada / fn_periodo_gate_escritura / fn_periodo_puede_ver,
---   antes en V30 aparte): sus unicas dependencias son estos mismos helpers y
---   TPERIODO_ACADEMICO/TSEDE (creadas en V22, anterior a este archivo), asi
---   que no necesitaban un numero de version propio.
---
--- POR QUE ESTE NUMERO TAN BAJO (V29)
---   Los gates de esas secciones NO se reescriben en migraciones nuevas: se
---   EDITAN IN-PLACE las migraciones originales (V37 periodos, V40
---   fn_periodo_gate_escritura, V50 utilities, V51 funcionarios, V52 sedes,
---   V53 establecimiento, V72, V100, V101, V111). Para que esas ediciones
---   puedan llamar a estos helpers sin una referencia "hacia adelante" en el
---   historial de Flyway, los helpers tienen que estar DEFINIDOS ANTES que
---   todas ellas. V29 es un hueco libre del historial, posterior a V22 (que
---   crea el esquema academico_test y las tablas TROL, TSEDE_USUARIO, TMENU,
---   TROL_MENU, TESTABLECIMIENTO, TSEDE, TLISTA_VALOR) y anterior a V37, la
---   primera que los usa.
---
--- POR QUE TODAS SON `LANGUAGE plpgsql` Y NINGUNA `LANGUAGE sql`  <-- CLAVE
---   En el punto V29 del historial varias dependencias TODAVIA NO EXISTEN:
---     * academico_test.fn_usuario_permisos_menu        -> se crea en V185
---     * academico_test.TROL_MENU.SOLO_LECTURA          -> se añade en V99
---     * academico_test.TROL.FK_TLISTA_VALOR_CATEGORIA  -> se añade en V120
---     * las filas TLISTA_VALOR con CATEGORIA='CATEGORIA_ROL'
---       (SUPER_ADMIN / ADMINISTRATIVOS_TERRITORIALES /
---        ADMINISTRATIVOS_ESTABLECIMIENTO / ADMINISTRATIVOS_SEDES /
---        ESTUDIANTES_FAMILIA)                          -> se siembran en V120
---   PostgreSQL VALIDA EL CUERPO de las funciones `LANGUAGE sql` al crearlas
---   (resuelve tablas, columnas y funciones referenciadas), asi que un helper
---   `sql` que mencione cualquiera de esas cosas HARIA FALLAR EL CREATE aqui
---   en V29. Los cuerpos `plpgsql`, en cambio, solo se comprueban
---   sintacticamente al crear y resuelven nombres en tiempo de EJECUCION —
---   que es cuando ya existe todo (post-V185). De ahi que hasta las que
---   devuelven un escalar o una tabla, y que naturalmente serian `sql`, esten
---   escritas como plpgsql (RETURN / RETURN QUERY). Todas siguen siendo
---   STABLE.
---
---   NOTA DE RENDIMIENTO derivada de lo anterior: fn_usuario_ee_accesibles en
---   plpgsql ya NO puede inline-arse dentro de un `IN (SELECT ...)`; se
---   evalua como una llamada por invocacion. Es aceptable en el uso previsto
---   (una vez por request, dentro de un assert), pero si algun LISTADO acaba
---   llamandola POR FILA hay que revisarlo (materializarla en un CTE/array al
---   inicio de la funcion que lista).
---
--- POR QUE ESTOS HELPERS
---   Hoy cada funcion CRUD autoriza con allowlists de numeros de rol
---   (FK_TROL IN (1,2,3), IN (1,2,3,7,8,9), ...) copiadas inline en cada
---   cuerpo (ver el bloque "0. Gate" de fn_fun_permisos_actualizar, V51
---   ~L1260). Eso: (a) ignora por completo la configuracion de menus
---   (TROL_MENU / TUSUARIO_ROL_PERMISO) que el super admin administra, y
---   (b) no es reutilizable ni auditable. Estos helpers concentran las tres
---   decisiones en un solo lugar.
---
--- MODELO DE 3 CAPAS
---   1. CAPABILITY — ¿que acciones (crear/editar/eliminar/ver) puede hacer
---      este usuario en esta seccion? DINAMICA: sale de
---      fn_usuario_permisos_menu (V185), es decir TROL_MENU concede (techo
---      del rol, via SOLO_LECTURA de V99) y TUSUARIO_ROL_PERMISO recorta
---      (restriccion del usuario, escrita por V199). Nunca amplia.
---      -> fn_usuario_puede_en_menu.
---   2. SCOPE — ¿sobre QUE establecimiento / sede / jornada puede actuar?
---      FIJA Y ESTRUCTURAL: se deriva de la categoria del rol y de las
---      filas TSEDE_USUARIO + los punteros TESTABLECIMIENTO.
---      FK_TFUNCIONARIO_RECTOR / FK_TFUNCIONARIO_SECRETARIA.
---      -> fn_usuario_ee_accesibles, fn_usuario_sedes_jornadas_accesibles.
---   3. RANGO DE ROL — un usuario no puede ver ni afectar a funcionarios de
---      su MISMA categoria de rol o superior, ni otorgar un rol de
---      categoria igual o superior a la propia.
---      -> fn_assert_rango_rol, fn_assert_rango_rol_otorgable.
---
--- NIVELES DE CATEGORIA (TROL.FK_TLISTA_VALOR_CATEGORIA -> TLISTA_VALOR
--- CATEGORIA='CATEGORIA_ROL', columna y seed de V120). 0 = mas alto:
---
---   nivel | VALOR de TLISTA_VALOR              | roles de hoy | scope
---   ------+------------------------------------+--------------+---------------------
---     0   | SUPER_ADMIN                        | 1            | bypass total
---     1   | ADMINISTRATIVOS_TERRITORIALES      | 2,3,4,5,6    | TODOS los EE
---     2   | ADMINISTRATIVOS_ESTABLECIMIENTO    | 7,8,9        | su(s) EE
---     3   | ADMINISTRATIVOS_SEDES              | 10..14       | su(s) (sede, jornada)
---     4   | ESTUDIANTES_FAMILIA                | 15,16        | n/a en estas secciones
---
--- POR QUE NO SE HARDCODEAN pk_trol
---   Los numeros de rol de la tabla de arriba son SOLO documentacion: la
---   unica fuente de verdad de la logica es la CATEGORIA del rol. Si mañana
---   se crea un rol 17 y el super admin lo clasifica como
---   ADMINISTRATIVOS_SEDES, hereda el scope de sede+jornada sin tocar una
---   sola linea de SQL. Ademas, el mapeo se resuelve por el TEXTO de
---   TLISTA_VALOR.VALOR y NO por el pk_lista_valor literal (51951/51953/
---   51949/51952/51950 en el servidor de test) porque esos pk varian por
---   ambiente — mismo criterio que V185/V198 al resolver el microservicio
---   por serviceid='eval-col' en vez de por id numerico.
---
--- ROL SIN CATEGORIA (FK_TLISTA_VALOR_CATEGORIA NULL)
---   DECISION: se trata como nivel 4 (el MAS BAJO). Fail-closed: un rol sin
---   clasificar no gana scope ni alcanza a nadie por rango; en cambio, si se
---   tratara como NULL "desconocido" propagaria NULLs a las comparaciones y
---   las volveria permisivas por accidente. Un rol nuevo sin categoria
---   asignada por el super admin queda inofensivo hasta que la reciba.
---   (Antes de V120 la columna FK_TLISTA_VALOR_CATEGORIA ni siquiera existe;
---   por eso estas funciones solo son INVOCABLES a partir de V120/V185 —
---   definirlas antes es seguro, ejecutarlas antes no.)
---
--- ERRORES
---   Todos los asserts lanzan SQLSTATE '42501' (-> HTTP 403 via
---   PostgresErrorMapper), con MENSAJES DISTINTOS para poder diferenciar
---   "no puedes esta accion" (capability) de "no alcanzas este objeto"
---   (scope) de "ese funcionario/rol es de tu rango o superior" (rango).
---   Los mensajes nombran al funcionario o al rol de forma legible, no solo
---   por su PK.
---
--- IDEMPOTENCIA
---   Solo CREATE OR REPLACE FUNCTION + COMMENT ON FUNCTION; ninguna firma
---   cambia respecto a algo ya existente (las 9 son nuevas), asi que no hace
---   falta DROP previo. Reaplicar el archivo N veces es un no-op.
---
--- NOTA plpgsql (bug real de V199): en fn_fun_filtros_permiso_listar un OUT
---   param fk_tsede choco con un SELECT FK_TSEDE de un subquery del gate
---   copiado. Aqui TODAS las columnas de subqueries van con alias de tabla.
+-- Depende de: V185 (fn_usuario_permisos_menu, enlazada en tiempo de
+-- ejecucion) y V120 (TROL.FK_TLISTA_VALOR_CATEGORIA).
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -171,13 +53,16 @@ COMMENT ON FUNCTION academico_test.fn_rol_categoria_nivel(BIGINT)
 -- 2) fn_usuario_categoria_rol_nivel — nivel MAS ALTO (numero MAS BAJO) de
 --    entre las categorias de todos los roles activos del usuario.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_usuario_categoria_rol_nivel(
+DO $guarda$
+BEGIN
+    IF to_regprocedure('academico_test.fn_usuario_categoria_rol_nivel(bigint)') IS NULL THEN
+        EXECUTE $crear$CREATE OR REPLACE FUNCTION academico_test.fn_usuario_categoria_rol_nivel(
     p_pk_tusuario  BIGINT
 )
 RETURNS INT
 LANGUAGE plpgsql
 STABLE
-AS $$
+AS $fnucrn$
 DECLARE
     v_nivel  INT;
 BEGIN
@@ -190,7 +75,11 @@ BEGIN
     -- NULL si el usuario no tiene ningun rol activo (MIN sobre 0 filas).
     RETURN v_nivel;
 END;
-$$;
+$fnucrn$
+$crear$;
+    END IF;
+END
+$guarda$;
 
 COMMENT ON FUNCTION academico_test.fn_usuario_categoria_rol_nivel(BIGINT)
     IS 'Nivel jerarquico (0 = mas alto) de la categoria de rol MAS ALTA que tiene el usuario entre sus TSEDE_USUARIO ACTIVE (multi-rol -> MIN del nivel). Devuelve NULL si el usuario no tiene ningun rol activo. Mismo criterio "solo ACTIVE" que fn_usuario_permisos_menu (V185), sin filtrar ademas por TLV_ESTADO. 0 = SUPER_ADMIN (bypass), 1 = territorial (todos los EE), 2 = establecimiento, 3 = sedes (sede+jornada), 4 = estudiantes/familia.';
@@ -411,6 +300,26 @@ COMMENT ON FUNCTION academico_test.fn_usuario_sedes_lectura(BIGINT)
 -- ---------------------------------------------------------------------------
 -- 5) fn_usuario_puede_en_menu — capability.
 -- ---------------------------------------------------------------------------
+-- La UI de menus deriva el CODIGO del nombre, asi que un mismo menu puede
+-- quedar como MATRICULA o MATRÍCULA segun el ambiente. Se compara siempre en
+-- forma canonica. translate() porque unaccent no esta instalada.
+CREATE OR REPLACE FUNCTION academico_test.fn_menu_codigo_canonico(
+    p_codigo VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT UPPER(TRIM(translate(
+        COALESCE(p_codigo, ''),
+        'ÁÀÄÂáàäâÉÈËÊéèëêÍÌÏÎíìïîÓÒÖÔóòöôÚÙÜÛúùüûÑñÇç',
+        'AAAAaaaaEEEEeeeeIIIIiiiiOOOOooooUUUUuuuuNnCc'
+    )))::VARCHAR;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_menu_codigo_canonico(VARCHAR)
+    IS 'Forma canonica de un TMENU.CODIGO: UPPER + TRIM + sin tildes/dieresis/cedilla. La usan el gate (fn_usuario_puede_en_menu), la resolucion de grupo (fn_menu_grupo_de) y la derivacion y unicidad de codigos al crear o editar menus (fn_upsert_menu).';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_usuario_puede_en_menu(
     p_pk_tusuario  BIGINT,
     p_codigo_menu  VARCHAR,
@@ -426,7 +335,8 @@ BEGIN
     SELECT EXISTS (
         SELECT 1
           FROM academico_test.fn_usuario_permisos_menu(p_pk_tusuario) pm
-         WHERE pm.codigo = p_codigo_menu
+         WHERE academico_test.fn_menu_codigo_canonico(pm.codigo)
+             = academico_test.fn_menu_codigo_canonico(p_codigo_menu)
            AND CASE UPPER(TRIM(COALESCE(p_accion, '')))
                    WHEN 'CREAR'    THEN pm.puede_crear
                    WHEN 'EDITAR'   THEN pm.puede_editar
@@ -441,7 +351,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_usuario_puede_en_menu(BIGINT, VARCHAR, VARCHAR)
-    IS 'TRUE si el usuario puede ejecutar p_accion (''CREAR''|''EDITAR''|''ELIMINAR''|''VER'', comparada con UPPER(TRIM(...)), case-insensitive) sobre el TMENU de codigo p_codigo_menu. Envuelve fn_usuario_permisos_menu (V185), asi que hereda gratis la semantica "TROL_MENU concede (techo del rol) / TUSUARIO_ROL_PERMISO recorta (restriccion del usuario)". DECISION: una accion desconocida o NULL devuelve FALSE (fail-closed) en vez de lanzar 22023 — el caller de estos helpers es siempre codigo del repo con literales fijos, y un FALSE se traduce en el 42501 normal de capability en fn_assert_permiso_seccion; asi ningun typo abre acceso. Si el menu no esta concedido por ningun rol activo del usuario, tambien FALSE. Requiere fn_usuario_permisos_menu (V185) en tiempo de ejecucion: por eso es plpgsql y no sql (V29 es anterior a V185).';
+    IS 'TRUE si el usuario puede ejecutar p_accion (''CREAR''|''EDITAR''|''ELIMINAR''|''VER'', comparada con UPPER(TRIM(...)), case-insensitive) sobre el TMENU de codigo p_codigo_menu, comparado en forma canonica (fn_menu_codigo_canonico: MATRICULA = MATRÍCULA). Envuelve fn_usuario_permisos_menu (V185), asi que hereda gratis la semantica "TROL_MENU concede (techo del rol) / TUSUARIO_ROL_PERMISO recorta (restriccion del usuario)". DECISION: una accion desconocida o NULL devuelve FALSE (fail-closed) en vez de lanzar 22023 — el caller de estos helpers es siempre codigo del repo con literales fijos, y un FALSE se traduce en el 42501 normal de capability en fn_assert_permiso_seccion; asi ningun typo abre acceso. Si el menu no esta concedido por ningun rol activo del usuario, tambien FALSE. Requiere fn_usuario_permisos_menu (V185) en tiempo de ejecucion: por eso es plpgsql y no sql (V29 es anterior a V185).';
 
 -- ---------------------------------------------------------------------------
 -- 6) fn_assert_permiso_seccion — capability + scope, en una llamada.
@@ -564,99 +474,6 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_assert_permiso_seccion(BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT)
     IS 'Assertion de autorizacion para las funciones CRUD de establecimiento / sedes / funcionarios / periodos academicos: PERFORM al inicio del cuerpo. Orden: (0) bypass si fn_usuario_categoria_rol_nivel = 0 (SUPER_ADMIN); (1) capability -- fn_usuario_puede_en_menu(u, menu, accion) debe ser TRUE, si no 42501 nombrando accion y modulo; (2) scope, SOLO si p_fk_establecimiento o p_fk_tsede no son NULL: (2.a) nivel 1 (territorial) alcanza todos los EE; (2.b) el EE objetivo (p_fk_establecimiento, o el FK_TESTABLECIMIENTO de p_fk_tsede) debe estar en fn_usuario_ee_accesibles; (2.c) el par (p_fk_tsede, p_fk_tlv_jornada) debe estar en fn_usuario_sedes_jornadas_accesibles; (2.d) SOLO para los menus ESTABLECIMIENTO y SEDES_EDUCATIVAS -- que no tienen jornada -- un rol nivel 3 (ADMINISTRATIVOS_SEDES) con la capability concedida alcanza su(s) sede(s) propia(s) (p_fk_tsede en fn_usuario_sedes_jornadas_accesibles) y el EE al que pertenecen, SIN exigir jornada; para PERIODOS/MATRICULA/cascada academica 2.d NO aplica y manda 2.c. Si nada aplica, 42501 con un mensaje DISTINTO al de capability. Si todos los p_fk_* son NULL (accion sin objeto, p.ej. crear un EE) la capability basta. NO valida existencia ni estado de los objetos (eso lo hace el caller). Es de solo lectura: llamarla N veces es equivalente a llamarla una.';
-
--- ---------------------------------------------------------------------------
--- 7) fn_assert_rango_rol — no ver ni afectar a iguales o superiores.
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_assert_rango_rol(
-    p_pk_solicitante           BIGINT,
-    p_pk_funcionario_objetivo  BIGINT
-)
-RETURNS void
-LANGUAGE plpgsql
-STABLE
-AS $$
-DECLARE
-    v_nivel_solicitante  INT;
-    v_nivel_objetivo     INT;
-    v_nombre_objetivo    TEXT;
-BEGIN
-    v_nivel_solicitante := academico_test.fn_usuario_categoria_rol_nivel(p_pk_solicitante);
-
-    -- SUPER_ADMIN: sin rango que lo limite.
-    IF v_nivel_solicitante = 0 THEN
-        RETURN;
-    END IF;
-
-    SELECT MIN(academico_test.fn_rol_categoria_nivel(su.FK_TROL))
-      INTO v_nivel_objetivo
-      FROM academico_test.TFUNCIONARIO f
-      JOIN academico_test.TSEDE_USUARIO su
-        ON su.FK_TUSUARIO = f.FK_TUSUARIO
-       AND su.ACTIVE = TRUE
-     WHERE f.PK_TFUNCIONARIO = p_pk_funcionario_objetivo;
-
-    -- El objetivo no tiene roles activos: no hay rango que proteger.
-    IF v_nivel_objetivo IS NULL THEN
-        RETURN;
-    END IF;
-
-    -- Solicitante sin rol activo (NULL): la comparacion nunca autoriza.
-    IF v_nivel_solicitante IS NULL OR v_nivel_solicitante >= v_nivel_objetivo THEN
-        SELECT TRIM(COALESCE(u.PRIMER_NOMBRE, '') || ' ' || COALESCE(u.PRIMER_APELLIDO, ''))
-          INTO v_nombre_objetivo
-          FROM academico_test.TFUNCIONARIO f
-          JOIN academico_test.TUSUARIO u ON u.PK_TUSUARIO = f.FK_TUSUARIO
-         WHERE f.PK_TFUNCIONARIO = p_pk_funcionario_objetivo;
-
-        RAISE EXCEPTION 'El funcionario "%" tiene un rol de categoria igual o superior a la del usuario; no se puede consultar ni afectar',
-            COALESCE(NULLIF(v_nombre_objetivo, ''), 'objetivo')
-            USING ERRCODE = '42501';
-    END IF;
-END;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_assert_rango_rol(BIGINT, BIGINT)
-    IS 'Assertion de RANGO DE ROL (capa 3): un usuario no puede ver ni afectar a funcionarios cuya categoria de rol sea la MISMA o SUPERIOR a la suya. nivel_objetivo = MIN(fn_rol_categoria_nivel) de los TSEDE_USUARIO ACTIVE del funcionario objetivo (via su FK_TUSUARIO); si fn_usuario_categoria_rol_nivel(solicitante) >= nivel_objetivo -> 42501 nombrando al funcionario. Un solicitante de nivel 0 (SUPER_ADMIN) pasa siempre. DECISION: si el objetivo no tiene ningun rol activo, nivel_objetivo es NULL y la funcion PASA -- no hay rango que proteger (un funcionario sin rol no es "superior" a nadie); el alcance sobre el sigue gobernado por el scope de EE. Un solicitante sin rol activo (nivel NULL) nunca pasa.';
-
--- ---------------------------------------------------------------------------
--- 8) fn_assert_rango_rol_otorgable — no otorgar iguales ni superiores.
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_assert_rango_rol_otorgable(
-    p_pk_solicitante  BIGINT,
-    p_pk_trol         BIGINT
-)
-RETURNS void
-LANGUAGE plpgsql
-STABLE
-AS $$
-DECLARE
-    v_nivel_solicitante  INT;
-    v_nivel_rol          INT;
-    v_nombre_rol         TEXT;
-BEGIN
-    v_nivel_solicitante := academico_test.fn_usuario_categoria_rol_nivel(p_pk_solicitante);
-
-    IF v_nivel_solicitante = 0 THEN
-        RETURN;
-    END IF;
-
-    v_nivel_rol := academico_test.fn_rol_categoria_nivel(p_pk_trol);
-
-    IF v_nivel_solicitante IS NULL OR v_nivel_solicitante >= v_nivel_rol THEN
-        SELECT r.NOMBRE INTO v_nombre_rol
-          FROM academico_test.TROL r
-         WHERE r.PK_TROL = p_pk_trol;
-
-        RAISE EXCEPTION 'El rol "%" es de categoria igual o superior a la del usuario; no se puede otorgar',
-            COALESCE(NULLIF(TRIM(COALESCE(v_nombre_rol, '')), ''), p_pk_trol::TEXT)
-            USING ERRCODE = '42501';
-    END IF;
-END;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_assert_rango_rol_otorgable(BIGINT, BIGINT)
-    IS 'Assertion de RANGO al OTORGAR un rol: nadie puede asignar a otro un rol cuya categoria sea igual o superior a la propia. Si fn_usuario_categoria_rol_nivel(solicitante) >= fn_rol_categoria_nivel(p_pk_trol) -> 42501 nombrando el rol (TROL.NOMBRE, no solo el pk). Un solicitante de nivel 0 (SUPER_ADMIN) puede otorgar cualquier rol; uno sin rol activo (nivel NULL) no puede otorgar ninguno. Pensada para fn_sede_usuario_crear / fn_fun_permisos_actualizar. Ejemplo: un Rector (nivel 2) no puede otorgar Rector ni Jefe de Sistema territorial (nivel 1), pero si Coordinador (nivel 3).';
 
 -- ---------------------------------------------------------------------------
 -- 9) fn_assert_permiso_funcionario — capability + scope + rango, modulo
