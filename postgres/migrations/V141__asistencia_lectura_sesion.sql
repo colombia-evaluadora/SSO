@@ -28,10 +28,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql STABLE AS $$
 BEGIN
-    IF NOT academico_test.fn_asistencia_puede_ver(p_pk_usuario, p_fk_tgrupo) THEN
-        RAISE EXCEPTION 'El usuario no puede ver la asistencia del grupo %', p_fk_tgrupo
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_asistencia_assert_puede_ver(p_pk_usuario, p_fk_tgrupo);
     IF p_fk_tgrupo IS NULL OR p_fecha IS NULL THEN
         RAISE EXCEPTION 'grupo y fecha son obligatorios' USING ERRCODE = '23502';
     END IF;
@@ -50,6 +47,7 @@ BEGIN
      WHERE a.FK_TGRUPO = p_fk_tgrupo
        AND a.ACTIVE = TRUE
        AND p_fecha BETWEEN v.inicio AND v.cierre
+       AND academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, a.FK_TGRUPO, a.FK_TASIGNATURA)
        AND (p_fk_tfuncionario IS NULL OR EXISTS (
                SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
                 WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario
@@ -61,7 +59,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_actividades_dia(BIGINT, BIGINT, DATE, BIGINT)
-    IS 'Actividades de un grupo VIGENTES en una fecha (equivalente formativo de fn_asistencia_asignaturas_sesion). Vigencia por RANGO [COALESCE(FECHA_INICIO,FECHA_CREACION), COALESCE(FECHA_CIERRE,FECHA_INICIO,FECHA_CREACION)]. p_fk_tfuncionario no NULL acota a TDOCENTE_ASIGNATURA. Gate: fn_asistencia_puede_ver. Copia identica de V220, redefinida aqui (V141) para trazabilidad.';
+    IS 'Actividades de un grupo VIGENTES en una fecha (equivalente formativo de fn_asistencia_asignaturas_sesion). Vigencia por RANGO [COALESCE(FECHA_INICIO,FECHA_CREACION), COALESCE(FECHA_CIERRE,FECHA_INICIO,FECHA_CREACION)]. p_fk_tfuncionario no NULL acota a TDOCENTE_ASIGNATURA. Gate: fn_asistencia_assert_puede_ver (Regla 74: el docente solo ve las asignaturas que dicta). Copia identica de V220, redefinida aqui (V141) para trazabilidad.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_estudiantes_sesion(
     p_pk_usuario     BIGINT,
@@ -90,10 +88,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql STABLE AS $$
 BEGIN
-    IF NOT academico_test.fn_asistencia_puede_ver(p_pk_usuario, p_fk_tgrupo) THEN
-        RAISE EXCEPTION 'El usuario no puede ver la asistencia del grupo %', p_fk_tgrupo
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_asistencia_assert_puede_ver(p_pk_usuario, p_fk_tgrupo, p_fk_tasignatura);
 
     IF p_fk_tgrupo IS NULL OR p_fecha IS NULL THEN
         RAISE EXCEPTION 'grupo y fecha son obligatorios' USING ERRCODE = '23502';
@@ -177,7 +172,7 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_estudiantes_sesion(
     BIGINT, BIGINT, BIGINT, DATE, NUMERIC, BIGINT
-) IS 'Padron de una sesion para "Asistencia manual": una fila por matricula activa del grupo con su estado ACTUAL (NULL si falta tomarlo). Cabecera de sesion (fk_tperiodo_evaluacion, hora_inicio/hora_fin) repetida en cada fila. Gate: fn_asistencia_puede_ver. Copia identica de V220, redefinida aqui (V141) para trazabilidad.';
+) IS 'Padron de una sesion para "Asistencia manual": una fila por matricula activa del grupo con su estado ACTUAL (NULL si falta tomarlo). Cabecera de sesion (fk_tperiodo_evaluacion, hora_inicio/hora_fin) repetida en cada fila. Gate: fn_asistencia_assert_puede_ver (Regla 74: el docente solo ve las asignaturas que dicta). Copia identica de V220, redefinida aqui (V141) para trazabilidad.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_asignaturas_sesion(
     p_pk_usuario      BIGINT,
@@ -194,10 +189,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql STABLE AS $$
 BEGIN
-    IF NOT academico_test.fn_asistencia_puede_ver(p_pk_usuario, p_fk_tgrupo) THEN
-        RAISE EXCEPTION 'El usuario no puede ver la asistencia del grupo %', p_fk_tgrupo
-            USING ERRCODE = '42501';
-    END IF;
+    PERFORM academico_test.fn_asistencia_assert_puede_ver(p_pk_usuario, p_fk_tgrupo);
     IF p_fk_tgrupo IS NULL OR p_fecha IS NULL THEN
         RAISE EXCEPTION 'grupo y fecha son obligatorios' USING ERRCODE = '23502';
     END IF;
@@ -221,6 +213,7 @@ BEGIN
       CROSS JOIN LATERAL academico_test.fn_asistencia_franja_bloque(
           p_fecha, th.HORA_INICIO, th.HORA_FIN, pa.HORA_INICIO, pa.HORA_FIN) franja
      WHERE gr.PK_TGRUPO = p_fk_tgrupo AND gr.ACTIVE = TRUE
+       AND academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, th.FK_TGRUPO, th.FK_TASIGNATURA)
        AND (p_fk_tfuncionario IS NULL OR EXISTS (
                SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
                 WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario
@@ -233,4 +226,4 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_asignaturas_sesion(
     BIGINT, BIGINT, DATE, BIGINT
-) IS 'Pestanas por asignatura de "Asistencia manual": (asignatura, bloque, franja) que THORARIO tiene programadas para el grupo en el DIA DE SEMANA de p_fecha. p_fk_tfuncionario no NULL acota a TDOCENTE_ASIGNATURA. Gate: fn_asistencia_puede_ver. Copia identica de V220, redefinida aqui (V141) para trazabilidad.';
+) IS 'Pestanas por asignatura de "Asistencia manual": (asignatura, bloque, franja) que THORARIO tiene programadas para el grupo en el DIA DE SEMANA de p_fecha. p_fk_tfuncionario no NULL acota a TDOCENTE_ASIGNATURA. Gate: fn_asistencia_assert_puede_ver (Regla 74: el docente solo ve las asignaturas que dicta). Copia identica de V220, redefinida aqui (V141) para trazabilidad.';

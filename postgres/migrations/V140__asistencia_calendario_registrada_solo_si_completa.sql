@@ -307,7 +307,7 @@ BEGIN
                       AND da.FK_TGRUPO       = d.fk_tgrupo
                       AND da.FK_TASIGNATURA  = d.fk_tasignatura
                       AND da.ACTIVE = TRUE))
-           AND academico_test.fn_asistencia_puede_ver(p_pk_usuario, d.fk_tgrupo)
+           AND academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, d.fk_tgrupo, d.fk_tasignatura)
          GROUP BY d.fecha, d.fk_tgrupo, d.grupo, d.fk_tgrado, d.grado, d.grado_valor,
                   d.fk_tlv_jornada, d.jornada, d.jornada_valor, d.fk_tasignatura, d.asignatura,
                   d.fk_tactividad, d.actividad, d.bloque
@@ -426,7 +426,7 @@ BEGIN
                       AND da.FK_TGRUPO       = d.fk_tgrupo
                       AND da.FK_TASIGNATURA  = d.fk_tasignatura
                       AND da.ACTIVE = TRUE))
-           AND academico_test.fn_asistencia_puede_ver(p_pk_usuario, d.fk_tgrupo)
+           AND academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, d.fk_tgrupo, d.fk_tasignatura)
          GROUP BY d.fecha, d.fk_tgrupo, d.fk_tasignatura, d.bloque
     ),
     programadas AS (
