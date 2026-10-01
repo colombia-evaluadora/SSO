@@ -10,6 +10,13 @@ from datetime import datetime
 from render_categories import CAT_CSS, CAT_JS, CAT_PANEL
 
 
+def vnum(v: str) -> float:
+    """Clave numerica de version con el orden de Flyway: V496.15 va despues de V496.6
+    (float("496.15") lo pondria antes). Cada parte decimal ocupa 3 cifras."""
+    parts = str(v).split(".")
+    return float(parts[0]) + sum(int(p) / 1000 ** i for i, p in enumerate(parts[1:], 1))
+
+
 VERDICTS = ["obsoleta", "residual", "parcial", "viva", "solo-binds", "sin-cambios"]
 
 
@@ -1604,7 +1611,7 @@ def build(model: dict) -> str:
         f'<td class="dim">{c["before"]} → {c["after"]}</td>'
         f'<td class="m dim" style="max-width:420px;word-break:break-word">'
         f'{", ".join(c["after_types"])}</td></tr>'
-        for c in sorted(data["sig"], key=lambda c: -float(c["to"]))) or \
+        for c in sorted(data["sig"], key=lambda c: -vnum(c["to"]))) or \
         '<tr><td colspan="4" class="empty">Sin cambios de firma detectados</td></tr>'
 
     issue_rows = "".join(
