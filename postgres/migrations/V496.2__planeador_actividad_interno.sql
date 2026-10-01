@@ -5,7 +5,8 @@
 -- que valida con V496.1 y escribe, sin gate ni etiqueta: los reutilizan los
 -- wrappers de V496.3, la importación y la unidad. Un trigger aplica las Reglas
 -- 36/39: al cambiar o quitar la unidad se sueltan las evidencias y criterios
--- que eran de la anterior.
+-- que eran de la anterior. Además: biblioteca de adaptaciones del docente,
+-- precarga de escala y los afectados/aviso PIAR al fijar estudiantes.
 -- Depende de: V496.1, V492.2 (vínculo con la unidad), V482 (eliminar),
 -- V483 (mínimo de evidencias), V408 (revertir recuperación).
 
@@ -82,6 +83,82 @@ BEGIN
 END;
 $$;
 
+-- Regla 48: el PIAR no se registra; la discapacidad del estudiante
+-- (TESTUDIANTE.FK_TDISCAPACIDAD) es lo que lo hace exigible.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_estudiantes_piar_excluidos(p_pk_tactividad BIGINT)
+RETURNS JSONB
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+               'pkTmatricula',  m.PK_TMATRICULA,
+               'fkTestudiante', es.PK_TESTUDIANTE,
+               'estudiante',    NULLIF(TRIM(CONCAT_WS(' ', us.PRIMER_NOMBRE, us.SEGUNDO_NOMBRE,
+                                                         us.PRIMER_APELLIDO, us.SEGUNDO_APELLIDO)), ''),
+               'discapacidad',  d.NOMBRE)
+               ORDER BY us.PRIMER_APELLIDO, us.PRIMER_NOMBRE, m.PK_TMATRICULA), '[]'::jsonb)
+      FROM academico_test.TACTIVIDAD a
+      JOIN academico_test.TMATRICULA m   ON m.FK_TGRUPO = a.FK_TGRUPO AND m.ACTIVE = TRUE
+      JOIN academico_test.TESTUDIANTE es ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE AND es.FK_TDISCAPACIDAD IS NOT NULL
+      JOIN academico_test.TUSUARIO us    ON us.PK_TUSUARIO = es.FK_TUSUARIO
+      LEFT JOIN academico_test.TDISCAPACIDAD d ON d.PK_DISCAPACIDAD = es.FK_TDISCAPACIDAD
+     WHERE a.PK_TACTIVIDAD = p_pk_tactividad
+       AND NOT EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+                        WHERE ae.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND ae.FK_TMATRICULA = m.PK_TMATRICULA
+                          AND ae.ACTIVE = TRUE);
+$$;
+
+-- Los afectados se leen ANTES del reemplazo: después ya no están en la adaptación.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_estudiantes_asignar_detalle_interno(
+    p_pk_usuario_solicitante BIGINT,
+    p_pk_tactividad          BIGINT,
+    p_fk_tmatriculas         BIGINT[] DEFAULT NULL,
+    p_todo_el_grupo          BOOLEAN  DEFAULT FALSE
+)
+RETURNS TABLE (total INT, afectados_adaptacion JSONB, avisos_piar JSONB)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+    v_set BIGINT[];
+BEGIN
+    PERFORM academico_test.fn_actividad_validar_existente(p_pk_tactividad);
+    afectados_adaptacion := '[]'::jsonb;
+    IF p_fk_tmatriculas IS NOT NULL OR COALESCE(p_todo_el_grupo, FALSE) THEN
+        IF p_fk_tmatriculas IS NULL THEN
+            SELECT COALESCE(array_agg(m.PK_TMATRICULA), ARRAY[]::BIGINT[]) INTO v_set
+              FROM academico_test.TMATRICULA m
+              JOIN academico_test.TACTIVIDAD a ON a.FK_TGRUPO = m.FK_TGRUPO
+             WHERE a.PK_TACTIVIDAD = p_pk_tactividad AND m.ACTIVE = TRUE;
+        ELSE
+            v_set := ARRAY(SELECT DISTINCT x FROM unnest(p_fk_tmatriculas) x WHERE x IS NOT NULL);
+        END IF;
+        SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                   'pkTmatricula', s.FK_TMATRICULA,
+                   'estudiante',   academico_test.fn_actividad_estudiante_nombre(s.FK_TMATRICULA),
+                   'adaptaciones', s.adaptaciones) ORDER BY s.FK_TMATRICULA), '[]'::jsonb)
+          INTO afectados_adaptacion
+          FROM (SELECT ae.FK_TMATRICULA,
+                       jsonb_agg(jsonb_build_object('pkTactividadAdaptacion', ad.PK_TACTIVIDAD_ADAPTACION,
+                                                    'tipoAdaptacion', lv.NOMBRE)) AS adaptaciones
+                  FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+                  JOIN academico_test.TACTIVIDAD_ADAPTACION_ESTUDIANTE ade
+                    ON ade.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE AND ade.ACTIVE = TRUE
+                  JOIN academico_test.TACTIVIDAD_ADAPTACION ad
+                    ON ad.PK_TACTIVIDAD_ADAPTACION = ade.FK_TACTIVIDAD_ADAPTACION AND ad.ACTIVE = TRUE
+                  LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = ad.FK_TLV_TIPO_ADAPTACION
+                 WHERE ae.FK_TACTIVIDAD = p_pk_tactividad AND ae.ACTIVE = TRUE
+                   AND NOT (ae.FK_TMATRICULA = ANY(v_set))
+                 GROUP BY ae.FK_TMATRICULA) s;
+    END IF;
+
+    total := academico_test.fn_actividad_estudiantes_asignar_interno(
+        p_pk_usuario_solicitante, p_pk_tactividad, p_fk_tmatriculas, p_todo_el_grupo);
+    avisos_piar := academico_test.fn_actividad_estudiantes_piar_excluidos(p_pk_tactividad);
+    RETURN NEXT;
+END;
+$$;
+
 -- ---------------------------------------------------------------------------
 -- Materiales de apoyo y adaptaciones
 -- ---------------------------------------------------------------------------
@@ -135,6 +212,7 @@ DECLARE
     v_por      VARCHAR := p_pk_usuario_solicitante::VARCHAR;
     v_elem     JSONB;
     v_pk_adapt BIGINT;
+    v_archivos BIGINT[];
     v_n        INT := 0;
 BEGIN
     IF p_adaptaciones IS NULL THEN
@@ -151,23 +229,37 @@ BEGIN
      WHERE ae.FK_TACTIVIDAD_ADAPTACION = ad.PK_TACTIVIDAD_ADAPTACION
        AND ad.FK_TACTIVIDAD = p_pk_tactividad AND ae.ACTIVE = TRUE;
 
+    UPDATE academico_test.TACTIVIDAD_ADAPTACION_ARCHIVO aa
+       SET ACTIVE = FALSE, MODIFIED_BY = v_por, MODIFIED_AT = CURRENT_TIMESTAMP
+      FROM academico_test.TACTIVIDAD_ADAPTACION ad
+     WHERE aa.FK_TACTIVIDAD_ADAPTACION = ad.PK_TACTIVIDAD_ADAPTACION
+       AND ad.FK_TACTIVIDAD = p_pk_tactividad AND aa.ACTIVE = TRUE;
+
     UPDATE academico_test.TACTIVIDAD_ADAPTACION
        SET ACTIVE = FALSE, MODIFIED_BY = v_por, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
 
     FOR v_elem IN SELECT * FROM jsonb_array_elements(p_adaptaciones) LOOP
+        v_archivos := academico_test.fn_actividad_adaptacion_archivos(v_elem);
         INSERT INTO academico_test.TACTIVIDAD_ADAPTACION (
             FK_TACTIVIDAD, FK_TLV_TIPO_ADAPTACION, DESCRIPCION, USA_VERSION_MODIFICADA,
             FK_TARCHIVO, URL, FK_TLV_FORMATO_ADAPTACION, FK_TLV_APLICA_A,
+            NOMBRE_PLANTILLA, ESPECIFICACION_TIPO,
             CREATED_BY, CREATED_AT, ACTIVE
         ) VALUES (
             p_pk_tactividad, (v_elem->>'tipoAdaptacion')::BIGINT, TRIM(v_elem->>'descripcion'),
             UPPER(TRIM(COALESCE(v_elem->>'usaVersionModificada', 'N'))),
-            (v_elem->>'fkTarchivo')::BIGINT, NULLIF(TRIM(v_elem->>'url'), ''),
+            v_archivos[1], NULLIF(TRIM(v_elem->>'url'), ''),
             (v_elem->>'formatoAdaptacion')::BIGINT, (v_elem->>'aplicaA')::BIGINT,
+            NULLIF(TRIM(v_elem->>'nombrePlantilla'), ''), NULLIF(TRIM(v_elem->>'especificacionTipo'), ''),
             v_por, CURRENT_TIMESTAMP, TRUE
         )
         RETURNING PK_TACTIVIDAD_ADAPTACION INTO v_pk_adapt;
+
+        INSERT INTO academico_test.TACTIVIDAD_ADAPTACION_ARCHIVO (
+            FK_TACTIVIDAD_ADAPTACION, FK_TARCHIVO, ORDEN, CREATED_BY, CREATED_AT, ACTIVE)
+        SELECT v_pk_adapt, f.x, f.o, v_por, CURRENT_TIMESTAMP, TRUE
+          FROM unnest(v_archivos) WITH ORDINALITY AS f(x, o);
 
         INSERT INTO academico_test.TACTIVIDAD_ADAPTACION_ESTUDIANTE (
             FK_TACTIVIDAD_ADAPTACION, FK_TACTIVIDAD_ESTUDIANTE, CREATED_BY, CREATED_AT, ACTIVE)
@@ -179,6 +271,135 @@ BEGIN
         v_n := v_n + 1;
     END LOOP;
     RETURN v_n;
+END;
+$$;
+
+-- Regla 50: lo que el docente ya registró (archivo o enlace), una fila por
+-- recurso aunque lo haya reutilizado en varias actividades.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_adaptaciones_reutilizables_listar_interno(
+    VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, INTEGER, INTEGER);
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_adaptaciones_reutilizables_listar_interno(
+    p_creado_por             VARCHAR,
+    p_pk_tactividad_excluir  BIGINT  DEFAULT NULL,
+    p_fk_tasignatura         BIGINT  DEFAULT NULL,
+    p_fk_tfuncionario        BIGINT  DEFAULT NULL,
+    p_fk_tlv_tipo_adaptacion BIGINT  DEFAULT NULL,
+    p_search                 VARCHAR DEFAULT NULL,
+    p_pagina                 INTEGER DEFAULT 1,
+    p_tamano_pagina          INTEGER DEFAULT 20
+)
+RETURNS TABLE(
+    fk_tarchivo              BIGINT,
+    nombre_archivo           VARCHAR,
+    peso                     BIGINT,
+    pk_tactividad_origen     BIGINT,
+    titulo_actividad_origen  VARCHAR,
+    fk_tlv_tipo_adaptacion   BIGINT,
+    tipo_adaptacion          VARCHAR,
+    descripcion              VARCHAR,
+    url                      VARCHAR,
+    nombre_plantilla         VARCHAR,
+    pk_tactividad_adaptacion BIGINT,
+    archivos                 JSONB,
+    total_count              BIGINT
+)
+LANGUAGE plpgsql
+STABLE
+AS $function$
+#variable_conflict use_column
+DECLARE
+    v_limite INT := GREATEST(COALESCE(p_tamano_pagina, 20), 1);
+    v_offset INT := (GREATEST(COALESCE(p_pagina, 1), 1) - 1) * GREATEST(COALESCE(p_tamano_pagina, 20), 1);
+    v_buscar VARCHAR := NULLIF(TRIM(p_search), '');
+BEGIN
+    RETURN QUERY
+    WITH recurso AS (
+        SELECT DISTINCT ON (ad.FK_TARCHIVO, ad.URL)
+               ad.PK_TACTIVIDAD_ADAPTACION AS pk_ad, ad.FK_TARCHIVO AS fk_arch, ad.URL AS enlace,
+               ad.NOMBRE_PLANTILLA AS plantilla, ad.DESCRIPCION AS descr,
+               ad.FK_TLV_TIPO_ADAPTACION AS fk_tipo, lv.NOMBRE AS tipo_nombre,
+               t.NOMBRE AS arch_nombre, t.PESO AS arch_peso,
+               a.PK_TACTIVIDAD AS pk_act, a.TITULO AS act_titulo
+          FROM academico_test.TACTIVIDAD_ADAPTACION ad
+          JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = ad.FK_TACTIVIDAD AND a.ACTIVE = TRUE
+          LEFT JOIN academico_test.TARCHIVO t ON t.PK_TARCHIVO = ad.FK_TARCHIVO AND t.ACTIVE = TRUE
+          LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = ad.FK_TLV_TIPO_ADAPTACION
+          LEFT JOIN academico_test.TUNIDAD u ON u.PK_TUNIDAD = a.FK_TUNIDAD
+         WHERE ad.ACTIVE = TRUE
+           AND ad.CREATED_BY = p_creado_por
+           AND (t.PK_TARCHIVO IS NOT NULL OR ad.URL IS NOT NULL)
+           AND (p_pk_tactividad_excluir IS NULL OR a.PK_TACTIVIDAD <> p_pk_tactividad_excluir)
+           AND (p_fk_tasignatura IS NULL OR a.FK_TASIGNATURA = p_fk_tasignatura)
+           AND (p_fk_tfuncionario IS NULL OR u.FK_TFUNCIONARIO = p_fk_tfuncionario)
+           AND (p_fk_tlv_tipo_adaptacion IS NULL OR ad.FK_TLV_TIPO_ADAPTACION = p_fk_tlv_tipo_adaptacion)
+           AND (v_buscar IS NULL
+                OR CONCAT_WS(' ', ad.NOMBRE_PLANTILLA, t.NOMBRE, ad.URL, a.TITULO) ILIKE '%' || v_buscar || '%')
+         ORDER BY ad.FK_TARCHIVO, ad.URL, ad.CREATED_AT DESC, ad.PK_TACTIVIDAD_ADAPTACION DESC
+    )
+    SELECT r.fk_arch, r.arch_nombre, r.arch_peso, r.pk_act, r.act_titulo,
+           r.fk_tipo, r.tipo_nombre, r.descr, r.enlace, r.plantilla, r.pk_ad,
+           (SELECT COALESCE(jsonb_agg(jsonb_build_object('fkTarchivo', ta.PK_TARCHIVO, 'nombre', ta.NOMBRE, 'peso', ta.PESO)
+                                      ORDER BY aa.ORDEN), '[]'::jsonb)
+              FROM academico_test.TACTIVIDAD_ADAPTACION_ARCHIVO aa
+              JOIN academico_test.TARCHIVO ta ON ta.PK_TARCHIVO = aa.FK_TARCHIVO AND ta.ACTIVE = TRUE
+             WHERE aa.FK_TACTIVIDAD_ADAPTACION = r.pk_ad AND aa.ACTIVE = TRUE),
+           COUNT(*) OVER()
+      FROM recurso r
+     ORDER BY COALESCE(r.plantilla, r.arch_nombre, r.enlace), r.act_titulo
+     LIMIT v_limite OFFSET v_offset;
+END;
+$function$;
+
+-- ---------------------------------------------------------------------------
+-- Escala de valoración (Regla 40)
+-- ---------------------------------------------------------------------------
+
+-- Regla 40: valores iniciales del constructor "Escala de valoración".
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_escala_precarga_interno(
+    p_fk_tasignatura BIGINT,
+    p_fk_tgrado      BIGINT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_fmt    RECORD;
+    v_escala BIGINT := academico_test.fn_actividad_escala_aplicable(p_fk_tasignatura, p_fk_tgrado);
+BEGIN
+    SELECT f.* INTO v_fmt
+      FROM academico_test.fn_criterio_evaluacion_formato(
+               academico_test.fn_asignatura_criterio_evaluacion_vigente(p_fk_tasignatura, p_fk_tgrado)) f;
+
+    RETURN jsonb_build_object(
+        'contexto', jsonb_build_object(
+            'fkTasignatura', p_fk_tasignatura, 'fkTgrado', p_fk_tgrado, 'fkTescala', v_escala,
+            'escala', (SELECT NOMBRE FROM academico_test.TESCALA WHERE PK_TESCALA = v_escala)),
+        'formato', jsonb_build_object(
+            'valor', v_fmt.formato_valor, 'nombre', v_fmt.formato_nombre,
+            'esNumerico', COALESCE(v_fmt.es_numerico, FALSE),
+            'notaMaxima', v_fmt.nota_maxima, 'decimales', COALESCE(v_fmt.decimales, 1)),
+        'tipoSugerido', CASE WHEN COALESCE(v_fmt.es_numerico, TRUE) THEN 'NUMERICA' ELSE 'CUALITATIVA' END,
+        -- Sin formato numérico la nota vive en porcentaje: el máximo es 100.
+        'valorMaximo', COALESCE(v_fmt.nota_maxima, 100),
+        'niveles', COALESCE((
+            SELECT jsonb_agg(jsonb_build_object(
+                       'fkTescalaValoracion', sv.PK_TESCALA_VALORACION,
+                       'orden',          sv.ORDEN,
+                       'codigo',         val.CODIGO,
+                       'etiqueta',       val.NOMBRE,
+                       'descriptor',     NULL,
+                       'tipoValoracion', lv.NOMBRE,
+                       'limiteInferior', sv.LIMITE_INFERIOR,
+                       'limiteSuperior', sv.LIMITE_SUPERIOR,
+                       'puntaje', CASE WHEN v_fmt.es_numerico
+                                       THEN ROUND(sv.LIMITE_PROMEDIO / 100 * v_fmt.nota_maxima, v_fmt.decimales)
+                                       ELSE sv.LIMITE_PROMEDIO END)
+                       ORDER BY sv.ORDEN, sv.LIMITE_INFERIOR)
+              FROM academico_test.TESCALA_VALORACION sv
+              JOIN academico_test.TVALORACION val ON val.PK_TVALORACION = sv.FK_TVALORACION
+              LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = sv.FK_TVL_TIPO_VALORACION
+             WHERE sv.FK_TESCALA = v_escala AND sv.ACTIVE = TRUE), '[]'::jsonb));
 END;
 $$;
 
@@ -284,13 +505,17 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_recuperacion_campos_dispo
 RETURNS JSONB
 LANGUAGE plpgsql STABLE AS $$
 DECLARE
-    v_sum     VARCHAR := UPPER(TRIM(COALESCE(p_es_sumativo, 'S')));
-    v_rec     VARCHAR := UPPER(TRIM(COALESCE(p_recuperar, 'N')));
-    v_visible BOOLEAN := COALESCE(p_evaluativo, FALSE) AND v_sum <> 'N'
-                         AND NOT COALESCE(p_es_preescolar, FALSE);
-    v_lista   JSONB;
-    v_origen  JSONB;
-    v_o       RECORD;
+    v_sum        VARCHAR := UPPER(TRIM(COALESCE(p_es_sumativo, 'S')));
+    v_rec        VARCHAR := UPPER(TRIM(COALESCE(p_recuperar, 'N')));
+    v_visible    BOOLEAN := COALESCE(p_evaluativo, FALSE) AND v_sum <> 'N'
+                            AND NOT COALESCE(p_es_preescolar, FALSE);
+    v_lista      JSONB;
+    v_candidatos JSONB;
+    v_origen     JSONB;
+    v_o          RECORD;
+    v_grado      BIGINT;
+    v_escala     BIGINT;
+    v_minimo     NUMERIC;
 BEGIN
     IF v_visible AND v_rec = 'S' AND p_fk_tasignatura IS NOT NULL THEN
         SELECT COALESCE(jsonb_agg(jsonb_build_object(
@@ -318,6 +543,39 @@ BEGIN
            AND COALESCE(a.ES_RECUPERACION::VARCHAR, 'N') = 'N'
            AND a.PK_TACTIVIDAD IS DISTINCT FROM p_pk_tactividad_actual
            AND academico_test.fn_actividad_estudiantes_con_resultado(a.PK_TACTIVIDAD) > 0;
+
+        -- Regla 63: Habilitación solo ofrece a quien ya tiene nota final de la
+        -- asignatura; se muestra la del periodo de evaluación más reciente.
+        IF p_fk_tgrupo IS NOT NULL THEN
+            SELECT g.FK_TGRADO INTO v_grado FROM academico_test.TGRUPO g WHERE g.PK_TGRUPO = p_fk_tgrupo;
+            v_escala := academico_test.fn_actividad_escala_aplicable(p_fk_tasignatura, v_grado);
+            v_minimo := academico_test.fn_grado_desempeno_minimo(v_grado);
+            SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                       'pkTmatricula',         m.PK_TMATRICULA,
+                       'fkTestudiante',        m.FK_TESTUDIANTE,
+                       'estudiante',           NULLIF(TRIM(CONCAT_WS(' ', us.PRIMER_NOMBRE, us.SEGUNDO_NOMBRE,
+                                                                       us.PRIMER_APELLIDO, us.SEGUNDO_APELLIDO)), ''),
+                       'notaFinal',            nf.nota,
+                       'fkTperiodoEvaluacion', nf.FK_TPERIODO_EVALUACION,
+                       'periodoEvaluacion',    nf.periodo,
+                       'desempeno',            academico_test.fn_actividad_desempeno_tipo(nf.nota, v_escala, v_minimo))
+                       ORDER BY us.PRIMER_APELLIDO, us.PRIMER_NOMBRE, m.PK_TMATRICULA), '[]'::jsonb)
+              INTO v_candidatos
+              FROM academico_test.TMATRICULA m
+              JOIN academico_test.TESTUDIANTE es ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
+              JOIN academico_test.TUSUARIO us    ON us.PK_TUSUARIO = es.FK_TUSUARIO
+              JOIN LATERAL (
+                    SELECT COALESCE(sn.DEFINITIVA, sn.CALIFICACION) AS nota, sn.FK_TPERIODO_EVALUACION,
+                           pe.NOMBRE AS periodo
+                      FROM academico_test.TASIGNATURA_NOTA sn
+                      LEFT JOIN academico_test.TPERIODO_EVALUACION pe
+                             ON pe.PK_TPERIODO_EVALUACION = sn.FK_TPERIODO_EVALUACION
+                     WHERE sn.FK_TMATRICULA = m.PK_TMATRICULA AND sn.FK_TASIGNATURA = p_fk_tasignatura
+                       AND sn.ACTIVE = TRUE AND COALESCE(sn.DEFINITIVA, sn.CALIFICACION) IS NOT NULL
+                     ORDER BY pe.FECHA_FIN DESC NULLS LAST, sn.PK_TASIGNATURA_NOTA DESC
+                     LIMIT 1) nf ON TRUE
+             WHERE m.FK_TGRUPO = p_fk_tgrupo AND m.ACTIVE = TRUE;
+        END IF;
     END IF;
 
     IF p_fk_tactividad_recuperar IS NOT NULL THEN
@@ -343,6 +601,11 @@ BEGIN
           LEFT JOIN academico_test.TGRADO gdu      ON gdu.PK_TGRADO = u.FK_TGRADO
          WHERE a.PK_TACTIVIDAD = p_fk_tactividad_recuperar;
 
+        v_escala := academico_test.fn_actividad_escala_aplicable(v_o.FK_TASIGNATURA, v_o.PK_TGRADO);
+        v_minimo := academico_test.fn_grado_desempeno_minimo(v_o.PK_TGRADO);
+
+        -- Regla 65: el roster completo del grupo, no solo los asignados a la
+        -- original; el indicador solo para quien tiene resultado en ella.
         v_origen := jsonb_build_object(
             'pkActividad',    v_o.PK_TACTIVIDAD,
             'tituloBase',     v_o.TITULO,
@@ -351,24 +614,32 @@ BEGIN
             'fkTgrupo',       v_o.FK_TGRUPO,      'grupo',      v_o.grupo,
             'fkTasignatura',  v_o.FK_TASIGNATURA, 'asignatura', v_o.asignatura,
             'fkTunidad',      v_o.FK_TUNIDAD,     'unidad',     v_o.unidad,
-            'camposHeredados', jsonb_build_array('FK_TGRUPO', 'FK_TASIGNATURA', 'FK_TUNIDAD'),
+            'camposHeredados', jsonb_build_array('FK_TGRUPO', 'FK_TASIGNATURA', 'FK_TUNIDAD', 'TITULO', 'ES_EVALUATIVA'),
             'estudiantes', COALESCE((
                 SELECT jsonb_agg(jsonb_build_object(
-                           'pkTmatricula',           ae.FK_TMATRICULA,
+                           'pkTmatricula',           m.PK_TMATRICULA,
                            'pkTactividadEstudiante', ae.PK_TACTIVIDAD_ESTUDIANTE,
                            'fkTestudiante',          m.FK_TESTUDIANTE,
                            'estudiante',             NULLIF(TRIM(CONCAT_WS(' ', us.PRIMER_NOMBRE, us.SEGUNDO_NOMBRE,
                                                                                 us.PRIMER_APELLIDO, us.SEGUNDO_APELLIDO)), ''),
                            'notaPrevia',             COALESCE(n.DEFINITIVA, n.CALIFICACION),
-                           'seleccionado',           TRUE)
-                           ORDER BY us.PRIMER_APELLIDO, us.PRIMER_NOMBRE, ae.PK_TACTIVIDAD_ESTUDIANTE)
-                  FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
-                  JOIN academico_test.TMATRICULA m   ON m.PK_TMATRICULA = ae.FK_TMATRICULA
+                           'desempeno',              academico_test.fn_actividad_desempeno_tipo(
+                                                         COALESCE(n.DEFINITIVA, n.CALIFICACION), v_escala, v_minimo),
+                           'asignadoEnOriginal',     ae.PK_TACTIVIDAD_ESTUDIANTE IS NOT NULL,
+                           'seleccionado',           ae.PK_TACTIVIDAD_ESTUDIANTE IS NOT NULL)
+                           ORDER BY us.PRIMER_APELLIDO, us.PRIMER_NOMBRE, m.PK_TMATRICULA)
+                  FROM academico_test.TMATRICULA m
                   JOIN academico_test.TESTUDIANTE es ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
                   JOIN academico_test.TUSUARIO us    ON us.PK_TUSUARIO = es.FK_TUSUARIO
+                  LEFT JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae
+                         ON ae.FK_TACTIVIDAD = v_o.PK_TACTIVIDAD AND ae.FK_TMATRICULA = m.PK_TMATRICULA
+                        AND ae.ACTIVE = TRUE
                   LEFT JOIN academico_test.TACTIVIDAD_NOTA n
                          ON n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE AND n.ACTIVE = TRUE
-                 WHERE ae.FK_TACTIVIDAD = v_o.PK_TACTIVIDAD AND ae.ACTIVE = TRUE), '[]'::jsonb));
+                 WHERE m.ACTIVE = TRUE
+                   AND (m.FK_TGRUPO = v_o.FK_TGRUPO
+                        -- Original sin grupo: no hay roster, quedan sus asignados.
+                        OR (v_o.FK_TGRUPO IS NULL AND ae.PK_TACTIVIDAD_ESTUDIANTE IS NOT NULL))), '[]'::jsonb));
     END IF;
 
     RETURN jsonb_build_object(
@@ -404,8 +675,12 @@ BEGIN
             'tipoCalculoOcultoSi',           'tipoAplicacion = REEMPLAZAR',
             'valorPonderacionRequeridoSi',   'tipoAplicacion = COMPUTAR y tipoCalculo = PONDERADO',
             'valorPonderacionRango',         jsonb_build_object('min', 0, 'max', 100),
-            'estudiantesPorDefecto',         'los asignados a la actividad origen; se envian en FK_TMATRICULAS los que quedan marcados'),
+            'estudiantesPorDefecto',         'Refuerzo: el roster completo del grupo de la original, con seleccionado = true en los que estaban asignados a ella; se envian en FK_TMATRICULAS los que quedan marcados',
+            'estudiantesHabilitacion',       'destino = NOTA_FINAL: solo los de candidatosHabilitacion, que ya tienen nota final de la asignatura',
+            'camposBloqueadosEnRefuerzo',    'grupo, unidad y titulo (debe contener el de la original); la escritura rechaza el cambio',
+            'desempeno',                     'FORTALEZA aprueba y DEBILIDAD reprueba segun la escala del nivel; null si no hay escala ni desempeno minimo configurados'),
         'actividadesRecuperables', v_lista,
+        'candidatosHabilitacion',  v_candidatos,
         'origen', v_origen);
 END;
 $$;
@@ -973,7 +1248,7 @@ COMMENT ON FUNCTION academico_test.fn_actividad_estudiantes_asignar_interno(BIGI
 COMMENT ON FUNCTION academico_test.fn_actividad_material_reemplazar_interno(BIGINT, BIGINT, JSONB)
     IS 'INTERNO: reemplazo de los materiales de apoyo (máximo 10, archivo o enlace http(s)). NULL = no tocar. La usan crear/actualizar_interno y fn_actividad_material_reemplazar.';
 COMMENT ON FUNCTION academico_test.fn_actividad_adaptacion_reemplazar_interno(BIGINT, BIGINT, JSONB)
-    IS 'INTERNO: reemplazo de las adaptaciones curriculares; sus estudiantes deben ser de la actividad. NULL = no tocar. La usan crear/actualizar_interno y fn_actividad_adaptacion_reemplazar.';
+    IS 'INTERNO: reemplazo de las adaptaciones curriculares; hasta 3 archivos (archivos[] y/o fkTarchivo, el primero queda en FK_TARCHIVO), nombrePlantilla y especificacionTipo. Sus estudiantes deben ser de la actividad. NULL = no tocar. La usan crear/actualizar_interno y fn_actividad_adaptacion_reemplazar.';
 COMMENT ON FUNCTION academico_test.fn_actividad_recuperacion_configurar_interno(BIGINT, BIGINT, JSONB)
     IS 'INTERNO: configuración 1:1 de recuperación. NULL = deja de ser recuperación (revierte lo aplicado). La actividad a recuperar debe cumplir fn_actividad_validar_recuperable. La usan crear/actualizar_interno.';
 COMMENT ON FUNCTION academico_test.fn_actividad_evidencias_set_interno(BIGINT, BIGINT, BIGINT[])
@@ -981,4 +1256,12 @@ COMMENT ON FUNCTION academico_test.fn_actividad_evidencias_set_interno(BIGINT, B
 COMMENT ON FUNCTION academico_test.fn_actividad_criterios_set_interno(BIGINT, BIGINT, BIGINT[])
     IS 'INTERNO: reemplazo del set de criterios de la rúbrica de la unidad que evalúan la actividad. NULL = no tocar. La usan crear/actualizar_interno.';
 COMMENT ON FUNCTION academico_test.fn_actividad_recuperacion_campos_disponibles(BOOLEAN, VARCHAR, BOOLEAN, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT)
-    IS 'La sección "Es una recuperación" del formulario: {visible, requerido, motivo, recuperarConsultado, catalogos, reglas, actividadesRecuperables, origen}. visible exige referente evaluativo, sumativa y nivel distinto de Preescolar. actividadesRecuperables (con p_recuperar = S): las sumativas del (grupo, asignatura), no recuperación, con resultados (Regla 64); puede tener ya otros Refuerzos (Regla 67). origen (con p_fk_tactividad_recuperar): alcance VER y fn_actividad_validar_recuperable antes de devolver el contexto heredado y los estudiantes con su nota previa.';
+    IS 'La sección "Es una recuperación" del formulario: {visible, requerido, motivo, recuperarConsultado, catalogos, reglas, actividadesRecuperables, candidatosHabilitacion, origen}. candidatosHabilitacion (con p_recuperar = S y grupo): los estudiantes del grupo con nota final de la asignatura y su desempeno (Regla 63). origen.estudiantes: el roster completo del grupo de la original, con notaPrevia y desempeno solo para quien tiene resultado en ella (Regla 65). La usan las lecturas de configuración de actividad.';
+COMMENT ON FUNCTION academico_test.fn_actividad_escala_precarga_interno(BIGINT, BIGINT)
+    IS 'INTERNO: valores iniciales del constructor Escala de valoración (Regla 40): formato de calificación, valorMaximo y los niveles de la escala del nivel con su puntaje equivalente. La usa fn_actividad_escala_precarga.';
+COMMENT ON FUNCTION academico_test.fn_actividad_estudiantes_piar_excluidos(BIGINT)
+    IS 'INTERNO: estudiantes del grupo con discapacidad registrada que no están en la actividad (aviso informativo de la Regla 48). La usa fn_actividad_estudiantes_asignar_detalle_interno.';
+COMMENT ON FUNCTION academico_test.fn_actividad_estudiantes_asignar_detalle_interno(BIGINT, BIGINT, BIGINT[], BOOLEAN)
+    IS 'INTERNO: fn_actividad_estudiantes_asignar_interno más los estudiantes que salen de adaptaciones (Regla 46) y el aviso PIAR (Regla 48). La usan fn_actividad_estudiantes_set_detalle y fn_actividad_estudiantes_set.';
+COMMENT ON FUNCTION academico_test.fn_actividad_adaptaciones_reutilizables_listar_interno(VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, INTEGER, INTEGER)
+    IS 'INTERNO: biblioteca de adaptaciones de un autor (CREATED_BY), archivo o enlace, una fila por recurso. El wrapper le pasa el solicitante ya resuelto. La usa fn_actividad_adaptaciones_reutilizables_listar.';
