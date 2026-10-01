@@ -148,8 +148,11 @@ BEGIN
           FROM con_label cl
          GROUP BY cl.rotulo
     )
-    SELECT ag.rotulo,
-           ag.rotulo_plural,
+    -- MIN(varchar) resuelve a `text`: RETURN QUERY exige tipo exacto contra
+    -- RETURNS TABLE, así que hace falta el cast explícito acá, no alcanza
+    -- con el de con_label.
+    SELECT ag.rotulo::VARCHAR,
+           ag.rotulo_plural::VARCHAR,
            ag.pk_referente,
            ag.grados,
            ag.asignaturas,
