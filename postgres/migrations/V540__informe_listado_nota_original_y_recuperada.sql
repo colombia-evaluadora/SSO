@@ -1,59 +1,19 @@
 -- ===========================================================================
--- V449 - El Final pondera por lo que vale cada periodo.
+-- V540 - El listado de informes manda al front la C y la R.
 --
---   fn_informe_grupo_listar -- la nota Final de cada asignatura
+--   fn_informe_grupo_listar, en el JSON de cada asignatura del periodo:
+--     con_recuperacion     TRUE si hubo recuperacion de NOTA_FINAL
+--     nota_original        la C, homologada (la R sigue siendo 'nota')
+--     valoracion_original  / simbolo_original, para escalas cualitativas
 --
+--   Y el PROMEDIO_PROYECTADO: se calculaba con COALESCE(proyectada,
+--   guardada), y la proyectada excluye la actividad de recuperacion
+--   (V496.23), asi que en una asignatura recuperada promediaba la C. Ahi se
+--   usa la resultante, que es la vigente. El guardado, la aprobacion y el
+--   Final (fn_asignatura_definitiva_anual_interno, que lee DEFINITIVA) ya
+--   usaban la R.
 --
--- EL FALLO
---   La nota Final de una asignatura era una media aritmetica plana:
---
---     SUM(COALESCE(d.nota_guardada, 0)) / NULLIF(v_n_periodos, 0)
---
---   Divide por la CANTIDAD de periodos y nunca mira
---   TPERIODO_EVALUACION.PORCENTAJE. El documento de negocio pide lo
---   contrario: "consolida todos los periodos del año escolar aplicando el
---   criterio de calculo vigente".
---
---   Y los pesos no son uniformes en los datos reales:
---
---     periodo academico 1750:  20 / 20 / 50 / 10
---     periodo academico 1771:  30 / 30 / 40 / 0
---     periodo academico 1737:  30 / 30 / 40
---
---   Con 20/20/50/10, un estudiante con 3,0 / 3,0 / 5,0 / sin nota tenia 2,75
---   cuando le corresponde 3,1. Y un periodo con peso 0 pesaba igual que los
---   demas.
---
---
--- LA REGLA
---   Numerador y denominador usan el porcentaje del periodo:
---
---     SUM(COALESCE(nota_guardada, 0) * porcentaje) / SUM(porcentaje)
---
---   El periodo sin consolidar sigue contando como CERO -- eso no cambia --,
---   pero ahora cuenta como cero DE SU PESO, no como un periodo mas. Es la
---   diferencia entre "todavia no tengo nota ahi" y "ese periodo vale menos".
---
---   El denominador es el peso TOTAL del año, constante, no la suma de los
---   periodos que tienen fila: asi el que no tiene nota sigue entrando al
---   divisor, exactamente como hoy entra en v_n_periodos.
---
---
--- EL RESPALDO
---   Si algun periodo del año tiene PORCENTAJE nulo, o si el total da cero, se
---   vuelve a la media simple de hoy. Es el mismo criterio que ya usan las
---   unidades en fn_asignatura_definitiva_proyectada_periodo: ponderar solo
---   cuando TODAS las piezas tienen peso, y promediar si falta alguna. Sin
---   eso, un colegio a medio configurar veria notas silenciosamente mal en vez
---   de las de siempre.
---
---
--- QUE NO CAMBIA
---   El promedio general de la fila Final se sigue calculando como el promedio
---   de las notas Final de las asignaturas (V431), no se re-pondera: el peso
---   del periodo ya quedo aplicado dentro de cada asignatura.
---
--- Idempotente: CREATE OR REPLACE, no cambia firma ni retorno.
+-- Depende de: V496.24 (ultimo cuerpo), V535.
 -- ===========================================================================
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_grupo_listar(p_pk_usuario_solicitante bigint, p_fk_tgrupo bigint, p_fk_periodos_evaluacion bigint[] DEFAULT NULL::bigint[], p_search character varying DEFAULT NULL::character varying)
@@ -69,10 +29,6 @@ DECLARE
     v_fk_grado    BIGINT;
     v_minimo         NUMERIC;
     v_n_periodos     INTEGER;
-    -- V449 -- peso total del año y si TODOS los periodos lo tienen. Si
-    -- alguno viene nulo no se pondera: se cae a la media simple de antes.
-    v_peso_total     NUMERIC;
-    v_pesos_ok       BOOLEAN;
     v_incluir_final  BOOLEAN;
 BEGIN
     SELECT s.PK_TSEDE, gr.FK_TLV_JORNADA, s.FK_TESTABLECIMIENTO,
@@ -115,14 +71,6 @@ BEGIN
 
     SELECT COUNT(*)
       INTO v_n_periodos
-      FROM academico_test.TPERIODO_EVALUACION pe
-     WHERE pe.ACTIVE = TRUE
-       AND pe.FK_TPERIODO_ACADEMICO = v_fk_peraca;
-
-    SELECT COALESCE(SUM(pe.PORCENTAJE), 0),
-           COUNT(*) FILTER (WHERE pe.PORCENTAJE IS NULL) = 0
-                AND COALESCE(SUM(pe.PORCENTAJE), 0) > 0
-      INTO v_peso_total, v_pesos_ok
       FROM academico_test.TPERIODO_EVALUACION pe
      WHERE pe.ACTIVE = TRUE
        AND pe.FK_TPERIODO_ACADEMICO = v_fk_peraca;
@@ -209,7 +157,10 @@ BEGIN
                COUNT(d.fk_tasignatura)                           AS calc_total,
                AVG(d.nota_guardada)                              AS calc_prom_guardado,
                AVG(COALESCE(d.nota_guardada, d.nota_proyectada)) AS calc_prom_visible,
-               AVG(COALESCE(d.nota_proyectada, d.nota_guardada)) AS calc_prom_proyectado,
+               -- V540 -- la proyectada excluye la recuperacion; en una
+               -- asignatura recuperada lo vigente es la resultante.
+               AVG(CASE WHEN d.con_recuperacion THEN d.nota_guardada
+                        ELSE COALESCE(d.nota_proyectada, d.nota_guardada) END) AS calc_prom_proyectado,
                COUNT(*) FILTER (WHERE d.aprobada IS TRUE)        AS calc_aprob,
                COUNT(*) FILTER (WHERE d.aprobada IS FALSE)       AS calc_reprob,
                COUNT(*) FILTER (WHERE d.fk_tasignatura IS NOT NULL
@@ -232,7 +183,13 @@ BEGIN
                            'es_numerico', d.es_numerico,
                            'valoracion',  d.valoracion_nombre,
                            'simbolo',     d.valoracion_simbolo,
-                           'aprobada',    d.aprobada
+                           'aprobada',    d.aprobada,
+                           -- V540 -- Regla 68: con recuperacion de NOTA_FINAL,
+                           -- 'nota' es la resultante (R) y estas la original (C).
+                           'con_recuperacion',    COALESCE(d.con_recuperacion, FALSE),
+                           'nota_original',       d.nota_original_homologada,
+                           'valoracion_original', d.nota_original_valoracion,
+                           'simbolo_original',    d.nota_original_simbolo
                        ) ORDER BY asg.ORDEN_REPORTE NULLS LAST, d.asignatura_nombre
                    ) FILTER (WHERE d.fk_tasignatura IS NOT NULL),
                    '[]'::JSONB
@@ -349,19 +306,9 @@ BEGIN
                MAX(asg.ORDEN_REPORTE)                   AS orden,
                COALESCE(BOOL_OR(d.es_numerico), FALSE)  AS es_numerico,
                MAX(d.desempeno_minimo)                  AS minimo,
-               -- V449 -- ponderado por lo que vale cada periodo. El periodo sin
-               -- consolidar sigue valiendo cero, pero cero DE SU PESO: entra al
-               -- divisor por v_peso_total, que es el del año completo.
-               CASE
-                   WHEN v_pesos_ok
-                   THEN SUM(COALESCE(d.nota_guardada, 0) * COALESCE(pe_f.PORCENTAJE, 0))
-                        / NULLIF(v_peso_total, 0)
-                   ELSE SUM(COALESCE(d.nota_guardada, 0)) / NULLIF(v_n_periodos, 0)
-               END                                      AS nota
+               academico_test.fn_asignatura_definitiva_anual_interno(d.mat, d.fk_tasignatura) AS nota
           FROM detalle_ano d
           JOIN academico_test.TASIGNATURA asg ON asg.PK_TASIGNATURA = d.fk_tasignatura
-     LEFT JOIN academico_test.TPERIODO_EVALUACION pe_f
-            ON pe_f.PK_TPERIODO_EVALUACION = d.fk_tperiodo_evaluacion
          WHERE d.fk_tasignatura IS NOT NULL
          GROUP BY d.mat, d.fk_tasignatura
     ),
@@ -592,3 +539,6 @@ BEGIN
      ORDER BY s.o_nombre NULLS LAST, s.o_mat, s.o_pe_inicio;
 END;
 $function$;
+
+COMMENT ON FUNCTION academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], CHARACTER VARYING)
+    IS 'Listado principal de informes: una fila por (estudiante, periodo) del grupo. EL FINAL SE PIDE METIENDO -1 EN PERIODOS (V439), que es el mismo centinela con el que esa fila viaja en FK_TPERIODO_EVALUACION; antes era el parametro p_incluir_final, que se retira. El cambio no es cosmetico: como -1 no matchea ningun periodo real, ARRAY[-1] deja la CTE de periodos vacia y por fin se puede pedir SOLO el Final -- con la bandera era imposible, porque un arreglo vacio significa (y sigue significando) TODOS los periodos reales, de modo que no habia forma de decir "ninguno". La fila Final llega con FK_TPERIODO_EVALUACION = -1, modo_periodo "final", consolidado false y asignaturas con estado "final"; su nota se calcula al vuelo sobre TODOS los periodos del año, el periodo sin nota guardada vale cero y el promedio general sale de esas mismas asignaturas (V431). EVIDENCIAS cuenta las imagenes adjuntas a observaciones de la fila, y en el Final las del año (V434). Su observacion es la que este GUARDADA en TESTUDIANTE_ANIO_OBSERVACION, con su estado y su marca de desactualizado, que se dispara cuando se CONSOLIDA UN PERIODO NUEVO y no cuando el docente escribe una observacion mas (V435). V335, V411, V412, V428, V431, V434, V435, V439. V474: PROMEDIO_GUARDADO y PROMEDIO_PROYECTADO ya NO salen en porcentaje -- se homologan con fn_promedio_homologar al formato del criterio de evaluacion GENERAL del periodo academico, el mismo con el que se pintan las asignaturas de la fila; antes la columna PR mostraba 70,0 al lado de asignaturas en 3,3. En un formato no numerico los dos vienen NULL y lo que vale son PROMEDIO_VALORACION / PROMEDIO_SIMBOLO y sus gemelas del proyectado; sin criterio configurado se sigue devolviendo el porcentaje crudo. PROMEDIO_FORMATO dice con cual se homologo. Cubre tambien el promedio de la fila Final y la nota requerida que viaja en PROMEDIO_PROYECTADO, porque la conversion esta en un solo punto de la salida. El PUESTO se sigue calculando sobre el porcentaje: la conversion es monotona y redondear antes de ordenar crearia empates que no existen. V540: cada asignatura del JSON trae CON_RECUPERACION y, si hubo recuperacion de destino NOTA_FINAL, NOTA_ORIGINAL / VALORACION_ORIGINAL / SIMBOLO_ORIGINAL (la nota antes de recuperar, homologada); NOTA sigue siendo la resultante (Regla 68). El PROMEDIO_PROYECTADO usa la resultante en las asignaturas recuperadas, porque la proyectada excluye la actividad de recuperacion.';
