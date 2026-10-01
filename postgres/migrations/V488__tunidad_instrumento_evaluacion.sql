@@ -21,6 +21,12 @@ DROP FUNCTION IF EXISTS academico_test.fn_unidad_actualizar(BIGINT, BIGINT, VARC
 
 ALTER TABLE academico_test.TUNIDAD DROP COLUMN IF EXISTS FK_TLV_INSTRUMENTO_EVALUACION;
 
+-- §4: título de sección del contenido. Va aquí y no en V492.1 porque
+-- fn_unidad_buscar_por_pk_interno (LANGUAGE sql) ya lo lee.
+ALTER TABLE academico_test.TUNIDAD_CONTENIDO ADD COLUMN IF NOT EXISTS TITULO VARCHAR(200);
+COMMENT ON COLUMN academico_test.TUNIDAD_CONTENIDO.TITULO
+    IS 'Título de la sección (máx. 200). NULL en filas anteriores a §4 o escritas por clientes que no lo envían.';
+
 -- La fila existe desde V245 y ON CONFLICT no la tocaría: se le quita el
 -- argumento del instrumento donde lo tenga. Sin él, no cambia nada.
 
@@ -409,7 +415,8 @@ AS $$
                 WHERE o.FK_TUNIDAD = u.PK_TUNIDAD AND o.ACTIVE = TRUE
            ), '[]'::jsonb),
            COALESCE((
-               SELECT jsonb_agg(jsonb_build_object('pk', c.PK_TUNIDAD_CONTENIDO, 'orden', c.ORDEN, 'descripcion', c.DESCRIPCION)
+               SELECT jsonb_agg(jsonb_build_object('pk', c.PK_TUNIDAD_CONTENIDO, 'orden', c.ORDEN,
+                                                   'titulo', c.TITULO, 'descripcion', c.DESCRIPCION)
                                 ORDER BY c.ORDEN)
                  FROM academico_test.TUNIDAD_CONTENIDO c
                 WHERE c.FK_TUNIDAD = u.PK_TUNIDAD AND c.ACTIVE = TRUE
@@ -448,7 +455,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_buscar_por_pk_interno(BIGINT)
-    IS 'INTERNO: detalle de una TUNIDAD sin gate, incluidas las inactivas (0 o 1 fila): nombres resueltos, total de actividades activas, inicio/fin derivados, objetivos y contenidos JSONB, estado derivado e instrumento derivado (fn_unidad_instrumento_derivado). campos_disponibles va NULL: depende de quién pide y lo pone el wrapper. Lo reutiliza fn_unidad_buscar_por_pk.';
+    IS 'INTERNO: detalle de una TUNIDAD sin gate, incluidas las inactivas (0 o 1 fila): nombres resueltos, total de actividades activas, inicio/fin derivados, objetivos y contenidos (con título de sección) JSONB, estado e instrumento derivados. campos_disponibles va NULL: lo pone el wrapper. La reutiliza fn_unidad_buscar_por_pk.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_buscar_por_pk(
     p_pk_usuario_solicitante   BIGINT,
