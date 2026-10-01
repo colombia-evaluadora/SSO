@@ -799,11 +799,11 @@ BEGIN
 END;
 $$;
 
--- Regla 73: al guardar la Vista, la asistencia del primer día de cada
+-- Regla 73: al guardar la Vista (o la oficial del Planeador), la asistencia del día que vale (fecha fin o primer día) de cada
 -- actividad (fn_actividad_asistencia_dia) fija el estado de los resultados aún
 -- sin registrar: No asistido según la excusa, o vuelve a Pendiente si estaba
--- No asistido. La Vista predomina: descarta lo marcado en el Planeador. Nunca
--- toca un resultado Calificado ni un No presentó.
+-- No asistido. Lo cambiado en el Planeador se conserva (solo toma la excusa).
+-- Nunca toca un resultado Calificado ni un No presentó.
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resultado_desde_asistencia_interno(
     p_pk_usuario_solicitante BIGINT,
     p_fk_tgrupo              BIGINT,
@@ -830,18 +830,40 @@ BEGIN
                  WHERE n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
                  ORDER BY n.ACTIVE DESC LIMIT 1) AS pk_nota,
                (SELECT bool_or(n.ACTIVE) FROM academico_test.TACTIVIDAD_NOTA n
-                 WHERE n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE) AS nota_activa
+                 WHERE n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE) AS nota_activa,
+               (SELECT lv.VALOR FROM academico_test.TACTIVIDAD_NOTA n
+                  JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = n.FK_TLV_TIPO_ASISTENCIA
+                 WHERE n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE AND n.ACTIVE = TRUE
+                   AND n.ASISTENCIA_ORIGEN = 'PLANEADOR') AS marca
           FROM academico_test.TACTIVIDAD a
           JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae ON ae.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND ae.ACTIVE = TRUE
          CROSS JOIN LATERAL academico_test.fn_actividad_asistencia_dia(ae.FK_TMATRICULA, a.PK_TACTIVIDAD) d
          WHERE a.FK_TGRUPO = p_fk_tgrupo AND a.ACTIVE = TRUE
-           AND academico_test.fn_actividad_fecha_asistencia(a.PK_TACTIVIDAD) = p_fecha
+           AND p_fecha IN (academico_test.fn_actividad_fecha_asistencia(a.PK_TACTIVIDAD),
+                           academico_test.fn_actividad_fecha_inicio_asistencia(a.PK_TACTIVIDAD))
+           AND d.fecha = p_fecha
            AND (a.FK_TASIGNATURA = p_fk_tasignatura OR academico_test.fn_actividad_es_formativa(a.PK_TACTIVIDAD))
            AND (p_matriculas IS NULL OR ae.FK_TMATRICULA = ANY (p_matriculas))
-           AND d.origen = 'ASISTENCIA'
     LOOP
         -- Una nota dada de baja no se reactiva: get_or_create traería su nota vieja.
         IF v_r.pk_nota IS NOT NULL AND NOT COALESCE(v_r.nota_activa, FALSE) THEN
+            CONTINUE;
+        END IF;
+        -- Lo cambiado en el Planeador se respeta; de la Vista solo toma la excusa:
+        -- un No asistió marcado ahí pasa a Justificada cuando la Vista la trae.
+        IF v_r.marca IS NOT NULL THEN
+            IF v_r.marca = '2' THEN
+                UPDATE academico_test.TACTIVIDAD_NOTA n
+                   SET ASISTENCIA_JUSTIFICADA = COALESCE(v_r.justificada, FALSE),
+                       FK_TLV_ESTADO_RESULTADO = academico_test.fn_tlv_estado_resultado_pk(
+                           academico_test.fn_actividad_estado_por_asistencia(TRUE, v_r.justificada)),
+                       MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+                 WHERE n.PK_TACTIVIDAD_NOTA = v_r.pk_nota
+                   AND academico_test.fn_actividad_estado_resultado(n.PK_TACTIVIDAD_NOTA) LIKE 'NO_ASISTIO%';
+                IF FOUND THEN
+                    v_n := v_n + 1;
+                END IF;
+            END IF;
             CONTINUE;
         END IF;
         v_estado := academico_test.fn_actividad_estado_por_asistencia(v_r.ausente, v_r.justificada);
@@ -871,10 +893,10 @@ BEGIN
 END;
 $$;
 
--- Asistencia marcada en la tabla de calificaciones del Planeador. Nunca toca la
--- de la Vista: si la Vista no se tomó ese día, deja una fila propia (ORIGEN
--- PLANEADOR, sin bloque) que cuenta como asistencia oficial. J/NJ lo decide la
--- excusa de la Vista, no el docente.
+-- Asistencia marcada en la tabla de calificaciones del Planeador: se fija en
+-- TACTIVIDAD_NOTA y nunca toca la de la Vista. Sin Vista ese día, la oficial
+-- (una fila por bloque) se calcula con las marcas de todas las actividades del
+-- día. J/NJ lo decide la excusa de la Vista.
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_asistencia_planeador_set_interno(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tactividad_estudiante BIGINT,
@@ -894,11 +916,13 @@ DECLARE
     v_estado   VARCHAR;
     v_actual   VARCHAR;
     v_pk_nota  BIGINT;
+    v_oficial  BIGINT;
 BEGIN
     PERFORM academico_test.fn_actividad_validar_activa(v_pk);
     PERFORM academico_test.fn_actividad_validar_referente_calificable(v_pk);
     v_fk_tipo := academico_test.fn_asistencia_validar_tipo(p_tipo_asistencia);
     PERFORM academico_test.fn_actividad_validar_asistencia_editable(p_pk_tactividad_estudiante);
+    PERFORM academico_test.fn_asistencia_validar_fecha_no_futura(academico_test.fn_actividad_fecha_asistencia(v_pk));
 
     SELECT ae.FK_TMATRICULA, a.FK_TASIGNATURA, a.FK_TGRUPO INTO v_ae
       FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
@@ -906,24 +930,6 @@ BEGIN
      WHERE ae.PK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante;
     v_fecha := academico_test.fn_actividad_fecha_asistencia(v_pk);
     SELECT * INTO v_dia FROM academico_test.fn_actividad_asistencia_dia(v_ae.FK_TMATRICULA, v_pk);
-
-    IF COALESCE(v_dia.origen, '') <> 'ASISTENCIA' THEN
-        v_periodo := academico_test.fn_asistencia_periodo_eval(v_ae.FK_TGRUPO, v_fecha);
-        IF v_periodo IS NULL THEN
-            RAISE EXCEPTION 'no hay periodo de evaluacion activo para el grupo % que contenga la fecha %',
-                v_ae.FK_TGRUPO, v_fecha USING ERRCODE = '22023';
-        END IF;
-        INSERT INTO academico_test.TASISTENCIA (
-            FECHA, FK_TLV_TIPO_ASISTENCIA, FK_TASIGNATURA, FK_TPERIODO_EVALUACION, FK_TMATRICULA,
-            ORIGEN, CREATED_BY, CREATED_AT, ACTIVE)
-        VALUES (v_fecha, v_fk_tipo, v_ae.FK_TASIGNATURA, v_periodo, v_ae.FK_TMATRICULA,
-                'PLANEADOR', p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE)
-        ON CONFLICT (FK_TMATRICULA, COALESCE(FK_TASIGNATURA, 0), COALESCE(FK_TACTIVIDAD, 0),
-                     FECHA, COALESCE(BLOQUE, 0)) WHERE ACTIVE = true
-        DO UPDATE SET FK_TLV_TIPO_ASISTENCIA = EXCLUDED.FK_TLV_TIPO_ASISTENCIA,
-                      MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
-                WHERE academico_test.TASISTENCIA.ORIGEN = 'PLANEADOR';
-    END IF;
 
     -- Llegó tarde con excusa y se cambia a No asistido: Justificada.
     v_just   := p_tipo_asistencia = 2 AND v_dia.origen = 'ASISTENCIA' AND COALESCE(v_dia.justificada, FALSE);
@@ -936,6 +942,57 @@ BEGIN
                COALESCE(v_estado, CASE WHEN v_actual LIKE 'NO_ASISTIO%' THEN 'PENDIENTE' ELSE v_actual END)),
            MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
+
+    -- Sin Vista ese día la oficial sale de todas las marcas del día: presente si
+    -- asistió en alguna actividad, tarde si solo llegó tarde, ausente si faltó en todas.
+    IF COALESCE(v_dia.origen, '') <> 'ASISTENCIA' THEN
+        SELECT academico_test.fn_asistencia_tipo_pk(
+                   CASE WHEN BOOL_OR(lv.VALOR = '1') THEN 1 WHEN BOOL_OR(lv.VALOR = '5') THEN 5 ELSE 2 END)
+          INTO v_oficial
+          FROM academico_test.TACTIVIDAD a
+          JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae
+            ON ae.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND ae.ACTIVE = TRUE AND ae.FK_TMATRICULA = v_ae.FK_TMATRICULA
+          JOIN academico_test.TACTIVIDAD_NOTA n
+            ON n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE AND n.ACTIVE = TRUE
+           AND n.ASISTENCIA_ORIGEN = 'PLANEADOR'
+          JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = n.FK_TLV_TIPO_ASISTENCIA
+         WHERE a.FK_TGRUPO = v_ae.FK_TGRUPO AND a.ACTIVE = TRUE
+           AND academico_test.fn_actividad_fecha_asistencia(a.PK_TACTIVIDAD) = v_fecha
+           AND (a.FK_TASIGNATURA = v_ae.FK_TASIGNATURA OR academico_test.fn_actividad_es_formativa(a.PK_TACTIVIDAD));
+
+        UPDATE academico_test.TASISTENCIA s
+           SET FK_TLV_TIPO_ASISTENCIA = v_oficial,
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE s.ORIGEN = 'PLANEADOR' AND s.ACTIVE = TRUE AND s.FECHA = v_fecha
+           AND s.FK_TMATRICULA = v_ae.FK_TMATRICULA
+           AND s.FK_TASIGNATURA IS NOT DISTINCT FROM v_ae.FK_TASIGNATURA;
+        IF NOT FOUND THEN
+            v_periodo := academico_test.fn_asistencia_periodo_eval(v_ae.FK_TGRUPO, v_fecha);
+            IF v_periodo IS NULL THEN
+                RAISE EXCEPTION 'no hay periodo de evaluacion activo para el grupo % que contenga la fecha %',
+                    v_ae.FK_TGRUPO, v_fecha USING ERRCODE = '22023';
+            END IF;
+            INSERT INTO academico_test.TASISTENCIA (
+                FECHA, FK_TLV_TIPO_ASISTENCIA, FK_TASIGNATURA, FK_TPERIODO_EVALUACION, FK_TMATRICULA,
+                BLOQUE, ORIGEN, CREATED_BY, CREATED_AT, ACTIVE)
+            SELECT v_fecha, v_oficial, v_ae.FK_TASIGNATURA, v_periodo, v_ae.FK_TMATRICULA,
+                   b.bloque, 'PLANEADOR', p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
+              FROM (SELECT bp.bloque FROM academico_test.fn_asistencia_bloques_programados(
+                        p_pk_usuario_solicitante, v_ae.FK_TGRUPO, v_ae.FK_TASIGNATURA, v_fecha) bp
+                    UNION ALL
+                    -- Sin horario resoluble: una toma sin bloque, para no perder la asistencia.
+                    SELECT NULL::NUMERIC WHERE NOT EXISTS (
+                        SELECT 1 FROM academico_test.fn_asistencia_bloques_programados(
+                            p_pk_usuario_solicitante, v_ae.FK_TGRUPO, v_ae.FK_TASIGNATURA, v_fecha))) b
+            ON CONFLICT (FK_TMATRICULA, COALESCE(FK_TASIGNATURA, 0), COALESCE(FK_TACTIVIDAD, 0),
+                         FECHA, COALESCE(BLOQUE, 0)) WHERE ACTIVE = true
+            DO NOTHING;
+        END IF;
+        -- Es oficial: las actividades del día sin marca propia toman su estado.
+        PERFORM academico_test.fn_actividad_resultado_desde_asistencia_interno(
+            p_pk_usuario_solicitante, v_ae.FK_TGRUPO, v_ae.FK_TASIGNATURA, v_fecha,
+            ARRAY[v_ae.FK_TMATRICULA]);
+    END IF;
     RETURN academico_test.fn_actividad_estado_resultado(v_pk_nota);
 END;
 $$;
@@ -1046,9 +1103,10 @@ BEGIN
     SELECT COUNT(*) INTO v_omitidos FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
      WHERE ae.FK_TACTIVIDAD = p_pk_tactividad AND ae.ACTIVE = TRUE
        AND (academico_test.fn_actividad_resultado_registrado(ae.PK_TACTIVIDAD_ESTUDIANTE)
-            OR EXISTS (SELECT 1 FROM academico_test.fn_actividad_asistencia_estudiante(ae.PK_TACTIVIDAD_ESTUDIANTE) x WHERE x.ausente));
+            OR NOT EXISTS (SELECT 1 FROM academico_test.fn_actividad_asistencia_estudiante(ae.PK_TACTIVIDAD_ESTUDIANTE) x
+                            WHERE NOT COALESCE(x.ausente, FALSE)));
     IF v_omitidos > 0 THEN
-        RAISE WARNING 'fn_actividad_observar_grupal: se omiten % estudiante(s) de % que ya tienen resultado registrado o están No asistido; la grupal no sobrescribe',
+        RAISE WARNING 'fn_actividad_observar_grupal: se omiten % estudiante(s) de % que ya tienen resultado registrado, están No asistido o no tienen asistencia; la grupal no sobrescribe',
             v_omitidos, academico_test.fn_actividad_etiqueta(p_pk_tactividad);
     END IF;
 
@@ -1056,8 +1114,9 @@ BEGIN
         SELECT ae.PK_TACTIVIDAD_ESTUDIANTE FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
          WHERE ae.FK_TACTIVIDAD = p_pk_tactividad AND ae.ACTIVE = TRUE
            AND NOT academico_test.fn_actividad_resultado_registrado(ae.PK_TACTIVIDAD_ESTUDIANTE)
-           AND NOT EXISTS (SELECT 1 FROM academico_test.fn_actividad_asistencia_estudiante(ae.PK_TACTIVIDAD_ESTUDIANTE) x
-                            WHERE x.ausente)
+           -- Solo presentes: sin asistencia o No asistido no se observan.
+           AND EXISTS (SELECT 1 FROM academico_test.fn_actividad_asistencia_estudiante(ae.PK_TACTIVIDAD_ESTUDIANTE) x
+                        WHERE NOT COALESCE(x.ausente, FALSE))
     LOOP
         v_pk_nota := academico_test.fn_actividad_nota_get_or_create(p_pk_usuario_solicitante, v_pk_ae);
         UPDATE academico_test.TACTIVIDAD_NOTA
@@ -1506,21 +1565,21 @@ COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_interno(BIGINT, B
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_obtener_interno(BIGINT)
     IS 'INTERNO: detalle de la nota de un estudiante (instrumento, %, captura cruda, soportes, homologación y resultado con etiquetas). Lo usa fn_actividad_nota_obtener.';
 COMMENT ON FUNCTION academico_test.fn_actividad_estudiantes_calificaciones_listar_interno(BIGINT, DATE, VARCHAR)
-    IS 'INTERNO: estudiantes de la actividad con la asistencia de la actividad (fn_actividad_asistencia_estudiante: primer día, bloques agregados, la Vista predomina, congelada con resultado; tipo_asistencia_valor 1/2/5, asistencia_justificada, origen_asistencia ASISTENCIA/PLANEADOR, asistencia_editable = sin resultado registrado), nota, homologación, resultado del instrumento, estado de resultado, momento, enlace de evidencia y resultados_completos (Regla 58, igual en todas las filas). Lo usa fn_actividad_estudiantes_calificaciones_listar.';
+    IS 'INTERNO: estudiantes de la actividad con la asistencia de la actividad (fn_actividad_asistencia_estudiante: fecha fin o primer día, bloques agregados, la Vista predomina, congelada con resultado; tipo_asistencia_valor 1/2/5, asistencia_justificada, origen_asistencia ASISTENCIA/PLANEADOR, asistencia_editable = sin resultado registrado), nota, homologación, resultado del instrumento, estado de resultado, momento, enlace de evidencia y resultados_completos (Regla 58, igual en todas las filas). Lo usa fn_actividad_estudiantes_calificaciones_listar.';
 COMMENT ON FUNCTION academico_test.fn_actividad_resultado_estado_set_interno(BIGINT, BIGINT, VARCHAR)
     IS 'INTERNO: fija el estado de resultado a mano (PENDIENTE o NO_PRESENTO; No asistido sale de la asistencia) de un estudiante y borra su CALIFICACION (Regla 62); No presentó exige que no haya nota ni inasistencia (fn_actividad_validar_estado_transicion). Lo usan fn_actividad_resultado_estado_set y su variante en bloque.';
 COMMENT ON FUNCTION academico_test.fn_actividad_resultado_estado_set_bulk_interno(BIGINT, BIGINT, VARCHAR, BIGINT[])
     IS 'INTERNO: el mismo estado para varios estudiantes de una actividad, uno por uno con fn_actividad_resultado_estado_set_interno. Lo usa fn_actividad_resultado_estado_set_bulk.';
 COMMENT ON FUNCTION academico_test.fn_actividad_resultado_desde_asistencia_interno(BIGINT, BIGINT, BIGINT, DATE, BIGINT[])
-    IS 'INTERNO: Regla 73. Tras guardar la Vista Asistencias, para las actividades del grupo cuyo primer día es p_fecha (de la asignatura, o formativas): ausente => No asistido (Justificada si algún bloque trae excusa), presente => vuelve a Pendiente si estaba No asistido. Descarta lo marcado en el Planeador (la Vista predomina) y no toca resultados Calificados ni No presentó. Devuelve cuántos cambió. La usan fn_asistencia_registrar_bulk_interno y fn_asistencia_editar_interno.';
+    IS 'INTERNO: Regla 73. Tras guardar la Vista Asistencias o la asistencia oficial que calcula el Planeador, para las actividades del grupo cuyo primer día o fecha fin es p_fecha y es el día que vale para el estudiante (de la asignatura, o formativas): ausente => No asistido (Justificada si algún bloque trae excusa), presente => vuelve a Pendiente si estaba No asistido. Conserva lo cambiado en el Planeador: de la Vista solo toma la excusa (un No asistió marcado ahí pasa a Justificada cuando la Vista la trae). No toca resultados Calificados ni No presentó. Devuelve cuántos cambió. La usan fn_asistencia_registrar_bulk_interno, fn_asistencia_editar_interno y fn_actividad_asistencia_planeador_set_interno.';
 COMMENT ON FUNCTION academico_test.fn_actividad_asistencia_planeador_set_interno(BIGINT, BIGINT, NUMERIC)
-    IS 'INTERNO: asistencia (1/2/5) de un estudiante marcada desde el Planeador. La fija en TACTIVIDAD_NOTA (ASISTENCIA_ORIGEN PLANEADOR) y recalcula el estado: No asistido Justificada solo si la Vista trae excusa ese día, si no No justificada; Asistió/Llegó tarde devuelve a Pendiente un No asistido. Nunca cambia la asistencia de la Vista; si la Vista no se tomó ese día, escribe la fila oficial con ORIGEN PLANEADOR. 22023 si el estudiante ya tiene resultado. Lo usa fn_actividad_asistencia_planeador_set.';
+    IS 'INTERNO: asistencia (1/2/5) de un estudiante marcada desde el Planeador. La fija en TACTIVIDAD_NOTA (ASISTENCIA_ORIGEN PLANEADOR) y recalcula el estado: No asistido Justificada solo si la Vista trae excusa ese día, si no No justificada; Asistió/Llegó tarde devuelve a Pendiente un No asistido. Nunca cambia la asistencia de la Vista; si ese día no se tomó, recalcula la oficial (ORIGEN PLANEADOR, una fila por bloque de fn_asistencia_bloques_programados) con las marcas de todas las actividades del día: presente si asistió en alguna, tarde si solo llegó tarde, ausente si faltó en todas; y sincroniza las actividades sin marca propia. La Vista, al guardarse, la reemplaza. 22023 si el estudiante ya tiene resultado o la actividad aún no empieza. Lo usa fn_actividad_asistencia_planeador_set.';
 COMMENT ON FUNCTION academico_test.fn_actividad_asistencia_congelar_interno(BIGINT)
-    IS 'INTERNO: copia en TACTIVIDAD_NOTA la asistencia vigente del primer día (fn_actividad_asistencia_dia) si aún no tiene una fijada. La llaman al registrar resultado fn_actividad_nota_aplicar_interno y las observaciones.';
+    IS 'INTERNO: copia en TACTIVIDAD_NOTA la asistencia vigente (fn_actividad_asistencia_dia: fecha fin o primer día) si aún no tiene una fijada. La llaman al registrar resultado fn_actividad_nota_aplicar_interno y las observaciones.';
 COMMENT ON FUNCTION academico_test.fn_actividad_observar_estudiante_interno(BIGINT, BIGINT, TEXT, DATE, BIGINT[], VARCHAR, VARCHAR)
     IS 'INTERNO: observación de UN estudiante en una actividad formativa: texto ≤1000, Momento (MOMENTO_REGISTRO), hasta 3 archivos o un enlace (Regla 61); marca Calificado. NULL en momento/evidencias/enlace = no tocar. Lo usa fn_actividad_observar_estudiante.';
 COMMENT ON FUNCTION academico_test.fn_actividad_observar_grupal_interno(BIGINT, BIGINT, TEXT, DATE, BIGINT[], VARCHAR, VARCHAR)
-    IS 'INTERNO: la misma observación para los estudiantes de una actividad formativa que siguen Pendientes y sin observación; los demás se omiten con WARNING. Devuelve cuántos observó. Lo usa fn_actividad_observar_grupal.';
+    IS 'INTERNO: la misma observación para los estudiantes de una actividad formativa que siguen Pendientes, sin observación y presentes (con asistencia y no ausentes); los demás se omiten con WARNING. Devuelve cuántos observó. Lo usa fn_actividad_observar_grupal.';
 COMMENT ON FUNCTION academico_test.fn_actividad_observacion_soportes_listar_interno(BIGINT)
     IS 'INTERNO: archivos activos adjuntos a la observación de un estudiante, con los datos de TARCHIVO. Lo usa fn_actividad_observacion_soportes_listar.';
 COMMENT ON FUNCTION academico_test.fn_actividad_observacion_soporte_agregar_interno(BIGINT, BIGINT, BIGINT, DATE)
