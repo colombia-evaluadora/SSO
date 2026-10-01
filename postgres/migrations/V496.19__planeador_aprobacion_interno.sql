@@ -420,6 +420,10 @@ RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    -- Igual que la edición directa: no se abre una solicitud que fallaría al aprobarse.
+    IF p_tipo_asistencia_valor IS NOT NULL THEN
+        PERFORM academico_test.fn_asistencia_validar_tipo(p_tipo_asistencia_valor);
+    END IF;
     PERFORM academico_test.fn_solicitud_aprobacion_crear_interno(
                p_pk_usuario_solicitante, 'CORRECCION_ASISTENCIA', 'TASISTENCIA', a.PK_TASISTENCIA,
                m.FK_TGRUPO, a.FK_TASIGNATURA,

@@ -3,7 +3,8 @@
 > **Este documento sustituye a** `docs/planeador/observacion-formativa-evidencias-favorita.md`
 > para el estado de la rama `feat/planeador-correcciones-reglas-gestion-academica`.
 > El contrato de rutas y claves no cambió, pero sí las reglas: `MOMENTO` y
-> `ENLACE` nuevos en la observación, la asistencia ya no bloquea, el gate de
+> `ENLACE` nuevos en la observación, la asistencia de la actividad bloquea
+> observar sin asistencia o en No asistido, el gate de
 > propiedad (Regla 54) ahora es explícito en wrapper, y el límite de evidencias
 > se valida con una función propia (Regla 61). Ver "Qué cambió" más abajo.
 
@@ -52,15 +53,17 @@ preescolar: se evalúa con observación narrativa, no con nota — Regla 52), su
   explícito).
 - **Evidencias:** hasta 3 archivos `pdf`/`doc`/`docx`/`jpg`/`jpeg`/`png` de
   máximo 10 MB cada uno, **o** un enlace — nunca ambos (Regla 61).
-- **La asistencia ya no bloquea observar** (Reglas 62/73): antes se exigía
-  asistencia válida en `FECHA`; hoy la inasistencia queda reflejada en el
-  estado de resultado, pero no impide registrar la observación.
+- **Asistencia de la actividad** (Reglas 62/73): cuenta la de la **fecha fin** si ya llegó y se tomó; si no, la del **primer día**
+  de la actividad, no `FECHA`. Sin asistencia (ni en la Vista ni marcada en el
+  Planeador), en No asistido o en No presentó **no se observa** (400). Al
+  observar, la asistencia de la actividad queda congelada.
 - **Regla 54 explícita:** solo el docente que **creó** la actividad puede
   observar o gestionar sus soportes; un docente de aula que no la creó recibe
   403. Coordinación, rectoría y super admin no tienen esa restricción.
 - **`observar-grupal` solo alcanza a Pendientes sin observación:** se omiten
   los estudiantes que ya tienen un resultado (observación o un estado como
-  *No asistido*). La clave de salida sigue siendo `estudiantes_observados`.
+  *No asistido*), están ausentes o no tienen asistencia. La clave de salida
+  sigue siendo `estudiantes_observados`.
 - **Favorito auditado:** marcar/desmarcar la evidencia favorita queda
   registrado en la auditoría igual que el resto de escrituras del módulo.
 
@@ -85,7 +88,7 @@ actividad formativa. Marca el resultado como `Calificado`.
 | `MOMENTO` | varchar | no | `INICIO`, `PROCESO` o `CIERRE`. Ausente/`NULL` = no toca el momento guardado. |
 | `EVIDENCIAS` | bigint[] | no | `PK_TARCHIVO`, hasta 3. **Reemplazo completo**: ausente/`NULL` = conserva los archivos actuales; `[]` = los quita todos. |
 | `ENLACE` | varchar | no | `http://` o `https://`. Alternativo a `EVIDENCIAS`, nunca junto con archivos vivos. |
-| `FECHA` | date | no | Por defecto hoy. La asistencia ya no bloquea. |
+| `FECHA` | date | no | Por defecto hoy. Fecha de las evidencias; la asistencia que vale es la de la fecha fin o, si aún no, la del primer día. |
 
 Regla: tras aplicar el cambio, la observación debe quedar con texto **o** al
 menos una evidencia (archivo o enlace) activa; si no, 400.
@@ -105,8 +108,8 @@ Función: `fn_actividad_observar_grupal` (wrapper) →
 
 **Uso:** aplicar la **misma** observación a todos los estudiantes de la
 actividad que siguen **Pendientes y sin observación**. Los que ya tienen un
-resultado (observación propia o un estado como *No asistido*) se omiten sin
-error.
+resultado (observación propia o un estado como *No asistido*), los ausentes y
+los que no tienen asistencia se omiten sin error.
 
 **Entrada:** mismos campos y límites que 1.1 (`OBSERVACION`, `MOMENTO`,
 `EVIDENCIAS`, `ENLACE`, `FECHA`) — los mismos archivos/enlace se adjuntan a
